@@ -1,0 +1,36 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+*.cache
+*.dll
+*.pdb
+*.exe
+*.nupkg
+project.lock.json
+.vs/
+*.swp
+
+## Node / Frontend
+node_modules/
+dist/
+build/
+.env.local
+.env.*.local
+
+## IDE
+.idea/
+*.iml
+.vscode/
+
+## OS
+.DS_Store
+Thumbs.db
+
+## Docker
+docker/postgres/data/
+
+## Test results
+TestResults/
+coverage/

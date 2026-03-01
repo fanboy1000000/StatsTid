@@ -1,0 +1,164 @@
+x-jwt-env: &jwt-env
+  Jwt__Issuer: "statstid"
+  Jwt__Audience: "statstid"
+  Jwt__SigningKey: "StatsTid_Sprint3_DevKey_MustBeAtLeast32BytesLong!"
+  Jwt__ExpirationMinutes: "480"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: statstid-postgres
+    environment:
+      POSTGRES_DB: statstid
+      POSTGRES_USER: statstid
+      POSTGRES_PASSWORD: statstid_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U statstid"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend-api:
+    build:
+      context: ..
+      dockerfile: src/Backend/StatsTid.Backend.Api/Dockerfile
+    container_name: statstid-backend-api
+    ports:
+      - "5100:8080"
+    environment:
+      <<: *jwt-env
+      ConnectionStrings__EventStore: "Host=postgres;Port=5432;Database=statstid;Username=statstid;Password=statstid_dev"
+      ServiceUrls__Orchestrator: "http://orchestrator:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      orchestrator:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  rule-engine:
+    build:
+      context: ..
+      dockerfile: src/RuleEngine/StatsTid.RuleEngine.Api/Dockerfile
+    container_name: statstid-rule-engine
+    ports:
+      - "5200:8080"
+    environment:
+      <<: *jwt-env
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  orchestrator:
+    build:
+      context: ..
+      dockerfile: src/Orchestrator/StatsTid.Orchestrator/Dockerfile
+    container_name: statstid-orchestrator
+    ports:
+      - "5300:8080"
+    environment:
+      <<: *jwt-env
+      ConnectionStrings__EventStore: "Host=postgres;Port=5432;Database=statstid;Username=statstid;Password=statstid_dev"
+      ServiceUrls__RuleEngine: "http://rule-engine:8080"
+      ServiceUrls__Backend: "http://backend-api:8080"
+      ServiceUrls__Payroll: "http://payroll:8080"
+      ServiceUrls__External: "http://external:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rule-engine:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  payroll:
+    build:
+      context: ..
+      dockerfile: src/Integrations/StatsTid.Integrations.Payroll/Dockerfile
+    container_name: statstid-payroll
+    ports:
+      - "5400:8080"
+    environment:
+      <<: *jwt-env
+      ConnectionStrings__EventStore: "Host=postgres;Port=5432;Database=statstid;Username=statstid;Password=statstid_dev"
+      ServiceUrls__MockPayroll: "http://mock-payroll:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mock-payroll:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  external:
+    build:
+      context: ..
+      dockerfile: src/Integrations/StatsTid.Integrations.External/Dockerfile
+    container_name: statstid-external
+    ports:
+      - "5500:8080"
+    environment:
+      <<: *jwt-env
+      ConnectionStrings__EventStore: "Host=postgres;Port=5432;Database=statstid;Username=statstid;Password=statstid_dev"
+      ServiceUrls__MockExternal: "http://mock-external:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mock-external:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  mock-payroll:
+    build:
+      context: ./mock-payroll
+    container_name: statstid-mock-payroll
+    ports:
+      - "5600:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  mock-external:
+    build:
+      context: ./mock-external
+    container_name: statstid-mock-external
+    ports:
+      - "5700:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+volumes:
+  postgres_data:

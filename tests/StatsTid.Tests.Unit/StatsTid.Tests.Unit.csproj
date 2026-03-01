@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="coverlet.collector" Version="6.0.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.8" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+    <PackageReference Include="xunit" Version="2.5.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\SharedKernel\StatsTid.SharedKernel\StatsTid.SharedKernel.csproj" />
+    <ProjectReference Include="..\..\src\RuleEngine\StatsTid.RuleEngine.Api\StatsTid.RuleEngine.Api.csproj" />
+    <ProjectReference Include="..\..\src\Infrastructure\StatsTid.Infrastructure\StatsTid.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Backend\StatsTid.Backend.Api\StatsTid.Backend.Api.csproj" />
+  </ItemGroup>
+
+</Project>
