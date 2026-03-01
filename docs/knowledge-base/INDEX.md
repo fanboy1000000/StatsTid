@@ -1,0 +1,106 @@
+# StatsTid Knowledge Base
+
+> **Governance**: Only the Orchestrator may create, modify, or delete entries in this knowledge base. Agents may propose new entries in their output, but the Orchestrator reviews and approves all additions.
+
+## Architectural Decision Records (ADR)
+
+| ID | Title | Status | Sprint | Domains | Tags |
+|----|-------|--------|--------|---------|------|
+| [ADR-001](decisions/ADR-001-event-sourcing-postgresql-npgsql.md) | Event sourcing with PostgreSQL via Npgsql | approved | S1 | Infrastructure, Data Model | event-sourcing, postgresql, npgsql |
+| [ADR-002](decisions/ADR-002-pure-function-rule-engine.md) | Pure function rule engine with no I/O | approved | S1 | Rule Engine | rule-engine, determinism, pure-functions |
+| [ADR-003](decisions/ADR-003-ok-version-resolved-by-entry-date.md) | OK version resolved by entry date, not current date | approved | S2 | Rule Engine | ok-version, determinism, version-resolution |
+| [ADR-004](decisions/ADR-004-outbox-pattern-guaranteed-delivery.md) | Outbox pattern for guaranteed delivery | approved | S1 | Infrastructure, API Integration | outbox-pattern, delivery-guarantee, integration |
+| [ADR-005](decisions/ADR-005-explicit-type-map-polymorphic-serialization.md) | Explicit type map for polymorphic event serialization | approved | S1 | Data Model, Infrastructure | serialization, events, type-map, system-text-json |
+| [ADR-006](decisions/ADR-006-eight-service-docker-compose.md) | 8-service Docker Compose architecture | approved | S1 | Infrastructure | docker, microservices, architecture |
+| [ADR-007](decisions/ADR-007-jwt-auth-rbac-correlation-ids.md) | JWT auth with RBAC and correlation IDs | approved | S3 | Security, Infrastructure | jwt, rbac, authentication, authorization, correlation-id, audit |
+
+## Validated Patterns (PAT)
+
+| ID | Title | Status | Sprint | Domains | Tags |
+|----|-------|--------|--------|---------|------|
+| [PAT-001](patterns/PAT-001-immutable-models-init-only.md) | Immutable models with init-only properties | approved | S1 | Data Model | immutability, models, value-objects, c-sharp |
+| [PAT-002](patterns/PAT-002-supplement-precedence-no-double-dipping.md) | Supplement precedence — no double-dipping | approved | S2 | Rule Engine | supplements, precedence, overtime, rule-engine |
+| [PAT-003](patterns/PAT-003-agreement-config-in-memory-dictionary.md) | Agreement config as in-memory dictionary | approved | S2 | Rule Engine | agreement-config, configuration, rule-engine, ac, hk, prosa |
+| [PAT-004](patterns/PAT-004-domain-events-extend-base-with-actor-tracking.md) | Domain events extend DomainEventBase with actor tracking | approved | S1+S3 | Data Model | events, domain-events, actor-tracking, audit |
+
+## Cross-Domain Dependencies (DEP)
+
+| ID | Title | Status | Sprint | From → To | Tags |
+|----|-------|--------|--------|-----------|------|
+| [DEP-001](dependencies/DEP-001-rule-engine-depends-on-sharedkernel-calendar.md) | Rule Engine depends on SharedKernel Calendar | approved | S2 | Rule Engine → SharedKernel | calendar, holidays, cross-domain, dependency |
+| [DEP-002](dependencies/DEP-002-payroll-depends-on-rule-engine-outputs.md) | Payroll depends on Rule Engine output types | approved | S2 | Payroll → Rule Engine | payroll, wage-types, cross-domain, dependency |
+| [DEP-003](dependencies/DEP-003-event-serializer-must-register-all-types.md) | EventSerializer must register all event types | approved | S1 | Infrastructure → Data Model | serialization, events, type-map, cross-domain, dependency |
+
+## Priority Conflict Resolutions (RES)
+
+| ID | Title | Status | Sprint | Priorities | Tags |
+|----|-------|--------|--------|------------|------|
+| [RES-001](resolutions/RES-001-ac-no-overtime-supplements.md) | AC has no overtime/supplements (agreement fidelity over feature parity) | approved | S2 | P2 vs P9 | ac, overtime, supplements, priority-conflict |
+
+## Failure/Pivot Log (FAIL)
+
+_No entries yet._
+
+---
+
+## Tag Index
+
+| Tag | Entries |
+|-----|---------|
+| ac | PAT-003, RES-001 |
+| agreement-config | PAT-003 |
+| architecture | ADR-006 |
+| actor-tracking | PAT-004 |
+| audit | ADR-007, PAT-004 |
+| authentication | ADR-007 |
+| authorization | ADR-007 |
+| c-sharp | PAT-001 |
+| calendar | DEP-001 |
+| configuration | PAT-003 |
+| correlation-id | ADR-007 |
+| cross-domain | DEP-001, DEP-002, DEP-003 |
+| delivery-guarantee | ADR-004 |
+| dependency | DEP-001, DEP-002, DEP-003 |
+| determinism | ADR-002, ADR-003 |
+| docker | ADR-006 |
+| domain-events | PAT-004 |
+| event-sourcing | ADR-001 |
+| events | ADR-005, PAT-004, DEP-003 |
+| hk | PAT-003 |
+| holidays | DEP-001 |
+| immutability | PAT-001 |
+| integration | ADR-004 |
+| jwt | ADR-007 |
+| microservices | ADR-006 |
+| models | PAT-001 |
+| npgsql | ADR-001 |
+| ok-version | ADR-003 |
+| outbox-pattern | ADR-004 |
+| overtime | PAT-002, RES-001 |
+| payroll | DEP-002 |
+| postgresql | ADR-001 |
+| precedence | PAT-002 |
+| priority-conflict | RES-001 |
+| prosa | PAT-003 |
+| pure-functions | ADR-002 |
+| rbac | ADR-007 |
+| rule-engine | ADR-002, PAT-002, PAT-003 |
+| serialization | ADR-005, DEP-003 |
+| supplements | PAT-002, RES-001 |
+| system-text-json | ADR-005 |
+| type-map | ADR-005, DEP-003 |
+| value-objects | PAT-001 |
+| version-resolution | ADR-003 |
+| wage-types | DEP-002 |
+
+## Domain Index
+
+| Domain | Entries |
+|--------|---------|
+| API Integration | ADR-004 |
+| Data Model | ADR-001, ADR-005, PAT-001, PAT-004, DEP-003 |
+| Infrastructure | ADR-001, ADR-004, ADR-005, ADR-006, ADR-007, DEP-003 |
+| Payroll | DEP-002 |
+| Rule Engine | ADR-002, ADR-003, PAT-002, PAT-003, DEP-001, DEP-002, RES-001 |
+| Security | ADR-007 |
+| SharedKernel | DEP-001 |

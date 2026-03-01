@@ -151,6 +151,7 @@ For all domain implementation work, you MUST delegate to domain agents.
 ## Orchestrator Workflow (MANDATORY)
 When given an implementation task (sprint plan, feature request, bug fix spanning multiple domains):
 
+0. **Consult Knowledge Base**: Read `docs/knowledge-base/INDEX.md` and identify relevant entries for the task. Use the Domain Index to select entries to include in each agent's prompt.
 1. **Decompose**: Break the task into domain-scoped subtasks. Each subtask must map to exactly one domain agent.
 2. **Delegate**: Spawn one Agent per subtask using the Claude Code `Agent` tool with `subagent_type: "general-purpose"`. Each agent receives:
    - Its domain role (e.g. "You are the Rule Engine Agent")
@@ -165,6 +166,7 @@ When given an implementation task (sprint plan, feature request, bug fix spannin
    - **Phase 3** (sequential): Test & QA Agent (depends on all implementation code)
    - **Phase 4** (sequential): Orchestrator validates — `dotnet build && dotnet test`
 5. **Validate**: After all agents complete, the Orchestrator runs build and test. If validation fails, identify the responsible agent and re-dispatch with the error context.
+5b. **Review Knowledge Proposals**: Review agent outputs for `PROPOSED KNOWLEDGE ENTRY` sections. Approve valid proposals by creating entries in `docs/knowledge-base/` and updating `INDEX.md`.
 6. **Merge**: If agents ran in worktrees, the Orchestrator merges their branches and resolves any conflicts.
 
 ## Domain Agents
@@ -225,6 +227,22 @@ TASK:
 CONTEXT:
 [relevant existing file contents, interfaces, models the agent needs]
 
+KNOWLEDGE BASE CONTEXT:
+[Orchestrator includes relevant KB entries for this agent's domain, sourced from docs/knowledge-base/INDEX.md Domain Index]
+
+KNOWLEDGE BASE INSTRUCTIONS:
+- You MUST respect all approved knowledge base entries provided above.
+- If you discover new knowledge (a pattern, dependency, decision, or failure), include a PROPOSED KNOWLEDGE ENTRY section in your output:
+  ### PROPOSED KNOWLEDGE ENTRY
+  - **Category**: decision | pattern | dependency | resolution | failure
+  - **Title**: [concise title]
+  - **Domains**: [affected domains]
+  - **Tags**: [relevant tags]
+  - **Context**: [what prompted this]
+  - **Content**: [the knowledge]
+  - **Rationale**: [why this matters]
+  - **Agent Guidance**: [what future agents need to know]
+
 ACCEPTANCE CRITERIA:
 - [criterion 1]
 - [criterion 2]
@@ -237,6 +255,7 @@ ACCEPTANCE CRITERIA:
 - The Orchestrator is the only entity that decomposes goals, assigns work, and validates outputs
 - If an agent encounters a cross-domain dependency, it must declare it in its output rather than modifying the other domain's files
 - All agent outputs must pass `dotnet build` before the Orchestrator accepts them
+- No agent may create, modify, or delete files under `docs/knowledge-base/` — this is an Orchestrator-only directory
 
 ## Small Tasks Exception
 For trivial changes (single-file fix, typo, < 10 lines changed in one domain), the Orchestrator may implement directly without spawning an agent. This exception must not be used to bypass the multi-agent workflow for substantive work.
@@ -250,3 +269,26 @@ For trivial changes (single-file fix, typo, < 10 lines changed in one domain), t
 - **Serialization**: System.Text.Json with polymorphic type handling
 - **Architecture**: Event sourcing, outbox pattern, CQRS-lite
 - **Rule Engine**: Pure functions, no I/O, deterministic, version-aware (OK24+)
+
+# Knowledge Base
+The project maintains a structured, version-controlled knowledge base at `docs/knowledge-base/`.
+
+## Governance
+- **Orchestrator-only writes**: Only the Orchestrator may create, modify, or delete files under `docs/knowledge-base/`. Agents may propose new entries but cannot write them directly.
+- **Version-controlled**: The knowledge base lives in the git repository and persists across sessions and machines.
+- **Outside agent scopes**: `docs/` is not within any agent's declared file scope — this is by design.
+
+## Entry Categories
+| Prefix | Directory | Purpose |
+|--------|-----------|---------|
+| ADR | `decisions/` | Architectural Decision Records — why we chose X over Y |
+| PAT | `patterns/` | Validated pattern conventions — how we do X |
+| DEP | `dependencies/` | Cross-domain dependency registry — X depends on Y |
+| RES | `resolutions/` | Priority conflict resolutions — when P2 conflicts with P9 |
+| FAIL | `failures/` | Failure/pivot log — what we tried that didn't work and why |
+
+## Agent Responsibilities
+- **Before implementation**: The Orchestrator consults `docs/knowledge-base/INDEX.md` and includes relevant entries in agent prompts.
+- **During implementation**: Agents MUST respect all approved knowledge base entries provided in their context.
+- **Proposing new knowledge**: If an agent discovers a new pattern, dependency, or decision during implementation, it includes a `PROPOSED KNOWLEDGE ENTRY` section in its output for Orchestrator review.
+- **Never modify directly**: Agents must never create, edit, or delete files under `docs/knowledge-base/`.
