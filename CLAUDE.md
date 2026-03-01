@@ -47,6 +47,7 @@ When given an implementation task (sprint plan, feature request, bug fix spannin
    - **Phase 3** (sequential): Test & QA Agent (depends on all implementation code)
    - **Phase 4** (sequential): Orchestrator validates — `dotnet build && dotnet test`
 5. **Validate**: After all agents complete, the Orchestrator runs build and test. If validation fails, identify the responsible agent and re-dispatch with the error context.
+5a. **Reviewer Audit**: If the task meets trigger criteria (see Reviewer Agent section), spawn the Reviewer Agent with the agent's output as context. Read the Reviewer's findings before proceeding to step 5b. The Orchestrator decides how to act on findings — a BLOCKER finding is a strong signal to withhold approval and re-dispatch, but authority remains with the Orchestrator. Do NOT invoke the Reviewer for tasks covered by the Small Tasks Exception.
 5b. **Review Knowledge Proposals**: Review agent outputs for `PROPOSED KNOWLEDGE ENTRY` sections. Approve valid proposals by creating entries in `docs/knowledge-base/` and updating `INDEX.md`.
 5c. **Record in Sprint Log**: After validating each task, record it in the current sprint's `docs/sprints/SPRINT-N.md` with validation criteria, files changed, and KB references.
 6. **Merge**: If agents ran in worktrees, the Orchestrator merges their branches and resolves any conflicts.
@@ -142,9 +143,130 @@ ACCEPTANCE CRITERIA:
 - All agent outputs must pass `dotnet build` before the Orchestrator accepts them
 - No agent may create, modify, or delete files under `docs/knowledge-base/` — this is an Orchestrator-only directory
 - No agent may create, modify, or delete files under `docs/sprints/` — this is an Orchestrator-only directory
+- The Reviewer Agent may not create, modify, or delete any file — it has no file scope
+- No domain agent may invoke the Reviewer Agent — only the Orchestrator may spawn it
 
 ## Small Tasks Exception
 For trivial changes (single-file fix, typo, < 10 lines changed in one domain), the Orchestrator may implement directly without spawning an agent. This exception must not be used to bypass the multi-agent workflow for substantive work.
+
+## Reviewer Agent
+
+The Reviewer Agent is an independent audit layer. It challenges agent outputs before the Orchestrator grants approval. It does not replace the Orchestrator, does not approve or reject outputs directly, and does not modify any files.
+
+**The Reviewer advises. The Orchestrator decides. Authority remains centralized.**
+
+### Role and Boundaries
+
+The Reviewer:
+- Challenges agent outputs for priority violations, architectural breaches, quality regressions, and simplicity failures
+- Acts as internal auditor, red team, compliance validator, architecture stress tester, and code quality reviewer
+- Produces advisory findings only — it never issues approvals or rejections
+- Has no file scope — it reads agent outputs and existing code context provided by the Orchestrator, but writes nothing
+- Is spawned by the Orchestrator at workflow step 5a, only when trigger criteria are met
+- Must not review its own prior advice — if a domain agent was re-dispatched based on Reviewer findings, the second pass is NOT sent back to the Reviewer for the same concern
+
+### Trigger Criteria
+
+| Tier | Condition | Review Required |
+|------|-----------|----------------|
+| MANDATORY | Task touches P1 (Architectural integrity) | Always |
+| MANDATORY | Task touches P2 (Deterministic rule engine) | Always |
+| MANDATORY | Task touches P3 (Event sourcing / auditability) | Always |
+| MANDATORY | Task touches P4 (Version correctness) | Always |
+| MANDATORY | Task involves cross-domain changes (multiple agents) | Always |
+| MANDATORY | Task introduces a new pattern or abstraction | Always |
+| OPTIONAL | Task touches P5–P7 (integrations, payroll, security) | Orchestrator discretion |
+| SKIP | Small Tasks Exception applies (< 10 lines, single domain) | Never |
+| SKIP | Pure UI fix with no backend change | Never |
+| SKIP | Documentation-only change | Never |
+| SKIP | Trivial seed data update (no schema or logic change) | Never |
+
+### Finding Severity Levels
+
+| Severity | Meaning | Expected Orchestrator Response |
+|----------|---------|-------------------------------|
+| BLOCKER | Priority violation or architectural breach | Strongly consider withholding approval and re-dispatching the responsible agent with the finding |
+| WARNING | Quality or simplicity concern, potential future issue | Note in sprint log; address at Orchestrator discretion |
+| NOTE | Suggestion for improvement; not blocking | Record if useful; no required action |
+
+The Reviewer NEVER uses the words "approved", "rejected", "pass", or "fail" in its output.
+
+### Scope per Invocation
+
+The Orchestrator defines the Reviewer's scope each time. The Reviewer does not self-scope. Each invocation receives:
+- The specific agent output(s) to review (diff, new files, changed files)
+- The specific concerns to evaluate (e.g. "check P2 compliance", "assess cross-domain boundary violations")
+- Relevant existing code context (file contents, interfaces, KB entries)
+
+### Reviewer Prompt Template
+
+When spawning the Reviewer Agent, use this structure:
+
+```
+You are the Reviewer Agent for the StatsTid project.
+
+ROLE: Independent audit layer. You challenge agent outputs before Orchestrator approval.
+You produce advisory findings only — you never approve, reject, or modify files.
+
+REVIEW SCOPE:
+[Orchestrator specifies which agent output(s) to review, which files changed, which concerns to evaluate.]
+
+PRIORITY ORDER (from CLAUDE.md):
+1. Architectural integrity
+2. Deterministic rule engine
+3. Event sourcing and auditability
+4. Version correctness (including OK transitions)
+5. Integration isolation and delivery guarantees
+6. Payroll integration correctness
+7. Security and access control
+8. CI/CD enforcement
+9. Usability and UX
+
+AGENT OUTPUT:
+[Diff or new file contents produced by the domain agent(s) being reviewed.]
+
+EXISTING CONTEXT:
+[Relevant existing file contents, interfaces, KB entries.]
+
+REVIEW CHECKLIST:
+[Orchestrator selects which checks apply:]
+- [ ] P1 — Architectural integrity preserved? Bounded contexts respected?
+- [ ] P2 — Rule engine code free of I/O, non-determinism, state?
+- [ ] P3 — Events remain append-only? Auditability maintained?
+- [ ] P4 — OK version resolution correct (entry-date, not current-date)?
+- [ ] P5 — Integrations properly isolated? Delivery guaranteed?
+- [ ] P6 — Payroll traceability chain maintained end-to-end?
+- [ ] P7 — Security intact? New endpoints authorized?
+- [ ] P8 — CI/CD will pass? Untested paths?
+- [ ] Cross-domain — Output require changes outside agent's declared scope?
+- [ ] Simplicity — Unnecessary complexity, over-abstraction, or duplication?
+- [ ] Completeness — Gaps relative to acceptance criteria?
+
+OUTPUT FORMAT:
+Structured findings report using severity labels: BLOCKER, WARNING, NOTE.
+Do not use "approved", "rejected", "pass", or "fail".
+If no issues found: "No findings for the reviewed scope."
+
+Format:
+BLOCKER: [Title]
+Priority: P[N]
+Location: [File and line or section]
+Finding: [What the problem is]
+Recommendation: [What the agent should do]
+
+SELF-REVIEW CONSTRAINT:
+If this is a second pass on a previously flagged concern, do NOT re-raise it.
+```
+
+### Constraints
+
+- The Reviewer has no file scope — it may not create, modify, or delete any file
+- The Reviewer may not approve or reject agent outputs — it advises only
+- The Reviewer may not self-assign review tasks — the Orchestrator controls invocation and scope
+- The Reviewer must not re-raise findings it previously raised on the same concern in a re-dispatch cycle
+- The Orchestrator is not required to act on every finding — WARNING and NOTE are at Orchestrator discretion
+- The Orchestrator should document reasoning in the sprint log when choosing not to act on a BLOCKER
+- The Reviewer does not appear in sprint log "Agent" fields — findings are recorded as validation evidence
 
 # Knowledge Base
 The project maintains a structured, version-controlled knowledge base at `docs/knowledge-base/`.

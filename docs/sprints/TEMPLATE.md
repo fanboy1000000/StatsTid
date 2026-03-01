@@ -38,6 +38,7 @@ _Check each constraint that was explicitly validated during this sprint._
 | **Agent** | [Rule Engine \| Data Model \| Payroll \| API Integration \| Security \| Test & QA \| UX \| Orchestrator] |
 | **Components** | [list of affected bounded contexts / modules] |
 | **KB Refs** | [ADR-xxx, PAT-xxx, DEP-xxx, RES-xxx — knowledge base entries relevant to this task] |
+| **Reviewer Audit** | skipped \| performed — [summary or "no findings"] |
 | **Orchestrator Approved** | yes — YYYY-MM-DD |
 
 **Description**: _What was done and why._
