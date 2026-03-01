@@ -15,7 +15,7 @@ Lower priorities must never compromise higher priorities.
 
 # Document References
 - **[SYSTEM_TARGET.md](SYSTEM_TARGET.md)** — End-state product definition (functional requirements, agreement rules, payroll, integrations)
-- **[ROADMAP.md](ROADMAP.md)** — Technology stack and strategic phases
+- **[ROADMAP.md](ROADMAP.md)** — Technology stack, phased milestones, and detailed next-sprint planning (rolling detail)
 
 Agents needing domain requirements context should consult SYSTEM_TARGET.md.
 
@@ -206,3 +206,13 @@ Each sprint log includes a Legal & Payroll Verification table tracking:
 - Overtime/supplement determinism
 - Absence effect accuracy
 - Retroactive recalculation stability
+
+# Roadmap
+The project maintains a phased roadmap at `ROADMAP.md` using a rolling detail pattern.
+
+## Governance
+- **Rolling detail**: Only the next sprint has task-level planning. Future phases have milestone-level descriptions.
+- **Sprint promotion**: After completing a sprint, the Orchestrator promotes the next sprint to detailed planning and updates ROADMAP.md.
+- **Coverage tracker**: ROADMAP.md includes a SYSTEM_TARGET.md coverage tracker showing projected completion per phase.
+- **Orchestrator-only writes**: Only the Orchestrator may modify ROADMAP.md. Already enforced by the Constraints section (ROADMAP.md in protected files list).
+- **Consistency**: Sprint plans in ROADMAP.md must be consistent with sprint logs in `docs/sprints/`.
