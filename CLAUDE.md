@@ -167,6 +167,7 @@ When given an implementation task (sprint plan, feature request, bug fix spannin
    - **Phase 4** (sequential): Orchestrator validates — `dotnet build && dotnet test`
 5. **Validate**: After all agents complete, the Orchestrator runs build and test. If validation fails, identify the responsible agent and re-dispatch with the error context.
 5b. **Review Knowledge Proposals**: Review agent outputs for `PROPOSED KNOWLEDGE ENTRY` sections. Approve valid proposals by creating entries in `docs/knowledge-base/` and updating `INDEX.md`.
+5c. **Record in Sprint Log**: After validating each task, record it in the current sprint's `docs/sprint-log/SPRINT-N.md` with validation criteria, files changed, and KB references.
 6. **Merge**: If agents ran in worktrees, the Orchestrator merges their branches and resolves any conflicts.
 
 ## Domain Agents
@@ -256,6 +257,7 @@ ACCEPTANCE CRITERIA:
 - If an agent encounters a cross-domain dependency, it must declare it in its output rather than modifying the other domain's files
 - All agent outputs must pass `dotnet build` before the Orchestrator accepts them
 - No agent may create, modify, or delete files under `docs/knowledge-base/` — this is an Orchestrator-only directory
+- No agent may create, modify, or delete files under `docs/sprint-log/` — this is an Orchestrator-only directory
 
 ## Small Tasks Exception
 For trivial changes (single-file fix, typo, < 10 lines changed in one domain), the Orchestrator may implement directly without spawning an agent. This exception must not be used to bypass the multi-agent workflow for substantive work.
@@ -292,3 +294,41 @@ The project maintains a structured, version-controlled knowledge base at `docs/k
 - **During implementation**: Agents MUST respect all approved knowledge base entries provided in their context.
 - **Proposing new knowledge**: If an agent discovers a new pattern, dependency, or decision during implementation, it includes a `PROPOSED KNOWLEDGE ENTRY` section in its output for Orchestrator review.
 - **Never modify directly**: Agents must never create, edit, or delete files under `docs/knowledge-base/`.
+
+# Sprint Log
+The project maintains a structured sprint log at `docs/sprint-log/` — a formal governance artifact that documents completed work with validation evidence and traceability.
+
+## Governance
+- **Orchestrator-only writes**: Only the Orchestrator may create, modify, or approve sprint log entries. Agents report task completion; the Orchestrator records it.
+- **Version-controlled**: Lives in the git repository alongside the knowledge base.
+- **Separate from git history**: Git commits record *what* changed; the sprint log records *why*, *who approved it*, *what was validated*, and *which constraints were verified*.
+
+## Sprint Log Structure
+- `docs/sprint-log/INDEX.md` — Master index with sprint table, cumulative metrics, constraint coverage matrix
+- `docs/sprint-log/TEMPLATE.md` — Template for new sprints
+- `docs/sprint-log/SPRINT-N.md` — One file per sprint
+
+## Task Entry Fields
+Each task in a sprint log includes:
+- **ID**: TASK-NNN (sprint-prefixed, e.g., TASK-301)
+- **Status**: complete | partial | blocked
+- **Agent**: Which domain agent performed the work
+- **Components**: Affected bounded contexts / modules
+- **KB Refs**: Related knowledge base entries
+- **Orchestrator Approved**: yes/no with date
+- **Validation Criteria**: Checklist of acceptance criteria with pass/fail
+- **Files Changed**: List of affected files
+
+## Orchestrator Workflow Integration
+- **Sprint start**: Copy TEMPLATE.md → SPRINT-N.md, fill metadata and goal
+- **During sprint**: Record each validated task as agents complete work
+- **Sprint end**: Verify all architectural constraints, run build/test, approve sprint, update INDEX.md
+- **Post-sprint**: Record retrospective and knowledge base entries produced
+
+## Legal & Payroll Traceability
+Each sprint log includes a Legal & Payroll Verification table tracking:
+- Agreement rule compliance
+- Wage type mapping correctness
+- Overtime/supplement determinism
+- Absence effect accuracy
+- Retroactive recalculation stability
