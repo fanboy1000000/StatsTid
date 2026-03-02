@@ -1,6 +1,7 @@
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Security;
 using StatsTid.Integrations.Payroll.Services;
+using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Models;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -9,6 +10,7 @@ var connectionString = builder.Configuration.GetConnectionString("EventStore")
     ?? "Host=localhost;Port=5432;Database=statstid;Username=statstid;Password=statstid_dev";
 
 builder.Services.AddSingleton(new DbConnectionFactory(connectionString));
+builder.Services.AddSingleton<IEventStore>(sp => new PostgresEventStore(sp.GetRequiredService<DbConnectionFactory>()));
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<PayrollMappingService>();
 builder.Services.AddSingleton<PayrollExportService>();

@@ -1,3 +1,5 @@
+using StatsTid.SharedKernel.Events;
+using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Models;
 using System.Text.Json;
 
@@ -13,6 +15,7 @@ public sealed class PeriodCalculationService
 {
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly PayrollMappingService _mappingService;
+    private readonly IEventStore _eventStore;
     private readonly ILogger<PeriodCalculationService> _logger;
     private readonly string _ruleEngineUrl;
 
@@ -25,11 +28,13 @@ public sealed class PeriodCalculationService
     public PeriodCalculationService(
         IHttpClientFactory httpClientFactory,
         PayrollMappingService mappingService,
+        IEventStore eventStore,
         IConfiguration configuration,
         ILogger<PeriodCalculationService> logger)
     {
         _httpClientFactory = httpClientFactory;
         _mappingService = mappingService;
+        _eventStore = eventStore;
         _logger = logger;
         _ruleEngineUrl = configuration["ServiceUrls:RuleEngine"] ?? "http://rule-engine:8080";
     }
@@ -59,11 +64,19 @@ public sealed class PeriodCalculationService
         // 1. Call Rule Engine for each rule via HTTP POST
         // ---------------------------------------------------------------
 
-        // Time-based rules
-        var timeRuleIds = new[] { "NORM_CHECK_37H", "SUPPLEMENT_CALC", "OVERTIME_CALC" };
-        foreach (var ruleId in timeRuleIds)
+        // Parallelize independent rules: 3 time rules + absence
+        var timeRuleTasks = new[] { "NORM_CHECK_37H", "SUPPLEMENT_CALC", "OVERTIME_CALC" }
+            .Select(ruleId => CallTimeRuleAsync(client, ruleId, profile, entries, periodStart, periodEnd, ct))
+            .ToList();
+        var absenceTask = CallAbsenceRuleAsync(client, profile, absences, periodStart, periodEnd, ct);
+
+        var allTasks = timeRuleTasks.Append(absenceTask).ToArray();
+        await Task.WhenAll(allTasks);
+
+        // Collect results from parallel calls
+        foreach (var task in timeRuleTasks)
         {
-            var result = await CallTimeRuleAsync(client, ruleId, profile, entries, periodStart, periodEnd, ct);
+            var result = await task; // Already completed
             if (result is not null)
             {
                 ruleResults.Add(result);
@@ -79,8 +92,8 @@ public sealed class PeriodCalculationService
             }
         }
 
-        // Absence rule
-        var absenceResult = await CallAbsenceRuleAsync(client, profile, absences, periodStart, periodEnd, ct);
+        // Absence result
+        var absenceResult = await absenceTask; // Already completed
         if (absenceResult is not null)
         {
             ruleResults.Add(absenceResult);
@@ -95,7 +108,7 @@ public sealed class PeriodCalculationService
             failureCount++;
         }
 
-        // Flex balance rule
+        // Flex balance rule — sequential (depends on absence results for norm credit)
         var flexResult = await CallFlexRuleAsync(client, profile, entries, absences, periodStart, periodEnd, previousFlexBalance, ct);
         if (flexResult is not null)
         {
@@ -112,7 +125,7 @@ public sealed class PeriodCalculationService
         }
 
         // If ALL rules failed, report overall failure
-        var totalRules = timeRuleIds.Length + 2; // +2 for absence and flex
+        var totalRules = 5; // 3 time rules + absence + flex
         if (failureCount >= totalRules)
         {
             _logger.LogError(
@@ -168,6 +181,34 @@ public sealed class PeriodCalculationService
         _logger.LogInformation(
             "Period calculation complete for {EmployeeId}: {RuleCount} rules evaluated, {LineCount} export lines produced",
             profile.EmployeeId, ruleResults.Count, exportLines.Count);
+
+        // ---------------------------------------------------------------
+        // 3. Emit PeriodCalculationCompleted event
+        // ---------------------------------------------------------------
+        try
+        {
+            var calcEvent = new PeriodCalculationCompleted
+            {
+                EmployeeId = profile.EmployeeId,
+                PeriodStart = periodStart,
+                PeriodEnd = periodEnd,
+                AgreementCode = profile.AgreementCode,
+                OkVersion = profile.OkVersion,
+                RuleCount = ruleResults.Count,
+                ExportLineCount = exportLines.Count,
+                TotalHours = exportLines.Sum(l => l.Hours),
+                CorrelationId = correlationId
+            };
+
+            await _eventStore.AppendAsync(
+                $"period-calc-{profile.EmployeeId}-{periodStart:yyyy-MM-dd}",
+                calcEvent, ct);
+        }
+        catch (Exception ex)
+        {
+            // Event emission failure should not fail the calculation
+            _logger.LogWarning(ex, "Failed to emit PeriodCalculationCompleted event for {EmployeeId}", profile.EmployeeId);
+        }
 
         return new PeriodCalculationResult
         {
