@@ -1,6 +1,7 @@
 using StatsTid.Infrastructure.Security;
 using StatsTid.RuleEngine.Api.Contracts;
 using StatsTid.RuleEngine.Api.Rules;
+using StatsTid.SharedKernel.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -49,7 +50,26 @@ app.MapPost("/api/rules/evaluate-flex", (EvaluateFlexRequest request, RuleRegist
         request.PeriodEnd,
         request.PreviousBalance);
 
-    return result.Success ? Results.Ok(result) : Results.BadRequest(result);
+    if (!result.Success)
+        return Results.BadRequest(result);
+
+    var payoutItem = FlexBalanceRule.GetPayoutLineItem(result, request.PeriodEnd);
+    var lineItems = payoutItem is not null ? new[] { payoutItem } : Array.Empty<CalculationLineItem>();
+
+    return Results.Ok(new
+    {
+        ruleId = FlexBalanceRule.RuleId,
+        result.EmployeeId,
+        result.Success,
+        lineItems,
+        result.PreviousBalance,
+        result.NewBalance,
+        result.Delta,
+        result.WorkedHours,
+        result.AbsenceNormCredits,
+        result.NormHours,
+        result.ExcessForPayout
+    });
 }).RequireAuthorization("Authenticated");
 
 app.MapGet("/api/rules/available/{okVersion}", (string okVersion, RuleRegistry registry) =>

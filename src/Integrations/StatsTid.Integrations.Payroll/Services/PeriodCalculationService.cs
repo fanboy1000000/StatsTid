@@ -305,36 +305,8 @@ public sealed class PeriodCalculationService
             }
 
             var json = await response.Content.ReadAsStringAsync(ct);
-
-            // Parse flex response — check for excessForPayout
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-
-            var lineItems = new List<CalculationLineItem>();
-
-            // Check if the response has excessForPayout (flex-specific field)
-            if (root.TryGetProperty("excessForPayout", out var excessProp))
-            {
-                var excessForPayout = excessProp.GetDecimal();
-                if (excessForPayout > 0)
-                {
-                    lineItems.Add(new CalculationLineItem
-                    {
-                        TimeType = "FLEX_PAYOUT",
-                        Hours = excessForPayout,
-                        Rate = 1.0m,
-                        Date = periodEnd
-                    });
-                }
-            }
-
-            return new CalculationResult
-            {
-                RuleId = "FLEX_BALANCE",
-                EmployeeId = profile.EmployeeId,
-                Success = true,
-                LineItems = lineItems
-            };
+            var result = JsonSerializer.Deserialize<CalculationResult>(json, JsonOptions);
+            return result;
         }
         catch (Exception ex)
         {
