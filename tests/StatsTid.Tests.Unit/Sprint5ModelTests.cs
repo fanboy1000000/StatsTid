@@ -25,7 +25,10 @@ public class Sprint5ModelTests
             OriginalPeriodEnd = new DateOnly(2024, 4, 14),
             AgreementCode = "HK",
             OkVersion = "OK24",
-            Reason = "Late time entry correction"
+            Reason = "Late time entry correction",
+            CorrectedByActorId = "admin01",
+            CorrectionLineCount = 2,
+            TotalDifferenceHours = 3.5m
         };
 
         Assert.Equal("RetroactiveCorrectionRequested", evt.EventType);
@@ -43,6 +46,9 @@ public class Sprint5ModelTests
             AgreementCode = "HK",
             OkVersion = "OK24",
             Reason = "Late time entry correction",
+            CorrectedByActorId = "admin01",
+            CorrectionLineCount = 2,
+            TotalDifferenceHours = 3.5m,
             ActorId = "admin01",
             ActorRole = "Admin",
             CorrelationId = correlationId
@@ -74,7 +80,10 @@ public class Sprint5ModelTests
             OriginalPeriodEnd = new DateOnly(2024, 4, 14),
             AgreementCode = "AC",
             OkVersion = "OK24",
-            Reason = "Forgotten overtime entry"
+            Reason = "Forgotten overtime entry",
+            CorrectedByActorId = "mgr01",
+            CorrectionLineCount = 3,
+            TotalDifferenceHours = 5.0m
         };
 
         // Serialize

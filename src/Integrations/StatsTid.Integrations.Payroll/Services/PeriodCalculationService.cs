@@ -64,8 +64,8 @@ public sealed class PeriodCalculationService
         // 1. Call Rule Engine for each rule via HTTP POST
         // ---------------------------------------------------------------
 
-        // Parallelize independent rules: 3 time rules + absence
-        var timeRuleTasks = new[] { "NORM_CHECK_37H", "SUPPLEMENT_CALC", "OVERTIME_CALC" }
+        // Parallelize independent rules: 4 time rules + absence
+        var timeRuleTasks = new[] { "NORM_CHECK_37H", "SUPPLEMENT_CALC", "OVERTIME_CALC", "ON_CALL_DUTY" }
             .Select(ruleId => CallTimeRuleAsync(client, ruleId, profile, entries, periodStart, periodEnd, ct))
             .ToList();
         var absenceTask = CallAbsenceRuleAsync(client, profile, absences, periodStart, periodEnd, ct);
@@ -125,7 +125,7 @@ public sealed class PeriodCalculationService
         }
 
         // If ALL rules failed, report overall failure
-        var totalRules = 5; // 3 time rules + absence + flex
+        var totalRules = 6; // 4 time rules + absence + flex
         if (failureCount >= totalRules)
         {
             _logger.LogError(

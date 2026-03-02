@@ -122,10 +122,13 @@ INSERT INTO rule_versions (rule_id, ok_version, rule_name, agreement_code, effec
     ('OVERTIME_CALC', 'OK24', 'Overtime / Merarbejde Calculation', 'PROSA', '2024-04-01'),
     ('ABSENCE_CALC', 'OK24', 'Absence Calculation', 'AC', '2024-04-01'),
     ('ABSENCE_CALC', 'OK24', 'Absence Calculation', 'HK', '2024-04-01'),
-    ('ABSENCE_CALC', 'OK24', 'Absence Calculation', 'PROSA', '2024-04-01')
+    ('ABSENCE_CALC', 'OK24', 'Absence Calculation', 'PROSA', '2024-04-01'),
+    ('ON_CALL_DUTY', 'OK24', 'On-Call Duty Calculation', 'AC', '2024-04-01'),
+    ('ON_CALL_DUTY', 'OK24', 'On-Call Duty Calculation', 'HK', '2024-04-01'),
+    ('ON_CALL_DUTY', 'OK24', 'On-Call Duty Calculation', 'PROSA', '2024-04-01')
 ON CONFLICT DO NOTHING;
 
--- Seed OK26 rule versions (4 rules x 3 agreements)
+-- Seed OK26 rule versions (5 rules x 3 agreements)
 INSERT INTO rule_versions (rule_id, ok_version, rule_name, agreement_code, effective_from) VALUES
     ('NORM_CHECK_37H', 'OK26', 'Weekly Norm Check 37 Hours', 'AC', '2026-04-01'),
     ('NORM_CHECK_37H', 'OK26', 'Weekly Norm Check 37 Hours', 'HK', '2026-04-01'),
@@ -138,7 +141,10 @@ INSERT INTO rule_versions (rule_id, ok_version, rule_name, agreement_code, effec
     ('OVERTIME_CALC', 'OK26', 'Overtime / Merarbejde Calculation', 'PROSA', '2026-04-01'),
     ('ABSENCE_CALC', 'OK26', 'Absence Calculation', 'AC', '2026-04-01'),
     ('ABSENCE_CALC', 'OK26', 'Absence Calculation', 'HK', '2026-04-01'),
-    ('ABSENCE_CALC', 'OK26', 'Absence Calculation', 'PROSA', '2026-04-01')
+    ('ABSENCE_CALC', 'OK26', 'Absence Calculation', 'PROSA', '2026-04-01'),
+    ('ON_CALL_DUTY', 'OK26', 'On-Call Duty Calculation', 'AC', '2026-04-01'),
+    ('ON_CALL_DUTY', 'OK26', 'On-Call Duty Calculation', 'HK', '2026-04-01'),
+    ('ON_CALL_DUTY', 'OK26', 'On-Call Duty Calculation', 'PROSA', '2026-04-01')
 ON CONFLICT DO NOTHING;
 
 -- Seed OK24 wage type mappings

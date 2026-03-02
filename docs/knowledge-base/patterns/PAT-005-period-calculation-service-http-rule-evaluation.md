@@ -35,5 +35,5 @@ This pattern ensures the payroll service never directly invokes rule engine func
 
 - Never import or reference Rule Engine assemblies from the Payroll project
 - Always include `SourceRuleId` and `SourceTimeType` on `PayrollExportLine` for audit trail
-- The flex endpoint response format is `FlexBalanceResult`, not `CalculationResult` — parse with `JsonDocument`
-- Sprint 5 improvement: consider unifying the flex endpoint to return `CalculationResult` with line items
+- As of Sprint 5, the flex endpoint returns a unified response deserializable as `CalculationResult` (see PAT-006). No `JsonDocument` workaround needed.
+- Independent rule calls (norm, supplement, overtime, on-call) + absence are parallelized via `Task.WhenAll`; flex remains sequential

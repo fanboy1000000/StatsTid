@@ -15,7 +15,6 @@ builder.Services.AddHttpClient();
 builder.Services.AddSingleton<PayrollMappingService>();
 builder.Services.AddSingleton<PayrollExportService>();
 builder.Services.AddSingleton<PeriodCalculationService>();
-builder.Services.AddSingleton<IEventStore, PostgresEventStore>();
 builder.Services.AddSingleton<RetroactiveCorrectionService>();
 
 builder.Services.AddStatsTidJwtAuth(builder.Configuration);

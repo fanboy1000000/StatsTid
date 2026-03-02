@@ -23,6 +23,7 @@
 | [PAT-003](patterns/PAT-003-agreement-config-in-memory-dictionary.md) | Agreement config as in-memory dictionary | approved | S2 | Rule Engine | agreement-config, configuration, rule-engine, ac, hk, prosa |
 | [PAT-004](patterns/PAT-004-domain-events-extend-base-with-actor-tracking.md) | Domain events extend DomainEventBase with actor tracking | approved | S1+S3 | Data Model | events, domain-events, actor-tracking, audit |
 | [PAT-005](patterns/PAT-005-period-calculation-service-http-rule-evaluation.md) | PeriodCalculationService HTTP rule evaluation pattern | approved | S4 | Payroll, Rule Engine | service-boundary, HTTP, traceability, payroll-chain |
+| [PAT-006](patterns/PAT-006-unified-rule-endpoint-response-format.md) | Unified rule endpoint response format | approved | S5 | Rule Engine, Payroll | rule-engine, endpoint-response, deserialization, flex, payroll-chain |
 
 ## Cross-Domain Dependencies (DEP)
 
@@ -62,11 +63,14 @@ _No entries yet._
 | cross-domain | DEP-001, DEP-002, DEP-003 |
 | delivery-guarantee | ADR-004 |
 | dependency | DEP-001, DEP-002, DEP-003 |
+| deserialization | PAT-006 |
 | determinism | ADR-002, ADR-003 |
 | docker | ADR-006 |
 | domain-events | PAT-004 |
+| endpoint-response | PAT-006 |
 | event-sourcing | ADR-001 |
 | events | ADR-005, PAT-004, DEP-003 |
+| flex | PAT-006 |
 | hk | PAT-003 |
 | HTTP | PAT-005 |
 | holidays | DEP-001 |
@@ -80,14 +84,14 @@ _No entries yet._
 | outbox-pattern | ADR-004 |
 | overtime | PAT-002, RES-001 |
 | payroll | DEP-002, PAT-005 |
-| payroll-chain | PAT-005 |
+| payroll-chain | PAT-005, PAT-006 |
 | postgresql | ADR-001 |
 | precedence | PAT-002 |
 | priority-conflict | RES-001 |
 | prosa | PAT-003 |
 | pure-functions | ADR-002 |
 | rbac | ADR-007 |
-| rule-engine | ADR-002, PAT-002, PAT-003 |
+| rule-engine | ADR-002, PAT-002, PAT-003, PAT-006 |
 | service-boundary | PAT-005 |
 | serialization | ADR-005, DEP-003 |
 | supplements | PAT-002, RES-001 |
@@ -105,7 +109,7 @@ _No entries yet._
 | API Integration | ADR-004 |
 | Data Model | ADR-001, ADR-005, PAT-001, PAT-004, DEP-003 |
 | Infrastructure | ADR-001, ADR-004, ADR-005, ADR-006, ADR-007, DEP-003 |
-| Payroll | DEP-002, PAT-005 |
-| Rule Engine | ADR-002, ADR-003, PAT-002, PAT-003, PAT-005, DEP-001, DEP-002, RES-001 |
+| Payroll | DEP-002, PAT-005, PAT-006 |
+| Rule Engine | ADR-002, ADR-003, PAT-002, PAT-003, PAT-005, PAT-006, DEP-001, DEP-002, RES-001 |
 | Security | ADR-007 |
 | SharedKernel | DEP-001 |

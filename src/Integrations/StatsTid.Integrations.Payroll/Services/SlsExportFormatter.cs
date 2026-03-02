@@ -1,3 +1,4 @@
+using System.Globalization;
 using StatsTid.SharedKernel.Models;
 
 namespace StatsTid.Integrations.Payroll.Services;
@@ -20,20 +21,23 @@ public static class SlsExportFormatter
     {
         var sb = new System.Text.StringBuilder();
 
+        var ic = CultureInfo.InvariantCulture;
+
         // Header record
-        sb.AppendLine($"H|{exportId}|{exportTimestamp:yyyy-MM-dd HH:mm:ss}|{lines.Count}");
+        sb.AppendLine(string.Format(ic, "H|{0}|{1:yyyy-MM-dd HH:mm:ss}|{2}", exportId, exportTimestamp, lines.Count));
 
         // Data records
         foreach (var line in lines)
         {
-            sb.AppendLine($"D|{line.EmployeeId}|{line.WageType}|{line.Hours:F2}|{line.Amount:F2}|{line.PeriodStart:yyyyMMdd}|{line.PeriodEnd:yyyyMMdd}|{line.OkVersion}");
+            sb.AppendLine(string.Format(ic, "D|{0}|{1}|{2:F2}|{3:F2}|{4:yyyyMMdd}|{5:yyyyMMdd}|{6}",
+                line.EmployeeId, line.WageType, line.Hours, line.Amount, line.PeriodStart, line.PeriodEnd, line.OkVersion));
         }
 
         // Trailer record with checksum
         var totalHours = lines.Sum(l => l.Hours);
         var totalAmount = lines.Sum(l => l.Amount);
         var checksum = CalculateChecksum(lines);
-        sb.Append($"T|{lines.Count}|{totalHours:F2}|{totalAmount:F2}|{checksum}");
+        sb.Append(string.Format(ic, "T|{0}|{1:F2}|{2:F2}|{3}", lines.Count, totalHours, totalAmount, checksum));
 
         return sb.ToString();
     }
