@@ -15,8 +15,11 @@ public static class AbsenceTypes
     public const string Vacation = "VACATION";
     public const string CareDay = "CARE_DAY";
     public const string ChildSick1 = "CHILD_SICK_1";
+    public const string ChildSick2 = "CHILD_SICK_2";
+    public const string ChildSick3 = "CHILD_SICK_3";
     public const string ParentalLeave = "PARENTAL_LEAVE";
     public const string SeniorDay = "SENIOR_DAY";
+    public const string SpecialHolidayAllowance = "SPECIAL_HOLIDAY_ALLOWANCE";
     public const string LeaveWithPay = "LEAVE_WITH_PAY";
     public const string LeaveWithoutPay = "LEAVE_WITHOUT_PAY";
 }

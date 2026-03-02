@@ -56,6 +56,24 @@ public static class FlexBalanceRule
             Success = true
         };
     }
+
+    /// <summary>
+    /// Pure function: produces a FLEX_PAYOUT line item when there is excess balance above the cap.
+    /// Returns null if no payout is needed.
+    /// </summary>
+    public static CalculationLineItem? GetPayoutLineItem(FlexBalanceResult result, DateOnly periodEnd)
+    {
+        if (result.ExcessForPayout <= 0)
+            return null;
+
+        return new CalculationLineItem
+        {
+            TimeType = "FLEX_PAYOUT",
+            Hours = result.ExcessForPayout,
+            Rate = 1.0m,
+            Date = periodEnd
+        };
+    }
 }
 
 public sealed class FlexBalanceResult

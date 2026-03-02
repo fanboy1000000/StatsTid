@@ -21,8 +21,11 @@ public static class AbsenceRule
         AbsenceTypes.Vacation,
         AbsenceTypes.CareDay,
         AbsenceTypes.ChildSick1,
+        AbsenceTypes.ChildSick2,
+        AbsenceTypes.ChildSick3,
         AbsenceTypes.ParentalLeave,
         AbsenceTypes.SeniorDay,
+        AbsenceTypes.SpecialHolidayAllowance,
         AbsenceTypes.LeaveWithPay,
     };
 
@@ -107,8 +110,11 @@ public static class AbsenceRule
         AbsenceTypes.Vacation => "VACATION",
         AbsenceTypes.CareDay => "CARE_DAY",
         AbsenceTypes.ChildSick1 => "CHILD_SICK_DAY",
+        AbsenceTypes.ChildSick2 => "CHILD_SICK_DAY_2",
+        AbsenceTypes.ChildSick3 => "CHILD_SICK_DAY_3",
         AbsenceTypes.ParentalLeave => "PARENTAL_LEAVE",
         AbsenceTypes.SeniorDay => "SENIOR_DAY",
+        AbsenceTypes.SpecialHolidayAllowance => "SPECIAL_HOLIDAY_ALLOWANCE",
         AbsenceTypes.LeaveWithPay => "LEAVE_WITH_PAY",
         AbsenceTypes.LeaveWithoutPay => "LEAVE_WITHOUT_PAY",
         _ => absenceType
