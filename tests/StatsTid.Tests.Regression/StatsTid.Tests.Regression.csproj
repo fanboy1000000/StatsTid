@@ -24,6 +24,7 @@
     <ProjectReference Include="..\..\src\SharedKernel\StatsTid.SharedKernel\StatsTid.SharedKernel.csproj" />
     <ProjectReference Include="..\..\src\RuleEngine\StatsTid.RuleEngine.Api\StatsTid.RuleEngine.Api.csproj" />
     <ProjectReference Include="..\..\src\Infrastructure\StatsTid.Infrastructure\StatsTid.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Integrations\StatsTid.Integrations.Payroll\StatsTid.Integrations.Payroll.csproj" />
   </ItemGroup>
 
 </Project>
