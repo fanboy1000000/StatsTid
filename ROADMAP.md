@@ -32,8 +32,8 @@ This roadmap uses a **rolling detail** pattern: only the next sprint has task-le
 
 The critical gap is payroll integration — infrastructure exists but the end-to-end traceability chain is disconnected. Phase 1 connects rules to payroll export and completes the absence type inventory.
 
-- **Sprint 4** (detailed below): Absence completion, flex payout, PeriodCalculationService "glue", payroll export endpoint, traceability regression tests
-- **Sprint 5** (milestone): On-call duty basics, weekend/holiday supplement refinement, payroll retroactive correction foundation, SLS export format
+- **Sprint 4** (complete): Absence completion, flex payout, PeriodCalculationService "glue", payroll export endpoint, traceability regression tests
+- **Sprint 5** (detailed below): Flex endpoint unification, on-call duty basics, PeriodCalculationCompleted emission, retroactive correction foundation, SLS export format
 
 ### Phase 2 — Advanced Rules + Retroactive Corrections (Sprints 6–7)
 
@@ -86,27 +86,54 @@ Projected functional coverage by requirement area. Percentages are cumulative.
 | External Integrations | 60% | 60% | 60% | 65% | 90% | 100% |
 | **Overall** | **~61%** | **~68%** | **~72%** | **~88%** | **~94%** | **100%** |
 
-## Sprint 4 Detailed Plan
+## Sprint 5 Detailed Plan
 
-**Goal**: Connect the payroll traceability chain end-to-end and complete absence type coverage.
+**Goal**: Complete Phase 1 by adding on-call duty basics, unifying the flex endpoint, laying retroactive correction foundations, and producing SLS-formatted payroll export. Also address Sprint 4 backlog (event emission, HTTP parallelization).
 
-**Test target**: ~130–140 (103 existing + 25–35 new)
+**Test target**: ~160–170 (133 existing + 25–35 new)
 
 **Execution phases**:
-1. Data Model + Rule Engine (parallel): TASK-401, TASK-402, TASK-406
-2. Payroll Integration: TASK-403, TASK-404, TASK-405
-3. Test & QA: TASK-407
+1. Rule Engine + Data Model (parallel): TASK-501, TASK-502, TASK-504
+2. Payroll Integration (depends on Phase 1): TASK-503, TASK-505, TASK-506
+3. Test & QA: TASK-507
 4. Orchestrator validates build + test
 
 | Task | Agent(s) | Description | Est. Tests |
 |------|----------|-------------|------------|
-| TASK-401 | Data Model + Rule Engine | Expand absence types: SPECIAL_HOLIDAY_ALLOWANCE, CHILD_SICK_2, CHILD_SICK_3, LEAVE_WITH_PAY distinction. Update AbsenceRule mappings and norm credit rules. | 8–10 |
-| TASK-402 | Rule Engine | Automatic flex payout trigger: produce FLEX_PAYOUT CalculationLineItem when flex excess > 0 at period end. | 4–6 |
-| TASK-403 | Payroll Integration | Wage type mapping seed data for new absence types (OK24+OK26, all agreements) in init.sql. | 2–3 |
-| TASK-404 | Data Model + Payroll Integration | PeriodCalculationService — the missing "glue" that loads events for a period, runs all rules, maps results to wage types, and produces PayrollExportLines with full traceability (Event → Rule → WageType → ExportLine). | 5–8 |
-| TASK-405 | Payroll Integration | POST /api/payroll/export endpoint triggering the full calculation-to-export chain for a given employee and period. | 2–3 |
-| TASK-406 | Data Model | PeriodCalculationCompleted event + EventSerializer type map registration. | 1–2 |
-| TASK-407 | Test & QA | Regression tests: full payroll chain for AC employee, HK employee, absence scenarios, flex payout, and traceability proof (every export line traces back to source event). | 5–8 |
+| TASK-501 | Rule Engine | Unify flex endpoint: wrap FlexBalanceResult response with CalculationResult-compatible fields (ruleId + lineItems including FLEX_PAYOUT when excess > 0). Simplify PeriodCalculationService.CallFlexRuleAsync to use standard CalculationResult deserialization instead of JsonDocument workaround. | 3–4 |
+| TASK-502 | Data Model + Rule Engine | On-call duty basics: add OnCallDutyEnabled/OnCallDutyRate to AgreementRuleConfig, create OnCallDutyRule pure function (ON_CALL_DUTY time type at reduced rate, e.g. 1/3), register in RuleRegistry, update AgreementConfigProvider (HK/PROSA: enabled, AC: disabled by default). | 6–8 |
+| TASK-503 | Payroll Integration | Emit PeriodCalculationCompleted event to event store after successful calculation. Register IEventStore + PostgresEventStore in Payroll DI. Parallelize independent rule HTTP calls (NORM_CHECK, SUPPLEMENT, OVERTIME + ABSENCE via Task.WhenAll, then FLEX sequentially). | 3–4 |
+| TASK-504 | Data Model | Retroactive correction models: RetroactiveCorrectionRequested event (extends DomainEventBase — with OriginalPeriodStart/End, Reason, CorrectedByActorId), CorrectionExportLine model (original vs corrected amounts), register in EventSerializer. | 2–3 |
+| TASK-505 | Payroll Integration | Retroactive correction foundation: POST /api/payroll/recalculate endpoint that re-runs PeriodCalculationService for a past period, compares with previous export lines, and produces correction PayrollExportLines (diff: new amount - previous amount). Correction lines carry SourceRuleId traceability. | 4–6 |
+| TASK-506 | Payroll Integration | Wage type mappings for ON_CALL_DUTY time type (init.sql, all agreements × both OK versions). SLS export formatter service: converts PayrollExportLines to SLS-compatible text format (pipe-delimited, with header/trailer records, employee ID, SLS code, hours, amount, period). | 3–5 |
+| TASK-507 | Test & QA | Unit + regression tests: OnCallDutyRule (AC disabled, HK/PROSA enabled, rate calculation), flex endpoint unified response, retroactive correction diff calculation, SLS format output, PeriodCalculationCompleted event emission (model test), correction event round-trip. | 8–10 |
+
+### Sprint 5 Task Details
+
+**TASK-501 — Flex Endpoint Unification** (Sprint 4 backlog)
+The evaluate-flex endpoint currently returns `FlexBalanceResult` directly. PeriodCalculationService uses a `JsonDocument` workaround to parse it. Fix: modify the endpoint to return an anonymous object containing all FlexBalanceResult fields PLUS `ruleId = "FLEX_BALANCE"` and `lineItems` (FLEX_PAYOUT item if excess > 0, otherwise empty array). Then update PeriodCalculationService.CallFlexRuleAsync to use standard `CalculationResult` deserialization. The endpoint response remains backward-compatible (existing fields preserved).
+
+**TASK-502 — On-Call Duty Basics**
+SYSTEM_TARGET.md Section C requires on-call duty (rådighedsvagt). Sprint 5 covers the basic rule: an employee declared "on call" earns ON_CALL_DUTY hours at a reduced rate (configurable per agreement, typically 1/3 of normal). Requires:
+- Add `OnCallDutyEnabled` (bool) and `OnCallDutyRate` (decimal, default 0.33m) to `AgreementRuleConfig`
+- Update all 6 entries in `AgreementConfigProvider` (HK/PROSA: enabled, AC: disabled)
+- Create `OnCallDutyRule` pure function in `src/RuleEngine/Rules/`
+- Register in `RuleRegistry`
+- Defer call-in work (CALL_IN_WORK) and complex on-call scenarios to Phase 2
+
+**TASK-503 — Event Emission + HTTP Parallelization** (Sprint 4 backlog)
+Two improvements to PeriodCalculationService:
+1. After successful calculation, emit a `PeriodCalculationCompleted` event to the event store (requires registering `PostgresEventStore` and `IEventStore` in Payroll DI)
+2. Parallelize the 4 independent rule calls (norm, supplement, overtime, absence) using `Task.WhenAll`, then call flex sequentially (it depends on absence results for norm credit)
+
+**TASK-504 — Retroactive Correction Models**
+Foundation for payroll re-export. A `RetroactiveCorrectionRequested` event records that a past period was re-evaluated. A `CorrectionExportLine` model extends `PayrollExportLine` semantics with `OriginalAmount`, `CorrectedAmount`, `DifferenceAmount` for the correction diff.
+
+**TASK-505 — Retroactive Correction Service**
+The recalculate endpoint re-runs `PeriodCalculationService` for a past period and produces correction lines by diffing against the previous export. This is the foundation for SYSTEM_TARGET.md's "retroactive recalculation" requirement. The correction lines carry full traceability (SourceRuleId, SourceTimeType) and can be exported via the existing PayrollExportService.
+
+**TASK-506 — On-Call Wage Mappings + SLS Formatter**
+Add `ON_CALL_DUTY` → `SLS_0710` wage type mappings (3 agreements × 2 OK versions = 6 rows). Create a `SlsExportFormatter` service that converts `IReadOnlyList<PayrollExportLine>` to SLS text format (pipe-delimited lines with header record, data records, and trailer record with checksum).
 
 ## Architecture Decisions
 
