@@ -16,6 +16,7 @@ public sealed class RuleRegistry
     {
         SupplementRule.RuleId,
         OvertimeRule.RuleId,
+        OnCallDutyRule.RuleId,
     };
 
     public IReadOnlyList<string> GetAvailableRules(string okVersion)
@@ -75,6 +76,7 @@ public sealed class RuleRegistry
         {
             "SUPPLEMENT_CALC" => SupplementRule.Evaluate(profile, entries, periodStart, periodEnd, config),
             "OVERTIME_CALC" => OvertimeRule.Evaluate(profile, entries, periodStart, periodEnd, config),
+            "ON_CALL_DUTY" => OnCallDutyRule.Evaluate(profile, entries, periodStart, periodEnd, config),
             _ => new CalculationResult
             {
                 RuleId = ruleId,

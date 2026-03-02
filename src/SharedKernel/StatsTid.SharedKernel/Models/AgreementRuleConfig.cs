@@ -32,4 +32,8 @@ public sealed class AgreementRuleConfig
     // Overtime thresholds (weekly hours)
     public decimal OvertimeThreshold50 { get; init; } = 37.0m;
     public decimal OvertimeThreshold100 { get; init; } = 40.0m;
+
+    // On-call duty (rådighedsvagt)
+    public bool OnCallDutyEnabled { get; init; }
+    public decimal OnCallDutyRate { get; init; } = 0.33m;
 }

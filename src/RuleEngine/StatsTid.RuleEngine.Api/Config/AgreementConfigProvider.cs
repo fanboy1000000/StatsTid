@@ -24,6 +24,7 @@ public static class AgreementConfigProvider
             NightSupplementEnabled = false,
             WeekendSupplementEnabled = false,
             HolidaySupplementEnabled = false,
+            OnCallDutyEnabled = false,
         },
         // HK OK24
         [("HK", "OK24")] = new AgreementRuleConfig
@@ -43,6 +44,8 @@ public static class AgreementConfigProvider
             EveningEnd = 23,
             NightStart = 23,
             NightEnd = 6,
+            OnCallDutyEnabled = true,
+            OnCallDutyRate = 0.33m,
         },
         // PROSA OK24
         [("PROSA", "OK24")] = new AgreementRuleConfig
@@ -62,6 +65,8 @@ public static class AgreementConfigProvider
             EveningEnd = 23,
             NightStart = 23,
             NightEnd = 6,
+            OnCallDutyEnabled = true,
+            OnCallDutyRate = 0.33m,
         },
         // AC OK26 (placeholder — identical to OK24 for now)
         [("AC", "OK26")] = new AgreementRuleConfig
@@ -77,6 +82,7 @@ public static class AgreementConfigProvider
             NightSupplementEnabled = false,
             WeekendSupplementEnabled = false,
             HolidaySupplementEnabled = false,
+            OnCallDutyEnabled = false,
         },
         // HK OK26 (placeholder)
         [("HK", "OK26")] = new AgreementRuleConfig
@@ -96,6 +102,8 @@ public static class AgreementConfigProvider
             EveningEnd = 23,
             NightStart = 23,
             NightEnd = 6,
+            OnCallDutyEnabled = true,
+            OnCallDutyRate = 0.33m,
         },
         // PROSA OK26 (placeholder)
         [("PROSA", "OK26")] = new AgreementRuleConfig
@@ -115,6 +123,8 @@ public static class AgreementConfigProvider
             EveningEnd = 23,
             NightStart = 23,
             NightEnd = 6,
+            OnCallDutyEnabled = true,
+            OnCallDutyRate = 0.33m,
         },
     };
 
