@@ -23,6 +23,7 @@ public static class EventSerializer
         ["FlexBalanceUpdated"] = typeof(FlexBalanceUpdated),
         ["SupplementCalculated"] = typeof(SupplementCalculated),
         ["OvertimeCalculated"] = typeof(OvertimeCalculated),
+        ["PeriodCalculationCompleted"] = typeof(PeriodCalculationCompleted),
     };
 
     public static string Serialize(IDomainEvent @event)

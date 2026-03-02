@@ -9,4 +9,6 @@ public sealed class PayrollExportLine
     public required DateOnly PeriodStart { get; init; }
     public required DateOnly PeriodEnd { get; init; }
     public required string OkVersion { get; init; }
+    public string? SourceRuleId { get; init; }
+    public string? SourceTimeType { get; init; }
 }
