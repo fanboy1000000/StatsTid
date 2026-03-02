@@ -24,6 +24,7 @@ public static class EventSerializer
         ["SupplementCalculated"] = typeof(SupplementCalculated),
         ["OvertimeCalculated"] = typeof(OvertimeCalculated),
         ["PeriodCalculationCompleted"] = typeof(PeriodCalculationCompleted),
+        ["RetroactiveCorrectionRequested"] = typeof(RetroactiveCorrectionRequested),
     };
 
     public static string Serialize(IDomainEvent @event)
