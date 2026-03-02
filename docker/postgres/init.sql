@@ -197,7 +197,11 @@ INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code
     -- Flex payout
     ('FLEX_PAYOUT', 'SLS_0610', 'OK24', 'AC', 'Flex balance auto-payout'),
     ('FLEX_PAYOUT', 'SLS_0610', 'OK24', 'HK', 'Flex balance auto-payout'),
-    ('FLEX_PAYOUT', 'SLS_0610', 'OK24', 'PROSA', 'Flex balance auto-payout')
+    ('FLEX_PAYOUT', 'SLS_0610', 'OK24', 'PROSA', 'Flex balance auto-payout'),
+    -- On-call duty (rådighedsvagt)
+    ('ON_CALL_DUTY', 'SLS_0710', 'OK24', 'AC', 'On-call duty compensation'),
+    ('ON_CALL_DUTY', 'SLS_0710', 'OK24', 'HK', 'On-call duty compensation'),
+    ('ON_CALL_DUTY', 'SLS_0710', 'OK24', 'PROSA', 'On-call duty compensation')
 ON CONFLICT DO NOTHING;
 
 -- Seed OK26 wage type mappings (identical to OK24 for now)
@@ -250,7 +254,11 @@ INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code
     ('LEAVE_WITH_PAY', 'SLS_0565', 'OK26', 'PROSA', 'Leave with pay'),
     ('FLEX_PAYOUT', 'SLS_0610', 'OK26', 'AC', 'Flex balance auto-payout'),
     ('FLEX_PAYOUT', 'SLS_0610', 'OK26', 'HK', 'Flex balance auto-payout'),
-    ('FLEX_PAYOUT', 'SLS_0610', 'OK26', 'PROSA', 'Flex balance auto-payout')
+    ('FLEX_PAYOUT', 'SLS_0610', 'OK26', 'PROSA', 'Flex balance auto-payout'),
+    -- On-call duty (rådighedsvagt)
+    ('ON_CALL_DUTY', 'SLS_0710', 'OK26', 'AC', 'On-call duty compensation'),
+    ('ON_CALL_DUTY', 'SLS_0710', 'OK26', 'HK', 'On-call duty compensation'),
+    ('ON_CALL_DUTY', 'SLS_0710', 'OK26', 'PROSA', 'On-call duty compensation')
 ON CONFLICT DO NOTHING;
 
 -- Seed Danish public holidays 2024-2026 (computed via Computus algorithm)
