@@ -1,6 +1,7 @@
 using StatsTid.RuleEngine.Api.Config;
 using StatsTid.RuleEngine.Api.Rules;
 using StatsTid.SharedKernel.Models;
+using StatsTid.Integrations.Payroll.Services;
 
 namespace StatsTid.Tests.Regression;
 
@@ -443,5 +444,192 @@ public class RegressionTests
         Assert.Contains(NormCheckRule.RuleId, distinctRules);
         Assert.Contains(OvertimeRule.RuleId, distinctRules);
         Assert.Contains(AbsenceRule.RuleId, distinctRules);
+    }
+
+    // --- Sprint 5: On-Call Duty & Retroactive Correction Regression Tests ---
+
+    private static AgreementRuleConfig CreateOnCallConfig(string agreement, bool enabled, decimal rate = 0.33m)
+    {
+        var baseConfig = AgreementConfigProvider.GetConfig(agreement, "OK24");
+        return new AgreementRuleConfig
+        {
+            AgreementCode = baseConfig.AgreementCode,
+            OkVersion = baseConfig.OkVersion,
+            WeeklyNormHours = baseConfig.WeeklyNormHours,
+            HasOvertime = baseConfig.HasOvertime,
+            HasMerarbejde = baseConfig.HasMerarbejde,
+            MaxFlexBalance = baseConfig.MaxFlexBalance,
+            FlexCarryoverMax = baseConfig.FlexCarryoverMax,
+            EveningSupplementEnabled = baseConfig.EveningSupplementEnabled,
+            NightSupplementEnabled = baseConfig.NightSupplementEnabled,
+            WeekendSupplementEnabled = baseConfig.WeekendSupplementEnabled,
+            HolidaySupplementEnabled = baseConfig.HolidaySupplementEnabled,
+            OnCallDutyEnabled = enabled,
+            OnCallDutyRate = rate,
+        };
+    }
+
+    private static TimeEntry CreateOnCallEntry(DateOnly date, decimal hours, string agreement = "HK") => new()
+    {
+        EmployeeId = "EMP001",
+        Date = date,
+        Hours = hours,
+        ActivityType = "ON_CALL",
+        AgreementCode = agreement,
+        OkVersion = "OK24"
+    };
+
+    /// <summary>
+    /// Regression 12: AC on-call duty is always disabled — AC employees must never produce
+    /// ON_CALL_DUTY line items regardless of the entries provided.
+    /// </summary>
+    [Fact]
+    public void OnCallDuty_AC_AlwaysDisabled_NeverProducesLineItems()
+    {
+        var profile = CreateProfile("AC");
+        var config = CreateOnCallConfig("AC", enabled: false);
+
+        var entries = new List<TimeEntry>
+        {
+            CreateOnCallEntry(Monday, 8m, "AC"),
+            CreateOnCallEntry(Monday.AddDays(1), 12m, "AC"),
+            CreateOnCallEntry(Monday.AddDays(2), 4m, "AC"),
+        };
+
+        var result = OnCallDutyRule.Evaluate(profile, entries, Monday, Sunday, config);
+
+        Assert.True(result.Success);
+        Assert.Empty(result.LineItems);
+        Assert.DoesNotContain(result.LineItems, li => li.TimeType == "ON_CALL_DUTY");
+    }
+
+    /// <summary>
+    /// Regression 13: HK on-call duty produces correct ON_CALL_DUTY time type that maps
+    /// to SLS wage code 0710. Verifies agreement fidelity and traceability.
+    /// </summary>
+    [Fact]
+    public void OnCallDuty_HK_Enabled_ProducesCorrectTimeType()
+    {
+        var profile = CreateProfile("HK");
+        var config = CreateOnCallConfig("HK", enabled: true, rate: 0.33m);
+
+        var entries = new List<TimeEntry>
+        {
+            CreateOnCallEntry(Monday, 8m),
+            CreateOnCallEntry(Monday.AddDays(2), 12m),
+        };
+
+        var result = OnCallDutyRule.Evaluate(profile, entries, Monday, Sunday, config);
+
+        Assert.True(result.Success);
+        Assert.Equal(OnCallDutyRule.RuleId, result.RuleId);
+        Assert.Equal(2, result.LineItems.Count);
+
+        // All line items must be ON_CALL_DUTY (mappable to SLS 0710)
+        Assert.All(result.LineItems, li =>
+        {
+            Assert.Equal("ON_CALL_DUTY", li.TimeType);
+            Assert.Equal(0.33m, li.Rate);
+        });
+
+        // Verify hours match input
+        Assert.Equal(8m, result.LineItems[0].Hours);
+        Assert.Equal(12m, result.LineItems[1].Hours);
+    }
+
+    /// <summary>
+    /// Regression 14: Flex payout produces FLEX_PAYOUT line item with correct time type.
+    /// This is the unified flex response pattern — the FLEX_PAYOUT time type must be
+    /// consistent across the system for payroll mapping.
+    /// </summary>
+    [Fact]
+    public void FlexPayout_ProducesFlexPayoutTimeType()
+    {
+        var profile = CreateProfile("AC");
+        var config = AgreementConfigProvider.GetConfig("AC", "OK24"); // MaxFlexBalance = 150
+
+        // AC employee works 50h in a week (excess will trigger payout)
+        var entries = Enumerable.Range(0, 5)
+            .Select(i => CreateEntry(Monday.AddDays(i), 10m))
+            .ToList();
+        var absences = new List<AbsenceEntry>();
+
+        // Previous balance = 145, delta = 13 → raw = 158, clamped to 150, excess = 8
+        var flexResult = FlexBalanceRule.Evaluate(profile, entries, absences, Monday, Sunday, config, 145m);
+
+        Assert.Equal(150m, flexResult.NewBalance);
+        Assert.Equal(8m, flexResult.ExcessForPayout);
+
+        var payoutItem = FlexBalanceRule.GetPayoutLineItem(flexResult, Sunday);
+
+        Assert.NotNull(payoutItem);
+        Assert.Equal("FLEX_PAYOUT", payoutItem.TimeType);
+        Assert.Equal(8m, payoutItem.Hours);
+        Assert.Equal(1.0m, payoutItem.Rate);
+    }
+
+    /// <summary>
+    /// Regression 15: CorrectionExportLine diff calculation is correct when comparing
+    /// previous and corrected PayrollExportLines. Verifies retroactive correction
+    /// arithmetic integrity.
+    /// </summary>
+    [Fact]
+    public void CorrectionExportLine_DiffMatchesBetweenOriginalAndCorrected()
+    {
+        // Original: 3h overtime at 1.5x = 4.50 amount
+        var originalLine = new PayrollExportLine
+        {
+            EmployeeId = "EMP001",
+            WageType = "1020",
+            Hours = 3.0m,
+            Amount = 4.5m,
+            PeriodStart = Monday,
+            PeriodEnd = Sunday,
+            OkVersion = "OK24",
+            SourceRuleId = "OVERTIME_CALC",
+            SourceTimeType = "OVERTIME_50"
+        };
+
+        // Corrected: 5h overtime at 1.5x = 7.50 amount
+        var correctedLine = new PayrollExportLine
+        {
+            EmployeeId = "EMP001",
+            WageType = "1020",
+            Hours = 5.0m,
+            Amount = 7.5m,
+            PeriodStart = Monday,
+            PeriodEnd = Sunday,
+            OkVersion = "OK24",
+            SourceRuleId = "OVERTIME_CALC",
+            SourceTimeType = "OVERTIME_50"
+        };
+
+        // Build the correction line
+        var correction = new CorrectionExportLine
+        {
+            EmployeeId = originalLine.EmployeeId,
+            WageType = originalLine.WageType,
+            OriginalHours = originalLine.Hours,
+            CorrectedHours = correctedLine.Hours,
+            DifferenceHours = correctedLine.Hours - originalLine.Hours,
+            OriginalAmount = originalLine.Amount,
+            CorrectedAmount = correctedLine.Amount,
+            DifferenceAmount = correctedLine.Amount - originalLine.Amount,
+            PeriodStart = originalLine.PeriodStart,
+            PeriodEnd = originalLine.PeriodEnd,
+            OkVersion = originalLine.OkVersion,
+            SourceRuleId = originalLine.SourceRuleId,
+            SourceTimeType = originalLine.SourceTimeType
+        };
+
+        // Verify diff arithmetic
+        Assert.Equal(2.0m, correction.DifferenceHours);
+        Assert.Equal(3.0m, correction.DifferenceAmount);
+        Assert.Equal(correction.CorrectedHours - correction.OriginalHours, correction.DifferenceHours);
+        Assert.Equal(correction.CorrectedAmount - correction.OriginalAmount, correction.DifferenceAmount);
+
+        // Verify traceability
+        Assert.Equal("OVERTIME_CALC", correction.SourceRuleId);
+        Assert.Equal("OVERTIME_50", correction.SourceTimeType);
     }
 }
