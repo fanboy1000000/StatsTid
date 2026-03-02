@@ -15,6 +15,8 @@ builder.Services.AddHttpClient();
 builder.Services.AddSingleton<PayrollMappingService>();
 builder.Services.AddSingleton<PayrollExportService>();
 builder.Services.AddSingleton<PeriodCalculationService>();
+builder.Services.AddSingleton<IEventStore, PostgresEventStore>();
+builder.Services.AddSingleton<RetroactiveCorrectionService>();
 
 builder.Services.AddStatsTidJwtAuth(builder.Configuration);
 builder.Services.AddStatsTidPolicies();
@@ -108,6 +110,38 @@ app.MapPost("/api/payroll/calculate-and-export", async (
     return Results.Ok(result);
 }).RequireAuthorization("Authenticated");
 
+app.MapPost("/api/payroll/recalculate", async (
+    RecalculateRequest request,
+    RetroactiveCorrectionService correctionService,
+    HttpContext httpContext,
+    CancellationToken ct) =>
+{
+    var authHeader = httpContext.Request.Headers.Authorization.FirstOrDefault();
+    Guid? correlationId = httpContext.Request.Headers.TryGetValue("X-Correlation-Id", out var corrValues)
+        && Guid.TryParse(corrValues.FirstOrDefault(), out var parsedCorr)
+            ? parsedCorr
+            : null;
+
+    // Extract actor ID from claims
+    var actorId = httpContext.User.FindFirst("sub")?.Value ?? "unknown";
+
+    var result = await correctionService.RecalculateAsync(
+        request.Profile,
+        request.Entries,
+        request.Absences,
+        request.PeriodStart,
+        request.PeriodEnd,
+        request.PreviousFlexBalance,
+        request.PreviousExportLines,
+        request.Reason,
+        actorId,
+        authHeader,
+        correlationId,
+        ct);
+
+    return result.Success ? Results.Ok(result) : Results.UnprocessableEntity(result);
+}).RequireAuthorization("Authenticated");
+
 app.Run();
 
 public sealed class PayrollExportRequest
@@ -130,4 +164,16 @@ public sealed class CalculateAndExportRequest
     public required DateOnly PeriodStart { get; init; }
     public required DateOnly PeriodEnd { get; init; }
     public decimal PreviousFlexBalance { get; init; }
+}
+
+public sealed class RecalculateRequest
+{
+    public required EmploymentProfile Profile { get; init; }
+    public required List<TimeEntry> Entries { get; init; }
+    public required List<AbsenceEntry> Absences { get; init; }
+    public required DateOnly PeriodStart { get; init; }
+    public required DateOnly PeriodEnd { get; init; }
+    public decimal PreviousFlexBalance { get; init; }
+    public required List<PayrollExportLine> PreviousExportLines { get; init; }
+    public required string Reason { get; init; }
 }
