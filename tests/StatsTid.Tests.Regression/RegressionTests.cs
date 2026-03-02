@@ -172,4 +172,276 @@ public class RegressionTests
             }
         }
     }
+
+    // --- Sprint 4: Payroll Chain Regression Tests ---
+
+    private static AbsenceEntry CreateAbsence(DateOnly date, string type, decimal hours = 7.4m, string agreement = "AC", string okVersion = "OK24") => new()
+    {
+        EmployeeId = "EMP001",
+        Date = date,
+        AbsenceType = type,
+        Hours = hours,
+        AgreementCode = agreement,
+        OkVersion = okVersion
+    };
+
+    /// <summary>
+    /// Regression 7: AC employee full payroll chain — produces MERARBEJDE (not OVERTIME),
+    /// no supplements, and each line item traces to a rule.
+    /// </summary>
+    [Fact]
+    public void PayrollChain_ACEmployee_ProducesMerarbejde_NoOvertime()
+    {
+        var profile = CreateProfile("AC");
+        var config = AgreementConfigProvider.GetConfig("AC", "OK24");
+
+        // AC employee works 45 hours in a week (5 days x 9h)
+        var entries = Enumerable.Range(0, 5)
+            .Select(i => CreateEntry(Monday.AddDays(i), 9m))
+            .ToList();
+        var absences = new List<AbsenceEntry>();
+
+        // Run all 5 pure rule functions in sequence
+        var normResult = NormCheckRule.Evaluate(profile, entries, Monday, Sunday);
+        var supplementResult = SupplementRule.Evaluate(profile, entries, Monday, Sunday, config);
+        var overtimeResult = OvertimeRule.Evaluate(profile, entries, Monday, Sunday, config);
+        var absenceResult = AbsenceRule.Evaluate(profile, absences, Monday, Sunday);
+        var flexResult = FlexBalanceRule.Evaluate(profile, entries, absences, Monday, Sunday, config, 0m);
+
+        // AC must produce MERARBEJDE, not OVERTIME
+        Assert.Contains(overtimeResult.LineItems, li => li.TimeType == OvertimeTypes.Merarbejde);
+        Assert.DoesNotContain(overtimeResult.LineItems, li => li.TimeType == OvertimeTypes.Overtime50);
+        Assert.DoesNotContain(overtimeResult.LineItems, li => li.TimeType == OvertimeTypes.Overtime100);
+
+        // AC has all supplements disabled
+        Assert.Empty(supplementResult.LineItems);
+
+        // Verify each result traces to the correct rule
+        Assert.Equal(NormCheckRule.RuleId, normResult.RuleId);
+        Assert.Equal(SupplementRule.RuleId, supplementResult.RuleId);
+        Assert.Equal(OvertimeRule.RuleId, overtimeResult.RuleId);
+        Assert.Equal(AbsenceRule.RuleId, absenceResult.RuleId);
+
+        // Merarbejde hours = 45 - 37 = 8 hours
+        var merarbejde = overtimeResult.LineItems.Single(li => li.TimeType == OvertimeTypes.Merarbejde);
+        Assert.Equal(8m, merarbejde.Hours);
+        Assert.Equal(1.0m, merarbejde.Rate);
+
+        // Flex should reflect the excess
+        Assert.Equal(8m, flexResult.Delta);
+    }
+
+    /// <summary>
+    /// Regression 8: HK employee full payroll chain — produces OVERTIME_50, OVERTIME_100,
+    /// and EVENING_SUPPLEMENT. No MERARBEJDE.
+    /// </summary>
+    [Fact]
+    public void PayrollChain_HKEmployee_ProducesOvertime_WithSupplements()
+    {
+        var profile = CreateProfile("HK");
+        var config = AgreementConfigProvider.GetConfig("HK", "OK24");
+
+        // HK employee works 42 hours: 5 days, some with evening hours
+        // Mon-Thu: 8h (8:00-16:00), Fri: 10h (8:00-18:00) including evening
+        var entries = new List<TimeEntry>
+        {
+            new() { EmployeeId = "EMP001", Date = Monday, Hours = 8m, StartTime = new TimeOnly(8, 0), EndTime = new TimeOnly(16, 0), AgreementCode = "HK", OkVersion = "OK24" },
+            new() { EmployeeId = "EMP001", Date = Monday.AddDays(1), Hours = 8m, StartTime = new TimeOnly(8, 0), EndTime = new TimeOnly(16, 0), AgreementCode = "HK", OkVersion = "OK24" },
+            new() { EmployeeId = "EMP001", Date = Monday.AddDays(2), Hours = 8m, StartTime = new TimeOnly(8, 0), EndTime = new TimeOnly(16, 0), AgreementCode = "HK", OkVersion = "OK24" },
+            new() { EmployeeId = "EMP001", Date = Monday.AddDays(3), Hours = 8m, StartTime = new TimeOnly(8, 0), EndTime = new TimeOnly(16, 0), AgreementCode = "HK", OkVersion = "OK24" },
+            new() { EmployeeId = "EMP001", Date = Monday.AddDays(4), Hours = 10m, StartTime = new TimeOnly(8, 0), EndTime = new TimeOnly(18, 0), AgreementCode = "HK", OkVersion = "OK24" },
+        };
+        var absences = new List<AbsenceEntry>();
+
+        // Run all rules
+        var normResult = NormCheckRule.Evaluate(profile, entries, Monday, Sunday);
+        var supplementResult = SupplementRule.Evaluate(profile, entries, Monday, Sunday, config);
+        var overtimeResult = OvertimeRule.Evaluate(profile, entries, Monday, Sunday, config);
+        var absenceResult = AbsenceRule.Evaluate(profile, absences, Monday, Sunday);
+        var flexResult = FlexBalanceRule.Evaluate(profile, entries, absences, Monday, Sunday, config, 0m);
+
+        // HK must produce overtime, not merarbejde
+        Assert.DoesNotContain(overtimeResult.LineItems, li => li.TimeType == OvertimeTypes.Merarbejde);
+        // Total = 42h, norm = 37h, threshold100 = 40h
+        // OVERTIME_50: hours from 37 to 40 = 3h
+        // OVERTIME_100: hours above 40 = 2h
+        Assert.Contains(overtimeResult.LineItems, li => li.TimeType == OvertimeTypes.Overtime50);
+        Assert.Contains(overtimeResult.LineItems, li => li.TimeType == OvertimeTypes.Overtime100);
+
+        var ot50 = overtimeResult.LineItems.Single(li => li.TimeType == OvertimeTypes.Overtime50);
+        var ot100 = overtimeResult.LineItems.Single(li => li.TimeType == OvertimeTypes.Overtime100);
+        Assert.Equal(3m, ot50.Hours);
+        Assert.Equal(1.5m, ot50.Rate);
+        Assert.Equal(2m, ot100.Hours);
+        Assert.Equal(2.0m, ot100.Rate);
+
+        // Friday 17:00-18:00 = 1 hour of evening supplement (HK evening: 17-23)
+        Assert.Contains(supplementResult.LineItems, li => li.TimeType == SupplementTypes.Evening);
+
+        // Verify rule IDs
+        Assert.Equal(OvertimeRule.RuleId, overtimeResult.RuleId);
+        Assert.Equal(SupplementRule.RuleId, supplementResult.RuleId);
+    }
+
+    /// <summary>
+    /// Regression 9: All 3 new absence types (SPECIAL_HOLIDAY_ALLOWANCE, CHILD_SICK_2,
+    /// CHILD_SICK_3) produce correct time types and grant norm credit.
+    /// </summary>
+    [Fact]
+    public void PayrollChain_AbsenceScenarios_AllNewTypesCorrect()
+    {
+        var profile = CreateProfile("HK");
+
+        var absences = new List<AbsenceEntry>
+        {
+            CreateAbsence(Monday, AbsenceTypes.SpecialHolidayAllowance, 7.4m, "HK"),
+            CreateAbsence(Monday.AddDays(1), AbsenceTypes.ChildSick2, 7.4m, "HK"),
+            CreateAbsence(Monday.AddDays(2), AbsenceTypes.ChildSick3, 7.4m, "HK"),
+        };
+
+        var result = AbsenceRule.Evaluate(profile, absences, Monday, Sunday);
+
+        Assert.True(result.Success);
+        Assert.Equal(3, result.LineItems.Count);
+
+        // Verify time type mappings
+        Assert.Equal("SPECIAL_HOLIDAY_ALLOWANCE", result.LineItems[0].TimeType);
+        Assert.Equal("CHILD_SICK_DAY_2", result.LineItems[1].TimeType);
+        Assert.Equal("CHILD_SICK_DAY_3", result.LineItems[2].TimeType);
+
+        // All three must grant norm credit
+        var normCredits = AbsenceRule.GetNormCreditHours(profile, absences, Monday, Sunday);
+        Assert.Equal(22.2m, normCredits); // 7.4 * 3
+
+        // Verify each line item has correct hours
+        foreach (var li in result.LineItems)
+        {
+            Assert.Equal(7.4m, li.Hours);
+            Assert.Equal(1.0m, li.Rate);
+        }
+
+        // Verify the rule ID
+        Assert.Equal(AbsenceRule.RuleId, result.RuleId);
+    }
+
+    /// <summary>
+    /// Regression 10: Flex payout produces FLEX_PAYOUT line item when balance exceeds cap.
+    /// AC employee: MaxFlexBalance = 150, previous = 145, works 45h → delta = 8 → raw = 153,
+    /// clamped to 150, excess = 3.
+    /// </summary>
+    [Fact]
+    public void PayrollChain_FlexPayout_ProducesLineItem()
+    {
+        var profile = CreateProfile("AC");
+        var config = AgreementConfigProvider.GetConfig("AC", "OK24"); // MaxFlexBalance = 150
+
+        // AC employee works 45h in a week
+        var entries = Enumerable.Range(0, 5)
+            .Select(i => CreateEntry(Monday.AddDays(i), 9m))
+            .ToList();
+        var absences = new List<AbsenceEntry>();
+
+        // Previous balance = 145
+        var flexResult = FlexBalanceRule.Evaluate(profile, entries, absences, Monday, Sunday, config, 145m);
+
+        // Delta = 45 - 37 = 8, raw = 145 + 8 = 153, clamped to 150, excess = 3
+        Assert.Equal(150m, flexResult.NewBalance);
+        Assert.Equal(3m, flexResult.ExcessForPayout);
+
+        // Get the payout line item
+        var payoutItem = FlexBalanceRule.GetPayoutLineItem(flexResult, Sunday);
+
+        Assert.NotNull(payoutItem);
+        Assert.Equal("FLEX_PAYOUT", payoutItem.TimeType);
+        Assert.Equal(3m, payoutItem.Hours);
+        Assert.Equal(1.0m, payoutItem.Rate);
+        Assert.Equal(Sunday, payoutItem.Date);
+    }
+
+    /// <summary>
+    /// Regression 11: Traceability proof — every line item from every rule can be attributed
+    /// to a RuleId. This is the end-to-end traceability guarantee for the payroll chain.
+    /// </summary>
+    [Fact]
+    public void PayrollChain_TraceabilityProof_EveryLineItemHasRuleId()
+    {
+        var profile = CreateProfile("HK");
+        var config = AgreementConfigProvider.GetConfig("HK", "OK24");
+
+        // HK employee works 42h with evening hours, plus one vacation day absence
+        // Mon-Wed: 10h each (8-18), Thu: 12h (10-22, includes evening), Fri: vacation
+        // Total worked = 42h, above 37h norm → overtime triggered
+        var entries = new List<TimeEntry>
+        {
+            new() { EmployeeId = "EMP001", Date = Monday, Hours = 10m, StartTime = new TimeOnly(8, 0), EndTime = new TimeOnly(18, 0), AgreementCode = "HK", OkVersion = "OK24" },
+            new() { EmployeeId = "EMP001", Date = Monday.AddDays(1), Hours = 10m, StartTime = new TimeOnly(8, 0), EndTime = new TimeOnly(18, 0), AgreementCode = "HK", OkVersion = "OK24" },
+            new() { EmployeeId = "EMP001", Date = Monday.AddDays(2), Hours = 10m, StartTime = new TimeOnly(8, 0), EndTime = new TimeOnly(18, 0), AgreementCode = "HK", OkVersion = "OK24" },
+            new() { EmployeeId = "EMP001", Date = Monday.AddDays(3), Hours = 12m, StartTime = new TimeOnly(10, 0), EndTime = new TimeOnly(22, 0), AgreementCode = "HK", OkVersion = "OK24" },
+        };
+
+        var absences = new List<AbsenceEntry>
+        {
+            CreateAbsence(Monday.AddDays(4), AbsenceTypes.Vacation, 7.4m, "HK")
+        };
+
+        // Run all 5 rules
+        var normResult = NormCheckRule.Evaluate(profile, entries, Monday, Sunday);
+        var supplementResult = SupplementRule.Evaluate(profile, entries, Monday, Sunday, config);
+        var overtimeResult = OvertimeRule.Evaluate(profile, entries, Monday, Sunday, config);
+        var absenceResult = AbsenceRule.Evaluate(profile, absences, Monday, Sunday);
+        var flexResult = FlexBalanceRule.Evaluate(profile, entries, absences, Monday, Sunday, config, 50m);
+
+        // Collect all results with their rule IDs
+        var allResults = new List<CalculationResult>
+        {
+            normResult,
+            supplementResult,
+            overtimeResult,
+            absenceResult
+        };
+
+        // Every result must have a non-empty RuleId
+        foreach (var result in allResults)
+        {
+            Assert.False(string.IsNullOrEmpty(result.RuleId),
+                $"Result for {result.EmployeeId} has empty RuleId");
+        }
+
+        // Collect all line items with their source rule
+        var allLineItemsWithRules = new List<(string RuleId, CalculationLineItem Item)>();
+        foreach (var result in allResults)
+        {
+            foreach (var item in result.LineItems)
+            {
+                allLineItemsWithRules.Add((result.RuleId, item));
+            }
+        }
+
+        // Add flex payout if applicable
+        var payoutItem = FlexBalanceRule.GetPayoutLineItem(flexResult, Sunday);
+        if (payoutItem != null)
+        {
+            allLineItemsWithRules.Add((FlexBalanceRule.RuleId, payoutItem));
+        }
+
+        // Must have line items from at least 3 different rules
+        // (norm, overtime, absence — supplements may or may not produce items)
+        var distinctRules = allLineItemsWithRules.Select(x => x.RuleId).Distinct().ToList();
+        Assert.True(distinctRules.Count >= 3,
+            $"Expected at least 3 distinct rules, got {distinctRules.Count}: {string.Join(", ", distinctRules)}");
+
+        // Every single line item must trace to a valid rule
+        foreach (var (ruleId, item) in allLineItemsWithRules)
+        {
+            Assert.False(string.IsNullOrEmpty(ruleId),
+                $"Line item {item.TimeType} on {item.Date} has no RuleId");
+            Assert.False(string.IsNullOrEmpty(item.TimeType),
+                $"Line item from {ruleId} on {item.Date} has no TimeType");
+        }
+
+        // Verify we have the expected known rules
+        Assert.Contains(NormCheckRule.RuleId, distinctRules);
+        Assert.Contains(OvertimeRule.RuleId, distinctRules);
+        Assert.Contains(AbsenceRule.RuleId, distinctRules);
+    }
 }

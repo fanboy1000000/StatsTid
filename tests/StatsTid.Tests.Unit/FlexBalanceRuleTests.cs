@@ -206,4 +206,95 @@ public class FlexBalanceRuleTests
         Assert.Equal(150m, result.NewBalance);
         Assert.Equal(21m, result.ExcessForPayout);
     }
+
+    // --- Sprint 4: GetPayoutLineItem tests ---
+
+    [Fact]
+    public void GetPayoutLineItem_NoExcess_ReturnsNull()
+    {
+        var result = new FlexBalanceResult
+        {
+            EmployeeId = "EMP001",
+            PreviousBalance = 50m,
+            NewBalance = 53m,
+            Delta = 3m,
+            WorkedHours = 40m,
+            AbsenceNormCredits = 0m,
+            NormHours = 37m,
+            ExcessForPayout = 0m,
+            Success = true
+        };
+
+        var payout = FlexBalanceRule.GetPayoutLineItem(result, Sunday);
+
+        Assert.Null(payout);
+    }
+
+    [Fact]
+    public void GetPayoutLineItem_WithExcess_ReturnsFlexPayoutItem()
+    {
+        var result = new FlexBalanceResult
+        {
+            EmployeeId = "EMP001",
+            PreviousBalance = 140m,
+            NewBalance = 150m,
+            Delta = 25.5m,
+            WorkedHours = 62.5m,
+            AbsenceNormCredits = 0m,
+            NormHours = 37m,
+            ExcessForPayout = 15.5m,
+            Success = true
+        };
+
+        var payout = FlexBalanceRule.GetPayoutLineItem(result, Sunday);
+
+        Assert.NotNull(payout);
+        Assert.Equal("FLEX_PAYOUT", payout.TimeType);
+        Assert.Equal(15.5m, payout.Hours);
+        Assert.Equal(1.0m, payout.Rate);
+    }
+
+    [Fact]
+    public void GetPayoutLineItem_NegativeExcess_ReturnsNull()
+    {
+        var result = new FlexBalanceResult
+        {
+            EmployeeId = "EMP001",
+            PreviousBalance = 50m,
+            NewBalance = 45m,
+            Delta = -5m,
+            WorkedHours = 32m,
+            AbsenceNormCredits = 0m,
+            NormHours = 37m,
+            ExcessForPayout = -5m,
+            Success = true
+        };
+
+        var payout = FlexBalanceRule.GetPayoutLineItem(result, Sunday);
+
+        Assert.Null(payout);
+    }
+
+    [Fact]
+    public void GetPayoutLineItem_DateMatchesPeriodEnd()
+    {
+        var periodEnd = new DateOnly(2024, 6, 30);
+        var result = new FlexBalanceResult
+        {
+            EmployeeId = "EMP001",
+            PreviousBalance = 140m,
+            NewBalance = 150m,
+            Delta = 20m,
+            WorkedHours = 57m,
+            AbsenceNormCredits = 0m,
+            NormHours = 37m,
+            ExcessForPayout = 10m,
+            Success = true
+        };
+
+        var payout = FlexBalanceRule.GetPayoutLineItem(result, periodEnd);
+
+        Assert.NotNull(payout);
+        Assert.Equal(periodEnd, payout.Date);
+    }
 }

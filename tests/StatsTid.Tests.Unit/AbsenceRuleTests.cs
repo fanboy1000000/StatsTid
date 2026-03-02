@@ -130,4 +130,90 @@ public class AbsenceRuleTests
         Assert.Single(result.LineItems);
         Assert.Equal(3.7m, result.LineItems[0].Hours); // 7.4 * 0.5
     }
+
+    // --- Sprint 4: New absence type tests ---
+
+    [Fact]
+    public void SpecialHolidayAllowance_GrantsNormCredit()
+    {
+        Assert.True(AbsenceRule.GrantsNormCredit(AbsenceTypes.SpecialHolidayAllowance));
+    }
+
+    [Fact]
+    public void ChildSick2_GrantsNormCredit()
+    {
+        Assert.True(AbsenceRule.GrantsNormCredit(AbsenceTypes.ChildSick2));
+    }
+
+    [Fact]
+    public void ChildSick3_GrantsNormCredit()
+    {
+        Assert.True(AbsenceRule.GrantsNormCredit(AbsenceTypes.ChildSick3));
+    }
+
+    [Fact]
+    public void Evaluate_ChildSick2_ProducesCorrectTimeType()
+    {
+        var profile = CreateProfile();
+        var absences = new List<AbsenceEntry>
+        {
+            CreateAbsence(Monday, AbsenceTypes.ChildSick2, 7.4m)
+        };
+
+        var result = AbsenceRule.Evaluate(profile, absences, Monday, Monday.AddDays(6));
+
+        Assert.True(result.Success);
+        Assert.Single(result.LineItems);
+        Assert.Equal("CHILD_SICK_DAY_2", result.LineItems[0].TimeType);
+        Assert.Equal(7.4m, result.LineItems[0].Hours);
+    }
+
+    [Fact]
+    public void Evaluate_ChildSick3_ProducesCorrectTimeType()
+    {
+        var profile = CreateProfile();
+        var absences = new List<AbsenceEntry>
+        {
+            CreateAbsence(Monday, AbsenceTypes.ChildSick3, 7.4m)
+        };
+
+        var result = AbsenceRule.Evaluate(profile, absences, Monday, Monday.AddDays(6));
+
+        Assert.True(result.Success);
+        Assert.Single(result.LineItems);
+        Assert.Equal("CHILD_SICK_DAY_3", result.LineItems[0].TimeType);
+        Assert.Equal(7.4m, result.LineItems[0].Hours);
+    }
+
+    [Fact]
+    public void Evaluate_SpecialHolidayAllowance_ProducesCorrectTimeType()
+    {
+        var profile = CreateProfile();
+        var absences = new List<AbsenceEntry>
+        {
+            CreateAbsence(Monday, AbsenceTypes.SpecialHolidayAllowance, 7.4m)
+        };
+
+        var result = AbsenceRule.Evaluate(profile, absences, Monday, Monday.AddDays(6));
+
+        Assert.True(result.Success);
+        Assert.Single(result.LineItems);
+        Assert.Equal("SPECIAL_HOLIDAY_ALLOWANCE", result.LineItems[0].TimeType);
+        Assert.Equal(7.4m, result.LineItems[0].Hours);
+    }
+
+    [Theory]
+    [InlineData("VACATION")]
+    [InlineData("CARE_DAY")]
+    [InlineData("CHILD_SICK_1")]
+    [InlineData("CHILD_SICK_2")]
+    [InlineData("CHILD_SICK_3")]
+    [InlineData("PARENTAL_LEAVE")]
+    [InlineData("SENIOR_DAY")]
+    [InlineData("SPECIAL_HOLIDAY_ALLOWANCE")]
+    [InlineData("LEAVE_WITH_PAY")]
+    public void AllPaidAbsenceTypes_GrantNormCredit(string absenceType)
+    {
+        Assert.True(AbsenceRule.GrantsNormCredit(absenceType));
+    }
 }
