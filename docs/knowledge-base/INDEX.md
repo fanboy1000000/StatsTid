@@ -22,6 +22,7 @@
 | [PAT-002](patterns/PAT-002-supplement-precedence-no-double-dipping.md) | Supplement precedence — no double-dipping | approved | S2 | Rule Engine | supplements, precedence, overtime, rule-engine |
 | [PAT-003](patterns/PAT-003-agreement-config-in-memory-dictionary.md) | Agreement config as in-memory dictionary | approved | S2 | Rule Engine | agreement-config, configuration, rule-engine, ac, hk, prosa |
 | [PAT-004](patterns/PAT-004-domain-events-extend-base-with-actor-tracking.md) | Domain events extend DomainEventBase with actor tracking | approved | S1+S3 | Data Model | events, domain-events, actor-tracking, audit |
+| [PAT-005](patterns/PAT-005-period-calculation-service-http-rule-evaluation.md) | PeriodCalculationService HTTP rule evaluation pattern | approved | S4 | Payroll, Rule Engine | service-boundary, HTTP, traceability, payroll-chain |
 
 ## Cross-Domain Dependencies (DEP)
 
@@ -67,6 +68,7 @@ _No entries yet._
 | event-sourcing | ADR-001 |
 | events | ADR-005, PAT-004, DEP-003 |
 | hk | PAT-003 |
+| HTTP | PAT-005 |
 | holidays | DEP-001 |
 | immutability | PAT-001 |
 | integration | ADR-004 |
@@ -77,7 +79,8 @@ _No entries yet._
 | ok-version | ADR-003 |
 | outbox-pattern | ADR-004 |
 | overtime | PAT-002, RES-001 |
-| payroll | DEP-002 |
+| payroll | DEP-002, PAT-005 |
+| payroll-chain | PAT-005 |
 | postgresql | ADR-001 |
 | precedence | PAT-002 |
 | priority-conflict | RES-001 |
@@ -85,9 +88,11 @@ _No entries yet._
 | pure-functions | ADR-002 |
 | rbac | ADR-007 |
 | rule-engine | ADR-002, PAT-002, PAT-003 |
+| service-boundary | PAT-005 |
 | serialization | ADR-005, DEP-003 |
 | supplements | PAT-002, RES-001 |
 | system-text-json | ADR-005 |
+| traceability | PAT-005 |
 | type-map | ADR-005, DEP-003 |
 | value-objects | PAT-001 |
 | version-resolution | ADR-003 |
@@ -100,7 +105,7 @@ _No entries yet._
 | API Integration | ADR-004 |
 | Data Model | ADR-001, ADR-005, PAT-001, PAT-004, DEP-003 |
 | Infrastructure | ADR-001, ADR-004, ADR-005, ADR-006, ADR-007, DEP-003 |
-| Payroll | DEP-002 |
-| Rule Engine | ADR-002, ADR-003, PAT-002, PAT-003, DEP-001, DEP-002, RES-001 |
+| Payroll | DEP-002, PAT-005 |
+| Rule Engine | ADR-002, ADR-003, PAT-002, PAT-003, PAT-005, DEP-001, DEP-002, RES-001 |
 | Security | ADR-007 |
 | SharedKernel | DEP-001 |

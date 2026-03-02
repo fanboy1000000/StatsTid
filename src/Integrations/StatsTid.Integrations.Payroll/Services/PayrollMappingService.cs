@@ -66,7 +66,9 @@ public sealed class PayrollMappingService
                 Amount = lineItem.Hours * lineItem.Rate,
                 PeriodStart = lineItem.Date,
                 PeriodEnd = lineItem.Date,
-                OkVersion = profile.OkVersion
+                OkVersion = profile.OkVersion,
+                SourceRuleId = result.RuleId,
+                SourceTimeType = lineItem.TimeType
             });
         }
 

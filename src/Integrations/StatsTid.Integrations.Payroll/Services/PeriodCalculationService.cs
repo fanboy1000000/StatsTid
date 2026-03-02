@@ -328,15 +328,6 @@ public sealed class PeriodCalculationService
                 }
             }
 
-            // Also check for standard lineItems in the response
-            if (root.TryGetProperty("lineItems", out var lineItemsProp))
-            {
-                var parsedItems = JsonSerializer.Deserialize<List<CalculationLineItem>>(
-                    lineItemsProp.GetRawText(), JsonOptions);
-                if (parsedItems is not null)
-                    lineItems.AddRange(parsedItems);
-            }
-
             return new CalculationResult
             {
                 RuleId = "FLEX_BALANCE",

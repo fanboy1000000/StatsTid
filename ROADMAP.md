@@ -20,6 +20,7 @@
 | Sprint 1 | Foundation | 8-service Docker skeleton, event sourcing, first rule | 12 |
 | Sprint 2 | Rule Engine Expansion | Absence/flex/supplement logic, OK version transitions, frontend scaffold | 74 |
 | Sprint 3 | Security & Compliance | JWT auth, RBAC, audit logging, correlation IDs, input validation, CI/CD | 103 |
+| Sprint 4 | Payroll Traceability | Absence completion, flex payout, PeriodCalculationService, payroll export chain, traceability | 133 |
 
 ## Phase Roadmap
 
@@ -74,16 +75,16 @@ Only makes sense once functional completeness is achieved.
 
 Projected functional coverage by requirement area. Percentages are cumulative.
 
-| Requirement Area | S1–S3 | After Phase 1 | After Phase 2 | After Phase 3 | After Phase 4 |
-|------------------|-------|---------------|---------------|---------------|---------------|
-| A. Basic Time Registration | 80% | 85% | 90% | 95% | 100% |
-| B. Working Time Rules | 70% | 75% | 95% | 95% | 100% |
-| C. Time Types & Supplements | 60% | 70% | 95% | 95% | 100% |
-| D. Absence Types | 65% | 85% | 90% | 95% | 100% |
-| AC-Specific Requirements | 40% | 45% | 85% | 90% | 100% |
-| Payroll Integration | 50% | 85% | 95% | 95% | 100% |
-| External Integrations | 60% | 60% | 65% | 90% | 100% |
-| **Overall** | **~61%** | **~72%** | **~88%** | **~94%** | **100%** |
+| Requirement Area | S1–S3 | S4 | After Phase 1 | After Phase 2 | After Phase 3 | After Phase 4 |
+|------------------|-------|-----|---------------|---------------|---------------|---------------|
+| A. Basic Time Registration | 80% | 80% | 85% | 90% | 95% | 100% |
+| B. Working Time Rules | 70% | 72% | 75% | 95% | 95% | 100% |
+| C. Time Types & Supplements | 60% | 60% | 70% | 95% | 95% | 100% |
+| D. Absence Types | 65% | 80% | 85% | 90% | 95% | 100% |
+| AC-Specific Requirements | 40% | 42% | 45% | 85% | 90% | 100% |
+| Payroll Integration | 50% | 80% | 85% | 95% | 95% | 100% |
+| External Integrations | 60% | 60% | 60% | 65% | 90% | 100% |
+| **Overall** | **~61%** | **~68%** | **~72%** | **~88%** | **~94%** | **100%** |
 
 ## Sprint 4 Detailed Plan
 

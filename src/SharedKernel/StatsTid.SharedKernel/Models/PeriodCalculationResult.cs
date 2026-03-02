@@ -7,8 +7,8 @@ public sealed class PeriodCalculationResult
     public required DateOnly PeriodEnd { get; init; }
     public required string AgreementCode { get; init; }
     public required string OkVersion { get; init; }
-    public required List<CalculationResult> RuleResults { get; init; }
-    public required List<PayrollExportLine> ExportLines { get; init; }
+    public required IReadOnlyList<CalculationResult> RuleResults { get; init; }
+    public required IReadOnlyList<PayrollExportLine> ExportLines { get; init; }
     public required bool Success { get; init; }
     public string? ErrorMessage { get; init; }
 }
