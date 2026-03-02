@@ -12,6 +12,7 @@ builder.Services.AddSingleton(new DbConnectionFactory(connectionString));
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<PayrollMappingService>();
 builder.Services.AddSingleton<PayrollExportService>();
+builder.Services.AddSingleton<PeriodCalculationService>();
 
 builder.Services.AddStatsTidJwtAuth(builder.Configuration);
 builder.Services.AddStatsTidPolicies();
@@ -52,6 +53,59 @@ app.MapPost("/api/payroll/export-period", async (PayrollPeriodExportRequest requ
     return result.Success ? Results.Ok(result) : Results.UnprocessableEntity(result);
 }).RequireAuthorization("Authenticated");
 
+app.MapPost("/api/payroll/calculate-and-export", async (
+    CalculateAndExportRequest request,
+    PeriodCalculationService calculator,
+    PayrollExportService export,
+    HttpContext httpContext,
+    CancellationToken ct) =>
+{
+    // Forward auth header and correlation ID for traceability
+    var authHeader = httpContext.Request.Headers.Authorization.FirstOrDefault();
+    Guid? correlationId = httpContext.Request.Headers.TryGetValue("X-Correlation-Id", out var corrValues)
+        && Guid.TryParse(corrValues.FirstOrDefault(), out var parsedCorr)
+            ? parsedCorr
+            : null;
+
+    var result = await calculator.CalculateAsync(
+        request.Profile,
+        request.Entries,
+        request.Absences,
+        request.PeriodStart,
+        request.PeriodEnd,
+        request.PreviousFlexBalance,
+        authHeader,
+        correlationId,
+        ct);
+
+    if (!result.Success)
+        return Results.UnprocessableEntity(result);
+
+    // If calculation produced export lines, send to payroll
+    if (result.ExportLines.Count > 0)
+    {
+        var exportResult = await export.ExportAsync(result.ExportLines, ct);
+        if (!exportResult.Success)
+        {
+            return Results.UnprocessableEntity(new
+            {
+                result.EmployeeId,
+                result.PeriodStart,
+                result.PeriodEnd,
+                result.AgreementCode,
+                result.OkVersion,
+                result.RuleResults,
+                result.ExportLines,
+                Success = false,
+                ErrorMessage = "Calculation succeeded but payroll export failed",
+                ExportId = exportResult.ExportId
+            });
+        }
+    }
+
+    return Results.Ok(result);
+}).RequireAuthorization("Authenticated");
+
 app.Run();
 
 public sealed class PayrollExportRequest
@@ -64,4 +118,14 @@ public sealed class PayrollPeriodExportRequest
 {
     public required List<CalculationResult> CalculationResults { get; init; }
     public required EmploymentProfile Profile { get; init; }
+}
+
+public sealed class CalculateAndExportRequest
+{
+    public required EmploymentProfile Profile { get; init; }
+    public required List<TimeEntry> Entries { get; init; }
+    public required List<AbsenceEntry> Absences { get; init; }
+    public required DateOnly PeriodStart { get; init; }
+    public required DateOnly PeriodEnd { get; init; }
+    public decimal PreviousFlexBalance { get; init; }
 }
