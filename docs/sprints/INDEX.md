@@ -11,6 +11,7 @@
 | [Sprint 3](SPRINT-3.md) | Security, Audit, Validation, CI/CD | complete | 2026-02-10 → 2026-02-21 | 103 | yes |
 | [Sprint 4](SPRINT-4.md) | Payroll Traceability Chain, Absence Completion | complete | 2026-03-02 → 2026-03-02 | 133 | yes |
 | [Sprint 5](SPRINT-5.md) | On-Call Duty, Flex Unification, Retroactive Corrections, SLS Export | complete | 2026-03-02 → 2026-03-02 | 158 | yes |
+| [Sprint 8](SPRINT-8.md) | RBAC with Organizational Hierarchy | complete | 2026-03-03 → 2026-03-03 | 179 | yes |
 
 ## Cumulative Task Summary
 
@@ -21,7 +22,8 @@
 | S3 | 7 | Security, Infrastructure, Backend API, Frontend, Tests, CI/CD | ADR-007, PAT-004 (extended) |
 | S4 | 7 | Rule Engine, SharedKernel, Payroll Integration, Infrastructure, Tests | PAT-005 |
 | S5 | 7 | Rule Engine, SharedKernel, Payroll Integration, Infrastructure, Tests | PAT-006 |
-| **Total** | **35** | — | **17 entries** |
+| S8 | 8 | SharedKernel, Infrastructure, Security, Backend API, PostgreSQL, Tests | ADR-008, ADR-009, ADR-010 |
+| **Total** | **43** | — | **20 entries** |
 
 ## Test Progression
 
@@ -32,32 +34,33 @@
 | S3 | 97 | 6 | 4 | 103 |
 | S4 | 122 | 11 | 4 | 133 |
 | S5 | 143 | 15 | 4 | 158 |
+| S8 | 164 | 15 | 4 | 179 |
 
 ## Architectural Constraint Coverage
 
 Shows which priorities were verified in each sprint.
 
-| Priority | Description | S1 | S2 | S3 | S4 | S5 |
-|----------|-------------|----|----|-----|-----|-----|
-| P1 | Architectural integrity | ✓ | ✓ | ✓ | ✓ | ✓ |
-| P2 | Deterministic rule engine | ✓ | ✓ | ✓ | ✓ | ✓ |
-| P3 | Event sourcing auditability | ✓ | ✓ | ✓ | ✓ | ✓ |
-| P4 | OK version correctness | — | ✓ | ✓ | ✓ | ✓ |
-| P5 | Integration isolation | ✓ | ✓ | ✓ | ✓ | ✓ |
-| P6 | Payroll correctness | ✓ | ✓ | ✓ | ✓ | ✓ |
-| P7 | Security and access control | — | — | ✓ | ✓ | ✓ |
-| P8 | CI/CD enforcement | — | — | ✓ | — | — |
-| P9 | Usability and UX | — | ✓ | ✓ | — | — |
+| Priority | Description | S1 | S2 | S3 | S4 | S5 | S8 |
+|----------|-------------|----|----|-----|-----|-----|-----|
+| P1 | Architectural integrity | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| P2 | Deterministic rule engine | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| P3 | Event sourcing auditability | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| P4 | OK version correctness | — | ✓ | ✓ | ✓ | ✓ | — |
+| P5 | Integration isolation | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| P6 | Payroll correctness | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| P7 | Security and access control | — | — | ✓ | ✓ | ✓ | ✓ |
+| P8 | CI/CD enforcement | — | — | ✓ | — | — | ✓ |
+| P9 | Usability and UX | — | ✓ | ✓ | — | — | — |
 
 ## Legal & Payroll Verification Status
 
-| Check | S1 | S2 | S3 | S4 | S5 |
-|-------|----|----|-----|-----|-----|
-| Agreement rules match legal requirements | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Wage type mappings correct | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Overtime/supplement determinism | — | ✓ | ✓ | ✓ | ✓ |
-| Absence effects correct | — | ✓ | ✓ | ✓ | ✓ |
-| Retroactive recalculation stable | — | ✓ | ✓ | ✓ | ✓ |
+| Check | S1 | S2 | S3 | S4 | S5 | S8 |
+|-------|----|----|-----|-----|-----|-----|
+| Agreement rules match legal requirements | ✓ | ✓ | ✓ | ✓ | ✓ | N/A |
+| Wage type mappings correct | ✓ | ✓ | ✓ | ✓ | ✓ | N/A |
+| Overtime/supplement determinism | — | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Absence effects correct | — | ✓ | ✓ | ✓ | ✓ | N/A |
+| Retroactive recalculation stable | — | ✓ | ✓ | ✓ | ✓ | N/A |
 
 ## How to Use This Log
 

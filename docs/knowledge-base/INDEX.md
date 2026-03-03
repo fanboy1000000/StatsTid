@@ -13,6 +13,9 @@
 | [ADR-005](decisions/ADR-005-explicit-type-map-polymorphic-serialization.md) | Explicit type map for polymorphic event serialization | approved | S1 | Data Model, Infrastructure | serialization, events, type-map, system-text-json |
 | [ADR-006](decisions/ADR-006-eight-service-docker-compose.md) | 8-service Docker Compose architecture | approved | S1 | Infrastructure | docker, microservices, architecture |
 | [ADR-007](decisions/ADR-007-jwt-auth-rbac-correlation-ids.md) | JWT auth with RBAC and correlation IDs | approved | S3 | Security, Infrastructure | jwt, rbac, authentication, authorization, correlation-id, audit |
+| [ADR-008](decisions/ADR-008-materialized-path-org-hierarchy.md) | Materialized path for organizational hierarchy | approved | S8 | Infrastructure, Security | organization, hierarchy, materialized-path, postgresql |
+| [ADR-009](decisions/ADR-009-scope-embedded-jwt.md) | Role scopes embedded in JWT token | approved | S8 | Security, Infrastructure | jwt, rbac, scopes, authorization, stateless |
+| [ADR-010](decisions/ADR-010-local-config-merge-at-service-layer.md) | Local config merged at service layer, not in rule engine | approved | S8 | Rule Engine, Payroll, Infrastructure | local-config, rule-engine, determinism, configuration, merge |
 
 ## Validated Patterns (PAT)
 
@@ -55,16 +58,16 @@ _No entries yet._
 | actor-tracking | PAT-004 |
 | audit | ADR-007, PAT-004 |
 | authentication | ADR-007 |
-| authorization | ADR-007 |
+| authorization | ADR-007, ADR-009 |
 | c-sharp | PAT-001 |
 | calendar | DEP-001 |
-| configuration | PAT-003 |
+| configuration | PAT-003, ADR-010 |
 | correlation-id | ADR-007 |
 | cross-domain | DEP-001, DEP-002, DEP-003 |
 | delivery-guarantee | ADR-004 |
 | dependency | DEP-001, DEP-002, DEP-003 |
 | deserialization | PAT-006 |
-| determinism | ADR-002, ADR-003 |
+| determinism | ADR-002, ADR-003, ADR-010 |
 | docker | ADR-006 |
 | domain-events | PAT-004 |
 | endpoint-response | PAT-006 |
@@ -76,7 +79,7 @@ _No entries yet._
 | holidays | DEP-001 |
 | immutability | PAT-001 |
 | integration | ADR-004 |
-| jwt | ADR-007 |
+| jwt | ADR-007, ADR-009 |
 | microservices | ADR-006 |
 | models | PAT-001 |
 | npgsql | ADR-001 |
@@ -85,13 +88,19 @@ _No entries yet._
 | overtime | PAT-002, RES-001 |
 | payroll | DEP-002, PAT-005 |
 | payroll-chain | PAT-005, PAT-006 |
-| postgresql | ADR-001 |
+| local-config | ADR-010 |
+| materialized-path | ADR-008 |
+| merge | ADR-010 |
+| organization | ADR-008 |
+| postgresql | ADR-001, ADR-008 |
 | precedence | PAT-002 |
 | priority-conflict | RES-001 |
 | prosa | PAT-003 |
 | pure-functions | ADR-002 |
-| rbac | ADR-007 |
-| rule-engine | ADR-002, PAT-002, PAT-003, PAT-006 |
+| rbac | ADR-007, ADR-009 |
+| rule-engine | ADR-002, PAT-002, PAT-003, PAT-006, ADR-010 |
+| scopes | ADR-009 |
+| stateless | ADR-009 |
 | service-boundary | PAT-005 |
 | serialization | ADR-005, DEP-003 |
 | supplements | PAT-002, RES-001 |
@@ -108,8 +117,8 @@ _No entries yet._
 |--------|---------|
 | API Integration | ADR-004 |
 | Data Model | ADR-001, ADR-005, PAT-001, PAT-004, DEP-003 |
-| Infrastructure | ADR-001, ADR-004, ADR-005, ADR-006, ADR-007, DEP-003 |
-| Payroll | DEP-002, PAT-005, PAT-006 |
-| Rule Engine | ADR-002, ADR-003, PAT-002, PAT-003, PAT-005, PAT-006, DEP-001, DEP-002, RES-001 |
-| Security | ADR-007 |
+| Infrastructure | ADR-001, ADR-004, ADR-005, ADR-006, ADR-007, ADR-008, ADR-009, ADR-010, DEP-003 |
+| Payroll | DEP-002, PAT-005, PAT-006, ADR-010 |
+| Rule Engine | ADR-002, ADR-003, PAT-002, PAT-003, PAT-005, PAT-006, DEP-001, DEP-002, RES-001, ADR-010 |
+| Security | ADR-007, ADR-008, ADR-009 |
 | SharedKernel | DEP-001 |
