@@ -85,7 +85,7 @@ Projected functional coverage by requirement area. Percentages are cumulative.
 | C. Time Types & Supplements | 60% | 60% | 70% | 70% | 95% | 95% | 100% |
 | D. Absence Types | 65% | 80% | 85% | 85% | 95% | 95% | 100% |
 | E. Organizational Structure | 0% | 0% | 0% | 70% | 90% | 90% | 100% |
-| F. Roles and Authorization | 0% | 0% | 0% | 60% | 90% | 90% | 100% |
+| F. Roles and Authorization | 0% | 0% | 0% | 50% | 90% | 90% | 100% |
 | G. Local Configuration | 0% | 0% | 0% | 10% | 80% | 80% | 100% |
 | H. Period Approval Workflow | 0% | 0% | 0% | 10% | 85% | 85% | 100% |
 | AC-Specific Requirements | 40% | 42% | 45% | 45% | 90% | 90% | 100% |
@@ -114,9 +114,48 @@ Sprint 6 started Phase 2 (RBAC + Org Hierarchy). See [docs/sprints/SPRINT-6.md](
 - Approval guard on payroll export (only APPROVED periods)
 - Endpoint-level org-scope enforcement in ScopeAuthorizationHandler
 
+## Sprint 7 — Impact Assessment (Tier 2 Re-prioritization)
+
+**Trigger**: New requirement added — org-scoped API enforcement (SYSTEM_TARGET.md § F). This formalizes the Sprint 6 Reviewer NOTE into a mandatory requirement and expands Sprint 7 scope to include retrofitting existing endpoints.
+
+**Affected sprints**:
+
+| Sprint | Impact |
+|--------|--------|
+| Sprint 7 | Scope expanded — org-scope enforcement promoted from backlog item to core deliverable. New `OrgScopeValidator` service + retrofit on existing Backend endpoints (time-entries, absences, flex-balance). |
+| Sprint 8 | Minor addition — frontend must use scopes from auth context to filter data visibility. No new backend work. |
+
+**No sprint split needed** — org-scope enforcement is a natural extension of the API work already planned for Sprint 7.
+
 ## Sprint 7 Detailed Plan
 
-_To be planned when Sprint 7 execution is requested. Phase 2 focus: Local Config + Period Approval + API Endpoints._
+**Phase 2 focus**: Local Config + Period Approval + API Endpoints + Org-Scope Enforcement
+
+### Phase 1 — Foundation (parallel)
+
+| Task | Agent | Description |
+|------|-------|-------------|
+| TASK-701 | Security | **OrgScopeValidator service** — new `Infrastructure/Security/OrgScopeValidator.cs`. Resolves target resource's org path (via `OrganizationRepository` + `UserRepository`), checks actor's scopes via `RoleScope.CoversOrg()`. Employee role: ownership check only. Logs failed access attempts. |
+| TASK-702 | Orchestrator | **PostgreSQL schema additions** — `local_configurations`, `approval_periods` + audit tables in `init.sql`. Seed data for test local configs. |
+| TASK-703 | Payroll | **ConfigResolutionService** — new `Integrations/Payroll/Services/ConfigResolutionService.cs`. Merges central `AgreementRuleConfig` + local DB overrides, validates against central min/max constraints. (ADR-010) |
+
+### Phase 2 — API endpoints (parallel, depends on Phase 1)
+
+| Task | Agent | Description |
+|------|-------|-------------|
+| TASK-704 | Security | **Retrofit org-scope on existing endpoints** — add `OrgScopeValidator` checks to all existing Backend resource-keyed endpoints (time-entries, absences, flex-balance). Update GET policies from `Authenticated` to `EmployeeOrAbove`. Return 403 on failed scope. |
+| TASK-705 | Security | **Org + User + Role management endpoints** — CRUD for organizations (scoped), users (scoped), role assignments (grant/revoke with audit). All use `OrgScopeValidator`. |
+| TASK-706 | Security | **Period approval endpoints** — submit (Employee), approve/reject (Leader, scoped), pending list (Leader, scoped). All use `OrgScopeValidator`. |
+| TASK-707 | Security | **Local configuration endpoints** — CRUD for org config (LocalAdmin, scoped), constraint validation via `ConfigResolutionService`, read-only central constraints reference endpoint. |
+| TASK-708 | Payroll | **Approval guard on payroll export** — update export endpoint to reject non-APPROVED periods. |
+
+### Phase 3 — Tests (sequential, depends on Phase 2)
+
+| Task | Agent | Description |
+|------|-------|-------------|
+| TASK-709 | Test & QA | **Sprint 7 tests** — OrgScopeValidator (scope matching, ownership, 403 on cross-org), ConfigResolutionService (merge, constraints), period approval (state machine, leader scope), endpoint retrofit (403 on cross-org GET), approval guard (export blocked for unapproved). |
+
+**Reviewer audit**: MANDATORY — touches P1 (new service boundary), P7 (security enforcement), cross-domain (Security + Payroll).
 
 **Backlog (from Sprint 5 retrospective, deferred to Phase 3)**:
 - Add idempotency tokens for retroactive correction events (Reviewer WARNING)

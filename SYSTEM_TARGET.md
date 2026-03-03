@@ -142,6 +142,15 @@ HR scope is explicitly assignable — HR in a child organization can cover the p
 Role changes are infrequent (monthly at most) and take effect on next authentication
 All role assignments must be auditable (who granted, when, expiration)
 
+API enforcement:
+All resource-keyed API endpoints must verify the actor's org scope covers the target resource's organization
+Scope verification uses materialized path prefix matching (scopes are embedded in JWT — no DB lookup per request for the scope itself)
+The target resource's org must be resolved at request time (e.g. employeeId → user's primaryOrgId → org's materializedPath)
+Employees may only access their own data — ownership check only, no org scope check needed
+Higher roles (Leader, HR, Admin) must pass org scope verification for cross-employee access
+Failed scope checks must return 403 Forbidden with no data leakage
+Scope enforcement must be auditable — failed access attempts should be logged
+
 ### G. Local Configuration
 
 Local administrators can configure operational parameters within centrally defined constraints. Local configuration must never override centrally negotiated agreement rules.
