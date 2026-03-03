@@ -344,3 +344,206 @@ CREATE TABLE IF NOT EXISTS audit_log (
 CREATE INDEX IF NOT EXISTS idx_audit_log_actor ON audit_log(actor_id);
 CREATE INDEX IF NOT EXISTS idx_audit_log_correlation ON audit_log(correlation_id);
 CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON audit_log(timestamp);
+
+-- ============================================================
+-- SPRINT 8: RBAC, Organizational Hierarchy, Period Approval
+-- ============================================================
+
+-- Organization hierarchy (Ministry -> Styrelse -> Afdeling -> Team)
+CREATE TABLE IF NOT EXISTS organizations (
+    org_id              TEXT        PRIMARY KEY,
+    org_name            TEXT        NOT NULL,
+    org_type            TEXT        NOT NULL CHECK (org_type IN ('MINISTRY', 'STYRELSE', 'AFDELING', 'TEAM')),
+    parent_org_id       TEXT        REFERENCES organizations(org_id),
+    materialized_path   TEXT        NOT NULL,
+    agreement_code      TEXT        NOT NULL DEFAULT 'AC',
+    ok_version          TEXT        NOT NULL DEFAULT 'OK24',
+    is_active           BOOLEAN     NOT NULL DEFAULT TRUE,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_org_parent ON organizations(parent_org_id);
+CREATE INDEX IF NOT EXISTS idx_org_path ON organizations USING btree (materialized_path text_pattern_ops);
+CREATE INDEX IF NOT EXISTS idx_org_type ON organizations(org_type);
+
+-- Users (replaces hardcoded test users)
+CREATE TABLE IF NOT EXISTS users (
+    user_id             TEXT        PRIMARY KEY,
+    username            TEXT        NOT NULL UNIQUE,
+    password_hash       TEXT        NOT NULL,
+    display_name        TEXT        NOT NULL,
+    email               TEXT,
+    primary_org_id      TEXT        NOT NULL REFERENCES organizations(org_id),
+    agreement_code      TEXT        NOT NULL DEFAULT 'AC',
+    ok_version          TEXT        NOT NULL DEFAULT 'OK24',
+    employment_category TEXT        NOT NULL DEFAULT 'Standard',
+    is_active           BOOLEAN     NOT NULL DEFAULT TRUE,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_users_org ON users(primary_org_id);
+CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+
+-- Role definitions (5 roles)
+CREATE TABLE IF NOT EXISTS roles (
+    role_id             TEXT        PRIMARY KEY,
+    role_name           TEXT        NOT NULL,
+    description         TEXT,
+    hierarchy_level     INT         NOT NULL,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Role assignments with organizational scope
+CREATE TABLE IF NOT EXISTS role_assignments (
+    assignment_id       UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id             TEXT        NOT NULL REFERENCES users(user_id),
+    role_id             TEXT        NOT NULL REFERENCES roles(role_id),
+    org_id              TEXT        REFERENCES organizations(org_id),
+    scope_type          TEXT        NOT NULL CHECK (scope_type IN ('GLOBAL', 'ORG_ONLY', 'ORG_AND_DESCENDANTS')),
+    assigned_by         TEXT        NOT NULL,
+    assigned_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at          TIMESTAMPTZ,
+    is_active           BOOLEAN     NOT NULL DEFAULT TRUE,
+    UNIQUE (user_id, role_id, org_id)
+);
+CREATE INDEX IF NOT EXISTS idx_role_assignments_user ON role_assignments(user_id);
+CREATE INDEX IF NOT EXISTS idx_role_assignments_org ON role_assignments(org_id);
+CREATE INDEX IF NOT EXISTS idx_role_assignments_role ON role_assignments(role_id);
+
+-- Role assignment audit trail (append-only)
+CREATE TABLE IF NOT EXISTS role_assignment_audit (
+    audit_id            BIGSERIAL   PRIMARY KEY,
+    assignment_id       UUID        NOT NULL,
+    action              TEXT        NOT NULL CHECK (action IN ('GRANTED', 'REVOKED', 'EXPIRED', 'MODIFIED')),
+    actor_id            TEXT        NOT NULL,
+    actor_role          TEXT        NOT NULL,
+    details             JSONB,
+    timestamp           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_role_audit_assignment ON role_assignment_audit(assignment_id);
+
+-- Local configuration overrides (validated against central constraints)
+CREATE TABLE IF NOT EXISTS local_configurations (
+    config_id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    org_id              TEXT        NOT NULL REFERENCES organizations(org_id),
+    config_area         TEXT        NOT NULL CHECK (config_area IN (
+        'WORKING_TIME', 'FLEX_RULES', 'ORG_STRUCTURE', 'LOCAL_AGREEMENT', 'OPERATIONAL'
+    )),
+    config_key          TEXT        NOT NULL,
+    config_value        JSONB       NOT NULL,
+    effective_from      DATE        NOT NULL,
+    effective_to        DATE,
+    version             INT         NOT NULL DEFAULT 1,
+    agreement_code      TEXT        NOT NULL,
+    ok_version          TEXT        NOT NULL,
+    created_by          TEXT        NOT NULL,
+    approved_by         TEXT,
+    approved_at         TIMESTAMPTZ,
+    is_active           BOOLEAN     NOT NULL DEFAULT TRUE,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (org_id, config_area, config_key, effective_from, agreement_code, ok_version)
+);
+CREATE INDEX IF NOT EXISTS idx_local_config_org ON local_configurations(org_id);
+CREATE INDEX IF NOT EXISTS idx_local_config_area ON local_configurations(config_area);
+
+-- Local configuration audit trail (append-only)
+CREATE TABLE IF NOT EXISTS local_configuration_audit (
+    audit_id            BIGSERIAL   PRIMARY KEY,
+    config_id           UUID        NOT NULL,
+    action              TEXT        NOT NULL CHECK (action IN ('CREATED', 'MODIFIED', 'DEACTIVATED', 'APPROVED')),
+    previous_value      JSONB,
+    new_value           JSONB,
+    actor_id            TEXT        NOT NULL,
+    actor_role          TEXT        NOT NULL,
+    timestamp           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_local_config_audit_config ON local_configuration_audit(config_id);
+
+-- Period approval workflow
+CREATE TABLE IF NOT EXISTS approval_periods (
+    period_id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    employee_id         TEXT        NOT NULL,
+    org_id              TEXT        NOT NULL REFERENCES organizations(org_id),
+    period_start        DATE        NOT NULL,
+    period_end          DATE        NOT NULL,
+    period_type         TEXT        NOT NULL CHECK (period_type IN ('WEEKLY', 'MONTHLY')),
+    status              TEXT        NOT NULL DEFAULT 'DRAFT' CHECK (status IN ('DRAFT', 'SUBMITTED', 'APPROVED', 'REJECTED')),
+    submitted_at        TIMESTAMPTZ,
+    submitted_by        TEXT,
+    approved_by         TEXT,
+    approved_at         TIMESTAMPTZ,
+    rejection_reason    TEXT,
+    agreement_code      TEXT        NOT NULL,
+    ok_version          TEXT        NOT NULL,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (employee_id, period_start, period_end)
+);
+CREATE INDEX IF NOT EXISTS idx_approval_employee ON approval_periods(employee_id);
+CREATE INDEX IF NOT EXISTS idx_approval_org ON approval_periods(org_id);
+CREATE INDEX IF NOT EXISTS idx_approval_status ON approval_periods(status);
+CREATE INDEX IF NOT EXISTS idx_approval_period ON approval_periods(period_start, period_end);
+
+-- Approval audit trail (append-only)
+CREATE TABLE IF NOT EXISTS approval_audit (
+    audit_id            BIGSERIAL   PRIMARY KEY,
+    period_id           UUID        NOT NULL,
+    action              TEXT        NOT NULL CHECK (action IN ('CREATED', 'SUBMITTED', 'APPROVED', 'REJECTED', 'REOPENED')),
+    actor_id            TEXT        NOT NULL,
+    actor_role          TEXT        NOT NULL,
+    comment             TEXT,
+    timestamp           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_approval_audit_period ON approval_audit(period_id);
+
+-- ============================================================
+-- SPRINT 8 SEED DATA: Roles, Organizations, Test Users
+-- ============================================================
+
+-- Seed role definitions
+INSERT INTO roles (role_id, role_name, description, hierarchy_level) VALUES
+    ('GLOBAL_ADMIN', 'Global Administrator', 'Manages state agreements, operates across all organizations', 1),
+    ('LOCAL_ADMIN', 'Local Administrator', 'Configures local settings within central agreement constraints', 2),
+    ('LOCAL_HR', 'Local HR Employee', 'Views/edits employee time registrations, org statistics', 3),
+    ('LOCAL_LEADER', 'Local Leader', 'Approves/rejects time registration periods, team oversight', 4),
+    ('EMPLOYEE', 'Employee', 'Registers own time, views own data', 5)
+ON CONFLICT DO NOTHING;
+
+-- Seed test organization hierarchy (Finansministeriet example)
+INSERT INTO organizations (org_id, org_name, org_type, parent_org_id, materialized_path, agreement_code, ok_version) VALUES
+    ('MIN01', 'Finansministeriet', 'MINISTRY', NULL, '/MIN01/', 'AC', 'OK24'),
+    ('STY01', 'Medarbejder- og Kompetencestyrelsen', 'STYRELSE', 'MIN01', '/MIN01/STY01/', 'AC', 'OK24'),
+    ('STY02', 'Statens IT', 'STYRELSE', 'MIN01', '/MIN01/STY02/', 'HK', 'OK24'),
+    ('STY03', 'Ekonomistyrelsen', 'STYRELSE', 'MIN01', '/MIN01/STY03/', 'AC', 'OK24'),
+    ('AFD01', 'IT-Drift', 'AFDELING', 'STY02', '/MIN01/STY02/AFD01/', 'HK', 'OK24'),
+    ('AFD02', 'Systemudvikling', 'AFDELING', 'STY02', '/MIN01/STY02/AFD02/', 'PROSA', 'OK24')
+ON CONFLICT DO NOTHING;
+
+-- Seed test users (bcrypt hashes for simple dev passwords)
+-- ALL users share the same dev password: "password" (bcrypt hash below)
+-- admin01/password, ladm01/password, hr01/password, mgr01/password, emp001-003/password
+-- Note: These are bcrypt($2a$10$) hashes for development ONLY — never use in production
+INSERT INTO users (user_id, username, password_hash, display_name, email, primary_org_id, agreement_code, ok_version) VALUES
+    ('admin01', 'admin01', '$2a$10$xJwL5v7GpxDAMkGGmfHiOONUGHRYiW6rQ3r5yt1FKfpKBneP8Jwm2', 'Global Administrator', 'admin@statstid.dk', 'MIN01', 'AC', 'OK24'),
+    ('hr01', 'hr01', '$2a$10$xJwL5v7GpxDAMkGGmfHiOONUGHRYiW6rQ3r5yt1FKfpKBneP8Jwm2', 'HR Medarbejder', 'hr@statens-it.dk', 'STY02', 'HK', 'OK24'),
+    ('mgr01', 'mgr01', '$2a$10$xJwL5v7GpxDAMkGGmfHiOONUGHRYiW6rQ3r5yt1FKfpKBneP8Jwm2', 'Team Leder', 'leder@statens-it.dk', 'AFD01', 'HK', 'OK24'),
+    ('emp001', 'emp001', '$2a$10$xJwL5v7GpxDAMkGGmfHiOONUGHRYiW6rQ3r5yt1FKfpKBneP8Jwm2', 'AC Medarbejder', 'emp.ac@mfk.dk', 'STY01', 'AC', 'OK24'),
+    ('emp002', 'emp002', '$2a$10$xJwL5v7GpxDAMkGGmfHiOONUGHRYiW6rQ3r5yt1FKfpKBneP8Jwm2', 'HK Medarbejder', 'emp.hk@statens-it.dk', 'AFD01', 'HK', 'OK24'),
+    ('emp003', 'emp003', '$2a$10$xJwL5v7GpxDAMkGGmfHiOONUGHRYiW6rQ3r5yt1FKfpKBneP8Jwm2', 'PROSA Medarbejder', 'emp.prosa@statens-it.dk', 'AFD02', 'PROSA', 'OK24'),
+    ('ladm01', 'ladm01', '$2a$10$xJwL5v7GpxDAMkGGmfHiOONUGHRYiW6rQ3r5yt1FKfpKBneP8Jwm2', 'Lokal Administrator', 'lokal.admin@statens-it.dk', 'STY02', 'HK', 'OK24')
+ON CONFLICT DO NOTHING;
+
+-- Seed role assignments
+-- admin01: Global Admin (covers everything)
+-- ladm01: Local Admin for Statens IT (covers STY02 + descendants)
+-- hr01: Local HR for Finansministeriet subtree (centralized HR in child org covering ministry)
+-- mgr01: Local Leader for IT-Drift department
+-- emp001-003: Employees at their respective orgs
+INSERT INTO role_assignments (user_id, role_id, org_id, scope_type, assigned_by) VALUES
+    ('admin01', 'GLOBAL_ADMIN', NULL, 'GLOBAL', 'system'),
+    ('ladm01', 'LOCAL_ADMIN', 'STY02', 'ORG_AND_DESCENDANTS', 'admin01'),
+    ('hr01', 'LOCAL_HR', 'MIN01', 'ORG_AND_DESCENDANTS', 'admin01'),
+    ('mgr01', 'LOCAL_LEADER', 'AFD01', 'ORG_AND_DESCENDANTS', 'ladm01'),
+    ('emp001', 'EMPLOYEE', 'STY01', 'ORG_ONLY', 'admin01'),
+    ('emp002', 'EMPLOYEE', 'AFD01', 'ORG_ONLY', 'mgr01'),
+    ('emp003', 'EMPLOYEE', 'AFD02', 'ORG_ONLY', 'ladm01')
+ON CONFLICT DO NOTHING;

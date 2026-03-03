@@ -57,15 +57,11 @@ app.MapPost("/api/auth/login", async (
 
         // Load role assignments and map to RoleScope[]
         var assignments = await roleAssignmentRepository.GetByUserIdAsync(dbUser.UserId, ct);
-        var scopes = assignments.Select(a => new RoleScope
-        {
-            RoleName = MapRoleIdToName(a.RoleId),
-            OrgId = a.OrgId,
-            ScopeType = a.ScopeType
-        }).ToList();
+        var scopes = assignments.Select(a =>
+            new RoleScope(MapRoleIdToName(a.RoleId), a.OrgId, a.ScopeType)).ToList();
 
         // Use the highest-privilege role as the primary role
-        var primaryRole = scopes.Count > 0 ? scopes[0].RoleName : StatsTidRoles.Employee;
+        var primaryRole = scopes.Count > 0 ? scopes[0].Role : StatsTidRoles.Employee;
 
         var token = tokenService.GenerateToken(
             dbUser.UserId, dbUser.DisplayName, primaryRole, dbUser.AgreementCode,

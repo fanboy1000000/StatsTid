@@ -159,12 +159,14 @@ public class Sprint8SecurityTests
 
         var handler = new JwtSecurityTokenHandler();
         var jwt = handler.ReadJwtToken(token);
-        var scopesClaim = jwt.Claims.First(c => c.Type == StatsTidClaims.Scopes);
+        // JWT libraries may split JSON array claims into multiple claims
+        var scopeValues = jwt.Claims.Where(c => c.Type == StatsTidClaims.Scopes).Select(c => c.Value).ToList();
+        var allScopesText = string.Join(" ", scopeValues);
 
-        Assert.Contains("GlobalAdmin", scopesClaim.Value);
-        Assert.Contains("GLOBAL", scopesClaim.Value);
-        Assert.Contains("LocalHR", scopesClaim.Value);
-        Assert.Contains("ORG_AND_DESCENDANTS", scopesClaim.Value);
+        Assert.Contains("GlobalAdmin", allScopesText);
+        Assert.Contains("GLOBAL", allScopesText);
+        Assert.Contains("LocalHR", allScopesText);
+        Assert.Contains("ORG_AND_DESCENDANTS", allScopesText);
     }
 
     [Fact]

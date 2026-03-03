@@ -17,7 +17,13 @@ public sealed class RoleAssignmentRepository
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
         await using var cmd = new NpgsqlCommand(
-            "SELECT * FROM role_assignments WHERE user_id = @userId AND is_active = TRUE", conn);
+            """
+            SELECT ra.* FROM role_assignments ra
+            JOIN roles r ON ra.role_id = r.role_id
+            WHERE ra.user_id = @userId AND ra.is_active = TRUE
+            AND (ra.expires_at IS NULL OR ra.expires_at > NOW())
+            ORDER BY r.hierarchy_level ASC
+            """, conn);
         cmd.Parameters.AddWithValue("userId", userId);
         return await ReadAssignmentsAsync(cmd, ct);
     }

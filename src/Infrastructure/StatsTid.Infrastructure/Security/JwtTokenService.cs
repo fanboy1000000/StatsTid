@@ -39,8 +39,7 @@ public sealed class JwtTokenService
 
         if (scopes is { Count: > 0 })
         {
-            var scopeArray = scopes.Select(s => new { role = s.Role, org_id = s.OrgId, scope_type = s.ScopeType });
-            var scopesJson = JsonSerializer.Serialize(scopeArray);
+            var scopesJson = JsonSerializer.Serialize(scopes);
             claims.Add(new Claim(StatsTidClaims.Scopes, scopesJson, JsonClaimValueTypes.JsonArray));
         }
 
