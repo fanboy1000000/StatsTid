@@ -3,7 +3,7 @@
 | Field | Value |
 |-------|-------|
 | **Status** | approved |
-| **Sprint** | S8 (design), S9 (implementation) |
+| **Sprint** | S6 (design), S7 (implementation) |
 | **Domains** | Rule Engine, Payroll, Infrastructure |
 | **Tags** | local-config, rule-engine, determinism, configuration, merge |
 
@@ -28,4 +28,4 @@ The rule engine never loads local configs. A `ConfigResolutionService` in the Pa
 - Never add I/O to the rule engine for local config loading
 - The merge pattern: `Central + Local Overrides = Effective Config`
 - Validation examples: local maxFlexBalance must be <= central MaxFlexBalance
-- Implementation target: Sprint 9 (ConfigResolutionService)
+- Implementation target: Sprint 7 (ConfigResolutionService)

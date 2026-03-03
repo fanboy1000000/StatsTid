@@ -346,7 +346,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_correlation ON audit_log(correlation_id
 CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON audit_log(timestamp);
 
 -- ============================================================
--- SPRINT 8: RBAC, Organizational Hierarchy, Period Approval
+-- SPRINT 6: RBAC, Organizational Hierarchy, Period Approval
 -- ============================================================
 
 -- Organization hierarchy (Ministry -> Styrelse -> Afdeling -> Team)
@@ -496,7 +496,7 @@ CREATE TABLE IF NOT EXISTS approval_audit (
 CREATE INDEX IF NOT EXISTS idx_approval_audit_period ON approval_audit(period_id);
 
 -- ============================================================
--- SPRINT 8 SEED DATA: Roles, Organizations, Test Users
+-- SPRINT 6 SEED DATA: Roles, Organizations, Test Users
 -- ============================================================
 
 -- Seed role definitions

@@ -22,7 +22,7 @@
 | Sprint 3 | Security & Compliance | JWT auth, RBAC, audit logging, correlation IDs, input validation, CI/CD | 103 |
 | Sprint 4 | Payroll Traceability | Absence completion, flex payout, PeriodCalculationService, payroll export chain, traceability | 133 |
 | Sprint 5 | On-Call Duty + SLS Export | Flex unification, on-call duty basics, event emission, HTTP parallelization, retroactive corrections, SLS export formatter | 158 |
-| Sprint 8 | RBAC + Org Hierarchy | 5-role RBAC, materialized path org hierarchy, scope-embedded JWT, DB-backed auth, 8 new events | 179 |
+| Sprint 6 | RBAC + Org Hierarchy | 5-role RBAC, materialized path org hierarchy, scope-embedded JWT, DB-backed auth, 8 new events | 179 |
 
 ## Phase Roadmap
 
@@ -37,7 +37,17 @@ The critical gap is payroll integration — infrastructure exists but the end-to
 - **Sprint 4** (complete): Absence completion, flex payout, PeriodCalculationService "glue", payroll export endpoint, traceability regression tests
 - **Sprint 5** (complete): Flex endpoint unification, on-call duty basics, event emission + HTTP parallelization, retroactive correction foundation, SLS export format, 158 tests
 
-### Phase 2 — Advanced Rules + Retroactive Corrections (Sprints 6–7)
+### Phase 2 — RBAC, Local Config, Period Approval + Frontend (Sprints 6–8)
+
+**Priority focus**: P7 (Security), P9 (Usability)
+
+Does not affect the deterministic core. Focuses on organizational hierarchy, local configuration, period approval, and user-facing completeness.
+
+- **Sprint 6** (complete): 5-role RBAC foundation, organizational hierarchy (materialized path), scope-embedded JWT, DB-backed auth, 8 new domain events, 21 new tests (179 total). See [docs/sprints/SPRINT-6.md](docs/sprints/SPRINT-6.md).
+- **Sprint 7** (next): Local config + period approval + API endpoints (ConfigResolutionService, org/user/role management APIs, period approval APIs, approval guard on payroll export)
+- **Sprint 8**: Frontend (role-based navigation, approval dashboard, admin panels, HR views, local config admin)
+
+### Phase 3 — Advanced Rules + Retroactive Corrections (Sprints 9–10)
 
 **Priority focus**: P2 (Deterministic rule engine), P4 (Version correctness), P6 (Payroll integration)
 
@@ -48,16 +58,6 @@ Depends on the connected payroll chain from Phase 1. These sprints tackle the mo
 - AC position-based rule overrides, academic/research norm systems
 - Retroactive recalculation across OK version transitions
 - Payroll re-export after retroactive corrections
-
-### Phase 3 — RBAC, Local Config, Period Approval + Frontend (Sprints 8–10)
-
-**Priority focus**: P7 (Security), P9 (Usability)
-
-Does not affect the deterministic core. Focuses on organizational hierarchy, local configuration, period approval, and user-facing completeness.
-
-- **Sprint 8** (complete): 5-role RBAC foundation, organizational hierarchy (materialized path), scope-embedded JWT, DB-backed auth, 8 new domain events, 21 new tests (179 total). See [docs/sprints/SPRINT-8.md](docs/sprints/SPRINT-8.md).
-- **Sprint 9** (next): Local config + period approval + API endpoints (ConfigResolutionService, org/user/role management APIs, period approval APIs, approval guard on payroll export)
-- **Sprint 10**: Frontend (role-based navigation, approval dashboard, admin panels, HR views, local config admin)
 
 ### Phase 4 — Production Hardening (Sprint 11+)
 
@@ -76,20 +76,20 @@ Only makes sense once functional completeness is achieved.
 
 Projected functional coverage by requirement area. Percentages are cumulative.
 
-| Requirement Area | S1–S3 | S4 | S5 (Phase 1) | S8 (Phase 3 start) | After Phase 2 | After Phase 3 | After Phase 4 |
+| Requirement Area | S1–S3 | S4 | S5 (Phase 1) | S6 (Phase 2 start) | After Phase 2 | After Phase 3 | After Phase 4 |
 |------------------|-------|-----|--------------|---------------------|---------------|---------------|---------------|
-| A. Basic Time Registration | 80% | 80% | 85% | 85% | 90% | 95% | 100% |
+| A. Basic Time Registration | 80% | 80% | 85% | 85% | 95% | 95% | 100% |
 | B. Working Time Rules | 70% | 72% | 75% | 75% | 95% | 95% | 100% |
 | C. Time Types & Supplements | 60% | 60% | 70% | 70% | 95% | 95% | 100% |
-| D. Absence Types | 65% | 80% | 85% | 85% | 90% | 95% | 100% |
-| E. Organizational Structure | 0% | 0% | 0% | 70% | 70% | 90% | 100% |
-| F. Roles and Authorization | 0% | 0% | 0% | 60% | 60% | 90% | 100% |
-| G. Local Configuration | 0% | 0% | 0% | 10% | 10% | 80% | 100% |
-| H. Period Approval Workflow | 0% | 0% | 0% | 10% | 10% | 85% | 100% |
-| AC-Specific Requirements | 40% | 42% | 45% | 45% | 85% | 90% | 100% |
+| D. Absence Types | 65% | 80% | 85% | 85% | 95% | 95% | 100% |
+| E. Organizational Structure | 0% | 0% | 0% | 70% | 90% | 90% | 100% |
+| F. Roles and Authorization | 0% | 0% | 0% | 60% | 90% | 90% | 100% |
+| G. Local Configuration | 0% | 0% | 0% | 10% | 80% | 80% | 100% |
+| H. Period Approval Workflow | 0% | 0% | 0% | 10% | 85% | 85% | 100% |
+| AC-Specific Requirements | 40% | 42% | 45% | 45% | 90% | 90% | 100% |
 | Payroll Integration | 50% | 80% | 88% | 88% | 95% | 95% | 100% |
-| External Integrations | 60% | 60% | 60% | 60% | 65% | 90% | 100% |
-| **Overall** | **~39%** | **~43%** | **~46%** | **~55%** | **~70%** | **~92%** | **100%** |
+| External Integrations | 60% | 60% | 60% | 60% | 90% | 90% | 100% |
+| **Overall** | **~39%** | **~43%** | **~46%** | **~55%** | **~91%** | **~91%** | **100%** |
 
 ## Sprint 5 — Completed
 
@@ -97,34 +97,30 @@ Sprint 5 completed Phase 1 (Sprints 4–5). See [docs/sprints/SPRINT-5.md](docs/
 
 **Key deliverables**: Flex endpoint unification (PAT-006), on-call duty basics (AC disabled, HK/PROSA at 1/3 rate), PeriodCalculationCompleted event emission, HTTP rule call parallelization (Task.WhenAll), retroactive correction foundation (models + service + endpoint), SLS pipe-delimited export formatter, 25 new tests (158 total).
 
-## Sprint 8 — Completed
+## Sprint 6 — Completed
 
-Sprint 8 started Phase 3 (RBAC + Org Hierarchy). See [docs/sprints/SPRINT-8.md](docs/sprints/SPRINT-8.md) for full task log.
+Sprint 6 started Phase 2 (RBAC + Org Hierarchy). See [docs/sprints/SPRINT-6.md](docs/sprints/SPRINT-6.md) for full task log.
 
 **Key deliverables**: 5-role RBAC system (GlobalAdmin, LocalAdmin, LocalHR, LocalLeader, Employee), organizational hierarchy with materialized path (ADR-008), scope-embedded JWT authorization (ADR-009), local config merge design (ADR-010), DB-backed dual-mode login, 8 new domain events, 3 new repositories, 21 new tests (179 total).
 
-**Reviewer findings addressed**: BLOCKER (JWT scope serialization case mismatch) fixed. WARNINGs (role ordering, expiry filter, seed passwords) fixed. Deferred: endpoint-level org-scope enforcement (Sprint 9), GetDescendantsAsync double connection.
+**Reviewer findings addressed**: BLOCKER (JWT scope serialization case mismatch) fixed. WARNINGs (role ordering, expiry filter, seed passwords) fixed. Deferred: endpoint-level org-scope enforcement (Sprint 7), GetDescendantsAsync double connection.
 
-**Sprint 9 backlog (from Sprint 8)**:
+**Sprint 7 backlog (from Sprint 6)**:
 - ConfigResolutionService: merge central + local config, validate constraints (ADR-010)
 - Org management, user management, role assignment API endpoints
 - Period approval API endpoints (submit/approve/reject/pending)
 - Approval guard on payroll export (only APPROVED periods)
 - Endpoint-level org-scope enforcement in ScopeAuthorizationHandler
 
-## Sprint 6 Detailed Plan
+## Sprint 7 Detailed Plan
 
-_To be planned when Sprint 6 execution is requested. Phase 2 focus: Advanced Rules + Retroactive Corrections._
+_To be planned when Sprint 7 execution is requested. Phase 2 focus: Local Config + Period Approval + API Endpoints._
 
-**Backlog (from Sprint 5 retrospective)**:
+**Backlog (from Sprint 5 retrospective, deferred to Phase 3)**:
 - Add idempotency tokens for retroactive correction events (Reviewer WARNING)
 - Define explicit FlexEvaluationResponse DTO in SharedKernel (Reviewer WARNING)
 - Call-in work (CALL_IN_WORK), complex on-call scenarios
 - 4-week norm periods, part-time pro rata
-
-## Sprint 9 Detailed Plan
-
-_To be planned when Sprint 9 execution is requested. Phase 3 focus: Local Config + Period Approval + API Endpoints._
 
 ## Architecture Decisions
 

@@ -25,7 +25,7 @@ public static class EventSerializer
         ["OvertimeCalculated"] = typeof(OvertimeCalculated),
         ["PeriodCalculationCompleted"] = typeof(PeriodCalculationCompleted),
         ["RetroactiveCorrectionRequested"] = typeof(RetroactiveCorrectionRequested),
-        // Sprint 8: RBAC and organizational hierarchy events
+        // Sprint 6: RBAC and organizational hierarchy events
         ["OrganizationCreated"] = typeof(OrganizationCreated),
         ["UserCreated"] = typeof(UserCreated),
         ["RoleAssignmentGranted"] = typeof(RoleAssignmentGranted),

@@ -3,7 +3,7 @@
 | Field | Value |
 |-------|-------|
 | **Status** | approved |
-| **Sprint** | S8 |
+| **Sprint** | S6 |
 | **Domains** | Infrastructure, Security |
 | **Tags** | organization, hierarchy, materialized-path, postgresql |
 

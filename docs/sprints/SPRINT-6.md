@@ -1,8 +1,8 @@
-# Sprint 8 — RBAC with Organizational Hierarchy
+# Sprint 6 — RBAC with Organizational Hierarchy
 
 | Field | Value |
 |-------|-------|
-| **Sprint** | 8 |
+| **Sprint** | 6 |
 | **Status** | complete |
 | **Start Date** | 2026-03-03 |
 | **End Date** | 2026-03-03 |
@@ -23,15 +23,15 @@ Implement the foundation for a 5-role RBAC system with organizational hierarchy,
 - [ ] P6 — Payroll integration correctness (not touched)
 - [x] P7 — Security and access control (new 5-role system, scope-aware auth, JWT with scopes)
 - [x] P8 — CI/CD enforcement (build + test pass)
-- [ ] P9 — Usability and UX (deferred to Sprint 10)
+- [ ] P9 — Usability and UX (deferred to Sprint 8)
 
 ## Task Log
 
-### TASK-801 — New SharedKernel Models
+### TASK-601 — New SharedKernel Models
 
 | Field | Value |
 |-------|-------|
-| **ID** | TASK-801 |
+| **ID** | TASK-601 |
 | **Status** | complete |
 | **Agent** | Data Model |
 | **Components** | SharedKernel/Models |
@@ -54,11 +54,11 @@ Implement the foundation for a 5-role RBAC system with organizational hierarchy,
 
 ---
 
-### TASK-802 — New Domain Events + EventSerializer Registration
+### TASK-602 — New Domain Events + EventSerializer Registration
 
 | Field | Value |
 |-------|-------|
-| **ID** | TASK-802 |
+| **ID** | TASK-602 |
 | **Status** | complete |
 | **Agent** | Data Model |
 | **Components** | SharedKernel/Events, Infrastructure/EventSerializer |
@@ -86,11 +86,11 @@ Implement the foundation for a 5-role RBAC system with organizational hierarchy,
 
 ---
 
-### TASK-803 — Updated Security Infrastructure (5-Role RBAC)
+### TASK-603 — Updated Security Infrastructure (5-Role RBAC)
 
 | Field | Value |
 |-------|-------|
-| **ID** | TASK-803 |
+| **ID** | TASK-603 |
 | **Status** | complete |
 | **Agent** | Security |
 | **Components** | SharedKernel/Security, Infrastructure/Security |
@@ -118,11 +118,11 @@ Implement the foundation for a 5-role RBAC system with organizational hierarchy,
 
 ---
 
-### TASK-804 — Updated JwtTokenService
+### TASK-604 — Updated JwtTokenService
 
 | Field | Value |
 |-------|-------|
-| **ID** | TASK-804 |
+| **ID** | TASK-604 |
 | **Status** | complete |
 | **Agent** | Security |
 | **Components** | Infrastructure/Security |
@@ -137,11 +137,11 @@ Implement the foundation for a 5-role RBAC system with organizational hierarchy,
 
 ---
 
-### TASK-805 — PostgreSQL Schema Additions + Seed Data
+### TASK-605 — PostgreSQL Schema Additions + Seed Data
 
 | Field | Value |
 |-------|-------|
-| **ID** | TASK-805 |
+| **ID** | TASK-605 |
 | **Status** | complete |
 | **Agent** | Orchestrator |
 | **Components** | PostgreSQL schema |
@@ -156,11 +156,11 @@ Implement the foundation for a 5-role RBAC system with organizational hierarchy,
 
 ---
 
-### TASK-806 — New Repositories
+### TASK-606 — New Repositories
 
 | Field | Value |
 |-------|-------|
-| **ID** | TASK-806 |
+| **ID** | TASK-606 |
 | **Status** | complete |
 | **Agent** | Security |
 | **Components** | Infrastructure |
@@ -177,11 +177,11 @@ Implement the foundation for a 5-role RBAC system with organizational hierarchy,
 
 ---
 
-### TASK-807 — DB-Backed Login Endpoint
+### TASK-607 — DB-Backed Login Endpoint
 
 | Field | Value |
 |-------|-------|
-| **ID** | TASK-807 |
+| **ID** | TASK-607 |
 | **Status** | complete |
 | **Agent** | Security |
 | **Components** | Backend API |
@@ -198,11 +198,11 @@ Implement the foundation for a 5-role RBAC system with organizational hierarchy,
 
 ---
 
-### TASK-808 — Sprint 8 Unit Tests
+### TASK-608 — Sprint 6 Unit Tests
 
 | Field | Value |
 |-------|-------|
-| **ID** | TASK-808 |
+| **ID** | TASK-608 |
 | **Status** | complete |
 | **Agent** | Test & QA |
 | **Components** | Tests |
@@ -213,7 +213,7 @@ Implement the foundation for a 5-role RBAC system with organizational hierarchy,
 **Description**: 21 new tests: RoleScope (5), StatsTidRoles hierarchy (4), JWT with scopes (3), domain models (7), event serialization (2).
 
 **Files Changed**:
-- `tests/StatsTid.Tests.Unit/Security/Sprint8SecurityTests.cs` — new (21 tests)
+- `tests/StatsTid.Tests.Unit/Security/Sprint6SecurityTests.cs` — new (21 tests)
 
 ---
 
@@ -221,7 +221,7 @@ Implement the foundation for a 5-role RBAC system with organizational hierarchy,
 
 | Check | Status | Notes |
 |-------|--------|-------|
-| Agreement rules match legal requirements | N/A | No rule changes in Sprint 8 |
+| Agreement rules match legal requirements | N/A | No rule changes in Sprint 6 |
 | Wage type mappings produce correct SLS codes | N/A | No payroll changes |
 | Overtime/supplement calculations are deterministic | verified | Rule engine untouched; 15 regression tests confirm |
 | Absence effects on norm/flex/pension are correct | N/A | No absence changes |
@@ -245,7 +245,7 @@ Implement the foundation for a 5-role RBAC system with organizational hierarchy,
 | WARNING | Expired role assignments not filtered | Fixed: added `expires_at > NOW()` filter |
 | WARNING | Identical seed passwords undocumented | Fixed: added password documentation comment |
 | WARNING | GetDescendantsAsync opens two connections | Deferred: acceptable for current usage pattern |
-| NOTE | ScopeAuthorizationHandler does role-only gating, not org-scoped | Tracked: endpoint-level enforcement deferred to Sprint 9 |
+| NOTE | ScopeAuthorizationHandler does role-only gating, not org-scoped | Tracked: endpoint-level enforcement deferred to Sprint 7 |
 | NOTE | DateTime.UtcNow defaults in model init properties | Noted: not a correctness issue for DB-populated models |
 | NOTE | Legacy role aliases create ambiguous switch pattern | Noted: will be removed when all consumers migrated |
 

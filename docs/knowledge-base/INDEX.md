@@ -13,9 +13,9 @@
 | [ADR-005](decisions/ADR-005-explicit-type-map-polymorphic-serialization.md) | Explicit type map for polymorphic event serialization | approved | S1 | Data Model, Infrastructure | serialization, events, type-map, system-text-json |
 | [ADR-006](decisions/ADR-006-eight-service-docker-compose.md) | 8-service Docker Compose architecture | approved | S1 | Infrastructure | docker, microservices, architecture |
 | [ADR-007](decisions/ADR-007-jwt-auth-rbac-correlation-ids.md) | JWT auth with RBAC and correlation IDs | approved | S3 | Security, Infrastructure | jwt, rbac, authentication, authorization, correlation-id, audit |
-| [ADR-008](decisions/ADR-008-materialized-path-org-hierarchy.md) | Materialized path for organizational hierarchy | approved | S8 | Infrastructure, Security | organization, hierarchy, materialized-path, postgresql |
-| [ADR-009](decisions/ADR-009-scope-embedded-jwt.md) | Role scopes embedded in JWT token | approved | S8 | Security, Infrastructure | jwt, rbac, scopes, authorization, stateless |
-| [ADR-010](decisions/ADR-010-local-config-merge-at-service-layer.md) | Local config merged at service layer, not in rule engine | approved | S8 | Rule Engine, Payroll, Infrastructure | local-config, rule-engine, determinism, configuration, merge |
+| [ADR-008](decisions/ADR-008-materialized-path-org-hierarchy.md) | Materialized path for organizational hierarchy | approved | S6 | Infrastructure, Security | organization, hierarchy, materialized-path, postgresql |
+| [ADR-009](decisions/ADR-009-scope-embedded-jwt.md) | Role scopes embedded in JWT token | approved | S6 | Security, Infrastructure | jwt, rbac, scopes, authorization, stateless |
+| [ADR-010](decisions/ADR-010-local-config-merge-at-service-layer.md) | Local config merged at service layer, not in rule engine | approved | S6 | Rule Engine, Payroll, Infrastructure | local-config, rule-engine, determinism, configuration, merge |
 
 ## Validated Patterns (PAT)
 

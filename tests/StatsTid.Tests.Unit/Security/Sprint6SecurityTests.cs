@@ -8,10 +8,10 @@ using StatsTid.SharedKernel.Security;
 namespace StatsTid.Tests.Unit.Security;
 
 /// <summary>
-/// Tests for Sprint 8: RBAC role hierarchy, organizational scoping,
+/// Tests for Sprint 6: RBAC role hierarchy, organizational scoping,
 /// JWT token enhancements, domain models, and event serialization.
 /// </summary>
-public class Sprint8SecurityTests
+public class Sprint6SecurityTests
 {
     private static JwtSettings TestSettings => new()
     {
@@ -280,7 +280,7 @@ public class Sprint8SecurityTests
     // ---------------------------------------------------------------
 
     [Fact]
-    public void EventSerializer_Sprint8Events_RoundtripCorrectly()
+    public void EventSerializer_Sprint6Events_RoundtripCorrectly()
     {
         // OrganizationCreated
         var orgCreated = new OrganizationCreated
