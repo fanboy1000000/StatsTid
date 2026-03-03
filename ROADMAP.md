@@ -28,6 +28,8 @@
 
 This roadmap uses a **rolling detail** pattern: only the next sprint has task-level planning. Future phases have milestone-level descriptions. After each sprint completes, the next sprint is promoted to detailed planning.
 
+> **Sprint numbering rule**: Sprint numbers are strictly sequential (see CLAUDE.md § Sprint Numbering & Re-prioritization). Phase-to-sprint mappings below are projections. When execution order changes, the Orchestrator replans affected sprints and updates these mappings — sprint numbers are never skipped or reordered.
+
 ### Phase 1 — Rule Engine Completion + Payroll Chain (Sprints 4–5)
 
 **Priority focus**: P2 (Deterministic rule engine), P3 (Event sourcing), P6 (Payroll integration)

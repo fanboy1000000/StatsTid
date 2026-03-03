@@ -338,3 +338,40 @@ The project maintains a phased roadmap at `ROADMAP.md` using a rolling detail pa
 - **Coverage tracker**: ROADMAP.md includes a SYSTEM_TARGET.md coverage tracker showing projected completion per phase.
 - **Orchestrator-only writes**: Only the Orchestrator may modify ROADMAP.md. Already enforced by the Constraints section (ROADMAP.md in protected files list).
 - **Consistency**: Sprint plans in ROADMAP.md must be consistent with sprint logs in `docs/sprints/`.
+
+# Sprint Numbering & Re-prioritization
+
+## Sequential Sprint Numbers
+- Sprint numbers are strictly sequential: the next sprint is always N+1 where N is the last completed sprint.
+- Never skip sprint numbers. Sprint numbers track execution order, not thematic grouping.
+- Task IDs follow the sprint: Sprint 6 tasks are TASK-601, TASK-602, etc.
+
+## Phases vs Sprints
+- Phases are thematic groupings (e.g. "RBAC + Frontend"). Sprints are chronological execution units.
+- ROADMAP.md assigns projected sprint ranges to phases (e.g. "Phase 2: Sprints 6-8"). These are projections, not fixed assignments.
+- When execution order changes, update the phase-to-sprint mapping in ROADMAP.md — never adjust sprint numbers to match the old projection.
+
+## Re-prioritization Procedure
+When new requirements arrive that change the planned execution order, the Orchestrator must replan before executing. The depth of replanning is tiered by scale of impact.
+
+### Tier 1 — Small addition (1 planned sprint affected or fewer)
+1. Assign the next sequential sprint number (N+1) to the new work
+2. Update ROADMAP.md: adjust phase-sprint ranges, shift deferred phases forward
+3. Update the coverage tracker to reflect new ordering
+4. Proceed to execution
+
+### Tier 2 — Cross-cutting change (2+ planned sprints affected)
+1. Assign the next sequential sprint number (N+1) to the new work
+2. Write an **Impact Assessment** section in ROADMAP.md before execution, containing:
+   - Which existing planned sprints are affected and how (scope change, dependency shift, new prerequisites)
+   - Whether any planned sprint must be split, merged, or have tasks added/removed
+   - Updated phase-sprint ranges for all affected phases
+   - Updated coverage tracker projections
+3. Rewrite the detailed plan for the next sprint (N+1) incorporating the impact
+4. Clear or rewrite any stale detailed plans for future sprints that were invalidated
+5. Proceed to execution only after the impact assessment is complete
+
+### Common rules (both tiers)
+- Deferred phases shift forward — their projected sprint numbers increase accordingly
+- Completed sprints are never renumbered — they are historical records
+- SYSTEM_TARGET.md must be updated if the new requirements introduce functional areas not yet documented
