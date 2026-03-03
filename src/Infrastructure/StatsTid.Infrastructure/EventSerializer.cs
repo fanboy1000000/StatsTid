@@ -24,6 +24,15 @@ public static class EventSerializer
         ["SupplementCalculated"] = typeof(SupplementCalculated),
         ["OvertimeCalculated"] = typeof(OvertimeCalculated),
         ["PeriodCalculationCompleted"] = typeof(PeriodCalculationCompleted),
+        // Sprint 8: RBAC and organizational hierarchy events
+        ["OrganizationCreated"] = typeof(OrganizationCreated),
+        ["UserCreated"] = typeof(UserCreated),
+        ["RoleAssignmentGranted"] = typeof(RoleAssignmentGranted),
+        ["RoleAssignmentRevoked"] = typeof(RoleAssignmentRevoked),
+        ["LocalConfigurationChanged"] = typeof(LocalConfigurationChanged),
+        ["PeriodSubmitted"] = typeof(PeriodSubmitted),
+        ["PeriodApproved"] = typeof(PeriodApproved),
+        ["PeriodRejected"] = typeof(PeriodRejected),
     };
 
     public static string Serialize(IDomainEvent @event)
