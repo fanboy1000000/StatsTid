@@ -6,4 +6,5 @@ public sealed class LoginResponse
     public required DateTime ExpiresAt { get; init; }
     public required string EmployeeId { get; init; }
     public required string Role { get; init; }
+    public string? OrgId { get; init; }
 }
