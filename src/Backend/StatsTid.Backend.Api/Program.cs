@@ -21,6 +21,11 @@ builder.Services.AddStatsTidJwtAuth(builder.Configuration);
 builder.Services.AddStatsTidPolicies();
 builder.Services.AddSingleton<AuditLogRepository>();
 builder.Services.AddSingleton<JwtTokenService>();
+builder.Services.AddSingleton<UserRepository>();
+builder.Services.AddSingleton<RoleAssignmentRepository>();
+builder.Services.AddSingleton<OrganizationRepository>();
+
+var useDbAuth = builder.Configuration.GetValue<bool>("Auth:UseDatabase", false);
 
 var app = builder.Build();
 
@@ -33,31 +38,77 @@ app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "back
 
 // ── Authentication ──
 
-app.MapPost("/api/auth/login", (LoginRequest request, JwtTokenService tokenService) =>
+app.MapPost("/api/auth/login", async (
+    LoginRequest request,
+    JwtTokenService tokenService,
+    UserRepository userRepository,
+    RoleAssignmentRepository roleAssignmentRepository,
+    CancellationToken ct) =>
 {
-    var users = new Dictionary<string, (string Name, string Role, string AgreementCode, string Password)>
+    if (useDbAuth)
     {
-        ["admin01"] = ("Administrator", StatsTidRoles.Admin, "AC", "admin"),
-        ["mgr01"] = ("Manager One", StatsTidRoles.Manager, "HK", "manager"),
-        ["emp001"] = ("Employee AC", StatsTidRoles.Employee, "AC", "employee"),
-        ["emp002"] = ("Employee HK", StatsTidRoles.Employee, "HK", "employee"),
-        ["emp003"] = ("Employee PROSA", StatsTidRoles.Employee, "PROSA", "employee"),
-        ["readonly01"] = ("ReadOnly User", StatsTidRoles.ReadOnly, "AC", "readonly"),
-    };
+        // DB-backed authentication
+        var dbUser = await userRepository.GetByUsernameAsync(request.Username, ct);
+        if (dbUser is null)
+            return Results.Unauthorized();
 
-    if (!users.TryGetValue(request.Username, out var user) || request.Password != user.Password)
-        return Results.Unauthorized();
+        if (!BCrypt.Net.BCrypt.Verify(request.Password, dbUser.PasswordHash))
+            return Results.Unauthorized();
 
-    var token = tokenService.GenerateToken(request.Username, user.Name, user.Role, user.AgreementCode);
-    var expiration = DateTime.UtcNow.AddMinutes(480);
+        // Load role assignments and map to RoleScope[]
+        var assignments = await roleAssignmentRepository.GetByUserIdAsync(dbUser.UserId, ct);
+        var scopes = assignments.Select(a => new RoleScope
+        {
+            RoleName = MapRoleIdToName(a.RoleId),
+            OrgId = a.OrgId,
+            ScopeType = a.ScopeType
+        }).ToList();
 
-    return Results.Ok(new LoginResponse
+        // Use the highest-privilege role as the primary role
+        var primaryRole = scopes.Count > 0 ? scopes[0].RoleName : StatsTidRoles.Employee;
+
+        var token = tokenService.GenerateToken(
+            dbUser.UserId, dbUser.DisplayName, primaryRole, dbUser.AgreementCode,
+            dbUser.PrimaryOrgId, scopes);
+        var expiration = DateTime.UtcNow.AddMinutes(480);
+
+        return Results.Ok(new LoginResponse
+        {
+            Token = token,
+            ExpiresAt = expiration,
+            EmployeeId = dbUser.UserId,
+            Role = primaryRole,
+            OrgId = dbUser.PrimaryOrgId
+        });
+    }
+    else
     {
-        Token = token,
-        ExpiresAt = expiration,
-        EmployeeId = request.Username,
-        Role = user.Role
-    });
+        // Legacy hardcoded authentication (default)
+        var users = new Dictionary<string, (string Name, string Role, string AgreementCode, string Password)>
+        {
+            ["admin01"] = ("Global Administrator", StatsTidRoles.GlobalAdmin, "AC", "admin"),
+            ["ladm01"] = ("Lokal Administrator", StatsTidRoles.LocalAdmin, "HK", "manager"),
+            ["hr01"] = ("HR Medarbejder", StatsTidRoles.LocalHR, "HK", "hr"),
+            ["mgr01"] = ("Team Leder", StatsTidRoles.LocalLeader, "HK", "manager"),
+            ["emp001"] = ("AC Medarbejder", StatsTidRoles.Employee, "AC", "employee"),
+            ["emp002"] = ("HK Medarbejder", StatsTidRoles.Employee, "HK", "employee"),
+            ["emp003"] = ("PROSA Medarbejder", StatsTidRoles.Employee, "PROSA", "employee"),
+        };
+
+        if (!users.TryGetValue(request.Username, out var user) || request.Password != user.Password)
+            return Results.Unauthorized();
+
+        var token = tokenService.GenerateToken(request.Username, user.Name, user.Role, user.AgreementCode);
+        var expiration = DateTime.UtcNow.AddMinutes(480);
+
+        return Results.Ok(new LoginResponse
+        {
+            Token = token,
+            ExpiresAt = expiration,
+            EmployeeId = request.Username,
+            Role = user.Role
+        });
+    }
 });
 
 // ── Time Entries ──
@@ -313,3 +364,13 @@ app.MapPost("/api/time-entries/calculate-week", async (
 }).RequireAuthorization("EmployeeOrAbove");
 
 app.Run();
+
+static string MapRoleIdToName(string roleId) => roleId switch
+{
+    "GLOBAL_ADMIN" => StatsTidRoles.GlobalAdmin,
+    "LOCAL_ADMIN" => StatsTidRoles.LocalAdmin,
+    "LOCAL_HR" => StatsTidRoles.LocalHR,
+    "LOCAL_LEADER" => StatsTidRoles.LocalLeader,
+    "EMPLOYEE" => StatsTidRoles.Employee,
+    _ => StatsTidRoles.Employee
+};
