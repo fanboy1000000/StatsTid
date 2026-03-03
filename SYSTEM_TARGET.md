@@ -12,6 +12,10 @@ Be event-sourced
 Be replayable
 Support historical recalculation
 Support OK version transitions (e.g. OK24 → OK26)
+Support multi-organization hierarchy (Ministry → Styrelse → Afdeling → Team)
+Support 5-role access control scoped to organizations
+Support local configuration within central agreement constraints
+Support period-based leader approval before payroll export
 Support outbound API integrations
 Support payroll export (SLS or equivalent)
 Be production-ready from day one
@@ -98,6 +102,81 @@ Flex balance
 Pension basis
 Payroll calculation
 All absence effects must be rule-driven and version-aware.
+
+### E. Organizational Structure
+
+The Danish state operates a multi-org hierarchy with varying degrees of centralization.
+
+System must support:
+Hierarchical organization types: Ministry → Styrelse (agency) → Afdeling (department) → Team
+Each organization has a parent reference and a materialized path for efficient subtree queries
+Organizations are linked to agreements (agreement_code, ok_version)
+Some ministries have centralized HR placed in a child organization (e.g. a styrelse) that covers the entire ministry subtree
+Subtree resolution must be efficient (single query) for scope-based authorization
+
+Examples:
+Finansministeriet (Ministry)
+├── Økonomistyrelsen (Styrelse) — may host centralized HR for all of Finansministeriet
+├── Statens It (Styrelse)
+│   ├── Drift (Afdeling)
+│   └── Udvikling (Afdeling)
+└── Digitaliseringsstyrelsen (Styrelse)
+
+### F. Roles and Authorization
+
+System must implement 5 roles with organization-scoped access control.
+
+| Role | Scope | Key Capabilities |
+|------|-------|------------------|
+| **Global Admin** | All organizations | Manage state agreements (OK version transitions, e.g. OK24 → OK26), create/manage organizations, manage all users |
+| **Local Admin** | Assigned org(s) + descendants | Configure local settings within central agreement constraints, manage local users |
+| **Local HR** | Explicitly assigned org subtree | View/edit all employees' time registrations within scope, organization statistics, employee management |
+| **Local Leader** | Assigned team/org | Approve/reject time registration periods, employee oversight (sick days, vacation balances) |
+| **Employee** | Own data only | Register time, view own registrations, submit periods for approval, view own balances |
+
+Authorization constraints:
+Each role assignment is scoped to an organization with a scope type: GLOBAL, ORG_ONLY, or ORG_AND_DESCENDANTS
+Scope resolution uses organizational hierarchy — a scope on a parent org covers all descendants
+A user may hold multiple role assignments (e.g. Leader for Team A, HR for Styrelse B)
+HR scope is explicitly assignable — HR in a child organization can cover the parent ministry's entire subtree
+Role changes are infrequent (monthly at most) and take effect on next authentication
+All role assignments must be auditable (who granted, when, expiration)
+
+### G. Local Configuration
+
+Local administrators can configure operational parameters within centrally defined constraints. Local configuration must never override centrally negotiated agreement rules.
+
+Five controlled configuration areas:
+1. **Working Time Planning** — Norm period length (1/4/8/12 weeks), planning start day, planning calendar
+2. **Flex Rules** — Maximum flex balance (within central limit), warning thresholds, payout triggers
+3. **Organizational Structure** — Departments, cost centers, projects, approval chains
+4. **Local Agreements (Lokalaftaler)** — Parameterized policies within central framework agreement boundaries
+5. **Operational Configuration** — Approval flows, cutoff dates, lock periods, exemptions
+
+Constraint enforcement:
+Local values must respect central min/max boundaries (e.g. local maxFlexBalance must be <= central MaxFlexBalance)
+Centrally negotiated rates (overtime rates, supplement rates) cannot be overridden locally
+Hierarchical resolution: Central Agreement → Employment Group (AC/HK/PROSA) → Local Institutional Configuration
+The rule engine must remain pure — local configuration is merged at the service layer, not in the rule engine
+Local config changes are effective after re-evaluation (not retroactive by default)
+
+### H. Period Approval Workflow
+
+Time registrations must be approved by a leader before payroll export.
+
+System must support:
+Period types: weekly or monthly
+Period status lifecycle: DRAFT → SUBMITTED → APPROVED or REJECTED
+Employees submit their own periods
+Leaders approve/reject periods for employees within their organizational scope
+Only APPROVED periods may be exported to payroll
+Rejection must include a reason
+All status transitions must be auditable (who, when, reason)
+
+Approval constraints:
+A leader may only approve periods for employees in their assigned organizational scope
+Payroll export endpoint must enforce the approval guard — unapproved periods are blocked
+Period approval does not affect the rule engine — it is a workflow gate before payroll export
 
 ## AC-Specific Requirements
 

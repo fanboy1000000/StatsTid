@@ -82,11 +82,14 @@ Projected functional coverage by requirement area. Percentages are cumulative.
 | B. Working Time Rules | 70% | 72% | 75% | 75% | 95% | 95% | 100% |
 | C. Time Types & Supplements | 60% | 60% | 70% | 70% | 95% | 95% | 100% |
 | D. Absence Types | 65% | 80% | 85% | 85% | 90% | 95% | 100% |
+| E. Organizational Structure | 0% | 0% | 0% | 70% | 70% | 90% | 100% |
+| F. Roles and Authorization | 0% | 0% | 0% | 60% | 60% | 90% | 100% |
+| G. Local Configuration | 0% | 0% | 0% | 10% | 10% | 80% | 100% |
+| H. Period Approval Workflow | 0% | 0% | 0% | 10% | 10% | 85% | 100% |
 | AC-Specific Requirements | 40% | 42% | 45% | 45% | 85% | 90% | 100% |
 | Payroll Integration | 50% | 80% | 88% | 88% | 95% | 95% | 100% |
 | External Integrations | 60% | 60% | 60% | 60% | 65% | 90% | 100% |
-| Security & RBAC | 30% | 30% | 30% | 60% | 60% | 90% | 100% |
-| **Overall** | **~58%** | **~63%** | **~67%** | **~71%** | **~84%** | **~93%** | **100%** |
+| **Overall** | **~39%** | **~43%** | **~46%** | **~55%** | **~70%** | **~92%** | **100%** |
 
 ## Sprint 5 — Completed
 
