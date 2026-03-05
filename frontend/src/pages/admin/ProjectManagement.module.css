@@ -1,0 +1,95 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.loadingContainer {
+  display: flex;
+  justify-content: center;
+  padding: var(--space-12);
+}
+
+.cardHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text);
+}
+
+.form {
+  padding: var(--space-4);
+  margin-bottom: var(--space-4);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--border-radius);
+  background-color: var(--color-gray-100);
+}
+
+.formTitle {
+  margin: 0 0 var(--space-3) 0;
+  font-size: 16px;
+  font-weight: var(--font-weight-medium);
+}
+
+.formFields {
+  display: flex;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-3);
+}
+
+.formField {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 160px;
+  flex: 1;
+}
+
+.label {
+  font-size: 13px;
+  font-weight: var(--font-weight-medium);
+  color: var(--color-gray-600);
+}
+
+.formActions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.table th,
+.table td {
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+  border-bottom: var(--border-width) solid var(--border-color);
+}
+
+.table th {
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-gray-600);
+  background-color: var(--color-gray-100);
+  font-size: 13px;
+}
+
+.emptyRow {
+  text-align: center;
+  color: var(--color-gray-400);
+  padding: var(--space-8) 0;
+}
+
+.actions {
+  display: flex;
+  gap: var(--space-1);
+}

@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { AGREEMENT_CODES } from '../types'
+import { FormField, Input, Button } from './ui'
+import styles from './TimeEntryForm.module.css'
 
 interface Props {
   employeeId: string
@@ -52,40 +54,77 @@ export function TimeEntryForm({ employeeId, onSubmit }: Props) {
   }
 
   return (
-    <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 400 }}>
-      <label>
-        Dato:
-        <input type="date" value={date} onChange={e => setDate(e.target.value)} required />
-      </label>
-      <label>
-        Timer:
-        <input type="number" step="0.1" value={hours} onChange={e => setHours(e.target.value)} required />
-      </label>
-      <label>
-        Starttid:
-        <input type="time" value={startTime} onChange={e => setStartTime(e.target.value)} />
-      </label>
-      <label>
-        Sluttid:
-        <input type="time" value={endTime} onChange={e => setEndTime(e.target.value)} />
-      </label>
-      <label>
-        Opgave:
-        <input type="text" value={taskId} onChange={e => setTaskId(e.target.value)} placeholder="Valgfri" />
-      </label>
-      <label>
-        Aktivitetstype:
-        <input type="text" value={activityType} onChange={e => setActivityType(e.target.value)} placeholder="Valgfri" />
-      </label>
-      <label>
-        Overenskomst:
-        <select value={agreementCode} onChange={e => setAgreementCode(e.target.value)}>
-          {AGREEMENT_CODES.map(c => <option key={c} value={c}>{c}</option>)}
+    <form onSubmit={handleSubmit} className={styles.form}>
+      <FormField label="Dato" htmlFor="entry-date" required>
+        <Input
+          id="entry-date"
+          type="date"
+          value={date}
+          onChange={e => setDate(e.target.value)}
+          required
+        />
+      </FormField>
+      <FormField label="Timer" htmlFor="entry-hours" required>
+        <Input
+          id="entry-hours"
+          type="number"
+          step="0.1"
+          value={hours}
+          onChange={e => setHours(e.target.value)}
+          required
+        />
+      </FormField>
+      <FormField label="Starttid" htmlFor="entry-start">
+        <Input
+          id="entry-start"
+          type="time"
+          value={startTime}
+          onChange={e => setStartTime(e.target.value)}
+        />
+      </FormField>
+      <FormField label="Sluttid" htmlFor="entry-end">
+        <Input
+          id="entry-end"
+          type="time"
+          value={endTime}
+          onChange={e => setEndTime(e.target.value)}
+        />
+      </FormField>
+      <FormField label="Opgave" htmlFor="entry-task">
+        <Input
+          id="entry-task"
+          type="text"
+          value={taskId}
+          onChange={e => setTaskId(e.target.value)}
+          placeholder="Valgfri"
+        />
+      </FormField>
+      <FormField label="Aktivitetstype" htmlFor="entry-activity">
+        <Input
+          id="entry-activity"
+          type="text"
+          value={activityType}
+          onChange={e => setActivityType(e.target.value)}
+          placeholder="Valgfri"
+        />
+      </FormField>
+      <FormField label="Overenskomst" htmlFor="entry-agreement">
+        <select
+          id="entry-agreement"
+          className={styles.select}
+          value={agreementCode}
+          onChange={e => setAgreementCode(e.target.value)}
+        >
+          {AGREEMENT_CODES.map(c => (
+            <option key={c} value={c}>{c}</option>
+          ))}
         </select>
-      </label>
-      <button type="submit" disabled={submitting}>
-        {submitting ? 'Registrerer...' : 'Registrer tid'}
-      </button>
+      </FormField>
+      <div className={styles.actions}>
+        <Button type="submit" disabled={submitting}>
+          {submitting ? 'Registrerer...' : 'Registrer tid'}
+        </Button>
+      </div>
     </form>
   )
 }

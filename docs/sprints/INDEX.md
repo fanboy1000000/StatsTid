@@ -12,6 +12,9 @@
 | [Sprint 4](SPRINT-4.md) | Payroll Traceability Chain, Absence Completion | complete | 2026-03-02 → 2026-03-02 | 133 | yes |
 | [Sprint 5](SPRINT-5.md) | On-Call Duty, Flex Unification, Retroactive Corrections, SLS Export | complete | 2026-03-02 → 2026-03-02 | 158 | yes |
 | [Sprint 6](SPRINT-6.md) | RBAC with Organizational Hierarchy | complete | 2026-03-03 → 2026-03-03 | 179 | yes |
+| [Sprint 7](SPRINT-7.md) | Local Config, Period Approval, Org-Scope Enforcement | complete | 2026-03-04 → 2026-03-04 | 217 | yes |
+| [Sprint 8](SPRINT-8.md) | Frontend: Design System + Role-Based UI | complete | 2026-03-04 → 2026-03-04 | 242 | yes |
+| [Sprint 9](SPRINT-9.md) | Skema: Monthly Spreadsheet + Timer + Two-Step Approval | complete | 2026-03-05 → 2026-03-05 | 275 | yes |
 
 ## Cumulative Task Summary
 
@@ -23,7 +26,10 @@
 | S4 | 7 | Rule Engine, SharedKernel, Payroll Integration, Infrastructure, Tests | PAT-005 |
 | S5 | 7 | Rule Engine, SharedKernel, Payroll Integration, Infrastructure, Tests | PAT-006 |
 | S6 | 8 | SharedKernel, Infrastructure, Security, Backend API, PostgreSQL, Tests | ADR-008, ADR-009, ADR-010 |
-| **Total** | **43** | — | **20 entries** |
+| S7 | 9 | Infrastructure, Security, Backend API, Payroll Integration, PostgreSQL, Tests | — (used existing ADR-008/009/010) |
+| S8 | 17 | Frontend (styles, components, contexts, lib, hooks, pages, guards, routing, tests) | — (consumed ADR-011) |
+| S9 | 10 | SharedKernel, Infrastructure, Backend API, PostgreSQL, Frontend, Tests | ADR-012, FAIL-001 |
+| **Total** | **79** | — | **22 entries** |
 
 ## Test Progression
 
@@ -35,32 +41,35 @@
 | S4 | 122 | 11 | 4 | 133 |
 | S5 | 143 | 15 | 4 | 158 |
 | S6 | 164 | 15 | 4 | 179 |
+| S7 | 202 | 15 | 4 | 217 |
+| S8 | 202 + 25 FE | 15 | 4 | 242 |
+| S9 | 227 + 33 FE | 15 | 4 | 275 |
 
 ## Architectural Constraint Coverage
 
 Shows which priorities were verified in each sprint.
 
-| Priority | Description | S1 | S2 | S3 | S4 | S5 | S6 |
-|----------|-------------|----|----|-----|-----|-----|-----|
-| P1 | Architectural integrity | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| P2 | Deterministic rule engine | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| P3 | Event sourcing auditability | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| P4 | OK version correctness | — | ✓ | ✓ | ✓ | ✓ | — |
-| P5 | Integration isolation | ✓ | ✓ | ✓ | ✓ | ✓ | — |
-| P6 | Payroll correctness | ✓ | ✓ | ✓ | ✓ | ✓ | — |
-| P7 | Security and access control | — | — | ✓ | ✓ | ✓ | ✓ |
-| P8 | CI/CD enforcement | — | — | ✓ | — | — | ✓ |
-| P9 | Usability and UX | — | ✓ | ✓ | — | — | — |
+| Priority | Description | S1 | S2 | S3 | S4 | S5 | S6 | S7 | S8 | S9 |
+|----------|-------------|----|----|-----|-----|-----|-----|-----|-----|-----|
+| P1 | Architectural integrity | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| P2 | Deterministic rule engine | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | — | — |
+| P3 | Event sourcing auditability | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ |
+| P4 | OK version correctness | — | ✓ | ✓ | ✓ | ✓ | — | — | — | — |
+| P5 | Integration isolation | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ | — | — |
+| P6 | Payroll correctness | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ | — | — |
+| P7 | Security and access control | — | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| P8 | CI/CD enforcement | — | — | ✓ | — | — | ✓ | ✓ | ✓ | ✓ |
+| P9 | Usability and UX | — | ✓ | ✓ | — | — | — | — | ✓ | ✓ |
 
 ## Legal & Payroll Verification Status
 
-| Check | S1 | S2 | S3 | S4 | S5 | S6 |
-|-------|----|----|-----|-----|-----|-----|
-| Agreement rules match legal requirements | ✓ | ✓ | ✓ | ✓ | ✓ | N/A |
-| Wage type mappings correct | ✓ | ✓ | ✓ | ✓ | ✓ | N/A |
-| Overtime/supplement determinism | — | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Absence effects correct | — | ✓ | ✓ | ✓ | ✓ | N/A |
-| Retroactive recalculation stable | — | ✓ | ✓ | ✓ | ✓ | N/A |
+| Check | S1 | S2 | S3 | S4 | S5 | S6 | S7 | S8 | S9 |
+|-------|----|----|-----|-----|-----|-----|-----|-----|-----|
+| Agreement rules match legal requirements | ✓ | ✓ | ✓ | ✓ | ✓ | N/A | N/A | N/A | N/A |
+| Wage type mappings correct | ✓ | ✓ | ✓ | ✓ | ✓ | N/A | N/A | N/A | Partial |
+| Overtime/supplement determinism | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | N/A | N/A |
+| Absence effects correct | — | ✓ | ✓ | ✓ | ✓ | N/A | N/A | N/A | N/A |
+| Retroactive recalculation stable | — | ✓ | ✓ | ✓ | ✓ | N/A | N/A | N/A | N/A |
 
 ## How to Use This Log
 

@@ -1,41 +1,79 @@
-import { BrowserRouter, Routes, Route, Link } from 'react-router-dom'
-import { TimeRegistration } from './pages/TimeRegistration'
-import { WeeklyView } from './pages/WeeklyView'
-import { AbsenceRegistration } from './pages/AbsenceRegistration'
-import { HealthDashboard } from './pages/HealthDashboard'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { AuthProvider, useAuth } from './contexts/AuthContext'
+import { AppLayout } from './components/layout/AppLayout'
+import { RequireAuth } from './components/guards/RequireAuth'
+import { RequireRole } from './components/guards/RequireRole'
 import { LoginPage } from './pages/LoginPage'
-import { useAuth } from './hooks/useAuth'
+import { SkemaPage } from './pages/SkemaPage'
+import { HealthDashboard } from './pages/HealthDashboard'
+import { NotFoundPage } from './pages/NotFoundPage'
+import { MyPeriods } from './pages/approval/MyPeriods'
+import { ApprovalDashboard } from './pages/approval/ApprovalDashboard'
+import { OrgManagement } from './pages/admin/OrgManagement'
+import { UserManagement } from './pages/admin/UserManagement'
+import { RoleManagement } from './pages/admin/RoleManagement'
+import { ProjectManagement } from './pages/admin/ProjectManagement'
+import { ConfigManagement } from './pages/config/ConfigManagement'
+import './styles/tokens.css'
 
 export function App() {
-  const { isAuthenticated, user, login, logout } = useAuth()
+  return (
+    <AuthProvider>
+      <BrowserRouter>
+        <AppRoutes />
+      </BrowserRouter>
+    </AuthProvider>
+  )
+}
 
-  if (!isAuthenticated) {
-    return <LoginPage onLogin={login} />
-  }
+function AppRoutes() {
+  const { isAuthenticated } = useAuth()
 
   return (
-    <BrowserRouter>
-      <div style={{ fontFamily: 'system-ui, sans-serif', maxWidth: 1000, margin: '0 auto', padding: 20 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h1>StatsTid</h1>
-          <div>
-            <span style={{ marginRight: 12 }}>{user?.employeeId} ({user?.role})</span>
-            <button onClick={logout}>Log ud</button>
-          </div>
-        </div>
-        <nav style={{ marginBottom: 24, display: 'flex', gap: 16 }}>
-          <Link to="/">Ugeoversigt</Link>
-          <Link to="/time">Tidsregistrering</Link>
-          <Link to="/absence">Fravaer</Link>
-          <Link to="/health">Services</Link>
-        </nav>
-        <Routes>
-          <Route path="/" element={<WeeklyView />} />
-          <Route path="/time" element={<TimeRegistration />} />
-          <Route path="/absence" element={<AbsenceRegistration />} />
-          <Route path="/health" element={<HealthDashboard />} />
-        </Routes>
-      </div>
-    </BrowserRouter>
+    <Routes>
+      <Route
+        path="/login"
+        element={
+          isAuthenticated ? <Navigate to="/" replace /> : <LoginContent />
+        }
+      />
+
+      {/* Protected routes */}
+      <Route element={<RequireAuth />}>
+        <Route element={<AppLayout />}>
+          {/* Employee routes (all authenticated users) */}
+          <Route index element={<SkemaPage />} />
+          <Route path="health" element={<HealthDashboard />} />
+
+          {/* Approval routes */}
+          <Route path="approval/mine" element={<MyPeriods />} />
+
+          {/* Leader routes */}
+          <Route element={<RequireRole minRole="LocalLeader" />}>
+            <Route path="approval" element={<ApprovalDashboard />} />
+          </Route>
+
+          {/* HR routes */}
+          <Route element={<RequireRole minRole="LocalHR" />}>
+            <Route path="admin/users" element={<UserManagement />} />
+          </Route>
+
+          {/* Admin routes */}
+          <Route element={<RequireRole minRole="LocalAdmin" />}>
+            <Route path="admin/orgs" element={<OrgManagement />} />
+            <Route path="admin/roles" element={<RoleManagement />} />
+            <Route path="admin/projects" element={<ProjectManagement />} />
+            <Route path="config" element={<ConfigManagement />} />
+          </Route>
+
+          <Route path="*" element={<NotFoundPage />} />
+        </Route>
+      </Route>
+    </Routes>
   )
+}
+
+function LoginContent() {
+  const { login } = useAuth()
+  return <LoginPage onLogin={login} />
 }

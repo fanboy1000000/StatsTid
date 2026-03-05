@@ -1,0 +1,130 @@
+.page {
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+}
+
+.title {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin: 0 0 1.5rem 0;
+  color: var(--color-text, #111);
+}
+
+.sectionTitle {
+  font-size: 1.125rem;
+  font-weight: 600;
+  margin: 1.5rem 0 0.75rem 0;
+  color: var(--color-text, #111);
+}
+
+.orgSelector {
+  margin-bottom: 1.5rem;
+}
+
+.orgSelectorLabel {
+  display: block;
+  font-size: 0.875rem;
+  font-weight: 500;
+  margin-bottom: 0.375rem;
+  color: var(--color-text-secondary, #555);
+}
+
+.userTable {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 1.5rem;
+}
+
+.userTable th,
+.userTable td {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--color-border, #d1d5db);
+}
+
+.userTable th {
+  font-weight: 600;
+  font-size: 0.8125rem;
+  text-transform: uppercase;
+  letter-spacing: 0.025em;
+  color: var(--color-text-secondary, #555);
+  border-bottom: 2px solid var(--color-border-strong, #333);
+}
+
+.userRow {
+  cursor: pointer;
+}
+
+.userRow:hover {
+  background: var(--color-bg-hover, #f3f4f6);
+}
+
+.userRowSelected {
+  background: var(--color-bg-selected, #e0e7ff);
+}
+
+.roleHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.roleTable {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.roleTable th,
+.roleTable td {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--color-border, #d1d5db);
+}
+
+.roleTable th {
+  font-weight: 600;
+  font-size: 0.8125rem;
+  text-transform: uppercase;
+  letter-spacing: 0.025em;
+  color: var(--color-text-secondary, #555);
+  border-bottom: 2px solid var(--color-border-strong, #333);
+}
+
+.dialogForm {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.dialogActions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  margin-top: 0.5rem;
+}
+
+.emptyState {
+  padding: 2rem;
+  text-align: center;
+  color: var(--color-text-secondary, #555);
+  font-size: 0.875rem;
+}
+
+.errorText {
+  color: var(--color-error, #dc2626);
+  font-size: 0.875rem;
+  margin-bottom: 0.5rem;
+}
+
+.loadingWrapper {
+  display: flex;
+  justify-content: center;
+  padding: 2rem;
+}
+
+.confirmText {
+  margin: 1rem 0;
+  font-size: 0.875rem;
+  color: var(--color-text, #111);
+}

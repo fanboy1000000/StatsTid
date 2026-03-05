@@ -1,0 +1,49 @@
+.grid {
+  font-family: var(--font-family);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: var(--space-3);
+}
+
+.dayHeader {
+  padding: var(--space-2);
+  border-bottom: 2px solid var(--color-text);
+  text-align: center;
+  min-width: 80px;
+  font-weight: var(--font-weight-semibold);
+  font-size: var(--font-size-sm);
+}
+
+.dayHeaderDate {
+  font-weight: var(--font-weight-regular);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.dayCell {
+  padding: var(--space-2);
+  border-bottom: var(--border-width) solid var(--border-color);
+  text-align: center;
+  vertical-align: top;
+  font-size: var(--font-size-sm);
+}
+
+.absenceText {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.emptyDay {
+  color: var(--color-gray-300);
+}
+
+.totalCell {
+  padding: var(--space-2);
+  border-bottom: var(--border-width) solid var(--border-color);
+  text-align: center;
+  font-weight: var(--font-weight-bold);
+  font-size: var(--font-size-sm);
+}

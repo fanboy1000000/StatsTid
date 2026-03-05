@@ -1,0 +1,182 @@
+.gridWrapper {
+  overflow-x: auto;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--border-radius);
+}
+
+.grid {
+  border-collapse: collapse;
+  width: max-content;
+  min-width: 100%;
+  font-family: var(--font-family);
+  font-size: 13px;
+}
+
+.grid th,
+.grid td {
+  border: var(--border-width) solid var(--border-color);
+  text-align: center;
+}
+
+/* Header */
+.labelHeader {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background-color: var(--color-gray-100);
+  min-width: 120px;
+  padding: var(--space-1) var(--space-2);
+}
+
+.dayHeader {
+  padding: var(--space-1) var(--space-1);
+  min-width: 44px;
+  background-color: var(--color-gray-100);
+  font-weight: var(--font-weight-medium);
+}
+
+.dayAbbrev {
+  font-size: 11px;
+  color: var(--color-gray-500);
+  line-height: 1.2;
+}
+
+.dayNumber {
+  font-size: 13px;
+  color: var(--color-text);
+  line-height: 1.2;
+}
+
+.sumHeader {
+  padding: var(--space-1) var(--space-2);
+  min-width: 52px;
+  background-color: var(--color-gray-100);
+  font-weight: var(--font-weight-semibold);
+}
+
+/* Row label (sticky first column) */
+.rowLabel {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background-color: var(--color-white);
+  text-align: left;
+  padding: var(--space-1) var(--space-2);
+  white-space: nowrap;
+  font-weight: var(--font-weight-medium);
+  min-width: 120px;
+}
+
+/* Cells */
+.cell {
+  padding: 0;
+}
+
+.cellInput {
+  width: 100%;
+  min-width: 40px;
+  border: none;
+  outline: none;
+  text-align: center;
+  padding: var(--space-1) 2px;
+  font-family: var(--font-family);
+  font-size: 13px;
+  background: transparent;
+  -moz-appearance: textfield;
+}
+
+.cellInput::-webkit-inner-spin-button,
+.cellInput::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.cellInput:focus {
+  background-color: var(--color-info-light);
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
+
+.cellDisplay {
+  display: block;
+  padding: var(--space-1) 2px;
+  min-height: 28px;
+  line-height: 28px;
+}
+
+/* Time inputs for arrival/departure */
+.timeInput {
+  width: 100%;
+  min-width: 40px;
+  border: none;
+  outline: none;
+  text-align: center;
+  padding: 2px 0;
+  font-family: var(--font-family);
+  font-size: 12px;
+  background: transparent;
+}
+
+.timeInput:focus {
+  background-color: var(--color-info-light);
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
+
+.timeDisplay {
+  display: block;
+  padding: 2px 0;
+  font-size: 12px;
+  color: var(--color-gray-500);
+  min-height: 24px;
+  line-height: 24px;
+}
+
+.arrivalRow td,
+.departureRow td {
+  font-size: 12px;
+}
+
+/* Sum column */
+.sumCell {
+  padding: var(--space-1) var(--space-2);
+  font-weight: var(--font-weight-medium);
+  background-color: var(--color-gray-50, var(--color-gray-100));
+  min-width: 52px;
+}
+
+/* Separator */
+.separatorRow {
+  height: 4px;
+}
+
+.separator {
+  border-top: 2px solid var(--color-gray-300);
+  padding: 0;
+}
+
+/* Total row */
+.totalRow td {
+  font-weight: var(--font-weight-semibold);
+  background-color: var(--color-gray-100);
+}
+
+.totalCell {
+  padding: var(--space-1) 2px;
+}
+
+.grandTotal {
+  padding: var(--space-1) var(--space-2);
+  font-weight: var(--font-weight-bold);
+  background-color: var(--color-gray-100);
+}
+
+/* Weekend columns */
+.weekend {
+  background-color: var(--color-gray-100);
+}
+
+/* Today column */
+.today {
+  background-color: var(--color-info-light);
+}

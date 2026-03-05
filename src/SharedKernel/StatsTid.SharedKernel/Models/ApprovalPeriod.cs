@@ -14,6 +14,10 @@ public sealed class ApprovalPeriod
     public string? ApprovedBy { get; init; }
     public DateTime? ApprovedAt { get; init; }
     public string? RejectionReason { get; init; }
+    public DateTime? EmployeeApprovedAt { get; init; }
+    public string? EmployeeApprovedBy { get; init; }
+    public DateOnly? EmployeeDeadline { get; init; }
+    public DateOnly? ManagerDeadline { get; init; }
     public required string AgreementCode { get; init; }
     public required string OkVersion { get; init; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;

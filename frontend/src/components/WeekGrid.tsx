@@ -1,4 +1,6 @@
 import type { TimeEntry, AbsenceEntry } from '../types'
+import { Badge } from './ui'
+import styles from './WeekGrid.module.css'
 
 interface Props {
   weekStart: string
@@ -17,20 +19,21 @@ export function WeekGrid({ weekStart, entries, absences }: Props) {
   })
 
   const totalHours = entries.reduce((sum, e) => sum + e.hours, 0)
-  const normStatus = totalHours >= 37 ? 'Norm opfyldt' : `${(37 - totalHours).toFixed(1)}t under norm`
+  const normMet = totalHours >= 37
+  const normStatus = normMet ? 'Norm opfyldt' : `${(37 - totalHours).toFixed(1)}t under norm`
 
   return (
-    <div>
-      <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 12 }}>
+    <div className={styles.grid}>
+      <table className={styles.table}>
         <thead>
           <tr>
             {DAY_NAMES.map((name, i) => (
-              <th key={i} style={{ padding: 8, borderBottom: '2px solid #333', textAlign: 'center', minWidth: 80 }}>
+              <th key={i} className={styles.dayHeader}>
                 {name}<br />
-                <small>{days[i]}</small>
+                <span className={styles.dayHeaderDate}>{days[i]}</span>
               </th>
             ))}
-            <th style={{ padding: 8, borderBottom: '2px solid #333' }}>Total</th>
+            <th className={styles.dayHeader}>Total</th>
           </tr>
         </thead>
         <tbody>
@@ -42,31 +45,28 @@ export function WeekGrid({ weekStart, entries, absences }: Props) {
               const absenceHours = dayAbsences.reduce((sum, a) => sum + a.hours, 0)
 
               return (
-                <td key={day} style={{ padding: 8, borderBottom: '1px solid #ccc', textAlign: 'center', verticalAlign: 'top' }}>
+                <td key={day} className={styles.dayCell}>
                   {dayHours > 0 && <div>{dayHours.toFixed(1)}t</div>}
                   {dayAbsences.map((a, i) => (
-                    <div key={i} style={{ fontSize: '0.8em', color: '#666' }}>
+                    <div key={i} className={styles.absenceText}>
                       {a.absenceType} ({absenceHours.toFixed(1)}t)
                     </div>
                   ))}
-                  {dayHours === 0 && dayAbsences.length === 0 && <div style={{ color: '#ccc' }}>-</div>}
+                  {dayHours === 0 && dayAbsences.length === 0 && (
+                    <div className={styles.emptyDay}>-</div>
+                  )}
                 </td>
               )
             })}
-            <td style={{ padding: 8, borderBottom: '1px solid #ccc', textAlign: 'center', fontWeight: 'bold' }}>
+            <td className={styles.totalCell}>
               {totalHours.toFixed(1)}t
             </td>
           </tr>
         </tbody>
       </table>
-      <div style={{
-        padding: 8,
-        backgroundColor: totalHours >= 37 ? '#e6ffe6' : '#fff3e6',
-        borderRadius: 4,
-        display: 'inline-block'
-      }}>
+      <Badge variant={normMet ? 'success' : 'warning'}>
         {normStatus}
-      </div>
+      </Badge>
     </div>
   )
 }

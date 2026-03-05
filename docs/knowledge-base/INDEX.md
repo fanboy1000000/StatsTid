@@ -16,6 +16,9 @@
 | [ADR-008](decisions/ADR-008-materialized-path-org-hierarchy.md) | Materialized path for organizational hierarchy | approved | S6 | Infrastructure, Security | organization, hierarchy, materialized-path, postgresql |
 | [ADR-009](decisions/ADR-009-scope-embedded-jwt.md) | Role scopes embedded in JWT token | approved | S6 | Security, Infrastructure | jwt, rbac, scopes, authorization, stateless |
 | [ADR-010](decisions/ADR-010-local-config-merge-at-service-layer.md) | Local config merged at service layer, not in rule engine | approved | S6 | Rule Engine, Payroll, Infrastructure | local-config, rule-engine, determinism, configuration, merge |
+| [ADR-011](decisions/ADR-011-frontend-design-system-and-component-strategy.md) | Frontend design system and component strategy | approved | S8 (pre) | Frontend | frontend, design-system, shadcn, css-modules, react, accessibility |
+| [ADR-012](decisions/ADR-012-two-step-approval-flow.md) | Two-step approval flow (Employee → Manager) | approved | S9 | Backend | ADR-012 |
+| Frontend | ADR-011, ADR-012 | approval, workflow, state-machine, period, two-step |
 
 ## Validated Patterns (PAT)
 
@@ -44,7 +47,9 @@
 
 ## Failure/Pivot Log (FAIL)
 
-_No entries yet._
+| ID | Title | Status | Sprint | Domains | Tags |
+|----|-------|--------|--------|---------|------|
+| [FAIL-001](failures/FAIL-001-jwt-claim-remapping-dotnet8.md) | .NET 8 JWT claim remapping silently breaks custom claims | resolved | S9 | Security, Infrastructure | jwt, claims, dotnet8, authentication, debugging |
 
 ---
 
@@ -52,26 +57,34 @@ _No entries yet._
 
 | Tag | Entries |
 |-----|---------|
+| accessibility | ADR-011 |
 | ac | PAT-003, RES-001 |
+| approval | ADR-012 |
+| authentication | ADR-007, FAIL-001 |
 | agreement-config | PAT-003 |
 | architecture | ADR-006 |
 | actor-tracking | PAT-004 |
 | audit | ADR-007, PAT-004 |
-| authentication | ADR-007 |
 | authorization | ADR-007, ADR-009 |
 | c-sharp | PAT-001 |
+| claims | FAIL-001 |
 | calendar | DEP-001 |
 | configuration | PAT-003, ADR-010 |
 | correlation-id | ADR-007 |
+| css-modules | ADR-011 |
+| debugging | FAIL-001 |
+| dotnet8 | FAIL-001 |
 | cross-domain | DEP-001, DEP-002, DEP-003 |
 | delivery-guarantee | ADR-004 |
 | dependency | DEP-001, DEP-002, DEP-003 |
 | deserialization | PAT-006 |
+| design-system | ADR-011 |
 | determinism | ADR-002, ADR-003, ADR-010 |
 | docker | ADR-006 |
 | domain-events | PAT-004 |
 | endpoint-response | PAT-006 |
 | event-sourcing | ADR-001 |
+| frontend | ADR-011 |
 | events | ADR-005, PAT-004, DEP-003 |
 | flex | PAT-006 |
 | hk | PAT-003 |
@@ -79,7 +92,7 @@ _No entries yet._
 | holidays | DEP-001 |
 | immutability | PAT-001 |
 | integration | ADR-004 |
-| jwt | ADR-007, ADR-009 |
+| jwt | ADR-007, ADR-009, FAIL-001 |
 | microservices | ADR-006 |
 | models | PAT-001 |
 | npgsql | ADR-001 |
@@ -98,27 +111,35 @@ _No entries yet._
 | prosa | PAT-003 |
 | pure-functions | ADR-002 |
 | rbac | ADR-007, ADR-009 |
+| react | ADR-011 |
 | rule-engine | ADR-002, PAT-002, PAT-003, PAT-006, ADR-010 |
 | scopes | ADR-009 |
 | stateless | ADR-009 |
 | service-boundary | PAT-005 |
 | serialization | ADR-005, DEP-003 |
+| shadcn | ADR-011 |
 | supplements | PAT-002, RES-001 |
 | system-text-json | ADR-005 |
 | traceability | PAT-005 |
 | type-map | ADR-005, DEP-003 |
 | value-objects | PAT-001 |
+| period | ADR-012 |
+| state-machine | ADR-012 |
+| two-step | ADR-012 |
 | version-resolution | ADR-003 |
 | wage-types | DEP-002 |
+| workflow | ADR-012 |
 
 ## Domain Index
 
 | Domain | Entries |
 |--------|---------|
 | API Integration | ADR-004 |
+| Backend | ADR-012 |
+| Frontend | ADR-011, ADR-012 |
 | Data Model | ADR-001, ADR-005, PAT-001, PAT-004, DEP-003 |
-| Infrastructure | ADR-001, ADR-004, ADR-005, ADR-006, ADR-007, ADR-008, ADR-009, ADR-010, DEP-003 |
+| Infrastructure | ADR-001, ADR-004, ADR-005, ADR-006, ADR-007, ADR-008, ADR-009, ADR-010, ADR-012, DEP-003, FAIL-001 |
 | Payroll | DEP-002, PAT-005, PAT-006, ADR-010 |
 | Rule Engine | ADR-002, ADR-003, PAT-002, PAT-003, PAT-005, PAT-006, DEP-001, DEP-002, RES-001, ADR-010 |
-| Security | ADR-007, ADR-008, ADR-009 |
+| Security | ADR-007, ADR-008, ADR-009, FAIL-001 |
 | SharedKernel | DEP-001 |

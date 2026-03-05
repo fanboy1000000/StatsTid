@@ -4,6 +4,9 @@ import { FlexBalanceCard } from '../components/FlexBalanceCard'
 import { useTimeEntries } from '../hooks/useTimeEntries'
 import { useAbsences } from '../hooks/useAbsences'
 import { useFlexBalance } from '../hooks/useFlexBalance'
+import { useAuth } from '../hooks/useAuth'
+import { FormField, Input, Card } from '../components/ui'
+import styles from './WeeklyView.module.css'
 
 function getMonday(dateStr: string): string {
   const d = new Date(dateStr)
@@ -14,7 +17,8 @@ function getMonday(dateStr: string): string {
 }
 
 export function WeeklyView() {
-  const [employeeId, setEmployeeId] = useState('EMP001')
+  const { user } = useAuth()
+  const employeeId = user?.employeeId ?? ''
   const today = new Date().toISOString().split('T')[0]
   const [selectedDate, setSelectedDate] = useState(today)
 
@@ -39,25 +43,25 @@ export function WeeklyView() {
   )
 
   return (
-    <div>
-      <h2>Ugeoversigt</h2>
+    <div className={styles.page}>
+      <h2 className={styles.title}>Ugeoversigt</h2>
 
-      <div style={{ display: 'flex', gap: 16, marginBottom: 16, alignItems: 'center' }}>
-        <label>
-          Medarbejder:
-          <input type="text" value={employeeId} onChange={e => setEmployeeId(e.target.value)} style={{ marginLeft: 8 }} />
-        </label>
-        <label>
-          Uge for dato:
-          <input type="date" value={selectedDate} onChange={e => setSelectedDate(e.target.value)} style={{ marginLeft: 8 }} />
-        </label>
-        <span>Uge: {weekStart} - {weekEnd}</span>
+      <div className={styles.controls}>
+        <FormField label="Uge for dato" htmlFor="week-date">
+          <Input
+            id="week-date"
+            type="date"
+            value={selectedDate}
+            onChange={e => setSelectedDate(e.target.value)}
+          />
+        </FormField>
+        <span className={styles.weekRange}>Uge: {weekStart} - {weekEnd}</span>
       </div>
 
-      <div style={{ display: 'flex', gap: 24, alignItems: 'flex-start' }}>
-        <div style={{ flex: 1 }}>
+      <div className={styles.content}>
+        <Card className={styles.gridWrapper}>
           <WeekGrid weekStart={weekStart} entries={weekEntries} absences={weekAbsences} />
-        </div>
+        </Card>
         <FlexBalanceCard flexBalance={flexBalance} loading={flexLoading} />
       </div>
     </div>

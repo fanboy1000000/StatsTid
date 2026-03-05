@@ -34,6 +34,11 @@ public static class EventSerializer
         ["PeriodSubmitted"] = typeof(PeriodSubmitted),
         ["PeriodApproved"] = typeof(PeriodApproved),
         ["PeriodRejected"] = typeof(PeriodRejected),
+        // Sprint 9: Skema (monthly spreadsheet) events
+        ["PeriodEmployeeApproved"] = typeof(PeriodEmployeeApproved),
+        ["PeriodReopened"] = typeof(PeriodReopened),
+        ["TimerCheckedIn"] = typeof(TimerCheckedIn),
+        ["TimerCheckedOut"] = typeof(TimerCheckedOut),
     };
 
     public static string Serialize(IDomainEvent @event)

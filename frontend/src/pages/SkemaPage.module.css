@@ -1,0 +1,58 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.loadingContainer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
+  padding: var(--space-12);
+  color: var(--color-gray-500);
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.monthNav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.monthTitle {
+  font-size: 20px;
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text);
+  margin: 0;
+  min-width: 180px;
+  text-align: center;
+}
+
+.footer {
+  padding: var(--space-4) 0;
+}
+
+.footerContent {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.footerText {
+  font-size: 14px;
+  color: var(--color-gray-500);
+}
+
+.deadline {
+  font-size: 13px;
+  color: var(--color-gray-500);
+  font-style: italic;
+}

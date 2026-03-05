@@ -523,13 +523,13 @@ ON CONFLICT DO NOTHING;
 -- admin01/password, ladm01/password, hr01/password, mgr01/password, emp001-003/password
 -- Note: These are bcrypt($2a$10$) hashes for development ONLY — never use in production
 INSERT INTO users (user_id, username, password_hash, display_name, email, primary_org_id, agreement_code, ok_version) VALUES
-    ('admin01', 'admin01', '$2a$10$xJwL5v7GpxDAMkGGmfHiOONUGHRYiW6rQ3r5yt1FKfpKBneP8Jwm2', 'Global Administrator', 'admin@statstid.dk', 'MIN01', 'AC', 'OK24'),
-    ('hr01', 'hr01', '$2a$10$xJwL5v7GpxDAMkGGmfHiOONUGHRYiW6rQ3r5yt1FKfpKBneP8Jwm2', 'HR Medarbejder', 'hr@statens-it.dk', 'STY02', 'HK', 'OK24'),
-    ('mgr01', 'mgr01', '$2a$10$xJwL5v7GpxDAMkGGmfHiOONUGHRYiW6rQ3r5yt1FKfpKBneP8Jwm2', 'Team Leder', 'leder@statens-it.dk', 'AFD01', 'HK', 'OK24'),
-    ('emp001', 'emp001', '$2a$10$xJwL5v7GpxDAMkGGmfHiOONUGHRYiW6rQ3r5yt1FKfpKBneP8Jwm2', 'AC Medarbejder', 'emp.ac@mfk.dk', 'STY01', 'AC', 'OK24'),
-    ('emp002', 'emp002', '$2a$10$xJwL5v7GpxDAMkGGmfHiOONUGHRYiW6rQ3r5yt1FKfpKBneP8Jwm2', 'HK Medarbejder', 'emp.hk@statens-it.dk', 'AFD01', 'HK', 'OK24'),
-    ('emp003', 'emp003', '$2a$10$xJwL5v7GpxDAMkGGmfHiOONUGHRYiW6rQ3r5yt1FKfpKBneP8Jwm2', 'PROSA Medarbejder', 'emp.prosa@statens-it.dk', 'AFD02', 'PROSA', 'OK24'),
-    ('ladm01', 'ladm01', '$2a$10$xJwL5v7GpxDAMkGGmfHiOONUGHRYiW6rQ3r5yt1FKfpKBneP8Jwm2', 'Lokal Administrator', 'lokal.admin@statens-it.dk', 'STY02', 'HK', 'OK24')
+    ('admin01', 'admin01', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Global Administrator', 'admin@statstid.dk', 'MIN01', 'AC', 'OK24'),
+    ('hr01', 'hr01', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'HR Medarbejder', 'hr@statens-it.dk', 'STY02', 'HK', 'OK24'),
+    ('mgr01', 'mgr01', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Team Leder', 'leder@statens-it.dk', 'AFD01', 'HK', 'OK24'),
+    ('emp001', 'emp001', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'AC Medarbejder', 'emp.ac@mfk.dk', 'STY01', 'AC', 'OK24'),
+    ('emp002', 'emp002', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'HK Medarbejder', 'emp.hk@statens-it.dk', 'AFD01', 'HK', 'OK24'),
+    ('emp003', 'emp003', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'PROSA Medarbejder', 'emp.prosa@statens-it.dk', 'AFD02', 'PROSA', 'OK24'),
+    ('ladm01', 'ladm01', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Lokal Administrator', 'lokal.admin@statens-it.dk', 'STY02', 'HK', 'OK24')
 ON CONFLICT DO NOTHING;
 
 -- Seed role assignments
@@ -546,4 +546,89 @@ INSERT INTO role_assignments (user_id, role_id, org_id, scope_type, assigned_by)
     ('emp001', 'EMPLOYEE', 'STY01', 'ORG_ONLY', 'admin01'),
     ('emp002', 'EMPLOYEE', 'AFD01', 'ORG_ONLY', 'mgr01'),
     ('emp003', 'EMPLOYEE', 'AFD02', 'ORG_ONLY', 'ladm01')
+ON CONFLICT DO NOTHING;
+
+-- ============================================================
+-- SPRINT 9: Skema tables
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS projects (
+    project_id      UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    org_id          TEXT        NOT NULL REFERENCES organizations(org_id),
+    project_code    TEXT        NOT NULL,
+    project_name    TEXT        NOT NULL,
+    is_active       BOOLEAN     NOT NULL DEFAULT TRUE,
+    sort_order      INT         NOT NULL DEFAULT 0,
+    created_by      TEXT        NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (org_id, project_code)
+);
+CREATE INDEX IF NOT EXISTS idx_projects_org ON projects(org_id);
+
+CREATE TABLE IF NOT EXISTS timer_sessions (
+    session_id      UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    employee_id     TEXT        NOT NULL,
+    date            DATE        NOT NULL,
+    check_in_at     TIMESTAMPTZ NOT NULL,
+    check_out_at    TIMESTAMPTZ,
+    is_active       BOOLEAN     NOT NULL DEFAULT TRUE,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (employee_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_timer_employee ON timer_sessions(employee_id);
+CREATE INDEX IF NOT EXISTS idx_timer_active ON timer_sessions(is_active) WHERE is_active = TRUE;
+
+CREATE TABLE IF NOT EXISTS absence_type_visibility (
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    org_id          TEXT        NOT NULL REFERENCES organizations(org_id),
+    absence_type    TEXT        NOT NULL,
+    is_hidden       BOOLEAN     NOT NULL DEFAULT FALSE,
+    set_by          TEXT        NOT NULL,
+    set_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (org_id, absence_type)
+);
+CREATE INDEX IF NOT EXISTS idx_absence_vis_org ON absence_type_visibility(org_id);
+
+-- Alter approval_periods for employee self-approval workflow
+ALTER TABLE approval_periods ADD COLUMN IF NOT EXISTS employee_approved_at TIMESTAMPTZ;
+ALTER TABLE approval_periods ADD COLUMN IF NOT EXISTS employee_approved_by TEXT;
+ALTER TABLE approval_periods ADD COLUMN IF NOT EXISTS employee_deadline DATE;
+ALTER TABLE approval_periods ADD COLUMN IF NOT EXISTS manager_deadline DATE;
+ALTER TABLE approval_periods DROP CONSTRAINT IF EXISTS approval_periods_status_check;
+ALTER TABLE approval_periods ADD CONSTRAINT approval_periods_status_check
+    CHECK (status IN ('DRAFT', 'EMPLOYEE_APPROVED', 'SUBMITTED', 'APPROVED', 'REJECTED'));
+
+-- ============================================================
+-- SPRINT 7 SEED DATA: Local Configurations
+-- ============================================================
+
+-- Seed test local configuration overrides for Statens IT (STY02)
+-- These demonstrate local config within central constraints
+INSERT INTO local_configurations (config_id, org_id, config_area, config_key, config_value, effective_from, agreement_code, ok_version, created_by) VALUES
+    ('a0000001-0000-0000-0000-000000000001', 'STY02', 'FLEX_RULES', 'MaxFlexBalance', '"80.0"', '2024-01-01', 'HK', 'OK24', 'ladm01'),
+    ('a0000001-0000-0000-0000-000000000002', 'STY02', 'WORKING_TIME', 'PlanningStartDay', '"MONDAY"', '2024-01-01', 'HK', 'OK24', 'ladm01'),
+    ('a0000001-0000-0000-0000-000000000003', 'AFD01', 'OPERATIONAL', 'ApprovalCutoffDay', '"25"', '2024-01-01', 'HK', 'OK24', 'ladm01')
+ON CONFLICT DO NOTHING;
+
+-- ============================================================
+-- SPRINT 9 SEED DATA: SICK_DAY wage type + projects
+-- ============================================================
+
+-- SICK_DAY wage type mappings (all 3 agreements x 2 OK versions)
+INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, description) VALUES
+    ('SICK_DAY', 'SLS_0540', 'OK24', 'AC', 'Sick day'),
+    ('SICK_DAY', 'SLS_0540', 'OK24', 'HK', 'Sick day'),
+    ('SICK_DAY', 'SLS_0540', 'OK24', 'PROSA', 'Sick day'),
+    ('SICK_DAY', 'SLS_0540', 'OK26', 'AC', 'Sick day'),
+    ('SICK_DAY', 'SLS_0540', 'OK26', 'HK', 'Sick day'),
+    ('SICK_DAY', 'SLS_0540', 'OK26', 'PROSA', 'Sick day')
+ON CONFLICT DO NOTHING;
+
+-- Sample projects for test orgs
+INSERT INTO projects (org_id, project_code, project_name, sort_order, created_by) VALUES
+    ('AFD01', 'DRIFT-01', 'Daglig drift', 1, 'ladm01'),
+    ('AFD01', 'PROJ-ALPHA', 'Projekt Alpha', 2, 'ladm01'),
+    ('AFD01', 'PROJ-BETA', 'Projekt Beta', 3, 'ladm01'),
+    ('AFD02', 'SYSDEV-01', 'Systemudvikling', 1, 'ladm01'),
+    ('AFD02', 'VEDL-01', 'Vedligeholdelse', 2, 'ladm01')
 ON CONFLICT DO NOTHING;

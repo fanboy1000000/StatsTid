@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import { Card, Table, Badge, Spinner } from '../components/ui'
+import styles from './HealthDashboard.module.css'
 
 interface ServiceHealth {
   name: string
@@ -40,34 +42,29 @@ export function HealthDashboard() {
   }, [])
 
   return (
-    <div>
-      <h2>Service Health Dashboard</h2>
-      {loading ? (
-        <p>Checking services...</p>
-      ) : (
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead>
-            <tr>
-              <th style={{ textAlign: 'left', padding: 8, borderBottom: '2px solid #333' }}>Service</th>
-              <th style={{ textAlign: 'left', padding: 8, borderBottom: '2px solid #333' }}>Status</th>
-            </tr>
-          </thead>
-          <tbody>
+    <div className={styles.page}>
+      <h2 className={styles.title}>Service Health Dashboard</h2>
+      <Card>
+        {loading ? (
+          <div className={styles.loadingWrapper}>
+            <Spinner size="md" />
+            <span>Checking services...</span>
+          </div>
+        ) : (
+          <Table headers={['Service', 'Status']}>
             {healthChecks.map((svc) => (
               <tr key={svc.name}>
-                <td style={{ padding: 8, borderBottom: '1px solid #ccc' }}>{svc.name}</td>
-                <td style={{
-                  padding: 8,
-                  borderBottom: '1px solid #ccc',
-                  color: svc.status === 'healthy' ? 'green' : 'red'
-                }}>
-                  {svc.status}
+                <td>{svc.name}</td>
+                <td>
+                  <Badge variant={svc.status === 'healthy' ? 'success' : 'error'}>
+                    {svc.status}
+                  </Badge>
                 </td>
               </tr>
             ))}
-          </tbody>
-        </table>
-      )}
+          </Table>
+        )}
+      </Card>
     </div>
   )
 }

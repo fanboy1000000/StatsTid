@@ -1,0 +1,56 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.list {
+  display: flex;
+  border-bottom: 2px solid var(--color-gray-200);
+  gap: 0;
+  flex-shrink: 0;
+}
+
+.trigger {
+  padding: var(--space-2) var(--space-4);
+  font-family: var(--font-family);
+  font-size: 14px;
+  font-weight: var(--font-weight-regular);
+  color: var(--color-gray-500);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  cursor: pointer;
+  line-height: 1.5;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.trigger:hover {
+  color: var(--color-gray-600);
+}
+
+.trigger:focus-visible {
+  outline: var(--focus-outline);
+  outline-offset: var(--focus-outline-offset);
+}
+
+.trigger[data-state='active'] {
+  color: var(--color-primary);
+  font-weight: var(--font-weight-semibold);
+  border-bottom-color: var(--color-primary);
+}
+
+.content {
+  padding-top: var(--space-4);
+  font-family: var(--font-family);
+  font-size: 16px;
+  color: var(--color-text);
+  line-height: 1.5;
+  outline: none;
+}
+
+.content:focus-visible {
+  outline: var(--focus-outline);
+  outline-offset: var(--focus-outline-offset);
+}

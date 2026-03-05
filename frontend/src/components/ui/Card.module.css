@@ -1,0 +1,18 @@
+.card {
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--border-radius);
+  background-color: var(--color-white);
+}
+
+.header {
+  padding: var(--space-4) var(--space-6);
+  border-bottom: var(--border-width) solid var(--border-color);
+  font-family: var(--font-family);
+  font-weight: var(--font-weight-semibold);
+  font-size: 16px;
+  color: var(--color-text);
+}
+
+.body {
+  padding: var(--space-6);
+}

@@ -1,0 +1,75 @@
+@import '@fontsource/ibm-plex-sans/400.css';
+@import '@fontsource/ibm-plex-sans/500.css';
+@import '@fontsource/ibm-plex-sans/600.css';
+@import '@fontsource/ibm-plex-sans/700.css';
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-family);
+  color: var(--color-text);
+  background-color: var(--color-white);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1 {
+  font-size: 48px;
+  font-weight: var(--font-weight-bold);
+  line-height: 56px;
+}
+
+h2 {
+  font-size: 32px;
+  font-weight: var(--font-weight-semibold);
+  line-height: 40px;
+}
+
+h3 {
+  font-size: 24px;
+  font-weight: var(--font-weight-semibold);
+  line-height: 32px;
+}
+
+h4 {
+  font-size: 20px;
+  font-weight: var(--font-weight-semibold);
+  line-height: 28px;
+}
+
+h5 {
+  font-size: 16px;
+  font-weight: var(--font-weight-semibold);
+  line-height: 24px;
+}
+
+h6 {
+  font-size: 14px;
+  font-weight: var(--font-weight-medium);
+  line-height: 20px;
+}
+
+a {
+  color: var(--color-link);
+  text-decoration: underline;
+}
+
+a:visited {
+  color: var(--color-link-visited);
+}
+
+a:hover {
+  text-decoration: none;
+}
+
+:focus-visible {
+  outline: var(--focus-outline);
+  outline-offset: var(--focus-outline-offset);
+}

@@ -1,0 +1,404 @@
+using Microsoft.Extensions.Logging;
+using StatsTid.SharedKernel.Models;
+
+namespace StatsTid.Infrastructure;
+
+/// <summary>
+/// Merges central AgreementRuleConfig with local DB overrides per ADR-010.
+/// The rule engine NEVER loads local configs — this service provides the merge
+/// at the service layer. Central config is authoritative; local configs can only
+/// adjust within central constraints.
+/// </summary>
+public sealed class ConfigResolutionService
+{
+    private readonly LocalConfigurationRepository _localConfigRepo;
+    private readonly ILogger<ConfigResolutionService> _logger;
+
+    /// <summary>
+    /// Central config dictionary — duplicated from Rule Engine's AgreementConfigProvider.
+    /// Must stay in sync. The Payroll integration must not reference the Rule Engine project.
+    /// </summary>
+    private static readonly Dictionary<(string AgreementCode, string OkVersion), AgreementRuleConfig> CentralConfigs = new()
+    {
+        // AC OK24
+        [("AC", "OK24")] = new AgreementRuleConfig
+        {
+            AgreementCode = "AC",
+            OkVersion = "OK24",
+            WeeklyNormHours = 37.0m,
+            HasOvertime = false,
+            HasMerarbejde = true,
+            MaxFlexBalance = 150.0m,
+            FlexCarryoverMax = 150.0m,
+            EveningSupplementEnabled = false,
+            NightSupplementEnabled = false,
+            WeekendSupplementEnabled = false,
+            HolidaySupplementEnabled = false,
+            OnCallDutyEnabled = false,
+        },
+        // HK OK24
+        [("HK", "OK24")] = new AgreementRuleConfig
+        {
+            AgreementCode = "HK",
+            OkVersion = "OK24",
+            WeeklyNormHours = 37.0m,
+            HasOvertime = true,
+            HasMerarbejde = false,
+            MaxFlexBalance = 100.0m,
+            FlexCarryoverMax = 100.0m,
+            EveningSupplementEnabled = true,
+            NightSupplementEnabled = true,
+            WeekendSupplementEnabled = true,
+            HolidaySupplementEnabled = true,
+            EveningStart = 17,
+            EveningEnd = 23,
+            NightStart = 23,
+            NightEnd = 6,
+            OnCallDutyEnabled = true,
+            OnCallDutyRate = 0.33m,
+        },
+        // PROSA OK24
+        [("PROSA", "OK24")] = new AgreementRuleConfig
+        {
+            AgreementCode = "PROSA",
+            OkVersion = "OK24",
+            WeeklyNormHours = 37.0m,
+            HasOvertime = true,
+            HasMerarbejde = false,
+            MaxFlexBalance = 120.0m,
+            FlexCarryoverMax = 120.0m,
+            EveningSupplementEnabled = true,
+            NightSupplementEnabled = true,
+            WeekendSupplementEnabled = true,
+            HolidaySupplementEnabled = true,
+            EveningStart = 17,
+            EveningEnd = 23,
+            NightStart = 23,
+            NightEnd = 6,
+            OnCallDutyEnabled = true,
+            OnCallDutyRate = 0.33m,
+        },
+        // AC OK26 (placeholder — identical to OK24 for now)
+        [("AC", "OK26")] = new AgreementRuleConfig
+        {
+            AgreementCode = "AC",
+            OkVersion = "OK26",
+            WeeklyNormHours = 37.0m,
+            HasOvertime = false,
+            HasMerarbejde = true,
+            MaxFlexBalance = 150.0m,
+            FlexCarryoverMax = 150.0m,
+            EveningSupplementEnabled = false,
+            NightSupplementEnabled = false,
+            WeekendSupplementEnabled = false,
+            HolidaySupplementEnabled = false,
+            OnCallDutyEnabled = false,
+        },
+        // HK OK26 (placeholder)
+        [("HK", "OK26")] = new AgreementRuleConfig
+        {
+            AgreementCode = "HK",
+            OkVersion = "OK26",
+            WeeklyNormHours = 37.0m,
+            HasOvertime = true,
+            HasMerarbejde = false,
+            MaxFlexBalance = 100.0m,
+            FlexCarryoverMax = 100.0m,
+            EveningSupplementEnabled = true,
+            NightSupplementEnabled = true,
+            WeekendSupplementEnabled = true,
+            HolidaySupplementEnabled = true,
+            EveningStart = 17,
+            EveningEnd = 23,
+            NightStart = 23,
+            NightEnd = 6,
+            OnCallDutyEnabled = true,
+            OnCallDutyRate = 0.33m,
+        },
+        // PROSA OK26 (placeholder)
+        [("PROSA", "OK26")] = new AgreementRuleConfig
+        {
+            AgreementCode = "PROSA",
+            OkVersion = "OK26",
+            WeeklyNormHours = 37.0m,
+            HasOvertime = true,
+            HasMerarbejde = false,
+            MaxFlexBalance = 120.0m,
+            FlexCarryoverMax = 120.0m,
+            EveningSupplementEnabled = true,
+            NightSupplementEnabled = true,
+            WeekendSupplementEnabled = true,
+            HolidaySupplementEnabled = true,
+            EveningStart = 17,
+            EveningEnd = 23,
+            NightStart = 23,
+            NightEnd = 6,
+            OnCallDutyEnabled = true,
+            OnCallDutyRate = 0.33m,
+        },
+    };
+
+    /// <summary>
+    /// Config keys that are centrally negotiated and MUST NOT be overridden locally.
+    /// These include overtime/merarbejde flags, supplement rates and toggles, and on-call settings.
+    /// </summary>
+    private static readonly HashSet<string> ProtectedKeys = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "HasOvertime",
+        "HasMerarbejde",
+        "EveningSupplementEnabled",
+        "NightSupplementEnabled",
+        "WeekendSupplementEnabled",
+        "HolidaySupplementEnabled",
+        "EveningRate",
+        "NightRate",
+        "WeekendSaturdayRate",
+        "WeekendSundayRate",
+        "HolidayRate",
+        "EveningStart",
+        "EveningEnd",
+        "NightStart",
+        "NightEnd",
+        "OvertimeThreshold50",
+        "OvertimeThreshold100",
+        "OnCallDutyEnabled",
+        "OnCallDutyRate",
+    };
+
+    public ConfigResolutionService(
+        LocalConfigurationRepository localConfigRepo,
+        ILogger<ConfigResolutionService> logger)
+    {
+        _localConfigRepo = localConfigRepo;
+        _logger = logger;
+    }
+
+    /// <summary>
+    /// Resolves the effective config for an org by merging central config with local overrides.
+    /// Central config is the base; local overrides are applied on top within constraints.
+    /// The result is a plain AgreementRuleConfig that the rule engine receives as-is.
+    /// </summary>
+    public async Task<AgreementRuleConfig> ResolveAsync(
+        string orgId, string agreementCode, string okVersion, CancellationToken ct = default)
+    {
+        if (!CentralConfigs.TryGetValue((agreementCode, okVersion), out var centralConfig))
+        {
+            throw new InvalidOperationException(
+                $"No central agreement configuration found for {agreementCode}/{okVersion}");
+        }
+
+        IReadOnlyList<LocalConfiguration> localOverrides;
+        try
+        {
+            localOverrides = await _localConfigRepo.GetActiveByOrgAsync(orgId, agreementCode, okVersion, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Failed to load local overrides for org {OrgId}/{AgreementCode}/{OkVersion} — returning central config",
+                orgId, agreementCode, okVersion);
+            return centralConfig;
+        }
+
+        if (localOverrides.Count == 0)
+        {
+            _logger.LogDebug(
+                "No local overrides for org {OrgId}/{AgreementCode}/{OkVersion} — returning central config",
+                orgId, agreementCode, okVersion);
+            return centralConfig;
+        }
+
+        // Start with central values, apply valid local overrides
+        var mergedWeeklyNormHours = centralConfig.WeeklyNormHours;
+        var mergedMaxFlexBalance = centralConfig.MaxFlexBalance;
+        var mergedFlexCarryoverMax = centralConfig.FlexCarryoverMax;
+
+        foreach (var local in localOverrides)
+        {
+            if (ProtectedKeys.Contains(local.ConfigKey))
+            {
+                _logger.LogWarning(
+                    "Local override for protected key '{ConfigKey}' in org {OrgId} rejected — centrally negotiated values cannot be overridden",
+                    local.ConfigKey, orgId);
+                continue;
+            }
+
+            switch (local.ConfigKey)
+            {
+                case "MaxFlexBalance":
+                    if (TryParseDecimal(local.ConfigValue, out var maxFlex)
+                        && maxFlex > 0 && maxFlex <= centralConfig.MaxFlexBalance)
+                    {
+                        mergedMaxFlexBalance = maxFlex;
+                        _logger.LogInformation(
+                            "Local override applied: MaxFlexBalance = {Value} for org {OrgId}",
+                            maxFlex, orgId);
+                    }
+                    else
+                    {
+                        _logger.LogWarning(
+                            "Invalid local override MaxFlexBalance = '{Value}' for org {OrgId} — must be > 0 and <= {Max}. Skipping.",
+                            local.ConfigValue, orgId, centralConfig.MaxFlexBalance);
+                    }
+                    break;
+
+                case "FlexCarryoverMax":
+                    if (TryParseDecimal(local.ConfigValue, out var carryover)
+                        && carryover > 0 && carryover <= centralConfig.FlexCarryoverMax)
+                    {
+                        mergedFlexCarryoverMax = carryover;
+                        _logger.LogInformation(
+                            "Local override applied: FlexCarryoverMax = {Value} for org {OrgId}",
+                            carryover, orgId);
+                    }
+                    else
+                    {
+                        _logger.LogWarning(
+                            "Invalid local override FlexCarryoverMax = '{Value}' for org {OrgId} — must be > 0 and <= {Max}. Skipping.",
+                            local.ConfigValue, orgId, centralConfig.FlexCarryoverMax);
+                    }
+                    break;
+
+                case "WeeklyNormHours":
+                    if (TryParseDecimal(local.ConfigValue, out var normHours)
+                        && normHours > 0 && normHours <= 40)
+                    {
+                        mergedWeeklyNormHours = normHours;
+                        _logger.LogInformation(
+                            "Local override applied: WeeklyNormHours = {Value} for org {OrgId}",
+                            normHours, orgId);
+                    }
+                    else
+                    {
+                        _logger.LogWarning(
+                            "Invalid local override WeeklyNormHours = '{Value}' for org {OrgId} — must be > 0 and <= 40. Skipping.",
+                            local.ConfigValue, orgId);
+                    }
+                    break;
+
+                case "PlanningStartDay":
+                case "ApprovalCutoffDay":
+                    // Informational only — does not affect AgreementRuleConfig
+                    _logger.LogDebug(
+                        "Informational local config '{ConfigKey}' = '{ConfigValue}' for org {OrgId} — not applied to AgreementRuleConfig",
+                        local.ConfigKey, local.ConfigValue, orgId);
+                    break;
+
+                default:
+                    _logger.LogWarning(
+                        "Unknown local config key '{ConfigKey}' for org {OrgId} — skipping",
+                        local.ConfigKey, orgId);
+                    break;
+            }
+        }
+
+        // Construct merged config preserving all central values except the overridden ones
+        return new AgreementRuleConfig
+        {
+            AgreementCode = centralConfig.AgreementCode,
+            OkVersion = centralConfig.OkVersion,
+            WeeklyNormHours = mergedWeeklyNormHours,
+            HasOvertime = centralConfig.HasOvertime,
+            HasMerarbejde = centralConfig.HasMerarbejde,
+            MaxFlexBalance = mergedMaxFlexBalance,
+            FlexCarryoverMax = mergedFlexCarryoverMax,
+            EveningSupplementEnabled = centralConfig.EveningSupplementEnabled,
+            NightSupplementEnabled = centralConfig.NightSupplementEnabled,
+            WeekendSupplementEnabled = centralConfig.WeekendSupplementEnabled,
+            HolidaySupplementEnabled = centralConfig.HolidaySupplementEnabled,
+            EveningStart = centralConfig.EveningStart,
+            EveningEnd = centralConfig.EveningEnd,
+            NightStart = centralConfig.NightStart,
+            NightEnd = centralConfig.NightEnd,
+            EveningRate = centralConfig.EveningRate,
+            NightRate = centralConfig.NightRate,
+            WeekendSaturdayRate = centralConfig.WeekendSaturdayRate,
+            WeekendSundayRate = centralConfig.WeekendSundayRate,
+            HolidayRate = centralConfig.HolidayRate,
+            OvertimeThreshold50 = centralConfig.OvertimeThreshold50,
+            OvertimeThreshold100 = centralConfig.OvertimeThreshold100,
+            OnCallDutyEnabled = centralConfig.OnCallDutyEnabled,
+            OnCallDutyRate = centralConfig.OnCallDutyRate,
+        };
+    }
+
+    /// <summary>
+    /// Validates a proposed local config value against central constraints.
+    /// Returns (true, null) if valid, or (false, errorMessage) if the value violates constraints.
+    /// </summary>
+    public (bool Valid, string? Error) ValidateLocalOverride(
+        string configKey, string configValue, AgreementRuleConfig centralConfig)
+    {
+        if (ProtectedKeys.Contains(configKey))
+        {
+            return (false, $"Config key '{configKey}' is centrally negotiated and cannot be overridden locally.");
+        }
+
+        switch (configKey)
+        {
+            case "MaxFlexBalance":
+                if (!TryParseDecimal(configValue, out var maxFlex))
+                    return (false, $"MaxFlexBalance value '{configValue}' is not a valid decimal.");
+                if (maxFlex <= 0)
+                    return (false, "MaxFlexBalance must be greater than 0.");
+                if (maxFlex > centralConfig.MaxFlexBalance)
+                    return (false, $"MaxFlexBalance {maxFlex} exceeds central maximum of {centralConfig.MaxFlexBalance}.");
+                return (true, null);
+
+            case "FlexCarryoverMax":
+                if (!TryParseDecimal(configValue, out var carryover))
+                    return (false, $"FlexCarryoverMax value '{configValue}' is not a valid decimal.");
+                if (carryover <= 0)
+                    return (false, "FlexCarryoverMax must be greater than 0.");
+                if (carryover > centralConfig.FlexCarryoverMax)
+                    return (false, $"FlexCarryoverMax {carryover} exceeds central maximum of {centralConfig.FlexCarryoverMax}.");
+                return (true, null);
+
+            case "WeeklyNormHours":
+                if (!TryParseDecimal(configValue, out var normHours))
+                    return (false, $"WeeklyNormHours value '{configValue}' is not a valid decimal.");
+                if (normHours <= 0)
+                    return (false, "WeeklyNormHours must be greater than 0.");
+                if (normHours > 40)
+                    return (false, $"WeeklyNormHours {normHours} exceeds maximum of 40.");
+                return (true, null);
+
+            case "PlanningStartDay":
+            case "ApprovalCutoffDay":
+                // Informational keys — no constraint
+                return (true, null);
+
+            default:
+                // Unknown keys are allowed (informational)
+                return (true, null);
+        }
+    }
+
+    /// <summary>
+    /// Returns the central config for a given agreement/version, or null if not found.
+    /// Useful for callers that need the central config without any local overrides.
+    /// </summary>
+    public static AgreementRuleConfig? GetCentralConfig(string agreementCode, string okVersion)
+    {
+        return CentralConfigs.TryGetValue((agreementCode, okVersion), out var config) ? config : null;
+    }
+
+    /// <summary>
+    /// Returns whether a central config exists for the given agreement/version.
+    /// </summary>
+    public static bool HasCentralConfig(string agreementCode, string okVersion)
+    {
+        return CentralConfigs.ContainsKey((agreementCode, okVersion));
+    }
+
+    /// <summary>
+    /// Parses a JSON config value as a decimal. The value may be a raw number
+    /// or a JSON-quoted string containing a number.
+    /// </summary>
+    private static bool TryParseDecimal(string jsonValue, out decimal result)
+    {
+        // Strip JSON quotes if present (config values are stored as JSON strings)
+        var trimmed = jsonValue.Trim().Trim('"');
+        return decimal.TryParse(trimmed, System.Globalization.CultureInfo.InvariantCulture, out result);
+    }
+}

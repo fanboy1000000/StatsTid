@@ -1,0 +1,33 @@
+.page {
+  font-family: var(--font-family);
+}
+
+.title {
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text);
+  margin: 0 0 var(--space-6) 0;
+}
+
+.controls {
+  display: flex;
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+  align-items: flex-end;
+}
+
+.weekRange {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  align-self: center;
+}
+
+.content {
+  display: flex;
+  gap: var(--space-6);
+  align-items: flex-start;
+}
+
+.gridWrapper {
+  flex: 1;
+}

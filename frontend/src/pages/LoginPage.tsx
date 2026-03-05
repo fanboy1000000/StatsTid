@@ -1,4 +1,6 @@
 import { useState, type FormEvent } from 'react'
+import { Card, FormField, Input, Button, Alert } from '../components/ui'
+import styles from './LoginPage.module.css'
 
 interface Props {
   onLogin: (username: string, password: string) => Promise<void>
@@ -24,37 +26,41 @@ export function LoginPage({ onLogin }: Props) {
   }
 
   return (
-    <div style={{ fontFamily: 'system-ui, sans-serif', maxWidth: 400, margin: '100px auto', padding: 20 }}>
-      <h1>StatsTid</h1>
-      <h2>Log ind</h2>
-      <form onSubmit={handleSubmit}>
-        <div style={{ marginBottom: 12 }}>
-          <label style={{ display: 'block', marginBottom: 4 }}>Brugernavn</label>
-          <input
-            type="text"
-            value={username}
-            onChange={e => setUsername(e.target.value)}
-            required
-            style={{ width: '100%', padding: 8, boxSizing: 'border-box' }}
-          />
+    <div className={styles.wrapper}>
+      <div className={styles.container}>
+        <h1 className={styles.title}>StatsTid</h1>
+        <h2 className={styles.subtitle}>Log ind</h2>
+        <Card>
+          <form onSubmit={handleSubmit} className={styles.form}>
+            <FormField label="Brugernavn" htmlFor="username" required>
+              <Input
+                id="username"
+                type="text"
+                value={username}
+                onChange={e => setUsername(e.target.value)}
+                required
+              />
+            </FormField>
+            <FormField label="Adgangskode" htmlFor="password" required>
+              <Input
+                id="password"
+                type="password"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                required
+              />
+            </FormField>
+            {error && <Alert variant="error">{error}</Alert>}
+            <div className={styles.actions}>
+              <Button type="submit" disabled={loading}>
+                {loading ? 'Logger ind...' : 'Log ind'}
+              </Button>
+            </div>
+          </form>
+        </Card>
+        <div className={styles.hint}>
+          <p>Test brugernavne: admin01, mgr01, emp001, emp002, emp003, readonly01</p>
         </div>
-        <div style={{ marginBottom: 12 }}>
-          <label style={{ display: 'block', marginBottom: 4 }}>Adgangskode</label>
-          <input
-            type="password"
-            value={password}
-            onChange={e => setPassword(e.target.value)}
-            required
-            style={{ width: '100%', padding: 8, boxSizing: 'border-box' }}
-          />
-        </div>
-        {error && <p style={{ color: 'red' }}>{error}</p>}
-        <button type="submit" disabled={loading} style={{ padding: '8px 24px' }}>
-          {loading ? 'Logger ind...' : 'Log ind'}
-        </button>
-      </form>
-      <div style={{ marginTop: 24, fontSize: 12, color: '#888' }}>
-        <p>Test brugernavne: admin01, mgr01, emp001, emp002, emp003, readonly01</p>
       </div>
     </div>
   )

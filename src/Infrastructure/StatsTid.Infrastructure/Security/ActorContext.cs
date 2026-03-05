@@ -16,7 +16,8 @@ public static class ActorContextExtensions
 {
     public static ActorContext GetActorContext(this HttpContext httpContext)
     {
-        var actorId = httpContext.User?.FindFirst(ClaimTypes.NameIdentifier)?.Value
+        var actorId = httpContext.User?.FindFirst("sub")?.Value
+                   ?? httpContext.User?.FindFirst(ClaimTypes.NameIdentifier)?.Value
                    ?? httpContext.User?.FindFirst(StatsTidClaims.EmployeeId)?.Value;
         var actorRole = httpContext.User?.FindFirst(StatsTidClaims.Role)?.Value;
         var orgId = httpContext.User?.FindFirst(StatsTidClaims.OrgId)?.Value;

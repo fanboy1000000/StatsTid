@@ -1,0 +1,54 @@
+:root {
+  /* Colors (from ADR-011 / designsystem.dk) */
+  --color-primary: #0059B3;
+  --color-primary-dark: #004993;
+  --color-primary-darker: #003972;
+  --color-text: #1A1A1A;
+  --color-gray-100: #F5F5F5;
+  --color-gray-200: #DCDCDC;
+  --color-gray-300: #BFBFBF;
+  --color-gray-400: #8E8E8E;
+  --color-gray-500: #707070;
+  --color-gray-600: #454545;
+  --color-white: #FFFFFF;
+  --color-success: #358000;
+  --color-success-light: #DDF7CE;
+  --color-error: #CC0000;
+  --color-error-light: #FFE0E0;
+  --color-warning: #FEBB30;
+  --color-warning-light: #FFEECC;
+  --color-info: #1B86C3;
+  --color-info-light: #E2F2FB;
+  --color-link: #004D99;
+  --color-link-visited: #800080;
+
+  /* Spacing (8px baseline grid) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* Typography */
+  --font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  /* Border */
+  --border-radius: 0px;
+  --border-color: var(--color-gray-200);
+  --border-focus: var(--color-gray-600);
+  --border-width: 1px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+
+  /* Focus */
+  --focus-outline: 2px solid var(--color-gray-600);
+  --focus-outline-offset: 2px;
+}

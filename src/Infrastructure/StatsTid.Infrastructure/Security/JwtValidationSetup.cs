@@ -1,3 +1,4 @@
+using System.IdentityModel.Tokens.Jwt;
 using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Extensions.Configuration;
@@ -11,6 +12,10 @@ public static class JwtValidationSetup
 {
     public static IServiceCollection AddStatsTidJwtAuth(this IServiceCollection services, IConfiguration configuration)
     {
+        // Prevent .NET from remapping JWT claim names (e.g. "role" → ClaimTypes.Role)
+        // so our custom claims (StatsTidClaims.Role, etc.) are preserved as-is.
+        JwtSecurityTokenHandler.DefaultInboundClaimTypeMap.Clear();
+
         var settings = new JwtSettings
         {
             Issuer = configuration["Jwt:Issuer"] ?? "statstid",
@@ -28,6 +33,7 @@ public static class JwtValidationSetup
         })
         .AddJwtBearer(options =>
         {
+            options.MapInboundClaims = false;
             options.TokenValidationParameters = new TokenValidationParameters
             {
                 ValidateIssuer = true,
@@ -37,7 +43,9 @@ public static class JwtValidationSetup
                 ValidateIssuerSigningKey = true,
                 IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(settings.SigningKey)),
                 ValidateLifetime = true,
-                ClockSkew = TimeSpan.FromMinutes(1)
+                ClockSkew = TimeSpan.FromMinutes(1),
+                NameClaimType = "sub",
+                RoleClaimType = "role"
             };
         });
 

@@ -1,9 +1,13 @@
 import { useState } from 'react'
 import { useAbsences } from '../hooks/useAbsences'
+import { useAuth } from '../hooks/useAuth'
 import { ABSENCE_TYPES, AGREEMENT_CODES } from '../types'
+import { Card, FormField, Input, Button, Table, Alert, Badge, Spinner } from '../components/ui'
+import styles from './AbsenceRegistration.module.css'
 
 export function AbsenceRegistration() {
-  const [employeeId, setEmployeeId] = useState('EMP001')
+  const { user } = useAuth()
+  const employeeId = user?.employeeId ?? ''
   const { absences, loading, error, registerAbsence } = useAbsences(employeeId)
 
   const [date, setDate] = useState('')
@@ -31,70 +35,83 @@ export function AbsenceRegistration() {
   }
 
   return (
-    <div>
-      <h2>Fravaersregistrering</h2>
+    <div className={styles.page}>
+      <h2 className={styles.title}>Fravaersregistrering</h2>
 
-      <label>
-        Medarbejder-ID:
-        <input type="text" value={employeeId} onChange={e => setEmployeeId(e.target.value)} style={{ marginLeft: 8, marginBottom: 16 }} />
-      </label>
+      <Card header="Registrer fravaer">
+        <form onSubmit={handleSubmit} className={styles.form}>
+          <FormField label="Dato" htmlFor="absence-date" required>
+            <Input
+              id="absence-date"
+              type="date"
+              value={date}
+              onChange={e => setDate(e.target.value)}
+              required
+            />
+          </FormField>
+          <FormField label="Type" htmlFor="absence-type" required>
+            <select
+              id="absence-type"
+              className={styles.select}
+              value={absenceType}
+              onChange={e => setAbsenceType(e.target.value)}
+            >
+              {ABSENCE_TYPES.map(t => (
+                <option key={t.value} value={t.value}>{t.label}</option>
+              ))}
+            </select>
+          </FormField>
+          <FormField label="Timer" htmlFor="absence-hours" required>
+            <Input
+              id="absence-hours"
+              type="number"
+              step="0.1"
+              value={hours}
+              onChange={e => setHours(e.target.value)}
+              required
+            />
+          </FormField>
+          <FormField label="Overenskomst" htmlFor="absence-agreement">
+            <select
+              id="absence-agreement"
+              className={styles.select}
+              value={agreementCode}
+              onChange={e => setAgreementCode(e.target.value)}
+            >
+              {AGREEMENT_CODES.map(c => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          </FormField>
+          <div className={styles.actions}>
+            <Button type="submit" disabled={submitting}>
+              {submitting ? 'Registrerer...' : 'Registrer fravaer'}
+            </Button>
+          </div>
+        </form>
+      </Card>
 
-      <h3>Registrer fravaer</h3>
-      <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 400 }}>
-        <label>
-          Dato:
-          <input type="date" value={date} onChange={e => setDate(e.target.value)} required />
-        </label>
-        <label>
-          Type:
-          <select value={absenceType} onChange={e => setAbsenceType(e.target.value)}>
-            {ABSENCE_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-          </select>
-        </label>
-        <label>
-          Timer:
-          <input type="number" step="0.1" value={hours} onChange={e => setHours(e.target.value)} required />
-        </label>
-        <label>
-          Overenskomst:
-          <select value={agreementCode} onChange={e => setAgreementCode(e.target.value)}>
-            {AGREEMENT_CODES.map(c => <option key={c} value={c}>{c}</option>)}
-          </select>
-        </label>
-        <button type="submit" disabled={submitting}>
-          {submitting ? 'Registrerer...' : 'Registrer fravaer'}
-        </button>
-      </form>
-
-      <h3 style={{ marginTop: 24 }}>Registreret fravaer</h3>
-      {loading && <p>Henter...</p>}
-      {error && <p style={{ color: 'red' }}>{error}</p>}
-      {!loading && absences.length === 0 && <p>Ingen fravaer fundet.</p>}
+      <h3 className={styles.sectionTitle}>Registreret fravaer</h3>
+      {loading && (
+        <div className={styles.loadingWrapper}>
+          <Spinner size="sm" />
+          <span>Henter...</span>
+        </div>
+      )}
+      {error && <Alert variant="error">{error}</Alert>}
+      {!loading && absences.length === 0 && <p className={styles.empty}>Ingen fravaer fundet.</p>}
       {absences.length > 0 && (
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead>
-            <tr>
-              <th style={thStyle}>Dato</th>
-              <th style={thStyle}>Type</th>
-              <th style={thStyle}>Timer</th>
-              <th style={thStyle}>Overenskomst</th>
+        <Table headers={['Dato', 'Type', 'Timer', 'Overenskomst']} striped>
+          {absences.map((a, i) => (
+            <tr key={i}>
+              <td>{a.date}</td>
+              <td><Badge variant="info">{a.absenceType}</Badge></td>
+              <td>{a.hours}</td>
+              <td>{a.agreementCode}</td>
             </tr>
-          </thead>
-          <tbody>
-            {absences.map((a, i) => (
-              <tr key={i}>
-                <td style={tdStyle}>{a.date}</td>
-                <td style={tdStyle}>{a.absenceType}</td>
-                <td style={tdStyle}>{a.hours}</td>
-                <td style={tdStyle}>{a.agreementCode}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+          ))}
+        </Table>
       )}
     </div>
   )
 }
-
-const thStyle: React.CSSProperties = { textAlign: 'left', padding: 8, borderBottom: '2px solid #333' }
-const tdStyle: React.CSSProperties = { padding: 8, borderBottom: '1px solid #ccc' }

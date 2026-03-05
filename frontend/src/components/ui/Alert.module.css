@@ -1,0 +1,62 @@
+.alert {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: var(--space-4);
+  font-family: var(--font-family);
+  font-size: 16px;
+  line-height: 1.5;
+  border-left: 4px solid transparent;
+  border-radius: var(--border-radius);
+}
+
+.content {
+  flex: 1;
+}
+
+.info {
+  background-color: var(--color-info-light);
+  border-left-color: var(--color-info);
+  color: var(--color-text);
+}
+
+.success {
+  background-color: var(--color-success-light);
+  border-left-color: var(--color-success);
+  color: var(--color-text);
+}
+
+.warning {
+  background-color: var(--color-warning-light);
+  border-left-color: var(--color-warning);
+  color: var(--color-text);
+}
+
+.error {
+  background-color: var(--color-error-light);
+  border-left-color: var(--color-error);
+  color: var(--color-text);
+}
+
+.dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-1);
+  margin-left: var(--space-3);
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--color-text);
+  border-radius: var(--border-radius);
+  flex-shrink: 0;
+}
+
+.dismiss:hover {
+  background-color: rgba(0, 0, 0, 0.05);
+}
+
+.dismiss:focus-visible {
+  outline: var(--focus-outline);
+  outline-offset: var(--focus-outline-offset);
+}
