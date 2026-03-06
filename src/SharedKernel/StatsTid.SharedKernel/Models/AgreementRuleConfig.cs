@@ -36,4 +36,17 @@ public sealed class AgreementRuleConfig
     // On-call duty (rådighedsvagt)
     public bool OnCallDutyEnabled { get; init; }
     public decimal OnCallDutyRate { get; init; } = 0.33m;
+
+    // Call-in work (tilkald)
+    public bool CallInWorkEnabled { get; init; }
+    public decimal CallInMinimumHours { get; init; } = 3.0m;
+    public decimal CallInRate { get; init; } = 1.0m;
+
+    // Travel time (rejsetid)
+    public bool TravelTimeEnabled { get; init; }
+    public decimal WorkingTravelRate { get; init; } = 1.0m;
+    public decimal NonWorkingTravelRate { get; init; } = 0.5m;
+
+    // Norm period length in weeks (valid: 1, 2, 4, 8, 12)
+    public int NormPeriodWeeks { get; init; } = 1;
 }

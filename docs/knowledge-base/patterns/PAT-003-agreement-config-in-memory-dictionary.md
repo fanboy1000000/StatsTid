@@ -28,7 +28,10 @@ Agreement configurations are stored as an in-memory dictionary keyed by agreemen
 - Config objects must be immutable (follows PAT-001)
 - The dictionary is the single source of truth for agreement-specific behavior
 
+## Update (Sprint 10)
+As of Sprint 10 (TASK-1003), the config dictionary is centralized in `CentralAgreementConfigs` (SharedKernel). Both `AgreementConfigProvider` (Rule Engine) and `ConfigResolutionService` (Infrastructure) delegate to it. This eliminates the sync hazard identified in Sprint 7 where two identical dictionaries could silently diverge.
+
 ## Agent Guidance
-- **Rule Engine Agent**: All agreement-specific values (rates, thresholds, flags) must come from the config dictionary. Never hardcode union-specific logic.
+- **Rule Engine Agent**: All agreement-specific values (rates, thresholds, flags) must come from the config dictionary. Never hardcode union-specific logic. `AgreementConfigProvider` delegates to `CentralAgreementConfigs` — add new config properties to `AgreementRuleConfig` and `CentralAgreementConfigs` only.
 - **Test & QA Agent**: Test each agreement type separately. Verify that changing config values changes rule outputs.
-- **Data Model Agent**: Config types should be in SharedKernel so both rule engine and tests can reference them.
+- **Data Model Agent**: Config types and central configs live in SharedKernel (`CentralAgreementConfigs`, `AgreementRuleConfig`) so both rule engine and infrastructure can reference them.

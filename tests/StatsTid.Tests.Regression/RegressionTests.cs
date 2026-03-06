@@ -203,7 +203,7 @@ public class RegressionTests
         var absences = new List<AbsenceEntry>();
 
         // Run all 5 pure rule functions in sequence
-        var normResult = NormCheckRule.Evaluate(profile, entries, Monday, Sunday);
+        var normResult = NormCheckRule.Evaluate(profile, entries, Monday, Sunday, normPeriodWeeks: 1);
         var supplementResult = SupplementRule.Evaluate(profile, entries, Monday, Sunday, config);
         var overtimeResult = OvertimeRule.Evaluate(profile, entries, Monday, Sunday, config);
         var absenceResult = AbsenceRule.Evaluate(profile, absences, Monday, Sunday);
@@ -255,7 +255,7 @@ public class RegressionTests
         var absences = new List<AbsenceEntry>();
 
         // Run all rules
-        var normResult = NormCheckRule.Evaluate(profile, entries, Monday, Sunday);
+        var normResult = NormCheckRule.Evaluate(profile, entries, Monday, Sunday, normPeriodWeeks: 1);
         var supplementResult = SupplementRule.Evaluate(profile, entries, Monday, Sunday, config);
         var overtimeResult = OvertimeRule.Evaluate(profile, entries, Monday, Sunday, config);
         var absenceResult = AbsenceRule.Evaluate(profile, absences, Monday, Sunday);
@@ -386,7 +386,7 @@ public class RegressionTests
         };
 
         // Run all 5 rules
-        var normResult = NormCheckRule.Evaluate(profile, entries, Monday, Sunday);
+        var normResult = NormCheckRule.Evaluate(profile, entries, Monday, Sunday, normPeriodWeeks: 1);
         var supplementResult = SupplementRule.Evaluate(profile, entries, Monday, Sunday, config);
         var overtimeResult = OvertimeRule.Evaluate(profile, entries, Monday, Sunday, config);
         var absenceResult = AbsenceRule.Evaluate(profile, absences, Monday, Sunday);

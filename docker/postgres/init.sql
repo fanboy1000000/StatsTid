@@ -207,7 +207,18 @@ INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code
     -- On-call duty (rådighedsvagt)
     ('ON_CALL_DUTY', 'SLS_0710', 'OK24', 'AC', 'On-call duty compensation'),
     ('ON_CALL_DUTY', 'SLS_0710', 'OK24', 'HK', 'On-call duty compensation'),
-    ('ON_CALL_DUTY', 'SLS_0710', 'OK24', 'PROSA', 'On-call duty compensation')
+    ('ON_CALL_DUTY', 'SLS_0710', 'OK24', 'PROSA', 'On-call duty compensation'),
+    -- Call-in work (tilkald) — HK/PROSA enabled, AC disabled but mapped for completeness
+    ('CALL_IN_WORK', 'SLS_0810', 'OK24', 'AC', 'Call-in work compensation'),
+    ('CALL_IN_WORK', 'SLS_0810', 'OK24', 'HK', 'Call-in work compensation'),
+    ('CALL_IN_WORK', 'SLS_0810', 'OK24', 'PROSA', 'Call-in work compensation'),
+    -- Travel time (rejsetid)
+    ('TRAVEL_WORK', 'SLS_0820', 'OK24', 'AC', 'Working travel time'),
+    ('TRAVEL_WORK', 'SLS_0820', 'OK24', 'HK', 'Working travel time'),
+    ('TRAVEL_WORK', 'SLS_0820', 'OK24', 'PROSA', 'Working travel time'),
+    ('TRAVEL_NON_WORK', 'SLS_0830', 'OK24', 'AC', 'Non-working travel time'),
+    ('TRAVEL_NON_WORK', 'SLS_0830', 'OK24', 'HK', 'Non-working travel time'),
+    ('TRAVEL_NON_WORK', 'SLS_0830', 'OK24', 'PROSA', 'Non-working travel time')
 ON CONFLICT DO NOTHING;
 
 -- Seed OK26 wage type mappings (identical to OK24 for now)
@@ -264,7 +275,18 @@ INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code
     -- On-call duty (rådighedsvagt)
     ('ON_CALL_DUTY', 'SLS_0710', 'OK26', 'AC', 'On-call duty compensation'),
     ('ON_CALL_DUTY', 'SLS_0710', 'OK26', 'HK', 'On-call duty compensation'),
-    ('ON_CALL_DUTY', 'SLS_0710', 'OK26', 'PROSA', 'On-call duty compensation')
+    ('ON_CALL_DUTY', 'SLS_0710', 'OK26', 'PROSA', 'On-call duty compensation'),
+    -- Call-in work (tilkald)
+    ('CALL_IN_WORK', 'SLS_0810', 'OK26', 'AC', 'Call-in work compensation'),
+    ('CALL_IN_WORK', 'SLS_0810', 'OK26', 'HK', 'Call-in work compensation'),
+    ('CALL_IN_WORK', 'SLS_0810', 'OK26', 'PROSA', 'Call-in work compensation'),
+    -- Travel time (rejsetid)
+    ('TRAVEL_WORK', 'SLS_0820', 'OK26', 'AC', 'Working travel time'),
+    ('TRAVEL_WORK', 'SLS_0820', 'OK26', 'HK', 'Working travel time'),
+    ('TRAVEL_WORK', 'SLS_0820', 'OK26', 'PROSA', 'Working travel time'),
+    ('TRAVEL_NON_WORK', 'SLS_0830', 'OK26', 'AC', 'Non-working travel time'),
+    ('TRAVEL_NON_WORK', 'SLS_0830', 'OK26', 'HK', 'Non-working travel time'),
+    ('TRAVEL_NON_WORK', 'SLS_0830', 'OK26', 'PROSA', 'Non-working travel time')
 ON CONFLICT DO NOTHING;
 
 -- Seed Danish public holidays 2024-2026 (computed via Computus algorithm)

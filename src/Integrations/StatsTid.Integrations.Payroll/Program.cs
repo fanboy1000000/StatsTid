@@ -1,4 +1,5 @@
 using StatsTid.Infrastructure;
+using StatsTid.Infrastructure.Resilience;
 using StatsTid.Infrastructure.Security;
 using StatsTid.Integrations.Payroll.Services;
 using StatsTid.SharedKernel.Interfaces;
@@ -19,6 +20,7 @@ builder.Services.AddSingleton<RetroactiveCorrectionService>();
 builder.Services.AddSingleton<ApprovalPeriodRepository>();
 builder.Services.AddSingleton<LocalConfigurationRepository>();
 builder.Services.AddSingleton<ConfigResolutionService>();
+builder.Services.AddSingleton<IdempotencyGuard>();
 
 builder.Services.AddStatsTidJwtAuth(builder.Configuration);
 builder.Services.AddStatsTidPolicies();
@@ -31,6 +33,9 @@ app.UseAuthorization();
 
 app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "payroll-integration" }));
 
+// Low-level export endpoint: intentionally NOT guarded by period approval.
+// Used for admin retroactive corrections and internal service-to-service calls.
+// The high-level /api/payroll/calculate-and-export endpoint enforces the approval guard.
 app.MapPost("/api/payroll/export", async (PayrollExportRequest request, PayrollMappingService mapping, PayrollExportService export, CancellationToken ct) =>
 {
     var lines = await mapping.MapCalculationResultAsync(request.CalculationResult, request.Profile, ct);
@@ -128,9 +133,14 @@ app.MapPost("/api/payroll/calculate-and-export", async (
     return Results.Ok(result);
 }).RequireAuthorization("Authenticated");
 
+// Retroactive correction endpoint: intentionally NOT guarded by period approval.
+// Corrections are initiated by admins for already-exported periods where rules or data changed.
+// Idempotency guard prevents duplicate correction processing (TASK-1001).
 app.MapPost("/api/payroll/recalculate", async (
     RecalculateRequest request,
     RetroactiveCorrectionService correctionService,
+    IdempotencyGuard idempotencyGuard,
+    DbConnectionFactory dbConnectionFactory,
     HttpContext httpContext,
     CancellationToken ct) =>
 {
@@ -139,6 +149,20 @@ app.MapPost("/api/payroll/recalculate", async (
         && Guid.TryParse(corrValues.FirstOrDefault(), out var parsedCorr)
             ? parsedCorr
             : null;
+
+    // Resolve idempotency token: use provided or generate new
+    var idempotencyToken = request.IdempotencyToken ?? Guid.NewGuid();
+
+    // Check idempotency: if this token was already processed, return early
+    if (await idempotencyGuard.HasBeenDeliveredAsync(idempotencyToken, ct))
+    {
+        return Results.Ok(new
+        {
+            success = true,
+            message = "Correction already processed",
+            idempotencyToken
+        });
+    }
 
     // Extract actor ID from claims
     var actorId = httpContext.User.FindFirst("sub")?.Value ?? "unknown";
@@ -155,9 +179,32 @@ app.MapPost("/api/payroll/recalculate", async (
         actorId,
         authHeader,
         correlationId,
+        idempotencyToken,
         ct);
 
-    return result.Success ? Results.Ok(result) : Results.UnprocessableEntity(result);
+    if (!result.Success)
+        return Results.UnprocessableEntity(result);
+
+    // Mark idempotency token as delivered in outbox
+    try
+    {
+        await using var conn = dbConnectionFactory.Create();
+        await conn.OpenAsync(ct);
+        await using var cmd = new Npgsql.NpgsqlCommand(
+            """
+            INSERT INTO outbox_messages (destination, payload, status, delivered_at, idempotency_token)
+            VALUES ('retroactive-correction', '{}', 'delivered', NOW(), @token)
+            """, conn);
+        cmd.Parameters.AddWithValue("token", idempotencyToken);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+    catch (Exception)
+    {
+        // Non-fatal: idempotency mark failed but correction was processed.
+        // Next call with same token will re-process (at-least-once is acceptable).
+    }
+
+    return Results.Ok(result);
 }).RequireAuthorization("Authenticated");
 
 app.Run();
@@ -194,4 +241,5 @@ public sealed class RecalculateRequest
     public decimal PreviousFlexBalance { get; init; }
     public required List<PayrollExportLine> PreviousExportLines { get; init; }
     public required string Reason { get; init; }
+    public Guid? IdempotencyToken { get; init; }
 }

@@ -7,16 +7,14 @@ public sealed class RuleRegistry
 {
     private static readonly HashSet<string> SupportedVersions = new() { "OK24", "OK26" };
 
-    private static readonly Dictionary<string, Func<EmploymentProfile, IReadOnlyList<TimeEntry>, DateOnly, DateOnly, CalculationResult>> TimeRules = new()
-    {
-        [NormCheckRule.RuleId] = NormCheckRule.Evaluate,
-    };
-
     private static readonly HashSet<string> ConfigAwareTimeRules = new()
     {
+        NormCheckRule.RuleId,
         SupplementRule.RuleId,
         OvertimeRule.RuleId,
         OnCallDutyRule.RuleId,
+        CallInWorkRule.RuleId,
+        TravelTimeRule.RuleId,
     };
 
     public IReadOnlyList<string> GetAvailableRules(string okVersion)
@@ -24,8 +22,7 @@ public sealed class RuleRegistry
         if (!SupportedVersions.Contains(okVersion))
             return [];
 
-        var rules = new List<string>(TimeRules.Keys);
-        rules.AddRange(ConfigAwareTimeRules);
+        var rules = new List<string>(ConfigAwareTimeRules);
         rules.Add(AbsenceRule.RuleId);
         rules.Add(FlexBalanceRule.RuleId);
         return rules;
@@ -41,10 +38,7 @@ public sealed class RuleRegistry
         DateOnly periodStart,
         DateOnly periodEnd)
     {
-        if (TimeRules.TryGetValue(ruleId, out var rule))
-            return rule(profile, entries, periodStart, periodEnd);
-
-        // Config-aware time rules
+        // All time rules are now config-aware
         if (ConfigAwareTimeRules.Contains(ruleId))
         {
             return EvaluateTimeRule(ruleId, profile, entries, periodStart, periodEnd);
@@ -74,9 +68,12 @@ public sealed class RuleRegistry
 
         return ruleId switch
         {
+            "NORM_CHECK_37H" => NormCheckRule.Evaluate(profile, entries, periodStart, periodEnd, config),
             "SUPPLEMENT_CALC" => SupplementRule.Evaluate(profile, entries, periodStart, periodEnd, config),
             "OVERTIME_CALC" => OvertimeRule.Evaluate(profile, entries, periodStart, periodEnd, config),
             "ON_CALL_DUTY" => OnCallDutyRule.Evaluate(profile, entries, periodStart, periodEnd, config),
+            "CALL_IN_WORK" => CallInWorkRule.Evaluate(profile, entries, periodStart, periodEnd, config),
+            "TRAVEL_TIME" => TravelTimeRule.Evaluate(profile, entries, periodStart, periodEnd, config),
             _ => new CalculationResult
             {
                 RuleId = ruleId,

@@ -34,15 +34,16 @@ public sealed class OrganizationRepository
 
     public async Task<IReadOnlyList<Organization>> GetDescendantsAsync(string orgId, CancellationToken ct = default)
     {
-        // First get the org's materialized path, then find all orgs whose path starts with it
-        var org = await GetByIdAsync(orgId, ct);
-        if (org is null) return Array.Empty<Organization>();
-
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
         await using var cmd = new NpgsqlCommand(
-            "SELECT * FROM organizations WHERE materialized_path LIKE @pathPrefix AND is_active = TRUE ORDER BY materialized_path", conn);
-        cmd.Parameters.AddWithValue("pathPrefix", org.MaterializedPath + "%");
+            @"SELECT o.* FROM organizations o
+              WHERE o.materialized_path LIKE (
+                  SELECT materialized_path FROM organizations WHERE org_id = @orgId
+              ) || '%'
+              AND o.is_active = TRUE
+              ORDER BY o.materialized_path", conn);
+        cmd.Parameters.AddWithValue("orgId", orgId);
         return await ReadOrgsAsync(cmd, ct);
     }
 

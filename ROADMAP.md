@@ -82,11 +82,8 @@ Does not affect the deterministic core. Focuses on organizational hierarchy, loc
 
 Depends on the connected payroll chain from Phase 1. These sprints tackle the most complex rule domains and prove the architecture works end-to-end across time.
 
-- On-call duty (rådighedsvagt), call-in work, travel time (working vs non-working)
-- 4-week norm periods, part-time pro rata
-- AC position-based rule overrides, academic/research norm systems
-- Retroactive recalculation across OK version transitions
-- Payroll re-export after retroactive corrections
+- **Sprint 10** (in-progress): Tech debt cleanup (idempotency guard, FlexEvaluationResponse DTO, config dict dedup, smoke test fix, GetDescendantsAsync optimization) + Rule engine expansion (4-week norm periods, part-time pro rata, call-in work, travel time). See [docs/sprints/SPRINT-10.md](docs/sprints/SPRINT-10.md).
+- **Sprint 11** (planned): Retroactive recalculation across OK version transitions, payroll re-export with delta tracking, AC position-based rule overrides, academic/research norm systems
 
 ### Phase 4 — Production Hardening (Sprint 12+)
 

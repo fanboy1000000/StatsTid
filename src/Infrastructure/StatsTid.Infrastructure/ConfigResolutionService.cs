@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using StatsTid.SharedKernel.Config;
 using StatsTid.SharedKernel.Models;
 
 namespace StatsTid.Infrastructure;
@@ -13,130 +14,6 @@ public sealed class ConfigResolutionService
 {
     private readonly LocalConfigurationRepository _localConfigRepo;
     private readonly ILogger<ConfigResolutionService> _logger;
-
-    /// <summary>
-    /// Central config dictionary — duplicated from Rule Engine's AgreementConfigProvider.
-    /// Must stay in sync. The Payroll integration must not reference the Rule Engine project.
-    /// </summary>
-    private static readonly Dictionary<(string AgreementCode, string OkVersion), AgreementRuleConfig> CentralConfigs = new()
-    {
-        // AC OK24
-        [("AC", "OK24")] = new AgreementRuleConfig
-        {
-            AgreementCode = "AC",
-            OkVersion = "OK24",
-            WeeklyNormHours = 37.0m,
-            HasOvertime = false,
-            HasMerarbejde = true,
-            MaxFlexBalance = 150.0m,
-            FlexCarryoverMax = 150.0m,
-            EveningSupplementEnabled = false,
-            NightSupplementEnabled = false,
-            WeekendSupplementEnabled = false,
-            HolidaySupplementEnabled = false,
-            OnCallDutyEnabled = false,
-        },
-        // HK OK24
-        [("HK", "OK24")] = new AgreementRuleConfig
-        {
-            AgreementCode = "HK",
-            OkVersion = "OK24",
-            WeeklyNormHours = 37.0m,
-            HasOvertime = true,
-            HasMerarbejde = false,
-            MaxFlexBalance = 100.0m,
-            FlexCarryoverMax = 100.0m,
-            EveningSupplementEnabled = true,
-            NightSupplementEnabled = true,
-            WeekendSupplementEnabled = true,
-            HolidaySupplementEnabled = true,
-            EveningStart = 17,
-            EveningEnd = 23,
-            NightStart = 23,
-            NightEnd = 6,
-            OnCallDutyEnabled = true,
-            OnCallDutyRate = 0.33m,
-        },
-        // PROSA OK24
-        [("PROSA", "OK24")] = new AgreementRuleConfig
-        {
-            AgreementCode = "PROSA",
-            OkVersion = "OK24",
-            WeeklyNormHours = 37.0m,
-            HasOvertime = true,
-            HasMerarbejde = false,
-            MaxFlexBalance = 120.0m,
-            FlexCarryoverMax = 120.0m,
-            EveningSupplementEnabled = true,
-            NightSupplementEnabled = true,
-            WeekendSupplementEnabled = true,
-            HolidaySupplementEnabled = true,
-            EveningStart = 17,
-            EveningEnd = 23,
-            NightStart = 23,
-            NightEnd = 6,
-            OnCallDutyEnabled = true,
-            OnCallDutyRate = 0.33m,
-        },
-        // AC OK26 (placeholder — identical to OK24 for now)
-        [("AC", "OK26")] = new AgreementRuleConfig
-        {
-            AgreementCode = "AC",
-            OkVersion = "OK26",
-            WeeklyNormHours = 37.0m,
-            HasOvertime = false,
-            HasMerarbejde = true,
-            MaxFlexBalance = 150.0m,
-            FlexCarryoverMax = 150.0m,
-            EveningSupplementEnabled = false,
-            NightSupplementEnabled = false,
-            WeekendSupplementEnabled = false,
-            HolidaySupplementEnabled = false,
-            OnCallDutyEnabled = false,
-        },
-        // HK OK26 (placeholder)
-        [("HK", "OK26")] = new AgreementRuleConfig
-        {
-            AgreementCode = "HK",
-            OkVersion = "OK26",
-            WeeklyNormHours = 37.0m,
-            HasOvertime = true,
-            HasMerarbejde = false,
-            MaxFlexBalance = 100.0m,
-            FlexCarryoverMax = 100.0m,
-            EveningSupplementEnabled = true,
-            NightSupplementEnabled = true,
-            WeekendSupplementEnabled = true,
-            HolidaySupplementEnabled = true,
-            EveningStart = 17,
-            EveningEnd = 23,
-            NightStart = 23,
-            NightEnd = 6,
-            OnCallDutyEnabled = true,
-            OnCallDutyRate = 0.33m,
-        },
-        // PROSA OK26 (placeholder)
-        [("PROSA", "OK26")] = new AgreementRuleConfig
-        {
-            AgreementCode = "PROSA",
-            OkVersion = "OK26",
-            WeeklyNormHours = 37.0m,
-            HasOvertime = true,
-            HasMerarbejde = false,
-            MaxFlexBalance = 120.0m,
-            FlexCarryoverMax = 120.0m,
-            EveningSupplementEnabled = true,
-            NightSupplementEnabled = true,
-            WeekendSupplementEnabled = true,
-            HolidaySupplementEnabled = true,
-            EveningStart = 17,
-            EveningEnd = 23,
-            NightStart = 23,
-            NightEnd = 6,
-            OnCallDutyEnabled = true,
-            OnCallDutyRate = 0.33m,
-        },
-    };
 
     /// <summary>
     /// Config keys that are centrally negotiated and MUST NOT be overridden locally.
@@ -181,11 +58,9 @@ public sealed class ConfigResolutionService
     public async Task<AgreementRuleConfig> ResolveAsync(
         string orgId, string agreementCode, string okVersion, CancellationToken ct = default)
     {
-        if (!CentralConfigs.TryGetValue((agreementCode, okVersion), out var centralConfig))
-        {
-            throw new InvalidOperationException(
+        var centralConfig = CentralAgreementConfigs.TryGetConfig(agreementCode, okVersion)
+            ?? throw new InvalidOperationException(
                 $"No central agreement configuration found for {agreementCode}/{okVersion}");
-        }
 
         IReadOnlyList<LocalConfiguration> localOverrides;
         try
@@ -380,7 +255,7 @@ public sealed class ConfigResolutionService
     /// </summary>
     public static AgreementRuleConfig? GetCentralConfig(string agreementCode, string okVersion)
     {
-        return CentralConfigs.TryGetValue((agreementCode, okVersion), out var config) ? config : null;
+        return CentralAgreementConfigs.TryGetConfig(agreementCode, okVersion);
     }
 
     /// <summary>
@@ -388,7 +263,7 @@ public sealed class ConfigResolutionService
     /// </summary>
     public static bool HasCentralConfig(string agreementCode, string okVersion)
     {
-        return CentralConfigs.ContainsKey((agreementCode, okVersion));
+        return CentralAgreementConfigs.HasConfig(agreementCode, okVersion);
     }
 
     /// <summary>

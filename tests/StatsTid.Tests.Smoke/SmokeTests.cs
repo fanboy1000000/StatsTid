@@ -1,6 +1,10 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Security.Claims;
+using System.Text;
 using System.Text.Json;
+using Microsoft.IdentityModel.JsonWebTokens;
+using Microsoft.IdentityModel.Tokens;
 
 namespace StatsTid.Tests.Smoke;
 
@@ -19,6 +23,45 @@ public class SmokeTests
     private const string ExternalUrl = "http://localhost:5500";
     private const string MockPayrollUrl = "http://localhost:5600";
     private const string MockExternalUrl = "http://localhost:5700";
+
+    // Matches the dev signing key in docker-compose.yml
+    private const string JwtSigningKey = "StatsTid_Sprint3_DevKey_MustBeAtLeast32BytesLong!";
+
+    private static string GenerateTestToken(string employeeId = "SMOKE001", string role = "GlobalAdmin", string orgId = "MIN01")
+    {
+        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(JwtSigningKey));
+        var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+
+        var scopes = JsonSerializer.Serialize(new[]
+        {
+            new { Role = role, OrgId = orgId, ScopeType = "GLOBAL" }
+        });
+
+        var descriptor = new SecurityTokenDescriptor
+        {
+            Subject = new ClaimsIdentity(new[]
+            {
+                new Claim("sub", employeeId),
+                new Claim("role", role),
+                new Claim("org_id", orgId),
+                new Claim("agreement_code", "AC"),
+                new Claim("scopes", scopes),
+            }),
+            Expires = DateTime.UtcNow.AddHours(1),
+            Issuer = "statstid",
+            Audience = "statstid",
+            SigningCredentials = credentials,
+        };
+
+        var handler = new JsonWebTokenHandler();
+        return handler.CreateToken(descriptor);
+    }
+
+    private HttpRequestMessage WithAuth(HttpRequestMessage request)
+    {
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", GenerateTestToken());
+        return request;
+    }
 
     [Fact]
     public async Task AllServices_HealthCheck_ReturnsHealthy()
@@ -62,7 +105,13 @@ public class SmokeTests
             periodEnd = "2024-04-07"
         };
 
-        var response = await _client.PostAsJsonAsync($"{RuleEngineUrl}/api/rules/evaluate", request);
+        var httpRequest = new HttpRequestMessage(HttpMethod.Post, $"{RuleEngineUrl}/api/rules/evaluate")
+        {
+            Content = JsonContent.Create(request)
+        };
+        WithAuth(httpRequest);
+
+        var response = await _client.SendAsync(httpRequest);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
         var result = await response.Content.ReadFromJsonAsync<JsonElement>();
@@ -82,10 +131,19 @@ public class SmokeTests
             okVersion = "OK24"
         };
 
-        var registerResponse = await _client.PostAsJsonAsync($"{BackendUrl}/api/time-entries", registerRequest);
+        var postRequest = new HttpRequestMessage(HttpMethod.Post, $"{BackendUrl}/api/time-entries")
+        {
+            Content = JsonContent.Create(registerRequest)
+        };
+        WithAuth(postRequest);
+
+        var registerResponse = await _client.SendAsync(postRequest);
         Assert.Equal(HttpStatusCode.Created, registerResponse.StatusCode);
 
-        var getResponse = await _client.GetAsync($"{BackendUrl}/api/time-entries/SMOKE002");
+        var getRequest = new HttpRequestMessage(HttpMethod.Get, $"{BackendUrl}/api/time-entries/SMOKE002");
+        WithAuth(getRequest);
+
+        var getResponse = await _client.SendAsync(getRequest);
         Assert.Equal(HttpStatusCode.OK, getResponse.StatusCode);
 
         var entries = await getResponse.Content.ReadFromJsonAsync<JsonElement>();

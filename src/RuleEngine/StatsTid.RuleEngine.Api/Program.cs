@@ -51,24 +51,42 @@ app.MapPost("/api/rules/evaluate-flex", (EvaluateFlexRequest request, RuleRegist
         request.PreviousBalance);
 
     if (!result.Success)
-        return Results.BadRequest(result);
+    {
+        return Results.BadRequest(new FlexEvaluationResponse
+        {
+            RuleId = FlexBalanceRule.RuleId,
+            EmployeeId = result.EmployeeId,
+            Success = false,
+            LineItems = [],
+            ErrorMessage = "Flex balance evaluation failed",
+            PreviousBalance = result.PreviousBalance,
+            NewBalance = result.NewBalance,
+            Delta = result.Delta,
+            WorkedHours = result.WorkedHours,
+            AbsenceNormCredits = result.AbsenceNormCredits,
+            EffectiveNorm = result.NormHours,
+            ExcessForPayout = result.ExcessForPayout
+        });
+    }
 
     var payoutItem = FlexBalanceRule.GetPayoutLineItem(result, request.PeriodEnd);
-    var lineItems = payoutItem is not null ? new[] { payoutItem } : Array.Empty<CalculationLineItem>();
+    var lineItems = payoutItem is not null
+        ? new List<CalculationLineItem> { payoutItem }
+        : new List<CalculationLineItem>();
 
-    return Results.Ok(new
+    return Results.Ok(new FlexEvaluationResponse
     {
-        ruleId = FlexBalanceRule.RuleId,
-        result.EmployeeId,
-        result.Success,
-        lineItems,
-        result.PreviousBalance,
-        result.NewBalance,
-        result.Delta,
-        result.WorkedHours,
-        result.AbsenceNormCredits,
-        result.NormHours,
-        result.ExcessForPayout
+        RuleId = FlexBalanceRule.RuleId,
+        EmployeeId = result.EmployeeId,
+        Success = true,
+        LineItems = lineItems,
+        PreviousBalance = result.PreviousBalance,
+        NewBalance = result.NewBalance,
+        Delta = result.Delta,
+        WorkedHours = result.WorkedHours,
+        AbsenceNormCredits = result.AbsenceNormCredits,
+        EffectiveNorm = result.NormHours,
+        ExcessForPayout = result.ExcessForPayout
     });
 }).RequireAuthorization("Authenticated");
 

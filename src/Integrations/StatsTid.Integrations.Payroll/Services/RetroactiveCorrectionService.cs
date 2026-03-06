@@ -37,6 +37,7 @@ public sealed class RetroactiveCorrectionService
         string actorId,
         string? authorizationHeader = null,
         Guid? correlationId = null,
+        Guid? idempotencyToken = null,
         CancellationToken ct = default)
     {
         // 1. Re-run calculation for the period
@@ -75,7 +76,8 @@ public sealed class RetroactiveCorrectionService
                 CorrectedByActorId = actorId,
                 CorrectionLineCount = correctionLines.Count,
                 TotalDifferenceHours = correctionLines.Sum(l => Math.Abs(l.DifferenceHours)),
-                CorrelationId = correlationId
+                CorrelationId = correlationId,
+                IdempotencyToken = idempotencyToken
             };
 
             await _eventStore.AppendAsync(

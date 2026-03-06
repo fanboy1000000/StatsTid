@@ -13,4 +13,5 @@ public sealed class RetroactiveCorrectionRequested : DomainEventBase
     public required string CorrectedByActorId { get; init; }
     public required int CorrectionLineCount { get; init; }
     public required decimal TotalDifferenceHours { get; init; }
+    public Guid? IdempotencyToken { get; init; }
 }

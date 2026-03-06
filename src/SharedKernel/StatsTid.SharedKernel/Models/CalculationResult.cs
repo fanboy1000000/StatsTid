@@ -7,6 +7,13 @@ public sealed class CalculationResult
     public required bool Success { get; init; }
     public required List<CalculationLineItem> LineItems { get; init; }
     public string? ErrorMessage { get; init; }
+
+    // Norm period metadata (populated by NormCheckRule)
+    public int? NormPeriodWeeks { get; init; }
+    public decimal? NormHoursTotal { get; init; }
+    public decimal? ActualHoursTotal { get; init; }
+    public decimal? Deviation { get; init; }
+    public bool? NormFulfilled { get; init; }
 }
 
 public sealed class CalculationLineItem
