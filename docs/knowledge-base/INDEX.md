@@ -38,6 +38,7 @@
 | [DEP-001](dependencies/DEP-001-rule-engine-depends-on-sharedkernel-calendar.md) | Rule Engine depends on SharedKernel Calendar | approved | S2 | Rule Engine → SharedKernel | calendar, holidays, cross-domain, dependency |
 | [DEP-002](dependencies/DEP-002-payroll-depends-on-rule-engine-outputs.md) | Payroll depends on Rule Engine output types | approved | S2 | Payroll → Rule Engine | payroll, wage-types, cross-domain, dependency |
 | [DEP-003](dependencies/DEP-003-event-serializer-must-register-all-types.md) | EventSerializer must register all event types | approved | S1 | Infrastructure → Data Model | serialization, events, type-map, cross-domain, dependency |
+| [DEP-004](dependencies/DEP-004-endpoint-registry-ui-api-data-alignment.md) | Endpoint registry — UI / API / Data Model alignment | approved | S10 | Frontend → Backend → All | endpoint-registry, alignment, api, frontend, data-model, traceability |
 
 ## Priority Conflict Resolutions (RES)
 
@@ -64,6 +65,8 @@
 | agreement-config | PAT-003 |
 | architecture | ADR-006 |
 | actor-tracking | PAT-004 |
+| alignment | DEP-004 |
+| api | DEP-004 |
 | audit | ADR-007, PAT-004 |
 | authorization | ADR-007, ADR-009 |
 | c-sharp | PAT-001 |
@@ -74,14 +77,15 @@
 | css-modules | ADR-011 |
 | debugging | FAIL-001 |
 | dotnet8 | FAIL-001 |
-| cross-domain | DEP-001, DEP-002, DEP-003 |
+| cross-domain | DEP-001, DEP-002, DEP-003, DEP-004 |
 | delivery-guarantee | ADR-004 |
-| dependency | DEP-001, DEP-002, DEP-003 |
+| dependency | DEP-001, DEP-002, DEP-003, DEP-004 |
 | deserialization | PAT-006 |
 | design-system | ADR-011 |
 | determinism | ADR-002, ADR-003, ADR-010 |
 | docker | ADR-006 |
 | domain-events | PAT-004 |
+| endpoint-registry | DEP-004 |
 | endpoint-response | PAT-006 |
 | event-sourcing | ADR-001 |
 | frontend | ADR-011 |
@@ -120,7 +124,7 @@
 | shadcn | ADR-011 |
 | supplements | PAT-002, RES-001 |
 | system-text-json | ADR-005 |
-| traceability | PAT-005 |
+| traceability | PAT-005, DEP-004 |
 | type-map | ADR-005, DEP-003 |
 | value-objects | PAT-001 |
 | period | ADR-012 |
@@ -135,8 +139,8 @@
 | Domain | Entries |
 |--------|---------|
 | API Integration | ADR-004 |
-| Backend | ADR-012 |
-| Frontend | ADR-011, ADR-012 |
+| Backend | ADR-012, DEP-004 |
+| Frontend | ADR-011, ADR-012, DEP-004 |
 | Data Model | ADR-001, ADR-005, PAT-001, PAT-004, DEP-003 |
 | Infrastructure | ADR-001, ADR-004, ADR-005, ADR-006, ADR-007, ADR-008, ADR-009, ADR-010, ADR-012, DEP-003, FAIL-001 |
 | Payroll | DEP-002, PAT-005, PAT-006, ADR-010 |
