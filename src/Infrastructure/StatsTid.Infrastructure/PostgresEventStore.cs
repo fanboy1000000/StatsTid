@@ -34,7 +34,7 @@ public sealed class PostgresEventStore : IEventStore
             "SELECT COALESCE(MAX(stream_version), 0) FROM events WHERE stream_id = @streamId",
             conn, tx);
         versionCmd.Parameters.AddWithValue("streamId", streamId);
-        var currentVersion = (int)(long)(await versionCmd.ExecuteScalarAsync(ct))!;
+        var currentVersion = Convert.ToInt32(await versionCmd.ExecuteScalarAsync(ct));
 
         var nextVersion = currentVersion + 1;
         var data = EventSerializer.Serialize(@event);

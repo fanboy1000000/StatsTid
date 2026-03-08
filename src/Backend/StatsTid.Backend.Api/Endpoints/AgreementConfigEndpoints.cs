@@ -90,7 +90,7 @@ public static class AgreementConfigEndpoints
 
             // Audit
             await agreementConfigRepo.AppendAuditAsync(
-                configId, "CREATE", null, SerializeForAudit(request),
+                configId, "CREATED", null, SerializeForAudit(request),
                 actor.ActorId ?? "system", actor.ActorRole ?? "GLOBAL_ADMIN", ct);
 
             // Emit event
@@ -181,7 +181,7 @@ public static class AgreementConfigEndpoints
 
             // Audit
             await agreementConfigRepo.AppendAuditAsync(
-                newConfigId, "CLONE", null, $"{{\"sourceConfigId\":\"{configId}\"}}",
+                newConfigId, "CLONED", null, $"{{\"sourceConfigId\":\"{configId}\"}}",
                 actor.ActorId ?? "system", actor.ActorRole ?? "GLOBAL_ADMIN", ct);
 
             // Emit event
@@ -239,7 +239,7 @@ public static class AgreementConfigEndpoints
 
             // Audit
             await agreementConfigRepo.AppendAuditAsync(
-                configId, "UPDATE", SerializeForAudit(existing), SerializeForAudit(request),
+                configId, "UPDATED", SerializeForAudit(existing), SerializeForAudit(request),
                 actor.ActorId ?? "system", actor.ActorRole ?? "GLOBAL_ADMIN", ct);
 
             // Emit event
@@ -289,7 +289,7 @@ public static class AgreementConfigEndpoints
 
             // Audit
             await agreementConfigRepo.AppendAuditAsync(
-                configId, "PUBLISH", null, $"{{\"archivedConfigId\":\"{archivedId}\"}}",
+                configId, "PUBLISHED", null, $"{{\"archivedConfigId\":\"{archivedId}\"}}",
                 actor.ActorId ?? "system", actor.ActorRole ?? "GLOBAL_ADMIN", ct);
 
             // Emit event
@@ -339,7 +339,7 @@ public static class AgreementConfigEndpoints
 
             // Audit
             await agreementConfigRepo.AppendAuditAsync(
-                configId, "ARCHIVE", existing.Status.ToString(), "ARCHIVED",
+                configId, "ARCHIVED", existing.Status.ToString(), "ARCHIVED",
                 actor.ActorId ?? "system", actor.ActorRole ?? "GLOBAL_ADMIN", ct);
 
             // Emit event

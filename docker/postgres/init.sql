@@ -76,10 +76,10 @@ CREATE TABLE IF NOT EXISTS wage_type_mappings (
     wage_type       TEXT        NOT NULL,
     ok_version      TEXT        NOT NULL,
     agreement_code  TEXT        NOT NULL,
-    position        TEXT,
+    position        TEXT        NOT NULL DEFAULT '',
     description     TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (time_type, ok_version, agreement_code, COALESCE(position, ''))
+    PRIMARY KEY (time_type, ok_version, agreement_code, position)
 );
 
 -- Flex balance snapshots
