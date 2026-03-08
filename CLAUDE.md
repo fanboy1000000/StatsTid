@@ -51,6 +51,7 @@ When given an implementation task (sprint plan, feature request, bug fix spannin
 5b. **Review Knowledge Proposals**: Review agent outputs for `PROPOSED KNOWLEDGE ENTRY` sections. Approve valid proposals by creating entries in `docs/knowledge-base/` and updating `INDEX.md`.
 5c. **Record in Sprint Log**: After validating each task, record it in the current sprint's `docs/sprints/SPRINT-N.md` with validation criteria, files changed, and KB references.
 6. **Merge**: If agents ran in worktrees, the Orchestrator merges their branches and resolves any conflicts.
+7. **Commit & Push**: After a sprint is completed successfully (build passes, tests pass, sprint log updated), the Orchestrator commits all changes and pushes to the remote repository. This is mandatory — every completed sprint must be committed and pushed before moving on.
 
 ## Domain Agents
 
@@ -318,7 +319,7 @@ Each task in a sprint log includes:
 ## Orchestrator Workflow Integration
 - **Sprint start**: Copy TEMPLATE.md → SPRINT-N.md, fill metadata and goal
 - **During sprint**: Record each validated task as agents complete work
-- **Sprint end**: Verify all architectural constraints, run build/test, approve sprint, update INDEX.md
+- **Sprint end**: Verify all architectural constraints, run build/test, approve sprint, update INDEX.md, commit and push to remote
 - **Post-sprint**: Record retrospective and knowledge base entries produced
 
 ## Legal & Payroll Traceability
