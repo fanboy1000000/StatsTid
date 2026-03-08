@@ -9,8 +9,7 @@ interface NavItem {
 }
 
 const employeeItems: NavItem[] = [
-  { label: 'Skema', to: '/' },
-  { label: 'Mine perioder', to: '/approval/mine' },
+  { label: 'Min Tid', to: '/' },
 ]
 
 const leaderItems: NavItem[] = [

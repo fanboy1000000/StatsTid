@@ -28,6 +28,7 @@
 | Sprint 9 | Skema: Monthly Spreadsheet + Timer + Two-Step Approval | Skema monthly grid (replaces 3 pages), backend-persisted timer, two-step approval (employee → manager), project CRUD, 3 new DB tables, 4 new events, 25 BE + 8 FE tests, JWT claim fix | 275 |
 | Sprint 10 | Tech Debt Cleanup + Rule Engine Expansion | CentralAgreementConfigs dedup, idempotency guard, FlexEvaluationResponse DTO, call-in work, travel time, multi-week norm | 304 |
 | Sprint 11 | Retroactive Corrections + AC Position Overrides + Academic Norms | OK version split, correction SLS export, position overrides (Option C), academic norm model, NORM_DEVIATION, ADR-013 | 306 |
+| Sprint 12 | Database-Backed Agreement Configuration Management | DB-backed configs (ADR-014), DRAFT/ACTIVE/ARCHIVED lifecycle, GlobalAdmin UI, 8 config endpoints | 334 |
 
 ## Phase Roadmap
 
@@ -95,17 +96,25 @@ Depends on the connected payroll chain from Phase 1. These sprints tackle the mo
 
 Moves agreement configs from static code to database, enabling GlobalAdmin self-service management through UI. The rule engine remains pure — only the config source changes.
 
-- **Sprint 12** (planned): DB-backed agreement configs (ADR-014), agreement_configs table with Draft/Active/Archived lifecycle, seed migration from CentralAgreementConfigs, AgreementConfigRepository, ConfigResolutionService rewiring, GlobalAdmin API endpoints (CRUD + clone + publish + archive), agreement management frontend page (overview + editor + diff view), validation rules, comprehensive tests.
+- **Sprint 12** (complete): DB-backed agreement configs (ADR-014), agreement_configs table with Draft/Active/Archived lifecycle, seed migration from CentralAgreementConfigs, AgreementConfigRepository, ConfigResolutionService rewiring, GlobalAdmin API endpoints (CRUD + clone + publish + archive), agreement management frontend page (overview + editor + diff view), validation rules, comprehensive tests. See [docs/sprints/SPRINT-12.md](docs/sprints/SPRINT-12.md).
 
-### Phase 3d — Position Override + Wage Type Mapping UI (Sprint 13)
+### Phase 3d — Employee Experience: Unified "Min Tid" (Sprint 13)
+
+**Priority focus**: P9 (Usability), P7 (Security)
+
+**Re-prioritized** (Tier 1): Sprint 13 was projected for "Position Override + Wage Type Mapping UI". Re-prioritized to employee experience consolidation — balance overview + time registration + month approval on one page. Position Override + Wage Type Mapping UI shifts to Sprint 14.
+
+- **Sprint 13** (complete): Balance summary endpoint (flex, vacation, norm, overtime), BalanceSummary component with 4 responsive cards, SkemaPage integration, sidebar rename "Skema" → "Min Tid", "Mine perioder" removed from primary nav. See [docs/sprints/SPRINT-13.md](docs/sprints/SPRINT-13.md).
+
+### Phase 3e — Position Override + Wage Type Mapping UI (Sprint 14)
 
 **Priority focus**: P6 (Payroll integration), P7 (Security), P9 (Usability)
 
 Extends the DB-backed config pattern to position overrides and wage type mappings. Reuses the architecture established in Sprint 12.
 
-- **Sprint 13** (projected): Position override management UI (per agreement), wage type mapping admin page (separate from agreement editor), DB migration for both.
+- **Sprint 14** (projected): Position override management UI (per agreement), wage type mapping admin page (separate from agreement editor), DB migration for both.
 
-### Phase 4 — Production Hardening (Sprint 14+)
+### Phase 4 — Production Hardening (Sprint 15+)
 
 **Priority focus**: All priorities — cross-cutting production readiness
 
@@ -122,21 +131,21 @@ Only makes sense once functional completeness is achieved.
 
 Projected functional coverage by requirement area. Percentages are cumulative.
 
-| Requirement Area | S1–S3 | S4 | S5 (Phase 1) | S6 | S7 | S8 (Phase 2) | S9 (Phase 2b) | S10–S11 (Phase 3) | S12 (Phase 3c) | S13 (Phase 3d) | After Phase 4 |
-|------------------|-------|-----|--------------|-----|-----|---------------------|---------------|-------------------|-----------------|----------------|---------------|
-| A. Basic Time Registration | 80% | 80% | 85% | 85% | 85% | 95% | 98% | 98% | 98% | 98% | 100% |
-| B. Working Time Rules | 70% | 72% | 75% | 75% | 75% | 95% | 95% | 98% | 98% | 98% | 100% |
-| C. Time Types & Supplements | 60% | 60% | 70% | 70% | 70% | 95% | 95% | 97% | 97% | 97% | 100% |
-| D. Absence Types | 65% | 80% | 85% | 85% | 85% | 95% | 97% | 97% | 97% | 97% | 100% |
-| E. Organizational Structure | 0% | 0% | 0% | 70% | 85% | 90% | 92% | 95% | 95% | 95% | 100% |
-| F. Roles and Authorization | 0% | 0% | 0% | 50% | 85% | 90% | 90% | 92% | 95% | 95% | 100% |
-| G. Local Configuration | 0% | 0% | 0% | 10% | 75% | 80% | 85% | 90% | 95% | 98% | 100% |
-| H. Period Approval Workflow | 0% | 0% | 0% | 10% | 80% | 85% | 95% | 95% | 95% | 95% | 100% |
-| I. Agreement Config Mgmt | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 85% | 95% | 100% |
-| AC-Specific Requirements | 40% | 42% | 45% | 45% | 45% | 90% | 90% | 97% | 98% | 99% | 100% |
-| Payroll Integration | 50% | 80% | 88% | 88% | 90% | 95% | 95% | 98% | 98% | 99% | 100% |
-| External Integrations | 60% | 60% | 60% | 60% | 60% | 90% | 90% | 90% | 90% | 90% | 100% |
-| **Overall** | **~39%** | **~43%** | **~46%** | **~55%** | **~67%** | **~91%** | **~93%** | **~97%** | **~95→97%** | **~97→99%** | **100%** |
+| Requirement Area | S1–S3 | S4 | S5 (Phase 1) | S6 | S7 | S8 (Phase 2) | S9 (Phase 2b) | S10–S11 (Phase 3) | S12 (Phase 3c) | S13 (Phase 3d) | S14 (Phase 3e) | After Phase 4 |
+|------------------|-------|-----|--------------|-----|-----|---------------------|---------------|-------------------|-----------------|----------------|----------------|---------------|
+| A. Basic Time Registration | 80% | 80% | 85% | 85% | 85% | 95% | 98% | 98% | 98% | 99% | 99% | 100% |
+| B. Working Time Rules | 70% | 72% | 75% | 75% | 75% | 95% | 95% | 98% | 98% | 98% | 98% | 100% |
+| C. Time Types & Supplements | 60% | 60% | 70% | 70% | 70% | 95% | 95% | 97% | 97% | 97% | 97% | 100% |
+| D. Absence Types | 65% | 80% | 85% | 85% | 85% | 95% | 97% | 97% | 97% | 97% | 97% | 100% |
+| E. Organizational Structure | 0% | 0% | 0% | 70% | 85% | 90% | 92% | 95% | 95% | 95% | 95% | 100% |
+| F. Roles and Authorization | 0% | 0% | 0% | 50% | 85% | 90% | 90% | 92% | 95% | 95% | 95% | 100% |
+| G. Local Configuration | 0% | 0% | 0% | 10% | 75% | 80% | 85% | 90% | 95% | 95% | 98% | 100% |
+| H. Period Approval Workflow | 0% | 0% | 0% | 10% | 80% | 85% | 95% | 95% | 95% | 95% | 95% | 100% |
+| I. Agreement Config Mgmt | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 85% | 85% | 95% | 100% |
+| AC-Specific Requirements | 40% | 42% | 45% | 45% | 45% | 90% | 90% | 97% | 98% | 98% | 99% | 100% |
+| Payroll Integration | 50% | 80% | 88% | 88% | 90% | 95% | 95% | 98% | 98% | 98% | 99% | 100% |
+| External Integrations | 60% | 60% | 60% | 60% | 60% | 90% | 90% | 90% | 90% | 90% | 90% | 100% |
+| **Overall** | **~39%** | **~43%** | **~46%** | **~55%** | **~67%** | **~91%** | **~93%** | **~97%** | **~95→97%** | **~96→97%** | **~97→99%** | **100%** |
 
 ## Sprint 5 — Completed
 
@@ -211,6 +220,22 @@ Sprint 11 completed Phase 3b (Retroactive Corrections + AC Position Overrides + 
 **Reviewer findings addressed**: ConfigResolutionService missing 9 fields in merged config construction (BLOCKER — fixed).
 
 **Phase 3 complete**: Sprints 10-11 delivered all advanced rules, retroactive corrections, position overrides, and academic norms. Overall functional coverage: ~97%.
+
+## Sprint 12 — Completed
+
+Sprint 12 completed Phase 3c (Agreement Configuration Management). See [docs/sprints/SPRINT-12.md](docs/sprints/SPRINT-12.md) for full task log.
+
+**Key deliverables**: DB-backed agreement configs (ADR-014), agreement_configs + agreement_config_audit tables with DRAFT/ACTIVE/ARCHIVED lifecycle, AgreementConfigRepository with transactional publish, AgreementConfigSeeder (idempotent from CentralAgreementConfigs), ConfigResolutionService rewired to DB with static fallback, 8 GlobalAdmin CRUD+lifecycle endpoints, agreement overview + editor frontend pages with clone/publish/archive, comparison diff view, 28 new unit tests (334 total).
+
+**Phase 3c complete**: Sprint 12 delivered full agreement config management. Overall functional coverage: ~97%.
+
+## Sprint 13 — Completed
+
+Sprint 13 completed Phase 3d (Employee Experience Consolidation). See [docs/sprints/SPRINT-13.md](docs/sprints/SPRINT-13.md) for full task log.
+
+**Key deliverables**: Balance summary endpoint (flex, vacation, norm, overtime aggregation from events + config), BalanceSummary component with 4 responsive balance cards (Flex saldo, Ferie, Normtimer, Merarbejde/Overarbejde), SkemaPage integration, sidebar rename "Skema" → "Min Tid", 15 new backend test cases + 5 new frontend tests (387 total).
+
+**Phase 3d complete**: Sprint 13 delivers unified employee experience. Overall functional coverage: ~97%.
 
 ## Architecture Decisions
 

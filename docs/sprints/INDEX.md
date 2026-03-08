@@ -18,6 +18,7 @@
 | [Sprint 10](SPRINT-10.md) | Tech Debt Cleanup + Rule Engine Expansion | complete | 2026-03-06 → 2026-03-06 | 304 | yes |
 | [Sprint 11](SPRINT-11.md) | Retroactive Corrections + AC Position Overrides + Academic Norms | complete | 2026-03-08 → 2026-03-08 | 306 | yes |
 | [Sprint 12](SPRINT-12.md) | Database-Backed Agreement Configuration Management | complete | 2026-03-08 → 2026-03-08 | 334 | yes |
+| [Sprint 13](SPRINT-13.md) | Employee Experience: Unified "Min Tid" Page | complete | 2026-03-08 → 2026-03-08 | 387 | yes |
 
 ## Cumulative Task Summary
 
@@ -35,7 +36,8 @@
 | S10 | 10 | SharedKernel, Rule Engine, Infrastructure, Payroll Integration, PostgreSQL, Tests | PAT-003 (updated) |
 | S11 | 10 | SharedKernel, Rule Engine, Infrastructure, Payroll Integration, Backend API, PostgreSQL, Knowledge Base, Tests | ADR-013 |
 | S12 | 16 | SharedKernel, Infrastructure, Backend API, PostgreSQL, Frontend, Tests | ADR-014 |
-| **Total** | **115** | — | **26 entries** |
+| S13 | 5 | Backend API, Frontend, Tests | — |
+| **Total** | **120** | — | **26 entries** |
 
 ## Test Progression
 
@@ -53,32 +55,33 @@
 | S10 | 256 + 33 FE | 15 | 4 | 304 |
 | S11 | 258 + 33 FE | 15 | 4 | 306 |
 | S12 | 286 + 33 FE | 15 | 4 | 334 |
+| S13 | 296 + 38 FE | 15 | 4 | 387 |
 
 ## Architectural Constraint Coverage
 
 Shows which priorities were verified in each sprint.
 
-| Priority | Description | S1 | S2 | S3 | S4 | S5 | S6 | S7 | S8 | S9 | S10 | S11 | S12 |
-|----------|-------------|----|----|-----|-----|-----|-----|-----|-----|-----|------|------|------|
-| P1 | Architectural integrity | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| P2 | Deterministic rule engine | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | — | — | ✓ | ✓ | ✓ |
-| P3 | Event sourcing auditability | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ | ✓ | ✓ | ✓ |
-| P4 | OK version correctness | — | ✓ | ✓ | ✓ | ✓ | — | — | — | — | ✓ | ✓ | ✓ |
-| P5 | Integration isolation | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ | — | — | ✓ | ✓ | ✓ |
-| P6 | Payroll correctness | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ | — | — | ✓ | ✓ | ✓ |
-| P7 | Security and access control | — | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ | ✓ |
-| P8 | CI/CD enforcement | — | — | ✓ | — | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| P9 | Usability and UX | — | ✓ | ✓ | — | — | — | — | ✓ | ✓ | — | — | ✓ |
+| Priority | Description | S1 | S2 | S3 | S4 | S5 | S6 | S7 | S8 | S9 | S10 | S11 | S12 | S13 |
+|----------|-------------|----|----|-----|-----|-----|-----|-----|-----|-----|------|------|------|------|
+| P1 | Architectural integrity | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| P2 | Deterministic rule engine | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | — | — | ✓ | ✓ | ✓ | — |
+| P3 | Event sourcing auditability | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ | ✓ | ✓ | ✓ | — |
+| P4 | OK version correctness | — | ✓ | ✓ | ✓ | ✓ | — | — | — | — | ✓ | ✓ | ✓ | — |
+| P5 | Integration isolation | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ | — | — | ✓ | ✓ | ✓ | — |
+| P6 | Payroll correctness | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ | — | — | ✓ | ✓ | ✓ | — |
+| P7 | Security and access control | — | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ | ✓ | ✓ |
+| P8 | CI/CD enforcement | — | — | ✓ | — | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| P9 | Usability and UX | — | ✓ | ✓ | — | — | — | — | ✓ | ✓ | — | — | ✓ | ✓ |
 
 ## Legal & Payroll Verification Status
 
-| Check | S1 | S2 | S3 | S4 | S5 | S6 | S7 | S8 | S9 | S10 | S11 | S12 |
-|-------|----|----|-----|-----|-----|-----|-----|-----|-----|------|------|------|
-| Agreement rules match legal requirements | ✓ | ✓ | ✓ | ✓ | ✓ | N/A | N/A | N/A | N/A | ✓ | ✓ | ✓ |
-| Wage type mappings correct | ✓ | ✓ | ✓ | ✓ | ✓ | N/A | N/A | N/A | Partial | ✓ | ✓ | N/A |
-| Overtime/supplement determinism | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | N/A | N/A | ✓ | ✓ | ✓ |
-| Absence effects correct | — | ✓ | ✓ | ✓ | ✓ | N/A | N/A | N/A | N/A | ✓ | ✓ | N/A |
-| Retroactive recalculation stable | — | ✓ | ✓ | ✓ | ✓ | N/A | N/A | N/A | N/A | ✓ | ✓ | N/A |
+| Check | S1 | S2 | S3 | S4 | S5 | S6 | S7 | S8 | S9 | S10 | S11 | S12 | S13 |
+|-------|----|----|-----|-----|-----|-----|-----|-----|-----|------|------|------|------|
+| Agreement rules match legal requirements | ✓ | ✓ | ✓ | ✓ | ✓ | N/A | N/A | N/A | N/A | ✓ | ✓ | ✓ | N/A |
+| Wage type mappings correct | ✓ | ✓ | ✓ | ✓ | ✓ | N/A | N/A | N/A | Partial | ✓ | ✓ | N/A | N/A |
+| Overtime/supplement determinism | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | N/A | N/A | ✓ | ✓ | ✓ | N/A |
+| Absence effects correct | — | ✓ | ✓ | ✓ | ✓ | N/A | N/A | N/A | N/A | ✓ | ✓ | N/A | N/A |
+| Retroactive recalculation stable | — | ✓ | ✓ | ✓ | ✓ | N/A | N/A | N/A | N/A | ✓ | ✓ | N/A | N/A |
 
 ## How to Use This Log
 

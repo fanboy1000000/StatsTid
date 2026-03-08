@@ -65,5 +65,6 @@ app.MapSkemaEndpoints();
 app.MapTimerEndpoints();
 app.MapProjectEndpoints();
 app.MapAgreementConfigEndpoints();
+app.MapBalanceEndpoints();
 
 app.Run();

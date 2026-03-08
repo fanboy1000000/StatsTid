@@ -4,6 +4,8 @@ import { useSkema } from '../hooks/useSkema'
 import { useTimer } from '../hooks/useTimer'
 import { SkemaGrid } from '../components/SkemaGrid'
 import { TimerControl } from '../components/TimerControl'
+import { BalanceSummary } from '../components/BalanceSummary'
+import { useBalanceSummary } from '../hooks/useBalanceSummary'
 import { Button } from '../components/ui/Button'
 import { Badge } from '../components/ui/Badge'
 import { Alert } from '../components/ui/Alert'
@@ -41,6 +43,7 @@ export function SkemaPage() {
 
   const { data, loading, error, refetch, saveMonth, employeeApprove } = useSkema(employeeId, year, month)
   const { session, loading: timerLoading, checkIn, checkOut, elapsed } = useTimer(employeeId)
+  const { data: balanceData, loading: balanceLoading } = useBalanceSummary(employeeId, year, month)
 
   // Local cell values for immediate editing
   const [localCells, setLocalCells] = useState<Map<string, number>>(new Map())
@@ -238,6 +241,9 @@ export function SkemaPage() {
           </Button>
         </div>
       </div>
+
+      {/* Balance summary */}
+      <BalanceSummary data={balanceData} loading={balanceLoading} />
 
       {/* Timer control (hidden when read-only) */}
       {!isReadOnly && (

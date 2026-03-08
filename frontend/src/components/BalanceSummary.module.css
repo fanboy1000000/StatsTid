@@ -1,0 +1,96 @@
+.container {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+@media (max-width: 768px) {
+  .container {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  .container {
+    grid-template-columns: 1fr;
+  }
+}
+
+.card {
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--border-radius);
+  padding: var(--space-4);
+  background: var(--color-white);
+}
+
+.label {
+  font-size: 0.75rem;
+  font-weight: var(--font-weight-medium);
+  color: var(--color-gray-500);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 0 0 var(--space-1) 0;
+}
+
+.value {
+  font-size: 1.5rem;
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text);
+  margin: 0;
+  line-height: 1.2;
+}
+
+.delta {
+  font-size: 0.8125rem;
+  font-weight: var(--font-weight-medium);
+  margin-top: var(--space-1);
+}
+
+.deltaPositive {
+  color: var(--color-success);
+}
+
+.deltaNegative {
+  color: var(--color-error);
+}
+
+.deltaNeutral {
+  color: var(--color-gray-500);
+}
+
+/* Skeleton loading */
+.skeleton {
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--border-radius);
+  padding: var(--space-4);
+  background: var(--color-white);
+}
+
+.skeletonLine {
+  background: var(--color-gray-100);
+  border-radius: 2px;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.skeletonLabel {
+  composes: skeletonLine;
+  height: 12px;
+  width: 60%;
+  margin-bottom: var(--space-2);
+}
+
+.skeletonValue {
+  composes: skeletonLine;
+  height: 24px;
+  width: 80%;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
