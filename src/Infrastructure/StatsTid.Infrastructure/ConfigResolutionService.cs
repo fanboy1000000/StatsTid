@@ -14,6 +14,7 @@ public sealed class ConfigResolutionService
 {
     private readonly AgreementConfigRepository _agreementConfigRepo;
     private readonly LocalConfigurationRepository _localConfigRepo;
+    private readonly PositionOverrideRepository _positionOverrideRepo;
     private readonly ILogger<ConfigResolutionService> _logger;
 
     /// <summary>
@@ -46,10 +47,12 @@ public sealed class ConfigResolutionService
     public ConfigResolutionService(
         AgreementConfigRepository agreementConfigRepo,
         LocalConfigurationRepository localConfigRepo,
+        PositionOverrideRepository positionOverrideRepo,
         ILogger<ConfigResolutionService> logger)
     {
         _agreementConfigRepo = agreementConfigRepo;
         _localConfigRepo = localConfigRepo;
+        _positionOverrideRepo = positionOverrideRepo;
         _logger = logger;
     }
 
@@ -95,7 +98,28 @@ public sealed class ConfigResolutionService
         // Apply position override on top of central config (before local overrides)
         if (position is not null)
         {
-            var positionOverride = PositionOverrideConfigs.TryGetOverride(agreementCode, okVersion, position);
+            PositionOverrideConfigs.PositionConfigOverride? positionOverride = null;
+            try
+            {
+                var dbOverride = await _positionOverrideRepo.GetActiveAsync(agreementCode, okVersion, position, ct);
+                if (dbOverride is not null)
+                {
+                    positionOverride = dbOverride.ToPositionConfigOverride();
+                }
+                else
+                {
+                    // Fallback to static config if no DB override found
+                    positionOverride = PositionOverrideConfigs.TryGetOverride(agreementCode, okVersion, position);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Failed to load DB position override for {AgreementCode}/{OkVersion}/{Position} — falling back to static",
+                    agreementCode, okVersion, position);
+                positionOverride = PositionOverrideConfigs.TryGetOverride(agreementCode, okVersion, position);
+            }
+
             if (positionOverride is not null)
             {
                 centralConfig = PositionOverrideConfigs.ApplyOverride(centralConfig, positionOverride);

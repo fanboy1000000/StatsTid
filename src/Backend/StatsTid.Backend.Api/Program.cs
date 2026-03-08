@@ -30,6 +30,8 @@ builder.Services.AddSingleton<ProjectRepository>();
 builder.Services.AddSingleton<TimerSessionRepository>();
 builder.Services.AddSingleton<AbsenceTypeVisibilityRepository>();
 builder.Services.AddSingleton<AgreementConfigRepository>();
+builder.Services.AddSingleton<PositionOverrideRepository>();
+builder.Services.AddSingleton<WageTypeMappingRepository>();
 
 // ── Services ──
 builder.Services.AddSingleton<ConfigResolutionService>();
@@ -65,6 +67,8 @@ app.MapSkemaEndpoints();
 app.MapTimerEndpoints();
 app.MapProjectEndpoints();
 app.MapAgreementConfigEndpoints();
+app.MapPositionOverrideEndpoints();
+app.MapWageTypeMappingEndpoints();
 app.MapBalanceEndpoints();
 
 app.Run();

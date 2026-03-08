@@ -45,6 +45,14 @@ public static class EventSerializer
         ["AgreementConfigPublished"] = typeof(AgreementConfigPublished),
         ["AgreementConfigArchived"] = typeof(AgreementConfigArchived),
         ["AgreementConfigCloned"] = typeof(AgreementConfigCloned),
+        // Sprint 14: Position override and wage type mapping events
+        ["PositionOverrideCreated"] = typeof(PositionOverrideCreated),
+        ["PositionOverrideUpdated"] = typeof(PositionOverrideUpdated),
+        ["PositionOverrideActivated"] = typeof(PositionOverrideActivated),
+        ["PositionOverrideDeactivated"] = typeof(PositionOverrideDeactivated),
+        ["WageTypeMappingCreated"] = typeof(WageTypeMappingCreated),
+        ["WageTypeMappingUpdated"] = typeof(WageTypeMappingUpdated),
+        ["WageTypeMappingDeleted"] = typeof(WageTypeMappingDeleted),
     };
 
     public static string Serialize(IDomainEvent @event)

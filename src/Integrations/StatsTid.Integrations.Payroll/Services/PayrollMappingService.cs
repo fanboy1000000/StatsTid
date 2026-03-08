@@ -75,8 +75,7 @@ public sealed class PayrollMappingService
                 WageType = reader.GetString(1),
                 OkVersion = reader.GetString(2),
                 AgreementCode = reader.GetString(3),
-                // Position is at ordinal 4 — read it but don't expose on model (SharedKernel owns WageTypeMapping)
-                // Description is at ordinal 5
+                Position = reader.IsDBNull(4) ? "" : reader.GetString(4),
                 Description = reader.IsDBNull(5) ? null : reader.GetString(5)
             };
         }

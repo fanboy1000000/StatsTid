@@ -78,8 +78,9 @@ Does not affect the deterministic core. Focuses on organizational hierarchy, loc
 - Phase 2b (Skema): Sprint 9 ← new
 - Phase 3 (Advanced Rules): Sprints 10–11 (was 9–10)
 - Phase 3c (Agreement Config Management): Sprint 12 ← new (re-prioritized from Phase 4)
-- Phase 3d (Position Override + Wage Type Mapping UI): Sprint 13 ← new
-- Phase 4 (Production): Sprint 14+ (was 12+, then 11+)
+- Phase 3d (Employee Experience): Sprint 13
+- Phase 3e (Position Override + Wage Type Mapping UI): Sprint 14
+- Phase 4 (Production): Sprint 15+ (was 14+, then 12+, then 11+)
 
 ### Phase 3 — Advanced Rules + Retroactive Corrections (Sprints 10–11)
 
@@ -112,7 +113,7 @@ Moves agreement configs from static code to database, enabling GlobalAdmin self-
 
 Extends the DB-backed config pattern to position overrides and wage type mappings. Reuses the architecture established in Sprint 12.
 
-- **Sprint 14** (projected): Position override management UI (per agreement), wage type mapping admin page (separate from agreement editor), DB migration for both.
+- **Sprint 14** (complete): 3 new DB tables (position_override_configs, audit tables), PositionOverrideConfigEntity + 4 domain events, WageTypeMapping Position property + 3 domain events, PositionOverrideRepository + WageTypeMappingRepository, ConfigResolutionService DB-first position override lookup with static fallback, 12 GlobalAdmin CRUD endpoints (7 position override + 5 wage type mapping), 2 admin pages (Positionstilpasninger + Lønartstilknytninger), 22 new tests (406 total). See [docs/sprints/SPRINT-14.md](docs/sprints/SPRINT-14.md).
 
 ### Phase 4 — Production Hardening (Sprint 15+)
 
@@ -236,6 +237,14 @@ Sprint 13 completed Phase 3d (Employee Experience Consolidation). See [docs/spri
 **Key deliverables**: Balance summary endpoint (flex, vacation, norm, overtime aggregation from events + config), BalanceSummary component with 4 responsive balance cards (Flex saldo, Ferie, Normtimer, Merarbejde/Overarbejde), SkemaPage integration, sidebar rename "Skema" → "Min Tid", 15 new backend test cases + 5 new frontend tests (387 total).
 
 **Phase 3d complete**: Sprint 13 delivers unified employee experience. Overall functional coverage: ~97%.
+
+## Sprint 14 — Completed
+
+Sprint 14 completed Phase 3e (Position Override + Wage Type Mapping UI). See [docs/sprints/SPRINT-14.md](docs/sprints/SPRINT-14.md) for full task log.
+
+**Key deliverables**: DB-backed position overrides (migrated from static PositionOverrideConfigs), ConfigResolutionService rewired with DB-first lookup + static fallback (Reviewer confirmed P1 compliance), WageTypeMapping CRUD with Position support, 12 GlobalAdmin API endpoints with audit trails + domain events, 2 admin pages (Positionstilpasninger, Lønartstilknytninger), PayrollMappingService now reads Position, 22 new tests (406 total).
+
+**Phase 3e complete**: Sprint 14 delivers full admin management for position overrides and wage type mappings. Overall functional coverage: ~98%.
 
 ## Architecture Decisions
 

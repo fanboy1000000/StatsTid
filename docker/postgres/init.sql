@@ -893,3 +893,61 @@ INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code
     ('NORM_DEVIATION', 'SLS_0150', 'OK26', 'AC_RESEARCH', 'Norm deviation (merarbejde from norm surplus)'),
     ('NORM_DEVIATION', 'SLS_0150', 'OK26', 'AC_TEACHING', 'Norm deviation (merarbejde from norm surplus)')
 ON CONFLICT DO NOTHING;
+
+-- ============================================================
+-- SPRINT 14: Position Override Configs + Audit Tables
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS position_override_configs (
+    override_id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    agreement_code      TEXT        NOT NULL,
+    ok_version          TEXT        NOT NULL,
+    position_code       TEXT        NOT NULL REFERENCES positions(position_code),
+    status              TEXT        NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'INACTIVE')),
+    max_flex_balance    DECIMAL,
+    flex_carryover_max  DECIMAL,
+    norm_period_weeks   INT,
+    weekly_norm_hours   DECIMAL,
+    created_by          TEXT        NOT NULL DEFAULT 'SYSTEM_SEED',
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    description         TEXT
+);
+
+-- Only one ACTIVE override per (agreement_code, ok_version, position_code)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_position_override_active_unique
+    ON position_override_configs (agreement_code, ok_version, position_code)
+    WHERE status = 'ACTIVE';
+
+CREATE TABLE IF NOT EXISTS position_override_config_audit (
+    audit_id        BIGSERIAL   PRIMARY KEY,
+    override_id     UUID        NOT NULL,
+    action          TEXT        NOT NULL CHECK (action IN ('CREATED', 'UPDATED', 'ACTIVATED', 'DEACTIVATED')),
+    previous_data   JSONB,
+    new_data        JSONB,
+    actor_id        TEXT        NOT NULL,
+    actor_role      TEXT        NOT NULL,
+    timestamp       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS wage_type_mapping_audit (
+    audit_id        BIGSERIAL   PRIMARY KEY,
+    time_type       TEXT        NOT NULL,
+    ok_version      TEXT        NOT NULL,
+    agreement_code  TEXT        NOT NULL,
+    position        TEXT        NOT NULL DEFAULT '',
+    action          TEXT        NOT NULL CHECK (action IN ('CREATED', 'UPDATED', 'DELETED')),
+    previous_data   JSONB,
+    new_data        JSONB,
+    actor_id        TEXT        NOT NULL,
+    actor_role      TEXT        NOT NULL,
+    timestamp       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Seed position overrides from PositionOverrideConfigs.cs (4 overrides)
+INSERT INTO position_override_configs (agreement_code, ok_version, position_code, status, max_flex_balance, norm_period_weeks, created_by, description) VALUES
+    ('AC', 'OK24', 'DEPARTMENT_HEAD', 'ACTIVE', 200.0, 4, 'SYSTEM_SEED', 'Kontorchef: higher flex cap, 4-week norm'),
+    ('AC', 'OK26', 'DEPARTMENT_HEAD', 'ACTIVE', 200.0, 4, 'SYSTEM_SEED', 'Kontorchef: higher flex cap, 4-week norm'),
+    ('AC', 'OK24', 'RESEARCHER', 'ACTIVE', NULL, 4, 'SYSTEM_SEED', 'Forsker: 4-week norm period'),
+    ('AC', 'OK26', 'RESEARCHER', 'ACTIVE', NULL, 4, 'SYSTEM_SEED', 'Forsker: 4-week norm period')
+ON CONFLICT DO NOTHING;
