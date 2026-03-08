@@ -38,7 +38,7 @@ app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "payr
 // The high-level /api/payroll/calculate-and-export endpoint enforces the approval guard.
 app.MapPost("/api/payroll/export", async (PayrollExportRequest request, PayrollMappingService mapping, PayrollExportService export, CancellationToken ct) =>
 {
-    var lines = await mapping.MapCalculationResultAsync(request.CalculationResult, request.Profile, ct);
+    var lines = await mapping.MapCalculationResultAsync(request.CalculationResult, request.Profile, position: null, ct);
 
     if (lines.Count == 0)
         return Results.BadRequest(new { success = false, error = "No mappable line items" });
@@ -53,7 +53,7 @@ app.MapPost("/api/payroll/export-period", async (PayrollPeriodExportRequest requ
 
     foreach (var calcResult in request.CalculationResults)
     {
-        var lines = await mapping.MapCalculationResultAsync(calcResult, request.Profile, ct);
+        var lines = await mapping.MapCalculationResultAsync(calcResult, request.Profile, position: null, ct);
         allLines.AddRange(lines);
     }
 
@@ -180,6 +180,8 @@ app.MapPost("/api/payroll/recalculate", async (
         authHeader,
         correlationId,
         idempotencyToken,
+        request.OkTransitionDate,
+        request.PreviousOkVersion,
         ct);
 
     if (!result.Success)
@@ -205,6 +207,28 @@ app.MapPost("/api/payroll/recalculate", async (
     }
 
     return Results.Ok(result);
+}).RequireAuthorization("Authenticated");
+
+// Correction export endpoint: formats correction lines into SLS correction format.
+// Pure formatting — no side effects, no DB writes. Used after retroactive recalculation
+// to produce the delta export file for the payroll system.
+app.MapPost("/api/payroll/export-corrections", (CorrectionExportRequest request) =>
+{
+    if (request.CorrectionLines.Count == 0)
+        return Results.BadRequest(new { success = false, error = "No correction lines to export" });
+
+    var exportId = request.ExportId ?? Guid.NewGuid().ToString();
+    var timestamp = DateTime.UtcNow;
+    var formatted = SlsExportFormatter.FormatCorrections(request.CorrectionLines, exportId, timestamp);
+
+    return Results.Ok(new
+    {
+        success = true,
+        exportId,
+        timestamp,
+        recordCount = request.CorrectionLines.Count,
+        slsContent = formatted
+    });
 }).RequireAuthorization("Authenticated");
 
 app.Run();
@@ -242,4 +266,23 @@ public sealed class RecalculateRequest
     public required List<PayrollExportLine> PreviousExportLines { get; init; }
     public required string Reason { get; init; }
     public Guid? IdempotencyToken { get; init; }
+
+    /// <summary>
+    /// When an OK version transition occurs mid-period, this is the date on which
+    /// the new OK version takes effect. Entries before this date use PreviousOkVersion;
+    /// entries on or after use Profile.OkVersion. Null means no version split.
+    /// </summary>
+    public DateOnly? OkTransitionDate { get; init; }
+
+    /// <summary>
+    /// The old OK version that applied before OkTransitionDate.
+    /// Required when OkTransitionDate is set; ignored otherwise.
+    /// </summary>
+    public string? PreviousOkVersion { get; init; }
+}
+
+public sealed class CorrectionExportRequest
+{
+    public required List<CorrectionExportLine> CorrectionLines { get; init; }
+    public string? ExportId { get; init; }
 }

@@ -39,6 +39,12 @@ public static class EventSerializer
         ["PeriodReopened"] = typeof(PeriodReopened),
         ["TimerCheckedIn"] = typeof(TimerCheckedIn),
         ["TimerCheckedOut"] = typeof(TimerCheckedOut),
+        // Sprint 12: Agreement config management events
+        ["AgreementConfigCreated"] = typeof(AgreementConfigCreated),
+        ["AgreementConfigUpdated"] = typeof(AgreementConfigUpdated),
+        ["AgreementConfigPublished"] = typeof(AgreementConfigPublished),
+        ["AgreementConfigArchived"] = typeof(AgreementConfigArchived),
+        ["AgreementConfigCloned"] = typeof(AgreementConfigCloned),
     };
 
     public static string Serialize(IDomainEvent @event)

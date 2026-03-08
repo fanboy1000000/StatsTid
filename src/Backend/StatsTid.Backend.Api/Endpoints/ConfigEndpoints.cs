@@ -15,13 +15,6 @@ public static class ConfigEndpoints
         "WORKING_TIME", "FLEX_RULES", "ORG_STRUCTURE", "LOCAL_AGREEMENT", "OPERATIONAL"
     };
 
-    // ── Known agreement/version pairs for constraint endpoint ──
-    private static readonly (string AgreementCode, string OkVersion)[] KnownAgreementVersionPairs =
-    {
-        ("AC", "OK24"), ("HK", "OK24"), ("PROSA", "OK24"),
-        ("AC", "OK26"), ("HK", "OK26"), ("PROSA", "OK26"),
-    };
-
     public static WebApplication MapConfigEndpoints(this WebApplication app)
     {
         // ═══════════════════════════════════════════
@@ -29,33 +22,29 @@ public static class ConfigEndpoints
         // to prevent "/api/config/constraints" from matching {orgId}
         // ═══════════════════════════════════════════
 
-        // 5. GET /api/config/constraints — Central constraint reference
-        app.MapGet("/api/config/constraints", () =>
+        // 5. GET /api/config/constraints — Central constraint reference (ADR-014: DB-backed)
+        app.MapGet("/api/config/constraints", async (
+            AgreementConfigRepository agreementConfigRepo,
+            CancellationToken ct) =>
         {
-            var constraints = new List<object>();
+            var activeConfigs = await agreementConfigRepo.GetByStatusAsync("ACTIVE", ct);
 
-            foreach (var (agreementCode, okVersion) in KnownAgreementVersionPairs)
+            var constraints = activeConfigs.Select(entity => new
             {
-                var central = ConfigResolutionService.GetCentralConfig(agreementCode, okVersion);
-                if (central is null) continue;
-
-                constraints.Add(new
-                {
-                    agreementCode = central.AgreementCode,
-                    okVersion = central.OkVersion,
-                    weeklyNormHours = central.WeeklyNormHours,
-                    maxFlexBalance = central.MaxFlexBalance,
-                    flexCarryoverMax = central.FlexCarryoverMax,
-                    hasOvertime = central.HasOvertime,
-                    hasMerarbejde = central.HasMerarbejde,
-                    eveningSupplementEnabled = central.EveningSupplementEnabled,
-                    nightSupplementEnabled = central.NightSupplementEnabled,
-                    weekendSupplementEnabled = central.WeekendSupplementEnabled,
-                    holidaySupplementEnabled = central.HolidaySupplementEnabled,
-                    onCallDutyEnabled = central.OnCallDutyEnabled,
-                    onCallDutyRate = central.OnCallDutyRate,
-                });
-            }
+                agreementCode = entity.AgreementCode,
+                okVersion = entity.OkVersion,
+                weeklyNormHours = entity.WeeklyNormHours,
+                maxFlexBalance = entity.MaxFlexBalance,
+                flexCarryoverMax = entity.FlexCarryoverMax,
+                hasOvertime = entity.HasOvertime,
+                hasMerarbejde = entity.HasMerarbejde,
+                eveningSupplementEnabled = entity.EveningSupplementEnabled,
+                nightSupplementEnabled = entity.NightSupplementEnabled,
+                weekendSupplementEnabled = entity.WeekendSupplementEnabled,
+                holidaySupplementEnabled = entity.HolidaySupplementEnabled,
+                onCallDutyEnabled = entity.OnCallDutyEnabled,
+                onCallDutyRate = entity.OnCallDutyRate,
+            }).ToList();
 
             return Results.Ok(constraints);
         }).RequireAuthorization("EmployeeOrAbove");
@@ -86,7 +75,7 @@ public static class ConfigEndpoints
                 return Results.NotFound(new { error = $"Organization '{orgId}' not found" });
 
             // Resolve merged config (central + local overrides)
-            var mergedConfig = await configService.ResolveAsync(orgId, org.AgreementCode, org.OkVersion, ct);
+            var mergedConfig = await configService.ResolveAsync(orgId, org.AgreementCode, org.OkVersion, ct: ct);
 
             return Results.Ok(new
             {
@@ -164,8 +153,8 @@ public static class ConfigEndpoints
             if (!ValidConfigAreas.Contains(request.ConfigArea))
                 return Results.BadRequest(new { error = $"Invalid configArea. Must be one of: {string.Join(", ", ValidConfigAreas)}" });
 
-            // Resolve the central config for validation
-            var centralConfig = ConfigResolutionService.GetCentralConfig(request.AgreementCode, request.OkVersion);
+            // Resolve the central config for validation (ADR-014: DB-backed)
+            var centralConfig = await configService.GetActiveConfigAsync(request.AgreementCode, request.OkVersion, ct);
             if (centralConfig is null)
                 return Results.BadRequest(new { error = $"No central configuration found for {request.AgreementCode}/{request.OkVersion}" });
 

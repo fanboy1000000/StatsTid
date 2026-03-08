@@ -17,7 +17,7 @@ public class Sprint7ConfigTests
     /// so we safely pass null! for the repo and NullLogger for the logger.
     /// </summary>
     private static ConfigResolutionService CreateSut()
-        => new(null!, NullLogger<ConfigResolutionService>.Instance);
+        => new(null!, null!, NullLogger<ConfigResolutionService>.Instance);
 
     // ---------------------------------------------------------------
     // 1. GetCentralConfig static method tests

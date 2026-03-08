@@ -8,6 +8,10 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// Service that re-runs PeriodCalculationService for a past period and produces
 /// correction lines by diffing against a previous export. Supports retroactive
 /// recalculation with full traceability and event sourcing.
+///
+/// When an OK version transition occurs mid-period (e.g., OK24 → OK26 on Jan 28),
+/// the service splits entries by the transition date and recalculates each segment
+/// under its respective OK version config (ADR-003: entry-date resolution).
 /// </summary>
 public sealed class RetroactiveCorrectionService
 {
@@ -38,29 +42,74 @@ public sealed class RetroactiveCorrectionService
         string? authorizationHeader = null,
         Guid? correlationId = null,
         Guid? idempotencyToken = null,
+        DateOnly? okTransitionDate = null,
+        string? previousOkVersion = null,
         CancellationToken ct = default)
     {
-        // 1. Re-run calculation for the period
-        var newResult = await _calculationService.CalculateAsync(
-            profile, entries, absences, periodStart, periodEnd,
-            previousFlexBalance, authorizationHeader, correlationId, ct);
+        IReadOnlyList<PayrollExportLine> allNewExportLines;
+        IReadOnlyList<CalculationResult> allRuleResults;
+        decimal? flexDelta = null;
 
-        if (!newResult.Success)
+        if (okTransitionDate.HasValue && previousOkVersion is not null)
         {
-            return new RetroactiveCorrectionResult
+            // ---------------------------------------------------------------
+            // OK version split: recalculate two segments
+            // ---------------------------------------------------------------
+            var splitResult = await RecalculateWithVersionSplitAsync(
+                profile, entries, absences, periodStart, periodEnd,
+                previousFlexBalance, okTransitionDate.Value, previousOkVersion,
+                authorizationHeader, correlationId, ct);
+
+            if (!splitResult.Success)
             {
-                EmployeeId = profile.EmployeeId,
-                PeriodStart = periodStart,
-                PeriodEnd = periodEnd,
-                CorrectionLines = [],
-                Success = false,
-                ErrorMessage = $"Recalculation failed: {newResult.ErrorMessage}"
-            };
+                return new RetroactiveCorrectionResult
+                {
+                    EmployeeId = profile.EmployeeId,
+                    PeriodStart = periodStart,
+                    PeriodEnd = periodEnd,
+                    CorrectionLines = [],
+                    Success = false,
+                    ErrorMessage = splitResult.ErrorMessage
+                };
+            }
+
+            allNewExportLines = splitResult.ExportLines;
+            allRuleResults = splitResult.RuleResults;
+            flexDelta = splitResult.FlexDelta;
+        }
+        else
+        {
+            // ---------------------------------------------------------------
+            // Single version: existing behavior
+            // ---------------------------------------------------------------
+            var newResult = await _calculationService.CalculateAsync(
+                profile, entries, absences, periodStart, periodEnd,
+                previousFlexBalance, authorizationHeader, correlationId, ct);
+
+            if (!newResult.Success)
+            {
+                return new RetroactiveCorrectionResult
+                {
+                    EmployeeId = profile.EmployeeId,
+                    PeriodStart = periodStart,
+                    PeriodEnd = periodEnd,
+                    CorrectionLines = [],
+                    Success = false,
+                    ErrorMessage = $"Recalculation failed: {newResult.ErrorMessage}"
+                };
+            }
+
+            allNewExportLines = newResult.ExportLines;
+            allRuleResults = newResult.RuleResults;
+
+            // Extract flex delta from single-version calculation
+            flexDelta = ExtractFlexDelta(newResult.RuleResults);
         }
 
         // 2. Diff new export lines against previous
         var correctionLines = ProduceCorrectionLines(
-            profile, previousExportLines, newResult.ExportLines, periodStart, periodEnd);
+            profile, previousExportLines, allNewExportLines, periodStart, periodEnd,
+            flexDelta, okTransitionDate, previousOkVersion);
 
         // 3. Emit RetroactiveCorrectionRequested event (non-fatal if fails)
         try
@@ -77,7 +126,8 @@ public sealed class RetroactiveCorrectionService
                 CorrectionLineCount = correctionLines.Count,
                 TotalDifferenceHours = correctionLines.Sum(l => Math.Abs(l.DifferenceHours)),
                 CorrelationId = correlationId,
-                IdempotencyToken = idempotencyToken
+                IdempotencyToken = idempotencyToken,
+                PreviousOkVersion = previousOkVersion
             };
 
             await _eventStore.AppendAsync(
@@ -90,8 +140,9 @@ public sealed class RetroactiveCorrectionService
         }
 
         _logger.LogInformation(
-            "Retroactive correction for {EmployeeId} period {PeriodStart}-{PeriodEnd}: {LineCount} correction lines",
-            profile.EmployeeId, periodStart, periodEnd, correctionLines.Count);
+            "Retroactive correction for {EmployeeId} period {PeriodStart}-{PeriodEnd}: {LineCount} correction lines{SplitInfo}",
+            profile.EmployeeId, periodStart, periodEnd, correctionLines.Count,
+            okTransitionDate.HasValue ? $" (split at {okTransitionDate.Value:yyyy-MM-dd}, {previousOkVersion} → {profile.OkVersion})" : "");
 
         return new RetroactiveCorrectionResult
         {
@@ -103,12 +154,128 @@ public sealed class RetroactiveCorrectionService
         };
     }
 
+    /// <summary>
+    /// Recalculates a period split by OK version transition date.
+    /// Segment 1: periodStart to (transitionDate - 1 day) under previousOkVersion.
+    /// Segment 2: transitionDate to periodEnd under profile.OkVersion.
+    /// </summary>
+    private async Task<VersionSplitResult> RecalculateWithVersionSplitAsync(
+        EmploymentProfile profile,
+        IReadOnlyList<TimeEntry> entries,
+        IReadOnlyList<AbsenceEntry> absences,
+        DateOnly periodStart,
+        DateOnly periodEnd,
+        decimal previousFlexBalance,
+        DateOnly transitionDate,
+        string previousOkVersion,
+        string? authorizationHeader,
+        Guid? correlationId,
+        CancellationToken ct)
+    {
+        // Split entries by transition date (ADR-003: entry-date resolution)
+        var entriesBefore = entries.Where(e => e.Date < transitionDate).ToList();
+        var entriesOnOrAfter = entries.Where(e => e.Date >= transitionDate).ToList();
+        var absencesBefore = absences.Where(a => a.Date < transitionDate).ToList();
+        var absencesOnOrAfter = absences.Where(a => a.Date >= transitionDate).ToList();
+
+        var segmentEnd1 = transitionDate.AddDays(-1);
+
+        // Create profile for old OK version segment
+        var oldVersionProfile = new EmploymentProfile
+        {
+            EmployeeId = profile.EmployeeId,
+            AgreementCode = profile.AgreementCode,
+            OkVersion = previousOkVersion,
+            WeeklyNormHours = profile.WeeklyNormHours,
+            EmploymentCategory = profile.EmploymentCategory,
+            IsPartTime = profile.IsPartTime,
+            PartTimeFraction = profile.PartTimeFraction
+        };
+
+        _logger.LogInformation(
+            "OK version split for {EmployeeId}: segment 1 [{Start}-{End}] under {OldVersion}, segment 2 [{TransitionDate}-{PeriodEnd}] under {NewVersion}",
+            profile.EmployeeId, periodStart, segmentEnd1, previousOkVersion, transitionDate, periodEnd, profile.OkVersion);
+
+        // Calculate segment 1 (old OK version)
+        var result1 = await _calculationService.CalculateAsync(
+            oldVersionProfile, entriesBefore, absencesBefore, periodStart, segmentEnd1,
+            previousFlexBalance, authorizationHeader, correlationId, ct);
+
+        if (!result1.Success)
+        {
+            return new VersionSplitResult
+            {
+                Success = false,
+                ErrorMessage = $"Segment 1 ({previousOkVersion}) recalculation failed: {result1.ErrorMessage}",
+                ExportLines = [],
+                RuleResults = []
+            };
+        }
+
+        // Flex balance from segment 1 feeds into segment 2
+        var segment1FlexDelta = ExtractFlexDelta(result1.RuleResults);
+        var segment2FlexBalance = previousFlexBalance + (segment1FlexDelta ?? 0m);
+
+        // Calculate segment 2 (new OK version) — uses profile as-is (has new OkVersion)
+        var result2 = await _calculationService.CalculateAsync(
+            profile, entriesOnOrAfter, absencesOnOrAfter, transitionDate, periodEnd,
+            segment2FlexBalance, authorizationHeader, correlationId, ct);
+
+        if (!result2.Success)
+        {
+            return new VersionSplitResult
+            {
+                Success = false,
+                ErrorMessage = $"Segment 2 ({profile.OkVersion}) recalculation failed: {result2.ErrorMessage}",
+                ExportLines = [],
+                RuleResults = []
+            };
+        }
+
+        // Merge export lines and rule results from both segments
+        var mergedExportLines = result1.ExportLines.Concat(result2.ExportLines).ToList();
+        var mergedRuleResults = result1.RuleResults.Concat(result2.RuleResults).ToList();
+
+        // Total flex delta across both segments
+        var segment2FlexDelta = ExtractFlexDelta(result2.RuleResults);
+        var totalFlexDelta = (segment1FlexDelta ?? 0m) + (segment2FlexDelta ?? 0m);
+
+        return new VersionSplitResult
+        {
+            Success = true,
+            ExportLines = mergedExportLines,
+            RuleResults = mergedRuleResults,
+            FlexDelta = totalFlexDelta
+        };
+    }
+
+    /// <summary>
+    /// Extracts the flex balance delta from rule results.
+    /// Looks for the FLEX_BALANCE rule result and computes delta from its line items.
+    /// Returns null if no flex rule result found.
+    /// </summary>
+    private static decimal? ExtractFlexDelta(IReadOnlyList<CalculationResult> ruleResults)
+    {
+        var flexResult = ruleResults.FirstOrDefault(r =>
+            r.RuleId.Equals("FLEX_BALANCE", StringComparison.OrdinalIgnoreCase));
+
+        if (flexResult is null || !flexResult.Success)
+            return null;
+
+        // The flex rule produces line items representing the delta.
+        // Sum all flex line item hours as the delta.
+        return flexResult.LineItems.Sum(li => li.Hours);
+    }
+
     private static IReadOnlyList<CorrectionExportLine> ProduceCorrectionLines(
         EmploymentProfile profile,
         IReadOnlyList<PayrollExportLine> previousLines,
         IReadOnlyList<PayrollExportLine> newLines,
         DateOnly periodStart,
-        DateOnly periodEnd)
+        DateOnly periodEnd,
+        decimal? flexDelta,
+        DateOnly? okTransitionDate,
+        string? previousOkVersion)
     {
         var corrections = new List<CorrectionExportLine>();
 
@@ -145,13 +312,24 @@ public sealed class RetroactiveCorrectionService
                 // Pick traceability from new lines if available, else from previous
                 var sourceItem = newItems.FirstOrDefault() ?? prevItems.FirstOrDefault();
 
+                // Determine the OK version for this correction line:
+                // - In split mode, use the OkVersion from the new export line (which reflects
+                //   the correct version per segment)
+                // - In single mode, use profile.OkVersion
+                var lineOkVersion = newItems.FirstOrDefault()?.OkVersion
+                    ?? prevItems.FirstOrDefault()?.OkVersion
+                    ?? profile.OkVersion;
+
+                // Attach flex delta only to flex-related wage types
+                var isFlexWageType = sourceItem?.SourceRuleId?.Equals("FLEX_BALANCE", StringComparison.OrdinalIgnoreCase) == true;
+
                 corrections.Add(new CorrectionExportLine
                 {
                     EmployeeId = profile.EmployeeId,
                     WageType = wageType,
                     PeriodStart = periodStart,
                     PeriodEnd = periodEnd,
-                    OkVersion = profile.OkVersion,
+                    OkVersion = lineOkVersion,
                     OriginalHours = originalHours,
                     OriginalAmount = originalAmount,
                     CorrectedHours = correctedHours,
@@ -159,12 +337,25 @@ public sealed class RetroactiveCorrectionService
                     DifferenceHours = diffHours,
                     DifferenceAmount = diffAmount,
                     SourceRuleId = sourceItem?.SourceRuleId,
-                    SourceTimeType = sourceItem?.SourceTimeType
+                    SourceTimeType = sourceItem?.SourceTimeType,
+                    FlexDelta = isFlexWageType ? flexDelta : null
                 });
             }
         }
 
         return corrections;
+    }
+
+    /// <summary>
+    /// Internal result type for version split recalculation.
+    /// </summary>
+    private sealed class VersionSplitResult
+    {
+        public required bool Success { get; init; }
+        public string? ErrorMessage { get; init; }
+        public required IReadOnlyList<PayrollExportLine> ExportLines { get; init; }
+        public required IReadOnlyList<CalculationResult> RuleResults { get; init; }
+        public decimal? FlexDelta { get; init; }
     }
 }
 

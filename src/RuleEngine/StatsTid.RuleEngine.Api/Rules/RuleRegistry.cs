@@ -64,7 +64,7 @@ public sealed class RuleRegistry
         DateOnly periodStart,
         DateOnly periodEnd)
     {
-        var config = AgreementConfigProvider.GetConfig(profile.AgreementCode, profile.OkVersion);
+        var config = AgreementConfigProvider.GetConfig(profile.AgreementCode, profile.OkVersion, profile.Position);
 
         return ruleId switch
         {
@@ -108,7 +108,7 @@ public sealed class RuleRegistry
         DateOnly periodEnd,
         decimal previousBalance)
     {
-        var config = AgreementConfigProvider.GetConfig(profile.AgreementCode, profile.OkVersion);
+        var config = AgreementConfigProvider.GetConfig(profile.AgreementCode, profile.OkVersion, profile.Position);
         return FlexBalanceRule.Evaluate(profile, entries, absences, periodStart, periodEnd, config, previousBalance);
     }
 }

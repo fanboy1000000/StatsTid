@@ -17,8 +17,9 @@
 | [ADR-009](decisions/ADR-009-scope-embedded-jwt.md) | Role scopes embedded in JWT token | approved | S6 | Security, Infrastructure | jwt, rbac, scopes, authorization, stateless |
 | [ADR-010](decisions/ADR-010-local-config-merge-at-service-layer.md) | Local config merged at service layer, not in rule engine | approved | S6 | Rule Engine, Payroll, Infrastructure | local-config, rule-engine, determinism, configuration, merge |
 | [ADR-011](decisions/ADR-011-frontend-design-system-and-component-strategy.md) | Frontend design system and component strategy | approved | S8 (pre) | Frontend | frontend, design-system, shadcn, css-modules, react, accessibility |
-| [ADR-012](decisions/ADR-012-two-step-approval-flow.md) | Two-step approval flow (Employee → Manager) | approved | S9 | Backend | ADR-012 |
-| Frontend | ADR-011, ADR-012 | approval, workflow, state-machine, period, two-step |
+| [ADR-012](decisions/ADR-012-two-step-approval-flow.md) | Two-step approval flow (Employee → Manager) | approved | S9 | Backend, Frontend | approval, workflow, state-machine, period, two-step |
+| [ADR-013](decisions/ADR-013-retroactive-corrections-single-period-no-cascade.md) | Retroactive corrections are single-period (no cascade) | approved | S11 | Payroll Integration, Rule Engine | retroactive, corrections, flex, carryover, payroll, cascade |
+| [ADR-014](decisions/ADR-014-agreement-configs-database-backed.md) | Agreement configs migrated from static code to database | approved | S12 (planned) | Infrastructure, SharedKernel, Rule Engine, Payroll, Frontend | agreement-config, database, migration, configuration, lifecycle, versioning |
 
 ## Validated Patterns (PAT)
 
@@ -62,7 +63,7 @@
 | ac | PAT-003, RES-001 |
 | approval | ADR-012 |
 | authentication | ADR-007, FAIL-001 |
-| agreement-config | PAT-003 |
+| agreement-config | PAT-003, ADR-014 |
 | architecture | ADR-006 |
 | actor-tracking | PAT-004 |
 | alignment | DEP-004 |
@@ -72,9 +73,13 @@
 | c-sharp | PAT-001 |
 | claims | FAIL-001 |
 | calendar | DEP-001 |
-| configuration | PAT-003, ADR-010 |
+| carryover | ADR-013 |
+| cascade | ADR-013 |
+| corrections | ADR-013 |
+| configuration | PAT-003, ADR-010, ADR-014 |
 | correlation-id | ADR-007 |
 | css-modules | ADR-011 |
+| database | ADR-014 |
 | debugging | FAIL-001 |
 | dotnet8 | FAIL-001 |
 | cross-domain | DEP-001, DEP-002, DEP-003, DEP-004 |
@@ -84,6 +89,7 @@
 | design-system | ADR-011 |
 | determinism | ADR-002, ADR-003, ADR-010 |
 | docker | ADR-006 |
+| lifecycle | ADR-014 |
 | domain-events | PAT-004 |
 | endpoint-registry | DEP-004 |
 | endpoint-response | PAT-006 |
@@ -98,12 +104,13 @@
 | integration | ADR-004 |
 | jwt | ADR-007, ADR-009, FAIL-001 |
 | microservices | ADR-006 |
+| migration | ADR-014 |
 | models | PAT-001 |
 | npgsql | ADR-001 |
 | ok-version | ADR-003 |
 | outbox-pattern | ADR-004 |
 | overtime | PAT-002, RES-001 |
-| payroll | DEP-002, PAT-005 |
+| payroll | DEP-002, PAT-005, ADR-013 |
 | payroll-chain | PAT-005, PAT-006 |
 | local-config | ADR-010 |
 | materialized-path | ADR-008 |
@@ -116,6 +123,7 @@
 | pure-functions | ADR-002 |
 | rbac | ADR-007, ADR-009 |
 | react | ADR-011 |
+| retroactive | ADR-013 |
 | rule-engine | ADR-002, PAT-002, PAT-003, PAT-006, ADR-010 |
 | scopes | ADR-009 |
 | stateless | ADR-009 |
@@ -131,6 +139,7 @@
 | state-machine | ADR-012 |
 | two-step | ADR-012 |
 | version-resolution | ADR-003 |
+| versioning | ADR-014 |
 | wage-types | DEP-002 |
 | workflow | ADR-012 |
 
@@ -140,10 +149,10 @@
 |--------|---------|
 | API Integration | ADR-004 |
 | Backend | ADR-012, DEP-004 |
-| Frontend | ADR-011, ADR-012, DEP-004 |
+| Frontend | ADR-011, ADR-012, ADR-014, DEP-004 |
 | Data Model | ADR-001, ADR-005, PAT-001, PAT-004, DEP-003 |
-| Infrastructure | ADR-001, ADR-004, ADR-005, ADR-006, ADR-007, ADR-008, ADR-009, ADR-010, ADR-012, DEP-003, FAIL-001 |
-| Payroll | DEP-002, PAT-005, PAT-006, ADR-010 |
-| Rule Engine | ADR-002, ADR-003, PAT-002, PAT-003, PAT-005, PAT-006, DEP-001, DEP-002, RES-001, ADR-010 |
+| Infrastructure | ADR-001, ADR-004, ADR-005, ADR-006, ADR-007, ADR-008, ADR-009, ADR-010, ADR-012, ADR-014, DEP-003, FAIL-001 |
+| Payroll | DEP-002, PAT-005, PAT-006, ADR-010, ADR-013, ADR-014 |
+| Rule Engine | ADR-002, ADR-003, PAT-002, PAT-003, PAT-005, PAT-006, DEP-001, DEP-002, RES-001, ADR-010, ADR-014 |
 | Security | ADR-007, ADR-008, ADR-009, FAIL-001 |
-| SharedKernel | DEP-001 |
+| SharedKernel | DEP-001, ADR-014 |

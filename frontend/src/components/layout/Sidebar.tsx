@@ -28,6 +28,10 @@ const adminItems: NavItem[] = [
   { label: 'Konfiguration', to: '/config' },
 ]
 
+const globalAdminItems: NavItem[] = [
+  { label: 'Overenskomster', to: '/admin/agreements' },
+]
+
 function NavSection({ items }: { items: NavItem[] }) {
   return (
     <>
@@ -53,6 +57,7 @@ export function Sidebar() {
   const showLeader = hasMinRole(role, 'LocalLeader')
   const showHR = hasMinRole(role, 'LocalHR')
   const showAdmin = hasMinRole(role, 'LocalAdmin')
+  const showGlobalAdmin = hasMinRole(role, 'GlobalAdmin')
 
   return (
     <aside className={styles.sidebar}>
@@ -77,6 +82,13 @@ export function Sidebar() {
           <>
             <hr className={styles.sectionDivider} />
             <NavSection items={adminItems} />
+          </>
+        )}
+
+        {showGlobalAdmin && (
+          <>
+            <hr className={styles.sectionDivider} />
+            <NavSection items={globalAdminItems} />
           </>
         )}
       </nav>

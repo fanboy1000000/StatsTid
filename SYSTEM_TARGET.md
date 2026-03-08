@@ -15,6 +15,7 @@ Support OK version transitions (e.g. OK24 → OK26)
 Support multi-organization hierarchy (Ministry → Styrelse → Afdeling → Team)
 Support 5-role access control scoped to organizations
 Support local configuration within central agreement constraints
+Support GlobalAdmin-managed agreement configuration with draft/active/archived lifecycle
 Support period-based leader approval before payroll export
 Support outbound API integrations
 Support payroll export (SLS or equivalent)
@@ -128,7 +129,7 @@ System must implement 5 roles with organization-scoped access control.
 
 | Role | Scope | Key Capabilities |
 |------|-------|------------------|
-| **Global Admin** | All organizations | Manage state agreements (OK version transitions, e.g. OK24 → OK26), create/manage organizations, manage all users |
+| **Global Admin** | All organizations | Manage state agreements (create, configure, publish, archive — see §I), manage OK version transitions (e.g. OK24 → OK26), create/manage organizations, manage all users |
 | **Local Admin** | Assigned org(s) + descendants | Configure local settings within central agreement constraints, manage local users |
 | **Local HR** | Explicitly assigned org subtree | View/edit all employees' time registrations within scope, organization statistics, employee management |
 | **Local Leader** | Assigned team/org | Approve/reject time registration periods, employee oversight (sick days, vacation balances) |
@@ -186,6 +187,60 @@ Approval constraints:
 A leader may only approve periods for employees in their assigned organizational scope
 Payroll export endpoint must enforce the approval guard — unapproved periods are blocked
 Period approval does not affect the rule engine — it is a workflow gate before payroll export
+
+### I. Agreement Configuration Management
+
+Global Admins must be able to create, configure, and manage agreement rule configurations through the UI. Agreement configs are the central parameters that govern all rule evaluation — they must be database-backed and version-controlled.
+
+#### Storage and Migration
+Agreement configurations are stored in PostgreSQL as the single source of truth. On first deployment, the database is seeded from the initial static configs (AC, HK, PROSA, AC_RESEARCH, AC_TEACHING × OK24/OK26). After seeding, the database is authoritative — config changes do not require redeployment.
+
+The rule engine remains pure: it receives `AgreementRuleConfig` as a parameter and never performs I/O. The service layer loads configs from the database and passes them to the rule engine.
+
+#### Versioning Lifecycle
+Each agreement config follows an immutable versioning lifecycle:
+
+```
+DRAFT → ACTIVE → ARCHIVED
+```
+
+- **DRAFT**: Being configured, not yet in use for rule evaluation. Editable.
+- **ACTIVE**: In effect. Immutable — cannot be edited. At most one ACTIVE config per (AgreementCode, OkVersion) pair.
+- **ARCHIVED**: Previous version, preserved for retroactive recalculation and audit. Read-only.
+
+Publishing a DRAFT automatically archives the current ACTIVE config for the same (AgreementCode, OkVersion).
+
+#### Configurable Parameters (31 fields per agreement)
+All parameters on `AgreementRuleConfig` are configurable:
+- **Identity**: AgreementCode, OkVersion
+- **Norm & Flex**: WeeklyNormHours, NormPeriodWeeks, NormModel (WEEKLY_HOURS/ANNUAL_ACTIVITY), AnnualNormHours, MaxFlexBalance, FlexCarryoverMax
+- **Overtime & Merarbejde**: HasOvertime, HasMerarbejde, OvertimeThreshold50, OvertimeThreshold100
+- **Supplements**: Evening/Night/Weekend/Holiday enabled flags, time windows (Start/End hours), and rates
+- **On-call & Call-in**: OnCallDutyEnabled, OnCallDutyRate, CallInWorkEnabled, CallInMinimumHours, CallInRate
+- **Travel**: TravelTimeEnabled, WorkingTravelRate, NonWorkingTravelRate
+
+#### UI Requirements
+The agreement management UI must support:
+- **Overview page**: List all agreements grouped by status (Active / Draft / Archived), with filtering and search
+- **Create new**: Empty form with sensible defaults from AgreementRuleConfig default values
+- **Clone from existing**: Select a source agreement (any status) to pre-populate all fields, then edit as needed. Supports cross-version cloning (e.g., OK24 → OK26) and cross-agreement cloning.
+- **Editor**: Form organized by parameter groups (Norm & Flex, Overtime, Supplements, On-call, Travel) with collapsible sections, toggle switches for boolean fields, conditional visibility (disabled supplement fields greyed out), and inline validation
+- **Compare/Diff view**: Side-by-side comparison of two agreement versions highlighting changed parameters
+- **Publish action**: Activates a draft config, auto-archiving the previous active config
+- **Archive action**: Manually archive an active config without publishing a replacement
+
+#### Validation Rules
+- AgreementCode + OkVersion must be unique per ACTIVE config
+- OvertimeThreshold100 must be ≥ OvertimeThreshold50
+- HasOvertime and HasMerarbejde should not both be true (warn, not block — per RES-001)
+- NormModel = ANNUAL_ACTIVITY requires AnnualNormHours > 0
+- NormModel = WEEKLY_HOURS makes AnnualNormHours irrelevant (hidden in UI)
+- NormPeriodWeeks must be one of: 1, 2, 4, 8, 12
+- All rates and hours must be > 0 where applicable
+
+#### Future Extensions (not in first iteration)
+- **Position override management**: UI for managing PositionOverrideConfigs per agreement (currently static)
+- **Wage type mapping management**: Separate admin page for configuring time type → SLS code mappings per agreement (currently seeded in init.sql)
 
 ## AC-Specific Requirements
 

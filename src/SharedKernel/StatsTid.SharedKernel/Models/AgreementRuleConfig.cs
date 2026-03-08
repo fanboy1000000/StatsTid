@@ -49,4 +49,10 @@ public sealed class AgreementRuleConfig
 
     // Norm period length in weeks (valid: 1, 2, 4, 8, 12)
     public int NormPeriodWeeks { get; init; } = 1;
+
+    // Norm model (default WEEKLY_HOURS for backward compatibility)
+    public NormModel NormModel { get; init; } = NormModel.WEEKLY_HOURS;
+
+    // Annual norm hours for ANNUAL_ACTIVITY model (1924h standard = 37h x 52w)
+    public decimal AnnualNormHours { get; init; } = 1924m;
 }

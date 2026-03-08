@@ -43,6 +43,44 @@ public static class SlsExportFormatter
     }
 
     /// <summary>
+    /// Formats CorrectionExportLines into SLS-compatible correction export format.
+    /// Pure formatting function — no I/O, no state.
+    ///
+    /// Format:
+    /// - Header:  HC|{ExportId}|{Timestamp}|{RecordCount}
+    /// - Data:    C|{EmployeeId}|{WageType}|{OrigHours:F2}|{CorrHours:F2}|{DiffHours:F2}|{DiffAmount:F2}|{PeriodStart:yyyyMMdd}|{PeriodEnd:yyyyMMdd}|{OkVersion}
+    /// - Trailer: TC|{RecordCount}|{TotalDiffHours:F2}|{TotalDiffAmount:F2}|{Checksum}
+    /// </summary>
+    public static string FormatCorrections(
+        IReadOnlyList<CorrectionExportLine> lines,
+        string exportId,
+        DateTime exportTimestamp)
+    {
+        var sb = new System.Text.StringBuilder();
+        var ic = CultureInfo.InvariantCulture;
+
+        // Header correction record
+        sb.AppendLine(string.Format(ic, "HC|{0}|{1:yyyy-MM-dd HH:mm:ss}|{2}", exportId, exportTimestamp, lines.Count));
+
+        // Correction data records
+        foreach (var line in lines)
+        {
+            sb.AppendLine(string.Format(ic, "C|{0}|{1}|{2:F2}|{3:F2}|{4:F2}|{5:F2}|{6:yyyyMMdd}|{7:yyyyMMdd}|{8}",
+                line.EmployeeId, line.WageType, line.OriginalHours, line.CorrectedHours,
+                line.DifferenceHours, line.DifferenceAmount,
+                line.PeriodStart, line.PeriodEnd, line.OkVersion));
+        }
+
+        // Trailer correction record with checksum
+        var totalDiffHours = lines.Sum(l => l.DifferenceHours);
+        var totalDiffAmount = lines.Sum(l => l.DifferenceAmount);
+        var checksum = CalculateCorrectionChecksum(lines);
+        sb.Append(string.Format(ic, "TC|{0}|{1:F2}|{2:F2}|{3}", lines.Count, totalDiffHours, totalDiffAmount, checksum));
+
+        return sb.ToString();
+    }
+
+    /// <summary>
     /// Simple checksum: sum of all hours and amounts multiplied, truncated to integer.
     /// Deterministic and reproducible.
     /// </summary>
@@ -52,6 +90,21 @@ public static class SlsExportFormatter
         foreach (var line in lines)
         {
             sum += line.Hours * 100 + line.Amount * 100;
+        }
+        return (long)sum;
+    }
+
+    /// <summary>
+    /// Correction checksum: sum of absolute differences multiplied by 100, truncated to long.
+    /// Uses absolute values to ensure checksum is always positive regardless of correction direction.
+    /// Deterministic and reproducible.
+    /// </summary>
+    private static long CalculateCorrectionChecksum(IReadOnlyList<CorrectionExportLine> lines)
+    {
+        decimal sum = 0;
+        foreach (var line in lines)
+        {
+            sum += Math.Abs(line.DifferenceHours) * 100 + Math.Abs(line.DifferenceAmount) * 100;
         }
         return (long)sum;
     }

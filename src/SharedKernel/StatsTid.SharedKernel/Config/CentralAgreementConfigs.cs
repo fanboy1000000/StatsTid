@@ -166,6 +166,98 @@ public static class CentralAgreementConfigs
             NonWorkingTravelRate = 0.5m,
             NormPeriodWeeks = 1,
         },
+        // AC_RESEARCH OK24 — Researchers (annual norm 1924h)
+        [("AC_RESEARCH", "OK24")] = new AgreementRuleConfig
+        {
+            AgreementCode = "AC_RESEARCH",
+            OkVersion = "OK24",
+            WeeklyNormHours = 37.0m,
+            HasOvertime = false,
+            HasMerarbejde = true,
+            MaxFlexBalance = 150.0m,
+            FlexCarryoverMax = 150.0m,
+            EveningSupplementEnabled = false,
+            NightSupplementEnabled = false,
+            WeekendSupplementEnabled = false,
+            HolidaySupplementEnabled = false,
+            OnCallDutyEnabled = false,
+            CallInWorkEnabled = false,
+            TravelTimeEnabled = true,
+            WorkingTravelRate = 1.0m,
+            NonWorkingTravelRate = 0.5m,
+            NormPeriodWeeks = 1,
+            NormModel = NormModel.ANNUAL_ACTIVITY,
+            AnnualNormHours = 1924m,
+        },
+        // AC_RESEARCH OK26 (same as OK24 for now)
+        [("AC_RESEARCH", "OK26")] = new AgreementRuleConfig
+        {
+            AgreementCode = "AC_RESEARCH",
+            OkVersion = "OK26",
+            WeeklyNormHours = 37.0m,
+            HasOvertime = false,
+            HasMerarbejde = true,
+            MaxFlexBalance = 150.0m,
+            FlexCarryoverMax = 150.0m,
+            EveningSupplementEnabled = false,
+            NightSupplementEnabled = false,
+            WeekendSupplementEnabled = false,
+            HolidaySupplementEnabled = false,
+            OnCallDutyEnabled = false,
+            CallInWorkEnabled = false,
+            TravelTimeEnabled = true,
+            WorkingTravelRate = 1.0m,
+            NonWorkingTravelRate = 0.5m,
+            NormPeriodWeeks = 1,
+            NormModel = NormModel.ANNUAL_ACTIVITY,
+            AnnualNormHours = 1924m,
+        },
+        // AC_TEACHING OK24 — Teaching staff (reduced annual norm 1680h for research obligations)
+        [("AC_TEACHING", "OK24")] = new AgreementRuleConfig
+        {
+            AgreementCode = "AC_TEACHING",
+            OkVersion = "OK24",
+            WeeklyNormHours = 37.0m,
+            HasOvertime = false,
+            HasMerarbejde = true,
+            MaxFlexBalance = 150.0m,
+            FlexCarryoverMax = 150.0m,
+            EveningSupplementEnabled = false,
+            NightSupplementEnabled = false,
+            WeekendSupplementEnabled = false,
+            HolidaySupplementEnabled = false,
+            OnCallDutyEnabled = false,
+            CallInWorkEnabled = false,
+            TravelTimeEnabled = true,
+            WorkingTravelRate = 1.0m,
+            NonWorkingTravelRate = 0.5m,
+            NormPeriodWeeks = 1,
+            NormModel = NormModel.ANNUAL_ACTIVITY,
+            AnnualNormHours = 1680m,
+        },
+        // AC_TEACHING OK26 (same as OK24 for now)
+        [("AC_TEACHING", "OK26")] = new AgreementRuleConfig
+        {
+            AgreementCode = "AC_TEACHING",
+            OkVersion = "OK26",
+            WeeklyNormHours = 37.0m,
+            HasOvertime = false,
+            HasMerarbejde = true,
+            MaxFlexBalance = 150.0m,
+            FlexCarryoverMax = 150.0m,
+            EveningSupplementEnabled = false,
+            NightSupplementEnabled = false,
+            WeekendSupplementEnabled = false,
+            HolidaySupplementEnabled = false,
+            OnCallDutyEnabled = false,
+            CallInWorkEnabled = false,
+            TravelTimeEnabled = true,
+            WorkingTravelRate = 1.0m,
+            NonWorkingTravelRate = 0.5m,
+            NormPeriodWeeks = 1,
+            NormModel = NormModel.ANNUAL_ACTIVITY,
+            AnnualNormHours = 1680m,
+        },
     };
 
     /// <summary>
@@ -179,6 +271,24 @@ public static class CentralAgreementConfigs
 
         throw new InvalidOperationException(
             $"No agreement configuration found for {agreementCode}/{okVersion}");
+    }
+
+    /// <summary>
+    /// Position-aware GetConfig: returns base config with position overrides applied.
+    /// If position is null or no override exists, returns the base config unchanged.
+    /// </summary>
+    public static AgreementRuleConfig GetConfig(string agreementCode, string okVersion, string? position)
+    {
+        var baseConfig = GetConfig(agreementCode, okVersion);
+
+        if (position is null)
+            return baseConfig;
+
+        var positionOverride = PositionOverrideConfigs.TryGetOverride(agreementCode, okVersion, position);
+        if (positionOverride is null)
+            return baseConfig;
+
+        return PositionOverrideConfigs.ApplyOverride(baseConfig, positionOverride);
     }
 
     /// <summary>

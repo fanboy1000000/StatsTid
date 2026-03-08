@@ -14,4 +14,16 @@ public sealed class RetroactiveCorrectionRequested : DomainEventBase
     public required int CorrectionLineCount { get; init; }
     public required decimal TotalDifferenceHours { get; init; }
     public Guid? IdempotencyToken { get; init; }
+
+    /// <summary>
+    /// The previous OK version when an OK version transition occurred mid-period.
+    /// Null when no version split was needed.
+    /// </summary>
+    public string? PreviousOkVersion { get; init; }
+
+    /// <summary>
+    /// The employee's position code when the correction was made.
+    /// Null when no position-based override applied.
+    /// </summary>
+    public string? Position { get; init; }
 }

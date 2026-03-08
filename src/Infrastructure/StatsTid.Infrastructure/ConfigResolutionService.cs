@@ -12,6 +12,7 @@ namespace StatsTid.Infrastructure;
 /// </summary>
 public sealed class ConfigResolutionService
 {
+    private readonly AgreementConfigRepository _agreementConfigRepo;
     private readonly LocalConfigurationRepository _localConfigRepo;
     private readonly ILogger<ConfigResolutionService> _logger;
 
@@ -43,9 +44,11 @@ public sealed class ConfigResolutionService
     };
 
     public ConfigResolutionService(
+        AgreementConfigRepository agreementConfigRepo,
         LocalConfigurationRepository localConfigRepo,
         ILogger<ConfigResolutionService> logger)
     {
+        _agreementConfigRepo = agreementConfigRepo;
         _localConfigRepo = localConfigRepo;
         _logger = logger;
     }
@@ -56,11 +59,48 @@ public sealed class ConfigResolutionService
     /// The result is a plain AgreementRuleConfig that the rule engine receives as-is.
     /// </summary>
     public async Task<AgreementRuleConfig> ResolveAsync(
-        string orgId, string agreementCode, string okVersion, CancellationToken ct = default)
+        string orgId, string agreementCode, string okVersion, string? position = null, CancellationToken ct = default)
     {
-        var centralConfig = CentralAgreementConfigs.TryGetConfig(agreementCode, okVersion)
-            ?? throw new InvalidOperationException(
-                $"No central agreement configuration found for {agreementCode}/{okVersion}");
+        // Get base config from DB (ADR-014), then apply position override if applicable.
+        // Resolution chain: DB (ACTIVE) → Position Override → Local Override
+        AgreementRuleConfig centralConfig;
+        try
+        {
+            var dbConfig = await _agreementConfigRepo.GetActiveAsync(agreementCode, okVersion, ct);
+            if (dbConfig is not null)
+            {
+                centralConfig = dbConfig.ToRuleConfig();
+            }
+            else
+            {
+                // Emergency fallback to static configs (defense in depth)
+                _logger.LogWarning(
+                    "No ACTIVE DB config found for {AgreementCode}/{OkVersion} — falling back to static CentralAgreementConfigs",
+                    agreementCode, okVersion);
+                centralConfig = CentralAgreementConfigs.TryGetConfig(agreementCode, okVersion)
+                    ?? throw new InvalidOperationException(
+                        $"No agreement configuration found for {agreementCode}/{okVersion}");
+            }
+        }
+        catch (Exception ex) when (ex is not InvalidOperationException)
+        {
+            _logger.LogWarning(ex,
+                "Failed to load DB config for {AgreementCode}/{OkVersion} — falling back to static CentralAgreementConfigs",
+                agreementCode, okVersion);
+            centralConfig = CentralAgreementConfigs.TryGetConfig(agreementCode, okVersion)
+                ?? throw new InvalidOperationException(
+                    $"No agreement configuration found for {agreementCode}/{okVersion}");
+        }
+
+        // Apply position override on top of central config (before local overrides)
+        if (position is not null)
+        {
+            var positionOverride = PositionOverrideConfigs.TryGetOverride(agreementCode, okVersion, position);
+            if (positionOverride is not null)
+            {
+                centralConfig = PositionOverrideConfigs.ApplyOverride(centralConfig, positionOverride);
+            }
+        }
 
         IReadOnlyList<LocalConfiguration> localOverrides;
         try
@@ -194,6 +234,15 @@ public sealed class ConfigResolutionService
             OvertimeThreshold100 = centralConfig.OvertimeThreshold100,
             OnCallDutyEnabled = centralConfig.OnCallDutyEnabled,
             OnCallDutyRate = centralConfig.OnCallDutyRate,
+            CallInWorkEnabled = centralConfig.CallInWorkEnabled,
+            CallInMinimumHours = centralConfig.CallInMinimumHours,
+            CallInRate = centralConfig.CallInRate,
+            TravelTimeEnabled = centralConfig.TravelTimeEnabled,
+            WorkingTravelRate = centralConfig.WorkingTravelRate,
+            NonWorkingTravelRate = centralConfig.NonWorkingTravelRate,
+            NormPeriodWeeks = centralConfig.NormPeriodWeeks,
+            NormModel = centralConfig.NormModel,
+            AnnualNormHours = centralConfig.AnnualNormHours,
         };
     }
 
@@ -250,8 +299,31 @@ public sealed class ConfigResolutionService
     }
 
     /// <summary>
-    /// Returns the central config for a given agreement/version, or null if not found.
-    /// Useful for callers that need the central config without any local overrides.
+    /// Returns the active config for a given agreement/version from DB, or null if not found.
+    /// Falls back to static CentralAgreementConfigs if DB unavailable.
+    /// </summary>
+    public async Task<AgreementRuleConfig?> GetActiveConfigAsync(
+        string agreementCode, string okVersion, CancellationToken ct = default)
+    {
+        try
+        {
+            var dbConfig = await _agreementConfigRepo.GetActiveAsync(agreementCode, okVersion, ct);
+            if (dbConfig is not null)
+                return dbConfig.ToRuleConfig();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Failed to load DB config for {AgreementCode}/{OkVersion} — falling back to static",
+                agreementCode, okVersion);
+        }
+
+        return CentralAgreementConfigs.TryGetConfig(agreementCode, okVersion);
+    }
+
+    /// <summary>
+    /// Returns the central config for a given agreement/version from static data.
+    /// Retained as emergency fallback. Prefer GetActiveConfigAsync for normal use.
     /// </summary>
     public static AgreementRuleConfig? GetCentralConfig(string agreementCode, string okVersion)
     {

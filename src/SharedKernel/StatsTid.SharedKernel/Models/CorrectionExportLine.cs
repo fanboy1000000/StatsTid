@@ -20,4 +20,11 @@ public sealed class CorrectionExportLine
     public required decimal DifferenceAmount { get; init; }
     public string? SourceRuleId { get; init; }
     public string? SourceTimeType { get; init; }
+
+    /// <summary>
+    /// Flex balance delta for this correction line (ADR-013: single-period, no cascade).
+    /// Represents the difference in flex balance between old and new calculation.
+    /// Null when not applicable (non-flex wage types).
+    /// </summary>
+    public decimal? FlexDelta { get; init; }
 }

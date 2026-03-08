@@ -14,6 +14,15 @@ public static class AgreementConfigProvider
         return CentralAgreementConfigs.GetConfig(agreementCode, okVersion);
     }
 
+    /// <summary>
+    /// Gets config with optional position override applied.
+    /// Null position = identical to GetConfig(code, version).
+    /// </summary>
+    public static AgreementRuleConfig GetConfig(string agreementCode, string okVersion, string? position)
+    {
+        return CentralAgreementConfigs.GetConfig(agreementCode, okVersion, position);
+    }
+
     public static bool HasConfig(string agreementCode, string okVersion)
     {
         return CentralAgreementConfigs.HasConfig(agreementCode, okVersion);

@@ -14,6 +14,8 @@ import { UserManagement } from './pages/admin/UserManagement'
 import { RoleManagement } from './pages/admin/RoleManagement'
 import { ProjectManagement } from './pages/admin/ProjectManagement'
 import { ConfigManagement } from './pages/config/ConfigManagement'
+import { AgreementConfigList } from './pages/admin/AgreementConfigList'
+import { AgreementConfigEditor } from './pages/admin/AgreementConfigEditor'
 import './styles/tokens.css'
 
 export function App() {
@@ -64,6 +66,12 @@ function AppRoutes() {
             <Route path="admin/roles" element={<RoleManagement />} />
             <Route path="admin/projects" element={<ProjectManagement />} />
             <Route path="config" element={<ConfigManagement />} />
+          </Route>
+
+          {/* GlobalAdmin routes */}
+          <Route element={<RequireRole minRole="GlobalAdmin" />}>
+            <Route path="admin/agreements" element={<AgreementConfigList />} />
+            <Route path="admin/agreements/:configId" element={<AgreementConfigEditor />} />
           </Route>
 
           <Route path="*" element={<NotFoundPage />} />

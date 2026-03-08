@@ -154,7 +154,7 @@ public sealed class PeriodCalculationService
         foreach (var (ruleId, lineItem) in allLineItems)
         {
             var mapping = await _mappingService.GetMappingAsync(
-                lineItem.TimeType, profile.OkVersion, profile.AgreementCode, ct);
+                lineItem.TimeType, profile.OkVersion, profile.AgreementCode, position: null, ct);
 
             if (mapping is null)
             {

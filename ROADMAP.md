@@ -26,6 +26,8 @@
 | Sprint 7 | Local Config + Org-Scope Enforcement | OrgScopeValidator, ConfigResolutionService, admin CRUD, period approval, local config endpoints, approval guard | 217 |
 | Sprint 8 | Frontend: Design System + Role-Based UI | Design tokens, 20 UI components, auth context, API client, layout shell, role-based navigation, 6 admin/approval/config pages, route guards, 25 frontend tests | 242 |
 | Sprint 9 | Skema: Monthly Spreadsheet + Timer + Two-Step Approval | Skema monthly grid (replaces 3 pages), backend-persisted timer, two-step approval (employee → manager), project CRUD, 3 new DB tables, 4 new events, 25 BE + 8 FE tests, JWT claim fix | 275 |
+| Sprint 10 | Tech Debt Cleanup + Rule Engine Expansion | CentralAgreementConfigs dedup, idempotency guard, FlexEvaluationResponse DTO, call-in work, travel time, multi-week norm | 304 |
+| Sprint 11 | Retroactive Corrections + AC Position Overrides + Academic Norms | OK version split, correction SLS export, position overrides (Option C), academic norm model, NORM_DEVIATION, ADR-013 | 306 |
 
 ## Phase Roadmap
 
@@ -74,7 +76,9 @@ Does not affect the deterministic core. Focuses on organizational hierarchy, loc
 **Updated phase-sprint ranges**:
 - Phase 2b (Skema): Sprint 9 ← new
 - Phase 3 (Advanced Rules): Sprints 10–11 (was 9–10)
-- Phase 4 (Production): Sprint 12+ (was 11+)
+- Phase 3c (Agreement Config Management): Sprint 12 ← new (re-prioritized from Phase 4)
+- Phase 3d (Position Override + Wage Type Mapping UI): Sprint 13 ← new
+- Phase 4 (Production): Sprint 14+ (was 12+, then 11+)
 
 ### Phase 3 — Advanced Rules + Retroactive Corrections (Sprints 10–11)
 
@@ -82,10 +86,26 @@ Does not affect the deterministic core. Focuses on organizational hierarchy, loc
 
 Depends on the connected payroll chain from Phase 1. These sprints tackle the most complex rule domains and prove the architecture works end-to-end across time.
 
-- **Sprint 10** (in-progress): Tech debt cleanup (idempotency guard, FlexEvaluationResponse DTO, config dict dedup, smoke test fix, GetDescendantsAsync optimization) + Rule engine expansion (4-week norm periods, part-time pro rata, call-in work, travel time). See [docs/sprints/SPRINT-10.md](docs/sprints/SPRINT-10.md).
-- **Sprint 11** (planned): Retroactive recalculation across OK version transitions, payroll re-export with delta tracking, AC position-based rule overrides, academic/research norm systems
+- **Sprint 10** (complete): Tech debt cleanup (idempotency guard, FlexEvaluationResponse DTO, config dict dedup, smoke test fix, GetDescendantsAsync optimization) + Rule engine expansion (4-week norm periods, part-time pro rata, call-in work, travel time). See [docs/sprints/SPRINT-10.md](docs/sprints/SPRINT-10.md).
+- **Sprint 11** (complete): Retroactive OK version split recalculation, delta/correction SLS export, AC position-based rule overrides with controlled position registry (Option C), academic/research annual norm model (ANNUAL_ACTIVITY), NormCheckRule cleanup, NORM_DEVIATION wage type, ADR-013 (no cascade), 35 new tests (306 total). See [docs/sprints/SPRINT-11.md](docs/sprints/SPRINT-11.md).
 
-### Phase 4 — Production Hardening (Sprint 12+)
+### Phase 3c — Agreement Configuration Management (Sprint 12)
+
+**Priority focus**: P1 (Architectural integrity), P2 (Deterministic rule engine — preservation), P3 (Event sourcing), P7 (Security)
+
+Moves agreement configs from static code to database, enabling GlobalAdmin self-service management through UI. The rule engine remains pure — only the config source changes.
+
+- **Sprint 12** (planned): DB-backed agreement configs (ADR-014), agreement_configs table with Draft/Active/Archived lifecycle, seed migration from CentralAgreementConfigs, AgreementConfigRepository, ConfigResolutionService rewiring, GlobalAdmin API endpoints (CRUD + clone + publish + archive), agreement management frontend page (overview + editor + diff view), validation rules, comprehensive tests.
+
+### Phase 3d — Position Override + Wage Type Mapping UI (Sprint 13)
+
+**Priority focus**: P6 (Payroll integration), P7 (Security), P9 (Usability)
+
+Extends the DB-backed config pattern to position overrides and wage type mappings. Reuses the architecture established in Sprint 12.
+
+- **Sprint 13** (projected): Position override management UI (per agreement), wage type mapping admin page (separate from agreement editor), DB migration for both.
+
+### Phase 4 — Production Hardening (Sprint 14+)
 
 **Priority focus**: All priorities — cross-cutting production readiness
 
@@ -102,20 +122,21 @@ Only makes sense once functional completeness is achieved.
 
 Projected functional coverage by requirement area. Percentages are cumulative.
 
-| Requirement Area | S1–S3 | S4 | S5 (Phase 1) | S6 | S7 | S8 (Phase 2) | S9 (Phase 2b) | After Phase 3 | After Phase 4 |
-|------------------|-------|-----|--------------|-----|-----|---------------------|---------------|---------------|---------------|
-| A. Basic Time Registration | 80% | 80% | 85% | 85% | 85% | 95% | 98% | 98% | 100% |
-| B. Working Time Rules | 70% | 72% | 75% | 75% | 75% | 95% | 95% | 95% | 100% |
-| C. Time Types & Supplements | 60% | 60% | 70% | 70% | 70% | 95% | 95% | 95% | 100% |
-| D. Absence Types | 65% | 80% | 85% | 85% | 85% | 95% | 97% | 97% | 100% |
-| E. Organizational Structure | 0% | 0% | 0% | 70% | 85% | 90% | 92% | 92% | 100% |
-| F. Roles and Authorization | 0% | 0% | 0% | 50% | 85% | 90% | 90% | 90% | 100% |
-| G. Local Configuration | 0% | 0% | 0% | 10% | 75% | 80% | 85% | 85% | 100% |
-| H. Period Approval Workflow | 0% | 0% | 0% | 10% | 80% | 85% | 95% | 95% | 100% |
-| AC-Specific Requirements | 40% | 42% | 45% | 45% | 45% | 90% | 90% | 90% | 100% |
-| Payroll Integration | 50% | 80% | 88% | 88% | 90% | 95% | 95% | 95% | 100% |
-| External Integrations | 60% | 60% | 60% | 60% | 60% | 90% | 90% | 90% | 100% |
-| **Overall** | **~39%** | **~43%** | **~46%** | **~55%** | **~67%** | **~91%** | **~93%** | **~93%** | **100%** |
+| Requirement Area | S1–S3 | S4 | S5 (Phase 1) | S6 | S7 | S8 (Phase 2) | S9 (Phase 2b) | S10–S11 (Phase 3) | S12 (Phase 3c) | S13 (Phase 3d) | After Phase 4 |
+|------------------|-------|-----|--------------|-----|-----|---------------------|---------------|-------------------|-----------------|----------------|---------------|
+| A. Basic Time Registration | 80% | 80% | 85% | 85% | 85% | 95% | 98% | 98% | 98% | 98% | 100% |
+| B. Working Time Rules | 70% | 72% | 75% | 75% | 75% | 95% | 95% | 98% | 98% | 98% | 100% |
+| C. Time Types & Supplements | 60% | 60% | 70% | 70% | 70% | 95% | 95% | 97% | 97% | 97% | 100% |
+| D. Absence Types | 65% | 80% | 85% | 85% | 85% | 95% | 97% | 97% | 97% | 97% | 100% |
+| E. Organizational Structure | 0% | 0% | 0% | 70% | 85% | 90% | 92% | 95% | 95% | 95% | 100% |
+| F. Roles and Authorization | 0% | 0% | 0% | 50% | 85% | 90% | 90% | 92% | 95% | 95% | 100% |
+| G. Local Configuration | 0% | 0% | 0% | 10% | 75% | 80% | 85% | 90% | 95% | 98% | 100% |
+| H. Period Approval Workflow | 0% | 0% | 0% | 10% | 80% | 85% | 95% | 95% | 95% | 95% | 100% |
+| I. Agreement Config Mgmt | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 85% | 95% | 100% |
+| AC-Specific Requirements | 40% | 42% | 45% | 45% | 45% | 90% | 90% | 97% | 98% | 99% | 100% |
+| Payroll Integration | 50% | 80% | 88% | 88% | 90% | 95% | 95% | 98% | 98% | 99% | 100% |
+| External Integrations | 60% | 60% | 60% | 60% | 60% | 90% | 90% | 90% | 90% | 90% | 100% |
+| **Overall** | **~39%** | **~43%** | **~46%** | **~55%** | **~67%** | **~91%** | **~93%** | **~97%** | **~95→97%** | **~97→99%** | **100%** |
 
 ## Sprint 5 — Completed
 
@@ -169,11 +190,27 @@ Sprint 9 delivered the Skema feature (Phase 2b re-prioritization). See [docs/spr
 **Phase 2b complete**: Sprint 9 delivers employee-facing monthly registration UX prerequisite for Phase 3 advanced rule testing. Overall functional coverage: ~93%.
 
 **Backlog (from Sprint 5/7 retrospective, deferred to Phase 3)**:
-- Add idempotency tokens for retroactive correction events (Reviewer WARNING)
-- Define explicit FlexEvaluationResponse DTO in SharedKernel (Reviewer WARNING)
-- Call-in work (CALL_IN_WORK), complex on-call scenarios
-- 4-week norm periods, part-time pro rata
-- AC position-based rule overrides, academic/research norm systems
+- ~~Add idempotency tokens for retroactive correction events~~ (done in S10)
+- ~~Define explicit FlexEvaluationResponse DTO in SharedKernel~~ (done in S10)
+- ~~Call-in work (CALL_IN_WORK), complex on-call scenarios~~ (done in S10)
+- ~~4-week norm periods, part-time pro rata~~ (done in S10)
+- ~~AC position-based rule overrides, academic/research norm systems~~ (done in S11)
+
+## Sprint 10 — Completed
+
+Sprint 10 completed Phase 3a (Tech Debt + Rule Engine Expansion). See [docs/sprints/SPRINT-10.md](docs/sprints/SPRINT-10.md) for full task log.
+
+**Key deliverables**: CentralAgreementConfigs single source of truth, idempotency guard on retroactive corrections, FlexEvaluationResponse DTO, call-in work rule, travel time rule, multi-week norm periods, part-time pro rata audit, NormCheck config-aware migration, 26 new tests (304 total).
+
+## Sprint 11 — Completed
+
+Sprint 11 completed Phase 3b (Retroactive Corrections + AC Position Overrides + Academic Norms). See [docs/sprints/SPRINT-11.md](docs/sprints/SPRINT-11.md) for full task log.
+
+**Key deliverables**: OK version split recalculation (RetroactiveCorrectionService splits periods at transition date), delta/correction SLS export format (HC|/C|/TC| prefixes), AC position-based rule overrides with controlled position registry (PositionOverrideConfigs, positions table, Option C design), academic/research annual norm model (NormModel.ANNUAL_ACTIVITY with pro-rated annual hours), position-aware wage type mappings (COALESCE PK), NORM_DEVIATION wage type, ADR-013 (no cascade), 35 new tests (306 total).
+
+**Reviewer findings addressed**: ConfigResolutionService missing 9 fields in merged config construction (BLOCKER — fixed).
+
+**Phase 3 complete**: Sprints 10-11 delivered all advanced rules, retroactive corrections, position overrides, and academic norms. Overall functional coverage: ~97%.
 
 ## Architecture Decisions
 

@@ -29,6 +29,7 @@ builder.Services.AddSingleton<ApprovalPeriodRepository>();
 builder.Services.AddSingleton<ProjectRepository>();
 builder.Services.AddSingleton<TimerSessionRepository>();
 builder.Services.AddSingleton<AbsenceTypeVisibilityRepository>();
+builder.Services.AddSingleton<AgreementConfigRepository>();
 
 // ── Services ──
 builder.Services.AddSingleton<ConfigResolutionService>();
@@ -36,6 +37,14 @@ builder.Services.AddSingleton<ConfigResolutionService>();
 var useDbAuth = builder.Configuration.GetValue<bool>("Auth:UseDatabase", false);
 
 var app = builder.Build();
+
+// ── Seed agreement configs from static data if DB is empty (ADR-014) ──
+using (var scope = app.Services.CreateScope())
+{
+    var repo = scope.ServiceProvider.GetRequiredService<AgreementConfigRepository>();
+    var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+    await AgreementConfigSeeder.SeedAsync(repo, logger);
+}
 
 // ── Middleware ──
 app.UseMiddleware<CorrelationIdMiddleware>();
@@ -55,5 +64,6 @@ app.MapConfigEndpoints();
 app.MapSkemaEndpoints();
 app.MapTimerEndpoints();
 app.MapProjectEndpoints();
+app.MapAgreementConfigEndpoints();
 
 app.Run();

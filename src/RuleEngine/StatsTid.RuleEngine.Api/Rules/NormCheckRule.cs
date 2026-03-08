@@ -19,7 +19,10 @@ public static class NormCheckRule
     public static readonly IReadOnlySet<int> ValidNormPeriodWeeks = new HashSet<int> { 1, 2, 4, 8, 12 };
 
     /// <summary>
-    /// Config-aware Evaluate: uses NormPeriodWeeks from AgreementRuleConfig.
+    /// Config-aware Evaluate: dispatches based on NormModel.
+    /// WEEKLY_HOURS: delegates to the explicit normPeriodWeeks overload.
+    /// ANNUAL_ACTIVITY: pro-rates annual norm to the period length.
+    /// Pure function, deterministic, no I/O.
     /// </summary>
     public static CalculationResult Evaluate(
         EmploymentProfile profile,
@@ -28,7 +31,56 @@ public static class NormCheckRule
         DateOnly periodEnd,
         AgreementRuleConfig config)
     {
-        return Evaluate(profile, entries, periodStart, periodEnd, config.NormPeriodWeeks);
+        return config.NormModel switch
+        {
+            NormModel.ANNUAL_ACTIVITY => EvaluateAnnualActivity(profile, entries, periodStart, periodEnd, config),
+            _ => Evaluate(profile, entries, periodStart, periodEnd, config.NormPeriodWeeks),
+        };
+    }
+
+    /// <summary>
+    /// ANNUAL_ACTIVITY norm calculation: pro-rates annual norm hours to the period.
+    /// Pure function, deterministic, no I/O.
+    /// </summary>
+    private static CalculationResult EvaluateAnnualActivity(
+        EmploymentProfile profile,
+        IReadOnlyList<TimeEntry> entries,
+        DateOnly periodStart,
+        DateOnly periodEnd,
+        AgreementRuleConfig config)
+    {
+        var periodDays = periodEnd.DayNumber - periodStart.DayNumber + 1;
+        var annualNorm = config.AnnualNormHours * profile.PartTimeFraction;
+        var periodNorm = annualNorm * periodDays / 365m;
+
+        var periodEntries = entries
+            .Where(e => e.Date >= periodStart && e.Date <= periodEnd)
+            .ToList();
+
+        var actualHours = periodEntries.Sum(e => e.Hours);
+
+        var lineItems = periodEntries
+            .Select(e => new CalculationLineItem
+            {
+                TimeType = "NORMAL_HOURS",
+                Hours = e.Hours,
+                Rate = 1.0m,
+                Date = e.Date
+            })
+            .ToList();
+
+        return new CalculationResult
+        {
+            RuleId = RuleId,
+            EmployeeId = profile.EmployeeId,
+            Success = true,
+            LineItems = lineItems,
+            NormPeriodWeeks = null,
+            NormHoursTotal = periodNorm,
+            ActualHoursTotal = actualHours,
+            Deviation = actualHours - periodNorm,
+            NormFulfilled = actualHours >= periodNorm
+        };
     }
 
     /// <summary>

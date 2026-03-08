@@ -70,15 +70,16 @@ CREATE TABLE IF NOT EXISTS rule_versions (
     PRIMARY KEY (rule_id, ok_version, agreement_code)
 );
 
--- Wage type mappings (versioned per OK agreement)
+-- Wage type mappings (versioned per OK agreement, optionally position-specific)
 CREATE TABLE IF NOT EXISTS wage_type_mappings (
     time_type       TEXT        NOT NULL,
     wage_type       TEXT        NOT NULL,
     ok_version      TEXT        NOT NULL,
     agreement_code  TEXT        NOT NULL,
+    position        TEXT,
     description     TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (time_type, ok_version, agreement_code)
+    PRIMARY KEY (time_type, ok_version, agreement_code, COALESCE(position, ''))
 );
 
 -- Flex balance snapshots
@@ -653,4 +654,242 @@ INSERT INTO projects (org_id, project_code, project_name, sort_order, created_by
     ('AFD01', 'PROJ-BETA', 'Projekt Beta', 3, 'ladm01'),
     ('AFD02', 'SYSDEV-01', 'Systemudvikling', 1, 'ladm01'),
     ('AFD02', 'VEDL-01', 'Vedligeholdelse', 2, 'ladm01')
+ON CONFLICT DO NOTHING;
+
+-- ============================================================
+-- SPRINT 11: Position Registry
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS positions (
+    position_code   TEXT        PRIMARY KEY,
+    display_label   TEXT        NOT NULL,
+    agreement_code  TEXT        NOT NULL,
+    is_active       BOOLEAN     NOT NULL DEFAULT true,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Seed initial AC position codes
+INSERT INTO positions (position_code, display_label, agreement_code) VALUES
+    ('DEPARTMENT_HEAD', 'Kontorchef', 'AC'),
+    ('RESEARCHER', 'Forsker', 'AC'),
+    ('SPECIALIST', 'Specialkonsulent', 'AC'),
+    ('TEACHING_STAFF', 'Undervisningspersonale', 'AC')
+ON CONFLICT DO NOTHING;
+
+-- ============================================================
+-- SPRINT 11 SEED DATA: Academic agreement wage type mappings
+-- ============================================================
+
+-- AC_RESEARCH OK24
+INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, description) VALUES
+    ('NORMAL_HOURS',      'SLS_0110', 'OK24', 'AC_RESEARCH', 'Normal hours'),
+    ('MERARBEJDE',        'SLS_0210', 'OK24', 'AC_RESEARCH', 'Merarbejde (extra work)'),
+    ('VACATION',          'SLS_0510', 'OK24', 'AC_RESEARCH', 'Vacation'),
+    ('SICK_DAY',          'SLS_0540', 'OK24', 'AC_RESEARCH', 'Sick day'),
+    ('CARE_DAY',          'SLS_0550', 'OK24', 'AC_RESEARCH', 'Care day (omsorgsdage)'),
+    ('CHILD_SICK_1',      'SLS_0560', 'OK24', 'AC_RESEARCH', 'Child sick day (barns sygedag)'),
+    ('SENIOR_DAY',        'SLS_0570', 'OK24', 'AC_RESEARCH', 'Senior day'),
+    ('LEAVE_WITH_PAY',    'SLS_0580', 'OK24', 'AC_RESEARCH', 'Leave with pay'),
+    ('LEAVE_WITHOUT_PAY', 'SLS_0590', 'OK24', 'AC_RESEARCH', 'Leave without pay'),
+    ('TRAVEL_WORK',       'SLS_0820', 'OK24', 'AC_RESEARCH', 'Travel time (working)'),
+    ('TRAVEL_NON_WORK',   'SLS_0830', 'OK24', 'AC_RESEARCH', 'Travel time (non-working)')
+ON CONFLICT DO NOTHING;
+
+-- AC_RESEARCH OK26
+INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, description) VALUES
+    ('NORMAL_HOURS',      'SLS_0110', 'OK26', 'AC_RESEARCH', 'Normal hours'),
+    ('MERARBEJDE',        'SLS_0210', 'OK26', 'AC_RESEARCH', 'Merarbejde (extra work)'),
+    ('VACATION',          'SLS_0510', 'OK26', 'AC_RESEARCH', 'Vacation'),
+    ('SICK_DAY',          'SLS_0540', 'OK26', 'AC_RESEARCH', 'Sick day'),
+    ('CARE_DAY',          'SLS_0550', 'OK26', 'AC_RESEARCH', 'Care day (omsorgsdage)'),
+    ('CHILD_SICK_1',      'SLS_0560', 'OK26', 'AC_RESEARCH', 'Child sick day (barns sygedag)'),
+    ('SENIOR_DAY',        'SLS_0570', 'OK26', 'AC_RESEARCH', 'Senior day'),
+    ('LEAVE_WITH_PAY',    'SLS_0580', 'OK26', 'AC_RESEARCH', 'Leave with pay'),
+    ('LEAVE_WITHOUT_PAY', 'SLS_0590', 'OK26', 'AC_RESEARCH', 'Leave without pay'),
+    ('TRAVEL_WORK',       'SLS_0820', 'OK26', 'AC_RESEARCH', 'Travel time (working)'),
+    ('TRAVEL_NON_WORK',   'SLS_0830', 'OK26', 'AC_RESEARCH', 'Travel time (non-working)')
+ON CONFLICT DO NOTHING;
+
+-- AC_TEACHING OK24
+INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, description) VALUES
+    ('NORMAL_HOURS',      'SLS_0110', 'OK24', 'AC_TEACHING', 'Normal hours'),
+    ('MERARBEJDE',        'SLS_0210', 'OK24', 'AC_TEACHING', 'Merarbejde (extra work)'),
+    ('VACATION',          'SLS_0510', 'OK24', 'AC_TEACHING', 'Vacation'),
+    ('SICK_DAY',          'SLS_0540', 'OK24', 'AC_TEACHING', 'Sick day'),
+    ('CARE_DAY',          'SLS_0550', 'OK24', 'AC_TEACHING', 'Care day (omsorgsdage)'),
+    ('CHILD_SICK_1',      'SLS_0560', 'OK24', 'AC_TEACHING', 'Child sick day (barns sygedag)'),
+    ('SENIOR_DAY',        'SLS_0570', 'OK24', 'AC_TEACHING', 'Senior day'),
+    ('LEAVE_WITH_PAY',    'SLS_0580', 'OK24', 'AC_TEACHING', 'Leave with pay'),
+    ('LEAVE_WITHOUT_PAY', 'SLS_0590', 'OK24', 'AC_TEACHING', 'Leave without pay'),
+    ('TRAVEL_WORK',       'SLS_0820', 'OK24', 'AC_TEACHING', 'Travel time (working)'),
+    ('TRAVEL_NON_WORK',   'SLS_0830', 'OK24', 'AC_TEACHING', 'Travel time (non-working)')
+ON CONFLICT DO NOTHING;
+
+-- AC_TEACHING OK26
+INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, description) VALUES
+    ('NORMAL_HOURS',      'SLS_0110', 'OK26', 'AC_TEACHING', 'Normal hours'),
+    ('MERARBEJDE',        'SLS_0210', 'OK26', 'AC_TEACHING', 'Merarbejde (extra work)'),
+    ('VACATION',          'SLS_0510', 'OK26', 'AC_TEACHING', 'Vacation'),
+    ('SICK_DAY',          'SLS_0540', 'OK26', 'AC_TEACHING', 'Sick day'),
+    ('CARE_DAY',          'SLS_0550', 'OK26', 'AC_TEACHING', 'Care day (omsorgsdage)'),
+    ('CHILD_SICK_1',      'SLS_0560', 'OK26', 'AC_TEACHING', 'Child sick day (barns sygedag)'),
+    ('SENIOR_DAY',        'SLS_0570', 'OK26', 'AC_TEACHING', 'Senior day'),
+    ('LEAVE_WITH_PAY',    'SLS_0580', 'OK26', 'AC_TEACHING', 'Leave with pay'),
+    ('LEAVE_WITHOUT_PAY', 'SLS_0590', 'OK26', 'AC_TEACHING', 'Leave without pay'),
+    ('TRAVEL_WORK',       'SLS_0820', 'OK26', 'AC_TEACHING', 'Travel time (working)'),
+    ('TRAVEL_NON_WORK',   'SLS_0830', 'OK26', 'AC_TEACHING', 'Travel time (non-working)')
+ON CONFLICT DO NOTHING;
+
+-- ============================================================
+-- SPRINT 12: Agreement Configuration Management (ADR-014)
+-- ============================================================
+
+-- Agreement configs table — single source of truth for all agreement rule configs
+CREATE TABLE IF NOT EXISTS agreement_configs (
+    config_id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    agreement_code          TEXT        NOT NULL,
+    ok_version              TEXT        NOT NULL,
+    status                  TEXT        NOT NULL DEFAULT 'DRAFT' CHECK (status IN ('DRAFT', 'ACTIVE', 'ARCHIVED')),
+    -- Norm & Flex
+    weekly_norm_hours       DECIMAL     NOT NULL,
+    norm_period_weeks       INT         NOT NULL DEFAULT 1,
+    norm_model              TEXT        NOT NULL DEFAULT 'WEEKLY_HOURS',
+    annual_norm_hours       DECIMAL     NOT NULL DEFAULT 1924,
+    max_flex_balance        DECIMAL     NOT NULL,
+    flex_carryover_max      DECIMAL     NOT NULL,
+    -- Overtime
+    has_overtime            BOOLEAN     NOT NULL,
+    has_merarbejde          BOOLEAN     NOT NULL,
+    overtime_threshold_50   DECIMAL     NOT NULL DEFAULT 37.0,
+    overtime_threshold_100  DECIMAL     NOT NULL DEFAULT 40.0,
+    -- Supplements
+    evening_supplement_enabled  BOOLEAN NOT NULL DEFAULT FALSE,
+    night_supplement_enabled    BOOLEAN NOT NULL DEFAULT FALSE,
+    weekend_supplement_enabled  BOOLEAN NOT NULL DEFAULT FALSE,
+    holiday_supplement_enabled  BOOLEAN NOT NULL DEFAULT FALSE,
+    evening_start           INT         NOT NULL DEFAULT 17,
+    evening_end             INT         NOT NULL DEFAULT 23,
+    night_start             INT         NOT NULL DEFAULT 23,
+    night_end               INT         NOT NULL DEFAULT 6,
+    evening_rate            DECIMAL     NOT NULL DEFAULT 1.25,
+    night_rate              DECIMAL     NOT NULL DEFAULT 1.50,
+    weekend_saturday_rate   DECIMAL     NOT NULL DEFAULT 1.50,
+    weekend_sunday_rate     DECIMAL     NOT NULL DEFAULT 2.0,
+    holiday_rate            DECIMAL     NOT NULL DEFAULT 2.0,
+    -- On-call
+    on_call_duty_enabled    BOOLEAN     NOT NULL DEFAULT FALSE,
+    on_call_duty_rate       DECIMAL     NOT NULL DEFAULT 0.33,
+    call_in_work_enabled    BOOLEAN     NOT NULL DEFAULT FALSE,
+    call_in_minimum_hours   DECIMAL     NOT NULL DEFAULT 3.0,
+    call_in_rate            DECIMAL     NOT NULL DEFAULT 1.0,
+    -- Travel
+    travel_time_enabled     BOOLEAN     NOT NULL DEFAULT FALSE,
+    working_travel_rate     DECIMAL     NOT NULL DEFAULT 1.0,
+    non_working_travel_rate DECIMAL     NOT NULL DEFAULT 0.5,
+    -- Metadata
+    created_by              TEXT        NOT NULL DEFAULT 'SYSTEM_SEED',
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    published_at            TIMESTAMPTZ,
+    archived_at             TIMESTAMPTZ,
+    cloned_from_id          UUID        REFERENCES agreement_configs(config_id),
+    description             TEXT
+);
+
+-- Only one ACTIVE per (agreement_code, ok_version)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agreement_configs_active
+    ON agreement_configs (agreement_code, ok_version) WHERE status = 'ACTIVE';
+
+CREATE INDEX IF NOT EXISTS idx_agreement_configs_code_version
+    ON agreement_configs (agreement_code, ok_version);
+CREATE INDEX IF NOT EXISTS idx_agreement_configs_status
+    ON agreement_configs (status);
+
+-- Agreement config audit trail (append-only)
+CREATE TABLE IF NOT EXISTS agreement_config_audit (
+    audit_id        BIGSERIAL   PRIMARY KEY,
+    config_id       UUID        NOT NULL,
+    action          TEXT        NOT NULL CHECK (action IN ('CREATED', 'UPDATED', 'PUBLISHED', 'ARCHIVED', 'CLONED')),
+    previous_data   JSONB,
+    new_data        JSONB,
+    actor_id        TEXT        NOT NULL,
+    actor_role      TEXT        NOT NULL,
+    timestamp       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_agreement_config_audit_config
+    ON agreement_config_audit(config_id);
+
+-- Seed 10 agreement configs from CentralAgreementConfigs (status=ACTIVE)
+-- AC OK24
+INSERT INTO agreement_configs (agreement_code, ok_version, status, weekly_norm_hours, norm_period_weeks, norm_model, annual_norm_hours, max_flex_balance, flex_carryover_max, has_overtime, has_merarbejde, overtime_threshold_50, overtime_threshold_100, evening_supplement_enabled, night_supplement_enabled, weekend_supplement_enabled, holiday_supplement_enabled, evening_start, evening_end, night_start, night_end, evening_rate, night_rate, weekend_saturday_rate, weekend_sunday_rate, holiday_rate, on_call_duty_enabled, on_call_duty_rate, call_in_work_enabled, call_in_minimum_hours, call_in_rate, travel_time_enabled, working_travel_rate, non_working_travel_rate, created_by, published_at, description)
+VALUES
+('AC', 'OK24', 'ACTIVE', 37.0, 1, 'WEEKLY_HOURS', 1924, 150.0, 150.0, FALSE, TRUE, 37.0, 40.0, FALSE, FALSE, FALSE, FALSE, 17, 23, 23, 6, 1.25, 1.50, 1.50, 2.0, 2.0, FALSE, 0.33, FALSE, 3.0, 1.0, TRUE, 1.0, 0.5, 'SYSTEM_SEED', NOW(), 'AC OK24 — Standard akademiker agreement')
+ON CONFLICT DO NOTHING;
+
+-- AC OK26
+INSERT INTO agreement_configs (agreement_code, ok_version, status, weekly_norm_hours, norm_period_weeks, norm_model, annual_norm_hours, max_flex_balance, flex_carryover_max, has_overtime, has_merarbejde, overtime_threshold_50, overtime_threshold_100, evening_supplement_enabled, night_supplement_enabled, weekend_supplement_enabled, holiday_supplement_enabled, evening_start, evening_end, night_start, night_end, evening_rate, night_rate, weekend_saturday_rate, weekend_sunday_rate, holiday_rate, on_call_duty_enabled, on_call_duty_rate, call_in_work_enabled, call_in_minimum_hours, call_in_rate, travel_time_enabled, working_travel_rate, non_working_travel_rate, created_by, published_at, description)
+VALUES
+('AC', 'OK26', 'ACTIVE', 37.0, 1, 'WEEKLY_HOURS', 1924, 150.0, 150.0, FALSE, TRUE, 37.0, 40.0, FALSE, FALSE, FALSE, FALSE, 17, 23, 23, 6, 1.25, 1.50, 1.50, 2.0, 2.0, FALSE, 0.33, FALSE, 3.0, 1.0, TRUE, 1.0, 0.5, 'SYSTEM_SEED', NOW(), 'AC OK26 — Standard akademiker agreement')
+ON CONFLICT DO NOTHING;
+
+-- HK OK24
+INSERT INTO agreement_configs (agreement_code, ok_version, status, weekly_norm_hours, norm_period_weeks, norm_model, annual_norm_hours, max_flex_balance, flex_carryover_max, has_overtime, has_merarbejde, overtime_threshold_50, overtime_threshold_100, evening_supplement_enabled, night_supplement_enabled, weekend_supplement_enabled, holiday_supplement_enabled, evening_start, evening_end, night_start, night_end, evening_rate, night_rate, weekend_saturday_rate, weekend_sunday_rate, holiday_rate, on_call_duty_enabled, on_call_duty_rate, call_in_work_enabled, call_in_minimum_hours, call_in_rate, travel_time_enabled, working_travel_rate, non_working_travel_rate, created_by, published_at, description)
+VALUES
+('HK', 'OK24', 'ACTIVE', 37.0, 1, 'WEEKLY_HOURS', 1924, 100.0, 100.0, TRUE, FALSE, 37.0, 40.0, TRUE, TRUE, TRUE, TRUE, 17, 23, 23, 6, 1.25, 1.50, 1.50, 2.0, 2.0, TRUE, 0.33, TRUE, 3.0, 1.0, TRUE, 1.0, 0.5, 'SYSTEM_SEED', NOW(), 'HK OK24 — Handels- og kontorfunktionærer')
+ON CONFLICT DO NOTHING;
+
+-- HK OK26
+INSERT INTO agreement_configs (agreement_code, ok_version, status, weekly_norm_hours, norm_period_weeks, norm_model, annual_norm_hours, max_flex_balance, flex_carryover_max, has_overtime, has_merarbejde, overtime_threshold_50, overtime_threshold_100, evening_supplement_enabled, night_supplement_enabled, weekend_supplement_enabled, holiday_supplement_enabled, evening_start, evening_end, night_start, night_end, evening_rate, night_rate, weekend_saturday_rate, weekend_sunday_rate, holiday_rate, on_call_duty_enabled, on_call_duty_rate, call_in_work_enabled, call_in_minimum_hours, call_in_rate, travel_time_enabled, working_travel_rate, non_working_travel_rate, created_by, published_at, description)
+VALUES
+('HK', 'OK26', 'ACTIVE', 37.0, 1, 'WEEKLY_HOURS', 1924, 100.0, 100.0, TRUE, FALSE, 37.0, 40.0, TRUE, TRUE, TRUE, TRUE, 17, 23, 23, 6, 1.25, 1.50, 1.50, 2.0, 2.0, TRUE, 0.33, TRUE, 3.0, 1.0, TRUE, 1.0, 0.5, 'SYSTEM_SEED', NOW(), 'HK OK26 — Handels- og kontorfunktionærer')
+ON CONFLICT DO NOTHING;
+
+-- PROSA OK24
+INSERT INTO agreement_configs (agreement_code, ok_version, status, weekly_norm_hours, norm_period_weeks, norm_model, annual_norm_hours, max_flex_balance, flex_carryover_max, has_overtime, has_merarbejde, overtime_threshold_50, overtime_threshold_100, evening_supplement_enabled, night_supplement_enabled, weekend_supplement_enabled, holiday_supplement_enabled, evening_start, evening_end, night_start, night_end, evening_rate, night_rate, weekend_saturday_rate, weekend_sunday_rate, holiday_rate, on_call_duty_enabled, on_call_duty_rate, call_in_work_enabled, call_in_minimum_hours, call_in_rate, travel_time_enabled, working_travel_rate, non_working_travel_rate, created_by, published_at, description)
+VALUES
+('PROSA', 'OK24', 'ACTIVE', 37.0, 1, 'WEEKLY_HOURS', 1924, 120.0, 120.0, TRUE, FALSE, 37.0, 40.0, TRUE, TRUE, TRUE, TRUE, 17, 23, 23, 6, 1.25, 1.50, 1.50, 2.0, 2.0, TRUE, 0.33, TRUE, 3.0, 1.0, TRUE, 1.0, 0.5, 'SYSTEM_SEED', NOW(), 'PROSA OK24 — IT-faglig organisation')
+ON CONFLICT DO NOTHING;
+
+-- PROSA OK26
+INSERT INTO agreement_configs (agreement_code, ok_version, status, weekly_norm_hours, norm_period_weeks, norm_model, annual_norm_hours, max_flex_balance, flex_carryover_max, has_overtime, has_merarbejde, overtime_threshold_50, overtime_threshold_100, evening_supplement_enabled, night_supplement_enabled, weekend_supplement_enabled, holiday_supplement_enabled, evening_start, evening_end, night_start, night_end, evening_rate, night_rate, weekend_saturday_rate, weekend_sunday_rate, holiday_rate, on_call_duty_enabled, on_call_duty_rate, call_in_work_enabled, call_in_minimum_hours, call_in_rate, travel_time_enabled, working_travel_rate, non_working_travel_rate, created_by, published_at, description)
+VALUES
+('PROSA', 'OK26', 'ACTIVE', 37.0, 1, 'WEEKLY_HOURS', 1924, 120.0, 120.0, TRUE, FALSE, 37.0, 40.0, TRUE, TRUE, TRUE, TRUE, 17, 23, 23, 6, 1.25, 1.50, 1.50, 2.0, 2.0, TRUE, 0.33, TRUE, 3.0, 1.0, TRUE, 1.0, 0.5, 'SYSTEM_SEED', NOW(), 'PROSA OK26 — IT-faglig organisation')
+ON CONFLICT DO NOTHING;
+
+-- AC_RESEARCH OK24
+INSERT INTO agreement_configs (agreement_code, ok_version, status, weekly_norm_hours, norm_period_weeks, norm_model, annual_norm_hours, max_flex_balance, flex_carryover_max, has_overtime, has_merarbejde, overtime_threshold_50, overtime_threshold_100, evening_supplement_enabled, night_supplement_enabled, weekend_supplement_enabled, holiday_supplement_enabled, evening_start, evening_end, night_start, night_end, evening_rate, night_rate, weekend_saturday_rate, weekend_sunday_rate, holiday_rate, on_call_duty_enabled, on_call_duty_rate, call_in_work_enabled, call_in_minimum_hours, call_in_rate, travel_time_enabled, working_travel_rate, non_working_travel_rate, created_by, published_at, description)
+VALUES
+('AC_RESEARCH', 'OK24', 'ACTIVE', 37.0, 1, 'ANNUAL_ACTIVITY', 1924, 150.0, 150.0, FALSE, TRUE, 37.0, 40.0, FALSE, FALSE, FALSE, FALSE, 17, 23, 23, 6, 1.25, 1.50, 1.50, 2.0, 2.0, FALSE, 0.33, FALSE, 3.0, 1.0, TRUE, 1.0, 0.5, 'SYSTEM_SEED', NOW(), 'AC_RESEARCH OK24 — Researchers (annual norm 1924h)')
+ON CONFLICT DO NOTHING;
+
+-- AC_RESEARCH OK26
+INSERT INTO agreement_configs (agreement_code, ok_version, status, weekly_norm_hours, norm_period_weeks, norm_model, annual_norm_hours, max_flex_balance, flex_carryover_max, has_overtime, has_merarbejde, overtime_threshold_50, overtime_threshold_100, evening_supplement_enabled, night_supplement_enabled, weekend_supplement_enabled, holiday_supplement_enabled, evening_start, evening_end, night_start, night_end, evening_rate, night_rate, weekend_saturday_rate, weekend_sunday_rate, holiday_rate, on_call_duty_enabled, on_call_duty_rate, call_in_work_enabled, call_in_minimum_hours, call_in_rate, travel_time_enabled, working_travel_rate, non_working_travel_rate, created_by, published_at, description)
+VALUES
+('AC_RESEARCH', 'OK26', 'ACTIVE', 37.0, 1, 'ANNUAL_ACTIVITY', 1924, 150.0, 150.0, FALSE, TRUE, 37.0, 40.0, FALSE, FALSE, FALSE, FALSE, 17, 23, 23, 6, 1.25, 1.50, 1.50, 2.0, 2.0, FALSE, 0.33, FALSE, 3.0, 1.0, TRUE, 1.0, 0.5, 'SYSTEM_SEED', NOW(), 'AC_RESEARCH OK26 — Researchers (annual norm 1924h)')
+ON CONFLICT DO NOTHING;
+
+-- AC_TEACHING OK24
+INSERT INTO agreement_configs (agreement_code, ok_version, status, weekly_norm_hours, norm_period_weeks, norm_model, annual_norm_hours, max_flex_balance, flex_carryover_max, has_overtime, has_merarbejde, overtime_threshold_50, overtime_threshold_100, evening_supplement_enabled, night_supplement_enabled, weekend_supplement_enabled, holiday_supplement_enabled, evening_start, evening_end, night_start, night_end, evening_rate, night_rate, weekend_saturday_rate, weekend_sunday_rate, holiday_rate, on_call_duty_enabled, on_call_duty_rate, call_in_work_enabled, call_in_minimum_hours, call_in_rate, travel_time_enabled, working_travel_rate, non_working_travel_rate, created_by, published_at, description)
+VALUES
+('AC_TEACHING', 'OK24', 'ACTIVE', 37.0, 1, 'ANNUAL_ACTIVITY', 1680, 150.0, 150.0, FALSE, TRUE, 37.0, 40.0, FALSE, FALSE, FALSE, FALSE, 17, 23, 23, 6, 1.25, 1.50, 1.50, 2.0, 2.0, FALSE, 0.33, FALSE, 3.0, 1.0, TRUE, 1.0, 0.5, 'SYSTEM_SEED', NOW(), 'AC_TEACHING OK24 — Teaching staff (1680h annual norm)')
+ON CONFLICT DO NOTHING;
+
+-- AC_TEACHING OK26
+INSERT INTO agreement_configs (agreement_code, ok_version, status, weekly_norm_hours, norm_period_weeks, norm_model, annual_norm_hours, max_flex_balance, flex_carryover_max, has_overtime, has_merarbejde, overtime_threshold_50, overtime_threshold_100, evening_supplement_enabled, night_supplement_enabled, weekend_supplement_enabled, holiday_supplement_enabled, evening_start, evening_end, night_start, night_end, evening_rate, night_rate, weekend_saturday_rate, weekend_sunday_rate, holiday_rate, on_call_duty_enabled, on_call_duty_rate, call_in_work_enabled, call_in_minimum_hours, call_in_rate, travel_time_enabled, working_travel_rate, non_working_travel_rate, created_by, published_at, description)
+VALUES
+('AC_TEACHING', 'OK26', 'ACTIVE', 37.0, 1, 'ANNUAL_ACTIVITY', 1680, 150.0, 150.0, FALSE, TRUE, 37.0, 40.0, FALSE, FALSE, FALSE, FALSE, 17, 23, 23, 6, 1.25, 1.50, 1.50, 2.0, 2.0, FALSE, 0.33, FALSE, 3.0, 1.0, TRUE, 1.0, 0.5, 'SYSTEM_SEED', NOW(), 'AC_TEACHING OK26 — Teaching staff (1680h annual norm)')
+ON CONFLICT DO NOTHING;
+
+-- ============================================================
+-- SPRINT 11 SEED DATA: NORM_DEVIATION wage type
+-- ============================================================
+
+-- NORM_DEVIATION wage type mappings (merarbejde from norm surplus, AC agreements only)
+INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, description) VALUES
+    ('NORM_DEVIATION', 'SLS_0150', 'OK24', 'AC', 'Norm deviation (merarbejde from norm surplus)'),
+    ('NORM_DEVIATION', 'SLS_0150', 'OK24', 'AC_RESEARCH', 'Norm deviation (merarbejde from norm surplus)'),
+    ('NORM_DEVIATION', 'SLS_0150', 'OK24', 'AC_TEACHING', 'Norm deviation (merarbejde from norm surplus)'),
+    ('NORM_DEVIATION', 'SLS_0150', 'OK26', 'AC', 'Norm deviation (merarbejde from norm surplus)'),
+    ('NORM_DEVIATION', 'SLS_0150', 'OK26', 'AC_RESEARCH', 'Norm deviation (merarbejde from norm surplus)'),
+    ('NORM_DEVIATION', 'SLS_0150', 'OK26', 'AC_TEACHING', 'Norm deviation (merarbejde from norm surplus)')
 ON CONFLICT DO NOTHING;
