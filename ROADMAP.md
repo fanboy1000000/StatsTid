@@ -80,7 +80,8 @@ Does not affect the deterministic core. Focuses on organizational hierarchy, loc
 - Phase 3c (Agreement Config Management): Sprint 12 ← new (re-prioritized from Phase 4)
 - Phase 3d (Employee Experience): Sprint 13
 - Phase 3e (Position Override + Wage Type Mapping UI): Sprint 14
-- Phase 4 (Production): Sprint 15+ (was 14+, then 12+, then 11+)
+- Phase 3f (Compliance, Entitlements & Overtime Governance): Sprints 15–17
+- Phase 4 (Production): Sprint 18+ (was 15+, then 14+, then 12+, then 11+)
 
 ### Phase 3 — Advanced Rules + Retroactive Corrections (Sprints 10–11)
 
@@ -115,7 +116,40 @@ Extends the DB-backed config pattern to position overrides and wage type mapping
 
 - **Sprint 14** (complete): 3 new DB tables (position_override_configs, audit tables), PositionOverrideConfigEntity + 4 domain events, WageTypeMapping Position property + 3 domain events, PositionOverrideRepository + WageTypeMappingRepository, ConfigResolutionService DB-first position override lookup with static fallback, 12 GlobalAdmin CRUD endpoints (7 position override + 5 wage type mapping), 2 admin pages (Positionstilpasninger + Lønartstilknytninger), 22 new tests (406 total). See [docs/sprints/SPRINT-14.md](docs/sprints/SPRINT-14.md).
 
-### Phase 4 — Production Hardening (Sprint 15+)
+### Phase 3f — Compliance, Entitlements & Overtime Governance (Sprints 15–17)
+
+**Priority focus**: P2 (Deterministic rule engine), P4 (Version correctness), P6 (Payroll integration)
+
+Addresses gaps identified in ontology analysis (2026-03-09). These are correctness requirements — without them the system can produce results that violate legal constraints or lack necessary balance tracking for accurate payroll export.
+
+**New SYSTEM_TARGET.md sections**: J (Working Time Compliance), K (Entitlement & Balance Management), L (Overtime Governance), M (Compensation Model)
+
+- **Sprint 15** — Entitlement & Balance Management
+  - Entitlement model: annual quotas for vacation (25 days, ferieår Sep–Aug), special holiday days, care days (2/year), senior days (age-based), child sick days (per-episode)
+  - Entitlement configuration per agreement (quota, accrual model, reset date, carryover max, part-time pro-rate)
+  - Balance tracking: entitlement used/remaining/planned, carryover from previous year
+  - Validation: absence registration rejected or warned when quota exceeded
+  - Balance summary endpoint extended with entitlement data
+  - Norm reduction: vacation days reduce period norm correctly (days × daily norm hours)
+  - DB tables: `entitlements`, `entitlement_balances`, `entitlement_config`
+
+- **Sprint 16** — Working Time Compliance
+  - Rest period validation rule: 11-hour daily rest, weekly rest day
+  - `MaxDailyHours`, `MinimumRestHours`, `RestPeriodDerogationAllowed` on AgreementRuleConfig
+  - `WeeklyMaxHoursReferencePeriod` for 48h/week EU directive ceiling
+  - NormCheckRule extended with daily limit validation
+  - Compliance warnings surfaced in Skema UI (employee) and approval dashboard (leader)
+  - Compensatory rest tracking when derogation is used
+
+- **Sprint 17** — Overtime Governance & Compensation Model
+  - Afspadsering as explicit concept: separate from flex, with conversion rates
+  - Overtime balance (separate from flex balance): accumulated, reduced by afspadsering or payout
+  - `DefaultCompensationModel`, `EmployeeCompensationChoice`, `MaxOvertimeHoursPerPeriod` on config
+  - `OvertimeRequiresPreApproval` flag (workflow gate, not rule engine)
+  - New wage type mappings: OVERTIME_50_PAYOUT, OVERTIME_50_AFSPADSERING, OVERTIME_100_PAYOUT, OVERTIME_100_AFSPADSERING, MERARBEJDE_PAYOUT, MERARBEJDE_AFSPADSERING
+  - Leader dashboard: overtime exceeded warnings, pre-approval tracking
+
+### Phase 4 — Production Hardening (Sprint 18+)
 
 **Priority focus**: All priorities — cross-cutting production readiness
 
@@ -132,21 +166,25 @@ Only makes sense once functional completeness is achieved.
 
 Projected functional coverage by requirement area. Percentages are cumulative.
 
-| Requirement Area | S1–S3 | S4 | S5 (Phase 1) | S6 | S7 | S8 (Phase 2) | S9 (Phase 2b) | S10–S11 (Phase 3) | S12 (Phase 3c) | S13 (Phase 3d) | S14 (Phase 3e) | After Phase 4 |
-|------------------|-------|-----|--------------|-----|-----|---------------------|---------------|-------------------|-----------------|----------------|----------------|---------------|
-| A. Basic Time Registration | 80% | 80% | 85% | 85% | 85% | 95% | 98% | 98% | 98% | 99% | 99% | 100% |
-| B. Working Time Rules | 70% | 72% | 75% | 75% | 75% | 95% | 95% | 98% | 98% | 98% | 98% | 100% |
-| C. Time Types & Supplements | 60% | 60% | 70% | 70% | 70% | 95% | 95% | 97% | 97% | 97% | 97% | 100% |
-| D. Absence Types | 65% | 80% | 85% | 85% | 85% | 95% | 97% | 97% | 97% | 97% | 97% | 100% |
-| E. Organizational Structure | 0% | 0% | 0% | 70% | 85% | 90% | 92% | 95% | 95% | 95% | 95% | 100% |
-| F. Roles and Authorization | 0% | 0% | 0% | 50% | 85% | 90% | 90% | 92% | 95% | 95% | 95% | 100% |
-| G. Local Configuration | 0% | 0% | 0% | 10% | 75% | 80% | 85% | 90% | 95% | 95% | 98% | 100% |
-| H. Period Approval Workflow | 0% | 0% | 0% | 10% | 80% | 85% | 95% | 95% | 95% | 95% | 95% | 100% |
-| I. Agreement Config Mgmt | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 85% | 85% | 95% | 100% |
-| AC-Specific Requirements | 40% | 42% | 45% | 45% | 45% | 90% | 90% | 97% | 98% | 98% | 99% | 100% |
-| Payroll Integration | 50% | 80% | 88% | 88% | 90% | 95% | 95% | 98% | 98% | 98% | 99% | 100% |
-| External Integrations | 60% | 60% | 60% | 60% | 60% | 90% | 90% | 90% | 90% | 90% | 90% | 100% |
-| **Overall** | **~39%** | **~43%** | **~46%** | **~55%** | **~67%** | **~91%** | **~93%** | **~97%** | **~95→97%** | **~96→97%** | **~97→99%** | **100%** |
+| Requirement Area | S1–S3 | S4 | S5 (Phase 1) | S6 | S7 | S8 (Phase 2) | S9 (Phase 2b) | S10–S11 (Phase 3) | S12 (Phase 3c) | S13 (Phase 3d) | S14 (Phase 3e) | S15 (Phase 3f) | S16 | S17 | After Phase 4 |
+|------------------|-------|-----|--------------|-----|-----|---------------------|---------------|-------------------|-----------------|----------------|----------------|----------------|-----|-----|---------------|
+| A. Basic Time Registration | 80% | 80% | 85% | 85% | 85% | 95% | 98% | 98% | 98% | 99% | 99% | 99% | 100% | 100% | 100% |
+| B. Working Time Rules | 70% | 72% | 75% | 75% | 75% | 95% | 95% | 98% | 98% | 98% | 98% | 98% | 100% | 100% | 100% |
+| C. Time Types & Supplements | 60% | 60% | 70% | 70% | 70% | 95% | 95% | 97% | 97% | 97% | 97% | 97% | 97% | 100% | 100% |
+| D. Absence Types | 65% | 80% | 85% | 85% | 85% | 95% | 97% | 97% | 97% | 97% | 97% | 100% | 100% | 100% | 100% |
+| E. Organizational Structure | 0% | 0% | 0% | 70% | 85% | 90% | 92% | 95% | 95% | 95% | 95% | 95% | 95% | 95% | 100% |
+| F. Roles and Authorization | 0% | 0% | 0% | 50% | 85% | 90% | 90% | 92% | 95% | 95% | 95% | 95% | 95% | 95% | 100% |
+| G. Local Configuration | 0% | 0% | 0% | 10% | 75% | 80% | 85% | 90% | 95% | 95% | 98% | 98% | 98% | 98% | 100% |
+| H. Period Approval Workflow | 0% | 0% | 0% | 10% | 80% | 85% | 95% | 95% | 95% | 95% | 95% | 95% | 95% | 98% | 100% |
+| I. Agreement Config Mgmt | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 85% | 85% | 95% | 97% | 98% | 100% | 100% |
+| J. Working Time Compliance | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 90% | 95% | 100% |
+| K. Entitlement & Balances | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 85% | 90% | 95% | 100% |
+| L. Overtime Governance | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 90% | 100% |
+| M. Compensation Model | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 85% | 100% |
+| AC-Specific Requirements | 40% | 42% | 45% | 45% | 45% | 90% | 90% | 97% | 98% | 98% | 99% | 99% | 99% | 100% | 100% |
+| Payroll Integration | 50% | 80% | 88% | 88% | 90% | 95% | 95% | 98% | 98% | 98% | 99% | 99% | 99% | 100% | 100% |
+| External Integrations | 60% | 60% | 60% | 60% | 60% | 90% | 90% | 90% | 90% | 90% | 90% | 90% | 90% | 90% | 100% |
+| **Overall** | **~33%** | **~36%** | **~39%** | **~46%** | **~56%** | **~75%** | **~77%** | **~80%** | **~82%** | **~82%** | **~83%** | **~86%** | **~90%** | **~95%** | **100%** |
 
 ## Sprint 5 — Completed
 
