@@ -32,6 +32,8 @@ builder.Services.AddSingleton<AbsenceTypeVisibilityRepository>();
 builder.Services.AddSingleton<AgreementConfigRepository>();
 builder.Services.AddSingleton<PositionOverrideRepository>();
 builder.Services.AddSingleton<WageTypeMappingRepository>();
+builder.Services.AddSingleton<EntitlementConfigRepository>();
+builder.Services.AddSingleton<EntitlementBalanceRepository>();
 
 // ── Services ──
 builder.Services.AddSingleton<ConfigResolutionService>();
@@ -46,6 +48,13 @@ using (var scope = app.Services.CreateScope())
     var repo = scope.ServiceProvider.GetRequiredService<AgreementConfigRepository>();
     var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
     await AgreementConfigSeeder.SeedAsync(repo, logger);
+}
+
+// ── Seed entitlement configs if DB is empty ──
+{
+    var dbFactory = app.Services.GetRequiredService<DbConnectionFactory>();
+    var logger = app.Services.GetRequiredService<ILogger<Program>>();
+    await EntitlementConfigSeeder.SeedAsync(dbFactory, logger);
 }
 
 // ── Middleware ──

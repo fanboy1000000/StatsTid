@@ -1,6 +1,17 @@
 import { useState, useEffect, useCallback } from 'react'
 import { apiClient } from '../lib/api'
 
+export interface EntitlementInfo {
+  type: string
+  label: string
+  totalQuota: number
+  used: number
+  planned: number
+  carryoverIn: number
+  remaining: number
+  entitlementYear: number
+}
+
 export interface BalanceSummary {
   flexBalance: number
   flexDelta: number
@@ -11,6 +22,7 @@ export interface BalanceSummary {
   overtimeHours: number
   agreementCode: string
   hasMerarbejde: boolean
+  entitlements?: EntitlementInfo[]
 }
 
 export function useBalanceSummary(employeeId: string, year: number, month: number) {

@@ -9,6 +9,15 @@ namespace StatsTid.Backend.Api.Endpoints;
 
 public static class BalanceEndpoints
 {
+    private static readonly Dictionary<string, string> DanishLabels = new()
+    {
+        ["VACATION"] = "Ferie",
+        ["SPECIAL_HOLIDAY"] = "Feriefridage",
+        ["CARE_DAY"] = "Omsorgsdage",
+        ["CHILD_SICK"] = "Barns sygedag",
+        ["SENIOR_DAY"] = "Seniordage"
+    };
+
     public static WebApplication MapBalanceEndpoints(this WebApplication app)
     {
         // ── GET /api/balance/{employeeId}/summary — Employee balance summary for a given month ──
@@ -19,6 +28,8 @@ public static class BalanceEndpoints
             int month,
             UserRepository userRepo,
             AgreementConfigRepository configRepo,
+            EntitlementConfigRepository entitlementConfigRepo,
+            EntitlementBalanceRepository entitlementBalanceRepo,
             IEventStore eventStore,
             OrgScopeValidator scopeValidator,
             HttpContext context,
@@ -93,6 +104,63 @@ public static class BalanceEndpoints
             // Overtime: max(0, actual - expected)
             var overtimeHours = Math.Max(0m, normHoursActual - normHoursExpected);
 
+            // ── Entitlements: load configs and balances ──
+            var entitlementConfigs = await entitlementConfigRepo.GetByAgreementAsync(
+                user.AgreementCode, user.OkVersion, ct);
+
+            // Part-time fraction not available on User model — default to 1.0
+            const decimal partTimeFraction = 1.0m;
+
+            var entitlements = new List<object>();
+            decimal? vacationEntitlementFromConfig = null;
+
+            foreach (var ec in entitlementConfigs)
+            {
+                // Calculate entitlement year based on resetMonth
+                int entitlementYear;
+                if (ec.ResetMonth == 1)
+                {
+                    entitlementYear = year;
+                }
+                else
+                {
+                    entitlementYear = month >= ec.ResetMonth ? year : year - 1;
+                }
+
+                // Look up balance for this employee + type + year
+                var balance = await entitlementBalanceRepo.GetByEmployeeAndTypeAsync(
+                    employeeId, ec.EntitlementType, entitlementYear, ct);
+
+                var totalQuota = ec.ProRateByPartTime
+                    ? ec.AnnualQuota * partTimeFraction
+                    : ec.AnnualQuota;
+
+                var used = balance?.Used ?? 0m;
+                var planned = balance?.Planned ?? 0m;
+                var carryoverIn = balance?.CarryoverIn ?? 0m;
+                var remaining = totalQuota + carryoverIn - used - planned;
+
+                DanishLabels.TryGetValue(ec.EntitlementType, out var label);
+
+                entitlements.Add(new
+                {
+                    type = ec.EntitlementType,
+                    label = label ?? ec.EntitlementType,
+                    totalQuota,
+                    used,
+                    planned,
+                    carryoverIn,
+                    remaining,
+                    entitlementYear
+                });
+
+                // Derive vacationDaysEntitlement from config instead of hardcoded 25
+                if (ec.EntitlementType == "VACATION")
+                    vacationEntitlementFromConfig = totalQuota;
+            }
+
+            var vacationDaysEntitlement = vacationEntitlementFromConfig ?? 25m;
+
             return Results.Ok(new
             {
                 employeeId,
@@ -101,12 +169,13 @@ public static class BalanceEndpoints
                 flexBalance,
                 flexDelta,
                 vacationDaysUsed,
-                vacationDaysEntitlement = 25,
+                vacationDaysEntitlement,
                 normHoursExpected,
                 normHoursActual,
                 overtimeHours,
                 agreementCode = user.AgreementCode,
-                hasMerarbejde
+                hasMerarbejde,
+                entitlements
             });
         }).RequireAuthorization("EmployeeOrAbove");
 

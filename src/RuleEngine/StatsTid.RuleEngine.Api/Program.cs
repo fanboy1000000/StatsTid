@@ -96,4 +96,10 @@ app.MapGet("/api/rules/available/{okVersion}", (string okVersion, RuleRegistry r
     return Results.Ok(new { okVersion, rules });
 }).RequireAuthorization("Authenticated");
 
+app.MapPost("/api/rules/validate-entitlement", (ValidateEntitlementRequest request) =>
+{
+    var result = EntitlementValidationRule.Evaluate(request);
+    return Results.Ok(result);
+}).RequireAuthorization("Authenticated");
+
 app.Run();

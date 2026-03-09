@@ -54,6 +54,9 @@ public static class EventSerializer
         ["WageTypeMappingCreated"] = typeof(WageTypeMappingCreated),
         ["WageTypeMappingUpdated"] = typeof(WageTypeMappingUpdated),
         ["WageTypeMappingDeleted"] = typeof(WageTypeMappingDeleted),
+        // Sprint 15: Entitlement management events
+        ["EntitlementBalanceAdjusted"] = typeof(EntitlementBalanceAdjusted),
+        ["EntitlementConfigSeeded"] = typeof(EntitlementConfigSeeded),
     };
 
     public static string Serialize(IDomainEvent @event)

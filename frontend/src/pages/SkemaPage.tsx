@@ -11,8 +11,24 @@ import { Badge } from '../components/ui/Badge'
 import { Alert } from '../components/ui/Alert'
 import { Spinner } from '../components/ui/Spinner'
 import { Card } from '../components/ui/Card'
+import type { QuotaError } from '../hooks/useSkema'
 import type { SkemaRow } from '../types'
 import styles from './SkemaPage.module.css'
+
+const DANISH_ABSENCE_LABELS: Record<string, string> = {
+  VACATION: 'Ferie',
+  SPECIAL_HOLIDAY: 'Feriefridage',
+  CARE_DAY: 'Omsorgsdage',
+  CHILD_SICK: 'Barns sygedag',
+  SENIOR_DAY: 'Seniordage',
+}
+
+function formatQuotaError(q: QuotaError): string {
+  const label = DANISH_ABSENCE_LABELS[q.absenceType] ?? q.absenceType
+  const remaining = q.remaining.toFixed(1).replace('.', ',')
+  const requested = q.requested.toFixed(1).replace('.', ',')
+  return `Du har overskredet din kvote for ${label}. Du har ${remaining} dage tilbage, men forsoegte at registrere ${requested} dage.`
+}
 
 const DANISH_MONTHS = [
   'Januar', 'Februar', 'Marts', 'April', 'Maj', 'Juni',
@@ -41,7 +57,7 @@ export function SkemaPage() {
   const [year, setYear] = useState(now.getFullYear())
   const [month, setMonth] = useState(now.getMonth() + 1)
 
-  const { data, loading, error, refetch, saveMonth, employeeApprove } = useSkema(employeeId, year, month)
+  const { data, loading, error, quotaError, clearQuotaError, refetch, saveMonth, employeeApprove } = useSkema(employeeId, year, month)
   const { session, loading: timerLoading, checkIn, checkOut, elapsed } = useTimer(employeeId)
   const { data: balanceData, loading: balanceLoading } = useBalanceSummary(employeeId, year, month)
 
@@ -261,6 +277,13 @@ export function SkemaPage() {
         <Alert variant="warning">
           Registrerede timer ({allocatedHoursToday.toFixed(1)}t) afviger fra stemplede timer (
           {timerHoursToday.toFixed(1)}t)
+        </Alert>
+      )}
+
+      {/* Quota error */}
+      {quotaError && (
+        <Alert variant="error" onDismiss={clearQuotaError}>
+          {formatQuotaError(quotaError)}
         </Alert>
       )}
 
