@@ -16,6 +16,7 @@ Lower priorities must never compromise higher priorities.
 # Document References
 - **[SYSTEM_TARGET.md](SYSTEM_TARGET.md)** — End-state product definition (functional requirements, agreement rules, payroll, integrations)
 - **[ROADMAP.md](ROADMAP.md)** — Technology stack, phased milestones, and detailed next-sprint planning (rolling detail)
+- **[docs/QUALITY.md](docs/QUALITY.md)** — Per-domain quality grading matrix, updated each sprint
 
 Agents needing domain requirements context should consult SYSTEM_TARGET.md.
 
@@ -33,6 +34,7 @@ For all domain implementation work, you MUST delegate to domain agents.
 When given an implementation task (sprint plan, feature request, bug fix spanning multiple domains):
 
 0. **Consult Knowledge Base**: Read `docs/knowledge-base/INDEX.md` and identify relevant entries for the task. Use the Domain Index to select entries to include in each agent's prompt.
+0a. **Entropy Scan** (sprint start only): Before the first task of a new sprint, run the Entropy Scanner to detect drift and accumulation. See "Entropy Management" section for details. Record findings in the sprint log header. Fix critical findings before proceeding; note non-critical findings for future sprints.
 1. **Decompose**: Break the task into domain-scoped subtasks. Each subtask must map to exactly one domain agent.
 2. **Delegate**: Spawn one Agent per subtask using the Claude Code `Agent` tool with `subagent_type: "general-purpose"`. Each agent receives:
    - Its domain role (e.g. "You are the Rule Engine Agent")
@@ -47,6 +49,7 @@ When given an implementation task (sprint plan, feature request, bug fix spannin
    - **Phase 3** (sequential): Test & QA Agent (depends on all implementation code)
    - **Phase 4** (sequential): Orchestrator validates — `dotnet build && dotnet test`
 5. **Validate**: After all agents complete, the Orchestrator runs build and test. If validation fails, identify the responsible agent and re-dispatch with the error context.
+5α. **Constraint Validation**: Run the Constraint Validator Agent on every agent output (except documentation-only changes). If violations are found, re-dispatch the responsible agent with the violation list before proceeding. For Small Tasks Exception, the Orchestrator self-checks against the Constraint Validator checklist. This step is fast and mechanical — it should catch rule violations that agents missed in their pre-submission checklist.
 5a. **Reviewer Audit**: If the task meets trigger criteria (see Reviewer Agent section), spawn the Reviewer Agent with the agent's output as context. Read the Reviewer's findings before proceeding to step 5b. The Orchestrator decides how to act on findings — a BLOCKER finding is a strong signal to withhold approval and re-dispatch, but authority remains with the Orchestrator. Do NOT invoke the Reviewer for tasks covered by the Small Tasks Exception.
 5b. **Review Knowledge Proposals**: Review agent outputs for `PROPOSED KNOWLEDGE ENTRY` sections. Approve valid proposals by creating entries in `docs/knowledge-base/` and updating `INDEX.md`.
 5c. **Record in Sprint Log**: After validating each task, record it in the current sprint's `docs/sprints/SPRINT-N.md` with validation criteria, files changed, and KB references.
@@ -89,6 +92,54 @@ When given an implementation task (sprint plan, feature request, bug fix spannin
 - **Scope**: `frontend/**`
 - **Responsibility**: React pages, components, hooks, routing, styling
 - **Constraints**: Secondary priority — must never drive backend decisions. Must consume backend APIs as-is.
+
+### Constraint Validator Agent
+- **Scope**: Read-only — no file modifications
+- **Responsibility**: Lightweight, fast cross-cutting constraint check on ALL agent outputs. Runs after every agent completes (step 5, before Reviewer). Checks mechanical rules that should never be violated regardless of domain.
+- **Constraints**: Read-only. Does not replace the Reviewer — it checks mechanical invariants, not architectural judgment. Returns PASS or VIOLATION list.
+- **Trigger**: Every agent output, including Small Tasks Exception (the Orchestrator self-checks against this list for small tasks). Not triggered for documentation-only changes.
+- **Checks**:
+  1. No imports crossing agent scope boundaries (e.g., Backend importing from RuleEngine directly)
+  2. No direct DB access from Rule Engine code (ADR-002)
+  3. No hardcoded service URLs (must use IConfiguration/ServiceUrls)
+  4. All new domain events present in EventSerializer type map (DEP-003)
+  5. All new HTTP endpoints have RequireAuthorization (ADR-007)
+  6. No anonymous type serialization for JWT/claims data (Sprint 6 lesson)
+  7. All new files are within the agent's declared scope
+  8. No `FindFirst` on claims that may be arrays (FAIL-001 — must use `FindAll`)
+
+### Constraint Validator Prompt Template
+
+```
+You are the Constraint Validator for the StatsTid project.
+
+ROLE: Mechanical invariant checker. You verify agent outputs against non-negotiable rules.
+You are NOT the Reviewer — you check syntax-level rules, not architectural judgment.
+Return PASS if all checks clear, or a VIOLATION list.
+
+AGENT OUTPUT:
+[Files changed/created by the agent]
+
+CHECKS:
+1. No imports from src/RuleEngine in src/Backend, src/Integrations, or src/Infrastructure (PAT-005: use HTTP)
+2. No NpgsqlCommand, DbConnection, or database types in src/RuleEngine (ADR-002)
+3. No hardcoded "http://localhost", "http://rule-engine", etc. — must use IConfiguration["ServiceUrls:*"]
+4. All classes inheriting DomainEventBase have a matching entry in EventSerializer._eventTypeMap (DEP-003)
+5. All MapGet/MapPost/MapPut/MapDelete calls chain .RequireAuthorization() (ADR-007)
+6. No new()/anonymous types used in JWT claim serialization — use typed classes (S6 lesson)
+7. All new/modified files fall within the agent's declared scope: [scope paths]
+8. No .FindFirst() on "scopes" claims — must use .FindAll() (FAIL-001)
+
+OUTPUT FORMAT:
+PASS — No violations found.
+
+or:
+
+VIOLATION: [Rule number and name]
+File: [path]
+Line: [approximate location]
+Detail: [what violates the rule]
+```
 
 ## Agent Prompt Template
 When spawning a domain agent, use this structure:
@@ -133,6 +184,18 @@ KNOWLEDGE BASE INSTRUCTIONS:
 ACCEPTANCE CRITERIA:
 - [criterion 1]
 - [criterion 2]
+
+PRE-SUBMISSION CHECKLIST (MANDATORY — verify before returning output):
+- [ ] All new endpoints have RequireAuthorization attributes
+- [ ] No direct function calls cross service boundaries (PAT-005: use HTTP)
+- [ ] All new domain events registered in EventSerializer type map (DEP-003)
+- [ ] No I/O, database access, or non-determinism in Rule Engine code (ADR-002)
+- [ ] Models use init-only properties (PAT-001)
+- [ ] No hardcoded URLs — use configuration or relative paths
+- [ ] Changes stay within declared file scope
+- [ ] No unused imports, dead code, or leftover debugging statements
+- [ ] [Domain-specific checks from KB entries provided above]
+Report any checklist failures in your output rather than silently ignoring them.
 ```
 
 ## Constraints
@@ -376,3 +439,101 @@ When new requirements arrive that change the planned execution order, the Orches
 - Deferred phases shift forward — their projected sprint numbers increase accordingly
 - Completed sprints are never renumbered — they are historical records
 - SYSTEM_TARGET.md must be updated if the new requirements introduce functional areas not yet documented
+
+# Entropy Management
+
+The project uses scheduled entropy scans to prevent drift and accumulation between sprints. This is inspired by the "garbage collection" pattern from harness engineering.
+
+## Pre-Sprint Entropy Scan (Step 0a)
+
+At the start of each new sprint, the Orchestrator runs a lightweight entropy scan. This is NOT a full agent — the Orchestrator performs it directly using Glob/Grep/Read tools.
+
+### Scan Checklist
+
+1. **KB Path Validation**: Verify all file paths referenced in `docs/knowledge-base/` entries still exist. Flag stale references.
+2. **Pattern Compliance Spot-Check**: Grep for known anti-patterns:
+   - Direct Rule Engine function calls from non-RuleEngine services (PAT-005 violation)
+   - `FindFirst("scopes")` usage (FAIL-001 regression)
+   - Hardcoded `http://localhost` URLs in non-test code
+   - Missing `RequireAuthorization` on endpoint definitions
+3. **Orphan Detection**: Check for files that exist but are not imported/referenced anywhere (unused components, dead models). Focus on files created in the previous 2 sprints.
+4. **Documentation Drift**: Verify that MEMORY.md deferred items list is current (no items already completed, no missing new items).
+5. **Quality Grade Review**: Update `docs/QUALITY.md` grades if the previous sprint changed domain quality.
+
+### Recording
+
+Entropy scan findings are recorded in the sprint log header under "## Entropy Scan Findings":
+- **DRIFT**: Stale reference or outdated documentation — fix before proceeding
+- **DEBT**: Non-critical accumulation — note in sprint log, fix when convenient
+- **CLEAN**: No issues found for this check
+
+If the scan finds DRIFT items, the Orchestrator fixes them before starting sprint tasks. DEBT items are tracked but don't block sprint execution.
+
+# Quality Grading
+
+The project maintains `docs/QUALITY.md` — a persistent quality assessment per domain and architectural layer, updated after each sprint.
+
+## Purpose
+- Visibility into which areas are fragile, undertested, or accumulating tech debt
+- Data-driven sprint planning — prioritize work in low-grade domains
+- Historical tracking of quality trends across sprints
+
+## Governance
+- **Orchestrator-only writes**: Updated by the Orchestrator at sprint end (step 5c) or during entropy scan (step 0a)
+- **Not a judgment tool**: Grades reflect objective measures (test coverage, pattern compliance, documentation completeness), not subjective quality
+
+## Grade Scale
+- **A**: High test coverage, full pattern compliance, well-documented, low tech debt
+- **B**: Adequate coverage, mostly compliant, some documentation gaps, manageable debt
+- **C**: Gaps in coverage or compliance, noticeable debt, needs attention in upcoming sprints
+- **D**: Significant gaps, active tech debt, should be prioritized for improvement
+- **F**: Broken or fundamentally non-compliant — immediate action required
+
+# Agent Effectiveness Metrics
+
+The sprint INDEX.md tracks agent effectiveness metrics to enable data-driven improvement of agent prompts and governance.
+
+## Metrics Tracked
+
+| Metric | Definition |
+|--------|-----------|
+| **Tasks** | Total tasks in the sprint |
+| **Constraint Violations** | Count of violations caught by the Constraint Validator (step 5α) |
+| **Reviewer Findings** | Count by severity: B=BLOCKER, W=WARNING, N=NOTE |
+| **Re-dispatches** | Number of agents re-dispatched after validation failures |
+| **First-Pass Rate** | Percentage of tasks accepted without re-dispatch: (Tasks - Re-dispatches) / Tasks |
+
+## Usage
+- If First-Pass Rate drops below 80%, investigate whether agent prompts need more KB context or clearer constraints
+- If a specific agent type consistently produces violations, add domain-specific items to its pre-submission checklist
+- If the same violation type recurs across sprints, escalate it to a new PAT or FAIL entry in the knowledge base
+
+# Harness Evolution
+
+The governance structure in this file is a "harness" — it constrains, informs, and corrects agent behavior. As model capabilities improve, parts of this harness may become unnecessary overhead.
+
+## Rippable Harness Principle
+Every governance mechanism should be periodically evaluated for cost vs. value. If a constraint consistently catches zero violations across 5+ sprints, consider relaxing or removing it. The goal is minimum effective governance, not maximum governance.
+
+## Evaluation Cadence
+- **Every 5 sprints**: Review agent effectiveness metrics. Identify constraints with zero violations and consider relaxation.
+- **On model upgrade**: When the underlying model changes significantly, reassess whether existing constraints are still necessary. Capabilities that required pipelines in earlier sprints may only need prompting with newer models.
+- **On workflow friction**: If a governance step consistently slows delivery without catching real issues, mark it for evaluation.
+
+## Observability Integration (Future — Phase 4+)
+When Docker services run in production-like environments, agent prompts may include runtime context:
+- Recent error logs from the target service
+- Performance metrics (latency, error rates)
+- Database query patterns and slow queries
+
+This enables agents to debug production issues autonomously. Implementation requires:
+- MCP server or API access to logging infrastructure
+- Scoped permissions (read-only access to logs, no write access to production)
+- Prompt template extensions for runtime context injection
+
+## Documentation Drift Prevention
+To prevent documentation from diverging from code:
+- **Entropy scan step 1**: KB path validation catches stale file references
+- **Entropy scan step 4**: MEMORY.md deferred items review catches completed-but-not-removed items
+- **Sprint log review**: Each sprint log lists files changed — cross-reference against docs that reference those files
+- **Future enhancement**: CI-step that validates all file paths in `docs/knowledge-base/*.md` resolve to existing files

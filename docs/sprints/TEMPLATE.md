@@ -13,6 +13,17 @@
 ## Sprint Goal
 _One or two sentences describing the sprint objective._
 
+## Entropy Scan Findings
+_Results of pre-sprint entropy scan (step 0a). Omit if this is not the first sprint in a session._
+
+| Check | Result | Detail |
+|-------|--------|--------|
+| KB path validation | CLEAN \| DRIFT \| DEBT | _Stale paths found and fixed, or none_ |
+| Pattern compliance spot-check | CLEAN \| DRIFT \| DEBT | _Anti-patterns found, or none_ |
+| Orphan detection | CLEAN \| DEBT | _Unused files found, or none_ |
+| Documentation drift | CLEAN \| DRIFT | _Stale MEMORY.md items, or none_ |
+| Quality grade review | CLEAN \| updated | _Grades changed, or stable_ |
+
 ## Architectural Constraints Verified
 
 _Check each constraint that was explicitly validated during this sprint._
@@ -38,6 +49,7 @@ _Check each constraint that was explicitly validated during this sprint._
 | **Agent** | [Rule Engine \| Data Model \| Payroll \| API Integration \| Security \| Test & QA \| UX \| Orchestrator] |
 | **Components** | [list of affected bounded contexts / modules] |
 | **KB Refs** | [ADR-xxx, PAT-xxx, DEP-xxx, RES-xxx — knowledge base entries relevant to this task] |
+| **Constraint Validator** | pass \| violations — [count and summary] |
 | **Reviewer Audit** | skipped \| performed — [summary or "no findings"] |
 | **Orchestrator Approved** | yes — YYYY-MM-DD |
 
@@ -72,6 +84,16 @@ _Repeat TASK block for each task in the sprint._
 | Regression tests | N | all passing |
 | Smoke tests | N | all passing \| N/A (requires Docker) |
 | **Total** | N | — |
+
+## Agent Effectiveness
+
+| Metric | Value |
+|--------|-------|
+| Tasks | N |
+| Constraint Violations | N |
+| Reviewer Findings | NB, NW, NN |
+| Re-dispatches | N |
+| First-Pass Rate | N% |
 
 ## Sprint Retrospective
 
