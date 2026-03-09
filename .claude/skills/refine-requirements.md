@@ -25,14 +25,19 @@ Cross-reference against the existing system:
 - Read docs/knowledge-base/INDEX.md — are there ADRs or patterns that constrain this?
 - Check docs/QUALITY.md — is this going into a weak area that needs extra care?
 
-### Step 2: Propose, Don't Ask
+### Step 2: Separate What You Know from What You Don't
 
-Instead of presenting a list of open questions, **propose the best answer and let the user correct it**. This is faster and surfaces hidden assumptions.
+Sort every ambiguity into one of two buckets:
 
-Bad: "Should the validation be server-side or client-side?"
-Good: "Validation will be server-side in the Rule Engine (per ADR-002 — deterministic, no I/O). The frontend will show errors returned by the API. If you also want instant client-side feedback, that's an additional UX task."
+**Propose** — when there's a clear best answer within our architecture, domain patterns, or technical constraints. Don't ask the user to make technical decisions you can make.
+- Example: "Validation will be server-side in the Rule Engine (per ADR-002). The frontend shows errors from the API."
+- The user says "yes" or corrects — they don't need to design the solution.
 
-For each ambiguity, state what you'd recommend and why. The user only needs to say "yes" or correct you — they don't need to design the solution.
+**Ask** — when the answer depends on business intent, domain knowledge you lack, scope preference, or a genuine design fork with real tradeoffs. These are decisions only the user can make.
+- Example: "Should child sick days be per-episode (reset each illness) or annual quota? Danish agreements vary — AC allows 1 day per episode, HK allows 2. Which model matches your users' contracts?"
+- Present the options with tradeoffs, not just "X or Y?" — help the user choose.
+
+**The test:** Could a domain expert at the user's organization disagree with your proposal? If yes → ask. If no → propose.
 
 ### Step 3: Output the Refinement
 
@@ -48,6 +53,14 @@ One to three sentences — the interpreted need, including things the user didn'
 
 **Proposed Approach**
 The recommended solution in 3-5 bullets. Be specific — name files, patterns, architectural layers. This is a hypothesis, not a question.
+
+**Open Questions** (decisions only you can make)
+Numbered list of genuine forks where user intent matters. For each:
+- State the question
+- Present the options with brief tradeoffs
+- Recommend one if you have a lean, but make clear it's the user's call
+
+Only include questions that would meaningfully change the implementation. If there are none: "None — all ambiguities resolved by architecture constraints."
 
 **Assumptions** (correct me if wrong)
 Numbered list of things being assumed. Phrased as statements, not questions. The user scans and flags anything wrong.
