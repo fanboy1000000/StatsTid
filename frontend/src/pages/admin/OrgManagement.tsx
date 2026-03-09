@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, type FormEvent } from 'react'
 import styles from './OrgManagement.module.css'
 
-const API_BASE = 'http://localhost:5100'
 const TOKEN_KEY = 'statstid_token'
 
 const AGREEMENT_CODES = ['AC', 'HK', 'PROSA'] as const
@@ -27,6 +26,7 @@ interface Organization {
   parentOrgId: string | null
   materializedPath: string
   agreementCode: string
+  okVersion?: string
 }
 
 interface CreateOrgForm {
@@ -57,7 +57,7 @@ function useOrganizations() {
     setError(null)
     try {
       const token = getToken()
-      const res = await fetch(`${API_BASE}/api/admin/organizations`, {
+      const res = await fetch(`/api/admin/organizations`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -83,7 +83,7 @@ function useOrganizations() {
       agreementCode: string
     }) => {
       const token = getToken()
-      const res = await fetch(`${API_BASE}/api/admin/organizations`, {
+      const res = await fetch(`/api/admin/organizations`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -100,11 +100,34 @@ function useOrganizations() {
     [fetchOrganizations]
   )
 
-  return { organizations, loading, error, createOrganization, refetch: fetchOrganizations }
+  const updateOrganization = useCallback(
+    async (
+      orgId: string,
+      updates: { orgName: string; agreementCode: string; okVersion: string }
+    ) => {
+      const token = getToken()
+      const res = await fetch(`/api/admin/organizations/${orgId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(updates),
+      })
+      if (!res.ok) {
+        const text = await res.text().catch(() => '')
+        throw new Error(text || `HTTP ${res.status}`)
+      }
+      await fetchOrganizations()
+    },
+    [fetchOrganizations]
+  )
+
+  return { organizations, loading, error, createOrganization, updateOrganization, refetch: fetchOrganizations }
 }
 
 export function OrgManagement() {
-  const { organizations, loading, error, createOrganization } = useOrganizations()
+  const { organizations, loading, error, createOrganization, updateOrganization } = useOrganizations()
   const [dialogOpen, setDialogOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
@@ -115,6 +138,19 @@ export function OrgManagement() {
     parentOrgId: '',
     agreementCode: 'AC',
   })
+
+  const [editDialogOpen, setEditDialogOpen] = useState(false)
+  const [editOrgId, setEditOrgId] = useState<string>('')
+  const [editForm, setEditForm] = useState<{
+    orgId: string
+    orgName: string
+    orgType: string
+    parentOrgId: string | null
+    agreementCode: string
+    okVersion: string
+  }>({ orgId: '', orgName: '', orgType: '', parentOrgId: null, agreementCode: 'AC', okVersion: 'OK24' })
+  const [editSubmitting, setEditSubmitting] = useState(false)
+  const [editFormError, setEditFormError] = useState<string | null>(null)
 
   const sortedOrgs = [...organizations].sort((a, b) =>
     a.materializedPath.localeCompare(b.materializedPath)
@@ -161,6 +197,43 @@ export function OrgManagement() {
     }
   }
 
+  const handleEditOpen = (org: Organization) => {
+    setEditOrgId(org.orgId)
+    setEditForm({
+      orgId: org.orgId,
+      orgName: org.orgName,
+      orgType: org.orgType,
+      parentOrgId: org.parentOrgId,
+      agreementCode: org.agreementCode,
+      okVersion: org.okVersion ?? 'OK24',
+    })
+    setEditFormError(null)
+    setEditDialogOpen(true)
+  }
+
+  const handleEditClose = () => {
+    setEditDialogOpen(false)
+    setEditFormError(null)
+  }
+
+  const handleEditSubmit = async (e: FormEvent) => {
+    e.preventDefault()
+    setEditSubmitting(true)
+    setEditFormError(null)
+    try {
+      await updateOrganization(editOrgId, {
+        orgName: editForm.orgName,
+        agreementCode: editForm.agreementCode,
+        okVersion: editForm.okVersion,
+      })
+      handleEditClose()
+    } catch (err) {
+      setEditFormError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setEditSubmitting(false)
+    }
+  }
+
   return (
     <div className={styles.page}>
       <div className={styles.header}>
@@ -190,6 +263,7 @@ export function OrgManagement() {
               <th>Overordnet</th>
               <th>Overenskomst</th>
               <th>Sti</th>
+              <th>Handlinger</th>
             </tr>
           </thead>
           <tbody>
@@ -214,6 +288,14 @@ export function OrgManagement() {
                   <td>{org.parentOrgId ?? '\u2014'}</td>
                   <td>{org.agreementCode}</td>
                   <td className={styles.pathCell}>{org.materializedPath}</td>
+                  <td>
+                    <button
+                      className={styles.createBtn}
+                      onClick={() => handleEditOpen(org)}
+                    >
+                      Rediger
+                    </button>
+                  </td>
                 </tr>
               )
             })}
@@ -337,6 +419,105 @@ export function OrgManagement() {
                   disabled={submitting}
                 >
                   {submitting ? 'Opretter...' : 'Opret'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {editDialogOpen && (
+        <div className={styles.overlay} onClick={handleEditClose}>
+          <div className={styles.dialog} onClick={(e) => e.stopPropagation()}>
+            <h2 className={styles.dialogTitle}>Rediger organisation</h2>
+            <form onSubmit={handleEditSubmit}>
+              <div className={styles.formField}>
+                <label className={styles.formLabel}>Organisations-ID</label>
+                <span>{editForm.orgId}</span>
+              </div>
+
+              <div className={styles.formField}>
+                <label className={styles.formLabel}>Type</label>
+                <span>{ORG_TYPE_LABELS[editForm.orgType] ?? editForm.orgType}</span>
+              </div>
+
+              <div className={styles.formField}>
+                <label className={styles.formLabel}>Overordnet org</label>
+                <span>{editForm.parentOrgId ?? '\u2014'}</span>
+              </div>
+
+              <div className={styles.formField}>
+                <label className={styles.formLabel} htmlFor="editOrgName">
+                  Navn <span className={styles.required}>*</span>
+                </label>
+                <input
+                  className={styles.input}
+                  id="editOrgName"
+                  type="text"
+                  required
+                  value={editForm.orgName}
+                  onChange={(e) =>
+                    setEditForm((f) => ({ ...f, orgName: e.target.value }))
+                  }
+                />
+              </div>
+
+              <div className={styles.formField}>
+                <label className={styles.formLabel} htmlFor="editAgreementCode">
+                  Overenskomst <span className={styles.required}>*</span>
+                </label>
+                <select
+                  className={styles.select}
+                  id="editAgreementCode"
+                  value={editForm.agreementCode}
+                  onChange={(e) =>
+                    setEditForm((f) => ({ ...f, agreementCode: e.target.value }))
+                  }
+                >
+                  {AGREEMENT_CODES.map((code) => (
+                    <option key={code} value={code}>
+                      {code}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className={styles.formField}>
+                <label className={styles.formLabel} htmlFor="editOkVersion">
+                  OK Version <span className={styles.required}>*</span>
+                </label>
+                <select
+                  className={styles.select}
+                  id="editOkVersion"
+                  value={editForm.okVersion}
+                  onChange={(e) =>
+                    setEditForm((f) => ({ ...f, okVersion: e.target.value }))
+                  }
+                >
+                  {['OK24', 'OK26'].map((v) => (
+                    <option key={v} value={v}>
+                      {v}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {editFormError && <div className={styles.alert}>{editFormError}</div>}
+
+              <div className={styles.dialogActions}>
+                <button
+                  type="button"
+                  className={styles.cancelBtn}
+                  onClick={handleEditClose}
+                >
+                  Annuller
+                </button>
+                <button
+                  type="submit"
+                  className={styles.createBtn}
+                  disabled={editSubmitting}
+                >
+                  {editSubmitting ? 'Gemmer...' : 'Gem'}
                 </button>
               </div>
             </form>

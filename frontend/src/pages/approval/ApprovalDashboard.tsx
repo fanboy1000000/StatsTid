@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import styles from './ApprovalDashboard.module.css'
 
-const API_BASE = 'http://localhost:5100'
 const TOKEN_KEY = 'statstid_token'
 
 interface ApprovalPeriod {
@@ -71,7 +70,7 @@ export function ApprovalDashboard() {
     setError(null)
     try {
       const token = getToken()
-      const res = await fetch(`${API_BASE}/api/approval/pending`, {
+      const res = await fetch(`/api/approval/pending`, {
         headers: token ? { 'Authorization': `Bearer ${token}` } : {},
       })
       if (!res.ok) { handle401(res); throw new Error(`HTTP ${res.status}`) }
@@ -90,7 +89,7 @@ export function ApprovalDashboard() {
     setApprovingId(periodId)
     try {
       const token = getToken()
-      const res = await fetch(`${API_BASE}/api/approval/${periodId}/approve`, {
+      const res = await fetch(`/api/approval/${periodId}/approve`, {
         method: 'POST',
         headers: {
           ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
@@ -122,7 +121,7 @@ export function ApprovalDashboard() {
     setRejecting(true)
     try {
       const token = getToken()
-      const res = await fetch(`${API_BASE}/api/approval/${rejectTarget.periodId}/reject`, {
+      const res = await fetch(`/api/approval/${rejectTarget.periodId}/reject`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

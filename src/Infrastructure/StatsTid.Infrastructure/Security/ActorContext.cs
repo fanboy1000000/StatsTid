@@ -26,10 +26,28 @@ public static class ActorContextExtensions
             : Guid.NewGuid();
 
         RoleScope[]? scopes = null;
-        var scopesClaim = httpContext.User?.FindFirst(StatsTidClaims.Scopes)?.Value;
-        if (scopesClaim is not null)
+        var scopesClaims = httpContext.User?.FindAll(StatsTidClaims.Scopes).ToList();
+        if (scopesClaims is { Count: > 0 })
         {
-            try { scopes = JsonSerializer.Deserialize<RoleScope[]>(scopesClaim); }
+            try
+            {
+                var allScopes = new List<RoleScope>();
+                foreach (var claim in scopesClaims)
+                {
+                    var value = claim.Value.TrimStart();
+                    if (value.StartsWith("["))
+                    {
+                        var arr = JsonSerializer.Deserialize<RoleScope[]>(value);
+                        if (arr is not null) allScopes.AddRange(arr);
+                    }
+                    else if (value.StartsWith("{"))
+                    {
+                        var single = JsonSerializer.Deserialize<RoleScope>(value);
+                        if (single is not null) allScopes.Add(single);
+                    }
+                }
+                if (allScopes.Count > 0) scopes = allScopes.ToArray();
+            }
             catch (JsonException) { /* invalid claim — leave null */ }
         }
 

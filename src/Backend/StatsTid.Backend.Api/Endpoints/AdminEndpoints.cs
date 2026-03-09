@@ -153,6 +153,74 @@ public static class AdminEndpoints
             });
         }).RequireAuthorization("LocalAdminOrAbove");
 
+        // 2b. PUT /api/admin/organizations/{orgId} — Update organization
+        app.MapPut("/api/admin/organizations/{orgId}", async (
+            string orgId,
+            UpdateOrganizationRequest request,
+            OrganizationRepository orgRepo,
+            OrgScopeValidator scopeValidator,
+            DbConnectionFactory dbFactory,
+            IEventStore eventStore,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            var actor = context.GetActorContext();
+
+            // Look up existing org
+            var existingOrg = await orgRepo.GetByIdAsync(orgId, ct);
+            if (existingOrg is null)
+                return Results.NotFound(new { error = "Organization not found" });
+
+            // Validate actor scope covers this org
+            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, orgId, ct);
+            if (!allowed)
+                return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+
+            // Update via direct Npgsql — only non-null fields
+            var now = DateTime.UtcNow;
+            await using var conn = dbFactory.Create();
+            await conn.OpenAsync(ct);
+            await using var cmd = new NpgsqlCommand(
+                """
+                UPDATE organizations
+                SET org_name = @orgName,
+                    agreement_code = @agreementCode,
+                    ok_version = @okVersion,
+                    updated_at = @now
+                WHERE org_id = @orgId AND is_active = TRUE
+                """, conn);
+            cmd.Parameters.AddWithValue("orgName", request.OrgName ?? existingOrg.OrgName);
+            cmd.Parameters.AddWithValue("agreementCode", request.AgreementCode ?? existingOrg.AgreementCode);
+            cmd.Parameters.AddWithValue("okVersion", request.OkVersion ?? existingOrg.OkVersion);
+            cmd.Parameters.AddWithValue("now", now);
+            cmd.Parameters.AddWithValue("orgId", orgId);
+            await cmd.ExecuteNonQueryAsync(ct);
+
+            // Emit domain event
+            var @event = new OrganizationUpdated
+            {
+                OrgId = orgId,
+                OrgName = request.OrgName,
+                AgreementCode = request.AgreementCode,
+                OkVersion = request.OkVersion,
+                ActorId = actor.ActorId,
+                ActorRole = actor.ActorRole,
+                CorrelationId = actor.CorrelationId
+            };
+            await eventStore.AppendAsync($"org-{orgId}", @event, ct);
+
+            return Results.Ok(new
+            {
+                orgId,
+                orgName = request.OrgName ?? existingOrg.OrgName,
+                orgType = existingOrg.OrgType,
+                parentOrgId = existingOrg.ParentOrgId,
+                materializedPath = existingOrg.MaterializedPath,
+                agreementCode = request.AgreementCode ?? existingOrg.AgreementCode,
+                okVersion = request.OkVersion ?? existingOrg.OkVersion
+            });
+        }).RequireAuthorization("LocalAdminOrAbove");
+
         // ═══════════════════════════════════════════
         // User Endpoints
         // ═══════════════════════════════════════════
@@ -666,6 +734,13 @@ public static class AdminEndpoints
         public string? ParentOrgId { get; init; }
         public required string AgreementCode { get; init; }
         public required string OkVersion { get; init; }
+    }
+
+    private sealed class UpdateOrganizationRequest
+    {
+        public string? OrgName { get; init; }
+        public string? AgreementCode { get; init; }
+        public string? OkVersion { get; init; }
     }
 
     private sealed class CreateUserRequest

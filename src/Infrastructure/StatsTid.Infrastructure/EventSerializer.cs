@@ -27,6 +27,7 @@ public static class EventSerializer
         ["RetroactiveCorrectionRequested"] = typeof(RetroactiveCorrectionRequested),
         // Sprint 6: RBAC and organizational hierarchy events
         ["OrganizationCreated"] = typeof(OrganizationCreated),
+        ["OrganizationUpdated"] = typeof(OrganizationUpdated),
         ["UserCreated"] = typeof(UserCreated),
         ["RoleAssignmentGranted"] = typeof(RoleAssignmentGranted),
         ["RoleAssignmentRevoked"] = typeof(RoleAssignmentRevoked),

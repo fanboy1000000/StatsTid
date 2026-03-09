@@ -27,13 +27,33 @@ public sealed class ScopeAuthorizationHandler : AuthorizationHandler<ScopeRequir
         // The target org is extracted from route/request by calling code.
         // At this level, we just verify the user HAS scopes — endpoint-level code
         // does the actual org path matching using the RoleScope.CoversOrg method.
-        var scopesClaim = context.User.FindFirst(StatsTidClaims.Scopes)?.Value;
-        if (scopesClaim is null) return Task.CompletedTask;
+        //
+        // Note: When a JWT claim is stored as JsonClaimValueTypes.JsonArray, the
+        // JWT bearer middleware may split the array into individual claims (one per
+        // element). We therefore collect ALL "scopes" claims and try to parse each
+        // as either a single RoleScope or an array of RoleScope.
+        var scopesClaims = context.User.FindAll(StatsTidClaims.Scopes).ToList();
+        if (scopesClaims.Count == 0) return Task.CompletedTask;
 
         try
         {
-            var scopes = JsonSerializer.Deserialize<RoleScope[]>(scopesClaim);
-            if (scopes is not null && scopes.Any(s => requirement.AllowedRoles.Contains(s.Role)))
+            var allScopes = new List<RoleScope>();
+            foreach (var claim in scopesClaims)
+            {
+                var value = claim.Value.TrimStart();
+                if (value.StartsWith("["))
+                {
+                    var arr = JsonSerializer.Deserialize<RoleScope[]>(value);
+                    if (arr is not null) allScopes.AddRange(arr);
+                }
+                else if (value.StartsWith("{"))
+                {
+                    var single = JsonSerializer.Deserialize<RoleScope>(value);
+                    if (single is not null) allScopes.Add(single);
+                }
+            }
+
+            if (allScopes.Any(s => requirement.AllowedRoles.Contains(s.Role)))
             {
                 context.Succeed(requirement);
             }

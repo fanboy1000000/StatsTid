@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback, type FormEvent } from 'react'
 import { useAuth } from '../../hooks/useAuth'
 import styles from './MyPeriods.module.css'
 
-const API_BASE = 'http://localhost:5100'
 const TOKEN_KEY = 'statstid_token'
 
 interface ApprovalPeriod {
@@ -97,7 +96,7 @@ export function MyPeriods() {
     setError(null)
     try {
       const token = getToken()
-      const res = await fetch(`${API_BASE}/api/approval/employee/${employeeId}`, {
+      const res = await fetch(`/api/approval/employee/${employeeId}`, {
         headers: token ? { 'Authorization': `Bearer ${token}` } : {},
       })
       if (!res.ok) { handle401(res); throw new Error(`HTTP ${res.status}`) }
@@ -121,7 +120,7 @@ export function MyPeriods() {
     okVersion: string
   }) => {
     const token = getToken()
-    const res = await fetch(`${API_BASE}/api/approval/submit`, {
+    const res = await fetch(`/api/approval/submit`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -135,7 +134,7 @@ export function MyPeriods() {
 
   const resubmitPeriod = async (periodId: string) => {
     const token = getToken()
-    const res = await fetch(`${API_BASE}/api/approval/${periodId}/submit`, {
+    const res = await fetch(`/api/approval/${periodId}/submit`, {
       method: 'POST',
       headers: {
         ...(token ? { 'Authorization': `Bearer ${token}` } : {}),

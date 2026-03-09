@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, type FormEvent } from 'react'
 import styles from './UserManagement.module.css'
 
-const API_BASE = 'http://localhost:5100'
 const TOKEN_KEY = 'statstid_token'
 
 const AGREEMENT_CODES = ['AC', 'HK', 'PROSA'] as const
@@ -64,7 +63,7 @@ function useOrganizations() {
       setError(null)
       try {
         const token = getToken()
-        const res = await fetch(`${API_BASE}/api/admin/organizations`, {
+        const res = await fetch(`/api/admin/organizations`, {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         })
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -94,7 +93,7 @@ function useOrgUsers(orgId: string) {
     setError(null)
     try {
       const res = await fetch(
-        `${API_BASE}/api/admin/organizations/${encodeURIComponent(targetOrgId)}/users`,
+        `/api/admin/organizations/${encodeURIComponent(targetOrgId)}/users`,
         { headers: authHeaders() }
       )
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -121,7 +120,7 @@ function useOrgUsers(orgId: string) {
       primaryOrgId: string
       agreementCode: string
     }) => {
-      const res = await fetch(`${API_BASE}/api/admin/users`, {
+      const res = await fetch(`/api/admin/users`, {
         method: 'POST',
         headers: authHeaders(),
         body: JSON.stringify(userData),
@@ -146,7 +145,7 @@ function useOrgUsers(orgId: string) {
       }
     ) => {
       const res = await fetch(
-        `${API_BASE}/api/admin/users/${encodeURIComponent(userId)}`,
+        `/api/admin/users/${encodeURIComponent(userId)}`,
         {
           method: 'PUT',
           headers: authHeaders(),
