@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import type { ComplianceCheckResult } from '../../hooks/useCompliance'
 import styles from './ApprovalDashboard.module.css'
 
 const TOKEN_KEY = 'statstid_token'
@@ -60,6 +61,9 @@ export function ApprovalDashboard() {
   // Track which period is being approved
   const [approvingId, setApprovingId] = useState<string | null>(null)
 
+  // Compliance results per employee
+  const [complianceMap, setComplianceMap] = useState<Record<string, ComplianceCheckResult>>({})
+
   const showToast = useCallback((message: string, variant: 'success' | 'error') => {
     setToast({ message, variant })
     setTimeout(() => setToast(null), 4000)
@@ -84,6 +88,28 @@ export function ApprovalDashboard() {
   }, [])
 
   useEffect(() => { fetchPending() }, [fetchPending])
+
+  // Fetch compliance for each pending period
+  useEffect(() => {
+    async function fetchCompliance() {
+      const token = getToken()
+      const results: Record<string, ComplianceCheckResult> = {}
+      for (const p of periods) {
+        try {
+          const start = new Date(p.periodStart)
+          const res = await fetch(
+            `/api/compliance/${p.employeeId}/period?year=${start.getFullYear()}&month=${start.getMonth() + 1}`,
+            { headers: token ? { 'Authorization': `Bearer ${token}` } : {} }
+          )
+          if (res.ok) {
+            results[p.periodId] = await res.json()
+          }
+        } catch { /* ignore */ }
+      }
+      setComplianceMap(results)
+    }
+    if (periods.length > 0) fetchCompliance()
+  }, [periods])
 
   const handleApprove = async (periodId: string) => {
     setApprovingId(periodId)
@@ -177,6 +203,7 @@ export function ApprovalDashboard() {
                 <th>Type</th>
                 <th>Overenskomst</th>
                 <th>Indsendt</th>
+                <th>Compliance</th>
                 <th>Handlinger</th>
               </tr>
             </thead>
@@ -189,6 +216,9 @@ export function ApprovalDashboard() {
                   <td>{PERIOD_TYPE_LABELS[p.periodType] ?? p.periodType}</td>
                   <td>{p.agreementCode}</td>
                   <td>{formatDate(p.submittedAt)}</td>
+                  <td>
+                    <ComplianceBadge result={complianceMap[p.periodId] ?? null} />
+                  </td>
                   <td>
                     <div className={styles.actionCell}>
                       <button
@@ -250,4 +280,25 @@ export function ApprovalDashboard() {
       )}
     </div>
   )
+}
+
+function ComplianceBadge({ result }: { result: ComplianceCheckResult | null }) {
+  if (!result) {
+    return <span className={styles.complianceLoading}>...</span>
+  }
+  if (result.violations.length > 0) {
+    return (
+      <span className={styles.complianceViolation} title={`${result.violations.length} overtraedelse(r)`}>
+        {result.violations.length} overtr.
+      </span>
+    )
+  }
+  if (result.warnings.length > 0) {
+    return (
+      <span className={styles.complianceWarning} title={`${result.warnings.length} advarsel(er)`}>
+        {result.warnings.length} adv.
+      </span>
+    )
+  }
+  return <span className={styles.complianceOk}>OK</span>
 }

@@ -56,6 +56,13 @@ public sealed class AgreementConfigEntity
     public required decimal WorkingTravelRate { get; init; }
     public required decimal NonWorkingTravelRate { get; init; }
 
+    // Working time compliance (Sprint 16)
+    public decimal MaxDailyHours { get; init; } = 13.0m;
+    public decimal MinimumRestHours { get; init; } = 11.0m;
+    public bool RestPeriodDerogationAllowed { get; init; }
+    public int WeeklyMaxHoursReferencePeriod { get; init; } = 17;
+    public bool VoluntaryUnsocialHoursAllowed { get; init; } = true;
+
     // Metadata
     public required string CreatedBy { get; init; }
     public required DateTime CreatedAt { get; init; }
@@ -103,5 +110,10 @@ public sealed class AgreementConfigEntity
         NonWorkingTravelRate = NonWorkingTravelRate,
         NormModel = NormModel,
         AnnualNormHours = AnnualNormHours,
+        MaxDailyHours = MaxDailyHours,
+        MinimumRestHours = MinimumRestHours,
+        RestPeriodDerogationAllowed = RestPeriodDerogationAllowed,
+        WeeklyMaxHoursReferencePeriod = WeeklyMaxHoursReferencePeriod,
+        VoluntaryUnsocialHoursAllowed = VoluntaryUnsocialHoursAllowed,
     };
 }

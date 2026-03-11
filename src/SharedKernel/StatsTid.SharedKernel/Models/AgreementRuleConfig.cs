@@ -55,4 +55,11 @@ public sealed class AgreementRuleConfig
 
     // Annual norm hours for ANNUAL_ACTIVITY model (1924h standard = 37h x 52w)
     public decimal AnnualNormHours { get; init; } = 1924m;
+
+    // Working time compliance (Sprint 16)
+    public decimal MaxDailyHours { get; init; } = 13.0m;
+    public decimal MinimumRestHours { get; init; } = 11.0m;
+    public bool RestPeriodDerogationAllowed { get; init; }
+    public int WeeklyMaxHoursReferencePeriod { get; init; } = 17;
+    public bool VoluntaryUnsocialHoursAllowed { get; init; } = true;
 }

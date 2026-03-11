@@ -267,6 +267,11 @@ public sealed class ConfigResolutionService
             NormPeriodWeeks = centralConfig.NormPeriodWeeks,
             NormModel = centralConfig.NormModel,
             AnnualNormHours = centralConfig.AnnualNormHours,
+            MaxDailyHours = centralConfig.MaxDailyHours,
+            MinimumRestHours = centralConfig.MinimumRestHours,
+            RestPeriodDerogationAllowed = centralConfig.RestPeriodDerogationAllowed,
+            WeeklyMaxHoursReferencePeriod = centralConfig.WeeklyMaxHoursReferencePeriod,
+            VoluntaryUnsocialHoursAllowed = centralConfig.VoluntaryUnsocialHoursAllowed,
         };
     }
 

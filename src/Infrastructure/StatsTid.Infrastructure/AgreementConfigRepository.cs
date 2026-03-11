@@ -86,6 +86,8 @@ public sealed class AgreementConfigRepository
                 on_call_duty_enabled, on_call_duty_rate,
                 call_in_work_enabled, call_in_minimum_hours, call_in_rate,
                 travel_time_enabled, working_travel_rate, non_working_travel_rate,
+                max_daily_hours, minimum_rest_hours, rest_period_derogation_allowed,
+                weekly_max_hours_reference_period, voluntary_unsocial_hours_allowed,
                 created_by, description, cloned_from_id,
                 created_at, updated_at
             ) VALUES (
@@ -99,6 +101,8 @@ public sealed class AgreementConfigRepository
                 @onCallDutyEnabled, @onCallDutyRate,
                 @callInWorkEnabled, @callInMinimumHours, @callInRate,
                 @travelTimeEnabled, @workingTravelRate, @nonWorkingTravelRate,
+                @maxDailyHours, @minimumRestHours, @restPeriodDerogationAllowed,
+                @weeklyMaxHoursReferencePeriod, @voluntaryUnsocialHoursAllowed,
                 @createdBy, @description, @clonedFromId,
                 NOW(), NOW()
             )
@@ -151,6 +155,11 @@ public sealed class AgreementConfigRepository
                 travel_time_enabled = @travelTimeEnabled,
                 working_travel_rate = @workingTravelRate,
                 non_working_travel_rate = @nonWorkingTravelRate,
+                max_daily_hours = @maxDailyHours,
+                minimum_rest_hours = @minimumRestHours,
+                rest_period_derogation_allowed = @restPeriodDerogationAllowed,
+                weekly_max_hours_reference_period = @weeklyMaxHoursReferencePeriod,
+                voluntary_unsocial_hours_allowed = @voluntaryUnsocialHoursAllowed,
                 description = @description,
                 updated_at = NOW()
             WHERE config_id = @configId AND status = 'DRAFT'
@@ -296,6 +305,11 @@ public sealed class AgreementConfigRepository
         cmd.Parameters.AddWithValue("travelTimeEnabled", entity.TravelTimeEnabled);
         cmd.Parameters.AddWithValue("workingTravelRate", entity.WorkingTravelRate);
         cmd.Parameters.AddWithValue("nonWorkingTravelRate", entity.NonWorkingTravelRate);
+        cmd.Parameters.AddWithValue("maxDailyHours", entity.MaxDailyHours);
+        cmd.Parameters.AddWithValue("minimumRestHours", entity.MinimumRestHours);
+        cmd.Parameters.AddWithValue("restPeriodDerogationAllowed", entity.RestPeriodDerogationAllowed);
+        cmd.Parameters.AddWithValue("weeklyMaxHoursReferencePeriod", entity.WeeklyMaxHoursReferencePeriod);
+        cmd.Parameters.AddWithValue("voluntaryUnsocialHoursAllowed", entity.VoluntaryUnsocialHoursAllowed);
     }
 
     private static async Task<IReadOnlyList<AgreementConfigEntity>> ReadEntitiesAsync(NpgsqlCommand cmd, CancellationToken ct)
@@ -344,6 +358,11 @@ public sealed class AgreementConfigRepository
         TravelTimeEnabled = reader.GetBoolean(reader.GetOrdinal("travel_time_enabled")),
         WorkingTravelRate = reader.GetDecimal(reader.GetOrdinal("working_travel_rate")),
         NonWorkingTravelRate = reader.GetDecimal(reader.GetOrdinal("non_working_travel_rate")),
+        MaxDailyHours = reader.GetDecimal(reader.GetOrdinal("max_daily_hours")),
+        MinimumRestHours = reader.GetDecimal(reader.GetOrdinal("minimum_rest_hours")),
+        RestPeriodDerogationAllowed = reader.GetBoolean(reader.GetOrdinal("rest_period_derogation_allowed")),
+        WeeklyMaxHoursReferencePeriod = reader.GetInt32(reader.GetOrdinal("weekly_max_hours_reference_period")),
+        VoluntaryUnsocialHoursAllowed = reader.GetBoolean(reader.GetOrdinal("voluntary_unsocial_hours_allowed")),
         CreatedBy = reader.GetString(reader.GetOrdinal("created_by")),
         CreatedAt = reader.GetDateTime(reader.GetOrdinal("created_at")),
         UpdatedAt = reader.GetDateTime(reader.GetOrdinal("updated_at")),

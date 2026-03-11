@@ -34,6 +34,7 @@ builder.Services.AddSingleton<PositionOverrideRepository>();
 builder.Services.AddSingleton<WageTypeMappingRepository>();
 builder.Services.AddSingleton<EntitlementConfigRepository>();
 builder.Services.AddSingleton<EntitlementBalanceRepository>();
+builder.Services.AddSingleton<CompensatoryRestRepository>();
 
 // ── Services ──
 builder.Services.AddSingleton<ConfigResolutionService>();
@@ -79,5 +80,6 @@ app.MapAgreementConfigEndpoints();
 app.MapPositionOverrideEndpoints();
 app.MapWageTypeMappingEndpoints();
 app.MapBalanceEndpoints();
+app.MapComplianceEndpoints();
 
 app.Run();

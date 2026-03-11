@@ -60,6 +60,7 @@ public static class CentralAgreementConfigs
             WorkingTravelRate = 1.0m,
             NonWorkingTravelRate = 0.5m,
             NormPeriodWeeks = 1,
+            RestPeriodDerogationAllowed = true,
         },
         // PROSA OK24
         [("PROSA", "OK24")] = new AgreementRuleConfig
@@ -88,6 +89,7 @@ public static class CentralAgreementConfigs
             WorkingTravelRate = 1.0m,
             NonWorkingTravelRate = 0.5m,
             NormPeriodWeeks = 1,
+            RestPeriodDerogationAllowed = true,
         },
         // AC OK26 (placeholder — identical to OK24 for now)
         [("AC", "OK26")] = new AgreementRuleConfig
@@ -137,6 +139,7 @@ public static class CentralAgreementConfigs
             WorkingTravelRate = 1.0m,
             NonWorkingTravelRate = 0.5m,
             NormPeriodWeeks = 1,
+            RestPeriodDerogationAllowed = true,
         },
         // PROSA OK26 (placeholder)
         [("PROSA", "OK26")] = new AgreementRuleConfig
@@ -165,6 +168,7 @@ public static class CentralAgreementConfigs
             WorkingTravelRate = 1.0m,
             NonWorkingTravelRate = 0.5m,
             NormPeriodWeeks = 1,
+            RestPeriodDerogationAllowed = true,
         },
         // AC_RESEARCH OK24 — Researchers (annual norm 1924h)
         [("AC_RESEARCH", "OK24")] = new AgreementRuleConfig

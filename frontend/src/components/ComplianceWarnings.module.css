@@ -1,0 +1,74 @@
+.container {
+  margin-bottom: var(--space-400);
+  border: 1px solid var(--color-border);
+  border-radius: 0;
+  padding: var(--space-300);
+  background: var(--color-surface);
+}
+
+.title {
+  font-size: var(--font-size-md);
+  font-weight: 600;
+  margin: 0 0 var(--space-200) 0;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-200);
+}
+
+.item {
+  border-left: 3px solid;
+  padding: var(--space-200) var(--space-300);
+}
+
+.violation {
+  border-color: var(--color-error);
+  background: color-mix(in srgb, var(--color-error) 5%, transparent);
+}
+
+.warning {
+  border-color: var(--color-warning, #e6a700);
+  background: color-mix(in srgb, var(--color-warning, #e6a700) 5%, transparent);
+}
+
+.itemHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--space-200);
+  margin-bottom: var(--space-100);
+}
+
+.badge {
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  padding: 2px 6px;
+}
+
+.badgeViolation {
+  color: var(--color-error);
+  border: 1px solid var(--color-error);
+}
+
+.badgeWarning {
+  color: var(--color-warning, #e6a700);
+  border: 1px solid var(--color-warning, #e6a700);
+}
+
+.type {
+  font-weight: 500;
+  font-size: var(--font-size-sm);
+}
+
+.date {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.message {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}

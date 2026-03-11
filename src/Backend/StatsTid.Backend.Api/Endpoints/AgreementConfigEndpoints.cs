@@ -170,6 +170,11 @@ public static class AgreementConfigEndpoints
                 TravelTimeEnabled = source.TravelTimeEnabled,
                 WorkingTravelRate = source.WorkingTravelRate,
                 NonWorkingTravelRate = source.NonWorkingTravelRate,
+                MaxDailyHours = source.MaxDailyHours,
+                MinimumRestHours = source.MinimumRestHours,
+                RestPeriodDerogationAllowed = source.RestPeriodDerogationAllowed,
+                WeeklyMaxHoursReferencePeriod = source.WeeklyMaxHoursReferencePeriod,
+                VoluntaryUnsocialHoursAllowed = source.VoluntaryUnsocialHoursAllowed,
                 CreatedBy = actor.ActorId ?? "system",
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow,
@@ -416,6 +421,12 @@ public static class AgreementConfigEndpoints
         travelTimeEnabled = e.TravelTimeEnabled,
         workingTravelRate = e.WorkingTravelRate,
         nonWorkingTravelRate = e.NonWorkingTravelRate,
+        // Working time compliance
+        maxDailyHours = e.MaxDailyHours,
+        minimumRestHours = e.MinimumRestHours,
+        restPeriodDerogationAllowed = e.RestPeriodDerogationAllowed,
+        weeklyMaxHoursReferencePeriod = e.WeeklyMaxHoursReferencePeriod,
+        voluntaryUnsocialHoursAllowed = e.VoluntaryUnsocialHoursAllowed,
         // Metadata
         createdBy = e.CreatedBy,
         createdAt = e.CreatedAt,
@@ -517,6 +528,11 @@ public static class AgreementConfigEndpoints
             TravelTimeEnabled = r.TravelTimeEnabled,
             WorkingTravelRate = r.WorkingTravelRate,
             NonWorkingTravelRate = r.NonWorkingTravelRate,
+            MaxDailyHours = r.MaxDailyHours,
+            MinimumRestHours = r.MinimumRestHours,
+            RestPeriodDerogationAllowed = r.RestPeriodDerogationAllowed,
+            WeeklyMaxHoursReferencePeriod = r.WeeklyMaxHoursReferencePeriod,
+            VoluntaryUnsocialHoursAllowed = r.VoluntaryUnsocialHoursAllowed,
             CreatedBy = createdBy,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
@@ -537,7 +553,9 @@ public static class AgreementConfigEndpoints
             r.EveningStart, r.EveningEnd, r.NightStart, r.NightEnd,
             r.EveningRate, r.NightRate, r.WeekendSaturdayRate, r.WeekendSundayRate, r.HolidayRate,
             r.OnCallDutyEnabled, r.OnCallDutyRate, r.CallInWorkEnabled, r.CallInMinimumHours, r.CallInRate,
-            r.TravelTimeEnabled, r.WorkingTravelRate, r.NonWorkingTravelRate, r.Description,
+            r.TravelTimeEnabled, r.WorkingTravelRate, r.NonWorkingTravelRate,
+            r.MaxDailyHours, r.MinimumRestHours, r.RestPeriodDerogationAllowed,
+            r.WeeklyMaxHoursReferencePeriod, r.VoluntaryUnsocialHoursAllowed, r.Description,
         });
 
     private static string SerializeForAudit(AgreementConfigEntity e) =>
@@ -551,7 +569,9 @@ public static class AgreementConfigEndpoints
             e.EveningStart, e.EveningEnd, e.NightStart, e.NightEnd,
             e.EveningRate, e.NightRate, e.WeekendSaturdayRate, e.WeekendSundayRate, e.HolidayRate,
             e.OnCallDutyEnabled, e.OnCallDutyRate, e.CallInWorkEnabled, e.CallInMinimumHours, e.CallInRate,
-            e.TravelTimeEnabled, e.WorkingTravelRate, e.NonWorkingTravelRate, e.Description,
+            e.TravelTimeEnabled, e.WorkingTravelRate, e.NonWorkingTravelRate,
+            e.MaxDailyHours, e.MinimumRestHours, e.RestPeriodDerogationAllowed,
+            e.WeeklyMaxHoursReferencePeriod, e.VoluntaryUnsocialHoursAllowed, e.Description,
         });
 
     // ── Request DTO ──
@@ -610,5 +630,12 @@ public static class AgreementConfigEndpoints
         public required bool TravelTimeEnabled { get; init; }
         public required decimal WorkingTravelRate { get; init; }
         public required decimal NonWorkingTravelRate { get; init; }
+
+        // Working time compliance
+        public decimal MaxDailyHours { get; init; } = 13.0m;
+        public decimal MinimumRestHours { get; init; } = 11.0m;
+        public bool RestPeriodDerogationAllowed { get; init; }
+        public int WeeklyMaxHoursReferencePeriod { get; init; } = 17;
+        public bool VoluntaryUnsocialHoursAllowed { get; init; } = true;
     }
 }

@@ -234,3 +234,27 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* Compliance badges */
+.complianceOk {
+  color: #166534;
+  font-weight: 600;
+  font-size: 0.875rem;
+}
+
+.complianceWarning {
+  color: #92400e;
+  font-weight: 600;
+  font-size: 0.875rem;
+}
+
+.complianceViolation {
+  color: #991b1b;
+  font-weight: 600;
+  font-size: 0.875rem;
+}
+
+.complianceLoading {
+  color: var(--color-text-secondary, #666);
+  font-size: 0.875rem;
+}

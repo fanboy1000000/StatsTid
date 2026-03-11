@@ -12,4 +12,5 @@ public sealed class TimeEntry
     public required string AgreementCode { get; init; }
     public required string OkVersion { get; init; }
     public DateTime RegisteredAt { get; init; } = DateTime.UtcNow;
+    public bool VoluntaryUnsocialHours { get; init; }
 }

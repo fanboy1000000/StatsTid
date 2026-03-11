@@ -13,4 +13,5 @@ public sealed class TimeEntryRegistered : DomainEventBase
     public string? ActivityType { get; init; }
     public required string AgreementCode { get; init; }
     public required string OkVersion { get; init; }
+    public bool VoluntaryUnsocialHours { get; init; }
 }

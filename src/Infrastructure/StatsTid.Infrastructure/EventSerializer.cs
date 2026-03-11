@@ -57,6 +57,9 @@ public static class EventSerializer
         // Sprint 15: Entitlement management events
         ["EntitlementBalanceAdjusted"] = typeof(EntitlementBalanceAdjusted),
         ["EntitlementConfigSeeded"] = typeof(EntitlementConfigSeeded),
+        // Sprint 16: Working time compliance events
+        ["RestPeriodViolationDetected"] = typeof(RestPeriodViolationDetected),
+        ["CompensatoryRestGranted"] = typeof(CompensatoryRestGranted),
     };
 
     public static string Serialize(IDomainEvent @event)

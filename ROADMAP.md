@@ -29,6 +29,10 @@
 | Sprint 10 | Tech Debt Cleanup + Rule Engine Expansion | CentralAgreementConfigs dedup, idempotency guard, FlexEvaluationResponse DTO, call-in work, travel time, multi-week norm | 304 |
 | Sprint 11 | Retroactive Corrections + AC Position Overrides + Academic Norms | OK version split, correction SLS export, position overrides (Option C), academic norm model, NORM_DEVIATION, ADR-013 | 306 |
 | Sprint 12 | Database-Backed Agreement Configuration Management | DB-backed configs (ADR-014), DRAFT/ACTIVE/ARCHIVED lifecycle, GlobalAdmin UI, 8 config endpoints | 334 |
+| Sprint 13 | Employee Experience: Unified "Min Tid" | Balance summary endpoint, BalanceSummary component, SkemaPage integration | 387 |
+| Sprint 14 | Position Override + Wage Type Mapping UI | DB-backed position overrides, WageTypeMapping CRUD, 2 admin pages, 12 endpoints | 406 |
+| Sprint 15 | Entitlement & Balance Management | 5 entitlement types, quota validation, atomic balance adjustment, progress bars | 422 |
+| Sprint 16 | Working Time Compliance (EU WTD) | RestPeriodRule (4 checks), compliance config chain, ComplianceWarnings UI, ADR-015 | 436 |
 
 ## Phase Roadmap
 
@@ -81,7 +85,8 @@ Does not affect the deterministic core. Focuses on organizational hierarchy, loc
 - Phase 3d (Employee Experience): Sprint 13
 - Phase 3e (Position Override + Wage Type Mapping UI): Sprint 14
 - Phase 3f (Compliance, Entitlements & Overtime Governance): Sprints 15–17
-- Phase 4 (Production): Sprint 18+ (was 15+, then 14+, then 12+, then 11+)
+- Phase 3g (UI/UX Refinements): Sprint 18
+- Phase 4 (Production): Sprint 19+ (was 18+, then 15+, then 14+, then 12+, then 11+)
 
 ### Phase 3 — Advanced Rules + Retroactive Corrections (Sprints 10–11)
 
@@ -149,11 +154,28 @@ Addresses gaps identified in ontology analysis (2026-03-09). These are correctne
   - New wage type mappings: OVERTIME_50_PAYOUT, OVERTIME_50_AFSPADSERING, OVERTIME_100_PAYOUT, OVERTIME_100_AFSPADSERING, MERARBEJDE_PAYOUT, MERARBEJDE_AFSPADSERING
   - Leader dashboard: overtime exceeded warnings, pre-approval tracking
 
-### Phase 4 — Production Hardening (Sprint 18+)
+### Phase 3g — UI/UX Refinements (Sprint 18)
+
+**Priority focus**: P9 (Usability)
+
+Polish pass across all user-facing surfaces before production hardening. Addresses accumulated UX debt, visual inconsistencies, and usability gaps identified during functional development.
+
+- Visual consistency audit: token usage, spacing, alignment across all pages
+- Responsive layout improvements (mobile/tablet breakpoints)
+- Form validation UX: inline errors, field-level feedback, loading states
+- Accessibility audit: keyboard navigation, ARIA labels, focus management, contrast ratios
+- Error and empty states: meaningful messages, retry actions, skeleton loaders
+- Navigation and information architecture review
+- Toast/notification consolidation and consistency
+- Data table improvements: sorting, filtering, pagination UX
+- Skema grid usability refinements based on workflow testing
+- Approval flow UX: clearer status indicators, action confirmations
+
+### Phase 4 — Production Hardening (Sprint 19+)
 
 **Priority focus**: All priorities — cross-cutting production readiness
 
-Only makes sense once functional completeness is achieved.
+Only makes sense once functional and UX completeness is achieved.
 
 - Performance profiling and optimization
 - Monitoring, alerting, health checks
@@ -166,25 +188,25 @@ Only makes sense once functional completeness is achieved.
 
 Projected functional coverage by requirement area. Percentages are cumulative.
 
-| Requirement Area | S1–S3 | S4 | S5 (Phase 1) | S6 | S7 | S8 (Phase 2) | S9 (Phase 2b) | S10–S11 (Phase 3) | S12 (Phase 3c) | S13 (Phase 3d) | S14 (Phase 3e) | S15 (Phase 3f) | S16 | S17 | After Phase 4 |
-|------------------|-------|-----|--------------|-----|-----|---------------------|---------------|-------------------|-----------------|----------------|----------------|----------------|-----|-----|---------------|
-| A. Basic Time Registration | 80% | 80% | 85% | 85% | 85% | 95% | 98% | 98% | 98% | 99% | 99% | 99% | 100% | 100% | 100% |
-| B. Working Time Rules | 70% | 72% | 75% | 75% | 75% | 95% | 95% | 98% | 98% | 98% | 98% | 98% | 100% | 100% | 100% |
-| C. Time Types & Supplements | 60% | 60% | 70% | 70% | 70% | 95% | 95% | 97% | 97% | 97% | 97% | 97% | 97% | 100% | 100% |
-| D. Absence Types | 65% | 80% | 85% | 85% | 85% | 95% | 97% | 97% | 97% | 97% | 97% | 100% | 100% | 100% | 100% |
-| E. Organizational Structure | 0% | 0% | 0% | 70% | 85% | 90% | 92% | 95% | 95% | 95% | 95% | 95% | 95% | 95% | 100% |
-| F. Roles and Authorization | 0% | 0% | 0% | 50% | 85% | 90% | 90% | 92% | 95% | 95% | 95% | 95% | 95% | 95% | 100% |
-| G. Local Configuration | 0% | 0% | 0% | 10% | 75% | 80% | 85% | 90% | 95% | 95% | 98% | 98% | 98% | 98% | 100% |
-| H. Period Approval Workflow | 0% | 0% | 0% | 10% | 80% | 85% | 95% | 95% | 95% | 95% | 95% | 95% | 95% | 98% | 100% |
-| I. Agreement Config Mgmt | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 85% | 85% | 95% | 97% | 98% | 100% | 100% |
-| J. Working Time Compliance | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 90% | 95% | 100% |
-| K. Entitlement & Balances | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 85% | 90% | 95% | 100% |
-| L. Overtime Governance | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 90% | 100% |
-| M. Compensation Model | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 85% | 100% |
-| AC-Specific Requirements | 40% | 42% | 45% | 45% | 45% | 90% | 90% | 97% | 98% | 98% | 99% | 99% | 99% | 100% | 100% |
-| Payroll Integration | 50% | 80% | 88% | 88% | 90% | 95% | 95% | 98% | 98% | 98% | 99% | 99% | 99% | 100% | 100% |
-| External Integrations | 60% | 60% | 60% | 60% | 60% | 90% | 90% | 90% | 90% | 90% | 90% | 90% | 90% | 90% | 100% |
-| **Overall** | **~33%** | **~36%** | **~39%** | **~46%** | **~56%** | **~75%** | **~77%** | **~80%** | **~82%** | **~82%** | **~83%** | **~86%** | **~90%** | **~95%** | **100%** |
+| Requirement Area | S1–S3 | S4 | S5 (Phase 1) | S6 | S7 | S8 (Phase 2) | S9 (Phase 2b) | S10–S11 (Phase 3) | S12 (Phase 3c) | S13 (Phase 3d) | S14 (Phase 3e) | S15 (Phase 3f) | S16 | S17 | S18 (Phase 3g) | After Phase 4 |
+|------------------|-------|-----|--------------|-----|-----|---------------------|---------------|-------------------|-----------------|----------------|----------------|----------------|-----|-----|----------------|---------------|
+| A. Basic Time Registration | 80% | 80% | 85% | 85% | 85% | 95% | 98% | 98% | 98% | 99% | 99% | 99% | 100% | 100% | 100% | 100% |
+| B. Working Time Rules | 70% | 72% | 75% | 75% | 75% | 95% | 95% | 98% | 98% | 98% | 98% | 98% | 100% | 100% | 100% | 100% |
+| C. Time Types & Supplements | 60% | 60% | 70% | 70% | 70% | 95% | 95% | 97% | 97% | 97% | 97% | 97% | 97% | 100% | 100% | 100% |
+| D. Absence Types | 65% | 80% | 85% | 85% | 85% | 95% | 97% | 97% | 97% | 97% | 97% | 100% | 100% | 100% | 100% | 100% |
+| E. Organizational Structure | 0% | 0% | 0% | 70% | 85% | 90% | 92% | 95% | 95% | 95% | 95% | 95% | 95% | 95% | 95% | 100% |
+| F. Roles and Authorization | 0% | 0% | 0% | 50% | 85% | 90% | 90% | 92% | 95% | 95% | 95% | 95% | 95% | 95% | 95% | 100% |
+| G. Local Configuration | 0% | 0% | 0% | 10% | 75% | 80% | 85% | 90% | 95% | 95% | 98% | 98% | 98% | 98% | 98% | 100% |
+| H. Period Approval Workflow | 0% | 0% | 0% | 10% | 80% | 85% | 95% | 95% | 95% | 95% | 95% | 95% | 95% | 98% | 98% | 100% |
+| I. Agreement Config Mgmt | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 85% | 85% | 95% | 97% | 98% | 100% | 100% | 100% |
+| J. Working Time Compliance | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 90% | 95% | 95% | 100% |
+| K. Entitlement & Balances | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 85% | 90% | 95% | 95% | 100% |
+| L. Overtime Governance | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 90% | 90% | 100% |
+| M. Compensation Model | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 85% | 85% | 100% |
+| AC-Specific Requirements | 40% | 42% | 45% | 45% | 45% | 90% | 90% | 97% | 98% | 98% | 99% | 99% | 99% | 100% | 100% | 100% |
+| Payroll Integration | 50% | 80% | 88% | 88% | 90% | 95% | 95% | 98% | 98% | 98% | 99% | 99% | 99% | 100% | 100% | 100% |
+| External Integrations | 60% | 60% | 60% | 60% | 60% | 90% | 90% | 90% | 90% | 90% | 90% | 90% | 90% | 90% | 90% | 100% |
+| **Overall** | **~33%** | **~36%** | **~39%** | **~46%** | **~56%** | **~75%** | **~77%** | **~80%** | **~82%** | **~82%** | **~83%** | **~86%** | **~90%** | **~95%** | **~96%** | **100%** |
 
 ## Sprint 5 — Completed
 
@@ -283,6 +305,14 @@ Sprint 14 completed Phase 3e (Position Override + Wage Type Mapping UI). See [do
 **Key deliverables**: DB-backed position overrides (migrated from static PositionOverrideConfigs), ConfigResolutionService rewired with DB-first lookup + static fallback (Reviewer confirmed P1 compliance), WageTypeMapping CRUD with Position support, 12 GlobalAdmin API endpoints with audit trails + domain events, 2 admin pages (Positionstilpasninger, Lønartstilknytninger), PayrollMappingService now reads Position, 22 new tests (406 total).
 
 **Phase 3e complete**: Sprint 14 delivers full admin management for position overrides and wage type mappings. Overall functional coverage: ~98%.
+
+## Sprint 16 — Completed
+
+Sprint 16 completed Phase 3f part 2 (Working Time Compliance). See [docs/sprints/SPRINT-16.md](docs/sprints/SPRINT-16.md) for full task log.
+
+**Key deliverables**: EU Working Time Directive 2003/88/EC compliance — RestPeriodRule (pure static, 4 checks: 11h daily rest, weekly rest day, 48h/week ceiling, max daily hours), 5 compliance config fields on AgreementRuleConfig, VoluntaryUnsocialHours on TimeEntry/TimeEntryRegistered events, ComplianceCheckResult model (ADR-015), compensatory_rest table, config resolution chain propagation (DB→Repository→Seeder→ConfigResolution→Entity→Endpoints), ComplianceWarnings component on SkemaPage, compliance badges in ApprovalDashboard, 14 new unit tests (436 total).
+
+**ADR-015**: ComplianceCheckResult is a separate return type from CalculationResult — justified divergence from PAT-006 because compliance results are validation outputs (violation/warning lists), not payroll calculations (wage lines).
 
 ## Architecture Decisions
 

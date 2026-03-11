@@ -20,6 +20,7 @@
 | [ADR-012](decisions/ADR-012-two-step-approval-flow.md) | Two-step approval flow (Employee → Manager) | approved | S9 | Backend, Frontend | approval, workflow, state-machine, period, two-step |
 | [ADR-013](decisions/ADR-013-retroactive-corrections-single-period-no-cascade.md) | Retroactive corrections are single-period (no cascade) | approved | S11 | Payroll Integration, Rule Engine | retroactive, corrections, flex, carryover, payroll, cascade |
 | [ADR-014](decisions/ADR-014-agreement-configs-database-backed.md) | Agreement configs migrated from static code to database | approved | S12 (planned) | Infrastructure, SharedKernel, Rule Engine, Payroll, Frontend | agreement-config, database, migration, configuration, lifecycle, versioning |
+| [ADR-015](decisions/ADR-015-compliance-check-result-pattern.md) | ComplianceCheckResult as separate return type from CalculationResult | approved | S16 | Rule Engine, SharedKernel | compliance, rule-engine, return-type, eu-working-time-directive |
 
 ## Validated Patterns (PAT)
 
@@ -142,6 +143,9 @@
 | versioning | ADR-014 |
 | wage-types | DEP-002 |
 | workflow | ADR-012 |
+| compliance | ADR-015 |
+| return-type | ADR-015 |
+| eu-working-time-directive | ADR-015 |
 
 ## Domain Index
 
@@ -153,6 +157,6 @@
 | Data Model | ADR-001, ADR-005, PAT-001, PAT-004, DEP-003 |
 | Infrastructure | ADR-001, ADR-004, ADR-005, ADR-006, ADR-007, ADR-008, ADR-009, ADR-010, ADR-012, ADR-014, DEP-003, FAIL-001 |
 | Payroll | DEP-002, PAT-005, PAT-006, ADR-010, ADR-013, ADR-014 |
-| Rule Engine | ADR-002, ADR-003, PAT-002, PAT-003, PAT-005, PAT-006, DEP-001, DEP-002, RES-001, ADR-010, ADR-014 |
+| Rule Engine | ADR-002, ADR-003, PAT-002, PAT-003, PAT-005, PAT-006, DEP-001, DEP-002, RES-001, ADR-010, ADR-014, ADR-015 |
 | Security | ADR-007, ADR-008, ADR-009, FAIL-001 |
-| SharedKernel | DEP-001, ADR-014 |
+| SharedKernel | DEP-001, ADR-014, ADR-015 |
