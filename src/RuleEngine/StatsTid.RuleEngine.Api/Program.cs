@@ -111,4 +111,14 @@ app.MapPost("/api/rules/check-compliance", (CheckComplianceRequest request) =>
     return Results.Ok(result);
 }).RequireAuthorization("Authenticated");
 
+app.MapPost("/api/rules/check-overtime-governance", (CheckOvertimeGovernanceRequest request) =>
+{
+    var config = StatsTid.RuleEngine.Api.Config.AgreementConfigProvider.GetConfig(
+        request.Profile.AgreementCode, request.Profile.OkVersion, request.Profile.Position);
+    var result = OvertimeGovernanceRule.Evaluate(
+        request.Profile, request.OvertimeHoursInPeriod, request.HasPreApproval,
+        request.PeriodStart, request.PeriodEnd, config);
+    return Results.Ok(result);
+}).RequireAuthorization("Authenticated");
+
 app.Run();

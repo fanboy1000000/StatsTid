@@ -25,7 +25,9 @@ public enum ComplianceViolationType
     DAILY_REST,
     WEEKLY_REST,
     MAX_DAILY_HOURS,
-    WEEKLY_MAX_HOURS
+    WEEKLY_MAX_HOURS,
+    OVERTIME_EXCEEDED,
+    OVERTIME_UNAPPROVED
 }
 
 public enum ComplianceSeverity

@@ -30,6 +30,7 @@ public static class BalanceEndpoints
             AgreementConfigRepository configRepo,
             EntitlementConfigRepository entitlementConfigRepo,
             EntitlementBalanceRepository entitlementBalanceRepo,
+            OvertimeBalanceRepository overtimeBalanceRepo,
             IEventStore eventStore,
             OrgScopeValidator scopeValidator,
             HttpContext context,
@@ -104,6 +105,9 @@ public static class BalanceEndpoints
             // Overtime: max(0, actual - expected)
             var overtimeHours = Math.Max(0m, normHoursActual - normHoursExpected);
 
+            // ── Overtime balance from DB ──
+            var overtimeBalance = await overtimeBalanceRepo.GetByEmployeeAndYearAsync(employeeId, year, ct);
+
             // ── Entitlements: load configs and balances ──
             var entitlementConfigs = await entitlementConfigRepo.GetByAgreementAsync(
                 user.AgreementCode, user.OkVersion, ct);
@@ -175,7 +179,15 @@ public static class BalanceEndpoints
                 overtimeHours,
                 agreementCode = user.AgreementCode,
                 hasMerarbejde,
-                entitlements
+                entitlements,
+                overtimeBalance = overtimeBalance is not null ? new
+                {
+                    accumulated = overtimeBalance.Accumulated,
+                    paidOut = overtimeBalance.PaidOut,
+                    afspadseringUsed = overtimeBalance.AfspadseringUsed,
+                    remaining = overtimeBalance.Remaining,
+                    compensationModel = overtimeBalance.CompensationModel
+                } : null
             });
         }).RequireAuthorization("EmployeeOrAbove");
 

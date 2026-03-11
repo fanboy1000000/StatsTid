@@ -62,4 +62,10 @@ public sealed class AgreementRuleConfig
     public bool RestPeriodDerogationAllowed { get; init; }
     public int WeeklyMaxHoursReferencePeriod { get; init; } = 17;
     public bool VoluntaryUnsocialHoursAllowed { get; init; } = true;
+
+    // Overtime governance & compensation (Sprint 17)
+    public string DefaultCompensationModel { get; init; } = "UDBETALING";
+    public bool EmployeeCompensationChoice { get; init; }
+    public decimal MaxOvertimeHoursPerPeriod { get; init; }
+    public bool OvertimeRequiresPreApproval { get; init; }
 }

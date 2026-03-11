@@ -42,6 +42,8 @@ public sealed class ConfigResolutionService
         "OvertimeThreshold100",
         "OnCallDutyEnabled",
         "OnCallDutyRate",
+        "DefaultCompensationModel",
+        "EmployeeCompensationChoice",
     };
 
     public ConfigResolutionService(
@@ -151,6 +153,8 @@ public sealed class ConfigResolutionService
         var mergedWeeklyNormHours = centralConfig.WeeklyNormHours;
         var mergedMaxFlexBalance = centralConfig.MaxFlexBalance;
         var mergedFlexCarryoverMax = centralConfig.FlexCarryoverMax;
+        var mergedMaxOvertimeHoursPerPeriod = centralConfig.MaxOvertimeHoursPerPeriod;
+        var mergedOvertimeRequiresPreApproval = centralConfig.OvertimeRequiresPreApproval;
 
         foreach (var local in localOverrides)
         {
@@ -215,6 +219,39 @@ public sealed class ConfigResolutionService
                     }
                     break;
 
+                case "MaxOvertimeHoursPerPeriod":
+                    if (TryParseDecimal(local.ConfigValue, out var maxOt)
+                        && maxOt >= 0)
+                    {
+                        mergedMaxOvertimeHoursPerPeriod = maxOt;
+                        _logger.LogInformation(
+                            "Local override applied: MaxOvertimeHoursPerPeriod = {Value} for org {OrgId}",
+                            maxOt, orgId);
+                    }
+                    else
+                    {
+                        _logger.LogWarning(
+                            "Invalid local override MaxOvertimeHoursPerPeriod = '{Value}' for org {OrgId} — must be >= 0. Skipping.",
+                            local.ConfigValue, orgId);
+                    }
+                    break;
+
+                case "OvertimeRequiresPreApproval":
+                    if (bool.TryParse(local.ConfigValue.Trim().Trim('"'), out var requiresPreApproval))
+                    {
+                        mergedOvertimeRequiresPreApproval = requiresPreApproval;
+                        _logger.LogInformation(
+                            "Local override applied: OvertimeRequiresPreApproval = {Value} for org {OrgId}",
+                            requiresPreApproval, orgId);
+                    }
+                    else
+                    {
+                        _logger.LogWarning(
+                            "Invalid local override OvertimeRequiresPreApproval = '{Value}' for org {OrgId} — must be true/false. Skipping.",
+                            local.ConfigValue, orgId);
+                    }
+                    break;
+
                 case "PlanningStartDay":
                 case "ApprovalCutoffDay":
                     // Informational only — does not affect AgreementRuleConfig
@@ -272,6 +309,10 @@ public sealed class ConfigResolutionService
             RestPeriodDerogationAllowed = centralConfig.RestPeriodDerogationAllowed,
             WeeklyMaxHoursReferencePeriod = centralConfig.WeeklyMaxHoursReferencePeriod,
             VoluntaryUnsocialHoursAllowed = centralConfig.VoluntaryUnsocialHoursAllowed,
+            DefaultCompensationModel = centralConfig.DefaultCompensationModel,
+            EmployeeCompensationChoice = centralConfig.EmployeeCompensationChoice,
+            MaxOvertimeHoursPerPeriod = mergedMaxOvertimeHoursPerPeriod,
+            OvertimeRequiresPreApproval = mergedOvertimeRequiresPreApproval,
         };
     }
 
@@ -314,6 +355,18 @@ public sealed class ConfigResolutionService
                     return (false, "WeeklyNormHours must be greater than 0.");
                 if (normHours > 40)
                     return (false, $"WeeklyNormHours {normHours} exceeds maximum of 40.");
+                return (true, null);
+
+            case "MaxOvertimeHoursPerPeriod":
+                if (!TryParseDecimal(configValue, out var maxOt))
+                    return (false, $"MaxOvertimeHoursPerPeriod value '{configValue}' is not a valid decimal.");
+                if (maxOt < 0)
+                    return (false, "MaxOvertimeHoursPerPeriod must be >= 0.");
+                return (true, null);
+
+            case "OvertimeRequiresPreApproval":
+                if (!bool.TryParse(configValue.Trim().Trim('"'), out _))
+                    return (false, $"OvertimeRequiresPreApproval value '{configValue}' is not a valid boolean.");
                 return (true, null);
 
             case "PlanningStartDay":

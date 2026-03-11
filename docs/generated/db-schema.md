@@ -1,7 +1,7 @@
 # StatsTid Database Schema
 
 > Generated from docker/postgres/init.sql. Do not edit manually -- update init.sql and regenerate.
-> Last generated: Sprint 15 (2026-03-09)
+> Last generated: Sprint 17 (2026-03-11)
 
 ---
 
@@ -715,6 +715,73 @@ Introduced: Sprint 15
 
 ---
 
+## 14. Compliance
+
+### compensatory_rest
+
+Purpose: Tracks compensatory rest grants when rest period derogation is used.
+
+| Column | Type | Constraints |
+|--------|------|-------------|
+| rest_id | UUID | PRIMARY KEY DEFAULT gen_random_uuid() |
+| employee_id | TEXT | NOT NULL |
+| grant_date | DATE | NOT NULL |
+| hours_owed | DECIMAL | NOT NULL |
+| hours_taken | DECIMAL | NOT NULL DEFAULT 0 |
+| status | TEXT | NOT NULL DEFAULT 'PENDING', CHECK IN ('PENDING', 'PARTIAL', 'FULFILLED') |
+| related_violation_date | DATE | |
+| created_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
+| updated_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
+
+**Unique constraint**: (employee_id, grant_date)
+
+Introduced: Sprint 16
+
+---
+
+## 15. Overtime
+
+### overtime_balances
+
+Purpose: Per-employee overtime balance tracking with compensation model (afspadsering vs udbetaling).
+
+| Column | Type | Constraints |
+|--------|------|-------------|
+| balance_id | UUID | PRIMARY KEY DEFAULT gen_random_uuid() |
+| employee_id | TEXT | NOT NULL |
+| agreement_code | TEXT | NOT NULL |
+| period_year | INT | NOT NULL |
+| accumulated | DECIMAL | NOT NULL DEFAULT 0 |
+| paid_out | DECIMAL | NOT NULL DEFAULT 0 |
+| afspadsering_used | DECIMAL | NOT NULL DEFAULT 0 |
+| compensation_model | TEXT | NOT NULL DEFAULT 'AFSPADSERING' |
+| updated_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
+
+**Unique constraint**: (employee_id, period_year)
+
+Introduced: Sprint 17
+
+### overtime_pre_approvals
+
+Purpose: Overtime pre-approval workflow with PENDING/APPROVED/REJECTED lifecycle.
+
+| Column | Type | Constraints |
+|--------|------|-------------|
+| id | UUID | PRIMARY KEY DEFAULT gen_random_uuid() |
+| employee_id | TEXT | NOT NULL |
+| period_start | DATE | NOT NULL |
+| period_end | DATE | NOT NULL |
+| max_hours | DECIMAL | NOT NULL |
+| approved_by | TEXT | |
+| approved_at | TIMESTAMPTZ | |
+| status | TEXT | NOT NULL DEFAULT 'PENDING', CHECK IN ('PENDING', 'APPROVED', 'REJECTED') |
+| reason | TEXT | |
+| created_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
+
+Introduced: Sprint 17
+
+---
+
 ## Table Summary
 
 | # | Table | Domain | Sprint | Audit Table |
@@ -748,5 +815,8 @@ Introduced: Sprint 15
 | 27 | wage_type_mapping_audit | Wage Type Audit | S14 | -- (is audit) |
 | 28 | entitlement_configs | Entitlements | S15 | -- |
 | 29 | entitlement_balances | Entitlements | S15 | -- |
+| 30 | compensatory_rest | Compliance | S16 | -- |
+| 31 | overtime_balances | Overtime | S17 | -- |
+| 32 | overtime_pre_approvals | Overtime | S17 | -- |
 
-**Total: 29 tables** (11 audit tables, 18 primary tables)
+**Total: 32 tables** (11 audit tables, 21 primary tables)

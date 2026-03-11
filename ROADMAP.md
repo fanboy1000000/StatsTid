@@ -33,6 +33,7 @@
 | Sprint 14 | Position Override + Wage Type Mapping UI | DB-backed position overrides, WageTypeMapping CRUD, 2 admin pages, 12 endpoints | 406 |
 | Sprint 15 | Entitlement & Balance Management | 5 entitlement types, quota validation, atomic balance adjustment, progress bars | 422 |
 | Sprint 16 | Working Time Compliance (EU WTD) | RestPeriodRule (4 checks), compliance config chain, ComplianceWarnings UI, ADR-015 | 436 |
+| Sprint 17 | Overtime Governance & Compensation Model | OvertimeGovernanceRule, OvertimeBalance, pre-approval workflow, compensation-aware payroll mapping, 9 endpoints, 4 frontend changes | 446 |
 
 ## Phase Roadmap
 
@@ -201,8 +202,8 @@ Projected functional coverage by requirement area. Percentages are cumulative.
 | I. Agreement Config Mgmt | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 85% | 85% | 95% | 97% | 98% | 100% | 100% | 100% |
 | J. Working Time Compliance | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 90% | 95% | 95% | 100% |
 | K. Entitlement & Balances | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 85% | 90% | 95% | 95% | 100% |
-| L. Overtime Governance | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 90% | 90% | 100% |
-| M. Compensation Model | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 85% | 85% | 100% |
+| L. Overtime Governance | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 90% | 95% | 100% |
+| M. Compensation Model | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 85% | 90% | 100% |
 | AC-Specific Requirements | 40% | 42% | 45% | 45% | 45% | 90% | 90% | 97% | 98% | 98% | 99% | 99% | 99% | 100% | 100% | 100% |
 | Payroll Integration | 50% | 80% | 88% | 88% | 90% | 95% | 95% | 98% | 98% | 98% | 99% | 99% | 99% | 100% | 100% | 100% |
 | External Integrations | 60% | 60% | 60% | 60% | 60% | 90% | 90% | 90% | 90% | 90% | 90% | 90% | 90% | 90% | 90% | 100% |
@@ -313,6 +314,14 @@ Sprint 16 completed Phase 3f part 2 (Working Time Compliance). See [docs/sprints
 **Key deliverables**: EU Working Time Directive 2003/88/EC compliance — RestPeriodRule (pure static, 4 checks: 11h daily rest, weekly rest day, 48h/week ceiling, max daily hours), 5 compliance config fields on AgreementRuleConfig, VoluntaryUnsocialHours on TimeEntry/TimeEntryRegistered events, ComplianceCheckResult model (ADR-015), compensatory_rest table, config resolution chain propagation (DB→Repository→Seeder→ConfigResolution→Entity→Endpoints), ComplianceWarnings component on SkemaPage, compliance badges in ApprovalDashboard, 14 new unit tests (436 total).
 
 **ADR-015**: ComplianceCheckResult is a separate return type from CalculationResult — justified divergence from PAT-006 because compliance results are validation outputs (violation/warning lists), not payroll calculations (wage lines).
+
+## Sprint 17 — Completed
+
+Sprint 17 completed Phase 3f part 3 (Overtime Governance & Compensation Model). See [docs/sprints/SPRINT-17.md](docs/sprints/SPRINT-17.md) for full task log.
+
+**Key deliverables**: OvertimeGovernanceRule (pure static, 2 checks: max ceiling + pre-approval requirement, WARNINGs via ComplianceCheckResult/ADR-015), OvertimeBalance model + repository (follows EntitlementBalance pattern), OvertimePreApproval workflow (separate table, PENDING/APPROVED/REJECTED), 4 new config fields through full chain (DB→Seeder→ConfigResolution→Endpoints), compensation-aware PayrollMappingService (OVERTIME_50/100/MERARBEJDE → _PAYOUT/_AFSPADSERING suffix), 28 new wage type mapping rows, 9 new backend endpoints, 4 frontend changes (overtime balance card, governance warnings, pre-approval management page, compensation choice selector), 10 new unit tests (446 total).
+
+**Phase 3f complete**: Sprints 15–17 delivered entitlements, working time compliance, and overtime governance. Overall functional coverage: ~95%.
 
 ## Architecture Decisions
 

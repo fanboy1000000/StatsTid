@@ -63,6 +63,12 @@ public sealed class AgreementConfigEntity
     public int WeeklyMaxHoursReferencePeriod { get; init; } = 17;
     public bool VoluntaryUnsocialHoursAllowed { get; init; } = true;
 
+    // Overtime governance & compensation (Sprint 17)
+    public string DefaultCompensationModel { get; init; } = "UDBETALING";
+    public bool EmployeeCompensationChoice { get; init; }
+    public decimal MaxOvertimeHoursPerPeriod { get; init; }
+    public bool OvertimeRequiresPreApproval { get; init; }
+
     // Metadata
     public required string CreatedBy { get; init; }
     public required DateTime CreatedAt { get; init; }
@@ -115,5 +121,9 @@ public sealed class AgreementConfigEntity
         RestPeriodDerogationAllowed = RestPeriodDerogationAllowed,
         WeeklyMaxHoursReferencePeriod = WeeklyMaxHoursReferencePeriod,
         VoluntaryUnsocialHoursAllowed = VoluntaryUnsocialHoursAllowed,
+        DefaultCompensationModel = DefaultCompensationModel,
+        EmployeeCompensationChoice = EmployeeCompensationChoice,
+        MaxOvertimeHoursPerPeriod = MaxOvertimeHoursPerPeriod,
+        OvertimeRequiresPreApproval = OvertimeRequiresPreApproval,
     };
 }

@@ -60,6 +60,10 @@ public static class EventSerializer
         // Sprint 16: Working time compliance events
         ["RestPeriodViolationDetected"] = typeof(RestPeriodViolationDetected),
         ["CompensatoryRestGranted"] = typeof(CompensatoryRestGranted),
+        // Sprint 17: Overtime governance events
+        ["OvertimeBalanceAdjusted"] = typeof(OvertimeBalanceAdjusted),
+        ["OvertimeCompensationApplied"] = typeof(OvertimeCompensationApplied),
+        ["OvertimePreApprovalCreated"] = typeof(OvertimePreApprovalCreated),
     };
 
     public static string Serialize(IDomainEvent @event)

@@ -88,6 +88,8 @@ public sealed class AgreementConfigRepository
                 travel_time_enabled, working_travel_rate, non_working_travel_rate,
                 max_daily_hours, minimum_rest_hours, rest_period_derogation_allowed,
                 weekly_max_hours_reference_period, voluntary_unsocial_hours_allowed,
+                default_compensation_model, employee_compensation_choice,
+                max_overtime_hours_per_period, overtime_requires_pre_approval,
                 created_by, description, cloned_from_id,
                 created_at, updated_at
             ) VALUES (
@@ -103,6 +105,8 @@ public sealed class AgreementConfigRepository
                 @travelTimeEnabled, @workingTravelRate, @nonWorkingTravelRate,
                 @maxDailyHours, @minimumRestHours, @restPeriodDerogationAllowed,
                 @weeklyMaxHoursReferencePeriod, @voluntaryUnsocialHoursAllowed,
+                @defaultCompensationModel, @employeeCompensationChoice,
+                @maxOvertimeHoursPerPeriod, @overtimeRequiresPreApproval,
                 @createdBy, @description, @clonedFromId,
                 NOW(), NOW()
             )
@@ -160,6 +164,10 @@ public sealed class AgreementConfigRepository
                 rest_period_derogation_allowed = @restPeriodDerogationAllowed,
                 weekly_max_hours_reference_period = @weeklyMaxHoursReferencePeriod,
                 voluntary_unsocial_hours_allowed = @voluntaryUnsocialHoursAllowed,
+                default_compensation_model = @defaultCompensationModel,
+                employee_compensation_choice = @employeeCompensationChoice,
+                max_overtime_hours_per_period = @maxOvertimeHoursPerPeriod,
+                overtime_requires_pre_approval = @overtimeRequiresPreApproval,
                 description = @description,
                 updated_at = NOW()
             WHERE config_id = @configId AND status = 'DRAFT'
@@ -310,6 +318,10 @@ public sealed class AgreementConfigRepository
         cmd.Parameters.AddWithValue("restPeriodDerogationAllowed", entity.RestPeriodDerogationAllowed);
         cmd.Parameters.AddWithValue("weeklyMaxHoursReferencePeriod", entity.WeeklyMaxHoursReferencePeriod);
         cmd.Parameters.AddWithValue("voluntaryUnsocialHoursAllowed", entity.VoluntaryUnsocialHoursAllowed);
+        cmd.Parameters.AddWithValue("defaultCompensationModel", entity.DefaultCompensationModel);
+        cmd.Parameters.AddWithValue("employeeCompensationChoice", entity.EmployeeCompensationChoice);
+        cmd.Parameters.AddWithValue("maxOvertimeHoursPerPeriod", entity.MaxOvertimeHoursPerPeriod);
+        cmd.Parameters.AddWithValue("overtimeRequiresPreApproval", entity.OvertimeRequiresPreApproval);
     }
 
     private static async Task<IReadOnlyList<AgreementConfigEntity>> ReadEntitiesAsync(NpgsqlCommand cmd, CancellationToken ct)
@@ -363,6 +375,10 @@ public sealed class AgreementConfigRepository
         RestPeriodDerogationAllowed = reader.GetBoolean(reader.GetOrdinal("rest_period_derogation_allowed")),
         WeeklyMaxHoursReferencePeriod = reader.GetInt32(reader.GetOrdinal("weekly_max_hours_reference_period")),
         VoluntaryUnsocialHoursAllowed = reader.GetBoolean(reader.GetOrdinal("voluntary_unsocial_hours_allowed")),
+        DefaultCompensationModel = reader.GetString(reader.GetOrdinal("default_compensation_model")),
+        EmployeeCompensationChoice = reader.GetBoolean(reader.GetOrdinal("employee_compensation_choice")),
+        MaxOvertimeHoursPerPeriod = reader.GetDecimal(reader.GetOrdinal("max_overtime_hours_per_period")),
+        OvertimeRequiresPreApproval = reader.GetBoolean(reader.GetOrdinal("overtime_requires_pre_approval")),
         CreatedBy = reader.GetString(reader.GetOrdinal("created_by")),
         CreatedAt = reader.GetDateTime(reader.GetOrdinal("created_at")),
         UpdatedAt = reader.GetDateTime(reader.GetOrdinal("updated_at")),

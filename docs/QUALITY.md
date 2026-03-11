@@ -4,7 +4,7 @@
 
 ## Domain Quality Matrix
 
-Last updated: Sprint 15 (2026-03-09)
+Last updated: Sprint 17 (2026-03-11)
 
 | Domain | Test Coverage | Pattern Compliance | Documentation | Tech Debt | Grade | Trend |
 |--------|-------------|-------------------|---------------|-----------|-------|-------|
@@ -14,7 +14,7 @@ Last updated: Sprint 15 (2026-03-09)
 | Infrastructure | Medium — repositories not directly unit-tested (integration-level) | Full — Npgsql pattern, seeder pattern (ADR-014) | Good — ADR-001, ADR-004, ADR-008 | Low | **B** | ● |
 | Security | Low — no dedicated security unit tests; coverage via integration paths | Full — JWT, RBAC, scope validation (ADR-007, ADR-009) | Good — ADR-007, ADR-009, FAIL-001 | Medium — FindAll fix was late-caught | **B-** | ● |
 | Backend API | Medium — endpoint logic tested indirectly via smoke tests | Mostly — PAT-005 violation fixed in S15, some inline logic remains | Partial — endpoint groups documented in MEMORY, no dedicated docs | Medium — some pages still use local fetch patterns | **B-** | ▲ |
-| Payroll Integration | Medium — mapping tests, SLS format tests, correction tests | Full — traceability chain (PAT-005), correction format (ADR-013) | Good — PAT-005, PAT-006, DEP-002 | Low — position-aware PeriodCalc deferred | **B** | ● |
+| Payroll Integration | Medium — mapping tests, SLS format tests, correction tests, compensation mapping | Full — traceability chain (PAT-005), correction format (ADR-013), compensation-aware mapping | Good — PAT-005, PAT-006, DEP-002 | Low — position-aware PeriodCalc deferred | **B+** | ▲ |
 | Frontend | Low — 41 vitest tests, no E2E, no visual regression | Partial — some pages use local fetch instead of shared hooks | Sparse — ADR-011 covers design system, no component docs | Medium — CORS fixes were reactive, some pages inconsistent | **C+** | ▲ |
 | PostgreSQL Schema | N/A (schema, not code) | Full — unique constraints, indexes, seed data | Partial — init.sql is self-documenting, no ER diagram | Low | **B** | ● |
 | Docker/Infrastructure | N/A (config, not code) | Full — 8-service compose (ADR-006) | Good — ADR-006 | Low | **B+** | ● |
@@ -39,15 +39,15 @@ Last updated: Sprint 15 (2026-03-09)
 
 ## Historical Grades
 
-| Domain | S14 | S15 |
-|--------|-----|-----|
-| Rule Engine | A | A |
-| SharedKernel (Models) | A | A |
-| SharedKernel (Events) | B+ | B+ |
-| Infrastructure | B | B |
-| Security | B- | B- |
-| Backend API | C+ | B- |
-| Payroll Integration | B | B |
-| Frontend | C | C+ |
-| PostgreSQL Schema | B | B |
-| Docker/Infrastructure | B+ | B+ |
+| Domain | S14 | S15 | S17 |
+|--------|-----|-----|-----|
+| Rule Engine | A | A | A |
+| SharedKernel (Models) | A | A | A |
+| SharedKernel (Events) | B+ | B+ | B+ |
+| Infrastructure | B | B | B |
+| Security | B- | B- | B- |
+| Backend API | C+ | B- | B- |
+| Payroll Integration | B | B | B+ |
+| Frontend | C | C+ | C+ |
+| PostgreSQL Schema | B | B | B |
+| Docker/Infrastructure | B+ | B+ | B+ |
