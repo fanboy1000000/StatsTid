@@ -155,18 +155,25 @@ public static class TimerEndpoints
                     return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
             }
 
-            var session = await timerRepo.GetActiveByEmployeeAsync(employeeId, ct);
-            if (session is null)
-                return Results.Ok(new { active = false });
+            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+            var allSessions = await timerRepo.GetAllByEmployeeDateAsync(employeeId, today, ct);
+            var activeSession = allSessions.FirstOrDefault(s => s.IsActive);
 
             return Results.Ok(new
             {
-                active = true,
-                sessionId = session.SessionId,
-                employeeId = session.EmployeeId,
-                date = session.Date,
-                checkInAt = session.CheckInAt,
-                isActive = session.IsActive
+                active = activeSession is not null,
+                sessionId = activeSession?.SessionId,
+                employeeId,
+                date = today,
+                checkInAt = activeSession?.CheckInAt,
+                isActive = activeSession?.IsActive ?? false,
+                sessions = allSessions.Select(s => new
+                {
+                    sessionId = s.SessionId,
+                    checkInAt = s.CheckInAt,
+                    checkOutAt = s.CheckOutAt,
+                    isActive = s.IsActive
+                })
             });
         }).RequireAuthorization("EmployeeOrAbove");
 

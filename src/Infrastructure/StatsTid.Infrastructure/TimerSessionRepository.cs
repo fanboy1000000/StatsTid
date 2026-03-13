@@ -28,11 +28,28 @@ public sealed class TimerSessionRepository
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
         await using var cmd = new NpgsqlCommand(
-            "SELECT * FROM timer_sessions WHERE employee_id = @employeeId AND date = @date", conn);
+            "SELECT * FROM timer_sessions WHERE employee_id = @employeeId AND date = @date LIMIT 1", conn);
         cmd.Parameters.AddWithValue("employeeId", employeeId);
         cmd.Parameters.AddWithValue("date", date);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         return await reader.ReadAsync(ct) ? ReadSession(reader) : null;
+    }
+
+    public async Task<IReadOnlyList<TimerSession>> GetAllByEmployeeDateAsync(string employeeId, DateOnly date, CancellationToken ct = default)
+    {
+        await using var conn = _connectionFactory.Create();
+        await conn.OpenAsync(ct);
+        await using var cmd = new NpgsqlCommand(
+            "SELECT * FROM timer_sessions WHERE employee_id = @employeeId AND date = @date ORDER BY check_in_at", conn);
+        cmd.Parameters.AddWithValue("employeeId", employeeId);
+        cmd.Parameters.AddWithValue("date", date);
+        var sessions = new List<TimerSession>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            sessions.Add(ReadSession(reader));
+        }
+        return sessions;
     }
 
     public async Task CheckInAsync(TimerSession session, CancellationToken ct = default)

@@ -104,37 +104,113 @@
   line-height: 28px;
 }
 
-/* Time inputs for arrival/departure */
-.timeInput {
-  width: 100%;
-  min-width: 40px;
-  border: none;
-  outline: none;
-  text-align: center;
-  padding: 2px 0;
-  font-family: var(--font-family);
+/* Arbejdstid row */
+.arbejdstidRow td {
   font-size: 12px;
-  background: transparent;
 }
 
-.timeInput:focus {
+.arbejdstidCell.clickable {
+  cursor: pointer;
+}
+
+.arbejdstidCell.clickable:hover {
   background-color: var(--color-info-light);
-  outline: 2px solid var(--color-primary);
-  outline-offset: -2px;
 }
 
-.timeDisplay {
+.arbejdstidDisplay {
   display: block;
   padding: 2px 0;
   font-size: 12px;
-  color: var(--color-gray-500);
+  color: var(--color-gray-600, var(--color-gray-500));
   min-height: 24px;
   line-height: 24px;
 }
 
-.arrivalRow td,
-.departureRow td {
-  font-size: 12px;
+/* Difference row */
+.diffRow td {
+  font-size: 11px;
+}
+
+.diffDisplay {
+  display: block;
+  padding: 2px 0;
+  min-height: 22px;
+  line-height: 22px;
+  font-weight: var(--font-weight-medium);
+}
+
+.diffCell {
+  color: var(--color-gray-500);
+}
+
+/* Work intervals dialog */
+.intervalsContainer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.intervalRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.intervalLabel {
+  font-size: 14px;
+  font-weight: var(--font-weight-medium);
+  color: var(--color-gray-500);
+  min-width: 24px;
+}
+
+.intervalTimeInput {
+  padding: var(--space-1) var(--space-2);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--border-radius);
+  font-family: var(--font-family);
+  font-size: 14px;
+  width: 120px;
+}
+
+.intervalTimeInput:focus {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -1px;
+  border-color: var(--color-primary);
+}
+
+.removeIntervalBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  border: var(--border-width) solid transparent;
+  border-radius: var(--border-radius);
+  color: var(--color-gray-500);
+  font-size: 14px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.removeIntervalBtn:hover {
+  background-color: var(--color-error-light, #fee);
+  color: var(--color-error, #c00);
+}
+
+.intervalSummary {
+  padding-top: var(--space-2);
+  border-top: var(--border-width) solid var(--border-color);
+  font-size: 14px;
+  color: var(--color-text);
+}
+
+.intervalActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
 }
 
 /* Sum column */

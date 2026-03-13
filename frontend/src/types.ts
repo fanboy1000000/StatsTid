@@ -97,6 +97,13 @@ export interface Project {
   sortOrder: number
 }
 
+export interface TimerSessionEntry {
+  sessionId: string
+  checkInAt: string
+  checkOutAt: string | null
+  isActive: boolean
+}
+
 export interface TimerSession {
   sessionId: string
   employeeId: string
@@ -104,6 +111,7 @@ export interface TimerSession {
   checkInAt: string
   checkOutAt: string | null
   isActive: boolean
+  sessions?: TimerSessionEntry[]
 }
 
 export interface SkemaRow {

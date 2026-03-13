@@ -595,8 +595,7 @@ CREATE TABLE IF NOT EXISTS timer_sessions (
     check_in_at     TIMESTAMPTZ NOT NULL,
     check_out_at    TIMESTAMPTZ,
     is_active       BOOLEAN     NOT NULL DEFAULT TRUE,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (employee_id, date)
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_timer_employee ON timer_sessions(employee_id);
 CREATE INDEX IF NOT EXISTS idx_timer_active ON timer_sessions(is_active) WHERE is_active = TRUE;

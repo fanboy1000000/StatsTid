@@ -2,7 +2,7 @@ import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 import { useSkema } from '../hooks/useSkema'
 import { useTimer } from '../hooks/useTimer'
-import { SkemaGrid } from '../components/SkemaGrid'
+import { SkemaGrid, type WorkInterval, type WorkIntervalsMap } from '../components/SkemaGrid'
 import { TimerControl } from '../components/TimerControl'
 import { BalanceSummary } from '../components/BalanceSummary'
 import { ComplianceWarnings } from '../components/ComplianceWarnings'
@@ -51,6 +51,16 @@ function formatDeadline(dateStr: string | null): string {
   }
 }
 
+function toTimeString(d: Date): string {
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`
+}
+
+function toWorkInterval(checkInAt: string, checkOutAt: string | null): WorkInterval {
+  const start = new Date(checkInAt)
+  const end = checkOutAt ? new Date(checkOutAt) : start
+  return { start: toTimeString(start), end: toTimeString(end) }
+}
+
 export function SkemaPage() {
   const { user, orgId } = useAuth()
   const employeeId = user?.employeeId ?? ''
@@ -60,7 +70,7 @@ export function SkemaPage() {
   const [month, setMonth] = useState(now.getMonth() + 1)
 
   const { data, loading, error, quotaError, clearQuotaError, refetch, saveMonth, employeeApprove } = useSkema(employeeId, year, month)
-  const { session, loading: timerLoading, checkIn, checkOut, elapsed } = useTimer(employeeId)
+  const { session, loading: timerLoading, checkIn, checkOut, elapsed, sessions: timerSessions, checkInClientTime } = useTimer(employeeId)
   const { data: balanceData, loading: balanceLoading } = useBalanceSummary(employeeId, year, month)
   const { result: complianceResult, loading: complianceLoading } = useCompliance(employeeId, year, month)
 
@@ -106,16 +116,86 @@ export function SkemaPage() {
     return [...projectRows, ...absenceRows]
   }, [data])
 
-  // Build arrival/departure map
-  const arrivalDepartures = useMemo(() => {
-    const map = new Map<string, { arrival: string | null; departure: string | null }>()
+  // Build work intervals map from arrival/departure data
+  const workIntervals = useMemo<WorkIntervalsMap>(() => {
+    const map: WorkIntervalsMap = new Map()
     if (data?.arrivalDepartures) {
       for (const ad of data.arrivalDepartures) {
-        map.set(ad.date, { arrival: ad.arrival, departure: ad.departure })
+        if (ad.arrival || ad.departure) {
+          map.set(ad.date, [{ start: ad.arrival ?? '', end: ad.departure ?? '' }])
+        }
       }
     }
     return map
   }, [data])
+
+  // Local work intervals state (for edits before save)
+  const [localWorkIntervals, setLocalWorkIntervals] = useState<WorkIntervalsMap>(new Map())
+  const syncedSessionIdsRef = useRef<Set<string>>(new Set())
+  const activeSessionIdRef = useRef<string | null>(null)
+
+  // Sync from data when it changes
+  useEffect(() => {
+    setLocalWorkIntervals(workIntervals)
+  }, [workIntervals])
+
+  // Sync timer sessions into work intervals for today
+  // Uses session ID tracking — once synced, a session is never re-added (even if user deletes the interval)
+  useEffect(() => {
+    if (timerSessions.length === 0) return
+    const todayKey = formatTodayKey()
+
+    for (const s of timerSessions) {
+      if (syncedSessionIdsRef.current.has(s.sessionId)) {
+        // Already synced — but check if active session just completed (check-out)
+        if (activeSessionIdRef.current === s.sessionId && !s.isActive && s.checkOutAt) {
+          const updatedEnd = toTimeString(new Date(s.checkOutAt))
+          setLocalWorkIntervals(prev => {
+            const next = new Map(prev)
+            const existing = next.get(todayKey) ?? []
+            if (existing.length > 0) {
+              const updated = [...existing]
+              updated[updated.length - 1] = { ...updated[updated.length - 1], end: updatedEnd }
+              next.set(todayKey, updated)
+            }
+            return next
+          })
+          activeSessionIdRef.current = null
+        }
+        continue
+      }
+
+      // New session — mark as synced and append interval
+      syncedSessionIdsRef.current.add(s.sessionId)
+      const interval = toWorkInterval(s.checkInAt, s.checkOutAt)
+
+      if (s.isActive) {
+        activeSessionIdRef.current = s.sessionId
+      }
+
+      setLocalWorkIntervals(prev => {
+        const next = new Map(prev)
+        const existing = next.get(todayKey) ?? []
+        next.set(todayKey, [...existing, interval])
+        return next
+      })
+    }
+  }, [timerSessions])
+
+  const handleWorkIntervalsChange = useCallback(
+    (date: string, intervals: WorkInterval[]) => {
+      setLocalWorkIntervals(prev => {
+        const next = new Map(prev)
+        if (intervals.length === 0) {
+          next.delete(date)
+        } else {
+          next.set(date, intervals)
+        }
+        return next
+      })
+    },
+    []
+  )
 
   // Approval status
   const approvalStatus = data?.approval?.status ?? 'DRAFT'
@@ -168,12 +248,6 @@ export function SkemaPage() {
     }
   }, [])
 
-  const handleArrivalDepartureChange = useCallback(
-    (_date: string, _field: 'arrival' | 'departure', _value: string) => {
-      // Future: save arrival/departure via API
-    },
-    []
-  )
 
   // Month navigation
   const goToPrevMonth = useCallback(() => {
@@ -271,10 +345,11 @@ export function SkemaPage() {
       {!isReadOnly && (
         <TimerControl
           session={session}
-          elapsed={elapsed}
           onCheckIn={checkIn}
           onCheckOut={checkOut}
           loading={timerLoading}
+          todayIntervals={localWorkIntervals.get(formatTodayKey()) ?? []}
+          checkInClientTime={checkInClientTime}
         />
       )}
 
@@ -303,8 +378,8 @@ export function SkemaPage() {
           readOnly={isReadOnly}
           onCellChange={handleCellChange}
           timerHoursToday={timerHoursToday}
-          arrivalDepartures={arrivalDepartures}
-          onArrivalDepartureChange={handleArrivalDepartureChange}
+          workIntervals={localWorkIntervals}
+          onWorkIntervalsChange={handleWorkIntervalsChange}
         />
       </Card>
 

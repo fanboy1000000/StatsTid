@@ -50,6 +50,19 @@
   color: var(--color-text);
 }
 
+.sessionsList {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  font-size: 13px;
+  color: var(--color-gray-500);
+}
+
+.sessionEntry {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 13px;
+}
+
 .action {
   margin-left: auto;
 }

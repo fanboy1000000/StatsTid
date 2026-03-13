@@ -1,4 +1,4 @@
-import { renderHook, act, waitFor } from '@testing-library/react'
+import { renderHook, waitFor } from '@testing-library/react'
 
 // Mock apiClient
 const mockGet = vi.fn()
@@ -22,7 +22,13 @@ describe('useTimer', () => {
   it('returns null session when no active timer', async () => {
     mockGet.mockResolvedValueOnce({
       ok: true,
-      data: null,
+      data: {
+        active: false,
+        employeeId: 'EMP001',
+        date: '2026-03-05',
+        isActive: false,
+        sessions: [],
+      },
     })
 
     const { result } = renderHook(() => useTimer('EMP001'))
@@ -41,12 +47,20 @@ describe('useTimer', () => {
     mockGet.mockResolvedValueOnce({
       ok: true,
       data: {
+        active: true,
         sessionId: 'sess-1',
         employeeId: 'EMP001',
         date: '2026-03-05',
         checkInAt: checkInTime,
-        checkOutAt: null,
         isActive: true,
+        sessions: [
+          {
+            sessionId: 'sess-1',
+            checkInAt: checkInTime,
+            checkOutAt: null,
+            isActive: true,
+          },
+        ],
       },
     })
 

@@ -69,6 +69,11 @@ For all domain implementation work, you MUST delegate to domain agents.
 ## Small Tasks Exception
 For trivial changes (single-file fix, typo, < 10 lines changed in one domain), the Orchestrator may implement directly without spawning an agent. This exception must not be used to bypass the multi-agent workflow for substantive work.
 
+# Pre-Implementation Gate
+Before planning or coding any user request to build, create, implement, fix, add, update, change, or develop: invoke the `refine-requirements` skill first. This ensures requirements are clarified, risks are surfaced, and architecture is cross-referenced before work begins.
+
+**Skip only when:** the task is mechanical with an obvious fix (e.g., a clear error message pointing to a clear bug, a typo, or a direct user instruction like "rename X to Y").
+
 # How to Use This System
 
 ## For the Orchestrator (you)
