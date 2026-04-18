@@ -23,6 +23,7 @@
 | [Sprint 15](SPRINT-15.md) | Entitlement & Balance Management | complete | 2026-03-09 → 2026-03-09 | 422 | yes |
 | [Sprint 16](SPRINT-16.md) | Working Time Compliance (EU WTD) | complete | 2026-03-11 → 2026-03-11 | 436 | yes |
 | [Sprint 17](SPRINT-17.md) | Overtime Governance & Compensation Model | complete | 2026-03-11 → 2026-03-11 | 446 | yes |
+| [Sprint 18](SPRINT-18.md) | Codex BLOCKER Remediation (OK version, wage mapping, endpoint auth, serializer coverage) | planned | 2026-04-18 → — | — | no |
 
 ## Cumulative Task Summary
 

@@ -155,11 +155,53 @@ Addresses gaps identified in ontology analysis (2026-03-09). These are correctne
   - New wage type mappings: OVERTIME_50_PAYOUT, OVERTIME_50_AFSPADSERING, OVERTIME_100_PAYOUT, OVERTIME_100_AFSPADSERING, MERARBEJDE_PAYOUT, MERARBEJDE_AFSPADSERING
   - Leader dashboard: overtime exceeded warnings, pre-approval tracking
 
-### Phase 3g — UI/UX Refinements (Sprint 18)
+### Phase 3g — Codex BLOCKER Remediation (Sprint 18)
+
+**Priority focus**: P2 (Deterministic rule engine), P4 (Version correctness), P6 (Payroll integration), P7 (Security), P3 (Event sourcing)
+
+**Re-prioritized (Tier 2, 2026-04-18)**: Sprint 18 was originally Phase 3g "UI/UX Refinements." The Codex external review ([`docs/reviews/codex-2026-04-18.md`](docs/reviews/codex-2026-04-18.md)) surfaced 4 BLOCKERs and 6 WARNINGs against core priorities P2–P7. Stabilizing correctness before a UX polish pass is the right order — P9 (Usability) must not compromise higher priorities. UI/UX Refinements shift to Sprint 19 (now Phase 3h).
+
+**Scope**: Five remediation tasks targeting the highest-impact Codex findings (Recs #1, #3, #4, #6, #8). No new features.
+
+- **TASK-1801** — OK-version resolution enforcement at write + payroll boundary. Server-resolve `OkVersion` from entry/absence date; reject or override caller-supplied mismatches. Fixes Codex BLOCKER #4 (priorities 2–4). Agent: Rule Engine + API Integration. Effort: M.
+- **TASK-1802** — Wage-type mapping lookup fix. Reconcile `position NOT NULL DEFAULT ''` schema with `IS NULL` query semantics; pass actual `profile.Position` through payroll mapping paths. Fixes Codex BLOCKER #6 (priorities 5–6). Agent: Payroll Integration + Data Model. Effort: M.
+- **TASK-1803** — Role-scope orchestrator / payroll / recalculate endpoints. `recalculate` → admin-only; export → internal/admin-scoped; orchestrator execution not reachable by employee tokens. Fixes Codex BLOCKER #7 (priority 7). Agent: Security. Effort: S.
+- **TASK-1804** — EventSerializer coverage test. Reflect over `DomainEventBase` descendants and fail the test if any are missing from `EventSerializer._eventTypeMap`. Add `UserUpdated` to the map (currently missing). Fixes Codex WARNING on dim. 3 (priorities 3, 8). Agent: Test & QA + Data Model. Effort: S.
+- **TASK-1805** — OK-version runtime regression tests. Cover backend registration, weekly calculation, and payroll split/replay paths — not just the resolver utility. Validates TASK-1801. Recs #8 (priorities 2–4, 8). Agent: Test & QA. Effort: M.
+
+**Explicitly deferred to S19 or later**:
+- Codex BLOCKER #5 (Outbox delivery — payroll background consumer + external transactional claim). Effort L, 2–3 sprints. Plan in S19 detail.
+- Codex Rec #2 (Remove Infrastructure dep from RuleEngine). Effort M. P1 concern but isolated; schedule S19 or S20.
+- Codex Rec #7 (CI expansion — smoke + vitest). Effort S. Schedule S19.
+- Codex Rec #9 (Governance drift-check CI step). Effort S. S19 or later.
+- Codex Rec #10 (Split AdminEndpoints/TimeEndpoints). Effort L. Phase 4.
+
+#### Impact Assessment (Tier 2 Re-prioritization, 2026-04-18)
+
+**Affected sprints**:
+- S18 (was: Phase 3g UI/UX Refinements) → Now: Phase 3g Codex BLOCKER Remediation
+- S19 (was: Phase 4 start) → Now: Phase 3h UI/UX Refinements
+- S20+ (was: continuation of Phase 4) → Now: Phase 4 Production Hardening start
+
+**Scope changes**:
+- UI/UX Refinements scope unchanged — shifted forward by one sprint (S18 → S19)
+- Phase 4 shifted forward by one sprint
+- No sprint needs splitting or merging
+- No new prerequisites introduced beyond what Codex findings surfaced
+
+**Updated phase-sprint ranges**:
+- Phase 3f (Compliance, Entitlements & Overtime Governance): Sprints 15–17 (unchanged)
+- Phase 3g (Codex BLOCKER Remediation): Sprint 18 ← new
+- Phase 3h (UI/UX Refinements): Sprint 19 ← was Phase 3g S18
+- Phase 4 (Production Hardening): Sprint 20+ ← was Sprint 19+
+
+**Rationale**: CLAUDE.md priority order mandates lower priorities never compromise higher ones. Codex surfaced concrete P2–P7 gaps that would be written into production if shipped behind a UX polish sprint. Remediation must come first.
+
+### Phase 3h — UI/UX Refinements (Sprint 19)
 
 **Priority focus**: P9 (Usability)
 
-Polish pass across all user-facing surfaces before production hardening. Addresses accumulated UX debt, visual inconsistencies, and usability gaps identified during functional development.
+Polish pass across all user-facing surfaces before production hardening. Addresses accumulated UX debt, visual inconsistencies, and usability gaps identified during functional development. Scope unchanged from original S18 plan.
 
 - Visual consistency audit: token usage, spacing, alignment across all pages
 - Responsive layout improvements (mobile/tablet breakpoints)
@@ -172,7 +214,7 @@ Polish pass across all user-facing surfaces before production hardening. Address
 - Skema grid usability refinements based on workflow testing
 - Approval flow UX: clearer status indicators, action confirmations
 
-### Phase 4 — Production Hardening (Sprint 19+)
+### Phase 4 — Production Hardening (Sprint 20+)
 
 **Priority focus**: All priorities — cross-cutting production readiness
 
