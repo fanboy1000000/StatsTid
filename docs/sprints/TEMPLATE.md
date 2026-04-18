@@ -51,6 +51,7 @@ _Check each constraint that was explicitly validated during this sprint._
 | **KB Refs** | [ADR-xxx, PAT-xxx, DEP-xxx, RES-xxx — knowledge base entries relevant to this task] |
 | **Constraint Validator** | pass \| violations — [count and summary] |
 | **Reviewer Audit** | skipped \| performed — [summary or "no findings"] |
+| **External Review (Codex)** | skipped \| performed (high-risk: {category}) — [cycles: N, findings: NB/NW/NN, or "no findings"] |
 | **Orchestrator Approved** | yes — YYYY-MM-DD |
 
 **Description**: _What was done and why._
@@ -76,6 +77,25 @@ _Repeat TASK block for each task in the sprint._
 | Absence effects on norm/flex/pension are correct | pending \| verified \| N/A | _Which absence types were tested_ |
 | Retroactive recalculation produces stable results | pending \| verified \| N/A | _Test evidence_ |
 
+## External Review (Step 7a)
+
+_Codex sprint-end review against the sprint-start commit. See [AGENTS.md](../AGENTS.md) External Review section._
+
+| Field | Value |
+|-------|-------|
+| **Invoked** | yes \| skipped — [reason if skipped] |
+| **Sprint-start commit** | `<sha>` |
+| **Command** | `codex review --base <sha> "..."` |
+| **Review Cycles** | N |
+| **Findings** | NB BLOCKER, NW WARNING, NN NOTE |
+| **Resolution** | all resolved \| user-approved exit — [reason] |
+
+### Findings
+
+_List each Codex finding with severity mapping. If no findings, state "No findings."_
+
+- BLOCKER / WARNING / NOTE — [file:line] — [summary] — [resolution: fixed in TASK-NXX \| user-accepted \| deferred to S{N+1}]
+
 ## Test Summary
 
 | Suite | Count | Status |
@@ -92,6 +112,8 @@ _Repeat TASK block for each task in the sprint._
 | Tasks | N |
 | Constraint Violations | N |
 | Reviewer Findings | NB, NW, NN |
+| External Review Cycles | N (sprint-end) + N (per-task) |
+| External Findings | NB, NW, NN |
 | Re-dispatches | N |
 | First-Pass Rate | N% |
 

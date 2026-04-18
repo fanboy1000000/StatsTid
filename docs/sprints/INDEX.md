@@ -99,27 +99,27 @@ Shows which priorities were verified in each sprint.
 
 Tracks agent quality signals to enable data-driven improvement of prompts and governance. See CLAUDE.md "Agent Effectiveness Metrics" for definitions.
 
-| Sprint | Tasks | Constraint Violations | Reviewer Findings | Re-dispatches | First-Pass Rate |
-|--------|-------|-----------------------|-------------------|---------------|-----------------|
-| S1 | 6 | N/A (pre-validator) | N/A (pre-reviewer) | 0 | 100% |
-| S2 | 8 | N/A | N/A | 0 | 100% |
-| S3 | 7 | N/A | N/A | 0 | 100% |
-| S4 | 7 | N/A | N/A | 0 | 100% |
-| S5 | 7 | N/A | N/A | 0 | 100% |
-| S6 | 8 | N/A | N/A | 0 | 100% |
-| S7 | 9 | N/A | 2B | 2 | 78% |
-| S8 | 17 | N/A | N/A | 0 | 100% |
-| S9 | 10 | N/A | N/A | 0 | 100% |
-| S10 | 10 | N/A | N/A | 0 | 100% |
-| S11 | 10 | N/A | 1W | 1 | 90% |
-| S12 | 16 | N/A | 1W, 1N | 0 | 100% |
-| S13 | 5 | N/A | N/A | 0 | 100% |
-| S14 | 12 | N/A | 1W, 1N | 0 | 100% |
-| S15 | 10 | N/A | 2W | 1 | 90% |
-| S16 | 13 | N/A | 1N | 0 | 100% |
-| S17 | 13 | N/A | N/A | 0 | 100% |
+| Sprint | Tasks | Constraint Violations | Reviewer Findings | External Findings | Re-dispatches | First-Pass Rate |
+|--------|-------|-----------------------|-------------------|-------------------|---------------|-----------------|
+| S1 | 6 | N/A (pre-validator) | N/A (pre-reviewer) | N/A (pre-external) | 0 | 100% |
+| S2 | 8 | N/A | N/A | N/A | 0 | 100% |
+| S3 | 7 | N/A | N/A | N/A | 0 | 100% |
+| S4 | 7 | N/A | N/A | N/A | 0 | 100% |
+| S5 | 7 | N/A | N/A | N/A | 0 | 100% |
+| S6 | 8 | N/A | N/A | N/A | 0 | 100% |
+| S7 | 9 | N/A | 2B | N/A | 2 | 78% |
+| S8 | 17 | N/A | N/A | N/A | 0 | 100% |
+| S9 | 10 | N/A | N/A | N/A | 0 | 100% |
+| S10 | 10 | N/A | N/A | N/A | 0 | 100% |
+| S11 | 10 | N/A | 1W | N/A | 1 | 90% |
+| S12 | 16 | N/A | 1W, 1N | N/A | 0 | 100% |
+| S13 | 5 | N/A | N/A | N/A | 0 | 100% |
+| S14 | 12 | N/A | 1W, 1N | N/A | 0 | 100% |
+| S15 | 10 | N/A | 2W | N/A | 1 | 90% |
+| S16 | 13 | N/A | 1N | N/A | 0 | 100% |
+| S17 | 13 | N/A | N/A | N/A | 0 | 100% |
 
-**Notes**: Constraint Validator introduced in governance update after S15. Historical data marked N/A. Reviewer introduced in S7. S7 had 2 BLOCKERs (Backend→Payroll ref, seed data constraint) both requiring re-dispatch. S11 had 1 WARNING (missing config fields) requiring fix. S15 had 2 WARNINGs (PAT-005 violation, TOCTOU race) with 1 re-dispatch. S16 had 1 NOTE (ADR-015 pattern — non-blocking). S17: all agents produced buildable output; Orchestrator fixed API signature mismatches during merge (no re-dispatch needed).
+**Notes**: Constraint Validator introduced in governance update after S15. Historical data marked N/A. Reviewer introduced in S7. External Review (Codex) introduced in governance update after S17 — active from S18 onward. S7 had 2 BLOCKERs (Backend→Payroll ref, seed data constraint) both requiring re-dispatch. S11 had 1 WARNING (missing config fields) requiring fix. S15 had 2 WARNINGs (PAT-005 violation, TOCTOU race) with 1 re-dispatch. S16 had 1 NOTE (ADR-015 pattern — non-blocking). S17: all agents produced buildable output; Orchestrator fixed API signature mismatches during merge (no re-dispatch needed).
 
 **Cumulative First-Pass Rate**: 157/168 = 93.5%
 

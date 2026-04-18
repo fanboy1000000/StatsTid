@@ -264,3 +264,117 @@ If this is a second pass on a previously flagged concern, do NOT re-raise it.
 - The Orchestrator is not required to act on every finding — WARNING and NOTE are at Orchestrator discretion
 - The Orchestrator should document reasoning in the sprint log when choosing not to act on a BLOCKER
 - The Reviewer does not appear in sprint log "Agent" fields — findings are recorded as validation evidence
+
+## External Review (Codex)
+
+The External Review is an independent, out-of-harness audit performed by the `codex` CLI. It brings an external perspective with no project-specific priors, complementing the internal Reviewer Agent. The Orchestrator invokes Codex via the `codex review` subcommand through the Bash tool.
+
+**Codex advises. The Orchestrator decides. Authority remains centralized.**
+
+### Role and Boundaries
+
+External Review:
+- Brings outside perspective — no KB priors, no harness assumptions
+- Complements (does not replace) the internal Reviewer Agent
+- Produces advisory findings only — never issues approvals or rejections
+- Operates on git diffs, not individual agent outputs
+- Is invoked via the `codex` CLI (`codex review`) through the Bash tool
+- Is invoked only by the Orchestrator
+- Has no write access to project files
+
+### Invocation Modes
+
+| Mode | When | Command Pattern |
+|------|------|-----------------|
+| Sprint-end review (Step 7a) | After tests green, internal Reviewer findings resolved, merge complete, before commit | `codex review --base <sprint-start-commit> "<prompt>"` |
+| Per-task high-risk review (Step 5a override) | Orchestrator-triggered on high-risk tasks, runs alongside internal Reviewer | `codex review --uncommitted "<prompt>"` |
+
+`<sprint-start-commit>` is the HEAD commit of the previous sprint on master (i.e., the commit just before the current sprint's first task commit).
+
+### High-Risk Trigger Categories (Per-Task)
+
+The Orchestrator triggers per-task Codex review at Step 5a when a task touches any of:
+
+- **Schema migrations** — changes to table definitions in `docker/postgres/init.sql`
+- **JWT/auth code** — `src/Infrastructure/**/Security/**`, `src/SharedKernel/**/Security/**`, JWT token issuance or validation
+- **Payroll export** — SLS code assignments, `src/Integrations/**/Payroll/**`
+- **Legal rule logic** — Danish agreement rules, OK version transitions, entitlement quotas, compliance checks
+- **Retroactive correction paths** — correction event flows, period recalculation, OK version re-resolution
+
+Orchestrator discretion applies beyond this list. Per-task Codex runs **in addition to**, not instead of, the internal Reviewer Agent.
+
+### Per-Task Scope (Step 5a)
+
+Per-task Codex review has a narrower scope than sprint-end review:
+- **Focus**: Cross-check domain correctness with external eyes — logic bugs, edge cases, spec misalignment
+- **Not the focus**: Architectural invariants (that is the internal Reviewer's job) or mechanical rules (that is the Constraint Validator's job)
+
+This division prevents duplication with the internal Reviewer Agent on high-risk tasks.
+
+### Finding Severity Levels
+
+Same semantics as the internal Reviewer Agent:
+
+| Severity | Meaning | Expected Orchestrator Response |
+|----------|---------|-------------------------------|
+| BLOCKER | Correctness, security, or architectural breach | Strongly consider withholding approval and re-dispatching the responsible agent |
+| WARNING | Quality or simplicity concern | Note in sprint log; address at Orchestrator discretion |
+| NOTE | Suggestion; not blocking | Record if useful; no required action |
+
+Codex's native output may not use these exact labels. The Orchestrator maps Codex's findings to BLOCKER/WARNING/NOTE when recording them in the sprint log.
+
+### Scope-Creep Governance (Review Cycle Cap)
+
+To prevent sprint-commit delays, the Orchestrator tracks Codex review cycles within a single sprint. A **cycle** = one `codex review` invocation. Re-invocation after fixing Codex's own BLOCKERs counts as an additional cycle.
+
+- **Cycle 1**: Normal — run Codex, act on findings.
+- **Cycle 2**: Normal — re-run Codex after BLOCKER fixes.
+- **Cycle 3 and beyond**: **Halt and prompt the human operator.** The Orchestrator must not invoke Codex a 3rd time without explicit user direction. The user chooses:
+  - (a) continue iterating (Codex runs again);
+  - (b) accept remaining findings and proceed to commit;
+  - (c) split remaining findings off as a new sprint task.
+
+The cap applies **separately** to sprint-end review (Step 7a) and per-task review (Step 5a). Record cycle counts in the sprint log.
+
+### Codex Review Prompt Template
+
+When invoking `codex review`, pass this structure as the prompt argument:
+
+```
+Review this diff for the StatsTid project — a Danish public-sector workforce management SaaS.
+
+SCOPE: [sprint-end | per-task high-risk — {category}]
+
+SPRINT GOAL / TASK GOAL: [one-line sprint objective, or task acceptance criteria]
+
+PRIORITY ORDER (what matters most, in order):
+1. Architectural integrity
+2. Deterministic rule engine (no I/O, no state, version-aware)
+3. Event sourcing and auditability
+4. OK version correctness (entry-date resolution)
+5. Integration isolation and delivery guarantees
+6. Payroll integration correctness (SLS codes, traceability)
+7. Security and access control
+8. CI/CD enforcement
+9. Usability and UX
+
+REVIEW FOCUS:
+[sprint-end: "Cross-task consistency, architectural drift, spec-vs-implementation alignment, integration seams, gaps between sprint goal and delivered work."]
+[per-task: "Domain correctness of the high-risk change. Logic bugs, edge cases, spec misalignment. Do NOT re-audit architectural invariants — that is covered by the internal Reviewer Agent."]
+
+OUTPUT:
+Label findings as BLOCKER, WARNING, or NOTE. For each finding, include:
+- File and approximate location
+- What is wrong or concerning
+- Recommended action
+
+If no issues found: "No findings."
+```
+
+### Constraints
+
+- Codex findings are advisory only — the Orchestrator decides whether to act
+- Codex is NOT invoked by domain agents — only by the Orchestrator
+- Codex findings go to the sprint log, not to the knowledge base (KB entries remain Orchestrator-curated — an Orchestrator may author a KB entry based on a Codex finding, but Codex output is not a KB entry)
+- If the `codex` CLI is unavailable at invocation time, the Orchestrator halts and prompts the user rather than silently skipping review
+- Codex does not appear in sprint log "Agent" fields — findings are recorded as validation evidence
