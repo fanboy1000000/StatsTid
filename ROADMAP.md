@@ -250,11 +250,11 @@ Addresses gaps identified in ontology analysis (2026-03-09). These are correctne
 
 **Priority focus**: P7 (Security) — resource scope enforcement, P4 (Version correctness) — export-boundary mixed-version handling, P3 (Auditability) — retroactive event canonicalization
 
-**Scope**: Five remediation tasks targeting the 2026-04-23 Codex findings. No new features. Full task detail in [docs/sprints/SPRINT-19.md](docs/sprints/SPRINT-19.md).
+**Scope**: Four remediation tasks targeting the 2026-04-23 Codex findings. No new features. The fifth finding (mixed-version export boundary, originally TASK-1903) was folded into S20 on 2026-04-25 — see decision note below. Full task detail in [docs/sprints/SPRINT-19.md](docs/sprints/SPRINT-19.md).
 
 - **TASK-1901** — Orchestrator `/execute` resource-scope validation. Reject when caller's scope does not cover `parameters.employeeId`. Agent: Security + API Integration. Effort: M.
 - **TASK-1902** — `/api/payroll/calculate-and-export` per-org scope validation (or escalate to GlobalAdminOnly). Plus policy-wiring test addressing internal-Reviewer WARNING. Agent: Security + Payroll. Effort: M.
-- **TASK-1903** — Mixed-version export boundary guard (reject / per-line-resolve / segment — decision at sprint planning). Agent: Payroll + Rule Engine. Effort: M.
+- **TASK-1903** — *Absorbed into S20 (2026-04-25)*. The mixed-version export boundary symptom is one specific call site of the general temporal-segmentation problem S20 generalises. Pre-production status removes the live-exposure pressure that would have justified a tactical S19 patch.
 - **TASK-1904** — Canonicalize OkVersion in single-version `RetroactiveCorrectionRequested` audit event. Agent: Payroll + Data Model. Effort: S.
 - **TASK-1905** — JWT dev-fallback honors both `ASPNETCORE_ENVIRONMENT` and `DOTNET_ENVIRONMENT` via `IHostEnvironment.IsDevelopment()`. Agent: Security. Effort: S.
 

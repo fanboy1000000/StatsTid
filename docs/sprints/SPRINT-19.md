@@ -12,9 +12,11 @@
 
 ## Sprint Goal
 
-Remediate the 2 BLOCKERs and 3 WARNINGs surfaced by the 2026-04-23 external Codex review of Sprint 18 ([`docs/sprints/SPRINT-18.md`](SPRINT-18.md) External Review section). Two of the findings are genuine scope-enforcement regressions — `LocalAdminOrAbove` and `EmployeeOrAbove` policies prove the caller's role but not that caller scope covers the request-body's target resource. Close these gaps, then re-run external review to confirm.
+Remediate 4 of the 5 findings surfaced by the 2026-04-23 external Codex review of Sprint 18 ([`docs/sprints/SPRINT-18.md`](SPRINT-18.md) External Review section). Two of the findings are genuine scope-enforcement regressions — `LocalAdminOrAbove` and `EmployeeOrAbove` policies prove the caller's role but not that caller scope covers the request-body's target resource. Close these gaps, then re-run external review to confirm.
 
 **Theme**: "role authorization ≠ resource scoping." The S18 remediation conflated role-level checks with per-org / per-employee scoping. S19 adds explicit resource-scope validation at the remaining endpoints.
+
+**Scope decision (2026-04-25)**: TASK-1903 (mixed-version export boundary) folded into S20 — the temporal-segmentation framework will solve it correctly as part of generalising the boundary problem rather than shipping a tactical patch here. System is pre-production, so live exposure is not a concern. See [SPRINT-20.md](SPRINT-20.md) "Scope Boundary → In scope" for the explicit absorption.
 
 ## Entropy Scan Findings
 
@@ -33,9 +35,9 @@ _To be recorded at sprint start (Step 0a)._
 - [ ] P1 — Architectural integrity preserved
 - [ ] P2 — Rule engine determinism maintained (no rule-engine changes expected)
 - [ ] P3 — Event sourcing append-only semantics respected (TASK-1904 only changes the VALUE on `RetroactiveCorrectionRequested`, not schema)
-- [ ] P4 — OK version correctness (primary focus of TASK-1903 + TASK-1904)
+- [ ] P4 — OK version correctness (TASK-1904 only; TASK-1903 export-boundary work absorbed into S20)
 - [ ] P5 — Integration isolation preserved
-- [ ] P6 — Payroll integration correctness (TASK-1902, TASK-1903)
+- [ ] P6 — Payroll integration correctness (TASK-1902 only; mixed-version export deferred to S20)
 - [ ] P7 — Security and access control — **primary focus** (TASK-1901, TASK-1902, TASK-1905)
 - [ ] P8 — CI/CD enforcement
 - [ ] P9 — Usability and UX (not in scope)
@@ -84,12 +86,14 @@ _To be recorded at sprint start (Step 0a)._
 | **Reviewer Audit** | required (P7 — MANDATORY) |
 | **External Review (Codex)** | required (high-risk: auth/security, payroll) |
 
-**Description**: Codex BLOCKER on S18 remediation. `/api/payroll/calculate-and-export` relies on `LocalAdminOrAbove` + the APPROVED-period guard for per-org scoping, but the approval guard matches only `(employee_id, period)` — a LocalAdmin from org A can trigger payroll export for any employee in org B whose period happens to be APPROVED. Fix: before accepting the request, resolve `request.Profile.EmployeeId`'s org path and verify it falls in the caller's scope claims (use the existing `OrgScopeValidator` / `ScopeAuthorizationHandler` machinery with an explicit resource-scope check). Alternative: revert `/calculate-and-export` to `GlobalAdminOnly` if per-org delegation is not a product requirement — Orchestrator to decide during sprint planning.
+**Description**: Codex BLOCKER on S18 remediation. `/api/payroll/calculate-and-export` relies on `LocalAdminOrAbove` + the APPROVED-period guard for per-org scoping, but the approval guard matches only `(employee_id, period)` — a LocalAdmin from org A can trigger payroll export for any employee in org B whose period happens to be APPROVED. Fix: before accepting the request, resolve `request.Profile.EmployeeId`'s org path and verify it falls in the caller's scope claims by calling `OrgScopeValidator.ValidateEmployeeAccessAsync(actor, request.Profile.EmployeeId, ct)` (already exists in `Infrastructure.Security`).
+
+**Decision (2026-04-25)**: Per-org scope validation chosen over `GlobalAdminOnly` escalation. LocalAdmin payroll delegation is a product requirement; escalating to global-only would break that workflow. Reuse existing `OrgScopeValidator` machinery rather than introducing a new helper.
 
 Also absorb the internal-Reviewer WARNING on auth-policy tests: add one test that resolves the real policy by name via `IAuthorizationPolicyProvider.GetPolicyAsync("GlobalAdminOnly")` / `GetPolicyAsync("LocalAdminOrAbove")` from a `ServiceCollection` that called `AddStatsTidPolicies`, asserting the requirement set — so policy-name typos at `RequireAuthorization("...")` sites would fail the test suite.
 
 **Validation Criteria**:
-- [ ] Product decision recorded (add per-org scope vs. escalate to GlobalAdminOnly) — if add per-org scope, proceed with below
+- [x] Product decision recorded — per-org scope validation (2026-04-25)
 - [ ] LocalAdmin from org A requesting export for employee in org B rejected 403 before any downstream call
 - [ ] LocalAdmin from org A requesting export for employee in org A (APPROVED) succeeds
 - [ ] GlobalAdmin bypasses the org check (existing behavior)
@@ -104,38 +108,18 @@ Also absorb the internal-Reviewer WARNING on auth-policy tests: add one test tha
 
 ---
 
-### TASK-1903 — Mixed-version export boundary guard
+### TASK-1903 — Mixed-version export boundary guard *(ABSORBED INTO S20)*
 
 | Field | Value |
 |-------|-------|
 | **ID** | TASK-1903 |
-| **Status** | planned |
-| **Agent** | Payroll Integration + Rule Engine |
-| **Components** | Payroll (`Program.cs` `OkVersionBoundary`, `Services/PayrollMappingService.cs`, `Services/PeriodCalculationService.cs`) |
-| **KB Refs** | ADR-003 (OK version resolved by entry date), ADR-013 (retroactive corrections, no cascade) |
-| **Reviewer Audit** | required (P4 — MANDATORY) |
-| **External Review (Codex)** | required (high-risk: legal/payroll correctness) |
+| **Status** | absorbed (2026-04-25) — folded into Sprint 20's Temporal Period Handling framework |
+| **Reason** | S20's general segmentation framework will solve this boundary correctly as part of its OK-version end-to-end implementation (S20 § "Scope Boundary → In scope"). System is pre-production, so the silent-pinning bug carries no live exposure that would justify a tactical patch in S19. Doing it here would produce throwaway code that S20 supersedes within one sprint. |
+| **S20 Reference** | Implementation covering at least the OK version boundary end-to-end is already in S20's in-scope list. The export-boundary symptom this task addressed is the specific call site where S20's segmentation will be exercised first. |
 
-**Description**: Codex WARNING on S18 remediation. `OkVersionBoundary.ResolveProfile` collapses a whole `CalculationResult` to the OK version of `LineItems.Min(li => li.Date)` and `MapCalculationResultAsync` then stamps every exported line with that single version. A `CalculationResult` containing line items on both sides of the OK24→OK26 transition would therefore export later lines under the wrong OK version. TASK-1801 makes cross-transition CalculationResults harder at write/calc time but does not forbid them at the export boundary.
+**Original description (kept for traceability)**: Codex WARNING on S18 remediation. `OkVersionBoundary.ResolveProfile` collapses a whole `CalculationResult` to the OK version of `LineItems.Min(li => li.Date)` and `MapCalculationResultAsync` then stamps every exported line with that single version. A `CalculationResult` containing line items on both sides of the OK24→OK26 transition would therefore export later lines under the wrong OK version. TASK-1801 makes cross-transition CalculationResults harder at write/calc time but does not forbid them at the export boundary.
 
-Rolls in internal Reviewer's WARNING about `/calculate-and-export` not applying the boundary consistently with `/export` / `/export-period`.
-
-Fix options (choose during sprint planning):
-1. **Reject mixed-version results** at the export boundary (defensive fail-fast). Simple; forces callers to segment.
-2. **Per-line OK-version resolution** in `MapCalculationResultAsync`. Preserves correctness even for mixed results; matches `RetroactiveCorrectionService` split semantics.
-3. **Segment + emit two separate exports** at the boundary. Most invasive; best fidelity.
-
-**Validation Criteria**:
-- [ ] Chosen approach documented (rejection / per-line / segmentation)
-- [ ] CalculationResult with line items spanning 2026-04-01 produces either (a) 400 with a clear mixed-version error, or (b) line items correctly mapped to OK24 / OK26 respectively
-- [ ] `/calculate-and-export` uses the same boundary helper as `/export` / `/export-period`, or the asymmetry is documented with a code comment explaining why
-- [ ] Regression test: mixed-version CalculationResult → expected outcome
-- [ ] Existing single-version tests still pass unchanged
-
-**Files Expected to Change**:
-- `src/Integrations/StatsTid.Integrations.Payroll/Program.cs` — `OkVersionBoundary` behavior change, apply to `/calculate-and-export`
-- `src/Integrations/StatsTid.Integrations.Payroll/Services/PayrollMappingService.cs` — possibly per-line resolution
-- `tests/StatsTid.Tests.Regression/OkVersionMixedResultTests.cs` — new
+The internal Reviewer WARNING about `/calculate-and-export` not applying the boundary consistently with `/export` / `/export-period` also rolls forward into S20.
 
 ---
 

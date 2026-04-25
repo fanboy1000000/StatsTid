@@ -24,7 +24,7 @@
 | [Sprint 16](SPRINT-16.md) | Working Time Compliance (EU WTD) | complete | 2026-03-11 → 2026-03-11 | 436 | yes |
 | [Sprint 17](SPRINT-17.md) | Overtime Governance & Compensation Model | complete | 2026-03-11 → 2026-03-11 | 446 | yes |
 | [Sprint 18](SPRINT-18.md) | Codex BLOCKER Remediation (Round 1: OK version, wage mapping, endpoint auth, serializer coverage) | complete (5 deferred findings → S19) | 2026-04-18 → 2026-04-23 | 474 | yes — 2026-04-23 |
-| [Sprint 19](SPRINT-19.md) | Codex BLOCKER Remediation (Round 2: `/execute` and `/calculate-and-export` resource-scope, mixed-version export, retroactive audit canonicalization, JWT env-var) | planned | TBD | — | no |
+| [Sprint 19](SPRINT-19.md) | Codex BLOCKER Remediation (Round 2: `/execute` and `/calculate-and-export` resource-scope, retroactive audit canonicalization, JWT env-var; mixed-version export absorbed into S20 on 2026-04-25) | planned | TBD | — | no |
 | [Sprint 20](SPRINT-20.md) | Temporal Period Handling (analysis-first: ADR + segmentation framework for periods that intersect effective-date boundaries) | planned (analysis-first) | TBD | — | no |
 | [Sprint 21](SPRINT-21.md) | Local Agreement Configuration Rework (analysis-first: profile model replacing per-key patch bag) | planned (analysis-first) | TBD | — | no |
 

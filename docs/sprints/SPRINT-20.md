@@ -123,7 +123,8 @@ These must be resolved — and documented in an ADR — **before** a task decomp
 - Rule temporal-locality classification scheme, applied to all existing rules.
 - Implementation covering at least the OK version boundary end-to-end, with extension points demonstrated.
 - Migration of `PeriodCalculationService` to the new segmentation model.
-- Regression tests covering the committed subset of the rule × scenario matrix.
+- **Mixed-version export boundary** (absorbed from Sprint 19's TASK-1903 on 2026-04-25): `OkVersionBoundary.ResolveProfile` in `src/Integrations/StatsTid.Integrations.Payroll/Program.cs:325-339` currently collapses a multi-version `CalculationResult` to a single version. The new framework must produce per-line OK-version stamping at the export boundary so straddling periods export correctly. The internal-Reviewer WARNING about `/calculate-and-export` not using the same boundary helper as `/export` / `/export-period` is part of the same fix surface.
+- Regression tests covering the committed subset of the rule × scenario matrix, including the mixed-version export case that was originally TASK-1903.
 
 ### Out of scope
 - Rewriting any rule's internal logic. This sprint changes coordination and metadata, not calculation semantics.
