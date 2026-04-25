@@ -223,6 +223,29 @@ Addresses gaps identified in ontology analysis (2026-03-09). These are correctne
 
 **Rationale**: Two of the 5 findings are genuine P7 scope-enforcement holes (not just UX polish). Deferring BLOCKERs through UX or architectural sprints would ship known scope-bypass endpoints to production. S19 closes them first; S20's architectural Temporal Period Handling then generalizes what S18/S19 tackled tactically; only then does S21 (UI/UX) fit the priority order.
 
+#### Impact Assessment (Tier 2 Re-prioritization, 2026-04-25 — Local Config Rework + UX deferred to launch)
+
+**Trigger**: User analysis of the local agreement configuration UX (2026-04-25) confirmed the implementation is patch-shaped (per-key rows with no uniqueness) where the intended model is profile-shaped (one local agreement profile per `(org, agreement, OkVersion)` with an editable subset of fields). User direction: add the rework as a dedicated sprint after S20, and push UI/UX Refinements to the absolute end so it polishes a stable post-hardening surface rather than a moving target.
+
+**Affected sprints**:
+- S21 (was: Phase 3i UI/UX Refinements) → Now: Phase 3i Local Agreement Configuration Rework — analysis-first, structurally similar to S20
+- S22+ (was: Phase 4 Production Hardening) → unchanged in content and starting position
+- UI/UX Refinements: moved to **Phase 5**, final pre-launch sprint, sprint number TBD once Phase 4's actual length is known
+
+**Scope changes**:
+- New Phase 3i sprint defined: drained the S21 slot of UI/UX work and replaced it with the local-config rework
+- Phase 4 unchanged
+- New Phase 5 introduced for the deferred UX polish — placed last in the rolling-detail roadmap with no fixed sprint number (assigned when Phase 4 closes)
+
+**Updated phase-sprint ranges**:
+- Phase 3g (Codex BLOCKER Remediation): Sprints 18–19 (unchanged)
+- Phase 3h (Temporal Period Handling): Sprint 20 (unchanged)
+- Phase 3i (Local Agreement Configuration Rework): Sprint 21 ← repurposed
+- Phase 4 (Production Hardening): Sprint 22+ (unchanged)
+- Phase 5 (UI/UX Refinements): final pre-launch sprint, TBD ← new, replaces the previous Phase 3i UX content
+
+**Rationale**: The local-config implementation does not match the intended model (one profile per agreement with an editable field subset). Today's flat patch table allows multiple conflicting active rows per key and gives admins no UX signal about which fields are adjustable. This is an admin-correctness gap, not just polish — it belongs in Phase 3 alongside the other correctness sprints (S18/S19/S20). UX polish then naturally moves to Phase 5 where it operates on a stable, hardened surface; this also avoids re-doing UX work as Phase 4 introduces monitoring widgets, performance instrumentation, and other surface-affecting changes.
+
 ### Phase 3g Round 2 — Codex BLOCKER Remediation (Sprint 19)
 
 **Priority focus**: P7 (Security) — resource scope enforcement, P4 (Version correctness) — export-boundary mixed-version handling, P3 (Auditability) — retroactive event canonicalization
@@ -241,11 +264,32 @@ Addresses gaps identified in ontology analysis (2026-03-09). These are correctne
 
 Analysis-first architectural sprint (ADR + task decomposition before implementation). Generalizes "calculation periods that intersect effective-date boundaries" — OK version transitions, agreement-config promotion, position-override effective dates, wage-type revisions, compliance-rule versioning, employee-profile changes. S18's TASK-1801 and S19's TASK-1903 tackle this reactively for OK version only; S20 produces the general solution. See [docs/sprints/SPRINT-20.md](docs/sprints/SPRINT-20.md) for the problem framing.
 
-### Phase 3i — UI/UX Refinements (Sprint 21)
+### Phase 3i — Local Agreement Configuration Rework (Sprint 21)
+
+**Priority focus**: P1 (Architectural integrity), P7 (Security — admin-facing correctness), P9 (Usability — admin form discoverability)
+
+Restructures local configuration from a flat "one value at a time" patch bag into a profile model: **one local agreement profile per `(org, agreementCode, OkVersion)`**, with the overridable subset of fields exposed as editable inputs and the rest pinned to central. Today's `local_configurations` table allows multiple active rows per `(org, key)` with no uniqueness constraint and the UX gives admins no signal about which fields are adjustable. See [docs/sprints/SPRINT-21.md](docs/sprints/SPRINT-21.md) for the full problem statement and open architectural questions.
+
+Analysis-first sprint (ADR + task decomposition before implementation), structurally similar to S20.
+
+### Phase 4 — Production Hardening (Sprint 22+)
+
+**Priority focus**: All priorities — cross-cutting production readiness
+
+Only makes sense once functional correctness is achieved. The final UX polish pass (Phase 5) follows production hardening so layout, performance, and instrumentation are settled before visual lockdown.
+
+- Performance profiling and optimization
+- Monitoring, alerting, health checks
+- Real SLS integration (replacing mock)
+- Load testing, stress testing
+- Security audit, penetration testing
+- Documentation and operational runbooks
+
+### Phase 5 — UI/UX Refinements (final pre-launch sprint, sprint TBD after Phase 4)
 
 **Priority focus**: P9 (Usability)
 
-Polish pass across all user-facing surfaces before production hardening. Addresses accumulated UX debt, visual inconsistencies, and usability gaps identified during functional development. Scope unchanged from original S18 plan.
+Final polish pass before launch — deferred from its original S18 / S21 slots so it lands on a stable, hardened backend rather than a moving target. Sprint number assigned once Phase 4's actual sprint count is known. Scope unchanged from the original S18 plan.
 
 - Visual consistency audit: token usage, spacing, alignment across all pages
 - Responsive layout improvements (mobile/tablet breakpoints)
@@ -257,19 +301,6 @@ Polish pass across all user-facing surfaces before production hardening. Address
 - Data table improvements: sorting, filtering, pagination UX
 - Skema grid usability refinements based on workflow testing
 - Approval flow UX: clearer status indicators, action confirmations
-
-### Phase 4 — Production Hardening (Sprint 22+)
-
-**Priority focus**: All priorities — cross-cutting production readiness
-
-Only makes sense once functional and UX completeness is achieved.
-
-- Performance profiling and optimization
-- Monitoring, alerting, health checks
-- Real SLS integration (replacing mock)
-- Load testing, stress testing
-- Security audit, penetration testing
-- Documentation and operational runbooks
 
 ## SYSTEM_TARGET.md Coverage Tracker
 
