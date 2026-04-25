@@ -2,6 +2,7 @@ using System.Text.Json;
 using StatsTid.Backend.Api.Contracts;
 using StatsTid.Backend.Api.Validation;
 using StatsTid.Infrastructure.Security;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Models;
@@ -13,6 +14,9 @@ public static class TimeEndpoints
 {
     public static WebApplication MapTimeEndpoints(this WebApplication app)
     {
+        var loggerFactory = app.Services.GetRequiredService<ILoggerFactory>();
+        var logger = loggerFactory.CreateLogger("StatsTid.Backend.Api.Endpoints.TimeEndpoints");
+
         // ── Time Entries ──
 
         app.MapPost("/api/time-entries", async (RegisterTimeEntryRequest request, IEventStore eventStore, OrgScopeValidator scopeValidator, HttpContext context, CancellationToken ct) =>
@@ -29,7 +33,20 @@ public static class TimeEndpoints
                     return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
             }
 
-            var (isValid, error) = RequestValidator.ValidateTimeEntry(request.EmployeeId, request.Hours, request.AgreementCode, request.OkVersion);
+            // OK version MUST be resolved server-side from the entry date (ADR-003).
+            // The caller-supplied value is advisory only; mismatches are logged but not rejected.
+            var resolvedOkVersion = OkVersionResolver.ResolveVersion(request.Date);
+#pragma warning disable CS0618 // RegisterTimeEntryRequest.OkVersion is intentionally obsolete/advisory
+            var suppliedOkVersion = request.OkVersion;
+#pragma warning restore CS0618
+            if (!string.Equals(suppliedOkVersion, resolvedOkVersion, StringComparison.Ordinal))
+            {
+                logger.LogWarning(
+                    "Caller-supplied OkVersion '{Supplied}' differs from server-resolved '{Resolved}' for time entry on {Date} (employee {EmployeeId}). Using resolved value.",
+                    suppliedOkVersion, resolvedOkVersion, request.Date, request.EmployeeId);
+            }
+
+            var (isValid, error) = RequestValidator.ValidateTimeEntry(request.EmployeeId, request.Hours, request.AgreementCode, resolvedOkVersion);
             if (!isValid)
                 return Results.BadRequest(new { error });
 
@@ -43,7 +60,7 @@ public static class TimeEndpoints
                 TaskId = request.TaskId,
                 ActivityType = request.ActivityType,
                 AgreementCode = request.AgreementCode,
-                OkVersion = request.OkVersion,
+                OkVersion = resolvedOkVersion,
                 ActorId = actor.ActorId,
                 ActorRole = actor.ActorRole,
                 CorrelationId = actor.CorrelationId
@@ -107,7 +124,24 @@ public static class TimeEndpoints
                     return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
             }
 
-            var (isValid, error) = RequestValidator.ValidateAbsence(request.EmployeeId, request.Hours, request.AbsenceType, request.AgreementCode, request.OkVersion);
+            // Absence registration design decision (TASK-1801):
+            // The RegisterAbsenceRequest carries a single `Date` (not a range), so OK-version
+            // resolution is naturally per-day. If future callers introduce multi-day absence
+            // registration that straddles an OK transition, the caller must split the request
+            // (one per OK version) — this mirrors the retroactive-correction split pattern
+            // (ADR-013) and keeps every persisted AbsenceRegistered event unambiguous.
+            var resolvedOkVersion = OkVersionResolver.ResolveVersion(request.Date);
+#pragma warning disable CS0618 // RegisterAbsenceRequest.OkVersion is intentionally obsolete/advisory
+            var suppliedOkVersion = request.OkVersion;
+#pragma warning restore CS0618
+            if (!string.Equals(suppliedOkVersion, resolvedOkVersion, StringComparison.Ordinal))
+            {
+                logger.LogWarning(
+                    "Caller-supplied OkVersion '{Supplied}' differs from server-resolved '{Resolved}' for absence on {Date} (employee {EmployeeId}). Using resolved value.",
+                    suppliedOkVersion, resolvedOkVersion, request.Date, request.EmployeeId);
+            }
+
+            var (isValid, error) = RequestValidator.ValidateAbsence(request.EmployeeId, request.Hours, request.AbsenceType, request.AgreementCode, resolvedOkVersion);
             if (!isValid)
                 return Results.BadRequest(new { error });
 
@@ -118,7 +152,7 @@ public static class TimeEndpoints
                 AbsenceType = request.AbsenceType,
                 Hours = request.Hours,
                 AgreementCode = request.AgreementCode,
-                OkVersion = request.OkVersion,
+                OkVersion = resolvedOkVersion,
                 ActorId = actor.ActorId,
                 ActorRole = actor.ActorRole,
                 CorrelationId = actor.CorrelationId
@@ -219,7 +253,21 @@ public static class TimeEndpoints
                     return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
             }
 
-            var (isValid, error) = RequestValidator.ValidateTimeEntry(request.EmployeeId, request.WeeklyNormHours, request.AgreementCode, request.OkVersion);
+            // Resolve OK version from PeriodStart (ADR-003). The caller-supplied value is advisory.
+            // Note: for calculation periods that straddle an OK transition, the retroactive-split
+            // flow (RetroactiveCorrectionService) is the correct path — see ADR-013.
+            var resolvedOkVersion = OkVersionResolver.ResolveVersion(request.PeriodStart);
+#pragma warning disable CS0618 // CalculateRequest.OkVersion is intentionally obsolete/advisory
+            var suppliedOkVersion = request.OkVersion;
+#pragma warning restore CS0618
+            if (!string.Equals(suppliedOkVersion, resolvedOkVersion, StringComparison.Ordinal))
+            {
+                logger.LogWarning(
+                    "Caller-supplied OkVersion '{Supplied}' differs from server-resolved '{Resolved}' for calculate request on period starting {PeriodStart} (employee {EmployeeId}). Using resolved value.",
+                    suppliedOkVersion, resolvedOkVersion, request.PeriodStart, request.EmployeeId);
+            }
+
+            var (isValid, error) = RequestValidator.ValidateTimeEntry(request.EmployeeId, request.WeeklyNormHours, request.AgreementCode, resolvedOkVersion);
             if (!isValid)
                 return Results.BadRequest(new { error });
 
@@ -247,7 +295,7 @@ public static class TimeEndpoints
                     {
                         EmployeeId = request.EmployeeId,
                         AgreementCode = request.AgreementCode,
-                        OkVersion = request.OkVersion,
+                        OkVersion = resolvedOkVersion,
                         WeeklyNormHours = request.WeeklyNormHours,
                         EmploymentCategory = "Standard",
                         PartTimeFraction = request.PartTimeFraction
@@ -291,6 +339,18 @@ public static class TimeEndpoints
                     return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
             }
 
+            // Resolve OK version from WeekStartDate (ADR-003). The caller-supplied value is advisory.
+            var resolvedOkVersion = OkVersionResolver.ResolveVersion(request.WeekStartDate);
+#pragma warning disable CS0618 // WeeklyCalculateRequest.OkVersion is intentionally obsolete/advisory
+            var suppliedOkVersion = request.OkVersion;
+#pragma warning restore CS0618
+            if (!string.Equals(suppliedOkVersion, resolvedOkVersion, StringComparison.Ordinal))
+            {
+                logger.LogWarning(
+                    "Caller-supplied OkVersion '{Supplied}' differs from server-resolved '{Resolved}' for weekly calculate on week starting {WeekStart} (employee {EmployeeId}). Using resolved value.",
+                    suppliedOkVersion, resolvedOkVersion, request.WeekStartDate, request.EmployeeId);
+            }
+
             var orchestratorUrl = configuration["ServiceUrls:Orchestrator"]
                 ?? "http://orchestrator:8080";
 
@@ -303,7 +363,7 @@ public static class TimeEndpoints
                 {
                     ["employeeId"] = request.EmployeeId,
                     ["agreementCode"] = request.AgreementCode,
-                    ["okVersion"] = request.OkVersion,
+                    ["okVersion"] = resolvedOkVersion,
                     ["periodStart"] = request.WeekStartDate.ToString("yyyy-MM-dd"),
                     ["periodEnd"] = weekEnd.ToString("yyyy-MM-dd"),
                     ["weeklyNormHours"] = request.WeeklyNormHours,

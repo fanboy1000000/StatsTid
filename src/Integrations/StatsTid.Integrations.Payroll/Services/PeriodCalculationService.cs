@@ -1,3 +1,4 @@
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Models;
@@ -50,6 +51,68 @@ public sealed class PeriodCalculationService
         Guid? correlationId = null,
         CancellationToken ct = default)
     {
+        // -------------------------------------------------------------------
+        // OK version resolution (ADR-003).
+        //
+        // Each period handled by CalculateAsync is expected to sit inside a
+        // single OK version — if the period straddles a transition, the caller
+        // (RetroactiveCorrectionService) is responsible for splitting the
+        // period first (see ADR-013). Under that invariant, the OK version is
+        // fully determined by periodStart.
+        //
+        // We ignore the caller-supplied profile.OkVersion for the authoritative
+        // value (it may be stale) and rebuild a resolved profile. A mismatch
+        // between supplied and resolved is logged as a warning.
+        // -------------------------------------------------------------------
+        var resolvedOkVersion = OkVersionResolver.ResolveVersion(periodStart);
+        if (!string.Equals(profile.OkVersion, resolvedOkVersion, StringComparison.Ordinal))
+        {
+            _logger.LogWarning(
+                "Caller-supplied profile.OkVersion '{Supplied}' differs from server-resolved '{Resolved}' for employee {EmployeeId} period {PeriodStart}-{PeriodEnd}. Using resolved value.",
+                profile.OkVersion, resolvedOkVersion, profile.EmployeeId, periodStart, periodEnd);
+        }
+
+        // Audit per-entry date/profile-version drift. Any entry whose date resolves to a
+        // different OK version than the period-resolved one signals that the caller failed
+        // to split the period at the transition (ADR-013). We log — but continue with the
+        // period-resolved value, because mid-period mixed resolution would break the rule
+        // engine's single-period contract.
+        foreach (var entry in entries)
+        {
+            var entryResolved = OkVersionResolver.ResolveVersion(entry.Date);
+            if (!string.Equals(entryResolved, resolvedOkVersion, StringComparison.Ordinal))
+            {
+                _logger.LogWarning(
+                    "Time entry on {Date} resolves to OkVersion '{EntryResolved}' but period resolves to '{PeriodResolved}' for employee {EmployeeId}. Caller should split the period at the OK transition (ADR-013).",
+                    entry.Date, entryResolved, resolvedOkVersion, profile.EmployeeId);
+            }
+        }
+        foreach (var absence in absences)
+        {
+            var absenceResolved = OkVersionResolver.ResolveVersion(absence.Date);
+            if (!string.Equals(absenceResolved, resolvedOkVersion, StringComparison.Ordinal))
+            {
+                _logger.LogWarning(
+                    "Absence on {Date} resolves to OkVersion '{AbsenceResolved}' but period resolves to '{PeriodResolved}' for employee {EmployeeId}. Caller should split the period at the OK transition (ADR-013).",
+                    absence.Date, absenceResolved, resolvedOkVersion, profile.EmployeeId);
+            }
+        }
+
+        // Use a profile with the authoritative OkVersion for all downstream calls.
+        var effectiveProfile = string.Equals(profile.OkVersion, resolvedOkVersion, StringComparison.Ordinal)
+            ? profile
+            : new EmploymentProfile
+            {
+                EmployeeId = profile.EmployeeId,
+                AgreementCode = profile.AgreementCode,
+                OkVersion = resolvedOkVersion,
+                WeeklyNormHours = profile.WeeklyNormHours,
+                EmploymentCategory = profile.EmploymentCategory,
+                IsPartTime = profile.IsPartTime,
+                PartTimeFraction = profile.PartTimeFraction,
+                Position = profile.Position
+            };
+
         var ruleResults = new List<CalculationResult>();
         var allLineItems = new List<(string RuleId, CalculationLineItem Item)>();
         var failureCount = 0;
@@ -66,9 +129,9 @@ public sealed class PeriodCalculationService
 
         // Parallelize independent rules: 4 time rules + absence
         var timeRuleTasks = new[] { "NORM_CHECK_37H", "SUPPLEMENT_CALC", "OVERTIME_CALC", "ON_CALL_DUTY" }
-            .Select(ruleId => CallTimeRuleAsync(client, ruleId, profile, entries, periodStart, periodEnd, ct))
+            .Select(ruleId => CallTimeRuleAsync(client, ruleId, effectiveProfile, entries, periodStart, periodEnd, ct))
             .ToList();
-        var absenceTask = CallAbsenceRuleAsync(client, profile, absences, periodStart, periodEnd, ct);
+        var absenceTask = CallAbsenceRuleAsync(client, effectiveProfile, absences, periodStart, periodEnd, ct);
 
         var allTasks = timeRuleTasks.Append(absenceTask).ToArray();
         await Task.WhenAll(allTasks);
@@ -109,7 +172,7 @@ public sealed class PeriodCalculationService
         }
 
         // Flex balance rule — sequential (depends on absence results for norm credit)
-        var flexResult = await CallFlexRuleAsync(client, profile, entries, absences, periodStart, periodEnd, previousFlexBalance, ct);
+        var flexResult = await CallFlexRuleAsync(client, effectiveProfile, entries, absences, periodStart, periodEnd, previousFlexBalance, ct);
         if (flexResult is not null)
         {
             ruleResults.Add(flexResult);
@@ -130,15 +193,15 @@ public sealed class PeriodCalculationService
         {
             _logger.LogError(
                 "All {TotalRules} rule evaluations failed for employee {EmployeeId} period {PeriodStart}-{PeriodEnd}",
-                totalRules, profile.EmployeeId, periodStart, periodEnd);
+                totalRules, effectiveProfile.EmployeeId, periodStart, periodEnd);
 
             return new PeriodCalculationResult
             {
-                EmployeeId = profile.EmployeeId,
+                EmployeeId = effectiveProfile.EmployeeId,
                 PeriodStart = periodStart,
                 PeriodEnd = periodEnd,
-                AgreementCode = profile.AgreementCode,
-                OkVersion = profile.OkVersion,
+                AgreementCode = effectiveProfile.AgreementCode,
+                OkVersion = effectiveProfile.OkVersion,
                 RuleResults = ruleResults,
                 ExportLines = [],
                 Success = false,
@@ -153,26 +216,27 @@ public sealed class PeriodCalculationService
 
         foreach (var (ruleId, lineItem) in allLineItems)
         {
+            // Pass effectiveProfile.Position so position-specific mappings are honored; null/empty falls back to generic (TASK-1802).
             var mapping = await _mappingService.GetMappingAsync(
-                lineItem.TimeType, profile.OkVersion, profile.AgreementCode, position: null, ct);
+                lineItem.TimeType, effectiveProfile.OkVersion, effectiveProfile.AgreementCode, effectiveProfile.Position, ct);
 
             if (mapping is null)
             {
                 _logger.LogWarning(
                     "No wage type mapping for {TimeType}/{OkVersion}/{Agreement} — skipping line item from rule {RuleId}",
-                    lineItem.TimeType, profile.OkVersion, profile.AgreementCode, ruleId);
+                    lineItem.TimeType, effectiveProfile.OkVersion, effectiveProfile.AgreementCode, ruleId);
                 continue;
             }
 
             exportLines.Add(new PayrollExportLine
             {
-                EmployeeId = profile.EmployeeId,
+                EmployeeId = effectiveProfile.EmployeeId,
                 WageType = mapping.WageType,
                 Hours = lineItem.Hours,
                 Amount = lineItem.Hours * lineItem.Rate,
                 PeriodStart = periodStart,
                 PeriodEnd = periodEnd,
-                OkVersion = profile.OkVersion,
+                OkVersion = effectiveProfile.OkVersion,
                 SourceRuleId = ruleId,
                 SourceTimeType = lineItem.TimeType
             });
@@ -180,7 +244,7 @@ public sealed class PeriodCalculationService
 
         _logger.LogInformation(
             "Period calculation complete for {EmployeeId}: {RuleCount} rules evaluated, {LineCount} export lines produced",
-            profile.EmployeeId, ruleResults.Count, exportLines.Count);
+            effectiveProfile.EmployeeId, ruleResults.Count, exportLines.Count);
 
         // ---------------------------------------------------------------
         // 3. Emit PeriodCalculationCompleted event
@@ -189,11 +253,11 @@ public sealed class PeriodCalculationService
         {
             var calcEvent = new PeriodCalculationCompleted
             {
-                EmployeeId = profile.EmployeeId,
+                EmployeeId = effectiveProfile.EmployeeId,
                 PeriodStart = periodStart,
                 PeriodEnd = periodEnd,
-                AgreementCode = profile.AgreementCode,
-                OkVersion = profile.OkVersion,
+                AgreementCode = effectiveProfile.AgreementCode,
+                OkVersion = effectiveProfile.OkVersion,
                 RuleCount = ruleResults.Count,
                 ExportLineCount = exportLines.Count,
                 TotalHours = exportLines.Sum(l => l.Hours),
@@ -201,22 +265,22 @@ public sealed class PeriodCalculationService
             };
 
             await _eventStore.AppendAsync(
-                $"period-calc-{profile.EmployeeId}-{periodStart:yyyy-MM-dd}",
+                $"period-calc-{effectiveProfile.EmployeeId}-{periodStart:yyyy-MM-dd}",
                 calcEvent, ct);
         }
         catch (Exception ex)
         {
             // Event emission failure should not fail the calculation
-            _logger.LogWarning(ex, "Failed to emit PeriodCalculationCompleted event for {EmployeeId}", profile.EmployeeId);
+            _logger.LogWarning(ex, "Failed to emit PeriodCalculationCompleted event for {EmployeeId}", effectiveProfile.EmployeeId);
         }
 
         return new PeriodCalculationResult
         {
-            EmployeeId = profile.EmployeeId,
+            EmployeeId = effectiveProfile.EmployeeId,
             PeriodStart = periodStart,
             PeriodEnd = periodEnd,
-            AgreementCode = profile.AgreementCode,
-            OkVersion = profile.OkVersion,
+            AgreementCode = effectiveProfile.AgreementCode,
+            OkVersion = effectiveProfile.OkVersion,
             RuleResults = ruleResults,
             ExportLines = exportLines,
             Success = true

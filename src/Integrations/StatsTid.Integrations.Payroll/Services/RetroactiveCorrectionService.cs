@@ -1,3 +1,4 @@
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Models;
@@ -50,14 +51,55 @@ public sealed class RetroactiveCorrectionService
         IReadOnlyList<CalculationResult> allRuleResults;
         decimal? flexDelta = null;
 
+        // Coherent-pair validation: either both split inputs are present or neither.
+        // Mismatched inputs indicate a caller bug and must not silently fall through to
+        // the single-version path.
+        if (okTransitionDate.HasValue ^ previousOkVersion is not null)
+        {
+            return new RetroactiveCorrectionResult
+            {
+                EmployeeId = profile.EmployeeId,
+                PeriodStart = periodStart,
+                PeriodEnd = periodEnd,
+                CorrectionLines = [],
+                Success = false,
+                ErrorMessage = "OkTransitionDate and PreviousOkVersion must both be provided or both omitted."
+            };
+        }
+
+        // Canonicalise OK versions from the transition date so the audit event reflects
+        // what the calculation actually used (ADR-003). If the caller-supplied value
+        // disagrees, override and log.
+        string? canonicalPreviousOkVersion = previousOkVersion;
+        string canonicalCurrentOkVersion = profile.OkVersion;
         if (okTransitionDate.HasValue && previousOkVersion is not null)
+        {
+            var resolvedPrevious = OkVersionResolver.ResolveVersion(okTransitionDate.Value.AddDays(-1));
+            var resolvedCurrent = OkVersionResolver.ResolveVersion(okTransitionDate.Value);
+            if (!string.Equals(previousOkVersion, resolvedPrevious, StringComparison.Ordinal))
+            {
+                _logger.LogWarning(
+                    "Caller-supplied PreviousOkVersion '{Supplied}' differs from date-resolved '{Resolved}' for transition {Transition}. Using resolved value.",
+                    previousOkVersion, resolvedPrevious, okTransitionDate.Value);
+                canonicalPreviousOkVersion = resolvedPrevious;
+            }
+            if (!string.Equals(profile.OkVersion, resolvedCurrent, StringComparison.Ordinal))
+            {
+                _logger.LogWarning(
+                    "Caller-supplied profile.OkVersion '{Supplied}' differs from date-resolved '{Resolved}' for transition {Transition}. Using resolved value.",
+                    profile.OkVersion, resolvedCurrent, okTransitionDate.Value);
+                canonicalCurrentOkVersion = resolvedCurrent;
+            }
+        }
+
+        if (okTransitionDate.HasValue && canonicalPreviousOkVersion is not null)
         {
             // ---------------------------------------------------------------
             // OK version split: recalculate two segments
             // ---------------------------------------------------------------
             var splitResult = await RecalculateWithVersionSplitAsync(
                 profile, entries, absences, periodStart, periodEnd,
-                previousFlexBalance, okTransitionDate.Value, previousOkVersion,
+                previousFlexBalance, okTransitionDate.Value, canonicalPreviousOkVersion,
                 authorizationHeader, correlationId, ct);
 
             if (!splitResult.Success)
@@ -109,9 +151,11 @@ public sealed class RetroactiveCorrectionService
         // 2. Diff new export lines against previous
         var correctionLines = ProduceCorrectionLines(
             profile, previousExportLines, allNewExportLines, periodStart, periodEnd,
-            flexDelta, okTransitionDate, previousOkVersion);
+            flexDelta, okTransitionDate, canonicalPreviousOkVersion);
 
-        // 3. Emit RetroactiveCorrectionRequested event (non-fatal if fails)
+        // 3. Emit RetroactiveCorrectionRequested event (non-fatal if fails).
+        // Persist the canonical (date-resolved) OK versions and the profile Position so
+        // the audit trail reflects what actually ran, not what the caller sent.
         try
         {
             var correctionEvent = new RetroactiveCorrectionRequested
@@ -120,14 +164,15 @@ public sealed class RetroactiveCorrectionService
                 OriginalPeriodStart = periodStart,
                 OriginalPeriodEnd = periodEnd,
                 AgreementCode = profile.AgreementCode,
-                OkVersion = profile.OkVersion,
+                OkVersion = canonicalCurrentOkVersion,
                 Reason = reason,
                 CorrectedByActorId = actorId,
                 CorrectionLineCount = correctionLines.Count,
                 TotalDifferenceHours = correctionLines.Sum(l => Math.Abs(l.DifferenceHours)),
                 CorrelationId = correlationId,
                 IdempotencyToken = idempotencyToken,
-                PreviousOkVersion = previousOkVersion
+                PreviousOkVersion = canonicalPreviousOkVersion,
+                Position = profile.Position
             };
 
             await _eventStore.AppendAsync(
@@ -142,7 +187,7 @@ public sealed class RetroactiveCorrectionService
         _logger.LogInformation(
             "Retroactive correction for {EmployeeId} period {PeriodStart}-{PeriodEnd}: {LineCount} correction lines{SplitInfo}",
             profile.EmployeeId, periodStart, periodEnd, correctionLines.Count,
-            okTransitionDate.HasValue ? $" (split at {okTransitionDate.Value:yyyy-MM-dd}, {previousOkVersion} → {profile.OkVersion})" : "");
+            okTransitionDate.HasValue ? $" (split at {okTransitionDate.Value:yyyy-MM-dd}, {canonicalPreviousOkVersion} → {canonicalCurrentOkVersion})" : "");
 
         return new RetroactiveCorrectionResult
         {
@@ -180,7 +225,9 @@ public sealed class RetroactiveCorrectionService
 
         var segmentEnd1 = transitionDate.AddDays(-1);
 
-        // Create profile for old OK version segment
+        // Create profile for old OK version segment.
+        // Position must be copied so position-specific agreement overrides and
+        // position-specific wage-type mappings continue to apply across the split.
         var oldVersionProfile = new EmploymentProfile
         {
             EmployeeId = profile.EmployeeId,
@@ -189,7 +236,8 @@ public sealed class RetroactiveCorrectionService
             WeeklyNormHours = profile.WeeklyNormHours,
             EmploymentCategory = profile.EmploymentCategory,
             IsPartTime = profile.IsPartTime,
-            PartTimeFraction = profile.PartTimeFraction
+            PartTimeFraction = profile.PartTimeFraction,
+            Position = profile.Position
         };
 
         _logger.LogInformation(

@@ -79,7 +79,7 @@ export function BalanceSummary({ data, loading }: BalanceSummaryProps) {
   const vacationPct = vacationTotal > 0 ? Math.min(100, (vacationUsed / vacationTotal) * 100) : 0
 
   const additionalEntitlements = data.entitlements
-    ?.filter(e => e.type !== 'VACATION' && e.totalQuota > 0) ?? []
+    ?.filter(e => e.type !== 'VACATION' && e.type !== 'CHILD_SICK' && e.totalQuota > 0) ?? []
 
   return (
     <div className={styles.container}>

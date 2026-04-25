@@ -17,7 +17,7 @@ public sealed class WageTypeMappingRepository
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
         await using var cmd = new NpgsqlCommand(
-            "SELECT * FROM wage_type_mappings ORDER BY agreement_code, ok_version, time_type, COALESCE(position, '')", conn);
+            "SELECT * FROM wage_type_mappings ORDER BY agreement_code, ok_version, time_type, position", conn);
         return await ReadMappingsAsync(cmd, ct);
     }
 
@@ -30,12 +30,12 @@ public sealed class WageTypeMappingRepository
             """
             SELECT * FROM wage_type_mappings
             WHERE time_type = @timeType AND ok_version = @okVersion AND agreement_code = @agreementCode
-              AND (position = @position OR (position IS NULL AND @position = ''))
+              AND position = @position
             """, conn);
         cmd.Parameters.AddWithValue("timeType", timeType);
         cmd.Parameters.AddWithValue("okVersion", okVersion);
         cmd.Parameters.AddWithValue("agreementCode", agreementCode);
-        cmd.Parameters.AddWithValue("position", position);
+        cmd.Parameters.AddWithValue("position", position ?? "");
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         return await reader.ReadAsync(ct) ? ReadMapping(reader) : null;
     }
@@ -53,8 +53,7 @@ public sealed class WageTypeMappingRepository
         cmd.Parameters.AddWithValue("wageType", mapping.WageType);
         cmd.Parameters.AddWithValue("okVersion", mapping.OkVersion);
         cmd.Parameters.AddWithValue("agreementCode", mapping.AgreementCode);
-        // Map empty Position to NULL for DB storage
-        cmd.Parameters.AddWithValue("position", string.IsNullOrEmpty(mapping.Position) ? DBNull.Value : mapping.Position);
+        cmd.Parameters.AddWithValue("position", mapping.Position ?? "");
         cmd.Parameters.AddWithValue("description", (object?)mapping.Description ?? DBNull.Value);
         var rows = await cmd.ExecuteNonQueryAsync(ct);
         return rows > 0;
@@ -70,14 +69,14 @@ public sealed class WageTypeMappingRepository
                 wage_type = @wageType,
                 description = @description
             WHERE time_type = @timeType AND ok_version = @okVersion AND agreement_code = @agreementCode
-              AND (position = @position OR (position IS NULL AND @position = ''))
+              AND position = @position
             """, conn);
         cmd.Parameters.AddWithValue("wageType", mapping.WageType);
         cmd.Parameters.AddWithValue("description", (object?)mapping.Description ?? DBNull.Value);
         cmd.Parameters.AddWithValue("timeType", mapping.TimeType);
         cmd.Parameters.AddWithValue("okVersion", mapping.OkVersion);
         cmd.Parameters.AddWithValue("agreementCode", mapping.AgreementCode);
-        cmd.Parameters.AddWithValue("position", string.IsNullOrEmpty(mapping.Position) ? (object)DBNull.Value : mapping.Position);
+        cmd.Parameters.AddWithValue("position", mapping.Position ?? "");
         var rows = await cmd.ExecuteNonQueryAsync(ct);
         return rows > 0;
     }
@@ -91,12 +90,12 @@ public sealed class WageTypeMappingRepository
             """
             DELETE FROM wage_type_mappings
             WHERE time_type = @timeType AND ok_version = @okVersion AND agreement_code = @agreementCode
-              AND (position = @position OR (position IS NULL AND @position = ''))
+              AND position = @position
             """, conn);
         cmd.Parameters.AddWithValue("timeType", timeType);
         cmd.Parameters.AddWithValue("okVersion", okVersion);
         cmd.Parameters.AddWithValue("agreementCode", agreementCode);
-        cmd.Parameters.AddWithValue("position", position);
+        cmd.Parameters.AddWithValue("position", position ?? "");
         var rows = await cmd.ExecuteNonQueryAsync(ct);
         return rows > 0;
     }
@@ -110,7 +109,7 @@ public sealed class WageTypeMappingRepository
             """
             SELECT * FROM wage_type_mappings
             WHERE agreement_code = @agreementCode AND ok_version = @okVersion
-            ORDER BY time_type, COALESCE(position, '')
+            ORDER BY time_type, position
             """, conn);
         cmd.Parameters.AddWithValue("agreementCode", agreementCode);
         cmd.Parameters.AddWithValue("okVersion", okVersion);
@@ -132,7 +131,7 @@ public sealed class WageTypeMappingRepository
         cmd.Parameters.AddWithValue("timeType", timeType);
         cmd.Parameters.AddWithValue("okVersion", okVersion);
         cmd.Parameters.AddWithValue("agreementCode", agreementCode);
-        cmd.Parameters.AddWithValue("position", string.IsNullOrEmpty(position) ? DBNull.Value : position);
+        cmd.Parameters.AddWithValue("position", position ?? "");
         cmd.Parameters.AddWithValue("action", action);
         cmd.Parameters.AddWithValue("previousData", (object?)previousData ?? DBNull.Value);
         cmd.Parameters.AddWithValue("newData", (object?)newData ?? DBNull.Value);
@@ -156,7 +155,7 @@ public sealed class WageTypeMappingRepository
         WageType = reader.GetString(reader.GetOrdinal("wage_type")),
         OkVersion = reader.GetString(reader.GetOrdinal("ok_version")),
         AgreementCode = reader.GetString(reader.GetOrdinal("agreement_code")),
-        Position = reader.IsDBNull(reader.GetOrdinal("position")) ? "" : reader.GetString(reader.GetOrdinal("position")),
+        Position = reader.GetString(reader.GetOrdinal("position")),
         Description = reader.IsDBNull(reader.GetOrdinal("description")) ? null : reader.GetString(reader.GetOrdinal("description")),
     };
 }

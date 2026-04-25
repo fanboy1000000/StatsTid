@@ -34,6 +34,7 @@
 | Sprint 15 | Entitlement & Balance Management | 5 entitlement types, quota validation, atomic balance adjustment, progress bars | 422 |
 | Sprint 16 | Working Time Compliance (EU WTD) | RestPeriodRule (4 checks), compliance config chain, ComplianceWarnings UI, ADR-015 | 436 |
 | Sprint 17 | Overtime Governance & Compensation Model | OvertimeGovernanceRule, OvertimeBalance, pre-approval workflow, compensation-aware payroll mapping, 9 endpoints, 4 frontend changes | 446 |
+| Sprint 18 | Codex BLOCKER Remediation (Round 1) | OK-version enforcement at write + payroll boundary, wage-type `position = ''` convention, role-scoped orchestrator/payroll/recalculate endpoints, dev JWT fallback fail-fast, UserUpdated EventSerializer registration + reflection coverage test, 9 OK-version runtime regression tests, 6 Testcontainers wage-type tests | 474 |
 
 ## Phase Roadmap
 
@@ -155,11 +156,11 @@ Addresses gaps identified in ontology analysis (2026-03-09). These are correctne
   - New wage type mappings: OVERTIME_50_PAYOUT, OVERTIME_50_AFSPADSERING, OVERTIME_100_PAYOUT, OVERTIME_100_AFSPADSERING, MERARBEJDE_PAYOUT, MERARBEJDE_AFSPADSERING
   - Leader dashboard: overtime exceeded warnings, pre-approval tracking
 
-### Phase 3g — Codex BLOCKER Remediation (Sprint 18)
+### Phase 3g — Codex BLOCKER Remediation (Sprints 18–19)
 
 **Priority focus**: P2 (Deterministic rule engine), P4 (Version correctness), P6 (Payroll integration), P7 (Security), P3 (Event sourcing)
 
-**Re-prioritized (Tier 2, 2026-04-18)**: Sprint 18 was originally Phase 3g "UI/UX Refinements." The Codex external review ([`docs/reviews/codex-2026-04-18.md`](docs/reviews/codex-2026-04-18.md)) surfaced 4 BLOCKERs and 6 WARNINGs against core priorities P2–P7. Stabilizing correctness before a UX polish pass is the right order — P9 (Usability) must not compromise higher priorities. UI/UX Refinements shift to Sprint 19 (now Phase 3h).
+**Re-prioritized (Tier 2, 2026-04-18 and 2026-04-23)**: Sprint 18 was originally Phase 3g "UI/UX Refinements." The Codex external review ([`docs/reviews/codex-2026-04-18.md`](docs/reviews/codex-2026-04-18.md)) surfaced 4 BLOCKERs and 6 WARNINGs against core priorities P2–P7. Stabilizing correctness before a UX polish pass is the right order — P9 (Usability) must not compromise higher priorities. Sprint 18's own Step 7a Codex review (2026-04-23) then surfaced 2 new BLOCKERs and 3 WARNINGs — genuine scope-enforcement regressions in the S18 remediation (role-level auth treated as per-org scoping). Sprint 19 extends Phase 3g for Round 2 remediation ([docs/sprints/SPRINT-19.md](docs/sprints/SPRINT-19.md)). UI/UX Refinements + Production Hardening shift forward by one sprint each.
 
 **Scope**: Five remediation tasks targeting the highest-impact Codex findings (Recs #1, #3, #4, #6, #8). No new features.
 
@@ -197,7 +198,50 @@ Addresses gaps identified in ontology analysis (2026-03-09). These are correctne
 
 **Rationale**: CLAUDE.md priority order mandates lower priorities never compromise higher ones. Codex surfaced concrete P2–P7 gaps that would be written into production if shipped behind a UX polish sprint. Remediation must come first.
 
-### Phase 3h — UI/UX Refinements (Sprint 19)
+#### Impact Assessment (Tier 2 Re-prioritization, 2026-04-23 — S19 Round 2)
+
+**Trigger**: S18 Step 7a Codex review (2026-04-23) surfaced 2 BLOCKERs + 3 WARNINGs. User-approved exit deferred all 5 findings to Sprint 19 rather than iterating Codex a third cycle.
+
+**Affected sprints**:
+- S18 (Phase 3g Round 1): complete with deferred findings recorded in the External Review section
+- S19 (was: Phase 3h UI/UX Refinements) → Now: Phase 3g Round 2 Codex Remediation — the 5 deferred findings
+- S20 (was: Phase 4 start) → unchanged content — an already-drafted "Temporal Period Handling" architectural sprint ([docs/sprints/SPRINT-20.md](docs/sprints/SPRINT-20.md)) remains in S20. This sprint generalizes the effective-date-boundary pattern surfaced by TASK-1801 + TASK-1903.
+- S21 (was: Phase 4 continuation) → Now: Phase 3h UI/UX Refinements — shifted forward
+- S22+ (was: Phase 4 continuation) → Now: Phase 4 Production Hardening — shifted forward
+
+**Scope changes**:
+- S19 scope: 5 remediation tasks (TASK-1901 … TASK-1905). No new architectural ground. Two P7 scope-enforcement fixes (TASK-1901, TASK-1902) dominate effort.
+- UI/UX Refinements scope unchanged — shifted forward by one sprint (S19 → S21)
+- Phase 4 shifted forward by one sprint (S20+ → S22+)
+- Temporal Period Handling (S20) remains in place and is thematically continuous with the OK-version work in S18/S19
+
+**Updated phase-sprint ranges**:
+- Phase 3g (Codex BLOCKER Remediation): Sprints 18–19 ← was Sprint 18 only
+- Phase 3h (Temporal Period Handling, architectural): Sprint 20 ← was planned standalone, now formally the next phase
+- Phase 3i (UI/UX Refinements): Sprint 21 ← was Phase 3h S19
+- Phase 4 (Production Hardening): Sprint 22+ ← was Sprint 20+
+
+**Rationale**: Two of the 5 findings are genuine P7 scope-enforcement holes (not just UX polish). Deferring BLOCKERs through UX or architectural sprints would ship known scope-bypass endpoints to production. S19 closes them first; S20's architectural Temporal Period Handling then generalizes what S18/S19 tackled tactically; only then does S21 (UI/UX) fit the priority order.
+
+### Phase 3g Round 2 — Codex BLOCKER Remediation (Sprint 19)
+
+**Priority focus**: P7 (Security) — resource scope enforcement, P4 (Version correctness) — export-boundary mixed-version handling, P3 (Auditability) — retroactive event canonicalization
+
+**Scope**: Five remediation tasks targeting the 2026-04-23 Codex findings. No new features. Full task detail in [docs/sprints/SPRINT-19.md](docs/sprints/SPRINT-19.md).
+
+- **TASK-1901** — Orchestrator `/execute` resource-scope validation. Reject when caller's scope does not cover `parameters.employeeId`. Agent: Security + API Integration. Effort: M.
+- **TASK-1902** — `/api/payroll/calculate-and-export` per-org scope validation (or escalate to GlobalAdminOnly). Plus policy-wiring test addressing internal-Reviewer WARNING. Agent: Security + Payroll. Effort: M.
+- **TASK-1903** — Mixed-version export boundary guard (reject / per-line-resolve / segment — decision at sprint planning). Agent: Payroll + Rule Engine. Effort: M.
+- **TASK-1904** — Canonicalize OkVersion in single-version `RetroactiveCorrectionRequested` audit event. Agent: Payroll + Data Model. Effort: S.
+- **TASK-1905** — JWT dev-fallback honors both `ASPNETCORE_ENVIRONMENT` and `DOTNET_ENVIRONMENT` via `IHostEnvironment.IsDevelopment()`. Agent: Security. Effort: S.
+
+### Phase 3h — Temporal Period Handling (Sprint 20)
+
+**Priority focus**: P1 (Architectural integrity), P2 (Deterministic rule engine), P4 (Version correctness)
+
+Analysis-first architectural sprint (ADR + task decomposition before implementation). Generalizes "calculation periods that intersect effective-date boundaries" — OK version transitions, agreement-config promotion, position-override effective dates, wage-type revisions, compliance-rule versioning, employee-profile changes. S18's TASK-1801 and S19's TASK-1903 tackle this reactively for OK version only; S20 produces the general solution. See [docs/sprints/SPRINT-20.md](docs/sprints/SPRINT-20.md) for the problem framing.
+
+### Phase 3i — UI/UX Refinements (Sprint 21)
 
 **Priority focus**: P9 (Usability)
 
@@ -214,7 +258,7 @@ Polish pass across all user-facing surfaces before production hardening. Address
 - Skema grid usability refinements based on workflow testing
 - Approval flow UX: clearer status indicators, action confirmations
 
-### Phase 4 — Production Hardening (Sprint 20+)
+### Phase 4 — Production Hardening (Sprint 22+)
 
 **Priority focus**: All priorities — cross-cutting production readiness
 

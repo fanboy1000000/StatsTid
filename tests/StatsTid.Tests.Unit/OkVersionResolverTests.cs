@@ -1,4 +1,4 @@
-using StatsTid.RuleEngine.Api.Config;
+using StatsTid.SharedKernel.Calendar;
 
 namespace StatsTid.Tests.Unit;
 

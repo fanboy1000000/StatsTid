@@ -17,7 +17,10 @@ public sealed class PayrollMappingService
 
     /// <summary>
     /// Position-aware wage type mapping lookup.
-    /// Precedence: position-specific match > generic (null position) fallback.
+    /// Canonical convention: empty string (<c>''</c>) in the <c>position</c> column is the
+    /// generic fallback. The DB column is NOT NULL with DEFAULT '', so we must never query
+    /// <c>position IS NULL</c> (Codex BLOCKER fix, TASK-1802).
+    /// Precedence: position-specific match wins over the generic ('') row.
     /// </summary>
     public async Task<WageTypeMapping?> GetMappingAsync(
         string timeType, string okVersion, string agreementCode, string? position = null, CancellationToken ct = default)
@@ -27,16 +30,18 @@ public sealed class PayrollMappingService
 
         NpgsqlCommand cmd;
 
-        if (position is not null)
+        // Treat null or empty position identically as "generic lookup".
+        if (!string.IsNullOrEmpty(position))
         {
-            // When position is provided, prefer position-specific match, fall back to generic
+            // Position provided: prefer position-specific row, fall back to generic ('').
+            // ORDER BY (position = '') ASC puts the specific match first (false < true).
             cmd = new NpgsqlCommand(
                 """
                 SELECT time_type, wage_type, ok_version, agreement_code, position, description
                 FROM wage_type_mappings
                 WHERE time_type = @timeType AND ok_version = @okVersion AND agreement_code = @agreementCode
-                  AND (position = @position OR position IS NULL)
-                ORDER BY position IS NULL ASC
+                  AND (position = @position OR position = '')
+                ORDER BY (position = '') ASC
                 LIMIT 1
                 """, conn);
             cmd.Parameters.AddWithValue("timeType", timeType);
@@ -46,13 +51,14 @@ public sealed class PayrollMappingService
         }
         else
         {
-            // When no position provided, only match generic (null position) rows
+            // Generic-only lookup: match the canonical empty-string row.
             cmd = new NpgsqlCommand(
                 """
                 SELECT time_type, wage_type, ok_version, agreement_code, position, description
                 FROM wage_type_mappings
                 WHERE time_type = @timeType AND ok_version = @okVersion AND agreement_code = @agreementCode
-                  AND position IS NULL
+                  AND position = ''
+                LIMIT 1
                 """, conn);
             cmd.Parameters.AddWithValue("timeType", timeType);
             cmd.Parameters.AddWithValue("okVersion", okVersion);
@@ -65,17 +71,18 @@ public sealed class PayrollMappingService
             if (!await reader.ReadAsync(ct))
             {
                 _logger.LogWarning("No mapping found for {TimeType}/{OkVersion}/{Agreement}/{Position}",
-                    timeType, okVersion, agreementCode, position ?? "(generic)");
+                    timeType, okVersion, agreementCode, string.IsNullOrEmpty(position) ? "(generic)" : position);
                 return null;
             }
 
+            // position column is NOT NULL (DEFAULT ''), so GetString is safe.
             return new WageTypeMapping
             {
                 TimeType = reader.GetString(0),
                 WageType = reader.GetString(1),
                 OkVersion = reader.GetString(2),
                 AgreementCode = reader.GetString(3),
-                Position = reader.IsDBNull(4) ? "" : reader.GetString(4),
+                Position = reader.GetString(4),
                 Description = reader.IsDBNull(5) ? null : reader.GetString(5)
             };
         }
@@ -83,7 +90,7 @@ public sealed class PayrollMappingService
 
     /// <summary>
     /// Maps a CalculationResult to PayrollExportLines using wage type mappings.
-    /// Accepts optional position for position-aware mapping lookup.
+    /// Accepts optional position for position-aware mapping lookup; null/empty == generic.
     /// </summary>
     public async Task<IReadOnlyList<PayrollExportLine>> MapCalculationResultAsync(
         CalculationResult result, EmploymentProfile profile, string? position = null, CancellationToken ct = default)

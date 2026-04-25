@@ -1,3 +1,4 @@
+using System;
 using System.IdentityModel.Tokens.Jwt;
 using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -10,17 +11,47 @@ namespace StatsTid.Infrastructure.Security;
 
 public static class JwtValidationSetup
 {
+    // Dev-only fallback signing key. MUST NOT be used outside Development.
+    // The fallback is intentionally weak and well-known — any non-Development
+    // environment without an explicit Jwt:SigningKey must fail fast at startup.
+    private const string DevFallbackSigningKey = "StatsTid_Sprint3_DevKey_MustBeAtLeast32BytesLong!";
+
     public static IServiceCollection AddStatsTidJwtAuth(this IServiceCollection services, IConfiguration configuration)
     {
         // Prevent .NET from remapping JWT claim names (e.g. "role" → ClaimTypes.Role)
         // so our custom claims (StatsTidClaims.Role, etc.) are preserved as-is.
         JwtSecurityTokenHandler.DefaultInboundClaimTypeMap.Clear();
 
+        var configuredSigningKey = configuration["Jwt:SigningKey"];
+        var environment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
+        var isDevelopment = string.Equals(environment, "Development", StringComparison.OrdinalIgnoreCase);
+
+        string signingKey;
+        if (!string.IsNullOrWhiteSpace(configuredSigningKey))
+        {
+            signingKey = configuredSigningKey;
+        }
+        else if (isDevelopment)
+        {
+            // Dev convenience: allow the well-known fallback so local runs don't need secrets.
+            signingKey = DevFallbackSigningKey;
+        }
+        else
+        {
+            // Fail fast — refusing to start is safer than silently accepting tokens
+            // signed with a well-known dev key in a non-Development environment.
+            throw new InvalidOperationException(
+                "Jwt:SigningKey configuration is missing. A signing key must be explicitly configured " +
+                "outside the Development environment (current ASPNETCORE_ENVIRONMENT="
+                + (environment ?? "<null>") + "). The dev fallback key is only permitted when " +
+                "ASPNETCORE_ENVIRONMENT=Development.");
+        }
+
         var settings = new JwtSettings
         {
             Issuer = configuration["Jwt:Issuer"] ?? "statstid",
             Audience = configuration["Jwt:Audience"] ?? "statstid",
-            SigningKey = configuration["Jwt:SigningKey"] ?? "StatsTid_Sprint3_DevKey_MustBeAtLeast32BytesLong!",
+            SigningKey = signingKey,
             ExpirationMinutes = int.TryParse(configuration["Jwt:ExpirationMinutes"], out var mins) ? mins : 480
         };
 

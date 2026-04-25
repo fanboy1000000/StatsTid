@@ -1,8 +1,15 @@
-namespace StatsTid.RuleEngine.Api.Config;
+namespace StatsTid.SharedKernel.Calendar;
 
 /// <summary>
-/// Resolves OK version based on entry date (not today).
-/// Ensures deterministic replay — the version is always determined by when the work was performed.
+/// Resolves the Danish public-sector collective-agreement (OK) version that applies on a given date.
+///
+/// The OK version is determined by when the work was performed — not by today's date — so replays,
+/// retroactive corrections, and payroll export remain deterministic (ADR-003).
+///
+/// This is the single source of truth. Previously the date-range table was duplicated across
+/// RuleEngine, Backend API, and Payroll Integration. TASK-1801 (Sprint 18) consolidated them here:
+/// a pure calendar constant with no dependencies is the textbook SharedKernel citizen, and callers
+/// on the write/calc boundaries can reach it without violating integration isolation (PAT-005).
 /// </summary>
 public static class OkVersionResolver
 {
@@ -13,7 +20,8 @@ public static class OkVersionResolver
     };
 
     /// <summary>
-    /// Resolves the OK version for a specific date.
+    /// Resolves the OK version for a specific date. Dates before the earliest known version clamp to
+    /// the earliest; dates after the latest clamp to the latest.
     /// </summary>
     public static string ResolveVersion(DateOnly date)
     {
@@ -23,7 +31,6 @@ public static class OkVersionResolver
                 return version;
         }
 
-        // Default: if before all known versions, use earliest; if after, use latest
         if (date < VersionPeriods[0].Start)
             return VersionPeriods[0].Version;
 
@@ -31,8 +38,8 @@ public static class OkVersionResolver
     }
 
     /// <summary>
-    /// Returns all OK versions that apply within a date range.
-    /// Useful for periods that span an OK transition boundary.
+    /// Returns all OK versions that apply within a date range, with each segment's effective bounds
+    /// clipped to the input period. Useful for periods that straddle an OK transition boundary.
     /// </summary>
     public static IReadOnlyList<(DateOnly Start, DateOnly End, string Version)> ResolveVersionsForPeriod(
         DateOnly periodStart, DateOnly periodEnd)
@@ -50,7 +57,6 @@ public static class OkVersionResolver
             }
         }
 
-        // If no overlap found, return the resolved version for the period start
         if (result.Count == 0)
         {
             var fallbackVersion = ResolveVersion(periodStart);

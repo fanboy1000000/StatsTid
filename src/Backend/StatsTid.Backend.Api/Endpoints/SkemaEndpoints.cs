@@ -25,12 +25,30 @@ public static class SkemaEndpoints
         ["LEAVE_WITHOUT_PAY"] = "Tjenestefri u. l\u00f8n"
     };
 
-    // ── Known absence time_types (used to filter wage_type_mappings) ──
-    private static readonly HashSet<string> AbsenceTimeTypes = new(StringComparer.Ordinal)
+    // ── Base absence types common to all agreements ──
+    private static readonly string[] BaseAbsenceTypes =
+    [
+        "SICK_DAY", "VACATION", "CARE_DAY", "CHILD_SICK_DAY",
+        "PARENTAL_LEAVE", "SENIOR_DAY", "LEAVE_WITH_PAY", "LEAVE_WITHOUT_PAY"
+    ];
+
+    /// <summary>
+    /// Returns the absence types available for a given agreement code.
+    /// Child sick days vary: AC=1, HK=2, PROSA=3.
+    /// </summary>
+    private static HashSet<string> GetAbsenceTypesForAgreement(string agreementCode)
     {
-        "SICK_DAY", "VACATION", "CARE_DAY", "CHILD_SICK_DAY", "CHILD_SICK_DAY_2",
-        "CHILD_SICK_DAY_3", "PARENTAL_LEAVE", "SENIOR_DAY", "LEAVE_WITH_PAY", "LEAVE_WITHOUT_PAY"
-    };
+        var types = new HashSet<string>(BaseAbsenceTypes, StringComparer.Ordinal);
+
+        // HK gets 2 child sick days, PROSA gets 3
+        if (agreementCode is "HK" or "PROSA")
+            types.Add("CHILD_SICK_DAY_2");
+
+        if (agreementCode is "PROSA")
+            types.Add("CHILD_SICK_DAY_3");
+
+        return types;
+    }
 
     // ── Absence type → entitlement type mapping (null = skip validation) ──
     private static readonly Dictionary<string, string?> AbsenceToEntitlementType = new(StringComparer.Ordinal)
@@ -109,8 +127,9 @@ public static class SkemaEndpoints
                 visibilityEntries.Where(v => v.IsHidden).Select(v => v.AbsenceType),
                 StringComparer.Ordinal);
 
-            // Build absence types list (filtered by visibility)
-            var absenceTypes = AbsenceTimeTypes
+            // Build absence types list (filtered by agreement and org visibility)
+            var agreementAbsenceTypes = GetAbsenceTypesForAgreement(user.AgreementCode);
+            var absenceTypes = agreementAbsenceTypes
                 .Where(t => !hiddenTypes.Contains(t))
                 .Select(t => new
                 {

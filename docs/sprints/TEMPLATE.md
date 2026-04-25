@@ -85,7 +85,7 @@ _Codex sprint-end review against the sprint-start commit. See [AGENTS.md](../AGE
 |-------|-------|
 | **Invoked** | yes \| skipped — [reason if skipped] |
 | **Sprint-start commit** | `<sha>` |
-| **Command** | `codex review --base <sha> "..."` |
+| **Command** | `codex review "..."` (prompt-alone, uncommitted) \| `codex review --base <sha>` (no prompt, if intermediate commits exist) |
 | **Review Cycles** | N |
 | **Findings** | NB BLOCKER, NW WARNING, NN NOTE |
 | **Resolution** | all resolved \| user-approved exit — [reason] |

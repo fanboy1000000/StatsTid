@@ -29,6 +29,7 @@ public static class EventSerializer
         ["OrganizationCreated"] = typeof(OrganizationCreated),
         ["OrganizationUpdated"] = typeof(OrganizationUpdated),
         ["UserCreated"] = typeof(UserCreated),
+        ["UserUpdated"] = typeof(UserUpdated),
         ["RoleAssignmentGranted"] = typeof(RoleAssignmentGranted),
         ["RoleAssignmentRevoked"] = typeof(RoleAssignmentRevoked),
         ["LocalConfigurationChanged"] = typeof(LocalConfigurationChanged),

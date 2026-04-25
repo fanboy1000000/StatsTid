@@ -2,6 +2,7 @@ using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Resilience;
 using StatsTid.Infrastructure.Security;
 using StatsTid.Integrations.Payroll.Services;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Models;
 
@@ -36,24 +37,41 @@ app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "payr
 // Low-level export endpoint: intentionally NOT guarded by period approval.
 // Used for admin retroactive corrections and internal service-to-service calls.
 // The high-level /api/payroll/calculate-and-export endpoint enforces the approval guard.
-app.MapPost("/api/payroll/export", async (PayrollExportRequest request, PayrollMappingService mapping, PayrollExportService export, CancellationToken ct) =>
+app.MapPost("/api/payroll/export", async (
+    PayrollExportRequest request,
+    PayrollMappingService mapping,
+    PayrollExportService export,
+    ILoggerFactory loggerFactory,
+    CancellationToken ct) =>
 {
-    var lines = await mapping.MapCalculationResultAsync(request.CalculationResult, request.Profile, position: null, ct);
+    // Resolve OK version from the earliest line-item date (ADR-003) so the export boundary
+    // does not trust caller-supplied profile.OkVersion. Preserves Position for TASK-1802.
+    var logger = loggerFactory.CreateLogger("Payroll.ExportBoundary");
+    var effectiveProfile = OkVersionBoundary.ResolveProfile(request.CalculationResult, request.Profile, logger, "/api/payroll/export");
+
+    var lines = await mapping.MapCalculationResultAsync(request.CalculationResult, effectiveProfile, effectiveProfile.Position, ct);
 
     if (lines.Count == 0)
         return Results.BadRequest(new { success = false, error = "No mappable line items" });
 
     var result = await export.ExportAsync(lines, ct);
     return result.Success ? Results.Ok(result) : Results.UnprocessableEntity(result);
-}).RequireAuthorization("Authenticated");
+}).RequireAuthorization("GlobalAdminOnly");
 
-app.MapPost("/api/payroll/export-period", async (PayrollPeriodExportRequest request, PayrollMappingService mapping, PayrollExportService export, CancellationToken ct) =>
+app.MapPost("/api/payroll/export-period", async (
+    PayrollPeriodExportRequest request,
+    PayrollMappingService mapping,
+    PayrollExportService export,
+    ILoggerFactory loggerFactory,
+    CancellationToken ct) =>
 {
+    var logger = loggerFactory.CreateLogger("Payroll.ExportBoundary");
     var allLines = new List<PayrollExportLine>();
 
     foreach (var calcResult in request.CalculationResults)
     {
-        var lines = await mapping.MapCalculationResultAsync(calcResult, request.Profile, position: null, ct);
+        var effectiveProfile = OkVersionBoundary.ResolveProfile(calcResult, request.Profile, logger, "/api/payroll/export-period");
+        var lines = await mapping.MapCalculationResultAsync(calcResult, effectiveProfile, effectiveProfile.Position, ct);
         allLines.AddRange(lines);
     }
 
@@ -62,7 +80,7 @@ app.MapPost("/api/payroll/export-period", async (PayrollPeriodExportRequest requ
 
     var result = await export.ExportAsync(allLines, ct);
     return result.Success ? Results.Ok(result) : Results.UnprocessableEntity(result);
-}).RequireAuthorization("Authenticated");
+}).RequireAuthorization("GlobalAdminOnly");
 
 app.MapPost("/api/payroll/calculate-and-export", async (
     CalculateAndExportRequest request,
@@ -131,7 +149,9 @@ app.MapPost("/api/payroll/calculate-and-export", async (
     }
 
     return Results.Ok(result);
-}).RequireAuthorization("Authenticated");
+// LocalAdmin is acceptable here because the APPROVED-period guard above enforces per-org scoping.
+// Raw /export and /export-period below bypass that guard and stay GlobalAdminOnly.
+}).RequireAuthorization("LocalAdminOrAbove");
 
 // Retroactive correction endpoint: intentionally NOT guarded by period approval.
 // Corrections are initiated by admins for already-exported periods where rules or data changed.
@@ -207,7 +227,7 @@ app.MapPost("/api/payroll/recalculate", async (
     }
 
     return Results.Ok(result);
-}).RequireAuthorization("Authenticated");
+}).RequireAuthorization("GlobalAdminOnly");
 
 // Correction export endpoint: formats correction lines into SLS correction format.
 // Pure formatting — no side effects, no DB writes. Used after retroactive recalculation
@@ -229,7 +249,7 @@ app.MapPost("/api/payroll/export-corrections", (CorrectionExportRequest request)
         recordCount = request.CorrectionLines.Count,
         slsContent = formatted
     });
-}).RequireAuthorization("Authenticated");
+}).RequireAuthorization("GlobalAdminOnly");
 
 app.Run();
 
@@ -285,4 +305,43 @@ public sealed class CorrectionExportRequest
 {
     public required List<CorrectionExportLine> CorrectionLines { get; init; }
     public string? ExportId { get; init; }
+}
+
+internal static class OkVersionBoundary
+{
+    // Resolves the authoritative OK version for a payroll export from the earliest
+    // line-item date on the CalculationResult (ADR-003). If the caller-supplied
+    // profile.OkVersion disagrees, logs and returns a profile with the resolved
+    // value; Position is preserved.
+    public static EmploymentProfile ResolveProfile(
+        CalculationResult result,
+        EmploymentProfile profile,
+        ILogger logger,
+        string context)
+    {
+        if (result.LineItems.Count == 0)
+            return profile;
+
+        var minDate = result.LineItems.Min(li => li.Date);
+        var resolved = OkVersionResolver.ResolveVersion(minDate);
+
+        if (string.Equals(profile.OkVersion, resolved, StringComparison.Ordinal))
+            return profile;
+
+        logger.LogWarning(
+            "Caller-supplied profile.OkVersion '{Supplied}' differs from date-resolved '{Resolved}' for {Context} (employee {EmployeeId}, earliest line {Date}). Using resolved value.",
+            profile.OkVersion, resolved, context, profile.EmployeeId, minDate);
+
+        return new EmploymentProfile
+        {
+            EmployeeId = profile.EmployeeId,
+            AgreementCode = profile.AgreementCode,
+            OkVersion = resolved,
+            WeeklyNormHours = profile.WeeklyNormHours,
+            EmploymentCategory = profile.EmploymentCategory,
+            IsPartTime = profile.IsPartTime,
+            PartTimeFraction = profile.PartTimeFraction,
+            Position = profile.Position
+        };
+    }
 }

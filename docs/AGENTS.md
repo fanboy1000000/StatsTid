@@ -284,12 +284,17 @@ External Review:
 
 ### Invocation Modes
 
+> **CLI constraint (verified on `codex-cli` 0.120.x)**: `codex review` does NOT accept a custom prompt and a diff-target flag (`--uncommitted` / `--base` / `--branch` / `--commit`) in the same invocation — the two forms are mutually exclusive. When a prompt is passed alone, Codex auto-detects the working copy's current uncommitted diff. When a diff-target flag is passed alone, Codex runs its default review prompt against that diff. See PR openai/codex#6538 for the documented contract.
+
 | Mode | When | Command Pattern |
 |------|------|-----------------|
-| Sprint-end review (Step 7a) | After tests green, internal Reviewer findings resolved, merge complete, before commit | `codex review --base <sprint-start-commit> "<prompt>"` |
-| Per-task high-risk review (Step 5a override) | Orchestrator-triggered on high-risk tasks, runs alongside internal Reviewer | `codex review --uncommitted "<prompt>"` |
+| Per-task high-risk review (Step 5a override) | Orchestrator-triggered on high-risk tasks, runs alongside internal Reviewer. At Step 5a all sprint work is still uncommitted by workflow design, so the prompt-alone form targets the right diff. | `codex review "<prompt>"` |
+| Sprint-end review (Step 7a) — no intermediate commits (preferred) | After tests green, internal Reviewer resolved, worktree merges complete but kept uncommitted on master. This is the default path — step 7 (commit) only runs AFTER step 7a. | `codex review "<prompt>"` |
+| Sprint-end review (Step 7a) — intermediate commits exist | If worktree merges produced commits on master during the sprint, the base-anchored form must be used. Steering prompt is LOST in this form. | `codex review --base <sprint-start-commit>` |
 
 `<sprint-start-commit>` is the HEAD commit of the previous sprint on master (i.e., the commit just before the current sprint's first task commit).
+
+**Preference**: Keep sprint work uncommitted until after Step 7a so the prompt-steered form is available. When merging worktree branches in Step 6, prefer `git merge --squash` / file-copy into the working tree over `git merge --no-ff` to avoid creating intermediate commits on master.
 
 ### High-Risk Trigger Categories (Per-Task)
 
@@ -338,7 +343,7 @@ The cap applies **separately** to sprint-end review (Step 7a) and per-task revie
 
 ### Codex Review Prompt Template
 
-When invoking `codex review`, pass this structure as the prompt argument:
+When invoking `codex review` in the prompt-alone form (`codex review "<prompt>"`), pass this structure as the single positional argument. For the base-anchored form (`codex review --base <sha>`), no prompt can be supplied — Codex's default review prompt runs instead.
 
 ```
 Review this diff for the StatsTid project — a Danish public-sector workforce management SaaS.
