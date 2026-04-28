@@ -284,6 +284,10 @@ Only makes sense once functional correctness is achieved. The final UX polish pa
 - Load testing, stress testing
 - Security audit, penetration testing
 - Documentation and operational runbooks
+- **Versioned History for Non-Dated Boundary Sources** (committed 2026-04-28 during S20 Q5b analysis): completes the temporal-segmentation correctness story for the three sources S20 left as snapshot-at-calculation. Each source moves from "snapshot the current row at calculation time, embed in segment manifest" to "look up the row effective on segment date." Existing manifests remain replayable; new manifests use the historical lookup. No retroactive recomputation of past calculations. **Hard dependency**: S20's `SnapshotContract` framework + segment manifest must be in place. Three sub-sprints (sprint numbers assigned when the slot opens):
+  - **Phase 4 X-1: Wage-type-mapping versioned history** — add `effective_from` / history-row semantics to `wage_type_mappings`. Simplest of the three; admin-managed, infrequent writes.
+  - **Phase 4 X-2: Entitlement-policy versioned history** — same pattern; admin-managed config table.
+  - **Phase 4 X-3: Employee-profile versioned history** — hardest. The `employees` table is read by every rule, has many fields, has self-service + HR + leader edit paths. Versioning means every edit creates a history row; UI surfaces "as of date" semantics; per-field decision (e.g., display name → last-write-wins; agreement code, hours fraction, employment category → versioned). May itself decompose into multiple sprints.
 
 ### Phase 5 — UI/UX Refinements (final pre-launch sprint, sprint TBD after Phase 4)
 

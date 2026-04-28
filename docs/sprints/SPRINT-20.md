@@ -241,12 +241,14 @@ These must be resolved — and documented in an ADR — **before** a task decomp
 
 5. **Scope of this sprint's implementation.** Does it cover all temporal boundaries in the boundary-source table, or just OK version plus an extensible framework for the rest? Recommendation: framework + OK version end-to-end, with agreement-config and position-override as fast-follow tasks if time permits. Wage-type-mapping and entitlement-policy are excluded — see 5b.
 
-   **5b. (Step 0b BLOCKER B3) Behavior for non-effective-dated boundary sources.** Wage-type-mapping, entitlement-policy, and employee-profile have no historical timeline today (last-write-wins / current row wins). Three options for how the framework treats them:
-   - **(a) unsupported** — planner refuses periods that span any change to a non-dated source; require a schema migration before they're segmentable;
-   - **(b) snapshot-at-calculation** — take a snapshot of the current row at calculation time, audit the snapshot, accept that re-running the same (period, profile, snapshot) deterministically reproduces the original output but cannot reproduce a historical run;
-   - **(c) introduce versioned history first** — make schema migrations to add `effective_from` columns a prerequisite for those sources before they enter the framework.
+   **5b. (Step 0b BLOCKER B3) Behavior for non-effective-dated boundary sources.** Wage-type-mapping, entitlement-policy, and employee-profile have no historical timeline today (last-write-wins / current row wins). Three options were considered:
+   - **(a) unsupported** — planner refuses periods that span any change. Rejected: would refuse most real periods (every employee profile edit becomes a "spans a change" scenario).
+   - **(b) snapshot-at-calculation** — take a snapshot of the current row at calculation time, embed in segment manifest. Re-run with same manifest → deterministic replay; recomputation without manifest → fresh snapshot, may differ. **Decided for S20** (2026-04-28).
+   - **(c) introduce versioned history first** — schema migrations adding `effective_from` per source. Out of S20 scope (would expand 1 sprint to 1 + 3+).
 
-   The ADR must commit to one choice per non-dated source.
+   **Decision**: S20 implements (b). Each registered rule declares a `SnapshotContract` (which non-dated tables / profile fields it reads); the planner gathers those snapshots at calculation time and writes them to the segment manifest. (b) is honest about the tradeoff: replay determinism becomes a property we can claim and verify; recomputation determinism stays unclaimed (we never had it).
+
+   **Long-term commitment** (option c, recorded in [ROADMAP.md](../../ROADMAP.md) Phase 4 on 2026-04-28): "Versioned History for Non-Dated Boundary Sources" tracks three sub-sprints (wage-type-mapping, entitlement-policy, employee-profile). Each source moves from (b) to a proper effective-dated lookup; existing manifests stay replayable. Hard dependency on S20's `SnapshotContract` + segment manifest being in place. Locking (c) into the roadmap now prevents (b) from quietly becoming permanent.
 
 6. **Backward compatibility with `RecalculateWithVersionSplitAsync` (Step 0b R-W1).** Two options only:
    - **(a) retire** after migration once the new planner is the canonical segmenter;
@@ -293,6 +295,87 @@ These must be resolved — and documented in an ADR — **before** a task decomp
 - Full retirement of `PeriodCalculationService` — see In scope above.
 - Retiring event sourcing, CQRS-lite, or the pure rule engine.
 - UI changes beyond surfacing any new audit information the architecture requires.
+
+## Decision Log (Q1–Q11 Resolution)
+
+_In-progress walk through the Open Architectural Questions, recorded as decisions are made. Each entry binds the ADR draft. Q9–Q11 remain open at session end 2026-04-28; resume 2026-04-29._
+
+### Q1 — Segmentation logic placement
+**Decision (2026-04-28)**: A — SharedKernel pure planner.
+**Pre-commits**:
+- The planner lives under `src/SharedKernel/StatsTid.SharedKernel/` (likely `Calendar/` or a new `Segmentation/` namespace).
+- `PeriodCalculationService.CalculateAsync` signature changes to accept a typed `PlannedCalculation` value as input. The constructor of `PlannedCalculation` is internal to the planner — callers cannot construct one directly. Bypass attempts fail at compile time (same compile-time-guard pattern as `AddStatsTidJwtAuth(IServiceCollection, IConfiguration, IHostEnvironment)` in TASK-1905).
+- Same Constraint Validator rule that catches direct rule-engine HTTP calls applies symmetrically here — out-of-band paths to `/api/rules/evaluate` must obtain their `(period, profile)` tuple from a `PlannedCalculation`.
+
+### Q2 — Rule classification declaration
+**Decision (2026-04-28)**: B (full) — required parameter on `RuleRegistry.Register`.
+**Implications**:
+- Multi-mode rules decompose to separately-registered rules. `NormCheckRule` becomes 3 registered rules (`NORM_CHECK_WEEKLY`, `NORM_CHECK_MULTIWEEK`, `NORM_CHECK_ANNUAL`); the dispatcher selects by classification + period, not by intra-rule branching.
+- `RuleRegistry.Register` signature gains required parameters: `span`, `splitBehavior`, `family`. Compile-time enforcement that no rule reaches the planner unclassified.
+- This is a real refactor of `NormCheckRule` and any other multi-mode rule; in S20 scope.
+
+### Q3 — Merge semantics
+**Decision (2026-04-28)**: B + per-rule override at registration.
+**Pre-commits**:
+- Two standalone mergers in SharedKernel: `CalculationResultMerger` and `ComplianceCheckResultMerger`. Pure static methods; no `MergeWith` on the result types themselves.
+- Default `MergeStrategy` derived from the `(span, splitBehavior)` triple:
+  - `(entry, segment-safe, calculation)` → `Concatenate`
+  - `(window, aligned-window, *)` → `RejectIfMultipleSegments` (planner contract violation if reached)
+  - `(period, mergeable, calculation)` → no default; registration MUST supply an override (compile-time enforcement when `splitBehavior: Mergeable`)
+  - `(*, *, compliance)` → `UnionDedupe` always
+- Per-rule override is an optional `mergeStrategy:` parameter on `Register`; required when default is undefined.
+
+### Q4 — Behavior at invalid segmentation boundary
+**Decision (2026-04-28)**: Default-reject; opt-in `PlannerOptions.AllowUpstreamAlignment` per call.
+**Pre-commits**:
+- `PlannerOptions.AllowUpstreamAlignment` defaults to `false`. When `false` and an `aligned-window` rule disagrees with the period boundary, the planner returns a structured error (NOT a `PlannedCalculation`) listing the offending rule(s).
+- When `true` and there's disagreement, the planner **shrinks** (not expands) the period to the rule's natural window edge and audit-annotates the manifest with `boundary_realigned`. Expansion is more surprising than shrink and ruled out.
+- `(reject, *, *)` rules ignore the flag — period straddle is always 4xx.
+
+### Q5 — Implementation scope (this sprint)
+**Decision (2026-04-28)**: Tightened scope per the table in the "## Scope Boundary > In scope" section above.
+- OK version: end-to-end (boundary detection, planner segmentation, classification, merge, manifest, mixed-version export stamping).
+- Agreement-config: ONE end-to-end path proves the framework extends.
+- Position-override + EU WTD: extension points only; no required e2e path.
+- Wage-type-mapping + entitlement + employee-profile: snapshot-at-calculation only (Q5b).
+
+### Q5b — Non-effective-dated boundary sources
+**Decision (2026-04-28)**: (b) snapshot-at-calculation for S20.
+**Long-term commitment**: option (c) — versioned history — committed to ROADMAP.md Phase 4 as "Versioned History for Non-Dated Boundary Sources" with three sub-sprints (wage-type-mapping, entitlement-policy, employee-profile). Hard dependency on S20's `SnapshotContract` + manifest. Locking (c) on the roadmap prevents (b) from quietly becoming permanent.
+
+### Q6 — `RecalculateWithVersionSplitAsync` backward compatibility
+**Decision (2026-04-28)**: (a) retire.
+**Pre-commits**:
+- `RecalculateWithVersionSplitAsync` deletes outright. Confirmed only-internal-caller (single file: `RetroactiveCorrectionService.cs`); no external API to coordinate with.
+- `RecalculateAsync` (public) keeps its signature; internal split logic replaced by a planner call.
+- ADR-013's no-cascade semantics move INTO the planner as an explicit merge-policy choice; not duplicated.
+
+### Q7 — Arbitrary segment count: representation and tests
+**Decision (2026-04-28)**: list-based merge, arbitrary-N `PlannedCalculation`, three committed test scenarios.
+**Pre-commits**:
+- `PlannedCalculation.Segments` is `IReadOnlyList<PlannedSegment>`; length ≥ 1; no special-case branches for N=1 or N=2.
+- `PlannedSegment` carries `(StartDate, EndDate, BoundaryCause, SegmentSnapshot)`.
+- Merge contract is **list-based**: `MergeStrategy.Apply(IReadOnlyList<TResult> segments)` — strategy operates on the whole list. Sidesteps merge-associativity invariant; no class of bug from fold order. Property-based associativity tests deferred.
+- Committed scenarios:
+  1. **2 segments** — canonical OK transition, period 2026-03-25 → 2026-04-30.
+  2. **3 segments, 2 distinct causes** — OK transition + agreement-config DRAFT→ACTIVE simultaneous; period covering 03-25 to 04-30 with config promotion 04-15.
+  3. **1 synthetic 4-segment test** — verifies framework handles arbitrary N; multiple position-override `effective_from` dates within one period or similar.
+
+### Q8 — Performance budget on the happy path
+**Decision (2026-04-28)**: A — always invoke planner. Budget 5/20/50 ms.
+**Pre-commits**:
+- Every `CalculateAsync` call goes through `Planner.Plan()` first, including non-straddling periods. Manifest is constructed for every calculation — uniform audit + replay determinism for both straddling and non-straddling cases (avoids the "(B) lazy" regression on Q5b's snapshot contract).
+- Budget: ≤5 ms p50, ≤20 ms p95, hard 50 ms p99 ceiling on planner overhead for a non-straddling 1-employee 1-period call.
+- Measurement: a regression test in the Q11 committed minimum matrix instruments planner wall-clock and asserts under-budget. Order-of-magnitude regression catcher; not perf-suite-grade.
+- Caching out of scope for S20. Planner is stateless across calls; if production load proves cost is high, follow-up sprint adds `(period, profile-version, rule-set-version)` keyed caching.
+
+### Q9–Q11 — Open
+
+- **Q9**: Where is drift detected and surfaced? (build-time / runtime / both)
+- **Q10**: Audit representation of a segmented run — segment manifest shape and persistence.
+- **Q11**: Test strategy committed minimum matrix.
+
+---
 
 ## Planning Entrypoint
 
