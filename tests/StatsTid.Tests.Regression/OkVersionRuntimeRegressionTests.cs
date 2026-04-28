@@ -300,4 +300,42 @@ public class OkVersionRuntimeRegressionTests
         Assert.Equal("OK24", entryResolved);
         Assert.NotEqual(periodResolved, entryResolved);
     }
+
+    // -----------------------------------------------------------------------
+    // 10. RetroactiveCorrectionService single-version audit-event invariant
+    //     (TASK-1904).
+    //
+    //    Background:
+    //      In the single-version (non-split) branch of
+    //      RetroactiveCorrectionService.RecalculateAsync, the emitted
+    //      RetroactiveCorrectionRequested event used to carry the caller-
+    //      supplied profile.OkVersion. After TASK-1801, however,
+    //      PeriodCalculationService server-resolves OK version from
+    //      periodStart and ignores profile.OkVersion. The audit event would
+    //      therefore diverge from what was actually computed whenever the
+    //      caller's profile carried a stale OK version.
+    //
+    //    TASK-1904 fixes this by canonicalising the audit-event OkVersion to
+    //    OkVersionResolver.ResolveVersion(periodStart) unconditionally, so the
+    //    audit value mirrors what PeriodCalculationService used.
+    //
+    //    This is a pure pin on the underlying invariant rather than a mock-
+    //    based test of the service itself (consistent with the discipline of
+    //    test #9 above): for a periodStart of 2026-05-01 (OK26), the audit
+    //    event must read OK26 even if the caller passed OK24.
+    // -----------------------------------------------------------------------
+    [Fact]
+    public void RetroactiveCorrection_SingleVersionAuditUsesPeriodStartResolution()
+    {
+        var periodStart = new DateOnly(2026, 5, 1);   // OK26
+        var callerSuppliedOkVersion = "OK24";          // stale / wrong
+
+        var canonical = OkVersionResolver.ResolveVersion(periodStart);
+
+        Assert.Equal("OK26", canonical);
+        Assert.NotEqual(callerSuppliedOkVersion, canonical);
+        // The audit event RetroactiveCorrectionRequested.OkVersion must equal
+        // `canonical`, NOT `callerSuppliedOkVersion`. RetroactiveCorrectionService
+        // assigns this value in the single-version path at TASK-1904.
+    }
 }

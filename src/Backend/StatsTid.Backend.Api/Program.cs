@@ -14,7 +14,7 @@ builder.Services.AddSingleton<IEventStore, PostgresEventStore>();
 builder.Services.AddHttpClient();
 
 // ── Security ──
-builder.Services.AddStatsTidJwtAuth(builder.Configuration);
+builder.Services.AddStatsTidJwtAuth(builder.Configuration, builder.Environment);
 builder.Services.AddStatsTidPolicies();
 builder.Services.AddSingleton<JwtTokenService>();
 builder.Services.AddSingleton<OrgScopeValidator>();

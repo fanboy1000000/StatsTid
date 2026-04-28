@@ -6,7 +6,7 @@ using StatsTid.SharedKernel.Models;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSingleton<RuleRegistry>();
-builder.Services.AddStatsTidJwtAuth(builder.Configuration);
+builder.Services.AddStatsTidJwtAuth(builder.Configuration, builder.Environment);
 builder.Services.AddStatsTidPolicies();
 
 var app = builder.Build();

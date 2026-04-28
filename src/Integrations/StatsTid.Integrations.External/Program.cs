@@ -13,7 +13,7 @@ builder.Services.AddSingleton<ExternalApiClient>();
 builder.Services.AddSingleton<DeliveryTracker>();
 builder.Services.AddHostedService<EventConsumerService>();
 
-builder.Services.AddStatsTidJwtAuth(builder.Configuration);
+builder.Services.AddStatsTidJwtAuth(builder.Configuration, builder.Environment);
 builder.Services.AddStatsTidPolicies();
 
 var app = builder.Build();

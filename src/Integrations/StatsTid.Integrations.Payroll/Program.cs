@@ -23,7 +23,15 @@ builder.Services.AddSingleton<LocalConfigurationRepository>();
 builder.Services.AddSingleton<ConfigResolutionService>();
 builder.Services.AddSingleton<IdempotencyGuard>();
 
-builder.Services.AddStatsTidJwtAuth(builder.Configuration);
+// Resource-scope enforcement for /api/payroll/calculate-and-export (TASK-1902).
+// LocalAdmin role alone is not sufficient — the caller's scope must also cover
+// the target employee's org. Reuses the same OrgScopeValidator chain the Backend
+// uses for its own scope enforcement.
+builder.Services.AddSingleton<OrganizationRepository>();
+builder.Services.AddSingleton<UserRepository>();
+builder.Services.AddSingleton<OrgScopeValidator>();
+
+builder.Services.AddStatsTidJwtAuth(builder.Configuration, builder.Environment);
 builder.Services.AddStatsTidPolicies();
 
 var app = builder.Build();
@@ -87,9 +95,29 @@ app.MapPost("/api/payroll/calculate-and-export", async (
     PeriodCalculationService calculator,
     PayrollExportService export,
     ApprovalPeriodRepository approvalRepo,
+    OrgScopeValidator scopeValidator,
     HttpContext httpContext,
     CancellationToken ct) =>
 {
+    // Resource-scope guard (TASK-1902): the caller's scope must cover the target
+    // employee's org. Pre-fix, LocalAdminOrAbove + the APPROVED-period match below
+    // were treated as equivalent to per-org scoping, but the approval guard only
+    // checks (employee_id, period) — a LocalAdmin from org A could trigger payroll
+    // for any employee in org B whose period happens to be APPROVED. This check
+    // closes that vector before the approval lookup or any downstream call.
+    var actor = httpContext.GetActorContext();
+    var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(
+        actor, request.Profile.EmployeeId, ct);
+    if (!allowed)
+    {
+        return Results.Json(new
+        {
+            error = "Access denied",
+            reason,
+            employeeId = request.Profile.EmployeeId
+        }, statusCode: 403);
+    }
+
     // Approval guard: period must be APPROVED before payroll export
     var approval = await approvalRepo.GetByEmployeeAndPeriodAsync(
         request.Profile.EmployeeId, request.PeriodStart, request.PeriodEnd, ct);
@@ -149,8 +177,11 @@ app.MapPost("/api/payroll/calculate-and-export", async (
     }
 
     return Results.Ok(result);
-// LocalAdmin is acceptable here because the APPROVED-period guard above enforces per-org scoping.
-// Raw /export and /export-period below bypass that guard and stay GlobalAdminOnly.
+// LocalAdmin is acceptable here because the resource-scope guard above (TASK-1902)
+// validates the caller's scope against the target employee's org. The previous
+// comment relied on the approval guard for scoping, which Codex showed to be
+// incorrect since approval matches only (employee, period). Raw /export and
+// /export-period below bypass both guards and stay GlobalAdminOnly.
 }).RequireAuthorization("LocalAdminOrAbove");
 
 // Retroactive correction endpoint: intentionally NOT guarded by period approval.

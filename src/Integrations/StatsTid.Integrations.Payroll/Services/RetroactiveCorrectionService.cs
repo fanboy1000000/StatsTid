@@ -67,29 +67,29 @@ public sealed class RetroactiveCorrectionService
             };
         }
 
-        // Canonicalise OK versions from the transition date so the audit event reflects
-        // what the calculation actually used (ADR-003). If the caller-supplied value
-        // disagrees, override and log.
-        string? canonicalPreviousOkVersion = previousOkVersion;
-        string canonicalCurrentOkVersion = profile.OkVersion;
-        if (okTransitionDate.HasValue && previousOkVersion is not null)
+        // Canonicalise OK versions from the period/transition dates so the audit event
+        // reflects what the calculation actually used (ADR-003 / TASK-1904). The pure
+        // resolution lives in OkVersionCanonicalization so the per-branch behaviour can
+        // be unit-tested without standing up the service stack — Codex first-pass S19
+        // review flagged that pinning OkVersionResolver alone left the service-level
+        // choice (resolver vs. profile.OkVersion) untested.
+        var canonical = OkVersionCanonicalization.Resolve(
+            profile.OkVersion, periodStart, okTransitionDate, previousOkVersion);
+        string canonicalCurrentOkVersion = canonical.CurrentOkVersion;
+        string? canonicalPreviousOkVersion = canonical.PreviousOkVersion;
+
+        if (canonical.PreviousDrifted)
         {
-            var resolvedPrevious = OkVersionResolver.ResolveVersion(okTransitionDate.Value.AddDays(-1));
-            var resolvedCurrent = OkVersionResolver.ResolveVersion(okTransitionDate.Value);
-            if (!string.Equals(previousOkVersion, resolvedPrevious, StringComparison.Ordinal))
-            {
-                _logger.LogWarning(
-                    "Caller-supplied PreviousOkVersion '{Supplied}' differs from date-resolved '{Resolved}' for transition {Transition}. Using resolved value.",
-                    previousOkVersion, resolvedPrevious, okTransitionDate.Value);
-                canonicalPreviousOkVersion = resolvedPrevious;
-            }
-            if (!string.Equals(profile.OkVersion, resolvedCurrent, StringComparison.Ordinal))
-            {
-                _logger.LogWarning(
-                    "Caller-supplied profile.OkVersion '{Supplied}' differs from date-resolved '{Resolved}' for transition {Transition}. Using resolved value.",
-                    profile.OkVersion, resolvedCurrent, okTransitionDate.Value);
-                canonicalCurrentOkVersion = resolvedCurrent;
-            }
+            _logger.LogWarning(
+                "Caller-supplied PreviousOkVersion '{Supplied}' differs from date-resolved '{Resolved}' for transition {Transition}. Using resolved value.",
+                previousOkVersion, canonical.PreviousOkVersion, okTransitionDate);
+        }
+        if (canonical.CurrentDrifted)
+        {
+            _logger.LogWarning(
+                "Caller-supplied profile.OkVersion '{Supplied}' differs from date-resolved '{Resolved}' (path={Path}). Using resolved value in audit event.",
+                profile.OkVersion, canonical.CurrentOkVersion,
+                okTransitionDate.HasValue && previousOkVersion is not null ? "split" : "single-version");
         }
 
         if (okTransitionDate.HasValue && canonicalPreviousOkVersion is not null)
