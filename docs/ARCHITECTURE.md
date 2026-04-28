@@ -58,9 +58,22 @@ Cross-cutting types shared by all services. No business logic, no I/O.
 - **Calendar/** -- Danish holiday calendar, work-day calculations ([DEP-001](knowledge-base/dependencies/DEP-001-rule-engine-depends-on-sharedkernel-calendar.md))
 - **Config/** -- `CentralAgreementConfigs` (static source of truth), `PositionOverrideConfigs`
 
+### Auth (`src/Auth/StatsTid.Auth/`)
+
+Pure auth primitives shared by all API services. No DB dependency. Extracted from `Infrastructure/Security/` in commit b4fc670 so the RuleEngine purity invariant (ADR-002) can be enforced by the .NET assembly graph rather than by inspection.
+
+- `ActorContext` + `GetActorContext` extension on `HttpContext`
+- `JwtValidationSetup.AddStatsTidJwtAuth` (JWT bearer config; honors both `ASPNETCORE_ENVIRONMENT` and `DOTNET_ENVIRONMENT`)
+- `AuthorizationPolicies.AddStatsTidPolicies` (6 named policies: `GlobalAdminOnly`, `LocalAdminOrAbove`, `HROrAbove`, `LeaderOrAbove`, `EmployeeOrAbove`, `Authenticated`)
+- `JwtTokenService` (token issuance — used only by Backend's `/api/auth/login`)
+- `ScopeAuthorizationHandler` + `ScopeRequirement` (role + scope authorization)
+- `CorrelationIdMiddleware` (request correlation ID propagation)
+
+`OrgScopeValidator` and `AuditLoggingMiddleware` stay in `Infrastructure/Security/` because they depend on `OrganizationRepository` / `UserRepository` / `AuditLogRepository` (DB-bound).
+
 ### RuleEngine (`src/RuleEngine/StatsTid.RuleEngine.Api/`)
 
-Pure deterministic rule evaluation. Zero I/O, zero database access ([ADR-002](knowledge-base/decisions/ADR-002-pure-function-rule-engine.md)).
+Pure deterministic rule evaluation. Zero I/O, zero database access ([ADR-002](knowledge-base/decisions/ADR-002-pure-function-rule-engine.md)). Project references SharedKernel + Auth only — Infrastructure is structurally unreachable.
 
 - **Rules/** -- `NormCheckRule`, `SupplementRule`, `OvertimeRule`, `AbsenceRule`, `FlexBalanceRule`, `OnCallDutyRule`, `CallInWorkRule`, `TravelTimeRule`
 - **Services/** -- `AgreementConfigProvider` (delegates to `CentralAgreementConfigs`), `RuleRegistry`
@@ -136,7 +149,7 @@ Types (SharedKernel)
 
 **Hard rules:**
 
-1. **Rule Engine depends ONLY on SharedKernel** ([DEP-001](knowledge-base/dependencies/DEP-001-rule-engine-depends-on-sharedkernel-calendar.md)). No database, no HTTP calls, no file I/O.
+1. **Rule Engine depends ONLY on SharedKernel + Auth** ([DEP-001](knowledge-base/dependencies/DEP-001-rule-engine-depends-on-sharedkernel-calendar.md)). No database, no HTTP calls, no file I/O. Enforced by the assembly graph since b4fc670: `StatsTid.RuleEngine.Api.csproj` references SharedKernel + Auth only, so any DB-touching type is unreachable at compile time.
 2. **Backend and Payroll call Rule Engine via HTTP only** -- never direct function calls ([PAT-005](knowledge-base/patterns/PAT-005-period-calculation-service-http-rule-evaluation.md)).
 3. **Payroll depends on Rule Engine output types** ([DEP-002](knowledge-base/dependencies/DEP-002-payroll-depends-on-rule-engine-outputs.md)), not its internals.
 4. **EventSerializer requires explicit type map registration** for every domain event ([DEP-003](knowledge-base/dependencies/DEP-003-event-serializer-must-register-all-types.md)).

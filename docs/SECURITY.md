@@ -79,7 +79,7 @@ Embedded in JWT as the `scopes` claim. Reference: [ADR-009](knowledge-base/decis
 
 ### ActorContext Extraction
 
-Defined in `src/Infrastructure/StatsTid.Infrastructure/Security/ActorContext.cs`.
+Defined in `src/Auth/StatsTid.Auth/ActorContext.cs` (moved from `src/Infrastructure/StatsTid.Infrastructure/Security/` in commit b4fc670; see ARCHITECTURE.md "Auth" section).
 
 ```csharp
 public sealed record ActorContext(
