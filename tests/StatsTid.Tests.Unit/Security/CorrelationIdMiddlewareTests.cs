@@ -1,5 +1,5 @@
 using Microsoft.AspNetCore.Http;
-using StatsTid.Infrastructure.Security;
+using StatsTid.Auth;
 
 namespace StatsTid.Tests.Unit.Security;
 

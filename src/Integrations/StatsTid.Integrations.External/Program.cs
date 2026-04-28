@@ -1,5 +1,5 @@
+using StatsTid.Auth;
 using StatsTid.Infrastructure;
-using StatsTid.Infrastructure.Security;
 using StatsTid.Integrations.External.Services;
 
 var builder = WebApplication.CreateBuilder(args);

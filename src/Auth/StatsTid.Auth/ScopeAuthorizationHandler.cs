@@ -2,7 +2,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using StatsTid.SharedKernel.Security;
 
-namespace StatsTid.Infrastructure.Security;
+namespace StatsTid.Auth;
 
 public sealed class ScopeAuthorizationHandler : AuthorizationHandler<ScopeRequirement>
 {

@@ -1,6 +1,6 @@
 using Microsoft.AspNetCore.Http;
 
-namespace StatsTid.Infrastructure.Security;
+namespace StatsTid.Auth;
 
 public sealed class CorrelationIdMiddleware
 {

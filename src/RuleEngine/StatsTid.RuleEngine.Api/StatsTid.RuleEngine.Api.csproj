@@ -2,7 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\SharedKernel\StatsTid.SharedKernel\StatsTid.SharedKernel.csproj" />
-    <ProjectReference Include="..\..\Infrastructure\StatsTid.Infrastructure\StatsTid.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\Auth\StatsTid.Auth\StatsTid.Auth.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

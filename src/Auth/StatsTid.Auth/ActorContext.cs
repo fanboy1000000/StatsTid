@@ -3,7 +3,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Http;
 using StatsTid.SharedKernel.Security;
 
-namespace StatsTid.Infrastructure.Security;
+namespace StatsTid.Auth;
 
 public sealed record ActorContext(
     string? ActorId,

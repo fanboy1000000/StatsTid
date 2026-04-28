@@ -1,7 +1,7 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
+using StatsTid.Auth;
 using StatsTid.SharedKernel.Models;
-using StatsTid.SharedKernel.Security;
 
 namespace StatsTid.Infrastructure.Security;
 

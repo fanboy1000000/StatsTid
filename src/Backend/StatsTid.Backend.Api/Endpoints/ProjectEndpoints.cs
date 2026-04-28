@@ -1,3 +1,4 @@
+using StatsTid.Auth;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Models;

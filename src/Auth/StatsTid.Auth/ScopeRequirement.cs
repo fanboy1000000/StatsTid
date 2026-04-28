@@ -1,6 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 
-namespace StatsTid.Infrastructure.Security;
+namespace StatsTid.Auth;
 
 public sealed class ScopeRequirement : IAuthorizationRequirement
 {

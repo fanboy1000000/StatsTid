@@ -1,3 +1,4 @@
+using StatsTid.Auth;
 using StatsTid.Backend.Api.Endpoints;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Security;

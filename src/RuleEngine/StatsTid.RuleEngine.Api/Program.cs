@@ -1,4 +1,4 @@
-using StatsTid.Infrastructure.Security;
+using StatsTid.Auth;
 using StatsTid.RuleEngine.Api.Contracts;
 using StatsTid.RuleEngine.Api.Rules;
 using StatsTid.SharedKernel.Models;

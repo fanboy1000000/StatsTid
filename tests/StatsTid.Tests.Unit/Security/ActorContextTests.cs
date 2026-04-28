@@ -1,6 +1,6 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Http;
-using StatsTid.Infrastructure.Security;
+using StatsTid.Auth;
 using StatsTid.SharedKernel.Security;
 
 namespace StatsTid.Tests.Unit.Security;

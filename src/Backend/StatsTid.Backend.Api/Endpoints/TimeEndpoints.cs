@@ -1,4 +1,5 @@
 using System.Text.Json;
+using StatsTid.Auth;
 using StatsTid.Backend.Api.Contracts;
 using StatsTid.Backend.Api.Validation;
 using StatsTid.Infrastructure.Security;

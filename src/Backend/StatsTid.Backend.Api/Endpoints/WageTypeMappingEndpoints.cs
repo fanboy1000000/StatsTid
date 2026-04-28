@@ -1,6 +1,6 @@
 using System.Text.Json;
+using StatsTid.Auth;
 using StatsTid.Infrastructure;
-using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Models;

@@ -1,6 +1,6 @@
+using StatsTid.Auth;
 using StatsTid.Backend.Api.Contracts;
 using StatsTid.Infrastructure;
-using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Security;
 
 namespace StatsTid.Backend.Api.Endpoints;

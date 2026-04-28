@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using StatsTid.Auth;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Security;
 

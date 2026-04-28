@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
+using StatsTid.Auth;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Security;

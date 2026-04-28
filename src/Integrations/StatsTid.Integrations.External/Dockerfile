@@ -1,10 +1,12 @@
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
 COPY src/SharedKernel/StatsTid.SharedKernel/StatsTid.SharedKernel.csproj src/SharedKernel/StatsTid.SharedKernel/
+COPY src/Auth/StatsTid.Auth/StatsTid.Auth.csproj src/Auth/StatsTid.Auth/
 COPY src/Infrastructure/StatsTid.Infrastructure/StatsTid.Infrastructure.csproj src/Infrastructure/StatsTid.Infrastructure/
 COPY src/Integrations/StatsTid.Integrations.External/StatsTid.Integrations.External.csproj src/Integrations/StatsTid.Integrations.External/
 RUN dotnet restore src/Integrations/StatsTid.Integrations.External/StatsTid.Integrations.External.csproj
 COPY src/SharedKernel/ src/SharedKernel/
+COPY src/Auth/ src/Auth/
 COPY src/Infrastructure/ src/Infrastructure/
 COPY src/Integrations/StatsTid.Integrations.External/ src/Integrations/StatsTid.Integrations.External/
 RUN dotnet publish src/Integrations/StatsTid.Integrations.External/StatsTid.Integrations.External.csproj -c Release -o /app

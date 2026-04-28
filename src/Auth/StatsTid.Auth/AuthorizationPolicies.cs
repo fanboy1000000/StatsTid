@@ -2,7 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.DependencyInjection;
 using StatsTid.SharedKernel.Security;
 
-namespace StatsTid.Infrastructure.Security;
+namespace StatsTid.Auth;
 
 public static class AuthorizationPolicies
 {
