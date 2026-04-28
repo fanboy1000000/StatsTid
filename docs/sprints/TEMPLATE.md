@@ -24,6 +24,29 @@ _Results of pre-sprint entropy scan (step 0a). Omit if this is not the first spr
 | Documentation drift | CLEAN \| DRIFT | _Stale MEMORY.md items, or none_ |
 | Quality grade review | CLEAN \| updated | _Grades changed, or stable_ |
 
+## Plan Review (Step 0b)
+
+_Pre-sprint plan review BEFORE any code is written. See [AGENTS.md](../AGENTS.md) Plan Review section for trigger criteria, prompt template, and cycle cap. SKIP per the trigger table for documentation-only / pure tech-debt sprints (record one-line rationale)._
+
+| Field | Value |
+|-------|-------|
+| **Trigger** | MANDATORY (P\_, ...) \| OPTIONAL \| SKIP — _rationale if SKIP_ |
+| **External Codex** | not invoked \| invoked YYYY-MM-DD — N cycle(s), NB/NW/NN \| skipped (CLI unavailable) |
+| **Internal Reviewer** | not invoked \| invoked YYYY-MM-DD — N cycle(s), NB/NW/NN |
+| **BLOCKERs resolved before Step 1** | n/a \| yes — _list_ |
+
+### Findings (cycle 1)
+
+_Codex findings:_
+- _BLOCKER \| WARNING \| NOTE — section / task ID — concern — recommended fix_
+
+_Internal Reviewer findings:_
+- _BLOCKER \| WARNING \| NOTE — section / task ID — concern — recommended fix_
+
+### Resolution
+
+_Plan edits applied in response to findings, or rationale for accepting a finding without edit._
+
 ## Architectural Constraints Verified
 
 _Check each constraint that was explicitly validated during this sprint._

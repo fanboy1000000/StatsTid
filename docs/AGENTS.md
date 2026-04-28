@@ -265,6 +265,104 @@ If this is a second pass on a previously flagged concern, do NOT re-raise it.
 - The Orchestrator should document reasoning in the sprint log when choosing not to act on a BLOCKER
 - The Reviewer does not appear in sprint log "Agent" fields — findings are recorded as validation evidence
 
+## Plan Review (Step 0b)
+
+The Plan Review is the earliest review checkpoint in the sprint workflow — invoked at sprint start, before any code is written. It complements the implementation reviews (Step 5α/5a/7a) by catching plan-level defects (missing validation criteria, ambiguous scope, wrong agent assignments, stale KB refs, gate/downstream-consumer mismatches encoded as features) while the cost of fixing them is still cheap (markdown edit, not code rewrite).
+
+**Plan Review advises. The Orchestrator decides. Authority remains centralized.**
+
+### Two Lenses
+
+Plan Review runs both an external Codex pass and an internal Reviewer pass — the same complementary structure used at Step 5a. They have different priors and tend to catch different classes of plan defect:
+
+| Lens | Catches |
+|------|---------|
+| External Codex (`codex exec`) | Scope tightness, validation-criteria coverage gaps, gate / downstream-consumer mismatches, ambiguous task boundaries, plan-encoded bugs (a "feature" that's really a security hole) |
+| Internal Reviewer Agent | Architectural fit, simplicity vs. over-engineering, agent assignment correctness, KB reference freshness, alignment with priority order |
+
+### Trigger Criteria
+
+| Tier | Condition | Plan Review Required |
+|------|-----------|----------------------|
+| MANDATORY | Sprint touches P1 (Architectural integrity) | Always |
+| MANDATORY | Sprint touches P3 (Event sourcing / auditability) | Always |
+| MANDATORY | Sprint touches P4 (Version correctness) | Always |
+| MANDATORY | Sprint touches P7 (Security / access control) | Always |
+| MANDATORY | Sprint touches schema migrations or payroll export | Always |
+| OPTIONAL | Sprint touches P5–P6 (integrations, payroll non-export) | Orchestrator discretion |
+| SKIP | Sprint is documentation-only or pure tech-debt cleanup | Never |
+| SKIP | Sprint replays a previously-validated plan with no scope change | Never |
+
+Orchestrator discretion applies beyond this list. The cost-benefit calculus: 5–10 min at sprint start vs. at least one Codex implementation cycle on a plan-level bug (S19 cycle 1's BLOCKER is the canonical example).
+
+### Invocation
+
+**External Codex (plan mode)**: Unlike `codex review` (which targets a diff), `codex exec` runs a free-form prompt. The prompt references the plan path on disk so Codex reads the file via its tools — keeps the prompt size bounded and ensures Codex sees the latest version.
+
+```
+codex exec "<plan-review-prompt>"
+```
+
+**Internal Reviewer (plan mode)**: Spawn the Reviewer Agent via the `Agent` tool. Pass the plan path as REVIEW SCOPE and use the Plan Review prompt template below — it overrides the default Reviewer prompt's "agent output" framing for the plan-review case. The Reviewer reads the plan and returns the same BLOCKER/WARNING/NOTE format used elsewhere.
+
+Both lenses can be run in parallel (they don't share state).
+
+### Plan Review Prompt Template
+
+When invoking either lens, pass this structure (substituting `[bracketed]` placeholders):
+
+```
+You are reviewing a sprint plan for the StatsTid project — a Danish public-sector workforce management SaaS — BEFORE implementation begins. The plan is at docs/sprints/SPRINT-N.md.
+
+This is a PLAN review, not a CODE review. There is no diff yet. You are checking whether the plan itself is sound.
+
+SPRINT GOAL: [one-line objective from the plan's "## Sprint Goal" section]
+
+PRIORITY ORDER (what matters most, in order):
+1. Architectural integrity
+2. Deterministic rule engine (no I/O, no state, version-aware)
+3. Event sourcing and auditability
+4. OK version correctness (entry-date resolution)
+5. Integration isolation and delivery guarantees
+6. Payroll integration correctness (SLS codes, traceability)
+7. Security and access control
+8. CI/CD enforcement
+9. Usability and UX
+
+REVIEW FOCUS:
+- **Scope tightness**: Are task boundaries clear? Any task that should be split or merged? Any work that belongs in a different sprint?
+- **Validation criteria coverage**: For each task, do the validation criteria pin the actual invariant the task is supposed to enforce? Watch for criteria that test the wrong layer (e.g., the resolver but not the service-level branch choice).
+- **Gate / downstream-consumer alignment**: For any task that adds a security gate or scope check, does the plan validate that the gate reads the SAME field the downstream consumer reads? Plan-encoded mismatches are common (S19 TASK-1901 was the canonical case).
+- **Agent assignment correctness**: Does each task list the right Agent? Cross-domain tasks should be split or assigned to multiple agents.
+- **KB reference freshness**: Are the listed ADR/PAT/DEP/RES/FAIL refs still relevant and pointing at current files?
+- **Dependency closure**: Does the plan depend on prior sprint work that isn't yet committed?
+- **Implicit features**: Watch for plan language that encodes a security hole as a feature (e.g., "top-level wins over nested" when the downstream reads nested).
+
+OUTPUT:
+Label findings as BLOCKER, WARNING, or NOTE. For each finding:
+- The plan section / task ID being flagged
+- What is wrong or concerning
+- Recommended fix to the plan
+
+If no issues found: "No findings for the reviewed plan."
+```
+
+### Output Handling
+
+Plan Review findings are recorded in the sprint log under "## Plan Review (Step 0b)" — placed between the Entropy Scan section and Architectural Constraints Verified. Findings are mapped to BLOCKER/WARNING/NOTE. BLOCKERs MUST be addressed (plan edit) before Step 1 (decompose) begins.
+
+### Cycle Cap
+
+Same as External Review (Step 7a): 2 cycles per lens per sprint. After cycle 2 on either lens, halt and prompt the user — choices: (a) continue iterating, (b) accept findings and proceed to Step 1, (c) defer findings as a new sprint task.
+
+### Constraints
+
+- Plan Review findings are advisory; the Orchestrator decides whether to act
+- Plan Review does NOT modify the plan — only the Orchestrator does, based on findings
+- If `codex` CLI is unavailable at invocation time, run only the internal Reviewer pass and document the Codex skip in the sprint log
+- A sprint that SKIPs Plan Review entirely (per the trigger table) records a one-line SKIP rationale in the sprint log under the same heading
+- Plan Review does not appear in sprint log "Agent" fields — findings are recorded as validation evidence
+
 ## External Review (Codex)
 
 The External Review is an independent, out-of-harness audit performed by the `codex` CLI. It brings an external perspective with no project-specific priors, complementing the internal Reviewer Agent. The Orchestrator invokes Codex via the `codex review` subcommand through the Bash tool.
