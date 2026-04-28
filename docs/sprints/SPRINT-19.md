@@ -251,4 +251,15 @@ S19's harness signal: external Codex caught a real BLOCKER (gate vs. downstream-
 
 **Process wrinkle**: Anthropic Claude usage limit hit during the first internal Reviewer spawn attempt. A second attempt with a tighter prompt succeeded after Codex cycle 1 fixes had landed. Order ended up being: Codex cycle 1 → fix → Codex cycle 2 (clean) → internal Reviewer (NOTE-only) → fix NOTEs → commit. Slightly out of the AGENTS.md canonical order (Step 5a before 7a), but the deferred Reviewer pass still caught the doc-drift before commit.
 
-**Carry-forward**: TASK-1903 (mixed-version export boundary) absorbed into S20. RuleEngine.Api/Program.cs `using StatsTid.Infrastructure` debt continues to carry from S18.
+**Carry-forward**: TASK-1903 (mixed-version export boundary) absorbed into S20. RuleEngine.Api/Program.cs `using StatsTid.Infrastructure` debt — see Post-Sprint Cleanup below; closed in commit `b4fc670`.
+
+## Post-Sprint Cleanup
+
+| Field | Value |
+|-------|-------|
+| **Commit** | `b4fc670` (2026-04-28, post-`9684dbf`) |
+| **Scope** | Tech debt: extract `StatsTid.Auth` assembly; RuleEngine drops Infrastructure reference |
+| **Trigger** | S18 Codex Rec #2 / S19 Step 0a entropy scan DEBT line (e). Sprint 19's entropy scan recorded the dependency as carried debt rather than fixing it; user picked it up immediately after S19 commit |
+| **Change** | New `src/Auth/StatsTid.Auth/` assembly holding the 7 pure auth files (ActorContext, AuthorizationPolicies, CorrelationIdMiddleware, JwtTokenService, JwtValidationSetup, ScopeAuthorizationHandler, ScopeRequirement) under namespace `StatsTid.Auth`. AuditLoggingMiddleware + OrgScopeValidator stay in `StatsTid.Infrastructure.Security` (DB-bound). RuleEngine.Api.csproj now references SharedKernel + StatsTid.Auth only. Other 4 services keep both Auth + Infrastructure refs. 22 `using StatsTid.Infrastructure.Security` consumers updated; 5 Dockerfiles updated for Docker restore step. |
+| **Verification** | Build clean, 493 unit tests passing. External Codex review (`codex review --base 9684dbf`): _"The change cleanly extracts the authentication/security primitives into a dedicated `StatsTid.Auth` project and updates the affected project files, Dockerfiles, and `using` directives consistently. I did not find a discrete regression that would break existing behavior or builds relative to the base commit."_ |
+| **Architectural significance** | ADR-002 (RuleEngine purity) is now enforced by the .NET assembly graph rather than by inspection. A future commit that introduces a DB type into RuleEngine.Api fails `dotnet build` because the project no longer references Infrastructure — the compiler is the CI guard. |
