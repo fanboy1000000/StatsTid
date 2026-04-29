@@ -6,4 +6,11 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <!-- Allow the unit-test project to exercise PlannedCalculation's internal constructor
+       for the Q9 invariant negative tests (ADR-016 D9 / TASK-2012). No other assembly
+       should construct PlannedCalculation directly — use PeriodPlanner.Plan() instead. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="StatsTid.Tests.Unit" />
+  </ItemGroup>
+
 </Project>
