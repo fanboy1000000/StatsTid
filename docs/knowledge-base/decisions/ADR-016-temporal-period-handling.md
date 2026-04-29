@@ -121,14 +121,15 @@ Wire-level contract checks at the RuleEngine HTTP boundary and reflection seals 
 - Indexes: `(employee_id, period_start)`; GIN on `boundary_cause_summary`.
 - Rebuildable from events.
 
-**Linkage**:
-- `payroll_export_lines.manifest_id UUID NULL` (additive). NULL = pre-S20; S20+ writes always populate.
-- `CalculationResult.ManifestId Guid` (additive; PAT-006 amendment).
-- `audit_log.payload_jsonb` calculation entries carry `manifest_id` — additive.
+**Linkage** (amended 2026-04-29 during Phase 1 — `payroll_export_lines` is an in-memory C# model, not a persisted DB table; original D10 spec wrongly assumed DB-side per-line linkage. The audit chain below covers the same need without inventing new persistence.):
+- `CalculationResult.ManifestId Guid` (additive; PAT-006 amendment) — in-memory + event payload.
+- `audit_log.payload_jsonb` calculation entries carry `manifest_id` — additive, queryable.
+- SLS export file format carries per-line OK-version stamping in file content (TASK-2010) — file-side, not DB-side.
+- `segment_manifests` projection (queryable manifest history) joined to `audit_log` via `manifest_id` is the audit query path; per-line DB persistence of export lines is explicitly out of scope and recorded as a deferred question (revisit if/when product needs query-by-line history).
 
 **Replay**: `PeriodCalculationService.ReplayAsync(Guid manifestId, CancellationToken)` returns a `CalculationResult` with the **same** `ManifestId` (replay does NOT mint a new manifest). Internal `PlannedCalculation.FromManifest(SegmentManifest)` ctor; subject to identical D9 invariants. Rules read snapshots from `SegmentSnapshot` in the reconstructed plan, NOT from the live DB. **Recomputation** (fresh snapshots, new manifest) is a separate operation; replay and recomputation never conflated.
 
-**Migration**: `CREATE TABLE segment_manifests`, `ALTER TABLE payroll_export_lines ADD COLUMN manifest_id`, indexes. **No backfill** of historical export lines — NULL = "pre-S20, no segmentation context".
+**Migration**: `CREATE TABLE segment_manifests` + indexes only. **No** `ALTER TABLE payroll_export_lines` — that table does not exist in the schema today. **No backfill** required (no per-line column was added).
 
 ### D11 — Test strategy: committed minimum matrix
 
@@ -187,7 +188,7 @@ Multi-mode decomposition (D2): `NormCheckRule` registers as 3 rules (`NORM_CHECK
 
 **Schema changes**:
 - New table `segment_manifests` (8 columns + 2 indexes).
-- New column `payroll_export_lines.manifest_id UUID NULL`.
+- (No column added to `payroll_export_lines` — that table does not exist as DB persistence; D10 amendment 2026-04-29.)
 
 **Code changes (new types in SharedKernel)**:
 - `Segmentation/PeriodPlanner.cs` — pure planner.

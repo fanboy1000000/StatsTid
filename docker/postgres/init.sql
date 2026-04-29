@@ -1126,3 +1126,37 @@ INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code
     ('MERARBEJDE_PAYOUT', 'SLS_0311', 'OK26', 'AC_TEACHING', 'Merarbejde — monetary payout'),
     ('MERARBEJDE_AFSPADSERING', 'SLS_0312', 'OK26', 'AC_TEACHING', 'Merarbejde — time-off compensation')
 ON CONFLICT DO NOTHING;
+
+-- ============================================================
+-- SPRINT 20: Temporal Period Handling — Segment Manifest Framework (ADR-016)
+-- ============================================================
+
+-- Segment manifests: persistent record of how a calculation period was split at
+-- effective-date boundaries before rule evaluation. One row per segmented calculation.
+-- Audit linkage to specific export lines lives in audit_log.payload_jsonb.manifest_id
+-- and in CalculationResult.ManifestId (event payload) — NOT in a payroll_export_lines
+-- column, since payroll_export_lines is an in-memory C# model, not a DB table
+-- (D10 amendment 2026-04-29 during Phase 1).
+CREATE TABLE IF NOT EXISTS segment_manifests (
+    manifest_id             UUID        PRIMARY KEY,
+    period_start            DATE        NOT NULL,
+    period_end              DATE        NOT NULL,
+    employee_id             UUID        NOT NULL,
+    -- Allowed values: 'forward-calc' | 'retroactive-correction' | 'replay'
+    -- No CHECK constraint — string enum is enforced in C# (project convention, per ADR-002)
+    calculation_kind        TEXT        NOT NULL,
+    -- Deduped list of boundary cause labels that triggered segmentation.
+    -- Examples: 'OkTransition', 'AgreementConfigPromotion', 'PositionOverrideEffective',
+    --           'EuWtdRulesetVersion', 'EntitlementPolicyChange', 'EmployeeProfileChange'
+    boundary_cause_summary  TEXT[]      NOT NULL,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- Full segment detail: array of {segmentStart, segmentEnd, okVersion, configSnapshot, ...}
+    -- Shape is defined and owned by the Payroll / PeriodPlanner domain (S20 implementation tasks)
+    segments_jsonb          JSONB       NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_segment_manifests_employee_period
+    ON segment_manifests (employee_id, period_start);
+
+CREATE INDEX IF NOT EXISTS idx_segment_manifests_boundary_cause
+    ON segment_manifests USING GIN (boundary_cause_summary);

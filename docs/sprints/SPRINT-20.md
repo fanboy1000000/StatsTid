@@ -401,18 +401,19 @@ _Walk through the Open Architectural Questions, recorded as decisions are made. 
   - New table `segment_manifests` with columns: `manifest_id UUID PRIMARY KEY`, `period_start DATE NOT NULL`, `period_end DATE NOT NULL`, `employee_id UUID NOT NULL`, `calculation_kind TEXT NOT NULL` (`forward-calc` / `retroactive-correction` / `replay`), `boundary_cause_summary TEXT[] NOT NULL` (deduped list: `OkTransition`, `AgreementConfigPromotion`, `PositionOverrideEffective`, …), `created_at TIMESTAMPTZ NOT NULL`, `segments_jsonb JSONB NOT NULL`.
   - Indexes: `idx_segment_manifests_employee_period (employee_id, period_start)`; GIN on `boundary_cause_summary`.
   - Rebuildable from events; rebuild script ships as part of S20.
-- **Linkage**:
-  - `payroll_export_lines.manifest_id UUID NULL` (additive column). NULL = pre-S20 line; S20+ writes always populate.
-  - `CalculationResult.ManifestId Guid` (additive field; PAT-006 amendment recorded in the ADR).
-  - `audit_log` calculation entries carry `manifest_id` in `payload_jsonb` — additive, no schema change.
+- **Linkage** (amended 2026-04-29 during Phase 1 — `payroll_export_lines` is an in-memory C# model, not a DB table; original spec assumed DB-side persistence that doesn't exist):
+  - `CalculationResult.ManifestId Guid` (additive field; PAT-006 amendment recorded in the ADR) — in-memory + event payload.
+  - `audit_log` calculation entries carry `manifest_id` in `payload_jsonb` — additive, no schema change, queryable.
+  - SLS export file format carries per-line OK-version stamping in file content (TASK-2010) — file-side, not DB-side.
+  - DB-side per-line persistence of export lines: explicitly deferred. Audit query path is `segment_manifests` ⨝ `audit_log.payload_jsonb.manifest_id`; no `payroll_export_lines.manifest_id` column.
 - **Replay primitive**:
   - `PeriodCalculationService.ReplayAsync(Guid manifestId, CancellationToken)` returns a `CalculationResult` carrying the **same** `ManifestId` (replay does NOT mint a new manifest).
   - Internal `PlannedCalculation.FromManifest(SegmentManifest)` ctor; same `internal` visibility as the regular ctor (Q9). Subject to identical Q9 invariants.
   - Rules read snapshots from `SegmentSnapshot` in the reconstructed plan, NOT from the live DB. Determinism (P3) follows.
   - **Recomputation** (fresh snapshots, new manifest) is a separate operation; the ADR documents the distinction explicitly so callers don't conflate "replay" with "recompute as of today".
-- **Migration**:
-  - Three schema changes: `CREATE TABLE segment_manifests`, `ALTER TABLE payroll_export_lines ADD COLUMN manifest_id`, indexes.
-  - **No backfill**: historical export lines stay `manifest_id NULL`. NULL semantics = "pre-S20, no segmentation context". Synthesizing manifests for past calculations is not worth the risk on audit-only data.
+- **Migration** (amended 2026-04-29 during Phase 1):
+  - Schema changes: `CREATE TABLE segment_manifests` + two indexes. **No** `ALTER TABLE payroll_export_lines` — that table does not exist as DB persistence today.
+  - **No backfill** required (no per-line column was added).
 - **Out of S20 (deferred)**:
   - No UI surfacing of manifest content (Phase 5 polish — frontend receives `ManifestId` but does not render segment breakdown).
   - No manifest-comparison tooling (replay-vs-replay diff for incident diagnosis); not P3-required.
@@ -482,7 +483,7 @@ _Drafted from ADR-016 and user-approved 2026-04-29. All tasks are `not-started` 
 
 | TASK | Domain / Agent | Phase | Title |
 |------|----------------|-------|-------|
-| TASK-2001 | Data Model | 1 | Schema migration: `segment_manifests` table + `payroll_export_lines.manifest_id` column |
+| TASK-2001 | Data Model | 1 | Schema migration: `segment_manifests` table + indexes (no `payroll_export_lines` ALTER — D10 amended 2026-04-29) |
 | TASK-2002 | Constraint Validator | 1 | Constraint Validator rule: flag direct `/api/rules/evaluate` posts that bypass `PeriodCalculationService` |
 | TASK-2003 | Rule Engine (SharedKernel infra) | 2 | SharedKernel `Segmentation/` skeleton: `PlannedCalculation`, `PlannedSegment`, `SegmentManifest`, `SnapshotContract`, `MergeStrategy`, `PlannerOptions`, `PlannerInvariantViolation` — types only, D9 invariants asserted in ctor |
 | TASK-2004 | Rule Engine (SharedKernel infra) | 2 | `PeriodPlanner.Plan()` + `PlannedCalculation.FromManifest()` logic — segment detection from boundary sources; manifest-driven replay reconstruction |
@@ -491,7 +492,7 @@ _Drafted from ADR-016 and user-approved 2026-04-29. All tasks are `not-started` 
 | TASK-2007 | Data Model | 2 | `EventSerializer` registers `SegmentManifestCreated` (count 34 → 35); `CalculationResult.ManifestId Guid` additive field; `audit_log` payload `manifest_id` field |
 | TASK-2008 | Payroll | 3 | `PeriodCalculationService.CalculateAsync(PlannedCalculation, …)` signature change + `ReplayAsync(Guid manifestId, …)` primitive; planner invocation on every call (D8 always-on) |
 | TASK-2009 | Payroll | 3 | `RetroactiveCorrectionService.RecalculateWithVersionSplitAsync` deletion; `RecalculateAsync` rewrite on top of planner; ADR-013 no-cascade migrates to planner merge-policy |
-| TASK-2010 | Payroll | 3 | Per-line OK-version stamping at export boundary (TASK-1903 absorbed): replace `OkVersionBoundary.ResolveProfile` collapse at `src/Integrations/StatsTid.Integrations.Payroll/Program.cs:325-339`; SLS export carries `manifest_id` end-to-end |
+| TASK-2010 | Payroll | 3 | Per-line OK-version stamping at export boundary (TASK-1903 absorbed): replace `OkVersionBoundary.ResolveProfile` collapse at `src/Integrations/StatsTid.Integrations.Payroll/Program.cs:325-339`; SLS export file content carries per-line OK stamps + manifest_id (file-side; D10 amended 2026-04-29 — no DB column on payroll_export_lines) |
 | TASK-2011 | Data Model | 3 | Manifest projection rebuild script: replay `SegmentManifestCreated` events into `segment_manifests` table; deployable as ops tooling |
 | TASK-2012 | Test & QA | 4 | Test matrix per ADR-016 D11 — 22 new tests floor (cells + invariants + manifest creation/replay/rebuild/determinism + boundary scenarios + mixed-version export + perf budget) |
 
@@ -505,18 +506,17 @@ _Drafted from ADR-016 and user-approved 2026-04-29. All tasks are `not-started` 
 
 ### Task Detail
 
-#### TASK-2001 — Schema migration: segment_manifests + payroll_export_lines.manifest_id
+#### TASK-2001 — Schema migration: segment_manifests + indexes
 **Agent**: Data Model
-**Phase**: 1
+**Phase**: 1 — completed 2026-04-29
 **Files (write)**:
-- `infra/postgres/init.sql` (additive — new table + column + indexes; verify migration story matches existing pattern)
+- `docker/postgres/init.sql` (additive — new table + indexes; spec originally said `infra/postgres/` — corrected to actual canonical path during execution)
 **Scope**:
 - `CREATE TABLE segment_manifests` (8 columns per ADR-016 D10).
-- `ALTER TABLE payroll_export_lines ADD COLUMN manifest_id UUID NULL`.
-- Two indexes: `idx_segment_manifests_employee_period (employee_id, period_start)`; GIN on `boundary_cause_summary`.
-- No backfill; NULL = pre-S20 line.
-**Validation**: migration runs cleanly on fresh DB and on a DB with existing `payroll_export_lines` rows (NULL backfill); `\d segment_manifests` matches the spec; existing 35-test regression suite still passes.
-**Cross-domain dependencies**: none.
+- Two indexes: `idx_segment_manifests_employee_period (employee_id, period_start)`; GIN on `idx_segment_manifests_boundary_cause`.
+- **Originally specified `ALTER TABLE payroll_export_lines ADD COLUMN manifest_id UUID NULL` — REMOVED from scope 2026-04-29** when the Data Model agent surfaced that `payroll_export_lines` is an in-memory C# model, not a DB table. ADR-016 D10 amended; linkage now lives in `audit_log.payload_jsonb` + `CalculationResult.ManifestId` + SLS file content.
+**Validation**: migration runs cleanly on fresh DB; `dotnet build` clean.
+**Cross-domain dependencies**: none — surfaced one architectural amendment (D10 linkage) which was applied to the ADR and downstream tasks before Phase 1 closure.
 
 #### TASK-2002 — Constraint Validator: planner-bypass rule
 **Agent**: Constraint Validator
@@ -608,10 +608,11 @@ _Drafted from ADR-016 and user-approved 2026-04-29. All tasks are `not-started` 
 **Phase**: 3
 **Files (write)**:
 - `src/Integrations/StatsTid.Integrations.Payroll/Program.cs` (replace `OkVersionBoundary.ResolveProfile` collapse logic at lines 325-339)
-- `src/Integrations/StatsTid.Integrations.Payroll/Services/PayrollMappingService.cs` (manifest_id propagation — verify location)
-- SLS export writer (location TBD — verify) — manifest_id end-to-end
-**Scope**: Per-line OK-version stamping derives FROM the segment manifest: each export line knows its segment, segment knows OK version, line stamps OK version. `OkVersionBoundary.ResolveProfile`'s single-version collapse goes away. Per-line stamping consumes ONLY segment-resolved OK / config context — wage-type-mapping effective-dating does NOT leak in (per Step 0b W3 + ADR-016 D5b boundary). Internal-Reviewer concern about `/calculate-and-export` not using the same boundary helper as `/export` / `/export-period` resolved by routing all three through the planner.
-**Validation**: mixed-version export regression test (TASK-2012) — period 2026-03-25 → 2026-04-30 produces lines stamped with the correct per-date OK version.
+- `src/SharedKernel/StatsTid.SharedKernel/Models/PayrollExportLine.cs` (additive `ManifestId Guid` + `OkVersion` per-line fields if not already present)
+- `src/Integrations/StatsTid.Integrations.Payroll/Services/PayrollMappingService.cs` (per-line OK propagation; manifest_id propagation)
+- `src/Integrations/StatsTid.Integrations.Payroll/Services/SlsExportFormatter.cs` (per-line OK stamp in file content; manifest_id stamp in file header / footer / per-line per SLS spec)
+**Scope**: Per-line OK-version stamping derives FROM the segment manifest: each export line knows its segment, segment knows OK version, line stamps OK version. `OkVersionBoundary.ResolveProfile`'s single-version collapse goes away. Per-line stamping consumes ONLY segment-resolved OK / config context — wage-type-mapping effective-dating does NOT leak in (per Step 0b W3 + ADR-016 D5b boundary). Internal-Reviewer concern about `/calculate-and-export` not using the same boundary helper as `/export` / `/export-period` resolved by routing all three through the planner. **Linkage is file-side and in-memory only; D10 amendment 2026-04-29 confirmed `payroll_export_lines` is not a DB table — manifest_id audit linkage lives in `audit_log.payload_jsonb` (TASK-2007) + the SLS export file content, not in a DB column.**
+**Validation**: mixed-version export regression test (TASK-2012) — period 2026-03-25 → 2026-04-30 produces lines stamped with the correct per-date OK version; manifest_id present in audit_log entries.
 **Cross-domain dependencies**: depends on TASK-2008.
 
 #### TASK-2011 — Manifest projection rebuild script
