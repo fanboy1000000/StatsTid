@@ -3,10 +3,10 @@
 | Field | Value |
 |-------|-------|
 | **Sprint** | 20 |
-| **Status** | analysis-phase (Step 0a complete; Step 0b in progress; no task log until ADR + classification + decomposition are user-approved) |
+| **Status** | analysis-phase complete (Step 0a, Step 0b, ADR-016, classification inventory, task decomposition all user-approved 2026-04-29); ready for Step 2 (Delegate) |
 | **Start Date** | 2026-04-28 |
 | **End Date** | TBD |
-| **Orchestrator Approved** | no (pending Step 0b plan review + analysis deliverables) |
+| **Orchestrator Approved** | yes (analysis-phase deliverables 1–3 approved 2026-04-29; implementation begins at Step 2) |
 | **Build Verified** | n/a (no implementation yet) |
 | **Test Verified** | n/a (no implementation yet) |
 
@@ -89,7 +89,7 @@ User-approved 2026-04-28 to apply all BLOCKER + WARNING fixes plus 4 of 5 NOTEs.
 - **W4** (Q10 test matrix loose) — Q11 (renumbered from Q10) commits the minimum matrix: one rule per `(span × split-behavior)` combination, valid+invalid scenario per implemented source, deterministic-replay case, merged-audit case, mixed-version export case.
 - **R-W1** (Q6 pseudo-option) — "leave both" removed; Q6 is now `retire` or `adapt to thin-wrap`. ADR-013 no-cascade-must-move constraint added explicitly.
 - **R-W3** (Q1 narrow now) — Q1 pre-commits "NOT in RuleEngine assembly" and "NOT pushed to caller" as closed constraints; remaining choice is SharedKernel pure planner vs. new coordination service.
-- **N1 + R-N2** (timebox analysis) — Planning Entrypoint adds 3-day analysis-phase timebox (2026-05-01 EOD) with default scope-reduction option and explicit exit criteria for "approved."
+- **N1 + R-N2** (timebox analysis) — exit criteria for "approved" added to Planning Entrypoint. The wall-clock "3 calendar days / 2026-05-01 EOD" framing originally accepted in cycle 1 was rejected on user feedback 2026-04-29 — it borrows a multi-developer-sprint coordination model that doesn't fit a solo, async project. Exit criteria (committed deliverables that demonstrate convergence) are the load-bearing protection; default scope-reduction option remains available, triggered by orchestrator+user judgment rather than elapsed days.
 - **N2** (N>2 segments framing) — Q7 reframed from "is N>2 needed?" to "how is arbitrary segment count represented and tested?" — including merge associativity.
 - **R-N1** (S19 helper precedent) — `OkVersionCanonicalization` added to "Context and Existing Partial Solutions" as the testing-shape precedent for per-rule merge contracts.
 
@@ -298,7 +298,7 @@ These must be resolved — and documented in an ADR — **before** a task decomp
 
 ## Decision Log (Q1–Q11 Resolution)
 
-_In-progress walk through the Open Architectural Questions, recorded as decisions are made. Each entry binds the ADR draft. Q9–Q11 remain open at session end 2026-04-28; resume 2026-04-29._
+_Walk through the Open Architectural Questions, recorded as decisions are made. Each entry binds the ADR draft. Q1–Q11 closed 2026-04-29; analysis-phase Decision Log complete._
 
 ### Q1 — Segmentation logic placement
 **Decision (2026-04-28)**: A — SharedKernel pure planner.
@@ -369,17 +369,90 @@ _In-progress walk through the Open Architectural Questions, recorded as decision
 - Measurement: a regression test in the Q11 committed minimum matrix instruments planner wall-clock and asserts under-budget. Order-of-magnitude regression catcher; not perf-suite-grade.
 - Caching out of scope for S20. Planner is stateless across calls; if production load proves cost is high, follow-up sprint adds `(period, profile-version, rule-set-version)` keyed caching.
 
-### Q9–Q11 — Open
+### Q9 — Drift detection placement
+**Decision (2026-04-29)**: B — compile-time + Constraint Validator (carry-forward from Q1) + runtime invariants on `PlannedCalculation` construction.
+**Rationale**: Compile-time (Q1) covers in-repo bypass; Constraint Validator (Q1) covers new code paths that try to post directly to `/api/rules/evaluate`. Both leave **planner-bug drift** silent — a malformed `PlannedCalculation` flows into RuleEngine and produces deterministically wrong output, breaking P3. Runtime invariants on planner output close that vector. Wire-level contract checks at the RuleEngine HTTP boundary (option C) and reflection seals (option D) deferred: PAT-005's convention-based enforcement has held for ~10 sprints, and a closed in-process deployable does not warrant the ceremony.
+**Pre-commits**:
+- **Carry-forward from Q1**:
+  - `PlannedCalculation` ctor is `internal`; `InternalsVisibleTo` only the planner test project.
+  - `PeriodCalculationService.CalculateAsync(PlannedCalculation plan, …)` is the sole entry point into segmented calculation.
+  - Constraint Validator rule extends to flag any new code under `src/Integrations/` (or future Payroll-side callers) that posts to `/api/rules/evaluate` without routing through `PeriodCalculationService`.
+- **New in Q9 — runtime invariants asserted in `PlannedCalculation`'s internal ctor**:
+  - `Segments.Count ≥ 1`.
+  - Segments are sorted, non-overlapping, contiguous, and `Segments.First().Start == period.Start && Segments.Last().End == period.End`.
+  - For every rule in the rule registry that declares a `SnapshotContract` (Q5b): every segment whose period intersects the contract's read scope carries a snapshot.
+  - Every rule has a non-null resolved `MergeStrategy` — default-derived per Q3 from `(span, splitBehavior, family)`, or a per-rule override supplied at registration (Q3 enforces the override at registration time for `Mergeable` rules without a default; the planner-side invariant catches the registry-vs-plan inconsistency case where a rule was registered but no strategy reached the plan).
+  - Violation throws `PlannerInvariantViolation : InvalidOperationException` with a structured message naming the rule and the failed invariant. Deterministic — same input always throws or always succeeds.
+- **Test coverage**: the Q11 minimum matrix includes one negative case per invariant (planner output construction throws).
+- **Explicitly NOT pre-committed (deferred)**:
+  - No HMAC seal or per-call token at the RuleEngine HTTP boundary; PAT-005 stays convention-based on the wire.
+  - No RuleEngine-side rejection of "unplannered" requests.
+  - Reflection-proof sealing (option D) — defends against attackers with in-process execution; not worth the ceremony.
 
-- **Q9**: Where is drift detected and surfaced? (build-time / runtime / both)
-- **Q10**: Audit representation of a segmented run — segment manifest shape and persistence.
-- **Q11**: Test strategy committed minimum matrix.
+### Q10 — Audit representation: segment manifest shape and persistence
+**Decision (2026-04-29)**: D + (ii) + (β) — separate `SegmentManifest` record (not a serialized `PlannedCalculation`); persistence is **event + indexed projection**; projection schema is **hybrid normalized columns + JSONB segments payload**; per-line `manifest_id` linkage on payroll exports; `ReplayAsync(manifestId)` primitive distinct from recomputation.
+**Rationale**: SharedKernel domain types stay pure (matches the post-S19 `OkVersionCanonicalization` precedent — pure helper, persistence concerns elsewhere). Event store is the source of truth for P3; projection table is convenience for audit query. Hybrid schema indexes the columns we'll filter on (employee, period, boundary cause) and JSONB-encodes the deep payload that's always read whole — `(α)` over-normalizes for queries we won't run, `(γ)` loses query utility. Replay-vs-recomputation distinction is what makes Q5b option (b) actually deliver determinism: replay reads snapshots from the manifest, not from the live DB.
+**Pre-commits**:
+- **Type**: `SegmentManifest` record in `src/SharedKernel/StatsTid.SharedKernel/Segmentation/` (or sibling of the planner). Constructed from a `PlannedCalculation` via a mapping ctor; not the same shape.
+- **Persistence — event**:
+  - New event `SegmentManifestCreated` registered in `EventSerializer`; brings registered event count 34 → 35 (DEP-003 update at sprint end).
+  - `manifest_id` = event `Id` (no separate UUID).
+- **Persistence — projection**:
+  - New table `segment_manifests` with columns: `manifest_id UUID PRIMARY KEY`, `period_start DATE NOT NULL`, `period_end DATE NOT NULL`, `employee_id UUID NOT NULL`, `calculation_kind TEXT NOT NULL` (`forward-calc` / `retroactive-correction` / `replay`), `boundary_cause_summary TEXT[] NOT NULL` (deduped list: `OkTransition`, `AgreementConfigPromotion`, `PositionOverrideEffective`, …), `created_at TIMESTAMPTZ NOT NULL`, `segments_jsonb JSONB NOT NULL`.
+  - Indexes: `idx_segment_manifests_employee_period (employee_id, period_start)`; GIN on `boundary_cause_summary`.
+  - Rebuildable from events; rebuild script ships as part of S20.
+- **Linkage**:
+  - `payroll_export_lines.manifest_id UUID NULL` (additive column). NULL = pre-S20 line; S20+ writes always populate.
+  - `CalculationResult.ManifestId Guid` (additive field; PAT-006 amendment recorded in the ADR).
+  - `audit_log` calculation entries carry `manifest_id` in `payload_jsonb` — additive, no schema change.
+- **Replay primitive**:
+  - `PeriodCalculationService.ReplayAsync(Guid manifestId, CancellationToken)` returns a `CalculationResult` carrying the **same** `ManifestId` (replay does NOT mint a new manifest).
+  - Internal `PlannedCalculation.FromManifest(SegmentManifest)` ctor; same `internal` visibility as the regular ctor (Q9). Subject to identical Q9 invariants.
+  - Rules read snapshots from `SegmentSnapshot` in the reconstructed plan, NOT from the live DB. Determinism (P3) follows.
+  - **Recomputation** (fresh snapshots, new manifest) is a separate operation; the ADR documents the distinction explicitly so callers don't conflate "replay" with "recompute as of today".
+- **Migration**:
+  - Three schema changes: `CREATE TABLE segment_manifests`, `ALTER TABLE payroll_export_lines ADD COLUMN manifest_id`, indexes.
+  - **No backfill**: historical export lines stay `manifest_id NULL`. NULL semantics = "pre-S20, no segmentation context". Synthesizing manifests for past calculations is not worth the risk on audit-only data.
+- **Out of S20 (deferred)**:
+  - No UI surfacing of manifest content (Phase 5 polish — frontend receives `ManifestId` but does not render segment breakdown).
+  - No manifest-comparison tooling (replay-vs-replay diff for incident diagnosis); not P3-required.
+
+### Q11 — Test strategy: committed minimum matrix
+**Decision (2026-04-29)**: (ii) — cell enumeration via the ADR's classification table (not pre-stated in this plan); floor of 22 new tests; placement and per-bucket counts pre-committed below; full rule × scenario × boundary exhaustive matrix deferred.
+**Rationale**: Q2 made `RuleRegistry.Register` carry the classification triple, so the table is a real ADR deliverable. Binding Q11 to that table is the only way the minimum stays correct after the rule re-classification work in the ADR. A floor of 4 distinct cells exercised catches the case where classification accidentally collapses to too few cells; the ADR can raise the floor but cannot lower it. Counts beyond the cells (Q9 invariants, Q10 manifest tests, boundary scenarios, mixed-version export, perf budget) are mechanically derivable from the prior decisions, so they can be pre-stated.
+**Pre-commits**:
+- **Cell enumeration**: one test per populated `(span, split-behavior)` cell as listed in the S20 ADR's classification table. **Floor: minimum 4 distinct cells exercised.** ADR table can raise the floor; cannot lower it.
+- **Q9 invariant negative tests** (4 tests, unit-level): one per invariant — segments empty; segments non-contiguous / overlapping / not covering period exactly; rule with `SnapshotContract` missing snapshot for an intersecting segment; rule with no resolved `MergeStrategy`. Each asserts `PlannerInvariantViolation` thrown with structured message naming the rule and failed invariant.
+- **Q10 manifest tests** (4 tests, regression-level / DB-touching):
+  - manifest-creation: calculation produces manifest; projection table reflects segments JSONB and indexed columns; `payroll_export_lines.manifest_id` populated.
+  - replay: `ReplayAsync(manifestId)` produces `CalculationResult` with same `ManifestId` and bit-equal payload.
+  - projection rebuild: truncate `segment_manifests`, replay `SegmentManifestCreated` events, projection reconstructs.
+  - replay-vs-recomputation: mutate the live DB after manifest creation; replay still produces the manifest's result, recomputation produces a different one. Locks down Q5b option (b)'s determinism contract.
+- **Boundary scenarios** (8 tests, regression-level): 4 implemented sources × (valid + invalid). Sources: OK version, agreement-config, position-override, EU WTD compliance ruleset. Q7's three committed scenarios slot in: 2-segment OK transition → OK-version valid; 3-segment OK + agreement-config simultaneous → agreement-config valid; 4-segment synthetic position-override → position-override valid. "Invalid" cases per source: window-rule boundary alignment violated with `AllowUpstreamAlignment=false`, expecting 4xx per Q4 default-reject. EU WTD valid/invalid: period straddling a compliance-rule version bump.
+- **Mixed-version export (TASK-1903 absorbed)** (1 test, regression-level): period 2026-03-25 → 2026-04-30 across OK24/OK26; export lines on dates ≤ 2026-03-31 carry OK24 stamp; lines on ≥ 2026-04-01 carry OK26. Replaces `OkVersionBoundary.ResolveProfile`'s collapse behavior at `src/Integrations/StatsTid.Integrations.Payroll/Program.cs:325-339`.
+- **Q8 perf budget assertion** (1 test, unit-level): non-straddling 1-employee 1-period planner overhead under p50 ≤ 5 ms / p95 ≤ 20 ms / p99 hard ceiling 50 ms. Order-of-magnitude regression catcher only.
+- **Test placement (file paths)**:
+  - `tests/StatsTid.Tests.Unit/Segmentation/PlannerCellTests.cs` — `(span × split-behavior)` cells (≥ 4)
+  - `tests/StatsTid.Tests.Unit/Segmentation/PlannedCalculationInvariantTests.cs` — Q9 negatives (4)
+  - `tests/StatsTid.Tests.Regression/Segmentation/ManifestCreationTests.cs` (1)
+  - `tests/StatsTid.Tests.Regression/Segmentation/ManifestReplayTests.cs` (1)
+  - `tests/StatsTid.Tests.Regression/Segmentation/ManifestProjectionRebuildTests.cs` (1)
+  - `tests/StatsTid.Tests.Regression/Segmentation/ReplayDeterminismTests.cs` (1)
+  - `tests/StatsTid.Tests.Regression/Segmentation/BoundaryScenarioTests.cs` (8)
+  - `tests/StatsTid.Tests.Regression/Payroll/MixedVersionExportTests.cs` (1)
+  - `tests/StatsTid.Tests.Unit/Segmentation/PlannerPerfBudgetTests.cs` (1)
+- **Floor**: 22 new tests (4 cells + 4 Q9 + 4 Q10 + 8 boundary + 1 mixed-version + 1 perf budget); cells beyond 4 add 1:1.
+- **Explicitly out of S20 (deferred)**:
+  - Full rule × scenario × boundary exhaustive matrix → exhaustive-testing debt; recorded in MEMORY.md deferred items at sprint end.
+  - Frontend tests for any S20-related UI (Phase 5 polish; ComplianceWarnings frontend-test debt stays deferred).
+  - Property-based merge associativity tests (Q7 sidestepped via list-based merge).
+  - Restructure of the existing 35-test regression suite — S20 adds tests, doesn't restructure.
 
 ---
 
 ## Planning Entrypoint
 
-No implementation tasks are defined yet. The sprint begins with the following **analysis-phase deliverables**, produced by the Orchestrator in collaboration with the user before any domain agent is spawned:
+The sprint began with the following **analysis-phase deliverables**, produced by the Orchestrator in collaboration with the user before any domain agent is spawned. All three approved 2026-04-29; analysis phase closed:
 
 1. **Architectural ADR** — answering the eleven open questions above, proposing segmentation placement, the multi-axis rule classification, merge semantics per result family, and the segment-manifest shape.
 2. **Rule classification inventory** — every existing rule (and every mode of multi-mode rules) tagged with its `(span, split-behavior, result-family)` triple.
@@ -389,15 +462,192 @@ No implementation tasks are defined yet. The sprint begins with the following **
 
 Only after items 1–3 are Orchestrator + user approved does Step 2 (Delegate) begin.
 
-### Analysis-Phase Time-box (Step 0b NOTE N1 + R-N2)
+### Analysis-Phase Exit Criteria (Step 0b NOTE N1 + R-N2, wall-clock framing rejected)
 
-If items 1–3 are not Orchestrator + user approved within **3 calendar days** of sprint start (i.e., by **2026-05-01 EOD**), the Orchestrator MUST halt and present the user with a scope-reduction option. Default reduction: ship OK-version-only (no extension framework, no manifest beyond the minimum needed for OK-boundary audit, no agreement-config / position-override extension points), and re-promote the broader framework to a future sprint.
+Step 0b cycle 1 originally accepted a 3-calendar-day wall-clock timebox for the analysis phase. That framing was rejected on user feedback 2026-04-29 — it borrows a multi-developer-sprint coordination model that doesn't fit a solo, async project, and the "default scope reduction kicks in on date X" rule is artificial pressure with no real trigger. The load-bearing protection against open-ended analysis is the exit criteria below; analysis halts when those criteria are satisfied, not on a calendar.
+
+If exit criteria stall, the default scope-reduction option remains available — triggered by orchestrator+user judgment, not by elapsed days. Default reduction: ship OK-version-only (no extension framework, no manifest beyond the minimum needed for OK-boundary audit, no agreement-config / position-override extension points), and re-promote the broader framework to a future sprint.
 
 Exit criteria for "approved":
 - ADR is committed under `docs/knowledge-base/decisions/` with a chosen answer to every open question (or an explicit "deferred to S21+" with rationale);
 - Rule classification inventory exists as a committed artifact (table in the ADR or a separate file under `docs/`);
 - TASK-20NN entries appear in this sprint log's Task Log with agents and file scopes assigned;
 - User confirms acceptance of the scope shape.
+
+## Task Log
+
+_Drafted from ADR-016 and user-approved 2026-04-29. All tasks are `not-started` until Step 2 (Delegate)._
+
+### Task Index
+
+| TASK | Domain / Agent | Phase | Title |
+|------|----------------|-------|-------|
+| TASK-2001 | Data Model | 1 | Schema migration: `segment_manifests` table + `payroll_export_lines.manifest_id` column |
+| TASK-2002 | Constraint Validator | 1 | Constraint Validator rule: flag direct `/api/rules/evaluate` posts that bypass `PeriodCalculationService` |
+| TASK-2003 | Rule Engine (SharedKernel infra) | 2 | SharedKernel `Segmentation/` skeleton: `PlannedCalculation`, `PlannedSegment`, `SegmentManifest`, `SnapshotContract`, `MergeStrategy`, `PlannerOptions`, `PlannerInvariantViolation` — types only, D9 invariants asserted in ctor |
+| TASK-2004 | Rule Engine (SharedKernel infra) | 2 | `PeriodPlanner.Plan()` + `PlannedCalculation.FromManifest()` logic — segment detection from boundary sources; manifest-driven replay reconstruction |
+| TASK-2005 | Rule Engine (SharedKernel infra) | 2 | `CalculationResultMerger` + `ComplianceCheckResultMerger` — list-based `MergeStrategy.Apply` per ADR-016 D3 defaults table |
+| TASK-2006 | Rule Engine | 2 | `RuleRegistry.Register` signature change (`span`, `splitBehavior`, `family`, optional `mergeStrategy`); multi-mode decomposition of `NormCheckRule` (3 modes), `RestPeriodRule` (4 checks), `OvertimeGovernanceRule` (2 checks) — 11 → 20 registered rules |
+| TASK-2007 | Data Model | 2 | `EventSerializer` registers `SegmentManifestCreated` (count 34 → 35); `CalculationResult.ManifestId Guid` additive field; `audit_log` payload `manifest_id` field |
+| TASK-2008 | Payroll | 3 | `PeriodCalculationService.CalculateAsync(PlannedCalculation, …)` signature change + `ReplayAsync(Guid manifestId, …)` primitive; planner invocation on every call (D8 always-on) |
+| TASK-2009 | Payroll | 3 | `RetroactiveCorrectionService.RecalculateWithVersionSplitAsync` deletion; `RecalculateAsync` rewrite on top of planner; ADR-013 no-cascade migrates to planner merge-policy |
+| TASK-2010 | Payroll | 3 | Per-line OK-version stamping at export boundary (TASK-1903 absorbed): replace `OkVersionBoundary.ResolveProfile` collapse at `src/Integrations/StatsTid.Integrations.Payroll/Program.cs:325-339`; SLS export carries `manifest_id` end-to-end |
+| TASK-2011 | Data Model | 3 | Manifest projection rebuild script: replay `SegmentManifestCreated` events into `segment_manifests` table; deployable as ops tooling |
+| TASK-2012 | Test & QA | 4 | Test matrix per ADR-016 D11 — 22 new tests floor (cells + invariants + manifest creation/replay/rebuild/determinism + boundary scenarios + mixed-version export + perf budget) |
+
+### Phase Ordering
+
+- **Phase 1 (parallel-independent)**: TASK-2001, TASK-2002. Schema and CV rule have no upstream dependencies; can run in parallel via `isolation: "worktree"`.
+- **Phase 2 (parallel within phase, depends on Phase 1)**: TASK-2003, TASK-2004, TASK-2005, TASK-2006, TASK-2007. TASK-2003 (skeleton types) is the upstream for TASK-2004 / TASK-2005 / TASK-2006 within Phase 2 — those three start once 2003 lands. TASK-2007 is independent and can run alongside 2003.
+- **Phase 3 (depends on Phase 2)**: TASK-2008, TASK-2009, TASK-2010, TASK-2011. All four consume the planner + types from Phase 2. Can run in parallel via worktree isolation since each touches a different surface (`PeriodCalculationService` vs `RetroactiveCorrectionService` vs export boundary vs ops script).
+- **Phase 4 (depends on Phase 3)**: TASK-2012. Test & QA Agent runs after all production code lands.
+- **Phase 5 (Orchestrator)**: build/test validation, Step 5α Constraint Validator over all outputs, Step 5a Internal Reviewer (P1–P4 trigger). **High-risk override applies — Step 5a also invokes `codex review --uncommitted`** (S20 touches P3 + P4 + P6 = three of the high-risk domains: schema, payroll, retroactive). Step 7a external Codex review against pre-S20 HEAD before commit.
+
+### Task Detail
+
+#### TASK-2001 — Schema migration: segment_manifests + payroll_export_lines.manifest_id
+**Agent**: Data Model
+**Phase**: 1
+**Files (write)**:
+- `infra/postgres/init.sql` (additive — new table + column + indexes; verify migration story matches existing pattern)
+**Scope**:
+- `CREATE TABLE segment_manifests` (8 columns per ADR-016 D10).
+- `ALTER TABLE payroll_export_lines ADD COLUMN manifest_id UUID NULL`.
+- Two indexes: `idx_segment_manifests_employee_period (employee_id, period_start)`; GIN on `boundary_cause_summary`.
+- No backfill; NULL = pre-S20 line.
+**Validation**: migration runs cleanly on fresh DB and on a DB with existing `payroll_export_lines` rows (NULL backfill); `\d segment_manifests` matches the spec; existing 35-test regression suite still passes.
+**Cross-domain dependencies**: none.
+
+#### TASK-2002 — Constraint Validator: planner-bypass rule
+**Agent**: Constraint Validator
+**Phase**: 1
+**Files (write)**: Constraint Validator rule definition file (location per existing CV pattern — verify against S18/S19 CV rule files).
+**Scope**: Add a static-analysis rule that flags any source file under `src/Integrations/` (and any future Payroll-side caller) that posts to `/api/rules/evaluate` without routing through `PeriodCalculationService.CalculateAsync(PlannedCalculation)`. Allowlist `PeriodCalculationService` itself.
+**Validation**: rule fires on a known-bad fixture; rule does not fire on the legitimate `PeriodCalculationService` HTTP call site.
+**Cross-domain dependencies**: none (independent of Phase 2 type shapes — the rule is a regex/AST check on call sites).
+
+#### TASK-2003 — SharedKernel Segmentation skeleton types
+**Agent**: Rule Engine (SharedKernel infrastructure)
+**Phase**: 2 (upstream for 2004–2006)
+**Files (write)**:
+- `src/SharedKernel/StatsTid.SharedKernel/Segmentation/PlannedCalculation.cs` (internal ctor, D9 invariants asserted)
+- `src/SharedKernel/StatsTid.SharedKernel/Segmentation/PlannedSegment.cs`
+- `src/SharedKernel/StatsTid.SharedKernel/Segmentation/SegmentManifest.cs`
+- `src/SharedKernel/StatsTid.SharedKernel/Segmentation/SnapshotContract.cs`
+- `src/SharedKernel/StatsTid.SharedKernel/Segmentation/MergeStrategy.cs`
+- `src/SharedKernel/StatsTid.SharedKernel/Segmentation/PlannerOptions.cs`
+- `src/SharedKernel/StatsTid.SharedKernel/Segmentation/PlannerInvariantViolation.cs`
+- `InternalsVisibleTo` attribute on `StatsTid.SharedKernel.csproj` for the planner test project only.
+**Scope**: Types only. Empty / placeholder logic where method bodies are required. D9 invariants ARE implemented in `PlannedCalculation`'s internal ctor — they're the contract the type carries.
+**Validation**: `dotnet build` clean; types compile; D9 invariant unit tests (placeholders that will be filled out in TASK-2012) at minimum exercise the ctor's throw paths.
+**Cross-domain dependencies**: none upstream; downstream blocks TASK-2004, TASK-2005, TASK-2006.
+
+#### TASK-2004 — PeriodPlanner.Plan() + FromManifest()
+**Agent**: Rule Engine (SharedKernel infrastructure)
+**Phase**: 2
+**Files (write)**:
+- `src/SharedKernel/StatsTid.SharedKernel/Segmentation/PeriodPlanner.cs`
+- `src/SharedKernel/StatsTid.SharedKernel/Segmentation/BoundaryDetector.cs` (helper — reads `OkVersionResolver`, agreement-config `active_from`, position-override `effective_from`, EU WTD ruleset version)
+**Scope**: `Plan(period, profile, ruleSet, options)` produces a `PlannedCalculation` (constructs the segments list from boundary detection, gathers `SnapshotContract` snapshots for non-dated sources at calculation time). `FromManifest(SegmentManifest)` reconstructs a `PlannedCalculation` with segments populated from the manifest's `segments_jsonb` rather than the live DB.
+**Validation**: cell tests in TASK-2012 exercise both paths; D9 invariants fire in negative cases.
+**Cross-domain dependencies**: depends on TASK-2003.
+
+#### TASK-2005 — Result mergers (calculation + compliance)
+**Agent**: Rule Engine (SharedKernel infrastructure)
+**Phase**: 2
+**Files (write)**:
+- `src/SharedKernel/StatsTid.SharedKernel/Segmentation/CalculationResultMerger.cs`
+- `src/SharedKernel/StatsTid.SharedKernel/Segmentation/ComplianceCheckResultMerger.cs`
+**Scope**: List-based `MergeStrategy.Apply(IReadOnlyList<TResult>)` per ADR-016 D3 defaults: `Concatenate` for entry/segment-safe calculation; `RejectIfMultipleSegments` for aligned-window; `UnionDedupe` for compliance always; explicit error when `Mergeable` calculation lacks per-rule override.
+**Validation**: unit tests cover each default path + the override path.
+**Cross-domain dependencies**: depends on TASK-2003.
+
+#### TASK-2006 — RuleRegistry signature + multi-mode decomposition
+**Agent**: Rule Engine
+**Phase**: 2
+**Files (write)**:
+- `src/RuleEngine/StatsTid.RuleEngine.Api/Rules/RuleRegistry.cs` (signature change)
+- `src/RuleEngine/StatsTid.RuleEngine.Api/Rules/NormCheckRule.cs` (decompose into `NORM_CHECK_WEEKLY`, `NORM_CHECK_MULTIWEEK`, `NORM_CHECK_ANNUAL`)
+- `src/RuleEngine/StatsTid.RuleEngine.Api/Rules/RestPeriodRule.cs` (decompose into `REST_PERIOD_MAX_DAILY`, `REST_PERIOD_DAILY_REST`, `REST_PERIOD_WEEKLY_REST`, `REST_PERIOD_48H_CEILING`)
+- `src/RuleEngine/StatsTid.RuleEngine.Api/Rules/OvertimeGovernanceRule.cs` (decompose into `OVERTIME_MAX_HOURS`, `OVERTIME_PRE_APPROVAL`)
+**Scope**: `Register` gains required `span`, `splitBehavior`, `family`, optional `mergeStrategy`. Compile-time error when `splitBehavior: Mergeable` registration omits `mergeStrategy`. Multi-mode rules' modes register separately. Existing endpoint dispatchers updated to route by classification + period rather than by intra-rule branching.
+**Validation**: existing rule unit tests still pass (each decomposed mode has its own focused tests added in TASK-2012). `dotnet build` clean.
+**Cross-domain dependencies**: depends on TASK-2003 (uses `MergeStrategy`, `SnapshotContract` types). Note: `EntitlementValidationRule` is explicitly out of segmentation scope per ADR-016 — register without segmentation triple OR keep it on the legacy path; decide at implementation time.
+
+#### TASK-2007 — EventSerializer + CalculationResult amendment
+**Agent**: Data Model
+**Phase**: 2
+**Files (write)**:
+- `src/Infrastructure/StatsTid.Infrastructure/Events/EventSerializer.cs` (or current location — verify)
+- `src/SharedKernel/StatsTid.SharedKernel/Models/CalculationResult.cs` (additive `ManifestId Guid` field)
+- `src/Infrastructure/StatsTid.Infrastructure/.../audit_log` payload writer (additive `manifest_id` field — verify location)
+**Scope**: Register `SegmentManifestCreated` event type (count 34 → 35); add additive `ManifestId` field to `CalculationResult`; add additive `manifest_id` to audit_log payload writers for calculation entries.
+**Validation**: `EventSerializer` round-trip test for `SegmentManifestCreated`; existing event-type-coverage test passes (DEP-003 invariant).
+**Cross-domain dependencies**: depends on TASK-2003 (`SegmentManifest` type must exist).
+
+#### TASK-2008 — PeriodCalculationService rewrite + ReplayAsync
+**Agent**: Payroll
+**Phase**: 3
+**Files (write)**:
+- `src/Integrations/StatsTid.Integrations.Payroll/Services/PeriodCalculationService.cs`
+**Scope**: `CalculateAsync(PlannedCalculation plan, …)` becomes the sole entry point. Internal call goes through `Plan()` for non-`PlannedCalculation` callers and immediately routes back through the new entry point. New `ReplayAsync(Guid manifestId, CancellationToken)` loads `SegmentManifest` from projection (with event-replay fallback), reconstructs via `PlannedCalculation.FromManifest`, runs `CalculateAsync(plan)`, returns `CalculationResult` with same `ManifestId`. Manifest emission happens here (after segments resolved + snapshots gathered + invariants pass).
+**Validation**: existing `PeriodCalculationService` tests adapted to new signature; new replay tests in TASK-2012.
+**Cross-domain dependencies**: depends on TASK-2004, TASK-2005, TASK-2006, TASK-2007. Pre-Phase-3 status check: ALL Phase 2 tasks must land first.
+
+#### TASK-2009 — RetroactiveCorrectionService rewrite + RecalculateWithVersionSplitAsync deletion
+**Agent**: Payroll
+**Phase**: 3
+**Files (write)**:
+- `src/Integrations/StatsTid.Integrations.Payroll/Services/RetroactiveCorrectionService.cs`
+**Scope**: Delete `RecalculateWithVersionSplitAsync` outright. Rewrite `RecalculateAsync` (public) on top of `PeriodPlanner.Plan()` + `PeriodCalculationService.CalculateAsync(plan)`. ADR-013's no-cascade rule lives in the planner's merge-policy — verify it does NOT remain duplicated here.
+**Validation**: existing retroactive-correction regression tests pass without modification (caller signature unchanged); no `RecalculateWithVersionSplitAsync` references remain in the codebase (grep check).
+**Cross-domain dependencies**: depends on TASK-2008. Note: `OkVersionCanonicalization` helper from S19 stays as the OK-resolution input to the planner — it does not get retired by this task; it becomes a planner input.
+
+#### TASK-2010 — Per-line OK-version stamping at export boundary (TASK-1903 absorbed)
+**Agent**: Payroll
+**Phase**: 3
+**Files (write)**:
+- `src/Integrations/StatsTid.Integrations.Payroll/Program.cs` (replace `OkVersionBoundary.ResolveProfile` collapse logic at lines 325-339)
+- `src/Integrations/StatsTid.Integrations.Payroll/Services/PayrollMappingService.cs` (manifest_id propagation — verify location)
+- SLS export writer (location TBD — verify) — manifest_id end-to-end
+**Scope**: Per-line OK-version stamping derives FROM the segment manifest: each export line knows its segment, segment knows OK version, line stamps OK version. `OkVersionBoundary.ResolveProfile`'s single-version collapse goes away. Per-line stamping consumes ONLY segment-resolved OK / config context — wage-type-mapping effective-dating does NOT leak in (per Step 0b W3 + ADR-016 D5b boundary). Internal-Reviewer concern about `/calculate-and-export` not using the same boundary helper as `/export` / `/export-period` resolved by routing all three through the planner.
+**Validation**: mixed-version export regression test (TASK-2012) — period 2026-03-25 → 2026-04-30 produces lines stamped with the correct per-date OK version.
+**Cross-domain dependencies**: depends on TASK-2008.
+
+#### TASK-2011 — Manifest projection rebuild script
+**Agent**: Data Model
+**Phase**: 3
+**Files (write)**:
+- `infra/postgres/scripts/rebuild_segment_manifests.sql` (or whatever ops-script location; verify)
+- A C# console entrypoint or Npgsql batch operation if SQL alone insufficient
+**Scope**: Truncate `segment_manifests`, replay all `SegmentManifestCreated` events from the event store into the projection. Idempotent. Documented as ops tooling for projection drift recovery.
+**Validation**: TASK-2012's projection-rebuild test exercises this path end-to-end.
+**Cross-domain dependencies**: depends on TASK-2007.
+
+#### TASK-2012 — Test matrix (D11 minimum)
+**Agent**: Test & QA
+**Phase**: 4
+**Files (write)**:
+- `tests/StatsTid.Tests.Unit/Segmentation/PlannerCellTests.cs` — ≥ 4 cell tests
+- `tests/StatsTid.Tests.Unit/Segmentation/PlannedCalculationInvariantTests.cs` — 4 D9 negatives
+- `tests/StatsTid.Tests.Regression/Segmentation/ManifestCreationTests.cs` — 1
+- `tests/StatsTid.Tests.Regression/Segmentation/ManifestReplayTests.cs` — 1
+- `tests/StatsTid.Tests.Regression/Segmentation/ManifestProjectionRebuildTests.cs` — 1
+- `tests/StatsTid.Tests.Regression/Segmentation/ReplayDeterminismTests.cs` — 1
+- `tests/StatsTid.Tests.Regression/Segmentation/BoundaryScenarioTests.cs` — 8 (4 sources × valid + invalid)
+- `tests/StatsTid.Tests.Regression/Payroll/MixedVersionExportTests.cs` — 1
+- `tests/StatsTid.Tests.Unit/Segmentation/PlannerPerfBudgetTests.cs` — 1
+**Scope**: 22 new tests floor; cells beyond 4 add 1:1 against the ADR-016 classification table (5 distinct populated cells means 5 cell tests). Q7's three committed scenarios slot into boundary scenarios.
+**Validation**: all 22+ tests pass; existing 493 unit + 35 regression + 41 frontend tests still pass; no flakiness on Docker-gated regression runs.
+**Cross-domain dependencies**: depends on TASK-2008 through TASK-2011 (all production code must land).
+
+### Risks & Watch-Points
+
+- **Phase 2 throughput** — TASK-2003 is the bottleneck (TASK-2004, TASK-2005, TASK-2006 all wait on it). Mitigation: keep TASK-2003 scoped to skeleton + invariants only; logic lives in TASK-2004.
+- **Multi-mode decomposition (TASK-2006) risk** — splitting `NormCheckRule` / `RestPeriodRule` / `OvertimeGovernanceRule` into multiple registered rules touches existing endpoint dispatchers. Mitigation: existing rule unit tests are the safety net; per-mode tests added in TASK-2012 catch regressions.
+- **Payroll Phase 3 parallel risk** — TASK-2008/2009/2010 all touch Payroll Integration. Worktree isolation is mandatory; conflicts likely on `Program.cs` and `Services/`. Sequential merge is acceptable if conflicts thrash.
+- **High-risk Step 5a override** — S20 hits P3 + P4 + P6 (three high-risk domains). External Codex review at Step 5a is mandatory; budget for one BLOCKER-fix cycle. Halt and prompt user after 2 BLOCKER cycles per workflow rule.
+- **`OkVersionCanonicalization` carry-forward** — the S19 helper stays in place; do not retire as part of this sprint.
 
 ## References
 
