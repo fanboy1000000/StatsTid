@@ -114,7 +114,7 @@ Wire-level contract checks at the RuleEngine HTTP boundary and reflection seals 
 
 `SegmentManifest` is a record type in SharedKernel (not the same shape as `PlannedCalculation`); built from a `PlannedCalculation` via a mapping ctor.
 
-**Event**: `SegmentManifestCreated` registered in `EventSerializer` (event count 34 → 35; DEP-003 update). `manifest_id` = event `Id`.
+**Event**: `SegmentManifestCreated` registered in `EventSerializer` (event count 43 → 44; DEP-003 update). `manifest_id` = event `Id`. (D10 amendment 2026-04-30: original spec said 34 → 35 based on a stale ADR-016 draft; the registry had grown across S6/S9/S12/S14/S15/S16/S17 to 43 entries by S20 dispatch — TASK-2007 verification confirmed 43 → 44.)
 
 **Projection** in PostgreSQL: new table `segment_manifests`:
 - `manifest_id UUID PRIMARY KEY`, `period_start DATE NOT NULL`, `period_end DATE NOT NULL`, `employee_id UUID NOT NULL`, `calculation_kind TEXT NOT NULL` (`forward-calc` / `retroactive-correction` / `replay`), `boundary_cause_summary TEXT[] NOT NULL` (deduped), `created_at TIMESTAMPTZ NOT NULL`, `segments_jsonb JSONB NOT NULL`.
@@ -173,7 +173,7 @@ Every existing rule (and every mode of multi-mode rules) tagged with its `(span,
 
 Populated `(span, split-behavior)` pairs: `(entry, segment-safe)`, `(window, segment-safe)`, `(window, aligned-window)`, `(period, mergeable)`, `(cross-period, mergeable)` — **5 distinct pairs**, exceeding the D11 floor of 4.
 
-Multi-mode decomposition (D2): `NormCheckRule` registers as 3 rules (`NORM_CHECK_WEEKLY`, `NORM_CHECK_MULTIWEEK`, `NORM_CHECK_ANNUAL`); `RestPeriodRule` registers as 4 rules (`REST_PERIOD_MAX_DAILY`, `REST_PERIOD_DAILY_REST`, `REST_PERIOD_WEEKLY_REST`, `REST_PERIOD_48H_CEILING`); `OvertimeGovernanceRule` registers as 2 rules. Total registered rules after refactor: 11 single-mode + 9 multi-mode-derived = **20 registered rules** (vs 11 today).
+Multi-mode decomposition (D2): `NormCheckRule` registers as 3 rules (`NORM_CHECK_WEEKLY`, `NORM_CHECK_MULTIWEEK`, `NORM_CHECK_ANNUAL`); `RestPeriodRule` registers as 4 rules (`REST_PERIOD_MAX_DAILY`, `REST_PERIOD_DAILY_REST`, `REST_PERIOD_WEEKLY_REST`, `REST_PERIOD_48H_CEILING`); `OvertimeGovernanceRule` registers as 2 rules. Total registered rules after refactor: **16 segmentation-classified + 1 out-of-scope (`EntitlementValidationRule`) = 17 total rules** (TASK-2006 verification 2026-04-30; original "20" figure in this ADR was an arithmetic miscount — 5 entry-segment-safe + 1 window-segment-safe-compliance + 4 window-aligned-window + 5 period-mergeable + 1 cross-period-mergeable = 16 segmentation-classified).
 
 ## Rationale
 

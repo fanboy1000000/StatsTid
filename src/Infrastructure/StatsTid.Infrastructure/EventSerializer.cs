@@ -65,6 +65,8 @@ public static class EventSerializer
         ["OvertimeBalanceAdjusted"] = typeof(OvertimeBalanceAdjusted),
         ["OvertimeCompensationApplied"] = typeof(OvertimeCompensationApplied),
         ["OvertimePreApprovalCreated"] = typeof(OvertimePreApprovalCreated),
+        // Sprint 20: Temporal segmentation events (ADR-016 D10)
+        ["SegmentManifestCreated"] = typeof(SegmentManifestCreated),
     };
 
     public static string Serialize(IDomainEvent @event)

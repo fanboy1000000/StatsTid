@@ -14,6 +14,15 @@ public sealed class CalculationResult
     public decimal? ActualHoursTotal { get; init; }
     public decimal? Deviation { get; init; }
     public bool? NormFulfilled { get; init; }
+
+    /// <summary>
+    /// Segment manifest id for the calculation run (Sprint 20, ADR-016 D10).
+    /// Defaults to <see cref="Guid.Empty"/> when no manifest was produced (e.g. legacy callers,
+    /// rules outside the segmentation framework, or planner-bypass paths). Populated end-to-end
+    /// so audit log payloads and SLS export rows can be correlated back to the manifest used.
+    /// Additive and non-required to preserve compatibility with all existing constructors.
+    /// </summary>
+    public Guid ManifestId { get; init; }
 }
 
 public sealed class CalculationLineItem

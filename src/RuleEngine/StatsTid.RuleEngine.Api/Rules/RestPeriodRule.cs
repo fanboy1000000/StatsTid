@@ -6,14 +6,36 @@ namespace StatsTid.RuleEngine.Api.Rules;
 /// Pure function: validates working time compliance against EU directive 2003/88/EC
 /// and Danish Arbejdstidsloven. Checks daily rest (11h), weekly rest, max daily hours,
 /// and 48h/week ceiling. No I/O, fully deterministic, version-aware via AgreementRuleConfig.
+///
+/// S20 / TASK-2006: this rule decomposes into four separately-registered classifications
+/// — <see cref="MaxDailyRuleId"/>, <see cref="DailyRestRuleId"/>,
+/// <see cref="WeeklyRestRuleId"/>, <see cref="Weekly48HCeilingRuleId"/>. The legacy
+/// <see cref="RuleId"/> entry point (<see cref="Evaluate"/>) is preserved verbatim so
+/// existing callers (Program.cs <c>/api/rules/check-compliance</c>, the existing
+/// regression suite, and the Sprint 16 unit tests) continue to work without
+/// modification — it runs all four checks and unions the findings under the legacy id.
 /// </summary>
 public static class RestPeriodRule
 {
+    /// <summary>
+    /// Legacy RuleId — preserved for backward compatibility with the
+    /// <c>/api/rules/check-compliance</c> endpoint and existing tests that assert against
+    /// the unified compliance check.
+    /// </summary>
     public const string RuleId = "REST_PERIOD_CHECK";
+
+    // S20 / TASK-2006 — multi-mode decomposition (ADR-016 D2):
+    public const string MaxDailyRuleId = "REST_PERIOD_MAX_DAILY";
+    public const string DailyRestRuleId = "REST_PERIOD_DAILY_REST";
+    public const string WeeklyRestRuleId = "REST_PERIOD_WEEKLY_REST";
+    public const string Weekly48HCeilingRuleId = "REST_PERIOD_48H_CEILING";
 
     /// <summary>
     /// Evaluates all compliance checks for the given period.
-    /// Pure function, deterministic, no I/O.
+    /// Pure function, deterministic, no I/O. Result is tagged with the legacy
+    /// <see cref="RuleId"/>; callers needing per-check classification should call the
+    /// individual <see cref="EvaluateMaxDailyHours"/>, <see cref="EvaluateDailyRest"/>,
+    /// <see cref="EvaluateWeeklyRest"/>, or <see cref="Evaluate48HCeiling"/> entry points.
     /// </summary>
     public static ComplianceCheckResult Evaluate(
         EmploymentProfile profile,
@@ -25,11 +47,7 @@ public static class RestPeriodRule
         var violations = new List<ComplianceViolation>();
         var warnings = new List<ComplianceViolation>();
 
-        var periodEntries = entries
-            .Where(e => e.Date >= periodStart && e.Date <= periodEnd)
-            .OrderBy(e => e.Date)
-            .ThenBy(e => e.StartTime)
-            .ToList();
+        var periodEntries = NormalizeEntries(entries, periodStart, periodEnd);
 
         // 1. Max daily hours check (works for all entries, including hours-only)
         CheckMaxDailyHours(periodEntries, config, violations, warnings);
@@ -52,6 +70,107 @@ public static class RestPeriodRule
             Warnings = warnings
         };
     }
+
+    /// <summary>
+    /// S20 — single-check entry point for max daily hours
+    /// (<see cref="MaxDailyRuleId"/>). Reuses the existing <see cref="CheckMaxDailyHours"/>
+    /// helper; logic is bit-identical to the corresponding branch of <see cref="Evaluate"/>.
+    /// </summary>
+    public static ComplianceCheckResult EvaluateMaxDailyHours(
+        EmploymentProfile profile,
+        IReadOnlyList<TimeEntry> entries,
+        DateOnly periodStart,
+        DateOnly periodEnd,
+        AgreementRuleConfig config)
+    {
+        var violations = new List<ComplianceViolation>();
+        var warnings = new List<ComplianceViolation>();
+        var periodEntries = NormalizeEntries(entries, periodStart, periodEnd);
+        CheckMaxDailyHours(periodEntries, config, violations, warnings);
+        return BuildResult(MaxDailyRuleId, profile, violations, warnings);
+    }
+
+    /// <summary>
+    /// S20 — single-check entry point for daily rest (<see cref="DailyRestRuleId"/>).
+    /// Reuses the existing <see cref="CheckDailyRest"/> helper; logic is bit-identical
+    /// to the corresponding branch of <see cref="Evaluate"/>.
+    /// </summary>
+    public static ComplianceCheckResult EvaluateDailyRest(
+        EmploymentProfile profile,
+        IReadOnlyList<TimeEntry> entries,
+        DateOnly periodStart,
+        DateOnly periodEnd,
+        AgreementRuleConfig config)
+    {
+        var violations = new List<ComplianceViolation>();
+        var warnings = new List<ComplianceViolation>();
+        var periodEntries = NormalizeEntries(entries, periodStart, periodEnd);
+        CheckDailyRest(periodEntries, config, violations, warnings);
+        return BuildResult(DailyRestRuleId, profile, violations, warnings);
+    }
+
+    /// <summary>
+    /// S20 — single-check entry point for weekly rest (<see cref="WeeklyRestRuleId"/>).
+    /// Reuses the existing <see cref="CheckWeeklyRest"/> helper; logic is bit-identical
+    /// to the corresponding branch of <see cref="Evaluate"/>.
+    /// </summary>
+    public static ComplianceCheckResult EvaluateWeeklyRest(
+        EmploymentProfile profile,
+        IReadOnlyList<TimeEntry> entries,
+        DateOnly periodStart,
+        DateOnly periodEnd,
+        AgreementRuleConfig config)
+    {
+        var violations = new List<ComplianceViolation>();
+        var warnings = new List<ComplianceViolation>();
+        var periodEntries = NormalizeEntries(entries, periodStart, periodEnd);
+        CheckWeeklyRest(periodEntries, periodStart, periodEnd, config, violations, warnings);
+        return BuildResult(WeeklyRestRuleId, profile, violations, warnings);
+    }
+
+    /// <summary>
+    /// S20 — single-check entry point for the 48h/week ceiling
+    /// (<see cref="Weekly48HCeilingRuleId"/>). Reuses the existing
+    /// <see cref="CheckWeeklyMaxHours"/> helper; logic is bit-identical to the
+    /// corresponding branch of <see cref="Evaluate"/>.
+    /// </summary>
+    public static ComplianceCheckResult Evaluate48HCeiling(
+        EmploymentProfile profile,
+        IReadOnlyList<TimeEntry> entries,
+        DateOnly periodStart,
+        DateOnly periodEnd,
+        AgreementRuleConfig config)
+    {
+        var violations = new List<ComplianceViolation>();
+        var warnings = new List<ComplianceViolation>();
+        var periodEntries = NormalizeEntries(entries, periodStart, periodEnd);
+        CheckWeeklyMaxHours(periodEntries, periodStart, periodEnd, config, violations, warnings);
+        return BuildResult(Weekly48HCeilingRuleId, profile, violations, warnings);
+    }
+
+    private static IReadOnlyList<TimeEntry> NormalizeEntries(
+        IReadOnlyList<TimeEntry> entries,
+        DateOnly periodStart,
+        DateOnly periodEnd) =>
+        entries
+            .Where(e => e.Date >= periodStart && e.Date <= periodEnd)
+            .OrderBy(e => e.Date)
+            .ThenBy(e => e.StartTime)
+            .ToList();
+
+    private static ComplianceCheckResult BuildResult(
+        string ruleId,
+        EmploymentProfile profile,
+        List<ComplianceViolation> violations,
+        List<ComplianceViolation> warnings) =>
+        new()
+        {
+            RuleId = ruleId,
+            EmployeeId = profile.EmployeeId,
+            Success = violations.Count == 0,
+            Violations = violations,
+            Warnings = warnings
+        };
 
     /// <summary>
     /// Check 1: Max daily hours. Sum hours per day, flag if exceeding MaxDailyHours.

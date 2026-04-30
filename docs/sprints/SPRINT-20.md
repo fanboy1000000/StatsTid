@@ -488,8 +488,8 @@ _Drafted from ADR-016 and user-approved 2026-04-29. All tasks are `not-started` 
 | TASK-2003 | Rule Engine (SharedKernel infra) | 2 | SharedKernel `Segmentation/` skeleton: `PlannedCalculation`, `PlannedSegment`, `SegmentManifest`, `SnapshotContract`, `MergeStrategy`, `PlannerOptions`, `PlannerInvariantViolation` — types only, D9 invariants asserted in ctor |
 | TASK-2004 | Rule Engine (SharedKernel infra) | 2 | `PeriodPlanner.Plan()` + `PlannedCalculation.FromManifest()` logic — segment detection from boundary sources; manifest-driven replay reconstruction |
 | TASK-2005 | Rule Engine (SharedKernel infra) | 2 | `CalculationResultMerger` + `ComplianceCheckResultMerger` — list-based `MergeStrategy.Apply` per ADR-016 D3 defaults table |
-| TASK-2006 | Rule Engine | 2 | `RuleRegistry.Register` signature change (`span`, `splitBehavior`, `family`, optional `mergeStrategy`); multi-mode decomposition of `NormCheckRule` (3 modes), `RestPeriodRule` (4 checks), `OvertimeGovernanceRule` (2 checks) — 11 → 20 registered rules |
-| TASK-2007 | Data Model | 2 | `EventSerializer` registers `SegmentManifestCreated` (count 34 → 35); `CalculationResult.ManifestId Guid` additive field; `audit_log` payload `manifest_id` field |
+| TASK-2006 | Rule Engine | 2 | `RuleRegistry.Register` signature change (`span`, `splitBehavior`, `family`, optional `mergeStrategy`); multi-mode decomposition of `NormCheckRule` (3 modes), `RestPeriodRule` (4 checks), `OvertimeGovernanceRule` (2 checks) — 16 segmentation-classified + 1 out-of-scope = 17 registered rules (corrected from original "11 → 20" miscount during execution 2026-04-30) |
+| TASK-2007 | Data Model | 2 | `EventSerializer` registers `SegmentManifestCreated` (count 43 → 44; corrected from original "34 → 35" stale figure during execution 2026-04-30); `CalculationResult.ManifestId Guid` additive field; `audit_log` payload `manifest_id` field |
 | TASK-2008 | Payroll | 3 | `PeriodCalculationService.CalculateAsync(PlannedCalculation, …)` signature change + `ReplayAsync(Guid manifestId, …)` primitive; planner invocation on every call (D8 always-on) |
 | TASK-2009 | Payroll | 3 | `RetroactiveCorrectionService.RecalculateWithVersionSplitAsync` deletion; `RecalculateAsync` rewrite on top of planner; ADR-013 no-cascade migrates to planner merge-policy |
 | TASK-2010 | Payroll | 3 | Per-line OK-version stamping at export boundary (TASK-1903 absorbed): replace `OkVersionBoundary.ResolveProfile` collapse at `src/Integrations/StatsTid.Integrations.Payroll/Program.cs:325-339`; SLS export file content carries per-line OK stamps + manifest_id (file-side; D10 amended 2026-04-29 — no DB column on payroll_export_lines) |
@@ -544,46 +544,52 @@ _Drafted from ADR-016 and user-approved 2026-04-29. All tasks are `not-started` 
 
 #### TASK-2004 — PeriodPlanner.Plan() + FromManifest()
 **Agent**: Rule Engine (SharedKernel infrastructure)
-**Phase**: 2
+**Phase**: 2 — completed 2026-04-30
 **Files (write)**:
-- `src/SharedKernel/StatsTid.SharedKernel/Segmentation/PeriodPlanner.cs`
-- `src/SharedKernel/StatsTid.SharedKernel/Segmentation/BoundaryDetector.cs` (helper — reads `OkVersionResolver`, agreement-config `active_from`, position-override `effective_from`, EU WTD ruleset version)
-**Scope**: `Plan(period, profile, ruleSet, options)` produces a `PlannedCalculation` (constructs the segments list from boundary detection, gathers `SnapshotContract` snapshots for non-dated sources at calculation time). `FromManifest(SegmentManifest)` reconstructs a `PlannedCalculation` with segments populated from the manifest's `segments_jsonb` rather than the live DB.
-**Validation**: cell tests in TASK-2012 exercise both paths; D9 invariants fire in negative cases.
-**Cross-domain dependencies**: depends on TASK-2003.
+- `src/SharedKernel/StatsTid.SharedKernel/Segmentation/PeriodPlanner.cs` (also defines `BoundarySources` record at file end)
+- `src/SharedKernel/StatsTid.SharedKernel/Segmentation/BoundaryDetector.cs`
+- `src/SharedKernel/StatsTid.SharedKernel/Segmentation/Span.cs` (added during execution — gap in TASK-2003 skeleton; planner is the consumer that defines the input contract)
+- `src/SharedKernel/StatsTid.SharedKernel/Segmentation/SplitBehavior.cs` (same)
+- `src/SharedKernel/StatsTid.SharedKernel/Segmentation/Family.cs` (same)
+- `src/SharedKernel/StatsTid.SharedKernel/Segmentation/RuleClassification.cs` (record consumed by planner, produced by RuleRegistry)
+- `src/SharedKernel/StatsTid.SharedKernel/Segmentation/PlannedCalculation.cs` (modified — `FromManifest` body delegates to `PeriodPlanner.FromManifest` instead of throwing)
+**Scope**: `Plan(employeeId, periodStart, periodEnd, calculationKind, ruleSet, sources, options)` produces a `PlannedCalculation` (segments list from boundary detection, snapshots gathered when any rule's `SnapshotContract` requires it). `FromManifest(SegmentManifest, ruleSet)` reconstructs a `PlannedCalculation` with segments populated from the manifest, re-runs rule-side invariants. Boundary-cause tie-break: OkTransition > AgreementConfigPromotion > PositionOverrideEffective > EuWtdRulesetVersion (highest-impact wins).
+**Validation**: build clean; 495/495 unit tests pass; cell tests + D9 invariant negatives in TASK-2012 will exercise the throw paths.
+**Cross-domain dependencies**: depends on TASK-2003 (skeleton). Note: TASK-2004 absorbed addition of the four classification contract types (Span/SplitBehavior/Family/RuleClassification) — TASK-2003 skeleton predated them.
 
 #### TASK-2005 — Result mergers (calculation + compliance)
 **Agent**: Rule Engine (SharedKernel infrastructure)
-**Phase**: 2
+**Phase**: 2 — completed 2026-04-30
 **Files (write)**:
 - `src/SharedKernel/StatsTid.SharedKernel/Segmentation/CalculationResultMerger.cs`
 - `src/SharedKernel/StatsTid.SharedKernel/Segmentation/ComplianceCheckResultMerger.cs`
-**Scope**: List-based `MergeStrategy.Apply(IReadOnlyList<TResult>)` per ADR-016 D3 defaults: `Concatenate` for entry/segment-safe calculation; `RejectIfMultipleSegments` for aligned-window; `UnionDedupe` for compliance always; explicit error when `Mergeable` calculation lacks per-rule override.
-**Validation**: unit tests cover each default path + the override path.
+**Scope**: List-based `MergeStrategy.Apply(IReadOnlyList<TResult>)` per ADR-016 D3 defaults. `ComplianceViolation` dedup key: `(ViolationType, Date, ActualValue, ThresholdValue, Severity)` as private `readonly record struct`; `Message` (presentation) and `IsVoluntaryExempt` (segment-state-dependent) excluded with rationale documented inline. `UnionDedupe` accepted by ComplianceCheckResultMerger only — calc merger throws `PlannerInvariantViolation` if reached. Empty-list defense in both. Stable order (first-occurrence wins) via `HashSet<DedupKey>`-guarded list.
+**Validation**: build clean; 495/495 unit tests pass (mergers are net-new code with no consumers yet — TASK-2008 wires them in).
 **Cross-domain dependencies**: depends on TASK-2003.
 
 #### TASK-2006 — RuleRegistry signature + multi-mode decomposition
 **Agent**: Rule Engine
-**Phase**: 2
+**Phase**: 2 — completed 2026-04-30
 **Files (write)**:
-- `src/RuleEngine/StatsTid.RuleEngine.Api/Rules/RuleRegistry.cs` (signature change)
-- `src/RuleEngine/StatsTid.RuleEngine.Api/Rules/NormCheckRule.cs` (decompose into `NORM_CHECK_WEEKLY`, `NORM_CHECK_MULTIWEEK`, `NORM_CHECK_ANNUAL`)
-- `src/RuleEngine/StatsTid.RuleEngine.Api/Rules/RestPeriodRule.cs` (decompose into `REST_PERIOD_MAX_DAILY`, `REST_PERIOD_DAILY_REST`, `REST_PERIOD_WEEKLY_REST`, `REST_PERIOD_48H_CEILING`)
-- `src/RuleEngine/StatsTid.RuleEngine.Api/Rules/OvertimeGovernanceRule.cs` (decompose into `OVERTIME_MAX_HOURS`, `OVERTIME_PRE_APPROVAL`)
-**Scope**: `Register` gains required `span`, `splitBehavior`, `family`, optional `mergeStrategy`. Compile-time error when `splitBehavior: Mergeable` registration omits `mergeStrategy`. Multi-mode rules' modes register separately. Existing endpoint dispatchers updated to route by classification + period rather than by intra-rule branching.
-**Validation**: existing rule unit tests still pass (each decomposed mode has its own focused tests added in TASK-2012). `dotnet build` clean.
-**Cross-domain dependencies**: depends on TASK-2003 (uses `MergeStrategy`, `SnapshotContract` types). Note: `EntitlementValidationRule` is explicitly out of segmentation scope per ADR-016 — register without segmentation triple OR keep it on the legacy path; decide at implementation time.
+- `src/RuleEngine/StatsTid.RuleEngine.Api/Rules/RuleRegistry.cs` (full rewrite — classification table + Register/GetAll/Get/ResolveDefault; legacy dispatchers retained, EvaluateTimeRule routes the three new norm ids alongside legacy NORM_CHECK_37H alias)
+- `src/RuleEngine/StatsTid.RuleEngine.Api/Rules/NormCheckRule.cs` (decompose: added `EvaluateWeekly`/`EvaluateMultiWeek`/`EvaluateAnnual`; legacy `RuleId="NORM_CHECK_37H"` and `Evaluate(...config)` unchanged for backward compat)
+- `src/RuleEngine/StatsTid.RuleEngine.Api/Rules/RestPeriodRule.cs` (decompose: added 4 entry points reusing existing `Check*` private helpers; legacy `RuleId="REST_PERIOD_CHECK"` and `Evaluate` unchanged)
+- `src/RuleEngine/StatsTid.RuleEngine.Api/Rules/OvertimeGovernanceRule.cs` (decompose: 2 entry points; legacy unchanged)
+**Scope**: `Register(ruleId, span, splitBehavior, family, mergeStrategy?, snapshotContract?)`. Runtime error when `splitBehavior: Mergeable` registration omits `mergeStrategy`. Period-mergeable compliance rules use explicit `MergeStrategy.UnionDedupe` (per ADR-016 D3 — compliance defaults to UnionDedupe regardless of split-behavior, correcting an early dispatch error that would have used Custom). Calc-Mergeable rules (MULTIWEEK, ANNUAL, FLEX_BALANCE) use explicit `MergeStrategy.Custom`; the actual Custom delegate wires in TASK-2008/2009 (until then merger throws if Custom is reached without delegate). Legacy ids (`NORM_CHECK_37H`, `REST_PERIOD_CHECK`, `OVERTIME_GOVERNANCE_CHECK`) retained as aliases routing to legacy `Evaluate` entry points — preserves all external callers (orchestrator pipeline, payroll integration, smoke tests, existing unit tests). `EntitlementValidationRule` kept on the legacy `/api/rules/validate-entitlement` HTTP path; not classified.
+**Validation**: build clean; 495/495 unit tests pass (no test required modification — the legacy entry points produce bit-exact results).
+**Cross-domain dependencies**: depends on TASK-2003 (`MergeStrategy`, `SnapshotContract`) + TASK-2004 (`Span`, `SplitBehavior`, `Family`, `RuleClassification`).
 
 #### TASK-2007 — EventSerializer + CalculationResult amendment
 **Agent**: Data Model
-**Phase**: 2
+**Phase**: 2 — completed 2026-04-30
 **Files (write)**:
-- `src/Infrastructure/StatsTid.Infrastructure/Events/EventSerializer.cs` (or current location — verify)
-- `src/SharedKernel/StatsTid.SharedKernel/Models/CalculationResult.cs` (additive `ManifestId Guid` field)
-- `src/Infrastructure/StatsTid.Infrastructure/.../audit_log` payload writer (additive `manifest_id` field — verify location)
-**Scope**: Register `SegmentManifestCreated` event type (count 34 → 35); add additive `ManifestId` field to `CalculationResult`; add additive `manifest_id` to audit_log payload writers for calculation entries.
-**Validation**: `EventSerializer` round-trip test for `SegmentManifestCreated`; existing event-type-coverage test passes (DEP-003 invariant).
-**Cross-domain dependencies**: depends on TASK-2003 (`SegmentManifest` type must exist).
+- `src/SharedKernel/StatsTid.SharedKernel/Events/SegmentManifestCreated.cs` (new — `DomainEventBase` descendant; list-typed properties default to `Array.Empty<T>()` rather than `required` to keep existing reflection-based `EventSerializerCoverageTests` round-trip passing)
+- `src/Infrastructure/StatsTid.Infrastructure/EventSerializer.cs` (registered `SegmentManifestCreated`)
+- `src/SharedKernel/StatsTid.SharedKernel/Models/CalculationResult.cs` (additive `Guid ManifestId { get; init; }` defaulting `Guid.Empty` — not `required`, not nullable)
+- `src/Infrastructure/StatsTid.Infrastructure/Security/AuditLoggingMiddleware.cs` (added `ManifestIdItemKey = "audit:manifest_id"`; new `BuildDetailsPayload(HttpContext)` writes `{"manifest_id":"<guid>"}` into `entry.Details` when key present in `HttpContext.Items` with non-empty Guid; otherwise null → JSON byte-identical to today)
+**Scope**: Register `SegmentManifestCreated` event type (event count 43 → 44 — original spec said 34→35 but registry had grown across S6/S9/S12/S14/S15/S16/S17). Additive `ManifestId` on `CalculationResult`. Audit middleware reads `audit:manifest_id` from `HttpContext.Items` (TASK-2008 will populate it from endpoints).
+**Validation**: build clean; 495/495 unit tests pass; `EventSerializerCoverageTests` reflection guard passes (every concrete `DomainEventBase` descendant registered); existing `Sprint4ModelTests:147` (only test that constructs `CalculationResult`) passes without modification.
+**Cross-domain dependencies**: depends on TASK-2003 (`SegmentManifest` type, `PlannedSegment` type).
 
 #### TASK-2008 — PeriodCalculationService rewrite + ReplayAsync
 **Agent**: Payroll

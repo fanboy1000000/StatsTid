@@ -140,13 +140,12 @@ public sealed class PlannedCalculation
     /// </summary>
     internal static PlannedCalculation FromManifest(SegmentManifest manifest)
     {
-        // TODO (TASK-2004): replace this stub with full reconstruction.
-        // The planner owns the logic for mapping SegmentManifest → PlannedCalculation,
-        // including re-hydrating SegmentSnapshot values and verifying SnapshotContract
-        // completeness for each segment. Calling this method before TASK-2004 lands will
-        // throw at runtime to make the missing dependency visible.
-        throw new NotImplementedException(
-            "PlannedCalculation.FromManifest is a stub pending TASK-2004 (PeriodPlanner). " +
-            $"ManifestId={manifest.ManifestId}");
+        // TASK-2004: delegate to PeriodPlanner.FromManifest. This single-argument shim
+        // skips the rule-side invariant pass — callers that have a ruleSet should use
+        // PeriodPlanner.FromManifest(manifest, ruleSet) directly so that snapshot
+        // completeness is re-asserted against today's rule registry. This shim exists so
+        // that callers which only need the geometric reconstruction (e.g. low-level
+        // projection rebuild paths) can still operate.
+        return PeriodPlanner.FromManifest(manifest, Array.Empty<RuleClassification>());
     }
 }
