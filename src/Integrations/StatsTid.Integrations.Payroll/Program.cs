@@ -24,6 +24,26 @@ builder.Services.AddSingleton<LocalConfigurationRepository>();
 builder.Services.AddSingleton<ConfigResolutionService>();
 builder.Services.AddSingleton<IdempotencyGuard>();
 
+// JWT minting service (TASK-2010): used by HttpRuleClassificationProvider to mint
+// service-to-service tokens for the GET /api/rules/classifications fetch. JwtSettings
+// is registered transitively by AddStatsTidJwtAuth below; the singleton constructor
+// resolves it from DI at first request.
+builder.Services.AddSingleton<JwtTokenService>();
+
+// HTTP-backed rule classification provider (TASK-2010 / S20). Replaces the implicit
+// EmptyRuleClassificationProvider fallback inside PeriodCalculationService — once this
+// registration is in place, D9 rule-side invariants fire on every calculation against
+// the live RuleRegistry contents fetched from /api/rules/classifications.
+//
+// EmptyRuleClassificationProvider (defined in PeriodCalculationService.cs) is retained
+// for tests and for any environment where the Rule Engine is unreachable; it remains
+// the documented fallback when this DI registration is absent.
+builder.Services.AddHttpClient<IRuleClassificationProvider, HttpRuleClassificationProvider>(client =>
+{
+    var ruleEngineUrl = builder.Configuration["ServiceUrls:RuleEngine"] ?? "http://rule-engine:8080";
+    client.BaseAddress = new Uri(ruleEngineUrl);
+});
+
 // Resource-scope enforcement for /api/payroll/calculate-and-export (TASK-1902).
 // LocalAdmin role alone is not sufficient — the caller's scope must also cover
 // the target employee's org. Reuses the same OrgScopeValidator chain the Backend

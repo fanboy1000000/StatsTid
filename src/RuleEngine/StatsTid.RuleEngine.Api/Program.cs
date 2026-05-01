@@ -96,6 +96,16 @@ app.MapGet("/api/rules/available/{okVersion}", (string okVersion, RuleRegistry r
     return Results.Ok(new { okVersion, rules });
 }).RequireAuthorization("Authenticated");
 
+// Read-only passthrough of the in-memory ADR-016 classification inventory used by
+// the segmentation planner. Consumed by Payroll's HTTP-backed
+// IRuleClassificationProvider (TASK-2010) so PeriodPlanner.Plan() / FromManifest()
+// see the resolved (Span, SplitBehavior, Family, MergeStrategy, SnapshotContract)
+// triple per rule. ADR-002 purity holds — RuleRegistry is in-memory; no I/O.
+app.MapGet("/api/rules/classifications", (RuleRegistry registry) =>
+{
+    return Results.Ok(registry.GetAll());
+}).RequireAuthorization("Authenticated");
+
 app.MapPost("/api/rules/validate-entitlement", (ValidateEntitlementRequest request) =>
 {
     var result = EntitlementValidationRule.Evaluate(request);
