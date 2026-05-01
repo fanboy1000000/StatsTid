@@ -1141,7 +1141,7 @@ CREATE TABLE IF NOT EXISTS segment_manifests (
     manifest_id             UUID        PRIMARY KEY,
     period_start            DATE        NOT NULL,
     period_end              DATE        NOT NULL,
-    employee_id             UUID        NOT NULL,
+    employee_id             TEXT        NOT NULL,
     -- Allowed values: 'forward-calc' | 'retroactive-correction' | 'replay'
     -- No CHECK constraint — string enum is enforced in C# (project convention, per ADR-002)
     calculation_kind        TEXT        NOT NULL,

@@ -48,7 +48,7 @@ public static class PeriodPlanner
     /// (in the ctor) or rule-side invariants (here in the planner) are violated.
     /// Also thrown for upstream-alignment violations per ADR-016 D4.</exception>
     public static PlannedCalculation Plan(
-        Guid employeeId,
+        string employeeId,
         DateOnly periodStart,
         DateOnly periodEnd,
         string calculationKind,
@@ -60,6 +60,9 @@ public static class PeriodPlanner
         ArgumentNullException.ThrowIfNull(sources);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(calculationKind);
+        // Empty/whitespace check on employeeId is asserted by PlannedCalculation's ctor
+        // (ADR-016 D10 amendment 2026-05-01) — the planner forwards the value unchanged so
+        // the violation message points at the geometric invariant where it belongs.
 
         if (periodEnd < periodStart)
             throw new PlannerInvariantViolation(
@@ -211,7 +214,7 @@ public static class PeriodPlanner
         IReadOnlyList<RuleClassification> ruleSet,
         BoundarySources sources,
         PlannerOptions options,
-        Guid employeeId)
+        string employeeId)
     {
         // Reject rules: any boundary inside the period is fatal.
         var hasInteriorBoundary = HasAnyInteriorBoundary(periodStart, periodEnd, sources);

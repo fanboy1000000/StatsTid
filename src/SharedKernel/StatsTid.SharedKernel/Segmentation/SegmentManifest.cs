@@ -23,7 +23,10 @@ public sealed record SegmentManifest(
     Guid ManifestId,
     DateOnly PeriodStart,
     DateOnly PeriodEnd,
-    Guid EmployeeId,
+    // EmployeeId is stored as string to align with every other employee_id column in the
+    // schema (ADR-016 D10 amendment 2026-05-01). The projection table uses TEXT NOT NULL
+    // so audit-query joins to other employee-keyed tables work without UUID derivation.
+    string EmployeeId,
 
     /// <summary>
     /// Allowed values: <c>forward-calc</c>, <c>retroactive-correction</c>, <c>replay</c>.

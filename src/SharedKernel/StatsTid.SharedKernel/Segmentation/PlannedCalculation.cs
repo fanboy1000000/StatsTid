@@ -45,8 +45,10 @@ public sealed class PlannedCalculation
     /// <summary>Unique identifier for this planned calculation run; also the manifest id.</summary>
     public Guid ManifestId { get; }
 
-    /// <summary>The employee whose period is being calculated.</summary>
-    public Guid EmployeeId { get; }
+    /// <summary>The employee whose period is being calculated. Stored as <c>string</c> to
+    /// align with every other <c>employee_id</c> column in the schema (ADR-016 D10 amendment
+    /// 2026-05-01) and to avoid synthetic SHA-256-derived UUIDs in the projection.</summary>
+    public string EmployeeId { get; }
 
     /// <summary>Inclusive start of the calculation period.</summary>
     public DateOnly PeriodStart { get; }
@@ -77,12 +79,22 @@ public sealed class PlannedCalculation
     /// </summary>
     internal PlannedCalculation(
         Guid manifestId,
-        Guid employeeId,
+        string employeeId,
         DateOnly periodStart,
         DateOnly periodEnd,
         IReadOnlyList<PlannedSegment> segments,
         string calculationKind)
     {
+        // --- Geometric invariant 0: employeeId is non-empty ---
+        // Replaces the implicit `Guid.Empty` invariant the type system used to provide
+        // (ADR-016 D10 amendment 2026-05-01: EmployeeId is now string to align with every
+        // other employee_id column in the schema). Whitespace-only ids are rejected for the
+        // same reason — they would project as a junk row that no other table can join to.
+        if (string.IsNullOrWhiteSpace(employeeId))
+            throw new PlannerInvariantViolation(
+                $"PlannedCalculation invariant violated: EmployeeId must be a non-empty, " +
+                $"non-whitespace string (PeriodStart={periodStart}, PeriodEnd={periodEnd}).");
+
         // --- Geometric invariant 1: at least one segment ---
         if (segments.Count < 1)
             throw new PlannerInvariantViolation(

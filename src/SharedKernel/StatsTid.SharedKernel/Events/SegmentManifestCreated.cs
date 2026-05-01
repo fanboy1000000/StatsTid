@@ -25,7 +25,13 @@ public sealed class SegmentManifestCreated : DomainEventBase
     public override string EventType => "SegmentManifestCreated";
 
     public required Guid ManifestId { get; init; }
-    public required Guid EmployeeId { get; init; }
+
+    /// <summary>
+    /// Employee identifier. Typed <c>string</c> to align with every other <c>employee_id</c>
+    /// column in the schema (ADR-016 D10 amendment 2026-05-01) and so the projection row can
+    /// join to other employee-keyed tables without SHA-256-derived synthetic UUIDs.
+    /// </summary>
+    public required string EmployeeId { get; init; }
     public required DateOnly PeriodStart { get; init; }
     public required DateOnly PeriodEnd { get; init; }
 
