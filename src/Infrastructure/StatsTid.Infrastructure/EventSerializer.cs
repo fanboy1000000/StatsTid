@@ -67,6 +67,8 @@ public static class EventSerializer
         ["OvertimePreApprovalCreated"] = typeof(OvertimePreApprovalCreated),
         // Sprint 20: Temporal segmentation events (ADR-016 D10)
         ["SegmentManifestCreated"] = typeof(SegmentManifestCreated),
+        // Sprint 21: Local agreement profile events (ADR-017 D6/D7)
+        ["LocalAgreementProfileChanged"] = typeof(LocalAgreementProfileChanged),
     };
 
     public static string Serialize(IDomainEvent @event)

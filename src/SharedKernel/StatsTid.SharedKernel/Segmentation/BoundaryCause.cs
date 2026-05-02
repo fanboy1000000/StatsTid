@@ -24,6 +24,16 @@ public enum BoundaryCause
     AgreementConfigPromotion,
 
     /// <summary>
+    /// A <c>local_agreement_profiles</c> row whose <c>effective_from</c> date (ADR-017, S21)
+    /// falls inside the calculation period — splitting the calculation into
+    /// pre-activation and post-activation segments.
+    ///
+    /// Tie-break order (ADR-017 D9b): <c>OkTransition &gt; AgreementConfigPromotion &gt;
+    /// LocalProfileActivation &gt; PositionOverrideEffective &gt; EuWtdRulesetVersion</c>.
+    /// </summary>
+    LocalProfileActivation,
+
+    /// <summary>
     /// A position-override policy whose <c>effective_from</c> date (ADR-013, S11/S14) falls
     /// inside the calculation period.
     /// </summary>

@@ -205,7 +205,7 @@ New table `local_agreement_profile_audit`:
 CREATE TABLE local_agreement_profile_audit (
     audit_id      BIGSERIAL    PRIMARY KEY,
     profile_id    UUID         NOT NULL,
-    action        TEXT         NOT NULL CHECK (action IN ('CREATED', 'SUPERSEDED', 'DEACTIVATED')),
+    action        TEXT         NOT NULL CHECK (action IN ('CREATED', 'SUPERSEDED', 'DEACTIVATED', 'MIGRATED_FROM_LEGACY')),
     delta_jsonb   JSONB        NOT NULL,  -- mirrors LocalAgreementProfileChanged.ChangedFields
     actor_id      TEXT         NOT NULL,
     actor_role    TEXT         NOT NULL,
@@ -213,6 +213,10 @@ CREATE TABLE local_agreement_profile_audit (
 );
 CREATE INDEX idx_local_profile_audit_profile ON local_agreement_profile_audit(profile_id);
 ```
+
+**Action enum (Phase-1 review amendment, 2026-05-02)**: `MIGRATED_FROM_LEGACY` was added to the action enum so the migration runner (TASK-2106) can record the per-profile "synthesized from legacy rows" trace alongside the per-row drops it writes into `local_configuration_audit`. The original D8 spec listed three actions; the migration's audit needs a fourth distinct from `CREATED` so audit consumers can distinguish admin-initiated saves from migration synthesis.
+
+**No `APPROVED` action** (forward-readable note for cross-table comparison): the legacy `local_configuration_audit` carries an `APPROVED` action because its domain has a separate approval role (per ADR-014's pattern). The new profile model has no approval state — D2's close-then-insert makes profile saves immediately effective; D5's `LocalAdminOrAbove` authorization is the gate, not a separate approval step. The asymmetry between the two audit tables' action enums is intentional and reflects the lifecycle simplification.
 
 One audit row per save. `delta_jsonb` mirrors the event's `ChangedFields` shape — same data, two persistence sites (event store + projection), identical semantics. The audit row write is in the **same DB transaction** as the event-store append and the profile UPDATE+INSERT (see D6's transactional-contract paragraph) — no partial-failure mode is possible while all three writes target the same PostgreSQL connection.
 

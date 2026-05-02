@@ -260,6 +260,11 @@ public static class PeriodPlanner
             if (t.Date > periodStart && t.Date <= periodEnd) return true;
         foreach (var t in sources.AgreementConfigPromotions)
             if (t.Date > periodStart && t.Date <= periodEnd) return true;
+        if (sources.LocalProfileActivations is { } profiles)
+        {
+            foreach (var t in profiles)
+                if (t.EffectiveFrom > periodStart && t.EffectiveFrom <= periodEnd) return true;
+        }
         foreach (var t in sources.PositionOverrideEffectiveDates)
             if (t.Date > periodStart && t.Date <= periodEnd) return true;
         foreach (var t in sources.EuWtdRulesetTransitions)
@@ -365,12 +370,24 @@ public static class PeriodPlanner
 /// <param name="NonDatedSourceValues">Snapshot dictionary for non-effective-dated sources
 /// (employee profile fields, wage-type mappings, entitlement-policy rows). Keyed by the
 /// dotted field path declared in <see cref="SnapshotContract.NonDatedSourceFields"/>.</param>
+/// <param name="LocalProfileActivations">Local-agreement-profile activation effective-from
+/// dates (ADR-017, S21). Each <c>(EffectiveFrom, ProfileId)</c> introduces a boundary at
+/// <c>EffectiveFrom</c> with cause <see cref="BoundaryCause.LocalProfileActivation"/>.
+/// Defaults to <c>null</c> for backward compatibility with pre-S21 call sites; the planner
+/// and detector treat <c>null</c> as the empty list (no profile-activation boundaries).
+/// Positional order is intentionally last (after <see cref="NonDatedSourceValues"/>) so
+/// existing positional construction continues to compile; the
+/// <see cref="BoundaryCause.LocalProfileActivation"/> tie-break slot in
+/// <c>BoundaryDetector.OrderedCauses</c> still sits between
+/// <see cref="BoundaryCause.AgreementConfigPromotion"/> and
+/// <see cref="BoundaryCause.PositionOverrideEffective"/> (ADR-017 D9b).</param>
 public sealed record BoundarySources(
     IReadOnlyList<(DateOnly Date, string FromVersion, string ToVersion)> OkTransitions,
     IReadOnlyList<(DateOnly Date, string AgreementCode)> AgreementConfigPromotions,
     IReadOnlyList<(DateOnly Date, string PositionCode)> PositionOverrideEffectiveDates,
     IReadOnlyList<(DateOnly Date, int FromRulesetVersion, int ToRulesetVersion)> EuWtdRulesetTransitions,
-    IReadOnlyDictionary<string, object?> NonDatedSourceValues)
+    IReadOnlyDictionary<string, object?> NonDatedSourceValues,
+    IReadOnlyList<(DateOnly EffectiveFrom, Guid ProfileId)>? LocalProfileActivations = null)
 {
     /// <summary>
     /// Convenience empty instance — useful for tests and for the common
@@ -381,5 +398,6 @@ public sealed record BoundarySources(
         Array.Empty<(DateOnly, string)>(),
         Array.Empty<(DateOnly, string)>(),
         Array.Empty<(DateOnly, int, int)>(),
-        new Dictionary<string, object?>());
+        new Dictionary<string, object?>(),
+        Array.Empty<(DateOnly, Guid)>());
 }

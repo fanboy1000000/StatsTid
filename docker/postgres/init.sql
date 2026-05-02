@@ -470,10 +470,19 @@ CREATE INDEX IF NOT EXISTS idx_local_config_org ON local_configurations(org_id);
 CREATE INDEX IF NOT EXISTS idx_local_config_area ON local_configurations(config_area);
 
 -- Local configuration audit trail (append-only)
+-- S21 ADR-017 D8: extended action vocabulary for legacy-row migration to profile model.
+--   DROPPED_DUPLICATE_AT_MIGRATION  -- legacy row collapsed into a sibling profile (dup of another key)
+--   DROPPED_INFORMATIONAL           -- legacy row carried no overridable value (e.g. notes-only)
+--   DROPPED_UNKNOWN_KEY             -- legacy row referenced a config_key not in the profile schema
+--   MIGRATED_FROM_LEGACY            -- legacy row absorbed into a local_agreement_profiles row
 CREATE TABLE IF NOT EXISTS local_configuration_audit (
     audit_id            BIGSERIAL   PRIMARY KEY,
     config_id           UUID        NOT NULL,
-    action              TEXT        NOT NULL CHECK (action IN ('CREATED', 'MODIFIED', 'DEACTIVATED', 'APPROVED')),
+    action              TEXT        NOT NULL CHECK (action IN (
+        'CREATED', 'MODIFIED', 'DEACTIVATED', 'APPROVED',
+        'DROPPED_DUPLICATE_AT_MIGRATION', 'DROPPED_INFORMATIONAL',
+        'DROPPED_UNKNOWN_KEY', 'MIGRATED_FROM_LEGACY'
+    )),
     previous_value      JSONB,
     new_value           JSONB,
     actor_id            TEXT        NOT NULL,
@@ -481,6 +490,57 @@ CREATE TABLE IF NOT EXISTS local_configuration_audit (
     timestamp           TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_local_config_audit_config ON local_configuration_audit(config_id);
+
+-- =====================================================================
+-- S21 ADR-017: Local agreement configuration as a profile
+-- =====================================================================
+-- Replaces the per-key patch bag in local_configurations with a typed
+-- profile row per (org_id, agreement_code, ok_version) effective period.
+-- Schema-level invariant: at most one currently-active profile per
+-- (org, agreement_code, ok_version) -- enforced via partial unique index
+-- on effective_to IS NULL (ADR-017 D1).
+CREATE TABLE IF NOT EXISTS local_agreement_profiles (
+    profile_id                          UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
+    org_id                              TEXT            NOT NULL REFERENCES organizations(org_id),
+    agreement_code                      TEXT            NOT NULL,
+    ok_version                          TEXT            NOT NULL,
+    effective_from                      DATE            NOT NULL,
+    effective_to                        DATE,
+    -- Overridable fields: NULL means "inherit central agreement value"
+    weekly_norm_hours                   NUMERIC(5,2),
+    max_flex_balance                    NUMERIC(6,2),
+    flex_carryover_max                  NUMERIC(6,2),
+    max_overtime_hours_per_period       NUMERIC(6,2),
+    overtime_requires_pre_approval      BOOLEAN,
+    -- Metadata
+    created_by                          TEXT            NOT NULL,
+    created_at                          TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+);
+-- ADR-017 D1: at most one active (effective_to IS NULL) profile per scope.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_local_agreement_profile_active
+    ON local_agreement_profiles (org_id, agreement_code, ok_version)
+    WHERE effective_to IS NULL;
+CREATE INDEX IF NOT EXISTS idx_local_agreement_profile_org
+    ON local_agreement_profiles(org_id);
+-- For GET .../history reads: list profiles in reverse chronological order.
+CREATE INDEX IF NOT EXISTS idx_local_agreement_profile_history
+    ON local_agreement_profiles (org_id, agreement_code, ok_version, effective_from DESC);
+
+-- ADR-017 D8: append-only audit trail for profile lifecycle events.
+-- Mirrors a new event type registered by TASK-2103 (DEP-003 EventSerializer).
+CREATE TABLE IF NOT EXISTS local_agreement_profile_audit (
+    audit_id        BIGSERIAL       PRIMARY KEY,
+    profile_id      UUID            NOT NULL,
+    action          TEXT            NOT NULL CHECK (action IN (
+        'CREATED', 'SUPERSEDED', 'DEACTIVATED', 'MIGRATED_FROM_LEGACY'
+    )),
+    delta_jsonb     JSONB           NOT NULL,
+    actor_id        TEXT            NOT NULL,
+    actor_role      TEXT            NOT NULL,
+    timestamp       TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_local_profile_audit_profile
+    ON local_agreement_profile_audit(profile_id);
 
 -- Period approval workflow
 CREATE TABLE IF NOT EXISTS approval_periods (

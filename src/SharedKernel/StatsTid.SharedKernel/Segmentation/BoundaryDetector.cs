@@ -26,6 +26,9 @@ internal static class BoundaryDetector
     ///     OK transition coincides with anything, attribute the segment to OK.</item>
     ///   <item><see cref="BoundaryCause.AgreementConfigPromotion"/> — DRAFT→ACTIVE
     ///     promotions are the next-most-impactful for downstream rules.</item>
+    ///   <item><see cref="BoundaryCause.LocalProfileActivation"/> — local-agreement-profile
+    ///     activation effective-from (ADR-017 D9b, S21); per-org scope, sits below
+    ///     agreement-level promotions but above per-position overrides.</item>
     ///   <item><see cref="BoundaryCause.PositionOverrideEffective"/> — per-position
     ///     scope; affects fewer rules.</item>
     ///   <item><see cref="BoundaryCause.EuWtdRulesetVersion"/> — narrow compliance
@@ -36,6 +39,7 @@ internal static class BoundaryDetector
     {
         BoundaryCause.OkTransition,
         BoundaryCause.AgreementConfigPromotion,
+        BoundaryCause.LocalProfileActivation,
         BoundaryCause.PositionOverrideEffective,
         BoundaryCause.EuWtdRulesetVersion,
     };
@@ -73,6 +77,18 @@ internal static class BoundaryDetector
         {
             if (IsInsidePeriod(t.Date, periodStart, periodEnd))
                 AddIfAbsent(byDate, t.Date, BoundaryCause.AgreementConfigPromotion);
+        }
+
+        // LocalProfileActivations (ADR-017 D9b, S21). Nullable for backward compatibility
+        // with pre-S21 callers that construct BoundarySources without specifying the field;
+        // null is treated as the empty list (no profile-activation boundaries).
+        if (sources.LocalProfileActivations is { } profileActivations)
+        {
+            foreach (var t in profileActivations)
+            {
+                if (IsInsidePeriod(t.EffectiveFrom, periodStart, periodEnd))
+                    AddIfAbsent(byDate, t.EffectiveFrom, BoundaryCause.LocalProfileActivation);
+            }
         }
 
         // PositionOverrideEffectiveDates
