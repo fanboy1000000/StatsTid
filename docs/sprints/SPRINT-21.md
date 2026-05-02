@@ -3,7 +3,7 @@
 | Field | Value |
 |-------|-------|
 | **Sprint** | 21 |
-| **Status** | analysis-phase open (Step 0a + Step 0b + data audit + ADR-017 + ADR review cycle 1 complete 2026-05-02; migration plan + task decomposition pending) |
+| **Status** | analysis-phase open (Step 0a + Step 0b + data audit + ADR-017 + ADR review cycle 1 + migration plan complete 2026-05-02; task decomposition pending) |
 | **Start Date** | 2026-05-02 |
 | **End Date** | TBD |
 | **Orchestrator Approved** | analysis-phase yet to begin |
@@ -329,6 +329,225 @@ Strong convergence with internal Reviewer. Same 3 BLOCKERs (D1+D9c filter mismat
 | ADR-014 predicate divergence | NOTE (Reviewer-only) | **D1 paragraph added** explaining the divergence (no DRAFT workflow → no `status` enum needed). |
 
 ADR-017 cycle 1 closed within the 2-cycle cap. Plan-review pattern matches S20's Step 0b shape. Cycle 2 not invoked — no BLOCKERs remain after cycle 1 resolutions.
+
+## Migration Plan (Deliverable #3, 2026-05-02)
+
+Per ADR-017 D4, migration is big-bang cutover in a single transaction. This section enumerates each step, the failure modes the transaction handles, and the synthesized fixture set for D11's 17-test floor.
+
+### Migration sequence
+
+The migration runs as one transaction inside the post-S20 deployment. PostgreSQL's transactional DDL guarantees all-or-nothing semantics: any failure rolls back every CREATE TABLE, INDEX, and INSERT.
+
+```sql
+BEGIN;
+
+-- Step 1: Create new schema.
+CREATE TABLE local_agreement_profiles (
+    profile_id                          UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    org_id                              TEXT         NOT NULL REFERENCES organizations(org_id),
+    agreement_code                      TEXT         NOT NULL,
+    ok_version                          TEXT         NOT NULL,
+    effective_from                      DATE         NOT NULL,
+    effective_to                        DATE,
+    weekly_norm_hours                   NUMERIC(5,2),
+    max_flex_balance                    NUMERIC(6,2),
+    flex_carryover_max                  NUMERIC(6,2),
+    max_overtime_hours_per_period       NUMERIC(6,2),
+    overtime_requires_pre_approval      BOOLEAN,
+    created_by                          TEXT         NOT NULL,
+    created_at                          TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX uq_local_agreement_profile_active
+    ON local_agreement_profiles (org_id, agreement_code, ok_version)
+    WHERE effective_to IS NULL;
+
+CREATE INDEX idx_local_agreement_profile_org ON local_agreement_profiles(org_id);
+CREATE INDEX idx_local_agreement_profile_history
+    ON local_agreement_profiles (org_id, agreement_code, ok_version, effective_from DESC);
+
+CREATE TABLE local_agreement_profile_audit (
+    audit_id      BIGSERIAL    PRIMARY KEY,
+    profile_id    UUID         NOT NULL,
+    action        TEXT         NOT NULL CHECK (action IN ('CREATED', 'SUPERSEDED', 'DEACTIVATED', 'MIGRATED_FROM_LEGACY')),
+    delta_jsonb   JSONB        NOT NULL,
+    actor_id      TEXT         NOT NULL,
+    actor_role    TEXT         NOT NULL,
+    timestamp     TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_local_profile_audit_profile ON local_agreement_profile_audit(profile_id);
+
+-- Step 2: Migrate per-row data into profile rows.
+-- See per-tuple migration logic below.
+
+-- Step 3: Emit `local_configuration_audit` rows for dropped per-row entries.
+-- See classification rules below.
+
+-- Step 4: Validation: row counts, key sets, expected drops.
+-- See post-migration assertions below.
+
+COMMIT;
+```
+
+If any step fails (constraint violation, classification mismatch, validation assertion), the entire transaction rolls back. The pre-S21 schema and data remain intact. Operator re-runs after fixing the fault.
+
+### Per-tuple migration logic (Step 2)
+
+Pseudocode (translated to a C# migration runner or PL/pgSQL function in deliverable #4):
+
+```
+known_overridable_keys = {
+    "MaxFlexBalance":              "max_flex_balance",
+    "FlexCarryoverMax":            "flex_carryover_max",
+    "WeeklyNormHours":             "weekly_norm_hours",
+    "MaxOvertimeHoursPerPeriod":   "max_overtime_hours_per_period",
+    "OvertimeRequiresPreApproval": "overtime_requires_pre_approval",
+}
+known_informational_keys = { "PlanningStartDay", "ApprovalCutoffDay" }
+
+# Whitelist source-of-truth (D4 cycle 1): the migration runner reads the
+# `known_overridable_keys` map from `LocalAgreementProfile`'s static metadata
+# (a `[Column]`-attribute reflection, or a single `OverridableFieldNames` const list).
+# If a future schema migration adds a column, the migration's known-keys set
+# automatically picks it up — no manual sync.
+
+for each (org_id, agreement_code, ok_version) tuple in local_configurations:
+    rows = SELECT * FROM local_configurations
+           WHERE org_id = @org AND agreement_code = @agreement AND ok_version = @ok_version
+             AND is_active = TRUE
+             AND effective_from <= today
+             AND (effective_to IS NULL OR effective_to >= today)
+           ORDER BY config_key, effective_from DESC;
+
+    profile_columns = {}
+    earliest_effective_from = MAX_DATE
+
+    for each config_key, group in rows group by config_key:
+        # Pick the most-recently-effective row for this key (largest effective_from).
+        winner = group.first  # Already DESC-sorted
+
+        if config_key in known_overridable_keys:
+            column_name = known_overridable_keys[config_key]
+            profile_columns[column_name] = parse(winner.config_value)
+            earliest_effective_from = MIN(earliest_effective_from, winner.effective_from)
+
+            # Audit-log all losers (non-winning rows for the same key).
+            for loser in group.skip(1):
+                INSERT INTO local_configuration_audit (config_id, action, previous_value, new_value, actor_id, actor_role)
+                VALUES (loser.config_id, 'DROPPED_DUPLICATE_AT_MIGRATION', loser.config_value, NULL, 'system', 'GlobalAdmin');
+
+        elif config_key in known_informational_keys:
+            for row in group:
+                INSERT INTO local_configuration_audit (config_id, action, previous_value, new_value, actor_id, actor_role)
+                VALUES (row.config_id, 'DROPPED_INFORMATIONAL', row.config_value, NULL, 'system', 'GlobalAdmin');
+
+        else:  # Unknown key (typo, deprecated, or future field)
+            for row in group:
+                INSERT INTO local_configuration_audit (config_id, action, previous_value, new_value, actor_id, actor_role)
+                VALUES (row.config_id, 'DROPPED_UNKNOWN_KEY', row.config_value, NULL, 'system', 'GlobalAdmin');
+
+    # Only insert a profile row if there's at least one overridable key.
+    if profile_columns is not empty:
+        new_profile_id = uuid_generate_v4()
+        INSERT INTO local_agreement_profiles (
+            profile_id, org_id, agreement_code, ok_version,
+            effective_from, effective_to, ...profile_columns,
+            created_by
+        ) VALUES (
+            @new_profile_id, @org, @agreement, @ok_version,
+            @earliest_effective_from, NULL, ...profile_columns.values,
+            'system'  # migration runs as the system actor
+        );
+
+        # Emit a profile-shaped audit row capturing the migration.
+        INSERT INTO local_agreement_profile_audit (profile_id, action, delta_jsonb, actor_id, actor_role)
+        VALUES (
+            @new_profile_id,
+            'MIGRATED_FROM_LEGACY',
+            jsonb_build_object('migrated_from_count', @row_count, 'profile_columns', @profile_columns_json),
+            'system',
+            'GlobalAdmin'
+        );
+```
+
+### Classification rules
+
+| Row in `local_configurations` | Migration action | Audit action |
+|-------------------------------|------------------|--------------|
+| `config_key` ∈ overridable, sole row for key | merged into profile column | none (it's the chosen value) |
+| `config_key` ∈ overridable, one of N rows | most-recently-effective wins | `DROPPED_DUPLICATE_AT_MIGRATION` for losers |
+| `config_key` ∈ informational | dropped | `DROPPED_INFORMATIONAL` |
+| `config_key` ∉ overridable ∪ informational | dropped (typo / deprecated / future) | `DROPPED_UNKNOWN_KEY` |
+| `is_active = FALSE` row | ignored entirely (not read into the migration) | none — pre-S21 deactivated rows stay queryable in their original table |
+| `effective_to < today` but `is_active = TRUE` | ignored (already-expired) | none — same reasoning |
+
+### Post-migration validation (Step 4)
+
+Inside the same transaction, before COMMIT, the migration runner asserts:
+
+1. **Profile count matches expected**: `SELECT COUNT(*) FROM local_agreement_profiles WHERE effective_to IS NULL` equals the count of `(org_id, agreement_code, ok_version)` tuples that had at least one overridable-key row in pre-migration data. For seed data: 1 (only `STY02 / HK / OK24`; `AFD01 / HK / OK24` has only `ApprovalCutoffDay` which is informational, so it does NOT receive a profile).
+2. **Drop counts match expected**: `SELECT COUNT(*) FROM local_configuration_audit WHERE action LIKE 'DROPPED_%' AND timestamp > @migration_start` equals the count of pre-migration rows that were not absorbed into profile columns. For seed: 2 (`PlanningStartDay`, `ApprovalCutoffDay`).
+3. **No partial-unique-index violations**: `SELECT COUNT(*) FROM (SELECT org_id, agreement_code, ok_version, COUNT(*) AS open_count FROM local_agreement_profiles WHERE effective_to IS NULL GROUP BY org_id, agreement_code, ok_version HAVING COUNT(*) > 1) violations` returns 0.
+4. **Profile NULL semantics correct**: every profile row has at least one non-NULL overridable column (otherwise no profile should exist — a fully-NULL profile is equivalent to no profile).
+
+If any assertion fails, the transaction rolls back. The runner outputs a structured error naming the failed assertion + offending row IDs.
+
+### Failure modes within migration
+
+| Failure | Detection | Outcome |
+|---------|-----------|---------|
+| Schema constraint violation (e.g., `org_id` doesn't reference a valid `organizations` row) | PostgreSQL FK check at INSERT time | Transaction aborts; rolled back |
+| Two rows with same `effective_from` for the same `(org, agreement, OkVersion)` after key resolution | Migration runner detects (would create two open-ended profiles for same key) — should be impossible because we pick a single winner per key, but assertion #3 catches the unexpected case | Transaction aborts; rolled back |
+| `local_configurations` table modified mid-migration (admin saves while migration runs) | Migration runs at deployment time when API is offline; admin saves shouldn't happen | If they do somehow happen, the post-migration `local_configurations` table contains rows the migration didn't see; those rows stay in legacy table (read-only post-migration) but are NOT in `local_agreement_profiles`. Explicitly NOT a transactional concern — operational discipline of "deploy with API offline" handles this. |
+| Insufficient permissions to CREATE TABLE | PostgreSQL DDL check | Transaction aborts |
+
+### Whitelist source-of-truth implementation (cycle 1 D4)
+
+Two implementation options for "the migration's known-overridable-keys set is generated from the same compile-time source as the schema":
+
+**Option (a) — Reflection over `LocalAgreementProfile` C# model.** The model has 5 properties matching column names; the migration runner uses reflection to enumerate them and maps PascalCase column-aware property names back to legacy `config_key` strings via a small dictionary. New columns automatically picked up.
+
+**Option (b) — Single shared const list.** A `static readonly IReadOnlyDictionary<string, string> LegacyKeyToColumn` declared in `StatsTid.SharedKernel.Models.LocalAgreementProfile`. The schema migration script references the same list (e.g., embeds them via a code-generation step). New columns added by editing the const + the schema together.
+
+Recommend option (b) — simpler, no reflection magic, single grep-able location. Deliverable #4 (task decomposition) commits to option (b) as the data-model task's responsibility.
+
+### Q11 / D11 Fixture Set
+
+Synthesized data for the 18 named test scenarios. Each fixture lives in the test class's `IAsyncLifetime.InitializeAsync` (Docker-gated) or as in-memory test data (unit). Migration-test fixtures populate `local_configurations` BEFORE running the migration; assertion checks the post-migration state.
+
+| # | Test class | Test name | Fixture seed | Assertion |
+|---|------------|-----------|--------------|-----------|
+| 1 | `ProfileMigrationTests` (Docker) | `MultiRowPerKeyCollision_KeepsMostRecentEffectiveFrom` | `local_configurations`: two rows for `(STY02, HK, OK24, MaxFlexBalance)` with `effective_from='2024-01-01'` (value=80) and `effective_from='2025-06-01'` (value=100), both `is_active=TRUE`, `effective_to=NULL` | post-migration profile has `max_flex_balance=100`; one `DROPPED_DUPLICATE_AT_MIGRATION` audit row for the 80-value losers |
+| 2 | `ProfileMigrationTests` (Docker) | `InformationalKey_PlanningStartDay_DroppedWithAudit` | `local_configurations`: one row `(STY02, HK, OK24, PlanningStartDay='MONDAY')` | post-migration: no `local_agreement_profiles` row created for STY02 (no overridable keys); one `DROPPED_INFORMATIONAL` audit row |
+| 3 | `ProfileMigrationTests` (Docker) | `TypoKey_MaxOvetimeHoursPerPeriod_DroppedWithAudit` | `local_configurations`: one row `(STY02, HK, OK24, MaxOvetimeHoursPerPeriod='150')` (typo) | post-migration: no profile row for STY02; one `DROPPED_UNKNOWN_KEY` audit row |
+| 4 | `ProfileMigrationTests` (Docker) | `ExpiredButActiveRow_IgnoredEntirely` | `local_configurations`: one row `(STY02, HK, OK24, MaxFlexBalance=60)` with `effective_to='2024-12-31'` (expired) but `is_active=TRUE` | post-migration: no profile row (the row was filtered out by `effective_to >= today`); the legacy row stays in `local_configurations` for audit-history reads |
+| 5 | `ProfileMigrationTests` (Docker) | `OneRowPerOverridableKey_HappyPath` | `local_configurations`: 5 rows, one per overridable key on `(STY02, HK, OK24)` with distinct `effective_from` dates | post-migration: one profile row with all 5 columns populated; `effective_from = MIN(source effective_froms)`; zero audit drops |
+| 6 | `ProfileUniquenessTests` (Docker) | `ConcurrentInsert_RaceSurfacesUniqueViolation` | two transactions racing INSERT against `(STY02, HK, OK24, effective_to=NULL)` | first INSERT succeeds; second receives PostgreSQL unique-violation error; partial-unique-index enforced |
+| 7 | `ProfileUniquenessTests` (Docker) | `DeactivationWithoutSupersession_AllowsFutureRecreation` | seed one open profile; UPDATE `effective_to=today`; later INSERT a new open profile for same triple | both operations succeed; the partial-unique-index is satisfied because the predecessor's `effective_to` is non-NULL |
+| 8 | `ProfileResolutionTests` (Unit) | `AllNullColumns_InheritCentralForEveryField` | profile with all 5 columns NULL; central config has known values | resolution returns `AgreementRuleConfig` matching central byte-for-byte |
+| 9 | `ProfileResolutionTests` (Unit) | `OneNonNullColumn_OverridesOnlyThatField` | profile with `max_flex_balance=100`, all other columns NULL; central has `max_flex_balance=80` | resolution returns `MaxFlexBalance=100`, `WeeklyNormHours=central`, etc. |
+| 10 | `ProfileResolutionTests` (Unit) | `NullAfterNonNull_RevertsToCentral` | initial profile sets `max_flex_balance=100`; second profile (after supersession) sets `max_flex_balance=NULL` | second profile's resolution returns central value for `MaxFlexBalance` |
+| 11 | `ProfileAuditTests` (Docker) | `Mutation_EmitsEventWithDelta` | PUT changes `weekly_norm_hours` 37→36 | one `LocalAgreementProfileChanged` event in event store with `ChangedFields={weekly_norm_hours: {Old:37, New:36}}`; `PrecedingProfileId` points at predecessor |
+| 12 | `ProfileAuditTests` (Docker) | `Mutation_PersistsAuditProjectionRow` | same PUT as #11 | one `local_agreement_profile_audit` row with same `delta_jsonb` shape; `action='SUPERSEDED'` |
+| 13 | `ProfileAlignmentValidatorTests` (Unit) | `WeeklyNormHoursMidWeek_Returns400WithStructuredError` | PUT with `effective_from='2026-05-06'` (Wednesday) and `weekly_norm_hours=36` | 400 with `{ field: "WeeklyNormHours", code: "NOT_MONDAY_ALIGNED", nearestValid: ["2026-05-04", "2026-05-11"] }` |
+| 14 | `ProfileBoundaryHydrationTests` (Docker) | `ProfileEffectiveFromInsidePeriod_ProducesBoundary` | seed profile with `effective_from='2026-04-15'`; calculation period `2026-04-01` to `2026-04-30` | `BuildPlanForLegacyCallers` produces `BoundarySources` with one `LocalProfileActivation` boundary at `2026-04-15`; `BoundaryCause.LocalProfileActivation` is set; tie-break order matches D9b. Variant: profile-less calling shape (no `OrgId` on `EmploymentProfile`) → empty `LocalProfileActivations`. |
+| 15 | `ProfileScheduledFutureRejectionTests` (Docker) | `EffectiveFromInFuture_Returns400` | PUT with `effective_from='2026-07-01'` (today is `2026-05-02`) | 400 with `code: "EFFECTIVE_FROM_NOT_TODAY_OR_PAST"` |
+| 16 | `ProfileLegacyEventNonEmissionTests` (Docker) | `ProfilePut_EmitsExactlyOneProfileEvent_AndZeroLegacyEvents` | PUT against new profile API | event store contains exactly one `LocalAgreementProfileChanged` and zero `LocalConfigurationChanged` for the calling correlation id |
+| 17 | `ProfileConcurrencyTokenTests` (Docker) | `PutWithoutIfMatchHeader_WhenCurrentExists_Returns412` | seed one open profile; PUT without `If-Match` header | 412 Precondition Failed; response body contains current profile state |
+| 18 | `ProfileConcurrencyTokenTests` (Docker) | `PutWithStaleIfMatch_AfterRacingAdminCommitted_Returns412` | seed open profile P1; admin A1 PUT with `If-Match: P1` succeeds (creates P2); admin A2 PUT with `If-Match: P1` (still based on P1) | 412 Precondition Failed; response body contains current profile state (=P2) |
+
+**Floor**: 17 tests committed (D11). 18 named scenarios documented; one above floor as headroom against last-minute removals. Each test class follows xUnit conventions and the post-S20 cleanup pattern (Docker-gated tests use `[Trait("Category", "Docker")]` + `TestFixtures.DockerHarness.StartAsync()`).
+
+### Migration plan summary
+
+- **Single transaction**, idempotent on rollback.
+- **Whitelist** generated from compile-time schema via const list (option b).
+- **Audit emissions** at every drop and every profile creation; both `local_configuration_audit` (legacy table for legacy-keyed entries) and `local_agreement_profile_audit` (new table for the migration-as-a-creation event).
+- **Validation assertions** inside the transaction; failure rolls back.
+- **Operational discipline** — deploy with API offline so no concurrent writes interfere with the migration.
+- **Post-migration cleanup** (drop `local_configurations` table + the per-row audit table) is explicitly out of S21 scope; tracked as a future cleanup sprint candidate.
+
+Migration plan closed. Next: deliverable #4 (TASK-21NN decomposition).
 
 ## References
 
