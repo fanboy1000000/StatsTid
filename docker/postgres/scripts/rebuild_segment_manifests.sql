@@ -127,12 +127,13 @@ DECLARE
     sample_ids      UUID[];
     rebuilt_rows    BIGINT;
 BEGIN
+    -- events has no physical manifest_id column; extract from data JSON.
     SELECT COUNT(*) INTO duplicate_count
     FROM (
-        SELECT manifest_id
+        SELECT (data->>'manifestId')::uuid AS manifest_id
         FROM events
         WHERE event_type = 'SegmentManifestCreated'
-        GROUP BY manifest_id
+        GROUP BY (data->>'manifestId')::uuid
         HAVING COUNT(*) > 1
     ) AS duplicates;
 
@@ -140,12 +141,12 @@ BEGIN
         SELECT ARRAY_AGG(manifest_id)
         INTO sample_ids
         FROM (
-            SELECT manifest_id
+            SELECT (data->>'manifestId')::uuid AS manifest_id
             FROM events
             WHERE event_type = 'SegmentManifestCreated'
-            GROUP BY manifest_id
+            GROUP BY (data->>'manifestId')::uuid
             HAVING COUNT(*) > 1
-            ORDER BY manifest_id
+            ORDER BY (data->>'manifestId')::uuid
             LIMIT 5
         ) AS d;
 

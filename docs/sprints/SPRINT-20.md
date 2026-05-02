@@ -757,9 +757,37 @@ Codex high-risk override: skipped for Phase 4 (test-only changes; the sprint-end
 
 **Quality grade impact**: see [docs/QUALITY.md](../QUALITY.md) — S20 column added. SharedKernel (Events) B+ → A-; SharedKernel (Segmentation) new domain at A; Payroll Integration B+ → A-; PostgreSQL Schema B → B+. Other domains stable.
 
+### Step 7a — Sprint-End External Codex Review (2026-05-02)
+
+**Cycle 1**: `codex review --base dc8867e` — 3 findings (2 [P1] + 1 [P2]; all real bugs):
+- **[P1] Projection rebuild queries nonexistent column** — `SegmentManifestProjectionRebuilder.cs:128-131` and the mirrored `docker/postgres/scripts/rebuild_segment_manifests.sql:130-148` queried bare `events.manifest_id` for the duplicate check. The `events` table has no physical `manifest_id` column; the manifest id lives inside `events.data` JSON. Every call to `RebuildAsync` (and the SQL ops script) would fail with `column "manifest_id" does not exist`. The recovery path was unusable in any environment.
+- **[P1] Replay appends duplicate manifest events** — `PeriodCalculationService.ReplayAsync(manifestId, profile, entries, …)` (the richer overload) reconstructed the plan from manifest then called `CalculateAsync(plan, …)` which unconditionally ran `EmitManifestAsync`. Every replay appended another `SegmentManifestCreated` event to the same `segment-manifest-{id}` stream with a fresh `createdAt`, mutating an immutable audit record. ADR-016 D10 immutability violated.
+- **[P2] Total-failure path misreports audit completeness** — `PeriodCalculationService.cs:353-372` (the all-rules-failed short-circuit) returned `AuditState.Complete` with a `ManifestId` that doesn't exist in either `segment_manifests` or the event store. Callers could surface a manifest id pointing nowhere; subsequent replay by that id would always fail.
+
+**Cycle 1 fixes applied**:
+- `SegmentManifestProjectionRebuilder.cs` `DuplicateCheckSql` + `DuplicateSampleSql` rewritten to extract `(data->>'manifestId')::uuid` (matching the main `RebuildSql` shape).
+- `docker/postgres/scripts/rebuild_segment_manifests.sql` mirrored fix.
+- `AuditState.NoManifest` enum value added; documented as "no manifest emission was attempted — short-circuit OR replay".
+- Total-failure short-circuit returns `AuditState.NoManifest` instead of `AuditState.Complete`.
+- `PeriodCalculationService.CalculateWithOutcomeAsync` gains `bool emitAuditEvents = true` parameter (skips both `EmitManifestAsync` and `EmitLegacyPeriodCompletedAsync` when `false`); returns `AuditState.NoManifest` in that case.
+- `ReplayAsync(manifestId, profile, entries, …)` calls `CalculateWithOutcomeAsync(..., emitAuditEvents: false)` so replay re-evaluates rules but does NOT mint a new manifest event.
+- Public `CalculateAsync(plan, …)` shim updated to use named `ct: ct` argument (parameter-ordering fix).
+
+**Cycle 2**: re-invoke with prompt summarising the three fixes — verdict: "The three addressed regressions appear closed: the rebuild SQL now consistently extracts manifestId from events.data, replay no longer emits new manifest/legacy completion events, and the all-rules-failed short-circuit no longer reports a successful audit state. The legacy CalculateAsync(profile, entries, …) shim still routes through the default emitAuditEvents=true path, so the /calculate-and-export forward-calculation flow continues to emit manifests." No new findings.
+
+Step 7a closed at cycle 2 (within the 2-cycle cap).
+
+**Validation post-Step-7a**:
+- `dotnet build`: 0 errors, 1 pre-existing CS0618 warning at `Program.cs:170`.
+- Tests: 512 unit + 32 plain regression pass.
+
+**Files modified in Codex-fix commit**:
+- `src/Infrastructure/StatsTid.Infrastructure/SegmentManifestProjectionRebuilder.cs`
+- `docker/postgres/scripts/rebuild_segment_manifests.sql`
+- `src/Integrations/StatsTid.Integrations.Payroll/Services/PeriodCalculationService.cs`
+
 **Remaining for sprint close**:
-- Step 7a — external Codex review on the full S20 sprint diff (`codex review --base dc8867e`).
-- Step 7 — commit Phase 4 + push.
+- Step 7 — commit Codex fixes + push.
 
 ### Risks & Watch-Points
 

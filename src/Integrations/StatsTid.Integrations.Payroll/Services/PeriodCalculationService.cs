@@ -154,6 +154,17 @@ public sealed class PeriodCalculationService
         /// in either store. Operators must investigate; treating the response as
         /// audit-of-record is unsafe.</summary>
         BothFailed,
+
+        /// <summary>No manifest emission was attempted. Set on the total-failure
+        /// short-circuit (every rule across every segment failed — typically Rule Engine
+        /// outage or auth misconfiguration) and on replay (the original manifest already
+        /// exists in the audit chain; replay re-evaluates rules but does NOT mint a new
+        /// manifest event — ADR-016 D10 immutability). The ManifestId carried alongside
+        /// this state references the in-memory plan; in the failure case it does not
+        /// resolve in either store; in the replay case it resolves to the original
+        /// forward-calc's persisted manifest. Callers that surface ManifestId to clients
+        /// must check this state explicitly before using it as an audit-query key.</summary>
+        NoManifest,
     }
 
     /// <summary>
@@ -204,7 +215,8 @@ public sealed class PeriodCalculationService
     {
         var outcome = await CalculateWithOutcomeAsync(
             plan, profile, entries, absences,
-            previousFlexBalance, authorizationHeader, correlationId, ct);
+            previousFlexBalance, authorizationHeader, correlationId,
+            ct: ct);
         return outcome.Result;
     }
 
@@ -222,6 +234,7 @@ public sealed class PeriodCalculationService
         decimal previousFlexBalance,
         string? authorizationHeader = null,
         Guid? correlationId = null,
+        bool emitAuditEvents = true,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(plan);
@@ -369,7 +382,11 @@ public sealed class PeriodCalculationService
                 Success = false,
                 ErrorMessage = "All rule evaluations failed"
             };
-            return new PeriodCalculationOutcome(failResult, AuditState.Complete, plan.ManifestId);
+            // No manifest was emitted on this short-circuit (BuildManifest +
+            // EmitManifestAsync run later). Return AuditState.NoManifest so callers do
+            // not treat plan.ManifestId as a valid audit-query key — it does not exist
+            // in segment_manifests or the event store. (Codex sprint-end review fix.)
+            return new PeriodCalculationOutcome(failResult, AuditState.NoManifest, plan.ManifestId);
         }
 
         // ---------------------------------------------------------------
@@ -394,14 +411,26 @@ public sealed class PeriodCalculationService
         //    partial failures rather than silently treating success-with-degraded-audit
         //    as success-with-complete-audit.
         // ---------------------------------------------------------------
-        var manifest = BuildManifest(plan);
-        var auditState = await EmitManifestAsync(plan, manifest, correlationId, ct);
+        AuditState auditState;
+        if (emitAuditEvents)
+        {
+            var manifest = BuildManifest(plan);
+            auditState = await EmitManifestAsync(plan, manifest, correlationId, ct);
 
-        // Legacy event for backward compatibility with the pre-S20 audit chain. Kept
-        // alongside SegmentManifestCreated so existing audit queries against
-        // PeriodCalculationCompleted continue to work; the new event is the source of
-        // truth for segmentation, the legacy one for high-level period-result counts.
-        await EmitLegacyPeriodCompletedAsync(plan, profile, allRuleResults.Count, allExportLines.Count, allExportLines.Sum(l => l.Hours), correlationId, ct);
+            // Legacy event for backward compatibility with the pre-S20 audit chain. Kept
+            // alongside SegmentManifestCreated so existing audit queries against
+            // PeriodCalculationCompleted continue to work; the new event is the source of
+            // truth for segmentation, the legacy one for high-level period-result counts.
+            await EmitLegacyPeriodCompletedAsync(plan, profile, allRuleResults.Count, allExportLines.Count, allExportLines.Sum(l => l.Hours), correlationId, ct);
+        }
+        else
+        {
+            // Replay path (ADR-016 D10 immutability): the original manifest already exists
+            // in the audit chain from the forward-calc that produced it; replay re-evaluates
+            // rules but does NOT mint a new SegmentManifestCreated event or a new
+            // PeriodCalculationCompleted event. Codex sprint-end review fix.
+            auditState = AuditState.NoManifest;
+        }
 
         _logger.LogInformation(
             "Period calculation complete for {EmployeeId} manifest {ManifestId}: " +
@@ -580,9 +609,17 @@ public sealed class PeriodCalculationService
 
         var plan = PeriodPlanner.FromManifest(manifest, _classificationProvider.GetClassifications());
 
-        return await CalculateAsync(
+        // Replay re-evaluates rules against the reconstructed plan but does NOT mint a
+        // new manifest event (ADR-016 D10 immutability). The original SegmentManifestCreated
+        // already exists from the forward-calc that produced this manifest id; calling the
+        // standard CalculateAsync path would unconditionally append a duplicate event with
+        // a fresh createdAt, mutating an immutable audit record (Codex sprint-end review).
+        // emitAuditEvents:false skips both EmitManifestAsync and EmitLegacyPeriodCompletedAsync.
+        var outcome = await CalculateWithOutcomeAsync(
             plan, profile, entries, absences,
-            previousFlexBalance, authorizationHeader, correlationId, ct);
+            previousFlexBalance, authorizationHeader, correlationId,
+            emitAuditEvents: false, ct);
+        return outcome.Result;
     }
 
     // -------------------------------------------------------------------

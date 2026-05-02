@@ -122,13 +122,15 @@ public static class SegmentManifestProjectionRebuilder
     /// logged at WARNING level so it doesn't get masked by the rebuild's
     /// last-write-wins dedupe.
     /// </summary>
+    // The manifest id lives inside events.data JSON (events has no physical
+    // manifest_id column); extract it the same way RebuildSql does.
     private const string DuplicateCheckSql = @"
         SELECT COUNT(*) AS duplicate_manifest_count
         FROM (
-            SELECT manifest_id
+            SELECT (data->>'manifestId')::uuid AS manifest_id
             FROM events
             WHERE event_type = 'SegmentManifestCreated'
-            GROUP BY manifest_id
+            GROUP BY (data->>'manifestId')::uuid
             HAVING COUNT(*) > 1
         ) AS duplicates;
     ";
@@ -138,12 +140,12 @@ public static class SegmentManifestProjectionRebuilder
     /// <c>SegmentManifestCreated</c> events, for ops triage.
     /// </summary>
     private const string DuplicateSampleSql = @"
-        SELECT manifest_id
+        SELECT (data->>'manifestId')::uuid AS manifest_id
         FROM events
         WHERE event_type = 'SegmentManifestCreated'
-        GROUP BY manifest_id
+        GROUP BY (data->>'manifestId')::uuid
         HAVING COUNT(*) > 1
-        ORDER BY manifest_id
+        ORDER BY (data->>'manifestId')::uuid
         LIMIT 5;
     ";
 
