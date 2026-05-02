@@ -213,6 +213,77 @@ Strong correctness signal — both saw these:
 
 Step 0b cycle 1 closed. Plan now has 14 open questions (Q9 closed, Q12-Q14 added), expanded option enumeration on Q1/Q4/Q7, sub-questions on Q6/Q11/Q12, and a corrected "What exists today" framing. Analysis-phase deliverables reordered to data-audit-first.
 
+## Data Audit (Deliverable #1, 2026-05-02)
+
+_Reviewer-recommended pre-ADR audit of actual `local_configurations` row shapes. Schema design (Q1, Q4, Q5) depends on what the migration must round-trip._
+
+### Seed data (`docker/postgres/init.sql:629-633`)
+
+Three rows total, all on `agreement_code='HK'`, `ok_version='OK24'`, `effective_from='2024-01-01'`, `is_active=true`, `effective_to=NULL`:
+
+| # | org_id | config_area | config_key | config_value | classification |
+|---|--------|-------------|------------|--------------|----------------|
+| 1 | STY02 | FLEX_RULES | `MaxFlexBalance` | `"80.0"` | overridable (canonical) |
+| 2 | STY02 | WORKING_TIME | `PlanningStartDay` | `"MONDAY"` | informational (Q6) |
+| 3 | AFD01 | OPERATIONAL | `ApprovalCutoffDay` | `"25"` | informational (Q6) |
+
+Two orgs covered (`STY02`, `AFD01`). No duplicate-row drift. No expired-but-active rows (`effective_to=NULL`). No typo'd keys. No multi-active overlapping windows. **The seed exercises zero failure modes** — Q11's migration test (≥ 3 scenarios) needs synthesized fixtures (recommendation moves to deliverable #3 migration plan).
+
+### Test fixtures (`grep` over `tests/`)
+
+No DB-backed test fixtures touch `local_configurations`. Three model/serialization-level references found:
+
+- `tests/StatsTid.Tests.Unit/Security/Sprint6SecurityTests.cs:249-268` — constructs in-memory `LocalConfiguration` for round-trip serialization. No DB write.
+- `tests/StatsTid.Tests.Unit/Sprint7ApprovalTests.cs:240-272` — constructs `LocalConfigurationChanged` event for round-trip serialization. No DB write.
+- `tests/StatsTid.Tests.Unit/Sprint7ConfigTests.cs:245-250` — calls `ValidateLocalOverride("PlanningStartDay", "Monday", centralConfig)` to assert validator accepts the key. Not a DB fixture; tests behavior that goes away once `PlanningStartDay` is dropped (Q6 → option c).
+
+### Production captures
+
+None. System is not in production.
+
+### Q6 sub-question 6a — where are `PlanningStartDay` / `ApprovalCutoffDay` read?
+
+Grep over `src/` and `frontend/` returned **exactly one production file**:
+
+- `src/Infrastructure/StatsTid.Infrastructure/ConfigResolutionService.cs:255-258` (resolution): `LogDebug("informational only — does not affect AgreementRuleConfig"); break;` — log-and-skip, no behavior.
+- `src/Infrastructure/StatsTid.Infrastructure/ConfigResolutionService.cs:372-374` (validation): `case "PlanningStartDay": case "ApprovalCutoffDay": return (true, null);` — accepts unconditionally with no constraint check.
+
+Plus one test (`Sprint7ConfigTests.cs:245`) that asserts the validator accepts the key — purely testing the validator's no-op path.
+
+**Zero hits in `frontend/`. Zero hits in any approval workflow (`src/Backend/.../Endpoints/`), event handler, or scheduled job.** The keys are entirely inert.
+
+→ **Q6 answer pre-committed: option (c) deleted entirely.** Migration drops both rows with `local_configuration_audit` emission. The validator switch cases at lines 372-374 are removed (the `default` branch will reject any future write — desirable). The test at `Sprint7ConfigTests.cs:245-250` is deleted as part of the migration commit. No regression risk: nothing reads them, nothing depends on them.
+
+### Canonical key taxonomy (from `ConfigResolutionService.cs`)
+
+For ADR-017's reference:
+
+- **5 overridable keys** (become physical NULL-able columns on `local_agreement_profiles` per Q5):
+  - `MaxFlexBalance`, `FlexCarryoverMax`, `WeeklyNormHours`, `MaxOvertimeHoursPerPeriod`, `OvertimeRequiresPreApproval`
+- **21 protected keys** (`ProtectedKeys` set at `ConfigResolutionService.cs:24-47`; cannot be locally overridden — absence from the profile schema enforces this structurally):
+  - `HasOvertime`, `HasMerarbejde`, `EveningSupplementEnabled`, `NightSupplementEnabled`, `WeekendSupplementEnabled`, `HolidaySupplementEnabled`, `EveningRate`, `NightRate`, `WeekendSaturdayRate`, `WeekendSundayRate`, `HolidayRate`, `EveningStart`, `EveningEnd`, `NightStart`, `NightEnd`, `OvertimeThreshold50`, `OvertimeThreshold100`, `OnCallDutyEnabled`, `OnCallDutyRate`, `DefaultCompensationModel`, `EmployeeCompensationChoice`
+- **2 informational keys** (drop entirely per Q6 → c):
+  - `PlanningStartDay`, `ApprovalCutoffDay`
+- **Unknown keys**: rejected by `ValidateLocalOverride`'s `default` branch + accepted-but-skipped by resolution. Today's typo'd-key failure mode arises here. After S21, the profile column set IS the whitelist — typos become compile-time field-name errors at write time.
+
+### Migration round-trip requirements
+
+For the seed data, the migration produces:
+
+- **Profile 1**: `(STY02, HK, OK24)`, `effective_from=2024-01-01`, `max_flex_balance=80.0`, all other overridable columns NULL.
+- Drops seed row 2 (`PlanningStartDay`) with audit-log emission `{action: "DROPPED_INFORMATIONAL", reason: "Q6 deletion per ADR-017"}`.
+- Drops seed row 3 (`ApprovalCutoffDay`) with the same audit shape.
+- Profile for `(AFD01, HK, OK24)` is NOT created — the org has only an informational row, no overlay. After migration, `AFD01` has no profile row; resolution returns central-only.
+
+### Implications for ADR-017
+
+1. **Q1 (uniqueness)**: option (c) partial-unique-index `WHERE effective_to IS NULL` is consistent with the seed (all rows have `effective_to=NULL`). No precedent for closed predecessors yet — the constraint is schema-enforced from day one.
+2. **Q4 (migration strategy)**: with zero failure-mode rows in seed and no production data, **big-bang cutover (option i)** is safe. Shadow-compare (option ii) buys nothing because there's no diff to compare against. Dual-path (option iii) is over-engineering. **Recommend option (i)** in ADR-017.
+3. **Q5 (schema choice)**: 5 overridable fields × 2 orgs in seed = trivial. Wide-nullable columns easily admin-readable. No case for JSONB.
+4. **Q11 (test strategy)**: migration test fixtures must be **synthesized** since seed doesn't exercise any failure mode. Fixtures: (a) one row per overridable key, (b) two-row collision on same `(org, agreement, OkVersion, key)` differing only in `effective_from`, (c) one typo'd key (`MaxOvetimeHoursPerPeriod`), (d) one informational key destined for drop, (e) one expired-but-active row. Migration plan (deliverable #3) commits to this fixture set.
+
+Data audit closed. Findings inform ADR-017 (deliverable #2) and the migration plan (deliverable #3).
+
 ## References
 
 - [CLAUDE.md](../../CLAUDE.md) — priority order (P1, P7, P9 driving this sprint)
