@@ -143,21 +143,59 @@ public sealed class PayrollMappingService
             var mapping = await GetMappingAsync(lineItem.TimeType, lineOkVersion, profile.AgreementCode, position, ct);
             if (mapping is null) continue;
 
-            lines.Add(new PayrollExportLine
-            {
-                EmployeeId = profile.EmployeeId,
-                WageType = mapping.WageType,
-                Hours = lineItem.Hours,
-                Amount = lineItem.Hours * lineItem.Rate,
-                PeriodStart = lineItem.Date,
-                PeriodEnd = lineItem.Date,
-                OkVersion = lineOkVersion,
-                SourceRuleId = result.RuleId,
-                SourceTimeType = lineItem.TimeType,
-                ManifestId = manifestId
-            });
+            // Per-line semantics: PeriodStart == PeriodEnd == lineItem.Date. The /export and
+            // /export-period endpoints don't have segment knowledge — each line stands alone
+            // at its entry date. Contrast with the planner-driven path in PCS which sets
+            // PeriodStart/End to the segment range; both go through BuildLine for the
+            // canonical line shape (post-S20 cleanup; previously two near-duplicate
+            // constructors in PCS and here).
+            lines.Add(BuildLine(
+                lineItem, result, profile, mapping,
+                periodStart: lineItem.Date,
+                periodEnd: lineItem.Date,
+                okVersion: lineOkVersion,
+                manifestId: manifestId));
         }
 
         return lines;
     }
+
+    /// <summary>
+    /// Canonical <see cref="PayrollExportLine"/> shape constructor — one source of truth for
+    /// per-line semantics across both per-line-date callers (this service's
+    /// <see cref="MapCalculationResultAsync"/> serving <c>/export</c> and
+    /// <c>/export-period</c>) and per-segment callers
+    /// (<c>PeriodCalculationService.MapSegmentToExportLinesAsync</c> serving the planner-driven
+    /// path). The two callers differ in <paramref name="periodStart"/>/<paramref name="periodEnd"/>
+    /// and <paramref name="okVersion"/> resolution; everything else is identical.
+    ///
+    /// <para>
+    /// Internal so PCS can call it without re-exposing the type via a public surface;
+    /// <see cref="System.Runtime.CompilerServices.InternalsVisibleToAttribute"/> on
+    /// <c>StatsTid.Integrations.Payroll</c> is not needed because both consumers live in the
+    /// same assembly.
+    /// </para>
+    /// </summary>
+    internal static PayrollExportLine BuildLine(
+        CalculationLineItem lineItem,
+        CalculationResult result,
+        EmploymentProfile profile,
+        WageTypeMapping mapping,
+        DateOnly periodStart,
+        DateOnly periodEnd,
+        string okVersion,
+        Guid manifestId)
+        => new()
+        {
+            EmployeeId = profile.EmployeeId,
+            WageType = mapping.WageType,
+            Hours = lineItem.Hours,
+            Amount = lineItem.Hours * lineItem.Rate,
+            PeriodStart = periodStart,
+            PeriodEnd = periodEnd,
+            OkVersion = okVersion,
+            SourceRuleId = result.RuleId,
+            SourceTimeType = lineItem.TimeType,
+            ManifestId = manifestId,
+        };
 }

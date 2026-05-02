@@ -1122,19 +1122,17 @@ public sealed class PeriodCalculationService
                     continue;
                 }
 
-                lines.Add(new PayrollExportLine
-                {
-                    EmployeeId = segmentProfile.EmployeeId,
-                    WageType = mapping.WageType,
-                    Hours = lineItem.Hours,
-                    Amount = lineItem.Hours * lineItem.Rate,
-                    PeriodStart = segmentStart,
-                    PeriodEnd = segmentEnd,
-                    OkVersion = segmentProfile.OkVersion, // segment-resolved, NOT period-level
-                    SourceRuleId = result.RuleId,
-                    SourceTimeType = lineItem.TimeType,
-                    ManifestId = manifestId, // ADR-016 D10: per-line manifest linkage for audit chain (TASK-2010 follow-up)
-                });
+                // Per-segment semantics: PeriodStart/End = segment range, OkVersion =
+                // segment-resolved (NOT per-line). Contrast with PayrollMappingService.
+                // MapCalculationResultAsync which sets Period* = lineItem.Date. Both go
+                // through PayrollMappingService.BuildLine for the canonical line shape
+                // (post-S20 cleanup).
+                lines.Add(PayrollMappingService.BuildLine(
+                    lineItem, result, segmentProfile, mapping,
+                    periodStart: segmentStart,
+                    periodEnd: segmentEnd,
+                    okVersion: segmentProfile.OkVersion,
+                    manifestId: manifestId));
             }
         }
 
