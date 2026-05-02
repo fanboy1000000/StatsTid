@@ -1,41 +1,43 @@
-import { useState, type ChangeEvent } from 'react'
+// Configuration management page (S21 / ADR-017 / TASK-2109).
+//
+// Replaces the legacy three-tab UI (Effective / Local / Constraints). The
+// Effective + Local tabs are consolidated into a single profile-centric
+// editor; History is added; Central constraints is preserved as-is.
+//
+// The user picks (Organization, Agreement, OkVersion) and the profile editor
+// loads the currently active profile (or signals "no profile — central applies"
+// for first creation). All work happens inside the (org, agreement, OkVersion)
+// scope — you can switch tuples freely without losing tab state.
+//
+// SCOPE: basic functional only — no Phase-5 polish (per the user's S21 cycle-1
+// resolution).
+import { useMemo, useState } from 'react'
 import { useOrganizations } from '../../hooks/useAdmin'
 import {
-  useEffectiveConfig,
-  useLocalConfig,
+  useCurrentProfile,
+  useProfileHistory,
   useConfigConstraints,
+  type ConfigConstraint,
+  type LocalAgreementProfile,
 } from '../../hooks/useConfig'
+import { useAgreementConfigs, type AgreementConfig } from '../../hooks/useAgreementConfigs'
 import {
-  Button,
-  Select,
   Badge,
   Card,
   Alert,
   Spinner,
-  Dialog,
   FormField,
-  Input,
-  Table,
+  Select,
   Tabs,
+  Button,
+  Table,
 } from '../../components/ui'
-import type {
-  Organization,
-  LocalConfiguration,
-  ConfigConstraint,
-} from '../../types'
+import { ProfileEditor } from '../../components/config/ProfileEditor'
 import styles from './ConfigManagement.module.css'
 
-const CONFIG_AREA_OPTIONS = [
-  { value: 'WORKING_TIME', label: 'Arbejdstid' },
-  { value: 'FLEX_RULES', label: 'Flex-regler' },
-  { value: 'ORG_STRUCTURE', label: 'Organisationsstruktur' },
-  { value: 'LOCAL_AGREEMENT', label: 'Lokal aftale' },
-  { value: 'OPERATIONAL', label: 'Operationel' },
-]
-
 const AGREEMENT_OPTIONS = [
-  { value: 'AC', label: 'AC' },
-  { value: 'HK', label: 'HK' },
+  { value: 'AC',    label: 'AC' },
+  { value: 'HK',    label: 'HK' },
   { value: 'PROSA', label: 'PROSA' },
 ]
 
@@ -44,9 +46,24 @@ const OK_VERSION_OPTIONS = [
   { value: 'OK26', label: 'OK26' },
 ]
 
-function formatDate(dateStr: string | null): string {
-  if (!dateStr) return '-'
-  return new Date(dateStr).toLocaleDateString('da-DK')
+interface OrgLike {
+  orgId: string
+  orgName: string
+}
+
+function formatDate(dateStr: string | null | undefined): string {
+  if (!dateStr) return '—'
+  // The backend emits yyyy-MM-dd for DateOnly columns. Render in da-DK for the user.
+  const d = new Date(dateStr)
+  if (Number.isNaN(d.getTime())) return dateStr
+  return d.toLocaleDateString('da-DK')
+}
+
+function formatDateTime(s: string | null | undefined): string {
+  if (!s) return '—'
+  const d = new Date(s)
+  if (Number.isNaN(d.getTime())) return s
+  return d.toLocaleString('da-DK')
 }
 
 function boolBadge(value: boolean) {
@@ -57,9 +74,54 @@ function boolBadge(value: boolean) {
   )
 }
 
-// --- Tab 1: Effective Configuration ---
-function EffectiveConfigTab({ orgId }: { orgId: string }) {
-  const { config, loading, error } = useEffectiveConfig(orgId)
+// ── Tab 1: Profile editor. ──
+
+interface ProfileTabProps {
+  orgId: string
+  agreementCode: string
+  okVersion: string
+  orgLabel: string
+}
+
+function ProfileTab({ orgId, agreementCode, okVersion, orgLabel }: ProfileTabProps) {
+  const { profile, etag, loading, error, refresh } = useCurrentProfile(orgId, agreementCode, okVersion)
+  const { configs: centralConfigs } = useAgreementConfigs('ACTIVE')
+
+  // The central agreement config to surface as read-only context. There is at
+  // most one ACTIVE config per (agreement, OkVersion) by design — pick it.
+  const centralConfig: AgreementConfig | null = useMemo(() => {
+    return centralConfigs.find(
+      c => c.agreementCode === agreementCode && c.okVersion === okVersion,
+    ) ?? null
+  }, [centralConfigs, agreementCode, okVersion])
+
+  return (
+    <ProfileEditor
+      orgId={orgId}
+      agreementCode={agreementCode}
+      okVersion={okVersion}
+      orgLabel={orgLabel}
+      profile={profile}
+      etag={etag}
+      centralConfig={centralConfig}
+      loading={loading}
+      loadError={error}
+      onSaved={refresh}
+    />
+  )
+}
+
+// ── Tab 2: History. ──
+
+interface HistoryTabProps {
+  orgId: string
+  agreementCode: string
+  okVersion: string
+}
+
+function HistoryTab({ orgId, agreementCode, okVersion }: HistoryTabProps) {
+  const { history, loading, error } = useProfileHistory(orgId, agreementCode, okVersion)
+  const [expanded, setExpanded] = useState<string | null>(null)
 
   if (loading) {
     return (
@@ -68,324 +130,81 @@ function EffectiveConfigTab({ orgId }: { orgId: string }) {
       </div>
     )
   }
-
   if (error) {
     return <Alert variant="error">{error}</Alert>
   }
-
-  if (!config || Object.keys(config).length === 0) {
+  if (history.length === 0) {
     return (
       <div className={styles.emptyState}>
-        Ingen effektiv konfiguration fundet for denne organisation.
+        Ingen tidligere profiler — denne (organisation, overenskomst, OK-version) har ingen lukkede forgaengere.
       </div>
     )
   }
 
-  const entries = Object.entries(config as Record<string, unknown>)
-
   return (
     <Card>
-      <Table headers={['Noegle', 'Vaerdi']}>
-        {entries.map(([key, value]: [string, unknown]) => (
-          <tr key={key}>
-            <td>{key}</td>
-            <td>{String(value)}</td>
-          </tr>
+      <Table headers={['Gaelder fra', 'Gaelder til', 'Aendret af', 'Oprettet', 'Detaljer']}>
+        {history.map((row: LocalAgreementProfile) => (
+          <RowWithDelta
+            key={row.profileId}
+            row={row}
+            expanded={expanded === row.profileId}
+            onToggle={() => setExpanded(expanded === row.profileId ? null : row.profileId)}
+          />
         ))}
       </Table>
     </Card>
   )
 }
 
-// --- Tab 2: Local Overrides ---
-function LocalOverridesTab({ orgId }: { orgId: string }) {
-  const { configs, loading, error, createOverride, deactivateOverride } =
-    useLocalConfig(orgId)
+interface RowWithDeltaProps {
+  row: LocalAgreementProfile
+  expanded: boolean
+  onToggle: () => void
+}
 
-  // Create override dialog state
-  const [createDialogOpen, setCreateDialogOpen] = useState(false)
-  const [formArea, setFormArea] = useState('')
-  const [formKey, setFormKey] = useState('')
-  const [formValue, setFormValue] = useState('')
-  const [formFrom, setFormFrom] = useState('')
-  const [formTo, setFormTo] = useState('')
-  const [formAgreement, setFormAgreement] = useState('')
-  const [formOkVersion, setFormOkVersion] = useState('')
-  const [createLoading, setCreateLoading] = useState(false)
-  const [createError, setCreateError] = useState<string | null>(null)
-
-  // Deactivate dialog state
-  const [deactivateDialogOpen, setDeactivateDialogOpen] = useState(false)
-  const [deactivateTargetId, setDeactivateTargetId] = useState<string | null>(
-    null
-  )
-  const [deactivateLoading, setDeactivateLoading] = useState(false)
-  const [deactivateError, setDeactivateError] = useState<string | null>(null)
-
-  function openCreateDialog() {
-    setFormArea('')
-    setFormKey('')
-    setFormValue('')
-    setFormFrom('')
-    setFormTo('')
-    setFormAgreement('')
-    setFormOkVersion('')
-    setCreateError(null)
-    setCreateDialogOpen(true)
-  }
-
-  async function handleCreate() {
-    if (!formArea || !formKey || !formValue || !formFrom || !formAgreement || !formOkVersion) {
-      setCreateError('Udfyld venligst alle paakraevede felter.')
-      return
-    }
-    setCreateLoading(true)
-    setCreateError(null)
-    try {
-      await createOverride({
-        configArea: formArea,
-        configKey: formKey,
-        configValue: formValue,
-        effectiveFrom: formFrom,
-        effectiveTo: formTo || undefined,
-        agreementCode: formAgreement,
-        okVersion: formOkVersion,
-      })
-      setCreateDialogOpen(false)
-    } catch (err) {
-      setCreateError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setCreateLoading(false)
-    }
-  }
-
-  function openDeactivateDialog(configId: string) {
-    setDeactivateTargetId(configId)
-    setDeactivateError(null)
-    setDeactivateDialogOpen(true)
-  }
-
-  async function handleDeactivate() {
-    if (!deactivateTargetId) return
-    setDeactivateLoading(true)
-    setDeactivateError(null)
-    try {
-      await deactivateOverride(deactivateTargetId)
-      setDeactivateDialogOpen(false)
-      setDeactivateTargetId(null)
-    } catch (err) {
-      setDeactivateError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setDeactivateLoading(false)
-    }
-  }
-
-  if (loading) {
-    return (
-      <div className={styles.loadingWrapper}>
-        <Spinner />
-      </div>
-    )
-  }
-
-  if (error) {
-    return <Alert variant="error">{error}</Alert>
-  }
-
+function RowWithDelta({ row, expanded, onToggle }: RowWithDeltaProps) {
   return (
     <>
-      <div className={styles.overridesHeader}>
-        <h3 className={styles.sectionTitle}>Lokale tilpasninger</h3>
-        <Button variant="primary" size="sm" onClick={openCreateDialog}>
-          Opret tilpasning
-        </Button>
-      </div>
-
-      {configs.length === 0 ? (
-        <div className={styles.emptyState}>
-          Ingen lokale tilpasninger fundet for denne organisation.
-        </div>
-      ) : (
-        <Table
-          headers={[
-            'Omraade',
-            'Noegle',
-            'Vaerdi',
-            'Gaelder fra',
-            'Gaelder til',
-            'Overenskomst',
-            'OK-version',
-            'Aktiv',
-            'Handlinger',
-          ]}
-        >
-          {configs.map((cfg: LocalConfiguration) => (
-            <tr key={cfg.configId}>
-              <td>
-                <Badge>{cfg.configArea}</Badge>
-              </td>
-              <td>{cfg.configKey}</td>
-              <td>{cfg.configValue}</td>
-              <td>{formatDate(cfg.effectiveFrom)}</td>
-              <td>{formatDate(cfg.effectiveTo)}</td>
-              <td>{cfg.agreementCode}</td>
-              <td>{cfg.okVersion}</td>
-              <td>
-                <Badge variant={cfg.isActive ? 'success' : 'default'}>
-                  {cfg.isActive ? 'Aktiv' : 'Inaktiv'}
-                </Badge>
-              </td>
-              <td>
-                {cfg.isActive && (
-                  <Button
-                    variant="danger"
-                    size="sm"
-                    onClick={() => openDeactivateDialog(cfg.configId)}
-                  >
-                    Deaktiver
-                  </Button>
-                )}
-              </td>
-            </tr>
-          ))}
-        </Table>
+      <tr>
+        <td>{formatDate(row.effectiveFrom)}</td>
+        <td>{formatDate(row.effectiveTo)}</td>
+        <td>{row.createdBy}</td>
+        <td>{formatDateTime(row.createdAt)}</td>
+        <td>
+          <Button variant="secondary" size="sm" onClick={onToggle}>
+            {expanded ? 'Skjul' : 'Vis aendringer'}
+          </Button>
+        </td>
+      </tr>
+      {expanded && (
+        <tr>
+          <td colSpan={5} style={{ background: 'var(--color-bg-subtle, #f9fafb)' }}>
+            <div style={{ padding: '0.5rem', fontSize: '0.875rem' }}>
+              <div><strong>Profil-ID:</strong> {row.profileId}</div>
+              <div style={{ marginTop: '0.5rem' }}><strong>Vaerdier paa denne profil:</strong></div>
+              <ul style={{ margin: '0.25rem 0 0 1rem' }}>
+                <li>WeeklyNormHours: {valueOrInherit(row.weeklyNormHours)}</li>
+                <li>MaxFlexBalance: {valueOrInherit(row.maxFlexBalance)}</li>
+                <li>FlexCarryoverMax: {valueOrInherit(row.flexCarryoverMax)}</li>
+                <li>MaxOvertimeHoursPerPeriod: {valueOrInherit(row.maxOvertimeHoursPerPeriod)}</li>
+                <li>OvertimeRequiresPreApproval: {row.overtimeRequiresPreApproval === null ? '(arvet fra central)' : row.overtimeRequiresPreApproval ? 'Ja' : 'Nej'}</li>
+              </ul>
+            </div>
+          </td>
+        </tr>
       )}
-
-      {/* Create override dialog */}
-      <Dialog
-        open={createDialogOpen}
-        onOpenChange={setCreateDialogOpen}
-        title="Opret lokal tilpasning"
-        description="Opret en ny lokal konfigurationstilpasning."
-      >
-        <div className={styles.dialogForm}>
-          {createError && <Alert variant="error">{createError}</Alert>}
-
-          <FormField label="Omraade" htmlFor="cfg-area" required>
-            <Select
-              id="cfg-area"
-              options={CONFIG_AREA_OPTIONS}
-              value={formArea}
-              onValueChange={setFormArea}
-              placeholder="Vaelg omraade..."
-            />
-          </FormField>
-
-          <FormField label="Noegle" htmlFor="cfg-key" required>
-            <Input
-              id="cfg-key"
-              type="text"
-              value={formKey}
-              onChange={(e: ChangeEvent<HTMLInputElement>) => setFormKey(e.target.value)}
-              placeholder="Konfigurationsnoegle"
-            />
-          </FormField>
-
-          <FormField label="Vaerdi" htmlFor="cfg-value" required>
-            <Input
-              id="cfg-value"
-              type="text"
-              value={formValue}
-              onChange={(e: ChangeEvent<HTMLInputElement>) => setFormValue(e.target.value)}
-              placeholder="Konfigurationsvaerdi"
-            />
-          </FormField>
-
-          <FormField label="Gaelder fra" htmlFor="cfg-from" required>
-            <Input
-              id="cfg-from"
-              type="date"
-              value={formFrom}
-              onChange={(e: ChangeEvent<HTMLInputElement>) => setFormFrom(e.target.value)}
-            />
-          </FormField>
-
-          <FormField label="Gaelder til" htmlFor="cfg-to">
-            <Input
-              id="cfg-to"
-              type="date"
-              value={formTo}
-              onChange={(e: ChangeEvent<HTMLInputElement>) => setFormTo(e.target.value)}
-            />
-          </FormField>
-
-          <FormField label="Overenskomst" htmlFor="cfg-agreement" required>
-            <Select
-              id="cfg-agreement"
-              options={AGREEMENT_OPTIONS}
-              value={formAgreement}
-              onValueChange={setFormAgreement}
-              placeholder="Vaelg overenskomst..."
-            />
-          </FormField>
-
-          <FormField label="OK-version" htmlFor="cfg-ok" required>
-            <Select
-              id="cfg-ok"
-              options={OK_VERSION_OPTIONS}
-              value={formOkVersion}
-              onValueChange={setFormOkVersion}
-              placeholder="Vaelg OK-version..."
-            />
-          </FormField>
-
-          <div className={styles.dialogActions}>
-            <Button
-              variant="secondary"
-              onClick={() => setCreateDialogOpen(false)}
-              disabled={createLoading}
-            >
-              Annuller
-            </Button>
-            <Button
-              variant="primary"
-              onClick={handleCreate}
-              disabled={createLoading}
-            >
-              {createLoading ? 'Opretter...' : 'Opret'}
-            </Button>
-          </div>
-        </div>
-      </Dialog>
-
-      {/* Deactivate confirmation dialog */}
-      <Dialog
-        open={deactivateDialogOpen}
-        onOpenChange={setDeactivateDialogOpen}
-        title="Deaktiver tilpasning"
-        description="Er du sikker paa, at du vil deaktivere denne konfigurationstilpasning?"
-      >
-        <div className={styles.dialogForm}>
-          {deactivateError && <Alert variant="error">{deactivateError}</Alert>}
-
-          <p className={styles.confirmText}>
-            Denne handling vil deaktivere den lokale tilpasning. Den centrale
-            konfiguration vil traede i kraft.
-          </p>
-
-          <div className={styles.dialogActions}>
-            <Button
-              variant="secondary"
-              onClick={() => setDeactivateDialogOpen(false)}
-              disabled={deactivateLoading}
-            >
-              Annuller
-            </Button>
-            <Button
-              variant="danger"
-              onClick={handleDeactivate}
-              disabled={deactivateLoading}
-            >
-              {deactivateLoading ? 'Deaktiverer...' : 'Deaktiver'}
-            </Button>
-          </div>
-        </div>
-      </Dialog>
     </>
   )
 }
 
-// --- Tab 3: Central Constraints ---
+function valueOrInherit(value: number | null): string {
+  if (value === null) return '(arvet fra central)'
+  return String(value)
+}
+
+// ── Tab 3: Central constraints (unchanged). ──
+
 function CentralConstraintsTab() {
   const { constraints, loading, error } = useConfigConstraints()
 
@@ -396,11 +215,9 @@ function CentralConstraintsTab() {
       </div>
     )
   }
-
   if (error) {
     return <Alert variant="error">{error}</Alert>
   }
-
   if (constraints.length === 0) {
     return (
       <div className={styles.emptyState}>
@@ -453,36 +270,52 @@ function CentralConstraintsTab() {
   )
 }
 
-// --- Main Component ---
+// ── Main page. ──
+
 export function ConfigManagement() {
   const { organizations } = useOrganizations()
   const [selectedOrgId, setSelectedOrgId] = useState('')
+  const [selectedAgreement, setSelectedAgreement] = useState('AC')
+  const [selectedOkVersion, setSelectedOkVersion] = useState('OK24')
 
-  const orgOptions = organizations.map((org: Organization) => ({
+  const orgOptions = (organizations as OrgLike[]).map(org => ({
     value: org.orgId,
     label: `${org.orgName} (${org.orgId})`,
   }))
 
+  const orgLabel = (organizations as OrgLike[]).find(o => o.orgId === selectedOrgId)?.orgName ?? selectedOrgId
+
+  const tupleSelected = Boolean(selectedOrgId && selectedAgreement && selectedOkVersion)
+
   const tabs = [
     {
-      value: 'effective',
-      label: 'Effektiv konfiguration',
-      content: selectedOrgId ? (
-        <EffectiveConfigTab orgId={selectedOrgId} />
+      value: 'profile',
+      label: 'Lokal profil',
+      content: tupleSelected ? (
+        <ProfileTab
+          orgId={selectedOrgId}
+          agreementCode={selectedAgreement}
+          okVersion={selectedOkVersion}
+          orgLabel={orgLabel}
+        />
       ) : (
         <div className={styles.emptyState}>
-          Vaelg en organisation for at se konfiguration.
+          Vaelg organisation, overenskomst og OK-version for at se profilen.
         </div>
       ),
     },
     {
-      value: 'overrides',
-      label: 'Lokale tilpasninger',
-      content: selectedOrgId ? (
-        <LocalOverridesTab orgId={selectedOrgId} />
+      value: 'history',
+      label: 'Historik',
+      content: tupleSelected ? (
+        <HistoryTab
+          orgId={selectedOrgId}
+          agreementCode={selectedAgreement}
+          okVersion={selectedOkVersion}
+        />
       ) : (
         <div className={styles.emptyState}>
-          Vaelg en organisation for at se lokale tilpasninger.
+          Vaelg organisation, overenskomst og OK-version for at se historik.
         </div>
       ),
     },
@@ -497,7 +330,7 @@ export function ConfigManagement() {
     <div className={styles.page}>
       <h1 className={styles.title}>Konfiguration</h1>
 
-      <div className={styles.orgSelector}>
+      <div className={styles.tupleSelector}>
         <FormField label="Organisation" htmlFor="config-org-select" required>
           <Select
             id="config-org-select"
@@ -507,9 +340,25 @@ export function ConfigManagement() {
             placeholder="Vaelg organisation..."
           />
         </FormField>
+        <FormField label="Overenskomst" htmlFor="config-agreement-select" required>
+          <Select
+            id="config-agreement-select"
+            options={AGREEMENT_OPTIONS}
+            value={selectedAgreement}
+            onValueChange={setSelectedAgreement}
+          />
+        </FormField>
+        <FormField label="OK-version" htmlFor="config-okversion-select" required>
+          <Select
+            id="config-okversion-select"
+            options={OK_VERSION_OPTIONS}
+            value={selectedOkVersion}
+            onValueChange={setSelectedOkVersion}
+          />
+        </FormField>
       </div>
 
-      <Tabs tabs={tabs} defaultValue="effective" />
+      <Tabs tabs={tabs} defaultValue="profile" />
     </div>
   )
 }

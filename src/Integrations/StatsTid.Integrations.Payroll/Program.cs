@@ -20,6 +20,11 @@ builder.Services.AddSingleton<PeriodCalculationService>();
 builder.Services.AddSingleton<RetroactiveCorrectionService>();
 builder.Services.AddSingleton<ApprovalPeriodRepository>();
 builder.Services.AddSingleton<LocalConfigurationRepository>();
+// S21 TASK-2108 (ADR-017 D9c): hydrates BoundarySources.LocalProfileActivations on
+// the legacy [Obsolete] CalculateAsync(profile, …) shim path. Optional dependency on
+// PeriodCalculationService — when the repository is unregistered (test fixtures), the
+// shim emits no profile-activation boundaries (D9c profile-less callers contract).
+builder.Services.AddSingleton<LocalAgreementProfileRepository>();
 builder.Services.AddSingleton<ConfigResolutionService>();
 builder.Services.AddSingleton<IdempotencyGuard>();
 

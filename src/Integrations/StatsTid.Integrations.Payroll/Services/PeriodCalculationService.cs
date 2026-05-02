@@ -77,6 +77,13 @@ public sealed class PeriodCalculationService
     private readonly IEventStore _eventStore;
     private readonly DbConnectionFactory _connectionFactory;
     private readonly IRuleClassificationProvider _classificationProvider;
+    // S21 TASK-2108 (ADR-017 D9c): optional repository for hydrating
+    // BoundarySources.LocalProfileActivations on the back-compat shim path. Optional
+    // because existing PCS unit tests construct PCS without DI; null-tolerant behavior
+    // matches the IRuleClassificationProvider precedent (line 124). When null, the
+    // shim emits no profile-activation boundaries — the same observable behavior as
+    // pre-S21, so existing tests are unaffected.
+    private readonly LocalAgreementProfileRepository? _localAgreementProfileRepo;
     private readonly ILogger<PeriodCalculationService> _logger;
     private readonly string _ruleEngineUrl;
 
@@ -108,7 +115,8 @@ public sealed class PeriodCalculationService
         DbConnectionFactory connectionFactory,
         IConfiguration configuration,
         ILogger<PeriodCalculationService> logger,
-        IRuleClassificationProvider? classificationProvider = null)
+        IRuleClassificationProvider? classificationProvider = null,
+        LocalAgreementProfileRepository? localAgreementProfileRepo = null)
     {
         _httpClientFactory = httpClientFactory;
         _mappingService = mappingService;
@@ -122,6 +130,12 @@ public sealed class PeriodCalculationService
         // TASK-2010 is expected to land the HTTP-backed provider; until then, callers who
         // construct PCS directly (tests) get the empty provider transparently.
         _classificationProvider = classificationProvider ?? EmptyRuleClassificationProvider.Instance;
+        // S21 TASK-2108 (ADR-017 D9c): null-tolerant — when the repository is not
+        // registered (legacy unit-test fixtures, environments without the S21 schema),
+        // BuildPlanForLegacyCallersAsync skips the activation lookup and passes an
+        // empty LocalProfileActivations list. The 13 existing PCS unit tests that
+        // construct PCS via `new(...)` continue to work without modification.
+        _localAgreementProfileRepo = localAgreementProfileRepo;
         _ruleEngineUrl = configuration["ServiceUrls:RuleEngine"] ?? "http://rule-engine:8080";
     }
 
@@ -320,7 +334,8 @@ public sealed class PeriodCalculationService
                     EmploymentCategory = profile.EmploymentCategory,
                     IsPartTime = profile.IsPartTime,
                     PartTimeFraction = profile.PartTimeFraction,
-                    Position = profile.Position
+                    Position = profile.Position,
+                    OrgId = profile.OrgId
                 };
 
             var segmentEntries = entries.Where(e => e.Date >= segment.StartDate && e.Date <= segment.EndDate).ToList();
@@ -471,11 +486,11 @@ public sealed class PeriodCalculationService
     // -------------------------------------------------------------------
     [Obsolete(
         "Use CalculateAsync(PlannedCalculation, …) or CalculateWithOutcomeAsync(PlannedCalculation, …). " +
-        "Boundary sources are limited to OK-transitions in this path; full segmentation requires explicit " +
-        "PlannedCalculation construction. The single surviving caller is the /calculate-and-export " +
-        "endpoint; full retirement is deferred per S20 Step 0b W2.",
+        "Boundary sources are limited to OK-transitions plus LocalProfileActivations (S21) in this path; " +
+        "full segmentation requires explicit PlannedCalculation construction. The single surviving caller " +
+        "is the /calculate-and-export endpoint; full retirement is deferred per S20 Step 0b W2.",
         error: false)]
-    public Task<PeriodCalculationResult> CalculateAsync(
+    public async Task<PeriodCalculationResult> CalculateAsync(
         EmploymentProfile profile,
         IReadOnlyList<TimeEntry> entries,
         IReadOnlyList<AbsenceEntry> absences,
@@ -488,9 +503,12 @@ public sealed class PeriodCalculationService
     {
         ArgumentNullException.ThrowIfNull(profile);
 
-        var plan = BuildPlanForLegacyCallers(profile, periodStart, periodEnd);
+        // BuildPlanForLegacyCallers became async in S21 TASK-2108 (ADR-017 D9c) so the
+        // shim can hydrate LocalProfileActivations from the local_agreement_profiles
+        // table. Other than the await, the method body is unchanged.
+        var plan = await BuildPlanForLegacyCallersAsync(profile, periodStart, periodEnd, ct);
 
-        return CalculateAsync(
+        return await CalculateAsync(
             plan, profile, entries, absences,
             previousFlexBalance, authorizationHeader, correlationId, ct);
     }
@@ -498,19 +516,42 @@ public sealed class PeriodCalculationService
     /// <summary>
     /// Build a <see cref="PlannedCalculation"/> for callers that haven't migrated to the
     /// PlannedCalculation-first signature yet. Hydrates an OK-version boundary source from
-    /// <see cref="OkVersionResolver"/> — S20's end-to-end boundary; agreement-config /
-    /// position-override / EU WTD boundary hydration are extension points that
-    /// TASK-2009/TASK-2010 callers will populate when they construct plans directly.
+    /// <see cref="OkVersionResolver"/> — S20's end-to-end boundary — and (S21 TASK-2108,
+    /// ADR-017 D9c) local-agreement-profile activation boundaries from
+    /// <see cref="LocalAgreementProfileRepository"/>. Agreement-config / position-override
+    /// / EU WTD boundary hydration remain extension points that TASK-2009/TASK-2010 callers
+    /// will populate when they construct plans directly.
     ///
+    /// <para>
     /// The resolved <see cref="RuleClassification"/> set comes from the same
     /// <see cref="IRuleClassificationProvider"/> used by the main entry point, so D9
     /// rule-side invariants run uniformly across the shim and PlannedCalculation-first
     /// paths (ADR-016 D9).
+    /// </para>
+    ///
+    /// <para>
+    /// <strong>Async (S21 TASK-2108)</strong>: the method became async to accommodate the
+    /// DB lookup against <c>local_agreement_profiles</c>. The single call site (the
+    /// <see cref="CalculateAsync(EmploymentProfile, IReadOnlyList{TimeEntry}, IReadOnlyList{AbsenceEntry}, DateOnly, DateOnly, decimal, string?, Guid?, CancellationToken)"/>
+    /// shim) was updated to <c>await</c>. Sync-over-async (<c>.GetAwaiter().GetResult()</c>)
+    /// was rejected to avoid ASP.NET deadlock risk.
+    /// </para>
+    ///
+    /// <para>
+    /// <strong>D9c profile-less contract</strong>: callers that do not associate the
+    /// employee with an organization (test fixtures, internal use, or the current
+    /// post-S21 state where <see cref="EmploymentProfile"/> does not yet expose
+    /// <c>OrgId</c>) MUST see an empty <c>LocalProfileActivations</c> list — i.e. no
+    /// segment boundaries from this source. The check is gated on both repository
+    /// presence AND a non-empty resolved org id; either being absent yields an empty
+    /// activation list and a single-segment plan (modulo other boundary sources).
+    /// </para>
     /// </summary>
-    private PlannedCalculation BuildPlanForLegacyCallers(
+    private async Task<PlannedCalculation> BuildPlanForLegacyCallersAsync(
         EmploymentProfile profile,
         DateOnly periodStart,
-        DateOnly periodEnd)
+        DateOnly periodEnd,
+        CancellationToken ct)
     {
         // Extract OK transitions whose dates fall strictly inside (periodStart, periodEnd]
         // — the planner's BoundaryDetector expects "first day of the new segment" semantics.
@@ -521,12 +562,33 @@ public sealed class PeriodCalculationService
             okTransitions.Add((versionPeriods[i].Start, versionPeriods[i - 1].Version, versionPeriods[i].Version));
         }
 
+        // Local-agreement-profile activations (S21 TASK-2108, ADR-017 D9c).
+        //
+        // EmploymentProfile.OrgId was added during TASK-2108 consolidation (Small Tasks
+        // Exception). When null/empty, hydration short-circuits per ADR-017 D9c's
+        // "profile-less callers see no profile boundaries" contract — applies to test
+        // fixtures and any internal use that doesn't bind employees to orgs.
+        string? resolvedOrgId = profile.OrgId;
+        IReadOnlyList<(DateOnly EffectiveFrom, Guid ProfileId)>? localProfileActivations = null;
+        if (_localAgreementProfileRepo is not null && !string.IsNullOrEmpty(resolvedOrgId))
+        {
+            localProfileActivations = await _localAgreementProfileRepo
+                .GetActivationsInPeriodAsync(
+                    resolvedOrgId,
+                    profile.AgreementCode,
+                    profile.OkVersion,
+                    periodStart,
+                    periodEnd,
+                    ct);
+        }
+
         var sources = new BoundarySources(
             OkTransitions: okTransitions,
             AgreementConfigPromotions: Array.Empty<(DateOnly, string)>(),
             PositionOverrideEffectiveDates: Array.Empty<(DateOnly, string)>(),
             EuWtdRulesetTransitions: Array.Empty<(DateOnly, int, int)>(),
-            NonDatedSourceValues: new Dictionary<string, object?>());
+            NonDatedSourceValues: new Dictionary<string, object?>(),
+            LocalProfileActivations: localProfileActivations);
 
         // EmployeeId is now string end-to-end (ADR-016 D10 amendment 2026-05-01) — pass
         // profile.EmployeeId directly with no synthetic Guid derivation.
