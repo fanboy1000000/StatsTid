@@ -3,7 +3,7 @@
 | Field | Value |
 |-------|-------|
 | **Sprint** | 21 |
-| **Status** | analysis-phase open (Step 0a + Step 0b complete 2026-05-02; data audit + ADR + migration plan + task decomposition pending) |
+| **Status** | analysis-phase open (Step 0a + Step 0b + data audit + ADR-017 complete 2026-05-02; migration plan + task decomposition pending) |
 | **Start Date** | 2026-05-02 |
 | **End Date** | TBD |
 | **Orchestrator Approved** | analysis-phase yet to begin |
@@ -290,7 +290,9 @@ Data audit closed. Findings inform ADR-017 (deliverable #2) and the migration pl
 - [ROADMAP.md](../../ROADMAP.md) — Phase 3i placement
 - [SYSTEM_TARGET.md § G](../../SYSTEM_TARGET.md) — Local Configuration product spec
 - [docs/knowledge-base/decisions/ADR-010-local-config-merge-at-service-layer.md](../knowledge-base/decisions/ADR-010-local-config-merge-at-service-layer.md) — current local config architecture
-- [docs/knowledge-base/decisions/ADR-014-db-backed-agreement-configs.md](../knowledge-base/decisions/ADR-014-db-backed-agreement-configs.md) — DRAFT/ACTIVE/ARCHIVED lifecycle precedent
+- [docs/knowledge-base/decisions/ADR-014-db-backed-agreement-configs.md](../knowledge-base/decisions/ADR-014-db-backed-agreement-configs.md) — DRAFT/ACTIVE/ARCHIVED lifecycle precedent + partial-unique-index pattern reused
+- [docs/knowledge-base/decisions/ADR-016-temporal-period-handling.md](../knowledge-base/decisions/ADR-016-temporal-period-handling.md) — `BoundarySources` extended additively by ADR-017 D9
+- [docs/knowledge-base/decisions/ADR-017-local-agreement-configuration-as-a-profile.md](../knowledge-base/decisions/ADR-017-local-agreement-configuration-as-a-profile.md) — S21's architectural decision (deliverable #2)
 - [SPRINT-20.md](SPRINT-20.md) — sibling analysis-first sprint, structurally similar
 - [docker/postgres/init.sql](../../docker/postgres/init.sql) — current `local_configurations` table (line 449)
 - [src/Infrastructure/StatsTid.Infrastructure/ConfigResolutionService.cs](../../src/Infrastructure/StatsTid.Infrastructure/ConfigResolutionService.cs) — current resolution (line 159 onward)
