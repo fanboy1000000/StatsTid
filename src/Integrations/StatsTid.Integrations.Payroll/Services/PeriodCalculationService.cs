@@ -462,14 +462,18 @@ public sealed class PeriodCalculationService
     // it hydrates BoundarySources, runs the planner, and re-enters the new entry point.
     // No "skip planner" code path exists.
     //
-    // [Obsolete] is intentional: TASK-2009 (RetroactiveCorrectionService) and TASK-2010
-    // (export boundary) will migrate their callers to construct PlannedCalculation
-    // explicitly. Compile-time warnings at every call site become the migration TODO list.
+    // [Obsolete] is intentional: it marks the migration runway from caller-supplied
+    // (profile, entries, …) to caller-constructed PlannedCalculation. TASK-2009 and
+    // TASK-2010 migrated their own surfaces (RetroactiveCorrectionService internals;
+    // /export and /export-period). The /calculate-and-export endpoint at Program.cs
+    // is the last surviving customer; its retirement was explicitly out-of-scope per
+    // S20 Step 0b W2 (full retirement of PeriodCalculationService is deferred).
     // -------------------------------------------------------------------
     [Obsolete(
         "Use CalculateAsync(PlannedCalculation, …) or CalculateWithOutcomeAsync(PlannedCalculation, …). " +
         "Boundary sources are limited to OK-transitions in this path; full segmentation requires explicit " +
-        "PlannedCalculation construction. Slated for removal during TASK-2009 / TASK-2010 cleanup.",
+        "PlannedCalculation construction. The single surviving caller is the /calculate-and-export " +
+        "endpoint; full retirement is deferred per S20 Step 0b W2.",
         error: false)]
     public Task<PeriodCalculationResult> CalculateAsync(
         EmploymentProfile profile,

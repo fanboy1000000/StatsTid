@@ -24,6 +24,7 @@ namespace StatsTid.Tests.Regression;
 /// constructor will throw and the tests will surface as failures with a clear
 /// message — we do not silently skip, because this is a BLOCKER regression.
 /// </summary>
+[Trait("Category", "Docker")]
 public sealed class WageTypeMappingRegressionTests : IAsyncLifetime
 {
     private const string ImageTag = "postgres:16-alpine";

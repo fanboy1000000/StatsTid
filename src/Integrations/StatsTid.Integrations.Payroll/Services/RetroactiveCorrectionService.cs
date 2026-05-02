@@ -22,13 +22,16 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// </para>
 ///
 /// <para>
-/// <strong>ADR-013 (no-cascade) preservation:</strong> the planner produces
-/// exactly one <c>PlannedCalculation</c> confined to <c>[periodStart, periodEnd]</c>
-/// and the merge strategies covering this domain (RejectIfMultipleSegments for
-/// aligned-window rules, UnionDedupe for compliance, Concatenate for calc rules,
-/// FlexBalanceRule's chained <c>previousBalance</c> hand-off) preserve the
-/// existing single-period semantics. There is no mechanism in the new path that
-/// cascades to neighbouring periods.
+/// <strong>ADR-013 (no-cascade) preservation:</strong> enforced by the planner's
+/// geometric bound — <c>PeriodPlanner.Plan</c> never expands the input window
+/// (D4 alignment policy can only shrink it; <c>aligned-window</c> rules either
+/// pass or reject) — combined with <c>FlexBalanceRule</c>'s chained-balance
+/// hand-off across in-period segments. The planner produces exactly one
+/// <c>PlannedCalculation</c> confined to <c>[periodStart, periodEnd]</c>; per-segment
+/// rule evaluation never consults a neighbouring period. The merge strategies
+/// (RejectIfMultipleSegments for aligned-window rules, UnionDedupe for compliance,
+/// Concatenate / Custom for calc rules) are the merge mechanism — not the
+/// no-cascade enforcement mechanism.
 /// </para>
 /// </summary>
 public sealed class RetroactiveCorrectionService
@@ -67,8 +70,10 @@ public sealed class RetroactiveCorrectionService
     /// <strong>ADR-013 (no-cascade)</strong>: the planner produces one
     /// <c>PlannedCalculation</c> bounded by <c>[periodStart, periodEnd]</c>;
     /// nothing in the call graph cascades into neighbouring periods. ADR-013's
-    /// constraint now lives in the planner's merge-policy choice and the
-    /// chained-balance hand-off in FlexBalanceRule, NOT in this service.
+    /// constraint is enforced by the planner's geometric bound (Plan never
+    /// expands the input window) and FlexBalanceRule's in-period chained-balance
+    /// hand-off — NOT by this service, and NOT by any merge strategy. The merge
+    /// strategies in PCS handle within-period segment merging only.
     /// </para>
     /// <para>
     /// <strong>ADR-016 D6</strong>: the previous local two-segment
@@ -174,7 +179,7 @@ public sealed class RetroactiveCorrectionService
         }
 
         // Flex delta is extracted from the merged rule results; FlexBalanceRule's
-        // own chained-balance hand-off (planner merge-policy) means
+        // own chained-balance hand-off (in-period across segments) means
         // newResult.RuleResults already carries the across-segment net delta.
         decimal? flexDelta = ExtractFlexDelta(newResult.RuleResults);
 

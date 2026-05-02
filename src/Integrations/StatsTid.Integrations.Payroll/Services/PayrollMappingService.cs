@@ -117,6 +117,20 @@ public sealed class PayrollMappingService
         Guid manifestId = default,
         CancellationToken ct = default)
     {
+        // Silent-loss guard (post-S20 cleanup, Reviewer wave-2 WARNING): the caller has the
+        // manifest id available on result.ManifestId but did not thread it into the optional
+        // parameter — emitted lines would carry Guid.Empty in PayrollExportLine.ManifestId,
+        // breaking the audit chain without any compile-time or runtime signal. Warn loudly;
+        // do not throw (legacy callers without manifest plumbing remain valid).
+        if (result.ManifestId != Guid.Empty && manifestId == Guid.Empty)
+        {
+            _logger.LogWarning(
+                "MapCalculationResultAsync: result.ManifestId={ResultManifestId} but caller passed " +
+                "manifestId=Guid.Empty. Emitted PayrollExportLines will carry empty ManifestId, " +
+                "breaking the audit chain. Thread result.ManifestId through to close the gap.",
+                result.ManifestId);
+        }
+
         var lines = new List<PayrollExportLine>();
 
         foreach (var lineItem in result.LineItems)

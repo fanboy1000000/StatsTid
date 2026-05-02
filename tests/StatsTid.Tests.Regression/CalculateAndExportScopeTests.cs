@@ -40,6 +40,7 @@ namespace StatsTid.Tests.Regression;
 /// Requires a running Docker daemon. Without Docker the fixture surfaces the
 /// failure clearly rather than silently skipping.
 /// </summary>
+[Trait("Category", "Docker")]
 public sealed class CalculateAndExportScopeTests : IAsyncLifetime
 {
     private const string ImageTag = "postgres:16-alpine";
