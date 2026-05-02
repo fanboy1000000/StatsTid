@@ -3,6 +3,16 @@ using StatsTid.SharedKernel.Models;
 
 namespace StatsTid.Infrastructure;
 
+/// <summary>
+/// Pre-S21 per-row local-configuration repository (legacy patch-bag shape).
+///
+/// <strong>Post-S21: legacy read path only.</strong> Writes have moved to
+/// <see cref="LocalAgreementProfileRepository"/> per ADR-017 D5. This class
+/// stays for historical audit-history reads against the legacy
+/// <c>local_configurations</c> table (which is no longer written to after the
+/// big-bang migration in <see cref="LocalAgreementProfileMigrator"/>). New
+/// callers MUST use <see cref="LocalAgreementProfileRepository"/>.
+/// </summary>
 public sealed class LocalConfigurationRepository
 {
     private readonly DbConnectionFactory _connectionFactory;

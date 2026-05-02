@@ -328,7 +328,45 @@ Strong convergence with internal Reviewer. Same 3 BLOCKERs (D1+D9c filter mismat
 | Error message language convention | NOTE (Reviewer-only) | **D9a paragraph added** specifying English error codes + ISO-8601 dates; frontend translates. |
 | ADR-014 predicate divergence | NOTE (Reviewer-only) | **D1 paragraph added** explaining the divergence (no DRAFT workflow → no `status` enum needed). |
 
-ADR-017 cycle 1 closed within the 2-cycle cap. Plan-review pattern matches S20's Step 0b shape. Cycle 2 not invoked — no BLOCKERs remain after cycle 1 resolutions.
+ADR-017 cycle 1 closed within the 2-cycle cap. Plan-review pattern matches S20's Step 0b shape. Cycle 2 not invoked at this stage — no BLOCKERs remain after cycle 1 resolutions on the ADR text itself. (Phase-3 implementation cycle 2 invoked separately; see "Phase 3 review (cycle 1 + 2)" below.)
+
+### Phase 3 review (cycle 1 + 2, 2026-05-02)
+
+**Cycle 1 — Reviewer + Codex on Phase 3 outputs (TASK-2106 + TASK-2107):**
+- Internal Reviewer: 2 BLOCKER, 7 WARNING, 9 NOTE.
+- Codex high-risk override: 2 BLOCKER (P1+P1).
+- **Convergent BLOCKER**: D6 transactional contract violated — event-store append happened AFTER `tx.CommitAsync` AND `PostgresEventStore.AppendAsync` opened its own connection internally; partial-failure mode possible.
+- **Codex-only BLOCKER**: migrator silently discarded recoverable overrides when newest-active value was unparseable (collapsed entire key group to `DROPPED_UNKNOWN_KEY` instead of falling through to next parseable winner).
+- **Reviewer-only BLOCKER**: future-effective_from rejection missing — D2's "no scheduled-future" + D11 fixture #15 not enforced in PUT.
+
+**Cycle 1 fixes applied:**
+- D6: added `IEventStore.AppendAsync(DbConnection, DbTransaction, …)` in-tx overload; PUT calls it BEFORE `tx.CommitAsync`.
+- Migrator: walks ordered (newest-first) rows, picks first parseable winner; older losers → `DROPPED_DUPLICATE_AT_MIGRATION`; newer-than-winner unparseables → `DROPPED_UNKNOWN_KEY`; only collapses to all-`DROPPED_UNKNOWN_KEY` when NO row in group is parseable.
+- Future rejection: PUT checks `candidate.EffectiveFrom > UTC today` before alignment validation; returns 400 with `code: "EFFECTIVE_FROM_NOT_TODAY_OR_PAST"`.
+- Plus WARNING: post-migration assertions tightened from `>=` to `==`; new drop-count exact-match assertion querying `actor_id='system'`.
+
+**Cycle 2 — Codex re-verification:**
+- Future-rejection + migrator fixes: verified clean.
+- D6 fix: **NEW [P1]** — under `RepeatableRead`, the in-tx `AppendInternalAsync` reads `MAX(stream_version)` from the caller's snapshot (taken before concurrent commits become visible). Two admins racing the same profile both compute the same `stream_version`, second commit fails with UNIQUE violation on `(stream_id, stream_version)`, whole save rolls back. The pre-cycle-1 self-contained `AppendAsync` (fresh transaction, fresh snapshot) avoided this.
+
+**Cycle 2 decision: Option C — revert D6 cycle-1 fix; Phase-4 carry-forward (user-approved 2026-05-02):**
+- 2-cycle cap reached per WORKFLOW.md; halted and prompted user.
+- Three options surfaced: (A) cycle-3 deeper fix (FOR UPDATE on event_streams + retry on UNIQUE violation, ~30 LOC), (B) accept cycle-2 finding as known limitation (rare admin contention, retries on 500), (C) revert cycle-1 D6 fix to pre-fix shape with Phase-4 transactional-outbox redesign.
+- User chose **Option C**. The architectural-honest answer: the proper fix is the transactional-outbox pattern (insert into `outbox_events` inside profile tx; separate publisher drains to canonical event store), which is sized correctly for a focused future sprint task — not a cycle-3 patch.
+
+**Cycle 2 reverts applied:**
+- `ConfigEndpoints.cs` PUT: event append moved back AFTER `tx.CommitAsync`, calling self-contained `eventStore.AppendAsync(streamId, @event, ct)`.
+- `IEventStore.AppendAsync(DbConnection, DbTransaction, …)` overload removed (dead code; will be re-added cleanly when the outbox task lands).
+- `PostgresEventStore.AppendInternalAsync` private helper removed (was only consumed by the in-tx overload).
+- Future-rejection fix and migrator fix (cycle-1 BLOCKERs 2 + 3) **preserved** — they passed cycle-2 verification cleanly.
+
+**ADR-017 D6 footnote** added: documents the residual partial-failure risk and the Phase-4 outbox commitment.
+
+**Phase-4 hardening commitments now on ROADMAP.md:**
+- D2.2 sibling — ETag/If-Match pattern propagation across `agreement_configs` / `position_overrides` / `wage_type_mappings` / `entitlement_configs`.
+- D6 sibling — Transactional outbox for event-store + state-change atomicity. Insert events into `outbox_events` inside the profile/state-change transaction; separate publisher drains to canonical event store. Same atomic guarantee without MVCC snapshot conflicts.
+
+Phase 3 review closed at cycle 2. 0 BLOCKERs remain in the to-be-committed diff. Phase 4 (TASK-2108 + TASK-2109) ready to dispatch on confirmation.
 
 ## Migration Plan (Deliverable #3, 2026-05-02)
 

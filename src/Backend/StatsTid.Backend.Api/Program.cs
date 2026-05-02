@@ -1,5 +1,6 @@
 using StatsTid.Auth;
 using StatsTid.Backend.Api.Endpoints;
+using StatsTid.Backend.Api.Validators;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Interfaces;
@@ -26,6 +27,7 @@ builder.Services.AddSingleton<UserRepository>();
 builder.Services.AddSingleton<RoleAssignmentRepository>();
 builder.Services.AddSingleton<OrganizationRepository>();
 builder.Services.AddSingleton<LocalConfigurationRepository>();
+builder.Services.AddSingleton<LocalAgreementProfileRepository>();
 builder.Services.AddSingleton<ApprovalPeriodRepository>();
 builder.Services.AddSingleton<ProjectRepository>();
 builder.Services.AddSingleton<TimerSessionRepository>();
@@ -41,6 +43,7 @@ builder.Services.AddSingleton<OvertimePreApprovalRepository>();
 
 // ── Services ──
 builder.Services.AddSingleton<ConfigResolutionService>();
+builder.Services.AddSingleton<ProfileAlignmentValidator>();
 
 var useDbAuth = builder.Configuration.GetValue<bool>("Auth:UseDatabase", false);
 

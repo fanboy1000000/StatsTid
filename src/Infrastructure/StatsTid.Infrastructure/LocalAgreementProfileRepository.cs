@@ -14,15 +14,22 @@ namespace StatsTid.Infrastructure;
 /// <see cref="IsolationLevel.RepeatableRead"/> transaction with <c>SELECT ... FOR UPDATE</c>
 /// on the current open row to gate concurrent writers (ETag/If-Match concurrency).
 ///
-/// Pattern follows <see cref="LocalConfigurationRepository"/>: each method opens its own
-/// connection via the injected <see cref="DbConnectionFactory"/>; the only multi-statement
-/// method (<see cref="SupersedeAndCreateAsync"/>) opens one connection and runs the lock +
-/// update + insert inside a single transaction on that connection.
+/// Pattern follows <see cref="LocalConfigurationRepository"/>: read methods open their own
+/// connection via the injected <see cref="DbConnectionFactory"/>. Writes have two flavors:
+/// <list type="bullet">
+/// <item><description>Self-contained:
+/// <see cref="SupersedeAndCreateAsync(System.Nullable{System.Guid}, LocalAgreementProfile, System.Threading.CancellationToken)"/>
+/// owns its own connection and transaction. Returns the new profile id on success.</description></item>
+/// <item><description>In-transaction sibling:
+/// <see cref="SupersedeAndCreateAsync(NpgsqlConnection, NpgsqlTransaction, System.Nullable{System.Guid}, LocalAgreementProfile, System.Threading.CancellationToken)"/>
+/// reuses a caller-supplied connection + transaction so the caller can extend the same
+/// PostgreSQL transaction across event-store + audit-row writes (ADR-017 D6 transactional
+/// contract — no two-phase commit across stores; same database).</description></item>
+/// </list>
 ///
 /// This repository is a pure CRUD facade. It does NOT emit domain events or write audit rows;
 /// the calling service (PUT endpoint, TASK-2107) is responsible for coordinating event-store
-/// + audit writes alongside the profile mutation. See the cross-store transaction note on
-/// <see cref="SupersedeAndCreateAsync"/>.
+/// + audit writes alongside the profile mutation.
 /// </summary>
 public sealed class LocalAgreementProfileRepository
 {
@@ -136,8 +143,14 @@ public sealed class LocalAgreementProfileRepository
 
     /// <summary>
     /// Atomically supersedes the currently-active profile (if any) and inserts
-    /// <paramref name="newProfile"/> as the new currently-active profile. This is the
-    /// ETag/If-Match concurrency entry point per ADR-017 D2.1.
+    /// <paramref name="newProfile"/> as the new currently-active profile. Self-contained
+    /// overload: opens its own connection and transaction. This is the ETag/If-Match
+    /// concurrency entry point per ADR-017 D2.1 for callers that do not need to extend
+    /// the transaction across additional writes.
+    ///
+    /// For cross-store atomicity (event-store + audit + profile in a single transaction —
+    /// ADR-017 D6 transactional contract), use the in-transaction sibling overload
+    /// <see cref="SupersedeAndCreateAsync(NpgsqlConnection, NpgsqlTransaction, System.Nullable{System.Guid}, LocalAgreementProfile, System.Threading.CancellationToken)"/>.
     ///
     /// Concurrency contract:
     /// <list type="bullet">
@@ -155,13 +168,6 @@ public sealed class LocalAgreementProfileRepository
     /// <c>SELECT ... FOR UPDATE</c> on the partial-unique row serializes concurrent writers to
     /// the same (org, agreement_code, ok_version) triple. PostgreSQL RepeatableRead is
     /// sufficient here — it prevents non-repeatable reads and the row-lock blocks competitors.
-    ///
-    /// Cross-store note (TASK-2107): this method owns its own transaction and does NOT accept
-    /// a caller-supplied transaction. The PUT endpoint must coordinate event-store + audit-row
-    /// writes through a separate orchestration layer (e.g., transactional outbox or
-    /// after-commit hook). When TASK-2107 needs an in-transaction overload, add a sibling
-    /// method that takes <c>NpgsqlConnection + NpgsqlTransaction</c>; do not retrofit this
-    /// signature.
     /// </summary>
     /// <returns>The new profile's <see cref="Guid"/>.</returns>
     /// <exception cref="OptimisticConcurrencyException">If the precondition encoded in
@@ -175,98 +181,7 @@ public sealed class LocalAgreementProfileRepository
         await using var tx = await conn.BeginTransactionAsync(IsolationLevel.RepeatableRead, ct);
         try
         {
-            // 1. Lock the currently-active row (if any) so concurrent supersessions serialize here.
-            Guid? actualCurrentProfileId = null;
-            await using (var lockCmd = new NpgsqlCommand(
-                """
-                SELECT profile_id FROM local_agreement_profiles
-                WHERE org_id = @orgId
-                  AND agreement_code = @agreementCode
-                  AND ok_version = @okVersion
-                  AND effective_to IS NULL
-                FOR UPDATE
-                """, conn, tx))
-            {
-                lockCmd.Parameters.AddWithValue("orgId", newProfile.OrgId);
-                lockCmd.Parameters.AddWithValue("agreementCode", newProfile.AgreementCode);
-                lockCmd.Parameters.AddWithValue("okVersion", newProfile.OkVersion);
-                await using var reader = await lockCmd.ExecuteReaderAsync(ct);
-                if (await reader.ReadAsync(ct))
-                    actualCurrentProfileId = reader.GetGuid(0);
-            }
-
-            // 2. Validate the precondition (If-None-Match: * vs If-Match: <id>).
-            if (expectedCurrentProfileId is null && actualCurrentProfileId is not null)
-            {
-                throw new OptimisticConcurrencyException(
-                    $"Cannot create: a current profile already exists ({actualCurrentProfileId.Value}); " +
-                    $"use If-Match: {actualCurrentProfileId.Value} for supersession.",
-                    expectedProfileId: null,
-                    actualProfileId: actualCurrentProfileId);
-            }
-            if (expectedCurrentProfileId is not null && actualCurrentProfileId != expectedCurrentProfileId)
-            {
-                throw new OptimisticConcurrencyException(
-                    $"Current profile is {(actualCurrentProfileId?.ToString() ?? "<none>")}, " +
-                    $"but caller sent If-Match: {expectedCurrentProfileId.Value}; refresh and retry.",
-                    expectedProfileId: expectedCurrentProfileId,
-                    actualProfileId: actualCurrentProfileId);
-            }
-
-            // 3. Close the predecessor (if any) by setting effective_to = today.
-            // "Today" is computed in UTC. Admins in Europe/Copenhagen saving across
-            // a UTC-midnight boundary may see effective_to stamped as "yesterday"
-            // relative to their wall clock. Acceptable for S21; Phase-4 hardening
-            // sub-sprint (per ADR-017 D2.2) revisits with a TimeProvider/IClock
-            // injection uniformly across admin-write surfaces.
-            if (expectedCurrentProfileId is not null)
-            {
-                await using var closeCmd = new NpgsqlCommand(
-                    "UPDATE local_agreement_profiles SET effective_to = @today WHERE profile_id = @currentProfileId",
-                    conn, tx);
-                closeCmd.Parameters.AddWithValue("today", DateOnly.FromDateTime(DateTime.UtcNow.Date));
-                closeCmd.Parameters.AddWithValue("currentProfileId", expectedCurrentProfileId.Value);
-                await closeCmd.ExecuteNonQueryAsync(ct);
-            }
-
-            // 4. Insert the new currently-active profile. ProfileId is generated client-side
-            //    (matches LocalConfigurationRepository.CreateAsync precedent).
-            var newProfileId = newProfile.ProfileId == Guid.Empty ? Guid.NewGuid() : newProfile.ProfileId;
-            await using (var insertCmd = new NpgsqlCommand(
-                """
-                INSERT INTO local_agreement_profiles (
-                    profile_id, org_id, agreement_code, ok_version,
-                    effective_from, effective_to,
-                    weekly_norm_hours, max_flex_balance, flex_carryover_max,
-                    max_overtime_hours_per_period, overtime_requires_pre_approval,
-                    created_by, created_at)
-                VALUES (
-                    @profileId, @orgId, @agreementCode, @okVersion,
-                    @effectiveFrom, NULL,
-                    @weeklyNormHours, @maxFlexBalance, @flexCarryoverMax,
-                    @maxOvertimeHoursPerPeriod, @overtimeRequiresPreApproval,
-                    @createdBy, @createdAt)
-                """, conn, tx))
-            {
-                insertCmd.Parameters.AddWithValue("profileId", newProfileId);
-                insertCmd.Parameters.AddWithValue("orgId", newProfile.OrgId);
-                insertCmd.Parameters.AddWithValue("agreementCode", newProfile.AgreementCode);
-                insertCmd.Parameters.AddWithValue("okVersion", newProfile.OkVersion);
-                insertCmd.Parameters.AddWithValue("effectiveFrom", newProfile.EffectiveFrom);
-                insertCmd.Parameters.AddWithValue("weeklyNormHours", (object?)newProfile.WeeklyNormHours ?? DBNull.Value);
-                insertCmd.Parameters.AddWithValue("maxFlexBalance", (object?)newProfile.MaxFlexBalance ?? DBNull.Value);
-                insertCmd.Parameters.AddWithValue("flexCarryoverMax", (object?)newProfile.FlexCarryoverMax ?? DBNull.Value);
-                insertCmd.Parameters.AddWithValue("maxOvertimeHoursPerPeriod", (object?)newProfile.MaxOvertimeHoursPerPeriod ?? DBNull.Value);
-                insertCmd.Parameters.AddWithValue("overtimeRequiresPreApproval", (object?)newProfile.OvertimeRequiresPreApproval ?? DBNull.Value);
-                insertCmd.Parameters.AddWithValue("createdBy", newProfile.CreatedBy);
-                // CreatedAt: prefer the model's value when supplied (caller may have stamped a
-                // deterministic timestamp); otherwise stamp now. The DB default would also fire,
-                // but explicit binding keeps the inserted row aligned with the in-memory model.
-                var createdAt = newProfile.CreatedAt == default ? DateTime.UtcNow : newProfile.CreatedAt;
-                insertCmd.Parameters.AddWithValue("createdAt", createdAt);
-                await insertCmd.ExecuteNonQueryAsync(ct);
-            }
-
+            var newProfileId = await SupersedeAndCreateAsync(conn, tx, expectedCurrentProfileId, newProfile, ct);
             await tx.CommitAsync(ct);
             return newProfileId;
         }
@@ -275,6 +190,170 @@ public sealed class LocalAgreementProfileRepository
             await tx.RollbackAsync(ct);
             throw;
         }
+    }
+
+    /// <summary>
+    /// In-transaction sibling overload of
+    /// <see cref="SupersedeAndCreateAsync(System.Nullable{System.Guid}, LocalAgreementProfile, System.Threading.CancellationToken)"/>.
+    /// Reuses the caller-supplied <paramref name="conn"/> and <paramref name="tx"/> so the
+    /// caller can extend the same PostgreSQL transaction across event-store + audit-row writes
+    /// (ADR-017 D6 transactional contract). The caller is responsible for committing or rolling
+    /// back the transaction; this method does NOT commit and does NOT rollback.
+    ///
+    /// Concurrency semantics, isolation expectation, and exception contract are identical to
+    /// the self-contained overload — the caller should open the transaction with
+    /// <see cref="IsolationLevel.RepeatableRead"/> for equivalent guarantees.
+    /// </summary>
+    /// <returns>The new profile's <see cref="Guid"/>.</returns>
+    /// <exception cref="OptimisticConcurrencyException">If the precondition encoded in
+    /// <paramref name="expectedCurrentProfileId"/> does not match the row currently holding
+    /// the active slot.</exception>
+    public async Task<Guid> SupersedeAndCreateAsync(
+        NpgsqlConnection conn,
+        NpgsqlTransaction tx,
+        Guid? expectedCurrentProfileId,
+        LocalAgreementProfile newProfile,
+        CancellationToken ct = default)
+    {
+        // 1. Lock the currently-active row (if any) so concurrent supersessions serialize here.
+        var actualCurrentProfileId = await AcquireLockAsync(
+            conn, tx, newProfile.OrgId, newProfile.AgreementCode, newProfile.OkVersion, ct);
+
+        // 2. Validate the precondition (If-None-Match: * vs If-Match: <id>).
+        ValidatePrecondition(actualCurrentProfileId, expectedCurrentProfileId);
+
+        // 3. Close the predecessor (if any) by setting effective_to = today.
+        // "Today" is computed in UTC. Admins in Europe/Copenhagen saving across
+        // a UTC-midnight boundary may see effective_to stamped as "yesterday"
+        // relative to their wall clock. Acceptable for S21; Phase-4 hardening
+        // sub-sprint (per ADR-017 D2.2) revisits with a TimeProvider/IClock
+        // injection uniformly across admin-write surfaces.
+        if (expectedCurrentProfileId is not null)
+        {
+            var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+            await CloseProfileAsync(conn, tx, expectedCurrentProfileId.Value, today, ct);
+        }
+
+        // 4. Insert the new currently-active profile. ProfileId is generated client-side
+        //    (matches LocalConfigurationRepository.CreateAsync precedent).
+        var newProfileId = newProfile.ProfileId == Guid.Empty ? Guid.NewGuid() : newProfile.ProfileId;
+        await InsertProfileAsync(conn, tx, newProfile, newProfileId, ct);
+        return newProfileId;
+    }
+
+    /// <summary>
+    /// Acquires a row-level lock on the currently-active profile (if any) for the
+    /// (org, agreement_code, ok_version) triple via <c>SELECT profile_id ... FOR UPDATE</c>.
+    /// Returns the locked profile_id, or <c>null</c> if no profile is currently active.
+    /// Concurrent writers attempting the same lock serialize on this query.
+    /// </summary>
+    private static async Task<Guid?> AcquireLockAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string orgId, string agreementCode, string okVersion,
+        CancellationToken ct)
+    {
+        await using var lockCmd = new NpgsqlCommand(
+            """
+            SELECT profile_id FROM local_agreement_profiles
+            WHERE org_id = @orgId
+              AND agreement_code = @agreementCode
+              AND ok_version = @okVersion
+              AND effective_to IS NULL
+            FOR UPDATE
+            """, conn, tx);
+        lockCmd.Parameters.AddWithValue("orgId", orgId);
+        lockCmd.Parameters.AddWithValue("agreementCode", agreementCode);
+        lockCmd.Parameters.AddWithValue("okVersion", okVersion);
+        await using var reader = await lockCmd.ExecuteReaderAsync(ct);
+        if (await reader.ReadAsync(ct))
+            return reader.GetGuid(0);
+        return null;
+    }
+
+    /// <summary>
+    /// Applies the optimistic-concurrency precondition (HTTP If-Match / If-None-Match)
+    /// against the row actually present at lock time. Throws
+    /// <see cref="OptimisticConcurrencyException"/> on mismatch with both the expected and
+    /// actual ids surfaced in the exception (the PUT endpoint maps these to the 412 body).
+    /// </summary>
+    private static void ValidatePrecondition(Guid? actualCurrentProfileId, Guid? expectedCurrentProfileId)
+    {
+        if (expectedCurrentProfileId is null && actualCurrentProfileId is not null)
+        {
+            throw new OptimisticConcurrencyException(
+                $"Cannot create: a current profile already exists ({actualCurrentProfileId.Value}); " +
+                $"use If-Match: {actualCurrentProfileId.Value} for supersession.",
+                expectedProfileId: null,
+                actualProfileId: actualCurrentProfileId);
+        }
+        if (expectedCurrentProfileId is not null && actualCurrentProfileId != expectedCurrentProfileId)
+        {
+            throw new OptimisticConcurrencyException(
+                $"Current profile is {(actualCurrentProfileId?.ToString() ?? "<none>")}, " +
+                $"but caller sent If-Match: {expectedCurrentProfileId.Value}; refresh and retry.",
+                expectedProfileId: expectedCurrentProfileId,
+                actualProfileId: actualCurrentProfileId);
+        }
+    }
+
+    /// <summary>
+    /// Closes the supplied currently-active profile by stamping <c>effective_to</c> to
+    /// <paramref name="today"/>. Caller must already hold the row lock acquired via
+    /// <see cref="AcquireLockAsync"/>.
+    /// </summary>
+    private static async Task CloseProfileAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        Guid currentProfileId, DateOnly today, CancellationToken ct)
+    {
+        await using var closeCmd = new NpgsqlCommand(
+            "UPDATE local_agreement_profiles SET effective_to = @today WHERE profile_id = @currentProfileId",
+            conn, tx);
+        closeCmd.Parameters.AddWithValue("today", today);
+        closeCmd.Parameters.AddWithValue("currentProfileId", currentProfileId);
+        await closeCmd.ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>
+    /// Inserts a new profile row with the supplied <paramref name="newProfileId"/> as the
+    /// currently-active profile (effective_to NULL). Assumes the active-slot lock has already
+    /// been acquired and (where needed) the predecessor closed via <see cref="CloseProfileAsync"/>.
+    /// </summary>
+    private static async Task InsertProfileAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        LocalAgreementProfile newProfile, Guid newProfileId, CancellationToken ct)
+    {
+        await using var insertCmd = new NpgsqlCommand(
+            """
+            INSERT INTO local_agreement_profiles (
+                profile_id, org_id, agreement_code, ok_version,
+                effective_from, effective_to,
+                weekly_norm_hours, max_flex_balance, flex_carryover_max,
+                max_overtime_hours_per_period, overtime_requires_pre_approval,
+                created_by, created_at)
+            VALUES (
+                @profileId, @orgId, @agreementCode, @okVersion,
+                @effectiveFrom, NULL,
+                @weeklyNormHours, @maxFlexBalance, @flexCarryoverMax,
+                @maxOvertimeHoursPerPeriod, @overtimeRequiresPreApproval,
+                @createdBy, @createdAt)
+            """, conn, tx);
+        insertCmd.Parameters.AddWithValue("profileId", newProfileId);
+        insertCmd.Parameters.AddWithValue("orgId", newProfile.OrgId);
+        insertCmd.Parameters.AddWithValue("agreementCode", newProfile.AgreementCode);
+        insertCmd.Parameters.AddWithValue("okVersion", newProfile.OkVersion);
+        insertCmd.Parameters.AddWithValue("effectiveFrom", newProfile.EffectiveFrom);
+        insertCmd.Parameters.AddWithValue("weeklyNormHours", (object?)newProfile.WeeklyNormHours ?? DBNull.Value);
+        insertCmd.Parameters.AddWithValue("maxFlexBalance", (object?)newProfile.MaxFlexBalance ?? DBNull.Value);
+        insertCmd.Parameters.AddWithValue("flexCarryoverMax", (object?)newProfile.FlexCarryoverMax ?? DBNull.Value);
+        insertCmd.Parameters.AddWithValue("maxOvertimeHoursPerPeriod", (object?)newProfile.MaxOvertimeHoursPerPeriod ?? DBNull.Value);
+        insertCmd.Parameters.AddWithValue("overtimeRequiresPreApproval", (object?)newProfile.OvertimeRequiresPreApproval ?? DBNull.Value);
+        insertCmd.Parameters.AddWithValue("createdBy", newProfile.CreatedBy);
+        // CreatedAt: prefer the model's value when supplied (caller may have stamped a
+        // deterministic timestamp); otherwise stamp now. The DB default would also fire,
+        // but explicit binding keeps the inserted row aligned with the in-memory model.
+        var createdAt = newProfile.CreatedAt == default ? DateTime.UtcNow : newProfile.CreatedAt;
+        insertCmd.Parameters.AddWithValue("createdAt", createdAt);
+        await insertCmd.ExecuteNonQueryAsync(ct);
     }
 
     /// <summary>
@@ -337,11 +416,11 @@ public sealed class LocalAgreementProfileRepository
 }
 
 /// <summary>
-/// Thrown by <see cref="LocalAgreementProfileRepository.SupersedeAndCreateAsync"/> when the
-/// caller's optimistic-concurrency precondition (HTTP <c>If-Match</c> / <c>If-None-Match: *</c>)
-/// does not match the row currently holding the active slot. Per ADR-017 D2.1, the PUT
-/// endpoint (TASK-2107) maps this to <c>412 Precondition Failed</c> and returns the current
-/// state in the response body.
+/// Thrown by <see cref="LocalAgreementProfileRepository.SupersedeAndCreateAsync(System.Nullable{System.Guid}, LocalAgreementProfile, System.Threading.CancellationToken)"/>
+/// (and its in-transaction sibling) when the caller's optimistic-concurrency precondition
+/// (HTTP <c>If-Match</c> / <c>If-None-Match: *</c>) does not match the row currently holding
+/// the active slot. Per ADR-017 D2.1, the PUT endpoint (TASK-2107) maps this to
+/// <c>412 Precondition Failed</c> and returns the current state in the response body.
 /// </summary>
 public sealed class OptimisticConcurrencyException : Exception
 {
