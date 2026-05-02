@@ -3,7 +3,7 @@
 | Field | Value |
 |-------|-------|
 | **Sprint** | 21 |
-| **Status** | analysis-phase open (Step 0a + Step 0b + data audit + ADR-017 + ADR review cycle 1 + migration plan complete 2026-05-02; task decomposition pending) |
+| **Status** | analysis-phase complete (Step 0a + Step 0b + data audit + ADR-017 + ADR review cycle 1 + migration plan + task decomposition complete 2026-05-02; awaits user approval before Step 2 — Delegate) |
 | **Start Date** | 2026-05-02 |
 | **End Date** | TBD |
 | **Orchestrator Approved** | analysis-phase yet to begin |
@@ -548,6 +548,213 @@ Synthesized data for the 18 named test scenarios. Each fixture lives in the test
 - **Post-migration cleanup** (drop `local_configurations` table + the per-row audit table) is explicitly out of S21 scope; tracked as a future cleanup sprint candidate.
 
 Migration plan closed. Next: deliverable #4 (TASK-21NN decomposition).
+
+## Task Log (Deliverable #4, 2026-05-02)
+
+_Drafted from ADR-017 + Migration Plan; user-approval pending. All tasks are `not-started` until Step 2 (Delegate)._
+
+### Task Index
+
+| TASK | Domain / Agent | Phase | Title |
+|------|----------------|-------|-------|
+| TASK-2101 | Data Model | 1 | Schema migration: `local_agreement_profiles` + audit table + partial-unique-index + audit-action enum extension |
+| TASK-2102 | Data Model | 1 | SharedKernel `LocalAgreementProfile` model + `AlignmentPolicies` static map + `LegacyKeyToColumn` whitelist |
+| TASK-2103 | Data Model | 1 | `LocalAgreementProfileChanged` event + `EventSerializer` registration (event count 44 → 45) |
+| TASK-2104 | Rule Engine (SharedKernel.Segmentation) | 1 | `BoundaryCause.LocalProfileActivation` enum value + `BoundarySources.LocalProfileActivations` field + `BoundaryDetector.OrderedCauses` extension |
+| TASK-2105 | Data Model (extended scope into Infrastructure) | 2 | `LocalAgreementProfileRepository` with `SELECT FOR UPDATE` for ETag transactions |
+| TASK-2106 | Data Model (extended scope into Infrastructure) | 3 | `LocalAgreementProfileMigrator` runner + `ConfigResolutionService` rewrite to read profiles instead of per-key rows |
+| TASK-2107 | Backend API (cross-domain authorized) | 3 | `ConfigEndpoints` rewrite (PUT/GET/history), `ProfileAlignmentValidator`, ETag/If-Match handling, OrgScopeValidator integration |
+| TASK-2108 | Payroll Integration | 4 | `BuildPlanForLegacyCallers` extension: hydrate `LocalProfileActivations` from `LocalAgreementProfileRepository` (D9c) |
+| TASK-2109 | UX | 4 | `ConfigManagement.tsx` rewrite as profile editor; WeeklyNormHours date-picker (Monday-only); ETag/If-Match save flow; read-only renderings for protected fields |
+| TASK-2110 | Test & QA | 5 | D11 18-scenario test matrix per fixture set table (9 test classes; floor of 17) |
+
+### Phase Ordering
+
+- **Phase 1 (parallel-independent, worktree isolation)**: TASK-2101, 2102, 2103, 2104. All four touch different surfaces (schema, models, events, segmentation types). Phase 1 done when all four land.
+- **Phase 2 (depends on Phase 1)**: TASK-2105 (repository — depends on 2101 schema + 2102 model). Single task, sequential.
+- **Phase 3 (parallel within Phase, depends on Phase 2)**: TASK-2106 (migration + resolution — depends on 2105), TASK-2107 (endpoints + validator — depends on 2102 + 2105). Parallel via worktree isolation.
+- **Phase 4 (parallel within Phase, depends on Phase 3)**: TASK-2108 (PCS extension — depends on 2104 + 2105), TASK-2109 (UX — depends on 2107 API surface). Parallel via worktree isolation.
+- **Phase 5 (sequential, depends on all production code)**: TASK-2110 (Test & QA matrix).
+- **Phase 6 (Orchestrator)**: build/test validation, Step 5α Constraint Validator over all outputs, Step 5a Internal Reviewer (P1 + P3 + P4 + cross-domain + new-abstraction triggers — MANDATORY). **High-risk Step 5a override** also applies (P3 auditability + P4 OK-version + schema migrations + new authorization paths = three of the high-risk domains): external Codex review per task in addition to internal Reviewer. Step 7a sprint-end Codex review on full S21 diff against `90ffa9b` (current pre-S21 master HEAD before S21 work began at `893ef83`).
+
+### Task Detail
+
+#### TASK-2101 — Schema migration: profile + audit + audit-action enum extension
+**Agent**: Data Model
+**Phase**: 1
+**Files (write)**:
+- `docker/postgres/init.sql` (additive — new `local_agreement_profiles` + `local_agreement_profile_audit` tables + indexes; extend `local_configuration_audit.action` CHECK constraint to include the four new action values: `DROPPED_DUPLICATE_AT_MIGRATION`, `DROPPED_INFORMATIONAL`, `DROPPED_UNKNOWN_KEY`, `MIGRATED_FROM_LEGACY`)
+
+**Scope**:
+- New `local_agreement_profiles` table per D1 schema.
+- Partial-unique-index `WHERE effective_to IS NULL`.
+- Two indexes: `(org_id)`, `(org_id, agreement_code, ok_version, effective_from DESC)` for history reads.
+- New `local_agreement_profile_audit` table per D8 schema + `(profile_id)` index.
+- Extend `local_configuration_audit.action` CHECK constraint (current values: `CREATED`, `MODIFIED`, `DEACTIVATED`, `APPROVED`; add the four migration-related values).
+
+**Validation**: migration runs cleanly on fresh DB (`docker compose up postgres` succeeds); `dotnet build` clean.
+
+**Cross-domain dependencies**: none — pure schema work. Subsequent tasks consume the schema.
+
+#### TASK-2102 — SharedKernel `LocalAgreementProfile` model + alignment + whitelist
+**Agent**: Data Model
+**Phase**: 1
+**Files (write)**:
+- `src/SharedKernel/StatsTid.SharedKernel/Models/LocalAgreementProfile.cs` (new — init-only properties per PAT-001; 5 nullable overridable columns + lifecycle metadata)
+- Static read-only members on `LocalAgreementProfile`:
+  - `LegacyKeyToColumn` — `IReadOnlyDictionary<string, string>` mapping pre-S21 `config_key` strings to schema column names. Used by migration runner (TASK-2106) and validator (TASK-2107).
+  - `AlignmentPolicies` — `IReadOnlyDictionary<string, Func<DateOnly, ValidationResult>>` keyed by overridable field name (PascalCase). Today only `WeeklyNormHours` is populated with the Monday-only check. Used by `ProfileAlignmentValidator` (TASK-2107).
+- Existing `src/SharedKernel/StatsTid.SharedKernel/Models/LocalConfiguration.cs` stays untouched (legacy reads continue).
+
+**Scope**: Type definitions + static metadata. No I/O, no behavior beyond constants and validation predicates.
+
+**Validation**: build clean; type compiles; PAT-001 immutability honored.
+
+**Cross-domain dependencies**: TASK-2105 / TASK-2106 / TASK-2107 / TASK-2108 / TASK-2109 all consume `LocalAgreementProfile`; TASK-2106 + TASK-2107 consume the static maps.
+
+#### TASK-2103 — `LocalAgreementProfileChanged` event + EventSerializer registration
+**Agent**: Data Model
+**Phase**: 1
+**Files (write)**:
+- `src/SharedKernel/StatsTid.SharedKernel/Events/LocalAgreementProfileChanged.cs` (new — extends `DomainEventBase`; carries `ProfileId`, `OrgId`, `AgreementCode`, `OkVersion`, `EffectiveFrom`, `ChangedFields: IReadOnlyDictionary<string, FieldChange>`, `ActorId`, `ActorRole`, `PrecedingProfileId?`)
+- `src/SharedKernel/StatsTid.SharedKernel/Events/FieldChange.cs` (new — sealed record `FieldChange(JsonElement Old, JsonElement New)`)
+- `src/Infrastructure/StatsTid.Infrastructure/EventSerializer.cs` (register the new type)
+
+**Scope**: Event class + EventSerializer entry. Existing `LocalConfigurationChanged` stays registered (D7 — pre-S21 events remain deserializable).
+
+**Validation**: build clean; `EventSerializerCoverageTests` reflection guard passes; event count 44 → 45; DEP-003 honored.
+
+**Cross-domain dependencies**: TASK-2106 + TASK-2107 emit this event during writes.
+
+#### TASK-2104 — `BoundaryCause.LocalProfileActivation` + `BoundarySources` extension + `OrderedCauses` update
+**Agent**: Rule Engine (SharedKernel.Segmentation infrastructure — same boundary as S20 TASK-2003 and TASK-2004 used)
+**Phase**: 1
+**Files (write)**:
+- `src/SharedKernel/StatsTid.SharedKernel/Segmentation/BoundaryCause.cs` (add `LocalProfileActivation` enum value)
+- `src/SharedKernel/StatsTid.SharedKernel/Segmentation/PeriodPlanner.cs` or wherever `BoundarySources` record is defined (extend with `IReadOnlyList<(DateOnly EffectiveFrom, Guid ProfileId)> LocalProfileActivations` field; default empty list; `BoundarySources.Empty` includes empty list)
+- `src/SharedKernel/StatsTid.SharedKernel/Segmentation/BoundaryDetector.cs` (extend `OrderedCauses` to insert `LocalProfileActivation` between `AgreementConfigPromotion` and `PositionOverrideEffective`; extend boundary-detection logic to emit boundaries from `BoundarySources.LocalProfileActivations`)
+
+**Scope**: Pure additive extensions. Existing planner tests must pass without modification — empty `LocalProfileActivations` is the default for all existing tests.
+
+**Validation**: build clean; existing 513 unit + 32 plain regression tests pass; D9b tie-break order matches the documented sequence.
+
+**Cross-domain dependencies**: TASK-2108 hydrates the new field. TASK-2110 tests the extended detection.
+
+#### TASK-2105 — `LocalAgreementProfileRepository`
+**Agent**: Data Model (extended scope into `src/Infrastructure/`; cross-domain authorized — repositories adjacent to models per S20 / S6 precedent)
+**Phase**: 2
+**Files (write)**:
+- `src/Infrastructure/StatsTid.Infrastructure/LocalAgreementProfileRepository.cs` (new)
+
+**Scope**: CRUD methods:
+- `GetCurrentOpenAsync(orgId, agreementCode, okVersion, ct)` — SELECT WHERE `effective_to IS NULL`. Returns `LocalAgreementProfile?`.
+- `GetActivationsInPeriodAsync(orgId, agreementCode, okVersion, periodStart, periodEnd, ct)` — for D9c hydration. SELECT WHERE `effective_from > periodStart AND effective_from <= periodEnd AND (effective_to IS NULL OR effective_to >= periodStart)`. Returns `IReadOnlyList<(DateOnly, Guid)>`.
+- `GetHistoryAsync(orgId, agreementCode, okVersion, ct)` — SELECT WHERE `effective_to IS NOT NULL` ORDER BY `effective_from DESC`. Returns `IReadOnlyList<LocalAgreementProfile>`.
+- `SupersedeAndCreateAsync(currentProfileId?, newProfile, ct)` — close-then-insert in a single transaction. Inside the transaction: `SELECT ... WHERE profile_id = @currentProfileId FOR UPDATE` first to acquire row lock. If `currentProfileId` is null, validates no current open profile exists (for first-creation). Returns new `Guid`.
+- `DeactivateAsync(orgId, agreementCode, okVersion, ct)` — UPDATE current open profile SET `effective_to = today`. No follow-on insert. Returns affected-rows count.
+
+All methods use the shared `DbConnectionFactory` pattern. `SELECT FOR UPDATE` ensures the partial-unique-index can't race during the close-then-insert window (required by D2.1).
+
+**Validation**: build clean; integration test from TASK-2110 exercises each method.
+
+**Cross-domain dependencies**: depends on TASK-2101 (schema) + TASK-2102 (model). Consumed by TASK-2106, TASK-2107, TASK-2108.
+
+#### TASK-2106 — `LocalAgreementProfileMigrator` runner + `ConfigResolutionService` rewrite
+**Agent**: Data Model (extended scope into `src/Infrastructure/`)
+**Phase**: 3
+**Files (write)**:
+- `src/Infrastructure/StatsTid.Infrastructure/LocalAgreementProfileMigrator.cs` (new — implements migration plan above; idempotent re-runnability for development; runs as single transaction)
+- `src/Infrastructure/StatsTid.Infrastructure/ConfigResolutionService.cs` (rewrite — replace per-key switch on `_localConfigRepo.GetActiveByOrgAsync(...)` with profile read via `_localAgreementProfileRepo.GetCurrentOpenAsync(...)`; per-column merge replacing per-key merge; resolution chain unchanged: central → position override → profile)
+- (deprecate but don't delete) `src/Infrastructure/StatsTid.Infrastructure/LocalConfigurationRepository.cs` — stays for historical reads against `local_configurations` legacy table; mark with XML doc comment "post-S21: legacy repository for pre-migration audit-history queries; new write path is `LocalAgreementProfileRepository`".
+
+**Scope**: Migration runs once on deployment; resolution service consumes the new profile shape on all paths.
+
+**Validation**: build clean; existing config/resolution tests adapted to profile shape (TASK-2110 owns the test changes); `dotnet build` 0 errors. Migration runner exercised by TASK-2110's migration tests.
+
+**Cross-domain dependencies**: depends on TASK-2101 (schema) + TASK-2102 (LegacyKeyToColumn map) + TASK-2105 (repository). Consumed by TASK-2107 (write path) + TASK-2108 (read path).
+
+#### TASK-2107 — `ConfigEndpoints` rewrite + `ProfileAlignmentValidator`
+**Agent**: Backend API (cross-domain authorized — `src/Backend/StatsTid.Backend.Api/` is not in any standard agent scope; TASK-2107 explicitly authorizes the Data Model agent or a Backend agent variant)
+**Phase**: 3
+**Files (write)**:
+- `src/Backend/StatsTid.Backend.Api/Endpoints/ConfigEndpoints.cs` (rewrite — remove the three per-row endpoints; add the three profile-shaped endpoints per D5 with `RequireAuthorization` policies, ETag/If-Match handling, OrgScopeValidator integration)
+- `src/Backend/StatsTid.Backend.Api/Validators/ProfileAlignmentValidator.cs` (new — consumes `LocalAgreementProfile.AlignmentPolicies` static map; runs on PUT before persistence; returns structured error per D9a)
+- `src/Backend/StatsTid.Backend.Api/Program.cs` (DI registration — `LocalAgreementProfileRepository`, `ProfileAlignmentValidator`)
+
+**Scope**:
+- PUT endpoint flow: parse body → run `ProfileAlignmentValidator` → check `If-Match` / `If-None-Match` precondition → SELECT FOR UPDATE current open row → emit `LocalAgreementProfileChanged` event + `local_agreement_profile_audit` row + UPDATE+INSERT in one transaction → return 200 with new profile (and `ETag: "<newProfileId>"`) or 412 / 400 on failure.
+- GET endpoint: return current open profile + `ETag` header.
+- History endpoint: return closed predecessors ordered most-recent-first.
+- All endpoints wrapped in `RequireAuthorization` per D5.
+- `OrgScopeValidator.ValidateOrgAccessAsync` runs before any repository call.
+
+**Validation**: build clean; `RequireAuthorization` chained on all three endpoints (Step 5α Constraint Validator check); ETag/If-Match handling matches D2.1 (TASK-2110 verifies via tests 17 + 18).
+
+**Cross-domain dependencies**: depends on TASK-2102 (alignment static map) + TASK-2103 (event) + TASK-2105 (repository). Consumed by TASK-2109 (frontend).
+
+#### TASK-2108 — `BuildPlanForLegacyCallers` extension (D9c)
+**Agent**: Payroll Integration
+**Phase**: 4
+**Files (write)**:
+- `src/Integrations/StatsTid.Integrations.Payroll/Services/PeriodCalculationService.cs` (extend the private `BuildPlanForLegacyCallers` method per D9c)
+
+**Scope**: Inject `LocalAgreementProfileRepository` via DI (cross-domain — same shape as the existing wage-type-mapping repository injection). Inside `BuildPlanForLegacyCallers`:
+- Compute `(orgId, agreementCode, okVersion)` from `EmploymentProfile`.
+- Call `_localAgreementProfileRepo.GetActivationsInPeriodAsync(orgId, agreementCode, okVersion, periodStart, periodEnd, ct)`.
+- Map the result to `BoundarySources.LocalProfileActivations`.
+- Profile-less callers (`profile.OrgId` null/empty) get an empty list per D9c contract.
+
+**Validation**: build clean; existing 513 unit + 32 plain regression tests pass; TASK-2110's hydration shim test exercises the new path.
+
+**Cross-domain dependencies**: depends on TASK-2104 (`BoundarySources.LocalProfileActivations` field) + TASK-2105 (repository).
+
+#### TASK-2109 — `ConfigManagement.tsx` rewrite as profile editor + date-picker
+**Agent**: UX
+**Phase**: 4
+**Files (write)**:
+- `frontend/src/pages/config/ConfigManagement.tsx` (rewrite — single profile editor view per `(org, agreement, OkVersion)`)
+- `frontend/src/hooks/useConfig.ts` (reshape — fetch profile + history; PUT with `If-Match` / `If-None-Match`)
+- `frontend/src/components/config/ProfileEditor.tsx` (new — profile editor with editable inputs on overridable subset and read-only renderings on protected fields)
+- `frontend/src/components/config/MondayDatePicker.tsx` (new — date picker that disables non-Mondays for `WeeklyNormHours`)
+
+**Scope**: Functional editor only — no visual / interaction polish (Phase 5 owns polish). The 5 overridable fields render as inputs (disabled when NULL = inherit-central; enabling lets admin override). The 21 protected fields render as read-only labels. Save flow handles 412 by re-fetching and presenting a "your data is stale" banner with retry option. WeeklyNormHours date-picker only allows Monday selection.
+
+**Validation**: vitest passes (existing 41 tests + maybe 2-3 new for the date-picker behavior); editor renders without errors against a mocked backend.
+
+**Cross-domain dependencies**: depends on TASK-2107 (API surface). UX agent's `frontend/**` scope covers all the new files.
+
+#### TASK-2110 — D11 18-scenario test matrix
+**Agent**: Test & QA
+**Phase**: 5
+**Files (write)**:
+- `tests/StatsTid.Tests.Regression/Config/ProfileMigrationTests.cs` (5 Docker-gated tests)
+- `tests/StatsTid.Tests.Regression/Config/ProfileUniquenessTests.cs` (2 Docker-gated tests)
+- `tests/StatsTid.Tests.Unit/Config/ProfileResolutionTests.cs` (3 unit tests)
+- `tests/StatsTid.Tests.Regression/Config/ProfileAuditTests.cs` (2 Docker-gated tests)
+- `tests/StatsTid.Tests.Unit/Config/ProfileAlignmentValidatorTests.cs` (1 unit test)
+- `tests/StatsTid.Tests.Regression/Segmentation/ProfileBoundaryHydrationTests.cs` (1 Docker-gated test)
+- `tests/StatsTid.Tests.Regression/Config/ProfileScheduledFutureRejectionTests.cs` (1 Docker-gated test)
+- `tests/StatsTid.Tests.Regression/Config/ProfileLegacyEventNonEmissionTests.cs` (1 Docker-gated test)
+- `tests/StatsTid.Tests.Regression/Config/ProfileConcurrencyTokenTests.cs` (2 Docker-gated tests)
+
+**Scope**: 18 named scenarios per the fixture set table above. All Docker-gated tests use `TestFixtures.DockerHarness.StartAsync()` (post-S20 cleanup pattern). Test class names + file paths match ADR-017 D11 verbatim. Floor: 17 (committed); 18 actual (one above floor).
+
+**Validation**: `dotnet build` 0 errors; `dotnet test --filter "Category!=Docker"` shows the 4 unit tests pass (3 resolution + 1 alignment); Docker-gated tests properly trait-marked; existing 513 unit + 32 plain regression still pass (no regressions). After this task, total counts: 513 + 4 = 517 unit + 32 + 14 = 46 plain regression (the 14 includes the 5 migration + 2 uniqueness + 2 audit + 1 hydration + 1 scheduled-future + 1 no-emit-legacy + 2 concurrency tests, all Docker-gated, only counted if Docker daemon runs).
+
+**Cross-domain dependencies**: depends on all production code (TASK-2101 through TASK-2109). Test & QA Agent's `tests/**` scope covers all new files.
+
+### Risks & Watch-Points
+
+- **Phase 1 throughput** — TASK-2104 (Segmentation extension) is the only Rule Engine task; the other three are Data Model. Worktree isolation handles parallel writes; Phase 1 done when all four tasks land.
+- **Cross-domain authorization for TASK-2105 + TASK-2106 + TASK-2107** — Data Model agent's standard scope is `src/SharedKernel/**/Models/**` etc.; TASK-2105 + 2106 extend into `src/Infrastructure/`, TASK-2107 extends into `src/Backend/`. Each task's prompt MUST explicitly authorize the extended scope (matching S20 TASK-2010's PayrollExportLine.cs pattern).
+- **Phase 3 parallel risk** — TASK-2106 and TASK-2107 both touch DI registration in their respective `Program.cs`. Worktree isolation prevents file-level conflicts; if conflicts arise on `Program.cs` files, sequential merge is acceptable.
+- **Phase 4 parallel risk** — TASK-2108 (PCS) and TASK-2109 (frontend) touch entirely different surfaces; parallel execution is safe.
+- **Frontend test coverage** — TASK-2109's vitest count goes from 41 to potentially ~43-45. UX agent should not aim for full E2E parity; basic functional correctness only (per scope-boundary "no polish").
+- **High-risk Step 5a override** — S21 hits **P3 + P4 + new schema + new authorization paths** = 4 high-risk categories (more than S20's 3). External Codex review at Step 5a is mandatory per workflow; budget for one BLOCKER-fix cycle. Halt and prompt user after 2 BLOCKER cycles per workflow rule.
+- **D9c hydration interaction with the S20 carry-forward** — S20's `BuildPlanForLegacyCallers` only hydrates `OkTransitions`. TASK-2108 adds `LocalProfileActivations`. Other non-OK boundary sources (agreement-config, position-override, EU-WTD) remain on the carry-forward list — they are explicitly NOT in S21 scope.
+- **Migration runner timing** — runs at deployment time when API is offline (operational discipline). Not transactional vs. concurrent admin writes — that's an ops concern, not a code concern.
+
+Task decomposition closed. Ready for user approval before Step 2 (Delegate).
 
 ## References
 
