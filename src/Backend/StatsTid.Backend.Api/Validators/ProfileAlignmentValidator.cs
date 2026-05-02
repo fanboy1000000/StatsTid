@@ -52,6 +52,24 @@ public sealed class ProfileAlignmentValidator
             ? new ValidationResult(true, Array.Empty<FieldValidationError>())
             : new ValidationResult(false, errors);
     }
+
+    /// <summary>
+    /// "No scheduled-future" check (ADR-017 D2; D11 fixture #15). Returns a structured error
+    /// when <paramref name="effectiveFrom"/> is strictly after <paramref name="today"/>; null
+    /// otherwise. The endpoint maps a non-null result to HTTP 400.
+    /// Static so unit tests can pin the predicate without spinning up the full pipeline.
+    /// </summary>
+    public static FieldValidationError? ValidateEffectiveFromTemporality(DateOnly effectiveFrom, DateOnly today)
+    {
+        if (effectiveFrom > today)
+        {
+            return new FieldValidationError(
+                Field: "EffectiveFrom",
+                Code: "EFFECTIVE_FROM_NOT_TODAY_OR_PAST",
+                NearestValid: new[] { today });
+        }
+        return null;
+    }
 }
 
 /// <summary>

@@ -173,7 +173,9 @@ public static class ConfigEndpoints
             //     matches the repository's effective_to stamping (Phase-4 hardening
             //     sub-sprint per D2.2 revisits TimeProvider/IClock injection).
             var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
-            if (candidate.EffectiveFrom > today)
+            var temporalityError = ProfileAlignmentValidator.ValidateEffectiveFromTemporality(
+                candidate.EffectiveFrom, today);
+            if (temporalityError is not null)
             {
                 return Results.BadRequest(new
                 {
@@ -182,9 +184,9 @@ public static class ConfigEndpoints
                     {
                         new
                         {
-                            field = "EffectiveFrom",
-                            code = "EFFECTIVE_FROM_NOT_TODAY_OR_PAST",
-                            nearestValid = new[] { today.ToString("O") },
+                            field = temporalityError.Field,
+                            code = temporalityError.Code,
+                            nearestValid = temporalityError.NearestValid?.Select(d => d.ToString("O")).ToArray(),
                         },
                     },
                 });
