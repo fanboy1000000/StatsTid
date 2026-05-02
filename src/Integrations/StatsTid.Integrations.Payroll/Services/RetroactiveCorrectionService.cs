@@ -10,9 +10,26 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// correction lines by diffing against a previous export. Supports retroactive
 /// recalculation with full traceability and event sourcing.
 ///
-/// When an OK version transition occurs mid-period (e.g., OK24 → OK26 on Jan 28),
-/// the service splits entries by the transition date and recalculates each segment
-/// under its respective OK version config (ADR-003: entry-date resolution).
+/// <para>
+/// Segmentation across boundaries (OK-version transitions, agreement-config
+/// promotions, position-override effective dates, EU-WTD ruleset transitions,
+/// etc.) is now driven entirely by the planner inside
+/// <see cref="PeriodCalculationService"/>. This service does NOT segment
+/// the period locally any more — it forwards the period as-is to the
+/// calculation service, which calls <c>PeriodPlanner.Plan</c> and produces
+/// a per-segment, per-line OK-stamped result (S20 wave 1+2 / TASK-2009 /
+/// ADR-016 D6).
+/// </para>
+///
+/// <para>
+/// <strong>ADR-013 (no-cascade) preservation:</strong> the planner produces
+/// exactly one <c>PlannedCalculation</c> confined to <c>[periodStart, periodEnd]</c>
+/// and the merge strategies covering this domain (RejectIfMultipleSegments for
+/// aligned-window rules, UnionDedupe for compliance, Concatenate for calc rules,
+/// FlexBalanceRule's chained <c>previousBalance</c> hand-off) preserve the
+/// existing single-period semantics. There is no mechanism in the new path that
+/// cascades to neighbouring periods.
+/// </para>
 /// </summary>
 public sealed class RetroactiveCorrectionService
 {
@@ -30,6 +47,35 @@ public sealed class RetroactiveCorrectionService
         _logger = logger;
     }
 
+    /// <summary>
+    /// Recalculates a past period and produces correction lines by diffing against
+    /// the previously-exported lines. All segmentation is delegated to the planner
+    /// inside <see cref="PeriodCalculationService"/>.
+    ///
+    /// <para>
+    /// <paramref name="okTransitionDate"/> and <paramref name="previousOkVersion"/>
+    /// are kept on the public signature for backward compatibility (the
+    /// <c>/api/payroll/recalculate</c> endpoint contract), but they no longer drive
+    /// a manual two-segment recalculation. The planner derives segmentation from
+    /// <see cref="OkVersionResolver"/> on its own. The two parameters are now
+    /// purely informational and feed into <see cref="OkVersionCanonicalization.Resolve"/>
+    /// so the audit event records the canonical (date-resolved) OK versions
+    /// instead of (potentially stale) caller-supplied values.
+    /// </para>
+    ///
+    /// <para>
+    /// <strong>ADR-013 (no-cascade)</strong>: the planner produces one
+    /// <c>PlannedCalculation</c> bounded by <c>[periodStart, periodEnd]</c>;
+    /// nothing in the call graph cascades into neighbouring periods. ADR-013's
+    /// constraint now lives in the planner's merge-policy choice and the
+    /// chained-balance hand-off in FlexBalanceRule, NOT in this service.
+    /// </para>
+    /// <para>
+    /// <strong>ADR-016 D6</strong>: the previous local two-segment
+    /// recalculation (<c>RecalculateWithVersionSplitAsync</c>) was retired by
+    /// TASK-2009; segmentation is the planner's responsibility, end-to-end.
+    /// </para>
+    /// </summary>
     public async Task<RetroactiveCorrectionResult> RecalculateAsync(
         EmploymentProfile profile,
         IReadOnlyList<TimeEntry> entries,
@@ -47,13 +93,11 @@ public sealed class RetroactiveCorrectionService
         string? previousOkVersion = null,
         CancellationToken ct = default)
     {
-        IReadOnlyList<PayrollExportLine> allNewExportLines;
-        IReadOnlyList<CalculationResult> allRuleResults;
-        decimal? flexDelta = null;
-
         // Coherent-pair validation: either both split inputs are present or neither.
-        // Mismatched inputs indicate a caller bug and must not silently fall through to
-        // the single-version path.
+        // Mismatched inputs indicate a caller bug and must not silently fall through.
+        // This guard is independent of segmentation — it pins the public contract of
+        // the /api/payroll/recalculate endpoint and is unaffected by the planner-driven
+        // rewrite.
         if (okTransitionDate.HasValue ^ previousOkVersion is not null)
         {
             return new RetroactiveCorrectionResult
@@ -92,70 +136,64 @@ public sealed class RetroactiveCorrectionService
                 okTransitionDate.HasValue && previousOkVersion is not null ? "split" : "single-version");
         }
 
-        if (okTransitionDate.HasValue && canonicalPreviousOkVersion is not null)
+        // ---------------------------------------------------------------
+        // Planner-driven recalculation (S20 wave 1+2 / ADR-016 D6).
+        //
+        // The shim overload of CalculateAsync internally calls
+        // PeriodPlanner.Plan(...) and returns a PeriodCalculationResult whose
+        // ExportLines are already per-segment, per-line OK-stamped. There is
+        // no need (and it would be wrong) to segment locally here — the
+        // planner detects boundaries from OkVersionResolver and produces 1
+        // segment for non-straddling periods or 2+ segments for straddling
+        // ones. The previously-hand-coded two-segment recalculation
+        // (RecalculateWithVersionSplitAsync) was retired by TASK-2009.
+        //
+        // The shim overload is [Obsolete]-marked because TASK-2010 will
+        // migrate the export boundary to construct PlannedCalculation
+        // directly. We are inside the migration path here, so the call is
+        // intentional and the warning is suppressed locally only — do NOT
+        // suppress at file scope.
+        // ---------------------------------------------------------------
+#pragma warning disable CS0618 // RetroactiveCorrectionService intentionally calls the [Obsolete] shim overload during the TASK-2009 / TASK-2010 migration; remove once the service constructs PlannedCalculation explicitly.
+        var newResult = await _calculationService.CalculateAsync(
+            profile, entries, absences, periodStart, periodEnd,
+            previousFlexBalance, authorizationHeader, correlationId, ct);
+#pragma warning restore CS0618
+
+        if (!newResult.Success)
         {
-            // ---------------------------------------------------------------
-            // OK version split: recalculate two segments
-            // ---------------------------------------------------------------
-            var splitResult = await RecalculateWithVersionSplitAsync(
-                profile, entries, absences, periodStart, periodEnd,
-                previousFlexBalance, okTransitionDate.Value, canonicalPreviousOkVersion,
-                authorizationHeader, correlationId, ct);
-
-            if (!splitResult.Success)
+            return new RetroactiveCorrectionResult
             {
-                return new RetroactiveCorrectionResult
-                {
-                    EmployeeId = profile.EmployeeId,
-                    PeriodStart = periodStart,
-                    PeriodEnd = periodEnd,
-                    CorrectionLines = [],
-                    Success = false,
-                    ErrorMessage = splitResult.ErrorMessage
-                };
-            }
-
-            allNewExportLines = splitResult.ExportLines;
-            allRuleResults = splitResult.RuleResults;
-            flexDelta = splitResult.FlexDelta;
-        }
-        else
-        {
-            // ---------------------------------------------------------------
-            // Single version: existing behavior
-            // ---------------------------------------------------------------
-            var newResult = await _calculationService.CalculateAsync(
-                profile, entries, absences, periodStart, periodEnd,
-                previousFlexBalance, authorizationHeader, correlationId, ct);
-
-            if (!newResult.Success)
-            {
-                return new RetroactiveCorrectionResult
-                {
-                    EmployeeId = profile.EmployeeId,
-                    PeriodStart = periodStart,
-                    PeriodEnd = periodEnd,
-                    CorrectionLines = [],
-                    Success = false,
-                    ErrorMessage = $"Recalculation failed: {newResult.ErrorMessage}"
-                };
-            }
-
-            allNewExportLines = newResult.ExportLines;
-            allRuleResults = newResult.RuleResults;
-
-            // Extract flex delta from single-version calculation
-            flexDelta = ExtractFlexDelta(newResult.RuleResults);
+                EmployeeId = profile.EmployeeId,
+                PeriodStart = periodStart,
+                PeriodEnd = periodEnd,
+                CorrectionLines = [],
+                Success = false,
+                ErrorMessage = $"Recalculation failed: {newResult.ErrorMessage}"
+            };
         }
 
-        // 2. Diff new export lines against previous
+        // Flex delta is extracted from the merged rule results; FlexBalanceRule's
+        // own chained-balance hand-off (planner merge-policy) means
+        // newResult.RuleResults already carries the across-segment net delta.
+        decimal? flexDelta = ExtractFlexDelta(newResult.RuleResults);
+
+        // Diff new export lines against previous. ProduceCorrectionLines already
+        // honours each line's per-line OkVersion (S14), which is exactly what the
+        // planner-driven path emits — so OK-version-aware diffing works whether
+        // the planner produced 1 or N segments.
         var correctionLines = ProduceCorrectionLines(
-            profile, previousExportLines, allNewExportLines, periodStart, periodEnd,
+            profile, previousExportLines, newResult.ExportLines, periodStart, periodEnd,
             flexDelta, okTransitionDate, canonicalPreviousOkVersion);
 
-        // 3. Emit RetroactiveCorrectionRequested event (non-fatal if fails).
-        // Persist the canonical (date-resolved) OK versions and the profile Position so
-        // the audit trail reflects what actually ran, not what the caller sent.
+        // Emit RetroactiveCorrectionRequested event (non-fatal if fails).
+        // Persist the canonical (date-resolved) OK versions and the profile Position
+        // so the audit trail reflects what actually ran, not what the caller sent.
+        // ManifestId joins this event to SegmentManifestCreated for the actual
+        // N-segment plan (closes Codex P2 / Reviewer audit-event NOTE: the
+        // OkVersion/PreviousOkVersion pair only describes the canonicalized
+        // 2-version view — full segmentation is recoverable via the manifest).
+        var manifestId = newResult.RuleResults.FirstOrDefault()?.ManifestId ?? Guid.Empty;
         try
         {
             var correctionEvent = new RetroactiveCorrectionRequested
@@ -172,7 +210,8 @@ public sealed class RetroactiveCorrectionService
                 CorrelationId = correlationId,
                 IdempotencyToken = idempotencyToken,
                 PreviousOkVersion = canonicalPreviousOkVersion,
-                Position = profile.Position
+                Position = profile.Position,
+                ManifestId = manifestId
             };
 
             await _eventStore.AppendAsync(
@@ -196,104 +235,6 @@ public sealed class RetroactiveCorrectionService
             PeriodEnd = periodEnd,
             CorrectionLines = correctionLines,
             Success = true
-        };
-    }
-
-    /// <summary>
-    /// Recalculates a period split by OK version transition date.
-    /// Segment 1: periodStart to (transitionDate - 1 day) under previousOkVersion.
-    /// Segment 2: transitionDate to periodEnd under profile.OkVersion.
-    /// </summary>
-    private async Task<VersionSplitResult> RecalculateWithVersionSplitAsync(
-        EmploymentProfile profile,
-        IReadOnlyList<TimeEntry> entries,
-        IReadOnlyList<AbsenceEntry> absences,
-        DateOnly periodStart,
-        DateOnly periodEnd,
-        decimal previousFlexBalance,
-        DateOnly transitionDate,
-        string previousOkVersion,
-        string? authorizationHeader,
-        Guid? correlationId,
-        CancellationToken ct)
-    {
-        // Split entries by transition date (ADR-003: entry-date resolution)
-        var entriesBefore = entries.Where(e => e.Date < transitionDate).ToList();
-        var entriesOnOrAfter = entries.Where(e => e.Date >= transitionDate).ToList();
-        var absencesBefore = absences.Where(a => a.Date < transitionDate).ToList();
-        var absencesOnOrAfter = absences.Where(a => a.Date >= transitionDate).ToList();
-
-        var segmentEnd1 = transitionDate.AddDays(-1);
-
-        // Create profile for old OK version segment.
-        // Position must be copied so position-specific agreement overrides and
-        // position-specific wage-type mappings continue to apply across the split.
-        var oldVersionProfile = new EmploymentProfile
-        {
-            EmployeeId = profile.EmployeeId,
-            AgreementCode = profile.AgreementCode,
-            OkVersion = previousOkVersion,
-            WeeklyNormHours = profile.WeeklyNormHours,
-            EmploymentCategory = profile.EmploymentCategory,
-            IsPartTime = profile.IsPartTime,
-            PartTimeFraction = profile.PartTimeFraction,
-            Position = profile.Position
-        };
-
-        _logger.LogInformation(
-            "OK version split for {EmployeeId}: segment 1 [{Start}-{End}] under {OldVersion}, segment 2 [{TransitionDate}-{PeriodEnd}] under {NewVersion}",
-            profile.EmployeeId, periodStart, segmentEnd1, previousOkVersion, transitionDate, periodEnd, profile.OkVersion);
-
-        // Calculate segment 1 (old OK version)
-        var result1 = await _calculationService.CalculateAsync(
-            oldVersionProfile, entriesBefore, absencesBefore, periodStart, segmentEnd1,
-            previousFlexBalance, authorizationHeader, correlationId, ct);
-
-        if (!result1.Success)
-        {
-            return new VersionSplitResult
-            {
-                Success = false,
-                ErrorMessage = $"Segment 1 ({previousOkVersion}) recalculation failed: {result1.ErrorMessage}",
-                ExportLines = [],
-                RuleResults = []
-            };
-        }
-
-        // Flex balance from segment 1 feeds into segment 2
-        var segment1FlexDelta = ExtractFlexDelta(result1.RuleResults);
-        var segment2FlexBalance = previousFlexBalance + (segment1FlexDelta ?? 0m);
-
-        // Calculate segment 2 (new OK version) — uses profile as-is (has new OkVersion)
-        var result2 = await _calculationService.CalculateAsync(
-            profile, entriesOnOrAfter, absencesOnOrAfter, transitionDate, periodEnd,
-            segment2FlexBalance, authorizationHeader, correlationId, ct);
-
-        if (!result2.Success)
-        {
-            return new VersionSplitResult
-            {
-                Success = false,
-                ErrorMessage = $"Segment 2 ({profile.OkVersion}) recalculation failed: {result2.ErrorMessage}",
-                ExportLines = [],
-                RuleResults = []
-            };
-        }
-
-        // Merge export lines and rule results from both segments
-        var mergedExportLines = result1.ExportLines.Concat(result2.ExportLines).ToList();
-        var mergedRuleResults = result1.RuleResults.Concat(result2.RuleResults).ToList();
-
-        // Total flex delta across both segments
-        var segment2FlexDelta = ExtractFlexDelta(result2.RuleResults);
-        var totalFlexDelta = (segment1FlexDelta ?? 0m) + (segment2FlexDelta ?? 0m);
-
-        return new VersionSplitResult
-        {
-            Success = true,
-            ExportLines = mergedExportLines,
-            RuleResults = mergedRuleResults,
-            FlexDelta = totalFlexDelta
         };
     }
 
@@ -392,18 +333,6 @@ public sealed class RetroactiveCorrectionService
         }
 
         return corrections;
-    }
-
-    /// <summary>
-    /// Internal result type for version split recalculation.
-    /// </summary>
-    private sealed class VersionSplitResult
-    {
-        public required bool Success { get; init; }
-        public string? ErrorMessage { get; init; }
-        public required IReadOnlyList<PayrollExportLine> ExportLines { get; init; }
-        public required IReadOnlyList<CalculationResult> RuleResults { get; init; }
-        public decimal? FlexDelta { get; init; }
     }
 }
 

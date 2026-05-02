@@ -26,4 +26,13 @@ public sealed class RetroactiveCorrectionRequested : DomainEventBase
     /// Null when no position-based override applied.
     /// </summary>
     public string? Position { get; init; }
+
+    /// <summary>
+    /// Manifest id of the planner-driven recalculation that produced these correction lines
+    /// (ADR-016 D10). Audit consumers join to <c>SegmentManifestCreated</c> via this id to
+    /// recover the actual N-segment plan; the legacy <c>OkVersion</c>/<c>PreviousOkVersion</c>
+    /// pair only describes the canonicalized 2-version view and under-reports N&gt;2 cases.
+    /// Default <see cref="Guid.Empty"/> for pre-S20 events.
+    /// </summary>
+    public Guid ManifestId { get; init; } = Guid.Empty;
 }

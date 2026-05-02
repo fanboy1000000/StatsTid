@@ -7,33 +7,49 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// Formats PayrollExportLines into SLS-compatible pipe-delimited text format.
 /// Pure formatting function — no I/O, no state.
 ///
-/// Format:
-/// - Header: H|{ExportId}|{Timestamp}|{RecordCount}
-/// - Data:   D|{EmployeeId}|{WageType}|{Hours:F2}|{Amount:F2}|{PeriodStart:yyyyMMdd}|{PeriodEnd:yyyyMMdd}|{OkVersion}
+/// Format (TASK-2010, ADR-016 D10 manifest linkage):
+/// - Header: H|{ExportId}|{Timestamp}|{RecordCount}|{ManifestId}
+/// - Data:   D|{EmployeeId}|{WageType}|{Hours:F2}|{Amount:F2}|{PeriodStart:yyyyMMdd}|{PeriodEnd:yyyyMMdd}|{OkVersion}|{ManifestId}
 /// - Trailer: T|{RecordCount}|{TotalHours:F2}|{TotalAmount:F2}|{Checksum}
+///
+/// <para>
+/// ManifestId column semantics — the new manifest column always renders, as either a
+/// guid or empty:
+/// - Header carries the dominant export-level manifest id (caller-supplied — typically the
+///   first or only manifest for the batch). When all lines pre-date manifest plumbing
+///   (legacy callers passing <see cref="System.Guid.Empty"/>) the trailing field renders as
+///   an empty string (i.e. "...|3|") — the column is present, the value is empty.
+/// - Per-line ManifestId is the line's own <see cref="PayrollExportLine.ManifestId"/>;
+///   <see cref="System.Guid.Empty"/> renders as empty string ("D|...|OK24|").
+/// </para>
 /// </summary>
 public static class SlsExportFormatter
 {
     public static string Format(
         IReadOnlyList<PayrollExportLine> lines,
         string exportId,
-        DateTime exportTimestamp)
+        DateTime exportTimestamp,
+        Guid manifestId = default)
     {
         var sb = new System.Text.StringBuilder();
 
         var ic = CultureInfo.InvariantCulture;
 
-        // Header record
-        sb.AppendLine(string.Format(ic, "H|{0}|{1:yyyy-MM-dd HH:mm:ss}|{2}", exportId, exportTimestamp, lines.Count));
+        // Header record. ManifestId renders empty when Guid.Empty (pre-S20 legacy callers).
+        var headerManifest = manifestId == Guid.Empty ? string.Empty : manifestId.ToString();
+        sb.AppendLine(string.Format(ic, "H|{0}|{1:yyyy-MM-dd HH:mm:ss}|{2}|{3}",
+            exportId, exportTimestamp, lines.Count, headerManifest));
 
         // Data records
         foreach (var line in lines)
         {
-            sb.AppendLine(string.Format(ic, "D|{0}|{1}|{2:F2}|{3:F2}|{4:yyyyMMdd}|{5:yyyyMMdd}|{6}",
-                line.EmployeeId, line.WageType, line.Hours, line.Amount, line.PeriodStart, line.PeriodEnd, line.OkVersion));
+            var lineManifest = line.ManifestId == Guid.Empty ? string.Empty : line.ManifestId.ToString();
+            sb.AppendLine(string.Format(ic, "D|{0}|{1}|{2:F2}|{3:F2}|{4:yyyyMMdd}|{5:yyyyMMdd}|{6}|{7}",
+                line.EmployeeId, line.WageType, line.Hours, line.Amount, line.PeriodStart, line.PeriodEnd,
+                line.OkVersion, lineManifest));
         }
 
-        // Trailer record with checksum
+        // Trailer record with checksum (unchanged).
         var totalHours = lines.Sum(l => l.Hours);
         var totalAmount = lines.Sum(l => l.Amount);
         var checksum = CalculateChecksum(lines);

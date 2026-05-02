@@ -3,7 +3,6 @@ using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Resilience;
 using StatsTid.Infrastructure.Security;
 using StatsTid.Integrations.Payroll.Services;
-using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Models;
 
@@ -70,15 +69,19 @@ app.MapPost("/api/payroll/export", async (
     PayrollExportRequest request,
     PayrollMappingService mapping,
     PayrollExportService export,
-    ILoggerFactory loggerFactory,
     CancellationToken ct) =>
 {
-    // Resolve OK version from the earliest line-item date (ADR-003) so the export boundary
-    // does not trust caller-supplied profile.OkVersion. Preserves Position for TASK-1802.
-    var logger = loggerFactory.CreateLogger("Payroll.ExportBoundary");
-    var effectiveProfile = OkVersionBoundary.ResolveProfile(request.CalculationResult, request.Profile, logger, "/api/payroll/export");
-
-    var lines = await mapping.MapCalculationResultAsync(request.CalculationResult, effectiveProfile, effectiveProfile.Position, ct);
+    // TASK-2010 (S20): per-line OK-version stamping inside the mapper supersedes the
+    // pre-S20 OkVersionBoundary.ResolveProfile collapse. The mapping service resolves
+    // OK per-line from each CalculationLineItem.Date, so straddling exports stay correct
+    // (ADR-016 D5). Manifest id flows through from the upstream CalculationResult; legacy
+    // callers that don't thread a manifest send Guid.Empty (D10 amendment 2026-04-29).
+    var lines = await mapping.MapCalculationResultAsync(
+        request.CalculationResult,
+        request.Profile,
+        request.Profile.Position,
+        request.CalculationResult.ManifestId,
+        ct);
 
     if (lines.Count == 0)
         return Results.BadRequest(new { success = false, error = "No mappable line items" });
@@ -91,16 +94,19 @@ app.MapPost("/api/payroll/export-period", async (
     PayrollPeriodExportRequest request,
     PayrollMappingService mapping,
     PayrollExportService export,
-    ILoggerFactory loggerFactory,
     CancellationToken ct) =>
 {
-    var logger = loggerFactory.CreateLogger("Payroll.ExportBoundary");
     var allLines = new List<PayrollExportLine>();
 
     foreach (var calcResult in request.CalculationResults)
     {
-        var effectiveProfile = OkVersionBoundary.ResolveProfile(calcResult, request.Profile, logger, "/api/payroll/export-period");
-        var lines = await mapping.MapCalculationResultAsync(calcResult, effectiveProfile, effectiveProfile.Position, ct);
+        // Per-line OK + per-line manifest stamping inside the mapper (TASK-2010, ADR-016 D5/D10).
+        var lines = await mapping.MapCalculationResultAsync(
+            calcResult,
+            request.Profile,
+            request.Profile.Position,
+            calcResult.ManifestId,
+            ct);
         allLines.AddRange(lines);
     }
 
@@ -359,41 +365,3 @@ public sealed class CorrectionExportRequest
     public string? ExportId { get; init; }
 }
 
-internal static class OkVersionBoundary
-{
-    // Resolves the authoritative OK version for a payroll export from the earliest
-    // line-item date on the CalculationResult (ADR-003). If the caller-supplied
-    // profile.OkVersion disagrees, logs and returns a profile with the resolved
-    // value; Position is preserved.
-    public static EmploymentProfile ResolveProfile(
-        CalculationResult result,
-        EmploymentProfile profile,
-        ILogger logger,
-        string context)
-    {
-        if (result.LineItems.Count == 0)
-            return profile;
-
-        var minDate = result.LineItems.Min(li => li.Date);
-        var resolved = OkVersionResolver.ResolveVersion(minDate);
-
-        if (string.Equals(profile.OkVersion, resolved, StringComparison.Ordinal))
-            return profile;
-
-        logger.LogWarning(
-            "Caller-supplied profile.OkVersion '{Supplied}' differs from date-resolved '{Resolved}' for {Context} (employee {EmployeeId}, earliest line {Date}). Using resolved value.",
-            profile.OkVersion, resolved, context, profile.EmployeeId, minDate);
-
-        return new EmploymentProfile
-        {
-            EmployeeId = profile.EmployeeId,
-            AgreementCode = profile.AgreementCode,
-            OkVersion = resolved,
-            WeeklyNormHours = profile.WeeklyNormHours,
-            EmploymentCategory = profile.EmploymentCategory,
-            IsPartTime = profile.IsPartTime,
-            PartTimeFraction = profile.PartTimeFraction,
-            Position = profile.Position
-        };
-    }
-}

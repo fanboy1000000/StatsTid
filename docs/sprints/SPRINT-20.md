@@ -648,6 +648,48 @@ _Drafted from ADR-016 and user-approved 2026-04-29. All tasks are `not-started` 
 **Validation**: all 22+ tests pass; existing 493 unit + 35 regression + 41 frontend tests still pass; no flakiness on Docker-gated regression runs.
 **Cross-domain dependencies**: depends on TASK-2008 through TASK-2011 (all production code must land).
 
+### Phase 3 Wave 2 Completion (2026-05-02)
+
+| Task | Wave | Commit | Status |
+|------|------|--------|--------|
+| TASK-2008 (PCS rewrite + ReplayAsync) | 1 | 5b462ba | complete |
+| TASK-2011 (manifest projection rebuild) | 1 | 5b462ba | complete |
+| Classifications endpoint + HTTP provider DI | 1b | a6beac2 | complete |
+| TASK-2009 (RetroactiveCorrectionService rewrite) | 2 | this commit | complete |
+| TASK-2010 (per-line OK-version export stamping) | 2 | this commit | complete |
+| Orchestrator follow-up (PCS `MapSegmentToExportLinesAsync` threads `plan.ManifestId` into `PayrollExportLine.ManifestId`) | 2 | this commit | small-tasks-exception |
+| Review-driven cleanups (audit-event `ManifestId`, doc-drift fixes) | 2 | this commit | small-tasks-exception |
+
+**Validation (wave 2 + cleanups)**:
+- `dotnet build`: 0 errors, 1 CS0618 warning at `Program.cs:170` (the `/calculate-and-export` endpoint is the last surviving customer of the `[Obsolete]` PCS shim — explicit migration breadcrumb; full retirement is OUT-of-scope per Step 0b W2).
+- Tests: **501 unit + 25 plain regression** pass (493 → 501 across S20; +8 from Phase 1+2's `PlannerBypassGuardTests` and Phase 3 wave 1b's `HttpRuleClassificationProviderTests`). 11 Docker-gated regression failures are environmental.
+- `OkVersionBoundary.ResolveProfile` deleted; no production references remain. `RecalculateWithVersionSplitAsync` deleted; no production references remain.
+
+**Step 5α Constraint Validator**: PASS (8/8 mechanical checks). PayrollExportLine.cs cross-domain (Data Model SharedKernel) authorized in TASK-2010 plan; no other scope violations.
+
+**Step 5a Reviewer Audit (P3+P4+P6 mandatory + high-risk Codex override)**:
+
+Internal Reviewer: 0 BLOCKER, 2 WARNING, 11 NOTE.
+Codex (high-risk override): 2 advisory findings ([P1] + [P2] in Codex severity).
+
+Convergent finding (both lenses): `RetroactiveCorrectionRequested` audit event still records 2-version OK pair (current + optional previous) while the planner can produce N segments. **Resolved** in this commit by adding `Guid ManifestId { get; init; } = Guid.Empty;` to the event and populating from `newResult.RuleResults.FirstOrDefault()?.ManifestId` in `RetroactiveCorrectionService.RecalculateAsync` — audit consumers join to `SegmentManifestCreated` for the actual N-segment plan.
+
+**Findings applied in this commit**:
+- Convergent audit-event manifest_id (above).
+- Doc-drift cleanups: `PCS:273` tense fix; `PCS:383-384` line-ref fix (the `Program.cs:325-339` reference is no longer valid after `OkVersionBoundary` removal); `OkVersionRuntimeRegressionTests.cs:191` comment refresh; `SlsExportFormatter.cs` doc-comment column-count wording.
+
+**Findings deferred (recorded as carry-forward debt)**:
+- **Codex [P1]** — `RecalculateAsync` calls the `[Obsolete]` shim, which only hydrates `OkTransitions` in `BoundarySources`. Agreement-config / position-override / EU-WTD boundaries silently miss segmentation in the retro path. **Status**: in-scope per ADR-016 D5 ("OK end-to-end + extension points demonstrated"); non-OK boundary hydration is the Phase 4 "Versioned History for Non-Dated Boundary Sources" sub-sprint trio plus future agreement-config / position-override boundary-source wiring. Not a wave-2 regression: the OK-only hydration matches the pre-S20 capability and the new shim path is strictly additive in coverage (it now runs the planner's invariants on every call).
+- **Reviewer WARNING — `manifestId = default` is silently lossy**. `PayrollMappingService.MapCalculationResultAsync` and `SlsExportFormatter.Format` accept `Guid manifestId = default`; today's single production caller path threads correctly, but a future caller could silently emit `Guid.Empty` lines. **Status**: bounded today; revisit during Phase 4 hardening (TASK-2012 can lock the contract via test assertions).
+- **Reviewer WARNING — `StampAuditContext` has no call sites in Payroll**. `AuditLoggingMiddleware` is registered only in Backend.Api, not Payroll, so the helper is currently moot for Payroll. **Status**: documentation gap; revisit when the audit chain is wired through the Backend → Payroll proxy in a future sprint.
+- **Reviewer NOTE — Two near-equivalent mappers (`MapCalculationResultAsync` vs `MapSegmentToExportLinesAsync`)** with subtle date-column divergence (`PeriodStart=PeriodEnd=lineItem.Date` vs `PeriodStart=segmentStart, PeriodEnd=segmentEnd`). Defer; consider extracting a shared private helper in a follow-up.
+- **Reviewer NOTE — Four OK-version resolution sites** (`OkVersionResolver`, `OkVersionCanonicalization`, `MapCalculationResultAsync`, PCS per-segment). Each has a distinct documented purpose; cognitive cost is real but no redundancy. Defer documentation index.
+- **Reviewer NOTE — ADR-013 no-cascade enforcement framing**. The doc-comments name "merge-policy" but actual enforcement is the planner's geometric bound (`PeriodPlanner.Plan` never expands the input window) plus `FlexBalanceRule`'s chained-balance hand-off. The merge strategies are the merge mechanism, not the no-cascade enforcement mechanism. Defer doc rewording.
+- **Reviewer NOTE — `FlexBalanceRule` chained-carry custom delegate not wired**. `MergeStrategy.Custom` falls back to `FallbackCustomMerge` (Concatenate-with-warning) for FLEX_BALANCE; the in-segment chained-carry via `ExtractFlexDelta + flexBalanceCarry` is what currently preserves correctness. The documented per-rule custom delegate (ADR-016 D11 inventory line "Per-rule override required: chained-carry") is migration-path TODO inside the Custom fallback. Defer; surfaces only when a real OK24/OK26 straddling correction runs (post-2026-04-01) — pre-empted by TASK-2012 boundary-scenario tests.
+- **Reviewer NOTE — `Program.cs:170` CS0618 warning** is the last `[Obsolete]` shim customer. **Status**: principled breadcrumb; no migration task currently exists in the plan. Track as a future task entry.
+- **Reviewer NOTE — SLS column-count wording** (already fixed in this commit per "applied" above).
+- **Reviewer NOTE — `OkVersionBoundary` removal verification** (informational; recorded for completeness — no action needed).
+
 ### Risks & Watch-Points
 
 - **Phase 2 throughput** — TASK-2003 is the bottleneck (TASK-2004, TASK-2005, TASK-2006 all wait on it). Mitigation: keep TASK-2003 scoped to skeleton + invariants only; logic lives in TASK-2004.

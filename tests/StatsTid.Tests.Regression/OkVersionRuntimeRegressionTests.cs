@@ -187,9 +187,10 @@ public class OkVersionRuntimeRegressionTests
     // 8. Retroactive split at the OK transition date: entries before
     //    2026-04-01 must be evaluated under the OK24 config, entries on/after
     //    under the OK26 config. Each segment produces a structurally-
-    //    consistent OvertimeRule result, proving the split mechanism in
-    //    RetroactiveCorrectionService.RecalculateWithVersionSplitAsync does
-    //    not cross-contaminate versions.
+    //    consistent OvertimeRule result, proving the planner-driven split
+    //    in PeriodCalculationService (S20 wave 1; replaced
+    //    RetroactiveCorrectionService.RecalculateWithVersionSplitAsync in wave 2)
+    //    does not cross-contaminate versions.
     //
     //    This test intentionally mirrors OkVersionTransition_OK24ToOK26_RecalculatesCorrectly
     //    in RegressionTests.cs but adds the split-by-transition-date step so

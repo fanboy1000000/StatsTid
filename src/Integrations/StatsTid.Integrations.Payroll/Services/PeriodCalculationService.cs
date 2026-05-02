@@ -270,8 +270,8 @@ public sealed class PeriodCalculationService
         //    For the FlexBalanceRule (CrossPeriod, Mergeable, Custom merge), the previous
         //    segment's flex delta becomes the next segment's "previousBalance" — preserving
         //    the carry-forward semantics that RetroactiveCorrectionService used to encode
-        //    explicitly in RecalculateWithVersionSplitAsync (ADR-013, S11) which retires in
-        //    TASK-2009.
+        //    explicitly in RecalculateWithVersionSplitAsync (ADR-013, S11), which was
+        //    retired by TASK-2009 / wave 2.
         // ---------------------------------------------------------------
         var perSegmentRuleResults = new List<List<CalculationResult>>(plan.Segments.Count);
         var perSegmentExportLines = new List<List<PayrollExportLine>>(plan.Segments.Count);
@@ -339,7 +339,7 @@ public sealed class PeriodCalculationService
 
             // Map this segment's line items to wage types using the segment's resolved OK version.
             var segmentExportLines = await MapSegmentToExportLinesAsync(
-                segmentRuleResults, segmentProfile, segment.StartDate, segment.EndDate, ct);
+                segmentRuleResults, segmentProfile, segment.StartDate, segment.EndDate, plan.ManifestId, ct);
 
             perSegmentRuleResults.Add(segmentRuleResults);
             perSegmentExportLines.Add(segmentExportLines);
@@ -379,9 +379,9 @@ public sealed class PeriodCalculationService
         //    callers), we default to Concatenate with a warning. Per-segment export lines
         //    are concatenated unconditionally — the per-line OK-version stamping carries
         //    the per-segment context, and the ExportLines list is intentionally a flat
-        //    sequence at the period level (TASK-2010 will exercise this at the export
-        //    boundary, replacing the OkVersionBoundary.ResolveProfile collapse at
-        //    Program.cs:325-339).
+        //    sequence at the period level. TASK-2010 / wave 2 retired the
+        //    OkVersionBoundary.ResolveProfile collapse that previously lived inline in
+        //    Program.cs; per-line OK-version stamping is now the canonical truth.
         // ---------------------------------------------------------------
         var allExportLines = perSegmentExportLines.SelectMany(s => s).ToList();
         var allRuleResults = MergePerSegmentRuleResults(
@@ -1058,6 +1058,7 @@ public sealed class PeriodCalculationService
         EmploymentProfile segmentProfile,
         DateOnly segmentStart,
         DateOnly segmentEnd,
+        Guid manifestId,
         CancellationToken ct)
     {
         var lines = new List<PayrollExportLine>();
@@ -1091,6 +1092,7 @@ public sealed class PeriodCalculationService
                     OkVersion = segmentProfile.OkVersion, // segment-resolved, NOT period-level
                     SourceRuleId = result.RuleId,
                     SourceTimeType = lineItem.TimeType,
+                    ManifestId = manifestId, // ADR-016 D10: per-line manifest linkage for audit chain (TASK-2010 follow-up)
                 });
             }
         }

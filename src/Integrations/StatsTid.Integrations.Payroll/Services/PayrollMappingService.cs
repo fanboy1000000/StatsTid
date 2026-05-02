@@ -1,5 +1,6 @@
 using Npgsql;
 using StatsTid.Infrastructure;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Models;
 
 namespace StatsTid.Integrations.Payroll.Services;
@@ -91,15 +92,41 @@ public sealed class PayrollMappingService
     /// <summary>
     /// Maps a CalculationResult to PayrollExportLines using wage type mappings.
     /// Accepts optional position for position-aware mapping lookup; null/empty == generic.
+    ///
+    /// <para>
+    /// OK-version stamping (TASK-2010, ADR-016 D5): the per-line OK version is resolved from
+    /// each <see cref="CalculationLineItem.Date"/> via <see cref="OkVersionResolver.ResolveVersion"/>.
+    /// This supersedes any caller-supplied <c>profile.OkVersion</c> at the export boundary
+    /// — the same resolved value flows into both the wage-type-mapping lookup and the
+    /// emitted <see cref="PayrollExportLine.OkVersion"/>, so a straddling export across an
+    /// OK transition produces correctly per-line-stamped lines (Step 0b WARNING W3 bound:
+    /// only OK version is per-line resolved; wage-type-mapping itself remains non-dated /
+    /// snapshot-at-calculation per ADR-016 D5b).
+    /// </para>
+    ///
+    /// <para>
+    /// Manifest linkage (ADR-016 D10): the optional <paramref name="manifestId"/> is stamped
+    /// onto every emitted line. Default <see cref="Guid.Empty"/> preserves callers that do
+    /// not yet thread the manifest id (e.g. tests, pre-S20 fixtures).
+    /// </para>
     /// </summary>
     public async Task<IReadOnlyList<PayrollExportLine>> MapCalculationResultAsync(
-        CalculationResult result, EmploymentProfile profile, string? position = null, CancellationToken ct = default)
+        CalculationResult result,
+        EmploymentProfile profile,
+        string? position = null,
+        Guid manifestId = default,
+        CancellationToken ct = default)
     {
         var lines = new List<PayrollExportLine>();
 
         foreach (var lineItem in result.LineItems)
         {
-            var mapping = await GetMappingAsync(lineItem.TimeType, profile.OkVersion, profile.AgreementCode, position, ct);
+            // Per-line OK supersedes profile.OkVersion at the export boundary (ADR-016 D5,
+            // Step 0b W3): resolves from CalculationLineItem.Date so a straddling export
+            // across an OK transition stamps each line with the segment-resolved OK.
+            var lineOkVersion = OkVersionResolver.ResolveVersion(lineItem.Date);
+
+            var mapping = await GetMappingAsync(lineItem.TimeType, lineOkVersion, profile.AgreementCode, position, ct);
             if (mapping is null) continue;
 
             lines.Add(new PayrollExportLine
@@ -110,9 +137,10 @@ public sealed class PayrollMappingService
                 Amount = lineItem.Hours * lineItem.Rate,
                 PeriodStart = lineItem.Date,
                 PeriodEnd = lineItem.Date,
-                OkVersion = profile.OkVersion,
+                OkVersion = lineOkVersion,
                 SourceRuleId = result.RuleId,
-                SourceTimeType = lineItem.TimeType
+                SourceTimeType = lineItem.TimeType,
+                ManifestId = manifestId
             });
         }
 
