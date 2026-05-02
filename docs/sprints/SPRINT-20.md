@@ -690,6 +690,77 @@ Convergent finding (both lenses): `RetroactiveCorrectionRequested` audit event s
 - **Reviewer NOTE — SLS column-count wording** (already fixed in this commit per "applied" above).
 - **Reviewer NOTE — `OkVersionBoundary` removal verification** (informational; recorded for completeness — no action needed).
 
+### Phase 4 Completion (2026-05-02)
+
+| Task | Wave | Commit | Status |
+|------|------|--------|--------|
+| TASK-2012 (Test & QA matrix) | 4 | this commit | complete (24 new tests across 9 test files + 1 helper) |
+| Review-driven cleanups (5 small fixes) | 4 | this commit | small-tasks-exception |
+
+**Validation (Phase 4)**:
+- `dotnet build`: 0 errors, 0 new warnings (1 pre-existing CS0618 at `Program.cs:170` per wave-2 record).
+- Tests: **512 unit + 32 plain regression** pass (501 + 11 = 512 unit; 25 + 7 = 32 plain regression). 6 new Docker-gated tests (`[Trait("Category", "Docker")]`) properly excluded by `--filter "Category!=Docker"`.
+
+**Test count progression across S20**:
+- Pre-S20: 493 unit + 25 plain regression + 10 Docker-gated = 528 backend tests + 41 frontend.
+- Post-S20: **512 unit + 32 plain regression + 17 Docker-gated** (6 new properly-trait-marked + 11 pre-existing without trait) = 561 backend + 41 frontend = 602 total.
+
+**Files added (Phase 4)**:
+- `tests/StatsTid.Tests.Unit/Segmentation/PlannerCellTests.cs` (6 cell tests; 5 distinct populated `(span × split-behavior)` cells, with `(window, aligned-window)` split into pass + fail variants)
+- `tests/StatsTid.Tests.Unit/Segmentation/PlannedCalculationInvariantTests.cs` (4 D9 invariant negatives)
+- `tests/StatsTid.Tests.Unit/Segmentation/PlannerPerfBudgetTests.cs` (1 D8 perf budget test, 100 iterations)
+- `tests/StatsTid.Tests.Regression/Segmentation/ManifestCreationTests.cs` (1, Docker)
+- `tests/StatsTid.Tests.Regression/Segmentation/ManifestReplayTests.cs` (1, Docker)
+- `tests/StatsTid.Tests.Regression/Segmentation/ManifestProjectionRebuildTests.cs` (1, Docker)
+- `tests/StatsTid.Tests.Regression/Segmentation/ReplayDeterminismTests.cs` (1, Docker)
+- `tests/StatsTid.Tests.Regression/Segmentation/BoundaryScenarioTests.cs` (8 — 1 Docker, 7 plain)
+- `tests/StatsTid.Tests.Regression/Segmentation/TestFixtures.cs` (shared helper)
+- `tests/StatsTid.Tests.Regression/Payroll/MixedVersionExportTests.cs` (1, Docker — TASK-1903 absorption)
+
+**Step 5α Constraint Validator**: PASS (test-only changes; all within `tests/**` scope; no production code touched; no new endpoints / events / JWT to check).
+
+**Step 5a Reviewer Audit (P3+P4 mandatory + cross-project + new abstraction)**:
+
+Internal Reviewer: 0 BLOCKER, 3 WARNING, 6 NOTE.
+Codex high-risk override: skipped for Phase 4 (test-only changes; the sprint-end Step 7a Codex run sweeps test quality on the full diff).
+
+**Findings applied in this commit**:
+- **NOTE 2** — `ReplayDeterminismTests` class docstring softened to match the inline WTM-snapshot caveat (the test pins ManifestId propagation under replay; byte-exact replay equality under WTM mutation is deferred to Phase 4 versioned-history sub-sprints).
+- **NOTE 3** — `BoundaryScenarioTests` Q7 anchors docstring extended with the EU-WTD case.
+- **NOTE 4** — `MixedVersionExportTests` SLS-format pipe-index comment rewritten with explicit 0-indexed field map.
+- **NOTE 5** — `PlannedCalculationInvariantTests.OverlappingSegments` gains a code comment noting that production emits the same "not contiguous" message for both gap and overlap (shared contiguity check; test name describes input shape, not a distinct production code path).
+- **WARNING 2** — `ManifestCreationTests` SchemaDdl docstring narrowed from "Copy of init.sql" to "Compatible-with-init.sql shape" with explicit acknowledgment of the hand-synthesised `events` shape (production uses base `CREATE TABLE` + later `ALTER TABLE ADD COLUMN` for `actor_id`/`actor_role`/`correlation_id`; we collapse them inline).
+
+**Findings deferred (recorded as carry-forward debt)**:
+- **WARNING 1** — `PlannerPerfBudgetTests` exercises only the cold-fast path (`BoundarySources.Empty`, all `SnapshotContract: null`). An order-of-magnitude regression in the dominant productive paths (boundary detection on multiple sources, snapshot completeness checks, per-rule MergeStrategy resolution) wouldn't register. **Status**: real coverage gap; add a second variant exercising `OkStraddleSources()` + non-null `SnapshotContract` in a follow-up.
+- **WARNING 3** — Five Docker-gated test classes duplicate the same SchemaDdl + `IAsyncLifetime` boilerplate; `TestFixtures.cs` was added but the per-class scaffolding stayed inline. **Status**: simplicity follow-up; lift container/factory/event-store init into `TestFixtures.StartAsync()`.
+- **NOTE 1** — Pre-existing 11 Docker-gated regression tests (`WageTypeMappingRegressionTests`, `CalculateAndExportScopeTests`) lack `[Trait("Category", "Docker")]`. **Status**: explicit carry-forward — single-line trait addition per class; Test & QA scope.
+- **NOTE 6** — Container startup cost ~30s × 6 ≈ 3 min on Docker-on CI. **Status**: defer; revisit if segmentation suite grows past 12 Docker-gated classes.
+- **NOTE 7** — `TestFixtures.RuleSet` and the per-test classification arrays hand-encode the production rule shapes; can't detect drift between this list and the production registry. **Status**: follow-up — add a targeted unit test that diffs `HttpRuleClassificationProvider`'s parser against a fixed JSON sample of `/api/rules/classifications`.
+
+### Sprint-End Summary (S20)
+
+**Phase progression**:
+- Phase 1 (TASK-2001 + TASK-2002): committed 5c0480b on 2026-04-29 — `segment_manifests` schema + planner-bypass CV guard.
+- Phase 2 (TASK-2003 + TASK-2004 + TASK-2005 + TASK-2006 + TASK-2007): committed ccae19a + df303e3 on 2026-04-29/30 — planner + mergers + registry decomposition + manifest event.
+- Phase 3 corrective (D10 amendment): committed 7dcc803 on 2026-04-30 — `employee_id UUID → TEXT`.
+- Phase 3 wave 1 (TASK-2008 + TASK-2011): committed 5b462ba on 2026-05-01 — PCS planner-driven rewrite + manifest projection rebuilder.
+- Phase 3 wave 1b (D9 activation): committed a6beac2 on 2026-05-02 — classifications endpoint + HTTP-backed provider DI.
+- Phase 3 wave 2 (TASK-2009 + TASK-2010): committed 73917f7 on 2026-05-02 — retro+export planner-driven; manifest_id end-to-end audit chain.
+- Phase 4 (TASK-2012): this commit — 22-test floor (24 actual) per ADR-016 D11 minimum matrix.
+
+**Knowledge base impact**:
+- ADR-016 (Temporal Period Handling) — committed 2026-04-29; D11 decisions span this entire sprint.
+- ADR-016 D10 amended 2026-04-30 (employee_id TEXT/string instead of UUID/Guid).
+- ADR-016 D10 amended 2026-04-29 (manifest linkage is file-side + audit_log + in-memory; no DB column on payroll_export_lines).
+- PAT-006 amended (additive `CalculationResult.ManifestId` field).
+
+**Quality grade impact**: see [docs/QUALITY.md](../QUALITY.md) — S20 column added. SharedKernel (Events) B+ → A-; SharedKernel (Segmentation) new domain at A; Payroll Integration B+ → A-; PostgreSQL Schema B → B+. Other domains stable.
+
+**Remaining for sprint close**:
+- Step 7a — external Codex review on the full S20 sprint diff (`codex review --base dc8867e`).
+- Step 7 — commit Phase 4 + push.
+
 ### Risks & Watch-Points
 
 - **Phase 2 throughput** — TASK-2003 is the bottleneck (TASK-2004, TASK-2005, TASK-2006 all wait on it). Mitigation: keep TASK-2003 scoped to skeleton + invariants only; logic lives in TASK-2004.
