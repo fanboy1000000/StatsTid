@@ -3,7 +3,7 @@
 | Field | Value |
 |-------|-------|
 | **Sprint** | 21 |
-| **Status** | analysis-phase open (Step 0a + Step 0b + data audit + ADR-017 complete 2026-05-02; migration plan + task decomposition pending) |
+| **Status** | analysis-phase open (Step 0a + Step 0b + data audit + ADR-017 + ADR review cycle 1 complete 2026-05-02; migration plan + task decomposition pending) |
 | **Start Date** | 2026-05-02 |
 | **End Date** | TBD |
 | **Orchestrator Approved** | analysis-phase yet to begin |
@@ -283,6 +283,52 @@ For the seed data, the migration produces:
 4. **Q11 (test strategy)**: migration test fixtures must be **synthesized** since seed doesn't exercise any failure mode. Fixtures: (a) one row per overridable key, (b) two-row collision on same `(org, agreement, OkVersion, key)` differing only in `effective_from`, (c) one typo'd key (`MaxOvetimeHoursPerPeriod`), (d) one informational key destined for drop, (e) one expired-but-active row. Migration plan (deliverable #3) commits to this fixture set.
 
 Data audit closed. Findings inform ADR-017 (deliverable #2) and the migration plan (deliverable #3).
+
+## ADR Review (Cycle 1, 2026-05-02)
+
+ADR-017 dispatched for plan-mode review (internal Reviewer + external Codex) immediately after drafting. Both lenses returned within minutes.
+
+### Findings — internal Reviewer (5 BLOCKER, 10 WARNING, 5 NOTE)
+
+**BLOCKERs:**
+- **R-B1** — D9c hydration query reads from `local_agreement_profiles` but doesn't filter on `is_active = TRUE`. Deactivated profiles would still hydrate planner boundaries.
+- **R-B2** — D1's `is_active` boolean and `effective_to IS NULL` partial-unique are redundant lifecycle dimensions. Could drift independently (`is_active=FALSE` AND `effective_to=NULL` would be open by index but inactive by boolean — silent inconsistency).
+- **R-B3** — D9a wires `IRuleClassificationProvider` into Backend.Api, but the provider isn't DI-registered there (lives in Payroll Integration). Either register it (expands dependency graph) or inline the alignment policy as static data (recommended — only `WeeklyNormHours` has alignment today).
+- **R-B4** — D9a's `Func<DateOnly, ValidationResult>` shape can't express timestamp-aligned constraints. ADR claims architectural extensibility it doesn't have.
+- **R-B5** (effectively the same as R-B2) — `is_active` redundancy ripples into D2, D9c, and migration tie-break.
+
+**WARNINGs (selected):** D2 race story underspecified (two-admin interleaved supersession); D5 authorization unnamed; D9c crosses Payroll → Infrastructure layering seam without naming the WTM precedent; D9c `OrgId` contract undocumented; D6+D8 dual-persistence transactional contract missing; D9a `FlexCarryoverMax → FlexBalanceRule` mapping forward-looking; D10 rollback path hand-waved; D11 missing tests for D9c hydration, D2 no-scheduled-future, D7 no-emit-legacy; migration unknown-key whitelist source-of-truth; Q12 (b) rejection rationale weaker than the ADR makes it.
+
+**NOTEs:** D9b tie-break rationale missing; `Augments` field omits ADR-002; References don't cite seed-row line range; D9a error message language convention undefined; ADR-014 partial-unique predicate divergence (`status='ACTIVE'` vs `effective_to IS NULL`).
+
+### Findings — external Codex (3 BLOCKER, 4 WARNING, 2 NOTE)
+
+Strong convergence with internal Reviewer. Same 3 BLOCKERs (D1+D9c filter mismatch; D6+D8 transactional contract; D9c layering seam). 4 WARNINGs convergent on D2 race, D11 hydration test, D5 authorization, ADR-014 predicate. 2 NOTEs on Q12-(b) softening + tie-break order verification.
+
+### Convergence Summary
+
+| Finding | Severity (Reviewer / Codex) | Resolution applied (cycle 1) |
+|---------|----------------------------|------------------------------|
+| D1 `is_active` redundancy + D9c filter mismatch | BLOCKER / BLOCKER | **D1 simplified — `is_active` column dropped.** Lifecycle = `effective_to` only. Partial-unique-index `WHERE effective_to IS NULL` is the single authoritative signal. |
+| D6+D8 dual-persistence transactional contract | WARNING / BLOCKER | **D6 + D8 paragraphs added** stating event-store, audit-projection, and profile UPDATE+INSERT all run in the same DB transaction. No partial-failure outcome model needed (no two-phase commit across stores). |
+| D9c layering seam | WARNING / BLOCKER | **D9c paragraph added** citing `WageTypeMappingRepository` precedent (S20 wave 1). |
+| D9a `IRuleClassificationProvider` plumbing not in Backend.Api | BLOCKER (Reviewer-only) | **D9a redesigned** — alignment policy is a static const map in `StatsTid.SharedKernel.Models.LocalAgreementProfile`. No provider DI dependency. |
+| D9a `Func<DateOnly, ValidationResult>` scope | BLOCKER (Reviewer-only) | **D9a paragraph added** acknowledging DateOnly-only scope; timestamp alignment is forward-looking. |
+| D2 two-admin race | WARNING (both) | **D2.1 added — ETag/If-Match optimistic concurrency** (user decision 2026-05-02). PUT requires `If-Match: "<currentProfileId>"` for supersession or `If-None-Match: *` for first creation; 412 Precondition Failed on stale state. **D2.2 added — Phase-4 followup** to propagate the pattern to `agreement_configs`, `position_overrides`, `wage_type_mappings`, `entitlement_configs` (5+ admin-write surfaces with same race today). |
+| D5 authorization | WARNING (both) | **D5 endpoint list extended** with explicit `RequireAuthorization` policies (`LocalAdminOrAbove` for PUT; `EmployeeOrAbove` for GET). |
+| D9c `OrgId` contract | WARNING (Reviewer-only) | **D9c paragraph added** documenting the contract (profile-less callers see no boundaries). |
+| D9a `FlexCarryoverMax` mapping | WARNING (Reviewer-only) | **D9a table extended** with explicit "consumer rule (documentation only)" column header + forward-looking note. The static map is the runtime data; the table is design-rationale. |
+| D10 rollback hand-waved | WARNING (Reviewer-only) | **D10 reframed as forward-only migration**. Pre-cutover backup is the rollback source; post-cutover writes are not reversibly transformable. Honest for a pre-production system. |
+| Migration unknown-key whitelist | WARNING (Reviewer-only) | **D4 paragraph added** committing to whitelist-from-schema-source-of-truth. Implementation mechanism deferred to deliverable #3 (migration plan). |
+| D11 missing tests (4 categories) | WARNING (both) | **D11 floor 13 → 17.** Added: hydration shim test (D9c), no-scheduled-future negative (D2), no-emit-legacy negative (D7), ETag/If-Match conflict (D2.1). |
+| Q12 (b) rationale weak | WARNING (Reviewer) / NOTE (Codex) | **Alternatives Rejected for Q12 reworded** to acknowledge (b) was a coherent alternative; (d)'s win is UX-driven, not architecture-driven. |
+| Tie-break rationale | NOTE (both) | **D9b paragraph added** with rationale (org-wide vs per-position scope). |
+| `Augments` omits ADR-002 | NOTE (Reviewer-only) | **Header updated.** |
+| References don't cite seed-row range | NOTE (Reviewer-only) | **References extended** with `init.sql:629-633`, `BoundaryDetector.cs`, and `PeriodCalculationService.cs`. |
+| Error message language convention | NOTE (Reviewer-only) | **D9a paragraph added** specifying English error codes + ISO-8601 dates; frontend translates. |
+| ADR-014 predicate divergence | NOTE (Reviewer-only) | **D1 paragraph added** explaining the divergence (no DRAFT workflow → no `status` enum needed). |
+
+ADR-017 cycle 1 closed within the 2-cycle cap. Plan-review pattern matches S20's Step 0b shape. Cycle 2 not invoked — no BLOCKERs remain after cycle 1 resolutions.
 
 ## References
 

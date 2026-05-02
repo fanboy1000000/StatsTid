@@ -8,8 +8,9 @@
 | **Domains** | Infrastructure, Backend API, SharedKernel, Frontend, Data Model |
 | **Tags** | local-config, profile, configuration, effective-dating, schema, migration |
 | **Amends** | ADR-010 (merge-at-service-layer) |
-| **Augments** | ADR-014 (partial-unique-index pattern reused), ADR-016 (BoundarySources extended with `LocalProfileActivation`) |
+| **Augments** | ADR-002 (rule-engine purity invariant preserved), ADR-014 (partial-unique-index pattern reused, with predicate divergence noted in D1), ADR-016 (BoundarySources extended with `LocalProfileActivation`) |
 | **Decisions** | D1–D12 below |
+| **Plan-Review Cycle 1** | Convergent BLOCKER + WARNING findings applied 2026-05-02 (D1 simplification, D2 ETag/If-Match concurrency contract, D5 authorization specification, D6+D8 transactional contract, D9a static-data design + DateOnly-scope ack, D9b tie-break rationale, D9c precedent + org_id contract, D10 forward-only rollback, D11 floor 13 → 17, NOTE applications, Q12-(b) rationale softened). See SPRINT-21.md "ADR Review (Cycle 1)" for the full finding list. |
 
 ## Context
 
@@ -52,7 +53,6 @@ CREATE TABLE local_agreement_profiles (
     ok_version                          TEXT         NOT NULL,
     effective_from                      DATE         NOT NULL,
     effective_to                        DATE,
-    is_active                           BOOLEAN      NOT NULL DEFAULT TRUE,
 
     -- Overridable fields (5). NULL = inherit central.
     weekly_norm_hours                   NUMERIC(5,2),
@@ -66,21 +66,27 @@ CREATE TABLE local_agreement_profiles (
 
     -- Q1 option (c): partial-unique-index. At most one open-ended profile per (org, agreement, OkVersion).
     -- Closed predecessors (effective_to NOT NULL) are unconstrained — they're history.
-    -- Pattern reused from ADR-014 (agreement_configs ACTIVE rows).
-    CONSTRAINT uq_local_agreement_profile_active
-        UNIQUE NULLS NOT DISTINCT (org_id, agreement_code, ok_version, effective_to)
 );
-```
 
-Note: Postgres 15+ supports `UNIQUE NULLS NOT DISTINCT`; for the partial-index variant: `CREATE UNIQUE INDEX uq_local_agreement_profile_active_partial ON local_agreement_profiles (org_id, agreement_code, ok_version) WHERE effective_to IS NULL`. The index variant is preferred; the table-level constraint above is illustrative.
+-- The partial-unique-index is created separately from the table (PostgreSQL doesn't
+-- support partial UNIQUE inside a table-level CONSTRAINT clause):
+CREATE UNIQUE INDEX uq_local_agreement_profile_active
+    ON local_agreement_profiles (org_id, agreement_code, ok_version)
+    WHERE effective_to IS NULL;
+```
 
 The 5 overridable fields are exactly those classified as overlays in `ConfigResolutionService.cs` (`MaxFlexBalance`, `FlexCarryoverMax`, `WeeklyNormHours`, `MaxOvertimeHoursPerPeriod`, `OvertimeRequiresPreApproval`). The 21 protected keys are absent from the schema by construction — they cannot be locally overridden because there is no column to store them. The 2 informational keys (`PlanningStartDay`, `ApprovalCutoffDay`) are absent per D4 (deleted entirely; see Q6 sub-question 6a).
 
-Lifecycle (Q3): `is_active` boolean. Deactivation means setting `is_active = FALSE`; the partial-unique-index's `WHERE effective_to IS NULL` predicate captures the "currently-open" row, which is the only relevant invariant. ADR-014's DRAFT/ACTIVE/ARCHIVED tri-state is overkill — local profiles change rarely, no preview workflow.
+**Lifecycle (Q3): `effective_to` only.** The partial-unique-index's `WHERE effective_to IS NULL` predicate is the **single authoritative "currently-active" signal**. There is no separate `is_active` boolean — the cycle-1 review identified that having both columns expressed the same lifecycle dimension twice and could drift independently (a row with `is_active=FALSE` AND `effective_to=NULL` would be open by the index predicate but inactive by the boolean — silent inconsistency). Resolutions:
 
-Schema choice (Q5): wide-nullable columns. JSONB is over-engineering for 5 fields; normalized child tables are over-engineering for non-list values; wide-nullable is admin-readable and queryable.
+- **Deactivation with supersession** (the dominant case — admin replaces one profile with another): close-then-insert in one transaction, exactly as D2 describes. Predecessor's `effective_to` is set to today; new row is inserted with `effective_to = NULL`.
+- **Deactivation without supersession** (the rare case — admin wants to revert to central-only): `UPDATE local_agreement_profiles SET effective_to = today WHERE org_id = @org AND agreement_code = @ac AND ok_version = @ok AND effective_to IS NULL`. No follow-on insert. After the UPDATE, no row has `effective_to IS NULL` for this triple, so resolution falls back to central. Re-creating a profile later is just an INSERT.
 
-### D2 — Effective-dating model: supersession via close-then-insert (Q2)
+ADR-014 uses a separate `status` enum (DRAFT/ACTIVE/ARCHIVED) and a partial-unique predicate `WHERE status = 'ACTIVE'`; that pattern fits its preview-and-promote workflow. ADR-017 has no preview state, so a single `effective_to` timestamp captures the full lifecycle. **Same pattern shape (partial-unique + history-via-closed-predecessors); divergent predicate (date null vs status enum); divergent justification (no DRAFT workflow vs explicit DRAFT workflow).** Forward readers comparing the two ADRs side-by-side: the divergence is intentional, not accidental.
+
+**Schema choice (Q5):** wide-nullable columns. JSONB is over-engineering for 5 fields; normalized child tables are over-engineering for non-list values; wide-nullable is admin-readable and queryable.
+
+### D2 — Effective-dating model: supersession via close-then-insert (Q2) + ETag/If-Match concurrency (cycle 1 review resolution)
 
 Activation is atomic, transactional, and has no scheduled-future support:
 
@@ -96,6 +102,24 @@ The partial-unique-index never fires during the transaction because the old row'
 **No scheduled-future profiles.** An admin who wants a change effective 2026-07-01 sets a calendar reminder and edits on the day. The schema *technically* supports it (close-then-insert with effective_from in the future), but the second-admin race scenario (two admins overlapping with future-pending changes) cannot be schema-enforced — partial-unique only fires when both candidates have NULL `effective_to`, and a future-pending row has NULL `effective_to` while the current row has a closed `effective_to`.
 
 If scheduled-future ever becomes a product requirement, the escape hatch is to migrate to a `daterange` exclusion constraint (PostgreSQL `btree_gist` extension); the per-profile data is unchanged. Documented for posterity; not implemented in S21.
+
+#### D2.1 — Concurrent same-profile saves: optimistic concurrency via ETag / If-Match
+
+Cycle-1 review identified an interleaved-supersession race: A1 closes current + inserts `new1`; A2 reads `new1` as current and supersedes it with `new2`. Both transactions succeed; the partial-unique-index is satisfied at every commit; the chain audit (`PrecedingProfileId` linkage) records both supersessions. But A1's intent is silently overwritten — the audit chain captures the sequence but A1 doesn't see that their change was immediately replaced.
+
+**Resolution: HTTP-standard optimistic concurrency via `ETag` / `If-Match` headers.**
+
+- **GET endpoints** (D5) return `ETag: "<profile_id>"` for the currently-open row.
+- **PUT endpoints** (D5):
+  - For supersession (current profile exists): caller MUST send `If-Match: "<currentProfileId>"`. Server validates inside the transaction (SELECT current open row; compare to header). A mismatch returns `412 Precondition Failed` with the current state in the response body so the admin can review what changed and retry.
+  - For first creation (no current profile exists): caller MUST send `If-None-Match: *`. Server validates no current open row exists for `(org, agreement, OkVersion)`; if exists, returns `412 Precondition Failed`.
+- **Frontend on 412:** fetch the latest profile state and present it to the admin: "Your edit was based on a stale state — here's what's current. Retry, or abandon and start over."
+
+Implementation note: the `If-Match` validation runs INSIDE the same transaction as the close-then-insert, so there is no race window between the SELECT-for-validation and the UPDATE-then-INSERT. Use `SELECT ... FOR UPDATE` on the current row to lock it for the transaction's duration.
+
+#### D2.2 — Phase-4 followup: propagate the pattern
+
+The same race exists today on **5+ admin-write surfaces** with no concurrency control: `agreement_configs` (DRAFT edits), `position_overrides`, `wage_type_mappings`, `entitlement_configs`, and (pre-S21) `local_configurations`. None implement ETag/If-Match or any equivalent. ADR-017 establishes the pattern for `local_agreement_profiles`; a **Phase-4 hardening sub-sprint** should propagate it to the remaining admin-write surfaces uniformly. Recorded as an S21 carry-forward in SPRINT-21.md and as a Phase-4 candidate in ROADMAP.md.
 
 ### D3 — Resolution chain: closed pre-commit (Q9)
 
@@ -114,7 +138,7 @@ Big-bang cutover is therefore safe. Migration runs in a single transaction:
 
 1. For each `(org_id, agreement_code, ok_version)` tuple in `local_configurations`, materialize a profile row populated from the most-recently-effective per-key row.
 2. Drop `local_configurations` rows for `PlanningStartDay` and `ApprovalCutoffDay` with audit-log emission `{action: "DROPPED_INFORMATIONAL", reason: "Q6 deletion per ADR-017"}`.
-3. Drop unknown-key rows with audit-log emission `{action: "DROPPED_UNKNOWN_KEY", reason: "key not in overridable schema"}`.
+3. Drop unknown-key rows with audit-log emission `{action: "DROPPED_UNKNOWN_KEY", reason: "key not in overridable schema"}`. **Whitelist source-of-truth (cycle 1 review resolution):** the migration's "known overridable keys" list is generated from the same compile-time source as the `local_agreement_profiles` schema columns (D1) — either by introspecting the table's column list at migration time or by a single shared const list. If a future schema migration adds a column, the migration's known-keys set automatically picks it up; if pre-S21 data contains a key that became overridable post-S21, that row is correctly classified as known. Deliverable #3 (migration plan) commits to the implementation mechanism.
 4. After migration, `local_configurations` table becomes read-only (no writes; reads continue to deserialize for historical event-store replay until a separate cleanup sprint removes the table).
 
 The migration test fixtures (Q11 / D11 below) synthesize the failure modes that seed data lacks: row collision, typo'd key, informational key, expired-but-active row, multi-row-per-key.
@@ -124,9 +148,14 @@ The migration test fixtures (Q11 / D11 below) synthesize the failure modes that 
 System is pre-production; no external consumers exist. The React frontend is the only consumer of `POST /api/config/{orgId}` and is being rebuilt anyway (D9 + frontend task). Clean break:
 
 - **Removed:** `POST /api/config/{orgId}` (per-row write), `GET /api/config/{orgId}/local` (per-row list), `DELETE /api/config/{orgId}/{configId}` (per-row delete).
-- **Added:** `PUT /api/config/{orgId}/profile/{agreementCode}/{okVersion}` (profile-shaped write — full or partial delta), `GET /api/config/{orgId}/profile/{agreementCode}/{okVersion}` (current-active profile read), `GET /api/config/{orgId}/profile/{agreementCode}/{okVersion}/history` (closed predecessors).
+- **Added:**
+  - `PUT /api/config/{orgId}/profile/{agreementCode}/{okVersion}` — profile-shaped write (full or partial delta). `RequireAuthorization("LocalAdminOrAbove")`. Requires `If-Match: "<currentProfileId>"` for supersession or `If-None-Match: *` for first creation (per D2.1). Returns 412 Precondition Failed on stale state; 400 with structured per-field errors on validation failure (D9a); 200 with the new profile on success.
+  - `GET /api/config/{orgId}/profile/{agreementCode}/{okVersion}` — current-active profile read. `RequireAuthorization("EmployeeOrAbove")`. Returns `ETag: "<profileId>"` header for use as the next `If-Match` value.
+  - `GET /api/config/{orgId}/profile/{agreementCode}/{okVersion}/history` — closed predecessors, ordered most-recent-first. `RequireAuthorization("EmployeeOrAbove")`. No ETag (history rows are immutable).
 
-The PUT endpoint accepts a request body shaped as the profile's overridable subset; fields omitted from the request preserve their current value, fields explicitly set to `null` revert to inherit-central. Save-time validation runs (D9 alignment policy) and either creates a new profile via close-then-insert or returns 400 with structured per-field errors.
+All endpoints invoke `OrgScopeValidator.ValidateOrgAccessAsync` before touching the repository (S6/S7 patterns, P7 enforced).
+
+The PUT endpoint accepts a request body shaped as the profile's overridable subset; fields omitted from the request preserve their current value, fields explicitly set to `null` revert to inherit-central. Save-time validation runs (D9a alignment policy), the `If-Match` / `If-None-Match` precondition is checked inside the transaction, and either a new profile is created via close-then-insert or 400 / 412 is returned.
 
 ### D6 — Domain event shape: one event per save with delta payload (Q8a)
 
@@ -155,6 +184,10 @@ One event per save. `ChangedFields` carries per-field old/new pairs. `PrecedingP
 
 Per-field decomposition into multiple events is rejected: profile-wide saves are atomic at the API; the audit unit should match the action unit.
 
+**Transactional contract (cycle 1 review resolution):** the `LocalAgreementProfileChanged` event-store append, the audit-projection insert (D8), and the close-then-insert UPDATE+INSERT on `local_agreement_profiles` all run inside the **same DB transaction** on the same PostgreSQL connection. PostgreSQL's transactional guarantees give us all-or-nothing semantics: any failure (constraint violation, ETag mismatch caught after SELECT FOR UPDATE, network drop mid-transaction) rolls back all four writes atomically. There is no partial-failure outcome model analogous to ADR-016 D10's `AuditState` because there is no two-phase commit across stores — both the event store and the audit projection are tables in the same database.
+
+If a future architectural change moves the event store or audit projection to a different connection / different database, this transactional simplicity goes away and an `AuditState`-style outcome model becomes necessary. Document explicitly so the simplification doesn't quietly drift.
+
 ### D7 — Legacy event compatibility (Q8b)
 
 `LocalConfigurationChanged` (existing per-row event):
@@ -181,7 +214,7 @@ CREATE TABLE local_agreement_profile_audit (
 CREATE INDEX idx_local_profile_audit_profile ON local_agreement_profile_audit(profile_id);
 ```
 
-One audit row per save. `delta_jsonb` mirrors the event's `ChangedFields` shape — same data, two persistence sites (event store + projection), identical semantics.
+One audit row per save. `delta_jsonb` mirrors the event's `ChangedFields` shape — same data, two persistence sites (event store + projection), identical semantics. The audit row write is in the **same DB transaction** as the event-store append and the profile UPDATE+INSERT (see D6's transactional-contract paragraph) — no partial-failure mode is possible while all three writes target the same PostgreSQL connection.
 
 The legacy `local_configuration_audit` table (`init.sql:473-483`) stays for pre-S21 historical audit queries; after S21 it stops receiving new rows. No migration of old audit rows — they remain queryable in their original `(config_id, previous_value, new_value)` shape.
 
@@ -191,17 +224,23 @@ The full Q12 option (d) decision: combine save-time validation with planner inte
 
 #### D9a — Save-time alignment validation
 
-A new validator runs on the PUT endpoint before the profile is written. For each changed field, the validator looks up the field's consumer rule's `(span, splitBehavior)` triple via `IRuleClassificationProvider` (S20 wave 1b) and applies the field's alignment policy:
+A new validator runs on the PUT endpoint before the profile is written. For each changed field, the validator looks up the field's alignment policy in a static map and validates the requested `effective_from` against it:
 
-| Field | Consumer rule | Alignment policy |
-|-------|---------------|------------------|
+| Field | Consumer rule (documentation only) | Alignment policy enforced at save |
+|-------|-----------------------------------|-----------------------------------|
 | `WeeklyNormHours` | `NormCheckRule.WEEKLY` (window, aligned-window) | `effective_from` must be a Monday |
 | `MaxFlexBalance` | `FlexBalanceRule` (cross-period, mergeable) | none |
-| `FlexCarryoverMax` | `FlexBalanceRule` (cross-period, ferieår) | none |
+| `FlexCarryoverMax` | `FlexBalanceRule` (cross-period, applied at ferieår — currently no rule directly consumes this field as input; it's read into `AgreementRuleConfig` by the rule pipeline but not classified by `IRuleClassificationProvider` today) | none |
 | `MaxOvertimeHoursPerPeriod` | `OvertimeGovernanceRule.MaxOvertime` (period, mergeable) | none |
 | `OvertimeRequiresPreApproval` | `OvertimeGovernanceRule.PreApproval` (period, mergeable) | none |
 
-The alignment policy is encoded as a `Dictionary<string, Func<DateOnly, ValidationResult>>` keyed by overridable field name. Today only `WeeklyNormHours` is populated; future fields with alignment requirements extend the dictionary without architectural change. Misaligned saves return 400 with a structured per-field error naming the nearest valid dates.
+**Implementation: static const map, no runtime provider dependency** (cycle 1 review resolution). The alignment policy is a static `IReadOnlyDictionary<string, Func<DateOnly, ValidationResult>>` declared in `StatsTid.SharedKernel.Models.LocalAgreementProfile.AlignmentPolicies` (or similar single-file location). The validator looks up the field name and invokes the function. **No `IRuleClassificationProvider` dependency in the Backend.Api PUT handler** — Backend.Api doesn't have the provider in DI today (the provider lives in Payroll Integration), and adding it would expand the dependency graph for no functional gain. The static-data approach is sufficient because (a) only `WeeklyNormHours` has an alignment requirement today, (b) the alignment-rule-by-field is design-time-known data (it's a property of which rule consumes the field, not a runtime computation), and (c) the dictionary is open for extension: future overridable fields with alignment requirements add a single entry.
+
+**Note on the consumer-rule column:** the table documents which rule classification each field maps to, for forward-readers tracing the design rationale. It is **NOT** runtime data — the validator never reads the classification at save time. Two of the rows (`FlexCarryoverMax`, the field's behavior described in `OvertimeGovernanceRule.PreApproval`) are forward-looking: no rule currently registered with `RuleRegistry` (S20 TASK-2006) directly consumes them as input today. The "no alignment" entry is correct because no aligned-window rule reads them; if a future rule does, the static map gains an entry and `RuleClassification` adds the rule.
+
+**Scope: DateOnly-only.** Today's signature `Func<DateOnly, ValidationResult>` accepts only a date. If a future overridable field requires timestamp-level alignment (e.g., effective at midnight Copenhagen time), this signature must widen to accept a richer context (perhaps the raw write payload). For S21 scope this is forward-looking; **the static map's extensibility is bounded to date-aligned constraints**. Document explicitly so the ADR doesn't claim architectural extensibility it doesn't have.
+
+**Error payload convention:** misaligned saves return 400 with a structured per-field error of the form `{ field: "WeeklyNormHours", code: "NOT_MONDAY_ALIGNED", nearestValid: ["2026-05-04", "2026-05-11"] }`. Codes are English; the frontend translates to Danish via existing i18n infrastructure (ADR-011). Dates are ISO-8601 `yyyy-MM-dd`.
 
 #### D9b — Planner integration
 
@@ -209,17 +248,23 @@ The alignment policy is encoded as a `Dictionary<string, Func<DateOnly, Validati
 - `BoundaryCause.LocalProfileActivation` enum value.
 - `BoundarySources.LocalProfileActivations` field (a list of `(DateOnly EffectiveFrom, Guid ProfileId)` records).
 
-`PeriodPlanner.Plan` detects boundaries from `LocalProfileActivations` exactly as it does for `OkTransitions`. The new `BoundaryCause` slots into `BoundaryDetector.OrderedCauses` with priority lower than `OkTransition` and `AgreementConfigPromotion` (a same-day OK transition or agreement-config promotion subsumes a profile activation in the cause-tie-break).
+`PeriodPlanner.Plan` detects boundaries from `LocalProfileActivations` exactly as it does for `OkTransitions`. The new `BoundaryCause` slots into `BoundaryDetector.OrderedCauses` between `AgreementConfigPromotion` and `PositionOverrideEffective`. **Rationale**: `LocalProfileActivation` ranks **above** `PositionOverrideEffective` because a profile change is org-wide whereas a position override scopes per-employee-position; org-wide scope is more impactful and should attribute the segment in tie-breaks. It ranks **below** `OkTransition` and `AgreementConfigPromotion` because both have agreement-wide product-level meaning that subsumes a single org's local profile change occurring on the same day.
+
+Final `OrderedCauses`: `OkTransition > AgreementConfigPromotion > LocalProfileActivation > PositionOverrideEffective > EuWtdRulesetVersion`.
 
 Because D9a guarantees that any profile changing `WeeklyNormHours` has `effective_from` on a Monday, the planner-produced segments around such a boundary always align with `NormCheckRule.WEEKLY`'s window. The aligned-window rule's `RejectIfMultipleSegments` merge strategy is never violated by a profile activation. Mergeable fields' rules merge their per-segment results via the strategies they already declare.
 
 #### D9c — Hydration shim extension
 
-`PeriodCalculationService.BuildPlanForLegacyCallers` (the S20 `[Obsolete]` shim that hydrates `BoundarySources` from production data) is extended:
+`PeriodCalculationService.BuildPlanForLegacyCallers` (the private method used by the S20 `[Obsolete]` `CalculateAsync(profile, entries, …)` shim — it hydrates `BoundarySources` from production data) is extended:
 - Pre-existing: hydrates `OkTransitions` from `OkVersionResolver`.
-- New: hydrates `LocalProfileActivations` from `local_agreement_profiles` via a SELECT keyed on `(org_id, agreement_code, ok_version)` constrained to `effective_from BETWEEN @periodStart AND @periodEnd`.
+- New: hydrates `LocalProfileActivations` from `local_agreement_profiles` via a SELECT keyed on `(org_id, agreement_code, ok_version)` constrained to `effective_from > @periodStart AND effective_from <= @periodEnd` (boundaries strictly inside the period; the profile active on `periodStart` is the segment-1 starting state, not a boundary). With D1's lifecycle simplification (no `is_active` column), there is no boolean filter — `effective_to` is the single signal, and the SELECT additionally filters `effective_to IS NULL OR effective_to >= @periodStart` so closed predecessors don't introduce phantom boundaries inside the current calculation period.
 
 This is a partial extension of the deferred S20 carry-forward (non-OK boundary hydration). Agreement-config promotions, position-override effective dates, and EU-WTD ruleset transitions remain on the carry-forward list — they don't enter S21 scope.
+
+**Layering precedent (cycle 1 review resolution):** PCS (Payroll Integration) reads `local_agreement_profiles` directly via `LocalAgreementProfileRepository`, extending the precedent set by `WageTypeMappingRepository` (S20 wave 1 — PCS already crosses the Payroll → Infrastructure storage boundary for wage-type lookup). Moving `BuildPlanForLegacyCallers` into Infrastructure would force PCS into a layer above its current home, which is a larger architectural change without product-level driver. The smaller cross is preferred. Future readers comparing the WTM and profile-activation reads should note both are deliberate, parallel choices — not accidental layer violations.
+
+**`OrgId` contract (cycle 1 review resolution):** the shim hydrates `LocalProfileActivations` only for callers whose `EmploymentProfile.OrgId` is non-null. Profile-less callers (test fixtures or pre-existing internal use that doesn't bind employees to orgs) see an empty `LocalProfileActivations` list — no boundaries from this source. This is the intended behavior: no org means no profile-keyed lookup is possible. D11's hydration-shim test asserts this contract (a profile-less calling shape produces zero `LocalProfileActivation` boundaries even when the DB has profiles for other orgs).
 
 ### D10 — Replay back-compat for pre-S21 manifests (Q13)
 
@@ -238,17 +283,23 @@ S21 ships with the documented contract: **pre-S21 manifests are best-effort repl
 
 ### D11 — Test strategy: committed minimum matrix (Q11)
 
-All four categories pre-committed as IN. Counted floor: **11 new tests** (10 from Q11 plus 1 for D9a alignment validation).
+All categories pre-committed as IN. Counted floor: **17 new tests** after cycle 1 review additions (D9c hydration, D2 no-scheduled-future, D7 no-emit-legacy, D2.1 ETag/If-Match conflict).
 
 | Category | Scenarios (counted floor) | Test file |
 |----------|---------------------------|-----------|
 | Migration (regression, Docker-gated) | 5: multi-row-per-key collision; informational-key drop (`PlanningStartDay`); typo'd-key drop; expired-but-active row; one-row-per-overridable-key happy path | `tests/StatsTid.Tests.Regression/Config/ProfileMigrationTests.cs` |
-| Uniqueness enforcement (regression, Docker-gated) | 2: concurrent-insert race surfaces a uniqueness violation; soft-delete reactivation does not violate the partial-unique-index | `tests/StatsTid.Tests.Regression/Config/ProfileUniquenessTests.cs` |
+| Uniqueness enforcement (regression, Docker-gated) | 2: concurrent-insert race surfaces a uniqueness violation; deactivation-without-supersession (`UPDATE SET effective_to = today` with no successor) leaves the partial-unique-index satisfied and a future re-creation is allowed | `tests/StatsTid.Tests.Regression/Config/ProfileUniquenessTests.cs` |
 | NULL-as-inherit resolution (unit) | 3: NULL on every overridable column inherits central; non-NULL on one overridable column overrides central for that field only; NULL after a previous non-NULL save reverts to central | `tests/StatsTid.Tests.Unit/Config/ProfileResolutionTests.cs` |
-| Audit emission (regression, Docker-gated) | 2: every profile mutation emits a `LocalAgreementProfileChanged` event with field-level delta; the audit projection table records the same delta | `tests/StatsTid.Tests.Regression/Config/ProfileAuditTests.cs` |
+| Audit emission (regression, Docker-gated) | 2: every profile mutation emits a `LocalAgreementProfileChanged` event with field-level delta; the audit projection table records the same delta in `local_agreement_profile_audit` | `tests/StatsTid.Tests.Regression/Config/ProfileAuditTests.cs` |
 | Save-time alignment validation (unit) | 1: mid-week `WeeklyNormHours` save returns 400 with structured per-field error naming nearest valid Monday dates | `tests/StatsTid.Tests.Unit/Config/ProfileAlignmentValidatorTests.cs` |
+| **Hydration shim** (regression, Docker-gated) — added cycle 1 | 1: with one profile whose `effective_from` falls inside the calculation period, `BuildPlanForLegacyCallers` produces a `BoundarySources` containing one `LocalProfileActivation` boundary; profile-less calling shape (no `OrgId` on `EmploymentProfile`) produces zero such boundaries even when the DB has profiles for other orgs | `tests/StatsTid.Tests.Regression/Segmentation/ProfileBoundaryHydrationTests.cs` |
+| **No-scheduled-future negative** (regression, Docker-gated) — added cycle 1 | 1: PUT with `effective_from > today` returns 400 with structured error code `EFFECTIVE_FROM_NOT_TODAY_OR_PAST` | `tests/StatsTid.Tests.Regression/Config/ProfileScheduledFutureRejectionTests.cs` |
+| **No-emit-legacy event negative** (regression, Docker-gated) — added cycle 1 | 1: a successful PUT against the new profile API emits exactly one `LocalAgreementProfileChanged` event and zero `LocalConfigurationChanged` events | `tests/StatsTid.Tests.Regression/Config/ProfileLegacyEventNonEmissionTests.cs` |
+| **ETag / If-Match concurrency** (regression, Docker-gated) — added cycle 1 (D2.1) | 2: PUT without `If-Match` (when current open profile exists) returns 412; PUT with stale `If-Match` (current is `new1` after racing admin's commit, caller sent the predecessor) returns 412 with current state in body | `tests/StatsTid.Tests.Regression/Config/ProfileConcurrencyTokenTests.cs` |
 
-Floor = 5 + 2 + 3 + 2 + 1 = **13 new tests**. (Original Q11 floor of 10 was set before D9a's validation test was added; the floor moves with the decision set.)
+Floor = 5 + 2 + 3 + 2 + 1 + 1 + 1 + 1 + 2 = **18 new tests**. ADR-017 commits to a **floor of 17** for headroom against last-minute removals; cycle 1 design adds 18 named scenarios. Tests above floor are documentation, not over-commitment.
+
+(Original Q11 floor of 10 was set during plan review; cycle 1 ADR review added 7 more tests covering decisions that gained scenarios after the plan-review pass: alignment validation, hydration shim, no-scheduled-future, no-emit-legacy, and ETag concurrency. Each addition is traceable to a specific cycle-1 BLOCKER or WARNING.)
 
 ### D12 — Effect on adjacent ADRs
 
@@ -304,7 +355,8 @@ The patch-bag merits considered and rejected:
 - The S20 carry-forward "non-OK boundary hydration in `BuildPlanForLegacyCallers`" is partially closed by D9c (profile activations now hydrate); agreement-config promotions, position-override effective dates, and EU-WTD ruleset transitions remain.
 
 ### For migration
-- Migration runs in a single transaction over `local_configurations`. Rollback path: restore from event-store replay of `LocalConfigurationChanged` events into the pre-S21 schema. Documented as ops procedure in the migration plan (deliverable #3).
+- Migration runs in a single transaction over `local_configurations`.
+- **Rollback policy: forward-only migration** (cycle 1 review resolution). Pre-cutover database backup is the rollback source for catastrophic post-migration issues; post-cutover writes are NOT reversibly transformable into the pre-S21 schema (`LocalAgreementProfileChanged` events describe profile-shaped writes that cannot losslessly decompose into per-row `LocalConfigurationChanged` writes). For a pre-production system with three seed rows, this is acceptable and honest. The earlier framing ("restore from event-store replay of `LocalConfigurationChanged` events into the pre-S21 schema") was misleading — the per-S21 events are profile-shaped, not per-row, and replaying them into the old schema would be a custom decomposition that doesn't exist as production code. Rejected.
 - Pre-S21 `SegmentManifest`s become best-effort replayable per D10.
 
 ## Alternatives Rejected
@@ -322,16 +374,18 @@ For each open question that produced a closed decision, the rejected options:
 - **Q8b (legacy event):** rewrite old events rejected — violates ADR-002 append-only invariant. Drop event type rejected — breaks deserialization of pre-S21 events.
 - **Q9 (resolution chain):** closed pre-commit — no rejected alternative; existing chain stays.
 - **Q10 (backwards compat):** redirect-with-shim rejected — no external consumers.
-- **Q12 (planner integration):** option (a) "first-class boundary source without save-time validation" rejected — would 4xx mid-week `WeeklyNormHours` saves at calculation time. Option (b) "profile-stability assumption" rejected — silent no-op-this-period behavior is admin-experience landmine. Option (c) "future work" rejected — same as (b) without commitment in writing.
+- **Q12 (planner integration):** option (a) "first-class boundary source without save-time validation" rejected — would 4xx mid-week `WeeklyNormHours` saves at calculation time. Option (b) "profile-stability assumption" was a coherent alternative — operationally simpler (no planner hydration extension; rule-classification compatibility automatic). Combined with D9a's save-time validation, it could refuse mid-period saves to preserve the `WeeklyNormHours` window invariant without 4xx-on-replay. The choice between (b) + save-time and (d) + save-time + planner integration is a UX-quality call: option (d) makes admin saves take effect immediately on the declared `effective_from` date for the **current** calculation period; option (b) defers them to the **next** period. The user's escalation to (d) was a deliberate immediacy preference. Option (c) "future work" rejected — same as (b) without commitment in writing. The cycle-1 review correctly noted this rejection rationale is UX-driven (not architecture-driven) — both (b) and (d) are architecturally sound; (d) wins on admin-experience grounds.
 - **Q13 (replay back-compat):** option (a) "migrate historical manifests" rejected — manifests don't carry local-config snapshots, so there's nothing to rewrite. Option (b) "two-shape replay" rejected — requires preserving old per-row table indefinitely; bloats schema.
 - **Q14 (audit projection):** option (a) "per-field audit rows" rejected — atomic-write-with-N-audit-rows mismatch. Option (c) "both transitionally" rejected — over-engineering for pre-production system.
 
 ## References
 
-- [ADR-002](ADR-002-pure-function-rule-engine.md) — rule engine purity invariant (preserved).
+- [ADR-002](ADR-002-pure-function-rule-engine.md) — rule engine purity invariant (preserved by D1 schema and D9a static-data design — Backend.Api never imports `StatsTid.RuleEngine`).
 - [ADR-010](ADR-010-local-config-merge-at-service-layer.md) — merge-at-service-layer invariant (preserved); data shape (amended).
-- [ADR-014](ADR-014-agreement-configs-database-backed.md) — partial-unique-index pattern reused.
+- [ADR-014](ADR-014-agreement-configs-database-backed.md) — partial-unique-index pattern shape reused; predicate divergence (`status='ACTIVE'` vs `effective_to IS NULL`) noted in D1 with rationale.
 - [ADR-016](ADR-016-temporal-period-handling.md) — `BoundarySources` extended additively; D2 classification inventory unchanged; D5b snapshot-at-calculation set unchanged.
-- [SPRINT-21.md](../../sprints/SPRINT-21.md) — analysis-phase deliverables (data audit, this ADR, migration plan, task decomposition).
-- [docker/postgres/init.sql](../../../docker/postgres/init.sql) — `local_configurations` table (`:449`), `local_configuration_audit` table (`:473`), seed rows (`:629-633`).
+- [SPRINT-21.md](../../sprints/SPRINT-21.md) — analysis-phase deliverables (data audit, this ADR, migration plan, task decomposition); ADR review (cycle 1) findings + resolutions.
+- [docker/postgres/init.sql](../../../docker/postgres/init.sql) — `local_configurations` table (`:449-470`), `local_configuration_audit` table (`:473-483`), seed rows (`:629-633`).
 - [src/Infrastructure/StatsTid.Infrastructure/ConfigResolutionService.cs](../../../src/Infrastructure/StatsTid.Infrastructure/ConfigResolutionService.cs) — current resolution chain (lines 69-129); `ProtectedKeys` set (lines 24-47); informational-keys log-and-skip (lines 255-258).
+- [src/SharedKernel/StatsTid.SharedKernel/Segmentation/BoundaryDetector.cs](../../../src/SharedKernel/StatsTid.SharedKernel/Segmentation/BoundaryDetector.cs) — `OrderedCauses` (extended by D9b).
+- [src/Integrations/StatsTid.Integrations.Payroll/Services/PeriodCalculationService.cs](../../../src/Integrations/StatsTid.Integrations.Payroll/Services/PeriodCalculationService.cs) — `BuildPlanForLegacyCallers` (extended by D9c).
