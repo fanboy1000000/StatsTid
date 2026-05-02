@@ -2,7 +2,6 @@ using Npgsql;
 using StatsTid.Infrastructure;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Segmentation;
-using Testcontainers.PostgreSql;
 
 namespace StatsTid.Tests.Regression.Segmentation;
 
@@ -305,100 +304,34 @@ public sealed class BoundaryScenarioTests
 }
 
 /// <summary>
-/// Single-use Postgres testcontainer fixture for the PCS-backed OK-valid scenario.
-/// Each test creates a new instance so isolation is preserved without xUnit
-/// collection fixtures.
+/// Single-use Postgres fixture for the PCS-backed OK-valid scenario. Wraps
+/// <see cref="TestFixtures.DockerHarness"/> with seeded wage-type mappings + a wired
+/// <see cref="StatsTid.Integrations.Payroll.Services.PeriodCalculationService"/>.
 /// </summary>
 internal sealed class BoundaryScenarioFixture : IAsyncDisposable
 {
-    private const string ImageTag = "postgres:16-alpine";
-    private const string SchemaDdl = """
-        CREATE TABLE IF NOT EXISTS event_streams (
-            stream_id   TEXT        PRIMARY KEY,
-            created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        );
-        CREATE TABLE IF NOT EXISTS events (
-            global_position BIGSERIAL   PRIMARY KEY,
-            event_id        UUID        NOT NULL UNIQUE,
-            stream_id       TEXT        NOT NULL REFERENCES event_streams(stream_id),
-            stream_version  INT         NOT NULL,
-            event_type      TEXT        NOT NULL,
-            data            JSONB       NOT NULL,
-            occurred_at     TIMESTAMPTZ NOT NULL,
-            stored_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            actor_id        TEXT,
-            actor_role      TEXT,
-            correlation_id  UUID,
-            UNIQUE (stream_id, stream_version)
-        );
-        CREATE TABLE IF NOT EXISTS segment_manifests (
-            manifest_id             UUID        PRIMARY KEY,
-            period_start            DATE        NOT NULL,
-            period_end              DATE        NOT NULL,
-            employee_id             TEXT        NOT NULL,
-            calculation_kind        TEXT        NOT NULL,
-            boundary_cause_summary  TEXT[]      NOT NULL,
-            created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
-            segments_jsonb          JSONB       NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS wage_type_mappings (
-            time_type       TEXT        NOT NULL,
-            wage_type       TEXT        NOT NULL,
-            ok_version      TEXT        NOT NULL,
-            agreement_code  TEXT        NOT NULL,
-            position        TEXT        NOT NULL DEFAULT '',
-            description     TEXT,
-            created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            PRIMARY KEY (time_type, ok_version, agreement_code, position)
-        );
-        """;
+    private readonly TestFixtures.DockerHarness _harness;
 
-    public PostgreSqlContainer Container { get; }
-    public DbConnectionFactory Factory { get; }
-    public PostgresEventStore EventStore { get; }
+    public DbConnectionFactory Factory => _harness.Factory;
+    public PostgresEventStore EventStore => _harness.EventStore;
+    public string ConnectionString => _harness.ConnectionString;
     public StatsTid.Integrations.Payroll.Services.PeriodCalculationService Pcs { get; }
-    public string ConnectionString => Container.GetConnectionString();
 
     private BoundaryScenarioFixture(
-        PostgreSqlContainer container,
-        DbConnectionFactory factory,
-        PostgresEventStore eventStore,
+        TestFixtures.DockerHarness harness,
         StatsTid.Integrations.Payroll.Services.PeriodCalculationService pcs)
     {
-        Container = container;
-        Factory = factory;
-        EventStore = eventStore;
+        _harness = harness;
         Pcs = pcs;
     }
 
     public static async Task<BoundaryScenarioFixture> CreateAsync()
     {
-        var container = new PostgreSqlBuilder()
-            .WithImage(ImageTag)
-            .WithDatabase("statstid_test")
-            .WithUsername("statstid")
-            .WithPassword("statstid_test")
-            .Build();
-        await container.StartAsync();
-
-        await using (var conn = new NpgsqlConnection(container.GetConnectionString()))
-        {
-            await conn.OpenAsync();
-            await using var cmd = new NpgsqlCommand(SchemaDdl, conn);
-            await cmd.ExecuteNonQueryAsync();
-        }
-
-        var factory = new DbConnectionFactory(container.GetConnectionString());
-        var eventStore = new PostgresEventStore(factory);
-        await TestFixtures.SeedWageTypeMappingsAsync(factory);
-        var pcs = TestFixtures.BuildPcs(factory, eventStore);
-
-        return new BoundaryScenarioFixture(container, factory, eventStore, pcs);
+        var harness = await TestFixtures.DockerHarness.StartAsync();
+        await TestFixtures.SeedWageTypeMappingsAsync(harness.Factory);
+        var pcs = TestFixtures.BuildPcs(harness.Factory, harness.EventStore);
+        return new BoundaryScenarioFixture(harness, pcs);
     }
 
-    public async ValueTask DisposeAsync()
-    {
-        if (Container is not null)
-            await Container.DisposeAsync();
-    }
+    public async ValueTask DisposeAsync() => await _harness.DisposeAsync();
 }

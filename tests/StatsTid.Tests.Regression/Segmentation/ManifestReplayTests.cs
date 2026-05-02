@@ -1,8 +1,6 @@
 using Npgsql;
-using StatsTid.Infrastructure;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Segmentation;
-using Testcontainers.PostgreSql;
 
 namespace StatsTid.Tests.Regression.Segmentation;
 
@@ -25,85 +23,16 @@ namespace StatsTid.Tests.Regression.Segmentation;
 [Trait("Category", "Docker")]
 public sealed class ManifestReplayTests : IAsyncLifetime
 {
-    private const string ImageTag = "postgres:16-alpine";
+    private TestFixtures.DockerHarness _harness = null!;
 
-    private const string SchemaDdl = """
-        CREATE TABLE IF NOT EXISTS event_streams (
-            stream_id   TEXT        PRIMARY KEY,
-            created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        );
-        CREATE TABLE IF NOT EXISTS events (
-            global_position BIGSERIAL   PRIMARY KEY,
-            event_id        UUID        NOT NULL UNIQUE,
-            stream_id       TEXT        NOT NULL REFERENCES event_streams(stream_id),
-            stream_version  INT         NOT NULL,
-            event_type      TEXT        NOT NULL,
-            data            JSONB       NOT NULL,
-            occurred_at     TIMESTAMPTZ NOT NULL,
-            stored_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            actor_id        TEXT,
-            actor_role      TEXT,
-            correlation_id  UUID,
-            UNIQUE (stream_id, stream_version)
-        );
-        CREATE TABLE IF NOT EXISTS segment_manifests (
-            manifest_id             UUID        PRIMARY KEY,
-            period_start            DATE        NOT NULL,
-            period_end              DATE        NOT NULL,
-            employee_id             TEXT        NOT NULL,
-            calculation_kind        TEXT        NOT NULL,
-            boundary_cause_summary  TEXT[]      NOT NULL,
-            created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
-            segments_jsonb          JSONB       NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS wage_type_mappings (
-            time_type       TEXT        NOT NULL,
-            wage_type       TEXT        NOT NULL,
-            ok_version      TEXT        NOT NULL,
-            agreement_code  TEXT        NOT NULL,
-            position        TEXT        NOT NULL DEFAULT '',
-            description     TEXT,
-            created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            PRIMARY KEY (time_type, ok_version, agreement_code, position)
-        );
-        """;
-
-    private PostgreSqlContainer _container = null!;
-    private DbConnectionFactory _factory = null!;
-    private PostgresEventStore _eventStore = null!;
-
-    public async Task InitializeAsync()
-    {
-        _container = new PostgreSqlBuilder()
-            .WithImage(ImageTag)
-            .WithDatabase("statstid_test")
-            .WithUsername("statstid")
-            .WithPassword("statstid_test")
-            .Build();
-        await _container.StartAsync();
-
-        await using (var conn = new NpgsqlConnection(_container.GetConnectionString()))
-        {
-            await conn.OpenAsync();
-            await using var cmd = new NpgsqlCommand(SchemaDdl, conn);
-            await cmd.ExecuteNonQueryAsync();
-        }
-
-        _factory = new DbConnectionFactory(_container.GetConnectionString());
-        _eventStore = new PostgresEventStore(_factory);
-    }
-
-    public async Task DisposeAsync()
-    {
-        if (_container is not null)
-            await _container.DisposeAsync();
-    }
+    public async Task InitializeAsync() => _harness = await TestFixtures.DockerHarness.StartAsync();
+    public async Task DisposeAsync() => await _harness.DisposeAsync();
 
     [Fact]
     public async Task ReplayAsync_ReturnsResult_WithOriginalManifestId_AndMatchingShape()
     {
-        await TestFixtures.SeedWageTypeMappingsAsync(_factory);
-        var pcs = TestFixtures.BuildPcs(_factory, _eventStore);
+        await TestFixtures.SeedWageTypeMappingsAsync(_harness.Factory);
+        var pcs = TestFixtures.BuildPcs(_harness.Factory, _harness.EventStore);
 
         var profile = TestFixtures.Profile("EMP-REPLAY-1");
         var entries = TestFixtures.WeekdayEntriesForPeriod(profile.EmployeeId, new DateOnly(2026, 3, 25), new DateOnly(2026, 4, 7));
@@ -146,7 +75,7 @@ public sealed class ManifestReplayTests : IAsyncLifetime
         Assert.Equal(forward.ExportLines.Sum(l => l.Hours), replay.ExportLines.Sum(l => l.Hours));
 
         // Replay must NOT mint a new manifest row — only one row in the projection.
-        await using var conn = new NpgsqlConnection(_container.GetConnectionString());
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
         await conn.OpenAsync();
         await using var countCmd = new NpgsqlCommand(
             "SELECT COUNT(*) FROM segment_manifests WHERE manifest_id = @id", conn);

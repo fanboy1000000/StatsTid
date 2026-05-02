@@ -9,6 +9,7 @@ using StatsTid.Infrastructure;
 using StatsTid.Integrations.Payroll.Services;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Segmentation;
+using Testcontainers.PostgreSql;
 
 namespace StatsTid.Tests.Regression.Segmentation;
 
@@ -269,5 +270,118 @@ internal static class TestFixtures
         private readonly IReadOnlyList<RuleClassification> _set;
         public InMemoryRuleClassificationProvider(IReadOnlyList<RuleClassification> set) => _set = set;
         public IReadOnlyList<RuleClassification> GetClassifications() => _set;
+    }
+
+    /// <summary>
+    /// Per-test Postgres testcontainer harness for the Sprint 20 segmentation regression
+    /// suite. Holds the container, a <see cref="DbConnectionFactory"/>, and a
+    /// <see cref="PostgresEventStore"/> wired to it. Schema is initialised in
+    /// <see cref="StartAsync"/> from the canonical <see cref="SchemaDdl"/> below — single
+    /// source of truth for the post-S20 cleanup that absorbed five separate copies.
+    ///
+    /// <para>
+    /// Compatible-with-<c>init.sql</c> shape covering <c>segment_manifests</c> +
+    /// <c>events</c> + <c>event_streams</c> + <c>wage_type_mappings</c>. The
+    /// <c>events</c> shape is hand-synthesised: production <c>init.sql</c> creates the
+    /// base table and adds <c>actor_id</c> / <c>actor_role</c> / <c>correlation_id</c>
+    /// via subsequent <c>ALTER TABLE</c> statements (S3 / S4); we collapse them inline
+    /// here. Schema drift in those columns will NOT auto-surface — when adding columns
+    /// to <c>events</c> in production, mirror them here. <c>segment_manifests</c> and
+    /// <c>wage_type_mappings</c> are single-block <c>CREATE TABLE</c> in production;
+    /// those rows match init.sql byte-for-byte.
+    /// </para>
+    /// </summary>
+    public sealed class DockerHarness : IAsyncDisposable
+    {
+        private const string ImageTag = "postgres:16-alpine";
+
+        public const string SchemaDdl = """
+            CREATE TABLE IF NOT EXISTS event_streams (
+                stream_id   TEXT        PRIMARY KEY,
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+
+            CREATE TABLE IF NOT EXISTS events (
+                global_position BIGSERIAL   PRIMARY KEY,
+                event_id        UUID        NOT NULL UNIQUE,
+                stream_id       TEXT        NOT NULL REFERENCES event_streams(stream_id),
+                stream_version  INT         NOT NULL,
+                event_type      TEXT        NOT NULL,
+                data            JSONB       NOT NULL,
+                occurred_at     TIMESTAMPTZ NOT NULL,
+                stored_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                actor_id        TEXT,
+                actor_role      TEXT,
+                correlation_id  UUID,
+                UNIQUE (stream_id, stream_version)
+            );
+
+            CREATE TABLE IF NOT EXISTS segment_manifests (
+                manifest_id             UUID        PRIMARY KEY,
+                period_start            DATE        NOT NULL,
+                period_end              DATE        NOT NULL,
+                employee_id             TEXT        NOT NULL,
+                calculation_kind        TEXT        NOT NULL,
+                boundary_cause_summary  TEXT[]      NOT NULL,
+                created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+                segments_jsonb          JSONB       NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS wage_type_mappings (
+                time_type       TEXT        NOT NULL,
+                wage_type       TEXT        NOT NULL,
+                ok_version      TEXT        NOT NULL,
+                agreement_code  TEXT        NOT NULL,
+                position        TEXT        NOT NULL DEFAULT '',
+                description     TEXT,
+                created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (time_type, ok_version, agreement_code, position)
+            );
+            """;
+
+        public PostgreSqlContainer Container { get; }
+        public DbConnectionFactory Factory { get; }
+        public PostgresEventStore EventStore { get; }
+        public string ConnectionString => Container.GetConnectionString();
+
+        private DockerHarness(PostgreSqlContainer container, DbConnectionFactory factory, PostgresEventStore eventStore)
+        {
+            Container = container;
+            Factory = factory;
+            EventStore = eventStore;
+        }
+
+        /// <summary>
+        /// Spins up a Postgres testcontainer, applies <see cref="SchemaDdl"/>, and returns
+        /// a harness wired with <see cref="DbConnectionFactory"/> + <see cref="PostgresEventStore"/>.
+        /// Disposed by the caller via <see cref="DisposeAsync"/>.
+        /// </summary>
+        public static async Task<DockerHarness> StartAsync()
+        {
+            var container = new PostgreSqlBuilder()
+                .WithImage(ImageTag)
+                .WithDatabase("statstid_test")
+                .WithUsername("statstid")
+                .WithPassword("statstid_test")
+                .Build();
+
+            await container.StartAsync();
+
+            await using (var conn = new NpgsqlConnection(container.GetConnectionString()))
+            {
+                await conn.OpenAsync();
+                await using var cmd = new NpgsqlCommand(SchemaDdl, conn);
+                await cmd.ExecuteNonQueryAsync();
+            }
+
+            var factory = new DbConnectionFactory(container.GetConnectionString());
+            var eventStore = new PostgresEventStore(factory);
+            return new DockerHarness(container, factory, eventStore);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await Container.DisposeAsync();
+        }
     }
 }
