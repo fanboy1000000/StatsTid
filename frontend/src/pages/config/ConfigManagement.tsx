@@ -35,10 +35,17 @@ import {
 import { ProfileEditor } from '../../components/config/ProfileEditor'
 import styles from './ConfigManagement.module.css'
 
+// Must mirror the agreement_code values seeded as ACTIVE in
+// docker/postgres/init.sql's agreement_configs table (currently AC, AC_RESEARCH,
+// AC_TEACHING, HK, PROSA). Step-7a cycle-1 fix: previously hard-coded only the
+// three primary codes, which silently hid AC_RESEARCH / AC_TEACHING orgs from
+// the local-profile editor after the S21 ConfigManagement rewrite.
 const AGREEMENT_OPTIONS = [
-  { value: 'AC',    label: 'AC' },
-  { value: 'HK',    label: 'HK' },
-  { value: 'PROSA', label: 'PROSA' },
+  { value: 'AC',           label: 'AC' },
+  { value: 'AC_RESEARCH',  label: 'AC_RESEARCH' },
+  { value: 'AC_TEACHING',  label: 'AC_TEACHING' },
+  { value: 'HK',           label: 'HK' },
+  { value: 'PROSA',        label: 'PROSA' },
 ]
 
 const OK_VERSION_OPTIONS = [

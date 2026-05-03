@@ -222,22 +222,57 @@ public sealed class LocalAgreementProfileRepository
         // 2. Validate the precondition (If-None-Match: * vs If-Match: <id>).
         ValidatePrecondition(actualCurrentProfileId, expectedCurrentProfileId);
 
-        // 3. Close the predecessor (if any) by setting effective_to = today.
-        // "Today" is computed in UTC. Admins in Europe/Copenhagen saving across
-        // a UTC-midnight boundary may see effective_to stamped as "yesterday"
-        // relative to their wall clock. Acceptable for S21; Phase-4 hardening
-        // sub-sprint (per ADR-017 D2.2) revisits with a TimeProvider/IClock
-        // injection uniformly across admin-write surfaces.
+        // 3. Close the predecessor (if any) by setting effective_to to the day BEFORE
+        // the new profile takes effect. Step-7a cycle-1 fix: previously closed at
+        // UTC `today`, which left the predecessor's window overlapping the
+        // replacement's window when the replacement was backdated
+        // (newProfile.EffectiveFrom < today). The endpoint allows backdated saves
+        // (D2 rejects only future effective_from), so the boundary must be derived
+        // from newProfile.EffectiveFrom — not from the wall clock.
+        //
+        // Known carry-forward (Step-7a cycle 9, deferred to Phase-4): when
+        // newProfile.EffectiveFrom <= predecessor.EffectiveFrom (same-day re-save
+        // OR backdate before predecessor's start), this stamps the predecessor's
+        // effective_to at a date <= its own effective_from — an invalid history
+        // window. The cycle 3-8 attempts to address this through a temporal
+        // guard + UPDATE-in-place path produced cascading regressions
+        // (lost-update on ETag, audit-shape drift, response/event payload
+        // divergence). The proper fix is a row-version column for ETag PLUS
+        // an effective_to-as-end-exclusive reshape — sized for the same
+        // Phase-4 hardening sub-sprint that introduces transactional outbox
+        // (D6 sibling) and propagates ETag/If-Match across admin-write surfaces
+        // (D2.2 sibling).
         if (expectedCurrentProfileId is not null)
         {
-            var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
-            await CloseProfileAsync(conn, tx, expectedCurrentProfileId.Value, today, ct);
+            var predecessorEffectiveTo = newProfile.EffectiveFrom.AddDays(-1);
+            await CloseProfileAsync(conn, tx, expectedCurrentProfileId.Value, predecessorEffectiveTo, ct);
         }
 
         // 4. Insert the new currently-active profile. ProfileId is generated client-side
         //    (matches LocalConfigurationRepository.CreateAsync precedent).
         var newProfileId = newProfile.ProfileId == Guid.Empty ? Guid.NewGuid() : newProfile.ProfileId;
-        await InsertProfileAsync(conn, tx, newProfile, newProfileId, ct);
+        try
+        {
+            await InsertProfileAsync(conn, tx, newProfile, newProfileId, ct);
+        }
+        catch (PostgresException ex) when (
+            ex.SqlState == "23505" &&
+            ex.ConstraintName == "uq_local_agreement_profile_active")
+        {
+            // Step-7a cycle-1 fix: the empty-slot path takes no row lock (PostgreSQL
+            // cannot SELECT ... FOR UPDATE a non-existent row), so two concurrent
+            // If-None-Match: * requests can both pass ValidatePrecondition and
+            // collide in the INSERT. The partial-unique-index uq_local_agreement_profile_active
+            // rejects the loser with SqlState 23505. Translate that into the
+            // contract shape the PUT handler expects (OptimisticConcurrencyException
+            // → 412 Precondition Failed) so the caller does not see a raw 500.
+            throw new OptimisticConcurrencyException(
+                "Another profile was created concurrently for the same " +
+                "(org_id, agreement_code, ok_version) triple; refresh and retry.",
+                expectedProfileId: expectedCurrentProfileId,
+                actualProfileId: null,
+                innerException: ex);
+        }
         return newProfileId;
     }
 
@@ -442,4 +477,16 @@ public sealed class OptimisticConcurrencyException : Exception
 
     public OptimisticConcurrencyException(string message, Exception innerException)
         : base(message, innerException) { }
+
+    public OptimisticConcurrencyException(
+        string message,
+        Guid? expectedProfileId,
+        Guid? actualProfileId,
+        Exception innerException)
+        : base(message, innerException)
+    {
+        ExpectedProfileId = expectedProfileId;
+        ActualProfileId = actualProfileId;
+    }
 }
+
