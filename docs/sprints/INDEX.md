@@ -24,9 +24,9 @@
 | [Sprint 16](SPRINT-16.md) | Working Time Compliance (EU WTD) | complete | 2026-03-11 → 2026-03-11 | 436 | yes |
 | [Sprint 17](SPRINT-17.md) | Overtime Governance & Compensation Model | complete | 2026-03-11 → 2026-03-11 | 446 | yes |
 | [Sprint 18](SPRINT-18.md) | Codex BLOCKER Remediation (Round 1: OK version, wage mapping, endpoint auth, serializer coverage) | complete (5 deferred findings → S19) | 2026-04-18 → 2026-04-23 | 474 | yes — 2026-04-23 |
-| [Sprint 19](SPRINT-19.md) | Codex BLOCKER Remediation (Round 2: `/execute` and `/calculate-and-export` resource-scope, retroactive audit canonicalization, JWT env-var; mixed-version export absorbed into S20 on 2026-04-25) | planned | TBD | — | no |
-| [Sprint 20](SPRINT-20.md) | Temporal Period Handling (analysis-first: ADR + segmentation framework for periods that intersect effective-date boundaries) | planned (analysis-first) | TBD | — | no |
-| [Sprint 21](SPRINT-21.md) | Local Agreement Configuration Rework (analysis-first: profile model replacing per-key patch bag) | planned (analysis-first) | TBD | — | no |
+| [Sprint 19](SPRINT-19.md) | Codex BLOCKER Remediation (Round 2: `/execute` and `/calculate-and-export` resource-scope, retroactive audit canonicalization, JWT env-var) | complete | 2026-04-25 → 2026-04-28 | 493 | yes — 2026-04-28 |
+| [Sprint 20](SPRINT-20.md) | Temporal Period Handling (ADR-016 D1-D11 + Segmentation bounded context + planner-driven PCS + manifest projection + per-line OK-version stamping) | complete | 2026-04-29 → 2026-05-02 | 562 | yes — 2026-05-02 |
+| [Sprint 21](SPRINT-21.md) | Local Agreement Configuration Rework (ADR-017 D1-D11 + profile schema + repository + migration runner + ConfigEndpoints rewrite + PCS hydration + UX profile editor + 18-scenario D11 test matrix + Step 7a 10-cycle review) | complete | 2026-05-02 → 2026-05-03 | 618 | yes — 2026-05-03 |
 
 ## Cumulative Task Summary
 
@@ -49,7 +49,11 @@
 | S15 | 10 | SharedKernel, Rule Engine, Infrastructure, Backend API, PostgreSQL, Frontend, Tests | — |
 | S16 | 13 | SharedKernel, Rule Engine, Infrastructure, Backend API, PostgreSQL, Frontend, Tests | ADR-015 |
 | S17 | 13 | SharedKernel, Rule Engine, Infrastructure, Backend API, Payroll Integration, PostgreSQL, Frontend, Tests | — |
-| **Total** | **168** | — | **27 entries** |
+| S18 | 8 | SharedKernel, Infrastructure, Backend API, Auth, Payroll Integration, Tests | — (carry-forward to S19) |
+| S19 | 4 | Orchestrator, Payroll Integration, Auth, Tests | — (TASK-1903 absorbed into S20) |
+| S20 | 17 | SharedKernel (Segmentation, new context), Infrastructure, Backend API, Payroll Integration, PostgreSQL, Tests | ADR-016 |
+| S21 | 10 | SharedKernel, Infrastructure, Backend API, Payroll Integration, PostgreSQL, Frontend, Tests | ADR-017 |
+| **Total** | **207** | — | **29 entries** |
 
 ## Test Progression
 
@@ -72,6 +76,10 @@
 | S15 | 407 + 41 FE | 15 | 4 | 422 |
 | S16 | 421 + 41 FE | 15 | 4 | 436 |
 | S17 | 431 + 41 FE | 15 | 4 | 446 |
+| S18 | 459 + 41 FE | 15 | 4 | 474 |
+| S19 | 478 + 41 FE | 15 | 4 | 493 |
+| S20 | 513 + 41 FE | 32 plain + 17 Docker | 4 | 562 (without Docker: 545) |
+| S21 | 517 + 48 FE | 35 plain + 18 Docker (profile) | 4 | 618 (without Docker: 600) |
 
 ## Architectural Constraint Coverage
 

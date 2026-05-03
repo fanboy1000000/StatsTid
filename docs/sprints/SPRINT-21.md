@@ -3,12 +3,12 @@
 | Field | Value |
 |-------|-------|
 | **Sprint** | 21 |
-| **Status** | analysis-phase complete (Step 0a + Step 0b + data audit + ADR-017 + ADR review cycle 1 + migration plan + task decomposition complete 2026-05-02; awaits user approval before Step 2 — Delegate) |
+| **Status** | complete (analysis + 5 implementation phases + Step 7a Codex 10-cycle review + revert-to-cycle-1-only + sprint close) |
 | **Start Date** | 2026-05-02 |
-| **End Date** | TBD |
-| **Orchestrator Approved** | analysis-phase yet to begin |
-| **Build Verified** | n/a (no implementation yet) |
-| **Test Verified** | n/a (no implementation yet) |
+| **End Date** | 2026-05-03 |
+| **Orchestrator Approved** | yes — 2026-05-03 |
+| **Build Verified** | yes (`dotnet build` 0 errors, 19 expected obsolete-warning breadcrumbs from S21 deprecations) |
+| **Test Verified** | yes (517 unit + 35 plain regression + 18 Docker-gated profile + 48 frontend = 618; pre-existing 6 Docker-gated PlannerInvariantViolation failures unchanged from pre-S21 master, separate carry-forward) |
 
 ## Entropy Scan Findings
 
@@ -793,6 +793,58 @@ All methods use the shared `DbConnectionFactory` pattern. `SELECT FOR UPDATE` en
 - **Migration runner timing** — runs at deployment time when API is offline (operational discipline). Not transactional vs. concurrent admin writes — that's an ops concern, not a code concern.
 
 Task decomposition closed. Ready for user approval before Step 2 (Delegate).
+
+## Implementation Commits
+
+Phases 1-5 ran in sequence per the task decomposition above; each phase included the Reviewer + Codex review cycles documented in their respective phase logs.
+
+| Phase | Commit | Tasks | Notes |
+|-------|--------|-------|-------|
+| Phase 1 | `fa676d6` | TASK-2101..2104 | Schema + model + event + segmentation extension. Worktree-isolated parallel execution. |
+| Phase 2 | `6db3499` | TASK-2105 | `LocalAgreementProfileRepository` with `SELECT FOR UPDATE` for ETag transactions. |
+| Phase 3 | `5eaca3b` | TASK-2106 + TASK-2107 | Migration runner + `ConfigEndpoints` + `ProfileAlignmentValidator`. Internal Reviewer + Codex high-risk override across cycle 1+2 (D6 outbox carry-forward + future-rejection + migrator-discard fixes). |
+| Phase 4 | `7982643` | TASK-2108 + TASK-2109 | PCS hydration + UX profile editor. Reviewer cycle 1 clean. |
+| Phase 5 | `2eaf7c3` | TASK-2110 | D11 18-scenario test matrix. Reviewer cycle 1 found tautological #15; cycle-2 fix extracted `ProfileAlignmentValidator.ValidateEffectiveFromTemporality` helper to pin production logic. |
+
+## Step 7a — External Codex on Full Diff (cycle 1 + 10 verify cycles, 2026-05-03)
+
+_Per WORKFLOW.md "high-risk Step 5a override" and the explicit S21 Phase-6 commitment, Step 7a ran `codex review --base 90ffa9b` against the full S21 diff after Phase 5 merge._
+
+### Cycle 1 — 3 BLOCKERs (2 P1 + 1 P2)
+
+- **C1 (P1)** — `LocalAgreementProfileRepository.SupersedeAndCreateAsync` closed predecessors at UTC `today` regardless of `newProfile.EffectiveFrom`. Backdated saves (allowed by D2; only future is rejected) produced overlapping windows for the (org, agreement, OkVersion) triple — historical reads, `GetActivationsInPeriodAsync` boundaries, and SLS export segments would have been wrong for the backdated period.
+- **C2 (P1)** — Empty-slot first-creation race. `AcquireLockAsync` cannot `SELECT ... FOR UPDATE` a non-existent row, so two concurrent `If-None-Match: *` requests both pass `ValidatePrecondition`. The partial-unique-index `uq_local_agreement_profile_active` rejects the loser with `PostgresException` SqlState 23505 — bubbled to the PUT handler as a raw 500 instead of the advertised 412 D2.1 contract.
+- **C3 (P2)** — `frontend/src/pages/config/ConfigManagement.tsx` `AGREEMENT_OPTIONS` hard-coded to `AC | HK | PROSA`, but the seed (`init.sql`) registers ACTIVE configs for `AC_RESEARCH` and `AC_TEACHING` as well. Admins on those orgs lost editor access after the S21 ConfigManagement rewrite.
+
+### Cycles 2-9 — Iterative Exploration (all reverted)
+
+A 9-cycle loop attempted to address a residual edge case that emerged from C1's fix: when `newProfile.EffectiveFrom <= predecessor.EffectiveFrom`, closing predecessor at `newProfile.EffectiveFrom - 1` produces `effective_to < effective_from` — an invalid history window. Each layered fix produced cascading regressions:
+
+- **Cycle 3 (`<=` temporal-monotonicity guard)** — broke the everyday in-place edit flow (frontend submits unchanged loaded `effective_from`).
+- **Cycle 6 (UPDATE-in-place for same-day)** — fixed the in-place flow but broke ETag/If-Match (profile_id stable across UPDATE → admins both pass `If-Match` → lost-update). Audit-action `MODIFIED` added without migration script for existing DBs.
+- **Cycle 8 (PrecedingProfileId nulling + GetCurrentOpenAsync re-fetch)** — fixed cycle 6's payload bugs but didn't address the underlying ETag mechanism issue.
+
+The architectural diagnosis (cycle 9): **ETag-via-profile_id + immutable history rows + close-then-insert do not compose for same-day re-saves.** Proper fix needs a row-version column (sibling to D2.2's ETag/If-Match propagation work) plus end-exclusive `effective_to` semantics (sibling to D6's transactional-outbox sub-sprint). Sized correctly for Phase-4 hardening, not for cycle-fix discipline.
+
+### Cycle 10 — Reverted to Cycle 1 Only, Verified Clean
+
+Cycles 3, 6, 8 reverted in commit `55a1aa8`. Cycle 4's frontend mapping for the cycle-3 error code also reverted (cycle 4 was companion polish to cycle 3). Cycle 10 Codex verify: **0 BLOCKERs, 0 WARNINGs**. Verbatim:
+
+> "I did not identify any new, actionable defects in the current changeset that would clearly break existing behavior or violate the documented contracts. The backend changes address the backdated supersession overlap and the empty-slot concurrency race, and the frontend change restores the missing agreement-code options."
+
+### Step 7a Carry-Forward (Phase-4)
+
+`newProfile.EffectiveFrom <= predecessor.EffectiveFrom` produces an invalid-range predecessor row. Recorded in:
+
+- **ADR-017** "For Phase 4 ROADMAP" section — D2 close-then-insert window math.
+- **MEMORY.md** carry-forward list as sibling to D2.2 (ETag propagation) and D6 (transactional outbox) — those three concerns share the row-version + end-exclusive-effective_to redesign.
+
+## Sprint Close Summary
+
+- **Implementation phases:** 5 (Phase 1-5), 10 tasks (TASK-2101..2110).
+- **Review cycles:** Phase 3 internal Reviewer + Codex cycle 1+2; Phase 5 internal Reviewer cycle 1+2; Step 7a external Codex cycle 1 + cycles 2-9 (iterative exploration, all reverted) + cycle 10 (verified clean).
+- **Final test counts:** 517 unit (was 513 pre-S21; +4 from D11 unit tests), 35 plain regression (was 32 pre-S21; +3 from cycle-2 fix #15), 18 Docker-gated profile (was 0 pre-S21; +18 from D11 + Step 7a), 48 frontend (was 41 pre-S21; +7 from MondayDatePicker + ProfileEditor). Total **618 passing** (was 603).
+- **Carry-forwards generated:** 2 from Phase 3 (D2.2 ETag propagation, D6 transactional outbox), 3 from Phase 5 (WebApplicationFactory hand-roll drift, reflection-on-private tests, ProfileTestSchema DDL drift), 1 from Step 7a (D2 close-then-insert window math). All recorded in MEMORY.md.
 
 ## References
 
