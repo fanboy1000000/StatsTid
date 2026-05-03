@@ -444,7 +444,7 @@ _Drafted from ADR-018 + Migration Plan; user-approval pending. All tasks are `no
 | TASK | Domain / Agent | Phase | Title |
 |------|----------------|-------|-------|
 | TASK-2201 | Data Model | 1 | Schema migration: `outbox_events` + `schema_migrations` ledger + row-version on profiles + end-exclusive shift + audit-action MODIFIED |
-| TASK-2202 | Data Model | 1 | `IEventStore.EnqueueAsync` interface overload (additive) |
+| TASK-2202 | Data Model (extended into Infrastructure) | 1 | New `IOutboxEnqueue` interface in `StatsTid.Infrastructure.Outbox` (cycle-6 design — `IEventStore` in SharedKernel stays unchanged to preserve post-S19 assembly-graph purity) |
 | TASK-2203 | Data Model (extended into Infrastructure) | 2 | `PostgresEventStore.EnqueueAsync` implementation + `OutboxPublisher` BackgroundService + `PublisherCorrelationException` |
 | TASK-2204 | Data Model (extended into Infrastructure) | 2 | `LocalAgreementProfileRepository` row-version + UPDATE-in-place + end-exclusive predicates + `InvalidProfileSupersessionException` re-introduced |
 | TASK-2205 | Backend API (cross-domain authorized) | 3 | `ConfigEndpoints` PUT rewrite — version-based If-Match + MODIFIED audit + EnqueueAsync |
@@ -478,26 +478,53 @@ _Drafted from ADR-018 + Migration Plan; user-approval pending. All tasks are `no
 
 **Cross-domain dependencies**: none. Subsequent tasks consume the schema.
 
-#### TASK-2202 — `IEventStore.EnqueueAsync` overload
-**Agent**: Data Model
+#### TASK-2202 — `IOutboxEnqueue` interface (cycle-6 amended)
+**Agent**: Data Model (extended scope into `src/Infrastructure/`; cross-domain authorized — interface lives with the Infrastructure assembly per ADR-018 D3 cycle-6 split)
 **Phase**: 1
 **Files (write)**:
-- `src/SharedKernel/StatsTid.SharedKernel/Events/IEventStore.cs` — add `Task EnqueueAsync(NpgsqlConnection conn, NpgsqlTransaction tx, string streamId, IDomainEvent @event, CancellationToken ct = default);`.
+- `src/Infrastructure/StatsTid.Infrastructure/Outbox/IOutboxEnqueue.cs` (new) — single-method interface:
+  ```csharp
+  namespace StatsTid.Infrastructure.Outbox;
 
-**Scope**: Interface-only addition. Existing `AppendAsync` signature unchanged.
+  public interface IOutboxEnqueue
+  {
+      Task EnqueueAsync(
+          NpgsqlConnection conn,
+          NpgsqlTransaction tx,
+          string streamId,
+          IDomainEvent @event,
+          CancellationToken ct = default);
+  }
+  ```
 
-**Validation**: `dotnet build` clean; existing test suite passes (no behavioral change yet).
+**Files NOT touched**:
+- `src/SharedKernel/StatsTid.SharedKernel/Interfaces/IEventStore.cs` — STAYS UNCHANGED (cycle-6 amendment per ADR-018 D3). No new methods, no new package references. Adding `Npgsql` to `StatsTid.SharedKernel.csproj` would transitively leak into `StatsTid.RuleEngine.Api` via its `<ProjectReference>` to SharedKernel, regressing the post-S19 `b4fc670` Npgsql-free assembly-graph invariant.
+- `StatsTid.SharedKernel.csproj` — NO new package references.
 
-**Cross-domain dependencies**: TASK-2203 implements; TASK-2206 consumes.
+**Scope**: Interface-only addition in Infrastructure. Implementation lives in TASK-2203 (`PostgresEventStore` implements both `IEventStore` and `IOutboxEnqueue`).
 
-#### TASK-2203 — Publisher implementation + new exception
+**Validation**:
+- `dotnet build` clean.
+- `git status` shows ONLY the new `IOutboxEnqueue.cs` file modified; SharedKernel and its csproj are untouched.
+- Verify no `using Npgsql;` was added to any SharedKernel file.
+
+**Cross-domain dependencies**: TASK-2203 implements (`PostgresEventStore : IEventStore, IOutboxEnqueue` + dual-DI registration); TASK-2206 consumes (state-change sites inject `IOutboxEnqueue`, NOT `IEventStore`).
+
+#### TASK-2203 — Publisher implementation + new exception (cycle-6 amended)
 **Agent**: Data Model (extended scope into `src/Infrastructure/`; cross-domain authorized — repositories adjacent to events per S20/S21 precedent)
 **Phase**: 2
 **Files (write)**:
-- `src/Infrastructure/StatsTid.Infrastructure/PostgresEventStore.cs` — implement `EnqueueAsync` writing to `outbox_events` using caller's conn+tx. Existing `AppendAsync` becomes the publisher-only entry point.
-- `src/Infrastructure/StatsTid.Infrastructure/Outbox/OutboxPublisher.cs` (new) — `BackgroundService`-implementing publisher per ADR-018 D2/D4. ReadCommitted tx, event_id correlation, per-stream FIFO, parallel cross-stream up to default 4.
+- `src/Infrastructure/StatsTid.Infrastructure/PostgresEventStore.cs` — implement BOTH interfaces: `class PostgresEventStore : IEventStore, IOutboxEnqueue`. The new `EnqueueAsync` (from `IOutboxEnqueue`) writes to `outbox_events` using caller's conn+tx; the existing `AppendAsync` (from `IEventStore`) becomes the publisher-only entry point.
+- `src/Infrastructure/StatsTid.Infrastructure/Outbox/OutboxPublisher.cs` (new) — `BackgroundService`-implementing publisher per ADR-018 D2/D4. ReadCommitted tx, event_id correlation, per-stream FIFO, parallel cross-stream up to default 4. Injects `IEventStore` (publisher-side path is the canonical `AppendAsync`).
 - `src/Infrastructure/StatsTid.Infrastructure/Outbox/PublisherCorrelationException.cs` (new) — exception per ADR-018 D4.
-- `src/Backend/StatsTid.Backend.Api/Program.cs` + each service's `Program.cs` (`Payroll/Program.cs`, `External/Program.cs`) — register `OutboxPublisher` via `builder.Services.AddHostedService<OutboxPublisher>()`. Configuration injects the per-service `service_id` constant.
+- `src/Backend/StatsTid.Backend.Api/Program.cs` + each service's `Program.cs` (`Payroll/Program.cs`, `External/Program.cs`) — DI registration per ADR-018 D3 dual-binding pattern:
+  ```csharp
+  builder.Services.AddSingleton<PostgresEventStore>();
+  builder.Services.AddSingleton<IEventStore>(sp => sp.GetRequiredService<PostgresEventStore>());
+  builder.Services.AddSingleton<IOutboxEnqueue>(sp => sp.GetRequiredService<PostgresEventStore>());
+  builder.Services.AddHostedService<OutboxPublisher>();
+  ```
+  Configuration injects the per-service `service_id` constant. Orchestrator's `Program.cs` does NOT register `OutboxPublisher` per ADR-018 D6 (Orchestrator MAY NOT write any stream).
 
 **Scope**: Implementation of the publisher contract + per-service registration. Idempotency tested via D12 scenarios #1-5.
 
@@ -548,17 +575,23 @@ _Drafted from ADR-018 + Migration Plan; user-approval pending. All tasks are `no
 - `src/Integrations/StatsTid.Integrations.Payroll/Services/PeriodCalculationService.cs` + `PayrollExportService.cs`
 - `src/Integrations/StatsTid.Integrations.External/Services/IntegrationDeliveryService.cs`
 
-**Scope**: Mechanical swap. Each call site changes from:
+**Scope**: Mechanical swap (cycle-6 amended for the split-interface design). Each call site changes from:
 ```csharp
-await tx.CommitAsync(ct);
-await eventStore.AppendAsync(streamId, @event, ct);
+async (..., IEventStore eventStore, ...) => {
+    await tx.CommitAsync(ct);
+    await eventStore.AppendAsync(streamId, @event, ct);
+}
 ```
 to:
 ```csharp
-await eventStore.EnqueueAsync(conn, tx, streamId, @event, ct);
-await tx.CommitAsync(ct);
+async (..., IOutboxEnqueue outbox, ...) => {
+    await outbox.EnqueueAsync(conn, tx, streamId, @event, ct);
+    await tx.CommitAsync(ct);
+}
 ```
-No behavioral change beyond the path of arrival; downstream consumers see the same event shapes.
+The DI parameter type changes from `IEventStore` to `IOutboxEnqueue`; the call site's local variable name shifts from `eventStore` to `outbox` for readability. No behavioral change beyond the path of arrival; downstream consumers see the same event shapes.
+
+**Note**: any state-change site that reads events (calls `ReadStreamAsync` or `ReadAllAsync`) keeps its `IEventStore` injection — `IOutboxEnqueue` only covers the write path. State-change sites that BOTH read and write events inject both interfaces (the same `PostgresEventStore` instance behind both DI bindings per D3).
 
 **Note**: `ConfigEndpoints.cs` is in TASK-2205, not here. TASK-2206 explicitly excludes it.
 

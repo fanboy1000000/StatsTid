@@ -1,6 +1,16 @@
 -- StatsTid Event Store Schema
 -- Sprint 2 initialization
 
+-- =========================================================================
+-- S22 / ADR-018 — schema_migrations ledger (must precede any DO $$ block
+-- that depends on it; cycle-3 review N-3 ordering invariant).
+-- =========================================================================
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    migration_id  TEXT         PRIMARY KEY,
+    applied_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    notes         TEXT         NULL
+);
+
 -- Event streams table
 CREATE TABLE IF NOT EXISTS event_streams (
     stream_id       TEXT        PRIMARY KEY,
@@ -23,6 +33,42 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_events_stream_id ON events(stream_id);
 CREATE INDEX IF NOT EXISTS idx_events_event_type ON events(event_type);
 CREATE INDEX IF NOT EXISTS idx_events_occurred_at ON events(occurred_at);
+
+-- =========================================================================
+-- S22 / ADR-018 — outbox_events: transactional outbox for state-change +
+-- event-store atomicity. State-change endpoints INSERT here inside the
+-- caller's tx via IEventStore.EnqueueAsync; OutboxPublisher BackgroundService
+-- drains rows in service-id-scoped FIFO order to the canonical event store.
+-- =========================================================================
+CREATE TABLE IF NOT EXISTS outbox_events (
+    outbox_id        BIGSERIAL    PRIMARY KEY,
+    service_id       TEXT         NOT NULL,
+    stream_id        TEXT         NOT NULL,
+    event_id         UUID         NOT NULL UNIQUE,
+    event_type       TEXT         NOT NULL,
+    event_payload    JSONB        NOT NULL,
+    correlation_id   TEXT         NULL,
+    actor_id         TEXT         NULL,
+    actor_role       TEXT         NULL,
+    created_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    published_at     TIMESTAMPTZ  NULL,
+    stream_version   INT          NULL,
+    attempts         INT          NOT NULL DEFAULT 0,
+    last_error       TEXT         NULL,
+    last_attempt_at  TIMESTAMPTZ  NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_outbox_unpublished
+    ON outbox_events (service_id, outbox_id)
+    WHERE published_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_outbox_attempts
+    ON outbox_events (service_id, attempts, last_attempt_at)
+    WHERE published_at IS NULL AND attempts > 0;
+
+CREATE INDEX IF NOT EXISTS idx_outbox_stream
+    ON outbox_events (stream_id, outbox_id)
+    WHERE published_at IS NULL;
 
 -- Outbox messages for guaranteed delivery pattern
 CREATE TABLE IF NOT EXISTS outbox_messages (
@@ -1220,3 +1266,40 @@ CREATE INDEX IF NOT EXISTS idx_segment_manifests_employee_period
 
 CREATE INDEX IF NOT EXISTS idx_segment_manifests_boundary_cause
     ON segment_manifests USING GIN (boundary_cause_summary);
+
+-- =========================================================================
+-- S22 / ADR-018 — one-shot guarded migration for D7 + D8 + D9.
+--   D7: row-version column on local_agreement_profiles
+--   D8: convert end-inclusive effective_to to end-exclusive (+1 day shift)
+--   D9: extend audit-action enum to include MODIFIED
+-- Guarded by schema_migrations ledger so re-runs of init.sql are idempotent.
+-- All referenced tables exist by this point in the file.
+-- =========================================================================
+DO $$
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s22-d7-d8-d9', 'ADR-018: row-version + end-exclusive + MODIFIED audit action')
+    ON CONFLICT (migration_id) DO NOTHING;
+
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+
+    -- D7: row-version column. Existing rows get DEFAULT 1 automatically.
+    ALTER TABLE local_agreement_profiles
+    ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 1;
+
+    -- D8: convert end-inclusive effective_to to end-exclusive.
+    UPDATE local_agreement_profiles
+    SET effective_to = effective_to + INTERVAL '1 day'
+    WHERE effective_to IS NOT NULL;
+
+    -- D9: extend audit-action enum to MODIFIED.
+    ALTER TABLE local_agreement_profile_audit
+    DROP CONSTRAINT IF EXISTS local_agreement_profile_audit_action_check;
+
+    ALTER TABLE local_agreement_profile_audit
+    ADD CONSTRAINT local_agreement_profile_audit_action_check
+    CHECK (action IN ('CREATED', 'MODIFIED', 'SUPERSEDED', 'DEACTIVATED', 'MIGRATED_FROM_LEGACY'));
+END
+$$;

@@ -90,18 +90,40 @@ Three options were enumerated at Step 0b cycle 1:
 
 Cross-service event ordering: per-stream FIFO is preserved within a single service because stream_ids are service-local in practice (e.g., `local-agreement-profile-{org}-{agreement}-{ok_version}` is only written by Backend.Api). Cross-service streams would require a global publisher, but no such streams exist today; D6 enforces the assumption.
 
-### D3 — `IEventStore` in-tx overload (Q3)
+### D3 — Split: `IEventStore` (SharedKernel) + `IOutboxEnqueue` (Infrastructure) (Q3)
 
-The state-change-emitting `IEventStore.AppendAsync` gains an in-tx overload:
+**Decision (cycle-6 amendment, 2026-05-03)**: split into two interfaces. The cycle-1 framing of "single interface, two overloads on `IEventStore`" was correct for the protocol but wrong for the assembly graph: the in-tx overload's parameter types (`NpgsqlConnection`, `NpgsqlTransaction`) live in the `Npgsql` package, and `IEventStore` is in `StatsTid.SharedKernel.Interfaces`. Adding the overload to `IEventStore` would require adding `<PackageReference Include="Npgsql" />` to `StatsTid.SharedKernel.csproj`, which transitively reaches `StatsTid.RuleEngine.Api` (via its existing `<ProjectReference>` to SharedKernel). The post-S19 `b4fc670` cleanup deliberately extracted `StatsTid.Auth` so RuleEngine.Api would reference SharedKernel + Auth only and be Npgsql-free; the cycle-1 framing regresses that.
+
+The corrected design:
 
 ```csharp
+// StatsTid.SharedKernel.Interfaces — UNCHANGED. No Npgsql types. Used by the
+// publisher (post-S22) and historical readers. RuleEngine.Api transitively
+// references this; the assembly graph stays Npgsql-free.
 public interface IEventStore
 {
-    // Existing self-contained overload — used by the publisher loop only post-S22.
     Task AppendAsync(string streamId, IDomainEvent @event, CancellationToken ct = default);
+    Task<IReadOnlyList<IDomainEvent>> ReadStreamAsync(string streamId, CancellationToken ct = default);
+    Task<IReadOnlyList<IDomainEvent>> ReadAllAsync(int fromPosition = 0, int maxCount = 1000, CancellationToken ct = default);
+}
+```
 
-    // New in-tx overload — used by state-change sites; writes to outbox_events
-    // within the caller's transaction.
+```csharp
+// StatsTid.Infrastructure.Outbox — NEW. Lives in Infrastructure (which already
+// references Npgsql). Single method; consumed only by state-change sites that
+// already reference Infrastructure (Backend.Api, Payroll, External). RuleEngine
+// does NOT reference Infrastructure (post-S19 b4fc670), so it never sees this
+// interface.
+namespace StatsTid.Infrastructure.Outbox;
+
+public interface IOutboxEnqueue
+{
+    /// <summary>
+    /// Enqueues an event into <c>outbox_events</c> within the caller-supplied
+    /// transaction. The caller commits or rolls back; outbox visibility follows
+    /// tx commit/rollback. A separate per-service <c>OutboxPublisher</c> drains
+    /// outbox_events to the canonical event store with at-least-once semantics.
+    /// </summary>
     Task EnqueueAsync(
         NpgsqlConnection conn,
         NpgsqlTransaction tx,
@@ -111,20 +133,29 @@ public interface IEventStore
 }
 ```
 
-Naming: `EnqueueAsync` (not `AppendAsync`) for the in-tx overload to make the call-site difference visible — state-change sites are NOT writing to the canonical event store directly; they're enqueuing for the publisher to forward.
+The single concrete implementation `PostgresEventStore` (in `StatsTid.Infrastructure`) implements **both** interfaces — the read/append surface for publishers and historical readers (`IEventStore`) plus the in-tx enqueue surface for state-change sites (`IOutboxEnqueue`). DI registers it under both interface contracts:
 
-State-change sites swap one line:
+```csharp
+builder.Services.AddSingleton<PostgresEventStore>();
+builder.Services.AddSingleton<IEventStore>(sp => sp.GetRequiredService<PostgresEventStore>());
+builder.Services.AddSingleton<IOutboxEnqueue>(sp => sp.GetRequiredService<PostgresEventStore>());
+```
+
+State-change sites inject `IOutboxEnqueue` (NOT `IEventStore`):
+
 ```csharp
 // Pre-S22 (post-commit, residual crash window):
 await tx.CommitAsync(ct);
-await eventStore.AppendAsync(streamId, @event, ct);
+await eventStore.AppendAsync(streamId, @event, ct);  // IEventStore
 
 // Post-S22 (in-tx, atomic with state-change):
-await eventStore.EnqueueAsync(conn, tx, streamId, @event, ct);
+await outbox.EnqueueAsync(conn, tx, streamId, @event, ct);  // IOutboxEnqueue
 await tx.CommitAsync(ct);
 ```
 
-Q3's "evolution to `IEventEmitter`" alternative was rejected — adding a new interface keeps the publisher's post-S22 caller surface stable (the publisher still calls `AppendAsync`) but doubles the type taxonomy admin code must navigate; a single `IEventStore` with two overloads is simpler.
+The cycle-6 split also resurrects the original Q3 alternative (a) — `IOutboxEnqueue` as a separate interface. The Q3 cycle-1 rationale ("doubles the type taxonomy admin code must navigate") is correct in narrow terms but underweighted the architectural cost; cycle-6's amendment finds the assembly-graph protection more valuable than the type-taxonomy unification. The `IEventEmitter` alternative (Q3 option (c)) remains rejected — it adds a third name without further benefit over (a).
+
+**Naming**: `EnqueueAsync` (not `AppendAsync`) preserved on `IOutboxEnqueue` to make the call-site semantic visible — state-change sites are NOT writing to the canonical event store directly; they're enqueuing for the publisher to forward.
 
 ### D4 — At-least-once via publisher-time version assignment (Q5)
 
@@ -437,11 +468,13 @@ The "pre-S22 SegmentManifest replays byte-identical" scenario (cycle 1 Reviewer 
 
 ## Implications
 
-### For SharedKernel.Events
-- `IEventStore` gains an `EnqueueAsync` overload. Existing callers that use `AppendAsync` directly become publisher-only; state-change sites switch to `EnqueueAsync`.
+### For SharedKernel
+- `IEventStore` is **unchanged** (cycle-6 amendment). No new methods; no new package references. SharedKernel stays Npgsql-free, preserving the post-S19 `b4fc670` assembly-graph invariant that keeps `StatsTid.RuleEngine.Api` Npgsql-free transitively.
 
 ### For Infrastructure
-- `PostgresEventStore` implements both overloads. The in-tx overload writes to `outbox_events`; the self-contained overload writes to `events` + `event_streams` (publisher-only).
+- New interface `StatsTid.Infrastructure.Outbox.IOutboxEnqueue` with single `EnqueueAsync(NpgsqlConnection, NpgsqlTransaction, ...)` method.
+- `PostgresEventStore` implements **both** `IEventStore` (existing) and `IOutboxEnqueue` (new). The in-tx `EnqueueAsync` writes to `outbox_events`; the self-contained `AppendAsync` writes to `events` + `event_streams` (publisher-only post-S22).
+- DI registration: register the concrete `PostgresEventStore` once, then expose it under both interface contracts (see D3).
 - New `OutboxPublisher : BackgroundService` per service. Polls its `service_id` partition; publishes in per-stream FIFO order with at-least-once semantics.
 - `LocalAgreementProfileRepository` gains:
   - `Version` field on the model + read mappings.
@@ -461,7 +494,20 @@ The "pre-S22 SegmentManifest replays byte-identical" scenario (cycle 1 Reviewer 
   - Call `SupersedeAndCreateAsync` returning `(profileId, newVersion)`.
   - Set `ETag: "<newVersion>"` on response.
   - Audit-action `MODIFIED` for in-place edits.
-- All 12 state-change-emitting endpoint sites (across `ConfigEndpoints`, `AdminEndpoints`, `AgreementConfigEndpoints`, `PositionOverrideEndpoints`, `WageTypeMappingEndpoints`, `ApprovalEndpoints`, `OvertimeEndpoints`, `ComplianceEndpoints`, `SkemaEndpoints`, `TimerEndpoints`, `TimeEndpoints`, plus `Payroll` + `External` integrations) swap one line: `tx.Commit + AppendAsync` → `EnqueueAsync(conn, tx, ...) + tx.Commit`.
+- All 12 state-change-emitting endpoint sites (across `ConfigEndpoints`, `AdminEndpoints`, `AgreementConfigEndpoints`, `PositionOverrideEndpoints`, `WageTypeMappingEndpoints`, `ApprovalEndpoints`, `OvertimeEndpoints`, `ComplianceEndpoints`, `SkemaEndpoints`, `TimerEndpoints`, `TimeEndpoints`, plus `Payroll` + `External` integrations) swap their event-emit line. They also switch DI parameter from `IEventStore` to `IOutboxEnqueue`:
+```csharp
+// Pre-S22:
+async (..., IEventStore eventStore, ...) => {
+    await tx.CommitAsync(ct);
+    await eventStore.AppendAsync(streamId, @event, ct);
+}
+
+// Post-S22:
+async (..., IOutboxEnqueue outbox, ...) => {
+    await outbox.EnqueueAsync(conn, tx, streamId, @event, ct);
+    await tx.CommitAsync(ct);
+}
+```
 
 ### For Frontend
 - `useConfig.ts` ETag handling: parse `ETag: "<number>"` header on GET responses; send `If-Match: "<number>"` on PUT. Per HTTP/RFC 7232, ETag values are quoted opaque strings — even when the value happens to be numeric, the response header is literally `ETag: "5"` (quotes included). The frontend MUST strip quotes before treating the value numerically (cycle-2 review C3 fix):
@@ -500,7 +546,7 @@ For each open question that produced a closed decision, the rejected options:
 
 - **Q1 (outbox shape):** separate event-store DB rejected — requires 2-PC across stores; over-engineered.
 - **Q2 (publisher topology):** option (a) single in-process publisher rejected — Backend.Api can't deserialize cross-service event types. Option (c) dedicated worker service rejected — operational footprint not justified pre-launch.
-- **Q3 (`IEventStore` evolution):** option (a) `IOutboxEnqueue` rejected — adds a new interface without changing semantics. Option (c) `IEventEmitter` rejected — same reason; type taxonomy doubles.
+- **Q3 (`IEventStore` evolution):** option (a) `IOutboxEnqueue` was the cycle-6 chosen path (cycle-1 rejected it citing "doubles the type taxonomy"; cycle-6 reversed that on the assembly-graph evidence — `IEventStore` in SharedKernel cannot take Npgsql-typed parameters without leaking Npgsql to RuleEngine.Api). Option (c) `IEventEmitter` remains rejected — adds a third name without further benefit over (a). Option (b) "single interface, two overloads on `IEventStore`" rejected for the assembly-graph reason recorded in D3.
 - **Q5 (at-least-once idempotency):** option (a) outbox row carries `stream_version` at enqueue rejected — reproduces S21 cycle-2 MVCC snapshot conflict. Option (c) per-stream sequencer table rejected — mechanically equivalent to (b) without behavior gain.
 - **Q7 (row-version bump):** trigger-based bump rejected — invisible from C# code, hard to assert correctly in tests, obscures the optimistic-concurrency contract. PostgreSQL `xmin` rejected — opaque, version-dependent, changes on VACUUM in some configurations.
 - **Q9 (in-place routing):** explicit `EditMode.InPlace` / `EditMode.Supersede` parameter on the repo rejected — the repo can detect from `newProfile.EffectiveFrom` cleanly; explicit mode adds caller burden without disambiguation gain (caller would just compute the same condition).
@@ -550,6 +596,21 @@ ADR-018 now fully ACCEPTED. No further review cycles needed before deliverables 
 ### Cycle 5 (2026-05-03)
 
 External Codex re-verify on cycle-4 fixes: 0 BLOCKERs. 1 P2 WARNING — internal inconsistency between D7's unquoted `If-Match: <version>` framing and the cycle-2 frontend section's correct quoted `If-Match: "<version>"` per RFC 7232. Mechanically fixed (D7 prose updated to specify quoted ETag throughout, with cross-reference to the frontend translation helpers). No new BLOCKERs. ADR-018 closed at cycle 5 within the cycle-cap-discipline boundary (4 BLOCKER-fix cycles total: 1 cycle of original BLOCKERs + 1 cycle 4 of Codex P1 fix + 0 BLOCKERs in cycle 5). Internal Reviewer cycle-3 approval still stands (cycle-4 + cycle-5 changes did not alter architectural shape).
+
+### Cycle 6 (2026-05-03) — assembly-graph BLOCKER from TASK-2202 dispatch
+
+The Phase-1 dispatch of TASK-2202 (`IEventStore.EnqueueAsync` overload) surfaced an architectural concern that all five prior review cycles missed: adding `NpgsqlConnection` / `NpgsqlTransaction` parameters to `IEventStore` (in `StatsTid.SharedKernel.Interfaces`) requires `<PackageReference Include="Npgsql" />` on `StatsTid.SharedKernel.csproj`, which transitively reaches `StatsTid.RuleEngine.Api` via its `<ProjectReference>` to SharedKernel. The post-S19 `b4fc670` cleanup deliberately extracted `StatsTid.Auth` to keep RuleEngine.Api Npgsql-free; the cycle-1-through-5 D3 framing regresses that.
+
+Cycle-6 fix:
+- D3 amended from "single interface, two overloads on `IEventStore`" to "split: `IEventStore` (SharedKernel, unchanged) + `IOutboxEnqueue` (Infrastructure, new)."
+- `PostgresEventStore` implements both interfaces; DI registers the concrete once and exposes it under both contracts.
+- State-change sites inject `IOutboxEnqueue` (NOT `IEventStore`).
+- Q3 alternative (a) — originally rejected as "doubles type taxonomy" — promoted to chosen path with cycle-6 rationale captured in "Alternatives Rejected".
+- Implications updated: SharedKernel "unchanged"; Infrastructure gets the new interface + dual-impl + dual-DI pattern.
+
+The TASK-2202 worktree (`agent-a4d1870e0faabe412`) is discarded; TASK-2202 will be re-dispatched against the cycle-6 design before Phase 1 completes. TASK-2201 (schema migration) is unaffected by the interface change and stays as-delivered.
+
+Cycle-6 lesson: **agent dispatch is a real review surface.** Five rounds of pre-implementation review (Reviewer + Codex × 2 + verify cycles) did not catch this because the architectural concern is at the package-graph level — neither lens reads .csproj files unprompted. Step 0a's "pattern compliance spot-check" notionally covers this (it greps for `using StatsTid.RuleEngine` from forbidden assemblies) but doesn't audit transitive package references. The ADR's first agent dispatch caught it the way agent reviews are supposed to: by trying to implement and discovering the cost. No prior-cycle BLOCKER was missed-by-laxness — just missed-by-abstraction. Recorded as a feedback memory: pre-implementation reviews of any code that adds package references should explicitly audit transitive impact.
 
 ## References
 
