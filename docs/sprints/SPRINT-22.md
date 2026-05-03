@@ -268,6 +268,347 @@ _Cycle 1 completed 2026-05-03. Trigger: MANDATORY (P1 architectural integrity + 
 
 Step 0b cycle 1 closed within the 2-cycle cap. 0 BLOCKERs remain in the post-split plan; ADR-018 drafting can begin.
 
+## Migration Plan (Deliverable #2, 2026-05-03)
+
+Per ADR-018, migration runs in two coordinated phases: schema migration (one transaction), code migration (sequential commits). The schema migration is gated by `schema_migrations` ledger so re-runs of `init.sql` are no-ops.
+
+### Migration sequence
+
+The deployment order matters because the publisher's `IEventStore.EnqueueAsync` overload depends on the `outbox_events` table existing. Production rollout (when applicable) follows this sequence; for the pre-production system in S22, all changes ship in one merge.
+
+1. **Schema migration** — single DDL block in `init.sql`, idempotent on re-run.
+2. **`IEventStore` interface evolution** — add `EnqueueAsync` overload (additive; no callers break).
+3. **`PostgresEventStore` implementation** — implement `EnqueueAsync` against the new outbox table; existing `AppendAsync` becomes publisher-only post-S22.
+4. **`OutboxPublisher` BackgroundService** — per-service hosted service, registered in each service's `Program.cs`.
+5. **`LocalAgreementProfileRepository` row-version + UPDATE-in-place** — repository surface change; profile_id-as-ETag path retired.
+6. **State-change site migration** — ~12 files swap `tx.Commit + AppendAsync` to `EnqueueAsync(conn, tx, ...) + tx.Commit`. Mechanical; touches Backend.Api endpoints + Payroll + External.
+7. **`ConfigEndpoints` PUT rewrite** — version-based If-Match handling, MODIFIED audit action, EnqueueAsync.
+8. **Frontend ETag helpers** — `parseVersionFromETag` + `formatVersionAsIfMatch` + `useConfig.ts` wiring.
+9. **Test matrix + fixture updates** — D12's 16 new tests + ~10 call-site destructures across 4 existing fixtures.
+
+### Schema migration (Step 1)
+
+```sql
+-- =========================================================================
+-- S22 / ADR-018 schema migration
+--
+-- Order of operations within init.sql:
+--   1. schema_migrations ledger table (CREATE IF NOT EXISTS, idempotent self-creation)
+--   2. outbox_events table + indexes (CREATE IF NOT EXISTS, idempotent)
+--   3. DO $$ block for the one-shot migration (guarded by ledger)
+--      a. ALTER TABLE local_agreement_profiles ADD COLUMN version
+--      b. UPDATE local_agreement_profiles SET effective_to = effective_to + INTERVAL '1 day'
+--      c. ALTER TABLE local_agreement_profile_audit DROP+ADD CHECK CONSTRAINT
+-- =========================================================================
+
+-- Ledger first (cycle-3 review N-3 ordering invariant).
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    migration_id  TEXT         PRIMARY KEY,
+    applied_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    notes         TEXT         NULL
+);
+
+-- Outbox table.
+CREATE TABLE IF NOT EXISTS outbox_events (
+    outbox_id        BIGSERIAL    PRIMARY KEY,
+    service_id       TEXT         NOT NULL,
+    stream_id        TEXT         NOT NULL,
+    event_id         UUID         NOT NULL UNIQUE,
+    event_type       TEXT         NOT NULL,
+    event_payload    JSONB        NOT NULL,
+    correlation_id   TEXT         NULL,
+    actor_id         TEXT         NULL,
+    actor_role       TEXT         NULL,
+    created_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    published_at     TIMESTAMPTZ  NULL,
+    stream_version   INT          NULL,
+    attempts         INT          NOT NULL DEFAULT 0,
+    last_error       TEXT         NULL,
+    last_attempt_at  TIMESTAMPTZ  NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_outbox_unpublished
+    ON outbox_events (service_id, outbox_id)
+    WHERE published_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_outbox_attempts
+    ON outbox_events (service_id, attempts, last_attempt_at)
+    WHERE published_at IS NULL AND attempts > 0;
+
+CREATE INDEX IF NOT EXISTS idx_outbox_stream
+    ON outbox_events (stream_id, outbox_id)
+    WHERE published_at IS NULL;
+
+-- One-shot guarded migration for D7 + D8 + D9.
+DO $$
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s22-d7-d8-d9', 'ADR-018: row-version + end-exclusive + MODIFIED audit action')
+    ON CONFLICT (migration_id) DO NOTHING;
+
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+
+    -- D7: row-version column. Existing rows get DEFAULT 1 automatically.
+    ALTER TABLE local_agreement_profiles
+    ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 1;
+
+    -- D8: convert end-inclusive effective_to to end-exclusive.
+    UPDATE local_agreement_profiles
+    SET effective_to = effective_to + INTERVAL '1 day'
+    WHERE effective_to IS NOT NULL;
+
+    -- D9: extend audit-action enum to MODIFIED.
+    ALTER TABLE local_agreement_profile_audit
+    DROP CONSTRAINT IF EXISTS local_agreement_profile_audit_action_check;
+
+    ALTER TABLE local_agreement_profile_audit
+    ADD CONSTRAINT local_agreement_profile_audit_action_check
+    CHECK (action IN ('CREATED', 'MODIFIED', 'SUPERSEDED', 'DEACTIVATED', 'MIGRATED_FROM_LEGACY'));
+END
+$$;
+```
+
+### Code migration sequencing (Steps 2-8)
+
+| Step | File(s) | Change | Dependency |
+|------|---------|--------|------------|
+| 2 | `src/SharedKernel/StatsTid.SharedKernel/Events/IEventStore.cs` | Add `Task EnqueueAsync(NpgsqlConnection conn, NpgsqlTransaction tx, string streamId, IDomainEvent @event, CancellationToken ct = default);` overload. | none |
+| 3 | `src/Infrastructure/StatsTid.Infrastructure/PostgresEventStore.cs` | Implement `EnqueueAsync` — INSERT into `outbox_events` using caller's conn+tx. Generate `event_id = Guid.NewGuid()` at enqueue. | Step 1 (outbox_events table) + Step 2 (interface) |
+| 4 | `src/Infrastructure/StatsTid.Infrastructure/Outbox/OutboxPublisher.cs` (new) | `BackgroundService`-implementing publisher. Polls `WHERE service_id = @ownServiceId AND published_at IS NULL`. ReadCommitted tx. event_id correlation on 23505. Per-service registration in each service's Program.cs (`builder.Services.AddHostedService<OutboxPublisher>()`). | Steps 1-3 |
+| 4b | `src/Infrastructure/StatsTid.Infrastructure/Outbox/PublisherCorrelationException.cs` (new) | New exception type per ADR-018 D4. | Step 4 |
+| 5a | `src/SharedKernel/StatsTid.SharedKernel/Models/LocalAgreementProfile.cs` | Add `Version` (long) init-only property. Read mappings updated in repository. | Step 1 (schema column) |
+| 5b | `src/Infrastructure/StatsTid.Infrastructure/LocalAgreementProfileRepository.cs` | `AcquireLockAsync` returns `(Guid ProfileId, long Version, DateOnly EffectiveFrom)?`. `SupersedeAndCreateAsync` returns `(Guid ProfileId, long Version)`. New private `UpdateInPlaceAsync` for same-day routing. End-exclusive predicate updates per D10 (`>=` → `>` in `GetActivationsInPeriodAsync`). `OptimisticConcurrencyException` reshaped to carry `expectedVersion`/`actualVersion` instead of profile_ids. `InvalidProfileSupersessionException` re-introduced. | Step 5a |
+| 6 | 12 state-change-emitting endpoint sites | Mechanical swap: `await tx.CommitAsync(ct); await eventStore.AppendAsync(streamId, @event, ct);` → `await eventStore.EnqueueAsync(conn, tx, streamId, @event, ct); await tx.CommitAsync(ct);`. Files: `ConfigEndpoints.cs` (also Step 7), `AdminEndpoints.cs`, `AgreementConfigEndpoints.cs`, `PositionOverrideEndpoints.cs`, `WageTypeMappingEndpoints.cs`, `ApprovalEndpoints.cs`, `OvertimeEndpoints.cs`, `ComplianceEndpoints.cs`, `SkemaEndpoints.cs`, `TimerEndpoints.cs`, `TimeEndpoints.cs`, plus 1-2 sites in `Payroll` / `External` integrations. | Step 2 (interface) |
+| 7 | `src/Backend/StatsTid.Backend.Api/Endpoints/ConfigEndpoints.cs` | PUT handler: parse `If-Match: "<version>"` (strip quotes), call `SupersedeAndCreateAsync` returning `(profileId, newVersion)`, audit action via `expectedCurrentVersion is null ? "CREATED" : (predecessor.EffectiveFrom == candidate.EffectiveFrom ? "MODIFIED" : "SUPERSEDED")`, set `ETag: "<newVersion>"` on response (quoted), call `EnqueueAsync` for `LocalAgreementProfileChanged` event. | Step 5b + Step 6 |
+| 8a | `frontend/src/hooks/useConfig.ts` | Add `parseVersionFromETag` + `formatVersionAsIfMatch` helpers. Wire ETag header into PUT/GET flows. | Step 7 (API surface) |
+| 8b | `frontend/src/components/config/ProfileEditor.tsx` | If-Match value comes from `useConfig` hook's tracked version state, not profile_id. | Step 8a |
+
+### Test fixture updates
+
+Existing test fixtures call `SupersedeAndCreateAsync` and assume return type `Guid`. Post-S22, the return is `(Guid ProfileId, long Version)`. Mechanical destructure update at:
+
+| File | Approximate sites |
+|------|------------------|
+| `tests/StatsTid.Tests.Regression/Config/ProfileSupersessionTests.cs` | 3 sites (lines ~73, 87, 167 pre-S22) |
+| `tests/StatsTid.Tests.Regression/Config/ProfileConcurrencyTokenTests.cs` | 4 sites (lines ~56, 71, 80, 95 pre-S22) |
+| `tests/StatsTid.Tests.Regression/Config/ProfileAuditTests.cs` | 2 sites (lines ~136, 185 pre-S22) |
+| `tests/StatsTid.Tests.Regression/Config/ProfileLegacyEventNonEmissionTests.cs` | 1 site (line ~68 pre-S22) |
+| **Total** | **~10 destructure updates** |
+
+Update pattern: `var id = await _repo.SupersedeAndCreateAsync(...)` → `var (id, version) = await _repo.SupersedeAndCreateAsync(...)`. Where the test asserts only the id, the version is discarded; where the test exercises the new optimistic-concurrency path, the version is asserted explicitly.
+
+### Failure modes within migration
+
+| Failure | Detection | Outcome |
+|---------|-----------|---------|
+| Schema migration partial failure (e.g., DDL syntax error in the DO block) | PostgreSQL transactional DDL — the entire DO block rolls back | Operator re-runs after fixing; ledger row was rolled back, so re-run is the first run |
+| `+1 day` overflow on absurd dates (e.g., `effective_to = '9999-12-31'`) | PostgreSQL DATE arithmetic: `'9999-12-31' + INTERVAL '1 day'` errors with `date out of range` | Pre-migration: validate no closed row has `effective_to >= '9999-12-30'`. Post-S21 the seed has zero closed rows with dates near max-DATE; production data audit (per S21) confirms the same. |
+| `outbox_events` write fails inside state-change tx | EnqueueAsync throws; state-change tx rolls back | Standard tx rollback; client receives 500 with the underlying error as a structured response; outbox row never visible to publisher |
+| Publisher process crashes during D4 step 4 (event INSERT done, outbox UPDATE not done) | Restart re-attempts the row | event_id-correlated lookup (D4) recognizes the prior insert; marks outbox row published with the existing version |
+| Publisher process crashes between D4 step 5 and step 6 | Restart re-attempts; outbox row already marked `published_at`; publisher skips it | No-op; the at-least-once guarantee holds |
+| Test fixture not updated → compile error | `dotnet build` 0 errors check | Sprint cannot pass build; deliverable #3 task TASK-2208 includes the updates explicitly |
+
+### D12 fixture set (16 named scenarios)
+
+| # | Test class | Test name | Fixture seed | Assertion |
+|---|------------|-----------|--------------|-----------|
+| 1 | `OutboxPublisherTests` (Docker) | `HappyPath_EnqueueAndPublish` | state-change tx commits with EnqueueAsync; publisher polls | event_store row appears with assigned stream_version; outbox row has `published_at != NULL` and `stream_version != NULL` |
+| 2 | `OutboxPublisherTests` (Docker) | `PublisherRestart_ResumesFromOldestUnpublished` | enqueue 5 rows; kill publisher mid-batch; restart | all 5 rows eventually published; ordering preserved within stream |
+| 3 | `OutboxPublisherTests` (Docker) | `PerStreamFifo_OrderedPublishing` | enqueue A, B, C on same stream | events appear with consecutive stream_versions (V, V+1, V+2) |
+| 4 | `OutboxPublisherTests` (Docker) | `CrossStreamConcurrency_NoInterference` | enqueue interleaved on streams X, Y | both publish concurrently up to publisher's parallelism setting |
+| 5 | `OutboxPublisherTests` (Docker) | `RolledBackStateChange_DoesNotPublish` | open tx, EnqueueAsync, ROLLBACK | no outbox row visible; publisher never publishes; events table unchanged |
+| 6 | `ProfileRowVersionTests` (Docker) | `InPlaceUpdate_BumpsVersion` | seed profile at version 1; PUT changes WeeklyNormHours | post-PUT version = 2; profile_id stable; effective_from unchanged |
+| 7 | `ProfileRowVersionTests` (Docker) | `ConcurrentInPlace_StaleIfMatchReturns412_NoOutboxRow` | admin A and B both load at V; A saves (V+1); B saves with `If-Match: "V"` | B receives 412; outbox row count delta from B's save = 0 (cycle-3 N3 assertion) |
+| 8 | `ProfileRowVersionTests` (Docker) | `SameDaySave_RoutesToUpdateInPlace` | seed profile with effective_from = today; save with same effective_from + changed value | one row exists for the triple; effective_to is NULL; audit-action MODIFIED |
+| 9 | `ProfileRowVersionTests` (Docker) | `EndExclusiveSupersedeClosePredecessor` | seed profile at effective_from = X; save with effective_from = Y > X | predecessor.effective_to = Y (NOT Y-1); query "active on Y" returns the new row |
+| 10 | `ProfileRowVersionTests` (Docker) | `SameDaySupersession_ThenInPlaceModification` (cycle-3 W4) | profile created today (CREATED); same-day SUPERSESSION with effective_from = today (??? — see test design note below) ... actually: profile created at effective_from = X-7; today = X; supersession PUT with effective_from = X (creates new row, audit SUPERSEDED); next PUT same-day at effective_from = X (UPDATE in place on the new row, audit MODIFIED) | audit chain: CREATED → SUPERSEDED → MODIFIED; final row's version = 2 |
+| 11 | `EndExclusiveMigrationTests` (Docker) | `ClosedRow_ConvertsByOneDayShift` | pre-migration seed with end-inclusive `effective_to = '2026-03-31'`; run migration | post-migration `effective_to = '2026-04-01'`; "active on 2026-03-31" query returns the row both before and after |
+| 12 | `EndExclusiveMigrationTests` (Docker) | `OpenRow_StaysNullWithVersion1` | pre-migration seed with `effective_to IS NULL`; run migration | post-migration `effective_to IS NULL` and `version = 1` |
+| 13 | `EndExclusiveMigrationTests` (Docker) | `PreS22Manifest_ReplaysIdentical` (cycle-1 R-B3, cycle-3 W2-confirmed) | seed pre-S22-shape profile + create manifest using S21-era BuildPlanForLegacyCallers + run migration + replay manifest | replay output byte-identical to pre-migration evaluation; replay never reads the migrated row (verified via DB query log) |
+| 14 | `EventStoreInTxTests` (Docker) | `EnqueueAsync_WritesOutboxRowInCallerTx` | open tx; EnqueueAsync; assert outbox row visible inside the same tx via SELECT | outbox row count delta within tx = 1; visibility outside tx = 0 until commit |
+| 15 | `EventStoreInTxTests` (Docker) | `EnqueueAsync_RollsBackWithCallerTx` | open tx; EnqueueAsync; ROLLBACK; SELECT after | outbox row count delta = 0 |
+| 16 | `EventStoreInTxTests` (Docker) | `VersionBackfill_ExistingProfileReturns1` | seed pre-S22 profile (no version column); run migration; GET profile | response ETag = `"1"`; profile.version = 1 |
+
+**Floor: 16 tests.** Categories: 5 outbox + 5 profile + 3 migration + 3 IEventStore = 16.
+
+Migration plan closed. Next: deliverable #3 (TASK-22NN decomposition).
+
+## Task Log (Deliverable #3, 2026-05-03)
+
+_Drafted from ADR-018 + Migration Plan; user-approval pending. All tasks are `not-started` until Step 2 (Delegate)._
+
+### Task Index
+
+| TASK | Domain / Agent | Phase | Title |
+|------|----------------|-------|-------|
+| TASK-2201 | Data Model | 1 | Schema migration: `outbox_events` + `schema_migrations` ledger + row-version on profiles + end-exclusive shift + audit-action MODIFIED |
+| TASK-2202 | Data Model | 1 | `IEventStore.EnqueueAsync` interface overload (additive) |
+| TASK-2203 | Data Model (extended into Infrastructure) | 2 | `PostgresEventStore.EnqueueAsync` implementation + `OutboxPublisher` BackgroundService + `PublisherCorrelationException` |
+| TASK-2204 | Data Model (extended into Infrastructure) | 2 | `LocalAgreementProfileRepository` row-version + UPDATE-in-place + end-exclusive predicates + `InvalidProfileSupersessionException` re-introduced |
+| TASK-2205 | Backend API (cross-domain authorized) | 3 | `ConfigEndpoints` PUT rewrite — version-based If-Match + MODIFIED audit + EnqueueAsync |
+| TASK-2206 | Backend API + Payroll Integration + External (cross-domain authorized) | 3 | State-change site migration — ~12 files swap post-commit `AppendAsync` to in-tx `EnqueueAsync` |
+| TASK-2207 | UX | 3 | `useConfig.ts` ETag helpers + `ProfileEditor` version wiring |
+| TASK-2208 | Test & QA | 4 | D12 16-scenario test matrix + ~10 fixture call-site destructure updates |
+
+### Phase Ordering
+
+- **Phase 1 (parallel-independent, worktree isolation)**: TASK-2201 (schema), TASK-2202 (interface). Both touch different surfaces.
+- **Phase 2 (depends on Phase 1)**: TASK-2203 (publisher impl + new exception), TASK-2204 (repository surface change). Parallel via worktree isolation; both depend on Phase 1.
+- **Phase 3 (parallel within Phase, depends on Phase 2)**: TASK-2205 (ConfigEndpoints — depends on TASK-2204), TASK-2206 (state-change site swap — depends on TASK-2202 + TASK-2203), TASK-2207 (frontend — depends on TASK-2205 API surface). Parallel via worktree isolation; merge conflicts on `ConfigEndpoints.cs` resolved by ordering TASK-2205 before TASK-2206 (TASK-2205 is one of the ~12 sites; TASK-2206 then sees ConfigEndpoints already-converted and skips it).
+- **Phase 4 (sequential, depends on all production code)**: TASK-2208 (Test & QA matrix + fixture updates).
+- **Phase 5 (Orchestrator)**: build/test validation, Step 5α Constraint Validator over all outputs, Step 5a Internal Reviewer (P1 + P3 + P5 + cross-domain + new abstractions — MANDATORY). **High-risk Step 5a override** also applies (P3 auditability + new authorization paths via the ETag rewrite + schema migration = three high-risk domains): external Codex review per task in addition to internal Reviewer. Step 7a sprint-end Codex review on full S22 diff against `07ffdbb` (ADR-018 ACCEPTED; current pre-implementation HEAD).
+
+### Task Detail
+
+#### TASK-2201 — Schema migration
+**Agent**: Data Model
+**Phase**: 1
+**Files (write)**:
+- `docker/postgres/init.sql` — additive: new `schema_migrations` ledger, `outbox_events` table + 3 indexes, DO $$ block for the one-shot S22 migration (version column + end-exclusive shift + MODIFIED CHECK constraint extension).
+
+**Scope**:
+- `schema_migrations` ledger table at the top of the schema migration block.
+- `outbox_events` table per ADR-018 D1 + D4 row layout, including `event_id UUID NOT NULL UNIQUE`, `service_id`, `stream_version BIGINT NULL` (debug join), `attempts INT NOT NULL DEFAULT 0`.
+- Three partial-conditional indexes: unpublished-by-service, retry-by-attempts, stream-locality.
+- DO $$ block guards the destructive `+1 day` UPDATE behind ledger insert.
+
+**Validation**: `dotnet build` clean (no compilation impact); `docker compose up postgres` succeeds; running `init.sql` twice produces no schema drift (idempotent).
+
+**Cross-domain dependencies**: none. Subsequent tasks consume the schema.
+
+#### TASK-2202 — `IEventStore.EnqueueAsync` overload
+**Agent**: Data Model
+**Phase**: 1
+**Files (write)**:
+- `src/SharedKernel/StatsTid.SharedKernel/Events/IEventStore.cs` — add `Task EnqueueAsync(NpgsqlConnection conn, NpgsqlTransaction tx, string streamId, IDomainEvent @event, CancellationToken ct = default);`.
+
+**Scope**: Interface-only addition. Existing `AppendAsync` signature unchanged.
+
+**Validation**: `dotnet build` clean; existing test suite passes (no behavioral change yet).
+
+**Cross-domain dependencies**: TASK-2203 implements; TASK-2206 consumes.
+
+#### TASK-2203 — Publisher implementation + new exception
+**Agent**: Data Model (extended scope into `src/Infrastructure/`; cross-domain authorized — repositories adjacent to events per S20/S21 precedent)
+**Phase**: 2
+**Files (write)**:
+- `src/Infrastructure/StatsTid.Infrastructure/PostgresEventStore.cs` — implement `EnqueueAsync` writing to `outbox_events` using caller's conn+tx. Existing `AppendAsync` becomes the publisher-only entry point.
+- `src/Infrastructure/StatsTid.Infrastructure/Outbox/OutboxPublisher.cs` (new) — `BackgroundService`-implementing publisher per ADR-018 D2/D4. ReadCommitted tx, event_id correlation, per-stream FIFO, parallel cross-stream up to default 4.
+- `src/Infrastructure/StatsTid.Infrastructure/Outbox/PublisherCorrelationException.cs` (new) — exception per ADR-018 D4.
+- `src/Backend/StatsTid.Backend.Api/Program.cs` + each service's `Program.cs` (`Payroll/Program.cs`, `External/Program.cs`) — register `OutboxPublisher` via `builder.Services.AddHostedService<OutboxPublisher>()`. Configuration injects the per-service `service_id` constant.
+
+**Scope**: Implementation of the publisher contract + per-service registration. Idempotency tested via D12 scenarios #1-5.
+
+**Validation**: `dotnet build` clean; D12 OutboxPublisherTests scenarios #1-5 pass against running Docker; `dotnet test --filter "Category!=Docker"` shows the unit-level subset passes.
+
+**Cross-domain dependencies**: TASK-2201 (outbox_events table) + TASK-2202 (interface). Consumed by TASK-2204 (LocalAgreementProfileChanged event) + TASK-2206 (all state-change sites).
+
+#### TASK-2204 — `LocalAgreementProfileRepository` row-version + UPDATE-in-place
+**Agent**: Data Model (extended scope into `src/Infrastructure/`; cross-domain authorized)
+**Phase**: 2
+**Files (write)**:
+- `src/SharedKernel/StatsTid.SharedKernel/Models/LocalAgreementProfile.cs` — add `Version` (long) init-only property.
+- `src/Infrastructure/StatsTid.Infrastructure/LocalAgreementProfileRepository.cs` — `AcquireLockAsync` returns `(Guid ProfileId, long Version, DateOnly EffectiveFrom)?`. `SupersedeAndCreateAsync` returns `(Guid ProfileId, long Version)`. New private `UpdateInPlaceAsync` for same-day routing. End-exclusive predicate updates per ADR-018 D10. `OptimisticConcurrencyException` reshaped (carries `expectedVersion`/`actualVersion`). `InvalidProfileSupersessionException` re-introduced.
+
+**Scope**: Repository surface change + same-day routing logic + predicate updates. The end-exclusive predicate change applies to `GetActivationsInPeriodAsync` only (the other read sites are NULL-checks per D10).
+
+**Validation**: `dotnet build` clean; all 18 existing Docker-gated profile tests pass with the destructure updates from TASK-2208 (sequenced). Specific D12 scenarios #6-9 pass (in-place update, concurrent 412, same-day routing, end-exclusive close).
+
+**Cross-domain dependencies**: TASK-2201 (schema columns). Consumed by TASK-2205 (PUT rewrite).
+
+#### TASK-2205 — `ConfigEndpoints` PUT rewrite
+**Agent**: Backend API (cross-domain authorized)
+**Phase**: 3
+**Files (write)**:
+- `src/Backend/StatsTid.Backend.Api/Endpoints/ConfigEndpoints.cs` — PUT handler rewritten: parse `If-Match: "<version>"` (strip quotes per cycle-2 C3 fix), call `SupersedeAndCreateAsync` returning `(profileId, newVersion)`, audit action via three-way switch (CREATED / MODIFIED / SUPERSEDED), set `ETag: "<newVersion>"` quoted, call `EnqueueAsync` for `LocalAgreementProfileChanged` event in-tx (replaces post-commit `AppendAsync`).
+
+**Scope**: Endpoint flow rewrite. ETag value extraction uses `parseVersionFromETag`-equivalent server-side helper (or inline regex). The audit-action three-way logic matches ADR-018 D9.
+
+**Validation**: `dotnet build` clean; D12 scenarios #6-10 pass (the Profile category exercises the endpoint flow).
+
+**Cross-domain dependencies**: TASK-2204 (repository surface) + TASK-2202 (interface). Consumed by TASK-2207 (frontend ETag wiring).
+
+#### TASK-2206 — State-change site migration (~12 files)
+**Agent**: Backend API + Payroll Integration + External (cross-domain authorized)
+**Phase**: 3
+**Files (write)**:
+- `src/Backend/StatsTid.Backend.Api/Endpoints/AdminEndpoints.cs`
+- `src/Backend/StatsTid.Backend.Api/Endpoints/AgreementConfigEndpoints.cs`
+- `src/Backend/StatsTid.Backend.Api/Endpoints/PositionOverrideEndpoints.cs`
+- `src/Backend/StatsTid.Backend.Api/Endpoints/WageTypeMappingEndpoints.cs`
+- `src/Backend/StatsTid.Backend.Api/Endpoints/ApprovalEndpoints.cs`
+- `src/Backend/StatsTid.Backend.Api/Endpoints/OvertimeEndpoints.cs`
+- `src/Backend/StatsTid.Backend.Api/Endpoints/ComplianceEndpoints.cs`
+- `src/Backend/StatsTid.Backend.Api/Endpoints/SkemaEndpoints.cs`
+- `src/Backend/StatsTid.Backend.Api/Endpoints/TimerEndpoints.cs`
+- `src/Backend/StatsTid.Backend.Api/Endpoints/TimeEndpoints.cs`
+- `src/Backend/StatsTid.Backend.Api/Endpoints/BalanceEndpoints.cs` (entitlement events)
+- `src/Integrations/StatsTid.Integrations.Payroll/Services/PeriodCalculationService.cs` + `PayrollExportService.cs`
+- `src/Integrations/StatsTid.Integrations.External/Services/IntegrationDeliveryService.cs`
+
+**Scope**: Mechanical swap. Each call site changes from:
+```csharp
+await tx.CommitAsync(ct);
+await eventStore.AppendAsync(streamId, @event, ct);
+```
+to:
+```csharp
+await eventStore.EnqueueAsync(conn, tx, streamId, @event, ct);
+await tx.CommitAsync(ct);
+```
+No behavioral change beyond the path of arrival; downstream consumers see the same event shapes.
+
+**Note**: `ConfigEndpoints.cs` is in TASK-2205, not here. TASK-2206 explicitly excludes it.
+
+**Validation**: `dotnet build` clean; existing 517 unit + 35 plain regression tests pass without behavioral change (the events still get to the canonical store, just via the outbox).
+
+**Cross-domain dependencies**: TASK-2202 (interface) + TASK-2203 (publisher must be running for events to arrive in events table). Consumed by no downstream task.
+
+#### TASK-2207 — Frontend ETag helpers + `useConfig.ts` wiring
+**Agent**: UX
+**Phase**: 3
+**Files (write)**:
+- `frontend/src/hooks/useConfig.ts` — add `parseVersionFromETag` + `formatVersionAsIfMatch` helpers; wire ETag header into PUT/GET flows; track version state alongside profile state.
+- `frontend/src/components/config/ProfileEditor.tsx` — If-Match value comes from `useConfig`'s tracked version, not profile_id.
+
+**Scope**: Frontend ETag handling. Strip quotes on parse, add quotes on format. 412 response handling unchanged.
+
+**Validation**: `npm test` passes (existing 48 vitest tests + maybe 2-3 new for the ETag helpers); ProfileEditor renders without errors against a mocked backend.
+
+**Cross-domain dependencies**: TASK-2205 (API surface). UX agent's `frontend/**` scope covers all the new files.
+
+#### TASK-2208 — D12 test matrix + fixture updates
+**Agent**: Test & QA
+**Phase**: 4
+**Files (write)**:
+- `tests/StatsTid.Tests.Regression/Outbox/OutboxPublisherTests.cs` (5 Docker-gated tests, scenarios #1-5)
+- `tests/StatsTid.Tests.Regression/Config/ProfileRowVersionTests.cs` (5 Docker-gated tests, scenarios #6-10)
+- `tests/StatsTid.Tests.Regression/Config/EndExclusiveMigrationTests.cs` (3 Docker-gated tests, scenarios #11-13)
+- `tests/StatsTid.Tests.Regression/Outbox/EventStoreInTxTests.cs` (3 Docker-gated tests, scenarios #14-16)
+- `tests/StatsTid.Tests.Regression/Config/ProfileSupersessionTests.cs` — destructure updates at 3 sites
+- `tests/StatsTid.Tests.Regression/Config/ProfileConcurrencyTokenTests.cs` — destructure updates at 4 sites
+- `tests/StatsTid.Tests.Regression/Config/ProfileAuditTests.cs` — destructure updates at 2 sites
+- `tests/StatsTid.Tests.Regression/Config/ProfileLegacyEventNonEmissionTests.cs` — destructure updates at 1 site
+
+**Scope**: 16 named scenarios per the D12 fixture set table + ~10 mechanical destructure updates. All Docker-gated tests use `TestFixtures.DockerHarness.StartAsync()`. Test class names + file paths match ADR-018 D12 verbatim.
+
+**Validation**: `dotnet build` 0 errors; all Docker-gated tests properly trait-marked; existing 517 unit + 35 plain regression tests still pass (no regressions). After this task, total counts: 517 + 0 = 517 unit (no new unit tests; all D12 scenarios are Docker-gated since they exercise the schema), 35 + 0 = 35 plain regression, 18 (S21) + 16 (S22) = 34 Docker-gated profile + outbox + migration tests.
+
+**Cross-domain dependencies**: depends on all production code (TASK-2201 through TASK-2207). Test & QA Agent's `tests/**` scope covers all new files.
+
+### Risks & Watch-Points
+
+- **TASK-2201 schema ordering** — the `schema_migrations` ledger table CREATE must precede the `DO $$` block. The init.sql edit places them in that order; reviewers should verify.
+- **TASK-2203 publisher per-service registration** — each of Backend.Api, Payroll, External must register the publisher with its own `service_id`. Orchestrator does NOT register (per ADR-018 D6 invariant). Forgotten registration = events enqueued but never published; visible at first integration test.
+- **TASK-2206 mechanical swap risk** — 12+ files; missing one means a state-change still uses post-commit `AppendAsync`. Reviewer cycle catches via grep audit (`grep -r "tx.CommitAsync" src/Backend/` should find no `AppendAsync` after).
+- **TASK-2207 frontend version-state lifecycle** — `useConfig` must reset `version` on org/agreement change (otherwise stale `If-Match` from a different profile). Test scenario covers.
+- **TASK-2208 destructure updates timing** — must run AFTER TASK-2204 lands (otherwise existing fixtures fail to compile); Phase 4 ordering enforces this.
+- **High-risk Step 5a override** — S22 hits **P3 auditability + new authorization paths (ETag) + schema migration + new outbox publisher** = 4 high-risk categories (matching S21's count). External Codex review at Step 5a is mandatory per workflow; budget for one BLOCKER-fix cycle. Halt and prompt user after 2 BLOCKER cycles per workflow rule.
+
+Task decomposition closed. Ready for user approval before Step 2 (Delegate).
+
 ## References
 
 - [CLAUDE.md](../../CLAUDE.md) — priority order
