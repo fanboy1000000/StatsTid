@@ -1,6 +1,6 @@
 # ADR-018: Transactional Outbox + Row-Version Optimistic Concurrency
 
-**Status**: DRAFT (pending Orchestrator approval)
+**Status**: ACCEPTED (cycle 4 fixes applied + cycle 5 verified clean; pending Orchestrator approval)
 **Date**: 2026-05-03
 **Sprint**: 22
 **Augments**: [ADR-001](ADR-001-event-sourcing-postgresql-npgsql.md) (event sourcing topology — outbox is an additive layer between state-change writes and the canonical event store)
@@ -39,6 +39,7 @@ CREATE TABLE outbox_events (
     outbox_id        BIGSERIAL    PRIMARY KEY,
     service_id       TEXT         NOT NULL,            -- 'backend-api' | 'payroll' | 'external' | 'orchestrator'
     stream_id        TEXT         NOT NULL,
+    event_id         UUID         NOT NULL UNIQUE,     -- mirrors events.event_id; correlation key for at-least-once recovery (cycle 2 fix)
     event_type       TEXT         NOT NULL,
     event_payload    JSONB        NOT NULL,
     correlation_id   TEXT         NULL,
@@ -46,7 +47,7 @@ CREATE TABLE outbox_events (
     actor_role       TEXT         NULL,
     created_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     published_at     TIMESTAMPTZ  NULL,                -- NULL = unpublished; doubles as consumed marker
-    stream_version   BIGINT       NULL,                -- assigned by publisher post-publish; debug join only
+    stream_version   INT          NULL,                -- assigned by publisher post-publish; debug join only
     attempts         INT          NOT NULL DEFAULT 0,
     last_error       TEXT         NULL,
     last_attempt_at  TIMESTAMPTZ  NULL
@@ -70,6 +71,8 @@ CREATE INDEX idx_outbox_stream
 
 The `service_id` column enables Q2's per-service publisher topology without cross-service contention on row claims (each publisher polls its partition). `stream_version` is debug-only — the publisher populates it after a successful event-store INSERT for forward-traceable outbox→events joins.
 
+The `event_id` column (added cycle 2) is the at-least-once correlation key. The state-change site generates a fresh `Guid` at enqueue time and stores it on both the outbox row AND the eventual `events.event_id` (which already exists as `UUID NOT NULL UNIQUE` per `init.sql:13`). On crash recovery, the publisher uses `event_id` to deterministically prove "this outbox row's event already exists in the canonical store" vs "a different outbox row won this stream_version slot." See D4 below for the protocol.
+
 The `correlation_id`, `actor_id`, `actor_role` columns mirror the audit-context fields the canonical events already carry; capturing them at enqueue time keeps the publisher's INSERT stateless (no need to re-resolve `ActorContext` in the publisher loop).
 
 ### D2 — Outbox publisher topology (Q2)
@@ -79,11 +82,11 @@ Three options were enumerated at Step 0b cycle 1:
 - (b) Per-service in-process publisher (Backend.Api, Payroll, External, Orchestrator each runs its own).
 - (c) Dedicated `StatsTid.OutboxPublisher` worker (new 9th docker service).
 
-**Decision: (b) per-service in-process publisher.** Each service hosts a `BackgroundService`-implementing `OutboxPublisher` that polls `WHERE service_id = @ownServiceId AND published_at IS NULL ORDER BY outbox_id` every poll interval (default 250ms with 1s backoff on quiet polls). Rationale:
+**Decision: (b) per-service in-process publisher.** Each service hosts a `BackgroundService`-implementing `OutboxPublisher` that polls `WHERE service_id = @ownServiceId AND published_at IS NULL ORDER BY outbox_id` every poll interval (default 250ms with 1s backoff on quiet polls). Rationale (cycle-2 review correction — the original "Backend.Api can't deserialize cross-service events" rationale was factually wrong, since all event types live in `SharedKernel.Events` and `EventSerializer` registers them centrally; the real reasons are operational):
 
-- **(a) is wrong** — Backend.Api can only publish events whose payload types it can deserialize; cross-service event types (e.g., `PayrollExportGenerated` from Payroll) would require Backend.Api to depend on Payroll's event assemblies, breaking ADR-002 isolation.
-- **(c) adds operational footprint** — a 9th docker service for what is essentially a polling loop is over-engineering for pre-production. Defer to a future sprint if the per-service publisher's latency or contention becomes a measured problem.
-- **(b)** keeps each service self-contained: it knows its own event types, its own outbox partition, its own `IEventStore` (the canonical store is shared but the writer is the service-local instance).
+- **(a) — single in-process publisher inside Backend.Api — rejected.** Couples Backend.Api uptime to event delivery for Payroll AND External writes. If Backend.Api crashes or restarts during deployment, Payroll's `PeriodCalculationCompleted` and External's `IntegrationDeliveryTracked` events stop publishing. The single-point-of-failure shape contradicts the per-service Docker topology established in ADR-006.
+- **(b) — per-service in-process publisher — chosen.** Stream-ownership is naturally per-service (D6 below codifies the invariant that each `stream_id` is owned by exactly one service); the per-service publisher partitions follow stream ownership without cross-publisher contention. Each service's outbox publishes its own writes; failures are isolated to that service.
+- **(c) — dedicated worker service — rejected.** A 9th docker service for a polling loop is over-engineering pre-production. Worth revisiting in Phase 5 if measured publisher latency or contention warrants the operational footprint.
 
 Cross-service event ordering: per-stream FIFO is preserved within a single service because stream_ids are service-local in practice (e.g., `local-agreement-profile-{org}-{agreement}-{ok_version}` is only written by Backend.Api). Cross-service streams would require a global publisher, but no such streams exist today; D6 enforces the assumption.
 
@@ -125,36 +128,65 @@ Q3's "evolution to `IEventEmitter`" alternative was rejected — adding a new in
 
 ### D4 — At-least-once via publisher-time version assignment (Q5)
 
-The publisher computes `stream_version` at publish time, not at enqueue time. Sequence per outbox row:
+The publisher computes `stream_version` at publish time, not at enqueue time. The events table's existing `event_id UUID NOT NULL UNIQUE` column (`init.sql:13`) is the at-least-once correlation key — the outbox row carries the same `event_id` written at enqueue time, and the publisher uses it on crash recovery to deterministically prove "this outbox row's event is already in the canonical store" vs "a different outbox row won this stream_version slot."
+
+Sequence per outbox row:
 
 1. `BEGIN` (publisher's own self-contained tx).
-2. `SELECT MAX(stream_version) FROM event_streams WHERE stream_id = @streamId FOR UPDATE`. The `FOR UPDATE` row-lock serializes concurrent publishers operating on the same stream (only the per-service publisher does this, so contention is minimal in practice).
-3. `INSERT INTO events (...) VALUES (...)` with `stream_version = result + 1`.
-4. `INSERT INTO event_streams (...)` or `UPDATE event_streams SET last_version = ...`.
-5. `UPDATE outbox_events SET published_at = NOW(), stream_version = @assignedVersion WHERE outbox_id = @outboxId`.
+2. **Ensure stream row + acquire stream lock**: unconditionally `INSERT INTO event_streams (stream_id) VALUES (@streamId) ON CONFLICT DO NOTHING` (idempotent — no-op if the row already exists). Then `SELECT 1 FROM event_streams WHERE stream_id = @streamId FOR UPDATE`. The `ON CONFLICT DO NOTHING` upsert mirrors the existing pattern in `PostgresEventStore.AppendAsync` so the publisher and the state-change path produce stream rows the same way. The FOR UPDATE locks the parent row in `event_streams` (which has only `(stream_id, created_at)` per `init.sql:5-8`), serializing concurrent publishers on the same stream. The lock is held until the tx commits at step 6.
+3. **Compute next version**: `SELECT COALESCE(MAX(stream_version), 0) + 1 FROM events WHERE stream_id = @streamId`. Note: `stream_version` lives on `events`, NOT `event_streams` (cycle-2 review fix). The MAX read is safe under the FOR UPDATE held in step 2 because no other publisher can be writing to this stream concurrently.
+4. **Insert canonical event**: `INSERT INTO events (event_id, stream_id, stream_version, event_type, data, occurred_at) VALUES (@outboxRow.event_id, @streamId, @newVersion, ...)`. The `event_id` is taken from the outbox row, not regenerated.
+5. **Mark outbox published**: `UPDATE outbox_events SET published_at = NOW(), stream_version = @newVersion WHERE outbox_id = @outboxId`.
 6. `COMMIT`.
 
-The events table's `(stream_id, stream_version)` UNIQUE constraint is the natural deduplication mechanism for the at-least-once protocol: if the publisher crashes after step 4 but before step 5, restart re-attempts the row, the events INSERT fails with 23505, the publisher recognizes the duplicate and only updates the outbox row's `published_at`. The publisher's idempotency protocol:
+**Isolation level: `READ COMMITTED`** (cycle-3 review fix). The publisher tx must NOT use `RepeatableRead` because that isolation level fixes the snapshot at `BEGIN` — meaning after `SELECT ... FOR UPDATE` waits for a concurrent publisher's commit, the subsequent `MAX(stream_version)` read still observes the pre-commit snapshot and picks the same next version as the prior publisher, producing 23505 on the INSERT. Under `READ COMMITTED`, each SELECT statement gets a fresh snapshot of the latest committed data, so the post-lock-wait `MAX` correctly observes the prior publisher's just-committed row. The publisher does not require consistent multi-statement reads — it requires "see latest committed data after lock acquisition," which is exactly what `READ COMMITTED` provides.
+
+Note that this is the OPPOSITE choice from the state-change side: the state-change tx (in `ConfigEndpoints` PUT and similar handlers) uses `RepeatableRead` because it DOES need consistent reads of the profile row across the optimistic-concurrency check, the close-then-insert step, and the audit row insert. The two transactions have different consistency requirements; the publisher's lighter requirement justifies the lighter isolation level.
+
+If the publisher crashes between step 4 and step 5, restart re-attempts the row. Step 4's INSERT fails with `23505` on either the `(stream_id, stream_version)` UNIQUE or the `event_id` UNIQUE — both are constraints on the events table. The recovery branch uses `event_id` lookup to determine which case fired:
 
 ```csharp
 async Task PublishAsync(OutboxRow row, CancellationToken ct)
 {
     await using var conn = _connectionFactory.Create();
     await conn.OpenAsync(ct);
-    await using var tx = await conn.BeginTransactionAsync(IsolationLevel.RepeatableRead, ct);
+    // READ COMMITTED — see comment above. The publisher's correctness invariant is
+    // "see latest committed data after FOR UPDATE wait completes," which RepeatableRead
+    // does NOT provide because its snapshot is frozen at BEGIN.
+    await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
     try
     {
-        var version = await ComputeNextStreamVersionAsync(conn, tx, row.StreamId, ct);
+        await EnsureStreamRowAsync(conn, tx, row.StreamId, ct);  // INSERT ... ON CONFLICT DO NOTHING (unconditional; idempotent)
+        await AcquireStreamLockAsync(conn, tx, row.StreamId, ct); // SELECT 1 ... FOR UPDATE
+        var version = await ComputeNextStreamVersionAsync(conn, tx, row.StreamId, ct); // MAX from events — fresh snapshot under READ COMMITTED
+
         try
         {
-            await InsertEventAsync(conn, tx, row, version, ct);
+            await InsertEventAsync(conn, tx, row, version, ct); // event_id from row.EventId
         }
         catch (PostgresException ex) when (ex.SqlState == "23505")
         {
-            // Crash-during-publish recovery: event already in canonical store.
-            // Look up existing version and proceed to mark outbox published.
-            version = await GetExistingStreamVersionAsync(conn, tx, row.StreamId, row.OutboxId, ct);
+            // Recovery: lookup-by-event_id determines whether THIS outbox row's event
+            // is already in the canonical store (crash-during-publish, idempotent retry)
+            // OR a different outbox row collided on stream_version (impossible under
+            // step-2's FOR UPDATE serialization, but defensive against future code that
+            // bypasses the lock). The event_id UNIQUE constraint catches the former
+            // case; the (stream_id, stream_version) UNIQUE constraint catches the
+            // latter. We distinguish by querying the events row by event_id.
+            var existingVersion = await TryGetExistingEventVersionAsync(
+                conn, tx, row.EventId, ct);
+            if (existingVersion is null)
+            {
+                // Different outbox row won the version slot — do NOT mark published.
+                // Roll back, increment attempts, surface to operator dashboard.
+                throw new PublisherCorrelationException(
+                    $"23505 on stream {row.StreamId} for outbox {row.OutboxId} but " +
+                    $"event_id {row.EventId} not found in events table; another writer " +
+                    $"won the version slot. Manual reconcile required.", ex);
+            }
+            version = existingVersion.Value;
         }
+
         await MarkPublishedAsync(conn, tx, row.OutboxId, version, ct);
         await tx.CommitAsync(ct);
     }
@@ -167,7 +199,9 @@ async Task PublishAsync(OutboxRow row, CancellationToken ct)
 }
 ```
 
-Q5 option (a) — outbox row carries `stream_version` at enqueue time — was the cycle-1-cycle-2 antipattern from S21. Listed in the sprint plan only for forward-readability; rejected here with the explicit rationale that in-tx `MAX(stream_version)` reads from the caller's `RepeatableRead` snapshot, producing UNIQUE violations on concurrent saves to the same stream.
+Q5 option (a) — outbox row carries `stream_version` at enqueue time — was the cycle-1-cycle-2 antipattern from S21. Listed in the sprint plan only for forward-readability; rejected here with the explicit rationale that in-tx `MAX(stream_version)` reads from the caller's `RepeatableRead` snapshot, producing UNIQUE violations on concurrent saves to the same stream. The publisher-time path above avoids this because the publisher's tx is self-contained (its own `BEGIN`) and uses an explicit FOR UPDATE on the parent stream row to serialize.
+
+**Why `event_id` correlation works** (cycle-2 review B1/C2 fix): D6 codifies that each `stream_id` has exactly one writer service, AND that service's per-service publisher polls only its own outbox partition. So the only way a `(stream_id, stream_version)` slot can be taken by an event with a different `event_id` is if a DIFFERENT outbox row won — which means the current row should NOT be marked published. The `PublisherCorrelationException` surfaces this case loudly for manual reconciliation rather than silently marking the wrong row published. Under normal operation (no concurrent publishers, FOR UPDATE serialization holding), this branch is unreachable — but defending against it makes the protocol auditable.
 
 ### D5 — Per-stream FIFO ordering (Q6)
 
@@ -193,15 +227,16 @@ await Parallel.ForEachAsync(
 
 ### D6 — Cross-service stream isolation invariant (Q2 + Q6)
 
-ADR-018 establishes the invariant: **each `stream_id` is owned by exactly one service.** No cross-service writers on the same stream. This is true today by construction:
+ADR-018 establishes the invariant: **each `stream_id` is owned by exactly one service.** No cross-service writers on the same stream. Stream-ownership table (cycle-2 review W5 — Orchestrator added explicitly):
 
-- `local-agreement-profile-*` streams: Backend.Api only.
-- `period-calculation-*` streams: Payroll only.
-- `payroll-export-*` streams: Payroll only.
-- `integration-delivery-*` streams: External only.
-- `org-*`, `user-*`, `role-*`, `agreement-config-*`, etc.: Backend.Api only.
+| Service | Streams owned (writes events to) |
+|---------|----------------------------------|
+| Backend.Api | `local-agreement-profile-*`, `org-*`, `user-*`, `role-*`, `agreement-config-*`, `position-override-*`, `wage-type-mapping-*`, `entitlement-*`, `period-approval-*`, `overtime-pre-approval-*`, `compensatory-rest-*`, `timer-session-*`, `time-entry-*`, `skema-*`, `project-*` |
+| Payroll | `period-calculation-*`, `payroll-export-*` (plus retroactive correction streams emitted from `RetroactiveCorrectionService`) |
+| External | `integration-delivery-*` |
+| Orchestrator | **MAY NOT write any stream.** Orchestrator coordinates rule-engine HTTP calls and dispatches tasks; it does not append domain events. If a future task type requires Orchestrator-emitted events, ADR-018's invariant requires re-architecting the outbox topology BEFORE adding the new event type (either move the emission to Backend.Api / Payroll, or introduce a global publisher per Q2 option (c)). |
 
-If a future feature requires cross-service writes to the same stream, it MUST first introduce a global publisher (Q2 option (c)) — the per-service topology cannot guarantee FIFO across service boundaries. This invariant is enforced by code review; no structural enforcement in the schema.
+If a future feature requires cross-service writes to the same stream, it MUST first introduce a global publisher (Q2 option (c)) — the per-service topology cannot guarantee FIFO across service boundaries. This invariant is enforced by code review; no structural enforcement in the schema. Recommended code-review checklist item: any new endpoint or service that calls `IEventStore.EnqueueAsync` is approved only after the new stream pattern is added to the table above.
 
 ### D7 — Row-version column on `local_agreement_profiles` (Q7)
 
@@ -212,14 +247,16 @@ ALTER TABLE local_agreement_profiles
 ADD COLUMN version BIGINT NOT NULL DEFAULT 1;
 ```
 
-Existing rows get `version = 1` by the DEFAULT. Subsequent UPDATEs bump via app-side increment (not a trigger): `UPDATE local_agreement_profiles SET version = version + 1, ... WHERE profile_id = @id AND version = @expectedVersion`. The `WHERE version = @expectedVersion` clause provides optimistic concurrency: if two admins both load at version V, both compute the UPDATE expecting `version = V`, only one's UPDATE affects rows (returns 1); the other affects 0 rows and the repository throws `OptimisticConcurrencyException`.
+Existing rows get `version = 1` by the DEFAULT. Subsequent UPDATEs bump via app-side increment (not a trigger): `UPDATE local_agreement_profiles SET version = version + 1, ... WHERE profile_id = @id AND version = @expectedVersion`.
+
+The optimistic-concurrency check happens **once, in `ValidatePrecondition`** (after `AcquireLockAsync` returns the locked row's current version). Once that check passes, the existing `SELECT ... FOR UPDATE` row-lock under `RepeatableRead` ensures no other writer can change the row before the UPDATE fires. The `WHERE version = @expectedVersion` clause on the UPDATE is therefore **defense-in-depth**, not the load-bearing check (cycle-2 review W3 clarification): it guards against a future code path that bypasses the lock (e.g., a hypothetical bulk-update endpoint that doesn't go through `AcquireLockAsync`) but is logically redundant under the current repository contract. We keep it because (a) the cost is negligible, (b) it makes the SQL self-documenting about the optimistic invariant, and (c) test coverage for "the UPDATE without FOR UPDATE" path becomes a one-line test addition rather than a multi-method refactor if the contract ever loosens.
 
 App-side increment (not trigger) rationale:
 - Repository code is the single source of truth for the bump; testable via unit tests.
 - Trigger-based bump is invisible from C# code, hard to assert correctly in tests, and obscures the optimistic-concurrency contract.
 - The increment is a single line in `LocalAgreementProfileRepository.UpdateInPlaceAsync`; complexity is minimal.
 
-ETag header value becomes the version: `ETag: "<version>"` (e.g., `ETag: "5"`). The frontend's `If-Match: 5` header asserts "I read at version 5; only proceed if that's still current." This replaces ADR-017 D2.1's `If-Match: <profile_id>` shape — `profile_id` was an immutable identifier per row, so ETag-via-profile_id worked only for the close-then-insert path; UPDATE-in-place needs a mutable token.
+ETag header value becomes the quoted version per RFC 7232: `ETag: "<version>"` (e.g., the literal wire bytes `ETag: "5"`, with quotes). The frontend's `If-Match: "5"` header asserts "I read at version 5; only proceed if that's still current." Both ETag (response) and If-Match (request) carry the quoted form on the wire; the frontend's `parseVersionFromETag` / `formatVersionAsIfMatch` helpers (see "Implications → For Frontend") translate between the wire format and the in-memory numeric `version`. This replaces ADR-017 D2.1's `If-Match: <profile_id>` shape — `profile_id` was an immutable identifier per row, so ETag-via-profile_id worked only for the close-then-insert path; UPDATE-in-place needs a mutable token.
 
 ### D8 — End-exclusive `effective_to` semantics + migration (Q8)
 
@@ -233,30 +270,60 @@ predecessor.effective_to = newProfile.EffectiveFrom.AddDays(-1);
 predecessor.effective_to = newProfile.EffectiveFrom;
 ```
 
-Migration converts existing closed rows in the same DDL block as the row-version column addition:
+Migration converts existing closed rows in the same DDL block as the row-version column addition. Critically, the `+1 day` shift is **NOT idempotent** by itself — a second run would shift twice and corrupt the data. The migration is gated by a `schema_migrations` ledger table (cycle-2 review B2 fix) so that re-running `init.sql` (e.g., on `docker compose down -v && docker compose up`) does not double-shift:
 
 ```sql
--- D7 + D8 schema migration: add version column + convert effective_to to end-exclusive.
-ALTER TABLE local_agreement_profiles
-ADD COLUMN version BIGINT NOT NULL DEFAULT 1;
+-- Schema-migrations ledger (additive, idempotent self-creation).
+-- Records which one-shot migrations have already run against this database.
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    migration_id  TEXT         PRIMARY KEY,
+    applied_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    notes         TEXT         NULL
+);
 
--- Convert end-inclusive effective_to to end-exclusive: shift by +1 day.
--- A row that was active January through March (effective_to = '2026-03-31') becomes
--- [2026-01-01, 2026-04-01) (effective_to = '2026-04-01'). Open rows stay NULL.
-UPDATE local_agreement_profiles
-SET effective_to = effective_to + INTERVAL '1 day'
-WHERE effective_to IS NOT NULL;
+-- D7 + D8 + D9 schema migration. Wrapped in DO block + INSERT ... ON CONFLICT
+-- guard so the +1-day UPDATE only runs the first time. Idempotent on re-run.
+DO $$
+BEGIN
+    -- Try to claim the migration. If it's already applied, INSERT does nothing
+    -- and we exit early.
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s22-d7-d8-d9', 'ADR-018: row-version + end-exclusive + MODIFIED audit action')
+    ON CONFLICT (migration_id) DO NOTHING;
 
--- Audit-action enum extension (D9): add 'MODIFIED' for in-place edits.
-ALTER TABLE local_agreement_profile_audit
-DROP CONSTRAINT local_agreement_profile_audit_action_check;
+    IF NOT FOUND THEN
+        -- Already applied; nothing to do.
+        RETURN;
+    END IF;
 
-ALTER TABLE local_agreement_profile_audit
-ADD CONSTRAINT local_agreement_profile_audit_action_check
-CHECK (action IN ('CREATED', 'MODIFIED', 'SUPERSEDED', 'DEACTIVATED', 'MIGRATED_FROM_LEGACY'));
+    -- D7: add version column. Existing rows get DEFAULT 1.
+    ALTER TABLE local_agreement_profiles
+    ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 1;
+
+    -- D8: convert end-inclusive effective_to to end-exclusive (+1 day shift).
+    -- A row that was active January through March (effective_to = '2026-03-31')
+    -- becomes [2026-01-01, 2026-04-01) (effective_to = '2026-04-01'). Open
+    -- rows (effective_to IS NULL) stay NULL.
+    UPDATE local_agreement_profiles
+    SET effective_to = effective_to + INTERVAL '1 day'
+    WHERE effective_to IS NOT NULL;
+
+    -- D9: extend audit-action enum to include MODIFIED for in-place edits.
+    ALTER TABLE local_agreement_profile_audit
+    DROP CONSTRAINT IF EXISTS local_agreement_profile_audit_action_check;
+
+    ALTER TABLE local_agreement_profile_audit
+    ADD CONSTRAINT local_agreement_profile_audit_action_check
+    CHECK (action IN ('CREATED', 'MODIFIED', 'SUPERSEDED', 'DEACTIVATED', 'MIGRATED_FROM_LEGACY'));
+END
+$$;
 ```
 
-Open rows (`effective_to IS NULL`) need no conversion — open is open under either convention. The version backfill is the DEFAULT 1, applied automatically.
+The `INSERT ... ON CONFLICT DO NOTHING` + `IF NOT FOUND THEN RETURN` pattern is PostgreSQL's idiomatic one-shot guard: the first run claims the migration_id and proceeds; subsequent runs see the row already present, the INSERT writes nothing, `FOUND` is false, the migration is skipped. Open rows (`effective_to IS NULL`) need no conversion — open is open under either convention. The version backfill is the DEFAULT 1, applied automatically by the ALTER TABLE.
+
+Future S22+ DDL migrations follow the same pattern with new `migration_id` values (e.g., `s23-d2-2-row-version-on-agreement-configs`).
+
+**Ordering invariant** (cycle-3 review N-3): the `CREATE TABLE IF NOT EXISTS schema_migrations` MUST appear before any guarded `DO $$ ... $$` block in `init.sql`. The `IF NOT EXISTS` makes self-creation idempotent in any ordering, but a guarded block that runs before the ledger exists would fail with "relation does not exist." Tasks decomposing this DDL into deliverable #2's migration plan place the ledger CREATE at the top of the schema migration block.
 
 ### D9 — Automatic in-place edit detection + `MODIFIED` audit action (Q9)
 
@@ -313,27 +380,27 @@ Every read-site that filters on `effective_to` is enumerated and audited for the
 | `LocalAgreementProfileRepository.GetCurrentOpenAsync` | `effective_to IS NULL` | `effective_to IS NULL` (unchanged) | Open is open under either convention. |
 | `LocalAgreementProfileRepository.GetActivationsInPeriodAsync` | `effective_to IS NULL OR effective_to >= @periodStart` | `effective_to IS NULL OR effective_to > @periodStart` | A row with end-exclusive `effective_to = periodStart` ended *before* periodStart; it does NOT overlap the period. |
 | `LocalAgreementProfileRepository.GetHistoryAsync` | `effective_to IS NOT NULL` | `effective_to IS NOT NULL` (unchanged) | Closed-vs-open test, not a date comparison. |
-| `LocalAgreementProfileMigrator.GetActiveSnapshotAsync` (S21) | `effective_to IS NULL OR effective_to >= today` | `effective_to IS NULL OR effective_to > today` | Same reasoning as `GetActivationsInPeriodAsync`. |
 | `ConfigResolutionService.ResolveAsync` (profile lookup branch) | calls `GetCurrentOpenAsync` | unchanged | Indirect via the repo. |
 | `BuildPlanForLegacyCallers` D9c (PCS) | calls `GetActivationsInPeriodAsync` | propagates the predicate change | Indirect via the repo. |
+
+`LocalAgreementProfileMigrator` (S21) reads the legacy `local_configurations` table, NOT `local_agreement_profiles`, so the end-exclusive change does not propagate there — the migrator's predicates are not affected by ADR-018 (cycle-2 review N5).
 
 No production code outside the repository directly compares `effective_to` to a date — the predicate update is localized to the repository's three filter sites + the migrator's snapshot read.
 
 ### D11 — Replay-determinism proof for pre-S22 `SegmentManifest`s
 
-Pre-S22 `SegmentManifest`s are replayed by `PCS.ReplayAsync(manifestId)` to reproduce historical calculations. ADR-016 D5b establishes that local-config (post-S21: profile data) is NOT in the snapshot-at-calculation set — manifests do NOT carry profile snapshots; they carry boundary dates derived from `LocalProfileActivation` events.
+Pre-S22 `SegmentManifest`s are replayed by `PCS.ReplayAsync(manifestId)` to reproduce historical calculations. ADR-016 D5b establishes that local-config (post-S21: profile data) is NOT in the snapshot-at-calculation set — manifests do NOT carry profile snapshots; they carry boundary dates and per-segment `SegmentSnapshot` values frozen at original calculation time.
 
-Replay's interaction with end-exclusive migration:
+Replay's interaction with end-exclusive migration (cycle-2 review W2 mechanism correction):
 
-1. Manifest payload contains `LocalProfileActivations: [(date, profileId)]` per ADR-017 D9b.
-2. Replay reads the manifest and re-evaluates rules against the boundary timeline.
-3. Boundary detection uses `effective_from` (the activation date), NOT `effective_to`.
-4. End-exclusive migration changes `effective_to` values; `effective_from` is unchanged.
-5. Therefore, the boundary timeline reproduces identically.
+1. Manifest payload contains `LocalProfileActivations: [(date, profileId)]` (ADR-017 D9b) plus `SegmentSnapshot` values per segment (ADR-016 D5b).
+2. `PCS.ReplayAsync(manifestId)` calls `PeriodPlanner.FromManifest(manifest, ruleSet)` (`PeriodPlanner.cs:178`) which **reuses `manifest.Segments` directly** — the planner does NOT re-walk `BoundarySources` against the live database; segment boundaries are reconstructed from manifest data.
+3. Rule evaluation runs `CalculateWithOutcomeAsync` against the caller-supplied `EmploymentProfile` and the manifest's per-segment `SegmentSnapshot` values. **`local_agreement_profiles` is never re-read on the replay path.**
+4. Therefore, post-S22 schema changes to `local_agreement_profiles` (the `+1 day` shift on `effective_to`, the new `version` column) cannot influence replay output — the replay path simply doesn't touch the migrated table.
 
-The only S22-introduced replay risk is for code paths that compute "is this profile currently active on date D?" — which use the predicate `effective_from <= D AND (effective_to IS NULL OR effective_to ? D)`. The `?` operator changes from `>=` to `>` under end-exclusive. For replay against pre-S22 manifests, this matters only if the manifest's snapshot-of-the-day overlapped a closed predecessor's `effective_to = D` exactly; under pre-S22 (end-inclusive) the predecessor was active on D, under post-S22 (end-exclusive) it ended *before* D. **However**, profile manifests don't snapshot the profile contents — they snapshot the `effective_from` boundary date and the profile_id, and replay re-fetches the live profile row to evaluate. So the live row, post-migration, has the corrected end-exclusive `effective_to`, and the live read predicate uses `>` accordingly. The replay sees a consistent (end-exclusive) view of the row.
+This is a stronger guarantee than the original cycle-1 framing claimed: replay is invariant under migration NOT because "the live row's post-migration state happens to match the post-migration read predicates," but because the replay path is structurally decoupled from the live row entirely. The `manifest.Segments` snapshot is the canonical input.
 
-**Test guarantee** (D12 below): regression test that pre-S22 manifests replay byte-identically to post-S22 evaluation of the same period. Floor: 1 dedicated test per the matrix.
+**Test guarantee** (D12 below): regression test that pre-S22 manifests replay byte-identically post-migration. Floor: 1 dedicated test per the matrix. The test seeds a pre-S22-shape profile (end-inclusive `effective_to`), creates a manifest using S21-era `BuildPlanForLegacyCallers`, runs the migration, then replays the manifest and asserts byte-identical output — the assertion holds because the replay never reads the migrated profile row.
 
 ### D12 — Test strategy: committed minimum matrix (Q12)
 
@@ -342,13 +409,17 @@ Matching ADR-016 D11 + ADR-017 D11 format. Categories pre-committed as IN; scena
 | Category | Scenarios | Floor | File |
 |----------|-----------|-------|------|
 | Outbox enqueue + publish | Happy path; publisher restart resumes; per-stream FIFO; concurrent cross-stream parallelism; **rolled-back state-change → no outbox row → no publish** | 5 | `tests/StatsTid.Tests.Regression/Outbox/OutboxPublisherTests.cs` |
-| Profile row-version + end-exclusive | In-place UPDATE bumps version; concurrent in-place 412; same-day routes to UPDATE; end-exclusive predecessor close | 4 | `tests/StatsTid.Tests.Regression/Config/ProfileRowVersionTests.cs` |
+| Profile row-version + end-exclusive | In-place UPDATE bumps version; concurrent in-place 412 (asserts outbox row count delta = 0 from the failed save, cycle-2 N3); same-day routes to UPDATE; end-exclusive predecessor close; **same-day SUPERSESSION followed by in-place MODIFICATION on the new active row** (cycle-2 W4) — admin creates profile with effective_from = today, then immediately changes a value without re-touching effective_from; routing must be SUPERSEDED then MODIFIED, audit chain must show both | 5 | `tests/StatsTid.Tests.Regression/Config/ProfileRowVersionTests.cs` |
 | End-exclusive migration | Closed row converts (`effective_to + 1`); open row stays NULL with version 1; pre-S22 SegmentManifest replays byte-identical | 3 | `tests/StatsTid.Tests.Regression/Config/EndExclusiveMigrationTests.cs` |
 | `IEventStore` in-tx overload | In-tx `EnqueueAsync` writes outbox row in caller's tx; rollback removes outbox row; ETag/version backfill on existing profiles returns `1` | 3 | `tests/StatsTid.Tests.Regression/Outbox/EventStoreInTxTests.cs` (+ `tests/StatsTid.Tests.Unit/Outbox/EventStoreInterfaceTests.cs` if needed for unit coverage) |
 
 The "rolled-back state-change → no publish" scenario (cycle 1 Reviewer R-B4) is the inverse-direction guarantee that defines transactional-outbox correctness. Without this scenario, the test matrix only proves "things that committed get published" and not "things that didn't commit don't get published" — which is the entire point of the outbox.
 
 The "pre-S22 SegmentManifest replays byte-identical" scenario (cycle 1 Reviewer R-B3) provides the replay-determinism proof for D11. The test seeds a pre-S22-shape profile (end-inclusive `effective_to`), creates a manifest using S21-era `BuildPlanForLegacyCallers`, runs the migration, then replays the manifest and asserts byte-identical output.
+
+**Test floor: 16 (was 15 in cycle 1)** — cycle 2 added the same-day-supersession-then-MODIFICATION scenario per W4. Categories total to (5 outbox) + (5 profile) + (3 migration) + (3 IEventStore) = 16.
+
+**Test fixture update budget** (cycle-2 review W6): the `SupersedeAndCreateAsync` return-type change from `Guid` to `(Guid ProfileId, long Version)` breaks 10 call sites across 4 existing test fixtures (`ProfileSupersessionTests.cs`, `ProfileConcurrencyTokenTests.cs`, `ProfileAuditTests.cs`, `ProfileLegacyEventNonEmissionTests.cs`). Task decomposition (deliverable #3) must include a TASK line item: "destructure tuple at ~10 existing test call sites." Mechanical change; estimated < 30 LOC total.
 
 ## Rationale
 
@@ -379,6 +450,8 @@ The "pre-S22 SegmentManifest replays byte-identical" scenario (cycle 1 Reviewer 
   - `AcquireLockAsync` returns `(Guid ProfileId, long Version, DateOnly EffectiveFrom)` (or null).
   - `OptimisticConcurrencyException` reshaped to carry expected/actual versions instead of profile_ids.
   - `InvalidProfileSupersessionException` re-introduced (cycle 3-9 of S21 Step 7a removed it; D9's strict-less-than guard re-introduces it).
+- New exceptions in `StatsTid.Infrastructure.Outbox` namespace:
+  - `PublisherCorrelationException` — thrown by the publisher when 23505 fires on `events` INSERT but the existing row's `event_id` does not match the outbox row's `event_id`. Surfaces as a manual-reconcile alert (operator dashboard) rather than a silent skip. Cycle-3 review N-1 fix.
 
 ### For Backend.Api
 - `ConfigEndpoints.MapPut` flow:
@@ -391,8 +464,27 @@ The "pre-S22 SegmentManifest replays byte-identical" scenario (cycle 1 Reviewer 
 - All 12 state-change-emitting endpoint sites (across `ConfigEndpoints`, `AdminEndpoints`, `AgreementConfigEndpoints`, `PositionOverrideEndpoints`, `WageTypeMappingEndpoints`, `ApprovalEndpoints`, `OvertimeEndpoints`, `ComplianceEndpoints`, `SkemaEndpoints`, `TimerEndpoints`, `TimeEndpoints`, plus `Payroll` + `External` integrations) swap one line: `tx.Commit + AppendAsync` → `EnqueueAsync(conn, tx, ...) + tx.Commit`.
 
 ### For Frontend
-- `useConfig.ts` ETag handling: parse `ETag: "<number>"` header on GET responses; send `If-Match: "<number>"` on PUT. Numeric ETag is simpler than UUID — no quoting weirdness, parse with `parseInt`.
-- 412 response handling unchanged.
+- `useConfig.ts` ETag handling: parse `ETag: "<number>"` header on GET responses; send `If-Match: "<number>"` on PUT. Per HTTP/RFC 7232, ETag values are quoted opaque strings — even when the value happens to be numeric, the response header is literally `ETag: "5"` (quotes included). The frontend MUST strip quotes before treating the value numerically (cycle-2 review C3 fix):
+
+```typescript
+// In useConfig.ts (or shared etag helper)
+function parseVersionFromETag(etag: string | null): number | null {
+  if (!etag) return null
+  // Strip surrounding double-quotes per RFC 7232; W/-prefixed weak ETags are
+  // not used by S22 (we emit only strong ETags) but stripped defensively.
+  const unquoted = etag.replace(/^W\//i, '').replace(/^"|"$/g, '')
+  const n = parseInt(unquoted, 10)
+  return Number.isNaN(n) ? null : n
+}
+
+function formatVersionAsIfMatch(version: number): string {
+  return `"${version}"`
+}
+```
+
+The ETag is treated as an opaque token end-to-end on the wire (quoted); the numeric `version` is the in-memory representation in TypeScript and the database column. The mismatch happens only at the HTTP boundary.
+
+- 412 response handling unchanged from S21.
 
 ### For migration
 - DDL migration (init.sql + production migration script): add `version` column with DEFAULT 1, convert `effective_to + 1 day` for closed rows, extend audit-action CHECK constraint, create `outbox_events` table + indexes.
@@ -412,6 +504,52 @@ For each open question that produced a closed decision, the rejected options:
 - **Q5 (at-least-once idempotency):** option (a) outbox row carries `stream_version` at enqueue rejected — reproduces S21 cycle-2 MVCC snapshot conflict. Option (c) per-stream sequencer table rejected — mechanically equivalent to (b) without behavior gain.
 - **Q7 (row-version bump):** trigger-based bump rejected — invisible from C# code, hard to assert correctly in tests, obscures the optimistic-concurrency contract. PostgreSQL `xmin` rejected — opaque, version-dependent, changes on VACUUM in some configurations.
 - **Q9 (in-place routing):** explicit `EditMode.InPlace` / `EditMode.Supersede` parameter on the repo rejected — the repo can detect from `newProfile.EffectiveFrom` cleanly; explicit mode adds caller burden without disambiguation gain (caller would just compute the same condition).
+
+## Review History
+
+### Cycle 1 (2026-05-03)
+
+Internal Reviewer: 2 BLOCKER + 6 WARNING + 5 NOTE. External Codex: 3 P1 BLOCKER. Convergent on D4's correlation-key gap (Reviewer B1, Codex C2). Codex independently flagged D4's wrong schema reference (C1) and frontend ETag parsing (C3); Reviewer independently flagged migration non-idempotency (B2), D2/D11 wrong rationales (W1/W2), redundant-but-load-bearing-implied D7 WHERE clause (W3), missing same-day-supersession-then-MODIFICATION test scenario (W4), missing Orchestrator from D6 stream-ownership table (W5), test-fixture update budget (W6), and the cross-reference / method-name NOTEs (N1-N5).
+
+### Cycle 2 (2026-05-03) — fixes applied
+
+| Finding | Resolution |
+|---------|-----------|
+| Reviewer B1 + Codex C2 (correlation-key gap) | Outbox row gains `event_id UUID NOT NULL UNIQUE`; mirrors `events.event_id` (existing UNIQUE constraint per `init.sql:13`). Publisher uses lookup-by-`event_id` on 23505 retry; mismatch surfaces `PublisherCorrelationException` for manual reconcile. No new column on `events` table. |
+| Reviewer B2 (migration non-idempotency) | New `schema_migrations` ledger table; the `+1 day` UPDATE wrapped in `DO $$ ... INSERT INTO schema_migrations ON CONFLICT DO NOTHING; IF NOT FOUND THEN RETURN $$` block. Re-runs of `init.sql` are no-ops. |
+| Codex C1 (wrong schema for `MAX(stream_version)`) | D4 protocol rewritten to query `MAX(stream_version) FROM events WHERE stream_id = @id`; serialization via `SELECT 1 FROM event_streams WHERE stream_id = @id FOR UPDATE`; `INSERT ... ON CONFLICT DO NOTHING` to ensure parent stream row exists. |
+| Codex C3 (ETag parseInt on quoted string) | Frontend section adds `parseVersionFromETag` + `formatVersionAsIfMatch` helpers that strip/add quotes per RFC 7232. ETag stays opaque on the wire; numeric internally. |
+| Reviewer W1 (D2 rationale wrong) | "Backend.Api can't deserialize cross-service events" replaced with the actual rationale (operational coupling + D6 stream-ownership). |
+| Reviewer W2 (D11 mechanism wrong) | "Replay re-fetches live profile rows" replaced with "replay reuses `manifest.Segments` directly via `PeriodPlanner.FromManifest`; `local_agreement_profiles` is never re-read on the replay path." Stronger guarantee. |
+| Reviewer W3 (D7 WHERE clause framing) | Clarified that the optimistic check happens in `ValidatePrecondition` post-`AcquireLockAsync`; the UPDATE's `WHERE version = @expected` is defense-in-depth, not load-bearing. |
+| Reviewer W4 (missing test scenario) | D12 Profile category extended from 4 → 5 scenarios; "same-day SUPERSESSION followed by in-place MODIFICATION" added. Total floor 15 → 16. |
+| Reviewer W5 (Orchestrator missing from D6) | Stream-ownership table extended to include Orchestrator with explicit "MAY NOT write any stream" entry; future addition gates on outbox-topology re-architecture. |
+| Reviewer W6 (test-fixture update budget) | D12 closing paragraph notes ~10 call sites across 4 fixtures need destructuring updates; deliverable #3 (task decomposition) must include a TASK line item. |
+| Reviewer N3 (concurrent in-place 412 outbox-rollback assertion) | D12 Profile #2 scenario gains "asserts outbox row count delta = 0 from the failed save." |
+| Reviewer N5 (D10 method-name) | Migrator row removed from D10 table (it queries `local_configurations`, not `local_agreement_profiles`); explanatory paragraph added. |
+
+Status flipped DRAFT → ACCEPTED pending cycle-3 verify. Cycle-3 review is mandatory before deliverable #2 (migration plan) + #3 (task decomposition) start.
+
+### Cycle 3 (2026-05-03)
+
+Internal Reviewer: APPROVED — all cycle-1 findings RESOLVED + 3 advisory NOTEs (N-1 PublisherCorrelationException not in Implications; N-2 D4 step-2 prose redundant with C# pseudocode; N-3 schema_migrations ledger ordering invariant). Recommendation: ACCEPTED.
+
+External Codex: 1 NEW P1 BLOCKER — cycle-2's `IsolationLevel.RepeatableRead` choice for the publisher tx is wrong. Under RepeatableRead, the snapshot is fixed at BEGIN, so even after waiting on `SELECT ... FOR UPDATE` the second publisher reads the OLD `MAX(stream_version)` from its frozen snapshot and picks the same next version as the first publisher — reproducing the exact bug ADR-018 was designed to eliminate. The fix is `IsolationLevel.ReadCommitted` (each statement gets a fresh snapshot of latest committed data; post-lock-wait `MAX` correctly observes the prior publisher's row).
+
+### Cycle 4 (2026-05-03) — fixes applied
+
+| Finding | Resolution |
+|---------|-----------|
+| Codex cycle-3 P1 (RepeatableRead snapshot bug) | Publisher tx uses `IsolationLevel.ReadCommitted`. Added explanatory paragraph contrasting publisher's "see latest committed after lock-wait" requirement with the state-change tx's "consistent multi-statement reads" requirement. The two transactions deliberately use different isolation levels because they have different consistency contracts. |
+| Reviewer cycle-3 N-1 (`PublisherCorrelationException` missing from Implications) | Added to Infrastructure implications list under new "exceptions in `StatsTid.Infrastructure.Outbox`" sub-bullet. |
+| Reviewer cycle-3 N-2 (D4 step-2 prose redundancy) | Step 2 rewritten to match the C# pseudocode shape: unconditional `INSERT ... ON CONFLICT DO NOTHING` followed by `SELECT 1 ... FOR UPDATE`, with explicit reference to the existing `PostgresEventStore.AppendAsync` pattern. No "first ... then re-issue the FOR UPDATE" check-then-acquire phrasing. |
+| Reviewer cycle-3 N-3 (schema_migrations ordering invariant) | Added "Ordering invariant" paragraph to D8 stating the ledger CREATE must precede any guarded `DO $$` block. |
+
+ADR-018 now fully ACCEPTED. No further review cycles needed before deliverables #2 + #3.
+
+### Cycle 5 (2026-05-03)
+
+External Codex re-verify on cycle-4 fixes: 0 BLOCKERs. 1 P2 WARNING — internal inconsistency between D7's unquoted `If-Match: <version>` framing and the cycle-2 frontend section's correct quoted `If-Match: "<version>"` per RFC 7232. Mechanically fixed (D7 prose updated to specify quoted ETag throughout, with cross-reference to the frontend translation helpers). No new BLOCKERs. ADR-018 closed at cycle 5 within the cycle-cap-discipline boundary (4 BLOCKER-fix cycles total: 1 cycle of original BLOCKERs + 1 cycle 4 of Codex P1 fix + 0 BLOCKERs in cycle 5). Internal Reviewer cycle-3 approval still stands (cycle-4 + cycle-5 changes did not alter architectural shape).
 
 ## References
 

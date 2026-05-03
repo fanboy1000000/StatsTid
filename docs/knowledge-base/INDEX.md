@@ -23,7 +23,7 @@
 | [ADR-015](decisions/ADR-015-compliance-check-result-pattern.md) | ComplianceCheckResult as separate return type from CalculationResult | approved | S16 | Rule Engine, SharedKernel | compliance, rule-engine, return-type, eu-working-time-directive |
 | [ADR-016](decisions/ADR-016-temporal-period-handling.md) | Temporal period handling — PeriodPlanner + SegmentManifest + SnapshotContract | approved | S20 | Rule Engine, SharedKernel, Payroll, Infrastructure | segmentation, period, planner, manifest, ok-version, replay, audit |
 | [ADR-017](decisions/ADR-017-local-agreement-configuration-as-a-profile.md) | Local agreement configuration as a profile (replaces patch-bag) | approved | S21 | Infrastructure, Backend, SharedKernel, Frontend, Data Model | local-config, profile, configuration, effective-dating, schema, migration |
-| [ADR-018](decisions/ADR-018-transactional-outbox-and-row-version-optimistic-concurrency.md) | Transactional outbox + row-version optimistic concurrency (supersedes ADR-004; amends ADR-017 D2 + D2.1) | DRAFT | S22 | Infrastructure, Backend, SharedKernel, Data Model | outbox, transactional-outbox, row-version, optimistic-concurrency, etag, end-exclusive, migration |
+| [ADR-018](decisions/ADR-018-transactional-outbox-and-row-version-optimistic-concurrency.md) | Transactional outbox + row-version optimistic concurrency (supersedes ADR-004; amends ADR-017 D2 + D2.1) | approved (cycles 1-5 reviewed 2026-05-03) | S22 | Infrastructure, Backend, SharedKernel, Data Model | outbox, transactional-outbox, row-version, optimistic-concurrency, etag, end-exclusive, migration |
 
 ## Validated Patterns (PAT)
 
