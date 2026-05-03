@@ -27,6 +27,8 @@
 | [Sprint 19](SPRINT-19.md) | Codex BLOCKER Remediation (Round 2: `/execute` and `/calculate-and-export` resource-scope, retroactive audit canonicalization, JWT env-var) | complete | 2026-04-25 → 2026-04-28 | 493 | yes — 2026-04-28 |
 | [Sprint 20](SPRINT-20.md) | Temporal Period Handling (ADR-016 D1-D11 + Segmentation bounded context + planner-driven PCS + manifest projection + per-line OK-version stamping) | complete | 2026-04-29 → 2026-05-02 | 562 | yes — 2026-05-02 |
 | [Sprint 21](SPRINT-21.md) | Local Agreement Configuration Rework (ADR-017 D1-D11 + profile schema + repository + migration runner + ConfigEndpoints rewrite + PCS hydration + UX profile editor + 18-scenario D11 test matrix + Step 7a 10-cycle review) | complete | 2026-05-02 → 2026-05-03 | 618 | yes — 2026-05-03 |
+| [Sprint 22](SPRINT-22.md) | Transactional Outbox + Profile Row-Version (Phase 4 Hardening Foundation: D6 outbox + Step-7a-D2 row-version + end-exclusive `effective_to` on `local_agreement_profiles`) | analysis-phase (Step 0a + Step 0b cycle 1 complete; ADR-018 + task decomposition pending) | 2026-05-03 → TBD | — | no |
+| [Sprint 23](SPRINT-23.md) | D2.2 ETag/If-Match Propagation (sibling to S22: pattern propagated to `agreement_configs`, `position_overrides`, `wage_type_mappings`, `entitlement_configs`) | placeholder (detail planning post-S22 close) | TBD | — | no |
 
 ## Cumulative Task Summary
 
