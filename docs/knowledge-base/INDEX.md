@@ -9,7 +9,7 @@
 | [ADR-001](decisions/ADR-001-event-sourcing-postgresql-npgsql.md) | Event sourcing with PostgreSQL via Npgsql | approved | S1 | Infrastructure, Data Model | event-sourcing, postgresql, npgsql |
 | [ADR-002](decisions/ADR-002-pure-function-rule-engine.md) | Pure function rule engine with no I/O | approved | S1 | Rule Engine | rule-engine, determinism, pure-functions |
 | [ADR-003](decisions/ADR-003-ok-version-resolved-by-entry-date.md) | OK version resolved by entry date, not current date | approved | S2 | Rule Engine | ok-version, determinism, version-resolution |
-| [ADR-004](decisions/ADR-004-outbox-pattern-guaranteed-delivery.md) | Outbox pattern for guaranteed delivery | approved | S1 | Infrastructure, API Integration | outbox-pattern, delivery-guarantee, integration |
+| [ADR-004](decisions/ADR-004-outbox-pattern-guaranteed-delivery.md) | Outbox pattern for guaranteed delivery | superseded by ADR-018 (S22) | S1 (never implemented) | Infrastructure, API Integration | outbox-pattern, delivery-guarantee, integration, superseded |
 | [ADR-005](decisions/ADR-005-explicit-type-map-polymorphic-serialization.md) | Explicit type map for polymorphic event serialization | approved | S1 | Data Model, Infrastructure | serialization, events, type-map, system-text-json |
 | [ADR-006](decisions/ADR-006-eight-service-docker-compose.md) | 8-service Docker Compose architecture | approved | S1 | Infrastructure | docker, microservices, architecture |
 | [ADR-007](decisions/ADR-007-jwt-auth-rbac-correlation-ids.md) | JWT auth with RBAC and correlation IDs | approved | S3 | Security, Infrastructure | jwt, rbac, authentication, authorization, correlation-id, audit |
@@ -23,6 +23,7 @@
 | [ADR-015](decisions/ADR-015-compliance-check-result-pattern.md) | ComplianceCheckResult as separate return type from CalculationResult | approved | S16 | Rule Engine, SharedKernel | compliance, rule-engine, return-type, eu-working-time-directive |
 | [ADR-016](decisions/ADR-016-temporal-period-handling.md) | Temporal period handling — PeriodPlanner + SegmentManifest + SnapshotContract | approved | S20 | Rule Engine, SharedKernel, Payroll, Infrastructure | segmentation, period, planner, manifest, ok-version, replay, audit |
 | [ADR-017](decisions/ADR-017-local-agreement-configuration-as-a-profile.md) | Local agreement configuration as a profile (replaces patch-bag) | approved | S21 | Infrastructure, Backend, SharedKernel, Frontend, Data Model | local-config, profile, configuration, effective-dating, schema, migration |
+| [ADR-018](decisions/ADR-018-transactional-outbox-and-row-version-optimistic-concurrency.md) | Transactional outbox + row-version optimistic concurrency (supersedes ADR-004; amends ADR-017 D2 + D2.1) | DRAFT | S22 | Infrastructure, Backend, SharedKernel, Data Model | outbox, transactional-outbox, row-version, optimistic-concurrency, etag, end-exclusive, migration |
 
 ## Validated Patterns (PAT)
 

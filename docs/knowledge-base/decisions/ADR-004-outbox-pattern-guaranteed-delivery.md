@@ -4,11 +4,13 @@
 |-------|-------|
 | **ID** | ADR-004 |
 | **Category** | decision |
-| **Status** | approved |
-| **Sprint** | Sprint 1 |
+| **Status** | **superseded by [ADR-018](ADR-018-transactional-outbox-and-row-version-optimistic-concurrency.md) (2026-05-03)** |
+| **Sprint** | Sprint 1 (approved); never implemented |
 | **Date** | 2026-01-15 |
 | **Domains** | Infrastructure, API Integration |
-| **Tags** | outbox-pattern, delivery-guarantee, integration |
+| **Tags** | outbox-pattern, delivery-guarantee, integration, superseded |
+
+> **Supersession note (2026-05-03):** This ADR was approved in Sprint 1 but never implemented. The `outbox_events` table specified here was not added to `init.sql`; per-event delivery to integrations actually happens via direct HTTP calls in S5+ payroll/external integration code, not through an outbox processor. ADR-018 implements the original commitment AND adds state-change-to-event-store atomicity (the residual partial-failure window S21 cycle-2 surfaced), which ADR-004 did not address. Treat ADR-018 as the authoritative outbox design; ADR-004 remains for historical record only.
 
 ## Context
 The system must send events to external integrations (payroll, external APIs) reliably. If an event is persisted but the integration call fails, the event must not be lost. Conversely, if the integration succeeds but the database transaction fails, the event must not be sent.
