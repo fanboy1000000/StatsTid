@@ -4,9 +4,9 @@ using Npgsql;
 using StatsTid.Auth;
 using StatsTid.Backend.Api.Validators;
 using StatsTid.Infrastructure;
+using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Events;
-using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Security;
 
@@ -101,14 +101,19 @@ public static class ConfigEndpoints
 
         // PUT /api/config/{orgId}/profile/{agreementCode}/{okVersion}
         // Create-or-supersede the local agreement profile for the (org, agreement, OK-version).
-        // Concurrency: requires `If-Match: "<currentProfileId>"` for supersession OR
-        // `If-None-Match: *` for first creation (ADR-017 D2.1). Returns 412 on stale state.
+        // Concurrency: requires `If-Match: "<version>"` for supersession or in-place edit OR
+        // `If-None-Match: *` for first creation (ADR-018 D7, RFC 7232 quoted). Returns 412 on
+        // stale state.
         // Validation: ProfileAlignmentValidator runs against changed fields (ADR-017 D9a) →
         // 400 with structured per-field errors on misalignment.
-        // Transaction (ADR-017 D6): the profile UPDATE/INSERT and the audit-row INSERT are
-        // committed in a single PostgreSQL transaction via the repo's in-transaction overload.
-        // The LocalAgreementProfileChanged event is appended via IEventStore after the profile
-        // transaction commits successfully (the event store owns its own transaction; same DB).
+        // Transaction (ADR-018 D3): the profile UPDATE/INSERT, the audit-row INSERT, and the
+        // outbox enqueue are committed in a single PostgreSQL transaction via the repo's
+        // in-transaction overload. A separate per-service OutboxPublisher drains
+        // outbox_events to the canonical event store at-least-once (ADR-018 D4) — this
+        // supersedes the S21 cycle-2 post-commit AppendAsync shape because the publisher's
+        // own ReadCommitted transaction sees the latest committed stream_version when it
+        // appends (eliminating the RepeatableRead snapshot conflict that drove the
+        // post-commit shape originally).
         app.MapPut("/api/config/{orgId}/profile/{agreementCode}/{okVersion}", async (
             string orgId,
             string agreementCode,
@@ -118,7 +123,7 @@ public static class ConfigEndpoints
             LocalAgreementProfileRepository profileRepo,
             ProfileAlignmentValidator alignmentValidator,
             OrgScopeValidator scopeValidator,
-            IEventStore eventStore,
+            IOutboxEnqueue outbox,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -129,14 +134,17 @@ public static class ConfigEndpoints
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
-            // 2. Parse the ETag/If-Match concurrency precondition (ADR-017 D2.1).
-            //    `If-Match: "<guid>"` -> supersede that specific predecessor.
-            //    `If-None-Match: *`  -> assert no current profile exists (first creation).
+            // 2. Parse the ETag/If-Match concurrency precondition (ADR-018 D7).
+            //    `If-Match: "<version>"` -> supersede / update-in-place at that version.
+            //    `If-None-Match: *`      -> assert no current profile exists (first creation).
             //    Exactly one of the two MUST be supplied.
-            if (!TryParseConcurrencyPrecondition(context, out var expectedCurrentProfileId, out var headerError))
+            if (!TryParseConcurrencyPrecondition(context, out var expectedCurrentVersion, out var headerError))
                 return Results.Json(new { error = headerError }, statusCode: 428);
 
-            // 3. Build the candidate profile from the request body.
+            // 3. Build the candidate profile from the request body. Version is `required init`
+            //    on the model (ADR-018 D7); the value here is a placeholder — the repository
+            //    assigns the authoritative version (1 for first-create / supersede-as-new;
+            //    predecessor.Version + 1 for UPDATE-in-place).
             var newProfileId = Guid.NewGuid();
             var candidate = new LocalAgreementProfile
             {
@@ -153,13 +161,15 @@ public static class ConfigEndpoints
                 OvertimeRequiresPreApproval = request.OvertimeRequiresPreApproval,
                 CreatedBy = actor.ActorId ?? "system",
                 CreatedAt = DateTime.UtcNow,
+                Version = 1,
             };
 
             // 4. Compute the field delta vs. the predecessor (or against NULL-defaults on
-            //    first creation). The delta drives both the alignment validator's
-            //    changed-fields input and the audit/event payload (ADR-017 D6).
+            //    first creation). The delta drives the alignment validator's changed-fields
+            //    input, the audit/event payload, AND the three-way audit-action routing
+            //    (ADR-018 D9 — see step 6 below).
             LocalAgreementProfile? predecessor = null;
-            if (expectedCurrentProfileId is not null)
+            if (expectedCurrentVersion is not null)
                 predecessor = await profileRepo.GetCurrentOpenAsync(orgId, agreementCode, okVersion, ct);
             var changedFields = ComputeChangedFields(predecessor, candidate);
             var changedFieldsForValidator = changedFields.ToDictionary(
@@ -208,11 +218,15 @@ public static class ConfigEndpoints
                 });
             }
 
-            // 6. Single-transaction profile + audit write (ADR-017 D6).
-            //    The repo's in-transaction overload performs the lock + close + insert; we
-            //    insert the audit row on the same conn+tx and commit together. On
-            //    OptimisticConcurrencyException we surface 412 with the actual current state.
+            // 6. Single-transaction profile + audit + outbox write (ADR-018 D3).
+            //    The repo's in-transaction overload performs the lock + (close+insert |
+            //    update-in-place) + (route same-day-vs-supersession). We then insert the
+            //    audit row AND enqueue the LocalAgreementProfileChanged outbox event on the
+            //    same conn+tx and commit together. On OptimisticConcurrencyException we
+            //    surface 412 with the actual current state; on InvalidProfileSupersessionException
+            //    we surface 400 (backdate-before-predecessor per ADR-018 D9).
             Guid persistedProfileId;
+            long persistedVersion;
             try
             {
                 await using var conn = connectionFactory.Create();
@@ -220,10 +234,18 @@ public static class ConfigEndpoints
                 await using var tx = await conn.BeginTransactionAsync(IsolationLevel.RepeatableRead, ct);
                 try
                 {
-                    persistedProfileId = await profileRepo.SupersedeAndCreateAsync(
-                        conn, tx, expectedCurrentProfileId, candidate, ct);
+                    (persistedProfileId, persistedVersion) = await profileRepo.SupersedeAndCreateAsync(
+                        conn, tx, expectedCurrentVersion, candidate, ct);
 
-                    var auditAction = expectedCurrentProfileId is null ? "CREATED" : "SUPERSEDED";
+                    // Three-way audit-action routing (ADR-018 D9):
+                    //   CREATED    — no predecessor (first-create path).
+                    //   MODIFIED   — predecessor exists with same effective_from (UPDATE-in-place
+                    //                same-day edit).
+                    //   SUPERSEDED — predecessor exists with earlier effective_from
+                    //                (close-then-insert).
+                    var auditAction = predecessor is null
+                        ? "CREATED"
+                        : (predecessor.EffectiveFrom == candidate.EffectiveFrom ? "MODIFIED" : "SUPERSEDED");
                     var deltaJson = JsonSerializer.Serialize(changedFields);
                     await using var auditCmd = new NpgsqlCommand(
                         """
@@ -238,6 +260,34 @@ public static class ConfigEndpoints
                     auditCmd.Parameters.AddWithValue("actorRole", actor.ActorRole ?? StatsTidRoles.LocalAdmin);
                     await auditCmd.ExecuteNonQueryAsync(ct);
 
+                    // Enqueue the LocalAgreementProfileChanged outbox event INSIDE the
+                    // profile transaction (ADR-018 D3 — replaces the S21 post-commit
+                    // AppendAsync shape). The publisher drains outbox_events to the
+                    // canonical event store under its own ReadCommitted transaction with
+                    // FOR UPDATE serialization on event_streams (ADR-018 D4), eliminating
+                    // the S21 cycle-2 RepeatableRead snapshot conflict that drove the
+                    // post-commit shape originally. PrecedingProfileId is the predecessor's
+                    // profile_id when there was one (for the SUPERSEDED audit path) — it is
+                    // intentionally null on first-create AND on UPDATE-in-place (same-day
+                    // edit retains the same profile_id).
+                    var streamId = $"local-agreement-profile-{orgId}-{agreementCode}-{okVersion}";
+                    var @event = new LocalAgreementProfileChanged
+                    {
+                        ProfileId = persistedProfileId,
+                        OrgId = orgId,
+                        AgreementCode = agreementCode,
+                        OkVersion = okVersion,
+                        EffectiveFrom = candidate.EffectiveFrom,
+                        ChangedFields = changedFields,
+                        PrecedingProfileId = predecessor is not null && auditAction == "SUPERSEDED"
+                            ? predecessor.ProfileId
+                            : null,
+                        ActorId = actor.ActorId,
+                        ActorRole = actor.ActorRole,
+                        CorrelationId = actor.CorrelationId,
+                    };
+                    await outbox.EnqueueAsync(conn, tx, streamId, @event, ct);
+
                     await tx.CommitAsync(ct);
                 }
                 catch
@@ -248,52 +298,32 @@ public static class ConfigEndpoints
             }
             catch (OptimisticConcurrencyException ex)
             {
-                // ADR-017 D2.1: 412 Precondition Failed with the freshly-fetched current state.
+                // ADR-018 D7: 412 Precondition Failed with the freshly-fetched current state
+                //             and the version mismatch surfaced for the caller's retry logic.
                 var currentState = await profileRepo.GetCurrentOpenAsync(orgId, agreementCode, okVersion, ct);
                 return Results.Json(new
                 {
                     error = "Concurrency precondition failed",
-                    expectedProfileId = ex.ExpectedProfileId,
-                    actualProfileId = ex.ActualProfileId,
+                    expectedVersion = ex.ExpectedVersion,
+                    actualVersion = ex.ActualVersion,
                     currentState = MapProfileResponse(currentState),
                 }, statusCode: 412);
             }
-
-            // 7. Append the LocalAgreementProfileChanged event AFTER the profile transaction
-            //    commits successfully. This is the post-commit "best-effort" shape, NOT the
-            //    same-DB-transaction shape ADR-017 D6 originally specified.
-            //
-            //    Cycle-2 review found that placing the event-append inside the caller's
-            //    RepeatableRead transaction caused a snapshot-stale conflict on
-            //    stream_version: a second concurrent admin would read MAX(stream_version)
-            //    from a snapshot taken BEFORE the first admin's event INSERT was visible,
-            //    leading to duplicate-key violations on (stream_id, stream_version). The
-            //    self-contained AppendAsync overload uses its own fresh transaction, so it
-            //    always sees the latest committed version.
-            //
-            //    Residual risk (S21 known limitation, tracked in Phase-4): if the process
-            //    crashes between tx.CommitAsync above and AppendAsync below, the audit and
-            //    profile rows persist with no corresponding event. Phase-4 hardening will
-            //    redesign via the transactional-outbox pattern (insert into outbox_events
-            //    in the profile tx; separate publisher drains to event store) — same
-            //    atomic guarantee without MVCC snapshot conflicts.
-            var streamId = $"local-agreement-profile-{orgId}-{agreementCode}-{okVersion}";
-            var @event = new LocalAgreementProfileChanged
+            catch (InvalidProfileSupersessionException ex)
             {
-                ProfileId = persistedProfileId,
-                OrgId = orgId,
-                AgreementCode = agreementCode,
-                OkVersion = okVersion,
-                EffectiveFrom = candidate.EffectiveFrom,
-                ChangedFields = changedFields,
-                PrecedingProfileId = expectedCurrentProfileId,
-                ActorId = actor.ActorId,
-                ActorRole = actor.ActorRole,
-                CorrelationId = actor.CorrelationId,
-            };
-            await eventStore.AppendAsync(streamId, @event, ct);
+                // ADR-018 D9 backdate guard: the new profile cannot start before the
+                // predecessor's effective_from (strict-less under end-exclusive). 400 carries
+                // the structured error so the UI can surface a precise message.
+                return Results.BadRequest(new
+                {
+                    error = "Invalid profile supersession",
+                    message = ex.Message,
+                });
+            }
 
-            // 8. Return 200 with the new profile and an ETag for the next If-Match.
+            // 7. Return 200 with the new profile and an ETag for the next If-Match. The ETag
+            //    wire format is `"<version>"` (RFC 7232 quoted, ADR-018 D7) — was profile_id
+            //    in S21 (ADR-017 D2.1).
             var saved = new LocalAgreementProfile
             {
                 ProfileId = persistedProfileId,
@@ -309,8 +339,9 @@ public static class ConfigEndpoints
                 OvertimeRequiresPreApproval = candidate.OvertimeRequiresPreApproval,
                 CreatedBy = candidate.CreatedBy,
                 CreatedAt = candidate.CreatedAt,
+                Version = persistedVersion,
             };
-            context.Response.Headers.ETag = $"\"{persistedProfileId}\"";
+            context.Response.Headers.ETag = $"\"{persistedVersion}\"";
             return Results.Ok(MapProfileResponse(saved));
         }).RequireAuthorization("LocalAdminOrAbove");
 
@@ -423,14 +454,19 @@ public static class ConfigEndpoints
     }
 
     /// <summary>
-    /// Parses the ETag/If-Match precondition from request headers (ADR-017 D2.1). Returns
-    /// the expected current profile id (Guid for supersession, null for first creation
-    /// signalled by If-None-Match: *). Either header MUST be present and exactly one parses.
+    /// Parses the ETag/If-Match precondition from request headers (ADR-018 D7). Returns
+    /// the expected current profile version (long for supersession / in-place edit, null
+    /// for first creation signalled by If-None-Match: *). Either header MUST be present and
+    /// exactly one parses.
+    ///
+    /// Wire format per RFC 7232: <c>If-Match: "&lt;version&gt;"</c> with the numeric version
+    /// quoted. Surrounding quotes and whitespace are tolerated; non-numeric bodies are
+    /// rejected. Bare-numeric (no quotes) is accepted defensively.
     /// </summary>
     private static bool TryParseConcurrencyPrecondition(
-        HttpContext context, out Guid? expectedCurrentProfileId, out string? error)
+        HttpContext context, out long? expectedCurrentVersion, out string? error)
     {
-        expectedCurrentProfileId = null;
+        expectedCurrentVersion = null;
         error = null;
 
         var ifMatch = context.Request.Headers.IfMatch.ToString();
@@ -440,7 +476,7 @@ public static class ConfigEndpoints
 
         if (!hasIfMatch && !hasIfNoneMatch)
         {
-            error = "Missing If-Match: \"<profileId>\" (for supersession) or If-None-Match: * (for first creation).";
+            error = "Missing If-Match: \"<version>\" (for supersession or in-place edit) or If-None-Match: * (for first creation).";
             return false;
         }
         if (hasIfMatch && hasIfNoneMatch)
@@ -456,18 +492,20 @@ public static class ConfigEndpoints
                 error = "If-None-Match must be exactly '*' (first-creation precondition).";
                 return false;
             }
-            expectedCurrentProfileId = null;
+            expectedCurrentVersion = null;
             return true;
         }
 
-        // If-Match: "<guid>" (or bare guid). Strip surrounding quotes / whitespace.
+        // If-Match: "<version>" per RFC 7232. Strip surrounding quotes / whitespace; bare
+        // numeric (unquoted) is accepted defensively.
         var raw = ifMatch.Trim().Trim('"');
-        if (!Guid.TryParse(raw, out var parsed))
+        if (!long.TryParse(raw, System.Globalization.NumberStyles.Integer,
+                           System.Globalization.CultureInfo.InvariantCulture, out var parsed))
         {
-            error = $"If-Match header is not a valid GUID: '{ifMatch}'.";
+            error = $"If-Match header is not a valid version (expected RFC 7232 quoted long): '{ifMatch}'.";
             return false;
         }
-        expectedCurrentProfileId = parsed;
+        expectedCurrentVersion = parsed;
         return true;
     }
 
@@ -522,6 +560,10 @@ public static class ConfigEndpoints
             overtimeRequiresPreApproval = profile.OvertimeRequiresPreApproval,
             createdBy = profile.CreatedBy,
             createdAt = profile.CreatedAt,
+            // ADR-018 D7: surface the row-version on the response body so the frontend can
+            // round-trip it as the next If-Match. The wire ETag header carries the same
+            // value quoted (RFC 7232).
+            version = profile.Version,
         };
     }
 
