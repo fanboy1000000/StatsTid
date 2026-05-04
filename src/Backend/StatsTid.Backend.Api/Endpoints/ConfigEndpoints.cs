@@ -367,7 +367,7 @@ public static class ConfigEndpoints
             if (profile is null)
                 return Results.NotFound(new { error = "No active local agreement profile for this org/agreement/OkVersion." });
 
-            context.Response.Headers.ETag = $"\"{profile.ProfileId}\"";
+            context.Response.Headers.ETag = $"\"{profile.Version}\"";
             return Results.Ok(MapProfileResponse(profile));
         }).RequireAuthorization("EmployeeOrAbove");
 
