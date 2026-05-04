@@ -1,5 +1,6 @@
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
+using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Resilience;
 using StatsTid.Infrastructure.Security;
 using StatsTid.Integrations.Payroll.Services;
@@ -12,7 +13,18 @@ var connectionString = builder.Configuration.GetConnectionString("EventStore")
     ?? "Host=localhost;Port=5432;Database=statstid;Username=statstid;Password=statstid_dev";
 
 builder.Services.AddSingleton(new DbConnectionFactory(connectionString));
-builder.Services.AddSingleton<IEventStore>(sp => new PostgresEventStore(sp.GetRequiredService<DbConnectionFactory>()));
+
+// ── Outbox: dual-binding per ADR-018 D3 + per-service publisher per D2/D6 ──
+// Payroll owns period-calculation-* + payroll-export-* + retroactive correction
+// streams per ADR-018 D6 stream-ownership table.
+builder.Services.AddSingleton(new OutboxServiceContext("payroll"));
+builder.Services.AddSingleton<PostgresEventStore>(sp => new PostgresEventStore(
+    sp.GetRequiredService<DbConnectionFactory>(),
+    sp.GetRequiredService<OutboxServiceContext>()));
+builder.Services.AddSingleton<IEventStore>(sp => sp.GetRequiredService<PostgresEventStore>());
+builder.Services.AddSingleton<IOutboxEnqueue>(sp => sp.GetRequiredService<PostgresEventStore>());
+builder.Services.AddHostedService<OutboxPublisher>();
+
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<PayrollMappingService>();
 builder.Services.AddSingleton<PayrollExportService>();

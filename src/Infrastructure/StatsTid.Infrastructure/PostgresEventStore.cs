@@ -1,17 +1,44 @@
 using Npgsql;
 using NpgsqlTypes;
+using StatsTid.Infrastructure.Outbox;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Interfaces;
 
 namespace StatsTid.Infrastructure;
 
-public sealed class PostgresEventStore : IEventStore
+/// <summary>
+/// Single concrete event-store implementation. Implements both interface contracts
+/// per ADR-018 D3 (cycle-6 split): <see cref="IEventStore"/> for the read +
+/// publisher-side append surface, and <see cref="IOutboxEnqueue"/> for the
+/// state-change-site in-tx enqueue surface. DI registers the concrete once and
+/// exposes it under both contracts.
+/// </summary>
+public sealed class PostgresEventStore : IEventStore, IOutboxEnqueue
 {
     private readonly DbConnectionFactory _connectionFactory;
+    private readonly OutboxServiceContext? _outboxServiceContext;
 
+    /// <summary>
+    /// Read-only / publisher-side constructor. <see cref="EnqueueAsync"/> is
+    /// not callable through this overload — services that enqueue must register
+    /// with the <see cref="OutboxServiceContext"/> overload below.
+    /// </summary>
     public PostgresEventStore(DbConnectionFactory connectionFactory)
     {
         _connectionFactory = connectionFactory;
+        _outboxServiceContext = null;
+    }
+
+    /// <summary>
+    /// State-change-site constructor. The injected
+    /// <see cref="OutboxServiceContext"/> stamps each enqueued row's
+    /// <c>service_id</c> column so the per-service <see cref="OutboxPublisher"/>
+    /// can scope its polling query (ADR-018 D2 + D6).
+    /// </summary>
+    public PostgresEventStore(DbConnectionFactory connectionFactory, OutboxServiceContext outboxServiceContext)
+    {
+        _connectionFactory = connectionFactory;
+        _outboxServiceContext = outboxServiceContext;
     }
 
     public async Task AppendAsync(string streamId, IDomainEvent @event, CancellationToken ct = default)
@@ -107,5 +134,64 @@ public sealed class PostgresEventStore : IEventStore
         }
 
         return events;
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// ADR-018 D1 + D3: writes a single row to <c>outbox_events</c> using the
+    /// caller's <paramref name="conn"/>+<paramref name="tx"/>. Visibility follows
+    /// the caller's tx commit/rollback. The <c>service_id</c> column is stamped
+    /// from the injected <see cref="OutboxServiceContext"/> so the per-service
+    /// <see cref="OutboxPublisher"/> can scope its polling query (ADR-018 D2).
+    /// <para>
+    /// Audit-context columns (<c>correlation_id</c>, <c>actor_id</c>, <c>actor_role</c>)
+    /// mirror the canonical event's audit fields at enqueue time so the
+    /// publisher can write the canonical <c>events</c> row without
+    /// deserializing the JSONB payload (ADR-018 D1 cycle-2 design choice).
+    /// </para>
+    /// </remarks>
+    public async Task EnqueueAsync(
+        NpgsqlConnection conn,
+        NpgsqlTransaction tx,
+        string streamId,
+        IDomainEvent @event,
+        CancellationToken ct = default)
+    {
+        if (_outboxServiceContext is null)
+        {
+            throw new InvalidOperationException(
+                "PostgresEventStore.EnqueueAsync requires an OutboxServiceContext. " +
+                "Register the concrete with the (DbConnectionFactory, OutboxServiceContext) " +
+                "constructor in DI per ADR-018 D3 dual-binding pattern.");
+        }
+
+        var payload = EventSerializer.Serialize(@event);
+
+        await using var cmd = new NpgsqlCommand(
+            """
+            INSERT INTO outbox_events (
+                service_id, stream_id, event_id, event_type, event_payload,
+                correlation_id, actor_id, actor_role
+            )
+            VALUES (
+                @serviceId, @streamId, @eventId, @eventType, @payload::jsonb,
+                @correlationId, @actorId, @actorRole
+            )
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("serviceId", _outboxServiceContext.ServiceId);
+        cmd.Parameters.AddWithValue("streamId", streamId);
+        cmd.Parameters.AddWithValue("eventId", @event.EventId);
+        cmd.Parameters.AddWithValue("eventType", @event.EventType);
+        cmd.Parameters.AddWithValue("payload", NpgsqlDbType.Text, payload);
+        // outbox_events.correlation_id is TEXT (vs events.correlation_id UUID).
+        // Stringify the Guid so the column type matches; the publisher parses
+        // back to Guid when binding to the canonical events.correlation_id UUID
+        // column (see OutboxPublisher.InsertEventAsync).
+        cmd.Parameters.AddWithValue("correlationId",
+            @event.CorrelationId.HasValue ? (object)@event.CorrelationId.Value.ToString() : DBNull.Value);
+        cmd.Parameters.AddWithValue("actorId", (object?)@event.ActorId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("actorRole", (object?)@event.ActorRole ?? DBNull.Value);
+
+        await cmd.ExecuteNonQueryAsync(ct);
     }
 }

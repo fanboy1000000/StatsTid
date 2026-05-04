@@ -2,6 +2,7 @@ using StatsTid.Auth;
 using StatsTid.Backend.Api.Endpoints;
 using StatsTid.Backend.Api.Validators;
 using StatsTid.Infrastructure;
+using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Interfaces;
 
@@ -12,7 +13,21 @@ var connectionString = builder.Configuration.GetConnectionString("EventStore")
 
 // ── Infrastructure ──
 builder.Services.AddSingleton(new DbConnectionFactory(connectionString));
-builder.Services.AddSingleton<IEventStore, PostgresEventStore>();
+
+// ── Outbox: dual-binding per ADR-018 D3 + per-service publisher per D2/D6 ──
+// PostgresEventStore is the single concrete implementing both IEventStore (read +
+// publisher-side append) and IOutboxEnqueue (state-change-site in-tx enqueue).
+// The OutboxServiceContext stamps service_id on each enqueued row so the per-
+// service OutboxPublisher partitions cleanly. Backend.Api owns Backend's streams
+// per ADR-018 D6 stream-ownership table.
+builder.Services.AddSingleton(new OutboxServiceContext("backend-api"));
+builder.Services.AddSingleton<PostgresEventStore>(sp => new PostgresEventStore(
+    sp.GetRequiredService<DbConnectionFactory>(),
+    sp.GetRequiredService<OutboxServiceContext>()));
+builder.Services.AddSingleton<IEventStore>(sp => sp.GetRequiredService<PostgresEventStore>());
+builder.Services.AddSingleton<IOutboxEnqueue>(sp => sp.GetRequiredService<PostgresEventStore>());
+builder.Services.AddHostedService<OutboxPublisher>();
+
 builder.Services.AddHttpClient();
 
 // ── Security ──
