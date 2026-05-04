@@ -11,6 +11,7 @@
 // "no Phase-5 polish" decision.
 import { useState, useEffect, useCallback } from 'react'
 import { apiClient } from '../lib/api'
+import { parseVersionFromETag } from '../lib/etag'
 import {
   getCurrentProfile,
   getProfileHistory,
@@ -18,13 +19,23 @@ import {
   type ProfileSaveRequest,
 } from '../api/profileApi'
 
+// Re-export the helpers so call sites that already import from useConfig (the
+// hook entry point) don't need a second import path. The canonical home is
+// `lib/etag.ts`.
+export { parseVersionFromETag, formatVersionAsIfMatch } from '../lib/etag'
+
 // ── Types (inline; types.ts does not own them — see useAgreementConfigs.ts precedent). ──
 
 /**
- * Local agreement profile (S21 / ADR-017 D1). Shape mirrors the backend's
- * MapProfileResponse output. The five overridable fields are nullable —
- * NULL means "inherit central." createdAt is an ISO-8601 timestamp; effectiveFrom
- * and effectiveTo are ISO yyyy-MM-dd date strings.
+ * Local agreement profile (S21 / ADR-017 D1, S22 / ADR-018 D7). Shape mirrors
+ * the backend's MapProfileResponse output. The five overridable fields are
+ * nullable — NULL means "inherit central." createdAt is an ISO-8601 timestamp;
+ * effectiveFrom and effectiveTo are ISO yyyy-MM-dd date strings.
+ *
+ * S22 added the `version` field: a monotonically increasing integer that
+ * doubles as the optimistic-concurrency token (replaces profileId-as-ETag).
+ * The wire-format ETag header carries this value as a quoted decimal — see
+ * `lib/etag.ts`.
  */
 export interface LocalAgreementProfile {
   profileId: string
@@ -40,6 +51,7 @@ export interface LocalAgreementProfile {
   overtimeRequiresPreApproval: boolean | null
   createdBy: string
   createdAt: string
+  version: number
 }
 
 /**
@@ -53,15 +65,21 @@ export interface ProfileFieldError {
 }
 
 /**
- * 400-validation-error body shape returned by PUT (ADR-017 D9a). The backend
- * (`ConfigEndpoints`) returns `{ error, fields: ProfileFieldError[] }` for
- * both alignment failures and the `EFFECTIVE_FROM_NOT_TODAY_OR_PAST`
- * rejection. 412 stale-state responses use the same wrapper with no `fields`.
+ * Error-response body shape returned by PUT (ADR-017 D9a, S22 ADR-018 D7).
+ *   - 400 alignment / `EFFECTIVE_FROM_NOT_TODAY_OR_PAST` →
+ *       `{ error, fields: ProfileFieldError[] }`
+ *   - 400 backdate-before-predecessor (S22 InvalidProfileSupersessionException) →
+ *       `{ error: "Invalid profile supersession", message }`
+ *   - 412 stale-state → `{ error, expectedVersion, actualVersion, currentState }`
+ *     (was `expectedProfileId`/`actualProfileId` pre-S22).
  */
 export interface ProfileSaveError {
   error?: string
   fields?: ProfileFieldError[]
   message?: string
+  expectedVersion?: number
+  actualVersion?: number
+  currentState?: LocalAgreementProfile | null
   [k: string]: unknown
 }
 
@@ -90,9 +108,18 @@ export interface ConfigConstraint {
 
 /**
  * Loads the currently active profile for a (org, agreement, OkVersion). Returns
- * `profile = null` when no local profile exists (central applies). The `etag` is
- * required as the next save's If-Match precondition; null means "no profile" and
- * the next save must use If-None-Match: *.
+ * `profile = null` when no local profile exists (central applies).
+ *
+ * Both `etag` (raw RFC 7232 quoted header value) and `version` (parsed
+ * integer) are exposed; they carry the same information. `etag` is the
+ * canonical wire form — pass it through to the save call. `version` is the
+ * convenience parsed view for UI that wants to display the version number or
+ * compare to a 412 body's `expectedVersion`/`actualVersion`. Both are null
+ * when no profile exists; the next save must use If-None-Match: *.
+ *
+ * S22 / ADR-018 D7 wire-format change: pre-S22 the ETag carried the profile
+ * UUID; post-S22 it carries the integer `version`. The hook contract is
+ * unchanged — call sites pass `etag` opaquely to `saveProfile`.
  */
 export function useCurrentProfile(
   orgId: string,
@@ -101,6 +128,7 @@ export function useCurrentProfile(
 ) {
   const [profile, setProfile] = useState<LocalAgreementProfile | null>(null)
   const [etag, setEtag] = useState<string | null>(null)
+  const [version, setVersion] = useState<number | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -108,6 +136,7 @@ export function useCurrentProfile(
     if (!orgId || !agreementCode || !okVersion) {
       setProfile(null)
       setEtag(null)
+      setVersion(null)
       return
     }
     setLoading(true)
@@ -116,17 +145,19 @@ export function useCurrentProfile(
     if (result.ok) {
       setProfile(result.profile)
       setEtag(result.etag)
+      setVersion(parseVersionFromETag(result.etag))
     } else {
       setError(result.error)
       setProfile(null)
       setEtag(null)
+      setVersion(null)
     }
     setLoading(false)
   }, [orgId, agreementCode, okVersion])
 
   useEffect(() => { refresh() }, [refresh])
 
-  return { profile, etag, loading, error, refresh }
+  return { profile, etag, version, loading, error, refresh }
 }
 
 /**
@@ -165,10 +196,13 @@ export function useProfileHistory(
 }
 
 /**
- * Saves a profile via PUT. Returns the newly persisted profile + new ETag on
- * success. Throws a structured `Error` whose `cause` carries `{status, body}`
- * on failure — callers branch on `status === 412` for the stale-state banner
- * and on `status === 400` for per-field error rendering.
+ * Saves a profile via PUT. Returns the newly persisted profile + new ETag
+ * (raw quoted form) and parsed version on success. Throws a structured
+ * `Error` carrying `{status, body}` on failure — callers branch on
+ * `status === 412` for the stale-state banner and on `status === 400` for
+ * per-field error rendering. S22 / ADR-018 D7: 400 may also be a
+ * backdate-before-predecessor rejection (`error: "Invalid profile
+ * supersession"` with no `fields`); callers fall through to the banner.
  */
 export async function saveProfile(
   orgId: string,
@@ -176,10 +210,14 @@ export async function saveProfile(
   okVersion: string,
   body: ProfileSaveRequest,
   etag: string | null,
-): Promise<{ savedProfile: LocalAgreementProfile; newEtag: string | null }> {
+): Promise<{ savedProfile: LocalAgreementProfile; newEtag: string | null; newVersion: number | null }> {
   const result = await saveProfileApi(orgId, agreementCode, okVersion, body, etag)
   if (result.ok) {
-    return { savedProfile: result.savedProfile, newEtag: result.newEtag }
+    return {
+      savedProfile: result.savedProfile,
+      newEtag: result.newEtag,
+      newVersion: result.newVersion,
+    }
   }
   const err = new Error(result.error || `HTTP ${result.status}`) as Error & {
     status?: number

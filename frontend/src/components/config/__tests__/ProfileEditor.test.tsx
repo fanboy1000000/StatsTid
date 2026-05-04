@@ -67,6 +67,8 @@ const existingProfile: LocalAgreementProfile = {
   overtimeRequiresPreApproval: null,
   createdBy: 'admin@example.dk',
   createdAt: '2026-04-27T08:00:00Z',
+  // S22 / ADR-018 D7: version replaces profileId-as-ETag.
+  version: 1,
 }
 
 describe('ProfileEditor', () => {
@@ -88,7 +90,7 @@ describe('ProfileEditor', () => {
         okVersion="OK24"
         orgLabel="Test org"
         profile={existingProfile}
-        etag={`"${existingProfile.profileId}"`}
+        etag={`"${existingProfile.version}"`}
         centralConfig={centralConfig}
         loading={false}
         loadError={null}
@@ -107,7 +109,7 @@ describe('ProfileEditor', () => {
         okVersion="OK24"
         orgLabel="Test org"
         profile={existingProfile}
-        etag={`"${existingProfile.profileId}"`}
+        etag={`"${existingProfile.version}"`}
         centralConfig={centralConfig}
         loading={false}
         loadError={null}
@@ -136,7 +138,7 @@ describe('ProfileEditor', () => {
         okVersion="OK24"
         orgLabel="Test org"
         profile={existingProfile}
-        etag={`"${existingProfile.profileId}"`}
+        etag={`"${existingProfile.version}"`}
         centralConfig={centralConfig}
         loading={false}
         loadError={null}

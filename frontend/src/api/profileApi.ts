@@ -1,4 +1,4 @@
-// Local agreement profile API (S21 / ADR-017 D5).
+// Local agreement profile API (S21 / ADR-017 D5; S22 / ADR-018 D7).
 //
 // These calls touch the profile-shaped endpoints introduced in S21 Phase 3:
 //
@@ -6,15 +6,20 @@
 //   GET    /api/config/{orgId}/profile/{agreementCode}/{okVersion}/history
 //   PUT    /api/config/{orgId}/profile/{agreementCode}/{okVersion}
 //
-// The PUT requires either `If-Match: "<profileId>"` (for supersession) or
+// The PUT requires either `If-Match: "<version>"` (for supersession) or
 // `If-None-Match: *` (for first creation), and GET returns an `ETag` header.
+//
+// S22 / ADR-018 D7 wire-format change: the ETag/If-Match value used to be the
+// profile UUID quoted (`"11111111-..."`). It is now a quoted decimal version
+// (`"5"`). Parsing/formatting lives in `lib/etag.ts`; this module imports the
+// helpers so the contract is explicit at the network boundary.
+//
 // `apiClient` from `lib/api.ts` does not currently expose response headers, so
 // this module talks to `fetch` directly. (Cross-domain note: extending
 // `apiClient` was the alternative — kept narrow here because only the profile
 // endpoints need header access.)
-//
-// Scope (S21 Phase-4 / TASK-2109): basic functional only. No polish.
 import type { LocalAgreementProfile, ProfileSaveError } from '../hooks/useConfig'
+import { parseVersionFromETag, formatVersionAsIfMatch } from '../lib/etag'
 
 const TOKEN_KEY = 'statstid_token'
 
@@ -35,7 +40,10 @@ function authHeaders(extra?: Record<string, string>): Record<string, string> {
 export interface ProfileGetSuccess {
   ok: true
   profile: LocalAgreementProfile | null
+  /** Raw RFC 7232 quoted ETag (S22: `"<version>"` numeric body). */
   etag: string | null
+  /** Parsed integer `version` from the ETag header — convenience view. */
+  version: number | null
 }
 
 export interface ProfileGetFailure {
@@ -56,7 +64,7 @@ export async function getCurrentProfile(
     const res = await fetch(url, { method: 'GET', headers: authHeaders() })
     if (res.status === 404) {
       // No active profile is the "central applies" steady state, not an error.
-      return { ok: true, profile: null, etag: null }
+      return { ok: true, profile: null, etag: null, version: null }
     }
     if (!res.ok) {
       const text = await res.text().catch(() => '')
@@ -64,7 +72,7 @@ export async function getCurrentProfile(
     }
     const data = (await res.json()) as LocalAgreementProfile
     const etag = res.headers.get('ETag')
-    return { ok: true, profile: data, etag }
+    return { ok: true, profile: data, etag, version: parseVersionFromETag(etag) }
   } catch (e) {
     return { ok: false, error: String(e), status: 0 }
   }
@@ -101,7 +109,10 @@ export interface ProfileSaveRequest {
 export interface ProfileSaveSuccess {
   ok: true
   savedProfile: LocalAgreementProfile
+  /** Raw RFC 7232 quoted ETag returned by the PUT response (S22: `"<version>"`). */
   newEtag: string | null
+  /** Parsed integer `version` from the new ETag header — convenience view. */
+  newVersion: number | null
 }
 
 export interface ProfileSaveFailure {
@@ -123,12 +134,25 @@ export async function saveProfile(
 ): Promise<ProfileSaveResult> {
   const url = `/api/config/${encodeURIComponent(orgId)}/profile/${encodeURIComponent(agreementCode)}/${encodeURIComponent(okVersion)}`
   // ETag is the optimistic-concurrency cookie. Null means "I expect no current
-  // profile" → If-None-Match: *. Non-null means "I expect this profile id" →
-  // If-Match: <etag>. The backend (ConfigEndpoints.TryParseConcurrencyPrecondition)
+  // profile" → If-None-Match: *. Non-null means "I expect this version" →
+  // If-Match: "<version>". The backend (ConfigEndpoints.TryParseConcurrencyPrecondition)
   // requires exactly one to be set.
-  const precondition: Record<string, string> = etag !== null
-    ? { 'If-Match': etag }
-    : { 'If-None-Match': '*' }
+  //
+  // S22 / ADR-018 D7: re-format the inbound etag through the helper so the
+  // outgoing wire form is canonical (`"<integer>"`) regardless of what shape
+  // the caller stored. If parsing fails (e.g. legacy quoted-UUID etag persisted
+  // somewhere) we pass the raw value through — the backend strips quotes
+  // anyway, so an unparseable string still surfaces a clean 412 with the
+  // current `actualVersion`.
+  let precondition: Record<string, string>
+  if (etag === null) {
+    precondition = { 'If-None-Match': '*' }
+  } else {
+    const parsedVersion = parseVersionFromETag(etag)
+    precondition = parsedVersion !== null
+      ? { 'If-Match': formatVersionAsIfMatch(parsedVersion) }
+      : { 'If-Match': etag }
+  }
 
   try {
     const res = await fetch(url, {
@@ -150,7 +174,12 @@ export async function saveProfile(
 
     const saved = (await res.json()) as LocalAgreementProfile
     const newEtag = res.headers.get('ETag')
-    return { ok: true, savedProfile: saved, newEtag }
+    return {
+      ok: true,
+      savedProfile: saved,
+      newEtag,
+      newVersion: parseVersionFromETag(newEtag),
+    }
   } catch (e) {
     return { ok: false, status: 0, error: String(e) }
   }

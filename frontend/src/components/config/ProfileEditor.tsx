@@ -130,14 +130,16 @@ export function ProfileEditor({
   const [state, setState] = useState<EditorState>(initialState)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
-  const [staleConflict, setStaleConflict] = useState<boolean>(false)
+  // S22 / ADR-018 D7: 412 body is `{ expectedVersion, actualVersion, currentState }`.
+  // Carry the actualVersion so the stale-state banner can show it.
+  const [staleConflict, setStaleConflict] = useState<{ expected?: number; actual?: number } | null>(null)
   const [fieldErrors, setFieldErrors] = useState<Record<string, ProfileFieldError>>({})
 
   // Reset draft when the loaded profile changes (e.g. after a save → refresh).
   useEffect(() => {
     setState(initialState)
     setSaveError(null)
-    setStaleConflict(false)
+    setStaleConflict(null)
     setFieldErrors({})
   }, [initialState])
 
@@ -179,7 +181,7 @@ export function ProfileEditor({
 
     setSaving(true)
     setSaveError(null)
-    setStaleConflict(false)
+    setStaleConflict(null)
     setFieldErrors({})
 
     // Build the PUT body. Per the backend contract, NULL = inherit central;
@@ -198,10 +200,23 @@ export function ProfileEditor({
       await saveProfile(orgId, agreementCode, okVersion, body, etag)
       onSaved()
     } catch (err) {
-      const e = err as Error & { status?: number; body?: { error?: string; fields?: ProfileFieldError[] } }
+      const e = err as Error & {
+        status?: number
+        body?: {
+          error?: string
+          message?: string
+          fields?: ProfileFieldError[]
+          expectedVersion?: number
+          actualVersion?: number
+        }
+      }
       if (e.status === 412) {
         // Stale state: another admin saved while this user was editing.
-        setStaleConflict(true)
+        // S22 / ADR-018 D7: body carries expectedVersion + actualVersion.
+        setStaleConflict({
+          expected: e.body?.expectedVersion,
+          actual: e.body?.actualVersion,
+        })
       } else if (e.status === 400 && e.body?.fields && e.body.fields.length > 0) {
         // Structured per-field errors from ConfigEndpoints (ADR-017 D9a):
         //   { error, fields: [{ field, code, nearestValid? }, ...] }
@@ -215,6 +230,11 @@ export function ProfileEditor({
         } else {
           setSaveError(e.body.error || e.message || 'Validering fejlede.')
         }
+      } else if (e.status === 400 && e.body?.error === 'Invalid profile supersession') {
+        // S22 / ADR-018 D7: backdate-before-predecessor rejection
+        // (InvalidProfileSupersessionException). No `fields` payload — surface
+        // the explanatory message in the existing error banner.
+        setSaveError(e.body.message || 'Ugyldig profil-supersession.')
       } else {
         setSaveError(e.body?.error || e.message || 'Kunne ikke gemme profil.')
       }
@@ -264,6 +284,11 @@ export function ProfileEditor({
         <Alert variant="warning">
           Din redigering var baseret paa en forældet tilstand. Profilen er blevet opdateret
           siden. Genindlaes og gennemgaa aendringerne foer du gemmer igen.
+          {staleConflict.expected !== undefined && staleConflict.actual !== undefined && (
+            <> {' '}
+              (Forventet version {staleConflict.expected}, aktuel version {staleConflict.actual}.)
+            </>
+          )}
         </Alert>
       )}
       {saveError && <Alert variant="error">{saveError}</Alert>}
