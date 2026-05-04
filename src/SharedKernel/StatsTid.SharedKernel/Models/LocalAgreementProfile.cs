@@ -28,6 +28,17 @@ public sealed class LocalAgreementProfile
 
     public required string CreatedBy { get; init; }
     public required DateTime CreatedAt { get; init; }
+
+    /// <summary>
+    /// Row-version optimistic-concurrency token (ADR-018 D7). First-insert is <c>1</c>;
+    /// each in-place UPDATE bumps it by one. Combined with end-exclusive
+    /// <see cref="EffectiveTo"/> semantics (ADR-018 D8) and same-day-save UPDATE-in-place
+    /// routing (ADR-018 D9), this replaces ADR-017 D2.1's profile_id-as-ETag scheme:
+    /// the wire ETag becomes <c>"&lt;version&gt;"</c> per RFC 7232 (quoted), and
+    /// <c>If-Match: "&lt;version&gt;"</c> on PUT asserts "I read at this version; only
+    /// proceed if it's still current."
+    /// </summary>
+    public required long Version { get; init; }
 }
 
 /// <summary>
