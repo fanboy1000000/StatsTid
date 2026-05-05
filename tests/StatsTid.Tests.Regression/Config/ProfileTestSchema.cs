@@ -84,7 +84,10 @@ internal static class ProfileTestSchema
             max_overtime_hours_per_period       NUMERIC(6,2),
             overtime_requires_pre_approval      BOOLEAN,
             created_by                          TEXT            NOT NULL,
-            created_at                          TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+            created_at                          TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+            -- S22 / ADR-018 D7: row-version optimistic-concurrency token. First-insert is 1;
+            -- each in-place UPDATE bumps it by one. Mirrors production init.sql DO $$ block.
+            version                             BIGINT          NOT NULL DEFAULT 1
         );
         CREATE UNIQUE INDEX IF NOT EXISTS uq_local_agreement_profile_active
             ON local_agreement_profiles (org_id, agreement_code, ok_version)
@@ -93,8 +96,9 @@ internal static class ProfileTestSchema
         CREATE TABLE IF NOT EXISTS local_agreement_profile_audit (
             audit_id        BIGSERIAL       PRIMARY KEY,
             profile_id      UUID            NOT NULL,
+            -- S22 / ADR-018 D9: 'MODIFIED' added for same-day in-place edits.
             action          TEXT            NOT NULL CHECK (action IN (
-                'CREATED', 'SUPERSEDED', 'DEACTIVATED', 'MIGRATED_FROM_LEGACY'
+                'CREATED', 'MODIFIED', 'SUPERSEDED', 'DEACTIVATED', 'MIGRATED_FROM_LEGACY'
             )),
             delta_jsonb     JSONB           NOT NULL,
             actor_id        TEXT            NOT NULL,

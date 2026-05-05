@@ -103,17 +103,30 @@ public sealed class OutboxPublisher : BackgroundService
                             {
                                 // Per ADR-018 D4: surface loudly. The bookkeeping
                                 // (attempts/last_error) is already recorded by
-                                // PublishAsync's catch block before throw. Log
-                                // and continue; manual reconcile is required.
+                                // PublishAsync's catch block before throw. Manual
+                                // reconcile is required; break out of the stream
+                                // group so later rows in this stream don't overtake
+                                // the stuck row (per-stream FIFO, ADR-018 D5).
+                                // Other stream groups continue independently.
                                 _logger.LogError(ex,
-                                    "OutboxPublisher correlation mismatch on outbox {OutboxId} stream {StreamId} event_id {EventId}; manual reconcile required",
+                                    "OutboxPublisher correlation mismatch on outbox {OutboxId} stream {StreamId} event_id {EventId}; manual reconcile required; halting this stream group to preserve FIFO",
                                     row.OutboxId, row.StreamId, row.EventId);
+                                break;
                             }
                             catch (Exception ex)
                             {
+                                // Per-stream FIFO (ADR-018 D5): on transient failure
+                                // BREAK out of the stream group rather than continue.
+                                // If we continued, later rows on this stream could
+                                // be published at higher stream_versions while the
+                                // failed row's retry would land at an even-higher
+                                // version, permanently reordering the stream.
+                                // Cross-stream parallelism is preserved — other
+                                // groups in the Parallel.ForEachAsync continue.
                                 _logger.LogWarning(ex,
-                                    "OutboxPublisher failed to publish outbox {OutboxId} stream {StreamId}; will retry",
+                                    "OutboxPublisher failed to publish outbox {OutboxId} stream {StreamId}; will retry; halting this stream group to preserve FIFO",
                                     row.OutboxId, row.StreamId);
+                                break;
                             }
                         }
                     }).ConfigureAwait(false);

@@ -324,6 +324,15 @@ public static class ConfigEndpoints
             // 7. Return 200 with the new profile and an ETag for the next If-Match. The ETag
             //    wire format is `"<version>"` (RFC 7232 quoted, ADR-018 D7) — was profile_id
             //    in S21 (ADR-017 D2.1).
+            //
+            //    ADR-018 D9 MODIFIED branch: the repository's UpdateInPlaceAsync preserves
+            //    the predecessor's created_by / created_at across same-day edits (only the
+            //    5 overridable columns + version are mutated). Echo those preserved values
+            //    here so the PUT response matches what a subsequent GET returns. INSERT
+            //    paths (first-create + close-then-insert supersession) take candidate.* as
+            //    the row's values — InsertProfileAsync binds them directly.
+            var isInPlaceEdit = predecessor is not null
+                && predecessor.EffectiveFrom == candidate.EffectiveFrom;
             var saved = new LocalAgreementProfile
             {
                 ProfileId = persistedProfileId,
@@ -337,8 +346,8 @@ public static class ConfigEndpoints
                 FlexCarryoverMax = candidate.FlexCarryoverMax,
                 MaxOvertimeHoursPerPeriod = candidate.MaxOvertimeHoursPerPeriod,
                 OvertimeRequiresPreApproval = candidate.OvertimeRequiresPreApproval,
-                CreatedBy = candidate.CreatedBy,
-                CreatedAt = candidate.CreatedAt,
+                CreatedBy = isInPlaceEdit ? predecessor!.CreatedBy : candidate.CreatedBy,
+                CreatedAt = isInPlaceEdit ? predecessor!.CreatedAt : candidate.CreatedAt,
                 Version = persistedVersion,
             };
             context.Response.Headers.ETag = $"\"{persistedVersion}\"";

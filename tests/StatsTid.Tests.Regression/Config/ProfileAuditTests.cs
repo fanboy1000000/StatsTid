@@ -132,9 +132,10 @@ public sealed class ProfileAuditTests : IAsyncLifetime
             WeeklyNormHours = weeklyNormHours,
             CreatedBy = "admin1",
             CreatedAt = DateTime.UtcNow,
+            Version = 1,
         };
-        var newId = await _repo.SupersedeAndCreateAsync(
-            expectedCurrentProfileId: null, initial);
+        var (newId, _) = await _repo.SupersedeAndCreateAsync(
+            expectedCurrentVersion: null, initial);
         // Read it back so we have the canonical persisted row.
         var persisted = await _repo.GetCurrentOpenAsync(OrgId, AgreementCode, OkVersion);
         Assert.NotNull(persisted);
@@ -160,10 +161,12 @@ public sealed class ProfileAuditTests : IAsyncLifetime
             WeeklyNormHours = weeklyNormHours,
             CreatedBy = "admin1",
             CreatedAt = DateTime.UtcNow,
+            Version = 1,
         };
 
         // Recover the predecessor's value to compose the delta — endpoint reads
-        // GetCurrentOpenAsync for the same purpose.
+        // GetCurrentOpenAsync for the same purpose. Capture the version for use as the
+        // optimistic-concurrency token (ADR-018 D7) on the supersession call.
         var predecessor = await _repo.GetCurrentOpenAsync(OrgId, AgreementCode, OkVersion);
         Assert.NotNull(predecessor);
         Assert.Equal(predecessorId, predecessor!.ProfileId);
@@ -182,8 +185,8 @@ public sealed class ProfileAuditTests : IAsyncLifetime
         await using var tx = await conn.BeginTransactionAsync(IsolationLevel.RepeatableRead);
         try
         {
-            newProfileId = await _repo.SupersedeAndCreateAsync(
-                conn, tx, expectedCurrentProfileId: predecessorId, candidate);
+            (newProfileId, _) = await _repo.SupersedeAndCreateAsync(
+                conn, tx, expectedCurrentVersion: predecessor.Version, candidate);
 
             var deltaJson = JsonSerializer.Serialize(changedFields);
             await using var auditCmd = new NpgsqlCommand(

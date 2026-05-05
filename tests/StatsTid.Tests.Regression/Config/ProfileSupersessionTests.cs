@@ -7,13 +7,15 @@ namespace StatsTid.Tests.Regression.Config;
 
 /// <summary>
 /// Step-7a Codex BLOCKER regressions on <see cref="LocalAgreementProfileRepository"/>'s
-/// supersession path:
+/// supersession path (S22 / ADR-018 update — end-exclusive close-then-insert + row-version
+/// concurrency token):
 ///
 /// <list type="bullet">
-///   <item>Backdated supersession must close the predecessor at
-///   <c>newProfile.EffectiveFrom - 1 day</c> — not at the wall-clock <c>today</c> —
-///   so historical reads and <c>BoundarySources</c> hydration don't see overlapping
-///   open windows for the (org_id, agreement_code, ok_version) triple.</item>
+///   <item>Supersession must close the predecessor at
+///   <c>newProfile.EffectiveFrom</c> (end-exclusive per ADR-018 D8) — not at the wall-clock
+///   <c>today</c> and not at <c>newProfile.EffectiveFrom - 1</c> — so historical reads and
+///   <c>BoundarySources</c> hydration don't see overlapping or off-by-one windows for the
+///   (org_id, agreement_code, ok_version) triple.</item>
 ///   <item>Concurrent first-creation race (two <c>If-None-Match: *</c> requests for
 ///   the same triple) must surface as <see cref="OptimisticConcurrencyException"/>,
 ///   not as a raw <see cref="PostgresException"/> with SqlState 23505. The PUT
@@ -48,16 +50,16 @@ public sealed class ProfileSupersessionTests : IAsyncLifetime
     public async Task DisposeAsync() => await _harness.DisposeAsync();
 
     [Fact]
-    public async Task BackdatedSupersession_ClosesPredecessorAtNewEffectiveFromMinusOne()
+    public async Task Supersession_ClosesPredecessorAtNewEffectiveFrom_EndExclusive()
     {
-        // Predecessor effective from a Monday in early 2025; replacement backdated
-        // to a Monday late in 2025 (still before today=2026-05-03). The endpoint
-        // allows backdated saves (D2 only rejects future effective_from), so the
-        // predecessor's effective_to MUST be the day before the replacement starts,
-        // not the wall-clock today (which would create an overlapping window).
+        // Predecessor effective from a Monday in early 2025; supersession to a Monday
+        // late in 2025. Under ADR-018 D8 end-exclusive semantics the predecessor's
+        // effective_to is stamped at newEffectiveFrom (NOT newEffectiveFrom-1, NOT today),
+        // making the predecessor's history window [predecessor.EffectiveFrom, newEffectiveFrom)
+        // and the successor's [newEffectiveFrom, NULL) — adjacent and non-overlapping.
         var predecessorEffectiveFrom = new DateOnly(2025, 1, 6);   // Monday
-        var newEffectiveFrom = new DateOnly(2025, 12, 29);          // Monday, before today
-        var expectedPredecessorEffectiveTo = newEffectiveFrom.AddDays(-1); // 2025-12-28 (Sunday)
+        var newEffectiveFrom = new DateOnly(2025, 12, 29);          // Monday
+        var expectedPredecessorEffectiveTo = newEffectiveFrom;      // ADR-018 D8
 
         var predecessor = new LocalAgreementProfile
         {
@@ -69,9 +71,10 @@ public sealed class ProfileSupersessionTests : IAsyncLifetime
             WeeklyNormHours = 37m,
             CreatedBy = "admin1",
             CreatedAt = DateTime.UtcNow,
+            Version = 1,
         };
-        var predecessorId = await _repo.SupersedeAndCreateAsync(
-            expectedCurrentProfileId: null, predecessor);
+        var (predecessorId, predecessorVersion) = await _repo.SupersedeAndCreateAsync(
+            expectedCurrentVersion: null, predecessor);
 
         var replacement = new LocalAgreementProfile
         {
@@ -83,11 +86,12 @@ public sealed class ProfileSupersessionTests : IAsyncLifetime
             WeeklyNormHours = 36m,
             CreatedBy = "admin1",
             CreatedAt = DateTime.UtcNow,
+            Version = 1,
         };
-        await _repo.SupersedeAndCreateAsync(predecessorId, replacement);
+        await _repo.SupersedeAndCreateAsync(predecessorVersion, replacement);
 
         // Read the predecessor row back and assert effective_to was stamped at
-        // newEffectiveFrom - 1 day, NOT at today.
+        // newEffectiveFrom (end-exclusive), NOT newEffectiveFrom-1 and NOT today.
         await using var conn = _harness.Factory.Create();
         await conn.OpenAsync();
         await using var cmd = new NpgsqlCommand(
@@ -161,11 +165,12 @@ public sealed class ProfileSupersessionTests : IAsyncLifetime
             WeeklyNormHours = 37m,
             CreatedBy = "admin1",
             CreatedAt = DateTime.UtcNow,
+            Version = 1,
         };
 
         var ex = await Assert.ThrowsAsync<OptimisticConcurrencyException>(
             async () => await _repo.SupersedeAndCreateAsync(
-                connA, txA, expectedCurrentProfileId: null, pA));
+                connA, txA, expectedCurrentVersion: null, pA));
 
         Assert.IsType<PostgresException>(ex.InnerException);
         Assert.Equal("23505", ((PostgresException)ex.InnerException!).SqlState);

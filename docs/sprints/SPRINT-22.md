@@ -642,6 +642,90 @@ The DI parameter type changes from `IEventStore` to `IOutboxEnqueue`; the call s
 
 Task decomposition closed. Ready for user approval before Step 2 (Delegate).
 
+## Phase 2/3 Outcomes (2026-05-04)
+
+Delegation produced 7 of 8 sub-tasks landed on master through commits `cbfbe69` → `5f22dee`. Option C scope narrowing taken mid-sprint per the user's decision.
+
+| Task | Commit | Outcome |
+|------|--------|---------|
+| TASK-2201 | `a6df246` | Schema migration landed: `outbox_events` + 3 partial indexes, `schema_migrations` ledger, version column, end-exclusive +1 day shift, audit-action MODIFIED. |
+| TASK-2202 | `1096ee5` | `IOutboxEnqueue` interface in Infrastructure (cycle-6 split — SharedKernel stays Npgsql-free; ADR-018 D3). |
+| TASK-2203 | `4d7b496` | `PostgresEventStore : IOutboxEnqueue` + `OutboxPublisher` BackgroundService + `PublisherCorrelationException` + `OutboxServiceContext` + dual-binding DI in Backend.Api/Payroll/External (Orchestrator excluded per ADR-018 D6). |
+| TASK-2204 | `35341c0` | `LocalAgreementProfile.Version` + repo reshape: `AcquireLockAsync→tuple`, `SupersedeAndCreateAsync→(Guid,long)`, `UpdateInPlaceAsync`, end-exclusive predicates, `OptimisticConcurrencyException` carries version pair, `InvalidProfileSupersessionException` re-introduced. |
+| TASK-2205 | `3ec245d` (+ `c18000e` follow-up) | `ConfigEndpoints` PUT rewrite — version-as-ETag, three-way audit, in-tx `EnqueueAsync`, 412 reshape. Follow-up commit fixed the GET handler ETag (was profileId, switched to Version). |
+| TASK-2206 | **DEFERRED** | Option C: 8-repo `(conn, tx)` overload refactor + 10-file site swap deferred to Phase-4 sub-sprint. ConfigEndpoints stands as the atomic exemplar. |
+| TASK-2207 | `5f22dee` | Frontend ETag helpers (`lib/etag.ts` parseVersionFromETag/formatVersionAsIfMatch) + `useConfig.ts`/`profileApi.ts`/`ProfileEditor.tsx` wiring. |
+
+### Option C scope narrowing (2026-05-04)
+TASK-2206's plan assumed every state-change site already had `tx` in scope; only ConfigEndpoints did. The other 8 endpoint repos lack `(NpgsqlConnection conn, NpgsqlTransaction tx)` overloads. A re-dispatch agent completed all 29 site swaps by introducing a *separate* tx wrapping only the outbox enqueue — same partial-failure window as today's post-commit `AppendAsync`, violating ADR-018's atomicity invariant. User decision: ship S22 with ConfigEndpoints as the **atomic exemplar**; defer the 10-file site swap + 8-repo refactor to a Phase-4 sub-sprint (sibling to S21's D2.2 ETag-propagation carry-forward). The 4 batch commits with the half-atomic pattern are preserved on `worktree-agent-a9b76f8d1f88717ff` (`c615dba` / `1466af9` / `c0093e6` / `2aa3044`) for Phase-4 reference. **NOT to be merged.**
+
+## Phase 4 Outcomes (2026-05-05)
+
+TASK-2208 (Test & QA) — D12 16-scenario test matrix + ~10 destructure updates.
+
+| Block | Result |
+|-------|--------|
+| **Block A — destructure fixtures** | 7 test files updated (`ProfileSupersessionTests.cs`, `ProfileConcurrencyTokenTests.cs`, `ProfileAuditTests.cs`, `ProfileLegacyEventNonEmissionTests.cs`, `ProfileResolutionTests.cs`, `ProfileAlignmentValidatorTests.cs`, `ProfileTestSchema.cs`). 18 build errors → 0. |
+| **Block B — D12 test matrix** | 5 new test files: `Outbox/OutboxPublisherTests.cs` (#1-5), `Outbox/EventStoreInTxTests.cs` (#14-16), `Outbox/OutboxTestSchema.cs` (DDL helper), `Config/ProfileRowVersionTests.cs` (#6-10), `Config/EndExclusiveMigrationTests.cs` (#11-13), `Config/LegacyProfileSchema.cs` (pre-S22 DDL + S22 migration DO $$ block for tests #11-13 + #16). All 16 D12 scenarios covered + `[Trait("Category","Docker")]`. |
+| **Build** | 0 errors / 0 warnings. |
+| **Tests** | 517 unit + 35 plain regression PASS (matches pre-S22 baseline; D12 scenarios are Docker-gated by design). |
+
+Narrowing decisions (recorded inline in test files):
+- **#13 (`PreS22Manifest_ReplaysIdentical`)**: narrowed to assert profile-snapshot column projection is byte-identical pre/post-migration (the load-bearing replay-determinism property), rather than wiring a full PCS `ReplayAsync` integration. Migration shifts only `effective_to` on closed rows + adds `version` column; neither is part of the snapshot contract.
+- **#16 (`VersionBackfill_ExistingProfileReturns1`)**: narrowed to repo-level projection (`(await repo.GetCurrentOpenAsync(...)).Version == 1`); endpoint ETag wire test deferred to a Phase-4 follow-up that wires `WebApplicationFactory<Program>` with the publisher hosted-service plumbing on the test bench.
+- **`ProfileConcurrencyTokenTests` #2**: under new semantics, both candidates use the same `effective_from` so A1 routes to UPDATE-in-place (profile_id stable, version 1→2). Stale `If-Match: 1` then mismatches against actual version 2 — preserved race property with stronger assertion.
+- **`ProfileSupersessionTests.BackdatedSupersession`**: renamed to `Supersession_ClosesPredecessorAtNewEffectiveFrom_EndExclusive`; expected `effective_to` is now `newEffectiveFrom` exactly (was `newEffectiveFrom - 1`) per ADR-018 D8.
+
+## Phase 5 Outcomes (2026-05-05)
+
+### Step 5α — Constraint Validator
+**PASS** — all 14 mechanical checks clear (RuleEngine import isolation, Npgsql purity, hardcoded URLs, `EventSerializer` registration of `LocalAgreementProfileChanged`, `RequireAuthorization()` on all new endpoints, scope adherence, SharedKernel.csproj clean of Npgsql, IEventStore.cs no Npgsql, IOutboxEnqueue path under Infrastructure, ConfigEndpoints PUT uses outbox-before-commit, OutboxServiceContext per-service IDs registered correctly, OutboxPublisher hosted in Backend.Api/Payroll/External, none in Orchestrator).
+
+### Step 5a — Internal Reviewer
+0 BLOCKERs, 4 WARNINGs, 6 NOTEs. WARN-2 (no max-attempts cap on outbox retries — poison-row hot loop) and WARN-4 (correlation_id silent drop on bad TEXT format) both deferred to Phase-4 publisher-hardening sub-sprint. WARN-3 (DDL drift in test schemas) extends an existing S21 carry-forward. WARN-1 (per-stream FIFO violated under transient publish failure) was promoted to Codex P1 in Step 7a cycle 2 — see below.
+
+### Step 5a — Codex `--uncommitted` (high-risk override)
+Clean — saw only TASK-2208 test changes; no findings on the test layer.
+
+### Step 7a — Codex full-sprint diff vs `07ffdbb` (3 cycles)
+
+**Cycle 1** — 2 findings:
+- [P2] `ConfigEndpoints.cs:340-341` — same-day in-place edit response echoes `candidate.CreatedBy/CreatedAt`, but the repo's UPDATE-in-place path preserves the predecessor's values. Real user-visible correctness bug.
+- [P3] `OutboxPublisher.cs:165-167` — no max-attempts cap (same as Reviewer WARN-2). Deferred.
+
+**Cycle 1 fix**: applied surgical conditional in `ConfigEndpoints.cs` — `isInPlaceEdit ? predecessor.CreatedBy : candidate.CreatedBy` (and likewise for `CreatedAt`). 2 lines + 7-line comment explaining the routing. Build green, 517 + 35 tests green.
+
+**Cycle 2** — 1 new finding:
+- [P1] `OutboxPublisher.cs:88-111` — per-stream FIFO violated under transient publish failure (Reviewer WARN-1 promoted by Codex). One row throws → catch logs and continues to next row in same stream group → later rows get lower stream_versions, failed row's retry permanently reorders the stream. Codex labels P1 ("must fix").
+
+**Cycle 2 fix** (option 1 / iterate, per user direction): changed `continue`-style catches to `break` in both the `PublisherCorrelationException` and generic `Exception` handlers inside the per-stream `foreach`. Cross-stream parallelism preserved (other groups in `Parallel.ForEachAsync` continue independently). Comments explain the FIFO invariant. Build green, 517 + 35 tests green.
+
+**Cycle 3** — 2 new P2 findings (cascade):
+- [P2] `frontend/src/api/profileApi.ts:73-75` — in cross-origin deployments, browser JS can't read `ETag` header unless the API exposes it via `Access-Control-Expose-Headers: ETag`. With `etag: null` returned, the next save uses `If-None-Match: *` and 412s on every existing-profile edit. Should fall back to `data.version` from the response body.
+- [P2] `LocalAgreementProfileRepository.cs:272-276` — same-day no-op save (no field changed) still calls `UpdateInPlaceAsync`, bumping version + emitting MODIFIED audit/event with empty `changedFields`. Pollutes audit trail; advances ETag spuriously.
+
+**Cycle 3 decision** (per cycle-cap discipline `feedback_step7a_cycle_cap_discipline.md`): halt and route both P2s to Phase-4 sub-sprint. Cascade pattern was exactly the one the discipline warns about. Neither finding is data-corrupting; the CORS fallback is environment-dependent (no current impact under local dev / same-origin prod), and the no-op-save is audit-pollution only.
+
+### Final state at sprint close
+- Build: 0 errors / 0 warnings.
+- Tests: 517 unit + 35 plain regression green.
+- Internal Reviewer: 0 BLOCKERs.
+- Codex: P2 same-day response fixed cycle 1; P1 FIFO fixed cycle 2; 2 P2 cascade-cycle-3 deferred per discipline.
+- Sprint commits: `cbfbe69` → `5f22dee` + Step-7a cycles 1+2 fixes (committed at sprint close).
+
+## Phase-4 carry-forward backlog (consolidated)
+
+The publisher-hardening sub-sprint absorbs:
+- **WARN-1 / Codex P1 (S22 cycle 2 — FIXED)** — captured here for the audit trail; the actual fix landed in S22.
+- **WARN-2 / Codex P3** — outbox max-attempts cap (poison-row protection). The `idx_outbox_attempts` index already exists for the predicate; the publisher's `ReadBatchAsync` needs a `WHERE attempts < @maxAttempts` clause + ops dashboard query for stuck rows.
+- **WARN-4** — `correlation_id` silent drop on bad TEXT format in `OutboxPublisher.cs:343-346`. Either log a warning or store TEXT consistently across `events` + `outbox_events`.
+- **Codex Cycle-3 P2 (frontend)** — `profileApi.ts` ETag fallback to `data.version` for CORS-restricted deployments. Sibling: backend should add `Access-Control-Expose-Headers: ETag` when CORS middleware is fully configured.
+- **Codex Cycle-3 P2 (no-op short-circuit)** — `ConfigEndpoints` PUT or `LocalAgreementProfileRepository.SupersedeAndCreateAsync` short-circuits when `changedFields.Count == 0` AND `isInPlaceEdit`, returning the predecessor unchanged with the existing version + ETag.
+
+The previously-captured TASK-2206 carry-forward (8-repo `(conn, tx)` refactor + 10-file site swap with proper single-tx atomicity) and the S21-derived D2.2/D6/Step-7a-D2 sibling-trio sprint (ETag propagation across admin-write surfaces + transactional outbox + row-version + end-exclusive across 4 more tables) remain on the Phase-4 backlog.
+
+NOTE-1, NOTE-3, NOTE-4 from the Internal Reviewer (412 fallback robustness, weak ETag handling, D12 coverage gaps) join the sub-sprint as nice-to-have hardening items.
+
 ## References
 
 - [CLAUDE.md](../../CLAUDE.md) — priority order

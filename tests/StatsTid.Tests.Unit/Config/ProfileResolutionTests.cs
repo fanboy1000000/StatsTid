@@ -139,6 +139,7 @@ public sealed class ProfileResolutionTests
         OvertimeRequiresPreApproval = overtimeRequiresPreApproval,
         CreatedBy = "test",
         CreatedAt = DateTime.UtcNow,
+        Version = 1,
     };
 
     /// <summary>

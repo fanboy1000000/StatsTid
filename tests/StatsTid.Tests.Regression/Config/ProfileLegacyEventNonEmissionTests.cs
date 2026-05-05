@@ -64,9 +64,10 @@ public sealed class ProfileLegacyEventNonEmissionTests : IAsyncLifetime
             WeeklyNormHours = 36m,
             CreatedBy = "admin1",
             CreatedAt = DateTime.UtcNow,
+            Version = 1,
         };
-        var newProfileId = await _repo.SupersedeAndCreateAsync(
-            expectedCurrentProfileId: null, candidate);
+        var (newProfileId, _) = await _repo.SupersedeAndCreateAsync(
+            expectedCurrentVersion: null, candidate);
 
         var streamId = $"local-agreement-profile-{OrgId}-{AgreementCode}-{OkVersion}";
         var profileEvent = new LocalAgreementProfileChanged

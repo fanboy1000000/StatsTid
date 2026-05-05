@@ -37,6 +37,7 @@ public sealed class ProfileAlignmentValidatorTests
             WeeklyNormHours = 36m,
             CreatedBy = "admin1",
             CreatedAt = DateTime.UtcNow,
+            Version = 1,
         };
 
         // ChangedFields keyed by field name, value is the new JsonElement (the validator
