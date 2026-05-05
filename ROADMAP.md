@@ -38,6 +38,7 @@
 | Sprint 19 | Codex BLOCKER Remediation (Round 2) | Orchestrator `/execute` resource-scope with task-type-aware ExtractEmployeeId, payroll `/calculate-and-export` per-org scope via OrgScopeValidator, OkVersionCanonicalization helper for retroactive audit, JWT honors DOTNET_ENVIRONMENT; TASK-1903 absorbed into S20 | 493 |
 | Sprint 20 | Temporal Period Handling | ADR-016 D1-D11, SharedKernel.Segmentation bounded context, planner-driven PCS, segment_manifests projection, classifications endpoint, retired OkVersionBoundary + RecalculateWithVersionSplitAsync, per-line OK stamping at export boundary | 562 |
 | Sprint 21 | Local Agreement Configuration Rework | ADR-017 D1-D11 profile model, partial-unique-index lifecycle, big-bang migration, ConfigEndpoints rewrite with ETag/If-Match, ProfileAlignmentValidator, BoundaryCause.LocalProfileActivation hydration, ProfileEditor frontend, Step 7a 10-cycle review | 618 |
+| Sprint 22 | Transactional Outbox + Row-Version Optimistic Concurrency | ADR-018 D1-D12, `outbox_events` + `schema_migrations` ledger + `version BIGINT` on profiles + end-exclusive `effective_to` + audit-action MODIFIED, `IOutboxEnqueue` split-interface (SharedKernel stays Npgsql-free), `PostgresEventStore : IEventStore, IOutboxEnqueue` dual-binding, `OutboxPublisher` BackgroundService with per-stream FIFO + 4-way cross-stream parallelism, `LocalAgreementProfileRepository` UPDATE-in-place same-day routing, `ConfigEndpoints` PUT atomic exemplar (version-as-ETag + three-way audit + in-tx EnqueueAsync), frontend ETag helpers, Option C scope narrowing (TASK-2206 deferred), TASK-2208 D12 16 Docker-gated scenarios, Step 7a 3-cycle review (P2 same-day response + P1 FIFO fixed; cycle-3 cascade halted per discipline) | 650 |
 
 ## Phase Roadmap
 
@@ -275,11 +276,46 @@ Restructures local configuration from a flat "one value at a time" patch bag int
 
 Analysis-first sprint (ADR + task decomposition before implementation), structurally similar to S20.
 
-### Phase 4 — Production Hardening (Sprint 22+)
+### Phase 4 — Production Hardening (Sprints 22–~29)
 
-**Priority focus**: All priorities — cross-cutting production readiness
+**Priority focus**: All priorities — cross-cutting production readiness.
 
 Only makes sense once functional correctness is achieved. The final UX polish pass (Phase 5) follows production hardening so layout, performance, and instrumentation are settled before visual lockdown.
+
+Functional coverage at Phase 4 entry: **~96%** (unchanged from end of S17 — S18-S22 added zero functional coverage; all five were correctness/hardening sprints). The Phase 4 backlog is thus structured as **pattern-propagation sub-sprints** rather than open-ended hardening work. Each sub-sprint has a named architectural exemplar in production already.
+
+#### Phase 4a — Transactional Outbox + Row-Version Atomic Exemplar (Sprint 22) — COMPLETE
+
+S22 (committed `a278f34` on 2026-05-05) delivered ADR-018: `IOutboxEnqueue`/`OutboxPublisher` split-interface design, row-version optimistic-concurrency token replacing S21's profile_id-as-ETag, end-exclusive `effective_to` semantics, UPDATE-in-place same-day routing with `MODIFIED` audit-action. `ConfigEndpoints` PUT is the atomic exemplar — single `(conn, tx)` carries profile mutation + audit row + outbox enqueue, committing together. The 12 other state-change endpoints + 8 repos still post-commit `AppendAsync` per S22's Option C scope narrowing — Phase 4c propagates the exemplar.
+
+Step 7a Codex cycle 1 fixed P2 (same-day in-place response echoed wrong CreatedBy/CreatedAt) → cycle 2 fixed P1 (per-stream FIFO violated under transient publish failure) → cycle 3 hit the cycle-cap discipline with 2 P2 cascade findings routed to Phase 4b.
+
+#### Phase 4b — Publisher Hardening (~1 sprint)
+
+Absorbs S22 Step-7a cycle-3 cascade findings + Reviewer WARNINGs deferred per cycle-cap discipline:
+
+- **Outbox max-attempts cap** (Reviewer WARN-2 / Codex P3) — `OutboxPublisher.ReadBatchAsync` lacks `WHERE attempts < @maxAttempts`, so permanently-broken rows hot-loop forever. The `idx_outbox_attempts` partial index already exists for the predicate. Add the cap + an ops-dashboard query for stuck rows.
+- **Correlation_id parse robustness** (Reviewer WARN-4) — `OutboxPublisher.cs:343-346` `Guid.TryParse` on TEXT body silently returns `DBNull.Value` on bad input, losing the audit-chain link. Either log a warning or store TEXT consistently across `events` + `outbox_events`.
+- **Frontend CORS ETag fallback** (Codex cycle-3 P2) — `frontend/src/api/profileApi.ts:73-75` `res.headers.get('ETag')` returns null in cross-origin deployments unless the API exposes the header. Fall back to `data.version` from the response body. Sibling backend fix: `Access-Control-Expose-Headers: ETag` when CORS middleware is fully configured.
+- **Same-day no-op short-circuit** (Codex cycle-3 P2) — when `changedFields.Count == 0 && isInPlaceEdit`, `ConfigEndpoints` PUT or `LocalAgreementProfileRepository.SupersedeAndCreateAsync` should return the predecessor unchanged with the existing version + ETag, rather than bumping version + emitting MODIFIED audit/event with empty `changedFields`.
+- **Reviewer NOTEs absorbed**: NOTE-1 (412 fallback robustness — wrap recovery `GetCurrentOpenAsync` in try/catch), NOTE-3 (weak ETag validators `W/"5"` parsed as null in `parseVersionFromETag`), NOTE-4 (D12 coverage gaps: concurrent enqueue across two endpoints competing for same stream_id; sustained publisher load above ~6 rows; backfill on already-shifted rows).
+
+#### Phase 4c — Site Propagation: TASK-2206 redo + D2.2 ETag propagation (~2 sprints, sibling pair)
+
+Both share S22's row-version + end-exclusive design — copy-and-adapt work, not new architecture.
+
+- **TASK-2206 redo** (S22 Option C carry-forward): 8-repo `(conn, tx)` overload refactor + 10-file site swap to use S22's single-tx atomic pattern. Touches `ApprovalPeriodRepository`, `AgreementConfigRepository`, `PositionOverrideRepository`, `WageTypeMappingRepository`, `OvertimePreApprovalRepository`, `OvertimeBalanceRepository`, `TimerSessionRepository`, `EntitlementBalanceRepository`, plus the endpoint sites that consume them. Reference shape: the 4 batch commits on `worktree-agent-a9b76f8d1f88717ff` (`c615dba` / `1466af9` / `c0093e6` / `2aa3044`) preserved for site-shape but **NOT to be merged** — they violate atomicity by introducing a separate tx wrapping only the outbox enqueue.
+- **D2.2 ETag/If-Match propagation** (ADR-019 placeholder, S21 D2.2 carry-forward): row-version + ETag pattern propagated across `agreement_configs` (DRAFT edits), `position_overrides`, `wage_type_mappings`, `entitlement_configs`. Each surface gains an `If-Match`/`If-None-Match` contract on its mutating endpoint(s); `OptimisticConcurrencyException` maps to 412 with `(expectedVersion, actualVersion, currentState)` body. End-exclusive `effective_to` semantics for any history-shaped surface.
+
+#### Phase 4d — Versioned History for Non-Dated Boundary Sources (3 sub-sprints, S20 Q5b carry-forward)
+
+Completes the temporal-segmentation correctness story for the three sources S20 left as snapshot-at-calculation. Each source moves from "snapshot the current row at calculation time, embed in segment manifest" to "look up the row effective on segment date." Existing manifests remain replayable; new manifests use the historical lookup. No retroactive recomputation of past calculations. **Hard dependency**: S20's `SnapshotContract` framework + segment manifest must be in place (it is).
+
+- **Phase 4d-1: Wage-type-mapping versioned history** — add `effective_from` / history-row semantics to `wage_type_mappings`. Simplest of the three; admin-managed, infrequent writes. Folds in the S20 carry-forward "WTM snapshot for full replay determinism" (`MapSegmentToExportLinesAsync` currently reads live DB during export-line stage).
+- **Phase 4d-2: Entitlement-policy versioned history** — same pattern; admin-managed config table. Pairs with `entitlement_configs` from Phase 4c.
+- **Phase 4d-3: Employee-profile versioned history** — hardest. The `employees` table is read by every rule, has many fields, has self-service + HR + leader edit paths. Versioning means every edit creates a history row; UI surfaces "as of date" semantics; per-field decision (e.g., display name → last-write-wins; agreement code, hours fraction, employment category → versioned). May itself decompose into multiple sprints.
+
+#### Phase 4e — General Hardening (~1-2 sprints)
 
 - Performance profiling and optimization
 - Monitoring, alerting, health checks
@@ -287,19 +323,14 @@ Only makes sense once functional correctness is achieved. The final UX polish pa
 - Load testing, stress testing
 - Security audit, penetration testing
 - Documentation and operational runbooks
-- **Versioned History for Non-Dated Boundary Sources** (committed 2026-04-28 during S20 Q5b analysis): completes the temporal-segmentation correctness story for the three sources S20 left as snapshot-at-calculation. Each source moves from "snapshot the current row at calculation time, embed in segment manifest" to "look up the row effective on segment date." Existing manifests remain replayable; new manifests use the historical lookup. No retroactive recomputation of past calculations. **Hard dependency**: S20's `SnapshotContract` framework + segment manifest must be in place. Three sub-sprints (sprint numbers assigned when the slot opens):
-  - **Phase 4 X-1: Wage-type-mapping versioned history** — add `effective_from` / history-row semantics to `wage_type_mappings`. Simplest of the three; admin-managed, infrequent writes.
-  - **Phase 4 X-2: Entitlement-policy versioned history** — same pattern; admin-managed config table.
-  - **Phase 4 X-3: Employee-profile versioned history** — hardest. The `employees` table is read by every rule, has many fields, has self-service + HR + leader edit paths. Versioning means every edit creates a history row; UI surfaces "as of date" semantics; per-field decision (e.g., display name → last-write-wins; agreement code, hours fraction, employment category → versioned). May itself decompose into multiple sprints.
-- **ETag/If-Match concurrency pattern propagation** (committed 2026-05-02 during S21 ADR-017 D2.2): S21 establishes the optimistic-concurrency token pattern (HTTP `ETag` / `If-Match` / `If-None-Match: *` with 412 Precondition Failed; `SELECT FOR UPDATE` on the partial-unique slot row inside `IsolationLevel.RepeatableRead`) for `local_agreement_profiles`. Today the same race exists silently across **5+ admin-write surfaces** with no concurrency control: `agreement_configs` (DRAFT edits), `position_overrides`, `wage_type_mappings`, `entitlement_configs`, and (pre-S21) `local_configurations`. A focused hardening sprint propagates the pattern uniformly. Each surface gains an `If-Match`/`If-None-Match` contract on its mutating endpoint(s); `OptimisticConcurrencyException` (or a shared base) maps to 412 with `expectedId` / `actualId` / `currentState` body. Sibling task to the transactional-outbox below.
-- **Transactional outbox for event-store + state-change atomicity** (committed 2026-05-02 during S21 cycle-2 review): S21's PUT-handler uses post-commit `eventStore.AppendAsync` because cycle-2 review found that an in-transaction event-append under `RepeatableRead` reads `MAX(stream_version)` from a stale snapshot, causing duplicate-key violations on `(stream_id, stream_version)` for concurrent saves. Residual partial-failure risk: process crash between profile-tx commit and event-store append leaves audit + profile committed with no event. Phase-4 fix: the transactional outbox pattern. Insert events into an `outbox_events` table inside the same transaction as state-change writes; a separate publisher process drains the outbox to the canonical event store with at-least-once semantics. Same atomic guarantee without MVCC snapshot conflicts. **Hard dependency**: S21's `IEventStore` API surface as the consumer side. Touches every state-change site that emits events — likely 1 sprint of focused work.
-- **Profile in-place edit + close-then-insert window math redesign** (committed 2026-05-03 during S21 Step 7a review): S21 ships close-then-insert for every save (predecessor `effective_to = newProfile.EffectiveFrom - 1`). When `newProfile.EffectiveFrom <= predecessor.EffectiveFrom` (same-day re-save OR backdate before predecessor's start), this stamps `effective_to <= effective_from` — invalid history window. Step-7a cycles 3-9 explored a temporal-monotonicity guard + UPDATE-in-place path; both reverted because each fix produced cascading regressions (lost-update on profile_id-as-ETag, audit-shape drift, self-cycle on `PrecedingProfileId`, response/GET divergence on `CreatedBy/CreatedAt`). Proper fix needs **(a) row-version column for ETag** so UPDATE-in-place can rotate the version token and concurrent admins still get 412, and **(b) end-exclusive `effective_to` semantics** so the predecessor's close-time is `newProfile.EffectiveFrom` (not `... - 1`) and equality is unambiguous. **Sibling to the two items above** — all three S21-derived concerns share the same row-version + end-exclusive redesign, sized as one Phase-4 sprint that touches `local_agreement_profiles` first then propagates the row-version pattern to the same admin-write surfaces as D2.2.
+- **S20 small-task absorbtion**: non-OK boundary-source hydration in `BuildPlanForLegacyCallers` (agreement-config / position-override / EU-WTD lists currently empty extension points); `StampAuditContext` wiring through Backend → Payroll proxy when audit chain reaches Payroll; retire the last `[Obsolete] CalculateAsync` call site at `/calculate-and-export`; `FlexBalanceRule` chained-carry custom delegate (currently `MergeStrategy.Custom` falls back to `FallbackCustomMerge`); `TestFixtures.RuleSet` drift-detection test against `HttpRuleClassificationProvider`.
+- **S21 test-harness debt**: tests #11/#12/#16 hand-roll PUT pipeline (could use `WebApplicationFactory<Program>`); reflection on private methods in tests #8-10/#14 (future small task with `[InternalsVisibleTo]`); `ProfileTestSchema.cs` / `LegacyProfileSchema.cs` DDL drift vs `init.sql` is silent today.
 
-### Phase 5 — UI/UX Refinements (final pre-launch sprint, sprint TBD after Phase 4)
+### Phase 5 — UI/UX Refinements (final pre-launch sprint, projected ~Sprint 30)
 
 **Priority focus**: P9 (Usability)
 
-Final polish pass before launch — deferred from its original S18 / S21 slots so it lands on a stable, hardened backend rather than a moving target. Sprint number assigned once Phase 4's actual sprint count is known. Scope unchanged from the original S18 plan.
+Final polish pass before launch — deferred from its original S18 / S21 slots so it lands on a stable, hardened backend rather than a moving target. Projected as ~S30 based on Phase 4 sub-sprint count (Phase 4a complete S22; Phase 4b ~1; Phase 4c ~2; Phase 4d ~3; Phase 4e ~1-2). Sprint number finalised when Phase 4d-3 (employee-profile versioned history) lands and its true sprint count is known. Scope unchanged from the original S18 plan.
 
 - Visual consistency audit: token usage, spacing, alignment across all pages
 - Responsive layout improvements (mobile/tablet breakpoints)
@@ -449,6 +480,18 @@ Sprint 17 completed Phase 3f part 3 (Overtime Governance & Compensation Model). 
 **Key deliverables**: OvertimeGovernanceRule (pure static, 2 checks: max ceiling + pre-approval requirement, WARNINGs via ComplianceCheckResult/ADR-015), OvertimeBalance model + repository (follows EntitlementBalance pattern), OvertimePreApproval workflow (separate table, PENDING/APPROVED/REJECTED), 4 new config fields through full chain (DB→Seeder→ConfigResolution→Endpoints), compensation-aware PayrollMappingService (OVERTIME_50/100/MERARBEJDE → _PAYOUT/_AFSPADSERING suffix), 28 new wage type mapping rows, 9 new backend endpoints, 4 frontend changes (overtime balance card, governance warnings, pre-approval management page, compensation choice selector), 10 new unit tests (446 total).
 
 **Phase 3f complete**: Sprints 15–17 delivered entitlements, working time compliance, and overtime governance. Overall functional coverage: ~95%.
+
+## Sprint 22 — Completed
+
+Sprint 22 completed Phase 4a (Transactional Outbox + Row-Version Atomic Exemplar). See [docs/sprints/SPRINT-22.md](docs/sprints/SPRINT-22.md) for full task log.
+
+**Key deliverables**: ADR-018 D1-D12 (`outbox_events` + `schema_migrations` ledger + `version BIGINT` on profiles + end-exclusive `effective_to` + audit-action MODIFIED). `IOutboxEnqueue` split-interface lives in Infrastructure (cycle-6 design) preserves SharedKernel Npgsql purity. `PostgresEventStore : IEventStore, IOutboxEnqueue` dual-binding. `OutboxPublisher` BackgroundService — per-stream FIFO + 4-way cross-stream parallelism, ReadCommitted publisher tx, event_id correlation on 23505. `LocalAgreementProfileRepository` UPDATE-in-place same-day routing (CREATED / MODIFIED / SUPERSEDED audit-action). `ConfigEndpoints` PUT atomic exemplar — version-as-ETag (RFC 7232 quoted long), three-way audit, in-tx EnqueueAsync replaces post-commit AppendAsync. Frontend ETag helpers (`lib/etag.ts` parseVersionFromETag/formatVersionAsIfMatch). 16 D12 Docker-gated regression scenarios across `OutboxPublisherTests`/`ProfileRowVersionTests`/`EndExclusiveMigrationTests`/`EventStoreInTxTests`. Build 0/0; 517 unit + 35 plain regression + 50 Docker-gated total = 650.
+
+**Option C scope narrowing (2026-05-04)**: TASK-2206 (8-repo `(conn, tx)` refactor + 10-file site swap) deferred to Phase 4c sub-sprint. ConfigEndpoints stands as the atomic exemplar; the other ~12 state-change endpoints still post-commit `AppendAsync` until 4c lands. Reference shape preserved on `worktree-agent-a9b76f8d1f88717ff` (NOT to be merged).
+
+**Step 7a Codex (3 cycles)**: Cycle 1 P2 fix — `ConfigEndpoints` PUT response now uses `predecessor.CreatedBy/CreatedAt` on UPDATE-in-place branch (where the repo preserves them). Cycle 2 P1 fix — `OutboxPublisher` per-stream foreach `continue` → `break` to preserve ADR-018 D5 FIFO under transient publish failures. Cycle 3 cascade halted per `feedback_step7a_cycle_cap_discipline.md`: 2 new P2 findings (frontend CORS ETag fallback + same-day no-op short-circuit) routed to Phase 4b.
+
+**Phase 4a complete**: Sprint 22 delivered the atomic state-change exemplar. Phase 4b-e propagate the pattern. Functional coverage unchanged at ~96% (all S18-S22 work was correctness/hardening; functional features were complete after S17). Committed `a278f34` on 2026-05-05.
 
 ## Architecture Decisions
 
