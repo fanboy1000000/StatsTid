@@ -16,4 +16,11 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <!-- S23 / TASK-2302: expose internals to the unit test project so tightly-
+       scoped helpers (e.g. OutboxCorrelationParser) can be unit-tested
+       without widening the public surface. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="StatsTid.Tests.Unit" />
+  </ItemGroup>
+
 </Project>

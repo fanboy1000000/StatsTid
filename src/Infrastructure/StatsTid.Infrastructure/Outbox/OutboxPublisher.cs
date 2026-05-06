@@ -355,7 +355,7 @@ public sealed class OutboxPublisher : BackgroundService
         return Convert.ToInt32(result);
     }
 
-    private static async Task InsertEventAsync(
+    private async Task InsertEventAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx, OutboxRow row, int version, CancellationToken ct)
     {
         await using var cmd = new NpgsqlCommand(
@@ -378,10 +378,20 @@ public sealed class OutboxPublisher : BackgroundService
         cmd.Parameters.AddWithValue("occurredAt", row.CreatedAt);
         cmd.Parameters.AddWithValue("actorId", (object?)row.ActorId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("actorRole", (object?)row.ActorRole ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("correlationId",
-            row.CorrelationId is null
-                ? DBNull.Value
-                : Guid.TryParse(row.CorrelationId, out var corr) ? (object)corr : DBNull.Value);
+
+        // S23 / TASK-2302: route correlation_id through OutboxCorrelationParser
+        // so a parse failure surfaces a structured warning (audit-chain
+        // breadcrumb survives in logs) before binding DBNull. Replaces the
+        // S22 inline ternary that silently dropped unparseable values.
+        var (outcome, correlationDbValue) = OutboxCorrelationParser.Parse(row.CorrelationId);
+        if (outcome == CorrelationParseOutcome.ParseFailure)
+        {
+            _logger.LogWarning(
+                "OutboxPublisher correlation_id parse failure for service {ServiceId} on outbox {OutboxId} stream {StreamId} event_id {EventId}; raw value '{RawCorrelationId}' is not a valid GUID — binding DBNull (audit chain link lost in canonical store)",
+                _serviceContext.ServiceId, row.OutboxId, row.StreamId, row.EventId, row.CorrelationId);
+        }
+        cmd.Parameters.AddWithValue("correlationId", correlationDbValue);
+
         await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
