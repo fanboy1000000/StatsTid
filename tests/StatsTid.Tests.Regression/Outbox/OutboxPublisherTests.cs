@@ -182,6 +182,71 @@ public sealed class OutboxPublisherTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task MaxAttemptsCap_QuarantinedRowIsNotPolled_OthersStillPublish()
+    {
+        // S23 / TASK-2301: ReadBatchAsync filters `attempts < MaxAttempts` (= 10).
+        // A row that's already hit the cap stays unpublished forever; rows on
+        // the same partition that haven't crossed the cap continue to publish.
+        //
+        // We seed Row A via raw INSERT with attempts = 10 already (simulating a
+        // poison row that has burned all its retries) and Row B via the normal
+        // enqueue path (attempts = 0). After running the publisher: Row B must
+        // be published; Row A must remain unpublished.
+        var streamA = "test-stream-cap-poison";
+        var streamB = "test-stream-cap-fresh";
+        var poisonEventId = Guid.NewGuid();
+
+        await using (var conn = new NpgsqlConnection(_harness.ConnectionString))
+        {
+            await conn.OpenAsync();
+            await using var insertPoison = new NpgsqlCommand(
+                """
+                INSERT INTO outbox_events (
+                    service_id, stream_id, event_id, event_type, event_payload,
+                    correlation_id, actor_id, actor_role, attempts, last_error)
+                VALUES (
+                    @serviceId, @streamId, @eventId, 'TestPoison', '{}'::jsonb,
+                    NULL, NULL, NULL, 10, 'simulated burn')
+                """, conn);
+            insertPoison.Parameters.AddWithValue("serviceId", ServiceId);
+            insertPoison.Parameters.AddWithValue("streamId", streamA);
+            insertPoison.Parameters.AddWithValue("eventId", poisonEventId);
+            await insertPoison.ExecuteNonQueryAsync();
+        }
+
+        var fresh = NewProfileEvent("STY02", "HK", "OK24");
+        await EnqueueAndCommitAsync(streamB, fresh);
+
+        using (var publisher = new OutboxPublisher(_harness.Factory, _context, NullLogger<OutboxPublisher>.Instance))
+        {
+            await publisher.StartAsync(CancellationToken.None);
+            await WaitForOutboxDrainedAsync(streamB, expectedCount: 1, timeoutMs: 10_000);
+            // Give the publisher a generous extra window — if the cap predicate
+            // were missing, the poison row would be re-attempted in this time.
+            await Task.Delay(1_500);
+            await publisher.StopAsync(CancellationToken.None);
+        }
+
+        // Fresh row published normally.
+        var freshVersion = await ReadCanonicalEventVersionAsync(fresh.EventId);
+        Assert.NotNull(freshVersion);
+
+        // Poison row remains unpublished AND its attempts count is unchanged
+        // (proving the publisher never picked it up — not even to bump attempts).
+        await using var verifyConn = new NpgsqlConnection(_harness.ConnectionString);
+        await verifyConn.OpenAsync();
+        await using var poisonCmd = new NpgsqlCommand(
+            """
+            SELECT published_at, attempts FROM outbox_events WHERE event_id = @id
+            """, verifyConn);
+        poisonCmd.Parameters.AddWithValue("id", poisonEventId);
+        await using var reader = await poisonCmd.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.True(reader.IsDBNull(0));        // published_at IS NULL
+        Assert.Equal(10, reader.GetInt32(1));   // attempts unchanged at 10
+    }
+
+    [Fact]
     public async Task RolledBackStateChange_DoesNotPublish()
     {
         // Open a tx, EnqueueAsync, ROLLBACK. Outbox row visibility follows tx

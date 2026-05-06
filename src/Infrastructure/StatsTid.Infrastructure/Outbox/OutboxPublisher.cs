@@ -44,6 +44,25 @@ public sealed class OutboxPublisher : BackgroundService
     /// within each group (ADR-018 D5).</summary>
     private const int MaxStreamParallelism = 4;
 
+    /// <summary>
+    /// Per-row attempt cap (S23 / Phase 4b). Rows that fail to publish more
+    /// than this many times are quarantined: <see cref="ReadBatchAsync"/>
+    /// stops returning them, freeing the publisher to make progress on the
+    /// rest of the partition. <see cref="IncrementAttemptsAsync"/> emits a
+    /// warn-log on first crossing so ops can detect stuck rows.
+    ///
+    /// <para>
+    /// Index note: <c>idx_outbox_unpublished (service_id, outbox_id) WHERE
+    /// published_at IS NULL</c> remains the primary scan driver for the
+    /// polling query — the new <c>attempts &lt; @maxAttempts</c> predicate is
+    /// applied as an in-scan filter. The complementary partial index
+    /// <c>idx_outbox_attempts (service_id, attempts, last_attempt_at) WHERE
+    /// published_at IS NULL AND attempts &gt; 0</c> is intended for the
+    /// ops-dashboard query that hunts stuck rows (<c>attempts &gt;= MaxAttempts</c>).
+    /// </para>
+    /// </summary>
+    private const int MaxAttempts = 10;
+
     private readonly DbConnectionFactory _connectionFactory;
     private readonly OutboxServiceContext _serviceContext;
     private readonly ILogger<OutboxPublisher> _logger;
@@ -170,6 +189,10 @@ public sealed class OutboxPublisher : BackgroundService
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct).ConfigureAwait(false);
 
+        // S23 / Phase 4b: `attempts < @maxAttempts` quarantines poison rows.
+        // `idx_outbox_unpublished` continues to drive the scan (it covers
+        // service_id + outbox_id ordering); the attempts predicate filters
+        // in-scan. See MaxAttempts XML-doc for the index rationale.
         await using var cmd = new NpgsqlCommand(
             """
             SELECT outbox_id, stream_id, event_id, event_type, event_payload,
@@ -177,10 +200,12 @@ public sealed class OutboxPublisher : BackgroundService
             FROM outbox_events
             WHERE service_id = @serviceId
               AND published_at IS NULL
+              AND attempts < @maxAttempts
             ORDER BY outbox_id ASC
             LIMIT @limit
             """, conn);
         cmd.Parameters.AddWithValue("serviceId", _serviceContext.ServiceId);
+        cmd.Parameters.AddWithValue("maxAttempts", MaxAttempts);
         cmd.Parameters.AddWithValue("limit", BatchSize);
 
         await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
@@ -391,6 +416,11 @@ public sealed class OutboxPublisher : BackgroundService
         // Bookkeeping happens on a SEPARATE connection so it is NOT rolled back
         // by the publisher tx's rollback. Best-effort: if this itself fails,
         // we swallow rather than re-throw and lose the original error context.
+        //
+        // S23 / Phase 4b: RETURNING attempts surfaces the post-increment value
+        // so we can warn-log on first-crossing of MaxAttempts (= the moment
+        // the row stops being polled by ReadBatchAsync). Logging on the
+        // boundary, not every subsequent attempt, keeps the signal noise-free.
         try
         {
             await using var conn = _connectionFactory.Create();
@@ -402,10 +432,17 @@ public sealed class OutboxPublisher : BackgroundService
                     last_error = @lastError,
                     last_attempt_at = NOW()
                 WHERE outbox_id = @outboxId
+                RETURNING attempts
                 """, conn);
             cmd.Parameters.AddWithValue("outboxId", outboxId);
             cmd.Parameters.AddWithValue("lastError", lastError ?? string.Empty);
-            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            var newAttempts = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
+            if (newAttempts is int n && n == MaxAttempts)
+            {
+                _logger.LogWarning(
+                    "OutboxPublisher quarantined outbox {OutboxId} for service {ServiceId} after {Attempts} attempts; last_error={LastError}; manual reconcile required (run the stuck-row ops query)",
+                    outboxId, _serviceContext.ServiceId, n, lastError);
+            }
         }
         catch (Exception ex)
         {

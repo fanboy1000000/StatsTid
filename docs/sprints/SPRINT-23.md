@@ -1,73 +1,297 @@
-# Sprint 23 — D2.2 ETag/If-Match Propagation Across Admin-Write Surfaces (Phase 4 Hardening, Sibling to S22)
+# Sprint 23 — Phase 4b Publisher Hardening
 
 | Field | Value |
 |-------|-------|
 | **Sprint** | 23 |
-| **Status** | placeholder (pre-S22 commit; S23 detail planning happens after S22 ships) |
-| **Start Date** | TBD (after S22 close) |
+| **Status** | in-progress |
+| **Start Date** | 2026-05-06 |
 | **End Date** | TBD |
-| **Orchestrator Approved** | n/a (placeholder) |
-| **Build Verified** | n/a |
-| **Test Verified** | n/a |
+| **Orchestrator Approved** | no |
+| **Build Verified** | no |
+| **Test Verified** | no |
 
 ## Sprint Goal
 
-Propagate the row-version-as-ETag pattern S22 establishes on `local_agreement_profiles` to the four other admin-write surfaces with silent lost-update races today:
+Tactical hardening pass on the S22 transactional-outbox / row-version exemplar before Phase 4c propagation begins. Absorbs S22 Step 7a Codex cycle-3 cascade findings + Reviewer WARNINGs/NOTEs deferred per cycle-cap discipline. No new architecture: each item maps to a named file and a commit-sized change.
 
-1. `agreement_configs` (DRAFT in-place edits + DRAFT→ACTIVE publish + ACTIVE→ARCHIVED clone — three distinct races per Reviewer Step 0b W2)
-2. `position_overrides`
-3. `wage_type_mappings`
-4. `entitlement_configs`
+The original SPRINT-23.md placeholder (drafted alongside S22) planned D2.2 ETag/If-Match propagation; that was demoted to Phase 4c by the 2026-05-05 ROADMAP restructure (commit `e070744`) once cycle-3 cascade routed publisher-hardening forward as the higher-priority next step. The propagation work + open questions (Q-23-1..Q-23-4 in the old draft) carry forward to the actual D2.2 sprint.
 
-The split from S22 was made at S22 Step 0b plan review (2026-05-03) once the Reviewer surfaced (a) Q3-Q5 coupling on `IEventStore` evolution, (b) `agreement_configs`'s three distinct race conditions, and (c) the divergent ETag-shape between S21's `profile_id`-as-ETag and the new row-version pattern. Bundling the propagation into S22 risked the cycle-cap death-spiral pattern S21 documented; sequencing them gives the row-version pattern a published exemplar before propagation.
+## Entropy Scan Findings
 
-## Pre-Sprint Anchoring (drafted alongside SPRINT-22.md, 2026-05-03)
+| Check | Result | Detail |
+|-------|--------|--------|
+| KB path validation | CLEAN | Spot-checked ADR-018 path + QUALITY.md presence; all entries link to existing files. |
+| Pattern compliance spot-check | CLEAN | No `FindFirst("scopes")` (FAIL-001 regression), no production-code `http://localhost` (only in launchSettings.json dev artifacts). |
+| Orphan detection | CLEAN | S21+S22 produced focused changes; no obvious orphans. |
+| Documentation drift | DRIFT — fixed | Stale SPRINT-23.md placeholder reflected pre-restructure D2.2 plan; overwritten with this Phase 4b plan. D2.2 content preserved in ROADMAP.md Phase 4c. |
+| Quality grade review | stable | S22 was correctness/hardening with no domain quality changes; grades unchanged from S21. |
 
-- **S22 prerequisites that S23 consumes**: ADR-018's row-version-as-ETag shape, `If-Match: <version>` HTTP convention, the in-tx outbox enqueue path, audit-action enum extensions where applicable.
-- **ADR-019** is the projected ADR number for S23 (covers the propagation pattern + Q10 shared-helper-vs-replication decision).
-- **Sprint-start commit**: TBD (= S22 sprint-close commit).
+## Plan Review (Step 0b)
 
-## Open Architectural Questions (to be detailed at S23 sprint start)
+| Field | Value |
+|-------|-------|
+| **Trigger** | OPTIONAL — pure tech-debt / Reviewer-finding-absorption sprint per WORKFLOW.md SKIP rows. User explicitly requested external Codex review of the approach + Open Questions, so Step 0b ran as plan-mode review (one cycle). Internal Reviewer skipped for the same SKIP-row rationale. |
+| **External Codex** | invoked 2026-05-06 — 1 cycle, 1B / 3W / 2N. Prompt at `.claude/codex-s23-prompt.txt`; output at `.claude/codex-s23-review.txt`. |
+| **Internal Reviewer** | not invoked (SKIP rationale: pure tech-debt absorption sprint, no new architectural ground). |
+| **BLOCKERs resolved before Step 1** | yes — BLOCKER on Item 4 (endpoint-level no-op short-circuit bypasses If-Match enforcement) addressed by relocating no-op detection inside `LocalAgreementProfileRepository.SupersedeAndCreateAsync` AFTER `AcquireLockAsync` + `ValidatePrecondition`. See TASK-2304. |
 
-These questions are deferred from S22's plan review (cycle 1) and will be resolved in ADR-019 once S22 ships.
+### Findings (cycle 1)
 
-1. **Q-23-1 (Q10 from S22)** — Shared `OptimisticConcurrencyHelper` vs per-repo replication of the row-version check. Trade-off: centralization risks coupling to lifecycle divergence (DRAFT/ACTIVE/ARCHIVED on `agreement_configs`); replication risks drift.
-2. **Q-23-2 (Q11 from S22)** — `agreement_configs`'s three distinct races:
-   - DRAFT in-place edit: standard If-Match on `version`.
-   - DRAFT→ACTIVE publish: state-machine transition; needs If-Match on the DRAFT being published.
-   - ACTIVE→ARCHIVED clone: the new ACTIVE replaces the old; the OLD ACTIVE's row-version must match what the publisher saw.
-   Three distinct token-handling paths; ADR-019 enumerates them.
-3. **Q-23-3** — Frontend ETag/If-Match wiring for the four surfaces. S21's `useConfig` hook is the pattern to extend; S23 surfaces each get equivalent handling.
-4. **Q-23-4** — Test matrix: minimum 2 scenarios per surface × 4 surfaces = 8 baseline; `agreement_configs`'s three races likely need 4-6 alone, total floor closer to 12-14.
+_Codex findings:_
+- **BLOCKER — Item 4** — Endpoint-level fast path returns 200 whenever the payload happens to equal the current row, even when the stored version has advanced past the caller's `If-Match`. Bypasses repo-level `OptimisticConcurrencyException`. Reintroduces a TOCTOU race between the predecessor read and the early return. → Resolved: TASK-2304 detection moved inside repo, after lock + version validation.
+- **WARNING — Item 1** — `idx_outbox_attempts` is NOT the scan driver for the polling query (excludes `attempts = 0`, no `outbox_id` ordering); `idx_outbox_unpublished` continues to drive scan with the new predicate filtering in-scan. `MaxAttempts = 10` quarantines a poison row in seconds at the 250ms active-poll cadence — acceptable only with explicit operator visibility. → Resolved: TASK-2301 adds a warn-log when a row first crosses the cap; sprint log documents the ops query for stuck rows.
+- **WARNING — Item 3** — Blindly formatting `data.version` could synthesize `"undefined"` if the response body is malformed. → Resolved: TASK-2303 adds runtime guard `typeof === 'number'` + `Number.isSafeInteger` + `>= 1`; on guard failure return `etag: null` (no bogus token).
+- **WARNING — Item 5c** — The 3 deferred D12 tests cover old NOTE debt, not the *new* hardening behaviour introduced by Items 1 and 4. → Resolved: TASK-2305 adds three sprint-local tests in addition to the deferred D12 set: cap behaviour (poison row stops, others continue), no-op path (no version bump / no audit / no outbox; stale If-Match still 412), weak ETag unit test in `etag.ts`.
+- **NOTE — Item 2** — Log enough breadcrumb to recover the audit chain on parse failure: include `outboxId`, `eventId`, `streamId`, raw `correlation_id`. → Resolved: TASK-2302 logs all four fields.
+- **NOTE — Item 5a** — Catch only DB/transport (PostgresException, NpgsqlException), let `OperationCanceledException` propagate; do NOT catch broad Exception. → TASK-2305 follows this pattern.
 
-## Scope Boundary (preliminary, refined at S23 sprint start)
+_Open-Questions verdicts (Codex):_
+- Q1 (correlation_id storage): Codex picks **A** (log-on-fail). Schema migration to TEXT has higher blast radius for a non-functional concern. Aligns with my recommendation.
+- Q2 (weak ETag): Codex picks **Other** — strip `W/` *case-insensitively* (RFC says uppercase but tolerating `w/` is effectively free). Stricter than my Option A.
+- Q3 (sprint shape): Codex picks **A** (sequential commits, no agent dispatch) with caveat that Item 4 will touch repo + endpoint + tests in one commit. Aligns with my recommendation.
 
-### In scope
-- ADR-019 covering the propagation pattern + agreement_configs three-race resolution.
-- Schema migration: add `version BIGINT NOT NULL DEFAULT 1` to `agreement_configs`, `position_overrides`, `wage_type_mappings`, `entitlement_configs`.
-- Repository updates: each repo gains row-version checks on UPDATE; `OptimisticConcurrencyException` thrown on mismatch.
-- Endpoint updates: each PUT/POST gains `ETag` header on GET responses; `If-Match` precondition on writes; 412 on mismatch with current state body.
-- `agreement_configs` DRAFT/publish/clone three-race handling per Q-23-2.
-- Frontend `useConfig`-style hooks for the four surfaces: `useAgreementConfig`, `usePositionOverride`, `useWageTypeMapping`, `useEntitlementConfig` — each carries an ETag and re-fetches on 412.
-- Regression coverage per Q-23-4.
+### Resolution
 
-### Out of scope
-- Touching S22's S22-shipped pattern (read-only consumer).
-- Versioned-history for non-dated boundary sources (Phase 4 X-1/X-2/X-3).
-- UI/UX polish on optimistic-concurrency error rendering (Phase 5).
+User accepted all Codex revisions and Open Question picks (2026-05-06). Sprint proceeds with:
+- Item 4 implemented at the repository layer with no-op detection inside `SupersedeAndCreateAsync` AFTER lock + version validation.
+- Item 1 keeps `MaxAttempts = 10` plus a first-crossing warn-log for ops visibility; the sprint log documents the ops query for stuck rows.
+- Item 3 frontend fallback adds runtime guards on `data.version` (typeof, SafeInteger, >= 1).
+- Item 5b weak-ETag strip is case-insensitive.
+- Item 5c adds three sprint-local hardening tests in addition to the three deferred D12 tests (six total new tests in S23).
 
-## Planning Entrypoint
+## Architectural Constraints Verified
 
-This sprint detail is drafted post-S22-close. S23 starts with:
+- [ ] P1 — Architectural integrity preserved
+- [ ] P2 — Rule engine determinism maintained (no I/O, no side effects) — N/A (no rule-engine touches)
+- [ ] P3 — Event sourcing append-only semantics respected
+- [ ] P4 — OK version correctness (entry-date resolution) — N/A (version-correctness in S23 refers to row-version optimistic-concurrency on profiles, not OK-version)
+- [ ] P5 — Integration isolation and delivery guarantees (outbox cap + correlation_id robustness)
+- [ ] P6 — Payroll integration correctness (traceability chain) — N/A (no payroll touches)
+- [ ] P7 — Security and access control — unchanged (no auth/scope changes)
+- [ ] P8 — CI/CD enforcement — unchanged
+- [ ] P9 — Usability and UX (frontend ETag fallback robustness)
 
-1. **Step 0a entropy scan** — completed at S23 sprint start, not now.
-2. **Step 0b plan review** — completed at S23 sprint start.
-3. **ADR-019** — covers the propagation pattern.
-4. **Migration plan** — 4 schema migrations (one per surface).
-5. **Task decomposition** — `TASK-23NN` entries.
+## Task Log
 
-## References
+### TASK-2301 — Outbox max-attempts cap
 
-- [SPRINT-22.md](SPRINT-22.md) — foundation sprint, S23 prerequisite
-- [docs/knowledge-base/decisions/ADR-017-local-agreement-configuration-as-a-profile.md](../knowledge-base/decisions/ADR-017-local-agreement-configuration-as-a-profile.md) — D2.1 ETag pattern reference
-- [ROADMAP.md](../../ROADMAP.md) — Phase 4 placement (sibling to S22 / X-1/X-2/X-3)
+| Field | Value |
+|-------|-------|
+| **ID** | TASK-2301 |
+| **Status** | pending |
+| **Agent** | Orchestrator (Small Tasks Exception per item) |
+| **Components** | Infrastructure (OutboxPublisher) |
+| **KB Refs** | ADR-018 (D2 + D4 + D5) |
+| **Constraint Validator** | pending |
+| **Reviewer Audit** | skipped (Small Tasks Exception) |
+| **External Review (Codex)** | bundled into Step 7a sprint-end review |
+| **Orchestrator Approved** | no |
+
+**Description**: `OutboxPublisher.ReadBatchAsync` lacks an `attempts < N` predicate. Permanently broken rows hot-loop forever, burning DB + log churn. Add `MaxAttempts = 10` const, extend the polling SQL, and add a first-crossing warn-log so ops can detect stuck rows. The existing `idx_outbox_unpublished` partial index (`service_id, outbox_id` WHERE `published_at IS NULL`) continues to drive the scan; the new predicate is an in-scan filter. The complementary `idx_outbox_attempts` partial index is repurposed for an ops-dashboard query (documented below) that hunts stuck rows.
+
+**Validation Criteria**:
+- [ ] `OutboxPublisher.ReadBatchAsync` SQL contains `AND attempts < @maxAttempts`; bound parameter
+- [ ] Constant `MaxAttempts = 10`
+- [ ] Warn-log emitted on first-crossing inside `IncrementAttemptsAsync` (after the UPDATE, when `attempts + 1 == MaxAttempts`)
+- [ ] XML-doc on `MaxAttempts` notes that `idx_outbox_unpublished` remains the primary poll index; `idx_outbox_attempts` is for the ops-dashboard query
+- [ ] Docker-gated regression test: row that fails publish 10 times stops being polled; rows on other streams continue publishing
+- [ ] `dotnet build` clean
+
+**Files Changed**:
+- `src/Infrastructure/StatsTid.Infrastructure/Outbox/OutboxPublisher.cs` — add MaxAttempts const, extend SQL, warn-log on first-crossing
+- `tests/StatsTid.Tests.Regression/Outbox/OutboxPublisherTests.cs` — Docker-gated cap test
+
+**Ops query for stuck rows** (documented here, no code in S23):
+```sql
+SELECT outbox_id, stream_id, event_type, attempts, last_error, last_attempt_at
+FROM outbox_events
+WHERE service_id = $1
+  AND published_at IS NULL
+  AND attempts >= 10
+ORDER BY last_attempt_at DESC
+LIMIT 100;
+-- Uses idx_outbox_attempts (service_id, attempts, last_attempt_at) WHERE attempts > 0
+```
+
+---
+
+### TASK-2302 — `correlation_id` parse robustness
+
+| Field | Value |
+|-------|-------|
+| **ID** | TASK-2302 |
+| **Status** | pending |
+| **Agent** | Orchestrator (Small Tasks Exception) |
+| **Components** | Infrastructure (OutboxPublisher) |
+| **KB Refs** | ADR-018 (D4) |
+| **Constraint Validator** | pending |
+| **Reviewer Audit** | skipped |
+| **External Review (Codex)** | bundled into Step 7a |
+| **Orchestrator Approved** | no |
+
+**Description**: `OutboxPublisher.InsertEventAsync` parses `outbox_events.correlation_id` (TEXT) into the `events.correlation_id UUID` column via `Guid.TryParse`. On parse failure today the value silently becomes `DBNull.Value` — the audit-chain breadcrumb is lost without trace. Replace the inline ternary with a guarded helper that logs a structured warning (with `outboxId`, `eventId`, `streamId`, raw value) and binds `DBNull.Value`. Open Question 1 verdict: Option A (log-on-fail), keep `events.correlation_id` as `UUID`. Schema migration is overkill for a debug-breadcrumb concern.
+
+**Validation Criteria**:
+- [ ] `InsertEventAsync` correlation_id branch calls a private helper (e.g. `BindCorrelationId(cmd, row, _logger)`)
+- [ ] Helper logs structured warning with `outboxId`, `eventId`, `streamId`, raw `correlation_id` on parse failure
+- [ ] Helper binds `DBNull.Value` on null OR parse failure
+- [ ] Unit test for helper: valid GUID string parses; invalid string logs + binds DBNull; null binds DBNull
+- [ ] `dotnet build` clean
+
+**Files Changed**:
+- `src/Infrastructure/StatsTid.Infrastructure/Outbox/OutboxPublisher.cs` — extract helper, replace ternary
+- `tests/StatsTid.Tests.Unit/Outbox/OutboxPublisherCorrelationParseTests.cs` — new
+
+---
+
+### TASK-2303 — Frontend ETag fallback with runtime guard
+
+| Field | Value |
+|-------|-------|
+| **ID** | TASK-2303 |
+| **Status** | pending |
+| **Agent** | Orchestrator (Small Tasks Exception) |
+| **Components** | Frontend (api/profileApi, lib/etag) |
+| **KB Refs** | ADR-018 (D7) |
+| **Constraint Validator** | pending |
+| **Reviewer Audit** | skipped |
+| **External Review (Codex)** | bundled into Step 7a |
+| **Orchestrator Approved** | no |
+
+**Description**: `res.headers.get('ETag')` returns null in cross-origin deployments unless `Access-Control-Expose-Headers: ETag` is set. Both `getCurrentProfile` and `saveProfile` should fall back to the response body's `version` field (already returned by `MapProfileResponse`). Per Codex WARNING: blindly formatting `data.version` synthesizes `"undefined"` if the body is malformed. Add a runtime guard before formatting. The backend CORS expose-header is a no-op today (no `AddCors`/`UseCors` present, vite dev-proxy is same-origin) and is deferred to Phase 4e infra when CORS is wired.
+
+**Validation Criteria**:
+- [ ] `getCurrentProfile` falls back to `data.version` when `res.headers.get('ETag')` is null AND `data.version` passes the runtime guard
+- [ ] `saveProfile` does the same for `newEtag`
+- [ ] Runtime guard: `typeof data.version === 'number' && Number.isSafeInteger(data.version) && data.version >= 1`
+- [ ] On guard failure, return `etag: null` / `newEtag: null` (no bogus `"undefined"` or `"NaN"` token)
+- [ ] vitest tests: header present → uses header; header null + valid body version → fallback ETag; header null + missing/invalid version → null
+- [ ] `npx vitest run` green
+
+**Files Changed**:
+- `frontend/src/api/profileApi.ts` — add fallback in `getCurrentProfile` (line ~74) and `saveProfile` (line ~176)
+- `frontend/src/api/__tests__/profileApi.etag-fallback.test.ts` — new
+
+---
+
+### TASK-2304 — Same-day no-op short-circuit (REPO-LEVEL)
+
+| Field | Value |
+|-------|-------|
+| **ID** | TASK-2304 |
+| **Status** | pending |
+| **Agent** | Orchestrator (Small Tasks Exception expanded — touches repo + endpoint + tests, single domain Backend) |
+| **Components** | Backend (LocalAgreementProfileRepository, ConfigEndpoints) |
+| **KB Refs** | ADR-018 (D7, D9) |
+| **Constraint Validator** | pending |
+| **Reviewer Audit** | skipped |
+| **External Review (Codex)** | bundled into Step 7a (high-risk: repo-level concurrency change + endpoint contract) |
+| **Orchestrator Approved** | no |
+
+**Description**: When admin saves a profile with no field changes on the same effective_from, today's flow calls `UpdateInPlaceAsync`, bumps `version`, emits MODIFIED audit, and enqueues an outbox event with empty `changedFields`. Per Codex BLOCKER on the original endpoint-level proposal: bypassing the repo's `If-Match` enforcement reintroduces a TOCTOU race and lets stale callers get 200 when the stored version has advanced. **Revised approach**: detect the no-op INSIDE `LocalAgreementProfileRepository.SupersedeAndCreateAsync`, AFTER `AcquireLockAsync` + `ValidatePrecondition` (the existing concurrency check). The repo returns a flag in its result tuple indicating "no-op" so the endpoint can skip the audit + outbox emission paths. The same-version, same-row, no-mutation result is what the caller receives.
+
+**Validation Criteria**:
+- [ ] `SupersedeAndCreateAsync` (or new sibling method) detects no-op AFTER lock + version validation; returns `(profileId, version, isNoOp)` (or equivalent shape)
+- [ ] No-op detection condition: `predecessor.EffectiveFrom == newProfile.EffectiveFrom && all-overridable-fields-match` (5 nullable fields)
+- [ ] Stale `If-Match` still produces 412 — the precondition check runs before no-op detection
+- [ ] On no-op: NO `UPDATE local_agreement_profiles` (version unchanged), NO audit row, NO outbox event
+- [ ] Endpoint: when repo returns `isNoOp = true`, skip the audit INSERT + `outbox.EnqueueAsync`; return 200 with predecessor's `Version` and `ETag = "<predecessor.Version>"`
+- [ ] Endpoint: when `changedFields.Count == 0` AND no-op detected, alignment validation can be skipped (validator only checks changed fields, so it would no-op anyway — explicit skip is symmetry not safety)
+- [ ] Docker-gated regression tests: no-op produces no version bump / no audit row / no outbox row; stale If-Match (lower version than current) still 412; concurrent two-writer no-op race lands as one no-op + one If-Match-ok update
+- [ ] `dotnet build` clean
+
+**Files Changed**:
+- `src/Infrastructure/StatsTid.Infrastructure/LocalAgreementProfileRepository.cs` — extend `SupersedeAndCreateAsync` return shape with `isNoOp`
+- `src/Backend/StatsTid.Backend.Api/Endpoints/ConfigEndpoints.cs` — branch on `isNoOp` to skip audit + outbox; return early
+- `tests/StatsTid.Tests.Regression/Profile/ProfileNoOpShortCircuitTests.cs` — new (Docker-gated)
+
+---
+
+### TASK-2305 — NOTE absorption (412 try/catch + weak ETag + 3 D12 + sprint-local tests)
+
+| Field | Value |
+|-------|-------|
+| **ID** | TASK-2305 |
+| **Status** | pending |
+| **Agent** | Orchestrator (Small Tasks Exception) |
+| **Components** | Backend (ConfigEndpoints), Frontend (lib/etag), Test suites |
+| **KB Refs** | ADR-018 |
+| **Constraint Validator** | pending |
+| **Reviewer Audit** | skipped |
+| **External Review (Codex)** | bundled into Step 7a |
+| **Orchestrator Approved** | no |
+
+**Description**: Three NOTE absorptions plus three deferred D12 coverage gaps.
+
+**5a — 412 fallback robustness**: `ConfigEndpoints.cs:303` `GetCurrentOpenAsync` runs AFTER the primary write tx already raised `OptimisticConcurrencyException`. If the recovery fetch also throws, the endpoint surfaces an unhandled exception masking the original concurrency error. Wrap in try/catch — catch `PostgresException` + `NpgsqlException` only; let `OperationCanceledException` and other exceptions propagate. On caught exception: log warning, return 412 with `currentState: null` and the `expectedVersion`/`actualVersion` preserved from the original.
+
+**5b — Weak ETag parser**: `frontend/src/lib/etag.ts` `parseVersionFromETag` rejects weak validators (`W/"5"`) by returning null. Per Codex Q2 verdict (Other): strip `W/` *case-insensitively* before the existing quote/unquote. The integer-row-version semantic doesn't distinguish strong vs weak; tolerating `w/` from broken intermediaries is free.
+
+**5c — Three deferred D12 + three sprint-local tests** (six total new):
+- Deferred D12 #1: concurrent enqueue across two endpoints competing for same `stream_id`; assert per-stream FIFO via `outbox_id` ordering on the published `events` rows.
+- Deferred D12 #2: sustained-load 50+ rows across 4 streams to exercise `MaxStreamParallelism = 4` saturation.
+- Deferred D12 #3: `EndExclusiveMigrationTests` extension — backfill on already-shifted rows is idempotent / no double-shift.
+- Sprint-local #1 (TASK-2301): poison row stops being polled at cap; others continue. (Already listed in TASK-2301 acceptance criteria — not double-counted here.)
+- Sprint-local #2 (TASK-2304): no-op path semantics. (Already listed in TASK-2304 acceptance criteria.)
+- Sprint-local #3 (TASK-2303 + 5b): weak-ETag parser unit tests in `etag.ts`. (vitest)
+
+**Validation Criteria**:
+- [ ] `ConfigEndpoints.cs:303` `GetCurrentOpenAsync` wrapped in try/catch (PostgresException + NpgsqlException only); `OperationCanceledException` propagates; on catch: log warning, return 412 body with `currentState: null`
+- [ ] `frontend/src/lib/etag.ts` `parseVersionFromETag` strips case-insensitive `W/` prefix before existing logic
+- [ ] Three new Docker-gated tests (concurrent-stream FIFO, sustained-load, migration backfill idempotency)
+- [ ] vitest tests for the weak-ETag strip (uppercase W/, lowercase w/, no prefix, malformed)
+- [ ] `dotnet build` clean
+- [ ] `npx vitest run` green
+
+**Files Changed**:
+- `src/Backend/StatsTid.Backend.Api/Endpoints/ConfigEndpoints.cs` — wrap recovery fetch
+- `frontend/src/lib/etag.ts` — case-insensitive `W/` strip
+- `tests/StatsTid.Tests.Regression/Outbox/ConcurrentEnqueueTests.cs` — new (Docker-gated)
+- `tests/StatsTid.Tests.Regression/Outbox/SustainedLoadTests.cs` — new (Docker-gated)
+- `tests/StatsTid.Tests.Regression/Migration/EndExclusiveBackfillIdempotencyTests.cs` — extends existing or new
+- `frontend/src/lib/__tests__/etag.weak-validator.test.ts` — new
+
+---
+
+## Legal & Payroll Verification
+
+| Check | Status | Notes |
+|-------|--------|-------|
+| Agreement rules match legal requirements | N/A | No rule-engine or agreement-config touches. |
+| Wage type mappings produce correct SLS codes | N/A | No wage-type-mapping touches. |
+| Overtime/supplement calculations are deterministic | N/A | No overtime-rule touches. |
+| Absence effects on norm/flex/pension are correct | N/A | No absence-rule touches. |
+| Retroactive recalculation produces stable results | N/A | No retroactive-correction touches. |
+
+## External Review (Step 7a)
+
+| Field | Value |
+|-------|-------|
+| **Invoked** | pending |
+| **Sprint-start commit** | `e070744` (S22 sprint close) |
+| **Command** | TBD — `codex review "..."` (prompt-alone, uncommitted) preferred; `codex review --base e070744` if intermediate commits exist |
+| **Review Cycles** | TBD |
+| **Findings** | TBD |
+| **Resolution** | TBD |
+
+### Findings
+
+_Populated after Step 7a runs._
+
+## Test Summary
+
+| Suite | Count | Status |
+|-------|-------|--------|
+| Unit tests | TBD (was 517 at S22 close) | pending |
+| Regression — plain | TBD (was 35 at S22 close) | pending |
+| Regression — Docker-gated | TBD (was 50 at S22 close; +5 expected: cap, no-op, concurrent, sustained, backfill) | pending |
+| Frontend (vitest) | TBD (was 48 at S22 close; +1-3 expected: ETag fallback, weak-ETag, ConfigEndpoints test if any) | pending |
+| **Total** | TBD | — |
+
+## Agent Effectiveness
+
+_Populated at sprint close._
+
+## Sprint Retrospective
+
+_Populated at sprint close._
