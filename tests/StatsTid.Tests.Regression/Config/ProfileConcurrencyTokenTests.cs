@@ -99,8 +99,12 @@ public sealed class ProfileConcurrencyTokenTests : IAsyncLifetime
     private async Task<(Guid ProfileId, long Version)> SeedOpenProfileAsync(decimal weeklyNormHours)
     {
         var initial = NewCandidate(weeklyNormHours);
-        return await _repo.SupersedeAndCreateAsync(
+        // S23 / TASK-2304: SupersedeAndCreateAsync now returns SaveProfileResult.
+        // Destructure via the 2-arg Deconstruct overload to preserve this helper's
+        // (Guid, long) tuple shape — IsNoOp is always false on first-create.
+        var (id, version) = await _repo.SupersedeAndCreateAsync(
             expectedCurrentVersion: null, initial);
+        return (id, version);
     }
 
     private static LocalAgreementProfile NewCandidate(decimal weeklyNormHours) => new()

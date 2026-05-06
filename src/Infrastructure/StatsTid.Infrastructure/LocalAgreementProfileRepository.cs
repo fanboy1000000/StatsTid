@@ -193,14 +193,18 @@ public sealed class LocalAgreementProfileRepository
     /// the same (org, agreement_code, ok_version) triple. PostgreSQL RepeatableRead is
     /// sufficient here — it prevents non-repeatable reads and the row-lock blocks competitors.
     /// </summary>
-    /// <returns>The post-write profile id and version. For first-create + supersession the
-    /// version is <c>1</c>; for UPDATE-in-place it is <c>predecessor.Version + 1</c>.</returns>
+    /// <returns>The post-write profile id and version (and whether the same-day write was
+    /// a no-op — <see cref="SaveProfileResult.IsNoOp"/>). For first-create + supersession the
+    /// version is <c>1</c>; for UPDATE-in-place it is <c>predecessor.Version + 1</c> unless
+    /// the candidate's overridable fields all match the predecessor (S23 / TASK-2304 same-day
+    /// no-op short-circuit), in which case the predecessor's version is returned unchanged
+    /// and the caller skips audit + outbox emission.</returns>
     /// <exception cref="OptimisticConcurrencyException">If the precondition encoded in
     /// <paramref name="expectedCurrentVersion"/> does not match the row currently holding the
     /// active slot.</exception>
     /// <exception cref="InvalidProfileSupersessionException">If
     /// <c>newProfile.EffectiveFrom &lt; predecessor.EffectiveFrom</c>.</exception>
-    public async Task<(Guid ProfileId, long Version)> SupersedeAndCreateAsync(
+    public async Task<SaveProfileResult> SupersedeAndCreateAsync(
         long? expectedCurrentVersion, LocalAgreementProfile newProfile, CancellationToken ct = default)
     {
         await using var conn = _connectionFactory.Create();
@@ -231,14 +235,16 @@ public sealed class LocalAgreementProfileRepository
     /// the self-contained overload — the caller should open the transaction with
     /// <see cref="IsolationLevel.RepeatableRead"/> for equivalent guarantees.
     /// </summary>
-    /// <returns>The post-write profile id and version. For first-create + supersession the
-    /// version is <c>1</c>; for UPDATE-in-place it is <c>predecessor.Version + 1</c>.</returns>
+    /// <returns>The post-write profile id, version, and a no-op flag. See <see cref="SaveProfileResult"/>
+    /// for semantics. For first-create + supersession the version is <c>1</c>; for UPDATE-in-place
+    /// it is <c>predecessor.Version + 1</c>; for the S23 same-day no-op path it is
+    /// <c>predecessor.Version</c> (unchanged) with <see cref="SaveProfileResult.IsNoOp"/> = true.</returns>
     /// <exception cref="OptimisticConcurrencyException">If the precondition encoded in
     /// <paramref name="expectedCurrentVersion"/> does not match the row currently holding the
     /// active slot.</exception>
     /// <exception cref="InvalidProfileSupersessionException">If
     /// <c>newProfile.EffectiveFrom &lt; predecessor.EffectiveFrom</c>.</exception>
-    public async Task<(Guid ProfileId, long Version)> SupersedeAndCreateAsync(
+    public async Task<SaveProfileResult> SupersedeAndCreateAsync(
         NpgsqlConnection conn,
         NpgsqlTransaction tx,
         long? expectedCurrentVersion,
@@ -252,6 +258,10 @@ public sealed class LocalAgreementProfileRepository
             conn, tx, newProfile.OrgId, newProfile.AgreementCode, newProfile.OkVersion, ct);
 
         // 2. Validate the precondition (If-None-Match: * vs If-Match: "<version>").
+        //    LOAD-BEARING: Codex S23 Step 0b BLOCKER on the original endpoint-level no-op
+        //    fast path was that it bypassed THIS check, letting stale callers get 200 when
+        //    the stored version had advanced. The no-op short-circuit at 3b-noop runs AFTER
+        //    this check, NEVER before it.
         ValidatePrecondition(current?.Version, expectedCurrentVersion);
 
         if (current is { } predecessor)
@@ -266,14 +276,27 @@ public sealed class LocalAgreementProfileRepository
                     $"earlier than predecessor's effective_from {predecessor.EffectiveFrom:yyyy-MM-dd}.");
             }
 
-            // 3b. Same-day save → UPDATE-in-place (ADR-018 D9 MODIFIED branch). profile_id
-            //     stable; version bumped by one; effective_from / effective_to immutable.
-            //     The audit-action at the call site is MODIFIED (vs SUPERSEDED for 3c below).
+            // 3b. Same-day save (ADR-018 D9 MODIFIED branch).
             if (newProfile.EffectiveFrom == predecessor.EffectiveFrom)
             {
+                // 3b-noop. S23 / TASK-2304 — short-circuit when no overridable field changed.
+                //     Detection happens AFTER lock + ValidatePrecondition (Codex Step 0b
+                //     BLOCKER fix): a stale caller cannot reach this path because their
+                //     If-Match is rejected by ValidatePrecondition first. If we reach here
+                //     and all 5 overridable fields match the predecessor, do NOT bump
+                //     version, do NOT UPDATE the row. Return predecessor.Version unchanged
+                //     with IsNoOp = true; the PUT handler skips audit + outbox emission.
+                if (AllOverridableFieldsMatch(predecessor, newProfile))
+                {
+                    return new SaveProfileResult(predecessor.ProfileId, predecessor.Version, IsNoOp: true);
+                }
+
+                // 3b-update. UPDATE-in-place. profile_id stable; version bumped by one;
+                //     effective_from / effective_to immutable. The audit-action at the call
+                //     site is MODIFIED (vs SUPERSEDED for 3c below).
                 var newVersion = await UpdateInPlaceAsync(
                     conn, tx, predecessor.ProfileId, newProfile, predecessor.Version, ct);
-                return (predecessor.ProfileId, newVersion);
+                return new SaveProfileResult(predecessor.ProfileId, newVersion, IsNoOp: false);
             }
 
             // 3c. Supersession (newProfile.EffectiveFrom > predecessor.EffectiveFrom):
@@ -311,30 +334,62 @@ public sealed class LocalAgreementProfileRepository
                 actualVersion: null,
                 innerException: ex);
         }
-        return (newProfileId, Version: 1);
+        return new SaveProfileResult(newProfileId, Version: 1, IsNoOp: false);
+    }
+
+    /// <summary>
+    /// Returns true when all 5 admin-overridable fields on <paramref name="predecessor"/>
+    /// equal the corresponding values on <paramref name="candidate"/>. Used by the S23
+    /// same-day no-op short-circuit to skip the UPDATE + audit + outbox emission when an
+    /// admin saves a profile with no field changes (typical "open the form, change nothing,
+    /// hit Save" admin flow).
+    ///
+    /// <para>
+    /// The 5 fields are the entire whitelist of overridable columns on
+    /// <c>local_agreement_profiles</c> per ADR-017 D9a (the schema columns ARE the
+    /// whitelist; protected keys are absent from the schema by design):
+    /// <c>WeeklyNormHours</c>, <c>MaxFlexBalance</c>, <c>FlexCarryoverMax</c>,
+    /// <c>MaxOvertimeHoursPerPeriod</c>, <c>OvertimeRequiresPreApproval</c>. C# nullable
+    /// equality (<c>==</c>) handles the (null, null) ⇒ true case correctly for both
+    /// <c>decimal?</c> and <c>bool?</c>. Identity (<c>profile_id</c>, <c>effective_from</c>,
+    /// <c>created_by</c>, <c>created_at</c>, <c>version</c>) and lifecycle (<c>effective_to</c>)
+    /// columns are immutable across in-place edits and therefore irrelevant to this check.
+    /// </para>
+    /// </summary>
+    private static bool AllOverridableFieldsMatch(
+        LocalAgreementProfile predecessor, LocalAgreementProfile candidate)
+    {
+        return predecessor.WeeklyNormHours == candidate.WeeklyNormHours
+            && predecessor.MaxFlexBalance == candidate.MaxFlexBalance
+            && predecessor.FlexCarryoverMax == candidate.FlexCarryoverMax
+            && predecessor.MaxOvertimeHoursPerPeriod == candidate.MaxOvertimeHoursPerPeriod
+            && predecessor.OvertimeRequiresPreApproval == candidate.OvertimeRequiresPreApproval;
     }
 
     /// <summary>
     /// Acquires a row-level lock on the currently-active profile (if any) for the
     /// (org, agreement_code, ok_version) triple via <c>SELECT ... FOR UPDATE</c>. Returns
-    /// the locked row's <c>(profile_id, version, effective_from)</c> triple, or <c>null</c>
-    /// if no profile is currently active. Concurrent writers attempting the same lock
-    /// serialize on this query.
+    /// the locked row as a full <see cref="LocalAgreementProfile"/>, or <c>null</c> if no
+    /// profile is currently active. Concurrent writers attempting the same lock serialize
+    /// on this query.
     ///
-    /// The <c>version</c> is the optimistic-concurrency token compared against the caller's
-    /// <c>expectedCurrentVersion</c>; the <c>effective_from</c> is what the routing branch
-    /// in <see cref="SupersedeAndCreateAsync(NpgsqlConnection, NpgsqlTransaction, System.Nullable{long}, LocalAgreementProfile, System.Threading.CancellationToken)"/>
-    /// compares against <c>newProfile.EffectiveFrom</c> to pick first-create / UPDATE-in-place
-    /// / supersession.
+    /// <para>
+    /// Returning the full profile (rather than just identity columns) lets
+    /// <see cref="SupersedeAndCreateAsync(NpgsqlConnection, NpgsqlTransaction, System.Nullable{long}, LocalAgreementProfile, System.Threading.CancellationToken)"/>
+    /// inspect the overridable-field set during the no-op short-circuit (S23 / TASK-2304)
+    /// without a second SELECT. The <c>version</c> column is the optimistic-concurrency
+    /// token; the <c>effective_from</c> column drives the first-create / UPDATE-in-place /
+    /// supersession routing.
+    /// </para>
     /// </summary>
-    private static async Task<(Guid ProfileId, long Version, DateOnly EffectiveFrom)?> AcquireLockAsync(
+    private static async Task<LocalAgreementProfile?> AcquireLockAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
         string orgId, string agreementCode, string okVersion,
         CancellationToken ct)
     {
         await using var lockCmd = new NpgsqlCommand(
             """
-            SELECT profile_id, version, effective_from FROM local_agreement_profiles
+            SELECT * FROM local_agreement_profiles
             WHERE org_id = @orgId
               AND agreement_code = @agreementCode
               AND ok_version = @okVersion
@@ -345,14 +400,7 @@ public sealed class LocalAgreementProfileRepository
         lockCmd.Parameters.AddWithValue("agreementCode", agreementCode);
         lockCmd.Parameters.AddWithValue("okVersion", okVersion);
         await using var reader = await lockCmd.ExecuteReaderAsync(ct);
-        if (await reader.ReadAsync(ct))
-        {
-            var profileId = reader.GetGuid(0);
-            var version = reader.GetInt64(1);
-            var effectiveFrom = DateOnly.FromDateTime(reader.GetDateTime(2));
-            return (profileId, version, effectiveFrom);
-        }
-        return null;
+        return await reader.ReadAsync(ct) ? MapReader(reader) : null;
     }
 
     /// <summary>
@@ -569,6 +617,44 @@ public sealed class LocalAgreementProfileRepository
         CreatedAt = reader.GetDateTime(reader.GetOrdinal("created_at")),
         Version = reader.GetInt64(reader.GetOrdinal("version"))
     };
+}
+
+/// <summary>
+/// Result of <see cref="LocalAgreementProfileRepository.SupersedeAndCreateAsync(System.Nullable{long}, LocalAgreementProfile, System.Threading.CancellationToken)"/>
+/// (and its in-transaction sibling). Carries the post-write profile identity, the version
+/// the row holds AFTER the operation, and a flag indicating whether the same-day write
+/// was a no-op (S23 / TASK-2304).
+///
+/// <para>
+/// <b>No-op semantics</b>: when an admin re-saves a profile on the same day with no
+/// overridable-field change, the repo skips the UPDATE entirely (version unchanged,
+/// audit + outbox suppressed by the caller). This branch runs AFTER lock acquisition +
+/// optimistic-concurrency precondition validation, so a stale caller cannot hide a
+/// version mismatch behind an apparent "no-op" — their <c>If-Match</c> is rejected
+/// before this short-circuit is reached. Per ADR-018 D7 + S23 Step 0b plan-mode review
+/// (Codex BLOCKER on the original endpoint-level fast path).
+/// </para>
+///
+/// <para>
+/// <b>Backward-compat</b>: the 2-arg <c>Deconstruct</c> overload preserves the
+/// <c>var (id, version) = ...</c> destructuring shape used across S22-era tests and
+/// callers — they continue to compile unchanged. New consumers (the PUT endpoint as of
+/// S23) destructure 3-arg and branch on <see cref="IsNoOp"/>.
+/// </para>
+/// </summary>
+public sealed record SaveProfileResult(Guid ProfileId, long Version, bool IsNoOp)
+{
+    /// <summary>
+    /// Backward-compat overload — preserves the S22 destructuring shape
+    /// <c>var (id, version) = await repo.SupersedeAndCreateAsync(...)</c>. New code
+    /// that needs the no-op signal destructures all three positional fields or
+    /// reads <see cref="IsNoOp"/> via property access.
+    /// </summary>
+    public void Deconstruct(out Guid profileId, out long version)
+    {
+        profileId = ProfileId;
+        version = Version;
+    }
 }
 
 /// <summary>

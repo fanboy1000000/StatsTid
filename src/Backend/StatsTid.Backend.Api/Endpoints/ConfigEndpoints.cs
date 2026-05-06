@@ -220,13 +220,17 @@ public static class ConfigEndpoints
 
             // 6. Single-transaction profile + audit + outbox write (ADR-018 D3).
             //    The repo's in-transaction overload performs the lock + (close+insert |
-            //    update-in-place) + (route same-day-vs-supersession). We then insert the
-            //    audit row AND enqueue the LocalAgreementProfileChanged outbox event on the
-            //    same conn+tx and commit together. On OptimisticConcurrencyException we
-            //    surface 412 with the actual current state; on InvalidProfileSupersessionException
-            //    we surface 400 (backdate-before-predecessor per ADR-018 D9).
+            //    update-in-place | no-op short-circuit) + (route same-day-vs-supersession).
+            //    We then insert the audit row AND enqueue the LocalAgreementProfileChanged
+            //    outbox event on the same conn+tx and commit together — UNLESS the repo
+            //    reports IsNoOp = true (S23 / TASK-2304 same-day no field changes), in
+            //    which case the audit + outbox are skipped (Codex Step 0b cycle-3 P2 fix).
+            //    On OptimisticConcurrencyException we surface 412 with the actual current
+            //    state; on InvalidProfileSupersessionException we surface 400 (backdate-
+            //    before-predecessor per ADR-018 D9).
             Guid persistedProfileId;
             long persistedVersion;
+            bool persistedIsNoOp;
             try
             {
                 await using var conn = connectionFactory.Create();
@@ -234,60 +238,67 @@ public static class ConfigEndpoints
                 await using var tx = await conn.BeginTransactionAsync(IsolationLevel.RepeatableRead, ct);
                 try
                 {
-                    (persistedProfileId, persistedVersion) = await profileRepo.SupersedeAndCreateAsync(
+                    var saveResult = await profileRepo.SupersedeAndCreateAsync(
                         conn, tx, expectedCurrentVersion, candidate, ct);
+                    persistedProfileId = saveResult.ProfileId;
+                    persistedVersion = saveResult.Version;
+                    persistedIsNoOp = saveResult.IsNoOp;
 
-                    // Three-way audit-action routing (ADR-018 D9):
-                    //   CREATED    — no predecessor (first-create path).
-                    //   MODIFIED   — predecessor exists with same effective_from (UPDATE-in-place
-                    //                same-day edit).
-                    //   SUPERSEDED — predecessor exists with earlier effective_from
-                    //                (close-then-insert).
-                    var auditAction = predecessor is null
-                        ? "CREATED"
-                        : (predecessor.EffectiveFrom == candidate.EffectiveFrom ? "MODIFIED" : "SUPERSEDED");
-                    var deltaJson = JsonSerializer.Serialize(changedFields);
-                    await using var auditCmd = new NpgsqlCommand(
-                        """
-                        INSERT INTO local_agreement_profile_audit
-                            (profile_id, action, delta_jsonb, actor_id, actor_role)
-                        VALUES (@profileId, @action, @delta::jsonb, @actorId, @actorRole)
-                        """, conn, tx);
-                    auditCmd.Parameters.AddWithValue("profileId", persistedProfileId);
-                    auditCmd.Parameters.AddWithValue("action", auditAction);
-                    auditCmd.Parameters.AddWithValue("delta", deltaJson);
-                    auditCmd.Parameters.AddWithValue("actorId", actor.ActorId ?? "system");
-                    auditCmd.Parameters.AddWithValue("actorRole", actor.ActorRole ?? StatsTidRoles.LocalAdmin);
-                    await auditCmd.ExecuteNonQueryAsync(ct);
-
-                    // Enqueue the LocalAgreementProfileChanged outbox event INSIDE the
-                    // profile transaction (ADR-018 D3 — replaces the S21 post-commit
-                    // AppendAsync shape). The publisher drains outbox_events to the
-                    // canonical event store under its own ReadCommitted transaction with
-                    // FOR UPDATE serialization on event_streams (ADR-018 D4), eliminating
-                    // the S21 cycle-2 RepeatableRead snapshot conflict that drove the
-                    // post-commit shape originally. PrecedingProfileId is the predecessor's
-                    // profile_id when there was one (for the SUPERSEDED audit path) — it is
-                    // intentionally null on first-create AND on UPDATE-in-place (same-day
-                    // edit retains the same profile_id).
-                    var streamId = $"local-agreement-profile-{orgId}-{agreementCode}-{okVersion}";
-                    var @event = new LocalAgreementProfileChanged
+                    if (!persistedIsNoOp)
                     {
-                        ProfileId = persistedProfileId,
-                        OrgId = orgId,
-                        AgreementCode = agreementCode,
-                        OkVersion = okVersion,
-                        EffectiveFrom = candidate.EffectiveFrom,
-                        ChangedFields = changedFields,
-                        PrecedingProfileId = predecessor is not null && auditAction == "SUPERSEDED"
-                            ? predecessor.ProfileId
-                            : null,
-                        ActorId = actor.ActorId,
-                        ActorRole = actor.ActorRole,
-                        CorrelationId = actor.CorrelationId,
-                    };
-                    await outbox.EnqueueAsync(conn, tx, streamId, @event, ct);
+                        // Three-way audit-action routing (ADR-018 D9):
+                        //   CREATED    — no predecessor (first-create path).
+                        //   MODIFIED   — predecessor exists with same effective_from (UPDATE-in-place
+                        //                same-day edit, at least one field changed).
+                        //   SUPERSEDED — predecessor exists with earlier effective_from
+                        //                (close-then-insert).
+                        var auditAction = predecessor is null
+                            ? "CREATED"
+                            : (predecessor.EffectiveFrom == candidate.EffectiveFrom ? "MODIFIED" : "SUPERSEDED");
+                        var deltaJson = JsonSerializer.Serialize(changedFields);
+                        await using var auditCmd = new NpgsqlCommand(
+                            """
+                            INSERT INTO local_agreement_profile_audit
+                                (profile_id, action, delta_jsonb, actor_id, actor_role)
+                            VALUES (@profileId, @action, @delta::jsonb, @actorId, @actorRole)
+                            """, conn, tx);
+                        auditCmd.Parameters.AddWithValue("profileId", persistedProfileId);
+                        auditCmd.Parameters.AddWithValue("action", auditAction);
+                        auditCmd.Parameters.AddWithValue("delta", deltaJson);
+                        auditCmd.Parameters.AddWithValue("actorId", actor.ActorId ?? "system");
+                        auditCmd.Parameters.AddWithValue("actorRole", actor.ActorRole ?? StatsTidRoles.LocalAdmin);
+                        await auditCmd.ExecuteNonQueryAsync(ct);
 
+                        // Enqueue the LocalAgreementProfileChanged outbox event INSIDE the
+                        // profile transaction (ADR-018 D3 — replaces the S21 post-commit
+                        // AppendAsync shape). The publisher drains outbox_events to the
+                        // canonical event store under its own ReadCommitted transaction with
+                        // FOR UPDATE serialization on event_streams (ADR-018 D4), eliminating
+                        // the S21 cycle-2 RepeatableRead snapshot conflict that drove the
+                        // post-commit shape originally. PrecedingProfileId is the predecessor's
+                        // profile_id when there was one (for the SUPERSEDED audit path) — it is
+                        // intentionally null on first-create AND on UPDATE-in-place (same-day
+                        // edit retains the same profile_id).
+                        var streamId = $"local-agreement-profile-{orgId}-{agreementCode}-{okVersion}";
+                        var @event = new LocalAgreementProfileChanged
+                        {
+                            ProfileId = persistedProfileId,
+                            OrgId = orgId,
+                            AgreementCode = agreementCode,
+                            OkVersion = okVersion,
+                            EffectiveFrom = candidate.EffectiveFrom,
+                            ChangedFields = changedFields,
+                            PrecedingProfileId = predecessor is not null && auditAction == "SUPERSEDED"
+                                ? predecessor.ProfileId
+                                : null,
+                            ActorId = actor.ActorId,
+                            ActorRole = actor.ActorRole,
+                            CorrelationId = actor.CorrelationId,
+                        };
+                        await outbox.EnqueueAsync(conn, tx, streamId, @event, ct);
+                    }
+
+                    // Always commit — on no-op the tx held only the lock SELECT, no writes.
                     await tx.CommitAsync(ct);
                 }
                 catch
