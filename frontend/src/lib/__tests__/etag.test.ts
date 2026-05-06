@@ -28,10 +28,27 @@ describe('parseVersionFromETag', () => {
     expect(parseVersionFromETag('"5.5"')).toBeNull()
   })
 
-  it('returns null for weak validators today (TASK-2305 will accept)', () => {
-    // S23 baseline: parseVersionFromETag still rejects W/"5". TASK-2305
-    // changes this; at THIS point the contract is unchanged.
-    expect(parseVersionFromETag('W/"5"')).toBeNull()
+  it('accepts uppercase weak validators by stripping the W/ prefix (TASK-2305)', () => {
+    expect(parseVersionFromETag('W/"5"')).toBe(5)
+  })
+
+  it('accepts lowercase weak validators (case-insensitive W/ strip)', () => {
+    // Codex Step 0b Q2 verdict: tolerate `w/` because broken intermediaries
+    // occasionally lower-case the prefix. Free robustness.
+    expect(parseVersionFromETag('w/"5"')).toBe(5)
+  })
+
+  it('accepts unquoted weak validators', () => {
+    expect(parseVersionFromETag('W/5')).toBe(5)
+  })
+
+  it('returns null for malformed weak prefix without body', () => {
+    expect(parseVersionFromETag('W/')).toBeNull()
+    expect(parseVersionFromETag('W/""')).toBeNull()
+  })
+
+  it('returns null for weak validator with non-integer body', () => {
+    expect(parseVersionFromETag('W/"abc"')).toBeNull()
   })
 })
 

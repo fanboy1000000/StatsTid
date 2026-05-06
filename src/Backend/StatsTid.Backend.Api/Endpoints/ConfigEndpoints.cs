@@ -124,10 +124,12 @@ public static class ConfigEndpoints
             ProfileAlignmentValidator alignmentValidator,
             OrgScopeValidator scopeValidator,
             IOutboxEnqueue outbox,
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         {
             var actor = context.GetActorContext();
+            var logger = loggerFactory.CreateLogger("StatsTid.Backend.Api.Endpoints.ConfigEndpoints.ProfilePut");
 
             // 1. Org-scope validation (P7).
             var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, orgId, ct);
@@ -311,7 +313,33 @@ public static class ConfigEndpoints
             {
                 // ADR-018 D7: 412 Precondition Failed with the freshly-fetched current state
                 //             and the version mismatch surfaced for the caller's retry logic.
-                var currentState = await profileRepo.GetCurrentOpenAsync(orgId, agreementCode, okVersion, ct);
+                //
+                // S23 / TASK-2305 NOTE-1: the recovery fetch runs AFTER the primary write tx
+                // already raised OptimisticConcurrencyException. If GetCurrentOpenAsync also
+                // throws (e.g. transient DB outage), surfacing that as an unhandled exception
+                // would mask the original concurrency error and produce a 500 the caller
+                // can't act on. Wrap the recovery in a narrow catch (Postgres/Npgsql only —
+                // OperationCanceledException and programming bugs propagate as before per
+                // Codex Step 0b NOTE) and degrade currentState to null with a warn-log.
+                LocalAgreementProfile? currentState;
+                try
+                {
+                    currentState = await profileRepo.GetCurrentOpenAsync(orgId, agreementCode, okVersion, ct);
+                }
+                catch (PostgresException recoveryEx)
+                {
+                    logger.LogWarning(recoveryEx,
+                        "412 recovery GetCurrentOpenAsync failed for {OrgId}/{AgreementCode}/{OkVersion}; degrading currentState to null",
+                        orgId, agreementCode, okVersion);
+                    currentState = null;
+                }
+                catch (NpgsqlException recoveryEx)
+                {
+                    logger.LogWarning(recoveryEx,
+                        "412 recovery GetCurrentOpenAsync failed for {OrgId}/{AgreementCode}/{OkVersion}; degrading currentState to null",
+                        orgId, agreementCode, okVersion);
+                    currentState = null;
+                }
                 return Results.Json(new
                 {
                     error = "Concurrency precondition failed",

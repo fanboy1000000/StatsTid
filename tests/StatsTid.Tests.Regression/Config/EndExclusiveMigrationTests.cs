@@ -86,6 +86,37 @@ public sealed class EndExclusiveMigrationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Migration_RunTwice_IsIdempotent()
+    {
+        // S23 / TASK-2305 D12 NOTE-4 #3: a partial migration run that leaves some rows
+        // shifted and some not could mask itself if a re-run double-shifts the already-
+        // converted rows. The DO $$ block guards against this by gating on the version
+        // column's existence (only runs the +1-day shift if the migration hasn't yet
+        // been applied), so a re-run is a no-op. Verify that contract directly: shift
+        // the same closed row twice and assert effective_to lands at +1 day, not +2.
+        var profileId = Guid.NewGuid();
+        var effectiveFrom = new DateOnly(2025, 12, 29);
+        var preMigrationEffectiveTo = new DateOnly(2026, 3, 31);
+
+        await SeedClosedRowAsync(profileId, effectiveFrom, preMigrationEffectiveTo, weeklyNormHours: 37m);
+
+        // First migration run — closed row shifts +1 day.
+        await LegacyProfileSchema.RunS22MigrationAsync(_harness.ConnectionString);
+        var afterFirst = await ReadEffectiveToAsync(profileId);
+        Assert.Equal(new DateOnly(2026, 4, 1), afterFirst);
+
+        // Second migration run — must NOT shift again. Idempotency guard inside the
+        // DO $$ block keys off the version column being already present.
+        await LegacyProfileSchema.RunS22MigrationAsync(_harness.ConnectionString);
+        var afterSecond = await ReadEffectiveToAsync(profileId);
+        Assert.Equal(afterFirst, afterSecond);
+
+        // Version backfill is also idempotent — version stays at 1, doesn't bump.
+        var version = await ReadVersionAsync(profileId);
+        Assert.Equal(1L, version);
+    }
+
+    [Fact]
     public async Task PreS22Manifest_ReplaysIdentical()
     {
         // Narrowed scope (per the agent brief): the full PCS-replay-determinism property

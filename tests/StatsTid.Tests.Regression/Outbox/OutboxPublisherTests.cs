@@ -247,6 +247,95 @@ public sealed class OutboxPublisherTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ConcurrentEnqueueOnSameStream_PreservesOutboxIdFifo()
+    {
+        // S23 / TASK-2305 D12 NOTE-4 #1: two endpoints commit transactions
+        // concurrently against the same stream_id. The publisher must publish
+        // them in outbox_id ASC order (= the SERIAL commit order), preserving
+        // the per-stream FIFO contract (ADR-018 D5) even though enqueue tx's
+        // ran in parallel.
+        var streamId = "test-stream-concurrent-fifo";
+
+        // Two parallel enqueue tasks. Each opens its own connection + tx,
+        // enqueues, then commits. PostgreSQL assigns outbox_id (BIGSERIAL) at
+        // commit time in commit order; the publisher draining ORDER BY
+        // outbox_id ASC must surface stream_versions matching that order.
+        var evtA = NewProfileEvent("STY02", "HK", "OK24");
+        var evtB = NewProfileEvent("STY02", "HK", "OK24");
+        var taskA = EnqueueAndCommitAsync(streamId, evtA);
+        var taskB = EnqueueAndCommitAsync(streamId, evtB);
+        await Task.WhenAll(taskA, taskB);
+
+        // Read back the outbox_id assignments in commit order — needed because
+        // enqueue order != commit order under parallel tasks.
+        var (firstEventId, secondEventId) = await ReadConcurrentEnqueueOrderAsync(streamId, evtA.EventId, evtB.EventId);
+
+        // Run publisher and let it drain.
+        using (var publisher = new OutboxPublisher(_harness.Factory, _context, NullLogger<OutboxPublisher>.Instance))
+        {
+            await publisher.StartAsync(CancellationToken.None);
+            await WaitForOutboxDrainedAsync(streamId, expectedCount: 2, timeoutMs: 10_000);
+            await publisher.StopAsync(CancellationToken.None);
+        }
+
+        // Assert: stream_version 1 went to whichever event committed first; 2 to second.
+        Assert.Equal(1, await ReadCanonicalEventVersionAsync(firstEventId));
+        Assert.Equal(2, await ReadCanonicalEventVersionAsync(secondEventId));
+    }
+
+    [Fact]
+    public async Task SustainedLoad_FiftyRowsAcrossFourStreams_AllPublishedFifo()
+    {
+        // S23 / TASK-2305 D12 NOTE-4 #2: drive sustained load (50 rows) across
+        // 4 streams to exercise MaxStreamParallelism = 4 saturation. Per-stream
+        // FIFO must hold within each stream (versions = enqueue index per stream).
+        var streamIds = new[]
+        {
+            "test-stream-load-A",
+            "test-stream-load-B",
+            "test-stream-load-C",
+            "test-stream-load-D",
+        };
+
+        // Seed: 13 rows on A, 13 on B, 12 on C, 12 on D = 50 total. Sequential
+        // enqueue per stream so commit order on each stream is deterministic;
+        // BIGSERIAL outbox_id is monotone but interleaved across streams.
+        var perStream = new Dictionary<string, List<LocalAgreementProfileChanged>>();
+        foreach (var s in streamIds) perStream[s] = new List<LocalAgreementProfileChanged>();
+
+        // Round-robin enqueue to interleave outbox_ids across streams realistically.
+        for (int i = 0; i < 50; i++)
+        {
+            var streamId = streamIds[i % streamIds.Length];
+            var evt = NewProfileEvent("STY02", "HK", "OK24");
+            perStream[streamId].Add(evt);
+            await EnqueueAndCommitAsync(streamId, evt);
+        }
+
+        using (var publisher = new OutboxPublisher(_harness.Factory, _context, NullLogger<OutboxPublisher>.Instance))
+        {
+            await publisher.StartAsync(CancellationToken.None);
+            foreach (var streamId in streamIds)
+            {
+                await WaitForOutboxDrainedAsync(streamId, expectedCount: perStream[streamId].Count, timeoutMs: 30_000);
+            }
+            await publisher.StopAsync(CancellationToken.None);
+        }
+
+        // Each stream's own version sequence is consecutive 1..N in enqueue order,
+        // independent of cross-stream interleaving.
+        foreach (var (streamId, events) in perStream)
+        {
+            for (int v = 0; v < events.Count; v++)
+            {
+                var version = await ReadCanonicalEventVersionAsync(events[v].EventId);
+                Assert.NotNull(version);
+                Assert.Equal(v + 1, version);
+            }
+        }
+    }
+
+    [Fact]
     public async Task RolledBackStateChange_DoesNotPublish()
     {
         // Open a tx, EnqueueAsync, ROLLBACK. Outbox row visibility follows tx
@@ -340,6 +429,29 @@ public sealed class OutboxPublisherTests : IAsyncLifetime
         var result = await cmd.ExecuteScalarAsync();
         if (result is null || result is DBNull) return null;
         return Convert.ToInt32(result);
+    }
+
+    private async Task<(Guid First, Guid Second)> ReadConcurrentEnqueueOrderAsync(
+        string streamId, Guid candidateA, Guid candidateB)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT event_id FROM outbox_events
+            WHERE stream_id = @streamId
+              AND event_id IN (@a, @b)
+            ORDER BY outbox_id ASC
+            """, conn);
+        cmd.Parameters.AddWithValue("streamId", streamId);
+        cmd.Parameters.AddWithValue("a", candidateA);
+        cmd.Parameters.AddWithValue("b", candidateB);
+        await using var reader = await cmd.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync(), "Concurrent enqueue produced no rows.");
+        var first = reader.GetGuid(0);
+        Assert.True(await reader.ReadAsync(), "Concurrent enqueue produced only one row.");
+        var second = reader.GetGuid(0);
+        return (first, second);
     }
 
     private async Task<(DateTime? PublishedAt, int? StreamVersion)> ReadOutboxStateAsync(Guid eventId)

@@ -28,14 +28,21 @@ export function parseVersionFromETag(etagHeader: string | null): number | null {
   if (etagHeader === null) return null
   const trimmed = etagHeader.trim()
   if (trimmed.length === 0) return null
+  // S23 / TASK-2305 NOTE-3: tolerate weak validators by stripping an optional
+  // `W/` (or `w/`) prefix before the unquote step. RFC 7232 specifies uppercase
+  // `W/`; broken intermediaries occasionally lower-case it. Our ETags carry
+  // integer row-version semantics, NOT content-hash semantics — strong-vs-weak
+  // is not meaningful for us, so case-insensitive strip is strictly more
+  // robust at zero cost (Codex Step 0b Q2 verdict: Other = case-insensitive).
+  const dequalified = /^[Ww]\//.test(trimmed) ? trimmed.slice(2) : trimmed
+  if (dequalified.length === 0) return null
   // Strip exactly one pair of surrounding double-quotes if present.
-  const unquoted = trimmed.startsWith('"') && trimmed.endsWith('"')
-    ? trimmed.slice(1, -1)
-    : trimmed
+  const unquoted = dequalified.startsWith('"') && dequalified.endsWith('"')
+    ? dequalified.slice(1, -1)
+    : dequalified
   if (unquoted.length === 0) return null
-  // Reject anything that isn't a clean integer literal — RFC 7232 disallows
-  // weak validators here (`W/"5"`); strict integer parse keeps the contract
-  // narrow.
+  // After stripping the optional W/ prefix and quotes, the body must be a
+  // clean integer literal. Anything else is rejected as null.
   if (!/^-?\d+$/.test(unquoted)) return null
   const parsed = Number.parseInt(unquoted, 10)
   if (!Number.isFinite(parsed) || !Number.isSafeInteger(parsed)) return null
