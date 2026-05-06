@@ -1,3 +1,8 @@
+---
+name: refine-requirements
+description: Refine and clarify requirements before planning or coding on this project. Trigger whenever the user asks to build, create, implement, fix, add, update, change, or develop anything (per CLAUDE.md Pre-Implementation Gate). Interprets intent rather than transcribing requests, proposes the best answer within the project's architecture, and surfaces Open Questions / Assumptions / Acceptance Criteria / Risks / Readiness before work begins. Skip only when the task is mechanical with an obvious fix.
+---
+
 # Requirements Refinement Skill
 
 ## Description

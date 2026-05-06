@@ -1,3 +1,8 @@
+---
+name: systematic-debugging
+description: Structured diagnostic process for hard, stuck, or recurring bugs. Trigger when the user expresses frustration ("can't figure out why", "going in circles"), when a second/third fix attempt is about to happen on the same bug, when a fix returned/moved, or for "it worked yesterday" symptoms. Stops thrashing — Rule #1 is no code changes until the root cause is confirmed. Walks through bug capture, minimal reproduction, scope narrowing, hypothesis generation, systematic elimination, root-cause confirmation, and a regression note. Skip for simple, obvious bugs with a clear cause.
+---
+
 # Systematic Debugging Skill
 
 ## Description

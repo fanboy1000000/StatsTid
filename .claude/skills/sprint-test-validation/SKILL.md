@@ -1,3 +1,8 @@
+---
+name: sprint-test-validation
+description: Use at sprint validation time (Orchestrator workflow step 4/5) to produce accurate, consistent test counts across unit / regression / smoke / frontend suites with a verifiable delta table. Trigger when wrapping up a sprint or asked for current test counts. Never estimate or carry forward counts from memory — always run the suites and compute previous + delta = current arithmetic.
+---
+
 # Sprint Test Validation
 
 Use this skill at sprint validation time (Orchestrator workflow step 4/5) to produce accurate, consistent test counts.
