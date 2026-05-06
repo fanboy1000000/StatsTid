@@ -247,6 +247,83 @@ public sealed class OutboxPublisherTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task MaxAttemptsCap_SameStreamSuccessor_StaysUnpublishedToPreserveFifo()
+    {
+        // S23 / TASK-2301 Step 7a cycle 2 — FIFO-preservation BLOCKER fix.
+        //
+        // A row at attempts >= MaxAttempts on stream S MUST stall the entire
+        // stream S, not just itself. Without the NOT EXISTS subquery in
+        // ReadBatchAsync, the publisher would skip the quarantined row but
+        // happily publish a later row on the same stream — violating ADR-018
+        // D5 per-stream FIFO. This test pins that invariant.
+        var streamId = "test-stream-cap-fifo";
+        var poisonEventId = Guid.NewGuid();
+
+        // Seed Row A directly with attempts = MaxAttempts (= 10), unpublished.
+        // Then enqueue Row B normally on the SAME stream via the EnqueueAsync
+        // path (attempts = 0). Row B has a larger outbox_id (BIGSERIAL) than
+        // Row A.
+        await using (var conn = new NpgsqlConnection(_harness.ConnectionString))
+        {
+            await conn.OpenAsync();
+            await using var insertPoison = new NpgsqlCommand(
+                """
+                INSERT INTO outbox_events (
+                    service_id, stream_id, event_id, event_type, event_payload,
+                    correlation_id, actor_id, actor_role, attempts, last_error)
+                VALUES (
+                    @serviceId, @streamId, @eventId, 'TestPoison', '{}'::jsonb,
+                    NULL, NULL, NULL, 10, 'simulated burn')
+                """, conn);
+            insertPoison.Parameters.AddWithValue("serviceId", ServiceId);
+            insertPoison.Parameters.AddWithValue("streamId", streamId);
+            insertPoison.Parameters.AddWithValue("eventId", poisonEventId);
+            await insertPoison.ExecuteNonQueryAsync();
+        }
+
+        var successor = NewProfileEvent("STY02", "HK", "OK24");
+        await EnqueueAndCommitAsync(streamId, successor);
+
+        using (var publisher = new OutboxPublisher(_harness.Factory, _context, NullLogger<OutboxPublisher>.Instance))
+        {
+            await publisher.StartAsync(CancellationToken.None);
+            // Generous window — without the FIFO fix, Row B would publish
+            // within a few hundred ms.
+            await Task.Delay(2_000);
+            await publisher.StopAsync(CancellationToken.None);
+        }
+
+        // Both rows must remain unpublished. Row A is filtered by the cap
+        // predicate; Row B is filtered by the NOT EXISTS subquery because
+        // it has a quarantined ancestor on the same stream.
+        await using var verifyConn = new NpgsqlConnection(_harness.ConnectionString);
+        await verifyConn.OpenAsync();
+        await using var checkA = new NpgsqlCommand(
+            "SELECT published_at FROM outbox_events WHERE event_id = @id", verifyConn);
+        checkA.Parameters.AddWithValue("id", poisonEventId);
+        Assert.True(await checkA.ExecuteScalarAsync() is DBNull,
+            "Quarantined Row A unexpectedly published.");
+
+        await using var checkB = new NpgsqlCommand(
+            "SELECT published_at FROM outbox_events WHERE event_id = @id", verifyConn);
+        checkB.Parameters.AddWithValue("id", successor.EventId);
+        Assert.True(await checkB.ExecuteScalarAsync() is DBNull,
+            "Successor Row B published despite quarantined ancestor on same stream — FIFO violated.");
+
+        // Negative side: a row on a DIFFERENT stream MUST still publish
+        // (cross-stream isolation preserved).
+        var otherStreamSuccessor = NewProfileEvent("STY03", "HK", "OK24");
+        await EnqueueAndCommitAsync("test-stream-cap-fifo-other", otherStreamSuccessor);
+        using (var publisher2 = new OutboxPublisher(_harness.Factory, _context, NullLogger<OutboxPublisher>.Instance))
+        {
+            await publisher2.StartAsync(CancellationToken.None);
+            await WaitForOutboxDrainedAsync("test-stream-cap-fifo-other", expectedCount: 1, timeoutMs: 10_000);
+            await publisher2.StopAsync(CancellationToken.None);
+        }
+        Assert.NotNull(await ReadCanonicalEventVersionAsync(otherStreamSuccessor.EventId));
+    }
+
+    [Fact]
     public async Task ConcurrentEnqueueOnSameStream_PreservesOutboxIdFifo()
     {
         // S23 / TASK-2305 D12 NOTE-4 #1: two endpoints commit transactions

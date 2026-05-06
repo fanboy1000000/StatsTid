@@ -190,17 +190,38 @@ public sealed class OutboxPublisher : BackgroundService
         await conn.OpenAsync(ct).ConfigureAwait(false);
 
         // S23 / Phase 4b: `attempts < @maxAttempts` quarantines poison rows.
-        // `idx_outbox_unpublished` continues to drive the scan (it covers
-        // service_id + outbox_id ordering); the attempts predicate filters
-        // in-scan. See MaxAttempts XML-doc for the index rationale.
+        //
+        // FIFO-PRESERVING (S23 Step 7a cycle 2 fix): the cap predicate alone
+        // is NOT enough — if row N on stream S is quarantined at attempts =
+        // MaxAttempts, naively filtering only that row lets row N+1 on
+        // stream S publish out-of-order, violating ADR-018 D5 per-stream
+        // FIFO. The NOT EXISTS subquery enforces stream-level quarantine:
+        // a row on stream S is excluded whenever ANY same-stream row with a
+        // smaller outbox_id has already crossed the cap. Net result: a
+        // quarantined head-of-stream row stalls its entire stream until
+        // manual reconcile, while other streams continue to drain freely.
+        //
+        // Index notes: `idx_outbox_unpublished (service_id, outbox_id) WHERE
+        // published_at IS NULL` continues to drive the outer scan + ORDER
+        // BY. `idx_outbox_stream (stream_id, outbox_id) WHERE published_at
+        // IS NULL` accelerates the NOT EXISTS lookup. `idx_outbox_attempts`
+        // covers the cap-row check inside the subquery.
         await using var cmd = new NpgsqlCommand(
             """
             SELECT outbox_id, stream_id, event_id, event_type, event_payload,
                    correlation_id, actor_id, actor_role, created_at
-            FROM outbox_events
+            FROM outbox_events o
             WHERE service_id = @serviceId
               AND published_at IS NULL
               AND attempts < @maxAttempts
+              AND NOT EXISTS (
+                SELECT 1 FROM outbox_events qf
+                WHERE qf.service_id = o.service_id
+                  AND qf.stream_id  = o.stream_id
+                  AND qf.published_at IS NULL
+                  AND qf.attempts >= @maxAttempts
+                  AND qf.outbox_id < o.outbox_id
+              )
             ORDER BY outbox_id ASC
             LIMIT @limit
             """, conn);
