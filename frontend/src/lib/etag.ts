@@ -56,3 +56,42 @@ export function parseVersionFromETag(etagHeader: string | null): number | null {
 export function formatVersionAsIfMatch(version: number): string {
   return `"${version}"`
 }
+
+/**
+ * Resolve the canonical (etag, version) pair for a profile response.
+ *
+ * Prefers the `ETag` response header. Falls back to the response body's
+ * `version` field when the header is missing or unparseable — the typical
+ * cross-origin case where `Access-Control-Expose-Headers: ETag` was not set
+ * (S22 Step 7a Codex cycle-3 P2; resolved in S23 / TASK-2303).
+ *
+ * Body-side validation per S23 Step 0b plan-mode review (Codex Item 3
+ * WARNING): a malformed body could carry `version: undefined` / `null` /
+ * `"5"` / `NaN` / `0`. Synthesizing `"undefined"` into an If-Match header
+ * would push a bogus optimistic-concurrency token to the backend. Instead
+ * we strict-validate (`typeof === 'number' && Number.isSafeInteger && >= 1`)
+ * and return `{ etag: null, version: null }` on validation failure so the
+ * caller surfaces a proper error path instead of a manufactured token.
+ *
+ * @param headerValue Raw `Response.headers.get('ETag')` result.
+ * @param body Decoded response body (or null if unavailable).
+ * @returns Canonical ETag wire form + parsed version, or both null.
+ */
+export function resolveEtag(
+  headerValue: string | null,
+  body: { version?: unknown } | null | undefined,
+): { etag: string | null; version: number | null } {
+  const headerVersion = parseVersionFromETag(headerValue)
+  if (headerVersion !== null) {
+    return { etag: headerValue, version: headerVersion }
+  }
+  const bodyVersion = body?.version
+  if (
+    typeof bodyVersion === 'number' &&
+    Number.isSafeInteger(bodyVersion) &&
+    bodyVersion >= 1
+  ) {
+    return { etag: `"${bodyVersion}"`, version: bodyVersion }
+  }
+  return { etag: null, version: null }
+}

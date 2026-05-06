@@ -19,7 +19,7 @@
 // `apiClient` was the alternative — kept narrow here because only the profile
 // endpoints need header access.)
 import type { LocalAgreementProfile, ProfileSaveError } from '../hooks/useConfig'
-import { parseVersionFromETag, formatVersionAsIfMatch } from '../lib/etag'
+import { parseVersionFromETag, formatVersionAsIfMatch, resolveEtag } from '../lib/etag'
 
 const TOKEN_KEY = 'statstid_token'
 
@@ -71,8 +71,11 @@ export async function getCurrentProfile(
       return { ok: false, error: text || `HTTP ${res.status}`, status: res.status }
     }
     const data = (await res.json()) as LocalAgreementProfile
-    const etag = res.headers.get('ETag')
-    return { ok: true, profile: data, etag, version: parseVersionFromETag(etag) }
+    // S23 / TASK-2303: prefer ETag header, fall back to body `version` for
+    // cross-origin deployments where the header isn't exposed. Strict body-
+    // version validation guards against `"undefined"` token synthesis.
+    const { etag, version } = resolveEtag(res.headers.get('ETag'), data)
+    return { ok: true, profile: data, etag, version }
   } catch (e) {
     return { ok: false, error: String(e), status: 0 }
   }
@@ -173,12 +176,18 @@ export async function saveProfile(
     }
 
     const saved = (await res.json()) as LocalAgreementProfile
-    const newEtag = res.headers.get('ETag')
+    // S23 / TASK-2303: same fallback as getCurrentProfile — header preferred,
+    // body.version fallback with strict runtime validation, both null on
+    // validation failure (no `"undefined"` token).
+    const { etag: newEtag, version: newVersion } = resolveEtag(
+      res.headers.get('ETag'),
+      saved,
+    )
     return {
       ok: true,
       savedProfile: saved,
       newEtag,
-      newVersion: parseVersionFromETag(newEtag),
+      newVersion,
     }
   } catch (e) {
     return { ok: false, status: 0, error: String(e) }
