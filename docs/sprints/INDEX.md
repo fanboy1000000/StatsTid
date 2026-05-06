@@ -27,8 +27,8 @@
 | [Sprint 19](SPRINT-19.md) | Codex BLOCKER Remediation (Round 2: `/execute` and `/calculate-and-export` resource-scope, retroactive audit canonicalization, JWT env-var) | complete | 2026-04-25 → 2026-04-28 | 493 | yes — 2026-04-28 |
 | [Sprint 20](SPRINT-20.md) | Temporal Period Handling (ADR-016 D1-D11 + Segmentation bounded context + planner-driven PCS + manifest projection + per-line OK-version stamping) | complete | 2026-04-29 → 2026-05-02 | 562 | yes — 2026-05-02 |
 | [Sprint 21](SPRINT-21.md) | Local Agreement Configuration Rework (ADR-017 D1-D11 + profile schema + repository + migration runner + ConfigEndpoints rewrite + PCS hydration + UX profile editor + 18-scenario D11 test matrix + Step 7a 10-cycle review) | complete | 2026-05-02 → 2026-05-03 | 618 | yes — 2026-05-03 |
-| [Sprint 22](SPRINT-22.md) | Transactional Outbox + Profile Row-Version (Phase 4 Hardening Foundation: D6 outbox + Step-7a-D2 row-version + end-exclusive `effective_to` on `local_agreement_profiles`) | analysis-phase (Step 0a + Step 0b cycle 1 complete; ADR-018 + task decomposition pending) | 2026-05-03 → TBD | — | no |
-| [Sprint 23](SPRINT-23.md) | D2.2 ETag/If-Match Propagation (sibling to S22: pattern propagated to `agreement_configs`, `position_overrides`, `wage_type_mappings`, `entitlement_configs`) | placeholder (detail planning post-S22 close) | TBD | — | no |
+| [Sprint 22](SPRINT-22.md) | Transactional Outbox + Row-Version Optimistic Concurrency (Phase 4a — atomic exemplar in `ConfigEndpoints` PUT; ADR-018 D1-D12) | complete | 2026-05-03 → 2026-05-05 | 650 | yes — 2026-05-05 |
+| [Sprint 23](SPRINT-23.md) | Phase 4b Publisher Hardening (outbox max-attempts cap + correlation_id parser + frontend ETag fallback + repo-level no-op short-circuit + 412 try/catch + weak ETag + 3 deferred D12 tests + Step-7a cycle-2 FIFO fix) | complete | 2026-05-06 → 2026-05-06 | 697 | yes — 2026-05-06 |
 
 ## Cumulative Task Summary
 
@@ -55,7 +55,9 @@
 | S19 | 4 | Orchestrator, Payroll Integration, Auth, Tests | — (TASK-1903 absorbed into S20) |
 | S20 | 17 | SharedKernel (Segmentation, new context), Infrastructure, Backend API, Payroll Integration, PostgreSQL, Tests | ADR-016 |
 | S21 | 10 | SharedKernel, Infrastructure, Backend API, Payroll Integration, PostgreSQL, Frontend, Tests | ADR-017 |
-| **Total** | **207** | — | **29 entries** |
+| S22 | 8 | SharedKernel, Infrastructure (outbox), Backend API, PostgreSQL, Frontend, Tests | ADR-018 |
+| S23 | 5 | Infrastructure (outbox + repo), Backend API, Frontend (lib + api), Tests, Sprint log | — (Step 7a cycle 1 P1 absorbed in cycle 2 fix; no new ADR/PAT) |
+| **Total** | **220** | — | **30 entries** |
 
 ## Test Progression
 
@@ -82,6 +84,8 @@
 | S19 | 478 + 41 FE | 15 | 4 | 493 |
 | S20 | 513 + 41 FE | 32 plain + 17 Docker | 4 | 562 (without Docker: 545) |
 | S21 | 517 + 48 FE | 35 plain + 18 Docker (profile) | 4 | 618 (without Docker: 600) |
+| S22 | 517 + 48 FE | 35 plain + 50 Docker (18 S21 + 16 S22 + 17 S20 segmentation) | 4 | 650 (without Docker: 600) |
+| S23 | 525 + 76 FE | 35 plain + 61 Docker (50 S22 + 11 S23) | 4 | 697 (without Docker: 636) |
 
 ## Architectural Constraint Coverage
 
@@ -132,10 +136,12 @@ Tracks agent quality signals to enable data-driven improvement of prompts and go
 | S15 | 10 | N/A | 2W | N/A | 1 | 90% |
 | S16 | 13 | N/A | 1N | N/A | 0 | 100% |
 | S17 | 13 | N/A | N/A | N/A | 0 | 100% |
+| S22 | 8 | 0 | 0B/0W/0N | Step-7a 3 cycles: cycle 1 P2 + cycle 2 P1 + cycle 3 cap-halt with 2 P2 routed forward | 0 | 100% |
+| S23 | 5 | 0 (Small Tasks Exception) | n/a (Reviewer skipped — pure tech-debt) | Step-0b 1 cycle: 1B/3W/2N (BLOCKER fixed before code); Step-7a 2 cycles: cycle 1 P1 BLOCKER (FIFO regression) + cycle 2 clean | 0 | 100% |
 
-**Notes**: Constraint Validator introduced in governance update after S15. Historical data marked N/A. Reviewer introduced in S7. External Review (Codex) introduced in governance update after S17 — active from S18 onward. S7 had 2 BLOCKERs (Backend→Payroll ref, seed data constraint) both requiring re-dispatch. S11 had 1 WARNING (missing config fields) requiring fix. S15 had 2 WARNINGs (PAT-005 violation, TOCTOU race) with 1 re-dispatch. S16 had 1 NOTE (ADR-015 pattern — non-blocking). S17: all agents produced buildable output; Orchestrator fixed API signature mismatches during merge (no re-dispatch needed).
+**Notes**: Constraint Validator introduced in governance update after S15. Historical data marked N/A. Reviewer introduced in S7. External Review (Codex) introduced in governance update after S17 — active from S18 onward. S7 had 2 BLOCKERs (Backend→Payroll ref, seed data constraint) both requiring re-dispatch. S11 had 1 WARNING (missing config fields) requiring fix. S15 had 2 WARNINGs (PAT-005 violation, TOCTOU race) with 1 re-dispatch. S16 had 1 NOTE (ADR-015 pattern — non-blocking). S17: all agents produced buildable output; Orchestrator fixed API signature mismatches during merge (no re-dispatch needed). S22 Step-7a hit cycle-cap discipline at cycle 3 with 2 P2 cascade findings routed to Phase 4b (S23). S23 absorbed all 4 cycle-3 + 3 NOTE carry-forwards from S22; Step-7a cycle 1 caught a load-bearing P1 (FIFO regression in TASK-2301) that the Step-0b plan-mode review missed — fixed cycle 2, verified clean.
 
-**Cumulative First-Pass Rate**: 157/168 = 93.5%
+**Cumulative First-Pass Rate**: 170/181 = 93.9% (S22 + S23 added with 100% first-pass — no agent re-dispatches; both hit Step 7a findings instead, which are external-review signals not first-pass-rate signals).
 
 ## How to Use This Log
 

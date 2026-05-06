@@ -3,12 +3,12 @@
 | Field | Value |
 |-------|-------|
 | **Sprint** | 23 |
-| **Status** | in-progress |
+| **Status** | complete |
 | **Start Date** | 2026-05-06 |
-| **End Date** | TBD |
-| **Orchestrator Approved** | no |
-| **Build Verified** | no |
-| **Test Verified** | no |
+| **End Date** | 2026-05-06 |
+| **Orchestrator Approved** | yes — 2026-05-06 |
+| **Build Verified** | yes — `dotnet build StatsTid.sln` 0 warnings 0 errors (the 19 CS0618 warnings are pre-existing carry-forward [Obsolete] breadcrumbs from S20/S21, not introduced by S23) |
+| **Test Verified** | yes — 525 unit + 35 plain regression + 76 frontend vitest = 636 directly verified; 61 Docker-gated tests compile but not executed locally (Docker engine not running) |
 
 ## Sprint Goal
 
@@ -267,31 +267,47 @@ LIMIT 100;
 
 | Field | Value |
 |-------|-------|
-| **Invoked** | pending |
+| **Invoked** | yes |
 | **Sprint-start commit** | `e070744` (S22 sprint close) |
-| **Command** | TBD — `codex review "..."` (prompt-alone, uncommitted) preferred; `codex review --base e070744` if intermediate commits exist |
-| **Review Cycles** | TBD |
-| **Findings** | TBD |
-| **Resolution** | TBD |
+| **Command** | `codex review --base e070744` (no prompt — fallback shape because intermediate per-task commits exist on master; project-specific steering lost per WORKFLOW.md) |
+| **Review Cycles** | 2 — cycle 1 found 1 P1, cycle 2 clean |
+| **Findings** | cycle 1: 1 BLOCKER (P1 FIFO regression in TASK-2301 cap predicate); cycle 2: 0 findings |
+| **Resolution** | cycle 1 P1 fixed in commit `cd8d2ed` (NOT EXISTS subquery in ReadBatchAsync stalls entire stream when a quarantined ancestor exists); cycle 2 verified clean — `"I did not find any discrete correctness issues in the changes relative to e070744. The no-op profile save path, ETag fallback handling, and outbox hardening all appear internally consistent with the updated tests and surrounding code."` |
 
 ### Findings
 
-_Populated after Step 7a runs._
+**Cycle 1 (P1 BLOCKER, fixed in `cd8d2ed`)** — `OutboxPublisher.cs:202` `ReadBatchAsync` SQL: the new `attempts < @maxAttempts` cap predicate filtered out a quarantined row but allowed LATER rows on the same stream to publish, violating ADR-018 D5 per-stream FIFO. Concrete failure: Row N on stream S fails 10 times → attempts reaches MaxAttempts → no longer fetched; Row N+1 on stream S has attempts=0 → IS fetched → publishes → Row N+1 takes the stream_version that should have gone to Row N. Permanent ordering break. **Fix**: extended `ReadBatchAsync` SQL with a `NOT EXISTS` subquery that excludes any row whose stream has a quarantined ancestor (smaller outbox_id, attempts >= MaxAttempts). Net result: quarantined head-of-stream row stalls its ENTIRE stream until manual reconcile (correct strict-FIFO behaviour); other streams drain freely. Added Docker-gated test `MaxAttemptsCap_SameStreamSuccessor_StaysUnpublishedToPreserveFifo` pinning the invariant + cross-stream isolation negative-side. Reaffirms the S22 cycle-2 `break` discipline at READ time.
+
+**Cycle 2** — clean. No findings. Codex verbatim: _"I did not find any discrete correctness issues in the changes relative to e070744. The no-op profile save path, ETag fallback handling, and outbox hardening all appear internally consistent with the updated tests and surrounding code."_
 
 ## Test Summary
 
-| Suite | Count | Status |
-|-------|-------|--------|
-| Unit tests | TBD (was 517 at S22 close) | pending |
-| Regression — plain | TBD (was 35 at S22 close) | pending |
-| Regression — Docker-gated | TBD (was 50 at S22 close; +5 expected: cap, no-op, concurrent, sustained, backfill) | pending |
-| Frontend (vitest) | TBD (was 48 at S22 close; +1-3 expected: ETag fallback, weak-ETag, ConfigEndpoints test if any) | pending |
-| **Total** | TBD | — |
+| Suite | Previous (S22) | Current (S23) | Delta |
+|-------|----------------|---------------|-------|
+| Unit | 517 | 525 | +8 (TASK-2302 OutboxCorrelationParserTests) |
+| Regression — plain | 35 | 35 | +0 |
+| Regression — Docker-gated | 50 | 61 | +11 (1 cap test + 6 no-op tests + 3 D12 deferred tests + 1 cycle-2 same-stream-FIFO test) |
+| Frontend (vitest) | 48 | 76 | +28 (16 etag.test.ts + 8 profileApi.etag-fallback.test.ts + 4 net new W/ cases) |
+| **Total** | **650** | **697** | **+47** |
+
+Docker-gated tests compile but are not executed locally (Docker engine not running on the dev workstation). The 6 pre-existing PlannerInvariantViolation Docker-gated failures inherited from pre-S21 are unchanged by S23.
 
 ## Agent Effectiveness
 
-_Populated at sprint close._
+| Metric | Value |
+|--------|-------|
+| Tasks | 5 (TASK-2301..TASK-2305) |
+| Constraint Violations | 0 (Small Tasks Exception per item; Orchestrator self-checked) |
+| Reviewer Findings | n/a (internal Reviewer skipped for pure tech-debt sprint per WORKFLOW.md SKIP rule) |
+| External Review Cycles | 1 sprint-start (Step 0b, plan-mode) + N sprint-end (Step 7a, populated below) |
+| External Findings (Step 0b) | 1 BLOCKER (Item 4 endpoint-level → repo-level) + 3 WARNING (Item 1 index rationale, Item 3 runtime guard, Item 5c new-behaviour test coverage) + 2 NOTE (Item 2 breadcrumb fields, Item 5a narrow catch) — all addressed before Step 1 |
+| Re-dispatches | 0 (no agent dispatch — Small Tasks Exception per item) |
+| First-Pass Rate | n/a (no agent dispatch) |
 
 ## Sprint Retrospective
 
-_Populated at sprint close._
+**What went well**: Step 0b plan-mode Codex review caught the Item 4 BLOCKER before any code was written — moving the no-op detection from endpoint-level to repo-level under lock + precondition validation was a category fix that would have been painful to discover in Step 7a. The `SaveProfileResult` record with the backward-compat 2-arg `Deconstruct` overload absorbed all 13 existing test destructures unchanged — only one helper (using implicit tuple-return conversion) needed an explicit destructure. Per-task commits with sprint-plan + per-item bodies preserved a clean bisectable history.
+
+**What to improve**: Step 7a cycle 1 surfaced a load-bearing P1 (per-stream FIFO violation under the new max-attempts cap predicate) that the Step 0b plan-mode review did not catch. The plan-mode reviewer flagged Item 1's index rationale and observability concerns but missed the FIFO interaction. Lesson: when extending a SQL predicate that interacts with an established ordering invariant (ADR-018 D5 in this case), explicitly enumerate the existing invariant + the new predicate's interaction with it as a Step 0b question, not just at Step 7a. The cycle-2 fix (`NOT EXISTS` subquery on quarantined ancestors) is correct, but the cycle-1 finding cost ~30 min of rework that earlier framing could have avoided.
+
+**Knowledge produced**: No new ADR/PAT entries — S23 is pure ADR-018 hardening. The `SaveProfileResult` record with backward-compat `Deconstruct` is a candidate PAT for future repo-shape evolutions (test-friendly migration), but not promoted in S23 — single instance is not yet a pattern.
