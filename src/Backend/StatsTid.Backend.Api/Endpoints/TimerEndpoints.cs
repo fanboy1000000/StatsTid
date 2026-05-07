@@ -1,8 +1,8 @@
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
+using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Events;
-using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Security;
 
@@ -16,8 +16,9 @@ public static class TimerEndpoints
 
         app.MapPost("/api/timer/check-in", async (
             CheckInRequest request,
+            DbConnectionFactory connectionFactory,
             TimerSessionRepository timerRepo,
-            IEventStore eventStore,
+            IOutboxEnqueue outbox,
             OrgScopeValidator scopeValidator,
             HttpContext context,
             CancellationToken ct) =>
@@ -50,9 +51,15 @@ public static class TimerEndpoints
                 IsActive = true
             };
 
-            await timerRepo.CheckInAsync(session, ct);
-
-            // Emit TimerCheckedIn event
+            // Atomic in-tx write: timer_sessions INSERT + outbox enqueue commit together
+            // (ADR-018 D3). Replaces the legacy post-commit eventStore.AppendAsync shape so
+            // a process crash between session-tx commit and event-store append no longer
+            // leaks state. The per-service OutboxPublisher drains outbox_events to the
+            // canonical event store under at-least-once semantics (ADR-018 D4).
+            //
+            // Stream name preserved as `timer-{employeeId}` per Phase 4c.5 carry-forward
+            // adjudication — ADR-018 line 265 spec'd `timer-session-{id}` but renaming
+            // existing streams retroactively breaks replay determinism.
             var streamId = $"timer-{request.EmployeeId}";
             var @event = new TimerCheckedIn
             {
@@ -63,7 +70,23 @@ public static class TimerEndpoints
                 ActorRole = actor.ActorRole,
                 CorrelationId = actor.CorrelationId
             };
-            await eventStore.AppendAsync(streamId, @event, ct);
+
+            await using (var conn = connectionFactory.Create())
+            {
+                await conn.OpenAsync(ct);
+                await using var tx = await conn.BeginTransactionAsync(ct);
+                try
+                {
+                    await timerRepo.CheckInAsync(conn, tx, session, ct);
+                    await outbox.EnqueueAsync(conn, tx, streamId, @event, ct);
+                    await tx.CommitAsync(ct);
+                }
+                catch
+                {
+                    await tx.RollbackAsync(ct);
+                    throw;
+                }
+            }
 
             return Results.Ok(new
             {
@@ -79,8 +102,9 @@ public static class TimerEndpoints
 
         app.MapPost("/api/timer/check-out", async (
             CheckOutRequest request,
+            DbConnectionFactory connectionFactory,
             TimerSessionRepository timerRepo,
-            IEventStore eventStore,
+            IOutboxEnqueue outbox,
             OrgScopeValidator scopeValidator,
             HttpContext context,
             CancellationToken ct) =>
@@ -106,9 +130,10 @@ public static class TimerEndpoints
             var now = DateTime.UtcNow;
             var clockedHours = Math.Round((decimal)(now - session.CheckInAt).TotalHours, 2);
 
-            await timerRepo.CheckOutAsync(session.SessionId, now, ct);
-
-            // Emit TimerCheckedOut event
+            // Atomic in-tx write: timer_sessions UPDATE + outbox enqueue commit together
+            // (ADR-018 D3). Replaces the legacy post-commit eventStore.AppendAsync shape.
+            // Stream name preserved as `timer-{employeeId}` per Phase 4c.5 carry-forward
+            // adjudication.
             var streamId = $"timer-{request.EmployeeId}";
             var @event = new TimerCheckedOut
             {
@@ -120,7 +145,23 @@ public static class TimerEndpoints
                 ActorRole = actor.ActorRole,
                 CorrelationId = actor.CorrelationId
             };
-            await eventStore.AppendAsync(streamId, @event, ct);
+
+            await using (var conn = connectionFactory.Create())
+            {
+                await conn.OpenAsync(ct);
+                await using var tx = await conn.BeginTransactionAsync(ct);
+                try
+                {
+                    await timerRepo.CheckOutAsync(conn, tx, session.SessionId, now, ct);
+                    await outbox.EnqueueAsync(conn, tx, streamId, @event, ct);
+                    await tx.CommitAsync(ct);
+                }
+                catch
+                {
+                    await tx.RollbackAsync(ct);
+                    throw;
+                }
+            }
 
             return Results.Ok(new
             {
