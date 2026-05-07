@@ -361,21 +361,21 @@ public static class AgreementConfigEndpoints
                 await tx.CommitAsync(ct);
             }
 
-            // Post-commit re-read for response payload (refinement R2 — must be AFTER tx
-            // commit, NOT inside the tx, to surface the visible-after-commit ACTIVE state
-            // and DB-generated published_at to the caller). Defense-in-depth: PublishAsync
-            // already returned Published:true under the committed tx, so this re-read is
-            // guaranteed to observe ACTIVE under MVCC barring an unrelated infrastructure failure.
+            // Post-commit re-read for response payload decoration (refinement R2 — AFTER tx
+            // commit, NOT inside the tx). The publish itself already succeeded — PublishAsync
+            // returned Published:true under the committed tx. This re-read only fetches the
+            // DB-generated published_at timestamp for the response. If a concurrent request
+            // (e.g. archive) changed the row between our commit and this re-read, the
+            // re-read may return null OR a non-ACTIVE status — that's a legitimate post-publish
+            // state, not a failure. Surface what we can; null published_at is harmless.
             var published = await agreementConfigRepo.GetByIdAsync(configId, ct);
-            if (published is null || published.Status != AgreementConfigStatus.ACTIVE)
-                return Results.Json(new { error = "Failed to publish — concurrent infrastructure failure" }, statusCode: 500);
 
             return Results.Ok(new
             {
                 configId,
                 status = "ACTIVE",
                 archivedConfigId = archivedId,
-                publishedAt = published.PublishedAt,
+                publishedAt = published?.PublishedAt,
             });
         }).RequireAuthorization("GlobalAdminOnly");
 
