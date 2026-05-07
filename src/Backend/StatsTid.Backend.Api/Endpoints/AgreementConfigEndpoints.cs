@@ -1,8 +1,8 @@
 using System.Text.Json;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
+using StatsTid.Infrastructure.Outbox;
 using StatsTid.SharedKernel.Events;
-using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Models;
 
 namespace StatsTid.Backend.Api.Endpoints;
@@ -71,7 +71,8 @@ public static class AgreementConfigEndpoints
         app.MapPost("/api/agreement-configs", async (
             AgreementConfigRequest request,
             AgreementConfigRepository agreementConfigRepo,
-            IEventStore eventStore,
+            DbConnectionFactory connectionFactory,
+            IOutboxEnqueue outbox,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -86,26 +87,34 @@ public static class AgreementConfigEndpoints
 
             var entity = BuildEntityFromRequest(request, normModel, actor.ActorId ?? "system");
 
-            var configId = await agreementConfigRepo.CreateAsync(entity, ct);
-
-            // Audit
-            await agreementConfigRepo.AppendAuditAsync(
-                configId, "CREATED", null, SerializeForAudit(request),
-                actor.ActorId ?? "system", actor.ActorRole ?? "GLOBAL_ADMIN", ct);
-
-            // Emit event
-            var @event = new AgreementConfigCreated
+            // Atomic state-change + audit + outbox enqueue (ADR-018 D3 atomic-outbox shape).
+            Guid configId;
+            await using (var conn = connectionFactory.Create())
             {
-                ConfigId = configId,
-                AgreementCode = request.AgreementCode,
-                OkVersion = request.OkVersion,
-                ActorId = actor.ActorId,
-                ActorRole = actor.ActorRole,
-                CorrelationId = actor.CorrelationId,
-            };
-            await eventStore.AppendAsync($"agreement-config-{configId}", @event, ct);
+                await conn.OpenAsync(ct);
+                await using var tx = await conn.BeginTransactionAsync(ct);
 
-            // Re-read to get DB-generated timestamps
+                configId = await agreementConfigRepo.CreateAsync(conn, tx, entity, ct);
+
+                await agreementConfigRepo.AppendAuditAsync(
+                    conn, tx, configId, "CREATED", null, SerializeForAudit(request),
+                    actor.ActorId ?? "system", actor.ActorRole ?? "GLOBAL_ADMIN", ct);
+
+                var @event = new AgreementConfigCreated
+                {
+                    ConfigId = configId,
+                    AgreementCode = request.AgreementCode,
+                    OkVersion = request.OkVersion,
+                    ActorId = actor.ActorId,
+                    ActorRole = actor.ActorRole,
+                    CorrelationId = actor.CorrelationId,
+                };
+                await outbox.EnqueueAsync(conn, tx, $"agreement-config-{configId}", @event, ct);
+
+                await tx.CommitAsync(ct);
+            }
+
+            // Re-read to get DB-generated timestamps (post-commit; outside the write tx).
             var created = await agreementConfigRepo.GetByIdAsync(configId, ct);
 
             return Results.Created($"/api/agreement-configs/{configId}",
@@ -120,7 +129,8 @@ public static class AgreementConfigEndpoints
             string? agreementCode,
             string? okVersion,
             AgreementConfigRepository agreementConfigRepo,
-            IEventStore eventStore,
+            DbConnectionFactory connectionFactory,
+            IOutboxEnqueue outbox,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -182,27 +192,35 @@ public static class AgreementConfigEndpoints
                 Description = source.Description,
             };
 
-            var newConfigId = await agreementConfigRepo.CreateAsync(cloneEntity, ct);
-
-            // Audit
-            await agreementConfigRepo.AppendAuditAsync(
-                newConfigId, "CLONED", null, $"{{\"sourceConfigId\":\"{configId}\"}}",
-                actor.ActorId ?? "system", actor.ActorRole ?? "GLOBAL_ADMIN", ct);
-
-            // Emit event
-            var @event = new AgreementConfigCloned
+            // Atomic state-change + audit + outbox enqueue (ADR-018 D3 atomic-outbox shape).
+            Guid newConfigId;
+            await using (var conn = connectionFactory.Create())
             {
-                ConfigId = newConfigId,
-                SourceConfigId = configId,
-                AgreementCode = cloneAgreementCode,
-                OkVersion = cloneOkVersion,
-                ActorId = actor.ActorId,
-                ActorRole = actor.ActorRole,
-                CorrelationId = actor.CorrelationId,
-            };
-            await eventStore.AppendAsync($"agreement-config-{newConfigId}", @event, ct);
+                await conn.OpenAsync(ct);
+                await using var tx = await conn.BeginTransactionAsync(ct);
 
-            // Re-read to get DB-generated timestamps
+                newConfigId = await agreementConfigRepo.CreateAsync(conn, tx, cloneEntity, ct);
+
+                await agreementConfigRepo.AppendAuditAsync(
+                    conn, tx, newConfigId, "CLONED", null, $"{{\"sourceConfigId\":\"{configId}\"}}",
+                    actor.ActorId ?? "system", actor.ActorRole ?? "GLOBAL_ADMIN", ct);
+
+                var @event = new AgreementConfigCloned
+                {
+                    ConfigId = newConfigId,
+                    SourceConfigId = configId,
+                    AgreementCode = cloneAgreementCode,
+                    OkVersion = cloneOkVersion,
+                    ActorId = actor.ActorId,
+                    ActorRole = actor.ActorRole,
+                    CorrelationId = actor.CorrelationId,
+                };
+                await outbox.EnqueueAsync(conn, tx, $"agreement-config-{newConfigId}", @event, ct);
+
+                await tx.CommitAsync(ct);
+            }
+
+            // Re-read to get DB-generated timestamps (post-commit; outside the write tx).
             var created = await agreementConfigRepo.GetByIdAsync(newConfigId, ct);
 
             return Results.Created($"/api/agreement-configs/{newConfigId}",
@@ -216,7 +234,8 @@ public static class AgreementConfigEndpoints
             Guid configId,
             AgreementConfigRequest request,
             AgreementConfigRepository agreementConfigRepo,
-            IEventStore eventStore,
+            DbConnectionFactory connectionFactory,
+            IOutboxEnqueue outbox,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -238,28 +257,38 @@ public static class AgreementConfigEndpoints
 
             var updatedEntity = BuildEntityFromRequest(request, normModel, existing.CreatedBy, existing.ClonedFromId);
 
-            var updated = await agreementConfigRepo.UpdateDraftAsync(configId, updatedEntity, ct);
-            if (!updated)
-                return Results.Json(new { error = "Failed to update — config may no longer be in DRAFT status" }, statusCode: 409);
-
-            // Audit
-            await agreementConfigRepo.AppendAuditAsync(
-                configId, "UPDATED", SerializeForAudit(existing), SerializeForAudit(request),
-                actor.ActorId ?? "system", actor.ActorRole ?? "GLOBAL_ADMIN", ct);
-
-            // Emit event
-            var @event = new AgreementConfigUpdated
+            // Atomic state-change + audit + outbox enqueue (ADR-018 D3 atomic-outbox shape).
+            await using (var conn = connectionFactory.Create())
             {
-                ConfigId = configId,
-                AgreementCode = request.AgreementCode,
-                OkVersion = request.OkVersion,
-                ActorId = actor.ActorId,
-                ActorRole = actor.ActorRole,
-                CorrelationId = actor.CorrelationId,
-            };
-            await eventStore.AppendAsync($"agreement-config-{configId}", @event, ct);
+                await conn.OpenAsync(ct);
+                await using var tx = await conn.BeginTransactionAsync(ct);
 
-            // Re-read to get updated timestamps
+                var updated = await agreementConfigRepo.UpdateDraftAsync(conn, tx, configId, updatedEntity, ct);
+                if (!updated)
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.Json(new { error = "Failed to update — config may no longer be in DRAFT status" }, statusCode: 409);
+                }
+
+                await agreementConfigRepo.AppendAuditAsync(
+                    conn, tx, configId, "UPDATED", SerializeForAudit(existing), SerializeForAudit(request),
+                    actor.ActorId ?? "system", actor.ActorRole ?? "GLOBAL_ADMIN", ct);
+
+                var @event = new AgreementConfigUpdated
+                {
+                    ConfigId = configId,
+                    AgreementCode = request.AgreementCode,
+                    OkVersion = request.OkVersion,
+                    ActorId = actor.ActorId,
+                    ActorRole = actor.ActorRole,
+                    CorrelationId = actor.CorrelationId,
+                };
+                await outbox.EnqueueAsync(conn, tx, $"agreement-config-{configId}", @event, ct);
+
+                await tx.CommitAsync(ct);
+            }
+
+            // Re-read to get updated timestamps (post-commit; outside the write tx).
             var refreshed = await agreementConfigRepo.GetByIdAsync(configId, ct);
 
             return Results.Ok(refreshed is not null ? MapEntityToResponse(refreshed) : new { configId });
@@ -271,7 +300,8 @@ public static class AgreementConfigEndpoints
         app.MapPost("/api/agreement-configs/{configId:guid}/publish", async (
             Guid configId,
             AgreementConfigRepository agreementConfigRepo,
-            IEventStore eventStore,
+            DbConnectionFactory connectionFactory,
+            IOutboxEnqueue outbox,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -284,31 +314,46 @@ public static class AgreementConfigEndpoints
             if (existing.Status != AgreementConfigStatus.DRAFT)
                 return Results.Json(new { error = "Only DRAFT configs can be published" }, statusCode: 409);
 
-            var archivedId = await agreementConfigRepo.PublishAsync(configId, actor.ActorId ?? "system", ct);
+            // Atomic publish: archive prior ACTIVE + activate DRAFT + audit + outbox enqueue
+            // all in a single transaction (ADR-018 D3). PublishAsync(conn, tx, ...) is the
+            // in-tx sibling overload from TASK-2401; it does NOT commit, leaving the caller
+            // in control. Returns Guid? — the prior-ACTIVE config_id that was archived
+            // (null if there was no prior ACTIVE OR the publish was a no-op because the
+            // target row is missing / not DRAFT). The endpoint already pre-validated DRAFT
+            // status above so the no-op branch covers concurrent status transitions only.
+            Guid? archivedId;
+            await using (var conn = connectionFactory.Create())
+            {
+                await conn.OpenAsync(ct);
+                await using var tx = await conn.BeginTransactionAsync(ct);
 
-            // PublishAsync returns null if publication failed (e.g. concurrent status change)
-            // Re-read to verify it actually became ACTIVE
+                archivedId = await agreementConfigRepo.PublishAsync(conn, tx, configId, actor.ActorId ?? "system", ct);
+
+                await agreementConfigRepo.AppendAuditAsync(
+                    conn, tx, configId, "PUBLISHED", null, $"{{\"archivedConfigId\":\"{archivedId}\"}}",
+                    actor.ActorId ?? "system", actor.ActorRole ?? "GLOBAL_ADMIN", ct);
+
+                var @event = new AgreementConfigPublished
+                {
+                    ConfigId = configId,
+                    AgreementCode = existing.AgreementCode,
+                    OkVersion = existing.OkVersion,
+                    ArchivedConfigId = archivedId,
+                    ActorId = actor.ActorId,
+                    ActorRole = actor.ActorRole,
+                    CorrelationId = actor.CorrelationId,
+                };
+                await outbox.EnqueueAsync(conn, tx, $"agreement-config-{configId}", @event, ct);
+
+                await tx.CommitAsync(ct);
+            }
+
+            // Post-commit re-read for response payload (refinement R2 — must be AFTER tx
+            // commit, NOT inside the tx, to surface the visible-after-commit ACTIVE state
+            // and DB-generated published_at to the caller).
             var published = await agreementConfigRepo.GetByIdAsync(configId, ct);
             if (published is null || published.Status != AgreementConfigStatus.ACTIVE)
                 return Results.Json(new { error = "Failed to publish — config may no longer be in DRAFT status" }, statusCode: 409);
-
-            // Audit
-            await agreementConfigRepo.AppendAuditAsync(
-                configId, "PUBLISHED", null, $"{{\"archivedConfigId\":\"{archivedId}\"}}",
-                actor.ActorId ?? "system", actor.ActorRole ?? "GLOBAL_ADMIN", ct);
-
-            // Emit event
-            var @event = new AgreementConfigPublished
-            {
-                ConfigId = configId,
-                AgreementCode = existing.AgreementCode,
-                OkVersion = existing.OkVersion,
-                ArchivedConfigId = archivedId,
-                ActorId = actor.ActorId,
-                ActorRole = actor.ActorRole,
-                CorrelationId = actor.CorrelationId,
-            };
-            await eventStore.AppendAsync($"agreement-config-{configId}", @event, ct);
 
             return Results.Ok(new
             {
@@ -325,7 +370,8 @@ public static class AgreementConfigEndpoints
         app.MapPost("/api/agreement-configs/{configId:guid}/archive", async (
             Guid configId,
             AgreementConfigRepository agreementConfigRepo,
-            IEventStore eventStore,
+            DbConnectionFactory connectionFactory,
+            IOutboxEnqueue outbox,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -338,28 +384,38 @@ public static class AgreementConfigEndpoints
             if (existing.Status == AgreementConfigStatus.ARCHIVED)
                 return Results.Json(new { error = "Config is already archived" }, statusCode: 409);
 
-            var archived = await agreementConfigRepo.ArchiveAsync(configId, actor.ActorId ?? "system", ct);
-            if (!archived)
-                return Results.Json(new { error = "Failed to archive config" }, statusCode: 409);
-
-            // Audit
-            await agreementConfigRepo.AppendAuditAsync(
-                configId, "ARCHIVED", existing.Status.ToString(), "ARCHIVED",
-                actor.ActorId ?? "system", actor.ActorRole ?? "GLOBAL_ADMIN", ct);
-
-            // Emit event
-            var @event = new AgreementConfigArchived
+            // Atomic state-change + audit + outbox enqueue (ADR-018 D3 atomic-outbox shape).
+            await using (var conn = connectionFactory.Create())
             {
-                ConfigId = configId,
-                AgreementCode = existing.AgreementCode,
-                OkVersion = existing.OkVersion,
-                ActorId = actor.ActorId,
-                ActorRole = actor.ActorRole,
-                CorrelationId = actor.CorrelationId,
-            };
-            await eventStore.AppendAsync($"agreement-config-{configId}", @event, ct);
+                await conn.OpenAsync(ct);
+                await using var tx = await conn.BeginTransactionAsync(ct);
 
-            // Re-read to get updated timestamps
+                var archived = await agreementConfigRepo.ArchiveAsync(conn, tx, configId, actor.ActorId ?? "system", ct);
+                if (!archived)
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.Json(new { error = "Failed to archive config" }, statusCode: 409);
+                }
+
+                await agreementConfigRepo.AppendAuditAsync(
+                    conn, tx, configId, "ARCHIVED", existing.Status.ToString(), "ARCHIVED",
+                    actor.ActorId ?? "system", actor.ActorRole ?? "GLOBAL_ADMIN", ct);
+
+                var @event = new AgreementConfigArchived
+                {
+                    ConfigId = configId,
+                    AgreementCode = existing.AgreementCode,
+                    OkVersion = existing.OkVersion,
+                    ActorId = actor.ActorId,
+                    ActorRole = actor.ActorRole,
+                    CorrelationId = actor.CorrelationId,
+                };
+                await outbox.EnqueueAsync(conn, tx, $"agreement-config-{configId}", @event, ct);
+
+                await tx.CommitAsync(ct);
+            }
+
+            // Re-read to get updated timestamps (post-commit; outside the write tx).
             var refreshed = await agreementConfigRepo.GetByIdAsync(configId, ct);
 
             return Results.Ok(new
