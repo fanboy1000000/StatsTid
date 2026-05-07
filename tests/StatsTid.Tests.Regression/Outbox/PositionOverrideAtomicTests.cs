@@ -95,6 +95,13 @@ public sealed class PositionOverrideAtomicTests : IAsyncLifetime
         var seed = NewOverride(maxFlex: 200m);
         var overrideId = await _repo.CreateAsync(seed);
 
+        // S25 / TASK-2504: v3 UpdateAsync(conn, tx, overrideId, expectedVersion, ...)
+        // requires the row's current version. Read it back via the same path the HTTP
+        // endpoint uses (GET → If-Match → PUT).
+        var preEntity = await _repo.GetByIdAsync(overrideId);
+        Assert.NotNull(preEntity);
+        var expectedVersion = preEntity!.Version;
+
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
         {
             await using var conn = _harness.Factory.Create();
@@ -103,10 +110,12 @@ public sealed class PositionOverrideAtomicTests : IAsyncLifetime
 
             // Update with sentinel value (max_flex=250).
             var updated = NewOverride(maxFlex: 250m);
-            var ok = await _repo.UpdateAsync(conn, tx, overrideId, updated);
-            Assert.True(ok);
+            var saveResult = await _repo.UpdateAsync(conn, tx, overrideId, expectedVersion, updated);
+            Assert.False(saveResult.IsCreated);
+            Assert.Equal(expectedVersion + 1, saveResult.Version);
             await _repo.AppendAuditAsync(
-                conn, tx, overrideId, "UPDATED", "{}", "{}", "tester", "GLOBAL_ADMIN");
+                conn, tx, overrideId, "UPDATED", "{}", "{}", "tester", "GLOBAL_ADMIN",
+                versionBefore: expectedVersion, versionAfter: saveResult.Version);
 
             var @event = new PositionOverrideUpdated
             {
@@ -139,16 +148,24 @@ public sealed class PositionOverrideAtomicTests : IAsyncLifetime
         var seed = NewOverride();
         var overrideId = await _repo.CreateAsync(seed);
 
+        // S25 / TASK-2504: v3 DeactivateAsync(conn, tx, overrideId, expectedVersion, ...)
+        // requires the row's current version.
+        var preEntity = await _repo.GetByIdAsync(overrideId);
+        Assert.NotNull(preEntity);
+        var expectedVersion = preEntity!.Version;
+
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
         {
             await using var conn = _harness.Factory.Create();
             await conn.OpenAsync();
             await using var tx = await conn.BeginTransactionAsync();
 
-            var ok = await _repo.DeactivateAsync(conn, tx, overrideId);
-            Assert.True(ok);
+            var saveResult = await _repo.DeactivateAsync(conn, tx, overrideId, expectedVersion);
+            Assert.False(saveResult.IsCreated);
+            Assert.Equal("INACTIVE", saveResult.Status);
             await _repo.AppendAuditAsync(
-                conn, tx, overrideId, "DEACTIVATED", "{}", null, "tester", "GLOBAL_ADMIN");
+                conn, tx, overrideId, "DEACTIVATED", "{}", null, "tester", "GLOBAL_ADMIN",
+                versionBefore: expectedVersion, versionAfter: saveResult.Version);
 
             var @event = new PositionOverrideDeactivated
             {
@@ -183,16 +200,24 @@ public sealed class PositionOverrideAtomicTests : IAsyncLifetime
         var overrideId = await _repo.CreateAsync(seed);
         await _repo.DeactivateAsync(overrideId);
 
+        // S25 / TASK-2504: v3 ActivateAsync(conn, tx, overrideId, expectedVersion, ...)
+        // requires the row's current version.
+        var preEntity = await _repo.GetByIdAsync(overrideId);
+        Assert.NotNull(preEntity);
+        var expectedVersion = preEntity!.Version;
+
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
         {
             await using var conn = _harness.Factory.Create();
             await conn.OpenAsync();
             await using var tx = await conn.BeginTransactionAsync();
 
-            var ok = await _repo.ActivateAsync(conn, tx, overrideId);
-            Assert.True(ok);
+            var saveResult = await _repo.ActivateAsync(conn, tx, overrideId, expectedVersion);
+            Assert.False(saveResult.IsCreated);
+            Assert.Equal("ACTIVE", saveResult.Status);
             await _repo.AppendAuditAsync(
-                conn, tx, overrideId, "ACTIVATED", null, "{}", "tester", "GLOBAL_ADMIN");
+                conn, tx, overrideId, "ACTIVATED", null, "{}", "tester", "GLOBAL_ADMIN",
+                versionBefore: expectedVersion, versionAfter: saveResult.Version);
 
             var @event = new PositionOverrideActivated
             {

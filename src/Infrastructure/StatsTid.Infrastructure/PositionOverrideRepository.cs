@@ -79,6 +79,12 @@ public sealed class PositionOverrideRepository
     /// Reuses the caller-supplied <paramref name="conn"/> + <paramref name="tx"/> so the
     /// caller can extend the same transaction across audit + outbox writes
     /// (ADR-018 D3 transactional-outbox contract). The caller commits or rolls back.
+    ///
+    /// <para>
+    /// Atomic-outbox primitive (S24 ForcedRollbackHarness consumer): preserved unchanged
+    /// across the S25 / TASK-2504 v3 migration. Create endpoint writes version=1 (DB
+    /// DEFAULT); the wire ETag for the 201 response is a static <c>"1"</c>.
+    /// </para>
     /// </summary>
     public async Task<Guid> CreateAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
@@ -121,21 +127,17 @@ public sealed class PositionOverrideRepository
     {
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
-        return await ExecuteUpdateAsync(conn, null, overrideId, updated, ct);
+        return await ExecuteSelfManagedUpdateAsync(conn, overrideId, updated, ct);
     }
 
-    /// <summary>
-    /// In-transaction sibling overload of <see cref="UpdateAsync(Guid, PositionOverrideConfigEntity, CancellationToken)"/>.
-    /// </summary>
-    public async Task<bool> UpdateAsync(
-        NpgsqlConnection conn, NpgsqlTransaction tx,
-        Guid overrideId, PositionOverrideConfigEntity updated, CancellationToken ct = default)
-        => await ExecuteUpdateAsync(conn, tx, overrideId, updated, ct);
-
-    private static async Task<bool> ExecuteUpdateAsync(
-        NpgsqlConnection conn, NpgsqlTransaction? tx,
+    private static async Task<bool> ExecuteSelfManagedUpdateAsync(
+        NpgsqlConnection conn,
         Guid overrideId, PositionOverrideConfigEntity updated, CancellationToken ct)
     {
+        // Self-managed (no caller tx) — preserved unchanged from pre-S25; legacy callers
+        // (seeders, internal tooling) continue to use this best-effort path. The v3
+        // in-transaction sibling enforces ETag/If-Match optimistic concurrency for HTTP
+        // admin endpoints.
         var sql =
             """
             UPDATE position_override_configs SET
@@ -147,7 +149,7 @@ public sealed class PositionOverrideRepository
                 updated_at = NOW()
             WHERE override_id = @overrideId AND status = 'ACTIVE'
             """;
-        await using var cmd = tx is null ? new NpgsqlCommand(sql, conn) : new NpgsqlCommand(sql, conn, tx);
+        await using var cmd = new NpgsqlCommand(sql, conn);
         cmd.Parameters.AddWithValue("overrideId", overrideId);
         cmd.Parameters.AddWithValue("maxFlexBalance", (object?)updated.MaxFlexBalance ?? DBNull.Value);
         cmd.Parameters.AddWithValue("flexCarryoverMax", (object?)updated.FlexCarryoverMax ?? DBNull.Value);
@@ -158,35 +160,207 @@ public sealed class PositionOverrideRepository
         return rows > 0;
     }
 
+    /// <summary>
+    /// In-transaction v3 update overload — admin-strict ETag/If-Match optimistic-concurrency
+    /// (ADR-019 pending, mirrors S22 ADR-018 D7 + S25 / TASK-2503 AgreementConfig v3 pattern).
+    /// Reads the current row under <c>SELECT ... FOR UPDATE</c>, validates
+    /// <paramref name="expectedVersion"/> against the stored <c>version</c>, and applies the
+    /// UPDATE with <c>version = version + 1</c> in a single SET clause. Status must be ACTIVE
+    /// — otherwise the call manifests as <see cref="OptimisticConcurrencyException"/> with the
+    /// actual current state surfaced (the endpoint maps this to a 412 body).
+    ///
+    /// <para>
+    /// Replaces the v2 overload <c>(conn, tx, overrideId, updated, ct) → bool</c>. The caller
+    /// commits or rolls back; this method does NOT.
+    /// </para>
+    /// </summary>
+    /// <returns>
+    /// <see cref="SavePositionOverrideResult"/> with the updated entity (post-write snapshot),
+    /// the new <c>version</c> (= prior version + 1), <c>IsCreated: false</c>, and
+    /// <c>Status</c> = <c>"ACTIVE"</c> (Update only runs against ACTIVE rows).
+    /// </returns>
+    /// <exception cref="OptimisticConcurrencyException">
+    /// Thrown when the row is missing, no longer ACTIVE, or its <c>version</c> column does
+    /// not equal <paramref name="expectedVersion"/>.
+    /// </exception>
+    public async Task<SavePositionOverrideResult> UpdateAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        Guid overrideId, long expectedVersion, PositionOverrideConfigEntity updated,
+        CancellationToken ct = default)
+    {
+        // 1. SELECT FOR UPDATE — capture status + version under the caller tx.
+        long currentVersion;
+        string currentStatus;
+        await using (var lockCmd = new NpgsqlCommand(
+            "SELECT version, status FROM position_override_configs WHERE override_id = @overrideId FOR UPDATE",
+            conn, tx))
+        {
+            lockCmd.Parameters.AddWithValue("overrideId", overrideId);
+            await using var reader = await lockCmd.ExecuteReaderAsync(ct);
+            if (!await reader.ReadAsync(ct))
+            {
+                throw new OptimisticConcurrencyException(
+                    $"Position override {overrideId} not found.",
+                    expectedVersion: expectedVersion,
+                    actualVersion: null);
+            }
+            currentVersion = reader.GetInt64(0);
+            currentStatus = reader.GetString(1);
+        }
+
+        // 2. Status check — only ACTIVE rows are editable. Concurrent deactivate between
+        //    endpoint pre-check and our FOR UPDATE → 412.
+        if (!string.Equals(currentStatus, "ACTIVE", StringComparison.Ordinal))
+        {
+            throw new OptimisticConcurrencyException(
+                $"Position override {overrideId} is no longer ACTIVE (current: {currentStatus}); refresh and retry.",
+                expectedVersion: expectedVersion,
+                actualVersion: currentVersion);
+        }
+
+        // 3. Optimistic-concurrency check.
+        if (currentVersion != expectedVersion)
+        {
+            throw new OptimisticConcurrencyException(
+                $"Position override {overrideId} version is {currentVersion}, but caller sent If-Match: \"{expectedVersion}\"; refresh and retry.",
+                expectedVersion: expectedVersion,
+                actualVersion: currentVersion);
+        }
+
+        // 4. UPDATE with version-bump in the same SET clause.
+        var updateSql =
+            """
+            UPDATE position_override_configs SET
+                max_flex_balance = @maxFlexBalance,
+                flex_carryover_max = @flexCarryoverMax,
+                norm_period_weeks = @normPeriodWeeks,
+                weekly_norm_hours = @weeklyNormHours,
+                description = @description,
+                updated_at = NOW(),
+                version = version + 1
+            WHERE override_id = @overrideId AND status = 'ACTIVE'
+            RETURNING *
+            """;
+        await using var updateCmd = new NpgsqlCommand(updateSql, conn, tx);
+        updateCmd.Parameters.AddWithValue("overrideId", overrideId);
+        updateCmd.Parameters.AddWithValue("maxFlexBalance", (object?)updated.MaxFlexBalance ?? DBNull.Value);
+        updateCmd.Parameters.AddWithValue("flexCarryoverMax", (object?)updated.FlexCarryoverMax ?? DBNull.Value);
+        updateCmd.Parameters.AddWithValue("normPeriodWeeks", (object?)updated.NormPeriodWeeks ?? DBNull.Value);
+        updateCmd.Parameters.AddWithValue("weeklyNormHours", (object?)updated.WeeklyNormHours ?? DBNull.Value);
+        updateCmd.Parameters.AddWithValue("description", (object?)updated.Description ?? DBNull.Value);
+        await using var updReader = await updateCmd.ExecuteReaderAsync(ct);
+        if (!await updReader.ReadAsync(ct))
+        {
+            // Defense-in-depth — unreachable while FOR UPDATE holds the lock.
+            throw new InvalidOperationException(
+                $"UpdateAsync produced no row for override_id={overrideId} at expected version {expectedVersion}; FOR UPDATE invariant violated.");
+        }
+        var entity = ReadEntity(updReader);
+        return new SavePositionOverrideResult(entity, entity.Version, IsCreated: false, Status: entity.Status);
+    }
+
     public async Task<bool> DeactivateAsync(Guid overrideId, CancellationToken ct = default)
     {
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
-        return await ExecuteDeactivateAsync(conn, null, overrideId, ct);
+        return await ExecuteSelfManagedDeactivateAsync(conn, overrideId, ct);
     }
 
-    /// <summary>
-    /// In-transaction sibling overload of <see cref="DeactivateAsync(Guid, CancellationToken)"/>.
-    /// </summary>
-    public async Task<bool> DeactivateAsync(
-        NpgsqlConnection conn, NpgsqlTransaction tx,
-        Guid overrideId, CancellationToken ct = default)
-        => await ExecuteDeactivateAsync(conn, tx, overrideId, ct);
-
-    private static async Task<bool> ExecuteDeactivateAsync(
-        NpgsqlConnection conn, NpgsqlTransaction? tx,
+    private static async Task<bool> ExecuteSelfManagedDeactivateAsync(
+        NpgsqlConnection conn,
         Guid overrideId, CancellationToken ct)
     {
+        // Self-managed path — preserved unchanged from pre-S25 (no version bump). Legacy
+        // callers (internal tooling, test seeding) continue to use this best-effort path;
+        // HTTP admin endpoints use the v3 sibling that enforces ETag/If-Match optimistic
+        // concurrency.
         var sql =
             """
             UPDATE position_override_configs
             SET status = 'INACTIVE', updated_at = NOW()
             WHERE override_id = @overrideId AND status = 'ACTIVE'
             """;
-        await using var cmd = tx is null ? new NpgsqlCommand(sql, conn) : new NpgsqlCommand(sql, conn, tx);
+        await using var cmd = new NpgsqlCommand(sql, conn);
         cmd.Parameters.AddWithValue("overrideId", overrideId);
         var rows = await cmd.ExecuteNonQueryAsync(ct);
         return rows > 0;
+    }
+
+    /// <summary>
+    /// In-transaction v3 deactivate overload — admin-strict ETag/If-Match optimistic-concurrency
+    /// (ADR-019 pending). Reads the current row under <c>SELECT ... FOR UPDATE</c>, validates
+    /// <paramref name="expectedVersion"/> against the stored <c>version</c>, and transitions
+    /// status from ACTIVE → INACTIVE with <c>version = version + 1</c>.
+    /// </summary>
+    /// <returns>
+    /// <see cref="SavePositionOverrideResult"/> with the deactivated entity (post-write
+    /// snapshot), the new <c>version</c>, <c>IsCreated: false</c>, and
+    /// <c>Status</c> = <c>"INACTIVE"</c>.
+    /// </returns>
+    /// <exception cref="OptimisticConcurrencyException">
+    /// Thrown when the row is missing, already INACTIVE, or its <c>version</c> column does
+    /// not equal <paramref name="expectedVersion"/>.
+    /// </exception>
+    public async Task<SavePositionOverrideResult> DeactivateAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        Guid overrideId, long expectedVersion, CancellationToken ct = default)
+    {
+        // 1. SELECT FOR UPDATE — capture status + version under the caller tx.
+        long currentVersion;
+        string currentStatus;
+        await using (var lockCmd = new NpgsqlCommand(
+            "SELECT version, status FROM position_override_configs WHERE override_id = @overrideId FOR UPDATE",
+            conn, tx))
+        {
+            lockCmd.Parameters.AddWithValue("overrideId", overrideId);
+            await using var reader = await lockCmd.ExecuteReaderAsync(ct);
+            if (!await reader.ReadAsync(ct))
+            {
+                throw new OptimisticConcurrencyException(
+                    $"Position override {overrideId} not found.",
+                    expectedVersion: expectedVersion,
+                    actualVersion: null);
+            }
+            currentVersion = reader.GetInt64(0);
+            currentStatus = reader.GetString(1);
+        }
+
+        // 2. Status check — only ACTIVE → INACTIVE is meaningful. Already-INACTIVE → 412.
+        if (!string.Equals(currentStatus, "ACTIVE", StringComparison.Ordinal))
+        {
+            throw new OptimisticConcurrencyException(
+                $"Position override {overrideId} is not ACTIVE (current: {currentStatus}); cannot deactivate — refresh and retry.",
+                expectedVersion: expectedVersion,
+                actualVersion: currentVersion);
+        }
+
+        // 3. Optimistic-concurrency check.
+        if (currentVersion != expectedVersion)
+        {
+            throw new OptimisticConcurrencyException(
+                $"Position override {overrideId} version is {currentVersion}, but caller sent If-Match: \"{expectedVersion}\"; refresh and retry.",
+                expectedVersion: expectedVersion,
+                actualVersion: currentVersion);
+        }
+
+        // 4. UPDATE with status='INACTIVE' + version-bump; RETURN the post-write snapshot.
+        await using var updateCmd = new NpgsqlCommand(
+            """
+            UPDATE position_override_configs
+            SET status = 'INACTIVE', updated_at = NOW(), version = version + 1
+            WHERE override_id = @overrideId AND status = 'ACTIVE'
+            RETURNING *
+            """, conn, tx);
+        updateCmd.Parameters.AddWithValue("overrideId", overrideId);
+        await using var updReader = await updateCmd.ExecuteReaderAsync(ct);
+        if (!await updReader.ReadAsync(ct))
+        {
+            // Defense-in-depth — unreachable while FOR UPDATE holds the lock.
+            throw new InvalidOperationException(
+                $"DeactivateAsync produced no row for override_id={overrideId} at expected version {expectedVersion}; FOR UPDATE invariant violated.");
+        }
+        var entity = ReadEntity(updReader);
+        return new SavePositionOverrideResult(entity, entity.Version, IsCreated: false, Status: entity.Status);
     }
 
     /// <summary>
@@ -194,7 +368,7 @@ public sealed class PositionOverrideRepository
     /// "verify no other ACTIVE for the (agreement_code, ok_version, position_code) triple +
     /// activate" pair. For caller-driven atomic outbox + audit + activate (ADR-018 D3) call
     /// the in-transaction sibling
-    /// <see cref="ActivateAsync(NpgsqlConnection, NpgsqlTransaction, Guid, CancellationToken)"/>.
+    /// <see cref="ActivateAsync(NpgsqlConnection, NpgsqlTransaction, Guid, long, CancellationToken)"/>.
     /// </summary>
     public async Task<bool> ActivateAsync(Guid overrideId, CancellationToken ct = default)
     {
@@ -203,7 +377,7 @@ public sealed class PositionOverrideRepository
         await using var tx = await conn.BeginTransactionAsync(ct);
         try
         {
-            var success = await ActivateAsync(conn, tx, overrideId, ct);
+            var success = await ExecuteSelfManagedActivateAsync(conn, tx, overrideId, ct);
             if (!success)
             {
                 await tx.RollbackAsync(ct);
@@ -219,20 +393,15 @@ public sealed class PositionOverrideRepository
         }
     }
 
-    /// <summary>
-    /// In-transaction sibling overload of <see cref="ActivateAsync(Guid, CancellationToken)"/>.
-    /// Verifies no other ACTIVE override exists for the (agreement_code, ok_version,
-    /// position_code) triple and activates the INACTIVE row identified by
-    /// <paramref name="overrideId"/>. Returns false on any of: row missing / not INACTIVE,
-    /// concurrent ACTIVE present, or zero-rows-updated by the activate UPDATE. Caller is
-    /// responsible for rolling back on false return (the activate path runs no UPDATEs that
-    /// would need reverting; the no-op short-circuits at the COUNT check).
-    /// </summary>
-    public async Task<bool> ActivateAsync(
+    private static async Task<bool> ExecuteSelfManagedActivateAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
-        Guid overrideId, CancellationToken ct = default)
+        Guid overrideId, CancellationToken ct)
     {
-        // Get the override being activated to find its (agreement_code, ok_version, position_code)
+        // Self-managed path — preserved unchanged from pre-S25 (no version bump). Legacy
+        // callers (internal tooling, test seeding) continue to use this best-effort path;
+        // HTTP admin endpoints use the v3 sibling that enforces ETag/If-Match optimistic
+        // concurrency + lets the partial-unique-index fire 23505 on concurrent activation
+        // races (caught + mapped to 409 in the endpoint).
         await using (var getCmd = new NpgsqlCommand(
             "SELECT agreement_code, ok_version, position_code FROM position_override_configs WHERE override_id = @overrideId AND status = 'INACTIVE'",
             conn, tx))
@@ -275,6 +444,95 @@ public sealed class PositionOverrideRepository
         return rows > 0;
     }
 
+    /// <summary>
+    /// In-transaction v3 activate overload — admin-strict ETag/If-Match optimistic-concurrency
+    /// (ADR-019 pending). Transitions status from INACTIVE → ACTIVE on the row identified by
+    /// <paramref name="overrideId"/> with <c>version = version + 1</c>. Reads the current row
+    /// under <c>SELECT ... FOR UPDATE</c> and validates <paramref name="expectedVersion"/>.
+    ///
+    /// <para>
+    /// Note: the partial-unique-index <c>WHERE status='ACTIVE'</c> enforces "at most one
+    /// ACTIVE per (agreement_code, ok_version, position_code)". A concurrent activation of a
+    /// sibling override for the same triple manifests as <see cref="PostgresException"/> with
+    /// SQL state 23505 (unique violation) on the UPDATE — distinct from
+    /// <see cref="OptimisticConcurrencyException"/>. The endpoint catches 23505 and maps it
+    /// to 409 Conflict (different race class than row-version concurrency).
+    /// </para>
+    /// </summary>
+    /// <returns>
+    /// <see cref="SavePositionOverrideResult"/> with the activated entity (post-write
+    /// snapshot), the new <c>version</c>, <c>IsCreated: false</c>, and
+    /// <c>Status</c> = <c>"ACTIVE"</c>.
+    /// </returns>
+    /// <exception cref="OptimisticConcurrencyException">
+    /// Thrown when the row is missing, not INACTIVE, or its <c>version</c> column does not
+    /// equal <paramref name="expectedVersion"/>.
+    /// </exception>
+    public async Task<SavePositionOverrideResult> ActivateAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        Guid overrideId, long expectedVersion, CancellationToken ct = default)
+    {
+        // 1. SELECT FOR UPDATE — capture status + version under the caller tx.
+        long currentVersion;
+        string currentStatus;
+        await using (var lockCmd = new NpgsqlCommand(
+            "SELECT version, status FROM position_override_configs WHERE override_id = @overrideId FOR UPDATE",
+            conn, tx))
+        {
+            lockCmd.Parameters.AddWithValue("overrideId", overrideId);
+            await using var reader = await lockCmd.ExecuteReaderAsync(ct);
+            if (!await reader.ReadAsync(ct))
+            {
+                throw new OptimisticConcurrencyException(
+                    $"Position override {overrideId} not found.",
+                    expectedVersion: expectedVersion,
+                    actualVersion: null);
+            }
+            currentVersion = reader.GetInt64(0);
+            currentStatus = reader.GetString(1);
+        }
+
+        // 2. Status check — only INACTIVE → ACTIVE is meaningful. Already-ACTIVE → 412.
+        if (!string.Equals(currentStatus, "INACTIVE", StringComparison.Ordinal))
+        {
+            throw new OptimisticConcurrencyException(
+                $"Position override {overrideId} is not INACTIVE (current: {currentStatus}); cannot activate — refresh and retry.",
+                expectedVersion: expectedVersion,
+                actualVersion: currentVersion);
+        }
+
+        // 3. Optimistic-concurrency check.
+        if (currentVersion != expectedVersion)
+        {
+            throw new OptimisticConcurrencyException(
+                $"Position override {overrideId} version is {currentVersion}, but caller sent If-Match: \"{expectedVersion}\"; refresh and retry.",
+                expectedVersion: expectedVersion,
+                actualVersion: currentVersion);
+        }
+
+        // 4. UPDATE with status='ACTIVE' + version-bump; RETURN the post-write snapshot.
+        //    The partial-unique-index `WHERE status='ACTIVE'` may fire 23505 here on a
+        //    concurrent sibling activation for the same (agreement, ok, position) triple
+        //    — endpoint catches and maps to 409.
+        await using var updateCmd = new NpgsqlCommand(
+            """
+            UPDATE position_override_configs
+            SET status = 'ACTIVE', updated_at = NOW(), version = version + 1
+            WHERE override_id = @overrideId AND status = 'INACTIVE'
+            RETURNING *
+            """, conn, tx);
+        updateCmd.Parameters.AddWithValue("overrideId", overrideId);
+        await using var updReader = await updateCmd.ExecuteReaderAsync(ct);
+        if (!await updReader.ReadAsync(ct))
+        {
+            // Defense-in-depth — unreachable while FOR UPDATE holds the lock.
+            throw new InvalidOperationException(
+                $"ActivateAsync produced no row for override_id={overrideId} at expected version {expectedVersion}; FOR UPDATE invariant violated.");
+        }
+        var entity = ReadEntity(updReader);
+        return new SavePositionOverrideResult(entity, entity.Version, IsCreated: false, Status: entity.Status);
+    }
+
     public async Task AppendAuditAsync(
         Guid overrideId, string action, string? previousData, string? newData,
         string actorId, string actorRole, CancellationToken ct = default)
@@ -291,8 +549,12 @@ public sealed class PositionOverrideRepository
     }
 
     /// <summary>
-    /// In-transaction sibling overload of
-    /// <see cref="AppendAuditAsync(Guid, string, string?, string?, string, string, CancellationToken)"/>.
+    /// In-transaction v2 audit overload (atomic-outbox primitive — preserved unchanged
+    /// across the S25 / TASK-2504 v3 migration). Used by the Create endpoint and by S24
+    /// ForcedRollbackHarness consumers; does NOT populate version_before / version_after
+    /// (those columns are nullable per TASK-2501 schema migration). New mutating endpoints
+    /// (Update / Activate / Deactivate) call the v3 sibling that captures the version
+    /// transition.
     /// </summary>
     public async Task AppendAuditAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
@@ -305,6 +567,41 @@ public sealed class PositionOverrideRepository
             VALUES (@overrideId, @action, @previousData::jsonb, @newData::jsonb, @actorId, @actorRole)
             """, conn, tx);
         AddAuditParameters(cmd, overrideId, action, previousData, newData, actorId, actorRole);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>
+    /// In-transaction v3 audit overload (S25 / TASK-2504 + ADR-019 pending). Writes the
+    /// version-transition pair (<paramref name="versionBefore"/>, <paramref name="versionAfter"/>)
+    /// into the new <c>version_before</c> / <c>version_after</c> columns added by TASK-2501.
+    /// Closes the audit-replay gap where the v2 audit captured *what* changed but not
+    /// *which version transition produced this state*.
+    ///
+    /// <para>
+    /// <paramref name="versionBefore"/> is nullable so first-create paths (POST /create) can
+    /// pass <c>null</c> while UPDATE / Activate / Deactivate paths pass the prior version.
+    /// <paramref name="versionAfter"/> is the post-mutation version sourced from the v3
+    /// repo's <see cref="SavePositionOverrideResult.Version"/>.
+    /// </para>
+    /// </summary>
+    public async Task AppendAuditAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        Guid overrideId, string action, string? previousData, string? newData,
+        string actorId, string actorRole,
+        long? versionBefore, long versionAfter,
+        CancellationToken ct = default)
+    {
+        await using var cmd = new NpgsqlCommand(
+            """
+            INSERT INTO position_override_config_audit
+                (override_id, action, previous_data, new_data, actor_id, actor_role,
+                 version_before, version_after)
+            VALUES (@overrideId, @action, @previousData::jsonb, @newData::jsonb, @actorId, @actorRole,
+                    @versionBefore, @versionAfter)
+            """, conn, tx);
+        AddAuditParameters(cmd, overrideId, action, previousData, newData, actorId, actorRole);
+        cmd.Parameters.AddWithValue("versionBefore", (object?)versionBefore ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("versionAfter", versionAfter);
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
@@ -344,6 +641,7 @@ public sealed class PositionOverrideRepository
         CreatedAt = reader.GetDateTime(reader.GetOrdinal("created_at")),
         UpdatedAt = reader.GetDateTime(reader.GetOrdinal("updated_at")),
         Description = reader.IsDBNull(reader.GetOrdinal("description")) ? null : reader.GetString(reader.GetOrdinal("description")),
+        Version = reader.GetInt64(reader.GetOrdinal("version")),
     };
 }
 
