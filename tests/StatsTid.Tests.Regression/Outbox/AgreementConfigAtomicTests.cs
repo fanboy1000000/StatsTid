@@ -140,6 +140,15 @@ public sealed class AgreementConfigAtomicTests : IAsyncLifetime
         var initial = NewConfig(weeklyNorm: 37m);
         var configId = await _repo.CreateAsync(initial);
 
+        // Capture the row's current version pre-mutation to feed the v3 (S25 / TASK-2503)
+        // UpdateDraftAsync overload's `expectedVersion` parameter. CreateAsync via the
+        // self-managed v1 path does not return the version — the row holds the DB DEFAULT
+        // (1) until the v3 path bumps it. Read it back to mirror what an admin endpoint
+        // would do (GET → If-Match: "<version>" → PUT).
+        var preEntity = await _repo.GetByIdAsync(configId);
+        Assert.NotNull(preEntity);
+        var expectedVersion = preEntity!.Version;
+
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
         {
             await using var conn = _harness.Factory.Create();
@@ -148,8 +157,9 @@ public sealed class AgreementConfigAtomicTests : IAsyncLifetime
 
             // Mutate a sentinel field (WeeklyNormHours 37 -> 38) to verify the rollback.
             var updated = NewConfig(weeklyNorm: 38m);
-            var ok = await _repo.UpdateDraftAsync(conn, tx, configId, updated);
-            Assert.True(ok);
+            var saveResult = await _repo.UpdateDraftAsync(conn, tx, configId, expectedVersion, updated);
+            Assert.False(saveResult.IsCreated); // existing row → IsCreated:false
+            Assert.Equal(expectedVersion + 1, saveResult.Version); // v3 bumps version
             await _repo.AppendAuditAsync(
                 conn, tx, configId, "UPDATED", "{}", "{}", "tester", "GLOBAL_ADMIN");
 
@@ -185,17 +195,26 @@ public sealed class AgreementConfigAtomicTests : IAsyncLifetime
         // state transitions must roll back together when the outbox throws.
         var (priorActiveId, draftId, sharedAgreementCode) = await SeedPriorActivePlusDraftAsync();
 
+        // Capture the DRAFT's current version for the v3 PublishAsync overload (S25 /
+        // TASK-2503). Mirrors the endpoint-equivalent pattern: GET → If-Match → POST publish.
+        var preDraft = await _repo.GetByIdAsync(draftId);
+        Assert.NotNull(preDraft);
+        var expectedVersion = preDraft!.Version;
+
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
         {
             await using var conn = _harness.Factory.Create();
             await conn.OpenAsync();
             await using var tx = await conn.BeginTransactionAsync();
 
-            var (archivedId, wasPublished) = await _repo.PublishAsync(conn, tx, draftId, "tester");
-            Assert.True(wasPublished); // target was DRAFT; this is the publish-success path
-            // archivedId == priorActiveId — endpoint stamps that into the event payload.
+            var saveResult = await _repo.PublishAsync(conn, tx, draftId, expectedVersion, "tester");
+            // archivedId carries on saveResult.ArchivedId — endpoint stamps that into the
+            // event payload. Concurrent state-change (S24 Step 7a P1) under v3 manifests as
+            // OptimisticConcurrencyException → 412 instead of (Guid?, bool).
+            Assert.Equal(priorActiveId, saveResult.ArchivedId);
+            Assert.False(saveResult.IsCreated);
             await _repo.AppendAuditAsync(
-                conn, tx, draftId, "PUBLISHED", null, $"{{\"archivedConfigId\":\"{archivedId}\"}}",
+                conn, tx, draftId, "PUBLISHED", null, $"{{\"archivedConfigId\":\"{saveResult.ArchivedId}\"}}",
                 "tester", "GLOBAL_ADMIN");
 
             var @event = new AgreementConfigPublished
@@ -203,7 +222,7 @@ public sealed class AgreementConfigAtomicTests : IAsyncLifetime
                 ConfigId = draftId,
                 AgreementCode = sharedAgreementCode,
                 OkVersion = "OK24",
-                ArchivedConfigId = archivedId,
+                ArchivedConfigId = saveResult.ArchivedId,
             };
             await _outbox.EnqueueAsync(conn, tx, $"agreement-config-{draftId}", @event);
             await tx.CommitAsync();
@@ -234,14 +253,20 @@ public sealed class AgreementConfigAtomicTests : IAsyncLifetime
         var initial = NewConfig();
         var configId = await _repo.CreateAsync(initial);
 
+        // Capture current version for v3 ArchiveAsync overload (S25 / TASK-2503).
+        var preEntity = await _repo.GetByIdAsync(configId);
+        Assert.NotNull(preEntity);
+        var expectedVersion = preEntity!.Version;
+
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
         {
             await using var conn = _harness.Factory.Create();
             await conn.OpenAsync();
             await using var tx = await conn.BeginTransactionAsync();
 
-            var archived = await _repo.ArchiveAsync(conn, tx, configId, "tester");
-            Assert.True(archived);
+            var saveResult = await _repo.ArchiveAsync(conn, tx, configId, expectedVersion, "tester");
+            Assert.False(saveResult.IsCreated);
+            Assert.Equal(expectedVersion + 1, saveResult.Version);
             await _repo.AppendAuditAsync(
                 conn, tx, configId, "ARCHIVED", "DRAFT", "ARCHIVED", "tester", "GLOBAL_ADMIN");
 

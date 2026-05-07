@@ -1,5 +1,6 @@
 using System.Text.Json;
 using StatsTid.Auth;
+using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.SharedKernel.Events;
@@ -13,6 +14,8 @@ public static class AgreementConfigEndpoints
     {
         // ═══════════════════════════════════════════
         // 1. GET /api/agreement-configs — List all configs, optionally filter by status
+        //    The list response includes `version` per row so the frontend can compose
+        //    `If-Match: "<version>"` for the next mutation without a separate by-id GET.
         // ═══════════════════════════════════════════
         app.MapGet("/api/agreement-configs", async (
             string? status,
@@ -39,21 +42,26 @@ public static class AgreementConfigEndpoints
 
         // ═══════════════════════════════════════════
         // 2. GET /api/agreement-configs/{configId:guid} — Get single config by ID
+        //    Sets `ETag: "<version>"` so the frontend can use it as the next If-Match.
         // ═══════════════════════════════════════════
         app.MapGet("/api/agreement-configs/{configId:guid}", async (
             Guid configId,
             AgreementConfigRepository agreementConfigRepo,
+            HttpContext context,
             CancellationToken ct) =>
         {
             var entity = await agreementConfigRepo.GetByIdAsync(configId, ct);
             if (entity is null)
                 return Results.NotFound(new { error = "Agreement config not found" });
 
+            context.Response.Headers.ETag = $"\"{entity.Version}\"";
             return Results.Ok(MapEntityToResponse(entity));
         }).RequireAuthorization("GlobalAdminOnly");
 
         // ═══════════════════════════════════════════
         // 3. GET /api/agreement-configs/{agreementCode}/{okVersion} — Get all versions for agreement
+        //    List response — `version` per row in body (no single ETag header — there are
+        //    multiple rows). Frontend composes If-Match from the row it intends to mutate.
         // ═══════════════════════════════════════════
         app.MapGet("/api/agreement-configs/{agreementCode}/{okVersion}", async (
             string agreementCode,
@@ -67,6 +75,9 @@ public static class AgreementConfigEndpoints
 
         // ═══════════════════════════════════════════
         // 4. POST /api/agreement-configs — Create new DRAFT config
+        //    Sets `ETag: "1"` on the 201 response (DB DEFAULT for first-create) so the
+        //    next PUT/Publish/Archive can If-Match on this version. No If-* parsing —
+        //    create endpoints have no preceding row to assert against.
         // ═══════════════════════════════════════════
         app.MapPost("/api/agreement-configs", async (
             AgreementConfigRequest request,
@@ -88,6 +99,9 @@ public static class AgreementConfigEndpoints
             var entity = BuildEntityFromRequest(request, normModel, actor.ActorId ?? "system");
 
             // Atomic state-change + audit + outbox enqueue (ADR-018 D3 atomic-outbox shape).
+            // Create still uses the v2 CreateAsync + v2 AppendAuditAsync overloads — the
+            // first-create has no prior version-transition to record (version_before is
+            // NULL by design). The 201 response carries ETag: "1" since the DB DEFAULT is 1.
             Guid configId;
             await using (var conn = connectionFactory.Create())
             {
@@ -117,12 +131,16 @@ public static class AgreementConfigEndpoints
             // Re-read to get DB-generated timestamps (post-commit; outside the write tx).
             var created = await agreementConfigRepo.GetByIdAsync(configId, ct);
 
+            // ETag for the 201 response. Sourced from the DB column when re-read succeeds;
+            // falls back to the static "1" (DB DEFAULT) if the re-read returned null.
+            context.Response.Headers.ETag = $"\"{(created?.Version ?? 1L)}\"";
             return Results.Created($"/api/agreement-configs/{configId}",
                 created is not null ? MapEntityToResponse(created) : new { configId });
         }).RequireAuthorization("GlobalAdminOnly");
 
         // ═══════════════════════════════════════════
         // 5. POST /api/agreement-configs/{configId:guid}/clone — Clone existing config as new DRAFT
+        //    Sets `ETag: "1"` on the 201 response. No If-* parsing — clone is a create-from-source.
         // ═══════════════════════════════════════════
         app.MapPost("/api/agreement-configs/{configId:guid}/clone", async (
             Guid configId,
@@ -223,12 +241,18 @@ public static class AgreementConfigEndpoints
             // Re-read to get DB-generated timestamps (post-commit; outside the write tx).
             var created = await agreementConfigRepo.GetByIdAsync(newConfigId, ct);
 
+            // ETag for the 201 response. Same fallback shape as POST /create.
+            context.Response.Headers.ETag = $"\"{(created?.Version ?? 1L)}\"";
             return Results.Created($"/api/agreement-configs/{newConfigId}",
                 created is not null ? MapEntityToResponse(created) : new { configId = newConfigId });
         }).RequireAuthorization("GlobalAdminOnly");
 
         // ═══════════════════════════════════════════
         // 6. PUT /api/agreement-configs/{configId:guid} — Update DRAFT config
+        //    Admin-strict If-Match: "<version>" required (rejects If-None-Match: *).
+        //    Stale → 412 with body {expectedVersion, actualVersion, currentState}.
+        //    Missing → 428 Precondition Required with hint.
+        //    Sets ETag: "<new-version>" on 200.
         // ═══════════════════════════════════════════
         app.MapPut("/api/agreement-configs/{configId:guid}", async (
             Guid configId,
@@ -241,6 +265,15 @@ public static class AgreementConfigEndpoints
         {
             var actor = context.GetActorContext();
 
+            // 1. Parse If-Match (admin-strict mode — rejects If-None-Match: *).
+            //    Missing or malformed → 428 Precondition Required with the helper's hint.
+            if (!EtagHeaderHelper.TryParseIfMatch(
+                    context.Request, out var expectedVersion, out var headerError))
+                return Results.Json(new { error = headerError }, statusCode: 428);
+
+            // 2. Pre-flight existence + status check. Same pre-check as before — gives the
+            //    caller a clean 404/409 before we open a tx, AND lets us echo `currentState`
+            //    in any subsequent 412 response below.
             var existing = await agreementConfigRepo.GetByIdAsync(configId, ct);
             if (existing is null)
                 return Results.NotFound(new { error = "Agreement config not found" });
@@ -257,45 +290,75 @@ public static class AgreementConfigEndpoints
 
             var updatedEntity = BuildEntityFromRequest(request, normModel, existing.CreatedBy, existing.ClonedFromId);
 
-            // Atomic state-change + audit + outbox enqueue (ADR-018 D3 atomic-outbox shape).
-            await using (var conn = connectionFactory.Create())
+            // 3. Atomic state-change + audit (with version-transition pair) + outbox enqueue
+            //    (ADR-018 D3). The v3 UpdateDraftAsync(conn, tx, configId, expectedVersion, ...)
+            //    enforces ETag/If-Match optimistic concurrency under SELECT ... FOR UPDATE
+            //    and surfaces OptimisticConcurrencyException on stale version OR concurrent
+            //    state change (e.g. row published between pre-check and our FOR UPDATE).
+            SaveAgreementConfigResult saveResult;
+            try
             {
+                await using var conn = connectionFactory.Create();
                 await conn.OpenAsync(ct);
                 await using var tx = await conn.BeginTransactionAsync(ct);
+                try
+                {
+                    saveResult = await agreementConfigRepo.UpdateDraftAsync(
+                        conn, tx, configId, expectedVersion, updatedEntity, ct);
 
-                var updated = await agreementConfigRepo.UpdateDraftAsync(conn, tx, configId, updatedEntity, ct);
-                if (!updated)
+                    // v3 audit overload — captures (versionBefore = expectedVersion,
+                    // versionAfter = saveResult.Version) into agreement_config_audit's new
+                    // version_before / version_after columns (TASK-2501 schema).
+                    await agreementConfigRepo.AppendAuditAsync(
+                        conn, tx, configId, "UPDATED",
+                        SerializeForAudit(existing), SerializeForAudit(request),
+                        actor.ActorId ?? "system", actor.ActorRole ?? "GLOBAL_ADMIN",
+                        versionBefore: expectedVersion, versionAfter: saveResult.Version, ct);
+
+                    var @event = new AgreementConfigUpdated
+                    {
+                        ConfigId = configId,
+                        AgreementCode = request.AgreementCode,
+                        OkVersion = request.OkVersion,
+                        ActorId = actor.ActorId,
+                        ActorRole = actor.ActorRole,
+                        CorrelationId = actor.CorrelationId,
+                    };
+                    await outbox.EnqueueAsync(conn, tx, $"agreement-config-{configId}", @event, ct);
+
+                    await tx.CommitAsync(ct);
+                }
+                catch
                 {
                     await tx.RollbackAsync(ct);
-                    return Results.Json(new { error = "Failed to update — config may no longer be in DRAFT status" }, statusCode: 409);
+                    throw;
                 }
-
-                await agreementConfigRepo.AppendAuditAsync(
-                    conn, tx, configId, "UPDATED", SerializeForAudit(existing), SerializeForAudit(request),
-                    actor.ActorId ?? "system", actor.ActorRole ?? "GLOBAL_ADMIN", ct);
-
-                var @event = new AgreementConfigUpdated
+            }
+            catch (OptimisticConcurrencyException ex)
+            {
+                // ADR-019 (pending) / ADR-018 D7: 412 Precondition Failed with the actual
+                // current state surfaced for the caller's retry logic.
+                var currentState = await agreementConfigRepo.GetByIdAsync(configId, ct);
+                return Results.Json(new
                 {
-                    ConfigId = configId,
-                    AgreementCode = request.AgreementCode,
-                    OkVersion = request.OkVersion,
-                    ActorId = actor.ActorId,
-                    ActorRole = actor.ActorRole,
-                    CorrelationId = actor.CorrelationId,
-                };
-                await outbox.EnqueueAsync(conn, tx, $"agreement-config-{configId}", @event, ct);
-
-                await tx.CommitAsync(ct);
+                    error = "Concurrency precondition failed",
+                    expectedVersion = ex.ExpectedVersion,
+                    actualVersion = ex.ActualVersion,
+                    currentState = currentState is null ? null : MapEntityToResponse(currentState),
+                }, statusCode: 412);
             }
 
-            // Re-read to get updated timestamps (post-commit; outside the write tx).
-            var refreshed = await agreementConfigRepo.GetByIdAsync(configId, ct);
-
-            return Results.Ok(refreshed is not null ? MapEntityToResponse(refreshed) : new { configId });
+            // 4. Set ETag for the next If-Match and return the post-write snapshot.
+            context.Response.Headers.ETag = $"\"{saveResult.Version}\"";
+            return Results.Ok(MapEntityToResponse(saveResult.Config));
         }).RequireAuthorization("GlobalAdminOnly");
 
         // ═══════════════════════════════════════════
         // 7. POST /api/agreement-configs/{configId:guid}/publish — Publish DRAFT → ACTIVE
+        //    Admin-strict If-Match required. Same 412/428/ETag contract as PUT.
+        //    Atomically archives prior ACTIVE for (agreement_code, ok_version) + activates
+        //    DRAFT in a single tx. Concurrent state-change (S24 Step 7a P1) now manifests
+        //    as 412 (OptimisticConcurrencyException) — replaces the (Guid?, bool) tuple.
         // ═══════════════════════════════════════════
         app.MapPost("/api/agreement-configs/{configId:guid}/publish", async (
             Guid configId,
@@ -307,6 +370,12 @@ public static class AgreementConfigEndpoints
         {
             var actor = context.GetActorContext();
 
+            // 1. Parse If-Match.
+            if (!EtagHeaderHelper.TryParseIfMatch(
+                    context.Request, out var expectedVersion, out var headerError))
+                return Results.Json(new { error = headerError }, statusCode: 428);
+
+            // 2. Pre-flight existence + status check.
             var existing = await agreementConfigRepo.GetByIdAsync(configId, ct);
             if (existing is null)
                 return Results.NotFound(new { error = "Agreement config not found" });
@@ -314,73 +383,76 @@ public static class AgreementConfigEndpoints
             if (existing.Status != AgreementConfigStatus.DRAFT)
                 return Results.Json(new { error = "Only DRAFT configs can be published" }, statusCode: 409);
 
-            // Atomic publish: archive prior ACTIVE + activate DRAFT + audit + outbox enqueue
-            // all in a single transaction (ADR-018 D3). PublishAsync(conn, tx, ...) is the
-            // in-tx sibling overload from TASK-2401; it does NOT commit, leaving the caller
-            // in control. Returns (Guid? ArchivedId, bool Published):
-            //   - Published == true : target was DRAFT and is now ACTIVE; ArchivedId is the
-            //     prior-ACTIVE config_id (or null if none existed).
-            //   - Published == false: target was missing OR not in DRAFT (concurrent change
-            //     between the L310 pre-check and PublishAsync). The endpoint MUST roll back
-            //     and surface 409 — emitting the audit/event in this case would falsely
-            //     claim a publish that never happened (S24 Step 7a P1 fix).
-            Guid? archivedId = null;
-            bool wasPublished = false;
-            await using (var conn = connectionFactory.Create())
+            // 3. Atomic publish (ADR-018 D3): archive prior ACTIVE + activate DRAFT + audit
+            //    (with version-transition pair) + outbox enqueue, all in a single tx. The v3
+            //    PublishAsync(conn, tx, configId, expectedVersion, ...) enforces ETag/If-Match
+            //    + status='DRAFT' under SELECT ... FOR UPDATE; concurrent change manifests as
+            //    OptimisticConcurrencyException → 412 (S24 Step 7a P1 fix, restated under
+            //    the v3 contract).
+            SaveAgreementConfigResult saveResult;
+            try
             {
+                await using var conn = connectionFactory.Create();
                 await conn.OpenAsync(ct);
                 await using var tx = await conn.BeginTransactionAsync(ct);
+                try
+                {
+                    saveResult = await agreementConfigRepo.PublishAsync(
+                        conn, tx, configId, expectedVersion, actor.ActorId ?? "system", ct);
 
-                (archivedId, wasPublished) = await agreementConfigRepo.PublishAsync(
-                    conn, tx, configId, actor.ActorId ?? "system", ct);
+                    await agreementConfigRepo.AppendAuditAsync(
+                        conn, tx, configId, "PUBLISHED",
+                        null, $"{{\"archivedConfigId\":\"{saveResult.ArchivedId}\"}}",
+                        actor.ActorId ?? "system", actor.ActorRole ?? "GLOBAL_ADMIN",
+                        versionBefore: expectedVersion, versionAfter: saveResult.Version, ct);
 
-                if (!wasPublished)
+                    var @event = new AgreementConfigPublished
+                    {
+                        ConfigId = configId,
+                        AgreementCode = existing.AgreementCode,
+                        OkVersion = existing.OkVersion,
+                        ArchivedConfigId = saveResult.ArchivedId,
+                        ActorId = actor.ActorId,
+                        ActorRole = actor.ActorRole,
+                        CorrelationId = actor.CorrelationId,
+                    };
+                    await outbox.EnqueueAsync(conn, tx, $"agreement-config-{configId}", @event, ct);
+
+                    await tx.CommitAsync(ct);
+                }
+                catch
                 {
                     await tx.RollbackAsync(ct);
-                    return Results.Json(
-                        new { error = "Concurrent change — config no longer in DRAFT" },
-                        statusCode: 409);
+                    throw;
                 }
-
-                await agreementConfigRepo.AppendAuditAsync(
-                    conn, tx, configId, "PUBLISHED", null, $"{{\"archivedConfigId\":\"{archivedId}\"}}",
-                    actor.ActorId ?? "system", actor.ActorRole ?? "GLOBAL_ADMIN", ct);
-
-                var @event = new AgreementConfigPublished
+            }
+            catch (OptimisticConcurrencyException ex)
+            {
+                var currentState = await agreementConfigRepo.GetByIdAsync(configId, ct);
+                return Results.Json(new
                 {
-                    ConfigId = configId,
-                    AgreementCode = existing.AgreementCode,
-                    OkVersion = existing.OkVersion,
-                    ArchivedConfigId = archivedId,
-                    ActorId = actor.ActorId,
-                    ActorRole = actor.ActorRole,
-                    CorrelationId = actor.CorrelationId,
-                };
-                await outbox.EnqueueAsync(conn, tx, $"agreement-config-{configId}", @event, ct);
-
-                await tx.CommitAsync(ct);
+                    error = "Concurrency precondition failed",
+                    expectedVersion = ex.ExpectedVersion,
+                    actualVersion = ex.ActualVersion,
+                    currentState = currentState is null ? null : MapEntityToResponse(currentState),
+                }, statusCode: 412);
             }
 
-            // Post-commit re-read for response payload decoration (refinement R2 — AFTER tx
-            // commit, NOT inside the tx). The publish itself already succeeded — PublishAsync
-            // returned Published:true under the committed tx. This re-read only fetches the
-            // DB-generated published_at timestamp for the response. If a concurrent request
-            // (e.g. archive) changed the row between our commit and this re-read, the
-            // re-read may return null OR a non-ACTIVE status — that's a legitimate post-publish
-            // state, not a failure. Surface what we can; null published_at is harmless.
-            var published = await agreementConfigRepo.GetByIdAsync(configId, ct);
-
+            // 4. Set ETag for the next If-Match (now pointing at the activated row's
+            //    post-publish version) and return the publish-result envelope.
+            context.Response.Headers.ETag = $"\"{saveResult.Version}\"";
             return Results.Ok(new
             {
                 configId,
                 status = "ACTIVE",
-                archivedConfigId = archivedId,
-                publishedAt = published?.PublishedAt,
+                archivedConfigId = saveResult.ArchivedId,
+                publishedAt = saveResult.Config.PublishedAt,
             });
         }).RequireAuthorization("GlobalAdminOnly");
 
         // ═══════════════════════════════════════════
         // 8. POST /api/agreement-configs/{configId:guid}/archive — Archive ACTIVE/DRAFT config
+        //    Admin-strict If-Match required. Same 412/428/ETag contract as PUT.
         // ═══════════════════════════════════════════
         app.MapPost("/api/agreement-configs/{configId:guid}/archive", async (
             Guid configId,
@@ -392,6 +464,12 @@ public static class AgreementConfigEndpoints
         {
             var actor = context.GetActorContext();
 
+            // 1. Parse If-Match.
+            if (!EtagHeaderHelper.TryParseIfMatch(
+                    context.Request, out var expectedVersion, out var headerError))
+                return Results.Json(new { error = headerError }, statusCode: 428);
+
+            // 2. Pre-flight existence + already-archived check.
             var existing = await agreementConfigRepo.GetByIdAsync(configId, ct);
             if (existing is null)
                 return Results.NotFound(new { error = "Agreement config not found" });
@@ -399,45 +477,62 @@ public static class AgreementConfigEndpoints
             if (existing.Status == AgreementConfigStatus.ARCHIVED)
                 return Results.Json(new { error = "Config is already archived" }, statusCode: 409);
 
-            // Atomic state-change + audit + outbox enqueue (ADR-018 D3 atomic-outbox shape).
-            await using (var conn = connectionFactory.Create())
+            // 3. Atomic archive (ADR-018 D3) — v3 ArchiveAsync(conn, tx, configId,
+            //    expectedVersion, ...) enforces ETag/If-Match optimistic concurrency.
+            SaveAgreementConfigResult saveResult;
+            try
             {
+                await using var conn = connectionFactory.Create();
                 await conn.OpenAsync(ct);
                 await using var tx = await conn.BeginTransactionAsync(ct);
+                try
+                {
+                    saveResult = await agreementConfigRepo.ArchiveAsync(
+                        conn, tx, configId, expectedVersion, actor.ActorId ?? "system", ct);
 
-                var archived = await agreementConfigRepo.ArchiveAsync(conn, tx, configId, actor.ActorId ?? "system", ct);
-                if (!archived)
+                    await agreementConfigRepo.AppendAuditAsync(
+                        conn, tx, configId, "ARCHIVED",
+                        existing.Status.ToString(), "ARCHIVED",
+                        actor.ActorId ?? "system", actor.ActorRole ?? "GLOBAL_ADMIN",
+                        versionBefore: expectedVersion, versionAfter: saveResult.Version, ct);
+
+                    var @event = new AgreementConfigArchived
+                    {
+                        ConfigId = configId,
+                        AgreementCode = existing.AgreementCode,
+                        OkVersion = existing.OkVersion,
+                        ActorId = actor.ActorId,
+                        ActorRole = actor.ActorRole,
+                        CorrelationId = actor.CorrelationId,
+                    };
+                    await outbox.EnqueueAsync(conn, tx, $"agreement-config-{configId}", @event, ct);
+
+                    await tx.CommitAsync(ct);
+                }
+                catch
                 {
                     await tx.RollbackAsync(ct);
-                    return Results.Json(new { error = "Failed to archive config" }, statusCode: 409);
+                    throw;
                 }
-
-                await agreementConfigRepo.AppendAuditAsync(
-                    conn, tx, configId, "ARCHIVED", existing.Status.ToString(), "ARCHIVED",
-                    actor.ActorId ?? "system", actor.ActorRole ?? "GLOBAL_ADMIN", ct);
-
-                var @event = new AgreementConfigArchived
+            }
+            catch (OptimisticConcurrencyException ex)
+            {
+                var currentState = await agreementConfigRepo.GetByIdAsync(configId, ct);
+                return Results.Json(new
                 {
-                    ConfigId = configId,
-                    AgreementCode = existing.AgreementCode,
-                    OkVersion = existing.OkVersion,
-                    ActorId = actor.ActorId,
-                    ActorRole = actor.ActorRole,
-                    CorrelationId = actor.CorrelationId,
-                };
-                await outbox.EnqueueAsync(conn, tx, $"agreement-config-{configId}", @event, ct);
-
-                await tx.CommitAsync(ct);
+                    error = "Concurrency precondition failed",
+                    expectedVersion = ex.ExpectedVersion,
+                    actualVersion = ex.ActualVersion,
+                    currentState = currentState is null ? null : MapEntityToResponse(currentState),
+                }, statusCode: 412);
             }
 
-            // Re-read to get updated timestamps (post-commit; outside the write tx).
-            var refreshed = await agreementConfigRepo.GetByIdAsync(configId, ct);
-
+            context.Response.Headers.ETag = $"\"{saveResult.Version}\"";
             return Results.Ok(new
             {
                 configId,
                 status = "ARCHIVED",
-                archivedAt = refreshed?.ArchivedAt,
+                archivedAt = saveResult.Config.ArchivedAt,
             });
         }).RequireAuthorization("GlobalAdminOnly");
 
@@ -452,6 +547,10 @@ public static class AgreementConfigEndpoints
         agreementCode = e.AgreementCode,
         okVersion = e.OkVersion,
         status = e.Status.ToString(),
+        // Row-version optimistic-concurrency token (TASK-2501 schema, ADR-019 pending).
+        // Surfaced in body for list responses where multiple rows preclude a single ETag
+        // header; by-id GET also sets the matching ETag header.
+        version = e.Version,
         // Norm settings
         weeklyNormHours = e.WeeklyNormHours,
         normPeriodWeeks = e.NormPeriodWeeks,

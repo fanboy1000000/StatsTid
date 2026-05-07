@@ -81,6 +81,12 @@ public sealed class AgreementConfigRepository
     /// caller can extend the same transaction across audit + outbox writes
     /// (ADR-018 D3 transactional-outbox contract). The caller commits or rolls back; this
     /// method does NOT.
+    ///
+    /// <para>
+    /// Atomic-outbox primitive (S24 ForcedRollbackHarness consumer): preserved unchanged
+    /// across the S25 / TASK-2503 v3 migration. Create endpoints + clone endpoint write
+    /// version=1 (DB DEFAULT); the wire ETag for the 201 response is a static <c>"1"</c>.
+    /// </para>
     /// </summary>
     public async Task<Guid> CreateAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
@@ -153,21 +159,17 @@ public sealed class AgreementConfigRepository
     {
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
-        return await ExecuteUpdateDraftAsync(conn, null, configId, updated, ct);
+        return await ExecuteSelfManagedUpdateDraftAsync(conn, configId, updated, ct);
     }
 
-    /// <summary>
-    /// In-transaction sibling overload of <see cref="UpdateDraftAsync(Guid, AgreementConfigEntity, CancellationToken)"/>.
-    /// </summary>
-    public async Task<bool> UpdateDraftAsync(
-        NpgsqlConnection conn, NpgsqlTransaction tx,
-        Guid configId, AgreementConfigEntity updated, CancellationToken ct = default)
-        => await ExecuteUpdateDraftAsync(conn, tx, configId, updated, ct);
-
-    private static async Task<bool> ExecuteUpdateDraftAsync(
-        NpgsqlConnection conn, NpgsqlTransaction? tx,
+    private static async Task<bool> ExecuteSelfManagedUpdateDraftAsync(
+        NpgsqlConnection conn,
         Guid configId, AgreementConfigEntity updated, CancellationToken ct)
     {
+        // Self-managed (no caller tx) — preserved unchanged from pre-S25; legacy callers
+        // (seeders, internal tooling) continue to use this best-effort path. The v3
+        // in-transaction sibling enforces ETag/If-Match optimistic concurrency for HTTP
+        // admin endpoints.
         var sql =
             """
             UPDATE agreement_configs SET
@@ -215,7 +217,7 @@ public sealed class AgreementConfigRepository
                 updated_at = NOW()
             WHERE config_id = @configId AND status = 'DRAFT'
             """;
-        await using var cmd = tx is null ? new NpgsqlCommand(sql, conn) : new NpgsqlCommand(sql, conn, tx);
+        await using var cmd = new NpgsqlCommand(sql, conn);
         cmd.Parameters.AddWithValue("configId", configId);
         AddConfigParameters(cmd, updated);
         cmd.Parameters.AddWithValue("description", (object?)updated.Description ?? DBNull.Value);
@@ -224,10 +226,151 @@ public sealed class AgreementConfigRepository
     }
 
     /// <summary>
+    /// In-transaction v3 update overload — admin-strict ETag/If-Match optimistic-concurrency
+    /// (ADR-019 pending, mirrors S22 ADR-018 D7 pattern). Reads the current row under
+    /// <c>SELECT ... FOR UPDATE</c>, validates <paramref name="expectedVersion"/> against the
+    /// stored <c>version</c>, and applies the UPDATE with <c>version = version + 1</c> in a
+    /// single SET clause. Status must be DRAFT — otherwise the call manifests as
+    /// <see cref="OptimisticConcurrencyException"/> with the actual current state surfaced
+    /// in the exception (the endpoint maps this to a 412 body).
+    ///
+    /// <para>
+    /// Replaces the v2 overload <c>(conn, tx, configId, updated, ct) → bool</c>. The caller
+    /// commits or rolls back; this method does NOT.
+    /// </para>
+    /// </summary>
+    /// <returns>
+    /// <see cref="SaveAgreementConfigResult"/> with the updated entity (post-write snapshot),
+    /// the new <c>version</c> (= prior version + 1), <c>IsCreated: false</c>, and
+    /// <c>ArchivedId: null</c>.
+    /// </returns>
+    /// <exception cref="OptimisticConcurrencyException">
+    /// Thrown when the row is missing, no longer in DRAFT, or its <c>version</c> column does
+    /// not equal <paramref name="expectedVersion"/>.
+    /// </exception>
+    public async Task<SaveAgreementConfigResult> UpdateDraftAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        Guid configId, long expectedVersion, AgreementConfigEntity updated,
+        CancellationToken ct = default)
+    {
+        // 1. SELECT FOR UPDATE the target row + status + version under the caller tx so
+        //    concurrent supersessions serialize on this lock. Returns the lockable triple
+        //    needed for the optimistic-concurrency check + the routing decision.
+        long currentVersion;
+        string currentStatus;
+        await using (var lockCmd = new NpgsqlCommand(
+            "SELECT version, status FROM agreement_configs WHERE config_id = @configId FOR UPDATE",
+            conn, tx))
+        {
+            lockCmd.Parameters.AddWithValue("configId", configId);
+            await using var reader = await lockCmd.ExecuteReaderAsync(ct);
+            if (!await reader.ReadAsync(ct))
+            {
+                // Row missing — surface as concurrency mismatch (caller may have raced an
+                // archive that turned into a hard delete in some future migration, or the
+                // ID was stale to begin with). Endpoint maps to 412.
+                throw new OptimisticConcurrencyException(
+                    $"Agreement config {configId} not found.",
+                    expectedVersion: expectedVersion,
+                    actualVersion: null);
+            }
+            currentVersion = reader.GetInt64(0);
+            currentStatus = reader.GetString(1);
+        }
+
+        // 2. Status check — only DRAFT is editable. A non-DRAFT row at this point means a
+        //    concurrent publish/archive between the endpoint's pre-check and our FOR UPDATE.
+        //    Map to OptimisticConcurrencyException so the caller's 412 path surfaces both
+        //    the version AND the (changed) state.
+        if (!string.Equals(currentStatus, "DRAFT", StringComparison.Ordinal))
+        {
+            throw new OptimisticConcurrencyException(
+                $"Agreement config {configId} is no longer in DRAFT status (current: {currentStatus}); refresh and retry.",
+                expectedVersion: expectedVersion,
+                actualVersion: currentVersion);
+        }
+
+        // 3. Optimistic-concurrency check — caller's If-Match must match the stored version.
+        if (currentVersion != expectedVersion)
+        {
+            throw new OptimisticConcurrencyException(
+                $"Agreement config {configId} version is {currentVersion}, but caller sent If-Match: \"{expectedVersion}\"; refresh and retry.",
+                expectedVersion: expectedVersion,
+                actualVersion: currentVersion);
+        }
+
+        // 4. UPDATE with version-bump in the same SET clause. WHERE status='DRAFT' is
+        //    defense-in-depth (the FOR UPDATE under RepeatableRead/ReadCommitted prevents
+        //    concurrent state change between step 1 and now).
+        var updateSql =
+            """
+            UPDATE agreement_configs SET
+                weekly_norm_hours = @weeklyNormHours,
+                norm_period_weeks = @normPeriodWeeks,
+                norm_model = @normModel,
+                annual_norm_hours = @annualNormHours,
+                max_flex_balance = @maxFlexBalance,
+                flex_carryover_max = @flexCarryoverMax,
+                has_overtime = @hasOvertime,
+                has_merarbejde = @hasMerarbejde,
+                overtime_threshold_50 = @overtimeThreshold50,
+                overtime_threshold_100 = @overtimeThreshold100,
+                evening_supplement_enabled = @eveningSupplementEnabled,
+                night_supplement_enabled = @nightSupplementEnabled,
+                weekend_supplement_enabled = @weekendSupplementEnabled,
+                holiday_supplement_enabled = @holidaySupplementEnabled,
+                evening_start = @eveningStart,
+                evening_end = @eveningEnd,
+                night_start = @nightStart,
+                night_end = @nightEnd,
+                evening_rate = @eveningRate,
+                night_rate = @nightRate,
+                weekend_saturday_rate = @weekendSaturdayRate,
+                weekend_sunday_rate = @weekendSundayRate,
+                holiday_rate = @holidayRate,
+                on_call_duty_enabled = @onCallDutyEnabled,
+                on_call_duty_rate = @onCallDutyRate,
+                call_in_work_enabled = @callInWorkEnabled,
+                call_in_minimum_hours = @callInMinimumHours,
+                call_in_rate = @callInRate,
+                travel_time_enabled = @travelTimeEnabled,
+                working_travel_rate = @workingTravelRate,
+                non_working_travel_rate = @nonWorkingTravelRate,
+                max_daily_hours = @maxDailyHours,
+                minimum_rest_hours = @minimumRestHours,
+                rest_period_derogation_allowed = @restPeriodDerogationAllowed,
+                weekly_max_hours_reference_period = @weeklyMaxHoursReferencePeriod,
+                voluntary_unsocial_hours_allowed = @voluntaryUnsocialHoursAllowed,
+                default_compensation_model = @defaultCompensationModel,
+                employee_compensation_choice = @employeeCompensationChoice,
+                max_overtime_hours_per_period = @maxOvertimeHoursPerPeriod,
+                overtime_requires_pre_approval = @overtimeRequiresPreApproval,
+                description = @description,
+                updated_at = NOW(),
+                version = version + 1
+            WHERE config_id = @configId AND status = 'DRAFT'
+            RETURNING *
+            """;
+        await using var updateCmd = new NpgsqlCommand(updateSql, conn, tx);
+        updateCmd.Parameters.AddWithValue("configId", configId);
+        AddConfigParameters(updateCmd, updated);
+        updateCmd.Parameters.AddWithValue("description", (object?)updated.Description ?? DBNull.Value);
+        await using var updReader = await updateCmd.ExecuteReaderAsync(ct);
+        if (!await updReader.ReadAsync(ct))
+        {
+            // Defense-in-depth — the FOR UPDATE lock should make this unreachable.
+            throw new InvalidOperationException(
+                $"UpdateDraftAsync produced no row for config_id={configId} at expected version {expectedVersion}; FOR UPDATE invariant violated.");
+        }
+        var entity = ReadEntity(updReader);
+        return new SaveAgreementConfigResult(entity, entity.Version, IsCreated: false, ArchivedId: null);
+    }
+
+    /// <summary>
     /// Self-managed overload: opens its own connection and an internal transaction for the
     /// archive-prior-ACTIVE + activate-DRAFT pair. For a caller-driven atomic outbox + audit +
     /// publish (ADR-018 D3) call the in-transaction sibling
-    /// <see cref="PublishAsync(NpgsqlConnection, NpgsqlTransaction, Guid, string, CancellationToken)"/>.
+    /// <see cref="PublishAsync(NpgsqlConnection, NpgsqlTransaction, Guid, long, string, CancellationToken)"/>.
     ///
     /// Returns the prior-ACTIVE config_id that was archived (null if there was no prior
     /// ACTIVE OR the publish was a no-op because the target config was missing / not in
@@ -241,7 +384,7 @@ public sealed class AgreementConfigRepository
         await using var tx = await conn.BeginTransactionAsync(ct);
         try
         {
-            var (archivedId, published) = await ExecutePublishAsync(conn, tx, configId, actorId, ct);
+            var (archivedId, published) = await ExecuteSelfManagedPublishAsync(conn, tx, configId, actorId, ct);
             if (!published)
             {
                 // Config not found OR config not DRAFT — preserve pre-S24 atomic semantic by
@@ -261,36 +404,124 @@ public sealed class AgreementConfigRepository
     }
 
     /// <summary>
-    /// In-transaction sibling overload of <see cref="PublishAsync(Guid, string, CancellationToken)"/>.
-    /// Archives the prior ACTIVE config (if any) for the same (agreement_code, ok_version) AND
-    /// activates the DRAFT identified by <paramref name="configId"/>. Both UPDATEs run on the
-    /// caller-supplied <paramref name="conn"/> + <paramref name="tx"/>. The caller commits or
-    /// rolls back; this method does NOT.
+    /// In-transaction v3 publish overload — admin-strict ETag/If-Match optimistic-concurrency
+    /// (ADR-019 pending). Atomically archives the prior ACTIVE config (if any) for the same
+    /// (agreement_code, ok_version) and activates the DRAFT identified by
+    /// <paramref name="configId"/>. Both UPDATEs run on the caller-supplied
+    /// <paramref name="conn"/> + <paramref name="tx"/>. The caller commits or rolls back;
+    /// this method does NOT.
     ///
     /// <para>
-    /// Returns a tuple <c>(ArchivedId, Published)</c>:
-    /// <list type="bullet">
-    /// <item><c>Published == true</c>: target was DRAFT and is now ACTIVE; <c>ArchivedId</c> is the prior-ACTIVE config_id (or null if none existed).</item>
-    /// <item><c>Published == false</c>: target was missing OR not in DRAFT (concurrency-recovery path); <c>ArchivedId</c> is always null. The caller MUST roll back the transaction — emitting audit/event rows in this case would falsely claim a publish that never happened (S24 Step 7a P1 fix).</item>
-    /// </list>
-    /// In-transaction callers (Phase 2) should still pre-check status before calling; this return shape exists so a concurrent status change between pre-check and PublishAsync is detected and rolled back, not silently committed as a false PUBLISHED audit/event.
+    /// Replaces the v2 overload that returned <c>(Guid? ArchivedId, bool Published)</c>
+    /// (S24 Step 7a P1 fix). The "Published == false" branch of that tuple now manifests
+    /// as <see cref="OptimisticConcurrencyException"/> — the caller's 412 path surfaces both
+    /// the (Expected, Actual) version AND the changed state. ArchivedId carries on
+    /// <see cref="SaveAgreementConfigResult"/> for the publish-event payload.
     /// </para>
     /// </summary>
-    public async Task<(Guid? ArchivedId, bool Published)> PublishAsync(
+    /// <returns>
+    /// <see cref="SaveAgreementConfigResult"/> with the activated entity, the new
+    /// <c>version</c> (= prior version + 1), <c>IsCreated: false</c>, and
+    /// <c>ArchivedId</c> = the prior-ACTIVE config_id (or null if none existed).
+    /// </returns>
+    /// <exception cref="OptimisticConcurrencyException">
+    /// Thrown when the row is missing, not in DRAFT, or its <c>version</c> column does not
+    /// equal <paramref name="expectedVersion"/>.
+    /// </exception>
+    public async Task<SaveAgreementConfigResult> PublishAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
-        Guid configId, string actorId, CancellationToken ct = default)
+        Guid configId, long expectedVersion, string actorId,
+        CancellationToken ct = default)
     {
-        return await ExecutePublishAsync(conn, tx, configId, actorId, ct);
+        // 1. SELECT FOR UPDATE the target row to acquire its lock + capture identity +
+        //    status + version in one shot.
+        string agreementCode;
+        string okVersion;
+        long currentVersion;
+        string currentStatus;
+        await using (var lockCmd = new NpgsqlCommand(
+            "SELECT agreement_code, ok_version, version, status FROM agreement_configs WHERE config_id = @configId FOR UPDATE",
+            conn, tx))
+        {
+            lockCmd.Parameters.AddWithValue("configId", configId);
+            await using var reader = await lockCmd.ExecuteReaderAsync(ct);
+            if (!await reader.ReadAsync(ct))
+            {
+                throw new OptimisticConcurrencyException(
+                    $"Agreement config {configId} not found.",
+                    expectedVersion: expectedVersion,
+                    actualVersion: null);
+            }
+            agreementCode = reader.GetString(0);
+            okVersion = reader.GetString(1);
+            currentVersion = reader.GetInt64(2);
+            currentStatus = reader.GetString(3);
+        }
+
+        // 2. Status check — only DRAFT is publishable. Concurrent publish/archive between
+        //    endpoint pre-check and our FOR UPDATE (S24 Step 7a P1 race) → 412.
+        if (!string.Equals(currentStatus, "DRAFT", StringComparison.Ordinal))
+        {
+            throw new OptimisticConcurrencyException(
+                $"Agreement config {configId} is no longer in DRAFT status (current: {currentStatus}); cannot publish — refresh and retry.",
+                expectedVersion: expectedVersion,
+                actualVersion: currentVersion);
+        }
+
+        // 3. Optimistic-concurrency check.
+        if (currentVersion != expectedVersion)
+        {
+            throw new OptimisticConcurrencyException(
+                $"Agreement config {configId} version is {currentVersion}, but caller sent If-Match: \"{expectedVersion}\"; refresh and retry.",
+                expectedVersion: expectedVersion,
+                actualVersion: currentVersion);
+        }
+
+        // 4. Archive the current ACTIVE config for the same (agreement_code, ok_version).
+        Guid? archivedId = null;
+        await using (var archiveCmd = new NpgsqlCommand(
+            """
+            UPDATE agreement_configs
+            SET status = 'ARCHIVED', archived_at = NOW(), updated_at = NOW(), version = version + 1
+            WHERE agreement_code = @agreementCode AND ok_version = @okVersion AND status = 'ACTIVE'
+            RETURNING config_id
+            """, conn, tx))
+        {
+            archiveCmd.Parameters.AddWithValue("agreementCode", agreementCode);
+            archiveCmd.Parameters.AddWithValue("okVersion", okVersion);
+            var result = await archiveCmd.ExecuteScalarAsync(ct);
+            if (result is Guid archivedGuid)
+                archivedId = archivedGuid;
+        }
+
+        // 5. Activate the DRAFT — bump version + return the post-write snapshot.
+        await using var publishCmd = new NpgsqlCommand(
+            """
+            UPDATE agreement_configs
+            SET status = 'ACTIVE', published_at = NOW(), updated_at = NOW(), version = version + 1
+            WHERE config_id = @configId AND status = 'DRAFT'
+            RETURNING *
+            """, conn, tx);
+        publishCmd.Parameters.AddWithValue("configId", configId);
+        await using var publishReader = await publishCmd.ExecuteReaderAsync(ct);
+        if (!await publishReader.ReadAsync(ct))
+        {
+            // Defense-in-depth — unreachable while FOR UPDATE holds the lock.
+            throw new InvalidOperationException(
+                $"PublishAsync produced no row for config_id={configId} at expected version {expectedVersion}; FOR UPDATE invariant violated.");
+        }
+        var entity = ReadEntity(publishReader);
+        return new SaveAgreementConfigResult(entity, entity.Version, IsCreated: false, ArchivedId: archivedId);
     }
 
-    private static async Task<(Guid? ArchivedId, bool Published)> ExecutePublishAsync(
+    private static async Task<(Guid? ArchivedId, bool Published)> ExecuteSelfManagedPublishAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
         Guid configId, string actorId, CancellationToken ct)
     {
-        // 1. Read identity AND status of the target row in one shot — guards against the
-        //    "archive prior ACTIVE then discover target isn't DRAFT" sequencing bug. If the
-        //    target is missing or not DRAFT we return Published:false BEFORE issuing
-        //    any UPDATE so the caller's tx stays clean.
+        // Self-managed path — preserved unchanged from pre-S25 (no version bump). Legacy
+        // callers (PublishAsync(Guid, …) entry) continue to use this best-effort path; HTTP
+        // admin endpoints use the v3 sibling that enforces ETag/If-Match optimistic
+        // concurrency.
         string agreementCode;
         string okVersion;
         string status;
@@ -309,7 +540,6 @@ public sealed class AgreementConfigRepository
         if (status != "DRAFT")
             return (null, false);
 
-        // 2. Archive the current ACTIVE config for the same (agreement_code, ok_version).
         Guid? archivedId = null;
         await using (var archiveCmd = new NpgsqlCommand(
             """
@@ -326,8 +556,6 @@ public sealed class AgreementConfigRepository
                 archivedId = archivedGuid;
         }
 
-        // 3. Activate the DRAFT (still guarded by status='DRAFT' in WHERE for defense-in-depth
-        //    against a concurrent transition between step 1 and now).
         await using var publishCmd = new NpgsqlCommand(
             """
             UPDATE agreement_configs
@@ -344,31 +572,104 @@ public sealed class AgreementConfigRepository
     {
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
-        return await ExecuteArchiveAsync(conn, null, configId, actorId, ct);
+        return await ExecuteSelfManagedArchiveAsync(conn, configId, actorId, ct);
     }
 
-    /// <summary>
-    /// In-transaction sibling overload of <see cref="ArchiveAsync(Guid, string, CancellationToken)"/>.
-    /// </summary>
-    public async Task<bool> ArchiveAsync(
-        NpgsqlConnection conn, NpgsqlTransaction tx,
-        Guid configId, string actorId, CancellationToken ct = default)
-        => await ExecuteArchiveAsync(conn, tx, configId, actorId, ct);
-
-    private static async Task<bool> ExecuteArchiveAsync(
-        NpgsqlConnection conn, NpgsqlTransaction? tx,
+    private static async Task<bool> ExecuteSelfManagedArchiveAsync(
+        NpgsqlConnection conn,
         Guid configId, string actorId, CancellationToken ct)
     {
+        // Self-managed path — preserved unchanged from pre-S25 (no version bump). Legacy
+        // callers (internal tooling) continue to use this best-effort path; HTTP admin
+        // endpoints use the v3 sibling that enforces ETag/If-Match optimistic concurrency.
         var sql =
             """
             UPDATE agreement_configs
             SET status = 'ARCHIVED', archived_at = NOW(), updated_at = NOW()
             WHERE config_id = @configId AND status != 'ARCHIVED'
             """;
-        await using var cmd = tx is null ? new NpgsqlCommand(sql, conn) : new NpgsqlCommand(sql, conn, tx);
+        await using var cmd = new NpgsqlCommand(sql, conn);
         cmd.Parameters.AddWithValue("configId", configId);
         var rows = await cmd.ExecuteNonQueryAsync(ct);
         return rows > 0;
+    }
+
+    /// <summary>
+    /// In-transaction v3 archive overload — admin-strict ETag/If-Match optimistic-concurrency
+    /// (ADR-019 pending). Reads the current row under <c>SELECT ... FOR UPDATE</c>, validates
+    /// <paramref name="expectedVersion"/>, and applies the UPDATE with status='ARCHIVED' +
+    /// <c>version = version + 1</c>. Already-ARCHIVED rows manifest as
+    /// <see cref="OptimisticConcurrencyException"/>.
+    /// </summary>
+    /// <returns>
+    /// <see cref="SaveAgreementConfigResult"/> with the archived entity, the new
+    /// <c>version</c>, <c>IsCreated: false</c>, and <c>ArchivedId: null</c>.
+    /// </returns>
+    /// <exception cref="OptimisticConcurrencyException">
+    /// Thrown when the row is missing, already ARCHIVED, or its <c>version</c> column does
+    /// not equal <paramref name="expectedVersion"/>.
+    /// </exception>
+    public async Task<SaveAgreementConfigResult> ArchiveAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        Guid configId, long expectedVersion, string actorId,
+        CancellationToken ct = default)
+    {
+        // 1. SELECT FOR UPDATE — capture status + version under the caller tx.
+        long currentVersion;
+        string currentStatus;
+        await using (var lockCmd = new NpgsqlCommand(
+            "SELECT version, status FROM agreement_configs WHERE config_id = @configId FOR UPDATE",
+            conn, tx))
+        {
+            lockCmd.Parameters.AddWithValue("configId", configId);
+            await using var reader = await lockCmd.ExecuteReaderAsync(ct);
+            if (!await reader.ReadAsync(ct))
+            {
+                throw new OptimisticConcurrencyException(
+                    $"Agreement config {configId} not found.",
+                    expectedVersion: expectedVersion,
+                    actualVersion: null);
+            }
+            currentVersion = reader.GetInt64(0);
+            currentStatus = reader.GetString(1);
+        }
+
+        // 2. Already-archived check — prevent double-archive.
+        if (string.Equals(currentStatus, "ARCHIVED", StringComparison.Ordinal))
+        {
+            throw new OptimisticConcurrencyException(
+                $"Agreement config {configId} is already ARCHIVED.",
+                expectedVersion: expectedVersion,
+                actualVersion: currentVersion);
+        }
+
+        // 3. Optimistic-concurrency check.
+        if (currentVersion != expectedVersion)
+        {
+            throw new OptimisticConcurrencyException(
+                $"Agreement config {configId} version is {currentVersion}, but caller sent If-Match: \"{expectedVersion}\"; refresh and retry.",
+                expectedVersion: expectedVersion,
+                actualVersion: currentVersion);
+        }
+
+        // 4. UPDATE with status='ARCHIVED' + version-bump; RETURN the post-write snapshot.
+        await using var updateCmd = new NpgsqlCommand(
+            """
+            UPDATE agreement_configs
+            SET status = 'ARCHIVED', archived_at = NOW(), updated_at = NOW(), version = version + 1
+            WHERE config_id = @configId AND status != 'ARCHIVED'
+            RETURNING *
+            """, conn, tx);
+        updateCmd.Parameters.AddWithValue("configId", configId);
+        await using var updReader = await updateCmd.ExecuteReaderAsync(ct);
+        if (!await updReader.ReadAsync(ct))
+        {
+            // Defense-in-depth — unreachable while FOR UPDATE holds the lock.
+            throw new InvalidOperationException(
+                $"ArchiveAsync produced no row for config_id={configId} at expected version {expectedVersion}; FOR UPDATE invariant violated.");
+        }
+        var entity = ReadEntity(updReader);
+        return new SaveAgreementConfigResult(entity, entity.Version, IsCreated: false, ArchivedId: null);
     }
 
     public async Task AppendAuditAsync(
@@ -387,8 +688,12 @@ public sealed class AgreementConfigRepository
     }
 
     /// <summary>
-    /// In-transaction sibling overload of
-    /// <see cref="AppendAuditAsync(Guid, string, string?, string?, string, string, CancellationToken)"/>.
+    /// In-transaction v2 audit overload (atomic-outbox primitive — preserved unchanged
+    /// across the S25 / TASK-2503 v3 migration). Used by the Create endpoints and by S24
+    /// ForcedRollbackHarness consumers; does NOT populate version_before / version_after
+    /// (those columns are nullable per TASK-2501 schema migration). New mutating endpoints
+    /// (Update / Publish / Archive) call the v3 sibling that captures the version
+    /// transition.
     /// </summary>
     public async Task AppendAuditAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
@@ -401,6 +706,41 @@ public sealed class AgreementConfigRepository
             VALUES (@configId, @action, @previousData::jsonb, @newData::jsonb, @actorId, @actorRole)
             """, conn, tx);
         AddAuditParameters(cmd, configId, action, previousData, newData, actorId, actorRole);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>
+    /// In-transaction v3 audit overload (S25 / TASK-2503 + ADR-019 pending). Writes the
+    /// version-transition pair (<paramref name="versionBefore"/>, <paramref name="versionAfter"/>)
+    /// into the new <c>version_before</c> / <c>version_after</c> columns added by TASK-2501.
+    /// Closes the audit-replay gap where the v2 audit captured *what* changed but not
+    /// *which version transition produced this state*.
+    ///
+    /// <para>
+    /// <paramref name="versionBefore"/> is nullable so first-create paths (POST /create) can
+    /// pass <c>null</c> while UPDATE paths pass the prior version. <paramref name="versionAfter"/>
+    /// is the post-mutation version sourced from the v3 repo's
+    /// <see cref="SaveAgreementConfigResult.Version"/>.
+    /// </para>
+    /// </summary>
+    public async Task AppendAuditAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        Guid configId, string action, string? previousData, string? newData,
+        string actorId, string actorRole,
+        long? versionBefore, long versionAfter,
+        CancellationToken ct = default)
+    {
+        await using var cmd = new NpgsqlCommand(
+            """
+            INSERT INTO agreement_config_audit
+                (config_id, action, previous_data, new_data, actor_id, actor_role,
+                 version_before, version_after)
+            VALUES (@configId, @action, @previousData::jsonb, @newData::jsonb, @actorId, @actorRole,
+                    @versionBefore, @versionAfter)
+            """, conn, tx);
+        AddAuditParameters(cmd, configId, action, previousData, newData, actorId, actorRole);
+        cmd.Parameters.AddWithValue("versionBefore", (object?)versionBefore ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("versionAfter", versionAfter);
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
@@ -524,16 +864,19 @@ public sealed class AgreementConfigRepository
         ArchivedAt = reader.IsDBNull(reader.GetOrdinal("archived_at")) ? null : reader.GetDateTime(reader.GetOrdinal("archived_at")),
         ClonedFromId = reader.IsDBNull(reader.GetOrdinal("cloned_from_id")) ? null : reader.GetGuid(reader.GetOrdinal("cloned_from_id")),
         Description = reader.IsDBNull(reader.GetOrdinal("description")) ? null : reader.GetString(reader.GetOrdinal("description")),
+        Version = reader.GetInt64(reader.GetOrdinal("version")),
     };
 }
 
 /// <summary>
 /// Result of a save operation on <see cref="AgreementConfigRepository"/> (TASK-2502 / Phase 2
 /// per-surface SaveResult — mirrors <c>SaveProfileResult</c> from
-/// <see cref="LocalAgreementProfileRepository"/>). Phase 2 repo work (TASK-2503) wires the
-/// repository to return this shape from its Save/Publish/Archive paths; Phase 3 endpoint
-/// migration (a sibling task) consumes the post-mutation <see cref="Version"/> for the ETag
-/// response header and the <see cref="ArchivedId"/> for publish-path audit.
+/// <see cref="LocalAgreementProfileRepository"/>). The S25 / TASK-2503 v3 mutating overloads
+/// (<see cref="AgreementConfigRepository.UpdateDraftAsync(NpgsqlConnection, NpgsqlTransaction, Guid, long, AgreementConfigEntity, CancellationToken)"/>,
+/// <see cref="AgreementConfigRepository.PublishAsync(NpgsqlConnection, NpgsqlTransaction, Guid, long, string, CancellationToken)"/>,
+/// <see cref="AgreementConfigRepository.ArchiveAsync(NpgsqlConnection, NpgsqlTransaction, Guid, long, string, CancellationToken)"/>)
+/// return this shape; endpoints set <c>ETag: "&lt;Version&gt;"</c> on the response and feed
+/// <see cref="ArchivedId"/> into the publish-event payload.
 /// </summary>
 /// <param name="Config">The persisted agreement config entity (post-mutation snapshot).</param>
 /// <param name="Version">The authoritative row-version after the save — first-insert is <c>1</c>;

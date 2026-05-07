@@ -395,13 +395,21 @@ public sealed class TxContractTests : IAsyncLifetime
         var entity = NewAgreementConfig();
         var configId = await repo.CreateAsync(entity);
 
+        // S25 / TASK-2503: v3 UpdateDraftAsync(conn, tx, configId, expectedVersion, ...)
+        // requires the row's current version. Read it back via the same path the HTTP
+        // endpoint uses (GET → If-Match → PUT).
+        var preEntity = await repo.GetByIdAsync(configId);
+        Assert.NotNull(preEntity);
+        var expectedVersion = preEntity!.Version;
+
         await using var conn = _harness.Factory.Create();
         await conn.OpenAsync();
         await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
 
         var updated = NewAgreementConfig(weeklyNorm: 38m);
-        var ok = await repo.UpdateDraftAsync(conn, tx, configId, updated);
-        Assert.True(ok);
+        var saveResult = await repo.UpdateDraftAsync(conn, tx, configId, expectedVersion, updated);
+        Assert.False(saveResult.IsCreated);
+        Assert.Equal(expectedVersion + 1, saveResult.Version);
         await AssertTxStillUsable(conn, tx);
         var seenInside = await ScalarInsideTx<decimal>(
             conn, tx, "SELECT weekly_norm_hours FROM agreement_configs WHERE config_id = @id", configId);
@@ -418,13 +426,20 @@ public sealed class TxContractTests : IAsyncLifetime
         var repo = new AgreementConfigRepository(_harness.Factory);
         var draftId = await repo.CreateAsync(NewAgreementConfig());
 
+        // S25 / TASK-2503: v3 PublishAsync expects expectedVersion. Concurrent
+        // state-change (S24 Step 7a P1) under v3 manifests as
+        // OptimisticConcurrencyException → 412, replacing the pre-S25 (Guid?, bool) tuple.
+        var preDraft = await repo.GetByIdAsync(draftId);
+        Assert.NotNull(preDraft);
+        var expectedVersion = preDraft!.Version;
+
         await using var conn = _harness.Factory.Create();
         await conn.OpenAsync();
         await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
 
-        var (archivedId, wasPublished) = await repo.PublishAsync(conn, tx, draftId, "tester");
-        Assert.Null(archivedId); // no prior ACTIVE for this (code, version)
-        Assert.True(wasPublished); // target WAS DRAFT and is now ACTIVE in this tx (S24 Step 7a fix)
+        var saveResult = await repo.PublishAsync(conn, tx, draftId, expectedVersion, "tester");
+        Assert.Null(saveResult.ArchivedId); // no prior ACTIVE for this (code, version)
+        Assert.False(saveResult.IsCreated);
         await AssertTxStillUsable(conn, tx);
         var statusInside = await ScalarInsideTx<string>(
             conn, tx, "SELECT status FROM agreement_configs WHERE config_id = @id", draftId);
@@ -442,12 +457,18 @@ public sealed class TxContractTests : IAsyncLifetime
         var repo = new AgreementConfigRepository(_harness.Factory);
         var configId = await repo.CreateAsync(NewAgreementConfig());
 
+        // S25 / TASK-2503: v3 ArchiveAsync expects expectedVersion.
+        var preEntity = await repo.GetByIdAsync(configId);
+        Assert.NotNull(preEntity);
+        var expectedVersion = preEntity!.Version;
+
         await using var conn = _harness.Factory.Create();
         await conn.OpenAsync();
         await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
 
-        var ok = await repo.ArchiveAsync(conn, tx, configId, "tester");
-        Assert.True(ok);
+        var saveResult = await repo.ArchiveAsync(conn, tx, configId, expectedVersion, "tester");
+        Assert.False(saveResult.IsCreated);
+        Assert.Equal(expectedVersion + 1, saveResult.Version);
         await AssertTxStillUsable(conn, tx);
         var statusInside = await ScalarInsideTx<string>(
             conn, tx, "SELECT status FROM agreement_configs WHERE config_id = @id", configId);
