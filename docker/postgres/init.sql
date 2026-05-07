@@ -1303,3 +1303,57 @@ BEGIN
     CHECK (action IN ('CREATED', 'MODIFIED', 'SUPERSEDED', 'DEACTIVATED', 'MIGRATED_FROM_LEGACY'));
 END
 $$;
+
+-- =========================================================================
+-- S25 / ADR-019 (pending) — one-shot guarded migration for D2.2.
+--   Part A: row-version BIGINT on 4 admin-config tables (agreement_configs,
+--           position_override_configs, wage_type_mappings, entitlement_configs).
+--   Part B: version-transition columns (version_before / version_after) on
+--           3 admin-config audit tables.
+-- Mirrors the s22-d7-d8-d9 pattern. Guarded by schema_migrations ledger so
+-- re-runs of init.sql are idempotent. All referenced tables exist by this
+-- point in the file.
+-- =========================================================================
+DO $$
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s25-d2-2-version', 'ADR-019 (pending): row-version on admin-config surfaces + audit version-transition columns')
+    ON CONFLICT (migration_id) DO NOTHING;
+
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+
+    -- Part A: row-version BIGINT on 4 admin-config tables.
+    -- Existing rows backfill to version=1 via DEFAULT.
+    ALTER TABLE agreement_configs
+    ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 1;
+
+    ALTER TABLE position_override_configs
+    ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 1;
+
+    ALTER TABLE wage_type_mappings
+    ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 1;
+
+    -- entitlement_configs: schema-only per ADR-019. Admin CRUD endpoints
+    -- (and v3 (conn, tx, expectedVersion) overload) are wired in a future
+    -- sprint when admin CRUD becomes motivated.
+    ALTER TABLE entitlement_configs
+    ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 1;
+
+    -- Part B: audit version-transition columns on 3 audit tables.
+    -- Nullable — old audit rows + ForcedRollbackHarness v2 audit calls leave
+    -- them NULL; v3 audit overload populates the version pair.
+    ALTER TABLE agreement_config_audit
+    ADD COLUMN IF NOT EXISTS version_before BIGINT NULL,
+    ADD COLUMN IF NOT EXISTS version_after BIGINT NULL;
+
+    ALTER TABLE position_override_config_audit
+    ADD COLUMN IF NOT EXISTS version_before BIGINT NULL,
+    ADD COLUMN IF NOT EXISTS version_after BIGINT NULL;
+
+    ALTER TABLE wage_type_mapping_audit
+    ADD COLUMN IF NOT EXISTS version_before BIGINT NULL,
+    ADD COLUMN IF NOT EXISTS version_after BIGINT NULL;
+END
+$$;
