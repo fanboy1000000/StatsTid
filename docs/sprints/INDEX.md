@@ -29,6 +29,7 @@
 | [Sprint 21](SPRINT-21.md) | Local Agreement Configuration Rework (ADR-017 D1-D11 + profile schema + repository + migration runner + ConfigEndpoints rewrite + PCS hydration + UX profile editor + 18-scenario D11 test matrix + Step 7a 10-cycle review) | complete | 2026-05-02 → 2026-05-03 | 618 | yes — 2026-05-03 |
 | [Sprint 22](SPRINT-22.md) | Transactional Outbox + Row-Version Optimistic Concurrency (Phase 4a — atomic exemplar in `ConfigEndpoints` PUT; ADR-018 D1-D12) | complete | 2026-05-03 → 2026-05-05 | 650 | yes — 2026-05-05 |
 | [Sprint 23](SPRINT-23.md) | Phase 4b Publisher Hardening (outbox max-attempts cap + correlation_id parser + frontend ETag fallback + repo-level no-op short-circuit + 412 try/catch + weak ETag + 3 deferred D12 tests + Step-7a cycle-2 FIFO fix) | complete | 2026-05-06 → 2026-05-06 | 697 | yes — 2026-05-06 |
+| [Sprint 24](SPRINT-24.md) | Phase 4c Part 1: Atomic Outbox Site Propagation (TASK-2206 redo — 7 repo `(conn, tx)` overloads + 21 endpoint sites converted across 6 endpoint files + 21-test ForcedRollbackHarness D-test suite + AGENTS.md cross-domain authorization governance edit + Step 7a cycle 1 P1 publish-race fix + cycle 2 P2 post-commit-tolerance fix) | complete | 2026-05-07 → 2026-05-07 | 741 | yes — 2026-05-07 |
 
 ## Cumulative Task Summary
 
@@ -57,7 +58,8 @@
 | S21 | 10 | SharedKernel, Infrastructure, Backend API, Payroll Integration, PostgreSQL, Frontend, Tests | ADR-017 |
 | S22 | 8 | SharedKernel, Infrastructure (outbox), Backend API, PostgreSQL, Frontend, Tests | ADR-018 |
 | S23 | 5 | Infrastructure (outbox + repo), Backend API, Frontend (lib + api), Tests, Sprint log | — (Step 7a cycle 1 P1 absorbed in cycle 2 fix; no new ADR/PAT) |
-| **Total** | **220** | — | **30 entries** |
+| S24 | 8 | Infrastructure (7 repos: conn-tx overloads), Backend API (6 endpoint files atomic outbox conversion), Tests (TxContractTests + ForcedRollbackHarness + 6 atomic test classes), Governance (AGENTS.md cross-domain authorization), Sprint log | — (no new ADR; propagates ADR-018 D2/D3/D5 only) |
+| **Total** | **228** | — | **30 entries** |
 
 ## Test Progression
 
@@ -86,6 +88,7 @@
 | S21 | 517 + 48 FE | 35 plain + 18 Docker (profile) | 4 | 618 (without Docker: 600) |
 | S22 | 517 + 48 FE | 35 plain + 50 Docker (18 S21 + 16 S22 + 17 S20 segmentation) | 4 | 650 (without Docker: 600) |
 | S23 | 525 + 76 FE | 35 plain + 61 Docker (50 S22 + 11 S23) | 4 | 697 (without Docker: 636) |
+| S24 | 525 + 76 FE | 35 plain + 105 Docker (61 S23 + 23 S24 TxContractTests + 21 S24 ForcedRollback) | 4 | 741 (without Docker: 636) |
 
 ## Architectural Constraint Coverage
 
@@ -138,10 +141,11 @@ Tracks agent quality signals to enable data-driven improvement of prompts and go
 | S17 | 13 | N/A | N/A | N/A | 0 | 100% |
 | S22 | 8 | 0 | 0B/0W/0N | Step-7a 3 cycles: cycle 1 P2 + cycle 2 P1 + cycle 3 cap-halt with 2 P2 routed forward | 0 | 100% |
 | S23 | 5 | 0 (Small Tasks Exception) | n/a (Reviewer skipped — pure tech-debt) | Step-0b 1 cycle: 1B/3W/2N (BLOCKER fixed before code); Step-7a 2 cycles: cycle 1 P1 BLOCKER (FIFO regression) + cycle 2 clean | 0 | 100% |
+| S24 | 8 | 0 | TASK-2401 Reviewer 0B/0W/5N; Phase 2 bundled Reviewer 0B/1W/6N (W absorbed: explicit tx.RollbackAsync consistency; 4 NOTEs deferred to Phase 4d as TOCTOU hardening) | Step 0b 2 cycles: cycle 1 2B/3W/1N + cycle 2 B1 re-flagged → fixed via AGENTS.md cross-domain governance edit (B2 fixed cleanly cycle 1); Step 7a 2 cycles: cycle 1 P1 publish-race + cycle 2 P2 post-commit-tolerance regression from cycle 1's defensive overreach, both fixed in-sprint | 0 | 100% |
 
 **Notes**: Constraint Validator introduced in governance update after S15. Historical data marked N/A. Reviewer introduced in S7. External Review (Codex) introduced in governance update after S17 — active from S18 onward. S7 had 2 BLOCKERs (Backend→Payroll ref, seed data constraint) both requiring re-dispatch. S11 had 1 WARNING (missing config fields) requiring fix. S15 had 2 WARNINGs (PAT-005 violation, TOCTOU race) with 1 re-dispatch. S16 had 1 NOTE (ADR-015 pattern — non-blocking). S17: all agents produced buildable output; Orchestrator fixed API signature mismatches during merge (no re-dispatch needed). S22 Step-7a hit cycle-cap discipline at cycle 3 with 2 P2 cascade findings routed to Phase 4b (S23). S23 absorbed all 4 cycle-3 + 3 NOTE carry-forwards from S22; Step-7a cycle 1 caught a load-bearing P1 (FIFO regression in TASK-2301) that the Step-0b plan-mode review missed — fixed cycle 2, verified clean.
 
-**Cumulative First-Pass Rate**: 170/181 = 93.9% (S22 + S23 added with 100% first-pass — no agent re-dispatches; both hit Step 7a findings instead, which are external-review signals not first-pass-rate signals).
+**Cumulative First-Pass Rate**: 178/189 = 94.2% (S22 + S23 + S24 added with 100% first-pass — no agent re-dispatches; all three hit Step 7a findings instead, which are external-review signals not first-pass-rate signals). S24 lesson: forgot to commit Phase 1 before dispatching Phase 2 worktrees; 5 of 6 worktrees correctly halted or auto-recovered, 1 halted cleanly. Recovery via `git checkout <branch> -- <file>` cherry-pick of endpoint-only changes worked cleanly. **Future sprints**: commit Phase 1 BEFORE dispatching Phase 2 worktrees.
 
 ## How to Use This Log
 

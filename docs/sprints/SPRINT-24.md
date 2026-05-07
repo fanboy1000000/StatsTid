@@ -3,12 +3,12 @@
 | Field | Value |
 |-------|-------|
 | **Sprint** | 24 |
-| **Status** | planned |
+| **Status** | complete |
 | **Start Date** | 2026-05-07 |
-| **End Date** | TBD |
-| **Orchestrator Approved** | no |
-| **Build Verified** | no |
-| **Test Verified** | no |
+| **End Date** | 2026-05-07 |
+| **Orchestrator Approved** | yes — 2026-05-07 |
+| **Build Verified** | yes — `dotnet build StatsTid.sln` 0 errors, 19 pre-existing CS0618 warnings unchanged |
+| **Test Verified** | yes — 525 unit + 35 plain regression + 76 frontend vitest = 636 directly verified; 105 Docker-gated tests compile but not executed locally (Docker engine not running) |
 
 ## Sprint Goal
 
@@ -135,7 +135,7 @@ For `AgreementConfigRepository.PublishAsync` (lines 182–244, owns internal mul
 | Field | Value |
 |-------|-------|
 | **ID** | TASK-2402 |
-| **Status** | planned |
+| **Status** | complete |
 | **Agent** | Backend API (cross-domain authorized; general-purpose Agent invocation in worktree; scope: `src/Backend/StatsTid.Backend.Api/Endpoints/ApprovalEndpoints.cs` only) |
 | **Components** | Backend.Api / Endpoints |
 | **KB Refs** | ADR-018 (D2/D3/D5) |
@@ -160,7 +160,7 @@ Forced-rollback regression tests for these 5 sites are in TASK-2408 (Test & QA, 
 | Field | Value |
 |-------|-------|
 | **ID** | TASK-2403 |
-| **Status** | planned |
+| **Status** | complete |
 | **Agent** | Backend API (cross-domain authorized; general-purpose Agent invocation in worktree; scope: `src/Backend/StatsTid.Backend.Api/Endpoints/AgreementConfigEndpoints.cs` only) |
 | **Components** | Backend.Api / Endpoints |
 | **KB Refs** | ADR-018 (D2/D3/D5) |
@@ -189,7 +189,7 @@ Forced-rollback regression tests are in TASK-2408. The publish-path test asserts
 | Field | Value |
 |-------|-------|
 | **ID** | TASK-2404 |
-| **Status** | planned |
+| **Status** | complete |
 | **Agent** | Backend API (cross-domain authorized; general-purpose Agent invocation in worktree; scope: `src/Backend/StatsTid.Backend.Api/Endpoints/PositionOverrideEndpoints.cs` only) |
 | **Components** | Backend.Api / Endpoints |
 | **KB Refs** | ADR-018 (D2/D3/D5) |
@@ -212,7 +212,7 @@ Forced-rollback regression tests are in TASK-2408. The publish-path test asserts
 | Field | Value |
 |-------|-------|
 | **ID** | TASK-2405 |
-| **Status** | planned |
+| **Status** | complete |
 | **Agent** | Backend API (cross-domain authorized; general-purpose Agent invocation in worktree; scope: `src/Backend/StatsTid.Backend.Api/Endpoints/WageTypeMappingEndpoints.cs` only) |
 | **Components** | Backend.Api / Endpoints |
 | **KB Refs** | ADR-018 (D2/D3/D5) |
@@ -235,7 +235,7 @@ Forced-rollback regression tests are in TASK-2408. The publish-path test asserts
 | Field | Value |
 |-------|-------|
 | **ID** | TASK-2406 |
-| **Status** | planned |
+| **Status** | complete |
 | **Agent** | Backend API (cross-domain authorized; general-purpose Agent invocation in worktree; scope: `src/Backend/StatsTid.Backend.Api/Endpoints/OvertimeEndpoints.cs` only) |
 | **Components** | Backend.Api / Endpoints |
 | **KB Refs** | ADR-018 (D2/D3/D5) |
@@ -259,7 +259,7 @@ Forced-rollback regression tests are in TASK-2408. The publish-path test asserts
 | Field | Value |
 |-------|-------|
 | **ID** | TASK-2407 |
-| **Status** | planned |
+| **Status** | complete |
 | **Agent** | Backend API (cross-domain authorized; general-purpose Agent invocation in worktree; scope: `src/Backend/StatsTid.Backend.Api/Endpoints/TimerEndpoints.cs` only) |
 | **Components** | Backend.Api / Endpoints |
 | **KB Refs** | ADR-018 (D2/D3/D5) |
@@ -284,7 +284,7 @@ Forced-rollback regression tests are in TASK-2408. The publish-path test asserts
 | Field | Value |
 |-------|-------|
 | **ID** | TASK-2408 |
-| **Status** | planned |
+| **Status** | complete |
 | **Agent** | Test & QA (scope: `tests/**` per AGENTS.md) |
 | **Components** | Tests / Regression / Outbox |
 | **KB Refs** | ADR-018 (D2/D3/D5) |
@@ -333,53 +333,62 @@ S24 is infrastructure-only. Legal/payroll surfaces unaffected.
 
 ## External Review (Step 7a)
 
-_Pending sprint-end._
-
 | Field | Value |
 |-------|-------|
-| **Invoked** | not yet |
+| **Invoked** | yes — 2 cycles |
 | **Sprint-start commit** | `b046399` (S23 sprint close, pushed to origin/master 2026-05-07) |
-| **Command** | TBD at sprint end |
-| **Review Cycles** | 0 |
-| **Findings** | 0B, 0W, 0N |
-| **Resolution** | n/a |
+| **Command** | `codex review --base b046399` (cycle 1), `codex review --base 4862cb8` (cycle 2 narrow scope on cycle 1 fix) |
+| **Review Cycles** | 2 |
+| **Findings** | 1 P1 (cycle 1) + 1 P2 (cycle 2) — both fixed in-sprint |
+| **Resolution** | all resolved; cycle 2 was a regression from cycle 1's defensive overreach (one-line revert) — no cycle 3 needed |
 
 ### Findings
 
-_Pending._
+- **Cycle 1 [P1] BLOCKER — `AgreementConfigEndpoints.cs:330-346` publish race**: When concurrent change moves target out of DRAFT after the L310 pre-check, `PublishAsync(conn, tx, ...)` returned `null` ambiguously for both "published with no prior ACTIVE" AND "did not publish at all" — the endpoint then committed a false PUBLISHED audit + AgreementConfigPublished event for a config that never became ACTIVE. **Resolution**: in-tx `PublishAsync(conn, tx, ...)` overload's return type changed from `Guid?` to `(Guid? ArchivedId, bool Published)` tuple. Endpoint destructures, rolls back + returns 409 when `Published==false`, only commits audit/event on `Published==true`. Self-managed `PublishAsync(ct)` entry's signature unchanged. Fixed in commit `d106368`.
+
+- **Cycle 2 [P2] WARNING — `AgreementConfigEndpoints.cs:370-371` post-commit overreach**: My cycle 1 fix added a defensive `if (published is null || published.Status != ACTIVE) return 500` branch after the post-commit re-read. This turns a legitimate concurrent-archive race (someone archives the config between our `tx.CommitAsync` and the post-commit re-read) into a server error 500 — misreporting a publish that actually succeeded. **Resolution**: removed the defensive branch. Publish itself is already proven by `PublishAsync`'s `Published==true` return under the committed tx; the post-commit re-read is response-payload decoration only. Surface `publishedAt: null` rather than 500 when concurrent change happens. Fixed in commit `222c98e`.
 
 ## Test Summary
 
-_Pending sprint-end. Target: 525 unit + N tx-contract unit tests + 35 plain + 82 Docker-gated (55 pre-existing pass + 6 pre-existing fail + 21 new forced-rollback) + 76 frontend = 718+ total._
-
 | Suite | Count | Status |
 |-------|-------|--------|
-| Unit tests | 525 + tx-contract | pending — TASK-2401 adds tx-contract test(s) |
-| Plain regression tests | 35 | pending |
-| Docker-gated regression tests | 82 (target) | pending — 21 new forced-rollback tests in TASK-2408 |
-| Frontend vitest | 76 (target) | pending |
-| **Total** | 718+ (target) | pending |
+| Unit tests | 525 | all passing (no change from S23 baseline) |
+| Plain regression tests | 35 | all passing |
+| Docker-gated regression tests | 105 | compile clean — Docker engine not running locally; new this sprint: 23 TxContractTests (TASK-2401) + 21 ForcedRollback tests (TASK-2408) |
+| Frontend vitest | 76 | all passing (no change) |
+| **Total** | **741** | 636 directly verified; 105 Docker-gated runtime-gated on Docker engine |
+
+**Delta vs S23**: +44 tests (23 tx-contract + 21 forced-rollback). Pre-existing 6 Docker-gated PlannerInvariantViolation failures (pre-S21, unchanged) remain on master HEAD.
 
 ## Agent Effectiveness
 
-_Pending sprint-end._
-
 | Metric | Value |
 |--------|-------|
-| Tasks | 8 (planned) |
-| Constraint Violations | TBD |
-| Reviewer Findings | TBD |
-| External Review Cycles | TBD (sprint-end) + 1 cycle (Step 0b plan review) — 2B/3W/1N Codex + 0B/6W/6N internal — all resolved before Step 1 |
-| External Findings | TBD |
-| Re-dispatches | TBD |
-| First-Pass Rate | TBD |
+| Tasks | 8 (TASK-2401 through TASK-2408) |
+| Constraint Violations | 0 |
+| Reviewer Findings | TASK-2401: 0B/0W/5N (informational); Phase 2 bundled (TASK-2402-2407): 0B/1W/6N (W absorbed in commit `d64f9b3`; 4 NOTEs deferred to Phase 4d as TOCTOU hardening candidates) |
+| External Review Cycles | Step 0b: 2 cycles (cycle 1 2B/3W/1N → cycle 2 B2 fixed cleanly + B1 re-flagged → governance edit to AGENTS.md); Step 7a: 2 cycles (1 P1 + 1 P2, both fixed in-sprint) |
+| External Findings | Step 0b cycle 1 Codex: 2B/3W/1N; Step 0b cycle 1 Reviewer: 0B/6W/6N; Step 0b cycle 2 Codex: 1B (governance) + 1 confirmation; Step 7a: 1 P1 + 1 P2 |
+| Re-dispatches | 1 (TASK-2403 worktree halted at first dispatch due to TASK-2401 not committed before Phase 2 launch — re-dispatched after recovery) |
+| First-Pass Rate | 7/8 = 87.5% (7 tasks accepted on first pass; TASK-2403 re-dispatched once) |
+
+**Worktree base mismatch lesson** (post-Phase-2 incident): Forgetting to commit Phase 1 before dispatching Phase 2 worktrees caused all 6 Phase 2 worktrees to branch from pre-S24 master (`60d2823`), missing TASK-2401's repo overloads. 5 of 6 agents handled it gracefully (3 added parallel overloads as cross-domain authorized; 2 produced endpoint code that wouldn't build standalone but matched canonical TASK-2401 signatures); 1 (TASK-2403) halted cleanly. Recovery via `git checkout <branch> -- <endpoint-file>` cherry-pick of endpoint-only changes worked smoothly. **For future sprints**: commit Phase 1 BEFORE dispatching Phase 2 worktrees.
 
 ## Sprint Retrospective
 
-_Pending sprint-end._
+**What went well**:
+- Refinement Step 4 review (newly added to skill this sprint) caught the Skema-fork BLOCKER, EntitlementBalanceRepository scope alignment WARNING, Pattern B count error (5 → 4), and stream-naming drift Risk before sprint-plan drafting. Without the review, Phase 2 would have shipped with a multi-event redesign accidentally bundled into TASK-2403.
+- Step 0b plan review caught the agent-scope governance gap (B1) early, leading to the AGENTS.md Cross-Domain Authorization formalization — closes a systematic governance debt, not just a one-sprint fix.
+- Phase 2 worktree recovery (5 endpoint files cherry-picked + 1 re-dispatch) added ~10 minutes vs full restart but preserved all 6 agents' correctness work.
+- Step 7a 2-cycle pattern: P1 fix introduced its own P2 (defensive overreach), caught and reverted in cycle 2. Each cycle was a small surgical edit; no cascade.
+- Reviewer audit on Phase 2 returned 0 BLOCKERs across 21-site conversion — strong signal that the cross-domain-authorized convention works.
 
-**What went well**: TBD
+**What to improve**:
+- **Commit Phase 1 before dispatching Phase 2 worktrees.** Source of the worktree base mismatch incident.
+- **WebApplicationFactory<Program> vs direct orchestration mirroring**: TASK-2408 used direct mirroring per established `ProfileAuditTests` precedent. While defensible (and consistent with project convention), this leaves the HTTP-surface contract untested — a future endpoint regression that, e.g., calls outbox AFTER commit could pass these tests. Future Phase 4 hardening: revisit harness for true HTTP-surface coverage.
+- **Phase 4d TOCTOU candidates** (deferred from Phase 2 Reviewer NOTEs): 4 pre-existing read-modify-write windows in ApprovalEndpoints (submit/approve/reject/employee-approve/reopen), TimerEndpoints (check-out), OvertimeEndpoints (compensate), AgreementConfigEndpoints (publish post-commit re-read 409 lossy race). All are pre-S24 patterns, not S24 regressions, but the atomic-outbox conversion is a good occasion to tighten them. Track as Phase 4d hardening backlog.
 
-**What to improve**: TBD
-
-**Knowledge produced**: TBD (no new ADR planned — S24 propagates ADR-018 only)
+**Knowledge produced**:
+- No new ADR/PAT/DEP/RES/FAIL entries — S24 propagates ADR-018 D2/D3/D5 only.
+- AGENTS.md gained Cross-Domain Authorization sub-section formalizing S22's de facto convention. Counts as governance documentation, not new KB entry.
+- New skill: `refine-requirements` Step 4 (Review the Refinement) added at sprint kickoff — caught BLOCKERs upstream of Step 0b. Skill change committed in `60d2823`.
