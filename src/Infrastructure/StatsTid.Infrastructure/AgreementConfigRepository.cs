@@ -526,3 +526,27 @@ public sealed class AgreementConfigRepository
         Description = reader.IsDBNull(reader.GetOrdinal("description")) ? null : reader.GetString(reader.GetOrdinal("description")),
     };
 }
+
+/// <summary>
+/// Result of a save operation on <see cref="AgreementConfigRepository"/> (TASK-2502 / Phase 2
+/// per-surface SaveResult — mirrors <c>SaveProfileResult</c> from
+/// <see cref="LocalAgreementProfileRepository"/>). Phase 2 repo work (TASK-2503) wires the
+/// repository to return this shape from its Save/Publish/Archive paths; Phase 3 endpoint
+/// migration (a sibling task) consumes the post-mutation <see cref="Version"/> for the ETag
+/// response header and the <see cref="ArchivedId"/> for publish-path audit.
+/// </summary>
+/// <param name="Config">The persisted agreement config entity (post-mutation snapshot).</param>
+/// <param name="Version">The authoritative row-version after the save — first-insert is <c>1</c>;
+/// each in-place UPDATE bumps by one. The wire ETag is <c>"&lt;version&gt;"</c> (RFC 7232 quoted)
+/// per ADR-018 D7.</param>
+/// <param name="IsCreated"><c>true</c> when this save inserted a new row (POST-style create);
+/// <c>false</c> when it updated an existing row (PUT-style edit / Publish / Archive).</param>
+/// <param name="ArchivedId">When the save executed the publish path, the <c>config_id</c> of the
+/// prior-ACTIVE config that was archived as a side-effect (S24 Step 7a P1 semantic — preserves
+/// the publish-archives-prior-ACTIVE atomicity for downstream audit). <c>null</c> on Update /
+/// Archive paths or when no prior ACTIVE existed before publish.</param>
+public sealed record SaveAgreementConfigResult(
+    AgreementConfigEntity Config,
+    long Version,
+    bool IsCreated,
+    Guid? ArchivedId);

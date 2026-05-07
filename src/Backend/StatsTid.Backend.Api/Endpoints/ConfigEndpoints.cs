@@ -2,6 +2,7 @@ using System.Data;
 using System.Text.Json;
 using Npgsql;
 using StatsTid.Auth;
+using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Backend.Api.Validators;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
@@ -139,8 +140,11 @@ public static class ConfigEndpoints
             // 2. Parse the ETag/If-Match concurrency precondition (ADR-018 D7).
             //    `If-Match: "<version>"` -> supersede / update-in-place at that version.
             //    `If-None-Match: *`      -> assert no current profile exists (first creation).
-            //    Exactly one of the two MUST be supplied.
-            if (!TryParseConcurrencyPrecondition(context, out var expectedCurrentVersion, out var headerError))
+            //    Exactly one of the two MUST be supplied. Profile-flexible mode — admin
+            //    endpoints (S25 Phase 4c Part 2) use the strict overload that rejects
+            //    If-None-Match: *.
+            if (!EtagHeaderHelper.TryParseIfMatchOrIfNoneMatchStar(
+                    context.Request, out var expectedCurrentVersion, out var headerError))
                 return Results.Json(new { error = headerError }, statusCode: 428);
 
             // 3. Build the candidate profile from the request body. Version is `required init`
@@ -499,62 +503,6 @@ public static class ConfigEndpoints
         }).RequireAuthorization("LocalAdminOrAbove");
 
         return app;
-    }
-
-    /// <summary>
-    /// Parses the ETag/If-Match precondition from request headers (ADR-018 D7). Returns
-    /// the expected current profile version (long for supersession / in-place edit, null
-    /// for first creation signalled by If-None-Match: *). Either header MUST be present and
-    /// exactly one parses.
-    ///
-    /// Wire format per RFC 7232: <c>If-Match: "&lt;version&gt;"</c> with the numeric version
-    /// quoted. Surrounding quotes and whitespace are tolerated; non-numeric bodies are
-    /// rejected. Bare-numeric (no quotes) is accepted defensively.
-    /// </summary>
-    private static bool TryParseConcurrencyPrecondition(
-        HttpContext context, out long? expectedCurrentVersion, out string? error)
-    {
-        expectedCurrentVersion = null;
-        error = null;
-
-        var ifMatch = context.Request.Headers.IfMatch.ToString();
-        var ifNoneMatch = context.Request.Headers.IfNoneMatch.ToString();
-        var hasIfMatch = !string.IsNullOrWhiteSpace(ifMatch);
-        var hasIfNoneMatch = !string.IsNullOrWhiteSpace(ifNoneMatch);
-
-        if (!hasIfMatch && !hasIfNoneMatch)
-        {
-            error = "Missing If-Match: \"<version>\" (for supersession or in-place edit) or If-None-Match: * (for first creation).";
-            return false;
-        }
-        if (hasIfMatch && hasIfNoneMatch)
-        {
-            error = "Send exactly one of If-Match or If-None-Match — not both.";
-            return false;
-        }
-
-        if (hasIfNoneMatch)
-        {
-            if (!ifNoneMatch.Trim().Equals("*", StringComparison.Ordinal))
-            {
-                error = "If-None-Match must be exactly '*' (first-creation precondition).";
-                return false;
-            }
-            expectedCurrentVersion = null;
-            return true;
-        }
-
-        // If-Match: "<version>" per RFC 7232. Strip surrounding quotes / whitespace; bare
-        // numeric (unquoted) is accepted defensively.
-        var raw = ifMatch.Trim().Trim('"');
-        if (!long.TryParse(raw, System.Globalization.NumberStyles.Integer,
-                           System.Globalization.CultureInfo.InvariantCulture, out var parsed))
-        {
-            error = $"If-Match header is not a valid version (expected RFC 7232 quoted long): '{ifMatch}'.";
-            return false;
-        }
-        expectedCurrentVersion = parsed;
-        return true;
     }
 
     /// <summary>

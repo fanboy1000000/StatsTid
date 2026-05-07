@@ -346,3 +346,26 @@ public sealed class PositionOverrideRepository
         Description = reader.IsDBNull(reader.GetOrdinal("description")) ? null : reader.GetString(reader.GetOrdinal("description")),
     };
 }
+
+/// <summary>
+/// Result of a save operation on <see cref="PositionOverrideRepository"/> (TASK-2502 / Phase 2
+/// per-surface SaveResult — mirrors <c>SaveProfileResult</c> from
+/// <see cref="LocalAgreementProfileRepository"/>). Phase 2 repo work (TASK-2504) wires the
+/// repository to return this shape from its Save / state-transition paths; Phase 3 endpoint
+/// migration consumes the post-mutation <see cref="Version"/> for the ETag response header and
+/// the <see cref="Status"/> for the response payload.
+/// </summary>
+/// <param name="Override">The persisted position-override entity (post-mutation snapshot).</param>
+/// <param name="Version">The authoritative row-version after the save — first-insert is <c>1</c>;
+/// each in-place UPDATE bumps by one. The wire ETag is <c>"&lt;version&gt;"</c> (RFC 7232 quoted)
+/// per ADR-018 D7.</param>
+/// <param name="IsCreated"><c>true</c> when this save inserted a new row (POST-style create);
+/// <c>false</c> when it updated an existing row (PUT-style edit / state transition).</param>
+/// <param name="Status">The post-mutation status of the override (<c>ACTIVE</c> /
+/// <c>INACTIVE</c>) — surfaced for state-transition responses (activate/deactivate flows) so
+/// the endpoint can compose the response payload without re-reading from the DB.</param>
+public sealed record SavePositionOverrideResult(
+    PositionOverrideConfigEntity Override,
+    long Version,
+    bool IsCreated,
+    string Status);

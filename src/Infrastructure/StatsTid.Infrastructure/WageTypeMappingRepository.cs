@@ -238,3 +238,21 @@ public sealed class WageTypeMappingRepository
         Description = reader.IsDBNull(reader.GetOrdinal("description")) ? null : reader.GetString(reader.GetOrdinal("description")),
     };
 }
+
+/// <summary>
+/// Result of a save operation on <see cref="WageTypeMappingRepository"/> (TASK-2502 / Phase 2
+/// per-surface SaveResult — mirrors <c>SaveProfileResult</c> from
+/// <see cref="LocalAgreementProfileRepository"/>). Phase 2 repo work (TASK-2505) wires the
+/// repository to return this shape from its create / update / delete paths; Phase 3 endpoint
+/// migration consumes the post-mutation <see cref="Version"/> for the ETag response header.
+/// </summary>
+/// <param name="Mapping">The persisted wage-type-mapping (post-mutation snapshot).</param>
+/// <param name="Version">The authoritative row-version after the save — first-insert is <c>1</c>;
+/// each in-place UPDATE bumps by one. The wire ETag is <c>"&lt;version&gt;"</c> (RFC 7232 quoted)
+/// per ADR-018 D7.</param>
+/// <param name="IsCreated"><c>true</c> when this save inserted a new row (POST-style create);
+/// <c>false</c> when it updated an existing row (PUT-style edit).</param>
+public sealed record SaveWageTypeMappingResult(
+    WageTypeMapping Mapping,
+    long Version,
+    bool IsCreated);
