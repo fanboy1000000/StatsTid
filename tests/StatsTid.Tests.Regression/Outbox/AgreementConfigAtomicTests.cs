@@ -191,7 +191,8 @@ public sealed class AgreementConfigAtomicTests : IAsyncLifetime
             await conn.OpenAsync();
             await using var tx = await conn.BeginTransactionAsync();
 
-            var archivedId = await _repo.PublishAsync(conn, tx, draftId, "tester");
+            var (archivedId, wasPublished) = await _repo.PublishAsync(conn, tx, draftId, "tester");
+            Assert.True(wasPublished); // target was DRAFT; this is the publish-success path
             // archivedId == priorActiveId — endpoint stamps that into the event payload.
             await _repo.AppendAuditAsync(
                 conn, tx, draftId, "PUBLISHED", null, $"{{\"archivedConfigId\":\"{archivedId}\"}}",

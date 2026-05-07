@@ -317,17 +317,30 @@ public static class AgreementConfigEndpoints
             // Atomic publish: archive prior ACTIVE + activate DRAFT + audit + outbox enqueue
             // all in a single transaction (ADR-018 D3). PublishAsync(conn, tx, ...) is the
             // in-tx sibling overload from TASK-2401; it does NOT commit, leaving the caller
-            // in control. Returns Guid? — the prior-ACTIVE config_id that was archived
-            // (null if there was no prior ACTIVE OR the publish was a no-op because the
-            // target row is missing / not DRAFT). The endpoint already pre-validated DRAFT
-            // status above so the no-op branch covers concurrent status transitions only.
-            Guid? archivedId;
+            // in control. Returns (Guid? ArchivedId, bool Published):
+            //   - Published == true : target was DRAFT and is now ACTIVE; ArchivedId is the
+            //     prior-ACTIVE config_id (or null if none existed).
+            //   - Published == false: target was missing OR not in DRAFT (concurrent change
+            //     between the L310 pre-check and PublishAsync). The endpoint MUST roll back
+            //     and surface 409 — emitting the audit/event in this case would falsely
+            //     claim a publish that never happened (S24 Step 7a P1 fix).
+            Guid? archivedId = null;
+            bool wasPublished = false;
             await using (var conn = connectionFactory.Create())
             {
                 await conn.OpenAsync(ct);
                 await using var tx = await conn.BeginTransactionAsync(ct);
 
-                archivedId = await agreementConfigRepo.PublishAsync(conn, tx, configId, actor.ActorId ?? "system", ct);
+                (archivedId, wasPublished) = await agreementConfigRepo.PublishAsync(
+                    conn, tx, configId, actor.ActorId ?? "system", ct);
+
+                if (!wasPublished)
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.Json(
+                        new { error = "Concurrent change — config no longer in DRAFT" },
+                        statusCode: 409);
+                }
 
                 await agreementConfigRepo.AppendAuditAsync(
                     conn, tx, configId, "PUBLISHED", null, $"{{\"archivedConfigId\":\"{archivedId}\"}}",
@@ -350,10 +363,12 @@ public static class AgreementConfigEndpoints
 
             // Post-commit re-read for response payload (refinement R2 — must be AFTER tx
             // commit, NOT inside the tx, to surface the visible-after-commit ACTIVE state
-            // and DB-generated published_at to the caller).
+            // and DB-generated published_at to the caller). Defense-in-depth: PublishAsync
+            // already returned Published:true under the committed tx, so this re-read is
+            // guaranteed to observe ACTIVE under MVCC barring an unrelated infrastructure failure.
             var published = await agreementConfigRepo.GetByIdAsync(configId, ct);
             if (published is null || published.Status != AgreementConfigStatus.ACTIVE)
-                return Results.Json(new { error = "Failed to publish — config may no longer be in DRAFT status" }, statusCode: 409);
+                return Results.Json(new { error = "Failed to publish — concurrent infrastructure failure" }, statusCode: 500);
 
             return Results.Ok(new
             {

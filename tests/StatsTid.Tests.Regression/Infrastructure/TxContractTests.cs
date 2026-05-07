@@ -422,8 +422,9 @@ public sealed class TxContractTests : IAsyncLifetime
         await conn.OpenAsync();
         await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
 
-        var archivedId = await repo.PublishAsync(conn, tx, draftId, "tester");
+        var (archivedId, wasPublished) = await repo.PublishAsync(conn, tx, draftId, "tester");
         Assert.Null(archivedId); // no prior ACTIVE for this (code, version)
+        Assert.True(wasPublished); // target WAS DRAFT and is now ACTIVE in this tx (S24 Step 7a fix)
         await AssertTxStillUsable(conn, tx);
         var statusInside = await ScalarInsideTx<string>(
             conn, tx, "SELECT status FROM agreement_configs WHERE config_id = @id", draftId);

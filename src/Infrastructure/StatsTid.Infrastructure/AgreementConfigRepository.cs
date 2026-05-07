@@ -241,8 +241,8 @@ public sealed class AgreementConfigRepository
         await using var tx = await conn.BeginTransactionAsync(ct);
         try
         {
-            var (archivedId, draftActivated) = await ExecutePublishAsync(conn, tx, configId, actorId, ct);
-            if (!draftActivated)
+            var (archivedId, published) = await ExecutePublishAsync(conn, tx, configId, actorId, ct);
+            if (!published)
             {
                 // Config not found OR config not DRAFT — preserve pre-S24 atomic semantic by
                 // rolling back the (potentially) archived prior-ACTIVE update so the
@@ -268,30 +268,28 @@ public sealed class AgreementConfigRepository
     /// rolls back; this method does NOT.
     ///
     /// <para>
-    /// Returns the prior-ACTIVE config_id that was archived (null if there was no prior
-    /// ACTIVE for the same (agreement_code, ok_version)). When the target config is missing
-    /// OR not in DRAFT the method returns null AND leaves any prior-ACTIVE archive write
-    /// intact in <paramref name="tx"/> — the caller is responsible for rolling back the
-    /// transaction in that case. In-transaction callers (Phase 2) must pre-check status
-    /// (the endpoint already reads + verifies before calling) so the no-op branch is
-    /// concurrency-recovery only.
+    /// Returns a tuple <c>(ArchivedId, Published)</c>:
+    /// <list type="bullet">
+    /// <item><c>Published == true</c>: target was DRAFT and is now ACTIVE; <c>ArchivedId</c> is the prior-ACTIVE config_id (or null if none existed).</item>
+    /// <item><c>Published == false</c>: target was missing OR not in DRAFT (concurrency-recovery path); <c>ArchivedId</c> is always null. The caller MUST roll back the transaction — emitting audit/event rows in this case would falsely claim a publish that never happened (S24 Step 7a P1 fix).</item>
+    /// </list>
+    /// In-transaction callers (Phase 2) should still pre-check status before calling; this return shape exists so a concurrent status change between pre-check and PublishAsync is detected and rolled back, not silently committed as a false PUBLISHED audit/event.
     /// </para>
     /// </summary>
-    public async Task<Guid?> PublishAsync(
+    public async Task<(Guid? ArchivedId, bool Published)> PublishAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
         Guid configId, string actorId, CancellationToken ct = default)
     {
-        var (archivedId, _) = await ExecutePublishAsync(conn, tx, configId, actorId, ct);
-        return archivedId;
+        return await ExecutePublishAsync(conn, tx, configId, actorId, ct);
     }
 
-    private static async Task<(Guid? ArchivedId, bool DraftActivated)> ExecutePublishAsync(
+    private static async Task<(Guid? ArchivedId, bool Published)> ExecutePublishAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
         Guid configId, string actorId, CancellationToken ct)
     {
         // 1. Read identity AND status of the target row in one shot — guards against the
         //    "archive prior ACTIVE then discover target isn't DRAFT" sequencing bug. If the
-        //    target is missing or not DRAFT we return draftActivated:false BEFORE issuing
+        //    target is missing or not DRAFT we return Published:false BEFORE issuing
         //    any UPDATE so the caller's tx stays clean.
         string agreementCode;
         string okVersion;
