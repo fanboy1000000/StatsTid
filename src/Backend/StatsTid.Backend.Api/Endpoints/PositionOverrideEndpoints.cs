@@ -3,7 +3,6 @@ using StatsTid.Auth;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.SharedKernel.Events;
-using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Models;
 
 namespace StatsTid.Backend.Api.Endpoints;

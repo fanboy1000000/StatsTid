@@ -149,7 +149,10 @@ public static class WageTypeMappingEndpoints
 
             var success = await repo.UpdateAsync(conn, tx, mapping, ct);
             if (!success)
+            {
+                await tx.RollbackAsync(ct);
                 return Results.NotFound(new { error = "Wage type mapping not found" });
+            }
 
             // Audit trail (Pattern B — (conn, tx) overload).
             await repo.AppendAuditAsync(
@@ -222,7 +225,10 @@ public static class WageTypeMappingEndpoints
 
             var success = await repo.DeleteAsync(conn, tx, timeType, okVersion, agreementCode, pos, ct);
             if (!success)
+            {
+                await tx.RollbackAsync(ct);
                 return Results.NotFound(new { error = "Wage type mapping not found" });
+            }
 
             // Audit trail (Pattern B — (conn, tx) overload).
             await repo.AppendAuditAsync(
