@@ -72,6 +72,11 @@ public sealed class ApprovalPeriodRepository
         return await ReadPeriodsAsync(cmd, ct);
     }
 
+    /// <summary>
+    /// Self-managed overload of <see cref="CreateAsync(NpgsqlConnection, NpgsqlTransaction, ApprovalPeriod, CancellationToken)"/>:
+    /// opens its own connection (no transaction). For atomic outbox + audit + state mutation
+    /// (ADR-018 D3) call the in-transaction sibling.
+    /// </summary>
     public async Task<Guid> CreateAsync(ApprovalPeriod period, CancellationToken ct = default)
     {
         await using var conn = _connectionFactory.Create();
@@ -95,13 +100,62 @@ public sealed class ApprovalPeriodRepository
         return periodId;
     }
 
+    /// <summary>
+    /// In-transaction sibling overload of
+    /// <see cref="CreateAsync(ApprovalPeriod, CancellationToken)"/>. Reuses the caller-supplied
+    /// <paramref name="conn"/> + <paramref name="tx"/> so the caller can extend the same
+    /// transaction across audit + outbox writes (ADR-018 D3 transactional-outbox contract).
+    /// The caller commits or rolls back; this method does NOT.
+    /// </summary>
+    public async Task<Guid> CreateAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        ApprovalPeriod period, CancellationToken ct = default)
+    {
+        var periodId = Guid.NewGuid();
+        await using var cmd = new NpgsqlCommand(
+            """
+            INSERT INTO approval_periods (period_id, employee_id, org_id, period_start, period_end, period_type, status, agreement_code, ok_version)
+            VALUES (@periodId, @employeeId, @orgId, @periodStart, @periodEnd, @periodType, @status, @agreementCode, @okVersion)
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("periodId", periodId);
+        cmd.Parameters.AddWithValue("employeeId", period.EmployeeId);
+        cmd.Parameters.AddWithValue("orgId", period.OrgId);
+        cmd.Parameters.AddWithValue("periodStart", period.PeriodStart);
+        cmd.Parameters.AddWithValue("periodEnd", period.PeriodEnd);
+        cmd.Parameters.AddWithValue("periodType", period.PeriodType);
+        cmd.Parameters.AddWithValue("status", period.Status);
+        cmd.Parameters.AddWithValue("agreementCode", period.AgreementCode);
+        cmd.Parameters.AddWithValue("okVersion", period.OkVersion);
+        await cmd.ExecuteNonQueryAsync(ct);
+        return periodId;
+    }
+
     public async Task UpdateStatusAsync(
         Guid periodId, string status, string? actorId = null,
         string? rejectionReason = null, CancellationToken ct = default)
     {
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
+        await using var cmd = BuildUpdateStatusCommand(conn, null, periodId, status, actorId, rejectionReason);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
 
+    /// <summary>
+    /// In-transaction sibling overload of <see cref="UpdateStatusAsync(Guid, string, string?, string?, CancellationToken)"/>.
+    /// </summary>
+    public async Task UpdateStatusAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        Guid periodId, string status, string? actorId = null,
+        string? rejectionReason = null, CancellationToken ct = default)
+    {
+        await using var cmd = BuildUpdateStatusCommand(conn, tx, periodId, status, actorId, rejectionReason);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    private static NpgsqlCommand BuildUpdateStatusCommand(
+        NpgsqlConnection conn, NpgsqlTransaction? tx,
+        Guid periodId, string status, string? actorId, string? rejectionReason)
+    {
         var sql = status switch
         {
             "SUBMITTED" => "UPDATE approval_periods SET status = 'SUBMITTED', submitted_at = NOW(), submitted_by = @actorId WHERE period_id = @periodId",
@@ -112,12 +166,12 @@ public sealed class ApprovalPeriodRepository
             _ => throw new ArgumentException($"Invalid status: {status}")
         };
 
-        await using var cmd = new NpgsqlCommand(sql, conn);
+        var cmd = tx is null ? new NpgsqlCommand(sql, conn) : new NpgsqlCommand(sql, conn, tx);
         cmd.Parameters.AddWithValue("periodId", periodId);
         cmd.Parameters.AddWithValue("actorId", (object?)actorId ?? DBNull.Value);
         if (status == "REJECTED")
             cmd.Parameters.AddWithValue("rejectionReason", (object?)rejectionReason ?? DBNull.Value);
-        await cmd.ExecuteNonQueryAsync(ct);
+        return cmd;
     }
 
     public async Task UpdateDeadlinesAsync(
@@ -127,6 +181,22 @@ public sealed class ApprovalPeriodRepository
         await conn.OpenAsync(ct);
         await using var cmd = new NpgsqlCommand(
             "UPDATE approval_periods SET employee_deadline = @employeeDeadline, manager_deadline = @managerDeadline WHERE period_id = @periodId", conn);
+        cmd.Parameters.AddWithValue("periodId", periodId);
+        cmd.Parameters.AddWithValue("employeeDeadline", (object?)employeeDeadline ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("managerDeadline", (object?)managerDeadline ?? DBNull.Value);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>
+    /// In-transaction sibling overload of <see cref="UpdateDeadlinesAsync(Guid, DateOnly?, DateOnly?, CancellationToken)"/>.
+    /// </summary>
+    public async Task UpdateDeadlinesAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        Guid periodId, DateOnly? employeeDeadline, DateOnly? managerDeadline, CancellationToken ct = default)
+    {
+        await using var cmd = new NpgsqlCommand(
+            "UPDATE approval_periods SET employee_deadline = @employeeDeadline, manager_deadline = @managerDeadline WHERE period_id = @periodId",
+            conn, tx);
         cmd.Parameters.AddWithValue("periodId", periodId);
         cmd.Parameters.AddWithValue("employeeDeadline", (object?)employeeDeadline ?? DBNull.Value);
         cmd.Parameters.AddWithValue("managerDeadline", (object?)managerDeadline ?? DBNull.Value);
@@ -144,6 +214,27 @@ public sealed class ApprovalPeriodRepository
             INSERT INTO approval_audit (period_id, action, actor_id, actor_role, comment)
             VALUES (@periodId, @action, @actorId, @actorRole, @comment)
             """, conn);
+        cmd.Parameters.AddWithValue("periodId", periodId);
+        cmd.Parameters.AddWithValue("action", action);
+        cmd.Parameters.AddWithValue("actorId", actorId);
+        cmd.Parameters.AddWithValue("actorRole", actorRole);
+        cmd.Parameters.AddWithValue("comment", (object?)comment ?? DBNull.Value);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>
+    /// In-transaction sibling overload of <see cref="AppendAuditAsync(Guid, string, string, string, string?, CancellationToken)"/>.
+    /// </summary>
+    public async Task AppendAuditAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        Guid periodId, string action, string actorId, string actorRole,
+        string? comment = null, CancellationToken ct = default)
+    {
+        await using var cmd = new NpgsqlCommand(
+            """
+            INSERT INTO approval_audit (period_id, action, actor_id, actor_role, comment)
+            VALUES (@periodId, @action, @actorId, @actorRole, @comment)
+            """, conn, tx);
         cmd.Parameters.AddWithValue("periodId", periodId);
         cmd.Parameters.AddWithValue("action", action);
         cmd.Parameters.AddWithValue("actorId", actorId);

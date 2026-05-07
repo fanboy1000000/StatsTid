@@ -56,17 +56,39 @@ public sealed class TimerSessionRepository
     {
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
-        await using var cmd = new NpgsqlCommand(
+        await using var cmd = BuildCheckInCommand(conn, null, session);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>
+    /// In-transaction sibling overload of <see cref="CheckInAsync(TimerSession, CancellationToken)"/>.
+    /// Reuses the caller-supplied <paramref name="conn"/> + <paramref name="tx"/> so the
+    /// caller can extend the same transaction across outbox writes (ADR-018 D3 transactional-
+    /// outbox contract). The caller commits or rolls back; this method does NOT.
+    /// </summary>
+    public async Task CheckInAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        TimerSession session, CancellationToken ct = default)
+    {
+        await using var cmd = BuildCheckInCommand(conn, tx, session);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    private static NpgsqlCommand BuildCheckInCommand(
+        NpgsqlConnection conn, NpgsqlTransaction? tx, TimerSession session)
+    {
+        var sql =
             """
             INSERT INTO timer_sessions (session_id, employee_id, date, check_in_at, is_active)
             VALUES (@sessionId, @employeeId, @date, @checkInAt, @isActive)
-            """, conn);
+            """;
+        var cmd = tx is null ? new NpgsqlCommand(sql, conn) : new NpgsqlCommand(sql, conn, tx);
         cmd.Parameters.AddWithValue("sessionId", session.SessionId);
         cmd.Parameters.AddWithValue("employeeId", session.EmployeeId);
         cmd.Parameters.AddWithValue("date", session.Date);
         cmd.Parameters.AddWithValue("checkInAt", session.CheckInAt);
         cmd.Parameters.AddWithValue("isActive", session.IsActive);
-        await cmd.ExecuteNonQueryAsync(ct);
+        return cmd;
     }
 
     public async Task CheckOutAsync(Guid sessionId, DateTime checkOutAt, CancellationToken ct = default)
@@ -75,6 +97,21 @@ public sealed class TimerSessionRepository
         await conn.OpenAsync(ct);
         await using var cmd = new NpgsqlCommand(
             "UPDATE timer_sessions SET check_out_at = @checkOutAt, is_active = FALSE WHERE session_id = @sessionId", conn);
+        cmd.Parameters.AddWithValue("sessionId", sessionId);
+        cmd.Parameters.AddWithValue("checkOutAt", checkOutAt);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>
+    /// In-transaction sibling overload of <see cref="CheckOutAsync(Guid, DateTime, CancellationToken)"/>.
+    /// </summary>
+    public async Task CheckOutAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        Guid sessionId, DateTime checkOutAt, CancellationToken ct = default)
+    {
+        await using var cmd = new NpgsqlCommand(
+            "UPDATE timer_sessions SET check_out_at = @checkOutAt, is_active = FALSE WHERE session_id = @sessionId",
+            conn, tx);
         cmd.Parameters.AddWithValue("sessionId", sessionId);
         cmd.Parameters.AddWithValue("checkOutAt", checkOutAt);
         await cmd.ExecuteNonQueryAsync(ct);

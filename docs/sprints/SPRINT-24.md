@@ -88,11 +88,15 @@ Not directly affected: P2, P4, P6, P9.
 | Field | Value |
 |-------|-------|
 | **ID** | TASK-2401 |
-| **Status** | planned |
+| **Status** | complete |
 | **Agent** | Data Model (extended into Infrastructure, cross-domain authorized; general-purpose Agent invocation; scope: `src/Infrastructure/StatsTid.Infrastructure/*Repository.cs`) |
 | **Components** | Infrastructure / Repositories |
 | **KB Refs** | ADR-018 (D2/D3/D5) |
 | **Phase** | Phase 1 (independent foundation; everything else depends on it) |
+| **Constraint Validator** | pass — no PAT-005 / ADR-002 / FAIL-001 violations; scope respected (7 repos + 1 new test file) |
+| **Reviewer Audit** | performed 2026-05-07 — 0 BLOCKER, 0 WARNING, 5 NOTE (test-location deviation acceptable; PublishAsync defensive pre-check sound; TxContractTests has strong tx-participation assertions; pre-existing UpdateStatusAsync param quirk noted; 23 overloads ↔ 23 sites ↔ 23 tests, narrow-scope discipline held) |
+| **External Review (Codex)** | skipped — repo-overload work is not on the high-risk-override list (no schema migration / JWT-auth / payroll export / legal rule / retroactive correction); deferred to Step 7a sprint-end review |
+| **Orchestrator Approved** | yes — 2026-05-07 |
 
 **Description**: Add `(NpgsqlConnection, NpgsqlTransaction)` overloads to write methods on the 7 in-scope repositories that have a converted consumer in TASK-2402-2407, mirroring `LocalAgreementProfileRepository.SupersedeAndCreateAsync(conn, tx, …)` at lines 247–252. Self-managed overloads stay (read paths and tests). For the 4 audit-bearing (Pattern B) repos — `Approval`, `AgreementConfig`, `PositionOverride`, `WageTypeMapping` — also add `(conn, tx)` overload on `AppendAuditAsync` so audit inserts share the endpoint tx. The remaining 3 in-scope repos (`OvertimePreApproval`, `OvertimeBalance`, `Timer`) have no audit method.
 
@@ -120,7 +124,9 @@ For `AgreementConfigRepository.PublishAsync` (lines 182–244, owns internal mul
 - `src/Infrastructure/StatsTid.Infrastructure/OvertimePreApprovalRepository.cs`
 - `src/Infrastructure/StatsTid.Infrastructure/OvertimeBalanceRepository.cs`
 - `src/Infrastructure/StatsTid.Infrastructure/TimerSessionRepository.cs`
-- New unit test file (in-scope per TASK-2401 since it's a tx-contract test, not a forced-rollback regression test): `tests/StatsTid.Tests.Unit/Infrastructure/TxContractTests.cs`
+- New Docker-gated test file: `tests/StatsTid.Tests.Regression/Infrastructure/TxContractTests.cs` (23 tests, one per added `(conn, tx)` overload; marked `[Trait("Category", "Docker")]`). **Path deviation from plan**: spec said `tests/StatsTid.Tests.Unit/Infrastructure/TxContractTests.cs`, but `Tests.Unit` lacks Npgsql + Testcontainers package refs and the .csproj was out of agent scope; co-located with existing Docker-gated repo tests under `Tests.Regression` per project convention. Reviewer accepted the deviation as sound.
+
+**Implementation summary** (added at completion 2026-05-07): 23 `(conn, tx)` overloads added across 7 repos. Pattern: `(conn, tx)` overload mirrors the self-managed body via private `Execute*Async` / `Build*Command` helpers; each `NpgsqlCommand` bound to `tx` via `new NpgsqlCommand(sql, conn, tx)`. **`AgreementConfigRepository.PublishAsync` refactored**: self-managed entry now opens conn + tx + delegates to in-tx overload; the in-tx overload pre-checks target status BEFORE issuing the archive UPDATE so the no-op branch leaves the caller's tx clean. Pre-S24 observable behavior preserved for the self-managed entry. **`PositionOverrideRepository.ActivateAsync` similarly refactored** to delegate. 23 Docker-gated tx-contract tests added: each asserts SUT participates in caller's tx (mutation visible in-tx + rolls back when tx rolls back) and does not commit/rollback. Build clean (0/0). 525 unit + 35 plain regression all pass.
 
 ---
 

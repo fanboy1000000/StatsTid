@@ -72,13 +72,31 @@ public sealed class OvertimeBalanceRepository
     {
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
-        await using var cmd = new NpgsqlCommand(
+        return await ExecuteAdjustPaidOutAsync(conn, null, employeeId, periodYear, deltaHours, ct);
+    }
+
+    /// <summary>
+    /// In-transaction sibling overload of <see cref="AdjustPaidOutAsync(string, int, decimal, CancellationToken)"/>.
+    /// Reuses the caller-supplied <paramref name="conn"/> + <paramref name="tx"/> so the
+    /// caller can extend the same transaction across outbox writes (ADR-018 D3 transactional-
+    /// outbox contract). The caller commits or rolls back; this method does NOT.
+    /// </summary>
+    public async Task<(bool Success, decimal NewPaidOut)> AdjustPaidOutAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string employeeId, int periodYear, decimal deltaHours, CancellationToken ct = default)
+        => await ExecuteAdjustPaidOutAsync(conn, tx, employeeId, periodYear, deltaHours, ct);
+
+    private static async Task<(bool Success, decimal NewPaidOut)> ExecuteAdjustPaidOutAsync(
+        NpgsqlConnection conn, NpgsqlTransaction? tx,
+        string employeeId, int periodYear, decimal deltaHours, CancellationToken ct)
+    {
+        var sql =
             @"UPDATE overtime_balances
               SET paid_out = overtime_balances.paid_out + @deltaHours, updated_at = NOW()
               WHERE employee_id = @employeeId AND period_year = @periodYear
                 AND overtime_balances.paid_out + overtime_balances.afspadsering_used + @deltaHours <= overtime_balances.accumulated
-              RETURNING paid_out",
-            conn);
+              RETURNING paid_out";
+        await using var cmd = tx is null ? new NpgsqlCommand(sql, conn) : new NpgsqlCommand(sql, conn, tx);
         cmd.Parameters.AddWithValue("employeeId", employeeId);
         cmd.Parameters.AddWithValue("periodYear", periodYear);
         cmd.Parameters.AddWithValue("deltaHours", deltaHours);
@@ -93,13 +111,28 @@ public sealed class OvertimeBalanceRepository
     {
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
-        await using var cmd = new NpgsqlCommand(
+        return await ExecuteAdjustAfspadseringAsync(conn, null, employeeId, periodYear, deltaHours, ct);
+    }
+
+    /// <summary>
+    /// In-transaction sibling overload of <see cref="AdjustAfspadseringAsync(string, int, decimal, CancellationToken)"/>.
+    /// </summary>
+    public async Task<(bool Success, decimal NewAfspadseringUsed)> AdjustAfspadseringAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string employeeId, int periodYear, decimal deltaHours, CancellationToken ct = default)
+        => await ExecuteAdjustAfspadseringAsync(conn, tx, employeeId, periodYear, deltaHours, ct);
+
+    private static async Task<(bool Success, decimal NewAfspadseringUsed)> ExecuteAdjustAfspadseringAsync(
+        NpgsqlConnection conn, NpgsqlTransaction? tx,
+        string employeeId, int periodYear, decimal deltaHours, CancellationToken ct)
+    {
+        var sql =
             @"UPDATE overtime_balances
               SET afspadsering_used = overtime_balances.afspadsering_used + @deltaHours, updated_at = NOW()
               WHERE employee_id = @employeeId AND period_year = @periodYear
                 AND overtime_balances.paid_out + overtime_balances.afspadsering_used + @deltaHours <= overtime_balances.accumulated
-              RETURNING afspadsering_used",
-            conn);
+              RETURNING afspadsering_used";
+        await using var cmd = tx is null ? new NpgsqlCommand(sql, conn) : new NpgsqlCommand(sql, conn, tx);
         cmd.Parameters.AddWithValue("employeeId", employeeId);
         cmd.Parameters.AddWithValue("periodYear", periodYear);
         cmd.Parameters.AddWithValue("deltaHours", deltaHours);

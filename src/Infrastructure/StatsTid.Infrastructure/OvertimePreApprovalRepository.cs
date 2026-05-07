@@ -57,10 +57,31 @@ public sealed class OvertimePreApprovalRepository
     {
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
-        await using var cmd = new NpgsqlCommand(
+        await using var cmd = BuildCreateCommand(conn, null, approval);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>
+    /// In-transaction sibling overload of <see cref="CreateAsync(OvertimePreApproval, CancellationToken)"/>.
+    /// Reuses the caller-supplied <paramref name="conn"/> + <paramref name="tx"/> so the
+    /// caller can extend the same transaction across outbox writes (ADR-018 D3 transactional-
+    /// outbox contract). The caller commits or rolls back; this method does NOT.
+    /// </summary>
+    public async Task CreateAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        OvertimePreApproval approval, CancellationToken ct = default)
+    {
+        await using var cmd = BuildCreateCommand(conn, tx, approval);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    private static NpgsqlCommand BuildCreateCommand(
+        NpgsqlConnection conn, NpgsqlTransaction? tx, OvertimePreApproval approval)
+    {
+        var sql =
             @"INSERT INTO overtime_pre_approvals (id, employee_id, period_start, period_end, max_hours, status, reason, created_at)
-              VALUES (@id, @employeeId, @periodStart, @periodEnd, @maxHours, @status, @reason, NOW())",
-            conn);
+              VALUES (@id, @employeeId, @periodStart, @periodEnd, @maxHours, @status, @reason, NOW())";
+        var cmd = tx is null ? new NpgsqlCommand(sql, conn) : new NpgsqlCommand(sql, conn, tx);
         cmd.Parameters.AddWithValue("id", approval.Id);
         cmd.Parameters.AddWithValue("employeeId", approval.EmployeeId);
         cmd.Parameters.AddWithValue("periodStart", approval.PeriodStart);
@@ -68,7 +89,7 @@ public sealed class OvertimePreApprovalRepository
         cmd.Parameters.AddWithValue("maxHours", approval.MaxHours);
         cmd.Parameters.AddWithValue("status", approval.Status);
         cmd.Parameters.AddWithValue("reason", (object?)approval.Reason ?? DBNull.Value);
-        await cmd.ExecuteNonQueryAsync(ct);
+        return cmd;
     }
 
     public async Task UpdateStatusAsync(

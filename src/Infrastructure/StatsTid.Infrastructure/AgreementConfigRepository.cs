@@ -72,8 +72,35 @@ public sealed class AgreementConfigRepository
     {
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
+        return await ExecuteCreateAsync(conn, null, entity, status, ct);
+    }
+
+    /// <summary>
+    /// In-transaction sibling overload of <see cref="CreateAsync(AgreementConfigEntity, CancellationToken)"/>.
+    /// Reuses the caller-supplied <paramref name="conn"/> + <paramref name="tx"/> so the
+    /// caller can extend the same transaction across audit + outbox writes
+    /// (ADR-018 D3 transactional-outbox contract). The caller commits or rolls back; this
+    /// method does NOT.
+    /// </summary>
+    public async Task<Guid> CreateAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        AgreementConfigEntity entity, CancellationToken ct = default)
+        => await ExecuteCreateAsync(conn, tx, entity, "DRAFT", ct);
+
+    /// <summary>
+    /// In-transaction sibling overload accepting an explicit <paramref name="status"/>.
+    /// </summary>
+    public async Task<Guid> CreateAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        AgreementConfigEntity entity, string status, CancellationToken ct = default)
+        => await ExecuteCreateAsync(conn, tx, entity, status, ct);
+
+    private static async Task<Guid> ExecuteCreateAsync(
+        NpgsqlConnection conn, NpgsqlTransaction? tx,
+        AgreementConfigEntity entity, string status, CancellationToken ct)
+    {
         var configId = Guid.NewGuid();
-        await using var cmd = new NpgsqlCommand(
+        var sql =
             """
             INSERT INTO agreement_configs (
                 config_id, agreement_code, ok_version, status,
@@ -110,7 +137,8 @@ public sealed class AgreementConfigRepository
                 @createdBy, @description, @clonedFromId,
                 NOW(), NOW()
             )
-            """, conn);
+            """;
+        await using var cmd = tx is null ? new NpgsqlCommand(sql, conn) : new NpgsqlCommand(sql, conn, tx);
         cmd.Parameters.AddWithValue("configId", configId);
         cmd.Parameters.AddWithValue("status", status);
         AddConfigParameters(cmd, entity);
@@ -125,7 +153,22 @@ public sealed class AgreementConfigRepository
     {
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
-        await using var cmd = new NpgsqlCommand(
+        return await ExecuteUpdateDraftAsync(conn, null, configId, updated, ct);
+    }
+
+    /// <summary>
+    /// In-transaction sibling overload of <see cref="UpdateDraftAsync(Guid, AgreementConfigEntity, CancellationToken)"/>.
+    /// </summary>
+    public async Task<bool> UpdateDraftAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        Guid configId, AgreementConfigEntity updated, CancellationToken ct = default)
+        => await ExecuteUpdateDraftAsync(conn, tx, configId, updated, ct);
+
+    private static async Task<bool> ExecuteUpdateDraftAsync(
+        NpgsqlConnection conn, NpgsqlTransaction? tx,
+        Guid configId, AgreementConfigEntity updated, CancellationToken ct)
+    {
+        var sql =
             """
             UPDATE agreement_configs SET
                 weekly_norm_hours = @weeklyNormHours,
@@ -171,7 +214,8 @@ public sealed class AgreementConfigRepository
                 description = @description,
                 updated_at = NOW()
             WHERE config_id = @configId AND status = 'DRAFT'
-            """, conn);
+            """;
+        await using var cmd = tx is null ? new NpgsqlCommand(sql, conn) : new NpgsqlCommand(sql, conn, tx);
         cmd.Parameters.AddWithValue("configId", configId);
         AddConfigParameters(cmd, updated);
         cmd.Parameters.AddWithValue("description", (object?)updated.Description ?? DBNull.Value);
@@ -179,6 +223,17 @@ public sealed class AgreementConfigRepository
         return rows > 0;
     }
 
+    /// <summary>
+    /// Self-managed overload: opens its own connection and an internal transaction for the
+    /// archive-prior-ACTIVE + activate-DRAFT pair. For a caller-driven atomic outbox + audit +
+    /// publish (ADR-018 D3) call the in-transaction sibling
+    /// <see cref="PublishAsync(NpgsqlConnection, NpgsqlTransaction, Guid, string, CancellationToken)"/>.
+    ///
+    /// Returns the prior-ACTIVE config_id that was archived (null if there was no prior
+    /// ACTIVE OR the publish was a no-op because the target config was missing / not in
+    /// DRAFT). On no-op the internal transaction is rolled back so the archive write is
+    /// reverted — matches the pre-S24 atomic semantic.
+    /// </summary>
     public async Task<Guid?> PublishAsync(Guid configId, string actorId, CancellationToken ct = default)
     {
         await using var conn = _connectionFactory.Create();
@@ -186,53 +241,15 @@ public sealed class AgreementConfigRepository
         await using var tx = await conn.BeginTransactionAsync(ct);
         try
         {
-            // Get the config being published to find its agreement_code and ok_version
-            Guid? archivedId = null;
-            await using (var getCmd = new NpgsqlCommand(
-                "SELECT agreement_code, ok_version FROM agreement_configs WHERE config_id = @configId", conn, tx))
+            var (archivedId, draftActivated) = await ExecutePublishAsync(conn, tx, configId, actorId, ct);
+            if (!draftActivated)
             {
-                getCmd.Parameters.AddWithValue("configId", configId);
-                await using var reader = await getCmd.ExecuteReaderAsync(ct);
-                if (!await reader.ReadAsync(ct))
-                {
-                    await tx.RollbackAsync(ct);
-                    return null;
-                }
-                var agreementCode = reader.GetString(0);
-                var okVersion = reader.GetString(1);
-                await reader.CloseAsync();
-
-                // Archive the current ACTIVE config for the same (code, version)
-                await using var archiveCmd = new NpgsqlCommand(
-                    """
-                    UPDATE agreement_configs
-                    SET status = 'ARCHIVED', archived_at = NOW(), updated_at = NOW()
-                    WHERE agreement_code = @agreementCode AND ok_version = @okVersion AND status = 'ACTIVE'
-                    RETURNING config_id
-                    """, conn, tx);
-                archiveCmd.Parameters.AddWithValue("agreementCode", agreementCode);
-                archiveCmd.Parameters.AddWithValue("okVersion", okVersion);
-                var result = await archiveCmd.ExecuteScalarAsync(ct);
-                if (result is Guid archivedGuid)
-                    archivedId = archivedGuid;
-            }
-
-            // Set this config to ACTIVE
-            await using var publishCmd = new NpgsqlCommand(
-                """
-                UPDATE agreement_configs
-                SET status = 'ACTIVE', published_at = NOW(), updated_at = NOW()
-                WHERE config_id = @configId AND status = 'DRAFT'
-                """, conn, tx);
-            publishCmd.Parameters.AddWithValue("configId", configId);
-            var publishedRows = await publishCmd.ExecuteNonQueryAsync(ct);
-
-            if (publishedRows == 0)
-            {
+                // Config not found OR config not DRAFT — preserve pre-S24 atomic semantic by
+                // rolling back the (potentially) archived prior-ACTIVE update so the
+                // database is left untouched. Endpoint observes null and surfaces 409.
                 await tx.RollbackAsync(ct);
                 return null;
             }
-
             await tx.CommitAsync(ct);
             return archivedId;
         }
@@ -243,16 +260,114 @@ public sealed class AgreementConfigRepository
         }
     }
 
+    /// <summary>
+    /// In-transaction sibling overload of <see cref="PublishAsync(Guid, string, CancellationToken)"/>.
+    /// Archives the prior ACTIVE config (if any) for the same (agreement_code, ok_version) AND
+    /// activates the DRAFT identified by <paramref name="configId"/>. Both UPDATEs run on the
+    /// caller-supplied <paramref name="conn"/> + <paramref name="tx"/>. The caller commits or
+    /// rolls back; this method does NOT.
+    ///
+    /// <para>
+    /// Returns the prior-ACTIVE config_id that was archived (null if there was no prior
+    /// ACTIVE for the same (agreement_code, ok_version)). When the target config is missing
+    /// OR not in DRAFT the method returns null AND leaves any prior-ACTIVE archive write
+    /// intact in <paramref name="tx"/> — the caller is responsible for rolling back the
+    /// transaction in that case. In-transaction callers (Phase 2) must pre-check status
+    /// (the endpoint already reads + verifies before calling) so the no-op branch is
+    /// concurrency-recovery only.
+    /// </para>
+    /// </summary>
+    public async Task<Guid?> PublishAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        Guid configId, string actorId, CancellationToken ct = default)
+    {
+        var (archivedId, _) = await ExecutePublishAsync(conn, tx, configId, actorId, ct);
+        return archivedId;
+    }
+
+    private static async Task<(Guid? ArchivedId, bool DraftActivated)> ExecutePublishAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        Guid configId, string actorId, CancellationToken ct)
+    {
+        // 1. Read identity AND status of the target row in one shot — guards against the
+        //    "archive prior ACTIVE then discover target isn't DRAFT" sequencing bug. If the
+        //    target is missing or not DRAFT we return draftActivated:false BEFORE issuing
+        //    any UPDATE so the caller's tx stays clean.
+        string agreementCode;
+        string okVersion;
+        string status;
+        await using (var getCmd = new NpgsqlCommand(
+            "SELECT agreement_code, ok_version, status FROM agreement_configs WHERE config_id = @configId",
+            conn, tx))
+        {
+            getCmd.Parameters.AddWithValue("configId", configId);
+            await using var reader = await getCmd.ExecuteReaderAsync(ct);
+            if (!await reader.ReadAsync(ct))
+                return (null, false);
+            agreementCode = reader.GetString(0);
+            okVersion = reader.GetString(1);
+            status = reader.GetString(2);
+        }
+        if (status != "DRAFT")
+            return (null, false);
+
+        // 2. Archive the current ACTIVE config for the same (agreement_code, ok_version).
+        Guid? archivedId = null;
+        await using (var archiveCmd = new NpgsqlCommand(
+            """
+            UPDATE agreement_configs
+            SET status = 'ARCHIVED', archived_at = NOW(), updated_at = NOW()
+            WHERE agreement_code = @agreementCode AND ok_version = @okVersion AND status = 'ACTIVE'
+            RETURNING config_id
+            """, conn, tx))
+        {
+            archiveCmd.Parameters.AddWithValue("agreementCode", agreementCode);
+            archiveCmd.Parameters.AddWithValue("okVersion", okVersion);
+            var result = await archiveCmd.ExecuteScalarAsync(ct);
+            if (result is Guid archivedGuid)
+                archivedId = archivedGuid;
+        }
+
+        // 3. Activate the DRAFT (still guarded by status='DRAFT' in WHERE for defense-in-depth
+        //    against a concurrent transition between step 1 and now).
+        await using var publishCmd = new NpgsqlCommand(
+            """
+            UPDATE agreement_configs
+            SET status = 'ACTIVE', published_at = NOW(), updated_at = NOW()
+            WHERE config_id = @configId AND status = 'DRAFT'
+            """, conn, tx);
+        publishCmd.Parameters.AddWithValue("configId", configId);
+        var publishedRows = await publishCmd.ExecuteNonQueryAsync(ct);
+
+        return (archivedId, publishedRows > 0);
+    }
+
     public async Task<bool> ArchiveAsync(Guid configId, string actorId, CancellationToken ct = default)
     {
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
-        await using var cmd = new NpgsqlCommand(
+        return await ExecuteArchiveAsync(conn, null, configId, actorId, ct);
+    }
+
+    /// <summary>
+    /// In-transaction sibling overload of <see cref="ArchiveAsync(Guid, string, CancellationToken)"/>.
+    /// </summary>
+    public async Task<bool> ArchiveAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        Guid configId, string actorId, CancellationToken ct = default)
+        => await ExecuteArchiveAsync(conn, tx, configId, actorId, ct);
+
+    private static async Task<bool> ExecuteArchiveAsync(
+        NpgsqlConnection conn, NpgsqlTransaction? tx,
+        Guid configId, string actorId, CancellationToken ct)
+    {
+        var sql =
             """
             UPDATE agreement_configs
             SET status = 'ARCHIVED', archived_at = NOW(), updated_at = NOW()
             WHERE config_id = @configId AND status != 'ARCHIVED'
-            """, conn);
+            """;
+        await using var cmd = tx is null ? new NpgsqlCommand(sql, conn) : new NpgsqlCommand(sql, conn, tx);
         cmd.Parameters.AddWithValue("configId", configId);
         var rows = await cmd.ExecuteNonQueryAsync(ct);
         return rows > 0;
@@ -269,13 +384,38 @@ public sealed class AgreementConfigRepository
             INSERT INTO agreement_config_audit (config_id, action, previous_data, new_data, actor_id, actor_role)
             VALUES (@configId, @action, @previousData::jsonb, @newData::jsonb, @actorId, @actorRole)
             """, conn);
+        AddAuditParameters(cmd, configId, action, previousData, newData, actorId, actorRole);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>
+    /// In-transaction sibling overload of
+    /// <see cref="AppendAuditAsync(Guid, string, string?, string?, string, string, CancellationToken)"/>.
+    /// </summary>
+    public async Task AppendAuditAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        Guid configId, string action, string? previousData, string? newData,
+        string actorId, string actorRole, CancellationToken ct = default)
+    {
+        await using var cmd = new NpgsqlCommand(
+            """
+            INSERT INTO agreement_config_audit (config_id, action, previous_data, new_data, actor_id, actor_role)
+            VALUES (@configId, @action, @previousData::jsonb, @newData::jsonb, @actorId, @actorRole)
+            """, conn, tx);
+        AddAuditParameters(cmd, configId, action, previousData, newData, actorId, actorRole);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    private static void AddAuditParameters(
+        NpgsqlCommand cmd, Guid configId, string action, string? previousData, string? newData,
+        string actorId, string actorRole)
+    {
         cmd.Parameters.AddWithValue("configId", configId);
         cmd.Parameters.AddWithValue("action", action);
         cmd.Parameters.AddWithValue("previousData", (object?)previousData ?? DBNull.Value);
         cmd.Parameters.AddWithValue("newData", (object?)newData ?? DBNull.Value);
         cmd.Parameters.AddWithValue("actorId", actorId);
         cmd.Parameters.AddWithValue("actorRole", actorRole);
-        await cmd.ExecuteNonQueryAsync(ct);
     }
 
     private static void AddConfigParameters(NpgsqlCommand cmd, AgreementConfigEntity entity)
