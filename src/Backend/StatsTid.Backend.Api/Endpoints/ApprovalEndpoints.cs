@@ -1,8 +1,8 @@
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
+using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Events;
-using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Security;
 
@@ -18,7 +18,8 @@ public static class ApprovalEndpoints
             SubmitPeriodRequest request,
             ApprovalPeriodRepository approvalRepo,
             OrgScopeValidator scopeValidator,
-            IEventStore eventStore,
+            DbConnectionFactory connectionFactory,
+            IOutboxEnqueue outbox,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -36,20 +37,28 @@ public static class ApprovalEndpoints
                     return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
             }
 
-            // Check if period already exists
+            // Check if period already exists (read-only — outside the write transaction).
             var existing = await approvalRepo.GetByEmployeeAndPeriodAsync(
                 request.EmployeeId, request.PeriodStart, request.PeriodEnd, ct);
 
+            // Only DRAFT or REJECTED periods can be (re-)submitted; reject early.
+            if (existing is not null && existing.Status is "SUBMITTED" or "APPROVED")
+                return Results.Conflict(new { error = $"Period already exists with status {existing.Status}" });
+
+            // Atomic state-change + audit + outbox enqueue (ADR-018 D3 atomic-outbox shape).
+            // Repo writes, audit insert and outbox enqueue commit together; the per-service
+            // OutboxPublisher drains outbox_events to the canonical event store at-least-once
+            // (ADR-018 D4) under its own ReadCommitted transaction with FOR UPDATE per-stream
+            // serialization — replaces the prior post-commit eventStore.AppendAsync shape.
             Guid periodId;
+            await using var conn = connectionFactory.Create();
+            await conn.OpenAsync(ct);
+            await using var tx = await conn.BeginTransactionAsync(ct);
 
             if (existing is not null)
             {
-                // Only DRAFT or REJECTED periods can be (re-)submitted
-                if (existing.Status is "SUBMITTED" or "APPROVED")
-                    return Results.Conflict(new { error = $"Period already exists with status {existing.Status}" });
-
                 // DRAFT or REJECTED -> transition to SUBMITTED
-                await approvalRepo.UpdateStatusAsync(existing.PeriodId, "SUBMITTED", actor.ActorId, ct: ct);
+                await approvalRepo.UpdateStatusAsync(conn, tx, existing.PeriodId, "SUBMITTED", actor.ActorId, ct: ct);
                 periodId = existing.PeriodId;
             }
             else
@@ -68,13 +77,17 @@ public static class ApprovalEndpoints
                     OkVersion = request.OkVersion
                 };
 
-                periodId = await approvalRepo.CreateAsync(newPeriod, ct);
+                periodId = await approvalRepo.CreateAsync(conn, tx, newPeriod, ct);
 
                 // Immediately transition to SUBMITTED
-                await approvalRepo.UpdateStatusAsync(periodId, "SUBMITTED", actor.ActorId, ct: ct);
+                await approvalRepo.UpdateStatusAsync(conn, tx, periodId, "SUBMITTED", actor.ActorId, ct: ct);
             }
 
-            // Emit PeriodSubmitted event
+            // Write approval audit (in-tx).
+            await approvalRepo.AppendAuditAsync(
+                conn, tx, periodId, "SUBMITTED", actor.ActorId!, actor.ActorRole ?? StatsTidRoles.Employee, null, ct);
+
+            // Enqueue PeriodSubmitted event in the same transaction.
             var streamId = $"approval-{request.EmployeeId}-{request.PeriodStart:yyyy-MM-dd}";
             var @event = new PeriodSubmitted
             {
@@ -88,11 +101,9 @@ public static class ApprovalEndpoints
                 ActorRole = actor.ActorRole,
                 CorrelationId = actor.CorrelationId
             };
-            await eventStore.AppendAsync(streamId, @event, ct);
+            await outbox.EnqueueAsync(conn, tx, streamId, @event, ct);
 
-            // Write approval audit
-            await approvalRepo.AppendAuditAsync(
-                periodId, "SUBMITTED", actor.ActorId!, actor.ActorRole ?? StatsTidRoles.Employee, null, ct);
+            await tx.CommitAsync(ct);
 
             return Results.Ok(new { periodId, status = "SUBMITTED" });
         }).RequireAuthorization("EmployeeOrAbove");
@@ -104,7 +115,8 @@ public static class ApprovalEndpoints
             ApprovalPeriodRepository approvalRepo,
             OrgScopeValidator scopeValidator,
             OrganizationRepository orgRepo,
-            IEventStore eventStore,
+            DbConnectionFactory connectionFactory,
+            IOutboxEnqueue outbox,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -123,10 +135,19 @@ public static class ApprovalEndpoints
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
-            // Transition to APPROVED
-            await approvalRepo.UpdateStatusAsync(periodId, "APPROVED", actor.ActorId, ct: ct);
+            // Atomic state-change + audit + outbox enqueue (ADR-018 D3).
+            await using var conn = connectionFactory.Create();
+            await conn.OpenAsync(ct);
+            await using var tx = await conn.BeginTransactionAsync(ct);
 
-            // Emit PeriodApproved event
+            // Transition to APPROVED
+            await approvalRepo.UpdateStatusAsync(conn, tx, periodId, "APPROVED", actor.ActorId, ct: ct);
+
+            // Write approval audit (in-tx).
+            await approvalRepo.AppendAuditAsync(
+                conn, tx, periodId, "APPROVED", actor.ActorId!, actor.ActorRole ?? StatsTidRoles.LocalLeader, null, ct);
+
+            // Enqueue PeriodApproved event in the same transaction.
             var streamId = $"approval-{period.EmployeeId}-{period.PeriodStart:yyyy-MM-dd}";
             var @event = new PeriodApproved
             {
@@ -140,11 +161,9 @@ public static class ApprovalEndpoints
                 ActorRole = actor.ActorRole,
                 CorrelationId = actor.CorrelationId
             };
-            await eventStore.AppendAsync(streamId, @event, ct);
+            await outbox.EnqueueAsync(conn, tx, streamId, @event, ct);
 
-            // Write approval audit
-            await approvalRepo.AppendAuditAsync(
-                periodId, "APPROVED", actor.ActorId!, actor.ActorRole ?? StatsTidRoles.LocalLeader, null, ct);
+            await tx.CommitAsync(ct);
 
             return Results.Ok(new { periodId, status = "APPROVED" });
         }).RequireAuthorization("LeaderOrAbove");
@@ -157,7 +176,8 @@ public static class ApprovalEndpoints
             ApprovalPeriodRepository approvalRepo,
             OrgScopeValidator scopeValidator,
             OrganizationRepository orgRepo,
-            IEventStore eventStore,
+            DbConnectionFactory connectionFactory,
+            IOutboxEnqueue outbox,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -176,10 +196,19 @@ public static class ApprovalEndpoints
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
-            // Transition to REJECTED
-            await approvalRepo.UpdateStatusAsync(periodId, "REJECTED", actor.ActorId, request.Reason, ct);
+            // Atomic state-change + audit + outbox enqueue (ADR-018 D3).
+            await using var conn = connectionFactory.Create();
+            await conn.OpenAsync(ct);
+            await using var tx = await conn.BeginTransactionAsync(ct);
 
-            // Emit PeriodRejected event
+            // Transition to REJECTED
+            await approvalRepo.UpdateStatusAsync(conn, tx, periodId, "REJECTED", actor.ActorId, request.Reason, ct);
+
+            // Write approval audit (in-tx).
+            await approvalRepo.AppendAuditAsync(
+                conn, tx, periodId, "REJECTED", actor.ActorId!, actor.ActorRole ?? StatsTidRoles.LocalLeader, request.Reason, ct);
+
+            // Enqueue PeriodRejected event in the same transaction.
             var streamId = $"approval-{period.EmployeeId}-{period.PeriodStart:yyyy-MM-dd}";
             var @event = new PeriodRejected
             {
@@ -194,11 +223,9 @@ public static class ApprovalEndpoints
                 ActorRole = actor.ActorRole,
                 CorrelationId = actor.CorrelationId
             };
-            await eventStore.AppendAsync(streamId, @event, ct);
+            await outbox.EnqueueAsync(conn, tx, streamId, @event, ct);
 
-            // Write approval audit
-            await approvalRepo.AppendAuditAsync(
-                periodId, "REJECTED", actor.ActorId!, actor.ActorRole ?? StatsTidRoles.LocalLeader, request.Reason, ct);
+            await tx.CommitAsync(ct);
 
             return Results.Ok(new { periodId, status = "REJECTED", reason = request.Reason });
         }).RequireAuthorization("LeaderOrAbove");
@@ -322,7 +349,8 @@ public static class ApprovalEndpoints
             ApprovalPeriodRepository approvalRepo,
             UserRepository userRepo,
             OrgScopeValidator scopeValidator,
-            IEventStore eventStore,
+            DbConnectionFactory connectionFactory,
+            IOutboxEnqueue outbox,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -351,17 +379,27 @@ public static class ApprovalEndpoints
             if (period.Status is not ("DRAFT" or "REJECTED"))
                 return Results.Conflict(new { error = $"Cannot employee-approve period with status {period.Status}. Only DRAFT or REJECTED periods can be employee-approved." });
 
-            // Transition to EMPLOYEE_APPROVED
-            await approvalRepo.UpdateStatusAsync(periodId, "EMPLOYEE_APPROVED", actor.ActorId, ct: ct);
+            // Atomic state-change + deadlines + audit + outbox enqueue (ADR-018 D3).
+            await using var conn = connectionFactory.Create();
+            await conn.OpenAsync(ct);
+            await using var tx = await conn.BeginTransactionAsync(ct);
 
-            // Calculate and set deadlines
+            // Transition to EMPLOYEE_APPROVED
+            await approvalRepo.UpdateStatusAsync(conn, tx, periodId, "EMPLOYEE_APPROVED", actor.ActorId, ct: ct);
+
+            // Calculate and set deadlines (in-tx).
             var lastDayOfMonth = new DateOnly(period.PeriodEnd.Year, period.PeriodEnd.Month,
                 DateTime.DaysInMonth(period.PeriodEnd.Year, period.PeriodEnd.Month));
             var employeeDeadline = lastDayOfMonth.AddDays(2);
             var managerDeadline = lastDayOfMonth.AddDays(5);
-            await approvalRepo.UpdateDeadlinesAsync(periodId, employeeDeadline, managerDeadline, ct);
+            await approvalRepo.UpdateDeadlinesAsync(conn, tx, periodId, employeeDeadline, managerDeadline, ct);
 
-            // Emit PeriodEmployeeApproved event
+            // Write audit trail (in-tx).
+            await approvalRepo.AppendAuditAsync(
+                conn, tx, periodId, "SUBMITTED", actor.ActorId!, actor.ActorRole ?? StatsTidRoles.Employee,
+                "Employee self-approval", ct);
+
+            // Enqueue PeriodEmployeeApproved event in the same transaction.
             var streamId = $"approval-{period.EmployeeId}-{period.PeriodStart:yyyy-MM-dd}";
             var @event = new PeriodEmployeeApproved
             {
@@ -374,12 +412,9 @@ public static class ApprovalEndpoints
                 ActorRole = actor.ActorRole,
                 CorrelationId = actor.CorrelationId
             };
-            await eventStore.AppendAsync(streamId, @event, ct);
+            await outbox.EnqueueAsync(conn, tx, streamId, @event, ct);
 
-            // Write audit trail
-            await approvalRepo.AppendAuditAsync(
-                periodId, "SUBMITTED", actor.ActorId!, actor.ActorRole ?? StatsTidRoles.Employee,
-                "Employee self-approval", ct);
+            await tx.CommitAsync(ct);
 
             return Results.Ok(new { periodId, status = "EMPLOYEE_APPROVED" });
         }).RequireAuthorization("EmployeeOrAbove");
@@ -391,7 +426,8 @@ public static class ApprovalEndpoints
             ReopenPeriodRequest request,
             ApprovalPeriodRepository approvalRepo,
             OrgScopeValidator scopeValidator,
-            IEventStore eventStore,
+            DbConnectionFactory connectionFactory,
+            IOutboxEnqueue outbox,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -410,10 +446,20 @@ public static class ApprovalEndpoints
             if (period.Status != "EMPLOYEE_APPROVED")
                 return Results.Conflict(new { error = $"Cannot reopen period with status {period.Status}. Only EMPLOYEE_APPROVED periods can be reopened." });
 
-            // Transition back to DRAFT
-            await approvalRepo.UpdateStatusAsync(periodId, "DRAFT", actor.ActorId, ct: ct);
+            // Atomic state-change + audit + outbox enqueue (ADR-018 D3).
+            await using var conn = connectionFactory.Create();
+            await conn.OpenAsync(ct);
+            await using var tx = await conn.BeginTransactionAsync(ct);
 
-            // Emit PeriodReopened event
+            // Transition back to DRAFT
+            await approvalRepo.UpdateStatusAsync(conn, tx, periodId, "DRAFT", actor.ActorId, ct: ct);
+
+            // Write audit trail (in-tx).
+            await approvalRepo.AppendAuditAsync(
+                conn, tx, periodId, "REOPENED", actor.ActorId!, actor.ActorRole ?? StatsTidRoles.LocalLeader,
+                request.Reason, ct);
+
+            // Enqueue PeriodReopened event in the same transaction.
             var streamId = $"approval-{period.EmployeeId}-{period.PeriodStart:yyyy-MM-dd}";
             var @event = new PeriodReopened
             {
@@ -427,12 +473,9 @@ public static class ApprovalEndpoints
                 ActorRole = actor.ActorRole,
                 CorrelationId = actor.CorrelationId
             };
-            await eventStore.AppendAsync(streamId, @event, ct);
+            await outbox.EnqueueAsync(conn, tx, streamId, @event, ct);
 
-            // Write audit trail
-            await approvalRepo.AppendAuditAsync(
-                periodId, "REOPENED", actor.ActorId!, actor.ActorRole ?? StatsTidRoles.LocalLeader,
-                request.Reason, ct);
+            await tx.CommitAsync(ct);
 
             return Results.Ok(new { periodId, status = "DRAFT" });
         }).RequireAuthorization("LeaderOrAbove");
