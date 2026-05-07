@@ -1,8 +1,8 @@
 using System.Text.Json;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
+using StatsTid.Infrastructure.Outbox;
 using StatsTid.SharedKernel.Events;
-using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Models;
 
 namespace StatsTid.Backend.Api.Endpoints;
@@ -37,11 +37,18 @@ public static class WageTypeMappingEndpoints
 
         // ═══════════════════════════════════════════
         // 3. POST /api/admin/wage-type-mappings — Create mapping
+        //
+        // ADR-018 D3 atomic write: the mapping INSERT, audit-row INSERT, and outbox enqueue
+        // commit in a single PostgreSQL transaction via the repo's (conn, tx) overloads
+        // (TASK-2401). A separate per-service OutboxPublisher drains outbox_events to the
+        // canonical event store at-least-once (ADR-018 D4) — this supersedes the prior
+        // post-commit eventStore.AppendAsync shape.
         // ═══════════════════════════════════════════
         app.MapPost("/api/admin/wage-type-mappings", async (
             CreateWageTypeMappingRequest body,
             WageTypeMappingRepository repo,
-            IEventStore eventStore,
+            DbConnectionFactory connectionFactory,
+            IOutboxEnqueue outbox,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -59,17 +66,23 @@ public static class WageTypeMappingEndpoints
                 Description = body.Description,
             };
 
-            var success = await repo.CreateAsync(mapping, ct);
+            await using var conn = connectionFactory.Create();
+            await conn.OpenAsync(ct);
+            await using var tx = await conn.BeginTransactionAsync(ct);
+
+            var success = await repo.CreateAsync(conn, tx, mapping, ct);
             if (!success)
                 return Results.Conflict(new { error = "A mapping with this key already exists" });
 
-            // Audit trail
+            // Audit trail (Pattern B — repo owns audit emission via (conn, tx) overload)
             await repo.AppendAuditAsync(
+                conn, tx,
                 body.TimeType, body.OkVersion, body.AgreementCode, body.Position ?? "",
                 "CREATED", null, JsonSerializer.Serialize(body),
                 actorId, actorRole, ct);
 
-            // Emit domain event
+            // Enqueue domain event INSIDE the same transaction (ADR-018 D3) — replaces the
+            // prior post-commit eventStore.AppendAsync shape.
             var @event = new WageTypeMappingCreated
             {
                 TimeType = body.TimeType,
@@ -81,7 +94,12 @@ public static class WageTypeMappingEndpoints
                 ActorRole = actorRole,
                 CorrelationId = actor.CorrelationId,
             };
-            await eventStore.AppendAsync($"wage-type-mapping-{body.AgreementCode}-{body.OkVersion}-{body.TimeType}", @event, ct);
+            await outbox.EnqueueAsync(
+                conn, tx,
+                $"wage-type-mapping-{body.AgreementCode}-{body.OkVersion}-{body.TimeType}",
+                @event, ct);
+
+            await tx.CommitAsync(ct);
 
             return Results.Created($"/api/admin/wage-type-mappings/agreement/{body.AgreementCode}/{body.OkVersion}", new
             {
@@ -95,11 +113,14 @@ public static class WageTypeMappingEndpoints
 
         // ═══════════════════════════════════════════
         // 4. PUT /api/admin/wage-type-mappings — Update mapping
+        //
+        // ADR-018 D3 atomic write — see POST handler above for rationale.
         // ═══════════════════════════════════════════
         app.MapPut("/api/admin/wage-type-mappings", async (
             UpdateWageTypeMappingRequest body,
             WageTypeMappingRepository repo,
-            IEventStore eventStore,
+            DbConnectionFactory connectionFactory,
+            IOutboxEnqueue outbox,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -107,7 +128,7 @@ public static class WageTypeMappingEndpoints
             var actorId = actor.ActorId ?? "unknown";
             var actorRole = actor.ActorRole ?? "unknown";
 
-            // Get previous data for audit
+            // Get previous data for audit (read outside the write tx — pre-existing shape).
             var previous = await repo.GetByKeyAsync(body.TimeType, body.OkVersion, body.AgreementCode, body.Position ?? "", ct);
             if (previous is null)
                 return Results.NotFound(new { error = "Wage type mapping not found" });
@@ -122,19 +143,24 @@ public static class WageTypeMappingEndpoints
                 Description = body.Description,
             };
 
-            var success = await repo.UpdateAsync(mapping, ct);
+            await using var conn = connectionFactory.Create();
+            await conn.OpenAsync(ct);
+            await using var tx = await conn.BeginTransactionAsync(ct);
+
+            var success = await repo.UpdateAsync(conn, tx, mapping, ct);
             if (!success)
                 return Results.NotFound(new { error = "Wage type mapping not found" });
 
-            // Audit trail
+            // Audit trail (Pattern B — (conn, tx) overload).
             await repo.AppendAuditAsync(
+                conn, tx,
                 body.TimeType, body.OkVersion, body.AgreementCode, body.Position ?? "",
                 "UPDATED",
                 JsonSerializer.Serialize(previous),
                 JsonSerializer.Serialize(body),
                 actorId, actorRole, ct);
 
-            // Emit domain event
+            // Enqueue domain event INSIDE the same transaction (ADR-018 D3).
             var @event = new WageTypeMappingUpdated
             {
                 TimeType = body.TimeType,
@@ -146,7 +172,12 @@ public static class WageTypeMappingEndpoints
                 ActorRole = actorRole,
                 CorrelationId = actor.CorrelationId,
             };
-            await eventStore.AppendAsync($"wage-type-mapping-{body.AgreementCode}-{body.OkVersion}-{body.TimeType}", @event, ct);
+            await outbox.EnqueueAsync(
+                conn, tx,
+                $"wage-type-mapping-{body.AgreementCode}-{body.OkVersion}-{body.TimeType}",
+                @event, ct);
+
+            await tx.CommitAsync(ct);
 
             return Results.Ok(new
             {
@@ -161,6 +192,8 @@ public static class WageTypeMappingEndpoints
 
         // ═══════════════════════════════════════════
         // 5. DELETE /api/admin/wage-type-mappings — Delete mapping
+        //
+        // ADR-018 D3 atomic write — see POST handler above for rationale.
         // ═══════════════════════════════════════════
         app.MapDelete("/api/admin/wage-type-mappings", async (
             string timeType,
@@ -168,7 +201,8 @@ public static class WageTypeMappingEndpoints
             string agreementCode,
             string? position,
             WageTypeMappingRepository repo,
-            IEventStore eventStore,
+            DbConnectionFactory connectionFactory,
+            IOutboxEnqueue outbox,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -177,24 +211,29 @@ public static class WageTypeMappingEndpoints
             var actorRole = actor.ActorRole ?? "unknown";
             var pos = position ?? "";
 
-            // Get data for audit before deletion
+            // Get data for audit before deletion (read outside the write tx — pre-existing shape).
             var existing = await repo.GetByKeyAsync(timeType, okVersion, agreementCode, pos, ct);
             if (existing is null)
                 return Results.NotFound(new { error = "Wage type mapping not found" });
 
-            var success = await repo.DeleteAsync(timeType, okVersion, agreementCode, pos, ct);
+            await using var conn = connectionFactory.Create();
+            await conn.OpenAsync(ct);
+            await using var tx = await conn.BeginTransactionAsync(ct);
+
+            var success = await repo.DeleteAsync(conn, tx, timeType, okVersion, agreementCode, pos, ct);
             if (!success)
                 return Results.NotFound(new { error = "Wage type mapping not found" });
 
-            // Audit trail
+            // Audit trail (Pattern B — (conn, tx) overload).
             await repo.AppendAuditAsync(
+                conn, tx,
                 timeType, okVersion, agreementCode, pos,
                 "DELETED",
                 JsonSerializer.Serialize(existing),
                 null,
                 actorId, actorRole, ct);
 
-            // Emit domain event
+            // Enqueue domain event INSIDE the same transaction (ADR-018 D3).
             var @event = new WageTypeMappingDeleted
             {
                 TimeType = timeType,
@@ -205,7 +244,12 @@ public static class WageTypeMappingEndpoints
                 ActorRole = actorRole,
                 CorrelationId = actor.CorrelationId,
             };
-            await eventStore.AppendAsync($"wage-type-mapping-{agreementCode}-{okVersion}-{timeType}", @event, ct);
+            await outbox.EnqueueAsync(
+                conn, tx,
+                $"wage-type-mapping-{agreementCode}-{okVersion}-{timeType}",
+                @event, ct);
+
+            await tx.CommitAsync(ct);
 
             return Results.Ok(new { timeType, okVersion, agreementCode, position = pos, deleted = true });
         }).RequireAuthorization("GlobalAdminOnly");
