@@ -2,9 +2,9 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
+using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Events;
-using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Security;
 
@@ -120,7 +120,8 @@ public static class OvertimeEndpoints
         app.MapPost("/api/overtime/pre-approval", async (
             OvertimePreApprovalRequest request,
             OvertimePreApprovalRepository preApprovalRepo,
-            IEventStore eventStore,
+            DbConnectionFactory connectionFactory,
+            IOutboxEnqueue outbox,
             OrgScopeValidator scopeValidator,
             HttpContext context,
             CancellationToken ct) =>
@@ -148,8 +149,13 @@ public static class OvertimeEndpoints
                 Status = "PENDING",
                 Reason = request.Reason,
             };
-            await preApprovalRepo.CreateAsync(approval, ct);
 
+            // Atomic in-tx repo write + outbox enqueue (ADR-018 D3, Pattern C — no audit row).
+            // Replaces the prior post-commit eventStore.AppendAsync shape so a process crash
+            // between the DB insert and event emission can no longer leave a created
+            // pre-approval row without its corresponding OvertimePreApprovalCreated event.
+            // The OutboxPublisher drains outbox_events to the canonical event store under its
+            // own ReadCommitted transaction (ADR-018 D4) at-least-once.
             var evt = new OvertimePreApprovalCreated
             {
                 EmployeeId = request.EmployeeId,
@@ -161,7 +167,23 @@ public static class OvertimeEndpoints
                 ActorRole = actor.ActorRole,
                 CorrelationId = Guid.NewGuid(),
             };
-            await eventStore.AppendAsync($"overtime-preapproval-{approval.Id}", evt, ct);
+            await using (var conn = connectionFactory.Create())
+            {
+                await conn.OpenAsync(ct);
+                await using var tx = await conn.BeginTransactionAsync(ct);
+                try
+                {
+                    await preApprovalRepo.CreateAsync(conn, tx, approval, ct);
+                    await outbox.EnqueueAsync(
+                        conn, tx, $"overtime-preapproval-{approval.Id}", evt, ct);
+                    await tx.CommitAsync(ct);
+                }
+                catch
+                {
+                    await tx.RollbackAsync(ct);
+                    throw;
+                }
+            }
 
             return Results.Created($"/api/overtime/pre-approval/{approval.Id}", new
             {
@@ -278,7 +300,8 @@ public static class OvertimeEndpoints
             string employeeId,
             OvertimeCompensateRequest request,
             OvertimeBalanceRepository overtimeBalanceRepo,
-            IEventStore eventStore,
+            DbConnectionFactory connectionFactory,
+            IOutboxEnqueue outbox,
             OrgScopeValidator scopeValidator,
             HttpContext context,
             CancellationToken ct) =>
@@ -304,15 +327,12 @@ public static class OvertimeEndpoints
             if (request.Hours > balance.Remaining)
                 return Results.BadRequest(new { error = $"Insufficient remaining hours. Available: {balance.Remaining}" });
 
-            if (request.CompensationType == "PAYOUT")
-            {
-                await overtimeBalanceRepo.AdjustPaidOutAsync(employeeId, request.PeriodYear, request.Hours, ct);
-            }
-            else
-            {
-                await overtimeBalanceRepo.AdjustAfspadseringAsync(employeeId, request.PeriodYear, request.Hours, ct);
-            }
-
+            // Atomic in-tx balance adjustment + outbox enqueue (ADR-018 D3, Pattern C — no
+            // audit row). Replaces the prior post-commit eventStore.AppendAsync shape so a
+            // process crash between the balance UPDATE and event emission can no longer leave
+            // an updated balance row without its corresponding OvertimeCompensationApplied
+            // event. The OutboxPublisher drains outbox_events to the canonical event store
+            // under its own ReadCommitted transaction (ADR-018 D4) at-least-once.
             var evt = new OvertimeCompensationApplied
             {
                 EmployeeId = employeeId,
@@ -325,7 +345,37 @@ public static class OvertimeEndpoints
                 ActorRole = actor.ActorRole,
                 CorrelationId = Guid.NewGuid(),
             };
-            await eventStore.AppendAsync($"overtime-balance-{employeeId}-{request.PeriodYear}", evt, ct);
+            await using (var conn = connectionFactory.Create())
+            {
+                await conn.OpenAsync(ct);
+                await using var tx = await conn.BeginTransactionAsync(ct);
+                try
+                {
+                    if (request.CompensationType == "PAYOUT")
+                    {
+                        await overtimeBalanceRepo.AdjustPaidOutAsync(
+                            conn, tx, employeeId, request.PeriodYear, request.Hours, ct);
+                    }
+                    else
+                    {
+                        await overtimeBalanceRepo.AdjustAfspadseringAsync(
+                            conn, tx, employeeId, request.PeriodYear, request.Hours, ct);
+                    }
+
+                    await outbox.EnqueueAsync(
+                        conn,
+                        tx,
+                        $"overtime-balance-{employeeId}-{request.PeriodYear}",
+                        evt,
+                        ct);
+                    await tx.CommitAsync(ct);
+                }
+                catch
+                {
+                    await tx.RollbackAsync(ct);
+                    throw;
+                }
+            }
 
             return Results.Ok(new
             {
