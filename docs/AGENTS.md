@@ -41,6 +41,21 @@ This document defines all agent types in the StatsTid multi-agent architecture. 
 - **Responsibility**: React pages, components, hooks, routing, styling
 - **Constraints**: Secondary priority — must never drive backend decisions. Must consume backend APIs as-is.
 
+### Cross-Domain Authorization
+
+Some tasks legitimately span multiple agent boundaries — a single endpoint conversion may touch HTTP routing (Backend.Api), repository orchestration (Infrastructure), audit-log emission (Security), and event types (Data Model) all at once. Other tasks sit in scope paths (`src/Backend/**/Endpoints/*.cs`, `src/Infrastructure/**/*Repository.cs`) that no single domain agent above declares as its scope.
+
+For these cases, the sprint plan declares the task as **cross-domain authorized**. The label takes one of two forms:
+
+- `<primary agent> (extended into <other scope>, cross-domain authorized)` — when one agent has the dominant claim but the work reaches into another agent's scope (e.g., `Data Model (extended into Infrastructure, cross-domain authorized)`)
+- `<scope label> (cross-domain authorized)` — when the work doesn't fit any single agent's declared scope (e.g., `Backend API (cross-domain authorized)`)
+
+The Orchestrator authorizes the cross-domain claim at decompose time (Step 1) and records it in the sprint log's "Agent" field. The cross-domain label is not a wildcard — it's an explicit statement that the Orchestrator has verified the multi-domain coupling is necessary, not accidental. Constraint Validator and Reviewer Agent treat cross-domain-authorized tasks the same way they treat single-agent tasks: file-scope checks operate on the explicit scope declared in the sprint plan, not on the agent label.
+
+**Why this exists rather than a "Backend Agent" or "Infrastructure Agent":** A generalist agent would absorb work that legitimately splits across specialists, hide cross-domain coupling that should be surfaced for review, and grow unboundedly to swallow whatever doesn't fit elsewhere. The cross-domain-authorized convention preserves specialist boundaries while acknowledging that some work genuinely spans them.
+
+**Established precedent**: S22 used this convention for TASK-2205 (`Backend API (cross-domain authorized)`) and TASK-2206 (`Backend API + Payroll Integration + External (cross-domain authorized)`). S24 continues the pattern.
+
 ## Constraint Validator Agent
 - **Scope**: Read-only — no file modifications
 - **Responsibility**: Lightweight, fast cross-cutting constraint check on ALL agent outputs. Runs after every agent completes (step 5, before Reviewer). Checks mechanical rules that should never be violated regardless of domain.

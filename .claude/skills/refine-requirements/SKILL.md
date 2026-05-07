@@ -94,7 +94,63 @@ Explicit assessment of whether this is clear enough to start planning/coding.
 
 ---
 
-### Step 4: Suggest the Next Question
+### Step 4: Review the Refinement (MANDATORY for substantive tasks)
+
+Refinements that bake in wrong scope or assumptions waste effort downstream. WORKFLOW.md Step 0b plan review catches such flaws on the formal sprint plan, but by then the assumptions have already shaped the plan. Reviewing the refinement here is upstream and cheaper to correct.
+
+**Procedure**
+
+1. Write the Step 3 refinement block to `.claude/refinements/REFINEMENT-<short-topic>.md` (gitignored — already excluded via `.gitignore`). Use a short, descriptive slug for `<short-topic>` (e.g., `s24-task-2206-redo`, `compliance-warning-color`).
+2. Run BOTH review lenses (in parallel where possible):
+   - **External lens (Codex)**: `codex exec "<review-prompt>"` referencing the refinement file path. Catches scope drift, missing exclusions, weak acceptance criteria, hidden assumptions, regression vectors.
+   - **Internal lens (Reviewer Agent)**: spawn the Reviewer Agent (per [docs/AGENTS.md](../../../docs/AGENTS.md)) with the refinement file as REVIEW SCOPE. Catches architectural fit against KB / ADRs / priority order, simplicity, scope-vs-priority alignment.
+3. Both lenses return BLOCKER / WARNING / NOTE findings in the standard severity format.
+4. Append findings inline in the user-facing Step 3 output under a new section:
+
+   ```
+   **Review Findings (Step 4)**
+
+   *External (Codex):*
+   - BLOCKER: ...
+   - WARNING: ...
+   - NOTE: ...
+
+   *Internal (Reviewer Agent):*
+   - BLOCKER: ...
+   - WARNING: ...
+   - NOTE: ...
+   ```
+5. Address all BLOCKERs before proceeding to Step 5. For each fix, update the refinement file and re-invoke whichever lens flagged it. WARNINGs and NOTEs are surfaced to the user with a recommendation; the user decides.
+
+**Codex review prompt template**
+
+```
+Review the requirements refinement at <path> against:
+1. Scope tightness — explicit exclusions, anything in scope that should be deferred, anything deferred that's actually load-bearing?
+2. Open Questions — genuine forks not surfaced? For each listed, is the recommendation defensible?
+3. Assumptions — wrong against current code, ADRs (docs/knowledge-base/), ROADMAP, CLAUDE.md priority order?
+4. Acceptance Criteria — checklist actually verifies "done"? Anything verifiable that's missing?
+5. Risks — hidden coupling, in-flux interfaces, regression vectors, migration concerns missing?
+6. Architectural fit — conflicts with KB / ADRs / ROADMAP / priority order?
+
+Return BLOCKER / WARNING / NOTE findings with file:line citations where applicable. If clean, say "Clean — no findings."
+Be terse.
+```
+
+**Cycle cap**
+
+2 BLOCKER-fix cycles per lens. After the second cycle on the same lens, halt and prompt the user to choose: (a) continue iterating, (b) accept remaining findings and proceed, (c) defer findings as a follow-up task. Mirrors WORKFLOW.md Step 0b / Step 7a discipline (see `feedback_step7a_cycle_cap_discipline.md`).
+
+**Skip conditions** (Step 4 only — Steps 1–3 still run)
+
+- Calibration "simple bug fix or typo" tier where Step 3 was 2–3 lines.
+- Mechanical task with an obvious fix.
+- User explicitly says "skip review" or "proceed without review."
+- `codex` CLI not on PATH OR Reviewer Agent unavailable → **halt and prompt user**. Do NOT silently skip.
+
+When skipping, record a one-line rationale in the user-facing output (e.g., "Step 4 skipped: trivial mechanical fix").
+
+### Step 5: Suggest the Next Question
 
 Always end with a suggested follow-up question the user should consider. This guides them to think deeper about aspects they may not have considered.
 
@@ -109,17 +165,17 @@ Format:
 
 This is NOT "Does this look right?" — that's a yes/no gate. The follow-up question opens a new line of thinking.
 
-### Step 5: Iterate or Proceed
+### Step 6: Iterate or Proceed
 
-- If the user answers the follow-up or makes corrections: update the refinement and suggest the next deeper question. Repeat until READY.
+- If the user answers the follow-up or makes corrections: update the refinement, re-run Step 4 review on the changed sections, then suggest the next deeper question. Repeat until READY.
 - If the user says to proceed: start planning or coding.
 - If the user gives a simple confirmation: proceed — don't over-refine simple tasks.
 
 ### Calibration
 
 **Scale the refinement to the task size:**
-- Simple bug fix or typo: 2-3 line refinement, skip edge cases, go straight to READY
-- Single-feature task: Standard refinement block
-- Multi-sprint feature or new domain: Full refinement with architecture review, multiple follow-up rounds
+- Simple bug fix or typo: 2-3 line refinement, skip edge cases, skip Step 4 review, go straight to READY
+- Single-feature task: Standard refinement block + Step 4 review
+- Multi-sprint feature or new domain: Full refinement with architecture review, Step 4 review, multiple follow-up rounds
 
 **Don't over-engineer refinement for tasks where the right answer is obvious.** If the user says "fix the 500 error on the positions page" and you can see the error, just fix it. The skill is for ambiguous or complex requests, not mechanical tasks.

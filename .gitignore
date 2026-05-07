@@ -34,3 +34,6 @@ docker/postgres/data/
 ## Test results
 TestResults/
 coverage/
+
+## Claude Code transient artifacts
+.claude/refinements/
