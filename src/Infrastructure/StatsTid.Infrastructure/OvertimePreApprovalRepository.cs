@@ -97,16 +97,39 @@ public sealed class OvertimePreApprovalRepository
     {
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
-        await using var cmd = new NpgsqlCommand(
+        await using var cmd = BuildUpdateStatusCommand(conn, null, id, status, approvedBy, reason);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>
+    /// In-transaction sibling overload of <see cref="UpdateStatusAsync(Guid, string, string?, string?, CancellationToken)"/>.
+    /// Reuses the caller-supplied <paramref name="conn"/> + <paramref name="tx"/> so the
+    /// caller can extend the same transaction across outbox writes (ADR-018 D3 transactional-
+    /// outbox contract). Required by TASK-2607 (Overtime approve/reject atomic). The caller
+    /// commits or rolls back; this method does NOT.
+    /// </summary>
+    public async Task UpdateStatusAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        Guid id, string status, string? approvedBy, string? reason, CancellationToken ct = default)
+    {
+        await using var cmd = BuildUpdateStatusCommand(conn, tx, id, status, approvedBy, reason);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    private static NpgsqlCommand BuildUpdateStatusCommand(
+        NpgsqlConnection conn, NpgsqlTransaction? tx,
+        Guid id, string status, string? approvedBy, string? reason)
+    {
+        var sql =
             @"UPDATE overtime_pre_approvals
               SET status = @status, approved_by = @approvedBy, approved_at = NOW(), reason = @reason
-              WHERE id = @id",
-            conn);
+              WHERE id = @id";
+        var cmd = tx is null ? new NpgsqlCommand(sql, conn) : new NpgsqlCommand(sql, conn, tx);
         cmd.Parameters.AddWithValue("id", id);
         cmd.Parameters.AddWithValue("status", status);
         cmd.Parameters.AddWithValue("approvedBy", (object?)approvedBy ?? DBNull.Value);
         cmd.Parameters.AddWithValue("reason", (object?)reason ?? DBNull.Value);
-        await cmd.ExecuteNonQueryAsync(ct);
+        return cmd;
     }
 
     private static async Task<IReadOnlyList<OvertimePreApproval>> ReadApprovalsAsync(
