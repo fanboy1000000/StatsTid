@@ -96,6 +96,14 @@ public sealed class WageTypeMappingAtomicTests : IAsyncLifetime
         await _repo.CreateAsync(seed);
         var streamId = $"wage-type-mapping-{AgreementCode}-{OkVersion}-{seed.TimeType}";
 
+        // S25 / TASK-2505: v3 UpdateAsync(conn, tx, mapping, expectedVersion, ...) requires
+        // the row's current version. Read it back via the same path the HTTP endpoint uses
+        // (GET → If-Match → PUT). CreateAsync via the self-managed v1 path does not return
+        // the version — the row holds the DB DEFAULT (1) until the v3 path bumps it.
+        var preMapping = await _repo.GetByKeyAsync(seed.TimeType, seed.OkVersion, seed.AgreementCode, seed.Position);
+        Assert.NotNull(preMapping);
+        var expectedVersion = preMapping!.Version;
+
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
         {
             await using var conn = _harness.Factory.Create();
@@ -103,12 +111,14 @@ public sealed class WageTypeMappingAtomicTests : IAsyncLifetime
             await using var tx = await conn.BeginTransactionAsync();
 
             var updated = NewMapping(seed.TimeType, wageType: "SLS_9999");
-            var success = await _repo.UpdateAsync(conn, tx, updated);
-            Assert.True(success);
+            var saveResult = await _repo.UpdateAsync(conn, tx, updated, expectedVersion);
+            Assert.False(saveResult.IsCreated);
+            Assert.Equal(expectedVersion + 1, saveResult.Version); // v3 bumps version
             await _repo.AppendAuditAsync(
                 conn, tx,
                 seed.TimeType, seed.OkVersion, seed.AgreementCode, seed.Position,
-                "UPDATED", "{}", "{}", "tester", "GLOBAL_ADMIN");
+                "UPDATED", "{}", "{}", "tester", "GLOBAL_ADMIN",
+                versionBefore: expectedVersion, versionAfter: saveResult.Version);
 
             var @event = new WageTypeMappingUpdated
             {
@@ -143,6 +153,13 @@ public sealed class WageTypeMappingAtomicTests : IAsyncLifetime
         await _repo.CreateAsync(seed);
         var streamId = $"wage-type-mapping-{AgreementCode}-{OkVersion}-{seed.TimeType}";
 
+        // S25 / TASK-2505: v3 DeleteAsync(conn, tx, ..., expectedVersion, ...) requires the
+        // row's current version. Read it back via the same path the HTTP endpoint uses
+        // (GET → If-Match → DELETE).
+        var preMapping = await _repo.GetByKeyAsync(seed.TimeType, seed.OkVersion, seed.AgreementCode, seed.Position);
+        Assert.NotNull(preMapping);
+        var expectedVersion = preMapping!.Version;
+
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
         {
             await using var conn = _harness.Factory.Create();
@@ -150,12 +167,13 @@ public sealed class WageTypeMappingAtomicTests : IAsyncLifetime
             await using var tx = await conn.BeginTransactionAsync();
 
             var success = await _repo.DeleteAsync(
-                conn, tx, seed.TimeType, seed.OkVersion, seed.AgreementCode, seed.Position);
+                conn, tx, seed.TimeType, seed.OkVersion, seed.AgreementCode, seed.Position, expectedVersion);
             Assert.True(success);
             await _repo.AppendAuditAsync(
                 conn, tx,
                 seed.TimeType, seed.OkVersion, seed.AgreementCode, seed.Position,
-                "DELETED", "{}", null, "tester", "GLOBAL_ADMIN");
+                "DELETED", "{}", null, "tester", "GLOBAL_ADMIN",
+                versionBefore: expectedVersion, versionAfter: expectedVersion);
 
             var @event = new WageTypeMappingDeleted
             {

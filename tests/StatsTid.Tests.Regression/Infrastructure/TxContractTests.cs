@@ -652,6 +652,13 @@ public sealed class TxContractTests : IAsyncLifetime
         var mapping = NewWageTypeMapping("TT_UPDATE_TEST_1");
         await repo.CreateAsync(mapping);
 
+        // S25 / TASK-2505: v3 UpdateAsync(conn, tx, mapping, expectedVersion, ...) requires
+        // the row's current version. Read it back via the same path the HTTP endpoint uses
+        // (GET → If-Match → PUT).
+        var preMapping = await repo.GetByKeyAsync(mapping.TimeType, mapping.OkVersion, mapping.AgreementCode, mapping.Position);
+        Assert.NotNull(preMapping);
+        var expectedVersion = preMapping!.Version;
+
         await using var conn = _harness.Factory.Create();
         await conn.OpenAsync();
         await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
@@ -666,8 +673,9 @@ public sealed class TxContractTests : IAsyncLifetime
             Position = mapping.Position,
             Description = mapping.Description,
         };
-        var ok = await repo.UpdateAsync(conn, tx, updated);
-        Assert.True(ok);
+        var saveResult = await repo.UpdateAsync(conn, tx, updated, expectedVersion);
+        Assert.False(saveResult.IsCreated);
+        Assert.Equal(expectedVersion + 1, saveResult.Version);
         await AssertTxStillUsable(conn, tx);
         await tx.RollbackAsync();
         var seenAfter = await ScalarFreshConn<string>(
@@ -682,11 +690,17 @@ public sealed class TxContractTests : IAsyncLifetime
         var mapping = NewWageTypeMapping("TT_DELETE_TEST_1");
         await repo.CreateAsync(mapping);
 
+        // S25 / TASK-2505: v3 DeleteAsync(conn, tx, ..., expectedVersion, ...) requires the
+        // row's current version.
+        var preMapping = await repo.GetByKeyAsync(mapping.TimeType, mapping.OkVersion, mapping.AgreementCode, mapping.Position);
+        Assert.NotNull(preMapping);
+        var expectedVersion = preMapping!.Version;
+
         await using var conn = _harness.Factory.Create();
         await conn.OpenAsync();
         await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
 
-        var ok = await repo.DeleteAsync(conn, tx, mapping.TimeType, mapping.OkVersion, mapping.AgreementCode, mapping.Position);
+        var ok = await repo.DeleteAsync(conn, tx, mapping.TimeType, mapping.OkVersion, mapping.AgreementCode, mapping.Position, expectedVersion);
         Assert.True(ok);
         await AssertTxStillUsable(conn, tx);
         Assert.Equal(0L, await CountInsideTx(
