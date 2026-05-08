@@ -1,6 +1,7 @@
 using Npgsql;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
+using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Interfaces;
@@ -68,7 +69,7 @@ public static class AdminEndpoints
             OrganizationRepository orgRepo,
             OrgScopeValidator scopeValidator,
             DbConnectionFactory dbFactory,
-            IEventStore eventStore,
+            IOutboxEnqueue outbox,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -107,40 +108,55 @@ public static class AdminEndpoints
             if (existing is not null)
                 return Results.Conflict(new { error = $"Organization '{request.OrgId}' already exists" });
 
-            // Insert via direct Npgsql
+            // Atomic INSERT + outbox-emit per ADR-018 D3 (S26 TASK-2605a prototype):
+            // inline organizations INSERT and OrganizationCreated outbox enqueue ride
+            // a single explicit transaction; commit at end of try, rollback on throw.
             var now = DateTime.UtcNow;
             await using var conn = dbFactory.Create();
             await conn.OpenAsync(ct);
-            await using var cmd = new NpgsqlCommand(
-                """
-                INSERT INTO organizations (org_id, org_name, org_type, parent_org_id, materialized_path, agreement_code, ok_version, is_active, created_at, updated_at)
-                VALUES (@orgId, @orgName, @orgType, @parentOrgId, @materializedPath, @agreementCode, @okVersion, TRUE, @now, @now)
-                """, conn);
-            cmd.Parameters.AddWithValue("orgId", request.OrgId);
-            cmd.Parameters.AddWithValue("orgName", request.OrgName);
-            cmd.Parameters.AddWithValue("orgType", request.OrgType.ToUpperInvariant());
-            cmd.Parameters.AddWithValue("parentOrgId", (object?)request.ParentOrgId ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("materializedPath", materializedPath);
-            cmd.Parameters.AddWithValue("agreementCode", request.AgreementCode);
-            cmd.Parameters.AddWithValue("okVersion", request.OkVersion);
-            cmd.Parameters.AddWithValue("now", now);
-            await cmd.ExecuteNonQueryAsync(ct);
+            await using var tx = await conn.BeginTransactionAsync(ct);
 
-            // Emit domain event
-            var @event = new OrganizationCreated
+            try
             {
-                OrgId = request.OrgId,
-                OrgName = request.OrgName,
-                OrgType = request.OrgType.ToUpperInvariant(),
-                ParentOrgId = request.ParentOrgId,
-                MaterializedPath = materializedPath,
-                AgreementCode = request.AgreementCode,
-                OkVersion = request.OkVersion,
-                ActorId = actor.ActorId,
-                ActorRole = actor.ActorRole,
-                CorrelationId = actor.CorrelationId
-            };
-            await eventStore.AppendAsync($"org-{request.OrgId}", @event, ct);
+                await using var cmd = new NpgsqlCommand(
+                    """
+                    INSERT INTO organizations (org_id, org_name, org_type, parent_org_id, materialized_path, agreement_code, ok_version, is_active, created_at, updated_at)
+                    VALUES (@orgId, @orgName, @orgType, @parentOrgId, @materializedPath, @agreementCode, @okVersion, TRUE, @now, @now)
+                    """, conn, tx);
+                cmd.Parameters.AddWithValue("orgId", request.OrgId);
+                cmd.Parameters.AddWithValue("orgName", request.OrgName);
+                cmd.Parameters.AddWithValue("orgType", request.OrgType.ToUpperInvariant());
+                cmd.Parameters.AddWithValue("parentOrgId", (object?)request.ParentOrgId ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("materializedPath", materializedPath);
+                cmd.Parameters.AddWithValue("agreementCode", request.AgreementCode);
+                cmd.Parameters.AddWithValue("okVersion", request.OkVersion);
+                cmd.Parameters.AddWithValue("now", now);
+                await cmd.ExecuteNonQueryAsync(ct);
+
+                // Emit domain event in-tx (BEFORE CommitAsync) so the organizations row
+                // and the outbox row commit atomically per ADR-018 D3.
+                var @event = new OrganizationCreated
+                {
+                    OrgId = request.OrgId,
+                    OrgName = request.OrgName,
+                    OrgType = request.OrgType.ToUpperInvariant(),
+                    ParentOrgId = request.ParentOrgId,
+                    MaterializedPath = materializedPath,
+                    AgreementCode = request.AgreementCode,
+                    OkVersion = request.OkVersion,
+                    ActorId = actor.ActorId,
+                    ActorRole = actor.ActorRole,
+                    CorrelationId = actor.CorrelationId
+                };
+                await outbox.EnqueueAsync(conn, tx, $"org-{request.OrgId}", @event, ct);
+
+                await tx.CommitAsync(ct);
+            }
+            catch
+            {
+                await tx.RollbackAsync(ct);
+                throw;
+            }
 
             return Results.Created($"/api/admin/organizations/{request.OrgId}", new
             {
