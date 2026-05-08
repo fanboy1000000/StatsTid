@@ -40,6 +40,28 @@ public sealed class EntitlementBalanceRepository
         return await reader.ReadAsync(ct) ? ReadBalance(reader) : null;
     }
 
+    /// <summary>
+    /// In-transaction sibling overload of
+    /// <see cref="GetByEmployeeAndTypeAsync(string, string, int, CancellationToken)"/>.
+    /// Reuses the caller-supplied <paramref name="conn"/> + <paramref name="tx"/> so the read
+    /// observes the same snapshot as the outer transaction (ADR-018 D3 transactional-outbox
+    /// contract; required by <see cref="CheckAndAdjustAsync(NpgsqlConnection, NpgsqlTransaction, string, string, int, decimal, decimal, CancellationToken)"/>
+    /// failure-path under RepeatableRead). The caller commits or rolls back; this method does NOT.
+    /// </summary>
+    public async Task<EntitlementBalance?> GetByEmployeeAndTypeAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string employeeId, string entitlementType, int entitlementYear, CancellationToken ct = default)
+    {
+        await using var cmd = new NpgsqlCommand(
+            "SELECT * FROM entitlement_balances WHERE employee_id = @employeeId AND entitlement_type = @entitlementType AND entitlement_year = @entitlementYear",
+            conn, tx);
+        cmd.Parameters.AddWithValue("employeeId", employeeId);
+        cmd.Parameters.AddWithValue("entitlementType", entitlementType);
+        cmd.Parameters.AddWithValue("entitlementYear", entitlementYear);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct) ? ReadBalance(reader) : null;
+    }
+
     public async Task UpsertAsync(EntitlementBalance balance, CancellationToken ct = default)
     {
         await using var conn = _connectionFactory.Create();
@@ -115,6 +137,50 @@ public sealed class EntitlementBalanceRepository
 
         // Update didn't match — quota would be exceeded. Return current used for error reporting.
         var balance = await GetByEmployeeAndTypeAsync(employeeId, entitlementType, entitlementYear, ct);
+        return (false, balance?.Used ?? 0m);
+    }
+
+    /// <summary>
+    /// In-transaction sibling overload of
+    /// <see cref="CheckAndAdjustAsync(string, string, int, decimal, decimal, CancellationToken)"/>.
+    /// Reuses the caller-supplied <paramref name="conn"/> + <paramref name="tx"/> so the
+    /// atomic-quota-check single-UPDATE participates in the outer transaction (ADR-018 D3
+    /// transactional-outbox contract). Preserves the v1 TOCTOU-safe shape: WITH-current-CTE +
+    /// UPDATE-WHERE-quota-guard + RETURNING-used. Failure-path fallback routes through the
+    /// (conn, tx) overload of <see cref="GetByEmployeeAndTypeAsync(NpgsqlConnection, NpgsqlTransaction, string, string, int, CancellationToken)"/>
+    /// so the current-Used read for the 422 response observes the same snapshot under
+    /// RepeatableRead. The caller commits or rolls back; this method does NOT.
+    /// </summary>
+    public async Task<(bool Success, decimal NewUsed)> CheckAndAdjustAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string employeeId, string entitlementType, int entitlementYear,
+        decimal deltaDays, decimal effectiveQuota, CancellationToken ct = default)
+    {
+        await using var cmd = new NpgsqlCommand(
+            @"WITH current AS (
+                SELECT used, carryover_in
+                FROM entitlement_balances
+                WHERE employee_id = @employeeId AND entitlement_type = @entitlementType AND entitlement_year = @entitlementYear
+              )
+              UPDATE entitlement_balances
+              SET used = entitlement_balances.used + @deltaDays, updated_at = NOW()
+              WHERE employee_id = @employeeId AND entitlement_type = @entitlementType AND entitlement_year = @entitlementYear
+                AND (SELECT used FROM current) + @deltaDays <= @effectiveQuota + (SELECT carryover_in FROM current)
+              RETURNING used",
+            conn, tx);
+        cmd.Parameters.AddWithValue("employeeId", employeeId);
+        cmd.Parameters.AddWithValue("entitlementType", entitlementType);
+        cmd.Parameters.AddWithValue("entitlementYear", entitlementYear);
+        cmd.Parameters.AddWithValue("deltaDays", deltaDays);
+        cmd.Parameters.AddWithValue("effectiveQuota", effectiveQuota);
+        var result = await cmd.ExecuteScalarAsync(ct);
+        if (result is decimal newUsed)
+            return (true, newUsed);
+
+        // Update didn't match — quota would be exceeded. Return current used for error reporting.
+        // Route the read through the (conn, tx) overload so the snapshot is consistent with the
+        // outer transaction under RepeatableRead (refinement W3).
+        var balance = await GetByEmployeeAndTypeAsync(conn, tx, employeeId, entitlementType, entitlementYear, ct);
         return (false, balance?.Used ?? 0m);
     }
 
