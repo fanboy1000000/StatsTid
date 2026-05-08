@@ -196,7 +196,8 @@ internal static class ForcedRollbackHarness
             published_at            TIMESTAMPTZ,
             archived_at             TIMESTAMPTZ,
             cloned_from_id          UUID        REFERENCES agreement_configs(config_id),
-            description             TEXT
+            description             TEXT,
+            version                 BIGINT      NOT NULL DEFAULT 1
         );
 
         CREATE TABLE IF NOT EXISTS agreement_config_audit (
@@ -207,7 +208,9 @@ internal static class ForcedRollbackHarness
             new_data        JSONB,
             actor_id        TEXT        NOT NULL,
             actor_role      TEXT        NOT NULL,
-            timestamp       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            timestamp       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            version_before  BIGINT,
+            version_after   BIGINT
         );
 
         CREATE TABLE IF NOT EXISTS position_override_configs (
@@ -223,7 +226,8 @@ internal static class ForcedRollbackHarness
             created_by          TEXT        NOT NULL DEFAULT 'SYSTEM_SEED',
             created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            description         TEXT
+            description         TEXT,
+            version             BIGINT      NOT NULL DEFAULT 1
         );
 
         CREATE UNIQUE INDEX IF NOT EXISTS idx_position_override_active_unique
@@ -238,7 +242,9 @@ internal static class ForcedRollbackHarness
             new_data        JSONB,
             actor_id        TEXT        NOT NULL,
             actor_role      TEXT        NOT NULL,
-            timestamp       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            timestamp       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            version_before  BIGINT,
+            version_after   BIGINT
         );
 
         CREATE TABLE IF NOT EXISTS wage_type_mapping_audit (
@@ -252,7 +258,9 @@ internal static class ForcedRollbackHarness
             new_data        JSONB,
             actor_id        TEXT        NOT NULL,
             actor_role      TEXT        NOT NULL,
-            timestamp       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            timestamp       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            version_before  BIGINT,
+            version_after   BIGINT
         );
 
         CREATE TABLE IF NOT EXISTS overtime_balances (
@@ -299,6 +307,7 @@ internal static class ForcedRollbackHarness
             position        TEXT        NOT NULL DEFAULT '',
             description     TEXT,
             created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            version         BIGINT      NOT NULL DEFAULT 1,
             PRIMARY KEY (time_type, ok_version, agreement_code, position)
         );
         """;

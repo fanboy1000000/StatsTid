@@ -42,7 +42,6 @@ public sealed class AuditVersionTransitionTests : IAsyncLifetime
         _harness = await Segmentation.TestFixtures.DockerHarness.StartAsync();
         await OutboxTestSchema.ApplyAsync(_harness.ConnectionString);
         await ForcedRollbackHarness.ApplySchemaAsync(_harness.ConnectionString);
-        await ConcurrencyTestSchema.ApplyAsync(_harness.ConnectionString);
         _agreementConfigRepo = new AgreementConfigRepository(_harness.Factory);
         _positionOverrideRepo = new PositionOverrideRepository(_harness.Factory);
         _wageTypeMappingRepo = new WageTypeMappingRepository(_harness.Factory);
