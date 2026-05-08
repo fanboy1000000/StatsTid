@@ -42,9 +42,6 @@ public sealed class TimerAtomicTests : IAsyncLifetime
     [Fact]
     public async Task CheckIn_OutboxFails_RollsBack()
     {
-        // Phase 4c.5 carry-forward: rename to timer-session-{employeeId} in this test
-        // when ADR-018 alignment lands (currently `timer-{employeeId}` per
-        // TimerEndpoints L63 — production stream-name preserved for replay determinism).
         var employeeId = "EMP_FR_TIMER_IN_" + Guid.NewGuid().ToString("N").Substring(0, 8);
         var streamId = $"timer-{employeeId}";
         var session = new TimerSession
@@ -86,9 +83,6 @@ public sealed class TimerAtomicTests : IAsyncLifetime
     [Fact]
     public async Task CheckOut_OutboxFails_RollsBack()
     {
-        // Phase 4c.5 carry-forward: rename to timer-session-{employeeId} in this test
-        // when ADR-018 alignment lands (currently `timer-{employeeId}` per
-        // TimerEndpoints L137 — production stream-name preserved for replay determinism).
         var employeeId = "EMP_FR_TIMER_OUT_" + Guid.NewGuid().ToString("N").Substring(0, 8);
         var streamId = $"timer-{employeeId}";
         var session = new TimerSession

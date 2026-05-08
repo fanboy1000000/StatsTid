@@ -56,10 +56,6 @@ public static class TimerEndpoints
             // a process crash between session-tx commit and event-store append no longer
             // leaks state. The per-service OutboxPublisher drains outbox_events to the
             // canonical event store under at-least-once semantics (ADR-018 D4).
-            //
-            // Stream name preserved as `timer-{employeeId}` per Phase 4c.5 carry-forward
-            // adjudication — ADR-018 line 265 spec'd `timer-session-{id}` but renaming
-            // existing streams retroactively breaks replay determinism.
             var streamId = $"timer-{request.EmployeeId}";
             var @event = new TimerCheckedIn
             {
@@ -132,8 +128,6 @@ public static class TimerEndpoints
 
             // Atomic in-tx write: timer_sessions UPDATE + outbox enqueue commit together
             // (ADR-018 D3). Replaces the legacy post-commit eventStore.AppendAsync shape.
-            // Stream name preserved as `timer-{employeeId}` per Phase 4c.5 carry-forward
-            // adjudication.
             var streamId = $"timer-{request.EmployeeId}";
             var @event = new TimerCheckedOut
             {
