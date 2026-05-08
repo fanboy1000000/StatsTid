@@ -3,12 +3,13 @@
 | Field | Value |
 |-------|-------|
 | **Sprint** | 25 |
-| **Status** | planned |
+| **Status** | complete |
 | **Start Date** | 2026-05-07 |
-| **End Date** | TBD |
-| **Orchestrator Approved** | no |
-| **Build Verified** | no |
-| **Test Verified** | no |
+| **End Date** | 2026-05-08 |
+| **Orchestrator Approved** | yes |
+| **Build Verified** | yes (0 errors / 19 pre-existing CS0618 carry-forwards unchanged) |
+| **Test Verified** | yes (525 unit + 35 plain regression + 129 Docker-gated + 88 frontend vitest = 777 total) |
+| **Sprint Close** | `d32f34a` Step 7a cycle 1 fix; `74e2c49` TASK-2508; `fdcabd4` TASK-2506; `d4a923d` TASK-2507; `4eed4da` TASK-2505; `43b7f80` TASK-2504; `da165c9` TASK-2503; `eef1dfe` TASK-2502; `161c161` TASK-2501; `91dc150` sprint open. Plus `ef9ec91` post-2508 cleanup (harness DDL inline). Final HEAD: `d32f34a` (10 commits S25 + 2 cleanup). |
 
 ## Sprint Goal
 
@@ -515,25 +516,54 @@ S25 is admin-config infrastructure-only (optimistic concurrency hardening). Lega
 
 ## External Review (Step 7a)
 
-_Pending sprint-end._
-
 | Field | Value |
 |-------|-------|
-| **Invoked** | not yet |
+| **Invoked** | yes (2026-05-08) |
 | **Sprint-start commit** | `3728ccc` (S24 sprint close) |
-| **Command** | TBD at sprint end |
-| **Review Cycles** | 0 (cycle cap: 2 per WORKFLOW.md) |
-| **Findings** | 0 |
-| **Resolution** | n/a |
+| **Command** | `codex review --base 3728ccc --title "S25 Phase 4c Part 2 — D2.2 ETag/If-Match propagation"` (cycle 1); `codex review --base ef9ec91` (cycle 2) |
+| **Review Cycles** | 2 of 2 (cycle cap: 2 per WORKFLOW.md / `feedback_step7a_cycle_cap_discipline.md`) |
+| **Cycle 1 Findings** | 1 P1 BLOCKER + 1 P2 WARNING (Codex). Internal Reviewer concurrent: 1 BLOCKER (same as Codex P1) + 3 WARNINGs + 4 NOTEs. Recommendation: REQUEST CHANGES. |
+| **Cycle 1 Resolution** | Commit `d32f34a` absorbed 3 fixes: B1 publish-supersession dual-emission per ADR-019 D1 (extended `SaveAgreementConfigResult` with `ArchivedVersion` + endpoint emits second audit + outbox in same tx) + Codex P2 412-before-409 (removed pre-flight 409 in publish/archive endpoints; status conflicts surface as 412 via v3 OCE) + Reviewer W1 catch-block ordering swap in PositionOverride activate. Reviewer W2/W3 + N1-N4 deferred to follow-on per cycle-cap discipline. 1 new D-test (`Publish_OverPriorActive_EmitsTwoAuditRowsAndTwoOutboxEvents`) covers B1 contract end-to-end. |
+| **Cycle 2 Findings** | 0 BLOCKERs / 0 WARNINGs / 0 NOTEs. Verdict: "The changes appear internally consistent: the publish path now surfaces the archived row version needed for the second audit/outbox emission, and the endpoint uses it within the same transaction. I did not find a discrete regression in the modified code paths that would clearly break existing behavior." |
+| **Cycle 2 Resolution** | Clean — sprint close authorized. |
 
 ## Test Summary
 
-_Pending sprint-end. Target: 525 unit + 35 plain + ~128 Docker-gated (105 pre-S25 + 22 concurrency + 1 migration) + ~88 frontend vitest = ~776 total._
+| Suite | Pre-S25 (S24 close) | S25 added | Post-S25 |
+|-------|---------------------|-----------|----------|
+| Unit | 525 | 0 | 525 |
+| Regression (plain) | 35 | 0 | 35 |
+| Regression (Docker-gated) | 105 | 23 + 1 | 129 |
+| Frontend vitest | 76 | 12 | 88 |
+| **Total** | **741** | **+36** | **777** |
+
+S25 D-tests added: 8 stale-If-Match (3 AgreementConfig + 3 PositionOverride + 2 WageTypeMapping) + 8 missing-If-Match (helper-surface; HTTP-surface harness deferred to Phase 4d) + 3 ETag-cycle (1 per resource) + 3 audit version-transition (D8 cross-resource) + 1 publish-supersession dual-emission (Step 7a cycle 1 B1 verification) + 1 migration idempotency = 24 D-tests. Frontend: 8 apiFetchWithEtag tests + 2 AgreementConfigEditor banner-with-retry + 2 PositionOverrideManagement banner-with-retry = 12 vitest tests.
 
 ## Agent Effectiveness
 
-_Pending sprint-end._
+| Task | Agent | Worktree | Cycles | First-pass | Notes |
+|------|-------|----------|--------|------------|-------|
+| TASK-2501 | Data Model (Orchestrator-direct) | n/a | 1 | yes | Schema-only migration. |
+| TASK-2502 | Backend API + Data Model (Orchestrator-direct) | n/a | 1 | yes | Foundation: SaveResult records + entity Version + EtagHeaderHelper extraction. |
+| TASK-2503 | Backend API + Data Model | yes | 1 | yes | AgreementConfig atomic per-surface migration. |
+| TASK-2504 | Backend API + Data Model | yes | 1 | yes | PositionOverride atomic per-surface migration. |
+| TASK-2505 | Backend API + Data Model | yes | 1 | yes | WageTypeMapping atomic per-surface migration. |
+| TASK-2506 | UX | yes | 1 | yes (with documented carry-forward — 13 pre-existing tsc errors in unrelated files) | Frontend ETag wiring across apiClient + 3 hooks + 4 admin pages. |
+| TASK-2507 | Orchestrator-direct | n/a | 1 | yes | ADR-019 + INDEX append. |
+| TASK-2508 | Test & QA | yes | 1 | yes (with 1 documented DEVIATION: ConcurrencyTestSchema.cs DDL helper for harness gap) | 23 Docker-gated D-tests. Deviation absorbed by Orchestrator follow-on commit `ef9ec91` (harness DDL inlined; helper deleted). |
+
+7/8 worktree tasks first-pass clean; 1 (TASK-2506) had a flagged carry-forward outside its scope (pre-existing tsc errors); 1 (TASK-2508) had a flagged DEVIATION absorbed in cleanup. Step 7a cycle 1 absorbed 1 BLOCKER (B1 — convergent finding from both Codex + Reviewer) + 2 contract fixes (P2 + W1). Cycle 2 clean.
 
 ## Sprint Retrospective
 
-_Pending sprint-end._
+**What worked well:**
+- Phase 2 worktrees ran fully parallel with zero merge conflicts (atomic per-surface design — each worktree owned 3 disjoint files: repo + endpoint + atomic test). S24 lesson absorbed (commit Phase 1 BEFORE dispatching Phase 2 worktrees).
+- Per-surface SaveResult records (D1) made the publish-supersession contract type-level legible — Step 7a cycle 1 BLOCKER fix landed cleanly via additive `ArchivedVersion` field with default null (no caller signature break).
+- D5 coexistence pattern (apiClient extension + sibling-module preservation) avoided a gratuitous migration on `profileApi.ts` while delivering the new admin-strict pattern coherently.
+- Step 7a cycle 1 convergence (Codex P1 + Reviewer B1 same finding) validated the multi-lens review value — the BLOCKER was real and would have shipped silently otherwise.
+
+**What surfaced for future sprints:**
+- ADR-019 W2 (`currentState` shape inconsistency vs ADR-019 D2 prose), W3 (apiFetchWithEtag body-parse asymmetry), N1 (deprecated v1 PublishAsync overloads), N2 (cross-cite comments for OCE reuse), N3 (harness drift assertion), N4 (unused `IsCreated:false` on AgreementConfig surface) — all deferred to follow-on cleanup sprint.
+- 13 pre-existing frontend tsc errors block `npm run build` clean (SkemaGrid/useAdmin/ProjectManagement/RoleManagement/SkemaPage) — unrelated to S25 but worth a small follow-on cleanup task.
+- HTTP-surface harness (`WebApplicationFactory<Program>`) deferred to Phase 4d per S24 carry-forward — TASK-2508 stayed at the helper surface for missing-If-Match tests.
+- Cycle-cap discipline held: 2 cycles max per Step 7a lens.
