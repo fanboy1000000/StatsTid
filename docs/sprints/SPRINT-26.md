@@ -3,13 +3,14 @@
 | Field | Value |
 |-------|-------|
 | **Sprint** | 26 |
-| **Status** | planned |
+| **Status** | complete (with cycle-2 carry-forward to Phase 4c.6) |
 | **Start Date** | 2026-05-08 |
-| **End Date** | TBD |
-| **Orchestrator Approved** | no |
-| **Build Verified** | no |
-| **Test Verified** | no |
+| **End Date** | 2026-05-08 |
+| **Orchestrator Approved** | yes |
+| **Build Verified** | yes (0 errors / 19 pre-existing CS0618 unchanged) |
+| **Test Verified** | yes (525 unit + 35 plain regression + 134 Docker-gated + 88 frontend vitest = 782 total) |
 | **Sprint-start commit base** | `b256a51` (S25 sprint close) |
+| **Sprint-end HEAD** | `3b27c78` (Step 7a cycle 1 B3 fix). 14 commits total: `4c84b3c` sprint open + Phase 1 (`77e491f`/`03d3cde`/`fb76db2`/`98c7e25`) + Phase 2 (`be4870c`/`65f0842`/`060b947`/`295d1df`/`1143976`) + Phase 3 `5deeabf` + Step 7a cycle 1 (`31176fd`/`62cfb20`/`d3adc30`/`3b27c78`). 2 commits reverted at cycle 1 (TASK-2604+2606); pre-existing post-validation race (cycle 2 finding) deferred to Phase 4c.6. |
 
 ## Sprint Goal
 
@@ -446,25 +447,90 @@ Phase 2 yields **4 simultaneously-active worktrees** initially (2604/2605a/2606/
 
 ## External Review (Step 7a)
 
-_Pending sprint-end._
-
 | Field | Value |
 |-------|-------|
-| **Invoked** | not yet |
+| **Invoked** | yes (2026-05-08) |
 | **Sprint-start commit** | `b256a51` (S25 sprint close) |
-| **Command** | TBD at sprint end |
-| **Review Cycles** | 0 (cycle cap: 2 per WORKFLOW.md) |
-| **Findings** | 0 |
-| **Resolution** | n/a |
+| **Commands** | `codex review --base b256a51 --title "S26 Phase 4c.5 — atomic outbox final sweep"` (cycle 1); `codex review --base 5deeabf --title "S26 Step 7a cycle 2 — re-review after revert + B3 fix"` (cycle 2) |
+| **Review Cycles** | 2 of 2 complete (cycle cap respected per `feedback_step7a_cycle_cap_discipline.md`) |
+| **Cycle 1 Findings — Codex** | 3 P1 BLOCKERs + 0 WARNINGs + 0 NOTEs. Recommendation: REQUEST CHANGES. |
+| **Cycle 1 Findings — Internal Reviewer** | 0 BLOCKERs + 0 WARNINGs + 4 NOTEs (style/coverage). Recommendation: APPROVE WITH NOTES. **Strong divergence from Codex** — Reviewer audited diff internals; Codex caught architectural cross-cutting concerns the Reviewer's surface-level check missed. |
+| **Cycle 1 Resolution** | 4 commits absorbing the 3 BLOCKERs (per user decision: "Revert 2604+2606, fix B3 inline + document carry-forwards"): |
+| | • `31176fd` Revert TASK-2606 (Time atomic — broke read-your-write; reads from `events` stream still synchronous-required) |
+| | • `62cfb20` Revert TASK-2604 (Skema atomic — same root cause + Skema multi-event tx) |
+| | • `d3adc30` Remove SkemaAtomicTests + TimeAtomicTests (no surface to test post-revert) |
+| | • `3b27c78` B3 fix: `CheckAndAdjustAsync` two-statement pattern (ensure-row INSERT + TOCTOU-safe quota-checked UPDATE); distinguishes missing-row from quota-breach. Both v1 + v2 (conn, tx) overloads refactored via shared private `CheckAndAdjustInternalAsync` helper. 2 new D-tests verify missing-row auto-create + missing-row delta-over-quota rejection. |
+| **Cycle 2 Findings — Codex** | 1 P1 BLOCKER (post-validation quota race silently returns 200 OK with inconsistent state at `SkemaEndpoints.cs:414-418`). **Pre-existing bug exposed by cycle-1 revert**, not introduced by cycle-1 fixes. Proper fix requires Phase 4c.6 projection-table redesign — see Architectural Finding section below. |
+| **Cycle 2 Resolution** | Per user decision ("Defer to Phase 4c.6 + document explicitly"): cycle-cap discipline respected (2 of 2). Carry-forward documented in this SPRINT-26.md + ROADMAP.md Phase 4c.6 entry — Phase 4c.6 sprint sequenced BEFORE Phase 4d to fix the post-validation race + restore atomic-rollback semantics with read-your-write preserved. No further code changes in S26. |
+
+### Architectural finding for Phase 4c.6 (carry-forward)
+
+**Atomic-outbox migration on event-stream-backed-read endpoints is unsafe without a synchronous DB projection table.** S22's `ConfigEndpoints` exemplar succeeded because reads come from `local_agreement_profiles` (a projection updated synchronously with the same tx). For `SkemaEndpoints` / `TimeEndpoints` / `BalanceEndpoints` / `ComplianceEndpoints`, **there is no projection table — reads come straight from the `events` table via `IEventStore.ReadStreamAsync`**. After atomic-outbox migration, POST writes only to `outbox_events`; the `OutboxPublisher` BackgroundService drains to `events` asynchronously (typically <1s but unbounded). A user saving and immediately refreshing sees stale data until the publisher catches up — production read-your-write regression.
+
+The S26 refinement missed this constraint. Both pre-implementation review cycles (1+2) and the TASK-2605a prototype Reviewer signoff did not audit GET-side read paths. The two atomic exemplars (S22 ConfigEndpoints, S25 admin-strict resources) all happened to have repos with projection tables, so the pattern looked uniform.
+
+### Cycle 2 finding — pre-existing post-validation quota race (carry-forward to Phase 4c.6)
+
+**SkemaEndpoints.cs:414-418 silently swallows post-validation quota race; returns 200 OK with inconsistent state.** Codex Step 7a cycle 2 surfaced this. When the Rule Engine HTTP pre-validation passes but a concurrent save consumes the entitlement before `CheckAndAdjustAsync` runs, the post-validation `(false, currentUsed)` returns silently `continue`s — the `AbsenceRegistered` events stay committed, the balance is not adjusted, no `EntitlementBalanceAdjusted` event is emitted, and the request returns 200 OK on inconsistent state.
+
+This is **pre-S26 behavior** that the cycle-1 revert of TASK-2604 restored. TASK-2604 attempted to fix this by wrapping events + balance + emit in a single tx with `SkemaQuotaBreachException` → 422, but cycle 1 BLOCKERs P1-1+P1-2 reverted TASK-2604 because the atomic-tx broke read-your-write (no projection table).
+
+**The trichotomy** (re-stated for the carry-forward record):
+
+| Behavior | Race response | Read-your-write |
+|---|---|---|
+| Pre-S26 / post-cycle-1-revert (current) | silent skip + 200 OK + inconsistent state | works |
+| S26 TASK-2604 (reverted) | atomic rollback + 422 + clean state | broke |
+| **Phase 4c.6 target** | atomic rollback + 422 + clean state + read-your-write | requires projection table |
+
+Pre-S26 silent-skip is a real ongoing data-consistency bug, not introduced by S26 — but the cycle-1 revert restored it after S26 had briefly fixed (one of) the trichotomy axes. Phase 4c.6 is the only path that satisfies all three constraints simultaneously.
+
+**Phase 4c.6 follow-up sprint plan** (carry-forward; sprint number TBD; **sequenced BEFORE Phase 4d** per ROADMAP):
+- Build projection tables for `time_entries` + `absences` (consolidated `employee_*` stream consumers). Use repository pattern with read methods routed to the projection.
+- Skema GET reads from projections instead of `events.ReadStreamAsync`.
+- BalanceEndpoints GET summary similarly.
+- ComplianceEndpoints GET routes through projections.
+- Re-attempt the atomic-outbox migration on Skema/Time/Balance/Compliance with read-your-write preserved.
+- **Restore S26-style atomic-rollback-on-quota-breach** (`SkemaQuotaBreachException` → 422) at `SkemaEndpoints.cs:414-418` — the post-validation race produces 422 + clean state instead of silent 200 OK + inconsistent state.
+- Document this as the canonical pattern for any future endpoint adding atomic-outbox: "atomic-outbox requires a synchronous projection table for any GET that reads back the just-written state."
 
 ## Test Summary
 
-_Pending sprint-end. Target: 525 unit + 35 plain + ~136 Docker-gated (129 pre-S26 + ~7 new D-tests + 2 TxContractTests) + 88 frontend vitest = ~786 total._
+_Pending sprint-end. Post-cycle-1 actual: 525 unit + 35 plain + 134 Docker-gated (129 pre-S26 + 5 net new from TASK-2608: 2 AdminAtomicTests + 2 OvertimeApproveRejectAtomicTests + 1 TxContractTests-original-S26 — minus 2 SkemaAtomicTests + TimeAtomicTests removed in cycle 1 revert + 2 new B3 D-tests in TxContractTests = +5 net) + 88 frontend vitest = ~782 total._
+
+Original target was ~786; actual ~782 reflects the 4-test net delta from the cycle-1 revert (-2 Skema + -2 Time atomic tests) and the +2 B3 D-tests (+2 entitlement-balance tests).
 
 ## Agent Effectiveness
 
-_Pending sprint-end._
+| Task | Agent | Worktree | Cycles | First-pass | Notes |
+|---|---|---|---|---|---|
+| TASK-2601 | Orchestrator-direct | n/a | 1 | yes | ADR-018 D6 retabulate + comment cleanup. |
+| TASK-2602 | Data Model | yes | 1 | yes | Net-new event types; EventSerializer 45→47 verified. |
+| TASK-2603 (a+b) | Data Model | yes | 1 | yes | 2 commits per spec; convergent BLOCKER fix from refinement cycle 2. |
+| TASK-2604 | Backend API + Data Model | yes | 1 | yes | **REVERTED at Step 7a cycle 1** — atomic-tx broke read-your-write on Skema (no projection table). |
+| TASK-2605a | Backend API | yes | 1 | yes | Admin prototype L143; Reviewer signoff APPROVE before TASK-2605b. |
+| TASK-2605b | Backend API | yes | 1 | yes | 5 sites, 2 sub-shapes; honored Reviewer NOTEs from prototype signoff. |
+| TASK-2606 | Backend API | yes | 1 | yes | **REVERTED at Step 7a cycle 1** — same root cause as TASK-2604. |
+| TASK-2607 | Backend API | yes | 1 | yes | Pattern C only; convergent BLOCKER fix from refinement cycle 2 ("no audit table"). |
+| TASK-2608 | Test & QA | yes | 1 | yes (with 2 D-tests later removed in cycle-1 revert) | 9 D-tests; 2 removed in cycle-1 cleanup. |
+
+7/8 worktree tasks first-pass clean; 2 of those (TASK-2604 + TASK-2606) reverted at Step 7a cycle 1 due to architectural read-your-write regression that pre-implementation reviews missed. Step 7a cycle 1 + cycle 2 absorbed via 4 commits + carry-forward documentation.
 
 ## Sprint Retrospective
 
-_Pending sprint-end._
+**What worked well:**
+- Phase 1 sequential plumbing landed cleanly; convergent BLOCKER findings from refinement cycle 2 (UpdateStatusAsync overload missing; Overtime audit-table doesn't exist) absorbed in plan rewrite before code dispatch.
+- Phase 2 worktree parallelism: 4 simultaneous worktrees (Skema/Time/Admin-prototype/Overtime) plus dependent TASK-2605b ran without merge conflicts.
+- TASK-2605a prototype Reviewer signoff before TASK-2605b dispatch successfully de-risked the inline-SQL+tx pattern propagation across 5 sites with 2 sub-shapes.
+- ADR-018 D6 retabulate (TASK-2601) preserved replay determinism per ADR-016 D10 (no code stream_id literals changed).
+- B3 fix at Step 7a cycle 1 closed a long-standing CheckAndAdjustAsync semantic gap (UPDATE-only path indistinguishable on missing-row vs breach) — improvement that survives independently of the TASK-2604 revert.
+
+**What surfaced for future sprints (Phase 4c.6 — sequenced BEFORE Phase 4d per ROADMAP):**
+- **Read-your-write architectural constraint**: atomic-outbox migration on event-stream-backed-read endpoints is unsafe without a synchronous projection table. S22 ConfigEndpoints exemplar succeeded only because of the `local_agreement_profiles` projection. Refinement Cycle 1+2 + Reviewer signoff + Cycle 2 BLOCKER didn't surface this; only Step 7a Codex caught it. **Lesson**: Any future "propagate atomic-outbox to endpoint X" task must include "verify endpoint X's GET path reads from a projection table, not the event stream" as a mandatory pre-implementation check.
+- **Pre-existing post-validation quota race**: SkemaEndpoints.cs:414-418 silently swallows the race when concurrent saves consume the entitlement between Rule Engine pre-validation and CheckAndAdjustAsync. Pre-S26 ongoing bug; the cycle-1 revert restored it. Phase 4c.6 fixes via projection-table + atomic-tx (the only resolution that satisfies all 3 axes of the trichotomy).
+- **Multi-lens review divergence**: Internal Reviewer audited diff internals (uniformity, DI consistency, test coverage) — all clean. Codex Step 7a caught architectural cross-cutting concerns (GET-side read paths). Two lenses' surfaces are complementary; both are needed for high-risk atomicity work. Recorded as a feedback memory: "internal Reviewer audits diff internals; Codex audits architectural fit + cross-cutting concerns; trust the multi-lens convergence/divergence signal."
+
+**Pre-existing carry-forwards from cycle-2 review (Phase 4e candidates):**
+- TASK-2603(a) inserted ensure-row at `(used=0, planned=0, carryover_in=0)` baseline — correct for first-creation but doesn't yet handle reset_month carryover transfer from prior year (currently the seed loop in init.sql handles year-rollover separately; future small task wires a carryover-transfer helper into ensure-row INSERT).
+- DI parameter naming inconsistency (`dbFactory` in AdminEndpoints vs `connectionFactory` elsewhere) — Reviewer Cycle 1 NOTE 3.
+- DEP-003 entry count update for the 2 net-new event types (47 total).
