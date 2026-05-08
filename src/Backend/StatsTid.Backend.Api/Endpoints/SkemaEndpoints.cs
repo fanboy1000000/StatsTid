@@ -2,7 +2,6 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
-using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Interfaces;
@@ -231,8 +230,7 @@ public static class SkemaEndpoints
             EntitlementBalanceRepository entitlementBalanceRepo,
             IHttpClientFactory httpClientFactory,
             IConfiguration configuration,
-            DbConnectionFactory connectionFactory,
-            IOutboxEnqueue outbox,
+            IEventStore eventStore,
             OrgScopeValidator scopeValidator,
             HttpContext context,
             CancellationToken ct) =>
@@ -350,148 +348,96 @@ public static class SkemaEndpoints
             var streamId = $"employee-{employeeId}";
             var savedCount = 0;
 
-            // ── Atomic outer transaction (S26 TASK-2604, ADR-018 D3 atomic-outbox shape) ──
-            // All TimeEntryRegistered + AbsenceRegistered + EntitlementBalanceAdjusted events,
-            // plus the entitlement_balances UPDATE, commit together — or roll back together
-            // (e.g. on a concurrent-modification quota breach surfaced inside the loop).
-            //
-            // BEHAVIOR CHANGE: pre-S26 the failure path silently skipped the balance
-            // adjustment for the breaching entitlement type but kept the time entries +
-            // other absences committed (event store + balances inconsistent with each other).
-            // Post-S26 the breach throws SkemaQuotaBreachException → tx.RollbackAsync → 422.
-            // Frontend 422 retry contract preserved (same body shape).
-            try
+            // Save time entries
+            if (request.Entries is not null)
             {
-                await using var conn = connectionFactory.Create();
-                await conn.OpenAsync(ct);
-                await using var tx = await conn.BeginTransactionAsync(ct);
-                try
+                foreach (var entry in request.Entries)
                 {
-                    // Save time entries (outbox enqueue inside outer tx)
-                    if (request.Entries is not null)
+                    var @event = new TimeEntryRegistered
                     {
-                        foreach (var entry in request.Entries)
-                        {
-                            var @event = new TimeEntryRegistered
-                            {
-                                EmployeeId = employeeId,
-                                Date = entry.Date,
-                                Hours = entry.Hours,
-                                TaskId = entry.ProjectCode,
-                                ActivityType = "NORMAL",
-                                AgreementCode = user.AgreementCode,
-                                OkVersion = user.OkVersion,
-                                ActorId = actor.ActorId,
-                                ActorRole = actor.ActorRole,
-                                CorrelationId = actor.CorrelationId
-                            };
-                            await outbox.EnqueueAsync(conn, tx, streamId, @event, ct);
-                            savedCount++;
-                        }
-                    }
-
-                    // Save absences and atomically adjust entitlement balances
-                    if (request.Absences is not null)
-                    {
-                        var savedByEntitlementType = new Dictionary<string, decimal>(StringComparer.Ordinal);
-
-                        foreach (var absence in request.Absences)
-                        {
-                            var @event = new AbsenceRegistered
-                            {
-                                EmployeeId = employeeId,
-                                Date = absence.Date,
-                                AbsenceType = absence.AbsenceType,
-                                Hours = absence.Hours,
-                                AgreementCode = user.AgreementCode,
-                                OkVersion = user.OkVersion,
-                                ActorId = actor.ActorId,
-                                ActorRole = actor.ActorRole,
-                                CorrelationId = actor.CorrelationId
-                            };
-                            await outbox.EnqueueAsync(conn, tx, streamId, @event, ct);
-                            savedCount++;
-
-                            if (AbsenceToEntitlementType.TryGetValue(absence.AbsenceType, out var entitlementType) && entitlementType is not null)
-                            {
-                                if (!savedByEntitlementType.ContainsKey(entitlementType))
-                                    savedByEntitlementType[entitlementType] = 0m;
-                                savedByEntitlementType[entitlementType] += absence.Hours;
-                            }
-                        }
-
-                        // Atomically check quota and adjust balances (eliminates TOCTOU race)
-                        // via the (conn, tx) overload from TASK-2603(a) so the UPDATE participates
-                        // in the outer tx. A breach (concurrent modification raced past the
-                        // pre-validation HTTP check) throws to roll back the entire save.
-                        foreach (var (entitlementType, totalHours) in savedByEntitlementType)
-                        {
-                            if (!entitlementData.TryGetValue(entitlementType, out var data))
-                                continue;
-
-                            var deltaDays = totalHours / StandardDayHours;
-                            var (success, newUsed) = await entitlementBalanceRepo.CheckAndAdjustAsync(
-                                conn, tx, employeeId, entitlementType, data.EntitlementYear,
-                                deltaDays, data.EffectiveQuota, ct);
-
-                            if (!success)
-                            {
-                                // Concurrent modification caused quota breach. Pre-S26 silently
-                                // skipped this absence's adjustment but kept events committed
-                                // (event store + balances drifted out of sync). Post-S26 we
-                                // throw to roll back the entire save atomically per ADR-018 D3.
-                                // The 422 response body preserves the existing shape so the
-                                // frontend retry path is unchanged.
-                                throw new SkemaQuotaBreachException(
-                                    entitlementType,
-                                    requestedDays: deltaDays,
-                                    remainingDays: Math.Round(data.EffectiveQuota - newUsed, 2));
-                            }
-
-                            // Read the carryover via the (conn, tx) overload so it observes the
-                            // same snapshot under the outer tx (ADR-018 D3).
-                            var balance = await entitlementBalanceRepo.GetByEmployeeAndTypeAsync(
-                                conn, tx, employeeId, entitlementType, data.EntitlementYear, ct);
-                            var carryoverIn = balance?.CarryoverIn ?? 0m;
-                            var newRemaining = data.EffectiveQuota + carryoverIn - newUsed;
-
-                            var balanceEvent = new EntitlementBalanceAdjusted
-                            {
-                                EmployeeId = employeeId,
-                                EntitlementType = entitlementType,
-                                EntitlementYear = data.EntitlementYear,
-                                DeltaDays = deltaDays,
-                                NewUsed = newUsed,
-                                NewRemaining = Math.Round(newRemaining, 2),
-                                Reason = "Absence registered via Skema save",
-                                ActorId = actor.ActorId,
-                                ActorRole = actor.ActorRole,
-                                CorrelationId = actor.CorrelationId
-                            };
-                            await outbox.EnqueueAsync(conn, tx, streamId, balanceEvent, ct);
-                        }
-                    }
-
-                    await tx.CommitAsync(ct);
-                }
-                catch
-                {
-                    await tx.RollbackAsync(ct);
-                    throw;
+                        EmployeeId = employeeId,
+                        Date = entry.Date,
+                        Hours = entry.Hours,
+                        TaskId = entry.ProjectCode,
+                        ActivityType = "NORMAL",
+                        AgreementCode = user.AgreementCode,
+                        OkVersion = user.OkVersion,
+                        ActorId = actor.ActorId,
+                        ActorRole = actor.ActorRole,
+                        CorrelationId = actor.CorrelationId
+                    };
+                    await eventStore.AppendAsync(streamId, @event, ct);
+                    savedCount++;
                 }
             }
-            catch (SkemaQuotaBreachException breach)
+
+            // Save absences and atomically adjust entitlement balances
+            if (request.Absences is not null)
             {
-                // Body shape mirrors the pre-validation 422 path above so frontend retry
-                // semantics are unchanged.
-                return Results.Json(new
+                var savedByEntitlementType = new Dictionary<string, decimal>(StringComparer.Ordinal);
+
+                foreach (var absence in request.Absences)
                 {
-                    error = "Entitlement quota exceeded",
-                    absenceType = breach.EntitlementType,
-                    remaining = breach.RemainingDays,
-                    requested = Math.Round(breach.RequestedDays, 2),
-                    message = "Concurrent modification caused quota to be exceeded; please retry."
-                }, statusCode: 422);
+                    var @event = new AbsenceRegistered
+                    {
+                        EmployeeId = employeeId,
+                        Date = absence.Date,
+                        AbsenceType = absence.AbsenceType,
+                        Hours = absence.Hours,
+                        AgreementCode = user.AgreementCode,
+                        OkVersion = user.OkVersion,
+                        ActorId = actor.ActorId,
+                        ActorRole = actor.ActorRole,
+                        CorrelationId = actor.CorrelationId
+                    };
+                    await eventStore.AppendAsync(streamId, @event, ct);
+                    savedCount++;
+
+                    if (AbsenceToEntitlementType.TryGetValue(absence.AbsenceType, out var entitlementType) && entitlementType is not null)
+                    {
+                        if (!savedByEntitlementType.ContainsKey(entitlementType))
+                            savedByEntitlementType[entitlementType] = 0m;
+                        savedByEntitlementType[entitlementType] += absence.Hours;
+                    }
+                }
+
+                // Atomically check quota and adjust balances (eliminates TOCTOU race)
+                foreach (var (entitlementType, totalHours) in savedByEntitlementType)
+                {
+                    if (!entitlementData.TryGetValue(entitlementType, out var data))
+                        continue;
+
+                    var deltaDays = totalHours / StandardDayHours;
+                    var (success, newUsed) = await entitlementBalanceRepo.CheckAndAdjustAsync(
+                        employeeId, entitlementType, data.EntitlementYear, deltaDays, data.EffectiveQuota, ct);
+
+                    if (!success)
+                    {
+                        // Concurrent modification caused quota breach — events already saved, but balance not adjusted.
+                        // Log warning; the balance remains consistent (not over-adjusted).
+                        continue;
+                    }
+
+                    var balance = await entitlementBalanceRepo.GetByEmployeeAndTypeAsync(
+                        employeeId, entitlementType, data.EntitlementYear, ct);
+                    var carryoverIn = balance?.CarryoverIn ?? 0m;
+                    var newRemaining = data.EffectiveQuota + carryoverIn - newUsed;
+
+                    var balanceEvent = new EntitlementBalanceAdjusted
+                    {
+                        EmployeeId = employeeId,
+                        EntitlementType = entitlementType,
+                        EntitlementYear = data.EntitlementYear,
+                        DeltaDays = deltaDays,
+                        NewUsed = newUsed,
+                        NewRemaining = Math.Round(newRemaining, 2),
+                        Reason = "Absence registered via Skema save",
+                        ActorId = actor.ActorId,
+                        ActorRole = actor.ActorRole,
+                        CorrelationId = actor.CorrelationId
+                    };
+                    await eventStore.AppendAsync(streamId, balanceEvent, ct);
+                }
             }
 
             return Results.Ok(new { saved = savedCount });
@@ -531,28 +477,5 @@ public static class SkemaEndpoints
         public decimal EffectiveQuota { get; init; }
         public decimal RemainingAfter { get; init; }
         public string? Message { get; init; }
-    }
-
-    /// <summary>
-    /// Internal signal used to roll back the atomic Skema save tx when the in-tx
-    /// CheckAndAdjustAsync surfaces a quota breach (concurrent modification raced
-    /// past the pre-validation HTTP check). Caught at the endpoint boundary and
-    /// mapped to a 422 response with the same body shape as the pre-validation
-    /// 422 path so the frontend retry contract is unchanged. See S26 TASK-2604 +
-    /// ADR-018 D3 atomic-outbox shape.
-    /// </summary>
-    private sealed class SkemaQuotaBreachException : Exception
-    {
-        public string EntitlementType { get; }
-        public decimal RequestedDays { get; }
-        public decimal RemainingDays { get; }
-
-        public SkemaQuotaBreachException(string entitlementType, decimal requestedDays, decimal remainingDays)
-            : base($"Quota exceeded for {entitlementType}")
-        {
-            EntitlementType = entitlementType;
-            RequestedDays = requestedDays;
-            RemainingDays = remainingDays;
-        }
     }
 }
