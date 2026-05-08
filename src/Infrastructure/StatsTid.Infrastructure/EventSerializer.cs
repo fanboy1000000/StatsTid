@@ -65,6 +65,9 @@ public static class EventSerializer
         ["OvertimeBalanceAdjusted"] = typeof(OvertimeBalanceAdjusted),
         ["OvertimeCompensationApplied"] = typeof(OvertimeCompensationApplied),
         ["OvertimePreApprovalCreated"] = typeof(OvertimePreApprovalCreated),
+        // Sprint 26: OvertimePreApproval atomic Pattern C lifecycle events (TASK-2602)
+        ["OvertimePreApprovalApproved"] = typeof(OvertimePreApprovalApproved),
+        ["OvertimePreApprovalRejected"] = typeof(OvertimePreApprovalRejected),
         // Sprint 20: Temporal segmentation events (ADR-016 D10)
         ["SegmentManifestCreated"] = typeof(SegmentManifestCreated),
         // Sprint 21: Local agreement profile events (ADR-017 D6/D7)
