@@ -253,6 +253,19 @@ public sealed class TxContractTests : IAsyncLifetime
             is_active       BOOLEAN     NOT NULL DEFAULT TRUE,
             created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
+
+        CREATE TABLE IF NOT EXISTS entitlement_balances (
+            balance_id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+            employee_id             TEXT        NOT NULL,
+            entitlement_type        TEXT        NOT NULL,
+            entitlement_year        INT         NOT NULL,
+            total_quota             DECIMAL     NOT NULL,
+            used                    DECIMAL     NOT NULL DEFAULT 0,
+            planned                 DECIMAL     NOT NULL DEFAULT 0,
+            carryover_in            DECIMAL     NOT NULL DEFAULT 0,
+            updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (employee_id, entitlement_type, entitlement_year)
+        );
         """;
 
     private static async Task ApplySchemaAsync(string connectionString, CancellationToken ct = default)
@@ -765,6 +778,107 @@ public sealed class TxContractTests : IAsyncLifetime
         Assert.Equal(1L, await CountInsideTx(conn, tx, "overtime_pre_approvals", "id", approval.Id));
         await tx.RollbackAsync();
         Assert.Equal(0L, await CountFreshConn("overtime_pre_approvals", "id", approval.Id));
+    }
+
+    /// <summary>
+    /// S26 / TASK-2603 (b): asserts <see cref="OvertimePreApprovalRepository.UpdateStatusAsync(NpgsqlConnection, NpgsqlTransaction, Guid, string, string?, string?, CancellationToken)"/>
+    /// participates in the caller-supplied transaction. Seed a PENDING row outside the SUT
+    /// tx; open conn+tx; call UpdateStatusAsync(conn, tx, ...) flipping to APPROVED; verify
+    /// the change is visible INSIDE the tx but NOT visible to a fresh connection (RC isolation
+    /// guarantees the uncommitted UPDATE stays inside the tx). Rollback; the row must remain
+    /// PENDING — proving the SUT did not silently auto-commit a private tx.
+    /// </summary>
+    [Fact]
+    public async Task OvertimePreApprovalRepo_UpdateStatusAsync_ParticipatesInCallerTx()
+    {
+        var repo = new OvertimePreApprovalRepository(_harness.Factory);
+        var approval = new OvertimePreApproval
+        {
+            Id = Guid.NewGuid(),
+            EmployeeId = "EMP_TX_PA_US",
+            PeriodStart = new DateOnly(2026, 5, 1),
+            PeriodEnd = new DateOnly(2026, 5, 31),
+            MaxHours = 20m,
+            Status = "PENDING",
+            Reason = "Tx contract test",
+        };
+        await repo.CreateAsync(approval); // seed PENDING outside the SUT tx
+
+        await using var conn = _harness.Factory.Create();
+        await conn.OpenAsync();
+        await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
+
+        await repo.UpdateStatusAsync(conn, tx, approval.Id, "APPROVED", "manager", "OK", default);
+
+        await AssertTxStillUsable(conn, tx);
+        // Visible INSIDE tx — proves the SUT used the supplied tx.
+        var statusInside = await ScalarInsideTx<string>(
+            conn, tx, "SELECT status FROM overtime_pre_approvals WHERE id = @id", approval.Id);
+        Assert.Equal("APPROVED", statusInside);
+        // NOT visible to a fresh connection under RC — proves the SUT did not auto-commit.
+        var statusFreshBeforeRollback = await ScalarFreshConn<string>(
+            "SELECT status FROM overtime_pre_approvals WHERE id = @id", approval.Id);
+        Assert.Equal("PENDING", statusFreshBeforeRollback);
+        await tx.RollbackAsync();
+        // After rollback the row remains at the seeded PENDING value.
+        var statusAfter = await ScalarFreshConn<string>(
+            "SELECT status FROM overtime_pre_approvals WHERE id = @id", approval.Id);
+        Assert.Equal("PENDING", statusAfter);
+    }
+
+    // ── EntitlementBalanceRepository (S26 / TASK-2603 (a)) ────────────────────────────
+
+    /// <summary>
+    /// S26 / TASK-2603 (a): asserts <see cref="EntitlementBalanceRepository.CheckAndAdjustAsync(NpgsqlConnection, NpgsqlTransaction, string, string, int, decimal, decimal, CancellationToken)"/>
+    /// participates in the caller-supplied transaction. Seed a balance row at used=0 outside
+    /// the SUT tx; open conn+tx; call CheckAndAdjustAsync(conn, tx, ..., deltaDays=2, quota=25);
+    /// verify the new used value is visible INSIDE the tx but NOT visible to a fresh
+    /// connection. Rollback; the row must remain at used=0 — proving atomicity of the
+    /// outer tx + the (conn, tx) overload.
+    /// </summary>
+    [Fact]
+    public async Task EntitlementBalanceRepo_CheckAndAdjustAsync_ParticipatesInCallerTx()
+    {
+        var repo = new EntitlementBalanceRepository(_harness.Factory);
+        const string employeeId = "EMP_TX_EB_CA";
+        const string entitlementType = "VACATION";
+        const int year = 2026;
+        await repo.UpsertAsync(new EntitlementBalance
+        {
+            BalanceId = Guid.NewGuid(),
+            EmployeeId = employeeId,
+            EntitlementType = entitlementType,
+            EntitlementYear = year,
+            TotalQuota = 25m,
+            Used = 0m,
+            Planned = 0m,
+            CarryoverIn = 0m,
+        });
+
+        await using var conn = _harness.Factory.Create();
+        await conn.OpenAsync();
+        await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
+
+        var (success, newUsed) = await repo.CheckAndAdjustAsync(
+            conn, tx, employeeId, entitlementType, year, deltaDays: 2m, effectiveQuota: 25m);
+        Assert.True(success);
+        Assert.Equal(2m, newUsed);
+
+        await AssertTxStillUsable(conn, tx);
+        var usedInside = await ScalarInsideTx<decimal>(
+            conn, tx,
+            "SELECT used FROM entitlement_balances WHERE employee_id = @id AND entitlement_type = 'VACATION' AND entitlement_year = 2026",
+            employeeId);
+        Assert.Equal(2m, usedInside);
+        var usedFreshBeforeRollback = await ScalarFreshConn<decimal>(
+            "SELECT used FROM entitlement_balances WHERE employee_id = @id AND entitlement_type = 'VACATION' AND entitlement_year = 2026",
+            employeeId);
+        Assert.Equal(0m, usedFreshBeforeRollback); // SUT must NOT auto-commit
+        await tx.RollbackAsync();
+        var usedAfter = await ScalarFreshConn<decimal>(
+            "SELECT used FROM entitlement_balances WHERE employee_id = @id AND entitlement_type = 'VACATION' AND entitlement_year = 2026",
+            employeeId);
+        Assert.Equal(0m, usedAfter); // rollback reverted the in-tx UPDATE
     }
 
     // ── OvertimeBalanceRepository ─────────────────────────────────────────────────────
