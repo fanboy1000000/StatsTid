@@ -2,8 +2,6 @@ using System.Text.Json;
 using StatsTid.Auth;
 using StatsTid.Backend.Api.Contracts;
 using StatsTid.Backend.Api.Validation;
-using StatsTid.Infrastructure;
-using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Events;
@@ -22,7 +20,7 @@ public static class TimeEndpoints
 
         // ── Time Entries ──
 
-        app.MapPost("/api/time-entries", async (RegisterTimeEntryRequest request, DbConnectionFactory connectionFactory, IOutboxEnqueue outbox, OrgScopeValidator scopeValidator, HttpContext context, CancellationToken ct) =>
+        app.MapPost("/api/time-entries", async (RegisterTimeEntryRequest request, IEventStore eventStore, OrgScopeValidator scopeValidator, HttpContext context, CancellationToken ct) =>
         {
             var actor = context.GetActorContext();
 
@@ -69,34 +67,8 @@ public static class TimeEndpoints
                 CorrelationId = actor.CorrelationId
             };
 
-            // Atomic in-tx write: outbox enqueue commits with the tx (ADR-018 D3).
-            // Replaces the legacy post-commit eventStore.AppendAsync shape so a process
-            // crash between request handling and event-store append no longer leaks
-            // state. The per-service OutboxPublisher drains outbox_events to the
-            // canonical event store with at-least-once semantics (ADR-018 D4).
-            //
-            // Pattern C — state + outbox only; the event itself IS the state for this
-            // endpoint (no separate state table). Stream id `employee-{EmployeeId}` is
-            // the consolidated employee stream carrying time-entry + absence +
-            // entitlement-balance + compliance events per ADR-018 D6 retabulate
-            // (TASK-2601). Do NOT change the stream id literal.
             var streamId = $"employee-{request.EmployeeId}";
-
-            await using (var conn = connectionFactory.Create())
-            {
-                await conn.OpenAsync(ct);
-                await using var tx = await conn.BeginTransactionAsync(ct);
-                try
-                {
-                    await outbox.EnqueueAsync(conn, tx, streamId, @event, ct);
-                    await tx.CommitAsync(ct);
-                }
-                catch
-                {
-                    await tx.RollbackAsync(ct);
-                    throw;
-                }
-            }
+            await eventStore.AppendAsync(streamId, @event, ct);
 
             return Results.Created($"/api/time-entries/{request.EmployeeId}", new { eventId = @event.EventId, streamId });
         }).RequireAuthorization("EmployeeOrAbove");
@@ -139,7 +111,7 @@ public static class TimeEndpoints
 
         // ── Absences ──
 
-        app.MapPost("/api/absences", async (RegisterAbsenceRequest request, DbConnectionFactory connectionFactory, IOutboxEnqueue outbox, OrgScopeValidator scopeValidator, HttpContext context, CancellationToken ct) =>
+        app.MapPost("/api/absences", async (RegisterAbsenceRequest request, IEventStore eventStore, OrgScopeValidator scopeValidator, HttpContext context, CancellationToken ct) =>
         {
             var actor = context.GetActorContext();
 
@@ -187,27 +159,8 @@ public static class TimeEndpoints
                 CorrelationId = actor.CorrelationId
             };
 
-            // Atomic in-tx write: outbox enqueue commits with the tx (ADR-018 D3).
-            // Replaces the legacy post-commit eventStore.AppendAsync shape. Pattern C —
-            // event-as-state; stream id `employee-{EmployeeId}` per ADR-018 D6
-            // retabulate (TASK-2601), unchanged.
             var streamId = $"employee-{request.EmployeeId}";
-
-            await using (var conn = connectionFactory.Create())
-            {
-                await conn.OpenAsync(ct);
-                await using var tx = await conn.BeginTransactionAsync(ct);
-                try
-                {
-                    await outbox.EnqueueAsync(conn, tx, streamId, @event, ct);
-                    await tx.CommitAsync(ct);
-                }
-                catch
-                {
-                    await tx.RollbackAsync(ct);
-                    throw;
-                }
-            }
+            await eventStore.AppendAsync(streamId, @event, ct);
 
             return Results.Created($"/api/absences/{request.EmployeeId}", new { eventId = @event.EventId, streamId });
         }).RequireAuthorization("EmployeeOrAbove");
