@@ -24,6 +24,7 @@
 | [ADR-016](decisions/ADR-016-temporal-period-handling.md) | Temporal period handling — PeriodPlanner + SegmentManifest + SnapshotContract | approved | S20 | Rule Engine, SharedKernel, Payroll, Infrastructure | segmentation, period, planner, manifest, ok-version, replay, audit |
 | [ADR-017](decisions/ADR-017-local-agreement-configuration-as-a-profile.md) | Local agreement configuration as a profile (replaces patch-bag) | approved | S21 | Infrastructure, Backend, SharedKernel, Frontend, Data Model | local-config, profile, configuration, effective-dating, schema, migration |
 | [ADR-018](decisions/ADR-018-transactional-outbox-and-row-version-optimistic-concurrency.md) | Transactional outbox + row-version optimistic concurrency (supersedes ADR-004; amends ADR-017 D2 + D2.1) | approved (cycles 1-5 reviewed 2026-05-03) | S22 | Infrastructure, Backend, SharedKernel, Data Model | outbox, transactional-outbox, row-version, optimistic-concurrency, etag, end-exclusive, migration |
+| [ADR-019](decisions/ADR-019-optimistic-concurrency-via-row-version.md) | Row-version optimistic concurrency propagated to admin-strict resources (amends ADR-018 D7) | accepted (cycles 1-3 reviewed 2026-05-07) | S25 | Infrastructure, Backend, SharedKernel, Frontend, Data Model | row-version, optimistic-concurrency, etag, if-match, admin-strict, audit-version-transition, propagation |
 
 ## Validated Patterns (PAT)
 
