@@ -104,9 +104,24 @@ public sealed class EntitlementBalanceRepository
     }
 
     /// <summary>
-    /// Atomically checks quota and adjusts the used balance in a single SQL statement.
-    /// Returns (success, newUsed). If the adjustment would exceed totalQuota + carryoverIn, returns (false, currentUsed).
-    /// Eliminates TOCTOU race condition between validation and adjustment.
+    /// Atomically checks quota and adjusts the used balance. Returns (success, newUsed). If
+    /// the adjustment would exceed totalQuota + carryoverIn, returns (false, currentUsed).
+    /// Eliminates TOCTOU race between validation and adjustment.
+    ///
+    /// <para>
+    /// S26 Step 7a B3 fix: previously this was a UPDATE-only path that returned (false, 0m)
+    /// when no row existed for the (employee, type, year) tuple — indistinguishable from a
+    /// real quota breach. Pre-S26 callers silently skipped balance adjustment but committed
+    /// the corresponding events (Skema first-absence-of-year would emit AbsenceRegistered
+    /// without any balance state). The fix uses two statements inside an internal tx: (1) an
+    /// idempotent <c>INSERT ... ON CONFLICT DO NOTHING</c> with <c>used = 0</c> baseline so
+    /// missing rows materialize at zero-state without touching used; (2) the existing
+    /// TOCTOU-safe atomic UPDATE-WHERE-quota-guard against the now-guaranteed-present row.
+    /// Net behavior: missing-row first absence within quota succeeds with (true, deltaDays);
+    /// genuine breach (existing or freshly-created) returns (false, currentUsed). Same shape
+    /// applies to the <see cref="CheckAndAdjustAsync(NpgsqlConnection, NpgsqlTransaction, string, string, int, decimal, decimal, CancellationToken)"/>
+    /// in-tx sibling.
+    /// </para>
     /// </summary>
     public async Task<(bool Success, decimal NewUsed)> CheckAndAdjustAsync(
         string employeeId, string entitlementType, int entitlementYear,
@@ -114,30 +129,19 @@ public sealed class EntitlementBalanceRepository
     {
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
-        await using var cmd = new NpgsqlCommand(
-            @"WITH current AS (
-                SELECT used, carryover_in
-                FROM entitlement_balances
-                WHERE employee_id = @employeeId AND entitlement_type = @entitlementType AND entitlement_year = @entitlementYear
-              )
-              UPDATE entitlement_balances
-              SET used = entitlement_balances.used + @deltaDays, updated_at = NOW()
-              WHERE employee_id = @employeeId AND entitlement_type = @entitlementType AND entitlement_year = @entitlementYear
-                AND (SELECT used FROM current) + @deltaDays <= @effectiveQuota + (SELECT carryover_in FROM current)
-              RETURNING used",
-            conn);
-        cmd.Parameters.AddWithValue("employeeId", employeeId);
-        cmd.Parameters.AddWithValue("entitlementType", entitlementType);
-        cmd.Parameters.AddWithValue("entitlementYear", entitlementYear);
-        cmd.Parameters.AddWithValue("deltaDays", deltaDays);
-        cmd.Parameters.AddWithValue("effectiveQuota", effectiveQuota);
-        var result = await cmd.ExecuteScalarAsync(ct);
-        if (result is decimal newUsed)
-            return (true, newUsed);
-
-        // Update didn't match — quota would be exceeded. Return current used for error reporting.
-        var balance = await GetByEmployeeAndTypeAsync(employeeId, entitlementType, entitlementYear, ct);
-        return (false, balance?.Used ?? 0m);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        try
+        {
+            var result = await CheckAndAdjustInternalAsync(
+                conn, tx, employeeId, entitlementType, entitlementYear, deltaDays, effectiveQuota, ct);
+            await tx.CommitAsync(ct);
+            return result;
+        }
+        catch
+        {
+            await tx.RollbackAsync(ct);
+            throw;
+        }
     }
 
     /// <summary>
@@ -156,6 +160,45 @@ public sealed class EntitlementBalanceRepository
         string employeeId, string entitlementType, int entitlementYear,
         decimal deltaDays, decimal effectiveQuota, CancellationToken ct = default)
     {
+        return await CheckAndAdjustInternalAsync(
+            conn, tx, employeeId, entitlementType, entitlementYear, deltaDays, effectiveQuota, ct);
+    }
+
+    // Two-statement core for both v1 (self-managed tx) and v2 (caller-supplied tx). S26 Step 7a
+    // B3 fix: Statement 1 idempotently materializes the balance row at zero-state if missing;
+    // Statement 2 is the existing TOCTOU-safe atomic UPDATE-WHERE-quota-guard. Together they
+    // distinguish "missing-row first absence within quota" (succeeds) from "existing/freshly-
+    // created row with quota breach" (false, currentUsed). Pre-S26 the UPDATE-only path
+    // collapsed both to (false, 0m), causing the false-422 surface flagged by Codex Step 7a.
+    private static async Task<(bool Success, decimal NewUsed)> CheckAndAdjustInternalAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string employeeId, string entitlementType, int entitlementYear,
+        decimal deltaDays, decimal effectiveQuota, CancellationToken ct)
+    {
+        // Statement 1: ensure-row INSERT. used = 0 baseline so the row exists at zero-state
+        // before Statement 2's quota check evaluates `used + deltaDays <= quota + carryover_in`.
+        // ON CONFLICT DO NOTHING — concurrent INSERTs from another session deduplicate cleanly.
+        // total_quota set to effectiveQuota for the freshly-created row; carryover_in defaults
+        // to 0 (first-creation has no prior-year carryover; reset_month logic handled elsewhere).
+        await using (var ensureCmd = new NpgsqlCommand(
+            @"INSERT INTO entitlement_balances (
+                  balance_id, employee_id, entitlement_type, entitlement_year,
+                  total_quota, used, planned, carryover_in, updated_at)
+              VALUES (
+                  gen_random_uuid(), @employeeId, @entitlementType, @entitlementYear,
+                  @effectiveQuota, 0, 0, 0, NOW())
+              ON CONFLICT (employee_id, entitlement_type, entitlement_year) DO NOTHING",
+            conn, tx))
+        {
+            ensureCmd.Parameters.AddWithValue("employeeId", employeeId);
+            ensureCmd.Parameters.AddWithValue("entitlementType", entitlementType);
+            ensureCmd.Parameters.AddWithValue("entitlementYear", entitlementYear);
+            ensureCmd.Parameters.AddWithValue("effectiveQuota", effectiveQuota);
+            await ensureCmd.ExecuteNonQueryAsync(ct);
+        }
+
+        // Statement 2: TOCTOU-safe atomic check-and-adjust on the now-guaranteed-present row.
+        // Single-statement UPDATE-WHERE-quota-guard with WITH-CTE for the snapshot read.
         await using var cmd = new NpgsqlCommand(
             @"WITH current AS (
                 SELECT used, carryover_in
@@ -177,11 +220,27 @@ public sealed class EntitlementBalanceRepository
         if (result is decimal newUsed)
             return (true, newUsed);
 
-        // Update didn't match — quota would be exceeded. Return current used for error reporting.
-        // Route the read through the (conn, tx) overload so the snapshot is consistent with the
-        // outer transaction under RepeatableRead (refinement W3).
-        var balance = await GetByEmployeeAndTypeAsync(conn, tx, employeeId, entitlementType, entitlementYear, ct);
+        // UPDATE didn't match — quota would be exceeded (existing row OR freshly-created
+        // zero-state row where deltaDays > quota + 0 carryover). Return current used for the
+        // 422 response payload. Routes the read through the (conn, tx) overload so the
+        // snapshot is consistent with the outer tx under RepeatableRead (refinement W3).
+        var balance = await GetByEmployeeAndTypeInternalAsync(
+            conn, tx, employeeId, entitlementType, entitlementYear, ct);
         return (false, balance?.Used ?? 0m);
+    }
+
+    private static async Task<EntitlementBalance?> GetByEmployeeAndTypeInternalAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string employeeId, string entitlementType, int entitlementYear, CancellationToken ct)
+    {
+        await using var cmd = new NpgsqlCommand(
+            "SELECT * FROM entitlement_balances WHERE employee_id = @employeeId AND entitlement_type = @entitlementType AND entitlement_year = @entitlementYear",
+            conn, tx);
+        cmd.Parameters.AddWithValue("employeeId", employeeId);
+        cmd.Parameters.AddWithValue("entitlementType", entitlementType);
+        cmd.Parameters.AddWithValue("entitlementYear", entitlementYear);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct) ? ReadBalance(reader) : null;
     }
 
     private static async Task<IReadOnlyList<EntitlementBalance>> ReadBalancesAsync(NpgsqlCommand cmd, CancellationToken ct)

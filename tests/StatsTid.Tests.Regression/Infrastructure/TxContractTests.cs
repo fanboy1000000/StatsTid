@@ -881,6 +881,90 @@ public sealed class TxContractTests : IAsyncLifetime
         Assert.Equal(0m, usedAfter); // rollback reverted the in-tx UPDATE
     }
 
+    /// <summary>
+    /// S26 Step 7a B3 fix: when no balance row exists for the (employee, type, year) tuple,
+    /// <see cref="EntitlementBalanceRepository.CheckAndAdjustAsync(NpgsqlConnection, NpgsqlTransaction, string, string, int, decimal, decimal, CancellationToken)"/>
+    /// must auto-create the row at zero-state baseline (Statement 1: ensure-row INSERT) and
+    /// then run the atomic quota-checked UPDATE (Statement 2). If deltaDays fits within quota,
+    /// returns (true, deltaDays); the row is left at used = deltaDays. Pre-fix this returned
+    /// (false, 0m) — indistinguishable from a real quota breach — and Skema first-absence-of-
+    /// year was rejected with a false 422.
+    /// </summary>
+    [Fact]
+    public async Task EntitlementBalanceRepo_CheckAndAdjustAsync_AutoCreatesRowOnMissing()
+    {
+        var repo = new EntitlementBalanceRepository(_harness.Factory);
+        // Unique employee id so no pre-existing row from other tests collides.
+        var employeeId = "EMP_TX_EB_MISSING_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+        const string entitlementType = "VACATION";
+        const int year = 2026;
+
+        // No seed — row does NOT exist. Verify by fresh-conn read.
+        var rowBefore = await ScalarFreshConn<long>(
+            "SELECT COUNT(*) FROM entitlement_balances WHERE employee_id = @id AND entitlement_type = 'VACATION' AND entitlement_year = 2026",
+            employeeId);
+        Assert.Equal(0L, rowBefore);
+
+        await using var conn = _harness.Factory.Create();
+        await conn.OpenAsync();
+        await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
+
+        var (success, newUsed) = await repo.CheckAndAdjustAsync(
+            conn, tx, employeeId, entitlementType, year, deltaDays: 2m, effectiveQuota: 25m);
+
+        // Pre-S26 Step 7a: would have returned (false, 0m). Post-fix: row materializes,
+        // Statement 2 UPDATE applies, returns (true, 2m).
+        Assert.True(success);
+        Assert.Equal(2m, newUsed);
+
+        await tx.CommitAsync();
+        var usedAfter = await ScalarFreshConn<decimal>(
+            "SELECT used FROM entitlement_balances WHERE employee_id = @id AND entitlement_type = 'VACATION' AND entitlement_year = 2026",
+            employeeId);
+        Assert.Equal(2m, usedAfter);
+    }
+
+    /// <summary>
+    /// S26 Step 7a B3 fix: when no balance row exists AND deltaDays exceeds quota, returns
+    /// (false, 0m). Statement 1 (ensure-row INSERT with used=0 baseline) materializes the row
+    /// at zero-state; Statement 2 (UPDATE with quota guard) fails the WHERE clause because
+    /// 0 + deltaDays > effectiveQuota + 0; the failure-path read returns the freshly-created
+    /// row's used (0m). Net: caller sees (false, 0m) — same surface as the existing-row breach
+    /// case — and a zero-state row is left behind. Caller treats this as a quota breach.
+    /// </summary>
+    [Fact]
+    public async Task EntitlementBalanceRepo_CheckAndAdjustAsync_RejectsWhenMissingRowDeltaExceedsQuota()
+    {
+        var repo = new EntitlementBalanceRepository(_harness.Factory);
+        var employeeId = "EMP_TX_EB_OVER_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+        const string entitlementType = "VACATION";
+        const int year = 2026;
+
+        await using var conn = _harness.Factory.Create();
+        await conn.OpenAsync();
+        await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
+
+        var (success, newUsed) = await repo.CheckAndAdjustAsync(
+            conn, tx, employeeId, entitlementType, year, deltaDays: 30m, effectiveQuota: 25m);
+
+        Assert.False(success);
+        Assert.Equal(0m, newUsed);
+
+        // Post-Statement-1, a zero-state row exists in this tx (ensure-row INSERT succeeded).
+        // The Statement-2 UPDATE failed the quota WHERE clause; the row stays at used=0.
+        var usedInside = await ScalarInsideTx<decimal>(
+            conn, tx,
+            "SELECT used FROM entitlement_balances WHERE employee_id = @id AND entitlement_type = 'VACATION' AND entitlement_year = 2026",
+            employeeId);
+        Assert.Equal(0m, usedInside);
+
+        await tx.RollbackAsync();
+        var rowAfterRollback = await ScalarFreshConn<long>(
+            "SELECT COUNT(*) FROM entitlement_balances WHERE employee_id = @id AND entitlement_type = 'VACATION' AND entitlement_year = 2026",
+            employeeId);
+        Assert.Equal(0L, rowAfterRollback); // rollback removed the ensure-row INSERT
+    }
+
     // ── OvertimeBalanceRepository ─────────────────────────────────────────────────────
 
     [Fact]
