@@ -478,20 +478,27 @@ public sealed class AgreementConfigRepository
         }
 
         // 4. Archive the current ACTIVE config for the same (agreement_code, ok_version).
+        //    RETURNING the archived row's new version too — the publish endpoint uses it to
+        //    emit a matching ARCHIVED audit row (versionBefore = version-1, versionAfter =
+        //    version) + AgreementConfigArchived outbox event in the same tx (ADR-019 D1).
         Guid? archivedId = null;
+        long? archivedVersion = null;
         await using (var archiveCmd = new NpgsqlCommand(
             """
             UPDATE agreement_configs
             SET status = 'ARCHIVED', archived_at = NOW(), updated_at = NOW(), version = version + 1
             WHERE agreement_code = @agreementCode AND ok_version = @okVersion AND status = 'ACTIVE'
-            RETURNING config_id
+            RETURNING config_id, version
             """, conn, tx))
         {
             archiveCmd.Parameters.AddWithValue("agreementCode", agreementCode);
             archiveCmd.Parameters.AddWithValue("okVersion", okVersion);
-            var result = await archiveCmd.ExecuteScalarAsync(ct);
-            if (result is Guid archivedGuid)
-                archivedId = archivedGuid;
+            await using var archiveReader = await archiveCmd.ExecuteReaderAsync(ct);
+            if (await archiveReader.ReadAsync(ct))
+            {
+                archivedId = archiveReader.GetGuid(0);
+                archivedVersion = archiveReader.GetInt64(1);
+            }
         }
 
         // 5. Activate the DRAFT — bump version + return the post-write snapshot.
@@ -511,7 +518,9 @@ public sealed class AgreementConfigRepository
                 $"PublishAsync produced no row for config_id={configId} at expected version {expectedVersion}; FOR UPDATE invariant violated.");
         }
         var entity = ReadEntity(publishReader);
-        return new SaveAgreementConfigResult(entity, entity.Version, IsCreated: false, ArchivedId: archivedId);
+        return new SaveAgreementConfigResult(
+            entity, entity.Version, IsCreated: false,
+            ArchivedId: archivedId, ArchivedVersion: archivedVersion);
     }
 
     private static async Task<(Guid? ArchivedId, bool Published)> ExecuteSelfManagedPublishAsync(
@@ -888,8 +897,14 @@ public sealed class AgreementConfigRepository
 /// prior-ACTIVE config that was archived as a side-effect (S24 Step 7a P1 semantic — preserves
 /// the publish-archives-prior-ACTIVE atomicity for downstream audit). <c>null</c> on Update /
 /// Archive paths or when no prior ACTIVE existed before publish.</param>
+/// <param name="ArchivedVersion">When <see cref="ArchivedId"/> is non-null, the archived row's
+/// new <c>version</c> after the publish-side archive UPDATE. The matching audit row's
+/// <c>version_before</c> is <c>(ArchivedVersion - 1)</c> and <c>version_after</c> is
+/// <c>ArchivedVersion</c> (per ADR-019 D8). Required by the publish endpoint to emit the
+/// second (ARCHIVED) audit row + outbox event mandated by ADR-019 D1.</param>
 public sealed record SaveAgreementConfigResult(
     AgreementConfigEntity Config,
     long Version,
     bool IsCreated,
-    Guid? ArchivedId);
+    Guid? ArchivedId,
+    long? ArchivedVersion = null);

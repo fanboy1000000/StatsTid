@@ -375,13 +375,14 @@ public static class AgreementConfigEndpoints
                     context.Request, out var expectedVersion, out var headerError))
                 return Results.Json(new { error = headerError }, statusCode: 428);
 
-            // 2. Pre-flight existence + status check.
+            // 2. Pre-flight existence read — surfaces 404 for genuinely-missing configs and
+            //    captures (agreement_code, ok_version) for outbox event payloads. Status is
+            //    NOT pre-checked: a stale-If-Match request against a non-DRAFT row must
+            //    surface as 412 via v3 PublishAsync's OCE (Step 7a cycle 1 P2 fix), not as
+            //    409 — frontend banner-with-retry only triggers on 412.
             var existing = await agreementConfigRepo.GetByIdAsync(configId, ct);
             if (existing is null)
                 return Results.NotFound(new { error = "Agreement config not found" });
-
-            if (existing.Status != AgreementConfigStatus.DRAFT)
-                return Results.Json(new { error = "Only DRAFT configs can be published" }, statusCode: 409);
 
             // 3. Atomic publish (ADR-018 D3): archive prior ACTIVE + activate DRAFT + audit
             //    (with version-transition pair) + outbox enqueue, all in a single tx. The v3
@@ -389,6 +390,12 @@ public static class AgreementConfigEndpoints
             //    + status='DRAFT' under SELECT ... FOR UPDATE; concurrent change manifests as
             //    OptimisticConcurrencyException → 412 (S24 Step 7a P1 fix, restated under
             //    the v3 contract).
+            //
+            //    When the publish supersedes a prior ACTIVE config (saveResult.ArchivedId
+            //    non-null), ADR-019 D1 mandates that we also emit a matching ARCHIVED audit
+            //    row + AgreementConfigArchived outbox event for the archived config — both
+            //    inside this same tx so the supersession atomicity holds end-to-end (Step 7a
+            //    cycle 1 B1 fix).
             SaveAgreementConfigResult saveResult;
             try
             {
@@ -417,6 +424,30 @@ public static class AgreementConfigEndpoints
                         CorrelationId = actor.CorrelationId,
                     };
                     await outbox.EnqueueAsync(conn, tx, $"agreement-config-{configId}", @event, ct);
+
+                    // ADR-019 D1: when a prior ACTIVE was archived as part of this publish,
+                    // emit the matching ARCHIVED audit + outbox for the archived config_id.
+                    if (saveResult.ArchivedId is { } archivedId &&
+                        saveResult.ArchivedVersion is { } archivedVersion)
+                    {
+                        await agreementConfigRepo.AppendAuditAsync(
+                            conn, tx, archivedId, "ARCHIVED",
+                            "ACTIVE", "ARCHIVED",
+                            actor.ActorId ?? "system", actor.ActorRole ?? "GLOBAL_ADMIN",
+                            versionBefore: archivedVersion - 1, versionAfter: archivedVersion, ct);
+
+                        var archivedEvent = new AgreementConfigArchived
+                        {
+                            ConfigId = archivedId,
+                            AgreementCode = existing.AgreementCode,
+                            OkVersion = existing.OkVersion,
+                            ActorId = actor.ActorId,
+                            ActorRole = actor.ActorRole,
+                            CorrelationId = actor.CorrelationId,
+                        };
+                        await outbox.EnqueueAsync(
+                            conn, tx, $"agreement-config-{archivedId}", archivedEvent, ct);
+                    }
 
                     await tx.CommitAsync(ct);
                 }
@@ -469,16 +500,20 @@ public static class AgreementConfigEndpoints
                     context.Request, out var expectedVersion, out var headerError))
                 return Results.Json(new { error = headerError }, statusCode: 428);
 
-            // 2. Pre-flight existence + already-archived check.
+            // 2. Pre-flight existence read — surfaces 404 for genuinely-missing configs and
+            //    captures (agreement_code, ok_version) for the outbox event payload + the
+            //    pre-archive status string for the audit row's previousData. Already-archived
+            //    is NOT pre-checked: a stale-If-Match request against an already-ARCHIVED row
+            //    must surface as 412 via v3 ArchiveAsync's OCE (Step 7a cycle 1 P2 fix), not
+            //    as 409 — frontend banner-with-retry only triggers on 412.
             var existing = await agreementConfigRepo.GetByIdAsync(configId, ct);
             if (existing is null)
                 return Results.NotFound(new { error = "Agreement config not found" });
 
-            if (existing.Status == AgreementConfigStatus.ARCHIVED)
-                return Results.Json(new { error = "Config is already archived" }, statusCode: 409);
-
             // 3. Atomic archive (ADR-018 D3) — v3 ArchiveAsync(conn, tx, configId,
-            //    expectedVersion, ...) enforces ETag/If-Match optimistic concurrency.
+            //    expectedVersion, ...) enforces ETag/If-Match optimistic concurrency. The v3
+            //    path also rejects already-ARCHIVED via OCE so callers see a uniform 412
+            //    contract on both stale-version and double-archive cases.
             SaveAgreementConfigResult saveResult;
             try
             {

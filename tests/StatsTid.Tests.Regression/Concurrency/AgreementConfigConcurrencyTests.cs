@@ -210,6 +210,141 @@ public sealed class AgreementConfigConcurrencyTests : IAsyncLifetime
         Assert.Equal(38m, afterUpdate.WeeklyNormHours);
     }
 
+    // ─── Publish-supersession atomic emission (ADR-019 D1, S25 Step 7a B1 fix) ────
+
+    [Fact]
+    public async Task Publish_OverPriorActive_EmitsTwoAuditRowsAndTwoOutboxEvents()
+    {
+        // ADR-019 D1: when a publish supersedes a prior ACTIVE config of the same
+        // (agreement_code, ok_version), the publish handler must emit TWO audit rows +
+        // TWO outbox events — PUBLISHED for the new ACTIVE + ARCHIVED for the prior ACTIVE.
+        // Repo surface guarantees `saveResult.ArchivedId` + `saveResult.ArchivedVersion`
+        // are populated so the endpoint can route the second emission through the same tx.
+        // Pre-S25-Step-7a-cycle-1 the publish path silently dropped the second emission.
+        var agreementCode = "CON_AGR_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+        const string okVersion = "OK24";
+
+        var priorActiveId = await _repo.CreateAsync(
+            NewConfig(weeklyNorm: 37m, agreementCode: agreementCode, okVersion: okVersion),
+            "ACTIVE");
+        var draftId = await _repo.CreateAsync(
+            NewConfig(weeklyNorm: 38m, agreementCode: agreementCode, okVersion: okVersion),
+            "DRAFT");
+
+        // Atomic publish + 2x audit + 2x outbox in one tx (mirrors the endpoint shape).
+        SaveAgreementConfigResult saveResult;
+        await using (var conn = _harness.Factory.Create())
+        {
+            await conn.OpenAsync();
+            await using var tx = await conn.BeginTransactionAsync();
+            saveResult = await _repo.PublishAsync(
+                conn, tx, draftId, expectedVersion: 1, actorId: "tester");
+
+            await _repo.AppendAuditAsync(
+                conn, tx, draftId, "PUBLISHED",
+                null, $"{{\"archivedConfigId\":\"{saveResult.ArchivedId}\"}}",
+                "tester", "GLOBAL_ADMIN",
+                versionBefore: 1, versionAfter: saveResult.Version);
+            await InsertOutboxEventAsync(
+                conn, tx, $"agreement-config-{draftId}", "AgreementConfigPublished");
+
+            // ADR-019 D1: second emission for the archived prior-ACTIVE config.
+            var archivedId = saveResult.ArchivedId!.Value;
+            var archivedVersion = saveResult.ArchivedVersion!.Value;
+            await _repo.AppendAuditAsync(
+                conn, tx, archivedId, "ARCHIVED",
+                "ACTIVE", "ARCHIVED", "tester", "GLOBAL_ADMIN",
+                versionBefore: archivedVersion - 1, versionAfter: archivedVersion);
+            await InsertOutboxEventAsync(
+                conn, tx, $"agreement-config-{archivedId}", "AgreementConfigArchived");
+
+            await tx.CommitAsync();
+        }
+
+        // SaveResult must surface both archived id and archived version (BlockEr-fix
+        // record extension — pre-fix only ArchivedId existed, no way to compute the
+        // archived audit row's version-transition pair).
+        Assert.Equal(priorActiveId, saveResult.ArchivedId);
+        Assert.Equal(2L, saveResult.ArchivedVersion);
+        Assert.Equal(2L, saveResult.Version);
+
+        // Audit table: TWO distinct rows on TWO distinct config_ids, each with the
+        // correct version-transition pair populated.
+        var publishAuditRows = await ReadAuditRowsAsync(draftId);
+        Assert.Single(publishAuditRows);
+        Assert.Equal(("PUBLISHED", (long?)1L, (long?)2L), publishAuditRows[0]);
+
+        var archiveAuditRows = await ReadAuditRowsAsync(priorActiveId);
+        Assert.Single(archiveAuditRows);
+        Assert.Equal(("ARCHIVED", (long?)1L, (long?)2L), archiveAuditRows[0]);
+
+        // Outbox table: TWO distinct events on TWO distinct stream_ids.
+        var draftOutbox = await ReadOutboxEventTypesAsync($"agreement-config-{draftId}");
+        Assert.Single(draftOutbox);
+        Assert.Equal("AgreementConfigPublished", draftOutbox[0]);
+
+        var archivedOutbox = await ReadOutboxEventTypesAsync($"agreement-config-{priorActiveId}");
+        Assert.Single(archivedOutbox);
+        Assert.Equal("AgreementConfigArchived", archivedOutbox[0]);
+    }
+
+    // ── Verification helpers (audit + outbox introspection) ─────────────────────
+
+    private static async Task InsertOutboxEventAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, string streamId, string eventType)
+    {
+        await using var cmd = new NpgsqlCommand(
+            """
+            INSERT INTO outbox_events (service_id, stream_id, event_id, event_type, event_payload)
+            VALUES (@service, @stream, @eventId, @type, '{}'::jsonb)
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("service", "backend-api");
+        cmd.Parameters.AddWithValue("stream", streamId);
+        cmd.Parameters.AddWithValue("eventId", Guid.NewGuid());
+        cmd.Parameters.AddWithValue("type", eventType);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    private async Task<List<(string Action, long? VersionBefore, long? VersionAfter)>>
+        ReadAuditRowsAsync(Guid configId)
+    {
+        var rows = new List<(string, long?, long?)>();
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT action, version_before, version_after
+            FROM agreement_config_audit
+            WHERE config_id = @configId
+            ORDER BY audit_id ASC
+            """, conn);
+        cmd.Parameters.AddWithValue("configId", configId);
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            rows.Add((
+                reader.GetString(0),
+                reader.IsDBNull(1) ? null : reader.GetInt64(1),
+                reader.IsDBNull(2) ? null : reader.GetInt64(2)));
+        }
+        return rows;
+    }
+
+    private async Task<List<string>> ReadOutboxEventTypesAsync(string streamId)
+    {
+        var types = new List<string>();
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "SELECT event_type FROM outbox_events WHERE stream_id = @stream ORDER BY outbox_id ASC",
+            conn);
+        cmd.Parameters.AddWithValue("stream", streamId);
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+            types.Add(reader.GetString(0));
+        return types;
+    }
+
     // ── Test data builders ────────────────────────────────────────────────────
 
     /// <summary>
@@ -224,12 +359,18 @@ public sealed class AgreementConfigConcurrencyTests : IAsyncLifetime
         return ctx.Request;
     }
 
-    private static AgreementConfigEntity NewConfig(decimal weeklyNorm = 37m) => new()
+    private static AgreementConfigEntity NewConfig(
+        decimal weeklyNorm = 37m,
+        string? agreementCode = null,
+        string okVersion = "OK24") => new()
     {
         ConfigId = Guid.Empty,
-        // Unique agreement_code per call so concurrent test fixtures don't collide.
-        AgreementCode = "CON_AGR_" + Guid.NewGuid().ToString("N").Substring(0, 8),
-        OkVersion = "OK24",
+        // Default to a fresh unique agreement_code per call so concurrent fixtures don't
+        // collide; supersession tests pass an explicit shared code so the publish-archives-
+        // prior-ACTIVE path can fire.
+        AgreementCode = agreementCode
+            ?? "CON_AGR_" + Guid.NewGuid().ToString("N").Substring(0, 8),
+        OkVersion = okVersion,
         Status = AgreementConfigStatus.DRAFT,
         WeeklyNormHours = weeklyNorm,
         NormPeriodWeeks = 1,

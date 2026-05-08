@@ -425,6 +425,21 @@ public static class PositionOverrideEndpoints
                     throw;
                 }
             }
+            catch (OptimisticConcurrencyException ex)
+            {
+                // ADR-019 D6 textual ordering: OptimisticConcurrencyException (412) catch
+                // ALWAYS precedes PostgresException 23505 (409). The two exception types are
+                // disjoint so first-match semantics produce identical behavior either way,
+                // but the ADR-prose ordering is the canonical contract source for readers.
+                var currentState = await repo.GetByIdAsync(overrideId, ct);
+                return Results.Json(new
+                {
+                    error = "Concurrency precondition failed",
+                    expectedVersion = ex.ExpectedVersion,
+                    actualVersion = ex.ActualVersion,
+                    currentState = currentState is null ? null : MapEntityToResponse(currentState),
+                }, statusCode: 412);
+            }
             catch (PostgresException ex) when (ex.SqlState == "23505")
             {
                 // Concurrent activation of a sibling override for the same
@@ -437,17 +452,6 @@ public static class PositionOverrideEndpoints
                 {
                     error = "Another override is already ACTIVE for this (agreement, ok, position)",
                 });
-            }
-            catch (OptimisticConcurrencyException ex)
-            {
-                var currentState = await repo.GetByIdAsync(overrideId, ct);
-                return Results.Json(new
-                {
-                    error = "Concurrency precondition failed",
-                    expectedVersion = ex.ExpectedVersion,
-                    actualVersion = ex.ActualVersion,
-                    currentState = currentState is null ? null : MapEntityToResponse(currentState),
-                }, statusCode: 412);
             }
 
             context.Response.Headers.ETag = $"\"{saveResult.Version}\"";
