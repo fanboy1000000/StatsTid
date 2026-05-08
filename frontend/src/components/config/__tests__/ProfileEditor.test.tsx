@@ -13,6 +13,7 @@ const centralConfig: AgreementConfig = {
   agreementCode: 'AC',
   okVersion: 'OK24',
   status: 'ACTIVE',
+  version: 1,
   weeklyNormHours: 37,
   normPeriodWeeks: 1,
   normModel: 'WEEKLY',

@@ -1,7 +1,7 @@
 import { useState, useCallback, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAgreementConfigs, useAgreementConfigActions } from '../../hooks/useAgreementConfigs'
-import type { AgreementConfig } from '../../hooks/useAgreementConfigs'
+import type { AgreementConfig, WithEtag } from '../../hooks/useAgreementConfigs'
 import styles from './AgreementConfigList.module.css'
 
 type StatusFilter = '' | 'DRAFT' | 'ACTIVE' | 'ARCHIVED'
@@ -45,17 +45,23 @@ export function AgreementConfigList() {
   const { cloneConfig } = useAgreementConfigActions()
 
   const [cloneDialogOpen, setCloneDialogOpen] = useState(false)
-  const [cloneSource, setCloneSource] = useState<AgreementConfig | null>(null)
+  const [cloneSource, setCloneSource] = useState<WithEtag<AgreementConfig> | null>(null)
   const [cloneAgreementCode, setCloneAgreementCode] = useState('')
   const [cloneOkVersion, setCloneOkVersion] = useState('')
   const [cloneSubmitting, setCloneSubmitting] = useState(false)
   const [cloneError, setCloneError] = useState<string | null>(null)
+  // S25 / TASK-2506 (ADR-019 pending) banner-with-retry precedent
+  // (mirrors ProfileEditor.tsx:135). The list page has no If-Match-bearing
+  // mutations today (clone is first-create, not If-Match), so the banner state
+  // is wired for surface consistency — a future list-row publish/archive
+  // transition would set it on 412.
+  const [staleConflict, setStaleConflict] = useState<{ expected?: number; actual?: number } | null>(null)
 
   const handleRowClick = useCallback((configId: string) => {
     navigate(`/admin/agreements/${configId}`)
   }, [navigate])
 
-  const handleCloneOpen = useCallback((e: React.MouseEvent, config: AgreementConfig) => {
+  const handleCloneOpen = useCallback((e: React.MouseEvent, config: WithEtag<AgreementConfig>) => {
     e.stopPropagation()
     setCloneSource(config)
     setCloneAgreementCode(config.agreementCode)
@@ -85,10 +91,22 @@ export function AgreementConfigList() {
       await refetch()
       navigate(`/admin/agreements/${result.configId}`)
     } catch (err) {
-      setCloneError(err instanceof Error ? err.message : String(err))
+      // S25 / TASK-2506 banner-with-retry pattern: 412 surfaces stale
+      // expectedVersion/actualVersion via the thrown ConfigMutationError.
+      const e = err as Error & { status?: number; body?: { expectedVersion?: number; actualVersion?: number } }
+      if (e.status === 412) {
+        setStaleConflict({ expected: e.body?.expectedVersion, actual: e.body?.actualVersion })
+      } else {
+        setCloneError(err instanceof Error ? err.message : String(err))
+      }
     } finally {
       setCloneSubmitting(false)
     }
+  }
+
+  const handleStaleRefresh = async () => {
+    setStaleConflict(null)
+    await refetch()
   }
 
   return (
@@ -115,6 +133,18 @@ export function AgreementConfigList() {
         ))}
       </div>
 
+      {staleConflict && (
+        <div className={styles.alert} role="alert" data-testid="stale-conflict-banner">
+          Din handling var baseret paa en foraeldet tilstand. Listen er blevet opdateret siden.
+          {staleConflict.expected !== undefined && staleConflict.actual !== undefined && (
+            <> {' '}(Forventet version {staleConflict.expected}, aktuel version {staleConflict.actual}.)</>
+          )}
+          {' '}
+          <button type="button" className={styles.cloneBtn} onClick={handleStaleRefresh}>
+            Genindlaes
+          </button>
+        </div>
+      )}
       {error && <div className={styles.alert}>{error}</div>}
 
       {loading && (

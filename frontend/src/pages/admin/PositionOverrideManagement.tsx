@@ -1,5 +1,5 @@
 import { useState, type ChangeEvent, type FormEvent } from 'react'
-import { usePositionOverrides, type PositionOverrideConfig } from '../../hooks/usePositionOverrides'
+import { usePositionOverrides, type PositionOverrideConfig, type WithEtag } from '../../hooks/usePositionOverrides'
 import styles from './PositionOverrideManagement.module.css'
 
 interface CreateForm {
@@ -31,16 +31,35 @@ function parseOptionalNumber(value: string): number | null {
 }
 
 export function PositionOverrideManagement() {
-  const { data, loading, error, create, update, deactivate, activate } = usePositionOverrides()
+  const { data, loading, error, refetch, create, update, deactivate, activate } = usePositionOverrides()
   const [showCreate, setShowCreate] = useState(false)
   const [form, setForm] = useState<CreateForm>(emptyForm)
   const [submitting, setSubmitting] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editForm, setEditForm] = useState<Partial<CreateForm>>({})
+  // S25 / TASK-2506 (ADR-019 pending) banner-with-retry precedent
+  // (mirrors ProfileEditor.tsx:135). 412 from update / activate / deactivate
+  // sets `staleConflict`; the "Genindlaes" button refetches the list and
+  // clears the banner.
+  const [staleConflict, setStaleConflict] = useState<{ expected?: number; actual?: number } | null>(null)
 
   const handleChange = (field: keyof CreateForm) => (e: ChangeEvent<HTMLInputElement>) => {
     setForm((f) => ({ ...f, [field]: e.target.value }))
+  }
+
+  const handleMutationError = (err: unknown) => {
+    const e = err as Error & { status?: number; body?: { expectedVersion?: number; actualVersion?: number } }
+    if (e.status === 412) {
+      setStaleConflict({ expected: e.body?.expectedVersion, actual: e.body?.actualVersion })
+    } else {
+      setFormError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  const handleStaleRefresh = async () => {
+    setStaleConflict(null)
+    await refetch()
   }
 
   const handleCreate = async (e: FormEvent) => {
@@ -51,26 +70,27 @@ export function PositionOverrideManagement() {
     }
     setSubmitting(true)
     setFormError(null)
-    const result = await create({
-      agreementCode: form.agreementCode,
-      okVersion: form.okVersion,
-      positionCode: form.positionCode,
-      maxFlexBalance: parseOptionalNumber(form.maxFlexBalance),
-      flexCarryoverMax: parseOptionalNumber(form.flexCarryoverMax),
-      normPeriodWeeks: parseOptionalNumber(form.normPeriodWeeks),
-      weeklyNormHours: parseOptionalNumber(form.weeklyNormHours),
-      description: form.description || null,
-    })
-    setSubmitting(false)
-    if (result.ok) {
+    try {
+      await create({
+        agreementCode: form.agreementCode,
+        okVersion: form.okVersion,
+        positionCode: form.positionCode,
+        maxFlexBalance: parseOptionalNumber(form.maxFlexBalance),
+        flexCarryoverMax: parseOptionalNumber(form.flexCarryoverMax),
+        normPeriodWeeks: parseOptionalNumber(form.normPeriodWeeks),
+        weeklyNormHours: parseOptionalNumber(form.weeklyNormHours),
+        description: form.description || null,
+      })
       setForm(emptyForm)
       setShowCreate(false)
-    } else {
-      setFormError(result.error)
+    } catch (err) {
+      handleMutationError(err)
+    } finally {
+      setSubmitting(false)
     }
   }
 
-  const startEdit = (item: PositionOverrideConfig) => {
+  const startEdit = (item: WithEtag<PositionOverrideConfig>) => {
     setEditingId(item.overrideId)
     setEditForm({
       maxFlexBalance: item.maxFlexBalance?.toString() ?? '',
@@ -86,19 +106,41 @@ export function PositionOverrideManagement() {
     setEditForm({})
   }
 
-  const saveEdit = async (overrideId: string) => {
+  const saveEdit = async (item: WithEtag<PositionOverrideConfig>) => {
     setSubmitting(true)
-    const result = await update(overrideId, {
-      maxFlexBalance: parseOptionalNumber(editForm.maxFlexBalance ?? ''),
-      flexCarryoverMax: parseOptionalNumber(editForm.flexCarryoverMax ?? ''),
-      normPeriodWeeks: parseOptionalNumber(editForm.normPeriodWeeks ?? ''),
-      weeklyNormHours: parseOptionalNumber(editForm.weeklyNormHours ?? ''),
-      description: editForm.description || null,
-    })
-    setSubmitting(false)
-    if (result.ok) {
+    try {
+      await update(item.overrideId, item.etag, {
+        agreementCode: item.agreementCode,
+        okVersion: item.okVersion,
+        positionCode: item.positionCode,
+        maxFlexBalance: parseOptionalNumber(editForm.maxFlexBalance ?? ''),
+        flexCarryoverMax: parseOptionalNumber(editForm.flexCarryoverMax ?? ''),
+        normPeriodWeeks: parseOptionalNumber(editForm.normPeriodWeeks ?? ''),
+        weeklyNormHours: parseOptionalNumber(editForm.weeklyNormHours ?? ''),
+        description: editForm.description || null,
+      })
       setEditingId(null)
       setEditForm({})
+    } catch (err) {
+      handleMutationError(err)
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const handleDeactivate = async (item: WithEtag<PositionOverrideConfig>) => {
+    try {
+      await deactivate(item.overrideId, item.etag)
+    } catch (err) {
+      handleMutationError(err)
+    }
+  }
+
+  const handleActivate = async (item: WithEtag<PositionOverrideConfig>) => {
+    try {
+      await activate(item.overrideId, item.etag)
+    } catch (err) {
+      handleMutationError(err)
     }
   }
 
@@ -122,6 +164,18 @@ export function PositionOverrideManagement() {
         </button>
       </div>
 
+      {staleConflict && (
+        <div className={styles.alert} role="alert" data-testid="stale-conflict-banner">
+          Din handling var baseret paa en foraeldet tilstand. Listen er blevet opdateret siden.
+          {staleConflict.expected !== undefined && staleConflict.actual !== undefined && (
+            <> {' '}(Forventet version {staleConflict.expected}, aktuel version {staleConflict.actual}.)</>
+          )}
+          {' '}
+          <button type="button" className={styles.actionBtn} onClick={handleStaleRefresh}>
+            Genindlaes
+          </button>
+        </div>
+      )}
       {error && <div className={styles.alert}>{error}</div>}
 
       {showCreate && (
@@ -304,7 +358,7 @@ export function PositionOverrideManagement() {
                         onChange={handleEditChange('maxFlexBalance')}
                       />
                     ) : (
-                      item.maxFlexBalance ?? '\u2014'
+                      item.maxFlexBalance ?? '—'
                     )}
                   </td>
                   <td>
@@ -317,7 +371,7 @@ export function PositionOverrideManagement() {
                         onChange={handleEditChange('normPeriodWeeks')}
                       />
                     ) : (
-                      item.normPeriodWeeks ?? '\u2014'
+                      item.normPeriodWeeks ?? '—'
                     )}
                   </td>
                   <td>
@@ -330,7 +384,7 @@ export function PositionOverrideManagement() {
                         onChange={handleEditChange('weeklyNormHours')}
                       />
                     ) : (
-                      item.weeklyNormHours ?? '\u2014'
+                      item.weeklyNormHours ?? '—'
                     )}
                   </td>
                   <td>
@@ -343,7 +397,7 @@ export function PositionOverrideManagement() {
                         style={{ width: '120px' }}
                       />
                     ) : (
-                      item.description ?? '\u2014'
+                      item.description ?? '—'
                     )}
                   </td>
                   <td>
@@ -351,7 +405,7 @@ export function PositionOverrideManagement() {
                       <>
                         <button
                           className={styles.saveBtn}
-                          onClick={() => saveEdit(item.overrideId)}
+                          onClick={() => saveEdit(item)}
                           disabled={submitting}
                         >
                           Gem
@@ -368,14 +422,14 @@ export function PositionOverrideManagement() {
                         {item.status === 'ACTIVE' ? (
                           <button
                             className={styles.deactivateBtn}
-                            onClick={() => deactivate(item.overrideId)}
+                            onClick={() => handleDeactivate(item)}
                           >
                             Deaktiver
                           </button>
                         ) : (
                           <button
                             className={styles.activateBtn}
-                            onClick={() => activate(item.overrideId)}
+                            onClick={() => handleActivate(item)}
                           >
                             Aktiver
                           </button>

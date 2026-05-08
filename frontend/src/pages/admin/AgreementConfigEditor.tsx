@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback, type ChangeEvent } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { apiClient } from '../../lib/api'
+import { apiFetchWithEtag } from '../../lib/api'
+import { formatVersionAsIfMatch, resolveEtag } from '../../lib/etag'
 import { useAgreementConfigActions } from '../../hooks/useAgreementConfigs'
 import type { AgreementConfig } from '../../hooks/useAgreementConfigs'
 import styles from './AgreementConfigEditor.module.css'
 
-type ConfigForm = Omit<AgreementConfig, 'configId' | 'createdBy' | 'createdAt' | 'updatedAt' | 'publishedAt' | 'archivedAt' | 'clonedFromId'>
+type ConfigForm = Omit<AgreementConfig, 'configId' | 'version' | 'createdBy' | 'createdAt' | 'updatedAt' | 'publishedAt' | 'archivedAt' | 'clonedFromId'>
 
 const NORM_MODELS = [
   { value: 'WEEKLY_HOURS', label: 'Ugentlige timer' },
@@ -126,12 +127,18 @@ export function AgreementConfigEditor() {
   const { createConfig, updateConfig, cloneConfig, publishConfig, archiveConfig } = useAgreementConfigActions()
 
   const [config, setConfig] = useState<AgreementConfig | null>(null)
+  // S25 / TASK-2506 (ADR-019 pending): track the wire-format ETag for the
+  // currently-loaded config so the next PUT/Publish/Archive can If-Match on
+  // it. Sourced from the GET response header (with body.version fallback).
+  const [etag, setEtag] = useState<string | null>(null)
   const [form, setForm] = useState<ConfigForm>(emptyForm())
   const [loading, setLoading] = useState(!isNew)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [confirmDialog, setConfirmDialog] = useState<'publish' | 'archive' | null>(null)
+  // S25 / TASK-2506 banner-with-retry precedent (mirrors ProfileEditor.tsx:135).
+  const [staleConflict, setStaleConflict] = useState<{ expected?: number; actual?: number } | null>(null)
 
   const isReadOnly = config !== null && config.status !== 'DRAFT'
 
@@ -139,10 +146,15 @@ export function AgreementConfigEditor() {
     if (isNew || !configId) return
     setLoading(true)
     setError(null)
-    const result = await apiClient.get<AgreementConfig>(`/api/agreement-configs/${configId}`)
+    // S25 / TASK-2506: capture the by-id ETag header for the next If-Match
+    // (header-preferred, body.version fallback for cross-origin deployments).
+    const result = await apiFetchWithEtag<AgreementConfig>(`/api/agreement-configs/${configId}`)
     if (result.ok) {
-      setConfig(result.data)
-      setForm(configToForm(result.data))
+      const { data, etag: rawEtag } = result.data
+      const { etag: resolvedEtag } = resolveEtag(rawEtag, data)
+      setConfig(data)
+      setEtag(resolvedEtag ?? formatVersionAsIfMatch(data.version))
+      setForm(configToForm(data))
     } else {
       setError(result.error)
     }
@@ -167,21 +179,42 @@ export function AgreementConfigEditor() {
     setField(key, e.target.checked as ConfigForm[typeof key])
   }
 
+  // S25 / TASK-2506 helper: classify thrown mutation errors and either set the
+  // stale-conflict banner (412) or surface a generic error (anything else).
+  const handleMutationError = (err: unknown) => {
+    const e = err as Error & { status?: number; body?: { expectedVersion?: number; actualVersion?: number } }
+    if (e.status === 412) {
+      setStaleConflict({ expected: e.body?.expectedVersion, actual: e.body?.actualVersion })
+    } else {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  const handleStaleRefresh = async () => {
+    setStaleConflict(null)
+    await fetchConfig()
+  }
+
   const handleSave = async () => {
     setSaving(true)
     setError(null)
     setSuccess(null)
+    setStaleConflict(null)
     try {
       if (isNew) {
         const result = await createConfig(form)
         navigate(`/admin/agreements/${result.configId}`, { replace: true })
       } else if (configId) {
-        await updateConfig(configId, form)
+        if (!etag) {
+          setError('ETag mangler — genindlaes konfigurationen.')
+          return
+        }
+        await updateConfig(configId, etag, form)
         setSuccess('Konfiguration gemt')
         await fetchConfig()
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      handleMutationError(err)
     } finally {
       setSaving(false)
     }
@@ -189,14 +222,19 @@ export function AgreementConfigEditor() {
 
   const handlePublish = async () => {
     if (!configId) return
+    if (!etag) {
+      setError('ETag mangler — genindlaes konfigurationen.')
+      return
+    }
     setConfirmDialog(null)
     setSaving(true)
     setError(null)
+    setStaleConflict(null)
     try {
-      await publishConfig(configId)
+      await publishConfig(configId, etag)
       navigate('/admin/agreements')
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      handleMutationError(err)
     } finally {
       setSaving(false)
     }
@@ -204,14 +242,19 @@ export function AgreementConfigEditor() {
 
   const handleArchive = async () => {
     if (!configId) return
+    if (!etag) {
+      setError('ETag mangler — genindlaes konfigurationen.')
+      return
+    }
     setConfirmDialog(null)
     setSaving(true)
     setError(null)
+    setStaleConflict(null)
     try {
-      await archiveConfig(configId)
+      await archiveConfig(configId, etag)
       navigate('/admin/agreements')
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      handleMutationError(err)
     } finally {
       setSaving(false)
     }
@@ -225,7 +268,7 @@ export function AgreementConfigEditor() {
       const result = await cloneConfig(configId)
       navigate(`/admin/agreements/${result.configId}`)
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      handleMutationError(err)
     } finally {
       setSaving(false)
     }
@@ -291,6 +334,18 @@ export function AgreementConfigEditor() {
         </div>
       </div>
 
+      {staleConflict && (
+        <div className={styles.alert} role="alert" data-testid="stale-conflict-banner">
+          Din redigering var baseret paa en foraeldet tilstand. Konfigurationen er blevet opdateret siden.
+          {staleConflict.expected !== undefined && staleConflict.actual !== undefined && (
+            <> {' '}(Forventet version {staleConflict.expected}, aktuel version {staleConflict.actual}.)</>
+          )}
+          {' '}
+          <button type="button" className={styles.secondaryBtn} onClick={handleStaleRefresh}>
+            Genindlaes og kassér aendringer
+          </button>
+        </div>
+      )}
       {error && <div className={styles.alert}>{error}</div>}
       {success && <div className={styles.success}>{success}</div>}
 

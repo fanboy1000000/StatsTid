@@ -1,5 +1,5 @@
 import { useState, type ChangeEvent, type FormEvent } from 'react'
-import { useWageTypeMappings, type WageTypeMappingItem } from '../../hooks/useWageTypeMappings'
+import { useWageTypeMappings, type WageTypeMappingItem, type WithEtag } from '../../hooks/useWageTypeMappings'
 import styles from './WageTypeMappingManagement.module.css'
 
 interface CreateForm {
@@ -25,16 +25,34 @@ function mappingKey(m: WageTypeMappingItem): string {
 }
 
 export function WageTypeMappingManagement() {
-  const { data, loading, error, create, updateMapping, deleteMapping } = useWageTypeMappings()
+  const { data, loading, error, refetch, create, updateMapping, deleteMapping } = useWageTypeMappings()
   const [showCreate, setShowCreate] = useState(false)
   const [form, setForm] = useState<CreateForm>(emptyForm)
   const [submitting, setSubmitting] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [editingKey, setEditingKey] = useState<string | null>(null)
   const [editForm, setEditForm] = useState<{ wageType: string; description: string }>({ wageType: '', description: '' })
+  // S25 / TASK-2506 (ADR-019 pending) banner-with-retry precedent
+  // (mirrors ProfileEditor.tsx:135). 412 from update / delete sets
+  // `staleConflict`; the "Genindlaes" button refetches the list and clears it.
+  const [staleConflict, setStaleConflict] = useState<{ expected?: number; actual?: number } | null>(null)
 
   const handleChange = (field: keyof CreateForm) => (e: ChangeEvent<HTMLInputElement>) => {
     setForm((f) => ({ ...f, [field]: e.target.value }))
+  }
+
+  const handleMutationError = (err: unknown) => {
+    const e = err as Error & { status?: number; body?: { expectedVersion?: number; actualVersion?: number } }
+    if (e.status === 412) {
+      setStaleConflict({ expected: e.body?.expectedVersion, actual: e.body?.actualVersion })
+    } else {
+      setFormError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  const handleStaleRefresh = async () => {
+    setStaleConflict(null)
+    await refetch()
   }
 
   const handleCreate = async (e: FormEvent) => {
@@ -45,24 +63,25 @@ export function WageTypeMappingManagement() {
     }
     setSubmitting(true)
     setFormError(null)
-    const result = await create({
-      timeType: form.timeType,
-      wageType: form.wageType,
-      okVersion: form.okVersion,
-      agreementCode: form.agreementCode,
-      position: form.position,
-      description: form.description || null,
-    })
-    setSubmitting(false)
-    if (result.ok) {
+    try {
+      await create({
+        timeType: form.timeType,
+        wageType: form.wageType,
+        okVersion: form.okVersion,
+        agreementCode: form.agreementCode,
+        position: form.position,
+        description: form.description || null,
+      })
       setForm(emptyForm)
       setShowCreate(false)
-    } else {
-      setFormError(result.error)
+    } catch (err) {
+      handleMutationError(err)
+    } finally {
+      setSubmitting(false)
     }
   }
 
-  const startEdit = (item: WageTypeMappingItem) => {
+  const startEdit = (item: WithEtag<WageTypeMappingItem>) => {
     setEditingKey(mappingKey(item))
     setEditForm({
       wageType: item.wageType,
@@ -75,27 +94,34 @@ export function WageTypeMappingManagement() {
     setEditForm({ wageType: '', description: '' })
   }
 
-  const saveEdit = async (item: WageTypeMappingItem) => {
+  const saveEdit = async (item: WithEtag<WageTypeMappingItem>) => {
     setSubmitting(true)
-    const result = await updateMapping({
-      timeType: item.timeType,
-      wageType: editForm.wageType,
-      okVersion: item.okVersion,
-      agreementCode: item.agreementCode,
-      position: item.position,
-      description: editForm.description || null,
-    })
-    setSubmitting(false)
-    if (result.ok) {
+    try {
+      await updateMapping(item.etag, {
+        timeType: item.timeType,
+        wageType: editForm.wageType,
+        okVersion: item.okVersion,
+        agreementCode: item.agreementCode,
+        position: item.position,
+        description: editForm.description || null,
+      })
       cancelEdit()
+    } catch (err) {
+      handleMutationError(err)
+    } finally {
+      setSubmitting(false)
     }
   }
 
-  const handleDelete = async (item: WageTypeMappingItem) => {
+  const handleDelete = async (item: WithEtag<WageTypeMappingItem>) => {
     if (!window.confirm(`Slet tilknytning for ${item.timeType} (${item.agreementCode} ${item.okVersion})?`)) {
       return
     }
-    await deleteMapping(item.timeType, item.okVersion, item.agreementCode, item.position)
+    try {
+      await deleteMapping(item.timeType, item.okVersion, item.agreementCode, item.position, item.etag)
+    } catch (err) {
+      handleMutationError(err)
+    }
   }
 
   return (
@@ -114,6 +140,18 @@ export function WageTypeMappingManagement() {
         </button>
       </div>
 
+      {staleConflict && (
+        <div className={styles.alert} role="alert" data-testid="stale-conflict-banner">
+          Din handling var baseret paa en foraeldet tilstand. Listen er blevet opdateret siden.
+          {staleConflict.expected !== undefined && staleConflict.actual !== undefined && (
+            <> {' '}(Forventet version {staleConflict.expected}, aktuel version {staleConflict.actual}.)</>
+          )}
+          {' '}
+          <button type="button" className={styles.actionBtn} onClick={handleStaleRefresh}>
+            Genindlaes
+          </button>
+        </div>
+      )}
       {error && <div className={styles.alert}>{error}</div>}
 
       {showCreate && (
@@ -280,7 +318,7 @@ export function WageTypeMappingManagement() {
                         style={{ width: '140px' }}
                       />
                     ) : (
-                      item.description ?? '\u2014'
+                      item.description ?? '—'
                     )}
                   </td>
                   <td>
