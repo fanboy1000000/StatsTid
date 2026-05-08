@@ -177,7 +177,7 @@ public static class AdminEndpoints
             OrganizationRepository orgRepo,
             OrgScopeValidator scopeValidator,
             DbConnectionFactory dbFactory,
-            IEventStore eventStore,
+            IOutboxEnqueue outbox,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -193,38 +193,53 @@ public static class AdminEndpoints
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
-            // Update via direct Npgsql — only non-null fields
+            // Atomic UPDATE + outbox-emit per ADR-018 D3 (S26 TASK-2605b):
+            // inline organizations UPDATE and OrganizationUpdated outbox enqueue ride
+            // a single explicit transaction; commit at end of try, rollback on throw.
             var now = DateTime.UtcNow;
             await using var conn = dbFactory.Create();
             await conn.OpenAsync(ct);
-            await using var cmd = new NpgsqlCommand(
-                """
-                UPDATE organizations
-                SET org_name = @orgName,
-                    agreement_code = @agreementCode,
-                    ok_version = @okVersion,
-                    updated_at = @now
-                WHERE org_id = @orgId AND is_active = TRUE
-                """, conn);
-            cmd.Parameters.AddWithValue("orgName", request.OrgName ?? existingOrg.OrgName);
-            cmd.Parameters.AddWithValue("agreementCode", request.AgreementCode ?? existingOrg.AgreementCode);
-            cmd.Parameters.AddWithValue("okVersion", request.OkVersion ?? existingOrg.OkVersion);
-            cmd.Parameters.AddWithValue("now", now);
-            cmd.Parameters.AddWithValue("orgId", orgId);
-            await cmd.ExecuteNonQueryAsync(ct);
+            await using var tx = await conn.BeginTransactionAsync(ct);
 
-            // Emit domain event
-            var @event = new OrganizationUpdated
+            try
             {
-                OrgId = orgId,
-                OrgName = request.OrgName,
-                AgreementCode = request.AgreementCode,
-                OkVersion = request.OkVersion,
-                ActorId = actor.ActorId,
-                ActorRole = actor.ActorRole,
-                CorrelationId = actor.CorrelationId
-            };
-            await eventStore.AppendAsync($"org-{orgId}", @event, ct);
+                await using var cmd = new NpgsqlCommand(
+                    """
+                    UPDATE organizations
+                    SET org_name = @orgName,
+                        agreement_code = @agreementCode,
+                        ok_version = @okVersion,
+                        updated_at = @now
+                    WHERE org_id = @orgId AND is_active = TRUE
+                    """, conn, tx);
+                cmd.Parameters.AddWithValue("orgName", request.OrgName ?? existingOrg.OrgName);
+                cmd.Parameters.AddWithValue("agreementCode", request.AgreementCode ?? existingOrg.AgreementCode);
+                cmd.Parameters.AddWithValue("okVersion", request.OkVersion ?? existingOrg.OkVersion);
+                cmd.Parameters.AddWithValue("now", now);
+                cmd.Parameters.AddWithValue("orgId", orgId);
+                await cmd.ExecuteNonQueryAsync(ct);
+
+                // Emit domain event in-tx (BEFORE CommitAsync) so the organizations row
+                // and the outbox row commit atomically per ADR-018 D3.
+                var @event = new OrganizationUpdated
+                {
+                    OrgId = orgId,
+                    OrgName = request.OrgName,
+                    AgreementCode = request.AgreementCode,
+                    OkVersion = request.OkVersion,
+                    ActorId = actor.ActorId,
+                    ActorRole = actor.ActorRole,
+                    CorrelationId = actor.CorrelationId
+                };
+                await outbox.EnqueueAsync(conn, tx, $"org-{orgId}", @event, ct);
+
+                await tx.CommitAsync(ct);
+            }
+            catch
+            {
+                await tx.RollbackAsync(ct);
+                throw;
+            }
 
             return Results.Ok(new
             {
@@ -278,7 +293,7 @@ public static class AdminEndpoints
             CreateUserRequest request,
             OrgScopeValidator scopeValidator,
             DbConnectionFactory dbFactory,
-            IEventStore eventStore,
+            IOutboxEnqueue outbox,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -292,50 +307,72 @@ public static class AdminEndpoints
             // Hash password with BCrypt
             var passwordHash = BCrypt.Net.BCrypt.HashPassword(request.Password);
 
-            // Insert via direct Npgsql
+            // Open the connection up-front: pre-flight existence check runs OUTSIDE the
+            // tx (read-only, no atomicity benefit and would only extend tx duration —
+            // S26 TASK-2605b Reviewer NOTE 1+2). The same connection then carries the
+            // tx for the atomic INSERT + outbox emit per ADR-018 D3.
             var now = DateTime.UtcNow;
             await using var conn = dbFactory.Create();
             await conn.OpenAsync(ct);
 
-            // Check if user already exists
-            await using var checkCmd = new NpgsqlCommand(
-                "SELECT COUNT(*) FROM users WHERE user_id = @userId OR username = @username", conn);
-            checkCmd.Parameters.AddWithValue("userId", request.UserId);
-            checkCmd.Parameters.AddWithValue("username", request.Username);
-            var existingCount = (long)(await checkCmd.ExecuteScalarAsync(ct))!;
-            if (existingCount > 0)
-                return Results.Conflict(new { error = "User with this ID or username already exists" });
-
-            await using var cmd = new NpgsqlCommand(
-                """
-                INSERT INTO users (user_id, username, password_hash, display_name, email, primary_org_id, agreement_code, ok_version, employment_category, is_active, created_at, updated_at)
-                VALUES (@userId, @username, @passwordHash, @displayName, @email, @primaryOrgId, @agreementCode, @okVersion, 'Standard', TRUE, @now, @now)
-                """, conn);
-            cmd.Parameters.AddWithValue("userId", request.UserId);
-            cmd.Parameters.AddWithValue("username", request.Username);
-            cmd.Parameters.AddWithValue("passwordHash", passwordHash);
-            cmd.Parameters.AddWithValue("displayName", request.DisplayName);
-            cmd.Parameters.AddWithValue("email", (object?)request.Email ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("primaryOrgId", request.PrimaryOrgId);
-            cmd.Parameters.AddWithValue("agreementCode", request.AgreementCode);
-            cmd.Parameters.AddWithValue("okVersion", request.OkVersion);
-            cmd.Parameters.AddWithValue("now", now);
-            await cmd.ExecuteNonQueryAsync(ct);
-
-            // Emit domain event
-            var @event = new UserCreated
+            // Check if user already exists (pre-flight, outside tx)
+            await using (var checkCmd = new NpgsqlCommand(
+                "SELECT COUNT(*) FROM users WHERE user_id = @userId OR username = @username", conn))
             {
-                UserId = request.UserId,
-                Username = request.Username,
-                DisplayName = request.DisplayName,
-                PrimaryOrgId = request.PrimaryOrgId,
-                AgreementCode = request.AgreementCode,
-                OkVersion = request.OkVersion,
-                ActorId = actor.ActorId,
-                ActorRole = actor.ActorRole,
-                CorrelationId = actor.CorrelationId
-            };
-            await eventStore.AppendAsync($"user-{request.UserId}", @event, ct);
+                checkCmd.Parameters.AddWithValue("userId", request.UserId);
+                checkCmd.Parameters.AddWithValue("username", request.Username);
+                var existingCount = (long)(await checkCmd.ExecuteScalarAsync(ct))!;
+                if (existingCount > 0)
+                    return Results.Conflict(new { error = "User with this ID or username already exists" });
+            }
+
+            // Atomic INSERT + outbox-emit per ADR-018 D3 (S26 TASK-2605b):
+            // inline users INSERT and UserCreated outbox enqueue ride a single
+            // explicit transaction on the same connection; commit at end of try,
+            // rollback on throw.
+            await using var tx = await conn.BeginTransactionAsync(ct);
+
+            try
+            {
+                await using var cmd = new NpgsqlCommand(
+                    """
+                    INSERT INTO users (user_id, username, password_hash, display_name, email, primary_org_id, agreement_code, ok_version, employment_category, is_active, created_at, updated_at)
+                    VALUES (@userId, @username, @passwordHash, @displayName, @email, @primaryOrgId, @agreementCode, @okVersion, 'Standard', TRUE, @now, @now)
+                    """, conn, tx);
+                cmd.Parameters.AddWithValue("userId", request.UserId);
+                cmd.Parameters.AddWithValue("username", request.Username);
+                cmd.Parameters.AddWithValue("passwordHash", passwordHash);
+                cmd.Parameters.AddWithValue("displayName", request.DisplayName);
+                cmd.Parameters.AddWithValue("email", (object?)request.Email ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("primaryOrgId", request.PrimaryOrgId);
+                cmd.Parameters.AddWithValue("agreementCode", request.AgreementCode);
+                cmd.Parameters.AddWithValue("okVersion", request.OkVersion);
+                cmd.Parameters.AddWithValue("now", now);
+                await cmd.ExecuteNonQueryAsync(ct);
+
+                // Emit domain event in-tx (BEFORE CommitAsync) so the users row
+                // and the outbox row commit atomically per ADR-018 D3.
+                var @event = new UserCreated
+                {
+                    UserId = request.UserId,
+                    Username = request.Username,
+                    DisplayName = request.DisplayName,
+                    PrimaryOrgId = request.PrimaryOrgId,
+                    AgreementCode = request.AgreementCode,
+                    OkVersion = request.OkVersion,
+                    ActorId = actor.ActorId,
+                    ActorRole = actor.ActorRole,
+                    CorrelationId = actor.CorrelationId
+                };
+                await outbox.EnqueueAsync(conn, tx, $"user-{request.UserId}", @event, ct);
+
+                await tx.CommitAsync(ct);
+            }
+            catch
+            {
+                await tx.RollbackAsync(ct);
+                throw;
+            }
 
             return Results.Created($"/api/admin/users/{request.UserId}", new
             {
@@ -355,7 +392,7 @@ public static class AdminEndpoints
             UpdateUserRequest request,
             UserRepository userRepo,
             OrgScopeValidator scopeValidator,
-            IEventStore eventStore,
+            IOutboxEnqueue outbox,
             DbConnectionFactory dbFactory,
             HttpContext context,
             CancellationToken ct) =>
@@ -380,41 +417,56 @@ public static class AdminEndpoints
                     return Results.Json(new { error = "Access denied", reason = reasonNew }, statusCode: 403);
             }
 
-            // Update via direct Npgsql
+            // Atomic UPDATE + outbox-emit per ADR-018 D3 (S26 TASK-2605b):
+            // inline users UPDATE and UserUpdated outbox enqueue ride a single
+            // explicit transaction; commit at end of try, rollback on throw.
             var now = DateTime.UtcNow;
             await using var conn = dbFactory.Create();
             await conn.OpenAsync(ct);
-            await using var cmd = new NpgsqlCommand(
-                """
-                UPDATE users
-                SET display_name = @displayName,
-                    email = @email,
-                    primary_org_id = @primaryOrgId,
-                    agreement_code = @agreementCode,
-                    updated_at = @now
-                WHERE user_id = @userId AND is_active = TRUE
-                """, conn);
-            cmd.Parameters.AddWithValue("displayName", request.DisplayName ?? existingUser.DisplayName);
-            cmd.Parameters.AddWithValue("email", (object?)(request.Email ?? existingUser.Email) ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("primaryOrgId", request.PrimaryOrgId ?? existingUser.PrimaryOrgId);
-            cmd.Parameters.AddWithValue("agreementCode", request.AgreementCode ?? existingUser.AgreementCode);
-            cmd.Parameters.AddWithValue("now", now);
-            cmd.Parameters.AddWithValue("userId", userId);
-            await cmd.ExecuteNonQueryAsync(ct);
+            await using var tx = await conn.BeginTransactionAsync(ct);
 
-            // Emit domain event for auditability
-            var @event = new UserUpdated
+            try
             {
-                UserId = userId,
-                DisplayName = request.DisplayName ?? existingUser.DisplayName,
-                Email = request.Email ?? existingUser.Email,
-                PrimaryOrgId = request.PrimaryOrgId ?? existingUser.PrimaryOrgId,
-                AgreementCode = request.AgreementCode ?? existingUser.AgreementCode,
-                ActorId = actor.ActorId,
-                ActorRole = actor.ActorRole,
-                CorrelationId = actor.CorrelationId
-            };
-            await eventStore.AppendAsync($"user-{userId}", @event, ct);
+                await using var cmd = new NpgsqlCommand(
+                    """
+                    UPDATE users
+                    SET display_name = @displayName,
+                        email = @email,
+                        primary_org_id = @primaryOrgId,
+                        agreement_code = @agreementCode,
+                        updated_at = @now
+                    WHERE user_id = @userId AND is_active = TRUE
+                    """, conn, tx);
+                cmd.Parameters.AddWithValue("displayName", request.DisplayName ?? existingUser.DisplayName);
+                cmd.Parameters.AddWithValue("email", (object?)(request.Email ?? existingUser.Email) ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("primaryOrgId", request.PrimaryOrgId ?? existingUser.PrimaryOrgId);
+                cmd.Parameters.AddWithValue("agreementCode", request.AgreementCode ?? existingUser.AgreementCode);
+                cmd.Parameters.AddWithValue("now", now);
+                cmd.Parameters.AddWithValue("userId", userId);
+                await cmd.ExecuteNonQueryAsync(ct);
+
+                // Emit domain event in-tx (BEFORE CommitAsync) so the users row
+                // and the outbox row commit atomically per ADR-018 D3.
+                var @event = new UserUpdated
+                {
+                    UserId = userId,
+                    DisplayName = request.DisplayName ?? existingUser.DisplayName,
+                    Email = request.Email ?? existingUser.Email,
+                    PrimaryOrgId = request.PrimaryOrgId ?? existingUser.PrimaryOrgId,
+                    AgreementCode = request.AgreementCode ?? existingUser.AgreementCode,
+                    ActorId = actor.ActorId,
+                    ActorRole = actor.ActorRole,
+                    CorrelationId = actor.CorrelationId
+                };
+                await outbox.EnqueueAsync(conn, tx, $"user-{userId}", @event, ct);
+
+                await tx.CommitAsync(ct);
+            }
+            catch
+            {
+                await tx.RollbackAsync(ct);
+                throw;
+            }
 
             return Results.Ok(new
             {
@@ -473,7 +525,7 @@ public static class AdminEndpoints
             UserRepository userRepo,
             OrgScopeValidator scopeValidator,
             DbConnectionFactory dbFactory,
-            IEventStore eventStore,
+            IOutboxEnqueue outbox,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -552,6 +604,23 @@ public static class AdminEndpoints
                     $"Granted {request.RoleId} on {request.OrgId ?? "GLOBAL"} ({request.ScopeType}) to {request.UserId}");
                 await auditCmd.ExecuteNonQueryAsync(ct);
 
+                // Emit domain event in-tx (BEFORE CommitAsync) so role_assignments
+                // + role_assignment_audit + outbox commit atomically per ADR-018 D3
+                // (S26 TASK-2605b narrower variant — existing tx already wraps state
+                // + audit; only the emission moves inside).
+                var @event = new RoleAssignmentGranted
+                {
+                    AssignmentId = assignmentId,
+                    UserId = request.UserId,
+                    RoleId = request.RoleId,
+                    OrgId = request.OrgId,
+                    ScopeType = request.ScopeType,
+                    ActorId = actor.ActorId,
+                    ActorRole = actor.ActorRole,
+                    CorrelationId = actor.CorrelationId
+                };
+                await outbox.EnqueueAsync(conn, tx, $"user-{request.UserId}", @event, ct);
+
                 await tx.CommitAsync(ct);
             }
             catch
@@ -559,20 +628,6 @@ public static class AdminEndpoints
                 await tx.RollbackAsync(ct);
                 throw;
             }
-
-            // Emit domain event
-            var @event = new RoleAssignmentGranted
-            {
-                AssignmentId = assignmentId,
-                UserId = request.UserId,
-                RoleId = request.RoleId,
-                OrgId = request.OrgId,
-                ScopeType = request.ScopeType,
-                ActorId = actor.ActorId,
-                ActorRole = actor.ActorRole,
-                CorrelationId = actor.CorrelationId
-            };
-            await eventStore.AppendAsync($"user-{request.UserId}", @event, ct);
 
             return Results.Created($"/api/admin/users/{request.UserId}/roles", new
             {
@@ -594,7 +649,7 @@ public static class AdminEndpoints
             UserRepository userRepo,
             OrgScopeValidator scopeValidator,
             DbConnectionFactory dbFactory,
-            IEventStore eventStore,
+            IOutboxEnqueue outbox,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -663,6 +718,22 @@ public static class AdminEndpoints
                     $"Revoked {assignmentRoleId} from {assignmentUserId}" + (request.Reason is not null ? $". Reason: {request.Reason}" : ""));
                 await auditCmd.ExecuteNonQueryAsync(ct);
 
+                // Emit domain event in-tx (BEFORE CommitAsync) so role_assignments
+                // + role_assignment_audit + outbox commit atomically per ADR-018 D3
+                // (S26 TASK-2605b narrower variant — existing tx already wraps state
+                // + audit; only the emission moves inside).
+                var @event = new RoleAssignmentRevoked
+                {
+                    AssignmentId = request.AssignmentId,
+                    UserId = assignmentUserId,
+                    RoleId = assignmentRoleId,
+                    Reason = request.Reason,
+                    ActorId = actor.ActorId,
+                    ActorRole = actor.ActorRole,
+                    CorrelationId = actor.CorrelationId
+                };
+                await outbox.EnqueueAsync(conn, tx, $"user-{assignmentUserId}", @event, ct);
+
                 await tx.CommitAsync(ct);
             }
             catch
@@ -670,19 +741,6 @@ public static class AdminEndpoints
                 await tx.RollbackAsync(ct);
                 throw;
             }
-
-            // Emit domain event
-            var @event = new RoleAssignmentRevoked
-            {
-                AssignmentId = request.AssignmentId,
-                UserId = assignmentUserId,
-                RoleId = assignmentRoleId,
-                Reason = request.Reason,
-                ActorId = actor.ActorId,
-                ActorRole = actor.ActorRole,
-                CorrelationId = actor.CorrelationId
-            };
-            await eventStore.AppendAsync($"user-{assignmentUserId}", @event, ct);
 
             return Results.Ok(new
             {
