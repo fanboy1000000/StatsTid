@@ -245,6 +245,8 @@ public static class OvertimeEndpoints
             Guid id,
             OvertimeApprovalRequest? request,
             OvertimePreApprovalRepository preApprovalRepo,
+            DbConnectionFactory connectionFactory,
+            IOutboxEnqueue outbox,
             OrgScopeValidator scopeValidator,
             HttpContext context,
             CancellationToken ct) =>
@@ -263,7 +265,37 @@ public static class OvertimeEndpoints
             if (existing.Status != "PENDING")
                 return Results.BadRequest(new { error = $"Pre-approval is already {existing.Status}" });
 
-            await preApprovalRepo.UpdateStatusAsync(id, "APPROVED", actor.ActorId, request?.Reason, ct);
+            // Atomic in-tx status mutation + outbox enqueue (ADR-018 D3, Pattern C — no audit
+            // row; the OvertimePreApprovalApproved event itself carries actor metadata via
+            // DomainEventBase per PAT-004 and is the audit-of-record for this state change).
+            // Pre-S26 the status flipped silently with no event emitted; post-S26 the status
+            // change + new-event emission ride a single tx so a process crash between the
+            // UPDATE and event emission cannot leave the row in APPROVED state without its
+            // corresponding event in the canonical event store.
+            await using var conn = connectionFactory.Create();
+            await conn.OpenAsync(ct);
+            await using var tx = await conn.BeginTransactionAsync(ct);
+            try
+            {
+                await preApprovalRepo.UpdateStatusAsync(conn, tx, id, "APPROVED", actor.ActorId, request?.Reason, ct);
+                var @event = new OvertimePreApprovalApproved
+                {
+                    PreApprovalId = id,
+                    EmployeeId = existing.EmployeeId,
+                    ApprovedBy = actor.ActorId ?? "system",
+                    Reason = request?.Reason,
+                    ActorId = actor.ActorId,
+                    ActorRole = actor.ActorRole,
+                    CorrelationId = actor.CorrelationId,
+                };
+                await outbox.EnqueueAsync(conn, tx, $"overtime-preapproval-{id}", @event, ct);
+                await tx.CommitAsync(ct);
+            }
+            catch
+            {
+                await tx.RollbackAsync(ct);
+                throw;
+            }
 
             return Results.Ok(new { id, status = "APPROVED", approvedBy = actor.ActorId, reason = request?.Reason });
         }).RequireAuthorization("LeaderOrAbove");
@@ -273,6 +305,8 @@ public static class OvertimeEndpoints
             Guid id,
             OvertimeApprovalRequest? request,
             OvertimePreApprovalRepository preApprovalRepo,
+            DbConnectionFactory connectionFactory,
+            IOutboxEnqueue outbox,
             OrgScopeValidator scopeValidator,
             HttpContext context,
             CancellationToken ct) =>
@@ -290,7 +324,32 @@ public static class OvertimeEndpoints
             if (existing.Status != "PENDING")
                 return Results.BadRequest(new { error = $"Pre-approval is already {existing.Status}" });
 
-            await preApprovalRepo.UpdateStatusAsync(id, "REJECTED", actor.ActorId, request?.Reason, ct);
+            // Atomic in-tx status mutation + outbox enqueue (ADR-018 D3, Pattern C). See
+            // approve handler above for rationale; symmetric shape with the rejection event.
+            await using var conn = connectionFactory.Create();
+            await conn.OpenAsync(ct);
+            await using var tx = await conn.BeginTransactionAsync(ct);
+            try
+            {
+                await preApprovalRepo.UpdateStatusAsync(conn, tx, id, "REJECTED", actor.ActorId, request?.Reason, ct);
+                var @event = new OvertimePreApprovalRejected
+                {
+                    PreApprovalId = id,
+                    EmployeeId = existing.EmployeeId,
+                    RejectedBy = actor.ActorId ?? "system",
+                    Reason = request?.Reason,
+                    ActorId = actor.ActorId,
+                    ActorRole = actor.ActorRole,
+                    CorrelationId = actor.CorrelationId,
+                };
+                await outbox.EnqueueAsync(conn, tx, $"overtime-preapproval-{id}", @event, ct);
+                await tx.CommitAsync(ct);
+            }
+            catch
+            {
+                await tx.RollbackAsync(ct);
+                throw;
+            }
 
             return Results.Ok(new { id, status = "REJECTED", reason = request?.Reason });
         }).RequireAuthorization("LeaderOrAbove");
