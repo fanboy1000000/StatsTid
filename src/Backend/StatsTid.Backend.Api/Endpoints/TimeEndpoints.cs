@@ -2,6 +2,8 @@ using System.Text.Json;
 using StatsTid.Auth;
 using StatsTid.Backend.Api.Contracts;
 using StatsTid.Backend.Api.Validation;
+using StatsTid.Infrastructure;
+using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Events;
@@ -20,7 +22,14 @@ public static class TimeEndpoints
 
         // ── Time Entries ──
 
-        app.MapPost("/api/time-entries", async (RegisterTimeEntryRequest request, IEventStore eventStore, OrgScopeValidator scopeValidator, HttpContext context, CancellationToken ct) =>
+        app.MapPost("/api/time-entries", async (
+            RegisterTimeEntryRequest request,
+            DbConnectionFactory connectionFactory,
+            IOutboxEnqueue outbox,
+            TimeEntryProjectionRepository timeProjectionRepo,
+            OrgScopeValidator scopeValidator,
+            HttpContext context,
+            CancellationToken ct) =>
         {
             var actor = context.GetActorContext();
 
@@ -67,13 +76,50 @@ public static class TimeEndpoints
                 CorrelationId = actor.CorrelationId
             };
 
+            // Atomic in-tx write per ADR-018 D3 + S27 Phase 4c.6 projection design
+            // (TASK-2707 — re-attempt of S26 TASK-2606 which was reverted because the
+            // event-stream-backed GET could not see the just-written event before the
+            // OutboxPublisher async drain). Per-event ordering inside the tx:
+            //   1. outbox enqueue FIRST → returns the freshly-allocated outbox_id
+            //      (TASK-2703 EnqueueAndReturnIdAsync overload).
+            //   2. projection INSERT SECOND → consumes the outbox_id so the
+            //      time_entries_projection row is keyed to the global outbox sequence
+            //      (per-employee monotonic ordering aligned with the global outbox
+            //      sequence, see TimeEntryProjectionRepository ORDER BY outbox_id ASC).
+            // Both rows commit or roll back together, so the migrated GET below
+            // (which reads from the projection) satisfies read-your-write.
+            //
+            // Stream id literal `employee-{EmployeeId}` unchanged per ADR-018 D6
+            // retabulate (TASK-2601) — consolidated employee stream carrying
+            // time-entry + absence + entitlement-balance + compliance events.
             var streamId = $"employee-{request.EmployeeId}";
-            await eventStore.AppendAsync(streamId, @event, ct);
+
+            await using (var conn = connectionFactory.Create())
+            {
+                await conn.OpenAsync(ct);
+                await using var tx = await conn.BeginTransactionAsync(ct);
+                try
+                {
+                    var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, @event, ct);
+                    await timeProjectionRepo.InsertAsync(conn, tx, @event, outboxId, ct);
+                    await tx.CommitAsync(ct);
+                }
+                catch
+                {
+                    await tx.RollbackAsync(ct);
+                    throw;
+                }
+            }
 
             return Results.Created($"/api/time-entries/{request.EmployeeId}", new { eventId = @event.EventId, streamId });
         }).RequireAuthorization("EmployeeOrAbove");
 
-        app.MapGet("/api/time-entries/{employeeId}", async (string employeeId, IEventStore eventStore, OrgScopeValidator scopeValidator, HttpContext context, CancellationToken ct) =>
+        app.MapGet("/api/time-entries/{employeeId}", async (
+            string employeeId,
+            TimeEntryProjectionRepository timeProjectionRepo,
+            OrgScopeValidator scopeValidator,
+            HttpContext context,
+            CancellationToken ct) =>
         {
             var actor = context.GetActorContext();
 
@@ -89,21 +135,25 @@ public static class TimeEndpoints
                     return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
             }
 
-            var streamId = $"employee-{employeeId}";
-            var events = await eventStore.ReadStreamAsync(streamId, ct);
+            // S27 Phase 4c.6 / TASK-2707: read from time_entries_projection instead of
+            // replaying the event stream. The atomic POST above commits the projection
+            // row in the same tx as the outbox enqueue, so reads see the just-written
+            // entry without waiting for the OutboxPublisher async drain (read-your-write).
+            // Full-stream read (no date filter) — uses idx_time_entries_proj_emp_outbox.
+            var rows = await timeProjectionRepo.GetByEmployeeAsync(employeeId, ct);
 
-            var entries = events.OfType<TimeEntryRegistered>().Select(e => new TimeEntry
+            var entries = rows.Select(r => new TimeEntry
             {
-                EmployeeId = e.EmployeeId,
-                Date = e.Date,
-                Hours = e.Hours,
-                StartTime = e.StartTime,
-                EndTime = e.EndTime,
-                TaskId = e.TaskId,
-                ActivityType = e.ActivityType,
-                AgreementCode = e.AgreementCode,
-                OkVersion = e.OkVersion,
-                RegisteredAt = e.OccurredAt
+                EmployeeId = r.EmployeeId,
+                Date = r.Date,
+                Hours = r.Hours,
+                StartTime = r.StartTime,
+                EndTime = r.EndTime,
+                TaskId = r.TaskId,
+                ActivityType = r.ActivityType,
+                AgreementCode = r.AgreementCode,
+                OkVersion = r.OkVersion,
+                RegisteredAt = r.OccurredAt
             }).ToList();
 
             return Results.Ok(entries);
@@ -111,7 +161,14 @@ public static class TimeEndpoints
 
         // ── Absences ──
 
-        app.MapPost("/api/absences", async (RegisterAbsenceRequest request, IEventStore eventStore, OrgScopeValidator scopeValidator, HttpContext context, CancellationToken ct) =>
+        app.MapPost("/api/absences", async (
+            RegisterAbsenceRequest request,
+            DbConnectionFactory connectionFactory,
+            IOutboxEnqueue outbox,
+            AbsenceProjectionRepository absenceProjectionRepo,
+            OrgScopeValidator scopeValidator,
+            HttpContext context,
+            CancellationToken ct) =>
         {
             var actor = context.GetActorContext();
 
@@ -159,13 +216,43 @@ public static class TimeEndpoints
                 CorrelationId = actor.CorrelationId
             };
 
+            // Atomic in-tx write per ADR-018 D3 + S27 Phase 4c.6 projection design
+            // (TASK-2707). Per-event ordering inside the tx:
+            //   1. outbox enqueue FIRST → returns the freshly-allocated outbox_id.
+            //   2. projection INSERT SECOND → consumes the outbox_id.
+            // Both rows commit or roll back together; the migrated GET below
+            // (which reads from absences_projection) satisfies read-your-write.
+            //
+            // Stream id literal `employee-{EmployeeId}` unchanged per ADR-018 D6
+            // retabulate (TASK-2601) — consolidated employee stream.
             var streamId = $"employee-{request.EmployeeId}";
-            await eventStore.AppendAsync(streamId, @event, ct);
+
+            await using (var conn = connectionFactory.Create())
+            {
+                await conn.OpenAsync(ct);
+                await using var tx = await conn.BeginTransactionAsync(ct);
+                try
+                {
+                    var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, @event, ct);
+                    await absenceProjectionRepo.InsertAsync(conn, tx, @event, outboxId, ct);
+                    await tx.CommitAsync(ct);
+                }
+                catch
+                {
+                    await tx.RollbackAsync(ct);
+                    throw;
+                }
+            }
 
             return Results.Created($"/api/absences/{request.EmployeeId}", new { eventId = @event.EventId, streamId });
         }).RequireAuthorization("EmployeeOrAbove");
 
-        app.MapGet("/api/absences/{employeeId}", async (string employeeId, IEventStore eventStore, OrgScopeValidator scopeValidator, HttpContext context, CancellationToken ct) =>
+        app.MapGet("/api/absences/{employeeId}", async (
+            string employeeId,
+            AbsenceProjectionRepository absenceProjectionRepo,
+            OrgScopeValidator scopeValidator,
+            HttpContext context,
+            CancellationToken ct) =>
         {
             var actor = context.GetActorContext();
 
@@ -180,23 +267,31 @@ public static class TimeEndpoints
                     return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
             }
 
-            var streamId = $"employee-{employeeId}";
-            var events = await eventStore.ReadStreamAsync(streamId, ct);
+            // S27 Phase 4c.6 / TASK-2707: read from absences_projection instead of
+            // replaying the event stream. Atomic POST above commits the projection
+            // row in the same tx as the outbox enqueue (read-your-write).
+            // Full-stream read (no date filter) — uses idx_absences_proj_emp_outbox.
+            var rows = await absenceProjectionRepo.GetByEmployeeAsync(employeeId, ct);
 
-            var absences = events.OfType<AbsenceRegistered>().Select(e => new AbsenceEntry
+            var absences = rows.Select(r => new AbsenceEntry
             {
-                EmployeeId = e.EmployeeId,
-                Date = e.Date,
-                AbsenceType = e.AbsenceType,
-                Hours = e.Hours,
-                AgreementCode = e.AgreementCode,
-                OkVersion = e.OkVersion
+                EmployeeId = r.EmployeeId,
+                Date = r.Date,
+                AbsenceType = r.AbsenceType,
+                Hours = r.Hours,
+                AgreementCode = r.AgreementCode,
+                OkVersion = r.OkVersion
             }).ToList();
 
             return Results.Ok(absences);
         }).RequireAuthorization("EmployeeOrAbove");
 
         // ── Flex Balance ──
+        //
+        // OUT OF SCOPE for S27 Phase 4c.6 / TASK-2707 (per refinement Assumption #4).
+        // FlexBalanceUpdated is NOT yet projected to a read-model table; this handler
+        // continues to read from the event stream. Phase 4d / 4e will introduce a
+        // flex_balance_projection if read-your-write is required for this endpoint.
 
         app.MapGet("/api/flex-balance/{employeeId}", async (string employeeId, IEventStore eventStore, OrgScopeValidator scopeValidator, HttpContext context, CancellationToken ct) =>
         {
