@@ -321,7 +321,15 @@ Captures the post-commit `eventStore.AppendAsync` sites that S24 explicitly excl
 - **`OvertimeEndpoints.cs:244/271` silent-state-change bug** (carry-forward, pre-existing). `UpdateStatusAsync` (APPROVED at L244, REJECTED at L271) mutates pre-approval state with NO follow-up event emission. Fixing requires net-new event types (`OvertimePreApprovalApproved`, `OvertimePreApprovalRejected`) plus the standard atomic pattern. Effort dominated by the new-event-type plumbing, not the pattern propagation.
 - **Stream-naming drift adjudication** (Codex Cycle 1 WARNING on S24 refinement). ADR-018's stream-ownership table documents `timer-session-*`, `time-entry-*`, `skema-*`; current code writes `timer-*` (`TimerEndpoints.cs:56,112`), `employee-*` (`TimeEndpoints.cs:70,162`, `SkemaEndpoints.cs:143,348`). Renaming streams retroactively breaks replay determinism — resolution likely amends ADR-018 spec to match code, but adjudication belongs with the Time/Skema work.
 
-#### Phase 4c.6 — Read-Path Projection Tables for Skema/Time/Balance/Compliance (S26 Step 7a B1+B2+cycle-2-P1 carry-forward)
+#### Phase 4c.6 — Read-Path Projection Tables for Skema/Time/Balance/Compliance (Sprint 27) — COMPLETE
+
+S27 (committed `aa6ad2d` on 2026-05-09 atop `c5edf52`) delivered ADR-018 D13 (sync-in-tx projection as canonical pattern for atomic-outbox migration on event-stream-backed-read endpoints) + the projection-table layer (`time_entries_projection` + `absences_projection`) + atomic-outbox re-attempt on Skema/Time POSTs (re-doing S26 TASK-2604 + TASK-2606 reverts) + `SkemaQuotaBreachException → 422` restoration with whole-bundle-rollback semantic (deferred from S26 Step 7a cycle 2 P1).
+
+11 sprint tasks + 2 Step 7a fix commits = 17 commits. 525 unit + 35 plain regression + 147 Docker-gated (134 pre-S27 + 13 net new) + 88 frontend vitest = 795 total. Marquee architectural-fix proof: TASK-2710 publisher-stall RYW D-test (Slot 4) verified tight on all 4 cycle-3 invariants — FAILS on S26-revert baseline, PASSES post-S27.
+
+Carried forward to Phase 4e: Step 7a P1 #2 (composite ordering for backfill bridging S22 boundary; doesn't fire under pre-launch posture; production-readiness fix).
+
+#### Phase 4c.6 — Original entry (preserved for historical context — S26 Step 7a B1+B2+cycle-2-P1 carry-forward)
 
 S26 reverted TASK-2604 (Skema atomic) + TASK-2606 (Time atomic) at Step 7a cycle 1 because the atomic-outbox migration broke read-your-write on event-stream-backed-read endpoints. Root cause: S22's `ConfigEndpoints` exemplar succeeded because reads come from the `local_agreement_profiles` projection table; for `SkemaEndpoints` / `TimeEndpoints` / `BalanceEndpoints` / `ComplianceEndpoints`, **there is no projection table — reads come straight from `events` via `IEventStore.ReadStreamAsync`**. After atomic-outbox migration, POST writes only to `outbox_events`; the `OutboxPublisher` BackgroundService drains to `events` asynchronously (typically <1s but unbounded). User saves and immediately refreshes → stale data until publisher catches up.
 
