@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>StatsTid.Tools.ProjectionBackfill</RootNamespace>
+    <AssemblyName>StatsTid.Tools.ProjectionBackfill</AssemblyName>
+  </PropertyGroup>
+
+  <!-- S27 / TASK-2705: one-shot ops backfill for the new TimeEntry/Absence
+       projection tables. Reads `events` JOIN `outbox_events`, deserializes
+       payloads via EventSerializer, INSERTs into the projection tables with
+       ON CONFLICT (event_id) DO NOTHING for idempotency. -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\SharedKernel\StatsTid.SharedKernel\StatsTid.SharedKernel.csproj" />
+    <ProjectReference Include="..\..\src\Infrastructure\StatsTid.Infrastructure\StatsTid.Infrastructure.csproj" />
+  </ItemGroup>
+
+</Project>
