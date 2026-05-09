@@ -51,4 +51,40 @@ public interface IOutboxEnqueue
         string streamId,
         IDomainEvent @event,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Same enqueue contract as <see cref="EnqueueAsync"/>, but returns the
+    /// freshly-allocated <c>outbox_id BIGSERIAL</c> assigned by PostgreSQL via
+    /// <c>RETURNING outbox_id</c>. S27 Phase 4c.6 atomic write paths
+    /// (TASK-2706 Skema, TASK-2707 Time) capture this value at write time and
+    /// stamp it on the corresponding read-path projection row
+    /// (<c>time_entries_projection</c> / <c>absences_projection</c>) inside the
+    /// same transaction so projections are visible synchronously without
+    /// waiting for the per-service <see cref="OutboxPublisher"/> drain
+    /// (read-your-write per ADR-018 D3 + Phase 4c.6 projection-table design).
+    /// <para>
+    /// This is an OVERLOAD added in S27 — the existing <see cref="EnqueueAsync"/>
+    /// signature is preserved so all 31 S22-S26 callers compile unchanged.
+    /// Implementations must produce identical persistent state for both
+    /// overloads (same column set, same values); the only difference is that
+    /// this overload surfaces the assigned <c>outbox_id</c> rather than
+    /// discarding it.
+    /// </para>
+    /// </summary>
+    /// <param name="conn">The caller's open <see cref="NpgsqlConnection"/>; the
+    /// enqueue INSERT runs on this connection so it participates in <paramref name="tx"/>.</param>
+    /// <param name="tx">The caller's active <see cref="NpgsqlTransaction"/>; the
+    /// enqueue INSERT joins this transaction. Outbox visibility is bound to
+    /// <paramref name="tx"/>.Commit / <paramref name="tx"/>.Rollback.</param>
+    /// <param name="streamId">The event-stream identifier (see <see cref="EnqueueAsync"/>).</param>
+    /// <param name="event">The domain event to enqueue (see <see cref="EnqueueAsync"/>).</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The freshly-allocated <c>outbox_id BIGSERIAL</c> assigned by
+    /// PostgreSQL for the inserted row.</returns>
+    Task<long> EnqueueAndReturnIdAsync(
+        NpgsqlConnection conn,
+        NpgsqlTransaction tx,
+        string streamId,
+        IDomainEvent @event,
+        CancellationToken ct = default);
 }

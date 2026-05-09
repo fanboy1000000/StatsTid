@@ -82,6 +82,21 @@ internal static class ForcedRollbackHarness
         {
             throw new InvalidOperationException(ThrowMessage);
         }
+
+        // S27 TASK-2703: same forced-rollback semantics on the new overload.
+        // Throws the same InvalidOperationException(ThrowMessage) so any S27
+        // atomic-projection test that wires this double through an
+        // EnqueueAndReturnIdAsync call site sees identical rollback behavior
+        // to the existing EnqueueAsync sites.
+        public Task<long> EnqueueAndReturnIdAsync(
+            NpgsqlConnection conn,
+            NpgsqlTransaction tx,
+            string streamId,
+            IDomainEvent @event,
+            CancellationToken ct = default)
+        {
+            throw new InvalidOperationException(ThrowMessage);
+        }
     }
 
     /// <summary>

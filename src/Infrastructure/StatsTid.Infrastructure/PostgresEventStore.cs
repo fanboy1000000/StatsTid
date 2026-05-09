@@ -157,10 +157,31 @@ public sealed class PostgresEventStore : IEventStore, IOutboxEnqueue
         IDomainEvent @event,
         CancellationToken ct = default)
     {
+        // Delegates to the (long-returning) overload to keep one SQL source of
+        // truth. The returned outbox_id is discarded for callers that don't
+        // need it (the 31 S22-S26 callers). S27 atomic-projection callers use
+        // EnqueueAndReturnIdAsync directly to capture the value.
+        _ = await EnqueueAndReturnIdAsync(conn, tx, streamId, @event, ct);
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// S27 Phase 4c.6 overload: same persistent state as <see cref="EnqueueAsync"/>
+    /// but returns the assigned <c>outbox_id BIGSERIAL</c> via
+    /// <c>INSERT ... RETURNING outbox_id</c> + <see cref="NpgsqlCommand.ExecuteScalarAsync(CancellationToken)"/>
+    /// (mirrors the local idiom in <c>OutboxPublisher.ComputeNextStreamVersionAsync</c>).
+    /// </remarks>
+    public async Task<long> EnqueueAndReturnIdAsync(
+        NpgsqlConnection conn,
+        NpgsqlTransaction tx,
+        string streamId,
+        IDomainEvent @event,
+        CancellationToken ct = default)
+    {
         if (_outboxServiceContext is null)
         {
             throw new InvalidOperationException(
-                "PostgresEventStore.EnqueueAsync requires an OutboxServiceContext. " +
+                "PostgresEventStore.EnqueueAndReturnIdAsync requires an OutboxServiceContext. " +
                 "Register the concrete with the (DbConnectionFactory, OutboxServiceContext) " +
                 "constructor in DI per ADR-018 D3 dual-binding pattern.");
         }
@@ -177,6 +198,7 @@ public sealed class PostgresEventStore : IEventStore, IOutboxEnqueue
                 @serviceId, @streamId, @eventId, @eventType, @payload::jsonb,
                 @correlationId, @actorId, @actorRole
             )
+            RETURNING outbox_id
             """, conn, tx);
         cmd.Parameters.AddWithValue("serviceId", _outboxServiceContext.ServiceId);
         cmd.Parameters.AddWithValue("streamId", streamId);
@@ -192,6 +214,7 @@ public sealed class PostgresEventStore : IEventStore, IOutboxEnqueue
         cmd.Parameters.AddWithValue("actorId", (object?)@event.ActorId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("actorRole", (object?)@event.ActorRole ?? DBNull.Value);
 
-        await cmd.ExecuteNonQueryAsync(ct);
+        var result = await cmd.ExecuteScalarAsync(ct);
+        return Convert.ToInt64(result);
     }
 }
