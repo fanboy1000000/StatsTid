@@ -60,6 +60,8 @@ Of the three S25-propagated resources, only `agreement_configs` carries lifecycl
 
 `position_override_configs` is flat-CRUD with `(active|inactive)` toggle — no effective-dating. `wage_type_mappings` is flat-CRUD with composite key `(time_type, ok_version, agreement_code, position)` — no effective-dating either. End-exclusive semantics do not apply to either.
 
+> **Amended by [ADR-020](ADR-020-versioned-config-design-foundations.md) / S29 (2026-05-09)** — the "flat-CRUD … no effective-dating either" framing for `wage_type_mappings` is **superseded for that resource only** by S29's Phase 4d-1 implementation. The S25-introduced row-version + ETag/If-Match contract on `wage_type_mappings` (D2.3 above) is **preserved unchanged on the live-edit path**; supersession adds a new history-row creation path orthogonal to the version contract. End-exclusive `effective_to` semantics from ADR-018 D8 now apply to `wage_type_mappings` per ADR-020 D2. `position_override_configs` framing is unchanged by ADR-020 — it remains flat-CRUD.
+
 ### D4 — Banner-with-retry frontend UX
 
 Each of the four S25-touched admin pages mirrors `frontend/src/components/config/ProfileEditor.tsx:135` (state declaration: `useState<{ expected?: number; actual?: number } | null>`), `:213-220` (412 handler: `if (e.status === 412) setStaleConflict({ expected: e.body?.expectedVersion, actual: e.body?.actualVersion })`), and `:283-293` (banner JSX: warning Alert with the expected/actual version pair displayed in parentheses, plus a refresh-and-lose-changes affordance).
