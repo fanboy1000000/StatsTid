@@ -1158,6 +1158,69 @@ INSERT INTO entitlement_configs (entitlement_type, agreement_code, ok_version, a
 ON CONFLICT DO NOTHING;
 
 -- ============================================================
+-- SPRINT 27 (Phase 4c.6): Sync-in-tx Read Projections
+-- ============================================================
+-- Projection tables for TimeEntryRegistered + AbsenceRegistered events,
+-- written inside the same transaction that appends to `events` + `outbox_events`
+-- so that GET endpoints satisfy read-your-write after a successful POST
+-- (fixes the regression that caused S26 TASK-2604/TASK-2606 reverts).
+--
+-- Field set is a strict superset of (a) what the source events carry per
+-- DomainEventBase + TimeEntryRegistered/AbsenceRegistered, and (b) what the
+-- 5 read-side endpoints currently materialize from `IEventStore.ReadStreamAsync`
+-- filters: SkemaEndpoints month GET, TimeEndpoints entries+absences GETs,
+-- BalanceEndpoints summary, ComplianceEndpoints period.
+--
+-- `outbox_id BIGINT NOT NULL` is sourced from `outbox_events.outbox_id`
+-- (BIGSERIAL) via INSERT ... RETURNING outbox_id in the same transaction.
+-- It is GLOBAL (not per-service-monotonic) — per-stream/per-service ordering
+-- comes from publisher-side filtering on (service_id, outbox_id).
+-- Per-employee monotonic ordering is preserved by the `(employee_id, outbox_id)`
+-- index, used by the no-date-filter Time GETs.
+
+CREATE TABLE IF NOT EXISTS time_entries_projection (
+    event_id                    UUID            PRIMARY KEY,
+    employee_id                 TEXT            NOT NULL,
+    date                        DATE            NOT NULL,
+    hours                       NUMERIC(6,2)    NOT NULL,
+    start_time                  TIME,
+    end_time                    TIME,
+    task_id                     TEXT,
+    activity_type               TEXT,
+    agreement_code              TEXT            NOT NULL,
+    ok_version                  TEXT            NOT NULL,
+    voluntary_unsocial_hours    BOOLEAN         NOT NULL DEFAULT false,
+    occurred_at                 TIMESTAMPTZ     NOT NULL,
+    actor_id                    TEXT,
+    actor_role                  TEXT,
+    correlation_id              UUID,
+    outbox_id                   BIGINT          NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_time_entries_proj_emp_date_outbox
+    ON time_entries_projection(employee_id, date, outbox_id);
+CREATE INDEX IF NOT EXISTS idx_time_entries_proj_emp_outbox
+    ON time_entries_projection(employee_id, outbox_id);
+
+CREATE TABLE IF NOT EXISTS absences_projection (
+    event_id                    UUID            PRIMARY KEY,
+    employee_id                 TEXT            NOT NULL,
+    date                        DATE            NOT NULL,
+    absence_type                TEXT            NOT NULL,
+    hours                       NUMERIC(6,2)    NOT NULL,
+    agreement_code              TEXT            NOT NULL,
+    ok_version                  TEXT            NOT NULL,
+    occurred_at                 TIMESTAMPTZ     NOT NULL,
+    actor_id                    TEXT,
+    actor_role                  TEXT,
+    correlation_id              UUID,
+    outbox_id                   BIGINT          NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_absences_proj_emp_date_outbox
+    ON absences_projection(employee_id, date, outbox_id);
+CREATE INDEX IF NOT EXISTS idx_absences_proj_emp_outbox
+    ON absences_projection(employee_id, outbox_id);
+
+-- ============================================================
 -- SPRINT 17: Overtime Governance & Compensation Model
 -- ============================================================
 
