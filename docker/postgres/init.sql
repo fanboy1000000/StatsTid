@@ -1182,7 +1182,7 @@ CREATE TABLE IF NOT EXISTS time_entries_projection (
     event_id                    UUID            PRIMARY KEY,
     employee_id                 TEXT            NOT NULL,
     date                        DATE            NOT NULL,
-    hours                       NUMERIC(6,2)    NOT NULL,
+    hours                       NUMERIC(8,4)    NOT NULL,  -- S27 Step 7a P2 fix: 4 decimal places preserves sub-centesimal hours (e.g., 7.375h = 22.5min); RequestValidator accepts arbitrary decimal in (0,24], canonical events keep full precision, projection must too
     start_time                  TIME,
     end_time                    TIME,
     task_id                     TEXT,
@@ -1206,7 +1206,7 @@ CREATE TABLE IF NOT EXISTS absences_projection (
     employee_id                 TEXT            NOT NULL,
     date                        DATE            NOT NULL,
     absence_type                TEXT            NOT NULL,
-    hours                       NUMERIC(6,2)    NOT NULL,
+    hours                       NUMERIC(8,4)    NOT NULL,  -- S27 Step 7a P2 fix: see time_entries_projection.hours comment
     agreement_code              TEXT            NOT NULL,
     ok_version                  TEXT            NOT NULL,
     occurred_at                 TIMESTAMPTZ     NOT NULL,
