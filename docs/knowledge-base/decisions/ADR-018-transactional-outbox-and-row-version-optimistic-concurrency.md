@@ -454,6 +454,27 @@ The "pre-S22 SegmentManifest replays byte-identical" scenario (cycle 1 Reviewer 
 
 **Test fixture update budget** (cycle-2 review W6): the `SupersedeAndCreateAsync` return-type change from `Guid` to `(Guid ProfileId, long Version)` breaks 10 call sites across 4 existing test fixtures (`ProfileSupersessionTests.cs`, `ProfileConcurrencyTokenTests.cs`, `ProfileAuditTests.cs`, `ProfileLegacyEventNonEmissionTests.cs`). Task decomposition (deliverable #3) must include a TASK line item: "destructure tuple at ~10 existing test call sites." Mechanical change; estimated < 30 LOC total.
 
+### D13 — Atomic-outbox migration requires a synchronous projection table for any GET that reads back the just-written state (S27)
+
+Added in S27 / TASK-2711 as the canonical pattern for any future endpoint adopting the ADR-018 D3 atomic-outbox shape. Promoted to a discrete decision (not a D6 footnote) per S27 refinement cycle 2 Reviewer W4 + cycle 3 convergent Codex/Reviewer NOTE.
+
+**Decision**: Atomic-outbox migration on any endpoint X requires a synchronous projection table for any GET that reads back the just-written state. POST writes both the event/outbox AND the projection in the same `(conn, tx)`; GET reads the projection, NOT `events.ReadStreamAsync`.
+
+**Rationale**: Reads from `events` via `IEventStore.ReadStreamAsync` see the publisher-drained snapshot, which lags POST commit by up to ~1s in steady state and unbounded under publisher backpressure (`OutboxPublisher.cs:32-45` — `QuietPollIntervalMs = 1000`, `ActivePollIntervalMs = 250`, `MaxStreamParallelism = 4`). Sync-in-tx projection (POST writes both the event/outbox AND the projection in the same transaction) is the only pattern that preserves read-your-write without serializing on the publisher loop.
+
+**Consequences**:
+- Any future endpoint adding atomic-outbox MUST audit GET-side read paths first. If reads currently come from `events.ReadStreamAsync`, a projection table is a prerequisite.
+- S22 ConfigEndpoints succeeded only because `local_agreement_profiles` already served as a projection. S26 TASK-2604 (Skema) + TASK-2606 (Time) reverted because Skema/Time had no projection (read-your-write regression detected at Step 7a cycle 1).
+- S27 Phase 4c.6 introduced `time_entries_projection` + `absences_projection` as the missing prerequisite, then re-attempted the atomic-outbox migration on Skema/Time POSTs (TASK-2706/2707) with the projection layer in place.
+- Per-event ordering inside the atomic tx is pinned: **outbox enqueue FIRST** (via `IOutboxEnqueue.EnqueueAndReturnIdAsync` returning `outbox_id`), **projection INSERT SECOND** (consuming the returned `outbox_id` for the projection's ordering column). Both inside the same tx; both roll back together on crash.
+- Projection ordering column: `outbox_id BIGINT NOT NULL` sourced from `outbox_events.outbox_id BIGSERIAL`. NOT `stream_version` — that's publisher-assigned at drain time (`OutboxPublisher.ComputeNextStreamVersionAsync` at L368-372) and unavailable at write commit.
+- Backfill for existing pre-projection events: one-shot ops script (`tools/ProjectionBackfill`, S27 TASK-2705) reads `events JOIN outbox_events`, INSERTs into projection with `ON CONFLICT (event_id) DO NOTHING`. Idempotent re-runs.
+- Read-your-write proof: D-test stops the `OutboxPublisher` BackgroundService via `IHostedService.StopAsync(CancellationToken.None)` (NOT `Task.Delay`, NOT a config flag — see S27 TASK-2701 `StatsTidWebApplicationFactory.StopPublisherAsync`), POSTs, then immediately GETs. Asserts: GET sees the write + `events` table empty + unpublished `outbox_events` row exists + projection.outbox_id matches outbox row.outbox_id.
+
+**Carve-outs preserved in S27** (per refinement Assumption #4): not every event-stream-backed read needs a projection. Reads that don't participate in a read-your-write loop (e.g., `BalanceEndpoints.cs:102` reading `FlexBalanceUpdated` for a passive flex-balance display) may stay on `events.ReadStreamAsync`. The grep-zero-hits AC for D13 compliance is scoped to migrated handler bodies, not entire endpoint files.
+
+**Open** (deferred to Phase 4d-3 refinement): whether projections may carry projection-only enrichment fields, or must remain a strict view of event payload — adjudicated when Phase 4d-3 (employee-profile versioned history) makes the constraint concrete. S27 leaves D13 as a discrete decision on the sync-in-tx pattern; the projection-only-fields rule is genuinely 4d-3 territory.
+
 ## Rationale
 
 **Why outbox?** The post-commit-append shape S21 cycle 2 settled on is functionally correct under normal operation but leaves a residual partial-failure window that grows operationally (more emit sites = more crash-windows = more divergence opportunities). The transactional outbox pattern is the canonical industry solution for this exact problem (Hohpe + Woolf 2003, Kleppmann 2017). PostgreSQL's MVCC + UNIQUE constraints make it cheap to implement correctly; no message broker required.
@@ -613,6 +634,16 @@ Cycle-6 fix:
 The TASK-2202 worktree (`agent-a4d1870e0faabe412`) is discarded; TASK-2202 will be re-dispatched against the cycle-6 design before Phase 1 completes. TASK-2201 (schema migration) is unaffected by the interface change and stays as-delivered.
 
 Cycle-6 lesson: **agent dispatch is a real review surface.** Five rounds of pre-implementation review (Reviewer + Codex × 2 + verify cycles) did not catch this because the architectural concern is at the package-graph level — neither lens reads .csproj files unprompted. Step 0a's "pattern compliance spot-check" notionally covers this (it greps for `using StatsTid.RuleEngine` from forbidden assemblies) but doesn't audit transitive package references. The ADR's first agent dispatch caught it the way agent reviews are supposed to: by trying to implement and discovering the cost. No prior-cycle BLOCKER was missed-by-laxness — just missed-by-abstraction. Recorded as a feedback memory: pre-implementation reviews of any code that adds package references should explicitly audit transitive impact.
+
+### Cycle 7 (2026-05-09) — D13 added (S27 / TASK-2711)
+
+Additive amendment within the already-accepted ADR family (no Status bump per S27 refinement cycle 3 Codex N1). D13 documents the canonical sync-in-tx projection requirement that S26 TASK-2604 + TASK-2606 violated (reverted at Step 7a cycle 1 because read-your-write broke without a projection table). S27 Phase 4c.6 introduced the missing projection prerequisite (`time_entries_projection` + `absences_projection`) and re-attempted the atomic-outbox migration on Skema/Time POSTs.
+
+D13 promotion from "footnote on D6" → "discrete decision" per S27 refinement cycle 2 Reviewer W4 + cycle 3 convergent Codex/Reviewer NOTE — load-bearing architectural rule for all future endpoint work, not a stream-naming detail.
+
+The D13 "discipline boundary" clause on projection-only enrichment fields was **deferred** to Phase 4d-3 refinement per S27 cycle 3 convergent NOTE (premature for S27 to bind a constraint that hasn't been made concrete by 4d-3's employee-profile versioned-history use case).
+
+S27-era D13 has no test-strategy floor of its own; the sync-in-tx pattern is exercised by S27 TASK-2710's ~12-14 D-tests (publisher-stall RYW × 2, parity-with-drain-sync × 2, Skema bundle-rollback × 1, atomic forced-rollback × 2, atomic quota-breach × 2, backfill idempotency × 1, TxContractTests × 2). The marquee architectural-fix proof is the publisher-stall RYW D-test that fails on the S26-revert baseline and passes post-S27.
 
 ## References
 

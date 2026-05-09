@@ -50,7 +50,7 @@ Cycle 3 BLOCKER (absorbed inline 2026-05-09): TASK-2701 prerequisites pinned (Mv
 
 ## Architectural Constraints Verified
 
-- [ ] P1 — Architectural integrity (ADR-018 D12 added as discrete decision; sync-in-tx projection becomes the canonical pattern for event-stream-backed-read endpoints; refinement's discipline-boundary clause on projection-only fields deferred to Phase 4d-3).
+- [ ] P1 — Architectural integrity (ADR-018 D13 added as discrete decision; sync-in-tx projection becomes the canonical pattern for event-stream-backed-read endpoints; refinement's discipline-boundary clause on projection-only fields deferred to Phase 4d-3).
 - [ ] P3 — Event sourcing append-only semantics respected; projections are derived state, not new event types (no EventSerializer typeof() count change). Backfill from `events` is the recovery path (idempotent rebuild). Per-event ordering inside the tx pinned: outbox enqueue FIRST, projection INSERT SECOND.
 - [ ] P5 — Integration isolation and delivery guarantees: atomic-outbox re-attempt closes the read-your-write regression that caused S26 reverts; trichotomy fully satisfied.
 - [ ] P8 — CI/CD enforcement: build clean, +12-14 D-tests, +1 test harness (TASK-2701), +1 backfill ops script (TASK-2705).
@@ -68,7 +68,7 @@ Not directly affected: P2, P4, P6, P7.
 | **Status** | planned |
 | **Agent** | Test & QA |
 | **Components** | tests/StatsTid.Tests.Regression/Hosting/, src/Backend/StatsTid.Backend.Api/Program.cs (one-line append) |
-| **KB Refs** | ADR-018 D12 (canonical sync-in-tx pattern — this harness validates it) |
+| **KB Refs** | ADR-018 D13 (canonical sync-in-tx pattern — this harness validates it) |
 | **Phase** | Phase 1 (sequential — REQUIRED before Phase 2 endpoints can be tested for read-your-write under publisher stall; Phase 1 first because Phase 2 D-tests at TASK-2710 depend on it) |
 
 **Description**: Build the minimal `WebApplicationFactory<Program>` integration harness that lets D-tests run same-host POST + GET against a real Postgres + a controllable `OutboxPublisher` BackgroundService. This is a Phase 1 prerequisite — the publisher-stall read-your-write D-tests (TASK-2710) cannot be executed without it. Refinement Approach 9 + Acceptance Criteria "Test harness" section.
@@ -109,7 +109,7 @@ Not directly affected: P2, P4, P6, P7.
 | **Status** | planned |
 | **Agent** | Data Model |
 | **Components** | docker/postgres/init.sql, docs/generated/db-schema.md (Orchestrator-only update at sprint close) |
-| **KB Refs** | ADR-001 (event sourcing PostgreSQL via Npgsql), ADR-018 D12 (new — sync-in-tx projection pattern) |
+| **KB Refs** | ADR-001 (event sourcing PostgreSQL via Npgsql), ADR-018 D13 (new — sync-in-tx projection pattern) |
 | **Phase** | Phase 1 (sequential) |
 
 **Description**: Add two new projection tables to `init.sql`. Both are sync-written from inside the atomic POST tx; both are event-derived (rebuildable from `events` via TASK-2705 backfill). Refinement Approach 1.
@@ -216,7 +216,7 @@ The exact field set should mirror what the GET responses currently materialize f
 | **Status** | planned |
 | **Agent** | Data Model |
 | **Components** | src/Infrastructure/StatsTid.Infrastructure/ |
-| **KB Refs** | ADR-018 D3 (atomic state-change), ADR-018 D12 (sync-in-tx projection pattern), S24 TASK-2206 `(conn, tx)` overload convention |
+| **KB Refs** | ADR-018 D3 (atomic state-change), ADR-018 D13 (sync-in-tx projection pattern), S24 TASK-2206 `(conn, tx)` overload convention |
 | **Phase** | Phase 1 (sequential — requires TASK-2702 schema; required by Phase 2 endpoints) |
 
 **Description**: Create two new repositories serving the projection tables. Each ships with a `(conn, tx) InsertAsync(..., outboxId)` overload (mirroring `EntitlementBalanceRepository.CheckAndAdjustAsync(conn, tx, ...)` shape per ADR-018 D3 + S24 convention) and read methods consumed by the 5 migrated GET endpoints. Self-managed v1 overloads NOT added — these projections only have one write-side caller (the atomic POST handler). Refinement Approach 2.
@@ -325,7 +325,7 @@ public sealed class AbsenceProjectionRepository
 | **Status** | planned |
 | **Agent** | API Integration (Backend.Api/Endpoints scope) + cross-domain authorization for projection repository consumption (per AGENTS.md Cross-Domain Authorization sub-section, S22 convention) |
 | **Components** | src/Backend/StatsTid.Backend.Api/Endpoints/SkemaEndpoints.cs |
-| **KB Refs** | ADR-018 D3 (atomic single-tx), ADR-018 D12 (sync-in-tx projection); S22 ConfigEndpoints atomic exemplar |
+| **KB Refs** | ADR-018 D3 (atomic single-tx), ADR-018 D13 (sync-in-tx projection); S22 ConfigEndpoints atomic exemplar |
 | **Phase** | Phase 2 (parallel via worktrees — depends on Phase 1 commits) |
 
 **Description**: Re-do S26 TASK-2604 (multi-event single-tx wrap) with projection writes added inside the same tx. Migrate Skema GET to read from projections. Restore `SkemaQuotaBreachException → 422` at `:414-418`. Refinement Approach 4 (Skema GET migration) + Approach 5 (Skema POST atomic re-attempt) + Approach 6 (quota-race fix).
@@ -366,7 +366,7 @@ public sealed class AbsenceProjectionRepository
 | **Status** | planned |
 | **Agent** | API Integration (Backend.Api/Endpoints scope) |
 | **Components** | src/Backend/StatsTid.Backend.Api/Endpoints/TimeEndpoints.cs |
-| **KB Refs** | ADR-018 D3, ADR-018 D12 |
+| **KB Refs** | ADR-018 D3, ADR-018 D13 |
 | **Phase** | Phase 2 (parallel via worktrees) |
 
 **Description**: Re-do S26 TASK-2606 (Time atomic) with projection writes added inside the same tx. Migrate Time GET endpoints to read from projections. Refinement Approach 4 (Time GET migration) + Approach 5 (Time POST atomic re-attempt). FlexBalance GET at `:217` and FlexBalanceUpdated read at `BalanceEndpoints.cs:102` are explicitly OUT OF SCOPE (per Approach 1 + 4 sub-clause).
@@ -403,7 +403,7 @@ public sealed class AbsenceProjectionRepository
 | **Status** | planned |
 | **Agent** | API Integration |
 | **Components** | src/Backend/StatsTid.Backend.Api/Endpoints/BalanceEndpoints.cs |
-| **KB Refs** | ADR-018 D12 |
+| **KB Refs** | ADR-018 D13 |
 | **Phase** | Phase 2 (parallel via worktrees — small task; could be folded with TASK-2707 if worktree sizing is too granular) |
 
 **Description**: Migrate Balance summary GET to read time-entries + absences from projections. Verified read-only endpoint per Assumption #13 (no POST sites). Refinement Approach 4.
@@ -433,7 +433,7 @@ public sealed class AbsenceProjectionRepository
 | **Status** | planned |
 | **Agent** | API Integration |
 | **Components** | src/Backend/StatsTid.Backend.Api/Endpoints/ComplianceEndpoints.cs |
-| **KB Refs** | ADR-018 D12, PAT-005 (PeriodCalculationService HTTP — Compliance endpoint follows the HTTP-to-rule-engine pattern, projection-source change does not affect the HTTP boundary) |
+| **KB Refs** | ADR-018 D13, PAT-005 (PeriodCalculationService HTTP — Compliance endpoint follows the HTTP-to-rule-engine pattern, projection-source change does not affect the HTTP boundary) |
 | **Phase** | Phase 2 (parallel via worktrees — small task) |
 
 **Description**: Migrate Compliance period GET to read time-entries from projection. The `/api/compliance/{employeeId}/compensatory-rest` endpoint at L105 reads from `compensatory_rest` (DB-backed since S16) and is unchanged. Refinement Approach 4 + Assumption #13.
@@ -464,7 +464,7 @@ public sealed class AbsenceProjectionRepository
 | **Status** | planned |
 | **Agent** | Test & QA |
 | **Components** | tests/StatsTid.Tests.Regression/ |
-| **KB Refs** | ADR-018 D3 (atomic), ADR-018 D5 (per-stream FIFO), ADR-018 D12 (sync-in-tx projection) |
+| **KB Refs** | ADR-018 D3 (atomic), ADR-018 D5 (per-stream FIFO), ADR-018 D13 (sync-in-tx projection) |
 | **Phase** | Phase 3 (sequential — runs after Phase 2 endpoints land + TASK-2701 harness ready) |
 
 **Description**: Net-new D-test coverage for the projection layer + atomic re-attempt + bundle-rollback + read-your-write. All `[Trait("Category", "Docker")]`. Mirrors S24/S26 layout under `tests/StatsTid.Tests.Regression/Outbox/` + `tests/StatsTid.Tests.Regression/Hosting/` + `tests/StatsTid.Tests.Regression/Infrastructure/`. Refinement Approach 8 (cycle 3 tightened assertions).
@@ -504,7 +504,7 @@ public sealed class AbsenceProjectionRepository
 
 ---
 
-### TASK-2711 — ADR-018 D12 documentation update
+### TASK-2711 — ADR-018 D13 documentation update (was D12 in plan; renumbered after collision check)
 
 | Field | Value |
 |-------|-------|
@@ -536,7 +536,7 @@ public sealed class AbsenceProjectionRepository
 (c) Update `docs/knowledge-base/INDEX.md` if needed (likely no update — ADR-018's row already exists; D12 is internal to that ADR).
 
 **Validation Criteria**:
-- [ ] ADR-018 D12 block added (Decision/Rationale/Consequences/Open format)
+- [ ] ADR-018 D13 block added (Decision/Rationale/Consequences/Open format)
 - [ ] Review-Cycles-section footnote added
 - [ ] No Status bump on ADR-018 header (additive amendment)
 - [ ] INDEX.md untouched (or trivial update only if needed)
@@ -567,7 +567,7 @@ All 4 touch different endpoint files → no merge conflicts.
 
 **Phase 3 (sequential, runs AFTER Phase 2 per AGENTS.md L37)**:
 - TASK-2710 Test & QA (D-test suite)
-- TASK-2711 ADR-018 D12 (Orchestrator-direct, parallel-with TASK-2710 if convenient)
+- TASK-2711 ADR-018 D13 (Orchestrator-direct, parallel-with TASK-2710 if convenient)
 
 **Phase 4 (Orchestrator)**:
 - Build/test validation
