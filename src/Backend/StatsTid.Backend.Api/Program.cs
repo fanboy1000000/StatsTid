@@ -105,3 +105,9 @@ app.MapComplianceEndpoints();
 app.MapOvertimeEndpoints();
 
 app.Run();
+
+// Marker for Microsoft.AspNetCore.Mvc.Testing's WebApplicationFactory<TEntryPoint>
+// to anchor on the top-level-statements compilation unit. Required because top-level
+// statements emit an internal Program class by default, which the test assembly cannot
+// reference. This is the documented industry-standard pattern (Microsoft docs).
+public partial class Program { }
