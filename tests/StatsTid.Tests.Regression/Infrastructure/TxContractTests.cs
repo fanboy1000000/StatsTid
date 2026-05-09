@@ -1,6 +1,7 @@
 using System.Data;
 using Npgsql;
 using StatsTid.Infrastructure;
+using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Models;
 
 namespace StatsTid.Tests.Regression.Infrastructure;
@@ -265,6 +266,43 @@ public sealed class TxContractTests : IAsyncLifetime
             carryover_in            DECIMAL     NOT NULL DEFAULT 0,
             updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             UNIQUE (employee_id, entitlement_type, entitlement_year)
+        );
+
+        -- S27 / TASK-2702 projection tables (mirrors docker/postgres/init.sql:1181-1221).
+        -- Wired into the (conn, tx) tx-contract tests below per S27 / TASK-2710 Slot 7.
+        -- Schema drift between this DDL and production must be mirrored here.
+        CREATE TABLE IF NOT EXISTS time_entries_projection (
+            event_id                    UUID            PRIMARY KEY,
+            employee_id                 TEXT            NOT NULL,
+            date                        DATE            NOT NULL,
+            hours                       NUMERIC(6,2)    NOT NULL,
+            start_time                  TIME,
+            end_time                    TIME,
+            task_id                     TEXT,
+            activity_type               TEXT,
+            agreement_code              TEXT            NOT NULL,
+            ok_version                  TEXT            NOT NULL,
+            voluntary_unsocial_hours    BOOLEAN         NOT NULL DEFAULT false,
+            occurred_at                 TIMESTAMPTZ     NOT NULL,
+            actor_id                    TEXT,
+            actor_role                  TEXT,
+            correlation_id              UUID,
+            outbox_id                   BIGINT          NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS absences_projection (
+            event_id                    UUID            PRIMARY KEY,
+            employee_id                 TEXT            NOT NULL,
+            date                        DATE            NOT NULL,
+            absence_type                TEXT            NOT NULL,
+            hours                       NUMERIC(6,2)    NOT NULL,
+            agreement_code              TEXT            NOT NULL,
+            ok_version                  TEXT            NOT NULL,
+            occurred_at                 TIMESTAMPTZ     NOT NULL,
+            actor_id                    TEXT,
+            actor_role                  TEXT,
+            correlation_id              UUID,
+            outbox_id                   BIGINT          NOT NULL
         );
         """;
 
@@ -1087,6 +1125,95 @@ public sealed class TxContractTests : IAsyncLifetime
         var isActiveAfter = await ScalarFreshConn<bool>(
             "SELECT is_active FROM timer_sessions WHERE session_id = @id", session.SessionId);
         Assert.True(isActiveAfter); // rollback reverted
+    }
+
+    // ── TimeEntryProjectionRepository (S27 / TASK-2710 Slot 7) ────────────────────────
+
+    /// <summary>
+    /// S27 / TASK-2710 Slot 7: asserts <see cref="TimeEntryProjectionRepository.InsertAsync(NpgsqlConnection, NpgsqlTransaction, TimeEntryRegistered, long, CancellationToken)"/>
+    /// participates in the caller-supplied transaction. Open conn+tx; insert a projection
+    /// row with a synthetic outbox_id; verify the row is visible INSIDE the tx but NOT
+    /// visible to a fresh connection (RC isolation guarantees the uncommitted INSERT
+    /// stays inside the tx). Rollback; assert ZERO rows in <c>time_entries_projection</c>
+    /// — proving the repo participated in the caller's tx rather than auto-committing.
+    /// </summary>
+    [Fact]
+    public async Task TimeEntryProjectionRepo_InsertAsync_ParticipatesInCallerTx()
+    {
+        var repo = new TimeEntryProjectionRepository(_harness.Factory);
+        var employeeId = "EMP_TX_TEP_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+        var @event = new TimeEntryRegistered
+        {
+            EmployeeId = employeeId,
+            Date = new DateOnly(2026, 5, 7),
+            Hours = 7.4m,
+            TaskId = "PROJ-TX-1",
+            ActivityType = "NORMAL",
+            AgreementCode = "HK",
+            OkVersion = "OK24",
+        };
+        const long syntheticOutboxId = 12345L;
+
+        await using var conn = _harness.Factory.Create();
+        await conn.OpenAsync();
+        await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
+
+        await repo.InsertAsync(conn, tx, @event, syntheticOutboxId);
+
+        await AssertTxStillUsable(conn, tx);
+        // Visible INSIDE tx — proves the SUT used the supplied tx.
+        Assert.Equal(1L, await CountInsideTx(
+            conn, tx, "time_entries_projection", "event_id", @event.EventId));
+        // NOT visible to a fresh connection under RC — proves the SUT did not auto-commit.
+        Assert.Equal(0L, await CountFreshConn(
+            "time_entries_projection", "event_id", @event.EventId));
+        await tx.RollbackAsync();
+        // After rollback the row must NOT persist.
+        Assert.Equal(0L, await CountFreshConn(
+            "time_entries_projection", "event_id", @event.EventId));
+    }
+
+    // ── AbsenceProjectionRepository (S27 / TASK-2710 Slot 7) ──────────────────────────
+
+    /// <summary>
+    /// S27 / TASK-2710 Slot 7: asserts <see cref="AbsenceProjectionRepository.InsertAsync(NpgsqlConnection, NpgsqlTransaction, AbsenceRegistered, long, CancellationToken)"/>
+    /// participates in the caller-supplied transaction. Mirror of
+    /// <see cref="TimeEntryProjectionRepo_InsertAsync_ParticipatesInCallerTx"/> for
+    /// the absences projection table.
+    /// </summary>
+    [Fact]
+    public async Task AbsenceProjectionRepo_InsertAsync_ParticipatesInCallerTx()
+    {
+        var repo = new AbsenceProjectionRepository(_harness.Factory);
+        var employeeId = "EMP_TX_AEP_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+        var @event = new AbsenceRegistered
+        {
+            EmployeeId = employeeId,
+            Date = new DateOnly(2026, 5, 7),
+            AbsenceType = "VACATION",
+            Hours = 7.4m,
+            AgreementCode = "HK",
+            OkVersion = "OK24",
+        };
+        const long syntheticOutboxId = 12346L;
+
+        await using var conn = _harness.Factory.Create();
+        await conn.OpenAsync();
+        await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
+
+        await repo.InsertAsync(conn, tx, @event, syntheticOutboxId);
+
+        await AssertTxStillUsable(conn, tx);
+        // Visible INSIDE tx — proves the SUT used the supplied tx.
+        Assert.Equal(1L, await CountInsideTx(
+            conn, tx, "absences_projection", "event_id", @event.EventId));
+        // NOT visible to a fresh connection under RC — proves the SUT did not auto-commit.
+        Assert.Equal(0L, await CountFreshConn(
+            "absences_projection", "event_id", @event.EventId));
+        await tx.RollbackAsync();
+        // After rollback the row must NOT persist.
+        Assert.Equal(0L, await CountFreshConn(
+            "absences_projection", "event_id", @event.EventId));
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────────────
