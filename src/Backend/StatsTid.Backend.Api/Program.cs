@@ -52,6 +52,8 @@ builder.Services.AddSingleton<PositionOverrideRepository>();
 builder.Services.AddSingleton<WageTypeMappingRepository>();
 builder.Services.AddSingleton<EntitlementConfigRepository>();
 builder.Services.AddSingleton<EntitlementBalanceRepository>();
+builder.Services.AddSingleton<TimeEntryProjectionRepository>();
+builder.Services.AddSingleton<AbsenceProjectionRepository>();
 builder.Services.AddSingleton<CompensatoryRestRepository>();
 builder.Services.AddSingleton<OvertimeBalanceRepository>();
 builder.Services.AddSingleton<OvertimePreApprovalRepository>();
