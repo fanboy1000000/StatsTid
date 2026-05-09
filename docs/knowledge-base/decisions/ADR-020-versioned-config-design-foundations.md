@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | DRAFT (will flip to ACCEPTED after S28 / TASK-2803 dual-lens review clean) |
+| **Status** | ACCEPTED (S28 / TASK-2803 cycles 1-2 reviewed 2026-05-09 — Reviewer cycle 2 + Codex cycle 2 both APPROVE) |
 | **Sprint** | S28 |
 | **Domains** | SharedKernel, Backend, Infrastructure, Payroll, Data Model |
 | **Tags** | versioned-config, snapshot-contract, planner-enrollment, supersession, soft-delete, seed-idempotency, replay-determinism, phase-4d |
@@ -39,7 +39,7 @@ The 3 questions ADR-020 settles:
 
 4. **The planner signature change**: `PeriodPlanner.Plan()` (or `PeriodPlanner` constructor — implementer picks) gains an `EmploymentProfile? profile` parameter. PCS L585 passes the profile when calling `Plan()`. Without this, the planner has no `EmploymentProfile` to feed the hydrator; the seam is registered but uncallable.
 
-5. **The hydrator invocation site**: After `SegmentSnapshot` construction at `PeriodPlanner.cs:128-130`, the planner iterates the enrollment list; for each enrolled contract, it invokes `hydrator(profile)` and stores the result at `SegmentSnapshot.NonDatedSourceValues[contractKey]`. Hydrator invocation is per-segment (each segment may receive a different profile if S29 ever adopts per-segment profile snapshots — currently uniform per plan, but the seam permits per-segment evolution). If `profile` is null (test call-site or no profile in scope), the hydrator is skipped silently for that contract.
+5. **The hydrator invocation site**: After `SegmentSnapshot` construction at `PeriodPlanner.cs:128-130`, the planner iterates the enrollment list; for each enrolled contract, it invokes `hydrator(profile)` and stores the result at `SegmentSnapshot.NonDatedSourceValues[contractKey]`. **Today (S29 binding)**: the same `profile` parameter is passed to `Plan()` once and re-used across all segments — uniform per plan. **Forward-compat seam (NOT a today binding)**: the per-segment iteration shape permits future per-segment profile evolution if S29's successors adopt per-segment profile snapshots; today's S29 implementation does NOT need to thread per-segment profiles. If `profile` is null (test call-site or no profile in scope), the hydrator is skipped silently for that contract.
 
 **Binding invariant**: "enrollment-registered contracts trigger `SegmentSnapshot` creation on the same code path that rule-declared contracts do, AND the hydrator runs against the supplied `EmploymentProfile` to populate `NonDatedSourceValues[contractKey]` for each segment."
 
@@ -53,7 +53,7 @@ WageTypeMappingEndpoints DELETE becomes truly soft (sets `effective_to = today` 
 
 **Case B — closed-on-today predecessor with `effective_from < today`** (the production case: DELETE at 09:00 today against a row originally created days ago, POST at 14:00 today): predecessor STAYS closed at `(effective_from = original_day, effective_to = today)`; POST proceeds as a fresh INSERT with `effective_from = today, effective_to = NULL, version = 1`. NO collision under `(natural_key, effective_from)` history-unique-index because predecessor's `effective_from` is in the past. **Audit honestly reflects the [DELETE, reopen] gap** — `GetByKeyAtAsync(date in gap interval)` returns NULL (matching reality). Audit emits `CREATED` + `WageTypeMappingCreated` outbox event for the new row; the prior DELETE was already audited at its own request.
 
-**Case C — closed-on-today predecessor with `effective_from = today`** (the same-day-CREATE-DELETE-CREATE case: row created earlier today, DELETED later today, CREATEd a third time today, all within minutes): predecessor is a zero-width `[today, today)` history row. INSERT at `effective_from = today` would collide on `(natural_key, today)`. Routing fix: **UPDATE-and-reopen on the zero-width predecessor** (set `effective_to = NULL`, version-bump, apply new field values via UPDATE). The zero-width predecessor mutates back to an open row. Audit emits `UPDATED` + `WageTypeMappingUpdated` outbox event (collapsed same-request DELETE+CREATE because they are not separately committed within Case C's single tx).
+**Case C — closed-on-today predecessor with `effective_from = today`** (the same-day-CREATE-DELETE-CREATE case: row created earlier today, DELETED later today, CREATEd a third time today, all within minutes — separate request transactions): predecessor is a zero-width `[today, today)` history row. INSERT at `effective_from = today` would collide on `(natural_key, today)`. Routing fix: **UPDATE-and-reopen on the zero-width predecessor** (set `effective_to = NULL`, version-bump, apply new field values via UPDATE). The zero-width predecessor mutates back to an open row. Audit emits `UPDATED` + `WageTypeMappingUpdated` outbox event on the **CURRENT request's tx** — the prior DELETE was already audited at its own request when it ran; the current request's UPDATE collapses the prior-DELETE-plus-current-CREATE intent into a single `UPDATED` action on its own audit row (TASK-2803 cycle 2 Reviewer N2 wording fix from the misleading "collapsed same-request DELETE+CREATE" framing).
 
 **Binding invariant** (this is what S29 must satisfy):
 
@@ -89,7 +89,7 @@ The 10 unguarded `INSERT INTO wage_type_mappings` statements in `init.sql` (line
 
 **Why these 3 questions in one ADR**: they are the load-bearing architectural decisions S29 implementation must satisfy. The deferred Phase 4d-1 refinement thrashed precisely because these 3 were under-bound — each cycle's "fix" surfaced a deeper layer of the same architectural concern. Binding all 3 in a single ADR-020 produces a pre-S29 contract that prevents the same thrash in the implementation refinement.
 
-**Why D1 binds 3 components**: cycle-1 of the design refinement bound only the API; cycle-2 added call-site; cycle-2.5 added planner-side. The pattern-recognition lesson (per `feedback_thrash_defer_real_world.md`) is that "the API exists" is insufficient binding for an ADR meant to prevent implementation rediscovery — the ADR must say WHO calls it, WHEN, and what downstream code change makes the registration consequential. D1 binds all three so S29's implementing agent reads a complete contract.
+**Why D1 binds 5 components** (TASK-2803 cycle 2 Codex P3 fix from "3 components" mis-cite): cycle-1 of the design refinement bound only the API; cycle-2 added call-site; cycle-2.5 added planner-side gate; TASK-2803 cycle 1 Reviewer B1 + user adjudication added components 4 (planner signature with `EmploymentProfile`) + 5 (hydrator invocation site). The pattern-recognition lesson (per `feedback_thrash_defer_real_world.md`) is that "the API exists" is insufficient binding for an ADR meant to prevent implementation rediscovery — the ADR must say WHO calls it, WHEN, what downstream code changes make the registration consequential, AND where the data flows through the binding chain. D1 binds all five so S29's implementing agent reads a complete contract; treating any one as optional reverts to the under-specified state that recurred across the design refinement's cycles.
 
 **Why D2 invariant + cited precedent (not SQL prescription)**: ADR text is read by future-Orchestrators and future-Reviewers years after the original decision. Embedding `SELECT ... FOR UPDATE` in the ADR locks the architecture to Postgres-specific shape; if the project ever migrates DB engines or refactors `SupersedeAndCreateAsync`, the ADR becomes contradictory. Binding the invariant ("atomic lock + same-tx routing") + citing the existing precedent shape keeps the ADR portable while preserving enough specificity for S29 to inherit the proven pattern.
 
@@ -185,6 +185,20 @@ These are explicitly NOT settled by ADR-020:
 
 **Pending**: TASK-2803 cycle 2 (re-review the absorption); cycle-cap respected (2 of 2 per lens for in-sprint TASK-2803). If cycle 2 surfaces new same-area-deeper-layer BLOCKERs, defer per `feedback_thrash_defer_real_world.md` — Phase 4d-1 itself may need re-scoping.
 
-### Cycle 2 (S28 / TASK-2803, 2026-05-09 — pending dispatch)
+### Cycle 2 (S28 / TASK-2803, 2026-05-09 — DRAFT → ACCEPTED)
 
-_Pending dispatch. Will record cycle 2 dual-lens findings here._
+**Reviewer Agent (Internal)**: 0 BLOCKERs / 0 WARNINGs / 3 NOTEs. APPROVE — DRAFT → ACCEPTED with NOTEs absorbed. Verified cycle 1 absorption clean: D1 5-component expansion ABSORBED; D2 3-case routing ABSORBED; W1 file-path ABSORBED; W2 D2.3→D7 cite ABSORBED. Both case-taxonomy probes (DELETE-09:00 + CREATE-14:00 both today against an old row → Case B; SUPERSEDED-today + DELETE + CREATE all today → Case C) resolve unambiguously under the as-written D2 invariant — case dispatch is on observable row state at lock-acquisition time, not history-of-edits, which is the right primitive for race-safety.
+
+**Codex (External)**: 1 P3 (NOTE-level) — internal contradiction at L92 ("D1 binds 3 components" rationale text contradicting the 5-component Decision body). Risk that S29 implementer misreads components 4-5 as optional, reverting to the under-specified state the ADR was written to prevent.
+
+**Lens divergence smoke alarm did NOT re-fire**: both lenses converged on APPROVE-with-NOTE-fixes (no same-area-deeper-layer BLOCKERs). The trail terminated cleanly per `feedback_thrash_defer_real_world.md`'s converging-finite test.
+
+**Cycle 2 NOTEs absorbed inline**:
+- **Codex P3** (L92 "3 components" → "5 components"): rationale section corrected; explicit "treating any one as optional reverts to the under-specified state" framing added so future readers cannot misread the rationale as relaxing the Decision.
+- **Reviewer N1** (D1 component 5 forward-compat clarity): one-sentence clarification added — "Today (S29 binding): the same `profile` parameter is passed to `Plan()` once and re-used across all segments — uniform per plan. Forward-compat seam (NOT a today binding): the per-segment iteration shape permits future per-segment profile evolution."
+- **Reviewer N2** (D2 Case C "collapsed same-request" misleading): wording fixed — Case C now says "audit emits UPDATED on the CURRENT request's tx ... the current request's UPDATE collapses the prior-DELETE-plus-current-CREATE intent into a single UPDATED action on its own audit row." Eliminates the prior-vs-current request confusion.
+- **Reviewer N3** (W2 fix breadcrumb housekeeping): KEPT inline in the ADR-019 amendment block as an annotation-of-correction; future-cleanup candidate but not blocking.
+
+**Status flip**: DRAFT → **ACCEPTED**. ADR-020 is binding contract for S29 implementation refinement.
+
+**Cycle-cap respected**: 2 of 2 cycles per lens for in-sprint TASK-2803. Total review trail across S28: 3 cycles per lens at refinement scoping + 2 cycles per lens at TASK-2803 ADR-text review. Convergence achieved.
