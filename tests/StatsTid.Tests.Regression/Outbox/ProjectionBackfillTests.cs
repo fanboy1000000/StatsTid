@@ -1,4 +1,4 @@
-using System.Data;
+using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using NpgsqlTypes;
 using StatsTid.Infrastructure;
@@ -10,40 +10,44 @@ namespace StatsTid.Tests.Regression.Outbox;
 /// S27 / TASK-2710 Slot 5 — Projection backfill idempotency.
 ///
 /// <para>
-/// Pins the load-bearing invariant of <c>tools/ProjectionBackfill</c>'s
+/// Pins the load-bearing invariant of <see cref="ProjectionBackfillService"/>'s
 /// <c>ON CONFLICT (event_id) DO NOTHING</c> idempotency: re-running the backfill against
 /// a database whose projections are already populated (e.g. from a prior backfill run, or
 /// from sync-in-tx writes that landed concurrently with the backfill query) MUST NOT
-/// duplicate rows. Per <c>tools/ProjectionBackfill/Program.cs:14-17</c>, no TRUNCATE is
+/// duplicate rows. Per <see cref="ProjectionBackfillService"/>'s class doc, no TRUNCATE is
 /// performed (live POST handlers may be racing the backfill in production), so idempotency
 /// is the correctness guarantee.
 /// </para>
 ///
 /// <para>
-/// Replicates the backfill SQL inline rather than invoking <c>StatsTid.Tools.ProjectionBackfill.Program</c>
-/// directly because the tool is an Exe with top-level statements and exposes no callable
-/// surface. The pertinent contract under test is "the SELECT/INSERT pair is idempotent",
-/// not "the tool's CLI argv parsing works" — the SQL is the load-bearing component and is
-/// duplicated here verbatim from <c>Program.cs:90-116</c>.
+/// Post-S27 Step 7a cycle 1 BLOCKER fix: invokes the production
+/// <see cref="ProjectionBackfillService"/> directly (single source of truth) rather than
+/// duplicating the SELECT/INSERT SQL inline. This eliminates the third site that had a
+/// drift surface flagged by the TASK-2710 Reviewer (NOTE-2). The console app at
+/// <c>tools/ProjectionBackfill</c> and Backend.Api startup also delegate to the same service.
 /// </para>
 /// </summary>
 [Trait("Category", "Docker")]
 public sealed class ProjectionBackfillTests : IAsyncLifetime
 {
     private Segmentation.TestFixtures.DockerHarness _harness = null!;
+    private ProjectionBackfillService _service = null!;
 
     public async Task InitializeAsync()
     {
         _harness = await Segmentation.TestFixtures.DockerHarness.StartAsync();
         await OutboxTestSchema.ApplyAsync(_harness.ConnectionString);
         await ProjectionSchemaTestFixture.ApplyAsync(_harness.ConnectionString);
+        _service = new ProjectionBackfillService(
+            _harness.Factory,
+            NullLogger<ProjectionBackfillService>.Instance);
     }
 
     public async Task DisposeAsync() => await _harness.DisposeAsync();
 
     /// <summary>
     /// Seed N events directly into <c>events</c> + <c>outbox_events</c> (mark them as
-    /// published with <c>stream_version</c> set). Run the backfill SQL programmatically;
+    /// published with <c>stream_version</c> set). Run the production backfill service;
     /// assert N rows in the projection table. Re-run; assert STILL N rows (no duplicates
     /// from <c>ON CONFLICT (event_id) DO NOTHING</c>).
     /// </summary>
@@ -74,8 +78,8 @@ public sealed class ProjectionBackfillTests : IAsyncLifetime
             seededEventIds.Add(evt.EventId);
         }
 
-        // Run backfill (replicates Program.cs:118-281 SELECT + INSERT path).
-        var run1 = await RunBackfillAsync();
+        // Run the production backfill via the canonical service (single source of truth).
+        var run1 = await _service.RunAsync();
         Assert.Equal(seedCount, run1.InsertedTime);
         Assert.Equal(0, run1.ConflictsTime);
 
@@ -84,7 +88,7 @@ public sealed class ProjectionBackfillTests : IAsyncLifetime
         Assert.Equal((long)seedCount, rowCountAfterRun1);
 
         // Re-run — every row should ON CONFLICT DO NOTHING.
-        var run2 = await RunBackfillAsync();
+        var run2 = await _service.RunAsync();
         Assert.Equal(0, run2.InsertedTime);
         Assert.Equal(seedCount, run2.ConflictsTime);
 
@@ -161,129 +165,6 @@ public sealed class ProjectionBackfillTests : IAsyncLifetime
         await tx.CommitAsync();
     }
 
-    /// <summary>
-    /// Inline replication of <c>tools/ProjectionBackfill/Program.cs:118-281</c>'s
-    /// SELECT + INSERT pipeline. Returns counters for assertion. Matches the production
-    /// SQL byte-for-byte (any drift in <c>Program.cs</c> SQL must be mirrored here).
-    /// </summary>
-    private async Task<BackfillCounts> RunBackfillAsync()
-    {
-        const string SelectSql = @"
-            SELECT
-                events.event_id,
-                events.event_type,
-                events.data,
-                events.stream_version,
-                outbox_events.outbox_id,
-                events.stored_at
-            FROM events
-            LEFT JOIN outbox_events ON events.event_id = outbox_events.event_id
-            WHERE events.event_type IN ('TimeEntryRegistered', 'AbsenceRegistered')
-            ORDER BY events.stream_id, events.stream_version
-        ";
-
-        const string InsertTimeSql = @"
-            INSERT INTO time_entries_projection (
-                event_id, employee_id, date, hours, start_time, end_time,
-                task_id, activity_type, agreement_code, ok_version,
-                voluntary_unsocial_hours, occurred_at, actor_id, actor_role,
-                correlation_id, outbox_id
-            ) VALUES (
-                @eventId, @employeeId, @date, @hours, @startTime, @endTime,
-                @taskId, @activityType, @agreementCode, @okVersion,
-                @voluntaryUnsocialHours, @occurredAt, @actorId, @actorRole,
-                @correlationId, @outboxId
-            )
-            ON CONFLICT (event_id) DO NOTHING
-        ";
-
-        const string InsertAbsSql = @"
-            INSERT INTO absences_projection (
-                event_id, employee_id, date, absence_type, hours,
-                agreement_code, ok_version, occurred_at,
-                actor_id, actor_role, correlation_id, outbox_id
-            ) VALUES (
-                @eventId, @employeeId, @date, @absenceType, @hours,
-                @agreementCode, @okVersion, @occurredAt,
-                @actorId, @actorRole, @correlationId, @outboxId
-            )
-            ON CONFLICT (event_id) DO NOTHING
-        ";
-
-        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
-        await conn.OpenAsync();
-        await using var tx = await conn.BeginTransactionAsync(IsolationLevel.RepeatableRead);
-
-        var rows = new List<(Guid EventId, string EventType, string Data, int StreamVersion, long? OutboxId)>();
-        await using (var selectCmd = new NpgsqlCommand(SelectSql, conn, tx))
-        await using (var reader = await selectCmd.ExecuteReaderAsync())
-        {
-            while (await reader.ReadAsync())
-            {
-                rows.Add((
-                    EventId: reader.GetGuid(0),
-                    EventType: reader.GetString(1),
-                    Data: reader.GetString(2),
-                    StreamVersion: reader.GetInt32(3),
-                    OutboxId: reader.IsDBNull(4) ? null : reader.GetInt64(4)));
-            }
-        }
-
-        var counts = new BackfillCounts();
-        foreach (var row in rows)
-        {
-            var outboxId = row.OutboxId ?? row.StreamVersion;
-            var domainEvent = EventSerializer.Deserialize(row.EventType, row.Data);
-            if (domainEvent is TimeEntryRegistered te)
-            {
-                await using var cmd = new NpgsqlCommand(InsertTimeSql, conn, tx);
-                cmd.Parameters.AddWithValue("eventId", te.EventId);
-                cmd.Parameters.AddWithValue("employeeId", te.EmployeeId);
-                cmd.Parameters.AddWithValue("date", te.Date);
-                cmd.Parameters.AddWithValue("hours", te.Hours);
-                cmd.Parameters.AddWithValue("startTime", (object?)te.StartTime ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("endTime", (object?)te.EndTime ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("taskId", (object?)te.TaskId ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("activityType", (object?)te.ActivityType ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("agreementCode", te.AgreementCode);
-                cmd.Parameters.AddWithValue("okVersion", te.OkVersion);
-                cmd.Parameters.AddWithValue("voluntaryUnsocialHours", te.VoluntaryUnsocialHours);
-                cmd.Parameters.AddWithValue("occurredAt",
-                    te.OccurredAt.Kind == DateTimeKind.Utc ? te.OccurredAt : DateTime.SpecifyKind(te.OccurredAt, DateTimeKind.Utc));
-                cmd.Parameters.AddWithValue("actorId", (object?)te.ActorId ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("actorRole", (object?)te.ActorRole ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("correlationId", (object?)te.CorrelationId ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("outboxId", outboxId);
-                var affected = await cmd.ExecuteNonQueryAsync();
-                if (affected == 1) counts.InsertedTime++;
-                else counts.ConflictsTime++;
-            }
-            else if (domainEvent is AbsenceRegistered ab)
-            {
-                await using var cmd = new NpgsqlCommand(InsertAbsSql, conn, tx);
-                cmd.Parameters.AddWithValue("eventId", ab.EventId);
-                cmd.Parameters.AddWithValue("employeeId", ab.EmployeeId);
-                cmd.Parameters.AddWithValue("date", ab.Date);
-                cmd.Parameters.AddWithValue("absenceType", ab.AbsenceType);
-                cmd.Parameters.AddWithValue("hours", ab.Hours);
-                cmd.Parameters.AddWithValue("agreementCode", ab.AgreementCode);
-                cmd.Parameters.AddWithValue("okVersion", ab.OkVersion);
-                cmd.Parameters.AddWithValue("occurredAt",
-                    ab.OccurredAt.Kind == DateTimeKind.Utc ? ab.OccurredAt : DateTime.SpecifyKind(ab.OccurredAt, DateTimeKind.Utc));
-                cmd.Parameters.AddWithValue("actorId", (object?)ab.ActorId ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("actorRole", (object?)ab.ActorRole ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("correlationId", (object?)ab.CorrelationId ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("outboxId", outboxId);
-                var affected = await cmd.ExecuteNonQueryAsync();
-                if (affected == 1) counts.InsertedAbs++;
-                else counts.ConflictsAbs++;
-            }
-        }
-
-        await tx.CommitAsync();
-        return counts;
-    }
-
     private async Task<long> CountProjectionRowsAsync(string tableName, string employeeId)
     {
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
@@ -302,13 +183,5 @@ public sealed class ProjectionBackfillTests : IAsyncLifetime
             $"SELECT COUNT(*) FROM {tableName} WHERE event_id = @id", conn);
         cmd.Parameters.AddWithValue("id", eventId);
         return Convert.ToInt64(await cmd.ExecuteScalarAsync());
-    }
-
-    private sealed class BackfillCounts
-    {
-        public int InsertedTime;
-        public int InsertedAbs;
-        public int ConflictsTime;
-        public int ConflictsAbs;
     }
 }

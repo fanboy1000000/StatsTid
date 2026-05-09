@@ -61,6 +61,7 @@ builder.Services.AddSingleton<OvertimePreApprovalRepository>();
 // ── Services ──
 builder.Services.AddSingleton<ConfigResolutionService>();
 builder.Services.AddSingleton<ProfileAlignmentValidator>();
+builder.Services.AddSingleton<ProjectionBackfillService>();
 
 var useDbAuth = builder.Configuration.GetValue<bool>("Auth:UseDatabase", false);
 
@@ -79,6 +80,25 @@ using (var scope = app.Services.CreateScope())
     var dbFactory = app.Services.GetRequiredService<DbConnectionFactory>();
     var logger = app.Services.GetRequiredService<ILogger<Program>>();
     await EntitlementConfigSeeder.SeedAsync(dbFactory, logger);
+}
+
+// ── S27 Phase 4c.6 / Step 7a cycle 1 BLOCKER fix ──
+// Apply projection backfill (idempotent; one-shot per startup).
+// No-op when projections already mirror events. Required because the
+// migrated GET handlers (TimeEndpoints, SkemaEndpoints, BalanceEndpoints,
+// ComplianceEndpoints) read exclusively from projection tables; without
+// this startup hook, a deploy against an existing events table would
+// surface empty GETs until ops manually ran tools/ProjectionBackfill.
+// Runs AFTER schema seeders (which create the projection tables) and
+// BEFORE app.Run() (which serves GETs that depend on populated projections).
+using (var scope = app.Services.CreateScope())
+{
+    var backfill = scope.ServiceProvider.GetRequiredService<ProjectionBackfillService>();
+    var result = await backfill.RunAsync();
+    app.Logger.LogInformation(
+        "Projection backfill on startup: scanned={Scanned}, time inserted={InsertedTime}, absences inserted={InsertedAbsences}, conflicts={Conflicts}, fallback warnings={Warnings}",
+        result.Scanned, result.InsertedTime, result.InsertedAbsences,
+        result.ConflictsTime + result.ConflictsAbsences, result.FallbackWarnings);
 }
 
 // ── Middleware ──
