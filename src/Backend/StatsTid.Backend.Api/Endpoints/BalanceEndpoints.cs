@@ -32,6 +32,8 @@ public static class BalanceEndpoints
             EntitlementConfigRepository entitlementConfigRepo,
             EntitlementBalanceRepository entitlementBalanceRepo,
             OvertimeBalanceRepository overtimeBalanceRepo,
+            TimeEntryProjectionRepository timeEntryProjectionRepo,
+            AbsenceProjectionRepository absenceProjectionRepo,
             IEventStore eventStore,
             OrgScopeValidator scopeValidator,
             HttpContext context,
@@ -82,23 +84,28 @@ public static class BalanceEndpoints
 
             var normHoursExpected = (weekdays / 5.0m) * weeklyNormHours;
 
-            // Read employee event stream
-            var streamId = $"employee-{employeeId}";
-            var allEvents = await eventStore.ReadStreamAsync(streamId, ct);
+            // Time entries: read from projection (date-range scoped to the month) — S27 TASK-2708.
+            // Read-your-write is satisfied because the atomic POST handler (TASK-2707) commits
+            // the projection row in the same transaction as the TimeEntryRegistered event.
+            var timeEntries = await timeEntryProjectionRepo.GetByEmployeeAndDateRangeAsync(
+                employeeId, monthStart, monthEnd, ct);
+            var normHoursActual = timeEntries.Sum(e => e.Hours);
 
-            // Sum time entry hours for the given month
-            var normHoursActual = allEvents.OfType<TimeEntryRegistered>()
-                .Where(e => e.Date >= monthStart && e.Date <= monthEnd)
-                .Sum(e => e.Hours);
-
-            // Count distinct vacation days used in the calendar year
-            var vacationDaysUsed = allEvents.OfType<AbsenceRegistered>()
+            // Absences: vacation days used over the entire calendar year — S27 TASK-2708.
+            // The date filter spans the whole year (not just the month), so use the full-stream
+            // read + client-side year filter rather than a date-range query.
+            var allAbsences = await absenceProjectionRepo.GetByEmployeeAsync(employeeId, ct);
+            var vacationDaysUsed = allAbsences
                 .Where(e => e.AbsenceType == "VACATION" && e.Date.Year == year)
                 .Select(e => e.Date)
                 .Distinct()
                 .Count();
 
-            // Flex balance from the latest FlexBalanceUpdated event
+            // Flex balance still comes from the event stream — flex projection is out of scope
+            // for S27 (Phase 4c.6 Assumption #4). The employee event stream is retained ONLY for
+            // this FlexBalanceUpdated read.
+            var streamId = $"employee-{employeeId}";
+            var allEvents = await eventStore.ReadStreamAsync(streamId, ct);
             var latestFlex = allEvents.OfType<FlexBalanceUpdated>().LastOrDefault();
             var flexBalance = latestFlex?.NewBalance ?? 0m;
             var flexDelta = latestFlex?.Delta ?? 0m;
