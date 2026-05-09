@@ -3,8 +3,6 @@ using System.Text.Json;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Security;
-using StatsTid.SharedKernel.Events;
-using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Security;
 
@@ -22,7 +20,7 @@ public static class ComplianceEndpoints
             UserRepository userRepo,
             IHttpClientFactory httpClientFactory,
             IConfiguration configuration,
-            IEventStore eventStore,
+            TimeEntryProjectionRepository timeEntryProjectionRepo,
             OrgScopeValidator scopeValidator,
             HttpContext context,
             CancellationToken ct) =>
@@ -48,24 +46,21 @@ public static class ComplianceEndpoints
             var monthStart = new DateOnly(year, month, 1);
             var monthEnd = new DateOnly(year, month, daysInMonth);
 
-            // Fetch time entries from event store
-            var streamId = $"employee-{employeeId}";
-            var allEvents = await eventStore.ReadStreamAsync(streamId, ct);
-
-            var timeEntries = allEvents.OfType<TimeEntryRegistered>()
-                .Where(e => e.Date >= monthStart && e.Date <= monthEnd)
-                .Select(e => new TimeEntry
+            // Fetch time entries from projection (sync-in-tx with the POST that wrote them — read-your-write per ADR-018 D12)
+            var timeEntryRows = await timeEntryProjectionRepo.GetByEmployeeAndDateRangeAsync(employeeId, monthStart, monthEnd, ct);
+            var timeEntries = timeEntryRows
+                .Select(r => new TimeEntry
                 {
-                    EmployeeId = e.EmployeeId,
-                    Date = e.Date,
-                    Hours = e.Hours,
-                    StartTime = e.StartTime,
-                    EndTime = e.EndTime,
-                    TaskId = e.TaskId,
-                    ActivityType = e.ActivityType,
-                    AgreementCode = e.AgreementCode,
-                    OkVersion = e.OkVersion,
-                    VoluntaryUnsocialHours = e.VoluntaryUnsocialHours,
+                    EmployeeId = r.EmployeeId,
+                    Date = r.Date,
+                    Hours = r.Hours,
+                    StartTime = r.StartTime,
+                    EndTime = r.EndTime,
+                    TaskId = r.TaskId,
+                    ActivityType = r.ActivityType,
+                    AgreementCode = r.AgreementCode,
+                    OkVersion = r.OkVersion,
+                    VoluntaryUnsocialHours = r.VoluntaryUnsocialHours,
                 })
                 .ToList();
 
