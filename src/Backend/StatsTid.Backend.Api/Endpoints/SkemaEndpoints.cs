@@ -2,9 +2,9 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
+using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Events;
-using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Security;
 
 namespace StatsTid.Backend.Api.Endpoints;
@@ -92,7 +92,16 @@ public static class SkemaEndpoints
             AbsenceTypeVisibilityRepository visibilityRepo,
             TimerSessionRepository timerRepo,
             ApprovalPeriodRepository approvalRepo,
-            IEventStore eventStore,
+            // S27 TASK-2706 GET migration: Skema month reads now serve from
+            // time_entries_projection + absences_projection (TASK-2702 schema,
+            // TASK-2704 repos) instead of the event stream. Projections commit
+            // in the same tx as the events (POST atomic-tx wrap below) so
+            // read-your-write is preserved without waiting for the publisher
+            // drain. The Skema GET handler does NOT consume FlexBalanceUpdated
+            // (Time/Balance own that stream); IEventStore is no longer needed
+            // by this handler.
+            TimeEntryProjectionRepository timeEntryProjectionRepo,
+            AbsenceProjectionRepository absenceProjectionRepo,
             OrgScopeValidator scopeValidator,
             HttpContext context,
             CancellationToken ct) =>
@@ -139,13 +148,16 @@ public static class SkemaEndpoints
                 })
                 .ToList();
 
-            // Fetch events for the employee stream
-            var streamId = $"employee-{employeeId}";
-            var allEvents = await eventStore.ReadStreamAsync(streamId, ct);
-
-            // Filter time entries for this month
-            var entries = allEvents.OfType<TimeEntryRegistered>()
-                .Where(e => e.Date >= monthStart && e.Date <= monthEnd)
+            // S27 TASK-2706 GET migration: read time entries + absences from the
+            // sync-in-tx projections (committed in the same atomic tx as the
+            // outbox enqueue per ADR-018 D12) instead of the event stream. This
+            // eliminates the post-S26 read-your-write gap that surfaced when the
+            // POST handler was made atomic but reads still waited for publisher
+            // drain. ORDER BY outbox_id ASC (inside the repos) preserves
+            // per-employee monotonic ordering across rows on the same date.
+            var entriesRows = await timeEntryProjectionRepo.GetByEmployeeAndDateRangeAsync(
+                employeeId, monthStart, monthEnd, ct);
+            var entries = entriesRows
                 .Select(e => new
                 {
                     date = e.Date,
@@ -154,9 +166,9 @@ public static class SkemaEndpoints
                 })
                 .ToList();
 
-            // Filter absences for this month
-            var absences = allEvents.OfType<AbsenceRegistered>()
-                .Where(e => e.Date >= monthStart && e.Date <= monthEnd)
+            var absencesRows = await absenceProjectionRepo.GetByEmployeeAndDateRangeAsync(
+                employeeId, monthStart, monthEnd, ct);
+            var absences = absencesRows
                 .Select(e => new
                 {
                     date = e.Date,
@@ -230,7 +242,18 @@ public static class SkemaEndpoints
             EntitlementBalanceRepository entitlementBalanceRepo,
             IHttpClientFactory httpClientFactory,
             IConfiguration configuration,
-            IEventStore eventStore,
+            // S27 TASK-2706 atomic POST: state-change site moved off
+            // IEventStore.AppendAsync and onto IOutboxEnqueue.EnqueueAndReturnIdAsync
+            // (ADR-018 D3). The outer transaction wraps every event emit + the
+            // entitlement_balances UPDATE + the projection INSERTs together so
+            // a quota breach (SkemaQuotaBreachException) rolls back the entire
+            // bundle (TASK-2706 (d) bundle-rollback semantic). Projection writes
+            // happen inside the same tx (sync-in-tx, ADR-018 D12) so the GET
+            // handler above sees this save's rows immediately on the next read.
+            DbConnectionFactory connectionFactory,
+            IOutboxEnqueue outbox,
+            TimeEntryProjectionRepository timeEntryProjectionRepo,
+            AbsenceProjectionRepository absenceProjectionRepo,
             OrgScopeValidator scopeValidator,
             HttpContext context,
             CancellationToken ct) =>
@@ -348,96 +371,173 @@ public static class SkemaEndpoints
             var streamId = $"employee-{employeeId}";
             var savedCount = 0;
 
-            // Save time entries
-            if (request.Entries is not null)
+            // ── S27 TASK-2706 atomic outer transaction (ADR-018 D3 + D12) ──
+            // All TimeEntryRegistered + AbsenceRegistered + EntitlementBalanceAdjusted
+            // outbox enqueues, the matching time_entries_projection +
+            // absences_projection INSERTs, and the entitlement_balances UPDATE
+            // commit together — or roll back together (e.g. on a concurrent-
+            // modification quota breach surfaced inside the loop, which throws
+            // SkemaQuotaBreachException and triggers tx.RollbackAsync).
+            //
+            // Per-event ordering invariant: outbox enqueue FIRST (returning the
+            // freshly-allocated outbox_id BIGSERIAL), projection INSERT SECOND
+            // (consuming outbox_id). This keeps the projection's per-employee
+            // monotonic ordering aligned with the global outbox sequence so
+            // replay-from-events backfill (TASK-2705) joins cleanly.
+            //
+            // BEHAVIOR CHANGE vs S26 silent-skip (deferred from S26 Step 7a
+            // cycle 2; see SPRINT-27.md TASK-2706 description): pre-S27 a
+            // post-validation quota race silently `continue`d the failing
+            // entitlement type, returning 200 OK with events committed but
+            // no matching balance adjustment. Post-S27 the same race throws
+            // SkemaQuotaBreachException → outer tx.RollbackAsync → 422 with
+            // body shape matching the pre-validation 422 path so the frontend
+            // useSkema.ts retry contract is unchanged. Bundle-rollback: ALL
+            // prior TimeEntryRegistered events from the same handler call
+            // are rolled back too (whole save is atomic), even quota-unrelated
+            // time entries the user typed alongside the breaching absence.
+            try
             {
-                foreach (var entry in request.Entries)
+                await using var conn = connectionFactory.Create();
+                await conn.OpenAsync(ct);
+                await using var tx = await conn.BeginTransactionAsync(ct);
+                try
                 {
-                    var @event = new TimeEntryRegistered
+                    // Save time entries (outbox enqueue + projection INSERT inside outer tx).
+                    if (request.Entries is not null)
                     {
-                        EmployeeId = employeeId,
-                        Date = entry.Date,
-                        Hours = entry.Hours,
-                        TaskId = entry.ProjectCode,
-                        ActivityType = "NORMAL",
-                        AgreementCode = user.AgreementCode,
-                        OkVersion = user.OkVersion,
-                        ActorId = actor.ActorId,
-                        ActorRole = actor.ActorRole,
-                        CorrelationId = actor.CorrelationId
-                    };
-                    await eventStore.AppendAsync(streamId, @event, ct);
-                    savedCount++;
+                        foreach (var entry in request.Entries)
+                        {
+                            var @event = new TimeEntryRegistered
+                            {
+                                EmployeeId = employeeId,
+                                Date = entry.Date,
+                                Hours = entry.Hours,
+                                TaskId = entry.ProjectCode,
+                                ActivityType = "NORMAL",
+                                AgreementCode = user.AgreementCode,
+                                OkVersion = user.OkVersion,
+                                ActorId = actor.ActorId,
+                                ActorRole = actor.ActorRole,
+                                CorrelationId = actor.CorrelationId
+                            };
+                            // Per-event ordering: enqueue FIRST (allocates outbox_id), projection SECOND.
+                            var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, @event, ct);
+                            await timeEntryProjectionRepo.InsertAsync(conn, tx, @event, outboxId, ct);
+                            savedCount++;
+                        }
+                    }
+
+                    // Save absences and atomically adjust entitlement balances.
+                    if (request.Absences is not null)
+                    {
+                        var savedByEntitlementType = new Dictionary<string, decimal>(StringComparer.Ordinal);
+
+                        foreach (var absence in request.Absences)
+                        {
+                            var @event = new AbsenceRegistered
+                            {
+                                EmployeeId = employeeId,
+                                Date = absence.Date,
+                                AbsenceType = absence.AbsenceType,
+                                Hours = absence.Hours,
+                                AgreementCode = user.AgreementCode,
+                                OkVersion = user.OkVersion,
+                                ActorId = actor.ActorId,
+                                ActorRole = actor.ActorRole,
+                                CorrelationId = actor.CorrelationId
+                            };
+                            // Per-event ordering: enqueue FIRST (allocates outbox_id), projection SECOND.
+                            var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, @event, ct);
+                            await absenceProjectionRepo.InsertAsync(conn, tx, @event, outboxId, ct);
+                            savedCount++;
+
+                            if (AbsenceToEntitlementType.TryGetValue(absence.AbsenceType, out var entitlementType) && entitlementType is not null)
+                            {
+                                if (!savedByEntitlementType.ContainsKey(entitlementType))
+                                    savedByEntitlementType[entitlementType] = 0m;
+                                savedByEntitlementType[entitlementType] += absence.Hours;
+                            }
+                        }
+
+                        // Atomically check quota and adjust balances (eliminates TOCTOU race) via the
+                        // (conn, tx) overload from S26 TASK-2603(a) so the UPDATE participates in the
+                        // outer tx. A breach (concurrent modification raced past the pre-validation
+                        // HTTP check) throws to roll back the entire save (S27 TASK-2706 (c)+(d)).
+                        foreach (var (entitlementType, totalHours) in savedByEntitlementType)
+                        {
+                            if (!entitlementData.TryGetValue(entitlementType, out var data))
+                                continue;
+
+                            var deltaDays = totalHours / StandardDayHours;
+                            var (success, newUsed) = await entitlementBalanceRepo.CheckAndAdjustAsync(
+                                conn, tx, employeeId, entitlementType, data.EntitlementYear,
+                                deltaDays, data.EffectiveQuota, ct);
+
+                            if (!success)
+                            {
+                                // S27 TASK-2706 (c) quota-race fix: throw to roll back the entire save
+                                // atomically (bundle-rollback per ADR-018 D3). Replaces pre-S27 silent
+                                // `continue` that returned 200 OK with inconsistent state. `newUsed`
+                                // here is the current used balance (the (conn, tx) overload routes the
+                                // failure-path read through the same snapshot — see EntitlementBalanceRepository
+                                // CheckAndAdjustInternalAsync). Caught at the outer try/catch below
+                                // and mapped to a 422 response.
+                                throw new SkemaQuotaBreachException(
+                                    entitlementType,
+                                    requestedDays: deltaDays,
+                                    currentUsed: newUsed,
+                                    effectiveQuota: data.EffectiveQuota);
+                            }
+
+                            // Read the carryover via the (conn, tx) overload so it observes the same
+                            // snapshot under the outer tx (ADR-018 D3 + S26 TASK-2603(a) refinement W3).
+                            var balance = await entitlementBalanceRepo.GetByEmployeeAndTypeAsync(
+                                conn, tx, employeeId, entitlementType, data.EntitlementYear, ct);
+                            var carryoverIn = balance?.CarryoverIn ?? 0m;
+                            var newRemaining = data.EffectiveQuota + carryoverIn - newUsed;
+
+                            var balanceEvent = new EntitlementBalanceAdjusted
+                            {
+                                EmployeeId = employeeId,
+                                EntitlementType = entitlementType,
+                                EntitlementYear = data.EntitlementYear,
+                                DeltaDays = deltaDays,
+                                NewUsed = newUsed,
+                                NewRemaining = Math.Round(newRemaining, 2),
+                                Reason = "Absence registered via Skema save",
+                                ActorId = actor.ActorId,
+                                ActorRole = actor.ActorRole,
+                                CorrelationId = actor.CorrelationId
+                            };
+                            // No projection write for EntitlementBalanceAdjusted: entitlement_balances is
+                            // a write-back projection mutated by CheckAndAdjustAsync above (not event-
+                            // derived); the event captures the balance transition for audit/replay only.
+                            await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, balanceEvent, ct);
+                        }
+                    }
+
+                    await tx.CommitAsync(ct);
+                }
+                catch
+                {
+                    await tx.RollbackAsync(ct);
+                    throw;
                 }
             }
-
-            // Save absences and atomically adjust entitlement balances
-            if (request.Absences is not null)
+            catch (SkemaQuotaBreachException ex)
             {
-                var savedByEntitlementType = new Dictionary<string, decimal>(StringComparer.Ordinal);
-
-                foreach (var absence in request.Absences)
+                // 422 body shape mirrors the pre-validation 422 above (error / absenceType /
+                // remaining / requested / message) so frontend useSkema.ts retry semantics
+                // are unchanged.
+                return Results.Json(new
                 {
-                    var @event = new AbsenceRegistered
-                    {
-                        EmployeeId = employeeId,
-                        Date = absence.Date,
-                        AbsenceType = absence.AbsenceType,
-                        Hours = absence.Hours,
-                        AgreementCode = user.AgreementCode,
-                        OkVersion = user.OkVersion,
-                        ActorId = actor.ActorId,
-                        ActorRole = actor.ActorRole,
-                        CorrelationId = actor.CorrelationId
-                    };
-                    await eventStore.AppendAsync(streamId, @event, ct);
-                    savedCount++;
-
-                    if (AbsenceToEntitlementType.TryGetValue(absence.AbsenceType, out var entitlementType) && entitlementType is not null)
-                    {
-                        if (!savedByEntitlementType.ContainsKey(entitlementType))
-                            savedByEntitlementType[entitlementType] = 0m;
-                        savedByEntitlementType[entitlementType] += absence.Hours;
-                    }
-                }
-
-                // Atomically check quota and adjust balances (eliminates TOCTOU race)
-                foreach (var (entitlementType, totalHours) in savedByEntitlementType)
-                {
-                    if (!entitlementData.TryGetValue(entitlementType, out var data))
-                        continue;
-
-                    var deltaDays = totalHours / StandardDayHours;
-                    var (success, newUsed) = await entitlementBalanceRepo.CheckAndAdjustAsync(
-                        employeeId, entitlementType, data.EntitlementYear, deltaDays, data.EffectiveQuota, ct);
-
-                    if (!success)
-                    {
-                        // Concurrent modification caused quota breach — events already saved, but balance not adjusted.
-                        // Log warning; the balance remains consistent (not over-adjusted).
-                        continue;
-                    }
-
-                    var balance = await entitlementBalanceRepo.GetByEmployeeAndTypeAsync(
-                        employeeId, entitlementType, data.EntitlementYear, ct);
-                    var carryoverIn = balance?.CarryoverIn ?? 0m;
-                    var newRemaining = data.EffectiveQuota + carryoverIn - newUsed;
-
-                    var balanceEvent = new EntitlementBalanceAdjusted
-                    {
-                        EmployeeId = employeeId,
-                        EntitlementType = entitlementType,
-                        EntitlementYear = data.EntitlementYear,
-                        DeltaDays = deltaDays,
-                        NewUsed = newUsed,
-                        NewRemaining = Math.Round(newRemaining, 2),
-                        Reason = "Absence registered via Skema save",
-                        ActorId = actor.ActorId,
-                        ActorRole = actor.ActorRole,
-                        CorrelationId = actor.CorrelationId
-                    };
-                    await eventStore.AppendAsync(streamId, balanceEvent, ct);
-                }
+                    error = "Entitlement quota exceeded",
+                    absenceType = ex.EntitlementType,
+                    remaining = Math.Round(ex.EffectiveQuota - ex.CurrentUsed, 2),
+                    requested = Math.Round(ex.RequestedDays, 2),
+                    message = ex.Message
+                }, statusCode: 422);
             }
 
             return Results.Ok(new { saved = savedCount });
