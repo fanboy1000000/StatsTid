@@ -55,6 +55,8 @@ public static class EventSerializer
         ["WageTypeMappingCreated"] = typeof(WageTypeMappingCreated),
         ["WageTypeMappingUpdated"] = typeof(WageTypeMappingUpdated),
         ["WageTypeMappingDeleted"] = typeof(WageTypeMappingDeleted),
+        // Sprint 29: cross-day supersession (predecessor closed + new history row inserted) per ADR-020 D2
+        ["WageTypeMappingSuperseded"] = typeof(WageTypeMappingSuperseded),
         // Sprint 15: Entitlement management events
         ["EntitlementBalanceAdjusted"] = typeof(EntitlementBalanceAdjusted),
         ["EntitlementConfigSeeded"] = typeof(EntitlementConfigSeeded),
