@@ -1420,3 +1420,77 @@ BEGIN
     ADD COLUMN IF NOT EXISTS version_after BIGINT NULL;
 END
 $$;
+
+-- =========================================================================
+-- S29 / ADR-020 D1+D2+D3 — wage-type-mapping effective-dating + supersession.
+--   Step (a): add mapping_id (UUID surrogate PK) + effective_from + effective_to;
+--             backfill existing rows; set NOT NULL on mapping_id + effective_from.
+--   Step (b): drop composite PK; add PK on mapping_id; add partial-unique-index
+--             on natural key WHERE effective_to IS NULL (S21 D2.1 pattern) +
+--             full unique on (natural_key, effective_from) for ADR-020 D3
+--             ON CONFLICT DO NOTHING conflict target.
+--   Step (c): widen wage_type_mapping_audit.action CHECK to add SUPERSEDED
+--             (S22 local_agreement_profile_audit precedent).
+-- Guarded by schema_migrations ledger so re-runs of init.sql are idempotent.
+-- =========================================================================
+DO $$
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s29-d1-wtm-effective-dating', 'ADR-020: wage_type_mappings effective-dating + supersession + audit SUPERSEDED action')
+    ON CONFLICT (migration_id) DO NOTHING;
+
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+
+    -- Step (a): add columns nullable, backfill, then enforce NOT NULL on the
+    -- two columns that must always be set. effective_to stays nullable —
+    -- NULL means "currently open / unbounded above."
+    ALTER TABLE wage_type_mappings
+    ADD COLUMN IF NOT EXISTS mapping_id     UUID,
+    ADD COLUMN IF NOT EXISTS effective_from DATE,
+    ADD COLUMN IF NOT EXISTS effective_to   DATE;
+
+    UPDATE wage_type_mappings
+    SET mapping_id = gen_random_uuid(),
+        effective_from = DATE '2020-01-01'
+    WHERE mapping_id IS NULL OR effective_from IS NULL;
+
+    ALTER TABLE wage_type_mappings
+    ALTER COLUMN mapping_id     SET NOT NULL,
+    ALTER COLUMN effective_from SET NOT NULL;
+
+    -- Step (b): swap composite PK for surrogate UUID PK + add the two indexes.
+    -- The PK swap requires drop-then-add; constraint name is the implicit
+    -- table-name-based default ("wage_type_mappings_pkey").
+    ALTER TABLE wage_type_mappings
+    DROP CONSTRAINT IF EXISTS wage_type_mappings_pkey;
+
+    ALTER TABLE wage_type_mappings
+    ADD CONSTRAINT wage_type_mappings_pkey PRIMARY KEY (mapping_id);
+
+    -- At most one open row per natural key (current-row uniqueness).
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_wtm_natural_key_open
+        ON wage_type_mappings (time_type, ok_version, agreement_code, position)
+        WHERE effective_to IS NULL;
+
+    -- ADR-020 D3 conflict target: forbids duplicate history rows on the same
+    -- natural key + effective_from tuple, including across closed predecessors.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_wtm_natural_key_history
+        ON wage_type_mappings (time_type, ok_version, agreement_code, position, effective_from);
+
+    -- Step (c): widen audit-action CHECK to include SUPERSEDED. CHECK
+    -- constraints don't support IF NOT EXISTS on ADD; use conditional
+    -- DROP-if-exists + ADD with a v2 name (mirrors S22 D9 audit-action
+    -- widening pattern at local_agreement_profile_audit).
+    ALTER TABLE wage_type_mapping_audit
+    DROP CONSTRAINT IF EXISTS wage_type_mapping_audit_action_check;
+
+    ALTER TABLE wage_type_mapping_audit
+    DROP CONSTRAINT IF EXISTS wage_type_mapping_audit_action_check_v2;
+
+    ALTER TABLE wage_type_mapping_audit
+    ADD CONSTRAINT wage_type_mapping_audit_action_check_v2
+    CHECK (action IN ('CREATED', 'UPDATED', 'DELETED', 'SUPERSEDED'));
+END
+$$;
