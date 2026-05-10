@@ -294,8 +294,15 @@ public static class WageTypeMappingEndpoints
                 await using var tx = await conn.BeginTransactionAsync(ct);
                 try
                 {
-                    var success = await repo.DeleteAsync(
-                        conn, tx, timeType, okVersion, agreementCode, pos, expectedVersion, ct);
+                    // S29 / TASK-2904: hard DeleteAsync(conn, tx, ..., expectedVersion) was
+                    // replaced by SoftDeleteAsync (sets effective_to = today on the open row)
+                    // per ADR-020 D2. Replay determinism preserved — past forward-calcs against
+                    // the (then-open) row continue to read the closed row via GetByKeyAtAsync.
+                    // Full TASK-2908 endpoint rewrite (POST 3-case routing, same-day-only-edit
+                    // validator) lands separately; this migration closes only the DELETE site.
+                    var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+                    var success = await repo.SoftDeleteAsync(
+                        conn, tx, timeType, okVersion, agreementCode, pos, expectedVersion, today, ct);
                     if (!success)
                     {
                         // Row vanished between pre-check and our FOR UPDATE — surface 404.
