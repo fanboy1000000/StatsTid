@@ -113,7 +113,7 @@ internal static class TestFixtures
                 """
                 INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, position, description)
                 VALUES (@t, @w, @ok, 'HK', '', NULL)
-                ON CONFLICT DO NOTHING
+                ON CONFLICT (time_type, ok_version, agreement_code, position) WHERE effective_to IS NULL DO NOTHING
                 """, conn);
             cmd.Parameters.AddWithValue("t", r.TimeType);
             cmd.Parameters.AddWithValue("w", r.WageType);
@@ -328,6 +328,7 @@ internal static class TestFixtures
             );
 
             CREATE TABLE IF NOT EXISTS wage_type_mappings (
+                mapping_id      UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
                 time_type       TEXT        NOT NULL,
                 wage_type       TEXT        NOT NULL,
                 ok_version      TEXT        NOT NULL,
@@ -335,8 +336,14 @@ internal static class TestFixtures
                 position        TEXT        NOT NULL DEFAULT '',
                 description     TEXT,
                 created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                PRIMARY KEY (time_type, ok_version, agreement_code, position)
+                version         BIGINT      NOT NULL DEFAULT 1,
+                effective_from  DATE        NOT NULL DEFAULT '2020-01-01',
+                effective_to    DATE
             );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_wtm_natural_key_open
+                ON wage_type_mappings (time_type, ok_version, agreement_code, position)
+                WHERE effective_to IS NULL;
             """;
 
         public PostgreSqlContainer Container { get; }

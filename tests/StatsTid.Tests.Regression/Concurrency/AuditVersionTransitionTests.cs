@@ -212,17 +212,18 @@ public sealed class AuditVersionTransitionTests : IAsyncLifetime
         }
         Assert.Equal(2L, updateVersion);
 
-        // DELETE — v3 mutate + v3 audit (2, 2). The version-at-point-of-deletion convention
-        // is captured by the endpoint passing `versionBefore=2, versionAfter=2` (NOT a
-        // post-delete version since there is no post-delete entity).
+        // DELETE — S29 / TASK-2904: hard DeleteAsync replaced by SoftDeleteAsync per
+        // ADR-020 D2. Audit semantic unchanged: versionBefore=2, versionAfter=2 because
+        // soft-close doesn't bump version; the row is preserved with effective_to set.
         await using (var conn = _harness.Factory.Create())
         {
             await conn.OpenAsync();
             await using var tx = await conn.BeginTransactionAsync();
-            var deleted = await _wageTypeMappingRepo.DeleteAsync(
+            var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+            var deleted = await _wageTypeMappingRepo.SoftDeleteAsync(
                 conn, tx,
                 seed.TimeType, seed.OkVersion, seed.AgreementCode, seed.Position,
-                expectedVersion: 2);
+                expectedVersion: 2, closeDate: today);
             Assert.True(deleted);
             await _wageTypeMappingRepo.AppendAuditAsync(
                 conn, tx,

@@ -153,12 +153,14 @@ public sealed class WageTypeMappingAtomicTests : IAsyncLifetime
         await _repo.CreateAsync(seed);
         var streamId = $"wage-type-mapping-{AgreementCode}-{OkVersion}-{seed.TimeType}";
 
-        // S25 / TASK-2505: v3 DeleteAsync(conn, tx, ..., expectedVersion, ...) requires the
-        // row's current version. Read it back via the same path the HTTP endpoint uses
-        // (GET → If-Match → DELETE).
+        // S29 / TASK-2904: hard DeleteAsync(conn, tx, ..., expectedVersion) was replaced by
+        // SoftDeleteAsync(conn, tx, ..., expectedVersion, closeDate) per ADR-020 D2. The
+        // forced-rollback semantic is unchanged — when the surrounding tx rolls back, the
+        // soft-close is undone and the row stays open.
         var preMapping = await _repo.GetByKeyAsync(seed.TimeType, seed.OkVersion, seed.AgreementCode, seed.Position);
         Assert.NotNull(preMapping);
         var expectedVersion = preMapping!.Version;
+        var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
         {
@@ -166,8 +168,8 @@ public sealed class WageTypeMappingAtomicTests : IAsyncLifetime
             await conn.OpenAsync();
             await using var tx = await conn.BeginTransactionAsync();
 
-            var success = await _repo.DeleteAsync(
-                conn, tx, seed.TimeType, seed.OkVersion, seed.AgreementCode, seed.Position, expectedVersion);
+            var success = await _repo.SoftDeleteAsync(
+                conn, tx, seed.TimeType, seed.OkVersion, seed.AgreementCode, seed.Position, expectedVersion, today);
             Assert.True(success);
             await _repo.AppendAuditAsync(
                 conn, tx,

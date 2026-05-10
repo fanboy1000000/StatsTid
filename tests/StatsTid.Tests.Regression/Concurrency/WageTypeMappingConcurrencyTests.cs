@@ -98,14 +98,17 @@ public sealed class WageTypeMappingConcurrencyTests : IAsyncLifetime
             await tx.CommitAsync();
         }
 
+        // S29 / TASK-2904: hard DeleteAsync replaced by SoftDeleteAsync per ADR-020 D2.
+        // Stale-If-Match contract preserved — OptimisticConcurrencyException still thrown.
         var ex = await Assert.ThrowsAsync<OptimisticConcurrencyException>(async () =>
         {
             await using var conn = _harness.Factory.Create();
             await conn.OpenAsync();
             await using var tx = await conn.BeginTransactionAsync();
-            await _repo.DeleteAsync(
+            var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+            await _repo.SoftDeleteAsync(
                 conn, tx, seed.TimeType, seed.OkVersion, seed.AgreementCode, seed.Position,
-                expectedVersion: 1);
+                expectedVersion: 1, closeDate: today);
             await tx.CommitAsync();
         });
         Assert.Equal(1L, ex.ExpectedVersion);

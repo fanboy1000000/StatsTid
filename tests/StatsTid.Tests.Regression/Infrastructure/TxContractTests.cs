@@ -211,7 +211,7 @@ public sealed class TxContractTests : IAsyncLifetime
             ok_version      TEXT        NOT NULL,
             agreement_code  TEXT        NOT NULL,
             position        TEXT        NOT NULL DEFAULT '',
-            action          TEXT        NOT NULL CHECK (action IN ('CREATED', 'UPDATED', 'DELETED')),
+            action          TEXT        NOT NULL CHECK (action IN ('CREATED', 'UPDATED', 'DELETED', 'SUPERSEDED')),
             previous_data   JSONB,
             new_data        JSONB,
             actor_id        TEXT        NOT NULL,
@@ -735,33 +735,36 @@ public sealed class TxContractTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task WageTypeMappingRepo_DeleteAsync_ParticipatesInCallerTx()
+    public async Task WageTypeMappingRepo_SoftDeleteAsync_ParticipatesInCallerTx()
     {
         var repo = new WageTypeMappingRepository(_harness.Factory);
         var mapping = NewWageTypeMapping("TT_DELETE_TEST_1");
         await repo.CreateAsync(mapping);
 
-        // S25 / TASK-2505: v3 DeleteAsync(conn, tx, ..., expectedVersion, ...) requires the
-        // row's current version.
+        // S29 / TASK-2904: hard DeleteAsync(conn, tx, ..., expectedVersion) was replaced by
+        // SoftDeleteAsync(conn, tx, ..., expectedVersion, closeDate) per ADR-020 D2 — the row
+        // is preserved with effective_to set instead of removed. Tx semantics unchanged.
         var preMapping = await repo.GetByKeyAsync(mapping.TimeType, mapping.OkVersion, mapping.AgreementCode, mapping.Position);
         Assert.NotNull(preMapping);
         var expectedVersion = preMapping!.Version;
+        var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
 
         await using var conn = _harness.Factory.Create();
         await conn.OpenAsync();
         await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
 
-        var ok = await repo.DeleteAsync(conn, tx, mapping.TimeType, mapping.OkVersion, mapping.AgreementCode, mapping.Position, expectedVersion);
+        var ok = await repo.SoftDeleteAsync(conn, tx, mapping.TimeType, mapping.OkVersion, mapping.AgreementCode, mapping.Position, expectedVersion, today);
         Assert.True(ok);
         await AssertTxStillUsable(conn, tx);
+        // Inside tx: row is closed (effective_to = today, no longer "open").
         Assert.Equal(0L, await CountInsideTx(
             conn, tx,
-            "SELECT COUNT(*) FROM wage_type_mappings WHERE time_type = @id",
+            "SELECT COUNT(*) FROM wage_type_mappings WHERE time_type = @id AND effective_to IS NULL",
             mapping.TimeType));
         await tx.RollbackAsync();
-        // After rollback the row is back.
+        // After rollback the row is open again.
         Assert.Equal(1L, await ScalarFreshConn<long>(
-            "SELECT COUNT(*) FROM wage_type_mappings WHERE time_type = @id", mapping.TimeType));
+            "SELECT COUNT(*) FROM wage_type_mappings WHERE time_type = @id AND effective_to IS NULL", mapping.TimeType));
     }
 
     [Fact]

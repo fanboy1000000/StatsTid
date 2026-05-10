@@ -36,6 +36,7 @@ public sealed class WageTypeMappingRegressionTests : IAsyncLifetime
     // docker/postgres/init.sql:74-83 so a schema drift will cause test failure.
     private const string SchemaDdl = """
         CREATE TABLE IF NOT EXISTS wage_type_mappings (
+            mapping_id      UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
             time_type       TEXT        NOT NULL,
             wage_type       TEXT        NOT NULL,
             ok_version      TEXT        NOT NULL,
@@ -43,8 +44,14 @@ public sealed class WageTypeMappingRegressionTests : IAsyncLifetime
             position        TEXT        NOT NULL DEFAULT '',
             description     TEXT,
             created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            PRIMARY KEY (time_type, ok_version, agreement_code, position)
+            version         BIGINT      NOT NULL DEFAULT 1,
+            effective_from  DATE        NOT NULL DEFAULT '2020-01-01',
+            effective_to    DATE
         );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_wtm_natural_key_open
+            ON wage_type_mappings (time_type, ok_version, agreement_code, position)
+            WHERE effective_to IS NULL;
         """;
 
     private PostgreSqlContainer _container = null!;
