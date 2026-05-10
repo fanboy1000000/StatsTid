@@ -1,3 +1,5 @@
+using StatsTid.SharedKernel.Models;
+
 namespace StatsTid.SharedKernel.Segmentation;
 
 /// <summary>
@@ -42,6 +44,13 @@ public static class PeriodPlanner
     /// <param name="ruleSet">Resolved rule classifications consumed by this calculation.</param>
     /// <param name="sources">Pre-hydrated boundary sources + non-dated source values for snapshots.</param>
     /// <param name="options">Planner call-site options (e.g., upstream alignment).</param>
+    /// <param name="enrollment">ADR-020 D1: optional non-rule snapshot enrollment. When
+    /// non-null AND <paramref name="profile"/> is non-null, registered hydrators run per
+    /// segment and their results merge into <see cref="SegmentSnapshot.Values"/>. Null
+    /// for test-direct call-sites that construct <see cref="BoundarySources"/> directly.</param>
+    /// <param name="profile">ADR-020 D1: optional <see cref="EmploymentProfile"/> fed to
+    /// each enrollment hydrator. Same profile is re-used across all segments (D1.5
+    /// uniform-per-plan binding). Null skips hydrator invocation silently.</param>
     /// <returns>A <see cref="PlannedCalculation"/> ready for evaluation by
     /// <c>PeriodCalculationService.CalculateAsync</c>.</returns>
     /// <exception cref="PlannerInvariantViolation">Thrown when geometric invariants
@@ -54,7 +63,9 @@ public static class PeriodPlanner
         string calculationKind,
         IReadOnlyList<RuleClassification> ruleSet,
         BoundarySources sources,
-        PlannerOptions options)
+        PlannerOptions options,
+        IPlannerEnrollment? enrollment = null,
+        EmploymentProfile? profile = null)
     {
         ArgumentNullException.ThrowIfNull(ruleSet);
         ArgumentNullException.ThrowIfNull(sources);
@@ -119,15 +130,34 @@ public static class PeriodPlanner
         }
 
         // --- 4. Gather snapshots per segment ---
-        // If any rule in ruleSet has a SnapshotContract, every segment carries a snapshot
-        // populated from sources.NonDatedSourceValues; otherwise Snapshot is null.
-        // Per ADR-016 D5b: a single snapshot per segment is sufficient because non-dated
-        // sources are time-invariant within a calculation run; the segment dimension is
-        // there for symmetry with future versioned-history work (Phase 4).
-        var anyContract = HasAnySnapshotContract(ruleSet);
-        SegmentSnapshot? sharedSnapshot = anyContract
-            ? new SegmentSnapshot(sources.NonDatedSourceValues)
-            : null;
+        // If any rule in ruleSet has a SnapshotContract, OR a non-rule enrollment is
+        // active with a non-null profile (ADR-020 D1), every segment carries a snapshot;
+        // otherwise Snapshot is null. Per ADR-016 D5b: a single snapshot per segment is
+        // sufficient because non-dated sources are time-invariant within a calculation
+        // run; the segment dimension is there for symmetry with future versioned-history
+        // work (Phase 4). ADR-020 D1.5: enrollment hydrators run uniformly per plan
+        // (same profile reused across segments today; per-segment evolution is a
+        // forward-compat seam, not a today binding).
+        var anyContract = HasAnySnapshotContract(ruleSet, enrollment);
+        var enrollmentActive = enrollment is not null && profile is not null;
+        SegmentSnapshot? sharedSnapshot = null;
+        if (anyContract || enrollmentActive)
+        {
+            // Build a merged values dictionary so the externally-visible Values stays an
+            // IReadOnlyDictionary; rule-declared non-dated source values land first,
+            // then enrollment-injected entries layer on top at well-known keys (e.g.
+            // S29 uses "WtmNaturalKey"). Rule-declared keys do not overlap with
+            // enrollment keys by design — rules don't declare enrollment contract keys.
+            var merged = new Dictionary<string, object?>(sources.NonDatedSourceValues);
+            if (enrollmentActive)
+            {
+                foreach (var (contractKey, hydrator) in enrollment!.GetEnrollments())
+                {
+                    merged[contractKey] = hydrator(profile!);
+                }
+            }
+            sharedSnapshot = new SegmentSnapshot(merged);
+        }
 
         foreach (var r in ranges)
         {
@@ -272,13 +302,21 @@ public static class PeriodPlanner
         return false;
     }
 
-    private static bool HasAnySnapshotContract(IReadOnlyList<RuleClassification> ruleSet)
+    private static bool HasAnySnapshotContract(
+        IReadOnlyList<RuleClassification> ruleSet,
+        IPlannerEnrollment? enrollment)
     {
         for (int i = 0; i < ruleSet.Count; i++)
         {
             if (ruleSet[i].SnapshotContract is not null)
                 return true;
         }
+        // ADR-020 D1 component 3: the gate also fires when a non-rule consumer has
+        // registered any enrollment. The hydrator-invocation gate (enrollmentActive
+        // at the call-site) additionally requires a non-null profile to actually run
+        // the hydrator; this method answers the rule-side question alone.
+        if (enrollment is not null && enrollment.GetEnrollments().Count > 0)
+            return true;
         return false;
     }
 

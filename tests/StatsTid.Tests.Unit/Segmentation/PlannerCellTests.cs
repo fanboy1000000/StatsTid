@@ -219,4 +219,37 @@ public sealed class PlannerCellTests
         Assert.Equal(BoundaryCause.OkTransition, plan.Segments[1].BoundaryCause);
         Assert.Equal(MergeStrategyKind.Custom, flexBalanceClassification.MergeStrategy.Kind);
     }
+
+    /// <summary>
+    /// ADR-020 D1 backward-compat: direct-planner test call-sites that omit the new
+    /// optional <c>enrollment</c> + <c>profile</c> parameters (or pass null) must still
+    /// produce a valid <see cref="PlannedCalculation"/>. With no rule snapshot contracts
+    /// AND null enrollment, the snapshot gate stays closed → segments[0].Snapshot is
+    /// null. This pins the ~20 existing direct-planner test call-sites' invariant.
+    /// </summary>
+    [Fact]
+    public void Plan_WithNullEnrollmentAndNullProfile_AllocatesNoSnapshot()
+    {
+        var noContractRule = new RuleClassification(
+            RuleId: "NO_CONTRACT_RULE",
+            Span: Span.Entry,
+            SplitBehavior: SplitBehavior.SegmentSafe,
+            Family: Family.Calculation,
+            MergeStrategy: MergeStrategy.Concatenate,
+            SnapshotContract: null);
+
+        var plan = PeriodPlanner.Plan(
+            employeeId: "EMP-NO-ENROLL",
+            periodStart: new DateOnly(2026, 5, 1),
+            periodEnd: new DateOnly(2026, 5, 7),
+            calculationKind: "forward-calc",
+            ruleSet: new[] { noContractRule },
+            sources: BoundarySources.Empty,
+            options: PlannerOptions.Default,
+            enrollment: null,
+            profile: null);
+
+        Assert.Single(plan.Segments);
+        Assert.Null(plan.Segments[0].Snapshot);
+    }
 }
