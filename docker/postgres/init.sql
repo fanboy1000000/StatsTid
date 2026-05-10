@@ -195,146 +195,146 @@ INSERT INTO rule_versions (rule_id, ok_version, rule_name, agreement_code, effec
 ON CONFLICT DO NOTHING;
 
 -- Seed OK24 wage type mappings
-INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, description) VALUES
+INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, description, effective_from) VALUES
     -- Normal hours (all agreements)
-    ('NORMAL_HOURS', 'SLS_0110', 'OK24', 'AC', 'Normal working hours'),
-    ('NORMAL_HOURS', 'SLS_0110', 'OK24', 'HK', 'Normal working hours'),
-    ('NORMAL_HOURS', 'SLS_0110', 'OK24', 'PROSA', 'Normal working hours'),
+    ('NORMAL_HOURS', 'SLS_0110', 'OK24', 'AC', 'Normal working hours', '2020-01-01'),
+    ('NORMAL_HOURS', 'SLS_0110', 'OK24', 'HK', 'Normal working hours', '2020-01-01'),
+    ('NORMAL_HOURS', 'SLS_0110', 'OK24', 'PROSA', 'Normal working hours', '2020-01-01'),
     -- Overtime (HK/PROSA)
-    ('OVERTIME_50', 'SLS_0210', 'OK24', 'HK', 'Overtime at 50% supplement'),
-    ('OVERTIME_50', 'SLS_0210', 'OK24', 'PROSA', 'Overtime at 50% supplement'),
-    ('OVERTIME_100', 'SLS_0220', 'OK24', 'HK', 'Overtime at 100% supplement'),
-    ('OVERTIME_100', 'SLS_0220', 'OK24', 'PROSA', 'Overtime at 100% supplement'),
+    ('OVERTIME_50', 'SLS_0210', 'OK24', 'HK', 'Overtime at 50% supplement', '2020-01-01'),
+    ('OVERTIME_50', 'SLS_0210', 'OK24', 'PROSA', 'Overtime at 50% supplement', '2020-01-01'),
+    ('OVERTIME_100', 'SLS_0220', 'OK24', 'HK', 'Overtime at 100% supplement', '2020-01-01'),
+    ('OVERTIME_100', 'SLS_0220', 'OK24', 'PROSA', 'Overtime at 100% supplement', '2020-01-01'),
     -- Merarbejde (AC only)
-    ('MERARBEJDE', 'SLS_0310', 'OK24', 'AC', 'Extra work (merarbejde)'),
+    ('MERARBEJDE', 'SLS_0310', 'OK24', 'AC', 'Extra work (merarbejde)', '2020-01-01'),
     -- Supplements (HK/PROSA)
-    ('EVENING_SUPPLEMENT', 'SLS_0410', 'OK24', 'HK', 'Evening supplement 17-23'),
-    ('EVENING_SUPPLEMENT', 'SLS_0410', 'OK24', 'PROSA', 'Evening supplement 17-23'),
-    ('NIGHT_SUPPLEMENT', 'SLS_0420', 'OK24', 'HK', 'Night supplement 23-06'),
-    ('NIGHT_SUPPLEMENT', 'SLS_0420', 'OK24', 'PROSA', 'Night supplement 23-06'),
-    ('WEEKEND_SUPPLEMENT', 'SLS_0430', 'OK24', 'HK', 'Weekend supplement'),
-    ('WEEKEND_SUPPLEMENT', 'SLS_0430', 'OK24', 'PROSA', 'Weekend supplement'),
-    ('HOLIDAY_SUPPLEMENT', 'SLS_0440', 'OK24', 'HK', 'Public holiday supplement'),
-    ('HOLIDAY_SUPPLEMENT', 'SLS_0440', 'OK24', 'PROSA', 'Public holiday supplement'),
+    ('EVENING_SUPPLEMENT', 'SLS_0410', 'OK24', 'HK', 'Evening supplement 17-23', '2020-01-01'),
+    ('EVENING_SUPPLEMENT', 'SLS_0410', 'OK24', 'PROSA', 'Evening supplement 17-23', '2020-01-01'),
+    ('NIGHT_SUPPLEMENT', 'SLS_0420', 'OK24', 'HK', 'Night supplement 23-06', '2020-01-01'),
+    ('NIGHT_SUPPLEMENT', 'SLS_0420', 'OK24', 'PROSA', 'Night supplement 23-06', '2020-01-01'),
+    ('WEEKEND_SUPPLEMENT', 'SLS_0430', 'OK24', 'HK', 'Weekend supplement', '2020-01-01'),
+    ('WEEKEND_SUPPLEMENT', 'SLS_0430', 'OK24', 'PROSA', 'Weekend supplement', '2020-01-01'),
+    ('HOLIDAY_SUPPLEMENT', 'SLS_0440', 'OK24', 'HK', 'Public holiday supplement', '2020-01-01'),
+    ('HOLIDAY_SUPPLEMENT', 'SLS_0440', 'OK24', 'PROSA', 'Public holiday supplement', '2020-01-01'),
     -- Absence types (all agreements)
-    ('VACATION', 'SLS_0510', 'OK24', 'AC', 'Vacation'),
-    ('VACATION', 'SLS_0510', 'OK24', 'HK', 'Vacation'),
-    ('VACATION', 'SLS_0510', 'OK24', 'PROSA', 'Vacation'),
-    ('CARE_DAY', 'SLS_0520', 'OK24', 'AC', 'Care day'),
-    ('CARE_DAY', 'SLS_0520', 'OK24', 'HK', 'Care day'),
-    ('CARE_DAY', 'SLS_0520', 'OK24', 'PROSA', 'Care day'),
-    ('CHILD_SICK_DAY', 'SLS_0530', 'OK24', 'AC', 'Childs 1st sick day'),
-    ('CHILD_SICK_DAY', 'SLS_0530', 'OK24', 'HK', 'Childs 1st sick day'),
-    ('CHILD_SICK_DAY', 'SLS_0530', 'OK24', 'PROSA', 'Childs 1st sick day'),
-    ('PARENTAL_LEAVE', 'SLS_0540', 'OK24', 'AC', 'Parental leave'),
-    ('PARENTAL_LEAVE', 'SLS_0540', 'OK24', 'HK', 'Parental leave'),
-    ('PARENTAL_LEAVE', 'SLS_0540', 'OK24', 'PROSA', 'Parental leave'),
-    ('SENIOR_DAY', 'SLS_0550', 'OK24', 'AC', 'Senior day'),
-    ('SENIOR_DAY', 'SLS_0550', 'OK24', 'HK', 'Senior day'),
-    ('SENIOR_DAY', 'SLS_0550', 'OK24', 'PROSA', 'Senior day'),
-    ('LEAVE_WITHOUT_PAY', 'SLS_0560', 'OK24', 'AC', 'Leave without pay'),
-    ('LEAVE_WITHOUT_PAY', 'SLS_0560', 'OK24', 'HK', 'Leave without pay'),
-    ('LEAVE_WITHOUT_PAY', 'SLS_0560', 'OK24', 'PROSA', 'Leave without pay'),
-    ('CHILD_SICK_DAY_2', 'SLS_0531', 'OK24', 'AC', 'Childs 2nd sick day'),
-    ('CHILD_SICK_DAY_2', 'SLS_0531', 'OK24', 'HK', 'Childs 2nd sick day'),
-    ('CHILD_SICK_DAY_2', 'SLS_0531', 'OK24', 'PROSA', 'Childs 2nd sick day'),
-    ('CHILD_SICK_DAY_3', 'SLS_0532', 'OK24', 'AC', 'Childs 3rd sick day'),
-    ('CHILD_SICK_DAY_3', 'SLS_0532', 'OK24', 'HK', 'Childs 3rd sick day'),
-    ('CHILD_SICK_DAY_3', 'SLS_0532', 'OK24', 'PROSA', 'Childs 3rd sick day'),
-    ('SPECIAL_HOLIDAY_ALLOWANCE', 'SLS_0570', 'OK24', 'AC', 'Special holiday allowance'),
-    ('SPECIAL_HOLIDAY_ALLOWANCE', 'SLS_0570', 'OK24', 'HK', 'Special holiday allowance'),
-    ('SPECIAL_HOLIDAY_ALLOWANCE', 'SLS_0570', 'OK24', 'PROSA', 'Special holiday allowance'),
-    ('LEAVE_WITH_PAY', 'SLS_0565', 'OK24', 'AC', 'Leave with pay'),
-    ('LEAVE_WITH_PAY', 'SLS_0565', 'OK24', 'HK', 'Leave with pay'),
-    ('LEAVE_WITH_PAY', 'SLS_0565', 'OK24', 'PROSA', 'Leave with pay'),
+    ('VACATION', 'SLS_0510', 'OK24', 'AC', 'Vacation', '2020-01-01'),
+    ('VACATION', 'SLS_0510', 'OK24', 'HK', 'Vacation', '2020-01-01'),
+    ('VACATION', 'SLS_0510', 'OK24', 'PROSA', 'Vacation', '2020-01-01'),
+    ('CARE_DAY', 'SLS_0520', 'OK24', 'AC', 'Care day', '2020-01-01'),
+    ('CARE_DAY', 'SLS_0520', 'OK24', 'HK', 'Care day', '2020-01-01'),
+    ('CARE_DAY', 'SLS_0520', 'OK24', 'PROSA', 'Care day', '2020-01-01'),
+    ('CHILD_SICK_DAY', 'SLS_0530', 'OK24', 'AC', 'Childs 1st sick day', '2020-01-01'),
+    ('CHILD_SICK_DAY', 'SLS_0530', 'OK24', 'HK', 'Childs 1st sick day', '2020-01-01'),
+    ('CHILD_SICK_DAY', 'SLS_0530', 'OK24', 'PROSA', 'Childs 1st sick day', '2020-01-01'),
+    ('PARENTAL_LEAVE', 'SLS_0540', 'OK24', 'AC', 'Parental leave', '2020-01-01'),
+    ('PARENTAL_LEAVE', 'SLS_0540', 'OK24', 'HK', 'Parental leave', '2020-01-01'),
+    ('PARENTAL_LEAVE', 'SLS_0540', 'OK24', 'PROSA', 'Parental leave', '2020-01-01'),
+    ('SENIOR_DAY', 'SLS_0550', 'OK24', 'AC', 'Senior day', '2020-01-01'),
+    ('SENIOR_DAY', 'SLS_0550', 'OK24', 'HK', 'Senior day', '2020-01-01'),
+    ('SENIOR_DAY', 'SLS_0550', 'OK24', 'PROSA', 'Senior day', '2020-01-01'),
+    ('LEAVE_WITHOUT_PAY', 'SLS_0560', 'OK24', 'AC', 'Leave without pay', '2020-01-01'),
+    ('LEAVE_WITHOUT_PAY', 'SLS_0560', 'OK24', 'HK', 'Leave without pay', '2020-01-01'),
+    ('LEAVE_WITHOUT_PAY', 'SLS_0560', 'OK24', 'PROSA', 'Leave without pay', '2020-01-01'),
+    ('CHILD_SICK_DAY_2', 'SLS_0531', 'OK24', 'AC', 'Childs 2nd sick day', '2020-01-01'),
+    ('CHILD_SICK_DAY_2', 'SLS_0531', 'OK24', 'HK', 'Childs 2nd sick day', '2020-01-01'),
+    ('CHILD_SICK_DAY_2', 'SLS_0531', 'OK24', 'PROSA', 'Childs 2nd sick day', '2020-01-01'),
+    ('CHILD_SICK_DAY_3', 'SLS_0532', 'OK24', 'AC', 'Childs 3rd sick day', '2020-01-01'),
+    ('CHILD_SICK_DAY_3', 'SLS_0532', 'OK24', 'HK', 'Childs 3rd sick day', '2020-01-01'),
+    ('CHILD_SICK_DAY_3', 'SLS_0532', 'OK24', 'PROSA', 'Childs 3rd sick day', '2020-01-01'),
+    ('SPECIAL_HOLIDAY_ALLOWANCE', 'SLS_0570', 'OK24', 'AC', 'Special holiday allowance', '2020-01-01'),
+    ('SPECIAL_HOLIDAY_ALLOWANCE', 'SLS_0570', 'OK24', 'HK', 'Special holiday allowance', '2020-01-01'),
+    ('SPECIAL_HOLIDAY_ALLOWANCE', 'SLS_0570', 'OK24', 'PROSA', 'Special holiday allowance', '2020-01-01'),
+    ('LEAVE_WITH_PAY', 'SLS_0565', 'OK24', 'AC', 'Leave with pay', '2020-01-01'),
+    ('LEAVE_WITH_PAY', 'SLS_0565', 'OK24', 'HK', 'Leave with pay', '2020-01-01'),
+    ('LEAVE_WITH_PAY', 'SLS_0565', 'OK24', 'PROSA', 'Leave with pay', '2020-01-01'),
     -- Flex payout
-    ('FLEX_PAYOUT', 'SLS_0610', 'OK24', 'AC', 'Flex balance auto-payout'),
-    ('FLEX_PAYOUT', 'SLS_0610', 'OK24', 'HK', 'Flex balance auto-payout'),
-    ('FLEX_PAYOUT', 'SLS_0610', 'OK24', 'PROSA', 'Flex balance auto-payout'),
+    ('FLEX_PAYOUT', 'SLS_0610', 'OK24', 'AC', 'Flex balance auto-payout', '2020-01-01'),
+    ('FLEX_PAYOUT', 'SLS_0610', 'OK24', 'HK', 'Flex balance auto-payout', '2020-01-01'),
+    ('FLEX_PAYOUT', 'SLS_0610', 'OK24', 'PROSA', 'Flex balance auto-payout', '2020-01-01'),
     -- On-call duty (rådighedsvagt)
-    ('ON_CALL_DUTY', 'SLS_0710', 'OK24', 'AC', 'On-call duty compensation'),
-    ('ON_CALL_DUTY', 'SLS_0710', 'OK24', 'HK', 'On-call duty compensation'),
-    ('ON_CALL_DUTY', 'SLS_0710', 'OK24', 'PROSA', 'On-call duty compensation'),
+    ('ON_CALL_DUTY', 'SLS_0710', 'OK24', 'AC', 'On-call duty compensation', '2020-01-01'),
+    ('ON_CALL_DUTY', 'SLS_0710', 'OK24', 'HK', 'On-call duty compensation', '2020-01-01'),
+    ('ON_CALL_DUTY', 'SLS_0710', 'OK24', 'PROSA', 'On-call duty compensation', '2020-01-01'),
     -- Call-in work (tilkald) — HK/PROSA enabled, AC disabled but mapped for completeness
-    ('CALL_IN_WORK', 'SLS_0810', 'OK24', 'AC', 'Call-in work compensation'),
-    ('CALL_IN_WORK', 'SLS_0810', 'OK24', 'HK', 'Call-in work compensation'),
-    ('CALL_IN_WORK', 'SLS_0810', 'OK24', 'PROSA', 'Call-in work compensation'),
+    ('CALL_IN_WORK', 'SLS_0810', 'OK24', 'AC', 'Call-in work compensation', '2020-01-01'),
+    ('CALL_IN_WORK', 'SLS_0810', 'OK24', 'HK', 'Call-in work compensation', '2020-01-01'),
+    ('CALL_IN_WORK', 'SLS_0810', 'OK24', 'PROSA', 'Call-in work compensation', '2020-01-01'),
     -- Travel time (rejsetid)
-    ('TRAVEL_WORK', 'SLS_0820', 'OK24', 'AC', 'Working travel time'),
-    ('TRAVEL_WORK', 'SLS_0820', 'OK24', 'HK', 'Working travel time'),
-    ('TRAVEL_WORK', 'SLS_0820', 'OK24', 'PROSA', 'Working travel time'),
-    ('TRAVEL_NON_WORK', 'SLS_0830', 'OK24', 'AC', 'Non-working travel time'),
-    ('TRAVEL_NON_WORK', 'SLS_0830', 'OK24', 'HK', 'Non-working travel time'),
-    ('TRAVEL_NON_WORK', 'SLS_0830', 'OK24', 'PROSA', 'Non-working travel time')
-ON CONFLICT DO NOTHING;
+    ('TRAVEL_WORK', 'SLS_0820', 'OK24', 'AC', 'Working travel time', '2020-01-01'),
+    ('TRAVEL_WORK', 'SLS_0820', 'OK24', 'HK', 'Working travel time', '2020-01-01'),
+    ('TRAVEL_WORK', 'SLS_0820', 'OK24', 'PROSA', 'Working travel time', '2020-01-01'),
+    ('TRAVEL_NON_WORK', 'SLS_0830', 'OK24', 'AC', 'Non-working travel time', '2020-01-01'),
+    ('TRAVEL_NON_WORK', 'SLS_0830', 'OK24', 'HK', 'Non-working travel time', '2020-01-01'),
+    ('TRAVEL_NON_WORK', 'SLS_0830', 'OK24', 'PROSA', 'Non-working travel time', '2020-01-01')
+ON CONFLICT (time_type, ok_version, agreement_code, position, effective_from) DO NOTHING;
 
 -- Seed OK26 wage type mappings (identical to OK24 for now)
-INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, description) VALUES
-    ('NORMAL_HOURS', 'SLS_0110', 'OK26', 'AC', 'Normal working hours'),
-    ('NORMAL_HOURS', 'SLS_0110', 'OK26', 'HK', 'Normal working hours'),
-    ('NORMAL_HOURS', 'SLS_0110', 'OK26', 'PROSA', 'Normal working hours'),
-    ('OVERTIME_50', 'SLS_0210', 'OK26', 'HK', 'Overtime at 50% supplement'),
-    ('OVERTIME_50', 'SLS_0210', 'OK26', 'PROSA', 'Overtime at 50% supplement'),
-    ('OVERTIME_100', 'SLS_0220', 'OK26', 'HK', 'Overtime at 100% supplement'),
-    ('OVERTIME_100', 'SLS_0220', 'OK26', 'PROSA', 'Overtime at 100% supplement'),
-    ('MERARBEJDE', 'SLS_0310', 'OK26', 'AC', 'Extra work (merarbejde)'),
-    ('EVENING_SUPPLEMENT', 'SLS_0410', 'OK26', 'HK', 'Evening supplement 17-23'),
-    ('EVENING_SUPPLEMENT', 'SLS_0410', 'OK26', 'PROSA', 'Evening supplement 17-23'),
-    ('NIGHT_SUPPLEMENT', 'SLS_0420', 'OK26', 'HK', 'Night supplement 23-06'),
-    ('NIGHT_SUPPLEMENT', 'SLS_0420', 'OK26', 'PROSA', 'Night supplement 23-06'),
-    ('WEEKEND_SUPPLEMENT', 'SLS_0430', 'OK26', 'HK', 'Weekend supplement'),
-    ('WEEKEND_SUPPLEMENT', 'SLS_0430', 'OK26', 'PROSA', 'Weekend supplement'),
-    ('HOLIDAY_SUPPLEMENT', 'SLS_0440', 'OK26', 'HK', 'Public holiday supplement'),
-    ('HOLIDAY_SUPPLEMENT', 'SLS_0440', 'OK26', 'PROSA', 'Public holiday supplement'),
-    ('VACATION', 'SLS_0510', 'OK26', 'AC', 'Vacation'),
-    ('VACATION', 'SLS_0510', 'OK26', 'HK', 'Vacation'),
-    ('VACATION', 'SLS_0510', 'OK26', 'PROSA', 'Vacation'),
-    ('CARE_DAY', 'SLS_0520', 'OK26', 'AC', 'Care day'),
-    ('CARE_DAY', 'SLS_0520', 'OK26', 'HK', 'Care day'),
-    ('CARE_DAY', 'SLS_0520', 'OK26', 'PROSA', 'Care day'),
-    ('CHILD_SICK_DAY', 'SLS_0530', 'OK26', 'AC', 'Childs 1st sick day'),
-    ('CHILD_SICK_DAY', 'SLS_0530', 'OK26', 'HK', 'Childs 1st sick day'),
-    ('CHILD_SICK_DAY', 'SLS_0530', 'OK26', 'PROSA', 'Childs 1st sick day'),
-    ('PARENTAL_LEAVE', 'SLS_0540', 'OK26', 'AC', 'Parental leave'),
-    ('PARENTAL_LEAVE', 'SLS_0540', 'OK26', 'HK', 'Parental leave'),
-    ('PARENTAL_LEAVE', 'SLS_0540', 'OK26', 'PROSA', 'Parental leave'),
-    ('SENIOR_DAY', 'SLS_0550', 'OK26', 'AC', 'Senior day'),
-    ('SENIOR_DAY', 'SLS_0550', 'OK26', 'HK', 'Senior day'),
-    ('SENIOR_DAY', 'SLS_0550', 'OK26', 'PROSA', 'Senior day'),
-    ('LEAVE_WITHOUT_PAY', 'SLS_0560', 'OK26', 'AC', 'Leave without pay'),
-    ('LEAVE_WITHOUT_PAY', 'SLS_0560', 'OK26', 'HK', 'Leave without pay'),
-    ('LEAVE_WITHOUT_PAY', 'SLS_0560', 'OK26', 'PROSA', 'Leave without pay'),
-    ('CHILD_SICK_DAY_2', 'SLS_0531', 'OK26', 'AC', 'Childs 2nd sick day'),
-    ('CHILD_SICK_DAY_2', 'SLS_0531', 'OK26', 'HK', 'Childs 2nd sick day'),
-    ('CHILD_SICK_DAY_2', 'SLS_0531', 'OK26', 'PROSA', 'Childs 2nd sick day'),
-    ('CHILD_SICK_DAY_3', 'SLS_0532', 'OK26', 'AC', 'Childs 3rd sick day'),
-    ('CHILD_SICK_DAY_3', 'SLS_0532', 'OK26', 'HK', 'Childs 3rd sick day'),
-    ('CHILD_SICK_DAY_3', 'SLS_0532', 'OK26', 'PROSA', 'Childs 3rd sick day'),
-    ('SPECIAL_HOLIDAY_ALLOWANCE', 'SLS_0570', 'OK26', 'AC', 'Special holiday allowance'),
-    ('SPECIAL_HOLIDAY_ALLOWANCE', 'SLS_0570', 'OK26', 'HK', 'Special holiday allowance'),
-    ('SPECIAL_HOLIDAY_ALLOWANCE', 'SLS_0570', 'OK26', 'PROSA', 'Special holiday allowance'),
-    ('LEAVE_WITH_PAY', 'SLS_0565', 'OK26', 'AC', 'Leave with pay'),
-    ('LEAVE_WITH_PAY', 'SLS_0565', 'OK26', 'HK', 'Leave with pay'),
-    ('LEAVE_WITH_PAY', 'SLS_0565', 'OK26', 'PROSA', 'Leave with pay'),
-    ('FLEX_PAYOUT', 'SLS_0610', 'OK26', 'AC', 'Flex balance auto-payout'),
-    ('FLEX_PAYOUT', 'SLS_0610', 'OK26', 'HK', 'Flex balance auto-payout'),
-    ('FLEX_PAYOUT', 'SLS_0610', 'OK26', 'PROSA', 'Flex balance auto-payout'),
+INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, description, effective_from) VALUES
+    ('NORMAL_HOURS', 'SLS_0110', 'OK26', 'AC', 'Normal working hours', '2020-01-01'),
+    ('NORMAL_HOURS', 'SLS_0110', 'OK26', 'HK', 'Normal working hours', '2020-01-01'),
+    ('NORMAL_HOURS', 'SLS_0110', 'OK26', 'PROSA', 'Normal working hours', '2020-01-01'),
+    ('OVERTIME_50', 'SLS_0210', 'OK26', 'HK', 'Overtime at 50% supplement', '2020-01-01'),
+    ('OVERTIME_50', 'SLS_0210', 'OK26', 'PROSA', 'Overtime at 50% supplement', '2020-01-01'),
+    ('OVERTIME_100', 'SLS_0220', 'OK26', 'HK', 'Overtime at 100% supplement', '2020-01-01'),
+    ('OVERTIME_100', 'SLS_0220', 'OK26', 'PROSA', 'Overtime at 100% supplement', '2020-01-01'),
+    ('MERARBEJDE', 'SLS_0310', 'OK26', 'AC', 'Extra work (merarbejde)', '2020-01-01'),
+    ('EVENING_SUPPLEMENT', 'SLS_0410', 'OK26', 'HK', 'Evening supplement 17-23', '2020-01-01'),
+    ('EVENING_SUPPLEMENT', 'SLS_0410', 'OK26', 'PROSA', 'Evening supplement 17-23', '2020-01-01'),
+    ('NIGHT_SUPPLEMENT', 'SLS_0420', 'OK26', 'HK', 'Night supplement 23-06', '2020-01-01'),
+    ('NIGHT_SUPPLEMENT', 'SLS_0420', 'OK26', 'PROSA', 'Night supplement 23-06', '2020-01-01'),
+    ('WEEKEND_SUPPLEMENT', 'SLS_0430', 'OK26', 'HK', 'Weekend supplement', '2020-01-01'),
+    ('WEEKEND_SUPPLEMENT', 'SLS_0430', 'OK26', 'PROSA', 'Weekend supplement', '2020-01-01'),
+    ('HOLIDAY_SUPPLEMENT', 'SLS_0440', 'OK26', 'HK', 'Public holiday supplement', '2020-01-01'),
+    ('HOLIDAY_SUPPLEMENT', 'SLS_0440', 'OK26', 'PROSA', 'Public holiday supplement', '2020-01-01'),
+    ('VACATION', 'SLS_0510', 'OK26', 'AC', 'Vacation', '2020-01-01'),
+    ('VACATION', 'SLS_0510', 'OK26', 'HK', 'Vacation', '2020-01-01'),
+    ('VACATION', 'SLS_0510', 'OK26', 'PROSA', 'Vacation', '2020-01-01'),
+    ('CARE_DAY', 'SLS_0520', 'OK26', 'AC', 'Care day', '2020-01-01'),
+    ('CARE_DAY', 'SLS_0520', 'OK26', 'HK', 'Care day', '2020-01-01'),
+    ('CARE_DAY', 'SLS_0520', 'OK26', 'PROSA', 'Care day', '2020-01-01'),
+    ('CHILD_SICK_DAY', 'SLS_0530', 'OK26', 'AC', 'Childs 1st sick day', '2020-01-01'),
+    ('CHILD_SICK_DAY', 'SLS_0530', 'OK26', 'HK', 'Childs 1st sick day', '2020-01-01'),
+    ('CHILD_SICK_DAY', 'SLS_0530', 'OK26', 'PROSA', 'Childs 1st sick day', '2020-01-01'),
+    ('PARENTAL_LEAVE', 'SLS_0540', 'OK26', 'AC', 'Parental leave', '2020-01-01'),
+    ('PARENTAL_LEAVE', 'SLS_0540', 'OK26', 'HK', 'Parental leave', '2020-01-01'),
+    ('PARENTAL_LEAVE', 'SLS_0540', 'OK26', 'PROSA', 'Parental leave', '2020-01-01'),
+    ('SENIOR_DAY', 'SLS_0550', 'OK26', 'AC', 'Senior day', '2020-01-01'),
+    ('SENIOR_DAY', 'SLS_0550', 'OK26', 'HK', 'Senior day', '2020-01-01'),
+    ('SENIOR_DAY', 'SLS_0550', 'OK26', 'PROSA', 'Senior day', '2020-01-01'),
+    ('LEAVE_WITHOUT_PAY', 'SLS_0560', 'OK26', 'AC', 'Leave without pay', '2020-01-01'),
+    ('LEAVE_WITHOUT_PAY', 'SLS_0560', 'OK26', 'HK', 'Leave without pay', '2020-01-01'),
+    ('LEAVE_WITHOUT_PAY', 'SLS_0560', 'OK26', 'PROSA', 'Leave without pay', '2020-01-01'),
+    ('CHILD_SICK_DAY_2', 'SLS_0531', 'OK26', 'AC', 'Childs 2nd sick day', '2020-01-01'),
+    ('CHILD_SICK_DAY_2', 'SLS_0531', 'OK26', 'HK', 'Childs 2nd sick day', '2020-01-01'),
+    ('CHILD_SICK_DAY_2', 'SLS_0531', 'OK26', 'PROSA', 'Childs 2nd sick day', '2020-01-01'),
+    ('CHILD_SICK_DAY_3', 'SLS_0532', 'OK26', 'AC', 'Childs 3rd sick day', '2020-01-01'),
+    ('CHILD_SICK_DAY_3', 'SLS_0532', 'OK26', 'HK', 'Childs 3rd sick day', '2020-01-01'),
+    ('CHILD_SICK_DAY_3', 'SLS_0532', 'OK26', 'PROSA', 'Childs 3rd sick day', '2020-01-01'),
+    ('SPECIAL_HOLIDAY_ALLOWANCE', 'SLS_0570', 'OK26', 'AC', 'Special holiday allowance', '2020-01-01'),
+    ('SPECIAL_HOLIDAY_ALLOWANCE', 'SLS_0570', 'OK26', 'HK', 'Special holiday allowance', '2020-01-01'),
+    ('SPECIAL_HOLIDAY_ALLOWANCE', 'SLS_0570', 'OK26', 'PROSA', 'Special holiday allowance', '2020-01-01'),
+    ('LEAVE_WITH_PAY', 'SLS_0565', 'OK26', 'AC', 'Leave with pay', '2020-01-01'),
+    ('LEAVE_WITH_PAY', 'SLS_0565', 'OK26', 'HK', 'Leave with pay', '2020-01-01'),
+    ('LEAVE_WITH_PAY', 'SLS_0565', 'OK26', 'PROSA', 'Leave with pay', '2020-01-01'),
+    ('FLEX_PAYOUT', 'SLS_0610', 'OK26', 'AC', 'Flex balance auto-payout', '2020-01-01'),
+    ('FLEX_PAYOUT', 'SLS_0610', 'OK26', 'HK', 'Flex balance auto-payout', '2020-01-01'),
+    ('FLEX_PAYOUT', 'SLS_0610', 'OK26', 'PROSA', 'Flex balance auto-payout', '2020-01-01'),
     -- On-call duty (rådighedsvagt)
-    ('ON_CALL_DUTY', 'SLS_0710', 'OK26', 'AC', 'On-call duty compensation'),
-    ('ON_CALL_DUTY', 'SLS_0710', 'OK26', 'HK', 'On-call duty compensation'),
-    ('ON_CALL_DUTY', 'SLS_0710', 'OK26', 'PROSA', 'On-call duty compensation'),
+    ('ON_CALL_DUTY', 'SLS_0710', 'OK26', 'AC', 'On-call duty compensation', '2020-01-01'),
+    ('ON_CALL_DUTY', 'SLS_0710', 'OK26', 'HK', 'On-call duty compensation', '2020-01-01'),
+    ('ON_CALL_DUTY', 'SLS_0710', 'OK26', 'PROSA', 'On-call duty compensation', '2020-01-01'),
     -- Call-in work (tilkald)
-    ('CALL_IN_WORK', 'SLS_0810', 'OK26', 'AC', 'Call-in work compensation'),
-    ('CALL_IN_WORK', 'SLS_0810', 'OK26', 'HK', 'Call-in work compensation'),
-    ('CALL_IN_WORK', 'SLS_0810', 'OK26', 'PROSA', 'Call-in work compensation'),
+    ('CALL_IN_WORK', 'SLS_0810', 'OK26', 'AC', 'Call-in work compensation', '2020-01-01'),
+    ('CALL_IN_WORK', 'SLS_0810', 'OK26', 'HK', 'Call-in work compensation', '2020-01-01'),
+    ('CALL_IN_WORK', 'SLS_0810', 'OK26', 'PROSA', 'Call-in work compensation', '2020-01-01'),
     -- Travel time (rejsetid)
-    ('TRAVEL_WORK', 'SLS_0820', 'OK26', 'AC', 'Working travel time'),
-    ('TRAVEL_WORK', 'SLS_0820', 'OK26', 'HK', 'Working travel time'),
-    ('TRAVEL_WORK', 'SLS_0820', 'OK26', 'PROSA', 'Working travel time'),
-    ('TRAVEL_NON_WORK', 'SLS_0830', 'OK26', 'AC', 'Non-working travel time'),
-    ('TRAVEL_NON_WORK', 'SLS_0830', 'OK26', 'HK', 'Non-working travel time'),
-    ('TRAVEL_NON_WORK', 'SLS_0830', 'OK26', 'PROSA', 'Non-working travel time')
-ON CONFLICT DO NOTHING;
+    ('TRAVEL_WORK', 'SLS_0820', 'OK26', 'AC', 'Working travel time', '2020-01-01'),
+    ('TRAVEL_WORK', 'SLS_0820', 'OK26', 'HK', 'Working travel time', '2020-01-01'),
+    ('TRAVEL_WORK', 'SLS_0820', 'OK26', 'PROSA', 'Working travel time', '2020-01-01'),
+    ('TRAVEL_NON_WORK', 'SLS_0830', 'OK26', 'AC', 'Non-working travel time', '2020-01-01'),
+    ('TRAVEL_NON_WORK', 'SLS_0830', 'OK26', 'HK', 'Non-working travel time', '2020-01-01'),
+    ('TRAVEL_NON_WORK', 'SLS_0830', 'OK26', 'PROSA', 'Non-working travel time', '2020-01-01')
+ON CONFLICT (time_type, ok_version, agreement_code, position, effective_from) DO NOTHING;
 
 -- Seed Danish public holidays 2024-2026 (computed via Computus algorithm)
 -- 2024: Easter = March 31
@@ -743,14 +743,14 @@ ON CONFLICT DO NOTHING;
 -- ============================================================
 
 -- SICK_DAY wage type mappings (all 3 agreements x 2 OK versions)
-INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, description) VALUES
-    ('SICK_DAY', 'SLS_0540', 'OK24', 'AC', 'Sick day'),
-    ('SICK_DAY', 'SLS_0540', 'OK24', 'HK', 'Sick day'),
-    ('SICK_DAY', 'SLS_0540', 'OK24', 'PROSA', 'Sick day'),
-    ('SICK_DAY', 'SLS_0540', 'OK26', 'AC', 'Sick day'),
-    ('SICK_DAY', 'SLS_0540', 'OK26', 'HK', 'Sick day'),
-    ('SICK_DAY', 'SLS_0540', 'OK26', 'PROSA', 'Sick day')
-ON CONFLICT DO NOTHING;
+INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, description, effective_from) VALUES
+    ('SICK_DAY', 'SLS_0540', 'OK24', 'AC', 'Sick day', '2020-01-01'),
+    ('SICK_DAY', 'SLS_0540', 'OK24', 'HK', 'Sick day', '2020-01-01'),
+    ('SICK_DAY', 'SLS_0540', 'OK24', 'PROSA', 'Sick day', '2020-01-01'),
+    ('SICK_DAY', 'SLS_0540', 'OK26', 'AC', 'Sick day', '2020-01-01'),
+    ('SICK_DAY', 'SLS_0540', 'OK26', 'HK', 'Sick day', '2020-01-01'),
+    ('SICK_DAY', 'SLS_0540', 'OK26', 'PROSA', 'Sick day', '2020-01-01')
+ON CONFLICT (time_type, ok_version, agreement_code, position, effective_from) DO NOTHING;
 
 -- Sample projects for test orgs
 INSERT INTO projects (org_id, project_code, project_name, sort_order, created_by) VALUES
@@ -786,7 +786,7 @@ ON CONFLICT DO NOTHING;
 -- ============================================================
 
 -- AC_RESEARCH OK24
-INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, description) VALUES
+INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, description, effective_from) VALUES
     ('NORMAL_HOURS',      'SLS_0110', 'OK24', 'AC_RESEARCH', 'Normal hours'),
     ('MERARBEJDE',        'SLS_0210', 'OK24', 'AC_RESEARCH', 'Merarbejde (extra work)'),
     ('VACATION',          'SLS_0510', 'OK24', 'AC_RESEARCH', 'Vacation'),
@@ -795,13 +795,13 @@ INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code
     ('CHILD_SICK_1',      'SLS_0560', 'OK24', 'AC_RESEARCH', 'Child sick day (barns sygedag)'),
     ('SENIOR_DAY',        'SLS_0570', 'OK24', 'AC_RESEARCH', 'Senior day'),
     ('LEAVE_WITH_PAY',    'SLS_0580', 'OK24', 'AC_RESEARCH', 'Leave with pay'),
-    ('LEAVE_WITHOUT_PAY', 'SLS_0590', 'OK24', 'AC_RESEARCH', 'Leave without pay'),
+    ('LEAVE_WITHOUT_PAY', 'SLS_0590', 'OK24', 'AC_RESEARCH', 'Leave without pay', '2020-01-01'),
     ('TRAVEL_WORK',       'SLS_0820', 'OK24', 'AC_RESEARCH', 'Travel time (working)'),
     ('TRAVEL_NON_WORK',   'SLS_0830', 'OK24', 'AC_RESEARCH', 'Travel time (non-working)')
-ON CONFLICT DO NOTHING;
+ON CONFLICT (time_type, ok_version, agreement_code, position, effective_from) DO NOTHING;
 
 -- AC_RESEARCH OK26
-INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, description) VALUES
+INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, description, effective_from) VALUES
     ('NORMAL_HOURS',      'SLS_0110', 'OK26', 'AC_RESEARCH', 'Normal hours'),
     ('MERARBEJDE',        'SLS_0210', 'OK26', 'AC_RESEARCH', 'Merarbejde (extra work)'),
     ('VACATION',          'SLS_0510', 'OK26', 'AC_RESEARCH', 'Vacation'),
@@ -810,13 +810,13 @@ INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code
     ('CHILD_SICK_1',      'SLS_0560', 'OK26', 'AC_RESEARCH', 'Child sick day (barns sygedag)'),
     ('SENIOR_DAY',        'SLS_0570', 'OK26', 'AC_RESEARCH', 'Senior day'),
     ('LEAVE_WITH_PAY',    'SLS_0580', 'OK26', 'AC_RESEARCH', 'Leave with pay'),
-    ('LEAVE_WITHOUT_PAY', 'SLS_0590', 'OK26', 'AC_RESEARCH', 'Leave without pay'),
+    ('LEAVE_WITHOUT_PAY', 'SLS_0590', 'OK26', 'AC_RESEARCH', 'Leave without pay', '2020-01-01'),
     ('TRAVEL_WORK',       'SLS_0820', 'OK26', 'AC_RESEARCH', 'Travel time (working)'),
     ('TRAVEL_NON_WORK',   'SLS_0830', 'OK26', 'AC_RESEARCH', 'Travel time (non-working)')
-ON CONFLICT DO NOTHING;
+ON CONFLICT (time_type, ok_version, agreement_code, position, effective_from) DO NOTHING;
 
 -- AC_TEACHING OK24
-INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, description) VALUES
+INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, description, effective_from) VALUES
     ('NORMAL_HOURS',      'SLS_0110', 'OK24', 'AC_TEACHING', 'Normal hours'),
     ('MERARBEJDE',        'SLS_0210', 'OK24', 'AC_TEACHING', 'Merarbejde (extra work)'),
     ('VACATION',          'SLS_0510', 'OK24', 'AC_TEACHING', 'Vacation'),
@@ -825,13 +825,13 @@ INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code
     ('CHILD_SICK_1',      'SLS_0560', 'OK24', 'AC_TEACHING', 'Child sick day (barns sygedag)'),
     ('SENIOR_DAY',        'SLS_0570', 'OK24', 'AC_TEACHING', 'Senior day'),
     ('LEAVE_WITH_PAY',    'SLS_0580', 'OK24', 'AC_TEACHING', 'Leave with pay'),
-    ('LEAVE_WITHOUT_PAY', 'SLS_0590', 'OK24', 'AC_TEACHING', 'Leave without pay'),
+    ('LEAVE_WITHOUT_PAY', 'SLS_0590', 'OK24', 'AC_TEACHING', 'Leave without pay', '2020-01-01'),
     ('TRAVEL_WORK',       'SLS_0820', 'OK24', 'AC_TEACHING', 'Travel time (working)'),
     ('TRAVEL_NON_WORK',   'SLS_0830', 'OK24', 'AC_TEACHING', 'Travel time (non-working)')
-ON CONFLICT DO NOTHING;
+ON CONFLICT (time_type, ok_version, agreement_code, position, effective_from) DO NOTHING;
 
 -- AC_TEACHING OK26
-INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, description) VALUES
+INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, description, effective_from) VALUES
     ('NORMAL_HOURS',      'SLS_0110', 'OK26', 'AC_TEACHING', 'Normal hours'),
     ('MERARBEJDE',        'SLS_0210', 'OK26', 'AC_TEACHING', 'Merarbejde (extra work)'),
     ('VACATION',          'SLS_0510', 'OK26', 'AC_TEACHING', 'Vacation'),
@@ -840,10 +840,10 @@ INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code
     ('CHILD_SICK_1',      'SLS_0560', 'OK26', 'AC_TEACHING', 'Child sick day (barns sygedag)'),
     ('SENIOR_DAY',        'SLS_0570', 'OK26', 'AC_TEACHING', 'Senior day'),
     ('LEAVE_WITH_PAY',    'SLS_0580', 'OK26', 'AC_TEACHING', 'Leave with pay'),
-    ('LEAVE_WITHOUT_PAY', 'SLS_0590', 'OK26', 'AC_TEACHING', 'Leave without pay'),
+    ('LEAVE_WITHOUT_PAY', 'SLS_0590', 'OK26', 'AC_TEACHING', 'Leave without pay', '2020-01-01'),
     ('TRAVEL_WORK',       'SLS_0820', 'OK26', 'AC_TEACHING', 'Travel time (working)'),
     ('TRAVEL_NON_WORK',   'SLS_0830', 'OK26', 'AC_TEACHING', 'Travel time (non-working)')
-ON CONFLICT DO NOTHING;
+ON CONFLICT (time_type, ok_version, agreement_code, position, effective_from) DO NOTHING;
 
 -- ============================================================
 -- SPRINT 12: Agreement Configuration Management (ADR-014)
@@ -1017,14 +1017,14 @@ ON CONFLICT DO NOTHING;
 -- ============================================================
 
 -- NORM_DEVIATION wage type mappings (merarbejde from norm surplus, AC agreements only)
-INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, description) VALUES
-    ('NORM_DEVIATION', 'SLS_0150', 'OK24', 'AC', 'Norm deviation (merarbejde from norm surplus)'),
-    ('NORM_DEVIATION', 'SLS_0150', 'OK24', 'AC_RESEARCH', 'Norm deviation (merarbejde from norm surplus)'),
-    ('NORM_DEVIATION', 'SLS_0150', 'OK24', 'AC_TEACHING', 'Norm deviation (merarbejde from norm surplus)'),
-    ('NORM_DEVIATION', 'SLS_0150', 'OK26', 'AC', 'Norm deviation (merarbejde from norm surplus)'),
-    ('NORM_DEVIATION', 'SLS_0150', 'OK26', 'AC_RESEARCH', 'Norm deviation (merarbejde from norm surplus)'),
-    ('NORM_DEVIATION', 'SLS_0150', 'OK26', 'AC_TEACHING', 'Norm deviation (merarbejde from norm surplus)')
-ON CONFLICT DO NOTHING;
+INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, description, effective_from) VALUES
+    ('NORM_DEVIATION', 'SLS_0150', 'OK24', 'AC', 'Norm deviation (merarbejde from norm surplus)', '2020-01-01'),
+    ('NORM_DEVIATION', 'SLS_0150', 'OK24', 'AC_RESEARCH', 'Norm deviation (merarbejde from norm surplus)', '2020-01-01'),
+    ('NORM_DEVIATION', 'SLS_0150', 'OK24', 'AC_TEACHING', 'Norm deviation (merarbejde from norm surplus)', '2020-01-01'),
+    ('NORM_DEVIATION', 'SLS_0150', 'OK26', 'AC', 'Norm deviation (merarbejde from norm surplus)', '2020-01-01'),
+    ('NORM_DEVIATION', 'SLS_0150', 'OK26', 'AC_RESEARCH', 'Norm deviation (merarbejde from norm surplus)', '2020-01-01'),
+    ('NORM_DEVIATION', 'SLS_0150', 'OK26', 'AC_TEACHING', 'Norm deviation (merarbejde from norm surplus)', '2020-01-01')
+ON CONFLICT (time_type, ok_version, agreement_code, position, effective_from) DO NOTHING;
 
 -- ============================================================
 -- SPRINT 14: Position Override Configs + Audit Tables
@@ -1259,42 +1259,42 @@ CREATE INDEX IF NOT EXISTS idx_overtime_pre_approvals_status
     ON overtime_pre_approvals(status);
 
 -- Sprint 17: Compensation-specific wage type mappings (OK24)
-INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, description) VALUES
+INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, description, effective_from) VALUES
     -- Overtime payout vs afspadsering (HK/PROSA)
-    ('OVERTIME_50_PAYOUT', 'SLS_0211', 'OK24', 'HK', 'Overtime 50% — monetary payout'),
-    ('OVERTIME_50_PAYOUT', 'SLS_0211', 'OK24', 'PROSA', 'Overtime 50% — monetary payout'),
-    ('OVERTIME_50_AFSPADSERING', 'SLS_0212', 'OK24', 'HK', 'Overtime 50% — time-off compensation'),
-    ('OVERTIME_50_AFSPADSERING', 'SLS_0212', 'OK24', 'PROSA', 'Overtime 50% — time-off compensation'),
-    ('OVERTIME_100_PAYOUT', 'SLS_0221', 'OK24', 'HK', 'Overtime 100% — monetary payout'),
-    ('OVERTIME_100_PAYOUT', 'SLS_0221', 'OK24', 'PROSA', 'Overtime 100% — monetary payout'),
-    ('OVERTIME_100_AFSPADSERING', 'SLS_0222', 'OK24', 'HK', 'Overtime 100% — time-off compensation'),
-    ('OVERTIME_100_AFSPADSERING', 'SLS_0222', 'OK24', 'PROSA', 'Overtime 100% — time-off compensation'),
+    ('OVERTIME_50_PAYOUT', 'SLS_0211', 'OK24', 'HK', 'Overtime 50% — monetary payout', '2020-01-01'),
+    ('OVERTIME_50_PAYOUT', 'SLS_0211', 'OK24', 'PROSA', 'Overtime 50% — monetary payout', '2020-01-01'),
+    ('OVERTIME_50_AFSPADSERING', 'SLS_0212', 'OK24', 'HK', 'Overtime 50% — time-off compensation', '2020-01-01'),
+    ('OVERTIME_50_AFSPADSERING', 'SLS_0212', 'OK24', 'PROSA', 'Overtime 50% — time-off compensation', '2020-01-01'),
+    ('OVERTIME_100_PAYOUT', 'SLS_0221', 'OK24', 'HK', 'Overtime 100% — monetary payout', '2020-01-01'),
+    ('OVERTIME_100_PAYOUT', 'SLS_0221', 'OK24', 'PROSA', 'Overtime 100% — monetary payout', '2020-01-01'),
+    ('OVERTIME_100_AFSPADSERING', 'SLS_0222', 'OK24', 'HK', 'Overtime 100% — time-off compensation', '2020-01-01'),
+    ('OVERTIME_100_AFSPADSERING', 'SLS_0222', 'OK24', 'PROSA', 'Overtime 100% — time-off compensation', '2020-01-01'),
     -- Merarbejde payout vs afspadsering (AC)
-    ('MERARBEJDE_PAYOUT', 'SLS_0311', 'OK24', 'AC', 'Merarbejde — monetary payout'),
-    ('MERARBEJDE_AFSPADSERING', 'SLS_0312', 'OK24', 'AC', 'Merarbejde — time-off compensation'),
-    ('MERARBEJDE_PAYOUT', 'SLS_0311', 'OK24', 'AC_RESEARCH', 'Merarbejde — monetary payout'),
-    ('MERARBEJDE_AFSPADSERING', 'SLS_0312', 'OK24', 'AC_RESEARCH', 'Merarbejde — time-off compensation'),
-    ('MERARBEJDE_PAYOUT', 'SLS_0311', 'OK24', 'AC_TEACHING', 'Merarbejde — monetary payout'),
-    ('MERARBEJDE_AFSPADSERING', 'SLS_0312', 'OK24', 'AC_TEACHING', 'Merarbejde — time-off compensation')
-ON CONFLICT DO NOTHING;
+    ('MERARBEJDE_PAYOUT', 'SLS_0311', 'OK24', 'AC', 'Merarbejde — monetary payout', '2020-01-01'),
+    ('MERARBEJDE_AFSPADSERING', 'SLS_0312', 'OK24', 'AC', 'Merarbejde — time-off compensation', '2020-01-01'),
+    ('MERARBEJDE_PAYOUT', 'SLS_0311', 'OK24', 'AC_RESEARCH', 'Merarbejde — monetary payout', '2020-01-01'),
+    ('MERARBEJDE_AFSPADSERING', 'SLS_0312', 'OK24', 'AC_RESEARCH', 'Merarbejde — time-off compensation', '2020-01-01'),
+    ('MERARBEJDE_PAYOUT', 'SLS_0311', 'OK24', 'AC_TEACHING', 'Merarbejde — monetary payout', '2020-01-01'),
+    ('MERARBEJDE_AFSPADSERING', 'SLS_0312', 'OK24', 'AC_TEACHING', 'Merarbejde — time-off compensation', '2020-01-01')
+ON CONFLICT (time_type, ok_version, agreement_code, position, effective_from) DO NOTHING;
 
 -- Sprint 17: Compensation-specific wage type mappings (OK26)
-INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, description) VALUES
-    ('OVERTIME_50_PAYOUT', 'SLS_0211', 'OK26', 'HK', 'Overtime 50% — monetary payout'),
-    ('OVERTIME_50_PAYOUT', 'SLS_0211', 'OK26', 'PROSA', 'Overtime 50% — monetary payout'),
-    ('OVERTIME_50_AFSPADSERING', 'SLS_0212', 'OK26', 'HK', 'Overtime 50% — time-off compensation'),
-    ('OVERTIME_50_AFSPADSERING', 'SLS_0212', 'OK26', 'PROSA', 'Overtime 50% — time-off compensation'),
-    ('OVERTIME_100_PAYOUT', 'SLS_0221', 'OK26', 'HK', 'Overtime 100% — monetary payout'),
-    ('OVERTIME_100_PAYOUT', 'SLS_0221', 'OK26', 'PROSA', 'Overtime 100% — monetary payout'),
-    ('OVERTIME_100_AFSPADSERING', 'SLS_0222', 'OK26', 'HK', 'Overtime 100% — time-off compensation'),
-    ('OVERTIME_100_AFSPADSERING', 'SLS_0222', 'OK26', 'PROSA', 'Overtime 100% — time-off compensation'),
-    ('MERARBEJDE_PAYOUT', 'SLS_0311', 'OK26', 'AC', 'Merarbejde — monetary payout'),
-    ('MERARBEJDE_AFSPADSERING', 'SLS_0312', 'OK26', 'AC', 'Merarbejde — time-off compensation'),
-    ('MERARBEJDE_PAYOUT', 'SLS_0311', 'OK26', 'AC_RESEARCH', 'Merarbejde — monetary payout'),
-    ('MERARBEJDE_AFSPADSERING', 'SLS_0312', 'OK26', 'AC_RESEARCH', 'Merarbejde — time-off compensation'),
-    ('MERARBEJDE_PAYOUT', 'SLS_0311', 'OK26', 'AC_TEACHING', 'Merarbejde — monetary payout'),
-    ('MERARBEJDE_AFSPADSERING', 'SLS_0312', 'OK26', 'AC_TEACHING', 'Merarbejde — time-off compensation')
-ON CONFLICT DO NOTHING;
+INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, description, effective_from) VALUES
+    ('OVERTIME_50_PAYOUT', 'SLS_0211', 'OK26', 'HK', 'Overtime 50% — monetary payout', '2020-01-01'),
+    ('OVERTIME_50_PAYOUT', 'SLS_0211', 'OK26', 'PROSA', 'Overtime 50% — monetary payout', '2020-01-01'),
+    ('OVERTIME_50_AFSPADSERING', 'SLS_0212', 'OK26', 'HK', 'Overtime 50% — time-off compensation', '2020-01-01'),
+    ('OVERTIME_50_AFSPADSERING', 'SLS_0212', 'OK26', 'PROSA', 'Overtime 50% — time-off compensation', '2020-01-01'),
+    ('OVERTIME_100_PAYOUT', 'SLS_0221', 'OK26', 'HK', 'Overtime 100% — monetary payout', '2020-01-01'),
+    ('OVERTIME_100_PAYOUT', 'SLS_0221', 'OK26', 'PROSA', 'Overtime 100% — monetary payout', '2020-01-01'),
+    ('OVERTIME_100_AFSPADSERING', 'SLS_0222', 'OK26', 'HK', 'Overtime 100% — time-off compensation', '2020-01-01'),
+    ('OVERTIME_100_AFSPADSERING', 'SLS_0222', 'OK26', 'PROSA', 'Overtime 100% — time-off compensation', '2020-01-01'),
+    ('MERARBEJDE_PAYOUT', 'SLS_0311', 'OK26', 'AC', 'Merarbejde — monetary payout', '2020-01-01'),
+    ('MERARBEJDE_AFSPADSERING', 'SLS_0312', 'OK26', 'AC', 'Merarbejde — time-off compensation', '2020-01-01'),
+    ('MERARBEJDE_PAYOUT', 'SLS_0311', 'OK26', 'AC_RESEARCH', 'Merarbejde — monetary payout', '2020-01-01'),
+    ('MERARBEJDE_AFSPADSERING', 'SLS_0312', 'OK26', 'AC_RESEARCH', 'Merarbejde — time-off compensation', '2020-01-01'),
+    ('MERARBEJDE_PAYOUT', 'SLS_0311', 'OK26', 'AC_TEACHING', 'Merarbejde — monetary payout', '2020-01-01'),
+    ('MERARBEJDE_AFSPADSERING', 'SLS_0312', 'OK26', 'AC_TEACHING', 'Merarbejde — time-off compensation', '2020-01-01')
+ON CONFLICT (time_type, ok_version, agreement_code, position, effective_from) DO NOTHING;
 
 -- ============================================================
 -- SPRINT 20: Temporal Period Handling — Segment Manifest Framework (ADR-016)
