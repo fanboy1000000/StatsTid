@@ -366,8 +366,12 @@ public sealed class PeriodCalculationService
             }
 
             // Map this segment's line items to wage types using the segment's resolved OK version.
+            // The full PlannedSegment is threaded through so MapSegmentToExportLinesAsync can read
+            // the WtmNaturalKey replay-stable triple from segment.Snapshot.Values (ADR-020 D1 +
+            // S29 TASK-2907) and pass asOfDate = segment.StartDate to the dated wage-type-mapping
+            // lookup (ADR-016 D10 replay determinism closed for WTM).
             var segmentExportLines = await MapSegmentToExportLinesAsync(
-                segmentRuleResults, segmentProfile, segment.StartDate, segment.EndDate, plan.ManifestId, ct);
+                segmentRuleResults, segmentProfile, segment, plan.ManifestId, ct);
 
             perSegmentRuleResults.Add(segmentRuleResults);
             perSegmentExportLines.Add(segmentExportLines);
@@ -590,6 +594,22 @@ public sealed class PeriodCalculationService
             NonDatedSourceValues: new Dictionary<string, object?>(),
             LocalProfileActivations: localProfileActivations);
 
+        // ADR-020 D1 (S29 TASK-2907) — planner-enrollment seam for non-rule snapshot
+        // contracts. Register the wage-type-mapping natural-key triple as a replay-stable
+        // input keyed by "WtmNaturalKey"; the planner runs the hydrator once per segment
+        // against the supplied profile, and MapSegmentToExportLinesAsync reads the typed
+        // record back to drive the dated wage-type-mapping lookup
+        // (PayrollMappingService.GetMappingAsync(..., asOfDate: segmentStart)).
+        //
+        // Position is normalized to "" when null per the canonical empty-string fallback
+        // convention (PayrollMappingService.GetMappingAsync XML doc + S29 TASK-2904
+        // GetByKeyAtAsync replication).
+        var enrollment = new PlannerEnrollment();
+        enrollment.RegisterSnapshotContract("WtmNaturalKey", p => new WtmNaturalKey(
+            OkVersion: p.OkVersion,
+            AgreementCode: p.AgreementCode,
+            Position: p.Position ?? ""));
+
         // EmployeeId is now string end-to-end (ADR-016 D10 amendment 2026-05-01) — pass
         // profile.EmployeeId directly with no synthetic Guid derivation.
         return PeriodPlanner.Plan(
@@ -599,7 +619,9 @@ public sealed class PeriodCalculationService
             calculationKind: "forward-calc",
             ruleSet: _classificationProvider.GetClassifications(),
             sources: sources,
-            options: PlannerOptions.Default);
+            options: PlannerOptions.Default,
+            enrollment: enrollment,
+            profile: profile);
     }
 
     // -------------------------------------------------------------------
@@ -1159,12 +1181,37 @@ public sealed class PeriodCalculationService
     private async Task<List<PayrollExportLine>> MapSegmentToExportLinesAsync(
         IReadOnlyList<CalculationResult> segmentRuleResults,
         EmploymentProfile segmentProfile,
-        DateOnly segmentStart,
-        DateOnly segmentEnd,
+        PlannedSegment plannedSegment,
         Guid manifestId,
         CancellationToken ct)
     {
         var lines = new List<PayrollExportLine>();
+
+        // ADR-020 D1 / Implications §1 + S29 TASK-2907 (LOCKED — REFINEMENT-s29-phase-4d1.md
+        // L122 + L275 + cycle 2 R2-B2): read the wage-type-mapping natural-key triple from
+        // the replay-stable segment snapshot, NOT from segmentProfile. The hydrator
+        // registered at BuildPlanForLegacyCallersAsync (PCS L585) lands a WtmNaturalKey
+        // record at Snapshot.Values["WtmNaturalKey"]. Reading from segmentProfile reverts
+        // to the pre-S29 profile-drift risk that ReplayAsync(Guid, EmploymentProfile, ...)
+        // accepts a caller-supplied profile that may differ from the forward-calc profile.
+        //
+        // Snapshot-missing → throw. Pre-launch posture (REFINEMENT-s29-phase-4d1.md
+        // Assumption #1) precludes legitimate manifest gaps; replay against a pre-S29
+        // manifest is out of scope per Phase 4d-1 deferred carry-forward. Test-direct
+        // callers exercising this method must EITHER supply a profile that the planner
+        // enrolls against OR not call MapSegmentToExportLinesAsync directly (the planner's
+        // null-profile clause silently skips hydrator invocation per ADR-020 D1.5).
+        if (plannedSegment.Snapshot is null
+            || !plannedSegment.Snapshot.Values.TryGetValue("WtmNaturalKey", out var wtmKeyObj)
+            || wtmKeyObj is not WtmNaturalKey wtmKey)
+        {
+            throw new InvalidOperationException(
+                "PCS.MapSegmentToExportLinesAsync requires a WtmNaturalKey entry in the segment " +
+                $"snapshot (ADR-020 D1 / Implications §1). Segment range: [{plannedSegment.StartDate:yyyy-MM-dd}, " +
+                $"{plannedSegment.EndDate:yyyy-MM-dd}]; ManifestId={manifestId}. This indicates either a " +
+                "manifest persisted before S29 or a test-direct caller that bypassed " +
+                "PCS.BuildPlanForLegacyCallersAsync (where the WtmNaturalKey hydrator is registered).");
+        }
 
         foreach (var result in segmentRuleResults)
         {
@@ -1172,15 +1219,22 @@ public sealed class PeriodCalculationService
 
             foreach (var lineItem in result.LineItems)
             {
+                // ADR-020 D1 + ADR-016 D10 (S29 TASK-2907): dated wage-type-mapping lookup
+                // pinned to segment.StartDate. The natural-key triple comes from the
+                // replay-stable snapshot; asOfDate routes through
+                // WageTypeMappingRepository.GetByKeyAtAsync which carries the
+                // (position = @position OR position = '') fallback at the dated read
+                // (TASK-2904 / Assumption #17 in REFINEMENT-s29-phase-4d1.md).
                 var mapping = await _mappingService.GetMappingAsync(
-                    lineItem.TimeType, segmentProfile.OkVersion, segmentProfile.AgreementCode,
-                    segmentProfile.Position, ct);
+                    lineItem.TimeType, wtmKey.OkVersion, wtmKey.AgreementCode,
+                    wtmKey.Position, ct, asOfDate: plannedSegment.StartDate);
 
                 if (mapping is null)
                 {
                     _logger.LogWarning(
-                        "No wage type mapping for {TimeType}/{OkVersion}/{Agreement} — skipping line item from rule {RuleId}",
-                        lineItem.TimeType, segmentProfile.OkVersion, segmentProfile.AgreementCode, result.RuleId);
+                        "No wage type mapping for {TimeType}/{OkVersion}/{Agreement} at {AsOfDate} — skipping line item from rule {RuleId}",
+                        lineItem.TimeType, wtmKey.OkVersion, wtmKey.AgreementCode,
+                        plannedSegment.StartDate, result.RuleId);
                     continue;
                 }
 
@@ -1191,8 +1245,8 @@ public sealed class PeriodCalculationService
                 // (post-S20 cleanup).
                 lines.Add(PayrollMappingService.BuildLine(
                     lineItem, result, segmentProfile, mapping,
-                    periodStart: segmentStart,
-                    periodEnd: segmentEnd,
+                    periodStart: plannedSegment.StartDate,
+                    periodEnd: plannedSegment.EndDate,
                     okVersion: segmentProfile.OkVersion,
                     manifestId: manifestId));
             }

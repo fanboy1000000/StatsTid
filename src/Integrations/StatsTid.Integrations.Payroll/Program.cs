@@ -26,6 +26,11 @@ builder.Services.AddSingleton<IOutboxEnqueue>(sp => sp.GetRequiredService<Postgr
 builder.Services.AddHostedService<OutboxPublisher>();
 
 builder.Services.AddHttpClient();
+// S29 TASK-2907: WageTypeMappingRepository is now an optional dependency of
+// PayrollMappingService for the dated-read path (ADR-020 D1 / Implications §7).
+// MapCalculationResultAsync stays current-row (no asOfDate); only the planner-driven
+// per-segment export in PCS.MapSegmentToExportLinesAsync passes asOfDate = segmentStart.
+builder.Services.AddSingleton<WageTypeMappingRepository>();
 builder.Services.AddSingleton<PayrollMappingService>();
 builder.Services.AddSingleton<PayrollExportService>();
 builder.Services.AddSingleton<PeriodCalculationService>();

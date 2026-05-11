@@ -8,12 +8,17 @@ namespace StatsTid.Integrations.Payroll.Services;
 public sealed class PayrollMappingService
 {
     private readonly DbConnectionFactory _connectionFactory;
+    private readonly WageTypeMappingRepository? _wageTypeMappingRepository;
     private readonly ILogger<PayrollMappingService> _logger;
 
-    public PayrollMappingService(DbConnectionFactory connectionFactory, ILogger<PayrollMappingService> logger)
+    public PayrollMappingService(
+        DbConnectionFactory connectionFactory,
+        ILogger<PayrollMappingService> logger,
+        WageTypeMappingRepository? wageTypeMappingRepository = null)
     {
         _connectionFactory = connectionFactory;
         _logger = logger;
+        _wageTypeMappingRepository = wageTypeMappingRepository;
     }
 
     /// <summary>
@@ -22,10 +27,40 @@ public sealed class PayrollMappingService
     /// generic fallback. The DB column is NOT NULL with DEFAULT '', so we must never query
     /// <c>position IS NULL</c> (Codex BLOCKER fix, TASK-1802).
     /// Precedence: position-specific match wins over the generic ('') row.
+    ///
+    /// <para>
+    /// ADR-020 D1 / Implications §7 (S29 TASK-2907): when <paramref name="asOfDate"/> is
+    /// supplied, the lookup routes through
+    /// <see cref="WageTypeMappingRepository.GetByKeyAtAsync"/> for an effective-dated read
+    /// (closed rows queryable at past dates per S29 effective-dating). When null, the
+    /// existing current-row query path is preserved unchanged — this is the
+    /// <c>MapCalculationResultAsync</c> per-line-date contract (Implications §7
+    /// "no retroactive recomputation"). Only the planner-driven per-segment export
+    /// (<c>PCS.MapSegmentToExportLinesAsync</c>) passes <c>asOfDate = segmentStart</c>.
+    /// </para>
     /// </summary>
     public async Task<WageTypeMapping?> GetMappingAsync(
-        string timeType, string okVersion, string agreementCode, string? position = null, CancellationToken ct = default)
+        string timeType, string okVersion, string agreementCode, string? position = null,
+        CancellationToken ct = default, DateOnly? asOfDate = null)
     {
+        // ADR-020 D1 / Implications §7 — dated read for the planner-driven export path
+        // (PCS.MapSegmentToExportLinesAsync passes asOfDate = segmentStart). The repo
+        // method replicates the (position = @position OR position = '') fallback at the
+        // dated read (TASK-2904 Assumption #17 in REFINEMENT-s29-phase-4d1.md); we do
+        // NOT duplicate the fallback logic here.
+        if (asOfDate.HasValue)
+        {
+            if (_wageTypeMappingRepository is null)
+            {
+                throw new InvalidOperationException(
+                    "PayrollMappingService.GetMappingAsync was called with asOfDate set but " +
+                    "no WageTypeMappingRepository was supplied at construction. The dated-read " +
+                    "path (ADR-020 D1) requires the repository dependency. Wire it in DI.");
+            }
+            return await _wageTypeMappingRepository.GetByKeyAtAsync(
+                timeType, okVersion, agreementCode, position ?? "", asOfDate.Value, ct);
+        }
+
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
 
@@ -140,6 +175,9 @@ public sealed class PayrollMappingService
             // across an OK transition stamps each line with the segment-resolved OK.
             var lineOkVersion = OkVersionResolver.ResolveVersion(lineItem.Date);
 
+            // ADR-020 Implications §7 + ROADMAP L350 (S29 TASK-2907): per-line-date export
+            // stays current-row — no asOfDate passed. Only PCS.MapSegmentToExportLinesAsync
+            // routes the planner-driven per-segment export through the dated-read path.
             var mapping = await GetMappingAsync(lineItem.TimeType, lineOkVersion, profile.AgreementCode, position, ct);
             if (mapping is null) continue;
 
