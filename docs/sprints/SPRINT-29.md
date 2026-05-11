@@ -3,14 +3,14 @@
 | Field | Value |
 |-------|-------|
 | **Sprint** | 29 |
-| **Status** | open |
+| **Status** | **complete** (closed 2026-05-11) |
 | **Start Date** | 2026-05-10 |
-| **End Date** | TBD |
-| **Orchestrator Approved** | n/a — sprint open |
-| **Build Verified** | TBD |
-| **Test Verified** | TBD (target: 526 unit + 35 plain regression + 159 Docker-gated + 88 frontend vitest = **808 total**, +13 net new from S28 close at 795) |
+| **End Date** | 2026-05-11 |
+| **Orchestrator Approved** | yes |
+| **Build Verified** | yes (0 errors; 19 pre-existing CS0618 warnings unchanged) |
+| **Test Verified** | 526 unit + 35 plain regression + 158 Docker-gated (passing) + 88 frontend vitest = **807 total**. Net new passing: +1 unit + +11 D-tests = +12. 8 new HTTP-level D-tests blocked on pre-existing `WebApplicationFactory<Program>` harness defect (also affects pre-S29 `PublisherStallReadYourWriteTests` — confirmed at S29 open `19b8fa8`); deferred to Phase 4e per user adjudication. Target was 808; delta -1 reflects 11-of-12 marquee-unblocked D-tests landing in Phase 3 (one `D-test #12 same-day-only-edit validator` sub-test counts as one [Fact] in the 11; the +8 HTTP shape would have hit 19 [Fact] methods → 159 D-tests, but the 8 blocked tests remain present in the codebase, just not passing). |
 | **Sprint-start commit base** | `8950893` (S28 sprint close, 2026-05-09) |
-| **Sprint-end HEAD** | TBD |
+| **Sprint-end HEAD** | `5a5e9c9` (TASK-2910 ADR docs commit; TASK-2911 sprint plumbing extends with one additional commit) |
 | **Sprint type** | **IMPLEMENTATION** — implements Phase 4d-1 backend versioned history against ADR-020 binding contract; no frontend changes (deferred to Phase 5 per ADR-020 Open). |
 | **Refinement** | `.claude/refinements/REFINEMENT-s29-phase-4d1.md` (Step 4 cycles 1+2+3 absorbed; lens convergence at cycle 3 = converging-finite trail). User adjudications 2026-05-10: cycle 1 position-fallback replicate-at-dated-read + D1 thread-through via Plan() parameter; cycle 2 backdate-forbid + cycle-3-waiver-grant; cycle 3 symmetric-forbid (same-day-only-edit) + absorb R3-W1/W3 inline. |
 
@@ -334,16 +334,56 @@ Plus +1 unit test for `Plan(enrollment: null, profile: null)` direct-planner bac
 
 ## External Review (Step 7a)
 
-_Pending — runs at sprint end on full diff vs `8950893`._
+**Skipped per user adjudication 2026-05-11.** Sprint close discussed externally-driven Codex/Reviewer cycles 1+2 at Step 7a but deferred them — refinement cycles 1+2+3 already closed lens-divergence cleanly (converging-finite trail per `feedback_thrash_defer_real_world.md`), and the live D-test catch of TASK-2912 defects served as a real-world Step-7a-equivalent harness within the sprint itself.
+
+D-test catch served the Step 7a purpose better than an external lens would have: it caught the init.sql ordering bug (TASK-2906 only fully rewrote 2 of 10 seed INSERT blocks) AND the JsonElement round-trip on `segments_jsonb` replay (TASK-2907 first-cut consumer used `is WtmNaturalKey` pattern matching that fails after JSON round-trip). Both are exactly the shape of finding Codex BLOCKERs typically surface; the marquee D-test #6 forced them into the open at sprint test time rather than at post-merge review time.
+
+The 8 HTTP-level D-tests blocked on the pre-existing `WebApplicationFactory<Program>` harness defect — independently confirmed by running `PublisherStallReadYourWriteTests` at S29 open commit `19b8fa8` and observing the identical `Failed to connect to 127.0.0.1:5432` error from `AgreementConfigSeeder` startup — are a Phase 4e candidate.
 
 ## Test Summary
 
-_Pending — target: 526 unit + 35 plain regression + 159 Docker-gated + 88 frontend vitest = 808 total. Baseline: 525 + 35 + 147 + 88 = 795 at S28 close. Net delta: +1 unit + +12 Docker-gated = +13._
+| Suite | Pre-S29 | S29 close | Delta |
+|-------|---------|-----------|-------|
+| Unit | 525 | 526 | +1 (TASK-2902 backward-compat for `Plan(enrollment: null, profile: null)`) |
+| Plain regression | 35 | 35 | 0 |
+| Docker-gated (passing) | 147 | 158 | +11 (5 supersession + 3 race + 2 idempotency + 1 marquee replay-determinism) |
+| Docker-gated (blocked, harness) | n/a | 8 | new — Phase 4e candidate |
+| Frontend vitest | 88 | 88 | 0 (no frontend changes per ADR-020 Open) |
+| **Total (passing)** | **795** | **807** | **+12** |
+
+**Marquee D-test PASSES**: `ReplayDeterminismTests.ReplayAsync_StableUnderWtmMutation_ExportLinesByteIdentical` closes the deferred-WTM caveat at `ReplayDeterminismTests.cs:14-23` (S20 carry-forward). Byte-identical assertion on hours sum + per-line wage-type column under mid-period WTM supersession — the ADR-016 D10 closure for WTM, the load-bearing deliverable of S29.
 
 ## Agent Effectiveness
 
-_Pending — tracked at sprint close per WORKFLOW.md L227 metrics._
+| Phase | Tasks | Agent dispatches | Defects caught by tests | Notes |
+|-------|-------|-------------------|--------------------------|-------|
+| Phase 1 (plumbing) | 6 (TASK-2901..2906) | 6 sequential domain-agent dispatches | 0 at Phase 1 close | Build + unit + plain regression were the only test surfaces; D-tests not yet present. Defects only surfaced at TASK-2909 Phase 3. |
+| Phase 2 (impl) | 2 (TASK-2907, TASK-2908) | 2 parallel general-purpose dispatches (no `isolation: "worktree"` — verified file scope disjoint) | 0 at Phase 2 close | Both touched different paths (`Payroll/Services/` vs `Backend.Api/Endpoints/`); commits stacked cleanly (1c1d00c + 3b7863d). |
+| Phase 3 (D-tests) | 1 (TASK-2909) | 1 general-purpose dispatch | 2 real defects caught (TASK-2912 fix 1/2 + 2/2) | Test & QA agent correctly stopped + reported the 2 defects per prompt's "do not fix architectural decisions" guard. Wrote 19 [Fact] methods across 4 files + 1 file extension. 11 passed first run after fixes; 8 blocked by pre-existing harness. |
+| Phase 4 (TASK-2912 fixes) | 1 (Orchestrator-direct) | 0 agents — direct edits | n/a | 3 commits absorbed inline by Orchestrator: init.sql CREATE TABLE pre-bake, partial seed rewrite completion, JsonElement round-trip handling. |
+| Phase 5 (docs) | 2 (TASK-2910, TASK-2911) | 0 agents — Orchestrator-direct per WORKFLOW.md L48 | n/a | KB writes are Orchestrator-only by governance. |
+
+**Effectiveness highlights**:
+- **Parallel dispatch without worktree isolation** (Phase 2) worked cleanly per the explicit "different files" verification — no recurrence of the S27 worktree-base-mismatch quirk.
+- **D-tests as real-world Step 7a substitute**: the marquee D-test caught BOTH live S29 defects (init.sql + JsonElement) that external Codex/Reviewer would otherwise have surfaced post-merge. This is consistent with the S26+S27 cycle-cap discipline of "let tests be the second lens when refinement convergence is already strong."
+- **Lens convergence at refinement cycle 3** (per `feedback_thrash_defer_real_world.md` discipline) correctly identified that no further pre-implementation dual-lens review was warranted; implementation surfaced 2 defects via tests, both within ~30 min absorption time.
 
 ## Sprint Retrospective
 
-_Pending — written at sprint close._
+**What worked**:
+1. **ADR-020 binding contract** (S28 design-only sprint) eliminated all architectural ambiguity going into S29. The refinement cycle 1+2+3 trail was about narrow implementation forks (position-fallback at dated read, D1 thread-through mechanism, validator symmetric-forbid), not architectural re-litigation. S28's design-split investment paid off in S29 implementation speed.
+2. **Phase 1 commit-before-dispatch discipline** (S26 R7 / S27 precedent) — each plumbing task committed before the next depended on it. No Phase 1 rework.
+3. **Marquee D-test as load-bearing proof** — `ReplayAsync_StableUnderWtmMutation_ExportLinesByteIdentical` is the kind of test that fails on the broken baseline AND passes post-implementation. It bound the implementation honestly: any future refactor that breaks ADR-016 D10 for WTM will fail this test.
+4. **Defect catch via tests, not review** — the 2 TASK-2912 defects (init.sql ordering + JsonElement round-trip) were caught by the D-tests TASK-2909 agent wrote. The agent's report explicitly stopped + flagged them rather than auto-fixing, which preserved Orchestrator adjudication. This is the test-and-report pattern working as intended.
+
+**What surprised**:
+1. **Partial TASK-2906 seed rewrite** — the Phase 1 agent updated the column list of all 10 seed INSERTs but only fully updated VALUES tuples in 2 of the 10 blocks (OK24+OK26 main seeds). The other 4 blocks (SPRINT 11 academic — AC_RESEARCH OK24/OK26 + AC_TEACHING OK24/OK26) had only the LEAVE_WITHOUT_PAY row updated, leaving 40 rows with mismatched value counts. Phase 1 plain-regression tests didn't catch this because they use programmatic fixture DDL, not init.sql. Lesson: any seed-INSERT rewrite should explicitly require an init.sql-bootstrap verification step (psql against fresh container or `docker compose down -v && docker compose up postgres -d --force-recreate`).
+2. **JsonElement round-trip on Snapshot.Values** — `Snapshot.Values: IReadOnlyDictionary<string, object?>` serializes typed records via System.Text.Json but the values come back as JsonElement on deserialize. S29 was the first sprint to add a non-primitive typed value to this seam (`WtmNaturalKey`); existing rule-side `NonDatedSourceValues` are primitives so the round-trip "just worked" before. Documented in ADR-018 D14 "Snapshot round-trip" consequence.
+3. **Pre-existing WAF<Program> harness defect** — independently confirmed at S29 open by checking `PublisherStallReadYourWriteTests`. The S27 marquee test that proves the Phase 4c.6 sync-in-tx projection invariant has been broken since at least S27 close in our environment. The exact cause (configuration-override timing for `ConnectionStrings:EventStore`) needs Phase 4e investigation.
+
+**Lessons + carry-forward**:
+- **Phase 4e additions**: (a) Fix `WebApplicationFactory<Program>` connection-override timing so `WageTypeMappingEndpointTests` + `PublisherStallReadYourWriteTests` unblock. (b) Pre-S22 ordering composite scheme for `ProjectionBackfill` (already deferred S27). (c) Clock abstraction (already deferred ADR-020 Open). (d) Production seed-reconciliation semantic (already deferred ADR-020 Open).
+- **Test harness hygiene**: D-test authors should verify their harness works at the existing-baseline before assuming it's a new-test-only issue. The agent did note the pre-existing failures in their report ("18 pre-existing failures observed when running the broader Docker-gated suite"), which made the in-flight pre-existing-vs-new distinction much cleaner at sprint close.
+- **Phase 4d-2 readiness**: ADR-020's planner-enrollment seam + ADR-018 D14's export-time effective-date pattern are now proven. Phase 4d-2 (`entitlement_configs` versioned history) can inherit verbatim if entitlement consumers are also export-bounded; if they're planner-bounded (e.g., entitlement quota checks during forward calc), the snapshot consumption pattern needs to shift from "natural-key triple" to "resolved row value." ADR-016 D5b reconciliation captures this fork.
+
+**Commits in this sprint (Phase 1 → Phase 5)**: 16 total across Phase 1 (6: c6edb66, f7634b3, ed92352, 870355e, e3f851e, b32167f), Phase 2 (2: 1c1d00c, 3b7863d), Phase 3 (1: 7580121), Phase 4 fix commits (3: ba2ad29, c332216, 3606e06), Phase 5 docs (1: 5a5e9c9 — TASK-2910), plus one sprint-close commit (TASK-2911) extending this entry. Sprint base `8950893` → sprint close (this commit).
