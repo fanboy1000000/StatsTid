@@ -116,17 +116,34 @@ CREATE TABLE IF NOT EXISTS rule_versions (
     PRIMARY KEY (rule_id, ok_version, agreement_code)
 );
 
--- Wage type mappings (versioned per OK agreement, optionally position-specific)
+-- Wage type mappings (versioned per OK agreement, optionally position-specific).
+-- S29 / ADR-020: surrogate UUID PK + effective-dating columns baked into the
+-- schema so greenfield bootstrap is single-pass. The migration block further
+-- down in this file remains idempotent on top of this shape (each ALTER is
+-- guarded by IF NOT EXISTS / DROP IF EXISTS) and is the path for legacy
+-- environments still on the pre-S29 composite-PK schema.
 CREATE TABLE IF NOT EXISTS wage_type_mappings (
+    mapping_id      UUID        NOT NULL DEFAULT gen_random_uuid(),
     time_type       TEXT        NOT NULL,
     wage_type       TEXT        NOT NULL,
     ok_version      TEXT        NOT NULL,
     agreement_code  TEXT        NOT NULL,
     position        TEXT        NOT NULL DEFAULT '',
     description     TEXT,
+    effective_from  DATE        NOT NULL,
+    effective_to    DATE,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (time_type, ok_version, agreement_code, position)
+    PRIMARY KEY (mapping_id)
 );
+
+-- ADR-020 D2: at most one open row per natural key (S21 D2.1 partial-unique pattern).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_wtm_natural_key_open
+    ON wage_type_mappings (time_type, ok_version, agreement_code, position)
+    WHERE effective_to IS NULL;
+
+-- ADR-020 D3 conflict target: forbids duplicate history rows on (natural_key, effective_from).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_wtm_natural_key_history
+    ON wage_type_mappings (time_type, ok_version, agreement_code, position, effective_from);
 
 -- Flex balance snapshots
 CREATE TABLE IF NOT EXISTS flex_balance_snapshots (
@@ -1068,7 +1085,8 @@ CREATE TABLE IF NOT EXISTS wage_type_mapping_audit (
     ok_version      TEXT        NOT NULL,
     agreement_code  TEXT        NOT NULL,
     position        TEXT        NOT NULL DEFAULT '',
-    action          TEXT        NOT NULL CHECK (action IN ('CREATED', 'UPDATED', 'DELETED')),
+    -- S29: SUPERSEDED added inline for greenfield (migration block widens legacy DBs to match).
+    action          TEXT        NOT NULL CHECK (action IN ('CREATED', 'UPDATED', 'DELETED', 'SUPERSEDED')),
     previous_data   JSONB,
     new_data        JSONB,
     actor_id        TEXT        NOT NULL,
