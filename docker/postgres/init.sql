@@ -804,62 +804,62 @@ ON CONFLICT DO NOTHING;
 
 -- AC_RESEARCH OK24
 INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, description, effective_from) VALUES
-    ('NORMAL_HOURS',      'SLS_0110', 'OK24', 'AC_RESEARCH', 'Normal hours'),
-    ('MERARBEJDE',        'SLS_0210', 'OK24', 'AC_RESEARCH', 'Merarbejde (extra work)'),
-    ('VACATION',          'SLS_0510', 'OK24', 'AC_RESEARCH', 'Vacation'),
-    ('SICK_DAY',          'SLS_0540', 'OK24', 'AC_RESEARCH', 'Sick day'),
-    ('CARE_DAY',          'SLS_0550', 'OK24', 'AC_RESEARCH', 'Care day (omsorgsdage)'),
-    ('CHILD_SICK_1',      'SLS_0560', 'OK24', 'AC_RESEARCH', 'Child sick day (barns sygedag)'),
-    ('SENIOR_DAY',        'SLS_0570', 'OK24', 'AC_RESEARCH', 'Senior day'),
-    ('LEAVE_WITH_PAY',    'SLS_0580', 'OK24', 'AC_RESEARCH', 'Leave with pay'),
-    ('LEAVE_WITHOUT_PAY', 'SLS_0590', 'OK24', 'AC_RESEARCH', 'Leave without pay', '2020-01-01'),
-    ('TRAVEL_WORK',       'SLS_0820', 'OK24', 'AC_RESEARCH', 'Travel time (working)'),
-    ('TRAVEL_NON_WORK',   'SLS_0830', 'OK24', 'AC_RESEARCH', 'Travel time (non-working)')
+    ('NORMAL_HOURS',      'SLS_0110', 'OK24', 'AC_RESEARCH', 'Normal hours',                       '2020-01-01'),
+    ('MERARBEJDE',        'SLS_0210', 'OK24', 'AC_RESEARCH', 'Merarbejde (extra work)',            '2020-01-01'),
+    ('VACATION',          'SLS_0510', 'OK24', 'AC_RESEARCH', 'Vacation',                           '2020-01-01'),
+    ('SICK_DAY',          'SLS_0540', 'OK24', 'AC_RESEARCH', 'Sick day',                           '2020-01-01'),
+    ('CARE_DAY',          'SLS_0550', 'OK24', 'AC_RESEARCH', 'Care day (omsorgsdage)',             '2020-01-01'),
+    ('CHILD_SICK_1',      'SLS_0560', 'OK24', 'AC_RESEARCH', 'Child sick day (barns sygedag)',     '2020-01-01'),
+    ('SENIOR_DAY',        'SLS_0570', 'OK24', 'AC_RESEARCH', 'Senior day',                         '2020-01-01'),
+    ('LEAVE_WITH_PAY',    'SLS_0580', 'OK24', 'AC_RESEARCH', 'Leave with pay',                     '2020-01-01'),
+    ('LEAVE_WITHOUT_PAY', 'SLS_0590', 'OK24', 'AC_RESEARCH', 'Leave without pay',                  '2020-01-01'),
+    ('TRAVEL_WORK',       'SLS_0820', 'OK24', 'AC_RESEARCH', 'Travel time (working)',              '2020-01-01'),
+    ('TRAVEL_NON_WORK',   'SLS_0830', 'OK24', 'AC_RESEARCH', 'Travel time (non-working)',          '2020-01-01')
 ON CONFLICT (time_type, ok_version, agreement_code, position, effective_from) DO NOTHING;
 
 -- AC_RESEARCH OK26
 INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, description, effective_from) VALUES
-    ('NORMAL_HOURS',      'SLS_0110', 'OK26', 'AC_RESEARCH', 'Normal hours'),
-    ('MERARBEJDE',        'SLS_0210', 'OK26', 'AC_RESEARCH', 'Merarbejde (extra work)'),
-    ('VACATION',          'SLS_0510', 'OK26', 'AC_RESEARCH', 'Vacation'),
-    ('SICK_DAY',          'SLS_0540', 'OK26', 'AC_RESEARCH', 'Sick day'),
-    ('CARE_DAY',          'SLS_0550', 'OK26', 'AC_RESEARCH', 'Care day (omsorgsdage)'),
-    ('CHILD_SICK_1',      'SLS_0560', 'OK26', 'AC_RESEARCH', 'Child sick day (barns sygedag)'),
-    ('SENIOR_DAY',        'SLS_0570', 'OK26', 'AC_RESEARCH', 'Senior day'),
-    ('LEAVE_WITH_PAY',    'SLS_0580', 'OK26', 'AC_RESEARCH', 'Leave with pay'),
-    ('LEAVE_WITHOUT_PAY', 'SLS_0590', 'OK26', 'AC_RESEARCH', 'Leave without pay', '2020-01-01'),
-    ('TRAVEL_WORK',       'SLS_0820', 'OK26', 'AC_RESEARCH', 'Travel time (working)'),
-    ('TRAVEL_NON_WORK',   'SLS_0830', 'OK26', 'AC_RESEARCH', 'Travel time (non-working)')
+    ('NORMAL_HOURS',      'SLS_0110', 'OK26', 'AC_RESEARCH', 'Normal hours',                       '2020-01-01'),
+    ('MERARBEJDE',        'SLS_0210', 'OK26', 'AC_RESEARCH', 'Merarbejde (extra work)',            '2020-01-01'),
+    ('VACATION',          'SLS_0510', 'OK26', 'AC_RESEARCH', 'Vacation',                           '2020-01-01'),
+    ('SICK_DAY',          'SLS_0540', 'OK26', 'AC_RESEARCH', 'Sick day',                           '2020-01-01'),
+    ('CARE_DAY',          'SLS_0550', 'OK26', 'AC_RESEARCH', 'Care day (omsorgsdage)',             '2020-01-01'),
+    ('CHILD_SICK_1',      'SLS_0560', 'OK26', 'AC_RESEARCH', 'Child sick day (barns sygedag)',     '2020-01-01'),
+    ('SENIOR_DAY',        'SLS_0570', 'OK26', 'AC_RESEARCH', 'Senior day',                         '2020-01-01'),
+    ('LEAVE_WITH_PAY',    'SLS_0580', 'OK26', 'AC_RESEARCH', 'Leave with pay',                     '2020-01-01'),
+    ('LEAVE_WITHOUT_PAY', 'SLS_0590', 'OK26', 'AC_RESEARCH', 'Leave without pay',                  '2020-01-01'),
+    ('TRAVEL_WORK',       'SLS_0820', 'OK26', 'AC_RESEARCH', 'Travel time (working)',              '2020-01-01'),
+    ('TRAVEL_NON_WORK',   'SLS_0830', 'OK26', 'AC_RESEARCH', 'Travel time (non-working)',          '2020-01-01')
 ON CONFLICT (time_type, ok_version, agreement_code, position, effective_from) DO NOTHING;
 
 -- AC_TEACHING OK24
 INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, description, effective_from) VALUES
-    ('NORMAL_HOURS',      'SLS_0110', 'OK24', 'AC_TEACHING', 'Normal hours'),
-    ('MERARBEJDE',        'SLS_0210', 'OK24', 'AC_TEACHING', 'Merarbejde (extra work)'),
-    ('VACATION',          'SLS_0510', 'OK24', 'AC_TEACHING', 'Vacation'),
-    ('SICK_DAY',          'SLS_0540', 'OK24', 'AC_TEACHING', 'Sick day'),
-    ('CARE_DAY',          'SLS_0550', 'OK24', 'AC_TEACHING', 'Care day (omsorgsdage)'),
-    ('CHILD_SICK_1',      'SLS_0560', 'OK24', 'AC_TEACHING', 'Child sick day (barns sygedag)'),
-    ('SENIOR_DAY',        'SLS_0570', 'OK24', 'AC_TEACHING', 'Senior day'),
-    ('LEAVE_WITH_PAY',    'SLS_0580', 'OK24', 'AC_TEACHING', 'Leave with pay'),
-    ('LEAVE_WITHOUT_PAY', 'SLS_0590', 'OK24', 'AC_TEACHING', 'Leave without pay', '2020-01-01'),
-    ('TRAVEL_WORK',       'SLS_0820', 'OK24', 'AC_TEACHING', 'Travel time (working)'),
-    ('TRAVEL_NON_WORK',   'SLS_0830', 'OK24', 'AC_TEACHING', 'Travel time (non-working)')
+    ('NORMAL_HOURS',      'SLS_0110', 'OK24', 'AC_TEACHING', 'Normal hours',                       '2020-01-01'),
+    ('MERARBEJDE',        'SLS_0210', 'OK24', 'AC_TEACHING', 'Merarbejde (extra work)',            '2020-01-01'),
+    ('VACATION',          'SLS_0510', 'OK24', 'AC_TEACHING', 'Vacation',                           '2020-01-01'),
+    ('SICK_DAY',          'SLS_0540', 'OK24', 'AC_TEACHING', 'Sick day',                           '2020-01-01'),
+    ('CARE_DAY',          'SLS_0550', 'OK24', 'AC_TEACHING', 'Care day (omsorgsdage)',             '2020-01-01'),
+    ('CHILD_SICK_1',      'SLS_0560', 'OK24', 'AC_TEACHING', 'Child sick day (barns sygedag)',     '2020-01-01'),
+    ('SENIOR_DAY',        'SLS_0570', 'OK24', 'AC_TEACHING', 'Senior day',                         '2020-01-01'),
+    ('LEAVE_WITH_PAY',    'SLS_0580', 'OK24', 'AC_TEACHING', 'Leave with pay',                     '2020-01-01'),
+    ('LEAVE_WITHOUT_PAY', 'SLS_0590', 'OK24', 'AC_TEACHING', 'Leave without pay',                  '2020-01-01'),
+    ('TRAVEL_WORK',       'SLS_0820', 'OK24', 'AC_TEACHING', 'Travel time (working)',              '2020-01-01'),
+    ('TRAVEL_NON_WORK',   'SLS_0830', 'OK24', 'AC_TEACHING', 'Travel time (non-working)',          '2020-01-01')
 ON CONFLICT (time_type, ok_version, agreement_code, position, effective_from) DO NOTHING;
 
 -- AC_TEACHING OK26
 INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, description, effective_from) VALUES
-    ('NORMAL_HOURS',      'SLS_0110', 'OK26', 'AC_TEACHING', 'Normal hours'),
-    ('MERARBEJDE',        'SLS_0210', 'OK26', 'AC_TEACHING', 'Merarbejde (extra work)'),
-    ('VACATION',          'SLS_0510', 'OK26', 'AC_TEACHING', 'Vacation'),
-    ('SICK_DAY',          'SLS_0540', 'OK26', 'AC_TEACHING', 'Sick day'),
-    ('CARE_DAY',          'SLS_0550', 'OK26', 'AC_TEACHING', 'Care day (omsorgsdage)'),
-    ('CHILD_SICK_1',      'SLS_0560', 'OK26', 'AC_TEACHING', 'Child sick day (barns sygedag)'),
-    ('SENIOR_DAY',        'SLS_0570', 'OK26', 'AC_TEACHING', 'Senior day'),
-    ('LEAVE_WITH_PAY',    'SLS_0580', 'OK26', 'AC_TEACHING', 'Leave with pay'),
-    ('LEAVE_WITHOUT_PAY', 'SLS_0590', 'OK26', 'AC_TEACHING', 'Leave without pay', '2020-01-01'),
-    ('TRAVEL_WORK',       'SLS_0820', 'OK26', 'AC_TEACHING', 'Travel time (working)'),
-    ('TRAVEL_NON_WORK',   'SLS_0830', 'OK26', 'AC_TEACHING', 'Travel time (non-working)')
+    ('NORMAL_HOURS',      'SLS_0110', 'OK26', 'AC_TEACHING', 'Normal hours',                       '2020-01-01'),
+    ('MERARBEJDE',        'SLS_0210', 'OK26', 'AC_TEACHING', 'Merarbejde (extra work)',            '2020-01-01'),
+    ('VACATION',          'SLS_0510', 'OK26', 'AC_TEACHING', 'Vacation',                           '2020-01-01'),
+    ('SICK_DAY',          'SLS_0540', 'OK26', 'AC_TEACHING', 'Sick day',                           '2020-01-01'),
+    ('CARE_DAY',          'SLS_0550', 'OK26', 'AC_TEACHING', 'Care day (omsorgsdage)',             '2020-01-01'),
+    ('CHILD_SICK_1',      'SLS_0560', 'OK26', 'AC_TEACHING', 'Child sick day (barns sygedag)',     '2020-01-01'),
+    ('SENIOR_DAY',        'SLS_0570', 'OK26', 'AC_TEACHING', 'Senior day',                         '2020-01-01'),
+    ('LEAVE_WITH_PAY',    'SLS_0580', 'OK26', 'AC_TEACHING', 'Leave with pay',                     '2020-01-01'),
+    ('LEAVE_WITHOUT_PAY', 'SLS_0590', 'OK26', 'AC_TEACHING', 'Leave without pay',                  '2020-01-01'),
+    ('TRAVEL_WORK',       'SLS_0820', 'OK26', 'AC_TEACHING', 'Travel time (working)',              '2020-01-01'),
+    ('TRAVEL_NON_WORK',   'SLS_0830', 'OK26', 'AC_TEACHING', 'Travel time (non-working)',          '2020-01-01')
 ON CONFLICT (time_type, ok_version, agreement_code, position, effective_from) DO NOTHING;
 
 -- ============================================================
