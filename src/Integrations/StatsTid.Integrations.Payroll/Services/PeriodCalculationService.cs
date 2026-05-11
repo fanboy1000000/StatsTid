@@ -1195,15 +1195,24 @@ public sealed class PeriodCalculationService
         // to the pre-S29 profile-drift risk that ReplayAsync(Guid, EmploymentProfile, ...)
         // accepts a caller-supplied profile that may differ from the forward-calc profile.
         //
-        // Snapshot-missing → throw. Pre-launch posture (REFINEMENT-s29-phase-4d1.md
-        // Assumption #1) precludes legitimate manifest gaps; replay against a pre-S29
-        // manifest is out of scope per Phase 4d-1 deferred carry-forward. Test-direct
-        // callers exercising this method must EITHER supply a profile that the planner
-        // enrolls against OR not call MapSegmentToExportLinesAsync directly (the planner's
-        // null-profile clause silently skips hydrator invocation per ADR-020 D1.5).
+        // Two paths reach this site:
+        //   - Forward calc: the hydrator just ran in-process; the value is a typed
+        //     WtmNaturalKey reference.
+        //   - Replay: the value round-tripped through segments_jsonb. Snapshot.Values is
+        //     IReadOnlyDictionary<string, object?>, so System.Text.Json materialises the
+        //     entry as JsonElement on load. Deserialize using the same JsonOptions that
+        //     was used to write it (line 974) so the triple is byte-stable.
+        //
+        // Snapshot-missing or unrecognised payload → throw. Pre-launch posture
+        // (REFINEMENT-s29-phase-4d1.md Assumption #1) precludes legitimate manifest gaps;
+        // replay against a pre-S29 manifest is out of scope per Phase 4d-1 deferred
+        // carry-forward. Test-direct callers exercising this method must EITHER supply a
+        // profile that the planner enrolls against OR not call MapSegmentToExportLinesAsync
+        // directly (the planner's null-profile clause silently skips hydrator invocation
+        // per ADR-020 D1.5).
         if (plannedSegment.Snapshot is null
             || !plannedSegment.Snapshot.Values.TryGetValue("WtmNaturalKey", out var wtmKeyObj)
-            || wtmKeyObj is not WtmNaturalKey wtmKey)
+            || wtmKeyObj is null)
         {
             throw new InvalidOperationException(
                 "PCS.MapSegmentToExportLinesAsync requires a WtmNaturalKey entry in the segment " +
@@ -1212,6 +1221,20 @@ public sealed class PeriodCalculationService
                 "manifest persisted before S29 or a test-direct caller that bypassed " +
                 "PCS.BuildPlanForLegacyCallersAsync (where the WtmNaturalKey hydrator is registered).");
         }
+
+        WtmNaturalKey wtmKey = wtmKeyObj switch
+        {
+            WtmNaturalKey direct => direct,
+            JsonElement el => el.Deserialize<WtmNaturalKey>(JsonOptions)
+                ?? throw new InvalidOperationException(
+                    "WtmNaturalKey JsonElement in segment snapshot deserialised to null. " +
+                    $"Segment range: [{plannedSegment.StartDate:yyyy-MM-dd}, {plannedSegment.EndDate:yyyy-MM-dd}]; " +
+                    $"ManifestId={manifestId}; payload={el.GetRawText()}."),
+            _ => throw new InvalidOperationException(
+                $"WtmNaturalKey entry in segment snapshot is of unexpected type {wtmKeyObj.GetType().FullName}; " +
+                $"expected WtmNaturalKey or JsonElement. Segment range: [{plannedSegment.StartDate:yyyy-MM-dd}, " +
+                $"{plannedSegment.EndDate:yyyy-MM-dd}]; ManifestId={manifestId}."),
+        };
 
         foreach (var result in segmentRuleResults)
         {
