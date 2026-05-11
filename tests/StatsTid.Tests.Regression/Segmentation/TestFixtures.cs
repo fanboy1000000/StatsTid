@@ -127,6 +127,15 @@ internal static class TestFixtures
     /// returns a deterministic NORMAL_HOURS line item per matched entry — enough to
     /// produce export lines and exercise per-line manifest stamping. The default handler
     /// shape returns a fresh <see cref="CalculationResult"/> for every rule call.
+    ///
+    /// <para>
+    /// S29 / TASK-2909 D-test #6 (replay-determinism marquee): <see cref="PayrollMappingService"/>
+    /// now receives a <see cref="WageTypeMappingRepository"/> so the dated-read path
+    /// (<c>asOfDate = segmentStart</c> per <c>PCS.MapSegmentToExportLinesAsync</c>) functions
+    /// in tests. Without the repo, any test going through the planner-driven export with a
+    /// segment snapshot containing <c>WtmNaturalKey</c> would throw
+    /// <see cref="InvalidOperationException"/> from <see cref="PayrollMappingService.GetMappingAsync"/>.
+    /// </para>
     /// </summary>
     public static PeriodCalculationService BuildPcs(
         DbConnectionFactory factory,
@@ -136,7 +145,8 @@ internal static class TestFixtures
         var stubHandler = new StubHandler(handler ?? DefaultRuleEngineHandler);
         var httpFactory = new SingleClientFactory(stubHandler);
 
-        var mappingService = new PayrollMappingService(factory, NullLogger<PayrollMappingService>.Instance);
+        var wtmRepo = new WageTypeMappingRepository(factory);
+        var mappingService = new PayrollMappingService(factory, NullLogger<PayrollMappingService>.Instance, wtmRepo);
 
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
