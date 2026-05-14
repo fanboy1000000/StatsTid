@@ -137,7 +137,7 @@ Not directly affected: P2 (rule engine determinism unchanged), P5 (no inter-serv
 | Field | Value |
 |-------|-------|
 | **ID** | TASK-3001 |
-| **Status** | pending |
+| **Status** | complete (TRIVIAL — 2026-05-14) |
 | **Agent** | Test & QA |
 | **Components** | tests/StatsTid.Tests.Regression/Hosting/ (or wherever the WAF fixture lives) — diagnosis only, no code change |
 | **KB Refs** | n/a (diagnostic) |
@@ -147,11 +147,56 @@ Not directly affected: P2 (rule engine determinism unchanged), P5 (no inter-serv
 **Description**: Diagnose root cause of `WebApplicationFactory<Program>` connection-override defect. Currently blocks 8 S29 HTTP-level D-tests + `PublisherStallReadYourWriteTests` (S27). Disposition outcomes: **trivial** → TASK-3001b fix in-sprint; **non-trivial** → split to S31, S30 D-tests use direct-orchestration harness. **1-day timebox**.
 
 **Validation Criteria**:
-- [ ] Root cause hypothesis written to this row (trivial classification or non-trivial classification with rationale)
-- [ ] If trivial: TASK-3001b conditional task created with file-scope + 1-line description
-- [ ] If non-trivial: S31 carry-forward note added to ROADMAP Phase 4e candidates
+- [x] Root cause hypothesis written to this row (trivial classification or non-trivial classification with rationale)
+- [x] If trivial: TASK-3001b conditional task created with file-scope + 1-line description — see "Recommended TASK-3001b shape" section above
+- [ ] If non-trivial: S31 carry-forward note added to ROADMAP Phase 4e candidates — N/A (TRIVIAL)
 
-**Files Changed**: _filled when diagnosis completes_
+**Files Changed**: none (read-only diagnostic). Diagnosis run on 2026-05-14 against base `41b6e89`.
+
+##### Root cause hypothesis
+
+`StatsTidWebApplicationFactory.ConfigureWebHost` adds the test container's connection string via `IWebHostBuilder.ConfigureAppConfiguration(...)` — but `Program.cs:11-12` reads `builder.Configuration.GetConnectionString("EventStore")` **at builder construction time**, BEFORE any `ConfigureWebHost` callback has fired. The local variable `connectionString` therefore resolves to the production default `Host=localhost;Port=5432;Database=statstid;Username=statstid;Password=statstid_dev`, and `Program.cs:15`'s `new DbConnectionFactory(connectionString)` captures that default into the DI singleton. Every repository constructed downstream (in the test) tries `127.0.0.1:5432`, ignoring the testcontainer.
+
+Verified by running `StatsTidWebApplicationFactoryTests.Harness_BootsBackendApi_AndStopsPublisherCleanly` against Docker (test logger shows the testcontainer DID start successfully — log line `[testcontainers.org 00:00:08.28] Delete Docker container 5407338b2116`). Failure: `Npgsql.NpgsqlException: Failed to connect to 127.0.0.1:5432` raised from `AgreementConfigSeeder.SeedAsync` at `Program.cs:75`. The 127.0.0.1:5432 target is the production default fallback in Program.cs:12, NOT the Testcontainers-published port — confirming that the `ConfigureAppConfiguration` override was applied too late in the WAF lifecycle (after `builder.Configuration` was already consulted).
+
+This is a well-known .NET 8 `WebApplicationFactory<Program>` + top-level-statements + `WebApplication.CreateBuilder` pitfall: app-configuration callbacks layered via `IWebHostBuilder.ConfigureAppConfiguration` only affect configuration read **after** the host is built, NOT configuration read at builder time inside the top-level statements of Program.cs. The same failure mode reproduces against `PublisherStallReadYourWriteTests` (S27) and against the 8 S29 deferred HTTP-level D-tests in `WageTypeMappingEndpointTests` + `WageTypeMappingIdempotencyTests` (`WageTypeMappingIdempotencyTests.SeedInsertIdempotency_...` calls `ApplyFullSchemaAsync` only — which succeeds — but the harness-using sibling tests share the failure mode).
+
+##### Classification (trivial / non-trivial)
+
+**TRIVIAL** — single-file fix inside `tests/StatsTid.Tests.Regression/Hosting/StatsTidWebApplicationFactory.cs`. Estimable <1h. No production code change required. No architectural rework. Two equally well-known fix shapes (either works; choose by preference):
+
+- **Option A (preferred — minimal & idiomatic):** override `ConfigureWebHost` to use `ConfigureHostConfiguration(...)` instead of (or in addition to) `ConfigureAppConfiguration(...)`. Host-configuration is materialized BEFORE the WebApplicationBuilder's app-configuration chain reads it at `builder.Configuration.GetConnectionString("EventStore")`. Code shape:
+  ```csharp
+  protected override IHost CreateHost(IHostBuilder builder)
+  {
+      builder.ConfigureHostConfiguration(cfg => cfg.AddInMemoryCollection(
+          new Dictionary<string, string?> { ["ConnectionStrings:EventStore"] = _connectionString }));
+      return base.CreateHost(builder);
+  }
+  ```
+  Plus delete or keep-as-belt-and-braces the existing `ConfigureWebHost` override.
+
+- **Option B (alternative, slightly more code):** in `ConfigureWebHost`, also `ConfigureTestServices(svc => { svc.RemoveAll<DbConnectionFactory>(); svc.AddSingleton(new DbConnectionFactory(_connectionString)); })`. This swaps the DI registration AFTER Program.cs's wiring runs, replacing the singleton that captured the production-default string. Repositories built lazily downstream will see the new factory.
+
+Both are 5-15 LOC; both are textbook patterns. Option A is preferred because it fixes the cause (config-source layering) rather than papering over it via DI replacement; Option B works defensively if other Program.cs sites read configuration at builder time for non-connection-string values.
+
+##### Recommended TASK-3001b shape
+
+Create conditional `TASK-3001b` in Phase 0 with Backend API / Test & QA shared scope (Test & QA preferred — single-file edit in `tests/`):
+
+> Add `protected override IHost CreateHost(IHostBuilder builder)` to `StatsTidWebApplicationFactory` that calls `builder.ConfigureHostConfiguration(cfg => cfg.AddInMemoryCollection(new Dictionary<string, string?> { ["ConnectionStrings:EventStore"] = _connectionString }))` then `return base.CreateHost(builder)`. Re-run `StatsTidWebApplicationFactoryTests.Harness_BootsBackendApi_AndStopsPublisherCleanly` + `PublisherStallReadYourWriteTests.*` + `WageTypeMappingEndpointTests.*` (the 8 S29 deferred HTTP-level D-tests) and confirm all pass. Expected ≥10 newly-passing Docker-gated tests.
+
+This unblocks **all** WAF-based tests in one stroke. If TASK-3001b is taken, TASK-3010's admin-CRUD D-tests can be written HTTP-level via `WebApplicationFactory<Program>` per the S25/S29 pattern, matching the +8 stretch test target.
+
+##### Reproduction command
+
+```
+docker ps   # ensure Docker daemon is up
+dotnet build tests/StatsTid.Tests.Regression/StatsTid.Tests.Regression.csproj
+dotnet test tests/StatsTid.Tests.Regression/StatsTid.Tests.Regression.csproj --filter "FullyQualifiedName~StatsTidWebApplicationFactoryTests" --no-build --logger "console;verbosity=detailed"
+```
+
+Expected exit code 1; stack trace pointing at `AgreementConfigSeeder.SeedAsync` (`Program.cs:75`) with `Failed to connect to 127.0.0.1:5432` as the inner exception. Run time ~9 s (most of which is Testcontainers Postgres cold start). The 127.0.0.1:5432 target — NOT the dynamic Testcontainers port — is the smoking gun: the test container did start successfully (visible in test log immediately above the failure), but Program.cs read the production-default connection string before WAF's `ConfigureAppConfiguration` override took effect.
 
 ---
 
