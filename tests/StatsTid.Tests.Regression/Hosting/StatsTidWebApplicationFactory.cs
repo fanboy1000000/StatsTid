@@ -61,10 +61,43 @@ public sealed class StatsTidWebApplicationFactory : WebApplicationFactory<Progra
     }
 
     /// <summary>
+    /// Inject the per-test container's connection string into HOST configuration
+    /// (which fires BEFORE <see cref="WebApplicationBuilder"/> reads its app
+    /// configuration at builder-construction time). This is the only timing point
+    /// where the override is observed by <c>Program.cs:11-12</c>'s
+    /// <c>builder.Configuration.GetConnectionString("EventStore")</c> read that
+    /// captures into the <c>DbConnectionFactory</c> singleton.
+    ///
+    /// <para>
+    /// Per TASK-3001 diagnosis (SPRINT-30): <see cref="ConfigureWebHost"/>'s
+    /// <see cref="IWebHostBuilder.ConfigureAppConfiguration"/> fires too late —
+    /// the production default <c>127.0.0.1:5432</c> has already been captured.
+    /// Host configuration via <see cref="IHostBuilder.ConfigureHostConfiguration"/>
+    /// fires earlier and overrides successfully.
+    /// </para>
+    /// </summary>
+    protected override IHost CreateHost(IHostBuilder builder)
+    {
+        builder.ConfigureHostConfiguration(cfg => cfg.AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:EventStore"] = _connectionString,
+            }));
+        return base.CreateHost(builder);
+    }
+
+    /// <summary>
     /// Override <c>ConnectionStrings:EventStore</c> so <c>Program.cs</c> reads our
     /// per-test container's connection string instead of the production default.
     /// All other configuration (JWT signing key dev fallback, etc.) is resolved
     /// from the host's defaults.
+    ///
+    /// <para>
+    /// Retained belt-and-braces alongside the <see cref="CreateHost"/> override
+    /// added in TASK-3001b: this path is harmless when the host-configuration
+    /// override already won, and keeps any future non-connection-string overrides
+    /// intact without re-introducing the timing bug.
+    /// </para>
     /// </summary>
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {

@@ -200,6 +200,40 @@ Expected exit code 1; stack trace pointing at `AgreementConfigSeeder.SeedAsync` 
 
 ---
 
+#### TASK-3001b — Apply Option A `CreateHost` override (TRIVIAL fix)
+
+| Field | Value |
+|-------|-------|
+| **ID** | TASK-3001b |
+| **Status** | complete (TRIVIAL fix applied — 2026-05-14) |
+| **Agent** | Test & QA |
+| **Components** | tests/StatsTid.Tests.Regression/Hosting/StatsTidWebApplicationFactory.cs |
+| **KB Refs** | n/a (test harness fix) |
+| **Plan section** | Phase 0 — TASK-3001b (PLAN-s30.md Phase 0 conditional shape; TASK-3001 row "Recommended TASK-3001b shape" section above) |
+| **Dependencies** | TASK-3001 (disposition = TRIVIAL) |
+
+**Description**: Per TASK-3001 Option A: add `protected override IHost CreateHost(IHostBuilder builder)` to `StatsTidWebApplicationFactory` that calls `builder.ConfigureHostConfiguration(cfg => cfg.AddInMemoryCollection(...))` with `ConnectionStrings:EventStore` set to `_connectionString`, then `return base.CreateHost(builder)`. Host-configuration fires BEFORE the `WebApplicationBuilder` reads app-configuration at builder-construction time (the timing point where `Program.cs:11-12` captures the connection string into the `DbConnectionFactory` singleton). Existing `ConfigureWebHost` override KEPT belt-and-braces (harmless once the host-configuration override has already won; preserves intent for any future non-connection-string overrides). No production-code change.
+
+**Validation Criteria**:
+- [x] `dotnet build tests/StatsTid.Tests.Regression/StatsTid.Tests.Regression.csproj` clean (0 errors; only pre-existing S20 W2 obsolete-API warning)
+- [x] `StatsTidWebApplicationFactoryTests.Harness_BootsBackendApi_AndStopsPublisherCleanly` PASSES (1/1)
+- [x] `PublisherStallReadYourWriteTests.*` PASSES (2/2 — `TimeEntry_PostThenGet_PublisherStopped_ProjectionServesReadYourWrite` + `Absence_PostThenGet_PublisherStopped_ProjectionServesReadYourWrite`; were failing pre-S29 per S29 close note)
+- [x] `WageTypeMappingEndpointTests.*` PASSES (8/8 — the 8 S29 deferred HTTP-level D-tests; 2 PUT 412/428 + 1 cross-day supersession + 1 DELETE 204 + 1 DELETE 428 + 1 POST 201 today + 1 POST 422 past + 1 PUT 422 future)
+- [x] **Total newly-passing Docker-gated tests: 10** (1 harness self-test was already trivially passing in isolation? — re-verified; +2 PublisherStallReadYourWrite + +8 WageTypeMappingEndpoint = +10 vs S29 baseline)
+
+**Files Changed**: 1 file
+- `tests/StatsTid.Tests.Regression/Hosting/StatsTidWebApplicationFactory.cs` (+25 LOC: new `CreateHost` override + XML-doc explaining the host-vs-app configuration timing distinction + amended XML-doc on `ConfigureWebHost` noting belt-and-braces retention)
+
+**Verification command run**:
+```
+dotnet test tests/StatsTid.Tests.Regression/StatsTid.Tests.Regression.csproj --filter "FullyQualifiedName~StatsTidWebApplicationFactoryTests" --no-build --logger "console;verbosity=normal"
+dotnet test tests/StatsTid.Tests.Regression/StatsTid.Tests.Regression.csproj --filter "FullyQualifiedName~PublisherStallReadYourWriteTests|FullyQualifiedName~WageTypeMappingEndpointTests" --no-build --logger "console;verbosity=normal"
+```
+
+Result: `Total tests: 1, Passed: 1` and `Total tests: 10, Passed: 10`. No remaining failures in the filter. Unblocks +10 Docker-gated tests against the S29 baseline and removes the need for direct-orchestration fallback in TASK-3010 — admin-CRUD D-tests can now be written HTTP-level via `WebApplicationFactory<Program>` per the S25/S29 pattern (stretch test target of 24 net new D-tests is now achievable).
+
+---
+
 ### Phase 1 — Plumbing (sequential, 5 commits — commit before Phase 2 dispatch)
 
 #### TASK-3002 — Schema migration `s30-d2-ec-effective-dating` + `entitlement_config_audit` CREATE
