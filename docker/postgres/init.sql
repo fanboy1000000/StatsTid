@@ -1175,43 +1175,49 @@ CREATE TABLE IF NOT EXISTS entitlement_balances (
 );
 
 -- Seed entitlement configs: AC/HK/PROSA × OK24/OK26 × 5 types = 30 rows
-INSERT INTO entitlement_configs (entitlement_type, agreement_code, ok_version, annual_quota, accrual_model, reset_month, carryover_max, pro_rate_by_part_time, is_per_episode, min_age, description) VALUES
+-- S30 TASK-3006 (ADR-021 D3): seed-INSERT rewrite to include effective_from
+-- + ON CONFLICT on (natural_key, effective_from) targeting idx_ec_natural_key_history
+-- so the block is idempotent across `docker compose down -v && up` re-runs (S29
+-- TASK-2906 / ADR-020 D3 precedent on wage_type_mappings at init.sql:1335,1353).
+-- Anchor '0001-01-01' matches the base CREATE TABLE default at L1129 — sentinel
+-- "pre-launch" effective_from, NOT a real agreement-start date.
+INSERT INTO entitlement_configs (entitlement_type, agreement_code, ok_version, annual_quota, accrual_model, reset_month, carryover_max, pro_rate_by_part_time, is_per_episode, min_age, description, effective_from) VALUES
     -- VACATION: 25 days, reset September, carryover 5
-    ('VACATION', 'AC', 'OK24', 25, 'IMMEDIATE', 9, 5, true, false, NULL, 'Ferie – 25 dage'),
-    ('VACATION', 'AC', 'OK26', 25, 'IMMEDIATE', 9, 5, true, false, NULL, 'Ferie – 25 dage'),
-    ('VACATION', 'HK', 'OK24', 25, 'IMMEDIATE', 9, 5, true, false, NULL, 'Ferie – 25 dage'),
-    ('VACATION', 'HK', 'OK26', 25, 'IMMEDIATE', 9, 5, true, false, NULL, 'Ferie – 25 dage'),
-    ('VACATION', 'PROSA', 'OK24', 25, 'IMMEDIATE', 9, 5, true, false, NULL, 'Ferie – 25 dage'),
-    ('VACATION', 'PROSA', 'OK26', 25, 'IMMEDIATE', 9, 5, true, false, NULL, 'Ferie – 25 dage'),
+    ('VACATION', 'AC', 'OK24', 25, 'IMMEDIATE', 9, 5, true, false, NULL, 'Ferie – 25 dage', '0001-01-01'),
+    ('VACATION', 'AC', 'OK26', 25, 'IMMEDIATE', 9, 5, true, false, NULL, 'Ferie – 25 dage', '0001-01-01'),
+    ('VACATION', 'HK', 'OK24', 25, 'IMMEDIATE', 9, 5, true, false, NULL, 'Ferie – 25 dage', '0001-01-01'),
+    ('VACATION', 'HK', 'OK26', 25, 'IMMEDIATE', 9, 5, true, false, NULL, 'Ferie – 25 dage', '0001-01-01'),
+    ('VACATION', 'PROSA', 'OK24', 25, 'IMMEDIATE', 9, 5, true, false, NULL, 'Ferie – 25 dage', '0001-01-01'),
+    ('VACATION', 'PROSA', 'OK26', 25, 'IMMEDIATE', 9, 5, true, false, NULL, 'Ferie – 25 dage', '0001-01-01'),
     -- SPECIAL_HOLIDAY: 5 days, reset September, no carryover
-    ('SPECIAL_HOLIDAY', 'AC', 'OK24', 5, 'IMMEDIATE', 9, 0, true, false, NULL, 'Særlige feriedage – 5 dage'),
-    ('SPECIAL_HOLIDAY', 'AC', 'OK26', 5, 'IMMEDIATE', 9, 0, true, false, NULL, 'Særlige feriedage – 5 dage'),
-    ('SPECIAL_HOLIDAY', 'HK', 'OK24', 5, 'IMMEDIATE', 9, 0, true, false, NULL, 'Særlige feriedage – 5 dage'),
-    ('SPECIAL_HOLIDAY', 'HK', 'OK26', 5, 'IMMEDIATE', 9, 0, true, false, NULL, 'Særlige feriedage – 5 dage'),
-    ('SPECIAL_HOLIDAY', 'PROSA', 'OK24', 5, 'IMMEDIATE', 9, 0, true, false, NULL, 'Særlige feriedage – 5 dage'),
-    ('SPECIAL_HOLIDAY', 'PROSA', 'OK26', 5, 'IMMEDIATE', 9, 0, true, false, NULL, 'Særlige feriedage – 5 dage'),
+    ('SPECIAL_HOLIDAY', 'AC', 'OK24', 5, 'IMMEDIATE', 9, 0, true, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01'),
+    ('SPECIAL_HOLIDAY', 'AC', 'OK26', 5, 'IMMEDIATE', 9, 0, true, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01'),
+    ('SPECIAL_HOLIDAY', 'HK', 'OK24', 5, 'IMMEDIATE', 9, 0, true, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01'),
+    ('SPECIAL_HOLIDAY', 'HK', 'OK26', 5, 'IMMEDIATE', 9, 0, true, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01'),
+    ('SPECIAL_HOLIDAY', 'PROSA', 'OK24', 5, 'IMMEDIATE', 9, 0, true, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01'),
+    ('SPECIAL_HOLIDAY', 'PROSA', 'OK26', 5, 'IMMEDIATE', 9, 0, true, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01'),
     -- CARE_DAY: 2 days, reset January, no carryover, not pro-rated
-    ('CARE_DAY', 'AC', 'OK24', 2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage'),
-    ('CARE_DAY', 'AC', 'OK26', 2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage'),
-    ('CARE_DAY', 'HK', 'OK24', 2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage'),
-    ('CARE_DAY', 'HK', 'OK26', 2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage'),
-    ('CARE_DAY', 'PROSA', 'OK24', 2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage'),
-    ('CARE_DAY', 'PROSA', 'OK26', 2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage'),
+    ('CARE_DAY', 'AC', 'OK24', 2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage', '0001-01-01'),
+    ('CARE_DAY', 'AC', 'OK26', 2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage', '0001-01-01'),
+    ('CARE_DAY', 'HK', 'OK24', 2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage', '0001-01-01'),
+    ('CARE_DAY', 'HK', 'OK26', 2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage', '0001-01-01'),
+    ('CARE_DAY', 'PROSA', 'OK24', 2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage', '0001-01-01'),
+    ('CARE_DAY', 'PROSA', 'OK26', 2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage', '0001-01-01'),
     -- CHILD_SICK: AC=1, HK=2, PROSA=3, per-episode
-    ('CHILD_SICK', 'AC', 'OK24', 1, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barn syg – 1 dag per episode'),
-    ('CHILD_SICK', 'AC', 'OK26', 1, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barn syg – 1 dag per episode'),
-    ('CHILD_SICK', 'HK', 'OK24', 2, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barn syg – 2 dage per episode'),
-    ('CHILD_SICK', 'HK', 'OK26', 2, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barn syg – 2 dage per episode'),
-    ('CHILD_SICK', 'PROSA', 'OK24', 3, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barn syg – 3 dage per episode'),
-    ('CHILD_SICK', 'PROSA', 'OK26', 3, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barn syg – 3 dage per episode'),
+    ('CHILD_SICK', 'AC', 'OK24', 1, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barn syg – 1 dag per episode', '0001-01-01'),
+    ('CHILD_SICK', 'AC', 'OK26', 1, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barn syg – 1 dag per episode', '0001-01-01'),
+    ('CHILD_SICK', 'HK', 'OK24', 2, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barn syg – 2 dage per episode', '0001-01-01'),
+    ('CHILD_SICK', 'HK', 'OK26', 2, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barn syg – 2 dage per episode', '0001-01-01'),
+    ('CHILD_SICK', 'PROSA', 'OK24', 3, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barn syg – 3 dage per episode', '0001-01-01'),
+    ('CHILD_SICK', 'PROSA', 'OK26', 3, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barn syg – 3 dage per episode', '0001-01-01'),
     -- SENIOR_DAY: 0 days default, min_age=60
-    ('SENIOR_DAY', 'AC', 'OK24', 0, 'IMMEDIATE', 1, 0, false, false, 60, 'Seniordage – kræver alder 60+'),
-    ('SENIOR_DAY', 'AC', 'OK26', 0, 'IMMEDIATE', 1, 0, false, false, 60, 'Seniordage – kræver alder 60+'),
-    ('SENIOR_DAY', 'HK', 'OK24', 0, 'IMMEDIATE', 1, 0, false, false, 60, 'Seniordage – kræver alder 60+'),
-    ('SENIOR_DAY', 'HK', 'OK26', 0, 'IMMEDIATE', 1, 0, false, false, 60, 'Seniordage – kræver alder 60+'),
-    ('SENIOR_DAY', 'PROSA', 'OK24', 0, 'IMMEDIATE', 1, 0, false, false, 60, 'Seniordage – kræver alder 60+'),
-    ('SENIOR_DAY', 'PROSA', 'OK26', 0, 'IMMEDIATE', 1, 0, false, false, 60, 'Seniordage – kræver alder 60+')
-ON CONFLICT DO NOTHING;
+    ('SENIOR_DAY', 'AC', 'OK24', 0, 'IMMEDIATE', 1, 0, false, false, 60, 'Seniordage – kræver alder 60+', '0001-01-01'),
+    ('SENIOR_DAY', 'AC', 'OK26', 0, 'IMMEDIATE', 1, 0, false, false, 60, 'Seniordage – kræver alder 60+', '0001-01-01'),
+    ('SENIOR_DAY', 'HK', 'OK24', 0, 'IMMEDIATE', 1, 0, false, false, 60, 'Seniordage – kræver alder 60+', '0001-01-01'),
+    ('SENIOR_DAY', 'HK', 'OK26', 0, 'IMMEDIATE', 1, 0, false, false, 60, 'Seniordage – kræver alder 60+', '0001-01-01'),
+    ('SENIOR_DAY', 'PROSA', 'OK24', 0, 'IMMEDIATE', 1, 0, false, false, 60, 'Seniordage – kræver alder 60+', '0001-01-01'),
+    ('SENIOR_DAY', 'PROSA', 'OK26', 0, 'IMMEDIATE', 1, 0, false, false, 60, 'Seniordage – kræver alder 60+', '0001-01-01')
+ON CONFLICT (entitlement_type, agreement_code, ok_version, effective_from) DO NOTHING;
 
 -- ============================================================
 -- SPRINT 27 (Phase 4c.6): Sync-in-tx Read Projections
