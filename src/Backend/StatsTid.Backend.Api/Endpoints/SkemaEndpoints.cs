@@ -79,6 +79,23 @@ public static class SkemaEndpoints
         return date.Month >= resetMonth ? date.Year : date.Year - 1;
     }
 
+    /// <summary>
+    /// S30 / TASK-3008 — derive the entitlement-year START DATE for a given relevant date
+    /// and reset month. Used as the <c>asOfDate</c> for dated reads against
+    /// <see cref="EntitlementConfigRepository.GetByTypeAtAsync(string, string, string, DateOnly, CancellationToken)"/>
+    /// (two-step pattern: live <c>ResetMonth</c> read first, then dated re-read at year-start).
+    /// resetMonth is 1-12. The entitlement year starts on (resetMonth, 1) of either the relevantDate's
+    /// calendar year (when month &gt;= resetMonth) or the prior calendar year (when month &lt; resetMonth).
+    /// E.g. AC VACATION resetMonth=9, relevantDate=2026-05-14 → year-start = 2025-09-01.
+    /// </summary>
+    private static DateOnly ResolveEntitlementYearStart(DateOnly relevantDate, int resetMonth)
+    {
+        var year = relevantDate.Month >= resetMonth
+            ? relevantDate.Year
+            : relevantDate.Year - 1;
+        return new DateOnly(year, resetMonth, 1);
+    }
+
     public static WebApplication MapSkemaEndpoints(this WebApplication app)
     {
         // ── GET /api/skema/{employeeId}/month — Composite monthly spreadsheet data ──
@@ -310,16 +327,32 @@ public static class SkemaEndpoints
                 {
                     var requestedDays = totalRequestedHours / StandardDayHours;
 
-                    var config = await entitlementConfigRepo.GetByTypeAsync(
+                    // ── S30 TASK-3008 two-step pattern (ADR-021 D2 + ADR-016 D5b "fifth pattern") ──
+                    // Step 1: read the LIVE (open) row to derive ResetMonth. ResetMonth is frozen
+                    // per natural key by the TASK-3007 admin-scope 422 guard (per ADR-021 Q1 sub-fork
+                    // (i)), so the live value is safe to use for entitlement-year-start derivation
+                    // across the entire history of this natural key.
+                    var liveConfig = await entitlementConfigRepo.GetCurrentOpenAsync(
                         entitlementType, user.AgreementCode, user.OkVersion, ct);
-                    if (config is null)
+                    if (liveConfig is null)
                         continue;
 
                     var firstAbsenceDate = request.Absences
                         .Where(a => AbsenceToEntitlementType.TryGetValue(a.AbsenceType, out var et) && et == entitlementType)
                         .Select(a => a.Date)
                         .Min();
-                    var entitlementYear = ResolveEntitlementYear(firstAbsenceDate, config.ResetMonth);
+                    var entitlementYear = ResolveEntitlementYear(firstAbsenceDate, liveConfig.ResetMonth);
+                    var entitlementYearStart = ResolveEntitlementYearStart(firstAbsenceDate, liveConfig.ResetMonth);
+
+                    // Step 2: dated read at the entitlement-year-start. This is the config row that
+                    // was IN EFFECT on the day the current entitlement year started — what quota
+                    // validation must use (annual_quota / carryover_max as they stood at year-start).
+                    // Fallback: if no row was effective at year-start (e.g. this OK version came into
+                    // existence mid-year), fall back to the live config so we don't silently skip a
+                    // real quota check.
+                    var config = await entitlementConfigRepo.GetByTypeAtAsync(
+                        entitlementType, user.AgreementCode, user.OkVersion, entitlementYearStart, ct)
+                        ?? liveConfig;
 
                     var balance = await entitlementBalanceRepo.GetByEmployeeAndTypeAsync(
                         employeeId, entitlementType, entitlementYear, ct);

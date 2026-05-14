@@ -117,7 +117,12 @@ public static class BalanceEndpoints
             var overtimeBalance = await overtimeBalanceRepo.GetByEmployeeAndYearAsync(employeeId, year, ct);
 
             // ── Entitlements: load configs and balances ──
-            var entitlementConfigs = await entitlementConfigRepo.GetByAgreementAsync(
+            // S30 TASK-3008 two-step pattern (ADR-021 D2 + ADR-016 D5b "fifth pattern").
+            // Step 1: read the LIVE (open) rows for this agreement/OK pair to discover the
+            // natural keys + their ResetMonth values. ResetMonth is frozen per natural key by
+            // the TASK-3007 admin-scope 422 guard (ADR-021 Q1 sub-fork (i)), so each live
+            // row's ResetMonth is safe to use for year-start derivation across the full history.
+            var liveConfigs = await entitlementConfigRepo.GetByAgreementAsync(
                 user.AgreementCode, user.OkVersion, ct);
 
             // Part-time fraction not available on User model — default to 1.0
@@ -126,20 +131,35 @@ public static class BalanceEndpoints
             var entitlements = new List<object>();
             decimal? vacationEntitlementFromConfig = null;
 
-            foreach (var ec in entitlementConfigs)
+            foreach (var live in liveConfigs)
             {
-                // Calculate entitlement year based on resetMonth
+                // Calculate entitlement year based on the live ResetMonth (immutable per natural key).
                 int entitlementYear;
-                if (ec.ResetMonth == 1)
+                if (live.ResetMonth == 1)
                 {
                     entitlementYear = year;
                 }
                 else
                 {
-                    entitlementYear = month >= ec.ResetMonth ? year : year - 1;
+                    entitlementYear = month >= live.ResetMonth ? year : year - 1;
                 }
 
-                // Look up balance for this employee + type + year
+                // Step 2: dated read at the entitlement-year-start. This is the config row that
+                // was IN EFFECT when the current entitlement year started — its annual_quota /
+                // carryover_max define this year's quota for display. Per-type dated reads
+                // (not GetByAgreementAtAsync) because each type may resolve to a DIFFERENT
+                // asOfDate (different reset_month → different year-start).
+                // Fallback: if no row was effective at year-start (e.g. this OK version came
+                // into existence mid-year), fall back to the live row so the entitlement still
+                // appears in the summary with the current quota values.
+                var entitlementYearStart = new DateOnly(entitlementYear, live.ResetMonth, 1);
+                var ec = await entitlementConfigRepo.GetByTypeAtAsync(
+                    live.EntitlementType, user.AgreementCode, user.OkVersion, entitlementYearStart, ct)
+                    ?? live;
+
+                // Look up balance for this employee + type + year (read from entitlement_balances
+                // — the balance projection is owned by Skema/Time POST handlers and is unchanged
+                // by Phase 4d-2 versioning of entitlement_configs).
                 var balance = await entitlementBalanceRepo.GetByEmployeeAndTypeAsync(
                     employeeId, ec.EntitlementType, entitlementYear, ct);
 
