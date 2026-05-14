@@ -1106,6 +1106,12 @@ ON CONFLICT DO NOTHING;
 -- SPRINT 15: Entitlement Management Tables
 -- ============================================================
 
+-- S30 / ADR-021: effective-dating columns + partial-unique-index pattern baked
+-- into the schema so greenfield bootstrap is single-pass. The migration block
+-- further down in this file remains idempotent on top of this shape (each
+-- ALTER is guarded by IF NOT EXISTS / DROP CONSTRAINT IF EXISTS) and is the
+-- path for legacy environments still on the pre-S30 single-row schema.
+-- `version` column is added by the S25 / ADR-019 migration block below.
 CREATE TABLE IF NOT EXISTS entitlement_configs (
     config_id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     entitlement_type        TEXT        NOT NULL,
@@ -1120,7 +1126,39 @@ CREATE TABLE IF NOT EXISTS entitlement_configs (
     min_age                 INT,
     description             TEXT,
     created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (entitlement_type, agreement_code, ok_version)
+    effective_from          DATE        NOT NULL DEFAULT '0001-01-01',
+    effective_to            DATE
+);
+
+-- ADR-021 D2: at most one open row per natural key (S21 D2.1 partial-unique pattern).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ec_natural_key_open
+    ON entitlement_configs (entitlement_type, agreement_code, ok_version)
+    WHERE effective_to IS NULL;
+
+-- ADR-021 D3 conflict target: forbids duplicate history rows on (natural_key, effective_from).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ec_natural_key_history
+    ON entitlement_configs (entitlement_type, agreement_code, ok_version, effective_from);
+
+-- ADR-021: audit table for entitlement_configs admin CRUD. Mirrors
+-- wage_type_mapping_audit (singular) post-S25 migration shape — version_before
+-- + version_after baked directly into the base CREATE (NOT a separate S25-style
+-- ALTER) because this table is brand-new in S30. action CHECK includes
+-- SUPERSEDED inline (S29 wage_type_mapping_audit precedent). No FK on
+-- config_id because supersession + soft-delete create FK-invalidating histories.
+CREATE TABLE IF NOT EXISTS entitlement_config_audit (
+    audit_id            BIGSERIAL   PRIMARY KEY,
+    config_id           UUID        NOT NULL,
+    entitlement_type    TEXT        NOT NULL,
+    agreement_code      TEXT        NOT NULL,
+    ok_version          TEXT        NOT NULL,
+    action              TEXT        NOT NULL CHECK (action IN ('CREATED', 'UPDATED', 'DELETED', 'SUPERSEDED')),
+    previous_data       JSONB,
+    new_data            JSONB,
+    version_before      BIGINT      NULL,
+    version_after       BIGINT      NULL,
+    actor_id            TEXT        NOT NULL,
+    actor_role          TEXT        NOT NULL,
+    timestamp           TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS entitlement_balances (
@@ -1510,5 +1548,62 @@ BEGIN
     ALTER TABLE wage_type_mapping_audit
     ADD CONSTRAINT wage_type_mapping_audit_action_check_v2
     CHECK (action IN ('CREATED', 'UPDATED', 'DELETED', 'SUPERSEDED'));
+END
+$$;
+
+-- =========================================================================
+-- S30 / ADR-021 D1+D2+D3 — entitlement-configs effective-dating + supersession.
+--   Step (a): add effective_from + effective_to to entitlement_configs;
+--             backfill existing rows; set NOT NULL on effective_from.
+--   Step (b): drop the legacy composite UNIQUE constraint
+--             (entitlement_type, agreement_code, ok_version); add
+--             partial-unique-index on natural key WHERE effective_to IS NULL
+--             (S21 D2.1 pattern) + full unique on (natural_key, effective_from)
+--             for ADR-021 D3 ON CONFLICT DO NOTHING conflict target.
+-- entitlement_config_audit table is brand-new in S30 — created by the base
+-- CREATE TABLE block above with version_before/version_after + SUPERSEDED
+-- action pre-baked, so no audit-table ALTER is required here.
+-- Guarded by schema_migrations ledger so re-runs of init.sql are idempotent.
+-- =========================================================================
+DO $$
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s30-d2-ec-effective-dating', 'ADR-021: entitlement_configs effective-dating + supersession + new audit table')
+    ON CONFLICT (migration_id) DO NOTHING;
+
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+
+    -- Step (a): add effective-dating columns. effective_from gets DEFAULT
+    -- '0001-01-01' so existing rows backfill automatically (matches the
+    -- greenfield CREATE TABLE default; sentinel pre-launch anchor per
+    -- PLAN-s30 exclusions table). effective_to stays nullable —
+    -- NULL means "currently open / unbounded above."
+    ALTER TABLE entitlement_configs
+    ADD COLUMN IF NOT EXISTS effective_from DATE NOT NULL DEFAULT '0001-01-01',
+    ADD COLUMN IF NOT EXISTS effective_to   DATE;
+
+    -- Step (b): drop the legacy composite UNIQUE constraint that prevented
+    -- multiple history rows per natural key. Default constraint name follows
+    -- PostgreSQL convention "<table>_<col1>_<col2>_..._key" for inline UNIQUE,
+    -- but PostgreSQL truncates identifiers to 63 chars. The full conventional
+    -- name (..._ok_version_key) is 65 chars and truncates to 63 chars dropping
+    -- the trailing "key" suffix. We DROP both forms to handle any legacy DB.
+    ALTER TABLE entitlement_configs
+    DROP CONSTRAINT IF EXISTS entitlement_configs_entitlement_type_agreement_code_ok_version_key;
+
+    ALTER TABLE entitlement_configs
+    DROP CONSTRAINT IF EXISTS entitlement_configs_entitlement_type_agreement_code_ok_version_;
+
+    -- At most one open row per natural key (current-row uniqueness).
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_ec_natural_key_open
+        ON entitlement_configs (entitlement_type, agreement_code, ok_version)
+        WHERE effective_to IS NULL;
+
+    -- ADR-021 D3 conflict target: forbids duplicate history rows on the same
+    -- natural key + effective_from tuple, including across closed predecessors.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_ec_natural_key_history
+        ON entitlement_configs (entitlement_type, agreement_code, ok_version, effective_from);
 END
 $$;
