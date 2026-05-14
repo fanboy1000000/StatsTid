@@ -31,6 +31,7 @@ const globalAdminItems: NavItem[] = [
   { label: 'Overenskomster', to: '/admin/agreements' },
   { label: 'Positionstilpasninger', to: '/admin/position-overrides' },
   { label: 'Lonartstilknytninger', to: '/admin/wage-type-mappings' },
+  { label: 'Berettigelser', to: '/admin/entitlement-configs' },
 ]
 
 function NavSection({ items }: { items: NavItem[] }) {

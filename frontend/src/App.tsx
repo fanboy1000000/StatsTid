@@ -18,6 +18,7 @@ import { AgreementConfigList } from './pages/admin/AgreementConfigList'
 import { AgreementConfigEditor } from './pages/admin/AgreementConfigEditor'
 import { PositionOverrideManagement } from './pages/admin/PositionOverrideManagement'
 import { WageTypeMappingManagement } from './pages/admin/WageTypeMappingManagement'
+import { EntitlementConfigEditor } from './pages/admin/EntitlementConfigEditor'
 import './styles/tokens.css'
 
 export function App() {
@@ -76,6 +77,7 @@ function AppRoutes() {
             <Route path="admin/agreements/:configId" element={<AgreementConfigEditor />} />
             <Route path="admin/position-overrides" element={<PositionOverrideManagement />} />
             <Route path="admin/wage-type-mappings" element={<WageTypeMappingManagement />} />
+            <Route path="admin/entitlement-configs" element={<EntitlementConfigEditor />} />
           </Route>
 
           <Route path="*" element={<NotFoundPage />} />
