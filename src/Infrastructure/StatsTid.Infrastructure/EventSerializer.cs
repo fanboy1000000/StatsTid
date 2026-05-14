@@ -60,6 +60,10 @@ public static class EventSerializer
         // Sprint 15: Entitlement management events
         ["EntitlementBalanceAdjusted"] = typeof(EntitlementBalanceAdjusted),
         ["EntitlementConfigSeeded"] = typeof(EntitlementConfigSeeded),
+        // Sprint 30: Entitlement config lifecycle events (ADR-020 D2 + Phase 4d-2)
+        ["EntitlementConfigCreated"] = typeof(EntitlementConfigCreated),
+        ["EntitlementConfigSuperseded"] = typeof(EntitlementConfigSuperseded),
+        ["EntitlementConfigSoftDeleted"] = typeof(EntitlementConfigSoftDeleted),
         // Sprint 16: Working time compliance events
         ["RestPeriodViolationDetected"] = typeof(RestPeriodViolationDetected),
         ["CompensatoryRestGranted"] = typeof(CompensatoryRestGranted),
