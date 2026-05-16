@@ -470,6 +470,65 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE INDEX IF NOT EXISTS idx_users_org ON users(primary_org_id);
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 
+-- ── Phase 4d-3 Part 1 (Sprint 31): employee_profiles authoritative store ──
+-- Surrogate UUID PK + pre-baked versioning columns (effective_from / effective_to /
+-- partial-unique-index / history-unique-index / version) so S32 needs ZERO schema
+-- migration to start emitting closed predecessors. S31 reads/writes only live rows
+-- (effective_to IS NULL); S32 activates the multi-row history path. Mirrors S29
+-- wage_type_mappings precedent.
+CREATE TABLE IF NOT EXISTS employee_profiles (
+    profile_id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    employee_id         TEXT        NOT NULL REFERENCES users(user_id),
+    weekly_norm_hours   NUMERIC(5,2) NOT NULL,
+    part_time_fraction  NUMERIC(4,3) NOT NULL DEFAULT 1.000,
+    position            TEXT        NULL,
+    effective_from      DATE        NOT NULL DEFAULT '0001-01-01',
+    effective_to        DATE        NULL,
+    version             BIGINT      NOT NULL DEFAULT 1,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Partial-unique-index: at most one live (open) row per employee. Forward-compat
+-- for S32 supersession routing (Case B closes predecessor + opens new live row).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_employee_profiles_live
+    ON employee_profiles (employee_id)
+    WHERE effective_to IS NULL;
+
+-- History-unique-index: at most one row per (employee_id, effective_from). Forward-
+-- compat for S32 history INSERTs at distinct effective_from values.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_employee_profiles_history
+    ON employee_profiles (employee_id, effective_from);
+
+-- employee_profile_audit (singular; mirrors wage_type_mapping_audit post-S25
+-- shape). version_before + version_after baked into the base CREATE (NOT a
+-- separate ALTER) because this table is brand-new in S31. action CHECK includes
+-- all 4 values (CREATED/UPDATED/DELETED/SUPERSEDED) up-front even though S31
+-- only emits CREATED + UPDATED — S32 will emit SUPERSEDED + DELETED without
+-- schema change. No FK on profile_id because supersession + soft-delete create
+-- FK-invalidating histories.
+CREATE TABLE IF NOT EXISTS employee_profile_audit (
+    audit_id        BIGSERIAL    PRIMARY KEY,
+    profile_id      UUID         NOT NULL,
+    employee_id     TEXT         NOT NULL,
+    action          TEXT         NOT NULL CHECK (action IN ('CREATED','UPDATED','DELETED','SUPERSEDED')),
+    previous_data   JSONB        NULL,
+    new_data        JSONB        NULL,
+    version_before  BIGINT       NULL,
+    version_after   BIGINT       NULL,
+    actor_id        TEXT         NOT NULL,
+    actor_role      TEXT         NOT NULL,
+    timestamp       TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_employee_profile_audit_profile_id ON employee_profile_audit (profile_id);
+CREATE INDEX IF NOT EXISTS idx_employee_profile_audit_employee_id ON employee_profile_audit (employee_id);
+
+-- schema_migrations ledger entry — documentary for S31 greenfield-only, forward-
+-- compat marker if init.sql ever runs against an older database.
+INSERT INTO schema_migrations (migration_id, applied_at)
+    VALUES ('s31-d3-employee-profile-store', NOW())
+    ON CONFLICT (migration_id) DO NOTHING;
+
 -- Role definitions (5 roles)
 CREATE TABLE IF NOT EXISTS roles (
     role_id             TEXT        PRIMARY KEY,
