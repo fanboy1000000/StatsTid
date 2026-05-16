@@ -19,6 +19,7 @@ import { AgreementConfigEditor } from './pages/admin/AgreementConfigEditor'
 import { PositionOverrideManagement } from './pages/admin/PositionOverrideManagement'
 import { WageTypeMappingManagement } from './pages/admin/WageTypeMappingManagement'
 import { EntitlementConfigEditor } from './pages/admin/EntitlementConfigEditor'
+import { EmployeeProfileEditor } from './pages/admin/EmployeeProfileEditor'
 import './styles/tokens.css'
 
 export function App() {
@@ -61,6 +62,7 @@ function AppRoutes() {
           {/* HR routes */}
           <Route element={<RequireRole minRole="LocalHR" />}>
             <Route path="admin/users" element={<UserManagement />} />
+            <Route path="admin/employee-profiles" element={<EmployeeProfileEditor />} />
           </Route>
 
           {/* Admin routes */}
