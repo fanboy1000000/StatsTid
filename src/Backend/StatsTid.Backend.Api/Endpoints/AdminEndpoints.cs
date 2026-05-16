@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Npgsql;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
@@ -372,6 +373,40 @@ public static class AdminEndpoints
                 profileCmd.Parameters.AddWithValue("weeklyNormHours", 37.0m);
                 profileCmd.Parameters.AddWithValue("partTimeFraction", 1.000m);
                 await profileCmd.ExecuteNonQueryAsync(ct);
+
+                // (2b) employee_profile_audit CREATED row in-tx (Step 7a P2 fix —
+                // every admin-created profile MUST have an origin audit row to keep
+                // the audit chain complete from day one). Mirrors the UPDATED audit
+                // shape at EmployeeProfileEndpoints.cs PUT path. previous_data is
+                // NULL (no predecessor), version_before is NULL (no prior version),
+                // version_after = 1.
+                var profileNewData = JsonSerializer.Serialize(new
+                {
+                    weeklyNormHours = 37.0m,
+                    partTimeFraction = 1.000m,
+                    position = (string?)null,
+                });
+                await using (var profileAuditCmd = new NpgsqlCommand(
+                    """
+                    INSERT INTO employee_profile_audit (
+                        profile_id, employee_id, action,
+                        previous_data, new_data,
+                        version_before, version_after,
+                        actor_id, actor_role)
+                    VALUES (
+                        @profileId, @employeeId, 'CREATED',
+                        NULL, @newData::jsonb,
+                        NULL, 1,
+                        @actorId, @actorRole)
+                    """, conn, tx))
+                {
+                    profileAuditCmd.Parameters.AddWithValue("profileId", profileId);
+                    profileAuditCmd.Parameters.AddWithValue("employeeId", request.UserId);
+                    profileAuditCmd.Parameters.AddWithValue("newData", profileNewData);
+                    profileAuditCmd.Parameters.AddWithValue("actorId", actor.ActorId ?? "unknown");
+                    profileAuditCmd.Parameters.AddWithValue("actorRole", actor.ActorRole ?? "unknown");
+                    await profileAuditCmd.ExecuteNonQueryAsync(ct);
+                }
 
                 // (3) UserCreated outbox emit in-tx (BEFORE CommitAsync) so the
                 // users row and the outbox row commit atomically per ADR-018 D3.

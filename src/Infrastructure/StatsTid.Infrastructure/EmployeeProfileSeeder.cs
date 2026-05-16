@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 using StatsTid.Infrastructure.Outbox;
@@ -94,6 +95,39 @@ public static class EmployeeProfileSeeder
                 insertCmd.Parameters.AddWithValue("weeklyNormHours", DefaultWeeklyNormHours);
                 insertCmd.Parameters.AddWithValue("partTimeFraction", DefaultPartTimeFraction);
                 await insertCmd.ExecuteNonQueryAsync(ct);
+
+                // Step 7a P2 fix — emit a CREATED audit row in the same per-row tx
+                // so the largest migration scenario this sprint introduces (backfill
+                // of all existing users) doesn't leave the audit table empty. Mirrors
+                // the UPDATED audit shape at EmployeeProfileEndpoints.cs PUT path.
+                // previous_data is NULL (no predecessor), version_before is NULL,
+                // version_after = 1, actor_id = SYSTEM_SEED (matches the event's
+                // ActorId so audit + outbox cross-reference cleanly).
+                var newData = JsonSerializer.Serialize(new
+                {
+                    weeklyNormHours = DefaultWeeklyNormHours,
+                    partTimeFraction = DefaultPartTimeFraction,
+                    position = (string?)null,
+                });
+                await using (var auditCmd = new NpgsqlCommand(
+                    """
+                    INSERT INTO employee_profile_audit (
+                        profile_id, employee_id, action,
+                        previous_data, new_data,
+                        version_before, version_after,
+                        actor_id, actor_role)
+                    VALUES (
+                        @profileId, @employeeId, 'CREATED',
+                        NULL, @newData::jsonb,
+                        NULL, 1,
+                        'SYSTEM_SEED', 'SYSTEM')
+                    """, conn, tx))
+                {
+                    auditCmd.Parameters.AddWithValue("profileId", profileId);
+                    auditCmd.Parameters.AddWithValue("employeeId", employeeId);
+                    auditCmd.Parameters.AddWithValue("newData", newData);
+                    await auditCmd.ExecuteNonQueryAsync(ct);
+                }
 
                 var @event = new EmployeeProfileCreated
                 {

@@ -75,18 +75,16 @@ public static class EmployeeProfileEndpoints
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
-            var profile = await repository.GetByEmployeeIdAsync(employeeId, ct);
-            if (profile is null)
+            // Step 7a P2 fix — atomic row+version read. Read body fields AND the
+            // `version` column from the same SELECT so the ETag stamped on the
+            // response matches the data serialized. Pre-fix used two reads
+            // (GetByEmployeeIdAsync + ReadLiveVersionAsync) — a concurrent admin
+            // edit between the two could have returned stale fields with a NEWER
+            // ETag, letting the next If-Match overwrite the racing change.
+            var hit = await repository.GetByEmployeeIdWithVersionAsync(employeeId, ct);
+            if (hit is null)
                 return Results.NotFound(new { error = "Employee profile not found" });
-
-            // Read the live row's version explicitly — GetByEmployeeIdAsync hydrates
-            // an EmploymentProfile (rule-engine consumable) which does NOT carry the
-            // row-version column. Issue a second read against employee_profiles to
-            // pick up version for the ETag header. Same employee_id partial-unique-
-            // index guarantees one row, so the second probe is O(1).
-            long version = await ReadLiveVersionAsync(
-                context.RequestServices.GetRequiredService<DbConnectionFactory>(),
-                employeeId, ct);
+            var (profile, version) = hit.Value;
 
             context.Response.Headers.ETag = $"\"{version}\"";
             return Results.Ok(new
@@ -267,33 +265,6 @@ public static class EmployeeProfileEndpoints
         }).RequireAuthorization("HROrAbove");
 
         return app;
-    }
-
-    // ── Helpers ──
-
-    /// <summary>
-    /// Reads the live row's <c>version</c> column for ETag stamping on the GET path.
-    /// The hydrated <see cref="StatsTid.SharedKernel.Models.EmploymentProfile"/> returned
-    /// by <see cref="EmployeeProfileRepository.GetByEmployeeIdAsync(string, CancellationToken)"/>
-    /// is rule-engine-consumable and intentionally does not carry the row-version column
-    /// — keep the join-and-hydrate shape stable for downstream consumers and probe the
-    /// version separately here.
-    /// </summary>
-    private static async Task<long> ReadLiveVersionAsync(
-        DbConnectionFactory connectionFactory, string employeeId, CancellationToken ct)
-    {
-        await using var conn = connectionFactory.Create();
-        await conn.OpenAsync(ct);
-        await using var cmd = new NpgsqlCommand(
-            """
-            SELECT version FROM employee_profiles
-            WHERE employee_id = @employeeId AND effective_to IS NULL
-            """, conn);
-        cmd.Parameters.AddWithValue("employeeId", employeeId);
-        var result = await cmd.ExecuteScalarAsync(ct);
-        // Defense in depth — caller already verified the live row exists via
-        // GetByEmployeeIdAsync; the partial-unique-index guarantees one match.
-        return result is long v ? v : 0L;
     }
 
     // ── Request DTO ──

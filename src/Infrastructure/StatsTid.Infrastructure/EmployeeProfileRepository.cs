@@ -89,7 +89,8 @@ public sealed class EmployeeProfileRepository
     {
         await using var conn = _dbFactory.Create();
         await conn.OpenAsync(ct);
-        return await ExecuteGetByEmployeeIdAsync(conn, null, employeeId, ct);
+        var hit = await ExecuteGetByEmployeeIdAsync(conn, null, employeeId, ct);
+        return hit?.Profile;
     }
 
     /// <summary>
@@ -103,9 +104,28 @@ public sealed class EmployeeProfileRepository
     public async Task<EmploymentProfile?> GetByEmployeeIdAsync(
         NpgsqlConnection conn, NpgsqlTransaction? tx,
         string employeeId, CancellationToken ct = default)
-        => await ExecuteGetByEmployeeIdAsync(conn, tx, employeeId, ct);
+    {
+        var hit = await ExecuteGetByEmployeeIdAsync(conn, tx, employeeId, ct);
+        return hit?.Profile;
+    }
 
-    private static async Task<EmploymentProfile?> ExecuteGetByEmployeeIdAsync(
+    /// <summary>
+    /// Step 7a P2 fix — atomic row + version read. The GET endpoint must hand back the row
+    /// data and its <c>version</c> from the SAME live snapshot so the ETag it stamps
+    /// matches the data it serializes; reading the two in separate statements opens a
+    /// concurrency window where the response can carry stale fields with a newer ETag and
+    /// the next admin edit would silently overwrite the racing change. Single SELECT;
+    /// nullable tuple shape mirrors <see cref="GetByEmployeeIdAsync(string, CancellationToken)"/>.
+    /// </summary>
+    public async Task<(EmploymentProfile Profile, long Version)?> GetByEmployeeIdWithVersionAsync(
+        string employeeId, CancellationToken ct = default)
+    {
+        await using var conn = _dbFactory.Create();
+        await conn.OpenAsync(ct);
+        return await ExecuteGetByEmployeeIdAsync(conn, null, employeeId, ct);
+    }
+
+    private static async Task<(EmploymentProfile Profile, long Version)?> ExecuteGetByEmployeeIdAsync(
         NpgsqlConnection conn, NpgsqlTransaction? tx,
         string employeeId, CancellationToken ct)
     {
@@ -113,13 +133,16 @@ public sealed class EmployeeProfileRepository
         // part_time_fraction, and position. The sibling fields (agreement_code, ok_version,
         // employment_category, primary_org_id) stay on `users` per refinement Q3 LEAVE and
         // are joined in here so the returned EmploymentProfile is consumable by PCS / rule
-        // engine paths unchanged.
+        // engine paths unchanged. `ep.version` joins in the row's optimistic-concurrency
+        // token for callers that need it on the ETag header (Step 7a P2 fix — same-snapshot
+        // read kills the GET race against concurrent admin edits).
         const string sql =
             """
             SELECT
                 ep.weekly_norm_hours,
                 ep.part_time_fraction,
                 ep.position,
+                ep.version,
                 u.agreement_code,
                 u.ok_version,
                 u.employment_category,
@@ -137,7 +160,7 @@ public sealed class EmployeeProfileRepository
         if (!await reader.ReadAsync(ct)) return null;
 
         var partTimeFraction = reader.GetDecimal(reader.GetOrdinal("part_time_fraction"));
-        return new EmploymentProfile
+        var profile = new EmploymentProfile
         {
             EmployeeId = employeeId,
             AgreementCode = reader.GetString(reader.GetOrdinal("agreement_code")),
@@ -153,6 +176,8 @@ public sealed class EmployeeProfileRepository
                 : reader.GetString(reader.GetOrdinal("position")),
             OrgId = reader.GetString(reader.GetOrdinal("primary_org_id")),
         };
+        var version = reader.GetInt64(reader.GetOrdinal("version"));
+        return (profile, version);
     }
 
     // ------------------------------------------------------------------
