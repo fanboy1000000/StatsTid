@@ -122,8 +122,14 @@ public static class BalanceEndpoints
             // natural keys + their ResetMonth values. ResetMonth is frozen per natural key by
             // the TASK-3007 admin-scope 422 guard (ADR-021 Q1 sub-fork (i)), so each live
             // row's ResetMonth is safe to use for year-start derivation across the full history.
-            var liveConfigs = await entitlementConfigRepo.GetByAgreementAsync(
-                user.AgreementCode, user.OkVersion, ct);
+            //
+            // EffectiveTo IS NULL filter is load-bearing: GetByAgreementAsync returns ALL rows
+            // (open + closed predecessors). Post-supersession the bulk read contains 2 rows per
+            // natural key — without this filter the loop double-emits each entitlement and
+            // vacationDaysEntitlement gets overwritten with whichever row is visited last.
+            var liveConfigs = (await entitlementConfigRepo.GetByAgreementAsync(
+                user.AgreementCode, user.OkVersion, ct))
+                .Where(c => c.EffectiveTo is null);
 
             // Part-time fraction not available on User model — default to 1.0
             const decimal partTimeFraction = 1.0m;

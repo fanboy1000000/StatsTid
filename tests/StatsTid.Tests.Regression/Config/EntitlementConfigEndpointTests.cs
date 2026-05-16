@@ -373,6 +373,71 @@ public sealed class EntitlementConfigEndpointTests : IAsyncLifetime
         }
     }
 
+    // ═════════════════════════════════════════════════════════════════════════
+    // D-test #9 — Step 7a P1 fix: after admin Case-B supersession of
+    // VACATION/AC/OK24, GET balance summary returns EXACTLY ONE entitlement
+    // entry of type VACATION — not two. Locks down the `EffectiveTo IS NULL`
+    // filter at BalanceEndpoints.cs that S30 missed; pre-fix this test fails
+    // with vacationCount == 2 (closed predecessor row leaks into the loop).
+    // ═════════════════════════════════════════════════════════════════════════
+    [Fact]
+    public async Task BalanceSummary_AfterSupersession_ReturnsExactlyOneVacationEntitlement()
+    {
+        var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", MintAdminToken());
+
+        // Seed VACATION/AC/OK24 has effective_from='0001-01-01'. PUT today triggers
+        // ADR-020 D2 Case B: predecessor closes at today-1, new row opens at today.
+        var (configId, version) = await ReadSeededConfigAsync(client, "VACATION", "AC", "OK24");
+        Assert.Equal(1L, version);
+        var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+
+        var putRsp = await PutAsync(client, configId,
+            entitlementType: "VACATION",
+            agreementCode: "AC",
+            okVersion: "OK24",
+            annualQuota: 27m, // change from 25
+            accrualModel: "IMMEDIATE",
+            resetMonth: 9,
+            carryoverMax: 5m,
+            proRateByPartTime: true,
+            isPerEpisode: false,
+            minAge: null,
+            description: "step7a-fix-test",
+            effectiveFrom: today,
+            ifMatchValue: version.ToString());
+        Assert.Equal(HttpStatusCode.OK, putRsp.StatusCode);
+
+        // Verify 2 rows now exist for the natural key (closed predecessor + new live).
+        await using (var conn = new NpgsqlConnection(_harness.ConnectionString))
+        {
+            await conn.OpenAsync();
+            await using var cnt = new NpgsqlCommand(
+                "SELECT COUNT(*) FROM entitlement_configs WHERE entitlement_type='VACATION' AND agreement_code='AC' AND ok_version='OK24'",
+                conn);
+            Assert.Equal(2L, Convert.ToInt64(await cnt.ExecuteScalarAsync()));
+        }
+
+        // Switch to employee token. emp001 is seeded with agreement_code='AC', ok_version='OK24'.
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer", MintEmployeeToken("emp001", "AC"));
+
+        var balanceRsp = await client.GetAsync(
+            $"/api/balance/emp001/summary?year={today.Year}&month={today.Month}");
+        Assert.Equal(HttpStatusCode.OK, balanceRsp.StatusCode);
+
+        var json = await balanceRsp.Content.ReadFromJsonAsync<JsonElement>();
+        var entitlements = json.GetProperty("entitlements");
+
+        var vacationCount = 0;
+        foreach (var ent in entitlements.EnumerateArray())
+        {
+            if (ent.GetProperty("type").GetString() == "VACATION")
+                vacationCount++;
+        }
+        Assert.Equal(1, vacationCount);
+    }
+
     // ─── Helpers ─────────────────────────────────────────────────────────────
 
     /// <summary>
@@ -448,5 +513,22 @@ public sealed class EntitlementConfigEndpointTests : IAsyncLifetime
             name: "S30 QA Admin",
             role: StatsTidRoles.GlobalAdmin,
             agreementCode: "AC");
+    }
+
+    private static string MintEmployeeToken(string employeeId, string agreementCode)
+    {
+        var settings = new JwtSettings
+        {
+            Issuer = "statstid",
+            Audience = "statstid",
+            SigningKey = DevFallbackSigningKey,
+            ExpirationMinutes = 60,
+        };
+        var tokenService = new JwtTokenService(settings);
+        return tokenService.GenerateToken(
+            employeeId: employeeId,
+            name: employeeId,
+            role: StatsTidRoles.Employee,
+            agreementCode: agreementCode);
     }
 }
