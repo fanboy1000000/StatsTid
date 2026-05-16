@@ -326,14 +326,21 @@ public static class AdminEndpoints
                     return Results.Conflict(new { error = "User with this ID or username already exists" });
             }
 
-            // Atomic INSERT + outbox-emit per ADR-018 D3 (S26 TASK-2605b):
-            // inline users INSERT and UserCreated outbox enqueue ride a single
+            // Atomic 4-way INSERT + outbox-emit per ADR-018 D3 + S31 TASK-3108:
+            // (1) users INSERT, (2) employee_profiles INSERT, (3) UserCreated outbox
+            // enqueue, (4) EmployeeProfileCreated outbox enqueue — all ride a single
             // explicit transaction on the same connection; commit at end of try,
-            // rollback on throw.
+            // rollback on throw. S31 invariant: every active user has exactly one
+            // live employee_profiles row. Defaults mirror EmployeeProfileSeeder
+            // (TASK-3106): weekly_norm_hours=37.0, part_time_fraction=1.000,
+            // position=NULL. EffectiveFrom uses 0001-01-01 anchor (same as backfill)
+            // for consistent "always here" semantics; HR overrides via TASK-3107
+            // PUT /api/admin/employee-profiles/{employeeId}.
             await using var tx = await conn.BeginTransactionAsync(ct);
 
             try
             {
+                // (1) users INSERT
                 await using var cmd = new NpgsqlCommand(
                     """
                     INSERT INTO users (user_id, username, password_hash, display_name, email, primary_org_id, agreement_code, ok_version, employment_category, is_active, created_at, updated_at)
@@ -350,8 +357,24 @@ public static class AdminEndpoints
                 cmd.Parameters.AddWithValue("now", now);
                 await cmd.ExecuteNonQueryAsync(ct);
 
-                // Emit domain event in-tx (BEFORE CommitAsync) so the users row
-                // and the outbox row commit atomically per ADR-018 D3.
+                // (2) employee_profiles INSERT — S31 invariant: every active user has
+                // exactly one live profile row (effective_to IS NULL).
+                var profileId = Guid.NewGuid();
+                await using var profileCmd = new NpgsqlCommand(
+                    """
+                    INSERT INTO employee_profiles
+                        (profile_id, employee_id, weekly_norm_hours, part_time_fraction, position)
+                    VALUES
+                        (@profileId, @employeeId, @weeklyNormHours, @partTimeFraction, NULL)
+                    """, conn, tx);
+                profileCmd.Parameters.AddWithValue("profileId", profileId);
+                profileCmd.Parameters.AddWithValue("employeeId", request.UserId);
+                profileCmd.Parameters.AddWithValue("weeklyNormHours", 37.0m);
+                profileCmd.Parameters.AddWithValue("partTimeFraction", 1.000m);
+                await profileCmd.ExecuteNonQueryAsync(ct);
+
+                // (3) UserCreated outbox emit in-tx (BEFORE CommitAsync) so the
+                // users row and the outbox row commit atomically per ADR-018 D3.
                 var @event = new UserCreated
                 {
                     UserId = request.UserId,
@@ -365,6 +388,24 @@ public static class AdminEndpoints
                     CorrelationId = actor.CorrelationId
                 };
                 await outbox.EnqueueAsync(conn, tx, $"user-{request.UserId}", @event, ct);
+
+                // (4) EmployeeProfileCreated outbox emit in-tx. Stream
+                // employee-profile-{employeeId} per ADR-018 D6 + S31. EffectiveFrom
+                // matches EmployeeProfileSeeder's 0001-01-01 anchor for consistent
+                // S32 replay semantics.
+                var profileEvent = new EmployeeProfileCreated
+                {
+                    ProfileId = profileId,
+                    EmployeeId = request.UserId,
+                    WeeklyNormHours = 37.0m,
+                    PartTimeFraction = 1.000m,
+                    Position = null,
+                    EffectiveFrom = new DateOnly(1, 1, 1),
+                    ActorId = actor.ActorId,
+                    ActorRole = actor.ActorRole,
+                    CorrelationId = actor.CorrelationId,
+                };
+                await outbox.EnqueueAsync(conn, tx, $"employee-profile-{request.UserId}", profileEvent, ct);
 
                 await tx.CommitAsync(ct);
             }
