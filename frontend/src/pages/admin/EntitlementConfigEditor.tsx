@@ -237,7 +237,23 @@ export function EntitlementConfigEditor() {
     setSubmitting(true)
     setFormError(null)
     try {
-      await updateConfig(editing.configId, editing.etag, editFormToPatch(editForm))
+      // Backend UpdateEntitlementConfigRequest requires the full shape:
+      // natural-key + frozen fields (immutable per Q1 sub-fork (i)) + editable
+      // patch + explicit effectiveFrom=today (cycle-3 same-day-only-edit
+      // validator). Source the immutable fields from `editing` directly — the
+      // page displays them read-only, so the round-trip matches the
+      // predecessor row and the server's freeze guard is a no-op on the
+      // happy path.
+      const today = new Date().toISOString().slice(0, 10)
+      await updateConfig(editing.configId, editing.etag, {
+        ...editFormToPatch(editForm),
+        entitlementType: editing.entitlementType,
+        agreementCode: editing.agreementCode,
+        okVersion: editing.okVersion,
+        accrualModel: editing.accrualModel,
+        resetMonth: editing.resetMonth,
+        effectiveFrom: today,
+      })
       closeEdit()
       await refetch()
     } catch (err) {

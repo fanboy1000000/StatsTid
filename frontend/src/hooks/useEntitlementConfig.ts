@@ -65,6 +65,25 @@ export interface EntitlementConfigCreateRequest extends EntitlementConfigPatch {
   resetMonth: number
 }
 
+/**
+ * Update request — backend `UpdateEntitlementConfigRequest` requires the full
+ * shape: natural-key fields + frozen fields (accrualModel/resetMonth) + the
+ * editable patch + explicit `effectiveFrom`. The natural-key + frozen fields
+ * are validated against the predecessor row (422 if changed per Q1 sub-fork
+ * (i)); `effectiveFrom` must equal today per the cycle-3 same-day-only-edit
+ * validator. Callers source the frozen fields from the editing row's
+ * `WithEtag<EntitlementConfig>` (the page already has them — they're displayed
+ * read-only).
+ */
+export interface EntitlementConfigUpdateRequest extends EntitlementConfigPatch {
+  entitlementType: EntitlementType
+  agreementCode: string
+  okVersion: string
+  accrualModel: AccrualModel
+  resetMonth: number
+  effectiveFrom: string // ISO date — must be today
+}
+
 export type WithEtag<T> = T & { etag: string; version: number }
 
 export interface EntitlementConfigMutationError extends Error {
@@ -197,7 +216,7 @@ export function useEntitlementConfigActions() {
   const updateConfig = async (
     configId: string,
     ifMatch: string,
-    body: EntitlementConfigPatch,
+    body: EntitlementConfigUpdateRequest,
   ): Promise<WithEtag<EntitlementConfig>> => {
     const result = await apiFetchWithEtag<EntitlementConfig>(
       `/api/admin/entitlement-configs/${configId}`,
