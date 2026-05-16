@@ -1,0 +1,125 @@
+using Microsoft.Extensions.Logging;
+using Npgsql;
+using StatsTid.Infrastructure.Outbox;
+using StatsTid.SharedKernel.Events;
+
+namespace StatsTid.Infrastructure;
+
+/// <summary>
+/// Seeds the <c>employee_profiles</c> table with one live row per existing user on first boot.
+/// Idempotent: reads users + existing employee_profiles, creates rows ONLY for users that
+/// don't yet have a live (effective_to IS NULL) profile. Each new row commits atomically
+/// with an <see cref="EmployeeProfileCreated"/> outbox event in a single transaction —
+/// matching the 4-way atomicity contract that <c>POST /api/admin/users</c> uses for new
+/// users in steady state (TASK-3108).
+///
+/// <para>
+/// S31 / TASK-3106. Seeder route (vs. SQL-side INSERTs in init.sql) chosen at Step 0b
+/// cycle 1 absorption because event emission requires <see cref="IOutboxEnqueue"/>
+/// serialization — SQL-side INSERTs into <c>outbox_events</c> would bypass the
+/// EventSerializer registry and break replay determinism.
+/// </para>
+///
+/// <para>
+/// Defaults for the 3 net-new fields:
+/// <c>weekly_norm_hours = 37.0</c>, <c>part_time_fraction = 1.000</c>,
+/// <c>position = NULL</c>. Admins re-enter correct values post-S31 via the new
+/// <c>/api/admin/employee-profiles/{employeeId}</c> PUT (TASK-3107) — pre-launch posture
+/// means no prior intent to preserve (Risk R5 in PLAN-s31.md).
+/// </para>
+/// </summary>
+public static class EmployeeProfileSeeder
+{
+    private const decimal DefaultWeeklyNormHours = 37.0m;
+    private const decimal DefaultPartTimeFraction = 1.000m;
+
+    public static async Task SeedAsync(
+        DbConnectionFactory dbFactory,
+        IOutboxEnqueue outbox,
+        ILogger logger,
+        CancellationToken ct = default)
+    {
+        await using var conn = dbFactory.Create();
+        await conn.OpenAsync(ct);
+
+        // Find users that lack a live employee_profiles row.
+        await using var findMissingCmd = new NpgsqlCommand(
+            """
+            SELECT u.user_id
+            FROM users u
+            WHERE u.is_active = TRUE
+              AND NOT EXISTS (
+                  SELECT 1 FROM employee_profiles p
+                  WHERE p.employee_id = u.user_id AND p.effective_to IS NULL
+              )
+            ORDER BY u.user_id
+            """, conn);
+
+        var missing = new List<string>();
+        await using (var reader = await findMissingCmd.ExecuteReaderAsync(ct))
+        {
+            while (await reader.ReadAsync(ct))
+            {
+                missing.Add(reader.GetString(0));
+            }
+        }
+
+        if (missing.Count == 0)
+        {
+            logger.LogDebug("Employee profiles already seeded for all active users — skipping");
+            return;
+        }
+
+        logger.LogInformation("Seeding employee_profiles for {Count} users without live rows...", missing.Count);
+
+        var seeded = 0;
+        foreach (var employeeId in missing)
+        {
+            // Each seed insert rides its own atomic tx (row INSERT + outbox event in one
+            // transaction; ADR-018 D5 atomic outbox pattern). Independent transactions
+            // per row keep retry semantics clean if any single insert fails.
+            await using var tx = await conn.BeginTransactionAsync(ct);
+            try
+            {
+                var profileId = Guid.NewGuid();
+                await using var insertCmd = new NpgsqlCommand(
+                    """
+                    INSERT INTO employee_profiles
+                        (profile_id, employee_id, weekly_norm_hours, part_time_fraction, position)
+                    VALUES
+                        (@profileId, @employeeId, @weeklyNormHours, @partTimeFraction, NULL)
+                    """, conn, tx);
+                insertCmd.Parameters.AddWithValue("profileId", profileId);
+                insertCmd.Parameters.AddWithValue("employeeId", employeeId);
+                insertCmd.Parameters.AddWithValue("weeklyNormHours", DefaultWeeklyNormHours);
+                insertCmd.Parameters.AddWithValue("partTimeFraction", DefaultPartTimeFraction);
+                await insertCmd.ExecuteNonQueryAsync(ct);
+
+                var @event = new EmployeeProfileCreated
+                {
+                    ProfileId = profileId,
+                    EmployeeId = employeeId,
+                    WeeklyNormHours = DefaultWeeklyNormHours,
+                    PartTimeFraction = DefaultPartTimeFraction,
+                    Position = null,
+                    EffectiveFrom = new DateOnly(1, 1, 1),
+                    ActorId = "SYSTEM_SEED",
+                    ActorRole = "SYSTEM",
+                    CorrelationId = null,
+                };
+                await outbox.EnqueueAsync(conn, tx, $"employee-profile-{employeeId}", @event, ct);
+
+                await tx.CommitAsync(ct);
+                seeded++;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Failed to seed employee_profile for user {EmployeeId} — rolling back this row", employeeId);
+                await tx.RollbackAsync(ct);
+                throw;
+            }
+        }
+
+        logger.LogInformation("Employee profile seeding complete — {Seeded} rows inserted with EmployeeProfileCreated events", seeded);
+    }
+}

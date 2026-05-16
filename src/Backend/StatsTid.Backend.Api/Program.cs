@@ -82,6 +82,20 @@ using (var scope = app.Services.CreateScope())
     await EntitlementConfigSeeder.SeedAsync(dbFactory, logger);
 }
 
+// ── S31 / TASK-3106: seed employee_profiles for any user lacking a live row ──
+// Runs AFTER agreement/entitlement seeders + AFTER init.sql users seed.
+// Idempotent: NOT EXISTS predicate skips users with existing live profiles.
+// Each new row commits with an EmployeeProfileCreated outbox event atomically
+// (ADR-018 D5). Default values (weekly_norm_hours=37.0, part_time_fraction=1.0,
+// position=NULL) — admins re-enter correct values post-S31 via the new
+// /api/admin/employee-profiles/{employeeId} PUT (TASK-3107).
+{
+    var dbFactory = app.Services.GetRequiredService<DbConnectionFactory>();
+    var outbox = app.Services.GetRequiredService<IOutboxEnqueue>();
+    var logger = app.Services.GetRequiredService<ILogger<Program>>();
+    await EmployeeProfileSeeder.SeedAsync(dbFactory, outbox, logger);
+}
+
 // ── S27 Phase 4c.6 / Step 7a cycle 1 BLOCKER fix ──
 // Apply projection backfill (idempotent; one-shot per startup).
 // No-op when projections already mirror events. Required because the
