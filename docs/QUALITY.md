@@ -4,7 +4,7 @@
 
 ## Domain Quality Matrix
 
-Last updated: Sprint 21 (2026-05-03)
+Last updated: Sprint 30 (2026-05-16)
 
 | Domain | Test Coverage | Pattern Compliance | Documentation | Tech Debt | Grade | Trend |
 |--------|-------------|-------------------|---------------|-----------|-------|-------|
@@ -40,16 +40,16 @@ Last updated: Sprint 21 (2026-05-03)
 
 ## Historical Grades
 
-| Domain | S14 | S15 | S17 | S20 | S21 | S29 |
-|--------|-----|-----|-----|-----|-----|-----|
-| Rule Engine | A | A | A | A | A | A |
-| SharedKernel (Models) | A | A | A | A | A | A |
-| SharedKernel (Events) | B+ | B+ | B+ | A- | A- | A- |
-| SharedKernel (Segmentation) | — | — | — | A (new) | A | A |
-| Infrastructure | B | B | B | B | B+ | B+ |
-| Security | B- | B- | B- | B- | B- | B- |
-| Backend API | C+ | B- | B- | B- | B | B |
-| Payroll Integration | B | B | B+ | A- | A- | **A** (↑ S29 closes ADR-016 D10 for WTM via ADR-018 D14 export-time effective-date lookup; marquee replay-determinism D-test passes) |
-| Frontend | C | C+ | C+ | C+ | C+ | C+ |
-| PostgreSQL Schema | B | B | B | B+ | B+ | B+ |
-| Docker/Infrastructure | B+ | B+ | B+ | B+ | B+ | B+ |
+| Domain | S14 | S15 | S17 | S20 | S21 | S29 | S30 |
+|--------|-----|-----|-----|-----|-----|-----|-----|
+| Rule Engine | A | A | A | A | A | A | A |
+| SharedKernel (Models) | A | A | A | A | A | A | A |
+| SharedKernel (Events) | B+ | B+ | B+ | A- | A- | A- | A- |
+| SharedKernel (Segmentation) | — | — | — | A (new) | A | A | A |
+| Infrastructure | B | B | B | B | B+ | B+ | **B+** (EntitlementConfigRepository gains 5 versioned-history methods with ADR-018 D5 `(conn, tx)` atomic-outbox threading + ADR-019 D8 audit version-transition + ADR-020 D2 3-case routing inheritance) |
+| Security | B- | B- | B- | B- | B- | B- | B- |
+| Backend API | C+ | B- | B- | B- | B | B | **B+** (↑ S30 closes Entitlement domain admin-CRUD gap via new `EntitlementConfigEndpoints` — 5 admin endpoints with `GlobalAdminOnly` RBAC + ADR-019 admin-strict If-Match contract + ADR-020 D2 3-case routing; matches the S25/S29 admin-CRUD discipline. Step 7a cycle 1 caught 2 sprint-defects in this domain — BalanceEndpoints supersession filter + frontend PUT payload — both fixed in `374960a` + `a2e8d83`. Remaining gap: handful of pages still use local fetch instead of shared hooks; documented as Phase-4e / Phase-5 polish.) |
+| Payroll Integration | B | B | B+ | A- | A- | A | A |
+| Frontend | C | C+ | C+ | C+ | C+ | C+ | C+ (new EntitlementConfigEditor admin page mirrors S25 admin-page shape, banner-with-retry on 412; vitest unchanged at 88 — no new tests added per S30 scope-trim, deferred to S31 polish; pre-existing `parseInt` truncation bug on decimal fields flagged at Step 7a cycle 2, deferred to S31) |
+| PostgreSQL Schema | B | B | B | B+ | B+ | B+ | **A-** (↑ S30 closes `entitlement_configs` versioned-history gap with schema migration `s30-d2-ec-effective-dating` — `effective_from` + `effective_to` + partial-unique-index `WHERE effective_to IS NULL` + history-unique-index + new `entitlement_config_audit` table mirroring `wage_type_mapping_audit` post-S25 shape + ADR-019 D8 version-transition columns. Greenfield-baked CREATE TABLE + ledger-guarded migration block. Step 7a cycle 2 flagged legacy-upgrade-path ordering concern — forward-compat issue under pre-launch posture, deferred to Phase 4e/production-deploy.) |
+| Docker/Infrastructure | B+ | B+ | B+ | B+ | B+ | B+ | B+ |
