@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | DRAFT (cycle 1 review pending at TASK-3202) |
+| **Status** | ACCEPTED (TASK-3202 cycle 1 dual-lens 2026-05-16; convergent absorption applied — D2 strengthened to "real exposure under normal admin workflow" + Phase 4e launch-blocking commitment + S33 emits `UserAgreementCodeChanged` event; D8 expanded to include `EmploymentProfileResolver` creation task + DI wiring + SoftDelete `version` no-mutation wording tightened. Cycle 2 NOT requested — mechanical absorption clean, no new architectural forks introduced.) |
 | **Sprint** | S32 (design-only sprint; produces this ADR for S33 implementation) |
 | **Domains** | Backend, Infrastructure, Frontend, Data Model, Payroll Integration, SharedKernel |
 | **Tags** | versioned-config, employee-profile, planner-snapshot, rule-engine-determinism, consumption-time-lookup, phase-4d, design-binding |
@@ -43,10 +43,13 @@ The EmployeeProfile snapshot is re-resolved **inside the existing per-segment lo
   - LIVE from `users`: `agreement_code`, `employment_category`, `primary_org_id` (the last is RBAC-scope, not rule-engine input — live is correct anyway)
 - `ok_version` stays server-resolved per ADR-003 at the segment boundary (already correct; not the resolver's job).
 
-**Documented determinism gap**:
+**Documented determinism gap** (cycle 1 review absorption — strengthened from "hypothetical exposure"):
 - Admin mutation of `users.agreement_code` flips replays of past PCS-routed calculations for that employee.
-- Under pre-launch posture (ROADMAP L369): no production data, no live admin workflow. Hypothetical exposure only.
-- Phase 4e production-readiness sprint addresses via one of: (a) per-time-entry agreement_code snapshot using `time_entries.agreement_code` already-stored values; (b) versioning `users.agreement_code` via row-level history; (c) some pattern not yet enumerated. ADR-016 D5b NOT extended in S33 — the determinism gap stays a documented limitation, not a new pattern.
+- **Real exposure**, NOT hypothetical: `AdminEndpoints.cs:466` PUT `/api/admin/users/{userId}` is scoped to `LocalAdminOrAbove` (any per-org admin), persists `agreement_code` directly at `AdminEndpoints.cs:512` with NO event emission, and `frontend/src/pages/admin/UserManagement.tsx:274` actively sends `agreementCode: editForm.agreementCode` from a live form field. Any normal-flow admin edit during S32+ pre-launch makes past PCS replays for that employee non-stable.
+- Acceptable under pre-launch posture (ROADMAP L369: no production data; any divergence is internal-testing-only and recoverable by re-running calculations). NOT acceptable for production.
+- **Phase 4e production-readiness sprint MUST close this gap as launch-blocking** (not just "candidate"). Three architectural options to choose at Phase 4e: (a) per-time-entry agreement_code snapshot via `time_entries.agreement_code` already-stored values (no schema change; PCS-side per-segment first-entry read); (b) versioning `users.agreement_code` via row-level history with `effective_from`/`effective_to`; (c) some pattern not yet enumerated.
+- **S33 emits a `UserAgreementCodeChanged` event** on every admin PUT that mutates `users.agreement_code` (carries `userId`, `oldAgreementCode`, `newAgreementCode`, `effective_from = NOW()`, `actor_id`, `actor_role`). The event has no S33 consumer — it lays a replay-data trail Phase 4e can consume regardless of which option Phase 4e picks. EventSerializer count 55 → 56 (1 new event registered + emitted in S33). This is the cycle 1 dual-lens absorption for the D2 BLOCKER without expanding S33's MIGRATE-cascade scope.
+- ADR-016 D5b NOT extended in S33 — the determinism gap stays a documented limitation, not a new pattern. Phase 4e closes the gap structurally.
 
 **S33 scope shrinks dramatically** with D2 reversal: no schema migration, no backfill, no AdminEndpoints PUT cutover, no AuthEndpoints/JwtTokenService cutover, no users column drop, no User-model surface cascade. Estimated S33 task count: **~10** (was ~14 under MIGRATE).
 
@@ -100,18 +103,20 @@ The JWT-drift question (cycle 2 Reviewer WARNING #2) also dissolves: JWT reads l
 
 With D2-D7 dissolving the MIGRATE-cascade scope, S33's actual implementation work is materially smaller and focused on what ADR-022 §S32-commitment-list called out as **critical for P4 window-safety**:
 
+- **NEW: `EmploymentProfileResolver` service** (`src/Infrastructure/StatsTid.Infrastructure/EmploymentProfileResolver.cs`) — cross-project plumbing task surfaced by Codex cycle 1 WARNING. The resolver doesn't exist today; S31's `EmployeeProfileRepository` has only `GetByEmployeeIdAsync` (live) + `GetByEmployeeIdWithVersionAsync` (live+version), neither accepts an `asOfDate` parameter. The resolver provides `GetByEmployeeIdAtAsync(employeeId, asOfDate, ct)` with single SQL JOIN of `employee_profiles` (dated) + `users` (live for agreement_code/employment_category/primary_org_id per D2). DI registration adds to Backend.Api + Payroll.Integrations Program.cs.
 - `EmployeeProfileRepository.SupersedeAndCreateAsync(conn, tx, request, expectedVersion, ct)` per ADR-020 D2 3-case routing under `SELECT ... FOR UPDATE` (Cases A/B/C); existing `UpsertAsync` becomes thin shim
-- `EmployeeProfileRepository.SoftDeleteAsync(conn, tx, employeeId, expectedVersion, closeDate, ct)` sets `effective_to = closeDate` per end-exclusive `[from, to)` semantic (Codex cycle 1 WARNING absorbed — row absent on dates `≥ effective_to`)
-- New `EmployeeProfileEndpoints.DELETE` endpoint with HROrAbove + OrgScopeValidator + ADR-019 admin-strict If-Match contract (412/428); emits `EmployeeProfileSoftDeleted` via atomic outbox + audit-row with `version_before = version_after = expected` per ADR-019 D8 DELETE convention (Reviewer cycle 1 WARNING absorbed)
+- `EmployeeProfileRepository.SoftDeleteAsync(conn, tx, employeeId, expectedVersion, closeDate, ct)` sets `effective_to = closeDate` per end-exclusive `[from, to)` semantic (Codex cycle 1 WARNING absorbed — row absent on dates `≥ effective_to`). **Predecessor row's `version` column is unchanged by SoftDelete** (cycle 1 Reviewer NOTE absorbed — soft-delete is row-state-change, not field-mutation; `expectedVersion` parameter serves only as If-Match guard); the audit row records `version_before = version_after = predecessor.version` to make the no-mutation semantic explicit per ADR-019 D8 DELETE convention.
+- New `EmployeeProfileEndpoints.DELETE` endpoint with HROrAbove + OrgScopeValidator + ADR-019 admin-strict If-Match contract (412/428); emits `EmployeeProfileSoftDeleted` via atomic outbox + audit row per above (Reviewer cycle 1 WARNING absorbed)
 - EmployeeProfileEndpoints.PUT extends to use `SupersedeAndCreateAsync`; cycle-3 same-day-only-edit validator (S29/S30 precedent) rejects `effective_from != today` with 422; cross-day case emits `EmployeeProfileSuperseded`
 - PCS.cs:326-339 segmentProfile cutover (D1)
-- ComplianceEndpoints.cs:72-79 cutover to `EmployeeProfileResolver.GetByEmployeeIdAtAsync` (replaces hardcoded `37.0m`)
+- ComplianceEndpoints.cs:72-79 cutover to `EmploymentProfileResolver.GetByEmployeeIdAtAsync` (replaces hardcoded `37.0m`)
 - BalanceEndpoints.cs:66-68 fallback chain inserts resolver at top
 - Dead-code DELETE of TimeEndpoints `/calculate*` per D6
 - Frontend EmployeeProfileEditor.tsx as-of-date toggle (read-only when `asOfDate != today`)
-- Marquee D-test `ReplayAsync_StableUnderEmployeeProfileMutation_ResultByteIdentical` — admin updates `weekly_norm_hours` 37 → 32 today; replay of last month's PCS-routed calc uses 37 (dated snapshot), not 32 (live)
+- **NEW: `UserAgreementCodeChanged` event** + emission from AdminEndpoints.PUT `/api/admin/users/{userId}` when `agreement_code` is mutated. EventSerializer registers it (55 → 56 typeof). No S33 consumer — replay-data-trail for Phase 4e per D2 absorption.
+- Marquee D-test `ReplayAsync_StableUnderEmployeeProfileMutation_ResultByteIdentical` — admin updates `weekly_norm_hours` 37 → 32 today; replay of last month's PCS-routed calc uses 37 (dated snapshot), not 32 (live). Does NOT cover `agreement_code` mutation (documented determinism gap per D2).
 
-**S33 task count target: ~10**. Phase decomposition follows S29/S30/S31 precedent (Phase 0 sprint open → Phase 1 sequential plumbing → Phase 2 parallel cutovers → Phase 3 D-tests → Phase 4 validation → Phase 5 docs + close).
+**S33 task count target: ~11**. Phase decomposition follows S29/S30/S31 precedent (Phase 0 sprint open → Phase 1 sequential plumbing → Phase 2 parallel cutovers → Phase 3 D-tests → Phase 4 validation → Phase 5 docs + close). Resolver creation + DI wiring + UserAgreementCodeChanged event registration add ~2 tasks vs the original ~10 estimate.
 
 ## Alternatives Considered
 
@@ -160,6 +165,7 @@ This ADR resolves the cycle-2 BLOCKERs by **reversing cycle-1 MIGRATE absorption
 ## Status History
 
 - **2026-05-16**: ADR-023 DRAFT filed (TASK-3201 sprint S32). Settles 7 questions from deferred S32-implementation refinement.
+- **2026-05-16**: ADR-023 status DRAFT → ACCEPTED (TASK-3202 cycle 1 dual-lens review). Codex gpt-5.5 returned 2 WARNINGs (D2 understates determinism-gap exposure; D8 scope undercount on resolver creation) + 2 confirmatory NOTEs (D1 site verified; D6 dead-code verified). Reviewer Agent returned 1 BLOCKER (D2 understates exposure — LocalAdminOrAbove scope makes gap normal-flow workflow) + 3 confirmatory NOTEs (D8 SoftDeleteAsync version no-mutation; D1 site verified; D6 dead-code verified; end-exclusive predicate verified). **Convergent on D2 finding** — Codex+Reviewer agree gap framing too weak. Mechanical absorption applied: (1) D2 strengthened "real exposure under normal admin workflow"; (2) Phase 4e binding (was "candidate") — agreement_code fix becomes launch-blocking; (3) S33 emits new `UserAgreementCodeChanged` event (55 → 56 typeof) as Phase 4e replay-data trail; (4) D8 + S33 task estimate ~10 → ~11 (resolver creation + DI wiring task added); (5) SoftDeleteAsync wording tightened (version unchanged; audit row records version_before = version_after = predecessor.version). Cycle 2 NOT requested — all absorptions mechanical (no new architectural forks); cycle-cap discipline respected (1 of 2 cycles used).
 
 ## Related ADRs
 
