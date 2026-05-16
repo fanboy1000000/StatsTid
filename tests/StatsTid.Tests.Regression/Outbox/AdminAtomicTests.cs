@@ -255,6 +255,43 @@ public sealed class AdminAtomicTests : IAsyncLifetime
             details             TEXT
         );
 
+        -- S31 / TASK-3104 fixture DDL drift: employee_profiles + audit mirror
+        -- the new init.sql shape (TASK-3101 at L473-530). Needed because TASK-3108
+        -- extends POST /api/admin/users for 4-way atomicity (users INSERT +
+        -- employee_profiles INSERT + UserCreated outbox + EmployeeProfileCreated
+        -- outbox in one tx); without these tables here, the existing AdminAtomic
+        -- tests that hit the POST path would 23503-fail on the FK.
+        CREATE TABLE IF NOT EXISTS employee_profiles (
+            profile_id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+            employee_id         TEXT        NOT NULL REFERENCES users(user_id),
+            weekly_norm_hours   NUMERIC(5,2) NOT NULL,
+            part_time_fraction  NUMERIC(4,3) NOT NULL DEFAULT 1.000,
+            position            TEXT        NULL,
+            effective_from      DATE        NOT NULL DEFAULT '0001-01-01',
+            effective_to        DATE        NULL,
+            version             BIGINT      NOT NULL DEFAULT 1,
+            created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_employee_profiles_live
+            ON employee_profiles (employee_id) WHERE effective_to IS NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_employee_profiles_history
+            ON employee_profiles (employee_id, effective_from);
+
+        CREATE TABLE IF NOT EXISTS employee_profile_audit (
+            audit_id        BIGSERIAL    PRIMARY KEY,
+            profile_id      UUID         NOT NULL,
+            employee_id     TEXT         NOT NULL,
+            action          TEXT         NOT NULL CHECK (action IN ('CREATED','UPDATED','DELETED','SUPERSEDED')),
+            previous_data   JSONB        NULL,
+            new_data        JSONB        NULL,
+            version_before  BIGINT       NULL,
+            version_after   BIGINT       NULL,
+            actor_id        TEXT         NOT NULL,
+            actor_role      TEXT         NOT NULL,
+            timestamp       TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+        );
+
         INSERT INTO roles (role_id, role_name, hierarchy_level)
         VALUES ('EMPLOYEE', 'Employee', 50)
         ON CONFLICT (role_id) DO NOTHING;
