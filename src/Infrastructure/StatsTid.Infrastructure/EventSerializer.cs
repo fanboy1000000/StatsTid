@@ -64,6 +64,12 @@ public static class EventSerializer
         ["EntitlementConfigCreated"] = typeof(EntitlementConfigCreated),
         ["EntitlementConfigSuperseded"] = typeof(EntitlementConfigSuperseded),
         ["EntitlementConfigSoftDeleted"] = typeof(EntitlementConfigSoftDeleted),
+        // Sprint 31: Employee profile lifecycle events (ADR-018 D6 + Phase 4d-3 Part 1).
+        // Superseded + SoftDeleted are registered up-front but reserved for S32 emission.
+        ["EmployeeProfileCreated"] = typeof(EmployeeProfileCreated),
+        ["EmployeeProfileUpdated"] = typeof(EmployeeProfileUpdated),
+        ["EmployeeProfileSuperseded"] = typeof(EmployeeProfileSuperseded),
+        ["EmployeeProfileSoftDeleted"] = typeof(EmployeeProfileSoftDeleted),
         // Sprint 16: Working time compliance events
         ["RestPeriodViolationDetected"] = typeof(RestPeriodViolationDetected),
         ["CompensatoryRestGranted"] = typeof(CompensatoryRestGranted),
