@@ -529,6 +529,68 @@ INSERT INTO schema_migrations (migration_id, applied_at)
     VALUES ('s31-d3-employee-profile-store', NOW())
     ON CONFLICT (migration_id) DO NOTHING;
 
+-- ── Phase 4e (Sprint 34): user_agreement_codes versioned-history store ──
+-- ADR-023 D2 option (b): per-user agreement-code history table so payroll
+-- export can perform an effective-date lookup (mirroring S29 wage_type_mappings
+-- ADR-018 D14 export-time pattern) instead of relying on the live scalar
+-- `users.agreement_code`. 4th application of the established versioned-config
+-- pattern (S29 wage_type_mappings, S30 entitlement_configs, S31 employee_profiles).
+-- Surrogate UUID PK + pre-baked effective_from / effective_to / partial-unique-
+-- index / history-unique-index / version so future supersession routing needs
+-- ZERO schema migration. S34 reads/writes only live rows (effective_to IS NULL);
+-- multi-row history activation lands in a follow-up sprint.
+CREATE TABLE IF NOT EXISTS user_agreement_codes (
+    assignment_id    UUID         PRIMARY KEY,
+    user_id          TEXT         NOT NULL REFERENCES users(user_id),
+    agreement_code   TEXT         NOT NULL,
+    effective_from   DATE         NOT NULL DEFAULT '0001-01-01',
+    effective_to     DATE         NULL,
+    version          BIGINT       NOT NULL DEFAULT 1,
+    created_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+-- Partial-unique-index: at most one live (open) row per user. Forward-compat
+-- for supersession routing (Case B closes predecessor + opens new live row).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_agreement_codes_live
+    ON user_agreement_codes (user_id) WHERE effective_to IS NULL;
+
+-- History-unique-index: at most one row per (user_id, effective_from). Forward-
+-- compat for history INSERTs at distinct effective_from values.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_agreement_codes_history
+    ON user_agreement_codes (user_id, effective_from);
+
+-- user_agreement_codes_audit — mirrors employee_profile_audit shape.
+-- version_before + version_after baked into the base CREATE (NOT a separate
+-- ALTER) because this table is brand-new in S34. action CHECK includes all 4
+-- values (CREATED/UPDATED/DELETED/SUPERSEDED) up-front; DELETED reserved for
+-- future (no DELETE path in S34 — SoftDelete dropped per Step 0b BLOCKER 1
+-- absorption — harmless dead enum, parallels employee_profile_audit). No FK
+-- on assignment_id because supersession creates FK-invalidating histories.
+CREATE TABLE IF NOT EXISTS user_agreement_codes_audit (
+    audit_id          BIGSERIAL    PRIMARY KEY,
+    assignment_id     UUID         NOT NULL,
+    user_id           TEXT         NOT NULL,
+    action            TEXT         NOT NULL CHECK (action IN ('CREATED','UPDATED','DELETED','SUPERSEDED')),
+    previous_data     JSONB        NULL,
+    new_data          JSONB        NULL,
+    version_before    BIGINT       NULL,
+    version_after     BIGINT       NULL,
+    actor_id          TEXT         NOT NULL,
+    actor_role        TEXT         NOT NULL,
+    audit_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_user_agreement_codes_audit_assignment_id
+    ON user_agreement_codes_audit (assignment_id);
+CREATE INDEX IF NOT EXISTS idx_user_agreement_codes_audit_user_id
+    ON user_agreement_codes_audit (user_id);
+
+-- schema_migrations ledger entry — documentary for S34 greenfield-only, forward-
+-- compat marker if init.sql ever runs against an older database.
+INSERT INTO schema_migrations (migration_id, applied_at)
+    VALUES ('s34-d1-user-agreement-codes', NOW())
+    ON CONFLICT (migration_id) DO NOTHING;
+
 -- Role definitions (5 roles)
 CREATE TABLE IF NOT EXISTS roles (
     role_id             TEXT        PRIMARY KEY,

@@ -292,6 +292,45 @@ public sealed class AdminAtomicTests : IAsyncLifetime
             timestamp       TIMESTAMPTZ  NOT NULL DEFAULT NOW()
         );
 
+        -- S34 / TASK-3401 fixture DDL drift: user_agreement_codes + audit mirror
+        -- the new init.sql shape (ADR-023 D2 option (b)). Needed so future S34
+        -- tasks (TASK-3402+) extending POST /api/admin/users for 5-way atomicity
+        -- (users INSERT + employee_profiles INSERT + user_agreement_codes INSERT
+        -- + UserCreated outbox + EmployeeProfileCreated outbox + UserAgreementCodeAssigned
+        -- outbox in one tx) do not 23503-fail on the FK in this fixture.
+        CREATE TABLE IF NOT EXISTS user_agreement_codes (
+            assignment_id    UUID         PRIMARY KEY,
+            user_id          TEXT         NOT NULL REFERENCES users(user_id),
+            agreement_code   TEXT         NOT NULL,
+            effective_from   DATE         NOT NULL DEFAULT '0001-01-01',
+            effective_to     DATE         NULL,
+            version          BIGINT       NOT NULL DEFAULT 1,
+            created_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+            updated_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_user_agreement_codes_live
+            ON user_agreement_codes (user_id) WHERE effective_to IS NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_user_agreement_codes_history
+            ON user_agreement_codes (user_id, effective_from);
+
+        CREATE TABLE IF NOT EXISTS user_agreement_codes_audit (
+            audit_id          BIGSERIAL    PRIMARY KEY,
+            assignment_id     UUID         NOT NULL,
+            user_id           TEXT         NOT NULL,
+            action            TEXT         NOT NULL CHECK (action IN ('CREATED','UPDATED','DELETED','SUPERSEDED')),
+            previous_data     JSONB        NULL,
+            new_data          JSONB        NULL,
+            version_before    BIGINT       NULL,
+            version_after     BIGINT       NULL,
+            actor_id          TEXT         NOT NULL,
+            actor_role        TEXT         NOT NULL,
+            audit_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS idx_user_agreement_codes_audit_assignment_id
+            ON user_agreement_codes_audit (assignment_id);
+        CREATE INDEX IF NOT EXISTS idx_user_agreement_codes_audit_user_id
+            ON user_agreement_codes_audit (user_id);
+
         INSERT INTO roles (role_id, role_name, hierarchy_level)
         VALUES ('EMPLOYEE', 'Employee', 50)
         ON CONFLICT (role_id) DO NOTHING;
