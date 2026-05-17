@@ -40,15 +40,57 @@ Run 2026-05-17 at sprint open (per WORKFLOW.md Step 0a):
 | Field | Value |
 |-------|-------|
 | **Trigger** | MANDATORY (P1, P3, P4, P7 — all four MANDATORY rows touched) |
-| **External Codex** | pending — dispatch after TASK-3400 commits |
-| **Internal Reviewer** | pending — dispatch in parallel with Codex |
-| **BLOCKERs resolved before Step 1** | pending |
+| **External Codex** | invoked 2026-05-17 — 2 cycles; cycle 1: 2B/2W/2N; cycle 2: 2B/1W/0N (cycle-cap reached) |
+| **Internal Reviewer** | invoked 2026-05-17 — 2 cycles; cycle 1: 0B/2W/10N; cycle 2: 2B/2W/8N — convergent with Codex on the 2 BLOCKERs (cycle-cap reached) |
+| **BLOCKERs resolved before Step 1** | yes — 2 cycle-1 Codex BLOCKERs (SoftDelete dropped; DI registration added) + 2 cycle-2 convergent BLOCKERs (cycle-1 propagation gaps — stale "3 events / 56→59" + "DELETE If-Match" in P3/P4 Constraints checklist) all absorbed mechanically |
 
 ### Findings (cycle 1)
-_To be populated post-dispatch._
+
+**External Codex (gpt-5.5)**:
+- **BLOCKER 1** — Missing AdminEndpoints DELETE cutover task: plan defines `SoftDeleteAsync` + `UserAgreementCodeSoftDeleted` event + DELETE D-tests, but Phase 2 only has PUT+POST in TASK-3407; either add DELETE task or remove SoftDelete from scope. → **Absorbed**: SoftDelete dropped entirely from S34 (semantically meaningless for agreement_code; every user must have an agreement at all times). Removed SoftDeleteAsync from TASK-3402, UserAgreementCodeSoftDeleted event from TASK-3404 (EventSerializer delta 56→59 → 56→58), DELETE D-tests from TASK-3414, all "DELETE endpoint" language from PLAN.
+- **BLOCKER 2** — `UserAgreementCodeRepository` DI registration missing: TASK-3402 creates the repo but doesn't extend Program.cs; runtime activation would fail. → **Absorbed**: TASK-3402 Components extended to include `src/Backend/StatsTid.Backend.Api/Program.cs` + explicit `AddSingleton<UserAgreementCodeRepository>()` registration line; Validation Criteria added.
+- **WARNING 1** — TASK-3406 validation doesn't pin full EmploymentProfile contract after SQL refactor. → **Absorbed**: TASK-3406 Validation Criteria expanded with all-8-fields hydration checklist + D-test assertion.
+- **WARNING 2** — TASK-3408 JWT mint adds 1 SELECT per login without perf note. → **Absorbed**: TASK-3408 Description gained explicit perf contract — login is rare; pool absorbs; no caching in S34; post-launch perf measurement may revisit.
+- **NOTE 1** — Risk areas covered (TASK-3407 PUT+POST bundling explicit; AC/HK material difference pinned; DEP-003 coverage exists; ROADMAP RESOLVED assigned to TASK-3415).
+- **NOTE 2** — ADR-016 still has "proposed" status while S34 treats D10 as binding. Cross-reference debt; orthogonal to S34 scope; surfacing.
+
+**Internal Reviewer Agent**:
+- **WARNING 1** — TASK-3414 marquee seed `WeeklyNormHours`-alone is insufficient discriminator because `EmploymentProfile.WeeklyNormHours` is sourced from dated employee_profiles, not agreement-config keyed by agreement_code. → **Absorbed**: TASK-3414 marquee Validation Criterion now requires `HasMerarbejde` and/or `NormModel` as discriminator (not `WeeklyNormHours`).
+- **WARNING 2** — Phase Decomposition prose ordering inconsistent with TASK-3403's dependency on TASK-3402 + TASK-3404; real dispatch order is 3401 → 3402 → 3404 → 3403 → 3405. → **Absorbed**: Phase Decomposition row clarified with explicit ordering note.
+- **8 NOTEs** — all confirmatory (cross-domain labels present, dependency closure verified, ADR refs valid, scope-vs-priority alignment strictly stronger than ADR-023 D2 promise, 16 tasks justified, KB freshness clean).
 
 ### Resolution
-_To be populated post-dispatch._
+
+Cycle 1 absorbed mechanically in PLAN-s34.md:
+
+1. **BLOCKER 1 (SoftDelete dropped)** — TASK-3402 API surface reduced from 5 methods to 4 (removed `SoftDeleteAsync`); TASK-3404 event types reduced from 3 to 2 (removed `UserAgreementCodeSoftDeleted`); TASK-3414 D-test suite dropped SoftDelete + DELETE If-Match tests; EventSerializer delta 56→59 corrected to 56→58.
+2. **BLOCKER 2 (DI registration)** — TASK-3402 Components + Validation Criteria gained explicit Program.cs registration step.
+3. **Codex W1 + Reviewer W1** — TASK-3406 hydration coverage + TASK-3414 marquee discriminator tightened.
+4. **Codex W2** — TASK-3408 perf contract documented.
+5. **Reviewer W2** — Phase Decomposition row clarified with real dispatch ordering.
+
+### Findings (cycle 2)
+
+Both lenses **converged** on the same 2 BLOCKERs (cycle-1 propagation gaps):
+
+**External Codex (gpt-5.5)** at PLAN-s34.md L520+L526:
+- **BLOCKER** — "3 new event types registered (56→59)" in P3 Constraints checklist contradicts cycle-1 absorbed TASK-3404 text (2 events, 56→58)
+- **BLOCKER** — "admin-strict If-Match on DELETE" in P4 Constraints checklist references DELETE endpoint that no longer exists in S34 scope (SoftDelete dropped)
+- **WARNING** — TASK-3406 two-query resolver read-consistency: cutover loses single-statement snapshot between employee_profiles + UserAgreementCodeRepository.GetByUserIdAtAsync; no real race (writes are atomic; replay reads frozen historical) but should be explicitly documented
+
+**Internal Reviewer Agent**: convergent with Codex on the 2 BLOCKERs at L520/L526 + WARNING on D-test count (~15→~11 in 3 sites) + WARNING on 5-way emission framing (actually 7-op cross-table) + 8 NOTEs (ADR-023 D8 stale citation at TASK-3409; audit CHECK enum keeps 'DELETED' harmless dead value; rest confirmatory on cycle-1 absorptions)
+
+### Resolution (cycle 2)
+
+Cycle 2 absorbed mechanically — all 100% propagation-gap text fixes from cycle 1:
+
+1. **P3 Constraints checklist** updated: 3 events 56→59 → **2 events 56→58** (UserAgreementCodeSeeded + UserAgreementCodeSuperseded); "5-way" framing → "5 event/audit emissions across 7-op cross-table atomic tx" with explicit operation enumeration
+2. **P4 Constraints checklist** updated: removed "admin-strict If-Match on DELETE" reference; added explicit "no DELETE endpoint in S34" note
+3. **D-test count** updated in 3 sites: ~15 → ~11 (1 marquee + 3 SupersedeAndCreate + 2 PUT-validator + 1 POST Case A + 3 HTTP-surface + 1 dual-emission + 1 cache-canonical + 1 backfill idempotency = 11)
+4. **TASK-3406 read-consistency note** added: two-query resolver path documented as acceptable under READ COMMITTED + atomic writes through `(conn, tx)` paths
+5. **TASK-3409 KB Refs** corrected: ADR-023 D8 stale citation → ADR-023 D2 with note that D8 doesn't apply (SoftDelete dropped)
+
+**Cycle-cap reached** (2/2 per lens). No cycle 3 authorized; PLAN READY for Phase 1 dispatch. All findings were mechanical text-consistency propagation gaps from cycle 1's substantive absorptions — no architectural reframe; zero risk to sprint shape or task decomposition.
 
 ## Architectural Constraints Verified
 
