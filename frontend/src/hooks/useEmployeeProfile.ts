@@ -29,12 +29,18 @@ export interface EmployeeProfile {
 
 /**
  * PUT request body — matches the backend's
- * `UpdateEmployeeProfileRequest(decimal WeeklyNormHours, decimal PartTimeFraction, string? Position)`.
- * All three fields are required by the backend record; the editor never sends a
+ * `UpdateEmployeeProfileRequest(DateOnly EffectiveFrom, decimal WeeklyNormHours, decimal PartTimeFraction, string? Position)`.
+ * All four fields are required by the backend record; the editor never sends a
  * partial patch (S30 cycle-1 Step 7a Codex P1 fix #2: hook's request shape
  * must match backend's required-fields shape exactly — no missing fields).
+ *
+ * S33 TASK-3308/TASK-3311 (refinement cycle 2 convergent BLOCKER): `effectiveFrom`
+ * is required by the backend validator and must equal today (UTC) per the
+ * ADR-023 D8 same-day-only-edit ergonomic. Wire format is ISO `YYYY-MM-DD` per
+ * the .NET 8 DateOnly JSON convention.
  */
 export interface EmployeeProfileUpdateRequest {
+  effectiveFrom: string
   weeklyNormHours: number
   partTimeFraction: number
   position: string | null

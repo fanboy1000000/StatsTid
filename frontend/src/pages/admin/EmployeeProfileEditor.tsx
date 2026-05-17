@@ -50,6 +50,14 @@ function parseFloatField(value: string, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
+// S33 TASK-3311 (ADR-023 D8). UTC year-month-day matches the backend's
+// `DateTime.UtcNow` reference for the same-day-only-edit validator. Using local
+// midnight would drift on either side of the IANA boundary; UTC keeps the wire
+// value and the backend check on the same calendar day.
+function todayIsoUtc(): string {
+  return new Date().toISOString().slice(0, 10)
+}
+
 function profileToForm(p: EmployeeProfile): ProfileFormState {
   return {
     weeklyNormHours: String(p.weeklyNormHours),
@@ -60,6 +68,11 @@ function profileToForm(p: EmployeeProfile): ProfileFormState {
 
 function formToUpdateRequest(f: ProfileFormState): EmployeeProfileUpdateRequest {
   return {
+    // S33 TASK-3311 (refinement cycle 2 convergent BLOCKER): inject today's UTC
+    // date so the wire body satisfies TASK-3308's `UpdateEmployeeProfileRequest`
+    // required `EffectiveFrom` field. UTC matches the backend's `DateTime.UtcNow`
+    // validator reference (refinement cycle 1 Reviewer W timezone-alignment).
+    effectiveFrom: todayIsoUtc(),
     // Backend NUMERIC columns — parseFloat preserves fractional input.
     weeklyNormHours: parseFloatField(f.weeklyNormHours, 0),
     partTimeFraction: parseFloatField(f.partTimeFraction, 1.0),
@@ -83,6 +96,13 @@ export function EmployeeProfileEditor() {
   const [form, setForm] = useState<ProfileFormState>(emptyProfileForm)
   const [submitting, setSubmitting] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
+  // S33 TASK-3311 (ADR-023 D8). As-of-date toggle — surfaces the temporal
+  // dimension of the profile to HR without yet wiring a historical fetch. The
+  // GET endpoint is unchanged (no `?asOf=` query param); the data shown is
+  // always today's live row. When the date is rolled back, the form becomes
+  // read-only and a banner explains the historical view is forward-looking.
+  const [asOfDate, setAsOfDate] = useState<string>(todayIsoUtc())
+  const isToday = asOfDate === todayIsoUtc()
   // S25/S29/S30 banner-with-retry precedent. 412 from PUT sets `staleConflict`;
   // the "Genindlaes" button refetches the profile (server returns the current
   // ETag) and clears the banner — HR can then re-save.
@@ -149,6 +169,11 @@ export function EmployeeProfileEditor() {
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
     if (!profile || !selectedEmployeeId) return
+    // S33 TASK-3311 — defense-in-depth: the submit button is `disabled` when
+    // `!isToday`, but a synthetic form-submission could still slip past the UI
+    // guard. Backend also rejects non-today `effectiveFrom` via the validator,
+    // so this is the second of three layers (UI disable + this guard + server).
+    if (!isToday) return
     setSubmitting(true)
     setFormError(null)
     try {
@@ -184,6 +209,32 @@ export function EmployeeProfileEditor() {
 
       {orgsError && <div className={styles.alert}>{orgsError}</div>}
       {usersError && <div className={styles.alert}>{usersError}</div>}
+
+      {/* S33 TASK-3311 (ADR-023 D8). As-of-date toggle — pure UX surface, no
+          new HTTP call. GET always returns today's live row. When the picker
+          is moved off today the form locks read-only and the banner explains
+          that historical fetch lands in a future release. */}
+      <div className={styles.formGrid} style={{ marginBottom: 16 }}>
+        <div className={styles.formField}>
+          <label className={styles.formLabel} htmlFor="ep-as-of-date">
+            Viser data for
+          </label>
+          <input
+            className={styles.input}
+            id="ep-as-of-date"
+            type="date"
+            value={asOfDate}
+            onChange={(e) => setAsOfDate(e.target.value || todayIsoUtc())}
+            data-testid="ep-as-of-date"
+          />
+        </div>
+      </div>
+
+      {!isToday && (
+        <div className={styles.alert} role="status" data-testid="historical-view-banner">
+          Showing today's profile — historical view available in a future release.
+        </div>
+      )}
 
       {staleConflict && (
         <div className={styles.alert} role="alert" data-testid="stale-conflict-banner">
@@ -274,6 +325,7 @@ export function EmployeeProfileEditor() {
                 step={0.25}
                 value={form.weeklyNormHours}
                 onChange={setField('weeklyNormHours')}
+                disabled={!isToday}
               />
             </div>
 
@@ -291,6 +343,7 @@ export function EmployeeProfileEditor() {
                 step={0.01}
                 value={form.partTimeFraction}
                 onChange={setField('partTimeFraction')}
+                disabled={!isToday}
               />
             </div>
 
@@ -306,6 +359,7 @@ export function EmployeeProfileEditor() {
                 value={form.position}
                 onChange={setField('position')}
                 placeholder="f.eks. Fuldmaegtig"
+                disabled={!isToday}
               />
             </div>
 
@@ -334,7 +388,11 @@ export function EmployeeProfileEditor() {
           {formError && <div className={styles.alert}>{formError}</div>}
 
           <div className={styles.dialogActions}>
-            <button type="submit" className={styles.createBtn} disabled={submitting}>
+            <button
+              type="submit"
+              className={styles.createBtn}
+              disabled={submitting || !isToday}
+            >
               {submitting ? 'Gemmer...' : 'Gem'}
             </button>
           </div>
