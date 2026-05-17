@@ -62,6 +62,7 @@ public static class OvertimeEndpoints
             decimal overtimeHours,
             bool? hasPreApproval,
             UserRepository userRepo,
+            UserAgreementCodeRepository userAgreementCodeRepo,
             IHttpClientFactory httpClientFactory,
             IConfiguration configuration,
             OrgScopeValidator scopeValidator,
@@ -84,6 +85,18 @@ public static class OvertimeEndpoints
             if (user is null)
                 return Results.NotFound(new { error = "Employee not found" });
 
+            // S34 / TASK-3412 — ADR-023 D2 binding cutover for agreement_code on past-period
+            // governance checks. Source the period-effective agreement_code from the dated
+            // repository instead of the live `user.AgreementCode` cache: Rule Engine overtime
+            // governance rules differ across AC / HK / PROSA, so a past-period governance
+            // query must execute against the agreement that was in effect at periodStart, not
+            // today's. ADR-023 D3 (Overtime governance = graceful-fallback HTTP consumer):
+            // null dated lookup falls through to `user.AgreementCode` (defensive — shouldn't
+            // happen post-backfill).
+            var pastEffectiveAgreementCode = await userAgreementCodeRepo.GetByUserIdAtAsync(
+                employeeId, periodStart, ct);
+            var agreementCode = pastEffectiveAgreementCode ?? user.AgreementCode;
+
             var ruleEngineUrl = configuration["ServiceUrls:RuleEngine"] ?? "http://rule-engine:8080";
             var client = httpClientFactory.CreateClient();
             var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, PropertyNameCaseInsensitive = true };
@@ -96,7 +109,7 @@ public static class OvertimeEndpoints
                 profile = new
                 {
                     employeeId,
-                    agreementCode = user.AgreementCode,
+                    agreementCode,
                     okVersion = user.OkVersion,
                 },
                 entries = Array.Empty<object>(),
@@ -453,6 +466,7 @@ public static class OvertimeEndpoints
             OvertimeBalanceRepository overtimeBalanceRepo,
             ConfigResolutionService configService,
             UserRepository userRepo,
+            UserAgreementCodeRepository userAgreementCodeRepo,
             OrgScopeValidator scopeValidator,
             HttpContext context,
             CancellationToken ct) =>
@@ -487,7 +501,18 @@ public static class OvertimeEndpoints
             if (user is null)
                 return Results.NotFound(new { error = "Employee not found" });
 
-            var config = await configService.GetActiveConfigAsync(user.AgreementCode, user.OkVersion, ct);
+            // S34 / TASK-3412 — ADR-023 D2 binding cutover for agreement_code on past-period
+            // compensation-model fallback selection. AC vs HK vs PROSA compensation rules
+            // differ; sourcing the agreement that was in effect at the START of the period
+            // year (Jan 1) ensures past-year queries return the correct DefaultCompensationModel
+            // for that year's agreement. ADR-023 D3 graceful fallback to live cache if dated
+            // lookup is null.
+            var periodYearStart = new DateOnly(periodYear, 1, 1);
+            var pastEffectiveAgreementCode = await userAgreementCodeRepo.GetByUserIdAtAsync(
+                employeeId, periodYearStart, ct);
+            var agreementCode = pastEffectiveAgreementCode ?? user.AgreementCode;
+
+            var config = await configService.GetActiveConfigAsync(agreementCode, user.OkVersion, ct);
             var defaultModel = config?.DefaultCompensationModel ?? "AFSPADSERING";
 
             return Results.Ok(new
@@ -506,6 +531,7 @@ public static class OvertimeEndpoints
             OvertimeBalanceRepository overtimeBalanceRepo,
             ConfigResolutionService configService,
             UserRepository userRepo,
+            UserAgreementCodeRepository userAgreementCodeRepo,
             OrgScopeValidator scopeValidator,
             HttpContext context,
             CancellationToken ct) =>
@@ -524,7 +550,18 @@ public static class OvertimeEndpoints
             if (user is null)
                 return Results.NotFound(new { error = "Employee not found" });
 
-            var config = await configService.GetActiveConfigAsync(user.AgreementCode, user.OkVersion, ct);
+            // S34 / TASK-3412 — ADR-023 D2 binding cutover for agreement_code on past-period
+            // compensation-choice config rule evaluation + new balance row creation. The
+            // "EmployeeCompensationChoice enabled?" rule may differ across AC/HK/PROSA, and
+            // a balance row persisted for a past period must record the agreement that was
+            // effective at the START of that year (Jan 1) — not today's. ADR-023 D3 graceful
+            // fallback to live cache when dated lookup returns null.
+            var periodYearStart = new DateOnly(request.PeriodYear, 1, 1);
+            var pastEffectiveAgreementCode = await userAgreementCodeRepo.GetByUserIdAtAsync(
+                employeeId, periodYearStart, ct);
+            var agreementCode = pastEffectiveAgreementCode ?? user.AgreementCode;
+
+            var config = await configService.GetActiveConfigAsync(agreementCode, user.OkVersion, ct);
             if (config?.EmployeeCompensationChoice != true)
                 return Results.BadRequest(new { error = "Employee compensation choice is not enabled for this agreement" });
 
@@ -537,7 +574,7 @@ public static class OvertimeEndpoints
                 {
                     BalanceId = Guid.NewGuid(),
                     EmployeeId = employeeId,
-                    AgreementCode = user.AgreementCode,
+                    AgreementCode = agreementCode,
                     PeriodYear = request.PeriodYear,
                     Accumulated = 0m,
                     PaidOut = 0m,
