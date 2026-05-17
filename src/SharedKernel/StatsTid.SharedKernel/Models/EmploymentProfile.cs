@@ -1,6 +1,6 @@
 namespace StatsTid.SharedKernel.Models;
 
-public sealed class EmploymentProfile
+public sealed record class EmploymentProfile
 {
     public required string EmployeeId { get; init; }
     public required string AgreementCode { get; init; }

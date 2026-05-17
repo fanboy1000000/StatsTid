@@ -31,6 +31,12 @@ builder.Services.AddHttpClient();
 // MapCalculationResultAsync stays current-row (no asOfDate); only the planner-driven
 // per-segment export in PCS.MapSegmentToExportLinesAsync passes asOfDate = segmentStart.
 builder.Services.AddSingleton<WageTypeMappingRepository>();
+// S33 TASK-3301 (ADR-023): IEmploymentProfileResolver provides the dated lookup
+// that PCS consumes per-segment for replay-deterministic employment-profile
+// hydration (ADR-016 D5b consumption-time-lookup). Same dated-vs-live split
+// pattern as WageTypeMappingRepository's ADR-018 D14 export-time effective-date
+// lookup — adjacent registration mirrors the consumption shape.
+builder.Services.AddSingleton<IEmploymentProfileResolver, EmploymentProfileResolver>();
 builder.Services.AddSingleton<PayrollMappingService>();
 builder.Services.AddSingleton<PayrollExportService>();
 builder.Services.AddSingleton<PeriodCalculationService>();
