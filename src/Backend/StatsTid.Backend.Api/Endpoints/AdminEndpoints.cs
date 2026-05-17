@@ -437,6 +437,12 @@ public static class AdminEndpoints
                 // employee-profile-{employeeId} per ADR-018 D6 + S31. EffectiveFrom
                 // matches EmployeeProfileSeeder's 0001-01-01 anchor for consistent
                 // S32 replay semantics.
+                // S33 Step 7a cycle 2 convergent BLOCKER absorption: event's EffectiveFrom
+                // must match the row's stamped effective_from (ADR-018 D3 atomic-outbox
+                // row/event parity). After TASK-3312b's admin-POST today-stamp, the row at
+                // L383 carries today; pre-fix this event claimed '0001-01-01' (seeder
+                // convention from S31 TASK-3108). Phase 4e replay consumers reconstructing
+                // employee profile timelines from the event stream now see consistent state.
                 var profileEvent = new EmployeeProfileCreated
                 {
                     ProfileId = profileId,
@@ -444,7 +450,7 @@ public static class AdminEndpoints
                     WeeklyNormHours = 37.0m,
                     PartTimeFraction = 1.000m,
                     Position = null,
-                    EffectiveFrom = new DateOnly(1, 1, 1),
+                    EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow),
                     ActorId = actor.ActorId,
                     ActorRole = actor.ActorRole,
                     CorrelationId = actor.CorrelationId,
