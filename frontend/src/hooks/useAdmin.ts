@@ -58,7 +58,13 @@ export function useOrgUsers(orgId: string) {
     return result.data
   }
 
-  const updateUser = async (userId: string, body: { displayName?: string; email?: string; primaryOrgId?: string; agreementCode?: string }) => {
+  // S34 TASK-3409 (ADR-023 D8). `effectiveFrom` is required on the wire — the
+  // backend `UpdateUserRequest` DTO (TASK-3407) carries a non-nullable
+  // `DateOnly EffectiveFrom` validated against `DateTime.UtcNow` per the
+  // same-day-only-edit rule. Frontend stamps today (UTC) so the backend
+  // validator passes; admin user-edit ergonomics intentionally keep no UI
+  // affordance (no date picker on UserManagement — pure wire-shape sync).
+  const updateUser = async (userId: string, body: { effectiveFrom: string; displayName?: string; email?: string; primaryOrgId?: string; agreementCode?: string }) => {
     const result = await apiClient.put<User>(`/api/admin/users/${userId}`, body)
     if (!result.ok) throw new Error(result.error)
     await fetchUsers()

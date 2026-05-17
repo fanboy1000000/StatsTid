@@ -51,6 +51,14 @@ function authHeaders(): Record<string, string> {
     : { 'Content-Type': 'application/json' }
 }
 
+// S34 TASK-3409 (ADR-023 D8). UTC year-month-day matches the backend's
+// `DateTime.UtcNow` reference for the same-day-only-edit validator (TASK-3407).
+// Mirrors `EmployeeProfileEditor.tsx` precedent (S33 TASK-3311); using local
+// midnight would drift on either side of the IANA boundary.
+function todayIsoUtc(): string {
+  return new Date().toISOString().slice(0, 10)
+}
+
 function useOrganizations() {
   const [organizations, setOrganizations] = useState<Organization[]>([])
   const [loading, setLoading] = useState(true)
@@ -138,6 +146,7 @@ function useOrgUsers(orgId: string) {
     async (
       userId: string,
       updates: {
+        effectiveFrom: string
         displayName?: string
         email?: string
         primaryOrgId?: string
@@ -268,6 +277,12 @@ export function UserManagement() {
     setFormError(null)
     try {
       await updateUser(editingUser.userId, {
+        // S34 TASK-3409 (ADR-023 D8). Inject today's UTC date so the wire body
+        // satisfies TASK-3407's `UpdateUserRequest` required `EffectiveFrom`
+        // field. UTC matches the backend's `DateTime.UtcNow` same-day-only-edit
+        // validator. No UI affordance — pure wire-shape sync (admin user-edit
+        // ergonomics differ from `EmployeeProfileEditor`'s as-of-date toggle).
+        effectiveFrom: todayIsoUtc(),
         displayName: editForm.displayName,
         email: editForm.email || undefined,
         primaryOrgId: editForm.primaryOrgId,
