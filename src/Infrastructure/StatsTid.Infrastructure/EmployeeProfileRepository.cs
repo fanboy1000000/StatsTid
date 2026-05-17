@@ -83,6 +83,20 @@ public sealed class EmployeeProfileRepository
     /// <c>part_time_fraction &lt; 1.0m</c> per refinement cycle 2 absorption — there is no
     /// <c>is_part_time</c> column in the schema.
     /// </para>
+    ///
+    /// <para>
+    /// <b>LIVE-only single-purpose read (S34 / TASK-3413 audit lock).</b> Returns the CURRENT
+    /// <see cref="EmploymentProfile"/> for the given employee, sourced via the partial-unique-
+    /// index predicate <c>WHERE ep.effective_to IS NULL</c>; the <c>u.agreement_code</c> JOIN
+    /// is a LIVE read off the <c>users</c> tail. <b>MUST NOT be used for replay-sensitive
+    /// (past-period / as-of-date) reads</b> — use
+    /// <see cref="StatsTid.SharedKernel.Interfaces.IEmploymentProfileResolver.GetByEmployeeIdAtAsync"/>
+    /// (implemented by <c>EmploymentProfileResolver</c>) for dated lookups per ADR-023 D2 +
+    /// the S34 PCS-replay cutover (TASK-3406). Sanctioned consumers are admin endpoints
+    /// (GET via <see cref="GetByEmployeeIdWithVersionAsync"/>, DELETE via the
+    /// <c>(conn, tx)</c> overload) and the S31 seeder's bootstrap probe — none are
+    /// replay-sensitive.
+    /// </para>
     /// </summary>
     public async Task<EmploymentProfile?> GetByEmployeeIdAsync(
         string employeeId, CancellationToken ct = default)
@@ -100,6 +114,18 @@ public sealed class EmployeeProfileRepository
     /// same transaction as a downstream write (ADR-018 D5 atomic-outbox contract). Used by
     /// admin endpoint handlers that need to read-then-emit-event atomically and by
     /// <see cref="UpsertAsync"/>'s internal preflight when constructing audit payloads.
+    ///
+    /// <para>
+    /// <b>LIVE-only single-purpose read (S34 / TASK-3413 audit lock).</b> Inherits the
+    /// LIVE-only contract of the self-managed overload — the underlying SQL filters
+    /// <c>WHERE ep.effective_to IS NULL</c> and JOINs <c>u.agreement_code</c> off the LIVE
+    /// <c>users</c> tail. <b>MUST NOT be used for replay-sensitive (past-period) reads</b>;
+    /// route those through
+    /// <see cref="StatsTid.SharedKernel.Interfaces.IEmploymentProfileResolver.GetByEmployeeIdAtAsync"/>
+    /// per ADR-023 D2 + S34 cutover. The only production consumer of this overload is the
+    /// admin DELETE handler's pre-delete audit-payload snapshot (live row about to be
+    /// soft-deleted) — that is a LIVE-state need by construction.
+    /// </para>
     /// </summary>
     public async Task<EmploymentProfile?> GetByEmployeeIdAsync(
         NpgsqlConnection conn, NpgsqlTransaction? tx,
@@ -116,6 +142,17 @@ public sealed class EmployeeProfileRepository
     /// concurrency window where the response can carry stale fields with a newer ETag and
     /// the next admin edit would silently overwrite the racing change. Single SELECT;
     /// nullable tuple shape mirrors <see cref="GetByEmployeeIdAsync(string, CancellationToken)"/>.
+    ///
+    /// <para>
+    /// <b>LIVE-only single-purpose read (S34 / TASK-3413 audit lock).</b> The <c>version</c>
+    /// returned here is the LIVE row's optimistic-concurrency token used to stamp the
+    /// response ETag for admin If-Match round-trips. The read uses the partial-unique-index
+    /// predicate <c>WHERE ep.effective_to IS NULL</c> and JOINs <c>u.agreement_code</c> off
+    /// the LIVE <c>users</c> tail. <b>MUST NOT be used for replay-sensitive (past-period)
+    /// reads</b> — past-period payroll / PCS-replay paths must use
+    /// <see cref="StatsTid.SharedKernel.Interfaces.IEmploymentProfileResolver.GetByEmployeeIdAtAsync"/>
+    /// per ADR-023 D2 + S34 cutover. Sole production consumer is the admin GET handler.
+    /// </para>
     /// </summary>
     public async Task<(EmploymentProfile Profile, long Version)?> GetByEmployeeIdWithVersionAsync(
         string employeeId, CancellationToken ct = default)
@@ -125,6 +162,20 @@ public sealed class EmployeeProfileRepository
         return await ExecuteGetByEmployeeIdAsync(conn, null, employeeId, ct);
     }
 
+    /// <summary>
+    /// <b>LIVE-only single-purpose shared codepath (S34 / TASK-3413 audit lock).</b> The
+    /// SQL below filters <c>WHERE ep.effective_to IS NULL</c> (the partial-unique-index
+    /// predicate) and JOINs <c>u.agreement_code</c> off the LIVE <c>users</c> tail; the
+    /// result is the CURRENT employee profile only. <b>This helper MUST NOT be reused
+    /// for replay-sensitive (past-period / as-of-date) reads</b> — the
+    /// <c>effective_to IS NULL</c> predicate is non-negotiable here. Past-period lookups
+    /// go through
+    /// <see cref="StatsTid.SharedKernel.Interfaces.IEmploymentProfileResolver.GetByEmployeeIdAtAsync"/>,
+    /// which uses the end-exclusive predicate
+    /// <c>effective_from &lt;= asOfDate AND (effective_to IS NULL OR effective_to &gt; asOfDate)</c>
+    /// and sources <c>agreement_code</c> from the dated <c>user_agreement_codes</c> table
+    /// per ADR-023 D2 + S34 cutover.
+    /// </summary>
     private static async Task<(EmploymentProfile Profile, long Version)?> ExecuteGetByEmployeeIdAsync(
         NpgsqlConnection conn, NpgsqlTransaction? tx,
         string employeeId, CancellationToken ct)
