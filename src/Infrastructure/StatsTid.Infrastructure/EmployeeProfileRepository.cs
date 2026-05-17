@@ -342,7 +342,8 @@ public sealed class EmployeeProfileRepository
                     expectedVersion: expectedVersion,
                     actualVersion: null);
             }
-            var (newProfileId, newVersion) = await InsertLiveRowAsync(conn, tx, req, ct);
+            // Case A: no predecessor → version=1 baseline.
+            var (newProfileId, newVersion) = await InsertLiveRowAsync(conn, tx, req, nextVersion: 1L, ct);
             return new SaveEmployeeProfileResult(
                 newProfileId, newVersion, SaveEmployeeProfileOutcome.Created);
         }
@@ -385,10 +386,11 @@ public sealed class EmployeeProfileRepository
         // 6. Case C — cross-day edit. Close the predecessor at end-exclusive
         //    `effective_to = req.EffectiveFrom` (version UNCHANGED — close is lifecycle, not
         //    a content edit; mirrors S22 ArchiveProfileAsync semantic), then INSERT new
-        //    live row at version=1.
+        //    live row at predecessor.Version + 1 (Step 7a P1 absorption — ETag monotonicity
+        //    across supersession; see InsertLiveRowAsync xmldoc).
         await ClosePredecessorAsync(conn, tx, predecessor.ProfileId, req.EffectiveFrom, ct);
         var (supersedingProfileId, supersedingVersion) =
-            await InsertLiveRowAsync(conn, tx, req, ct);
+            await InsertLiveRowAsync(conn, tx, req, nextVersion: predecessor.Version + 1, ct);
         return new SaveEmployeeProfileResult(
             supersedingProfileId, supersedingVersion, SaveEmployeeProfileOutcome.Superseded);
     }
@@ -658,16 +660,31 @@ public sealed class EmployeeProfileRepository
     }
 
     /// <summary>
-    /// Case A (Create) + Case C (Supersede) shared path — INSERT a fresh live row at
-    /// version=1 with the caller-supplied <c>effective_from</c>. <c>profile_id</c> is
-    /// generated client-side (S29 WTM precedent at L137 + S31 CreateAsync at L217) so the
-    /// endpoint can include it in the outbox event body. The partial-unique-index
-    /// <c>idx_employee_profiles_live</c> guarantees at most one open row per employee;
-    /// in Case C the caller has already closed the predecessor under the same tx.
+    /// Case A (Create) + Case C (Supersede) shared path — INSERT a fresh live row with the
+    /// caller-supplied <c>effective_from</c>. <c>profile_id</c> is generated client-side
+    /// (S29 WTM precedent at L137 + S31 CreateAsync at L217) so the endpoint can include it
+    /// in the outbox event body. The partial-unique-index <c>idx_employee_profiles_live</c>
+    /// guarantees at most one open row per employee; in Case C the caller has already closed
+    /// the predecessor under the same tx.
+    ///
+    /// <para>
+    /// <b>Version contract (S33 Step 7a P1 absorption — ETag monotonicity fix).</b>
+    /// Case A passes <paramref name="nextVersion"/> = 1 (no predecessor exists).
+    /// Case C passes <paramref name="nextVersion"/> = <c>predecessor.Version + 1</c> so the
+    /// admin's response ETag strictly increases across the supersession. Without this,
+    /// a legacy/seeder-backfilled profile at version=1 superseded across days would yield
+    /// a new live row also at version=1, and a racing admin holding old <c>If-Match: "1"</c>
+    /// could overwrite the newly superseded row without a 412 — ADR-019 D2 contract
+    /// violation. The bump-on-Case-C diverges from ADR-020 D2's literal "version=1 for new
+    /// row" wording but inherits the SPIRIT of D2 (each successor is a fresh logical row);
+    /// the WTM precedent doesn't suffer this because WTM's natural key includes
+    /// effective_from, making (key, version) globally unique — EmployeeProfile's natural
+    /// key is just <c>employee_id</c>, so the version must carry the monotonic load alone.
+    /// </para>
     /// </summary>
     private static async Task<(Guid ProfileId, long Version)> InsertLiveRowAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
-        EmployeeProfileSupersedeRequest req, CancellationToken ct)
+        EmployeeProfileSupersedeRequest req, long nextVersion, CancellationToken ct)
     {
         var newProfileId = Guid.NewGuid();
         await using var cmd = new NpgsqlCommand(
@@ -677,7 +694,7 @@ public sealed class EmployeeProfileRepository
                 effective_from, effective_to, version)
             VALUES (
                 @profileId, @employeeId, @weeklyNormHours, @partTimeFraction, @position,
-                @effectiveFrom, NULL, 1)
+                @effectiveFrom, NULL, @version)
             RETURNING profile_id, version
             """, conn, tx);
         cmd.Parameters.AddWithValue("profileId", newProfileId);
@@ -686,6 +703,7 @@ public sealed class EmployeeProfileRepository
         cmd.Parameters.AddWithValue("partTimeFraction", req.PartTimeFraction);
         cmd.Parameters.AddWithValue("position", (object?)req.Position ?? DBNull.Value);
         cmd.Parameters.AddWithValue("effectiveFrom", req.EffectiveFrom);
+        cmd.Parameters.AddWithValue("version", nextVersion);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct))
         {

@@ -73,6 +73,29 @@ public sealed class EmployeeProfileAtomicTests : IAsyncLifetime
 
         const string employeeId = "emp001";
 
+        // S33 Step 7a P1 absorption: EmployeeProfileSeeder stamps effective_from with
+        // the schema DEFAULT '0001-01-01' (history-covering for PCS replays of pre-
+        // deployment periods). Without this backdate-to-today, a same-day PUT would
+        // route to Case C cross-day supersession (because '0001-01-01' < today) and
+        // emit EmployeeProfileSuperseded + audit action 'SUPERSEDED' instead of the
+        // UPDATED path this S31 marquee test contracts on. Backdate the seed row to
+        // today so PUT routes to Case B (UPDATE-in-place, version 1 → 2). The
+        // Case C semantic is exercised separately by the lifecycle tests'
+        // PUT_CrossDayEdit_EmitsEmployeeProfileSuperseded_NotUpdated.
+        await using (var seedConn = new NpgsqlConnection(_harness.ConnectionString))
+        {
+            await seedConn.OpenAsync();
+            await using var cmd = new NpgsqlCommand(
+                """
+                UPDATE employee_profiles
+                   SET effective_from = @today
+                 WHERE employee_id = @employeeId AND effective_to IS NULL
+                """, seedConn);
+            cmd.Parameters.AddWithValue("today", DateOnly.FromDateTime(DateTime.UtcNow));
+            cmd.Parameters.AddWithValue("employeeId", employeeId);
+            await cmd.ExecuteNonQueryAsync();
+        }
+
         // ── 1. Read the seeded live row → version=1, ETag "1".
         var getRsp = await client.GetAsync($"/api/admin/employee-profiles/{employeeId}");
         Assert.Equal(HttpStatusCode.OK, getRsp.StatusCode);

@@ -82,26 +82,28 @@ public static class EmployeeProfileSeeder
             await using var tx = await conn.BeginTransactionAsync(ct);
             try
             {
-                // S33 in-flight defect fix: stamp effective_from = today (UTC) instead of
-                // using the schema DEFAULT '0001-01-01'. Under TASK-3302's new 3-case routing,
-                // default-seeded rows would trigger Case C cross-day supersession on the first
-                // PUT (because '0001-01-01' < today). Stamping today keeps backfill profiles
-                // in the same-day window for the day they're created.
+                // S33 Step 7a P1 absorption: backfill MUST use schema DEFAULT '0001-01-01'
+                // (NOT today) so existing employees' historical periods resolve via the
+                // resolver's `effective_from <= asOfDate` predicate. Stamping today on
+                // backfill would leave pre-deployment periods uncovered → resolver returns
+                // null → PCS/Compliance fail-closed with 500 on any historical calc.
+                // Same-day PUT against a seeder-backfilled row routes to Case C
+                // (effective_from='0001-01-01' < today), but the Step 7a P1 fix in
+                // EmployeeProfileRepository.InsertLiveRowAsync now stamps
+                // supersedingVersion = predecessor.Version + 1, so the ETag monotonicity
+                // contract holds across the supersession.
                 var profileId = Guid.NewGuid();
                 await using var insertCmd = new NpgsqlCommand(
                     """
                     INSERT INTO employee_profiles
-                        (profile_id, employee_id, weekly_norm_hours, part_time_fraction, position,
-                         effective_from)
+                        (profile_id, employee_id, weekly_norm_hours, part_time_fraction, position)
                     VALUES
-                        (@profileId, @employeeId, @weeklyNormHours, @partTimeFraction, NULL,
-                         @effectiveFrom)
+                        (@profileId, @employeeId, @weeklyNormHours, @partTimeFraction, NULL)
                     """, conn, tx);
                 insertCmd.Parameters.AddWithValue("profileId", profileId);
                 insertCmd.Parameters.AddWithValue("employeeId", employeeId);
                 insertCmd.Parameters.AddWithValue("weeklyNormHours", DefaultWeeklyNormHours);
                 insertCmd.Parameters.AddWithValue("partTimeFraction", DefaultPartTimeFraction);
-                insertCmd.Parameters.AddWithValue("effectiveFrom", DateOnly.FromDateTime(DateTime.UtcNow));
                 await insertCmd.ExecuteNonQueryAsync(ct);
 
                 // Step 7a P2 fix — emit a CREATED audit row in the same per-row tx

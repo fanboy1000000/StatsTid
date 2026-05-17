@@ -290,7 +290,9 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
         }
 
         Assert.Equal(SaveEmployeeProfileOutcome.Superseded, result.Outcome);
-        Assert.Equal(1L, result.Version);
+        // Step 7a P1 absorption: Case C successor inherits predecessor.Version + 1
+        // (ETag monotonicity across supersession; ADR-019 D2 contract holds).
+        Assert.Equal(predecessorVersion + 1, result.Version);
         Assert.NotEqual(predecessorProfileId, result.ProfileId);
 
         // Verify: closed predecessor row carries effective_to=today + version unchanged.
@@ -311,7 +313,7 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
             Assert.Equal(today, reader.GetFieldValue<DateOnly>(2));
         }
 
-        // Verify: new live row at effective_from=today + version=1.
+        // Verify: new live row at effective_from=today + version=predecessor+1.
         await using (var verifyConn = _harness.Factory.Create())
         {
             await verifyConn.OpenAsync();
@@ -324,7 +326,8 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
             liveCmd.Parameters.AddWithValue("employeeId", employeeId);
             await using var reader = await liveCmd.ExecuteReaderAsync();
             Assert.True(await reader.ReadAsync());
-            Assert.Equal(1L, reader.GetInt64(0));
+            // Step 7a P1 absorption: Case C successor row inherits predecessor.Version + 1
+            Assert.Equal(predecessorVersion + 1, reader.GetInt64(0));
             Assert.Equal(today, reader.GetFieldValue<DateOnly>(1));
             Assert.True(reader.IsDBNull(2));
             Assert.Equal(30.0m, reader.GetDecimal(3));
