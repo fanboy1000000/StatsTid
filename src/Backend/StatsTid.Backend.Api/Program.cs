@@ -52,6 +52,7 @@ builder.Services.AddSingleton<PositionOverrideRepository>();
 builder.Services.AddSingleton<WageTypeMappingRepository>();
 builder.Services.AddSingleton<EntitlementConfigRepository>();
 builder.Services.AddSingleton<EmployeeProfileRepository>();
+builder.Services.AddSingleton<UserAgreementCodeRepository>();
 builder.Services.AddSingleton<IEmploymentProfileResolver, EmploymentProfileResolver>();
 builder.Services.AddSingleton<EntitlementBalanceRepository>();
 builder.Services.AddSingleton<TimeEntryProjectionRepository>();
