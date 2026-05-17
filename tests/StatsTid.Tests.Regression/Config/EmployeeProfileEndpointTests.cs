@@ -444,11 +444,18 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
         decimal weeklyNormHours, decimal partTimeFraction, string? position,
         string? ifMatchValue)
     {
+        // S33 TASK-3308 added required EffectiveFrom: DateOnly to the PUT DTO.
+        // S31 test helper now stamps today (UTC) so the S31 acceptance behavior
+        // (200/412/428/403/422 per existing test names) survives the validator
+        // unchanged. S33 TASK-3312 adds dedicated 422 tests for the backdated +
+        // future-dated validator paths (PUT_BackdatedEffectiveFrom_Returns422 +
+        // PUT_FutureDatedEffectiveFrom_Returns422).
         var req = new HttpRequestMessage(HttpMethod.Put,
             $"/api/admin/employee-profiles/{employeeId}")
         {
             Content = JsonContent.Create(new
             {
+                effectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow),
                 weeklyNormHours,
                 partTimeFraction,
                 position,

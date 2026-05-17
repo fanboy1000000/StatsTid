@@ -84,11 +84,16 @@ public sealed class EmployeeProfileAtomicTests : IAsyncLifetime
         Assert.Equal(1L, initial.GetProperty("version").GetInt64());
 
         // ── 2. PUT with If-Match: "1" → 200 + new ETag "2".
+        // S33 TASK-3308 added required EffectiveFrom: DateOnly to PUT DTO; same-day-only
+        // validator (rejects backdated AND future-dated with 422). S31 marquee atomic test
+        // stamps today (UTC) so the round-trip-with-atomic-audit-and-event invariant
+        // survives the new validator unchanged.
         var putReq = new HttpRequestMessage(HttpMethod.Put,
             $"/api/admin/employee-profiles/{employeeId}")
         {
             Content = JsonContent.Create(new
             {
+                effectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow),
                 weeklyNormHours = 30.0m,
                 partTimeFraction = 0.75m,
                 position = "Department Head",
