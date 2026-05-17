@@ -241,115 +241,350 @@ public sealed class EmployeeProfileRepository
     }
 
     /// <summary>
+    /// S33 / TASK-3302 — ADR-020 D2 3-case routing under <c>SELECT ... FOR UPDATE</c>.
+    /// This is the canonical write path for employee profiles; <see cref="UpsertAsync"/>
+    /// is now a thin shim that delegates here with <c>EffectiveFrom = today (UTC)</c>.
+    ///
+    /// <para>
+    /// <b>Routing</b> (decided after acquiring a row-level lock on the live row, if any,
+    /// for <c>req.EmployeeId</c> via <c>SELECT ... FOR UPDATE</c>):
+    /// <list type="bullet">
+    ///   <item><description><b>Case A — Created.</b> No live row exists. Allowed only when
+    ///     <paramref name="expectedVersion"/> is <c>null</c> (seeder / admin-POST path).
+    ///     INSERT a fresh row at <c>(effective_from = req.EffectiveFrom, effective_to = NULL,
+    ///     version = 1)</c>. Returns <see cref="SaveEmployeeProfileOutcome.Created"/>.</description></item>
+    ///   <item><description><b>Case B — Updated.</b> Live row exists and its
+    ///     <c>effective_from</c> equals <paramref name="req"/><c>.EffectiveFrom</c>. UPDATE
+    ///     in-place: refresh fields, bump <c>version = version + 1</c>, stamp
+    ///     <c>updated_at = NOW()</c>; <c>profile_id</c> and <c>effective_from</c> are immutable.
+    ///     Returns <see cref="SaveEmployeeProfileOutcome.Updated"/>.</description></item>
+    ///   <item><description><b>Case C — Superseded.</b> Live row exists and its
+    ///     <c>effective_from</c> is strictly earlier than <paramref name="req"/><c>.EffectiveFrom</c>.
+    ///     Close the predecessor by stamping <c>effective_to = req.EffectiveFrom</c>
+    ///     (end-exclusive, ADR-018 D9 — predecessor's history window becomes
+    ///     <c>[predecessor.effective_from, req.EffectiveFrom)</c>; <b>version unchanged</b>),
+    ///     then INSERT a new live row at
+    ///     <c>(effective_from = req.EffectiveFrom, effective_to = NULL, version = 1)</c>.
+    ///     Returns <see cref="SaveEmployeeProfileOutcome.Superseded"/> so the endpoint emits
+    ///     <c>EmployeeProfileSuperseded</c> instead of <c>EmployeeProfileUpdated</c>.</description></item>
+    /// </list>
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Optimistic concurrency (ADR-019 admin-strict If-Match).</b>
+    /// When <paramref name="expectedVersion"/> is <b>non-null</b>:
+    /// <list type="bullet">
+    ///   <item><description>No live row → throws <see cref="OptimisticConcurrencyException"/>
+    ///     with <c>ActualVersion = null</c> (caller asserted a current state that does not
+    ///     exist; degenerate mismatch).</description></item>
+    ///   <item><description>Live row, version differs → throws
+    ///     <see cref="OptimisticConcurrencyException"/> with the actual stored version.</description></item>
+    /// </list>
+    /// When <paramref name="expectedVersion"/> is <b>null</b> (seeder + admin-POST), no
+    /// version check is performed; Case A is allowed and Cases B/C proceed unguarded.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Backdate guard.</b> When <paramref name="req"/><c>.EffectiveFrom &lt; predecessor.EffectiveFrom</c>,
+    /// throws <see cref="InvalidProfileSupersessionException"/>. Mirrors S29 WTM precedent
+    /// at <see cref="WageTypeMappingRepository.SupersedeAndCreateAsync"/>.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Atomic-outbox contract (ADR-018 D5).</b> Caller owns the transaction; this method
+    /// only writes to <c>employee_profiles</c>. Endpoint emits the audit row + outbox event
+    /// in the same tx after this returns, sourcing the event type from
+    /// <see cref="SaveEmployeeProfileResult.Outcome"/> (TASK-3308 cutover).
+    /// </para>
+    /// </summary>
+    /// <exception cref="OptimisticConcurrencyException">
+    /// Thrown when <paramref name="expectedVersion"/> is non-null and (a) no live row exists
+    /// or (b) the live row's <c>version</c> column differs from <paramref name="expectedVersion"/>.
+    /// Endpoint maps to 412 per ADR-019.
+    /// </exception>
+    /// <exception cref="InvalidProfileSupersessionException">
+    /// Thrown when <paramref name="req"/><c>.EffectiveFrom</c> is strictly earlier than the
+    /// predecessor's <c>effective_from</c> (backdate rejected per ADR-018 D9 strict-less
+    /// under end-exclusive). Endpoint maps to 400/422.
+    /// </exception>
+    public async Task<SaveEmployeeProfileResult> SupersedeAndCreateAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        EmployeeProfileSupersedeRequest req, long? expectedVersion,
+        CancellationToken ct = default)
+    {
+        // 1. SELECT ... FOR UPDATE the live row (if any). The partial-unique-index
+        //    `idx_employee_profiles_live` guarantees at most one matching row; the row-level
+        //    lock serializes concurrent writers attempting to supersede or update the same
+        //    employee's live profile. Mirrors S29 WTM precedent at
+        //    WageTypeMappingRepository.AcquireLockAsync (L611-635).
+        var predecessorNullable = await AcquireLockAsync(conn, tx, req.EmployeeId, ct);
+
+        // 2. Case A — no live row.
+        if (predecessorNullable is null)
+        {
+            if (expectedVersion is not null)
+            {
+                // Caller asserted a current version, but there is no live row → degenerate
+                // mismatch (412). ActualVersion = null distinguishes this branch from the
+                // "live row exists, version differs" branch in Case B/C.
+                throw new OptimisticConcurrencyException(
+                    $"No live employee profile exists for employee_id='{req.EmployeeId}', " +
+                    $"but caller sent If-Match: \"{expectedVersion.Value}\"; refresh and retry.",
+                    expectedVersion: expectedVersion,
+                    actualVersion: null);
+            }
+            var (newProfileId, newVersion) = await InsertLiveRowAsync(conn, tx, req, ct);
+            return new SaveEmployeeProfileResult(
+                newProfileId, newVersion, SaveEmployeeProfileOutcome.Created);
+        }
+
+        // Hoist out of the nullable tuple now that we've eliminated the null branch — C#
+        // flow-analysis doesn't propagate property access through `?` on value-type tuples.
+        var predecessor = predecessorNullable.Value;
+
+        // 3. Predecessor exists. Validate optimistic concurrency (when If-Match supplied).
+        if (expectedVersion is not null && predecessor.Version != expectedVersion.Value)
+        {
+            throw new OptimisticConcurrencyException(
+                $"Employee profile version is {predecessor.Version}, but caller sent " +
+                $"If-Match: \"{expectedVersion.Value}\"; refresh and retry.",
+                expectedVersion: expectedVersion,
+                actualVersion: predecessor.Version);
+        }
+
+        // 4. Backdate guard (ADR-018 D9 strict-less under end-exclusive). A new row cannot
+        //    start before its predecessor — there is no valid history window for the
+        //    predecessor in that case. Mirrors S29 WTM precedent at
+        //    WageTypeMappingRepository.SupersedeAndCreateInternalAsync (L331-336).
+        if (req.EffectiveFrom < predecessor.EffectiveFrom)
+        {
+            throw new InvalidProfileSupersessionException(
+                $"Cannot supersede employee profile for employee_id='{req.EmployeeId}' " +
+                $"with effective_from {req.EffectiveFrom:yyyy-MM-dd} earlier than " +
+                $"predecessor's effective_from {predecessor.EffectiveFrom:yyyy-MM-dd}.");
+        }
+
+        // 5. Case B — same-day edit. UPDATE-in-place with version bump.
+        if (req.EffectiveFrom == predecessor.EffectiveFrom)
+        {
+            var (sameDayProfileId, sameDayVersion) =
+                await UpdateInPlaceAsync(conn, tx, req, predecessor.ProfileId, ct);
+            return new SaveEmployeeProfileResult(
+                sameDayProfileId, sameDayVersion, SaveEmployeeProfileOutcome.Updated);
+        }
+
+        // 6. Case C — cross-day edit. Close the predecessor at end-exclusive
+        //    `effective_to = req.EffectiveFrom` (version UNCHANGED — close is lifecycle, not
+        //    a content edit; mirrors S22 ArchiveProfileAsync semantic), then INSERT new
+        //    live row at version=1.
+        await ClosePredecessorAsync(conn, tx, predecessor.ProfileId, req.EffectiveFrom, ct);
+        var (supersedingProfileId, supersedingVersion) =
+            await InsertLiveRowAsync(conn, tx, req, ct);
+        return new SaveEmployeeProfileResult(
+            supersedingProfileId, supersedingVersion, SaveEmployeeProfileOutcome.Superseded);
+    }
+
+    /// <summary>
     /// S31 / TASK-3102 — atomic-outbox UPDATE overload for the live row of an existing
     /// employee profile. Used by TASK-3107 admin PUT handler. Caller threads audit + outbox
     /// emission into the same transaction.
     ///
     /// <para>
-    /// <b>ADR-019 admin-strict If-Match (optimistic concurrency).</b> When
-    /// <paramref name="expectedVersion"/> is non-null, the UPDATE predicate includes
-    /// <c>AND version = @expectedVersion</c>. On version mismatch (no rows updated due to
-    /// the predicate) the method re-reads the current version to distinguish 412 (stale
-    /// If-Match) from 404 (no live row), and throws
-    /// <see cref="OptimisticConcurrencyException"/> for the endpoint to map to 412.
-    /// When <paramref name="expectedVersion"/> is null, the version predicate is omitted
-    /// (used by the seeder + internal callers that don't enforce If-Match).
+    /// <b>S33 / TASK-3302 refactor — now a thin shim that delegates to
+    /// <see cref="SupersedeAndCreateAsync"/> with
+    /// <c>EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow)</c>.</b> The 2-tuple return
+    /// shape <c>(ProfileId, Version)</c> is preserved for backwards compatibility with
+    /// existing S31 callers (<see cref="EmployeeProfileEndpoints"/> PUT handler); the
+    /// underlying method's <see cref="SaveEmployeeProfileResult.Outcome"/> is discarded
+    /// here but routes correctly under the hood — for instance, when today's date is later
+    /// than the predecessor's <c>effective_from</c>, this shim will silently route through
+    /// Case C (cross-day supersession) rather than Case B (same-day in-place edit). The
+    /// TASK-3308 endpoint cutover will call <see cref="SupersedeAndCreateAsync"/> directly
+    /// to read <c>Outcome</c> and emit the correct event type.
     /// </para>
     ///
     /// <para>
-    /// Increments <c>version</c> by 1 and stamps <c>updated_at = NOW()</c>. Returns
-    /// <c>(profile_id, new_version)</c> so the endpoint can build the audit row + outbox
-    /// event payload + wire ETag <c>"&lt;new_version&gt;"</c>.
+    /// <b>S31-compatible exception contract.</b> The S31 endpoint (PUT) caught both
+    /// <see cref="OptimisticConcurrencyException"/> (412) and <see cref="KeyNotFoundException"/>
+    /// (404). The shim translates "no live row + non-null <paramref name="expectedVersion"/>"
+    /// — which <see cref="SupersedeAndCreateAsync"/> raises as
+    /// <see cref="OptimisticConcurrencyException"/> with <c>ActualVersion = null</c> — back
+    /// to <see cref="KeyNotFoundException"/> so the existing endpoint surface continues to
+    /// return 404 in that case unchanged.
     /// </para>
     /// </summary>
     /// <exception cref="KeyNotFoundException">
-    /// Thrown when no live row exists for <paramref name="req"/><c>.EmployeeId</c>
-    /// (the partial-unique-index guarantees at most one live row per employee; "no rows
-    /// updated" combined with "no version mismatch" means there is no live row). Endpoint
-    /// maps to 404. Mirrors S29 WTM precedent at
-    /// <see cref="WageTypeMappingRepository.UpdateAsync(NpgsqlConnection, NpgsqlTransaction, WageTypeMapping, long, CancellationToken)"/>.
+    /// Thrown when no live row exists for <paramref name="req"/><c>.EmployeeId</c> and
+    /// <paramref name="expectedVersion"/> is non-null. Preserves the S31 endpoint contract
+    /// (PUT against a non-existent employee profile → 404).
     /// </exception>
     /// <exception cref="OptimisticConcurrencyException">
-    /// Thrown when <paramref name="expectedVersion"/> is non-null and does not match the
-    /// live row's <c>version</c>. Endpoint maps to 412 per ADR-019. <c>ActualVersion</c>
-    /// is populated so the endpoint can return the current state in the response body.
+    /// Thrown when a live row exists and <paramref name="expectedVersion"/> does not match
+    /// its <c>version</c>. Endpoint maps to 412 per ADR-019.
+    /// </exception>
+    /// <exception cref="InvalidProfileSupersessionException">
+    /// Not thrown via this shim under normal use — the shim always passes
+    /// <c>EffectiveFrom = today (UTC)</c>, which is never earlier than the predecessor's
+    /// <c>effective_from</c> (unless the system clock is misconfigured).
     /// </exception>
     public async Task<(Guid ProfileId, long Version)> UpsertAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
         EmployeeProfileUpsertRequest req, long? expectedVersion,
         CancellationToken ct = default)
     {
-        // S31 scope intentionally narrow: UPDATE the live row, no supersession routing.
-        // S32 will add ADR-020 D2 3-case routing inside a new SupersedeAndCreateAsync
-        // method modeled on EntitlementConfigRepository.cs:247 / WageTypeMappingRepository.cs:290.
-        // The simple WHERE predicate is sufficient because the partial-unique-index
-        // (employee_id) WHERE effective_to IS NULL guarantees at most one matching row.
-        var sql = expectedVersion is null
-            ? """
-              UPDATE employee_profiles SET
-                  weekly_norm_hours = @weeklyNormHours,
-                  part_time_fraction = @partTimeFraction,
-                  position = @position,
-                  version = version + 1,
-                  updated_at = NOW()
-              WHERE employee_id = @employeeId
-                AND effective_to IS NULL
-              RETURNING profile_id, version
-              """
-            : """
-              UPDATE employee_profiles SET
-                  weekly_norm_hours = @weeklyNormHours,
-                  part_time_fraction = @partTimeFraction,
-                  position = @position,
-                  version = version + 1,
-                  updated_at = NOW()
-              WHERE employee_id = @employeeId
-                AND effective_to IS NULL
-                AND version = @expectedVersion
-              RETURNING profile_id, version
-              """;
-        await using var cmd = new NpgsqlCommand(sql, conn, tx);
+        var supersedeRequest = new EmployeeProfileSupersedeRequest(
+            EmployeeId: req.EmployeeId,
+            WeeklyNormHours: req.WeeklyNormHours,
+            PartTimeFraction: req.PartTimeFraction,
+            Position: req.Position,
+            EffectiveFrom: DateOnly.FromDateTime(DateTime.UtcNow));
+        try
+        {
+            var result = await SupersedeAndCreateAsync(conn, tx, supersedeRequest, expectedVersion, ct);
+            return (result.ProfileId, result.Version);
+        }
+        catch (OptimisticConcurrencyException ex) when (ex.ActualVersion is null && expectedVersion is not null)
+        {
+            // S31 endpoint contract: "no live row + If-Match supplied" → 404, not 412.
+            // SupersedeAndCreateAsync raises this as OCE-with-null-actual; translate back
+            // to KeyNotFoundException so the existing PUT handler's catch block is preserved.
+            throw new KeyNotFoundException(
+                $"Employee profile not found for employee_id='{req.EmployeeId}'.", ex);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Private helpers — shared by SupersedeAndCreateAsync's three routing branches.
+    // Mirrors S29 WageTypeMappingRepository's AcquireLockAsync / UpdateInPlaceAsync /
+    // CloseRowAsync / InsertSupersedingRowAsync triad.
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Locks the live row (effective_to IS NULL) for <paramref name="employeeId"/> via
+    /// <c>SELECT ... FOR UPDATE</c>. Returns the locked row's <c>profile_id</c>, current
+    /// <c>version</c>, and <c>effective_from</c> — the three pieces of state
+    /// <see cref="SupersedeAndCreateAsync"/> needs to route Cases A/B/C and validate
+    /// optimistic concurrency. Returns <c>null</c> when no live row exists (Case A).
+    /// Mirrors S29 WTM precedent at
+    /// <see cref="WageTypeMappingRepository.AcquireLockAsync"/>.
+    /// </summary>
+    private static async Task<(Guid ProfileId, long Version, DateOnly EffectiveFrom)?> AcquireLockAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string employeeId, CancellationToken ct)
+    {
+        await using var lockCmd = new NpgsqlCommand(
+            """
+            SELECT profile_id, version, effective_from
+            FROM employee_profiles
+            WHERE employee_id = @employeeId
+              AND effective_to IS NULL
+            FOR UPDATE
+            """, conn, tx);
+        lockCmd.Parameters.AddWithValue("employeeId", employeeId);
+        await using var reader = await lockCmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct)) return null;
+        return (
+            reader.GetGuid(0),
+            reader.GetInt64(1),
+            reader.GetFieldValue<DateOnly>(2));
+    }
+
+    /// <summary>
+    /// Case A (Create) + Case C (Supersede) shared path — INSERT a fresh live row at
+    /// version=1 with the caller-supplied <c>effective_from</c>. <c>profile_id</c> is
+    /// generated client-side (S29 WTM precedent at L137 + S31 CreateAsync at L217) so the
+    /// endpoint can include it in the outbox event body. The partial-unique-index
+    /// <c>idx_employee_profiles_live</c> guarantees at most one open row per employee;
+    /// in Case C the caller has already closed the predecessor under the same tx.
+    /// </summary>
+    private static async Task<(Guid ProfileId, long Version)> InsertLiveRowAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        EmployeeProfileSupersedeRequest req, CancellationToken ct)
+    {
+        var newProfileId = Guid.NewGuid();
+        await using var cmd = new NpgsqlCommand(
+            """
+            INSERT INTO employee_profiles (
+                profile_id, employee_id, weekly_norm_hours, part_time_fraction, position,
+                effective_from, effective_to, version)
+            VALUES (
+                @profileId, @employeeId, @weeklyNormHours, @partTimeFraction, @position,
+                @effectiveFrom, NULL, 1)
+            RETURNING profile_id, version
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("profileId", newProfileId);
         cmd.Parameters.AddWithValue("employeeId", req.EmployeeId);
         cmd.Parameters.AddWithValue("weeklyNormHours", req.WeeklyNormHours);
         cmd.Parameters.AddWithValue("partTimeFraction", req.PartTimeFraction);
         cmd.Parameters.AddWithValue("position", (object?)req.Position ?? DBNull.Value);
-        if (expectedVersion is not null)
+        cmd.Parameters.AddWithValue("effectiveFrom", req.EffectiveFrom);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
         {
-            cmd.Parameters.AddWithValue("expectedVersion", expectedVersion.Value);
+            // Defense-in-depth — INSERT ... RETURNING always yields one row on success.
+            throw new InvalidOperationException(
+                $"InsertLiveRowAsync produced no row for employee_id='{req.EmployeeId}' " +
+                $"at effective_from='{req.EffectiveFrom:yyyy-MM-dd}'.");
         }
-        await using (var reader = await cmd.ExecuteReaderAsync(ct))
-        {
-            if (await reader.ReadAsync(ct))
-            {
-                return (reader.GetGuid(0), reader.GetInt64(1));
-            }
-        }
+        return (reader.GetGuid(0), reader.GetInt64(1));
+    }
 
-        // No row matched the UPDATE predicate. Distinguish 404 (no live row) from 412
-        // (stale If-Match) by re-reading the row inside the same tx. The partial-unique-
-        // index guarantees there is at most one live row per employee_id, so a single
-        // probe suffices.
-        await using var probeCmd = new NpgsqlCommand(
+    /// <summary>
+    /// Case B (Updated) — same-day UPDATE-in-place. Targets the (still-locked) live row by
+    /// its <paramref name="profileId"/>; refreshes the three S31-authoritative fields,
+    /// bumps <c>version = version + 1</c>, stamps <c>updated_at = NOW()</c>;
+    /// <c>profile_id</c> and <c>effective_from</c> are immutable across same-day edits.
+    /// Mirrors S29 WTM precedent at
+    /// <see cref="WageTypeMappingRepository.UpdateInPlaceAsync"/>.
+    /// </summary>
+    private static async Task<(Guid ProfileId, long Version)> UpdateInPlaceAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        EmployeeProfileSupersedeRequest req, Guid profileId, CancellationToken ct)
+    {
+        await using var cmd = new NpgsqlCommand(
             """
-            SELECT version FROM employee_profiles
-            WHERE employee_id = @employeeId AND effective_to IS NULL
+            UPDATE employee_profiles SET
+                weekly_norm_hours = @weeklyNormHours,
+                part_time_fraction = @partTimeFraction,
+                position = @position,
+                version = version + 1,
+                updated_at = NOW()
+            WHERE profile_id = @profileId
+            RETURNING profile_id, version
             """, conn, tx);
-        probeCmd.Parameters.AddWithValue("employeeId", req.EmployeeId);
-        var probeResult = await probeCmd.ExecuteScalarAsync(ct);
-        if (probeResult is null || probeResult is DBNull)
+        cmd.Parameters.AddWithValue("profileId", profileId);
+        cmd.Parameters.AddWithValue("weeklyNormHours", req.WeeklyNormHours);
+        cmd.Parameters.AddWithValue("partTimeFraction", req.PartTimeFraction);
+        cmd.Parameters.AddWithValue("position", (object?)req.Position ?? DBNull.Value);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
         {
-            // No live row exists for this employee → 404.
-            throw new KeyNotFoundException(
-                $"Employee profile not found for employee_id='{req.EmployeeId}'.");
+            // Defense-in-depth — unreachable while FOR UPDATE holds the lock.
+            throw new InvalidOperationException(
+                $"UpdateInPlaceAsync produced no row for profile_id='{profileId}'; " +
+                "FOR UPDATE invariant violated.");
         }
+        return (reader.GetGuid(0), reader.GetInt64(1));
+    }
 
-        // Live row exists but version doesn't match → 412 stale If-Match (ADR-019).
-        var actualVersion = (long)probeResult;
-        throw new OptimisticConcurrencyException(
-            $"Employee profile version is {actualVersion}, but caller sent " +
-            $"If-Match: \"{expectedVersion?.ToString() ?? "<none>"}\"; refresh and retry.",
-            expectedVersion: expectedVersion,
-            actualVersion: actualVersion);
+    /// <summary>
+    /// Case C (Supersede) — close the predecessor by stamping
+    /// <c>effective_to = closeDate</c> under end-exclusive semantics (ADR-018 D9 —
+    /// predecessor's history window becomes <c>[predecessor.effective_from, closeDate)</c>).
+    /// The version column is NOT bumped: close is a lifecycle event, not a content edit
+    /// (mirrors S22 ArchiveProfileAsync + S29 WTM CloseRowAsync). Caller must already hold
+    /// the row lock acquired via <see cref="AcquireLockAsync"/>.
+    /// </summary>
+    private static async Task ClosePredecessorAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        Guid profileId, DateOnly closeDate, CancellationToken ct)
+    {
+        await using var closeCmd = new NpgsqlCommand(
+            "UPDATE employee_profiles SET effective_to = @closeDate WHERE profile_id = @profileId",
+            conn, tx);
+        closeCmd.Parameters.AddWithValue("closeDate", closeDate);
+        closeCmd.Parameters.AddWithValue("profileId", profileId);
+        await closeCmd.ExecuteNonQueryAsync(ct);
     }
 }
 
@@ -381,3 +616,66 @@ public sealed record EmployeeProfileCreateRequest(
     decimal WeeklyNormHours,
     decimal PartTimeFraction,
     string? Position);
+
+/// <summary>
+/// S33 / TASK-3302 — payload for <see cref="EmployeeProfileRepository.SupersedeAndCreateAsync"/>.
+/// Extends <see cref="EmployeeProfileUpsertRequest"/>'s field set with the explicit
+/// <see cref="EffectiveFrom"/> date that drives ADR-020 D2 3-case routing (same-day vs
+/// cross-day vs net-new). The endpoint reads the clock per refinement Assumption #14 (no
+/// clock dependency in the repo); seeders + admin-POST + admin-PUT supply the date
+/// directly. Used to be a candidate for inheritance from
+/// <see cref="EmployeeProfileUpsertRequest"/>, but records-with-inheritance complicates the
+/// downstream <c>with</c>-expression ergonomics — flat record is the S29 WTM precedent shape.
+/// </summary>
+public sealed record EmployeeProfileSupersedeRequest(
+    string EmployeeId,
+    decimal WeeklyNormHours,
+    decimal PartTimeFraction,
+    string? Position,
+    DateOnly EffectiveFrom);
+
+/// <summary>
+/// S33 / TASK-3302 — result of <see cref="EmployeeProfileRepository.SupersedeAndCreateAsync"/>.
+/// <see cref="Outcome"/> discriminates which of the ADR-020 D2 3-case branches fired so the
+/// endpoint can emit the correct event type — <c>EmployeeProfileCreated</c>,
+/// <c>EmployeeProfileUpdated</c>, or <c>EmployeeProfileSuperseded</c> — and stamp the right
+/// audit <c>action</c> column (CREATED / UPDATED / SUPERSEDED).
+/// </summary>
+/// <param name="ProfileId">The <c>profile_id</c> of the row this call produced. In Case A
+/// (Created) and Case C (Superseded) this is a freshly-generated UUID for the new live row;
+/// in Case B (Updated) it is the predecessor's unchanged <c>profile_id</c>.</param>
+/// <param name="Version">The post-write <c>version</c> column value on the row identified
+/// by <see cref="ProfileId"/>. Case A → 1; Case B → <c>prior + 1</c>; Case C → 1 (the new
+/// live row starts at version 1; the closed predecessor's version is unchanged but is not
+/// the row this result describes).</param>
+/// <param name="Outcome">Which ADR-020 D2 branch the call routed through.</param>
+public sealed record SaveEmployeeProfileResult(
+    Guid ProfileId,
+    long Version,
+    SaveEmployeeProfileOutcome Outcome);
+
+/// <summary>
+/// S33 / TASK-3302 — ADR-020 D2 3-case routing discriminator. Read by TASK-3308 endpoint
+/// cutover to map each case to its correct outbox event type:
+/// <list type="bullet">
+///   <item><description><see cref="Created"/> → <c>EmployeeProfileCreated</c> (net-new live row;
+///     no predecessor existed).</description></item>
+///   <item><description><see cref="Updated"/> → <c>EmployeeProfileUpdated</c> (same-day in-place
+///     edit; predecessor's <c>effective_from</c> matched the request's, version bumped).</description></item>
+///   <item><description><see cref="Superseded"/> → <c>EmployeeProfileSuperseded</c> (cross-day
+///     supersession; predecessor closed at end-exclusive <c>effective_to</c>, new live row
+///     at version 1).</description></item>
+/// </list>
+/// </summary>
+public enum SaveEmployeeProfileOutcome
+{
+    /// <summary>Case A — no live row existed; INSERT produced a brand-new live profile row.</summary>
+    Created,
+    /// <summary>Case B — live row existed and its <c>effective_from</c> matched the request's;
+    /// UPDATE-in-place with version bump (mapping_id and effective_from unchanged).</summary>
+    Updated,
+    /// <summary>Case C — live row existed at an earlier <c>effective_from</c>; predecessor
+    /// closed at end-exclusive <c>effective_to = request.EffectiveFrom</c> (version unchanged),
+    /// new live row inserted at version 1.</summary>
+    Superseded,
+}
