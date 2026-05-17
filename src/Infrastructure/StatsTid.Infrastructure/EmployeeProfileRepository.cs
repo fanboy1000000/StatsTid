@@ -453,6 +453,165 @@ public sealed class EmployeeProfileRepository
         }
     }
 
+    /// <summary>
+    /// S33 / TASK-3303 — soft-delete the live employee profile row by stamping
+    /// <c>effective_to = NOW()::date</c> under end-exclusive <c>[from, to)</c> semantics
+    /// (ADR-018 D9). After this call, the row no longer satisfies the partial-unique-index
+    /// <c>idx_employee_profiles_live</c> predicate (<c>WHERE effective_to IS NULL</c>) and is
+    /// invisible to <see cref="GetByEmployeeIdAsync(string, CancellationToken)"/>, but remains
+    /// in the history table for replay determinism (ADR-016 D10).
+    ///
+    /// <para>
+    /// <b>Predecessor <c>version</c> column is UNCHANGED (ADR-023 D8).</b> Soft-delete is a
+    /// row-state-change, not a field-mutation: the row "disappears" from live reads via the
+    /// partial-unique-index predicate, so bumping <c>version</c> would be redundant. The audit
+    /// row emitted by the endpoint (TASK-3308) accordingly records
+    /// <c>version_before = version_after = predecessor.version</c> per ADR-019 D8 for DELETE
+    /// actions. This is the deliberate semantic divergence from sibling ADR-019 D8 endpoints
+    /// (<c>agreement_configs</c>, <c>wage_type_mappings</c>, <c>entitlement_configs</c>) which
+    /// all bump <c>version + 1</c> on soft-delete.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>404-vs-412 retry semantic divergence.</b> Because the predecessor row's version is
+    /// unchanged, an admin retry with stale <c>If-Match: "@expectedVersion"</c> after a
+    /// successful soft-delete will hit <b>404 Not Found</b> (the partial-unique-index
+    /// <c>WHERE effective_to IS NULL</c> matches no live row), <b>NOT 412 Precondition Failed</b>.
+    /// This is intentional — soft-delete is idempotent-by-row-disappearance rather than
+    /// idempotent-by-version-bump. Sibling ADR-019 D8 endpoints map stale-after-delete to 412
+    /// because they bump version + leave the row visible to history-comparing queries;
+    /// employee_profiles DELETE chooses row-disappearance per ADR-023 D8. The D-test
+    /// <c>SoftDelete_StaleIfMatchAfterSoftDelete_Returns404NotConflict412</c> in TASK-3312 locks
+    /// this contract.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>SQL contract (binding — no <c>version + 1</c> clause).</b>
+    /// <code>
+    /// UPDATE employee_profiles
+    ///    SET effective_to = NOW()::date, updated_at = NOW()
+    ///  WHERE employee_id = @employeeId
+    ///    AND effective_to IS NULL
+    ///    AND version = @expectedVersion
+    /// RETURNING profile_id, version
+    /// </code>
+    /// The <c>NOW()::date</c> cast pins the close-stamp to day-granularity (the
+    /// <c>effective_to</c> column is <c>DATE</c>); the SQL is single-statement because the
+    /// version predicate handles the race (no <c>SELECT ... FOR UPDATE</c> needed — unlike
+    /// <see cref="SupersedeAndCreateAsync"/> which has 3-case routing to resolve under the lock).
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Atomic-outbox contract (ADR-018 D5).</b> Caller (TASK-3308 endpoint) owns the
+    /// transaction; this method only writes to <c>employee_profiles</c>. The endpoint emits
+    /// the audit row (with <c>version_before = version_after = predecessor.version</c>) +
+    /// <c>EmployeeProfileSoftDeleted</c> outbox event in the same tx after this returns.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Exception distinguishing pattern (S31 precedent at UpsertAsync L446-453).</b> After
+    /// the UPDATE fails to match a row, this method probes the live row's <c>version</c>
+    /// column to distinguish 404 (no live row) from 412 (live row, version mismatch):
+    /// <list type="bullet">
+    ///   <item><description>Probe returns <c>null</c> → no live row exists → throws
+    ///     <see cref="KeyNotFoundException"/>. Endpoint maps to 404.</description></item>
+    ///   <item><description>Probe returns a value (the live row's actual version, different
+    ///     from <paramref name="expectedVersion"/>) → throws
+    ///     <see cref="OptimisticConcurrencyException"/> with the actual version. Endpoint
+    ///     maps to 412 per ADR-019 D2.</description></item>
+    /// </list>
+    /// </para>
+    /// </summary>
+    /// <param name="conn">Caller-owned connection (ADR-018 D5 atomic-outbox contract).</param>
+    /// <param name="tx">Caller-owned transaction; this method does not commit or roll back.</param>
+    /// <param name="employeeId">Natural key — the <c>employee_id</c> of the live profile row to soft-delete.</param>
+    /// <param name="expectedVersion">The <c>version</c> column value the caller asserts is
+    /// currently stored on the live row. The UPDATE's <c>AND version = @expectedVersion</c>
+    /// predicate enforces optimistic concurrency under ADR-019 admin-strict If-Match.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>
+    /// <c>(profile_id, version)</c> of the soft-deleted row, where <c>version</c> is
+    /// <b>unchanged</b> from the predecessor's value (per ADR-023 D8). The endpoint records
+    /// this on the audit row as <c>version_before = version_after = version</c>.
+    /// </returns>
+    /// <exception cref="OptimisticConcurrencyException">
+    /// Thrown when a live row exists for <paramref name="employeeId"/> but its <c>version</c>
+    /// column differs from <paramref name="expectedVersion"/>. <c>ExpectedVersion</c> is set
+    /// to <paramref name="expectedVersion"/>; <c>ActualVersion</c> is set to the live row's
+    /// actual version. Endpoint maps to 412 Precondition Failed per ADR-019 D2.
+    /// </exception>
+    /// <exception cref="KeyNotFoundException">
+    /// Thrown when no live row (<c>effective_to IS NULL</c>) exists for
+    /// <paramref name="employeeId"/>. Endpoint maps to 404 Not Found. This is also the branch
+    /// hit by an admin retry with stale <c>If-Match</c> after a successful soft-delete (the
+    /// row "disappeared" from live reads per the partial-unique-index predicate — see
+    /// 404-vs-412 retry semantic divergence above).
+    /// </exception>
+    public async Task<(Guid ProfileId, long Version)> SoftDeleteAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string employeeId, long expectedVersion,
+        CancellationToken ct = default)
+    {
+        // 1. Single-statement UPDATE with row-disappearance semantic — no version bump
+        //    (ADR-023 D8: soft-delete is row-state-change, not field-mutation; the partial-
+        //    unique-index `idx_employee_profiles_live` makes the row "disappear" from live
+        //    reads, so bumping version would be redundant). The `AND version = @expectedVersion`
+        //    predicate enforces optimistic concurrency without needing a separate
+        //    `SELECT ... FOR UPDATE` step — unlike SupersedeAndCreateAsync's 3-case routing,
+        //    soft-delete has no branching that needs the lock to be held across multiple
+        //    statements. `NOW()::date` pins the close-stamp to day-granularity (effective_to
+        //    is a DATE column per the S31 schema).
+        await using var cmd = new NpgsqlCommand(
+            """
+            UPDATE employee_profiles
+               SET effective_to = NOW()::date, updated_at = NOW()
+             WHERE employee_id = @employeeId
+               AND effective_to IS NULL
+               AND version = @expectedVersion
+            RETURNING profile_id, version
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("employeeId", employeeId);
+        cmd.Parameters.AddWithValue("expectedVersion", expectedVersion);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (await reader.ReadAsync(ct))
+        {
+            // Happy path: UPDATE matched exactly one row (partial-unique-index guarantees ≤1).
+            // Returned version is UNCHANGED from predecessor per ADR-023 D8.
+            return (reader.GetGuid(0), reader.GetInt64(1));
+        }
+        // The reader must be disposed before we can issue the probe SELECT on the same
+        // connection (Npgsql forbids overlapping commands on a single connection).
+        await reader.DisposeAsync();
+
+        // 2. UPDATE matched no row. Probe to distinguish 404 (no live row) from 412 (live
+        //    row exists, version differs) per S31 UpsertAsync precedent. This second read
+        //    sits inside the same tx so it sees the same snapshot as the failed UPDATE — no
+        //    chance of a TOCTOU window mis-classifying a concurrent insert as a 404.
+        await using var probeCmd = new NpgsqlCommand(
+            """
+            SELECT version FROM employee_profiles
+            WHERE employee_id = @employeeId
+              AND effective_to IS NULL
+            """, conn, tx);
+        probeCmd.Parameters.AddWithValue("employeeId", employeeId);
+        var probeResult = await probeCmd.ExecuteScalarAsync(ct);
+        if (probeResult is null || probeResult is DBNull)
+        {
+            // No live row → 404. This branch is also hit by an admin retry with stale
+            // If-Match after a successful soft-delete (row disappeared per partial-unique-
+            // index predicate; ADR-023 D8 row-disappearance idempotency — see XML doc above).
+            throw new KeyNotFoundException(
+                $"Employee profile not found for employee_id='{employeeId}'.");
+        }
+        var actualVersion = (long)probeResult;
+        // Live row exists but version differs → 412 per ADR-019 D2 admin-strict If-Match.
+        throw new OptimisticConcurrencyException(
+            $"Employee profile version is {actualVersion}, but caller sent " +
+            $"If-Match: \"{expectedVersion}\"; refresh and retry.",
+            expectedVersion: expectedVersion,
+            actualVersion: actualVersion);
+    }
+
     // ------------------------------------------------------------------
     // Private helpers — shared by SupersedeAndCreateAsync's three routing branches.
     // Mirrors S29 WageTypeMappingRepository's AcquireLockAsync / UpdateInPlaceAsync /
