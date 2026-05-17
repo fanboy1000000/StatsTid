@@ -228,10 +228,17 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
     [Fact]
     public async Task SupersedeAndCreate_CaseC_CrossDayEdit_ClosesPredecessorInsertsSuccessor()
     {
-        // emp001 has a backfilled row at effective_from='0001-01-01' from
-        // the seeder. Today is later than '0001-01-01' → Case C.
+        // S33 in-flight defect fix: post the S33 seeder change (CreateAsync /
+        // AdminEndpoints POST / EmployeeProfileSeeder all stamp effective_from
+        // = today instead of the schema DEFAULT '0001-01-01'), the backfilled
+        // emp001 row is at effective_from = today. To exercise Case C cross-day
+        // routing this test must explicitly backdate the predecessor's
+        // effective_from to a past date (yesterday) via direct SQL so the
+        // SupersedeAndCreateAsync(EffectiveFrom=today) call sees a strictly-
+        // less-than predecessor and routes to Case C.
         const string employeeId = "emp001";
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var yesterday = today.AddDays(-1);
 
         Guid predecessorProfileId;
         long predecessorVersion;
@@ -239,6 +246,18 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
         await using (var conn = _harness.Factory.Create())
         {
             await conn.OpenAsync();
+            // Backdate the predecessor to force Case C routing.
+            await using (var backdateCmd = new NpgsqlCommand(
+                """
+                UPDATE employee_profiles
+                   SET effective_from = @yesterday
+                 WHERE employee_id = @employeeId AND effective_to IS NULL
+                """, conn))
+            {
+                backdateCmd.Parameters.AddWithValue("employeeId", employeeId);
+                backdateCmd.Parameters.AddWithValue("yesterday", yesterday);
+                await backdateCmd.ExecuteNonQueryAsync();
+            }
             await using var preCmd = new NpgsqlCommand(
                 """
                 SELECT profile_id, version, effective_from
@@ -518,6 +537,25 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
         const string employeeId = "emp001";
         var client = AuthorizedClient();
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var yesterday = today.AddDays(-1);
+
+        // S33 in-flight defect fix: post-seeder-stamp-today, the predecessor's
+        // effective_from = today; PUT at today would route to Case B (Updated).
+        // Backdate the predecessor to yesterday so PUT(today) routes to Case C
+        // (Superseded) — the case this test exercises.
+        await using (var backdateConn = new NpgsqlConnection(_harness.ConnectionString))
+        {
+            await backdateConn.OpenAsync();
+            await using var cmd = new NpgsqlCommand(
+                """
+                UPDATE employee_profiles
+                   SET effective_from = @yesterday
+                 WHERE employee_id = @employeeId AND effective_to IS NULL
+                """, backdateConn);
+            cmd.Parameters.AddWithValue("employeeId", employeeId);
+            cmd.Parameters.AddWithValue("yesterday", yesterday);
+            await cmd.ExecuteNonQueryAsync();
+        }
 
         var rsp = await PutEmployeeProfileAsync(client, employeeId,
             effectiveFrom: today,

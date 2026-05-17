@@ -120,39 +120,46 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
     {
         var pcs = BuildPcsWithResolver(_resolver);
 
-        // ── Baseline forward calc.
-        var plan = PeriodPlanner.Plan(
-            employeeId: EmployeeId,
-            periodStart: PeriodStart,
-            periodEnd: PeriodEnd,
-            calculationKind: "forward-calc",
-            ruleSet: TestFixtures.RuleSet,
-            sources: SingleSegmentSources(),
-            options: PlannerOptions.Default);
-        Assert.Single(plan.Segments);
-
         var profileSeed = TestFixtures.Profile(EmployeeId);
         var entries = TestFixtures.WeekdayEntriesForPeriod(EmployeeId, PeriodStart, PeriodEnd);
         var absences = Array.Empty<AbsenceEntry>();
 
-        var baseline = await pcs.CalculateAsync(plan, profileSeed, entries, absences, 0m);
+        // ── Baseline forward calc via the (Obsolete) legacy shim — same entry
+        // point S29 TASK-2909 marquee uses. The shim routes through
+        // BuildPlanForLegacyCallersAsync, which registers the WtmNaturalKey
+        // hydrator on the plan's IPlannerEnrollment (S29) — required by
+        // PCS.MapSegmentToExportLinesAsync at L1236. Direct
+        // PeriodPlanner.Plan() bypasses this registration and fails replay.
+#pragma warning disable CS0618 // Obsolete shim is the public entry point for hydrator wiring.
+        var baseline = await pcs.CalculateAsync(
+            profileSeed, entries, absences, PeriodStart, PeriodEnd, previousFlexBalance: 0m);
+#pragma warning restore CS0618
         Assert.True(baseline.Success);
         Assert.NotEmpty(baseline.RuleResults);
+
+        // ManifestId is stamped per-RuleResult (PCS.cs:356-359 WithManifestId)
+        var baselineManifestId = baseline.RuleResults.First().ManifestId;
+        Assert.NotEqual(Guid.Empty, baselineManifestId);
 
         var baselineJson = JsonSerializer.Serialize(baseline.RuleResults, SerializerOptions);
 
         // ── Case C cross-day supersession on weekly_norm_hours: 37.0 → 32.0.
+        // SeedUserAndProfileAsync inserts the live row with the schema DEFAULT
+        // effective_from='0001-01-01', so this supersession at Today creates
+        // Case C cross-day routing: predecessor closed at effective_to=Today
+        // (window ['0001-01-01', Today)), new row at effective_from=Today.
+        // Replay at segment.StartDate=2026-04-01 falls in the predecessor's
+        // window (today > 2026-04-01), so the resolver reads weekly_norm_hours=37.
         await SupersedeAsync(
             newWeeklyNormHours: 32.0m,
             newPartTimeFraction: 1.000m,
             effectiveFrom: Today);
 
-        // ── Replay against the baseline's manifest id. PCS calls the resolver
-        // at segment.StartDate=2026-04-01; the predecessor row's window is
-        // ['0001-01-01', today) — 2026-04-01 falls inside. Result must
-        // serialize byte-identically.
+        // ── Replay against the baseline's manifest id. Result must serialize
+        // byte-identically because the resolver returns the predecessor row
+        // for any asOfDate < Today.
         var replay = await pcs.ReplayAsync(
-            plan.ManifestId, profileSeed, entries, absences, previousFlexBalance: 0m);
+            baselineManifestId, profileSeed, entries, absences, previousFlexBalance: 0m);
         Assert.True(replay.Success);
 
         var replayJson = JsonSerializer.Serialize(replay.RuleResults, SerializerOptions);
@@ -176,21 +183,18 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
     {
         var pcs = BuildPcsWithResolver(_resolver);
 
-        var plan = PeriodPlanner.Plan(
-            employeeId: EmployeeId,
-            periodStart: PeriodStart,
-            periodEnd: PeriodEnd,
-            calculationKind: "forward-calc",
-            ruleSet: TestFixtures.RuleSet,
-            sources: SingleSegmentSources(),
-            options: PlannerOptions.Default);
-
         var profileSeed = TestFixtures.Profile(EmployeeId);
         var entries = TestFixtures.WeekdayEntriesForPeriod(EmployeeId, PeriodStart, PeriodEnd);
         var absences = Array.Empty<AbsenceEntry>();
 
-        var baseline = await pcs.CalculateAsync(plan, profileSeed, entries, absences, 0m);
+        // Legacy shim — registers WtmNaturalKey hydrator via BuildPlanForLegacyCallersAsync
+        // (S29 TASK-2909 precedent; required by PCS.MapSegmentToExportLinesAsync L1236).
+#pragma warning disable CS0618
+        var baseline = await pcs.CalculateAsync(
+            profileSeed, entries, absences, PeriodStart, PeriodEnd, previousFlexBalance: 0m);
+#pragma warning restore CS0618
         Assert.True(baseline.Success);
+        var baselineManifestId = baseline.RuleResults.First().ManifestId;
         var baselineJson = JsonSerializer.Serialize(baseline.RuleResults, SerializerOptions);
 
         // Case C cross-day supersession on part_time_fraction: 1.000 → 0.750.
@@ -200,7 +204,7 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
             effectiveFrom: Today);
 
         var replay = await pcs.ReplayAsync(
-            plan.ManifestId, profileSeed, entries, absences, previousFlexBalance: 0m);
+            baselineManifestId, profileSeed, entries, absences, previousFlexBalance: 0m);
         Assert.True(replay.Success);
         var replayJson = JsonSerializer.Serialize(replay.RuleResults, SerializerOptions);
 
@@ -238,23 +242,18 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
         await SetSeedPositionAsync("RESEARCHER");
         var pcs = BuildPcsWithResolver(_resolver);
 
-        var plan = PeriodPlanner.Plan(
-            employeeId: EmployeeId,
-            periodStart: PeriodStart,
-            periodEnd: PeriodEnd,
-            calculationKind: "forward-calc",
-            ruleSet: TestFixtures.RuleSet,
-            sources: SingleSegmentSources(),
-            options: PlannerOptions.Default);
-
         // Caller-supplied profile with Position=null. Resolver-returned value
         // (Position="RESEARCHER") wins per PCS L344-345; line L357 does NOT
         // fire because segmentProfile.Position is already non-null.
         var callerProfile = TestFixtures.Profile(EmployeeId) with { Position = null };
         var entries = TestFixtures.WeekdayEntriesForPeriod(EmployeeId, PeriodStart, PeriodEnd);
 
+        // Legacy shim — registers WtmNaturalKey hydrator (S29 precedent).
+#pragma warning disable CS0618
         var result = await pcs.CalculateAsync(
-            plan, callerProfile, entries, Array.Empty<AbsenceEntry>(), 0m);
+            callerProfile, entries, Array.Empty<AbsenceEntry>(), PeriodStart, PeriodEnd,
+            previousFlexBalance: 0m);
+#pragma warning restore CS0618
         Assert.True(result.Success);
         // Resolver-driven dated profile carries Position="RESEARCHER"; we
         // can't introspect segmentProfile directly from the result, but we
@@ -359,10 +358,13 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
         await conn.OpenAsync();
 
         // organizations FK target — minimal row for the user's primary_org_id.
+        // Column names match docker/postgres/init.sql:439-450:
+        // org_name (not name), materialized_path (not hierarchy_path),
+        // agreement_code/ok_version (no default_ prefix).
         await using (var orgCmd = new NpgsqlCommand(
             """
-            INSERT INTO organizations (org_id, name, org_type, parent_org_id, hierarchy_path,
-                                       default_agreement_code, default_ok_version)
+            INSERT INTO organizations (org_id, org_name, org_type, parent_org_id, materialized_path,
+                                       agreement_code, ok_version)
             VALUES (@orgId, 'Marquee Org', 'STYRELSE', NULL, '/MARQ/',
                     @agreementCode, @okVersion)
             ON CONFLICT (org_id) DO NOTHING
