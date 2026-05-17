@@ -360,18 +360,27 @@ public static class AdminEndpoints
 
                 // (2) employee_profiles INSERT — S31 invariant: every active user has
                 // exactly one live profile row (effective_to IS NULL).
+                // S33 in-flight defect fix: stamp effective_from = today (UTC) instead of
+                // using the schema DEFAULT '0001-01-01'. Under TASK-3302's new 3-case
+                // routing, default-seeded rows would trigger Case C cross-day supersession
+                // on the first PUT (because '0001-01-01' < today), creating a brand-new
+                // successor row at version=1 instead of UPDATE-in-place at version=2.
+                // Stamping today aligns same-day-edit semantics with admin expectations.
                 var profileId = Guid.NewGuid();
                 await using var profileCmd = new NpgsqlCommand(
                     """
                     INSERT INTO employee_profiles
-                        (profile_id, employee_id, weekly_norm_hours, part_time_fraction, position)
+                        (profile_id, employee_id, weekly_norm_hours, part_time_fraction, position,
+                         effective_from)
                     VALUES
-                        (@profileId, @employeeId, @weeklyNormHours, @partTimeFraction, NULL)
+                        (@profileId, @employeeId, @weeklyNormHours, @partTimeFraction, NULL,
+                         @effectiveFrom)
                     """, conn, tx);
                 profileCmd.Parameters.AddWithValue("profileId", profileId);
                 profileCmd.Parameters.AddWithValue("employeeId", request.UserId);
                 profileCmd.Parameters.AddWithValue("weeklyNormHours", 37.0m);
                 profileCmd.Parameters.AddWithValue("partTimeFraction", 1.000m);
+                profileCmd.Parameters.AddWithValue("effectiveFrom", DateOnly.FromDateTime(DateTime.UtcNow));
                 await profileCmd.ExecuteNonQueryAsync(ct);
 
                 // (2b) employee_profile_audit CREATED row in-tx (Step 7a P2 fix —

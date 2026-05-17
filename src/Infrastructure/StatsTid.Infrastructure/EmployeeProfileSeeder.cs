@@ -82,18 +82,26 @@ public static class EmployeeProfileSeeder
             await using var tx = await conn.BeginTransactionAsync(ct);
             try
             {
+                // S33 in-flight defect fix: stamp effective_from = today (UTC) instead of
+                // using the schema DEFAULT '0001-01-01'. Under TASK-3302's new 3-case routing,
+                // default-seeded rows would trigger Case C cross-day supersession on the first
+                // PUT (because '0001-01-01' < today). Stamping today keeps backfill profiles
+                // in the same-day window for the day they're created.
                 var profileId = Guid.NewGuid();
                 await using var insertCmd = new NpgsqlCommand(
                     """
                     INSERT INTO employee_profiles
-                        (profile_id, employee_id, weekly_norm_hours, part_time_fraction, position)
+                        (profile_id, employee_id, weekly_norm_hours, part_time_fraction, position,
+                         effective_from)
                     VALUES
-                        (@profileId, @employeeId, @weeklyNormHours, @partTimeFraction, NULL)
+                        (@profileId, @employeeId, @weeklyNormHours, @partTimeFraction, NULL,
+                         @effectiveFrom)
                     """, conn, tx);
                 insertCmd.Parameters.AddWithValue("profileId", profileId);
                 insertCmd.Parameters.AddWithValue("employeeId", employeeId);
                 insertCmd.Parameters.AddWithValue("weeklyNormHours", DefaultWeeklyNormHours);
                 insertCmd.Parameters.AddWithValue("partTimeFraction", DefaultPartTimeFraction);
+                insertCmd.Parameters.AddWithValue("effectiveFrom", DateOnly.FromDateTime(DateTime.UtcNow));
                 await insertCmd.ExecuteNonQueryAsync(ct);
 
                 // Step 7a P2 fix — emit a CREATED audit row in the same per-row tx

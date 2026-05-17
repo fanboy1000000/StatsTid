@@ -214,6 +214,14 @@ public sealed class EmployeeProfileRepository
     {
         // profile_id is generated client-side so the endpoint can include it in the
         // outbox event body (S29 WTM precedent at WageTypeMappingRepository.cs:137).
+        // S33 in-flight defect fix: stamp effective_from = today (UTC) instead of using
+        // the schema DEFAULT '0001-01-01' (S31 placeholder). Under TASK-3302's new
+        // 3-case routing, the first PUT against a default-seeded row would trigger
+        // Case C cross-day supersession (because '0001-01-01' < today), creating a
+        // brand-new successor row at version=1 instead of UPDATE-in-place at version=2.
+        // Stamping today makes the freshly-created row sit in the same-day window for
+        // any same-day PUT (Case B routing → version bump), matching pre-S33 admin
+        // expectations.
         var newProfileId = Guid.NewGuid();
         await using var cmd = new NpgsqlCommand(
             """
@@ -222,7 +230,7 @@ public sealed class EmployeeProfileRepository
                 effective_from, effective_to, version)
             VALUES (
                 @profileId, @employeeId, @weeklyNormHours, @partTimeFraction, @position,
-                DEFAULT, NULL, 1)
+                @effectiveFrom, NULL, 1)
             RETURNING profile_id, version
             """, conn, tx);
         cmd.Parameters.AddWithValue("profileId", newProfileId);
@@ -230,6 +238,7 @@ public sealed class EmployeeProfileRepository
         cmd.Parameters.AddWithValue("weeklyNormHours", req.WeeklyNormHours);
         cmd.Parameters.AddWithValue("partTimeFraction", req.PartTimeFraction);
         cmd.Parameters.AddWithValue("position", (object?)req.Position ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("effectiveFrom", DateOnly.FromDateTime(DateTime.UtcNow));
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct))
         {
