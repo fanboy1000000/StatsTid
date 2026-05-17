@@ -28,6 +28,7 @@ public static class BalanceEndpoints
             int year,
             int month,
             UserRepository userRepo,
+            UserAgreementCodeRepository userAgreementCodeRepo,
             AgreementConfigRepository configRepo,
             EntitlementConfigRepository entitlementConfigRepo,
             EntitlementBalanceRepository entitlementBalanceRepo,
@@ -62,6 +63,27 @@ public static class BalanceEndpoints
             if (user is null)
                 return Results.NotFound(new { error = "Employee not found" });
 
+            // Calculate working days (Mon-Fri) in the month
+            var daysInMonth = DateTime.DaysInMonth(year, month);
+            var monthStart = new DateOnly(year, month, 1);
+            var monthEnd = new DateOnly(year, month, daysInMonth);
+
+            // S34 / TASK-3410 — ADR-023 D2 binding cutover for agreement_code on past-period
+            // queries. Source the month-effective agreement_code from the dated repository
+            // instead of the live `user.AgreementCode` cache. If admin changed agreement_code
+            // today, last month's summary must recompute against the agreement code that was
+            // in effect at the start of last month — not today's.
+            //
+            // ADR-023 D3 (Balance = graceful-fallback consumer): if the dated lookup returns
+            // null (defensive — shouldn't happen post-backfill but possible if user was
+            // created after the period being summarized + before backfill), fall through to
+            // the live `user.AgreementCode` cache. Balance is informational (not load-bearing
+            // for PCS replay); graceful degradation is correct per the ADR-023 D3 split
+            // (PCS fails-closed; HTTP consumers gracefully fall back).
+            var pastEffectiveAgreementCode = await userAgreementCodeRepo.GetByUserIdAtAsync(
+                employeeId, monthStart, ct);
+            var agreementCode = pastEffectiveAgreementCode ?? user.AgreementCode;
+
             // ADR-023 D3: resolver-first, then existing fallback chain. Balance is a
             // pure-HTTP non-rule-engine consumer — null resolver result falls through
             // gracefully to AgreementConfig → CentralAgreementConfigs → 37.0m floor.
@@ -69,22 +91,17 @@ public static class BalanceEndpoints
             // profile, this endpoint returns sensible default data (graceful), unlike
             // the PCS-routed callers that fail-closed (ADR-023 D3 split).
             var datedProfile = await profileResolver.GetByEmployeeIdAtAsync(
-                employeeId, new DateOnly(year, month, 1), ct);
+                employeeId, monthStart, ct);
 
             // Get agreement config — try DB first (ACTIVE), fall back to central static config
-            var dbConfig = await configRepo.GetActiveAsync(user.AgreementCode, user.OkVersion, ct);
+            var dbConfig = await configRepo.GetActiveAsync(agreementCode, user.OkVersion, ct);
             var weeklyNormHours = datedProfile?.WeeklyNormHours
                 ?? dbConfig?.WeeklyNormHours
-                ?? CentralAgreementConfigs.TryGetConfig(user.AgreementCode, user.OkVersion)?.WeeklyNormHours
+                ?? CentralAgreementConfigs.TryGetConfig(agreementCode, user.OkVersion)?.WeeklyNormHours
                 ?? 37.0m;
             var hasMerarbejde = dbConfig?.HasMerarbejde
-                ?? CentralAgreementConfigs.TryGetConfig(user.AgreementCode, user.OkVersion)?.HasMerarbejde
+                ?? CentralAgreementConfigs.TryGetConfig(agreementCode, user.OkVersion)?.HasMerarbejde
                 ?? false;
-
-            // Calculate working days (Mon-Fri) in the month
-            var daysInMonth = DateTime.DaysInMonth(year, month);
-            var monthStart = new DateOnly(year, month, 1);
-            var monthEnd = new DateOnly(year, month, daysInMonth);
 
             var weekdays = 0;
             for (var day = monthStart; day <= monthEnd; day = day.AddDays(1))
@@ -139,7 +156,7 @@ public static class BalanceEndpoints
             // natural key — without this filter the loop double-emits each entitlement and
             // vacationDaysEntitlement gets overwritten with whichever row is visited last.
             var liveConfigs = (await entitlementConfigRepo.GetByAgreementAsync(
-                user.AgreementCode, user.OkVersion, ct))
+                agreementCode, user.OkVersion, ct))
                 .Where(c => c.EffectiveTo is null);
 
             // Part-time fraction not available on User model — default to 1.0
@@ -171,7 +188,7 @@ public static class BalanceEndpoints
                 // appears in the summary with the current quota values.
                 var entitlementYearStart = new DateOnly(entitlementYear, live.ResetMonth, 1);
                 var ec = await entitlementConfigRepo.GetByTypeAtAsync(
-                    live.EntitlementType, user.AgreementCode, user.OkVersion, entitlementYearStart, ct)
+                    live.EntitlementType, agreementCode, user.OkVersion, entitlementYearStart, ct)
                     ?? live;
 
                 // Look up balance for this employee + type + year (read from entitlement_balances
@@ -222,7 +239,7 @@ public static class BalanceEndpoints
                 normHoursExpected,
                 normHoursActual,
                 overtimeHours,
-                agreementCode = user.AgreementCode,
+                agreementCode,
                 hasMerarbejde,
                 entitlements,
                 overtimeBalance = overtimeBalance is not null ? new
