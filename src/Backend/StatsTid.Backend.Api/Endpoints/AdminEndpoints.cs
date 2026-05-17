@@ -691,6 +691,27 @@ public static class AdminEndpoints
                     // INSERT a fresh row at v=1 since expectedVersion is null. The
                     // safety-net branch keeps the PUT path resilient against
                     // pre-S34 stragglers; admin POST always seeds the row explicitly.
+
+                    // S34 Step 7a cycle 2 absorption (Codex BLOCKER-1) — re-validate
+                    // agreementCodeMutated against the FOR-UPDATE'd canonical source.
+                    // The pre-tx existingUser.AgreementCode snapshot at L610-611 can
+                    // be stale under concurrent admin edits; once we hold the row
+                    // lock, the predecessor's agreement_code is the authoritative
+                    // "before" value. If a peer admin already applied the requested
+                    // change while we waited on the lock, this PUT becomes a no-op
+                    // on the agreement-code dimension — skip SupersedeAndCreateAsync
+                    // + audit + Changed/Superseded emission to avoid (a) a spurious
+                    // version bump, (b) emitting UserAgreementCodeChanged with stale
+                    // OldAgreementCode that misreports the lineage as <pre-lock>→<new>
+                    // when the actual transition is <new>→<new>. Case A safety-net
+                    // (predecessor null) falls back to existingUser.AgreementCode
+                    // since there is no canonical row to read from.
+                    var canonicalOldAgreementCode =
+                        agreementPredecessor?.AgreementCode ?? existingUser.AgreementCode;
+                    if (string.Equals(request.AgreementCode, canonicalOldAgreementCode, StringComparison.Ordinal))
+                    {
+                        agreementCodeMutated = false;
+                    }
                 }
 
                 await using var cmd = new NpgsqlCommand(
@@ -842,10 +863,18 @@ public static class AdminEndpoints
                     // outcome (Case A / B / C). Phase 4e replay-data trail consumers
                     // pattern-match on this event type without parsing every
                     // UserUpdated event's old-vs-new diff.
+                    //
+                    // S34 Step 7a cycle 2 absorption (Codex BLOCKER-1) — OldAgreementCode
+                    // is sourced from the FOR-UPDATE'd predecessor row (canonical "before"
+                    // value), not from the pre-tx existingUser snapshot. Mirrors the
+                    // identical fix on the audit `previous_data` JSONB above + the
+                    // UserAgreementCodeSuperseded event payload below — all three sites
+                    // now flow off the same locked row state. Case A safety-net (no live
+                    // row exists) falls back to existingUser.AgreementCode.
                     var agreementChangedEvent = new UserAgreementCodeChanged
                     {
                         UserId = userId,
-                        OldAgreementCode = existingUser.AgreementCode,
+                        OldAgreementCode = agreementPredecessor?.AgreementCode ?? existingUser.AgreementCode,
                         NewAgreementCode = request.AgreementCode!,
                         EffectiveFrom = request.EffectiveFrom,
                         ActorId = actor.ActorId,
