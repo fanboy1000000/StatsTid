@@ -36,6 +36,7 @@ public static class BalanceEndpoints
             AbsenceProjectionRepository absenceProjectionRepo,
             IEventStore eventStore,
             OrgScopeValidator scopeValidator,
+            IEmploymentProfileResolver profileResolver,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -61,9 +62,19 @@ public static class BalanceEndpoints
             if (user is null)
                 return Results.NotFound(new { error = "Employee not found" });
 
+            // ADR-023 D3: resolver-first, then existing fallback chain. Balance is a
+            // pure-HTTP non-rule-engine consumer — null resolver result falls through
+            // gracefully to AgreementConfig → CentralAgreementConfigs → 37.0m floor.
+            // Documented determinism gap on agreement_code: when admin soft-deletes a
+            // profile, this endpoint returns sensible default data (graceful), unlike
+            // the PCS-routed callers that fail-closed (ADR-023 D3 split).
+            var datedProfile = await profileResolver.GetByEmployeeIdAtAsync(
+                employeeId, new DateOnly(year, month, 1), ct);
+
             // Get agreement config — try DB first (ACTIVE), fall back to central static config
             var dbConfig = await configRepo.GetActiveAsync(user.AgreementCode, user.OkVersion, ct);
-            var weeklyNormHours = dbConfig?.WeeklyNormHours
+            var weeklyNormHours = datedProfile?.WeeklyNormHours
+                ?? dbConfig?.WeeklyNormHours
                 ?? CentralAgreementConfigs.TryGetConfig(user.AgreementCode, user.OkVersion)?.WeeklyNormHours
                 ?? 37.0m;
             var hasMerarbejde = dbConfig?.HasMerarbejde
