@@ -19,8 +19,11 @@ namespace StatsTid.Tests.Regression;
 //   close that gap by:
 //     (a) exercising the canonical StatsTid.SharedKernel.Calendar.OkVersionResolver
 //         for every transition-boundary case referenced in the fix;
-//     (b) proving the absence-split and weekly-calculation design contracts
-//         stated in TimeEndpoints.cs comments;
+//     (b) proving the per-day absence resolution contract (TimeEndpoints.cs
+//         POST /api/absences) and the week-start-anchored resolution contract
+//         (formerly the Backend /api/time-entries/calculate-week endpoint —
+//         deleted in S33 TASK-3310 per ADR-023 D6; the OkVersionResolver
+//         invariant continues to apply to any future week-anchored caller);
 //     (c) proving that a retroactive split at the OK-transition date yields
 //         two structurally-consistent result sets — one per version — using
 //         the same pure OvertimeRule path as RegressionTests.cs.
@@ -156,14 +159,21 @@ public class OkVersionRuntimeRegressionTests
     }
 
     // -----------------------------------------------------------------------
-    // 7. Weekly-calculate design contract (TimeEndpoints.cs, POST
-    //    /api/time-entries/calculate-week): OK version is resolved from the
-    //    WeekStartDate, NOT from each day in the week. A week that starts on
-    //    Mon 2026-03-30 crosses the transition mid-week but must resolve to
-    //    OK24 because the week's anchor is 2026-03-30.
+    // 7. Week-start-anchored OK-version resolution contract: when a caller
+    //    anchors a week to a single OK version, that version is resolved from
+    //    the WeekStartDate, NOT from each day in the week. A week that starts
+    //    on Mon 2026-03-30 crosses the transition mid-week but must resolve
+    //    to OK24 because the week's anchor is 2026-03-30.
     //
-    //    If this invariant changes in the future, callers that span the
-    //    transition must use the retroactive-split flow (ADR-013) instead.
+    //    If this invariant is needed for any future caller that anchors at
+    //    week-start, the per-day mismatch (Wed 2026-04-01 → OK26) demonstrates
+    //    why straddle cases must go through the planner-driven split path
+    //    (ADR-016 D10 / PeriodCalculationService) instead.
+    //
+    //    Historical note: the Backend `/api/time-entries/calculate-week`
+    //    endpoint used week-start anchoring and was deleted in S33 TASK-3310
+    //    (ADR-023 D6). The mathematical invariant on OkVersionResolver pinned
+    //    here is independent of any specific caller.
     // -----------------------------------------------------------------------
     [Fact]
     public void WeeklyCalculate_WeekContainingTransition_ResolvedByWeekStart()

@@ -302,9 +302,10 @@ public class OrchestratorScopeEnforcementTests
     [Fact]
     public void ExtractEmployeeId_WeeklyCalculation_ReadsTopLevelEmployeeId()
     {
-        // Mirrors TimeEndpoints.cs `/api/time-entries/calculate-week` payload —
-        // the production shape WeeklyCalculationPipeline.ExecuteAsync consumes
-        // via parameters["employeeId"].
+        // Production shape WeeklyCalculationPipeline.ExecuteAsync consumes
+        // via parameters["employeeId"]. (Historical Backend caller
+        // /api/time-entries/calculate-week was deleted in S33 TASK-3310 per
+        // ADR-023 D6 — orchestrator /execute remains the live entry point.)
         const string json = """
         {
             "employeeId": "USR01",
@@ -392,11 +393,13 @@ public class OrchestratorScopeEnforcementTests
     [Fact]
     public void ExtractEmployeeId_RuleEvaluation_ReadsNestedProfileEmployeeId()
     {
-        // Mirrors TimeEndpoints.cs `/api/time-entries/calculate` payload —
-        // the production shape RuleEngine /api/rules/evaluate consumes via
+        // Production shape RuleEngine /api/rules/evaluate consumes via
         // request.Profile.EmployeeId. THIS is the field the gate must check
         // for rule-evaluation; the prior top-level-wins helper let a caller
         // satisfy the gate with one id while the rule engine used another.
+        // (Historical Backend caller /api/time-entries/calculate was deleted
+        // in S33 TASK-3310 per ADR-023 D6 — orchestrator /execute remains the
+        // live entry point.)
         const string json = """
         {
             "ruleId": "NORM_CHECK_37H",
