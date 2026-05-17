@@ -4,6 +4,7 @@ using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Events;
+using StatsTid.SharedKernel.Exceptions;
 using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Segmentation;
@@ -84,6 +85,12 @@ public sealed class PeriodCalculationService
     // shim emits no profile-activation boundaries — the same observable behavior as
     // pre-S21, so existing tests are unaffected.
     private readonly LocalAgreementProfileRepository? _localAgreementProfileRepo;
+    // S33 TASK-3305 (ADR-023 D1): optional resolver for the dated employee_profiles
+    // lookup at the segmentProfile construction site. Optional because existing PCS
+    // unit-test fixtures construct the service directly (no DI); the legacy
+    // copy-caller-profile path is preserved when this is null (refinement cycle 2
+    // Codex W absorption — S29 _localAgreementProfileRepo precedent at line 86).
+    private readonly IEmploymentProfileResolver? _profileResolver;
     private readonly ILogger<PeriodCalculationService> _logger;
     private readonly string _ruleEngineUrl;
 
@@ -116,7 +123,8 @@ public sealed class PeriodCalculationService
         IConfiguration configuration,
         ILogger<PeriodCalculationService> logger,
         IRuleClassificationProvider? classificationProvider = null,
-        LocalAgreementProfileRepository? localAgreementProfileRepo = null)
+        LocalAgreementProfileRepository? localAgreementProfileRepo = null,
+        IEmploymentProfileResolver? profileResolver = null)
     {
         _httpClientFactory = httpClientFactory;
         _mappingService = mappingService;
@@ -136,6 +144,12 @@ public sealed class PeriodCalculationService
         // empty LocalProfileActivations list. The 13 existing PCS unit tests that
         // construct PCS via `new(...)` continue to work without modification.
         _localAgreementProfileRepo = localAgreementProfileRepo;
+        // S33 TASK-3305 (ADR-023 D1): null-tolerant — when the resolver is not
+        // registered (legacy unit-test fixtures, environments without the S33
+        // employee_profiles schema), the segmentProfile construction site below
+        // falls back to copying the caller-supplied profile (pre-S33 behavior).
+        // DI-registered code paths get fail-closed semantics per ADR-023 D3.
+        _profileResolver = profileResolver;
         _ruleEngineUrl = configuration["ServiceUrls:RuleEngine"] ?? "http://rule-engine:8080";
     }
 
@@ -323,20 +337,25 @@ public sealed class PeriodCalculationService
                     profile.OkVersion, segmentOkVersion, profile.EmployeeId, segment.StartDate, segment.EndDate);
             }
 
-            var segmentProfile = string.Equals(profile.OkVersion, segmentOkVersion, StringComparison.Ordinal)
-                ? profile
-                : new EmploymentProfile
-                {
-                    EmployeeId = profile.EmployeeId,
-                    AgreementCode = profile.AgreementCode,
-                    OkVersion = segmentOkVersion,
-                    WeeklyNormHours = profile.WeeklyNormHours,
-                    EmploymentCategory = profile.EmploymentCategory,
-                    IsPartTime = profile.IsPartTime,
-                    PartTimeFraction = profile.PartTimeFraction,
-                    Position = profile.Position,
-                    OrgId = profile.OrgId
-                };
+            // ADR-023 D1 cutover: resolve segmentProfile from dated employee_profiles
+            // (via EmploymentProfileResolver) instead of copying caller-supplied profile.
+            // Legacy test-fixture path preserved when resolver is null (refinement
+            // cycle 2 Codex W absorption — S29 _localAgreementProfileRepo precedent).
+            var segmentProfile = _profileResolver is not null
+                ? (await _profileResolver.GetByEmployeeIdAtAsync(profile.EmployeeId, segment.StartDate, ct))
+                    ?? throw new EmployeeProfileNotFoundException(profile.EmployeeId, segment.StartDate)
+                : profile;
+
+            // OkVersion server-resolution overlay (ADR-003 preserved separately —
+            // resolver returns live ok_version from users; segment-resolved override
+            // applies for OK24 boundary).
+            if (!string.Equals(segmentProfile.OkVersion, segmentOkVersion, StringComparison.Ordinal))
+                segmentProfile = segmentProfile with { OkVersion = segmentOkVersion };
+
+            // Position caller-fallback (TASK-1802 preservation — when resolver has no
+            // Position but caller supplied one, prefer caller's).
+            if (segmentProfile.Position is null && profile.Position is not null)
+                segmentProfile = segmentProfile with { Position = profile.Position };
 
             var segmentEntries = entries.Where(e => e.Date >= segment.StartDate && e.Date <= segment.EndDate).ToList();
             var segmentAbsences = absences.Where(a => a.Date >= segment.StartDate && a.Date <= segment.EndDate).ToList();
