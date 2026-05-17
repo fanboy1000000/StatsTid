@@ -99,6 +99,23 @@ using (var scope = app.Services.CreateScope())
     await EmployeeProfileSeeder.SeedAsync(dbFactory, outbox, logger);
 }
 
+// ── S34 / TASK-3403: seed user_agreement_codes for any active user lacking a live row ──
+// Phase 4e (ADR-023 D2 option (b)) bootstrap backfill — reads each user's current
+// users.agreement_code scalar and inserts a matching live history row at
+// effective_from='0001-01-01' (history-covering default per S33 Step 7a cycle 1
+// absorption; stamping today would leave pre-deployment periods uncovered and
+// break replay determinism). Idempotent NOT EXISTS predicate + per-row atomic tx
+// (row INSERT + audit CREATED + UserAgreementCodeSeeded outbox event). Catches
+// PostgresException(SqlState=23505) on partial-unique-index race for concurrent-
+// startup safety — ships the fix inline that S31 EmployeeProfileSeeder deferred
+// to Phase 4e (candidate #2).
+{
+    var dbFactory = app.Services.GetRequiredService<DbConnectionFactory>();
+    var outbox = app.Services.GetRequiredService<IOutboxEnqueue>();
+    var logger = app.Services.GetRequiredService<ILogger<Program>>();
+    await UserAgreementCodeBackfillSeeder.SeedAsync(dbFactory, outbox, logger);
+}
+
 // ── S27 Phase 4c.6 / Step 7a cycle 1 BLOCKER fix ──
 // Apply projection backfill (idempotent; one-shot per startup).
 // No-op when projections already mirror events. Required because the
