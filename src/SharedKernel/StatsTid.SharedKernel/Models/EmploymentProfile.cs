@@ -3,6 +3,19 @@ namespace StatsTid.SharedKernel.Models;
 public sealed record class EmploymentProfile
 {
     public required string EmployeeId { get; init; }
+
+    /// <summary>
+    /// Agreement code for the employee at the consumption-time asOfDate (e.g. "AC", "HK",
+    /// "PROSA"). Per ADR-023 D2 + S34: this value is sourced from the dated
+    /// <c>user_agreement_codes</c> table via
+    /// <c>UserAgreementCodeRepository.GetByUserIdAtAsync(employeeId, asOfDate, ct)</c>
+    /// at PCS replay consumption sites; <c>users.agreement_code</c> remains as a
+    /// denormalized cache for live-only consumers (JWT mint, current-row reads).
+    /// Replay-sensitive readers MUST NOT hydrate this field from <c>users.agreement_code</c>
+    /// — past-period historical replays would silently use today's agreement_code instead
+    /// of the period-effective value. ADR-016 D10 closed for this field in S34
+    /// (4th and final rule-engine input).
+    /// </summary>
     public required string AgreementCode { get; init; }
     public required string OkVersion { get; init; }
     public required decimal WeeklyNormHours { get; init; }
