@@ -295,6 +295,7 @@ public static class AdminEndpoints
             OrgScopeValidator scopeValidator,
             DbConnectionFactory dbFactory,
             IOutboxEnqueue outbox,
+            UserAgreementCodeRepository userAgreementCodeRepo,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -417,6 +418,61 @@ public static class AdminEndpoints
                     await profileAuditCmd.ExecuteNonQueryAsync(ct);
                 }
 
+                // (2c) user_agreement_codes Case A INSERT in-tx (S34 / TASK-3407,
+                // ADR-023 D2 option (b)) — extends the existing S31 4-way atomicity
+                // to 6-way: users + employee_profiles + employee_profile_audit +
+                // user_agreement_codes + user_agreement_codes_audit + 3 outboxes.
+                // Routes through UserAgreementCodeRepository.SupersedeAndCreateAsync
+                // with expectedVersion=null → Case A (Created) because POST creates a
+                // brand-new user with no predecessor row. EffectiveFrom = today (UTC)
+                // mirrors the employee_profiles today-stamp convention at L383 (S33
+                // in-flight defect fix — keeps same-day-edit semantics aligned).
+                // Diverges from the seeder's '0001-01-01' anchor because admin-POST
+                // is a steady-state path, not a history-covering bootstrap.
+                var agreementToday = DateOnly.FromDateTime(DateTime.UtcNow);
+                var agreementResult = await userAgreementCodeRepo.SupersedeAndCreateAsync(
+                    conn, tx,
+                    new UserAgreementCodeSupersedeRequest(
+                        UserId: request.UserId,
+                        AgreementCode: request.AgreementCode,
+                        EffectiveFrom: agreementToday),
+                    expectedVersion: null,
+                    ct);
+
+                // (2d) user_agreement_codes_audit CREATED row in-tx. Mirrors the
+                // backfill seeder's audit shape (UserAgreementCodeBackfillSeeder) so
+                // the admin-POST path and the seeder path leave audit rows of the
+                // same shape. previous_data NULL (no predecessor); version_before
+                // NULL; version_after = 1 (Case A baseline per ADR-020 D2).
+                var agreementNewData = JsonSerializer.Serialize(new
+                {
+                    userId = request.UserId,
+                    agreementCode = request.AgreementCode,
+                    effectiveFrom = agreementToday.ToString("yyyy-MM-dd"),
+                });
+                await using (var agreementAuditCmd = new NpgsqlCommand(
+                    """
+                    INSERT INTO user_agreement_codes_audit (
+                        assignment_id, user_id, action,
+                        previous_data, new_data,
+                        version_before, version_after,
+                        actor_id, actor_role)
+                    VALUES (
+                        @assignmentId, @userId, 'CREATED',
+                        NULL, @newData::jsonb,
+                        NULL, @versionAfter,
+                        @actorId, @actorRole)
+                    """, conn, tx))
+                {
+                    agreementAuditCmd.Parameters.AddWithValue("assignmentId", agreementResult.AssignmentId);
+                    agreementAuditCmd.Parameters.AddWithValue("userId", request.UserId);
+                    agreementAuditCmd.Parameters.AddWithValue("newData", agreementNewData);
+                    agreementAuditCmd.Parameters.AddWithValue("versionAfter", agreementResult.Version);
+                    agreementAuditCmd.Parameters.AddWithValue("actorId", actor.ActorId ?? "unknown");
+                    agreementAuditCmd.Parameters.AddWithValue("actorRole", actor.ActorRole ?? "unknown");
+                    await agreementAuditCmd.ExecuteNonQueryAsync(ct);
+                }
+
                 // (3) UserCreated outbox emit in-tx (BEFORE CommitAsync) so the
                 // users row and the outbox row commit atomically per ADR-018 D3.
                 var @event = new UserCreated
@@ -457,6 +513,27 @@ public static class AdminEndpoints
                 };
                 await outbox.EnqueueAsync(conn, tx, $"employee-profile-{request.UserId}", profileEvent, ct);
 
+                // (5) UserAgreementCodeSeeded outbox emit in-tx (S34 / TASK-3407,
+                // ADR-023 D2). Same canonical user-{userId} stream as UserCreated
+                // (TASK-3309 + backfill seeder convention) so the per-user lineage
+                // replays in one walk. Seeded — NOT Changed/Superseded — because this
+                // is the FIRST-EVER agreement-code assignment for the user (Step 0b
+                // BLOCKER 1 absorption: no predecessor; matches the backfill seeder's
+                // bootstrap semantic). EffectiveFrom = today (UTC) mirrors the row's
+                // stamped effective_from at L432 (ADR-018 D3 atomic-outbox row/event
+                // parity).
+                var agreementSeededEvent = new UserAgreementCodeSeeded
+                {
+                    UserId = request.UserId,
+                    AgreementCode = request.AgreementCode,
+                    EffectiveFrom = agreementToday,
+                    RowVersion = agreementResult.Version,
+                    ActorId = actor.ActorId,
+                    ActorRole = actor.ActorRole,
+                    CorrelationId = actor.CorrelationId,
+                };
+                await outbox.EnqueueAsync(conn, tx, $"user-{request.UserId}", agreementSeededEvent, ct);
+
                 await tx.CommitAsync(ct);
             }
             catch
@@ -478,6 +555,23 @@ public static class AdminEndpoints
         }).RequireAuthorization("LocalAdminOrAbove");
 
         // 5. PUT /api/admin/users/{userId} — Update user
+        //
+        // S34 / TASK-3407 (ADR-023 D2 option (b)) — extends the S33 / TASK-3309
+        // UserAgreementCodeChanged emission with full versioned-history routing
+        // when agreement_code mutates. The DTO grows a required
+        // EffectiveFrom: DateOnly validated as today (UTC); on mutation the
+        // handler routes through UserAgreementCodeRepository.SupersedeAndCreateAsync
+        // (Case B same-day in-place vs Case C cross-day supersession against the
+        // seeder-backfilled '0001-01-01' predecessor) and emits:
+        //   • UserAgreementCodeChanged — ALWAYS when mutated (preserved S33
+        //     narrow-signal precedent for Phase 4e replay-data trail).
+        //   • UserAgreementCodeSuperseded — ADDITIONALLY on Case C (dual emission
+        //     per S25 publish-supersession precedent).
+        // The audit row's action discriminates Updated vs Superseded vs Created.
+        // The users.agreement_code denormalized cache UPDATE rides the same
+        // atomic tx per the UserAgreementCodeRepository canonical-write contract.
+        // No-agreement_code-mutation path is UNCHANGED from S33 — just users
+        // UPDATE + UserUpdated outbox in one tx.
         app.MapPut("/api/admin/users/{userId}", async (
             string userId,
             UpdateUserRequest request,
@@ -485,6 +579,7 @@ public static class AdminEndpoints
             OrgScopeValidator scopeValidator,
             IOutboxEnqueue outbox,
             DbConnectionFactory dbFactory,
+            UserAgreementCodeRepository userAgreementCodeRepo,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -508,9 +603,45 @@ public static class AdminEndpoints
                     return Results.Json(new { error = "Access denied", reason = reasonNew }, statusCode: 403);
             }
 
+            // S34 / TASK-3407 — agreement_code mutation predicate (null-safe + Ordinal
+            // compare per S33 TASK-3309 precedent — codes are identifiers, not
+            // culture-sensitive text). When false, the agreement_code routing branch
+            // below is skipped entirely and behaviour matches S33 verbatim.
+            var agreementCodeMutated = request.AgreementCode is not null &&
+                !string.Equals(request.AgreementCode, existingUser.AgreementCode, StringComparison.Ordinal);
+
+            // S34 / TASK-3407 — EffectiveFrom validator (ADR-023 D8 same-day-only-edit
+            // narrowing). Only gated on the agreement_code mutation path: when the
+            // admin is not editing agreement_code (e.g. just updating display_name or
+            // email), EffectiveFrom is irrelevant and skipping the validator preserves
+            // the no-mutation path's S33 behaviour unchanged. DateTime.UtcNow (not
+            // local time) aligns with the frontend's
+            // `new Date().toISOString().slice(0,10)` UTC extraction (TASK-3409 sync).
+            // Rejects both backdated AND future-dated values with 422.
+            if (agreementCodeMutated)
+            {
+                var today = DateOnly.FromDateTime(DateTime.UtcNow);
+                if (request.EffectiveFrom != today)
+                {
+                    return Results.UnprocessableEntity(new
+                    {
+                        error = "EffectiveFrom must equal today (UTC).",
+                        provided = request.EffectiveFrom,
+                        expected = today,
+                    });
+                }
+            }
+
             // Atomic UPDATE + outbox-emit per ADR-018 D3 (S26 TASK-2605b):
             // inline users UPDATE and UserUpdated outbox enqueue ride a single
             // explicit transaction; commit at end of try, rollback on throw.
+            //
+            // S34 / TASK-3407 extends the tx with — when agreement_code mutated —
+            // user_agreement_codes routing via SupersedeAndCreateAsync + audit row +
+            // UserAgreementCodeChanged + (on Case C) UserAgreementCodeSuperseded all
+            // in the SAME atomic tx (ADR-018 D3 atomic-outbox contract). The
+            // users.agreement_code denormalized cache UPDATE is part of the same tx
+            // per the canonical-write contract on UserAgreementCodeRepository.
             var now = DateTime.UtcNow;
             await using var conn = dbFactory.Create();
             await conn.OpenAsync(ct);
@@ -518,6 +649,43 @@ public static class AdminEndpoints
 
             try
             {
+                // S34 / TASK-3407 — predecessor snapshot read in-tx (only when
+                // agreement_code mutated). Captures the full row state for the
+                // UserAgreementCodeSuperseded event payload (PredecessorAssignmentId,
+                // PredecessorEffectiveFrom, OldAgreementCode, VersionBefore) on Case C
+                // and the audit row's version_before on Case B/C. Mirrors the
+                // EmployeeProfileEndpoints PUT pre-tx-read pattern (PredecessorSnapshot).
+                // SupersedeAndCreateAsync will FOR-UPDATE-lock the live row before
+                // mutating it, so this read can safely race with a concurrent admin —
+                // the conflict will surface on the second writer's lock acquisition,
+                // not here. Skipped on the no-mutation path.
+                AgreementPredecessorSnapshot? agreementPredecessor = null;
+                if (agreementCodeMutated)
+                {
+                    await using var preCmd = new NpgsqlCommand(
+                        """
+                        SELECT assignment_id, agreement_code, effective_from, version
+                        FROM user_agreement_codes
+                        WHERE user_id = @userId AND effective_to IS NULL
+                        """, conn, tx);
+                    preCmd.Parameters.AddWithValue("userId", userId);
+                    await using var preReader = await preCmd.ExecuteReaderAsync(ct);
+                    if (await preReader.ReadAsync(ct))
+                    {
+                        agreementPredecessor = new AgreementPredecessorSnapshot(
+                            AssignmentId: preReader.GetGuid(0),
+                            AgreementCode: preReader.GetString(1),
+                            EffectiveFrom: preReader.GetFieldValue<DateOnly>(2),
+                            Version: preReader.GetInt64(3));
+                    }
+                    // If null: no live row exists — backfill seeder didn't run for
+                    // this user, or the user was created pre-S34 and somehow missed
+                    // the seeder. SupersedeAndCreateAsync will route to Case A and
+                    // INSERT a fresh row at v=1 since expectedVersion is null. The
+                    // safety-net branch keeps the PUT path resilient against
+                    // pre-S34 stragglers; admin POST always seeds the row explicitly.
+                }
+
                 await using var cmd = new NpgsqlCommand(
                     """
                     UPDATE users
@@ -537,7 +705,9 @@ public static class AdminEndpoints
                 await cmd.ExecuteNonQueryAsync(ct);
 
                 // Emit domain event in-tx (BEFORE CommitAsync) so the users row
-                // and the outbox row commit atomically per ADR-018 D3.
+                // and the outbox row commit atomically per ADR-018 D3. UserUpdated
+                // fires on EVERY PUT regardless of agreement_code mutation
+                // (preserved S31 / S33 contract).
                 var @event = new UserUpdated
                 {
                     UserId = userId,
@@ -551,27 +721,154 @@ public static class AdminEndpoints
                 };
                 await outbox.EnqueueAsync(conn, tx, $"user-{userId}", @event, ct);
 
-                // S33 / TASK-3309 (ADR-023 D2) — Phase 4e replay-data trail.
-                // Narrow signal: emit UserAgreementCodeChanged ONLY when the
-                // request explicitly sets agreement_code AND the new value
-                // differs from the existing one (Ordinal compare — codes are
-                // identifiers, not culture-sensitive text). UserUpdated above
-                // still fires on every PUT; this rides the same atomic tx
-                // per ADR-018 D3, same stream as UserUpdated.
-                if (request.AgreementCode is not null &&
-                    !string.Equals(request.AgreementCode, existingUser.AgreementCode, StringComparison.Ordinal))
+                // S34 / TASK-3407 (ADR-023 D2 option (b)) — agreement_code routing.
+                // Extends the S33 / TASK-3309 narrow-signal UserAgreementCodeChanged
+                // emission with full versioned-history routing through
+                // SupersedeAndCreateAsync. The repo's ADR-020 D2 3-case routing
+                // selects:
+                //   • Case B (Updated)    — live row's effective_from == today (UTC);
+                //                           UPDATE-in-place with version bump.
+                //   • Case C (Superseded) — live row's effective_from < today (e.g.
+                //                           seeder-backfilled '0001-01-01' or earlier
+                //                           admin edit); close predecessor + INSERT
+                //                           new live row at predecessor.Version + 1.
+                //   • Case A (Created)    — no live row exists (pre-S34 straggler);
+                //                           INSERT fresh row at v=1.
+                // Audit row action mirrors the outcome (UPDATED / SUPERSEDED /
+                // CREATED). UserAgreementCodeChanged emits ALWAYS when mutated
+                // (preserved S33 contract); UserAgreementCodeSuperseded emits
+                // ADDITIONALLY on Case C (dual emission per S25 publish-supersession
+                // precedent — Phase 4e replay consumers see the "agreement code
+                // changed" signal AND the cross-day supersession lifecycle event).
+                if (agreementCodeMutated)
                 {
-                    var agreementEvent = new UserAgreementCodeChanged
+                    var agreementResult = await userAgreementCodeRepo.SupersedeAndCreateAsync(
+                        conn, tx,
+                        new UserAgreementCodeSupersedeRequest(
+                            UserId: userId,
+                            AgreementCode: request.AgreementCode!,
+                            EffectiveFrom: request.EffectiveFrom),
+                        expectedVersion: null,
+                        ct);
+
+                    // Audit row — action + version-transition columns discriminated
+                    // by outcome:
+                    //   Case B Updated:    action=UPDATED,    version_before=predecessor.Version, version_after=result.Version
+                    //   Case C Superseded: action=SUPERSEDED, version_before=predecessor.Version, version_after=result.Version
+                    //   Case A Created:    action=CREATED,    version_before=NULL,                version_after=result.Version
+                    // version_before is the predecessor's row-version (NOT NULL on
+                    // B/C because we snapshotted it above; NULL on A because there
+                    // is no predecessor). Mirrors EmployeeProfileEndpoints PUT
+                    // precedent (L366-367) — the audit chain narrates the visible
+                    // state delta on the user's agreement-code lineage.
+                    string auditAction;
+                    long? auditVersionBefore;
+                    switch (agreementResult.Outcome)
+                    {
+                        case SaveUserAgreementCodeOutcome.Updated:
+                            auditAction = "UPDATED";
+                            auditVersionBefore = agreementPredecessor!.Version;
+                            break;
+                        case SaveUserAgreementCodeOutcome.Superseded:
+                            auditAction = "SUPERSEDED";
+                            auditVersionBefore = agreementPredecessor!.Version;
+                            break;
+                        case SaveUserAgreementCodeOutcome.Created:
+                            auditAction = "CREATED";
+                            auditVersionBefore = null;
+                            break;
+                        default:
+                            throw new InvalidOperationException(
+                                $"Unhandled SaveUserAgreementCodeOutcome value '{agreementResult.Outcome}'.");
+                    }
+                    var previousData = agreementPredecessor is null
+                        ? null
+                        : JsonSerializer.Serialize(new
+                        {
+                            userId,
+                            agreementCode = agreementPredecessor.AgreementCode,
+                            effectiveFrom = agreementPredecessor.EffectiveFrom.ToString("yyyy-MM-dd"),
+                        });
+                    var newData = JsonSerializer.Serialize(new
+                    {
+                        userId,
+                        agreementCode = request.AgreementCode,
+                        effectiveFrom = request.EffectiveFrom.ToString("yyyy-MM-dd"),
+                    });
+                    await using (var agreementAuditCmd = new NpgsqlCommand(
+                        """
+                        INSERT INTO user_agreement_codes_audit (
+                            assignment_id, user_id, action,
+                            previous_data, new_data,
+                            version_before, version_after,
+                            actor_id, actor_role)
+                        VALUES (
+                            @assignmentId, @userId, @action,
+                            @previousData::jsonb, @newData::jsonb,
+                            @versionBefore, @versionAfter,
+                            @actorId, @actorRole)
+                        """, conn, tx))
+                    {
+                        agreementAuditCmd.Parameters.AddWithValue("assignmentId", agreementResult.AssignmentId);
+                        agreementAuditCmd.Parameters.AddWithValue("userId", userId);
+                        agreementAuditCmd.Parameters.AddWithValue("action", auditAction);
+                        agreementAuditCmd.Parameters.AddWithValue("previousData",
+                            previousData is null ? (object)DBNull.Value : previousData);
+                        agreementAuditCmd.Parameters.AddWithValue("newData", newData);
+                        agreementAuditCmd.Parameters.AddWithValue("versionBefore",
+                            auditVersionBefore is null ? (object)DBNull.Value : auditVersionBefore.Value);
+                        agreementAuditCmd.Parameters.AddWithValue("versionAfter", agreementResult.Version);
+                        agreementAuditCmd.Parameters.AddWithValue("actorId", actor.ActorId ?? "unknown");
+                        agreementAuditCmd.Parameters.AddWithValue("actorRole", actor.ActorRole ?? "unknown");
+                        await agreementAuditCmd.ExecuteNonQueryAsync(ct);
+                    }
+
+                    // S33 / TASK-3309 (preserved) — UserAgreementCodeChanged narrow
+                    // signal emits ALWAYS when agreement_code mutated, regardless of
+                    // outcome (Case A / B / C). Phase 4e replay-data trail consumers
+                    // pattern-match on this event type without parsing every
+                    // UserUpdated event's old-vs-new diff.
+                    var agreementChangedEvent = new UserAgreementCodeChanged
                     {
                         UserId = userId,
                         OldAgreementCode = existingUser.AgreementCode,
-                        NewAgreementCode = request.AgreementCode,
-                        EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow),
+                        NewAgreementCode = request.AgreementCode!,
+                        EffectiveFrom = request.EffectiveFrom,
                         ActorId = actor.ActorId,
                         ActorRole = actor.ActorRole,
                         CorrelationId = actor.CorrelationId
                     };
-                    await outbox.EnqueueAsync(conn, tx, $"user-{userId}", agreementEvent, ct);
+                    await outbox.EnqueueAsync(conn, tx, $"user-{userId}", agreementChangedEvent, ct);
+
+                    // S34 / TASK-3407 (NEW) — UserAgreementCodeSuperseded emits
+                    // ADDITIONALLY on Case C (cross-day supersession). Dual emission
+                    // with UserAgreementCodeChanged per the S25 publish-supersession
+                    // precedent — Phase 4e replay consumers reconstruct the
+                    // predecessor close + successor insert lifecycle without
+                    // inferring it from (effective_from, effective_to) deltas. Same
+                    // canonical user-{userId} stream per TASK-3309 + backfill seeder
+                    // convention. Under end-exclusive semantics (ADR-018 D9), the
+                    // predecessor's effective_to == new row's effective_from.
+                    if (agreementResult.Outcome == SaveUserAgreementCodeOutcome.Superseded)
+                    {
+                        var supersededEvent = new UserAgreementCodeSuperseded
+                        {
+                            PredecessorAssignmentId = agreementPredecessor!.AssignmentId,
+                            NewAssignmentId = agreementResult.AssignmentId,
+                            UserId = userId,
+                            PredecessorEffectiveFrom = agreementPredecessor.EffectiveFrom,
+                            PredecessorEffectiveTo = request.EffectiveFrom,
+                            NewEffectiveFrom = request.EffectiveFrom,
+                            OldAgreementCode = agreementPredecessor.AgreementCode,
+                            NewAgreementCode = request.AgreementCode!,
+                            VersionBefore = agreementPredecessor.Version,
+                            VersionAfter = agreementResult.Version,
+                            ActorId = actor.ActorId,
+                            ActorRole = actor.ActorRole,
+                            CorrelationId = actor.CorrelationId,
+                        };
+                        await outbox.EnqueueAsync(conn, tx, $"user-{userId}", supersededEvent, ct);
+                    }
                 }
 
                 await tx.CommitAsync(ct);
@@ -950,6 +1247,18 @@ public static class AdminEndpoints
         public string? Email { get; init; }
         public string? PrimaryOrgId { get; init; }
         public string? AgreementCode { get; init; }
+        /// <summary>
+        /// S34 / TASK-3407 (ADR-023 D2 option (b)) — required.
+        /// Validator narrows to <c>DateOnly.FromDateTime(DateTime.UtcNow)</c> per
+        /// ADR-023 D8 same-day-only-edit narrowing. Always sent by the frontend
+        /// (TASK-3409 — <c>new Date().toISOString().slice(0,10)</c> UTC extraction);
+        /// drives ADR-020 D2 3-case routing in
+        /// <c>UserAgreementCodeRepository.SupersedeAndCreateAsync</c> when
+        /// <c>AgreementCode</c> mutates against an existing live row (Case B
+        /// same-day in-place vs Case C cross-day supersession against a seeder-
+        /// backfilled <c>'0001-01-01'</c> predecessor).
+        /// </summary>
+        public DateOnly EffectiveFrom { get; init; }
     }
 
     private sealed class GrantRoleRequest
@@ -966,4 +1275,20 @@ public static class AdminEndpoints
         public required Guid AssignmentId { get; init; }
         public string? Reason { get; init; }
     }
+
+    /// <summary>
+    /// S34 / TASK-3407 — local snapshot record for the user_agreement_codes
+    /// predecessor row state read in-tx by the PUT handler BEFORE routing through
+    /// <see cref="UserAgreementCodeRepository.SupersedeAndCreateAsync"/>. Carries
+    /// enough fields to (a) build the user_agreement_codes_audit row's
+    /// <c>previous_data</c> JSONB + <c>version_before</c> column, and (b) hydrate
+    /// the <see cref="UserAgreementCodeSuperseded"/> event payload on Case C
+    /// (cross-day supersession) without a second SELECT. Mirrors the
+    /// EmployeeProfileEndpoints PUT path's <c>PredecessorSnapshot</c>.
+    /// </summary>
+    private sealed record AgreementPredecessorSnapshot(
+        Guid AssignmentId,
+        string AgreementCode,
+        DateOnly EffectiveFrom,
+        long Version);
 }
