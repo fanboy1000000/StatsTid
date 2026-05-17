@@ -536,6 +536,29 @@ public static class AdminEndpoints
                 };
                 await outbox.EnqueueAsync(conn, tx, $"user-{userId}", @event, ct);
 
+                // S33 / TASK-3309 (ADR-023 D2) — Phase 4e replay-data trail.
+                // Narrow signal: emit UserAgreementCodeChanged ONLY when the
+                // request explicitly sets agreement_code AND the new value
+                // differs from the existing one (Ordinal compare — codes are
+                // identifiers, not culture-sensitive text). UserUpdated above
+                // still fires on every PUT; this rides the same atomic tx
+                // per ADR-018 D3, same stream as UserUpdated.
+                if (request.AgreementCode is not null &&
+                    !string.Equals(request.AgreementCode, existingUser.AgreementCode, StringComparison.Ordinal))
+                {
+                    var agreementEvent = new UserAgreementCodeChanged
+                    {
+                        UserId = userId,
+                        OldAgreementCode = existingUser.AgreementCode,
+                        NewAgreementCode = request.AgreementCode,
+                        EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow),
+                        ActorId = actor.ActorId,
+                        ActorRole = actor.ActorRole,
+                        CorrelationId = actor.CorrelationId
+                    };
+                    await outbox.EnqueueAsync(conn, tx, $"user-{userId}", agreementEvent, ct);
+                }
+
                 await tx.CommitAsync(ct);
             }
             catch
