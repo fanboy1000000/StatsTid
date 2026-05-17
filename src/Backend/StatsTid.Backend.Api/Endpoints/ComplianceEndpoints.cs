@@ -3,6 +3,8 @@ using System.Text.Json;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Security;
+using StatsTid.SharedKernel.Exceptions;
+using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Security;
 
@@ -21,6 +23,7 @@ public static class ComplianceEndpoints
             IHttpClientFactory httpClientFactory,
             IConfiguration configuration,
             TimeEntryProjectionRepository timeEntryProjectionRepo,
+            IEmploymentProfileResolver profileResolver,
             OrgScopeValidator scopeValidator,
             HttpContext context,
             CancellationToken ct) =>
@@ -69,14 +72,16 @@ public static class ComplianceEndpoints
             var httpClient = httpClientFactory.CreateClient();
             var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
-            var profile = new EmploymentProfile
-            {
-                EmployeeId = employeeId,
-                AgreementCode = user.AgreementCode,
-                OkVersion = user.OkVersion,
-                WeeklyNormHours = 37.0m,
-                EmploymentCategory = "STANDARD",
-            };
+            // ADR-023 D1+D3 cutover: resolve fully-hydrated dated profile via
+            // EmploymentProfileResolver. Non-PCS rule-engine HTTP caller →
+            // fail-closed on null (caller maps to 500 via existing middleware per
+            // ADR-023 D3). Replaces hardcoded WeeklyNormHours=37.0m +
+            // EmploymentCategory="STANDARD" defaults; dated weekly_norm_hours +
+            // live-joined agreement_code/ok_version/employment_category come
+            // from the resolver per ADR-023 D2 (employment_category gap is
+            // Phase 4e launch-blocking).
+            var profile = await profileResolver.GetByEmployeeIdAtAsync(employeeId, monthStart, ct)
+                ?? throw new EmployeeProfileNotFoundException(employeeId, monthStart);
 
             var complianceRequest = new
             {
