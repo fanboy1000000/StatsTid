@@ -88,6 +88,11 @@ public static class EventSerializer
         // Emitted by AdminEndpoints PUT /api/admin/users/{userId} (TASK-3309) ONLY when
         // agreement_code mutates; rides the same atomic tx as UserUpdated.
         ["UserAgreementCodeChanged"] = typeof(UserAgreementCodeChanged),
+        // Sprint 34: agreement_code versioned history (ADR-023 D2 option (b)).
+        // Seeded — first-ever assignment for a user (bootstrap seeder TASK-3403 + AdminEndpoints POST TASK-3407).
+        // Superseded — cross-day Case C supersession (predecessor closed + new live row created) via TASK-3407 PUT.
+        ["UserAgreementCodeSeeded"] = typeof(UserAgreementCodeSeeded),
+        ["UserAgreementCodeSuperseded"] = typeof(UserAgreementCodeSuperseded),
     };
 
     public static string Serialize(IDomainEvent @event)
