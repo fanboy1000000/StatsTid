@@ -655,10 +655,16 @@ public static class AdminEndpoints
                 // PredecessorEffectiveFrom, OldAgreementCode, VersionBefore) on Case C
                 // and the audit row's version_before on Case B/C. Mirrors the
                 // EmployeeProfileEndpoints PUT pre-tx-read pattern (PredecessorSnapshot).
-                // SupersedeAndCreateAsync will FOR-UPDATE-lock the live row before
-                // mutating it, so this read can safely race with a concurrent admin —
-                // the conflict will surface on the second writer's lock acquisition,
-                // not here. Skipped on the no-mutation path.
+                //
+                // S34 Step 7a cycle 1 absorption (Codex BLOCKER-1+2 / Reviewer WARNING-1
+                // convergent): this SELECT uses FOR UPDATE so the row-level lock is held
+                // from snapshot through to SupersedeAndCreateAsync's own AcquireLockAsync
+                // (re-entrant within the same tx). Combined with passing
+                // expectedVersion=predecessor.Version below, audit `previous_data` JSONB
+                // + `version_before` column + the UserAgreementCodeSuperseded event payload
+                // are guaranteed to reflect the same row state that SupersedeAndCreateAsync
+                // operates on — no audit-trail drift under concurrent admin edits.
+                // Skipped on the no-mutation path.
                 AgreementPredecessorSnapshot? agreementPredecessor = null;
                 if (agreementCodeMutated)
                 {
@@ -667,6 +673,7 @@ public static class AdminEndpoints
                         SELECT assignment_id, agreement_code, effective_from, version
                         FROM user_agreement_codes
                         WHERE user_id = @userId AND effective_to IS NULL
+                        FOR UPDATE
                         """, conn, tx);
                     preCmd.Parameters.AddWithValue("userId", userId);
                     await using var preReader = await preCmd.ExecuteReaderAsync(ct);
@@ -742,13 +749,20 @@ public static class AdminEndpoints
                 // changed" signal AND the cross-day supersession lifecycle event).
                 if (agreementCodeMutated)
                 {
+                    // S34 Step 7a cycle 1 absorption — pass
+                    // expectedVersion=predecessor.Version (defense-in-depth on top of the
+                    // FOR UPDATE lock above). If the lock somehow released between the
+                    // predecessor read and this call, the repository's optimistic
+                    // concurrency check at UserAgreementCodeRepository.cs:266-273 would
+                    // throw OptimisticConcurrencyException → 412 rather than silently
+                    // proceeding with stale audit metadata.
                     var agreementResult = await userAgreementCodeRepo.SupersedeAndCreateAsync(
                         conn, tx,
                         new UserAgreementCodeSupersedeRequest(
                             UserId: userId,
                             AgreementCode: request.AgreementCode!,
                             EffectiveFrom: request.EffectiveFrom),
-                        expectedVersion: null,
+                        expectedVersion: agreementPredecessor?.Version,
                         ct);
 
                     // Audit row — action + version-transition columns discriminated

@@ -535,10 +535,13 @@ INSERT INTO schema_migrations (migration_id, applied_at)
 -- ADR-018 D14 export-time pattern) instead of relying on the live scalar
 -- `users.agreement_code`. 4th application of the established versioned-config
 -- pattern (S29 wage_type_mappings, S30 entitlement_configs, S31 employee_profiles).
--- Surrogate UUID PK + pre-baked effective_from / effective_to / partial-unique-
--- index / history-unique-index / version so future supersession routing needs
--- ZERO schema migration. S34 reads/writes only live rows (effective_to IS NULL);
--- multi-row history activation lands in a follow-up sprint.
+-- Surrogate UUID PK + effective_from / effective_to / partial-unique-index /
+-- history-unique-index / version. S34 activates the full 3-case routing
+-- (ADR-020 D2): Case A INSERT v=1 (no live row), Case B same-day UPDATE-
+-- in-place (v→v+1), Case C cross-day supersede (close predecessor +
+-- INSERT successor at predecessor.Version+1 per S33 Step 7a P1 ETag-
+-- monotonicity refinement). Backfill seeder writes 'effective_from = 0001-01-01'
+-- (history-covering anchor) so first PUT-after-seed Case-C-supersedes cleanly.
 CREATE TABLE IF NOT EXISTS user_agreement_codes (
     assignment_id    UUID         PRIMARY KEY,
     user_id          TEXT         NOT NULL REFERENCES users(user_id),

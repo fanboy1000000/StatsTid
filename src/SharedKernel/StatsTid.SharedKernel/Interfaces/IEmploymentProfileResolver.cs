@@ -21,9 +21,12 @@ public interface IEmploymentProfileResolver
     /// Dated fields (<c>weekly_norm_hours</c>, <c>part_time_fraction</c>, <c>position</c>)
     /// are sourced from <c>employee_profiles</c> with the end-exclusive predicate
     /// <c>effective_from &lt;= asOfDate AND (effective_to IS NULL OR effective_to &gt; asOfDate)</c>.
-    /// Live fields (<c>agreement_code</c>, <c>ok_version</c>, <c>employment_category</c>,
-    /// <c>primary_org_id</c>) are joined live from <c>users</c> per the documented
-    /// determinism gap in ADR-023 D2 (Phase 4e launch-blocking).
+    /// <c>agreement_code</c> is sourced from <c>user_agreement_codes</c> with the
+    /// same end-exclusive predicate per S34 / ADR-023 D2 option (b) — closes
+    /// ADR-016 D10 retroactive-replay determinism for the 4th and final rule-
+    /// engine input. Remaining sibling fields (<c>ok_version</c>,
+    /// <c>employment_category</c>, <c>primary_org_id</c>) are joined live from
+    /// <c>users</c> — none feeds replay-sensitive rule-engine logic.
     /// </summary>
     Task<EmploymentProfile?> GetByEmployeeIdAtAsync(
         string employeeId, DateOnly asOfDate, CancellationToken ct = default);
