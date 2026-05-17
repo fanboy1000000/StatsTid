@@ -105,6 +105,7 @@ public static class SkemaEndpoints
             int year,
             int month,
             UserRepository userRepo,
+            UserAgreementCodeRepository userAgreementCodeRepo,
             ProjectRepository projectRepo,
             AbsenceTypeVisibilityRepository visibilityRepo,
             TimerSessionRepository timerRepo,
@@ -145,6 +146,21 @@ public static class SkemaEndpoints
             var monthStart = new DateOnly(year, month, 1);
             var monthEnd = new DateOnly(year, month, daysInMonth);
 
+            // S34 / TASK-3411 — ADR-023 D2 binding cutover for agreement_code on past-month
+            // queries. The absence-types list shown for a past month must reflect the
+            // agreement that was in effect at the START of that month (e.g. a user who
+            // switched AC → HK today should still see only 1 child-sick-day option when
+            // viewing September; HK's CHILD_SICK_DAY_2 should NOT appear retroactively).
+            //
+            // ADR-023 D3 (Skema = graceful-fallback consumer on the GET path): null dated
+            // lookup falls through to live `user.AgreementCode`. Defensive only — the
+            // TASK-3403 backfill seeder guarantees every user has a covering row, but the
+            // fallback keeps the GET informational even if a user was created after the
+            // period being viewed.
+            var pastEffectiveAgreementCode = await userAgreementCodeRepo.GetByUserIdAtAsync(
+                employeeId, monthStart, ct);
+            var agreementCode = pastEffectiveAgreementCode ?? user.AgreementCode;
+
             // Fetch projects for the employee's org
             var projects = await projectRepo.GetByOrgAsync(user.PrimaryOrgId, ct);
 
@@ -155,7 +171,7 @@ public static class SkemaEndpoints
                 StringComparer.Ordinal);
 
             // Build absence types list (filtered by agreement and org visibility)
-            var agreementAbsenceTypes = GetAbsenceTypesForAgreement(user.AgreementCode);
+            var agreementAbsenceTypes = GetAbsenceTypesForAgreement(agreementCode);
             var absenceTypes = agreementAbsenceTypes
                 .Where(t => !hiddenTypes.Contains(t))
                 .Select(t => new
@@ -254,6 +270,7 @@ public static class SkemaEndpoints
             string employeeId,
             SaveSkemaRequest request,
             UserRepository userRepo,
+            UserAgreementCodeRepository userAgreementCodeRepo,
             ApprovalPeriodRepository approvalRepo,
             EntitlementConfigRepository entitlementConfigRepo,
             EntitlementBalanceRepository entitlementBalanceRepo,
@@ -298,6 +315,29 @@ public static class SkemaEndpoints
             var monthStart = new DateOnly(request.Year, request.Month, 1);
             var monthEnd = new DateOnly(request.Year, request.Month, daysInMonth);
 
+            // S34 / TASK-3411 — ADR-023 D2 binding cutover for agreement_code on past-month
+            // saves. Employees can edit prior-period Skema entries before manager approval;
+            // for those saves, the quota/entitlement validation + the AgreementCode field
+            // stamped onto TimeEntryRegistered / AbsenceRegistered events MUST reflect the
+            // agreement that was in effect on the first day of the month being saved — not
+            // today's live cache. Without this, an AC → HK switch today would cause last
+            // month's vacation save to validate against (and be stamped with) HK's quota
+            // rules instead of AC's.
+            //
+            // ADR-023 D3 (Skema POST = graceful-fallback consumer): null dated lookup falls
+            // through to live `user.AgreementCode`. Defensive only — TASK-3403 backfill
+            // covers every user — but the fallback keeps the POST functional in the edge
+            // case where a user is created after the period being saved.
+            //
+            // Quota-breach 422 trichotomy (S26 / ADR-018 D13 — atomic-rollback + 422 + clean
+            // state + read-your-write) is preserved: this cutover only changes which row of
+            // entitlement_configs is selected for validation; the atomic-tx wrap, the
+            // SkemaQuotaBreachException → 422 mapping, and the projection RYW guarantee are
+            // unchanged.
+            var pastEffectiveAgreementCode = await userAgreementCodeRepo.GetByUserIdAtAsync(
+                employeeId, monthStart, ct);
+            var agreementCode = pastEffectiveAgreementCode ?? user.AgreementCode;
+
             var period = await approvalRepo.GetByEmployeeAndPeriodAsync(employeeId, monthStart, monthEnd, ct);
             if (period is not null && period.Status is "EMPLOYEE_APPROVED" or "APPROVED")
                 return Results.Conflict(new { error = $"Cannot save entries for a period with status {period.Status}" });
@@ -333,7 +373,7 @@ public static class SkemaEndpoints
                     // (i)), so the live value is safe to use for entitlement-year-start derivation
                     // across the entire history of this natural key.
                     var liveConfig = await entitlementConfigRepo.GetCurrentOpenAsync(
-                        entitlementType, user.AgreementCode, user.OkVersion, ct);
+                        entitlementType, agreementCode, user.OkVersion, ct);
                     if (liveConfig is null)
                         continue;
 
@@ -351,7 +391,7 @@ public static class SkemaEndpoints
                     // existence mid-year), fall back to the live config so we don't silently skip a
                     // real quota check.
                     var config = await entitlementConfigRepo.GetByTypeAtAsync(
-                        entitlementType, user.AgreementCode, user.OkVersion, entitlementYearStart, ct)
+                        entitlementType, agreementCode, user.OkVersion, entitlementYearStart, ct)
                         ?? liveConfig;
 
                     var balance = await entitlementBalanceRepo.GetByEmployeeAndTypeAsync(
@@ -448,7 +488,7 @@ public static class SkemaEndpoints
                                 Hours = entry.Hours,
                                 TaskId = entry.ProjectCode,
                                 ActivityType = "NORMAL",
-                                AgreementCode = user.AgreementCode,
+                                AgreementCode = agreementCode,
                                 OkVersion = user.OkVersion,
                                 ActorId = actor.ActorId,
                                 ActorRole = actor.ActorRole,
@@ -474,7 +514,7 @@ public static class SkemaEndpoints
                                 Date = absence.Date,
                                 AbsenceType = absence.AbsenceType,
                                 Hours = absence.Hours,
-                                AgreementCode = user.AgreementCode,
+                                AgreementCode = agreementCode,
                                 OkVersion = user.OkVersion,
                                 ActorId = actor.ActorId,
                                 ActorRole = actor.ActorRole,
