@@ -84,6 +84,10 @@ public static class EventSerializer
         ["SegmentManifestCreated"] = typeof(SegmentManifestCreated),
         // Sprint 21: Local agreement profile events (ADR-017 D6/D7)
         ["LocalAgreementProfileChanged"] = typeof(LocalAgreementProfileChanged),
+        // Sprint 33: User agreement-code change event (ADR-023 D2 + Phase 4e replay-data trail).
+        // Emitted by AdminEndpoints PUT /api/admin/users/{userId} (TASK-3309) ONLY when
+        // agreement_code mutates; rides the same atomic tx as UserUpdated.
+        ["UserAgreementCodeChanged"] = typeof(UserAgreementCodeChanged),
     };
 
     public static string Serialize(IDomainEvent @event)
