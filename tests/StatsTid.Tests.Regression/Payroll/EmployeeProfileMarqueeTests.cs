@@ -89,7 +89,9 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
         // 4-table subset only).
         await StatsTidWebApplicationFactory.ApplyFullSchemaAsync(_harness.ConnectionString);
 
-        _resolver = new EmploymentProfileResolver(_harness.Factory);
+        _resolver = new EmploymentProfileResolver(
+            _harness.Factory,
+            new UserAgreementCodeRepository(_harness.Factory));
         _repo = new EmployeeProfileRepository(_harness.Factory);
 
         await SeedUserAndProfileAsync(weeklyNormHours: 37.0m, partTimeFraction: 1.000m);
