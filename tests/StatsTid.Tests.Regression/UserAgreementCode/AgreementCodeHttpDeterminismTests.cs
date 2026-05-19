@@ -2,8 +2,10 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using StatsTid.Auth;
+using StatsTid.Infrastructure;
 using StatsTid.SharedKernel.Security;
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Segmentation;
@@ -107,12 +109,24 @@ public sealed class AgreementCodeHttpDeterminismTests : IAsyncLifetime
         const string userId = "emp001";
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
+        // S35 / TASK-3506 — admin-strict If-Match required on PUT. Capture
+        // ETag via GET first; missing If-Match would yield 428 not 200.
+        var getRsp = await client.GetAsync($"/api/admin/users/{userId}");
+        Assert.Equal(HttpStatusCode.OK, getRsp.StatusCode);
+        var etag = getRsp.Headers.ETag;
+        Assert.NotNull(etag);
+
         // Flip agreement code to HK today (Case C supersession).
-        var flipRsp = await client.PutAsJsonAsync($"/api/admin/users/{userId}", new
+        var flipReq = new HttpRequestMessage(HttpMethod.Put, $"/api/admin/users/{userId}")
         {
-            agreementCode = "HK",
-            effectiveFrom = today.ToString("yyyy-MM-dd"),
-        });
+            Content = JsonContent.Create(new
+            {
+                agreementCode = "HK",
+                effectiveFrom = today.ToString("yyyy-MM-dd"),
+            }),
+        };
+        flipReq.Headers.IfMatch.Add(etag!);
+        var flipRsp = await client.SendAsync(flipReq);
         Assert.Equal(HttpStatusCode.OK, flipRsp.StatusCode);
 
         // Sanity: users.agreement_code cache is now HK; the live user_agreement_codes
@@ -167,12 +181,23 @@ public sealed class AgreementCodeHttpDeterminismTests : IAsyncLifetime
         const string userId = "emp001";
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
+        // S35 / TASK-3506 — admin-strict If-Match required on PUT.
+        var getRsp = await client.GetAsync($"/api/admin/users/{userId}");
+        Assert.Equal(HttpStatusCode.OK, getRsp.StatusCode);
+        var etag = getRsp.Headers.ETag;
+        Assert.NotNull(etag);
+
         // Flip to HK today.
-        var flipRsp = await client.PutAsJsonAsync($"/api/admin/users/{userId}", new
+        var flipReq = new HttpRequestMessage(HttpMethod.Put, $"/api/admin/users/{userId}")
         {
-            agreementCode = "HK",
-            effectiveFrom = today.ToString("yyyy-MM-dd"),
-        });
+            Content = JsonContent.Create(new
+            {
+                agreementCode = "HK",
+                effectiveFrom = today.ToString("yyyy-MM-dd"),
+            }),
+        };
+        flipReq.Headers.IfMatch.Add(etag!);
+        var flipRsp = await client.SendAsync(flipReq);
         Assert.Equal(HttpStatusCode.OK, flipRsp.StatusCode);
 
         // POST a save for a past month (two months ago).
@@ -305,6 +330,207 @@ public sealed class AgreementCodeHttpDeterminismTests : IAsyncLifetime
         Assert.Equal(
             "Employee compensation choice is not enabled for this agreement",
             body.GetProperty("error").GetString());
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
+    // S35 / TASK-3509 — Case A concurrent-create race + seeder idempotency
+    // (closes items #2 + seeder bullet of S34-deferred per PLAN-s35.md L535-564).
+    // ═════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// S35 / TASK-3502 + TASK-3509 — Closes item #2 of S34 deferred. Two concurrent
+    /// admin POST <c>/api/admin/users</c> calls for the same <c>user_id</c> both
+    /// route through Case A on <see cref="UserAgreementCodeRepository.SupersedeAndCreateAsync"/>
+    /// (no live <c>user_agreement_codes</c> predecessor row); the partial-unique-index
+    /// <c>idx_user_agreement_codes_live</c> serializes the writes — the winner
+    /// commits and the loser surfaces <c>PostgresException(SqlState="23505")</c>.
+    /// The repository catches the 23505 and re-throws
+    /// <see cref="ConcurrentSeedConflictException"/>; the endpoint maps the typed
+    /// exception to <b>409 Conflict</b> with a structured body
+    /// <c>{ error, userId, hint }</c> — symmetric to
+    /// <see cref="OptimisticConcurrencyException"/> → 412 elsewhere
+    /// (cf. <see cref="ConcurrentSeedConflictException"/> xmldoc).
+    ///
+    /// <para>
+    /// <b>Both threads must lose user-id pre-flight check</b>. The endpoint's
+    /// pre-flight check at <c>AdminEndpoints.cs:373-381</c> runs OUTSIDE the
+    /// transaction; under POSIX-style read snapshot, two concurrent admin POSTs
+    /// can both pass it before either commits. We don't pre-existence the user;
+    /// we rely on the Postgres serialization at the partial-unique-index
+    /// boundary to surface the race. If the pre-flight check happens to serialize
+    /// both threads (e.g. one reads after the other commits), the second gets
+    /// 409 from the pre-flight check via a slightly different body shape
+    /// ("User with this ID or username already exists" — see L380); the test
+    /// tolerates both 409 paths.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>DB state under both paths</b>. Exactly one users row + exactly one
+    /// live user_agreement_codes row + at most one user_agreement_codes_audit
+    /// CREATED row (the winning thread's row). No 500 from a raw
+    /// <c>PostgresException</c> bubbling up unhandled.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task UserAgreementCodeRepository_CaseA_Concurrent23505_MapsTo409_NotCrash()
+    {
+        var clientA = AuthorizedClient();
+        var clientB = AuthorizedClient();
+        var contestedUserId = "emp_s35_race_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+
+        // Build two POST bodies with the SAME user_id + SAME username so they
+        // race on idx_user_agreement_codes_live (Case A INSERT).
+        object Body() => new
+        {
+            userId = contestedUserId,
+            username = contestedUserId,
+            password = "TestPassword123!",
+            displayName = "S35 Race Target",
+            email = (string?)null,
+            primaryOrgId = "STY01",
+            agreementCode = "AC",
+            okVersion = "OK24",
+        };
+
+        // Barrier-synchronized fire: both Tasks build their request, await a
+        // common TCS, then dispatch in the same window. Maximises probability
+        // of hitting the partial-unique-index serialization boundary.
+        var barrier = new TaskCompletionSource();
+        Task<HttpResponseMessage> Fire(HttpClient client) => Task.Run(async () =>
+        {
+            await barrier.Task;
+            return await client.PostAsJsonAsync("/api/admin/users", Body());
+        });
+
+        var taskA = Fire(clientA);
+        var taskB = Fire(clientB);
+        barrier.SetResult();
+
+        var responses = await Task.WhenAll(taskA, taskB);
+
+        // Exactly one 201 + exactly one 409. Neither side surfaces a 500
+        // (which is what would happen pre-S35 if the raw 23505 bubbled out
+        // of the endpoint's try block uncaught).
+        var createdCount = responses.Count(r => r.StatusCode == HttpStatusCode.Created);
+        var conflictCount = responses.Count(r => r.StatusCode == HttpStatusCode.Conflict);
+        Assert.Equal(1, createdCount);
+        Assert.Equal(1, conflictCount);
+
+        // Loser's body is the structured 409 (either the S35 Case-A 23505 mapping
+        // OR the pre-flight existence-check 409 — both are valid client-actionable
+        // responses; test tolerates both per the xmldoc above).
+        var loser = responses.Single(r => r.StatusCode == HttpStatusCode.Conflict);
+        var loserBody = await loser.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(loserBody.TryGetProperty("error", out var errorProp),
+            "409 response must carry an 'error' property.");
+        Assert.False(string.IsNullOrWhiteSpace(errorProp.GetString()),
+            "409 response 'error' must be non-empty.");
+
+        // DB invariants: exactly one users row + exactly one live
+        // user_agreement_codes row, regardless of which thread won.
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using (var usersCmd = new NpgsqlCommand(
+            "SELECT COUNT(*) FROM users WHERE user_id = @userId", conn))
+        {
+            usersCmd.Parameters.AddWithValue("userId", contestedUserId);
+            Assert.Equal(1L, Convert.ToInt64(await usersCmd.ExecuteScalarAsync()));
+        }
+        await using (var liveCmd = new NpgsqlCommand(
+            """
+            SELECT COUNT(*) FROM user_agreement_codes
+            WHERE user_id = @userId AND effective_to IS NULL
+            """, conn))
+        {
+            liveCmd.Parameters.AddWithValue("userId", contestedUserId);
+            Assert.Equal(1L, Convert.ToInt64(await liveCmd.ExecuteScalarAsync()));
+        }
+    }
+
+    /// <summary>
+    /// S35 / TASK-3509 — Seeder idempotency under concurrent startup. Direct
+    /// invocation: two parallel
+    /// <see cref="UserAgreementCodeBackfillSeeder.SeedAsync"/> calls against the
+    /// same DB must both complete without throwing; the partial-unique-index
+    /// race is handled inline at the SQL boundary via the seeder's catch on
+    /// <c>PostgresException(SqlState="23505")</c> (cf.
+    /// <see cref="UserAgreementCodeBackfillSeeder"/> L223-236).
+    ///
+    /// <para>
+    /// <b>Setup.</b> Insert a fresh user via direct SQL (NOT through POST
+    /// /api/admin/users which would also Case A INSERT the user_agreement_codes
+    /// row) so both seeder runs see "this user has no live row" and try to
+    /// INSERT. The first seeder run + the second seeder run race on
+    /// idx_user_agreement_codes_live; whichever loses catches 23505 inline,
+    /// rolls back its per-row tx, logs a warning, and continues.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Note.</b> The boot-time seeder triggered by
+    /// <see cref="StatsTidWebApplicationFactory"/>'s CreateClient may have
+    /// already backfilled init.sql's seed users (emp001-003, admin01, etc.) —
+    /// so the two parallel seeder runs we drive here will mostly see "all
+    /// active users already have live rows" and skip, EXCEPT for the
+    /// freshly-inserted user we add below. That user is the contested target
+    /// of the race; that user is also why we direct-INSERT (bypassing POST)
+    /// so the row is missing on both seeder runs.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Seeder_ConcurrentStartup_DoesNotCrashOnDuplicateRow()
+    {
+        // Insert a fresh user via direct SQL so the seeder will INSERT a
+        // user_agreement_codes row for them. NOT via POST (which would also
+        // Case A INSERT the row, defeating the race scenario).
+        var contestedUserId = "emp_s35_seed_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+        await using (var seedConn = new NpgsqlConnection(_harness.ConnectionString))
+        {
+            await seedConn.OpenAsync();
+            await using var insertCmd = new NpgsqlCommand(
+                """
+                INSERT INTO users (user_id, username, password_hash, display_name, email,
+                                   primary_org_id, agreement_code, ok_version, is_active)
+                VALUES (@userId, @userId, 'dev-only', 'S35 Seeder Race Target', NULL,
+                        'STY01', 'AC', 'OK24', TRUE)
+                """, seedConn);
+            insertCmd.Parameters.AddWithValue("userId", contestedUserId);
+            await insertCmd.ExecuteNonQueryAsync();
+        }
+
+        // Two parallel seeder invocations against the SAME DbConnectionFactory.
+        // PostgresEventStore implements IOutboxEnqueue (cf. SPRINT-22.md L653
+        // "PostgresEventStore : IOutboxEnqueue"); we reuse the harness's
+        // PostgresEventStore so the parallel seeder runs share the canonical
+        // outbox enqueue path.
+        var dbFactory = _harness.Factory;
+        var outbox = _harness.EventStore;
+        var logger = NullLogger.Instance;
+
+        // Both seeder invocations must complete without throwing — the
+        // partial-unique-index race is caught + skipped inline (seeder's
+        // catch on PostgresException 23505 at UserAgreementCodeBackfillSeeder.cs
+        // L223). Failure mode pre-S31 inline fix: one of these throws
+        // PostgresException(23505) uncaught.
+        var taskA = UserAgreementCodeBackfillSeeder.SeedAsync(dbFactory, outbox, logger);
+        var taskB = UserAgreementCodeBackfillSeeder.SeedAsync(dbFactory, outbox, logger);
+
+        // Await both — the test PASSES if no exception bubbles out of either.
+        // Task.WhenAll re-throws the first exception from any constituent task,
+        // which is the failure mode this test pins.
+        await Task.WhenAll(taskA, taskB);
+
+        // Post-condition: exactly one live user_agreement_codes row for the
+        // contested user (the partial-unique-index guarantee). Independent
+        // of which seeder run won the race for that user.
+        await using var verifyConn = new NpgsqlConnection(_harness.ConnectionString);
+        await verifyConn.OpenAsync();
+        await using var liveCmd = new NpgsqlCommand(
+            """
+            SELECT COUNT(*) FROM user_agreement_codes
+            WHERE user_id = @userId AND effective_to IS NULL
+            """, verifyConn);
+        liveCmd.Parameters.AddWithValue("userId", contestedUserId);
+        Assert.Equal(1L, Convert.ToInt64(await liveCmd.ExecuteScalarAsync()));
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────
