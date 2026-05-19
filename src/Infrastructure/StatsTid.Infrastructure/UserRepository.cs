@@ -44,6 +44,79 @@ public sealed class UserRepository
         return await ReadUsersAsync(cmd, ct);
     }
 
+    /// <summary>
+    /// In-tx FOR-UPDATE atomic row + version read — used by <c>AdminEndpoints</c> PUT
+    /// <c>/api/admin/users/{userId}</c> to read user fields and their optimistic-concurrency
+    /// <c>version</c> token under a row lock as part of the admin-strict If-Match contract
+    /// per ADR-019 D2. Mirrors the S31
+    /// <see cref="EmployeeProfileRepository.GetByEmployeeIdWithVersionAsync(string, CancellationToken)"/>
+    /// in-tx overload precedent.
+    ///
+    /// <para>
+    /// The <c>FOR UPDATE</c> clause prevents the audit-trail race where a pre-transaction
+    /// snapshot of the row becomes stale by the time the UPDATE commits — the predecessor
+    /// row state captured under this lock is canonical for both the <c>If-Match</c>
+    /// precondition check and the <c>UserUpdated</c> audit payload's <c>old_*</c> fields.
+    /// </para>
+    ///
+    /// <para>
+    /// Returns <c>null</c> when <c>user_id</c> is not found OR <c>is_active = FALSE</c>
+    /// (matches the existing <see cref="GetByIdAsync(string, CancellationToken)"/> semantic;
+    /// soft-deleted users are not addressable through admin edit).
+    /// </para>
+    /// </summary>
+    public async Task<(User User, long Version)?> GetByIdWithVersionAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, string userId, CancellationToken ct = default)
+    {
+        await using var cmd = new NpgsqlCommand(
+            "SELECT * FROM users WHERE user_id = @userId AND is_active = TRUE FOR UPDATE",
+            conn, tx);
+        cmd.Parameters.AddWithValue("userId", userId);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct)) return null;
+        var user = ReadUser(reader);
+        var version = reader.GetInt64(reader.GetOrdinal("version"));
+        return (user, version);
+    }
+
+    /// <summary>
+    /// Non-tx atomic row + version read — used by <c>AdminEndpoints</c> GET
+    /// <c>/api/admin/users/{userId}</c> (added in TASK-3506) to stamp the response ETag
+    /// from the same live snapshot it serializes. Mirrors the S31
+    /// <see cref="EmployeeProfileRepository.GetByEmployeeIdWithVersionAsync(string, CancellationToken)"/>
+    /// non-tx overload precedent at <c>EmployeeProfileRepository.cs:157</c>.
+    ///
+    /// <para>
+    /// Closes the S31 GET-race class: pre-S31 the GET handler would issue two separate
+    /// reads (the existing <see cref="GetByIdAsync(string, CancellationToken)"/> for body
+    /// fields plus a follow-up <c>SELECT version</c>) and could return stale fields paired
+    /// with a newer ETag — the next admin PUT carrying that ETag in <c>If-Match</c> would
+    /// pass the precondition check and silently overwrite the racing change. A single
+    /// SELECT eliminates the window.
+    /// </para>
+    ///
+    /// <para>
+    /// No <c>FOR UPDATE</c> — this is the read-only GET path, no transaction. Returns
+    /// <c>null</c> when <c>user_id</c> is not found OR <c>is_active = FALSE</c> (matches
+    /// the existing <see cref="GetByIdAsync(string, CancellationToken)"/> semantic).
+    /// </para>
+    /// </summary>
+    public async Task<(User User, long Version)?> GetByIdWithVersionAsync(
+        string userId, CancellationToken ct = default)
+    {
+        await using var conn = _connectionFactory.Create();
+        await conn.OpenAsync(ct);
+        await using var cmd = new NpgsqlCommand(
+            "SELECT * FROM users WHERE user_id = @userId AND is_active = TRUE",
+            conn);
+        cmd.Parameters.AddWithValue("userId", userId);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct)) return null;
+        var user = ReadUser(reader);
+        var version = reader.GetInt64(reader.GetOrdinal("version"));
+        return (user, version);
+    }
+
     private static async Task<IReadOnlyList<User>> ReadUsersAsync(NpgsqlCommand cmd, CancellationToken ct)
     {
         var users = new List<User>();
