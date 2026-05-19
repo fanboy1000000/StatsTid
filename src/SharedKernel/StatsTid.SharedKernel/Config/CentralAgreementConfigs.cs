@@ -32,6 +32,8 @@ public static class CentralAgreementConfigs
             WorkingTravelRate = 1.0m,
             NonWorkingTravelRate = 0.5m,
             NormPeriodWeeks = 1,
+            DefaultCompensationModel = "AFSPADSERING",
+            EmployeeCompensationChoice = false,
         },
         // HK OK24
         [("HK", "OK24")] = new AgreementRuleConfig
@@ -115,6 +117,8 @@ public static class CentralAgreementConfigs
             WorkingTravelRate = 1.0m,
             NonWorkingTravelRate = 0.5m,
             NormPeriodWeeks = 1,
+            DefaultCompensationModel = "AFSPADSERING",
+            EmployeeCompensationChoice = false,
         },
         // HK OK26 (placeholder)
         [("HK", "OK26")] = new AgreementRuleConfig
@@ -200,6 +204,8 @@ public static class CentralAgreementConfigs
             NormPeriodWeeks = 1,
             NormModel = NormModel.ANNUAL_ACTIVITY,
             AnnualNormHours = 1924m,
+            DefaultCompensationModel = "AFSPADSERING",
+            EmployeeCompensationChoice = false,
         },
         // AC_RESEARCH OK26 (same as OK24 for now)
         [("AC_RESEARCH", "OK26")] = new AgreementRuleConfig
@@ -223,6 +229,8 @@ public static class CentralAgreementConfigs
             NormPeriodWeeks = 1,
             NormModel = NormModel.ANNUAL_ACTIVITY,
             AnnualNormHours = 1924m,
+            DefaultCompensationModel = "AFSPADSERING",
+            EmployeeCompensationChoice = false,
         },
         // AC_TEACHING OK24 — Teaching staff (reduced annual norm 1680h for research obligations)
         [("AC_TEACHING", "OK24")] = new AgreementRuleConfig
@@ -246,6 +254,8 @@ public static class CentralAgreementConfigs
             NormPeriodWeeks = 1,
             NormModel = NormModel.ANNUAL_ACTIVITY,
             AnnualNormHours = 1680m,
+            DefaultCompensationModel = "AFSPADSERING",
+            EmployeeCompensationChoice = false,
         },
         // AC_TEACHING OK26 (same as OK24 for now)
         [("AC_TEACHING", "OK26")] = new AgreementRuleConfig
@@ -269,6 +279,8 @@ public static class CentralAgreementConfigs
             NormPeriodWeeks = 1,
             NormModel = NormModel.ANNUAL_ACTIVITY,
             AnnualNormHours = 1680m,
+            DefaultCompensationModel = "AFSPADSERING",
+            EmployeeCompensationChoice = false,
         },
     };
 
