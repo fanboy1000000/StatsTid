@@ -32,14 +32,22 @@ namespace StatsTid.Tests.Regression.UserAgreementCode;
 ///     stamp the period-effective <c>AgreementCode</c>. After flip-to-HK,
 ///     a past-month save must emit events stamped <c>AgreementCode='AC'</c>
 ///     so payroll export effective-date lookup (ADR-018 D14) resolves cleanly.</item>
-///   <item><b>Overtime</b> — past-period compensation-choice GET returns
-///     <c>compensationModel</c> sourced from the dated agreement's config.
-///     AC.DefaultCompensationModel is unset (falls back to "AFSPADSERING"
-///     literal in endpoint); HK has <c>EmployeeCompensationChoice=true</c>
-///     with <c>DefaultCompensationModel="AFSPADSERING"</c>. For past-year
-///     queries (periodYear < current year), the response keys off the
-///     past-year-start agreement code — so the source-of-truth discriminator
-///     pins the dated lookup path.</item>
+///   <item><b>Overtime</b> — past-period compensation-choice PUT exercises
+///     a strong response-status discriminator. AC has
+///     <c>EmployeeCompensationChoice=false</c>; HK has
+///     <c>EmployeeCompensationChoice=true</c>. With AC effective at the
+///     past-year boundary, the endpoint rejects 400 BadRequest with the
+///     "Employee compensation choice is not enabled for this agreement"
+///     literal at <c>OvertimeEndpoints.cs:566</c>. If the dated-lookup
+///     cutover at <c>OvertimeEndpoints.cs:511-513</c> regressed to live
+///     <c>user.AgreementCode</c> (HK after the flip), the response would be
+///     200 OK — directly distinguishable from the AC path. The test uses a
+///     dual-token-leg approach: the existing GlobalAdmin token flips AC→HK
+///     via PUT <c>/api/admin/users/{userId}</c> (with TASK-3506
+///     ETag/If-Match), then a freshly-minted Employee token (sub=emp001,
+///     role=Employee, scope=org:STY01) acts as the employee for the
+///     compensation-choice PUT under the endpoint's
+///     <c>employeeId != actor.ActorId → 403</c> self-only gate.</item>
 /// </list>
 /// </para>
 ///
@@ -219,104 +227,84 @@ public sealed class AgreementCodeHttpDeterminismTests : IAsyncLifetime
     // ═════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// emp001 backfilled at AC. Flip to HK today. Past-year overtime
-    /// compensation-choice GET (with <c>periodYear</c> in a past year)
-    /// must surface the AC-derived default compensation model — sourced via
-    /// the dated lookup at <c>periodYearStart = new DateOnly(periodYear, 1, 1)</c>
-    /// (OvertimeEndpoints.cs:510-513).
+    /// emp001 backfilled at AC. Flip to HK today (with TASK-3506 admin-strict
+    /// ETag/If-Match flow). Then act as <c>emp001</c> (Employee role + matching
+    /// org scope) and PUT a compensation-choice for a past year. The endpoint
+    /// resolves the agreement at <c>periodYearStart = new DateOnly(periodYear,
+    /// 1, 1)</c> via <c>userAgreementCodeRepo.GetByUserIdAtAsync</c>
+    /// (OvertimeEndpoints.cs:559-562) — the dated lookup returns AC (the
+    /// predecessor covers Jan 1 of last year), so the endpoint reads AC's
+    /// config which has <c>EmployeeCompensationChoice=false</c>, and rejects
+    /// the request with 400 BadRequest at line 566.
     ///
     /// <para>
-    /// <b>Discriminator</b>. With no balance row for the past year, the
-    /// endpoint falls back to the agreement config (
-    /// <c>config?.DefaultCompensationModel ?? "AFSPADSERING"</c>). For AC,
-    /// <c>DefaultCompensationModel</c> is unset → the literal fallback
-    /// "AFSPADSERING" applies. For HK, the same. The load-bearing pin is
-    /// the <c>source="config_default"</c> branch is reached AND the response
-    /// emits a 200 OK — which means the dated lookup path resolved cleanly
-    /// for the past year. (A pre-cutover regression that read live HK would
-    /// still hit the config_default branch — but routed through HK's config.
-    /// To distinguish, we read back the user_agreement_codes table directly
-    /// after the GET to confirm the live row hasn't shifted, then assert the
-    /// response's <c>compensationModel</c> matches what AC's config would
-    /// produce.)
+    /// <b>Strong response-status discriminator</b>. If the S34 dated-lookup
+    /// cutover at <c>OvertimeEndpoints.cs:511-513</c> (read leg) and its
+    /// PUT-side symmetry at L559-562 regressed to <c>user.AgreementCode</c>
+    /// (today's live HK after the flip), the endpoint would read HK's config
+    /// which has <c>EmployeeCompensationChoice=true</c> and return 200 OK with
+    /// the new balance row stamped. AC=400 vs HK=200 is a directly
+    /// distinguishable HTTP status, NOT a side-channel — that's the strong
+    /// discriminator this test pins.
     /// </para>
     ///
     /// <para>
-    /// Where this matters operationally: a follow-up endpoint that records a
-    /// new balance row (PUT compensation-choice) would stamp the past-year
-    /// balance row with the period-effective agreement_code = 'AC', not 'HK'
-    /// — preserving the cross-agreement balance-record integrity. The GET
-    /// test pins the read leg; the write leg (PUT) is exercised by the
-    /// dated-lookup symmetry at OvertimeEndpoints.cs:559-562 — same
-    /// resolver, same path.
+    /// <b>Dual-token-leg approach</b>. The endpoint at
+    /// <c>OvertimeEndpoints.cs:541-543</c> enforces
+    /// <c>if (employeeId != actor.ActorId) return 403</c> with no admin
+    /// bypass, so the global-admin token used for the AC→HK flip cannot be
+    /// reused for the compensation-choice PUT. A fresh Employee token is
+    /// minted via <see cref="MintEmployeeToken"/> with <c>sub=emp001</c>,
+    /// <c>role=Employee</c>, and a scope covering org STY01 (emp001's
+    /// primary_org_id per docker/postgres/init.sql L833).
     /// </para>
     /// </summary>
     [Fact]
-    public async Task Overtime_PastPeriodBalance_UsesPeriodEffectiveAgreementCode_NotLive()
+    public async Task Overtime_PastPeriodCompensationChoice_RejectsForACWithStrongDiscriminator()
     {
-        var client = AuthorizedClient();
+        var adminClient = AuthorizedClient();
         const string userId = "emp001";
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
-        // Flip to HK today.
-        var flipRsp = await client.PutAsJsonAsync($"/api/admin/users/{userId}", new
+        // (1) Admin GET to capture ETag (TASK-3506 added the GET endpoint with
+        //     ETag header stamped from the same atomic snapshot as the row).
+        var getRsp = await adminClient.GetAsync($"/api/admin/users/{userId}");
+        Assert.Equal(HttpStatusCode.OK, getRsp.StatusCode);
+        var etag = getRsp.Headers.ETag;
+        Assert.NotNull(etag);
+
+        // (2) Admin PUT flip AC→HK with If-Match (TASK-3506: admin-strict
+        //     If-Match required; missing header would yield 428 not 200).
+        var flipReq = new HttpRequestMessage(HttpMethod.Put, $"/api/admin/users/{userId}")
         {
-            agreementCode = "HK",
-            effectiveFrom = today.ToString("yyyy-MM-dd"),
-        });
+            Content = JsonContent.Create(new
+            {
+                agreementCode = "HK",
+                effectiveFrom = today.ToString("yyyy-MM-dd"),
+            }),
+        };
+        flipReq.Headers.IfMatch.Add(etag!);
+        var flipRsp = await adminClient.SendAsync(flipReq);
         Assert.Equal(HttpStatusCode.OK, flipRsp.StatusCode);
 
-        // Query a past year (last year — strictly before today so the
-        // periodYearStart = Jan 1 last year falls inside the predecessor's
-        // ['0001-01-01', today) window).
+        // (3) Act as emp001 (Employee role + matching org) — PUT
+        //     compensation-choice for a past year. STY01 is emp001's primary
+        //     org per docker/postgres/init.sql L833.
+        var employeeClient = AuthorizedClientFor(userId, "STY01");
         var pastYear = today.Year - 1;
-        var rsp = await client.GetAsync(
-            $"/api/overtime/{userId}/compensation-choice?periodYear={pastYear}");
-        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+        var rsp = await employeeClient.PutAsJsonAsync(
+            $"/api/overtime/{userId}/compensation-choice",
+            new { periodYear = pastYear, compensationModel = "UDBETALING" });
 
+        // (4) Strong discriminator: AC has EmployeeCompensationChoice=false →
+        //     400 BadRequest with the literal at OvertimeEndpoints.cs:566.
+        //     If the cutover regressed to live HK (EmployeeCompensationChoice
+        //     =true), the endpoint would return 200 OK with a new balance row.
+        Assert.Equal(HttpStatusCode.BadRequest, rsp.StatusCode);
         var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
-        // No balance row exists for the past year → falls through to
-        // config_default branch. compensationModel surfaces.
-        Assert.Equal("config_default", body.GetProperty("source").GetString());
-
-        // The compensationModel value reflects the agreement's
-        // DefaultCompensationModel (CentralAgreementConfigs). For both AC + HK
-        // OK24 this is "AFSPADSERING", so this assertion alone does not
-        // discriminate. The discriminator is: the dated lookup path resolved
-        // to AC at periodYearStart=Jan 1 last year, NOT today's HK live cache.
-        // Verify the lookup path by reading user_agreement_codes directly:
-        // the live row is HK, the predecessor row is AC, and the predecessor
-        // covers periodYearStart.
-        Assert.Equal("AFSPADSERING", body.GetProperty("compensationModel").GetString());
-
-        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
-        await conn.OpenAsync();
-        // Live row is HK.
-        await using (var liveCmd = new NpgsqlCommand(
-            """
-            SELECT agreement_code FROM user_agreement_codes
-            WHERE user_id = @userId AND effective_to IS NULL
-            """, conn))
-        {
-            liveCmd.Parameters.AddWithValue("userId", userId);
-            Assert.Equal("HK", (string?)await liveCmd.ExecuteScalarAsync());
-        }
-
-        // Closed predecessor row is AC and covers Jan 1 of last year.
-        var periodYearStart = new DateOnly(pastYear, 1, 1);
-        await using (var predCmd = new NpgsqlCommand(
-            """
-            SELECT agreement_code FROM user_agreement_codes
-            WHERE user_id = @userId
-              AND effective_from <= @asOfDate
-              AND (effective_to IS NULL OR effective_to > @asOfDate)
-            """, conn))
-        {
-            predCmd.Parameters.AddWithValue("userId", userId);
-            predCmd.Parameters.AddWithValue("asOfDate", periodYearStart);
-            var dated = (string?)await predCmd.ExecuteScalarAsync();
-            Assert.Equal("AC", dated);
-        }
+        Assert.Equal(
+            "Employee compensation choice is not enabled for this agreement",
+            body.GetProperty("error").GetString());
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────
@@ -345,5 +333,42 @@ public sealed class AgreementCodeHttpDeterminismTests : IAsyncLifetime
             role: StatsTidRoles.GlobalAdmin,
             agreementCode: "AC",
             scopes: new[] { new RoleScope(StatsTidRoles.GlobalAdmin, null, "GLOBAL") });
+    }
+
+    /// <summary>
+    /// Mints an Employee-role JWT keyed on <paramref name="employeeId"/> with
+    /// an ORG_ONLY scope covering <paramref name="orgId"/>. Used by
+    /// <see cref="Overtime_PastPeriodCompensationChoice_RejectsForACWithStrongDiscriminator"/>
+    /// (TASK-3508) to act as a real employee so the
+    /// <c>employeeId != actor.ActorId → 403</c> self-only gate at
+    /// <c>OvertimeEndpoints.cs:541-543</c> is satisfied (no admin bypass on
+    /// that endpoint). Mirrors <see cref="MintGlobalAdminToken"/> shape;
+    /// signs with the same <see cref="DevFallbackSigningKey"/>.
+    /// </summary>
+    private static string MintEmployeeToken(string employeeId, string orgId)
+    {
+        var settings = new JwtSettings
+        {
+            Issuer = "statstid",
+            Audience = "statstid",
+            SigningKey = DevFallbackSigningKey,
+            ExpirationMinutes = 60,
+        };
+        var tokenService = new JwtTokenService(settings);
+        return tokenService.GenerateToken(
+            employeeId: employeeId,
+            name: employeeId,
+            role: StatsTidRoles.Employee,
+            agreementCode: "AC",
+            orgId: orgId,
+            scopes: new[] { new RoleScope(StatsTidRoles.Employee, orgId, "ORG_ONLY") });
+    }
+
+    private HttpClient AuthorizedClientFor(string employeeId, string orgId)
+    {
+        var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", MintEmployeeToken(employeeId, orgId));
+        return client;
     }
 }

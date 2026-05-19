@@ -200,13 +200,26 @@ public sealed class AdminEndpointsAgreementCodeTests : IAsyncLifetime
         var client = AuthorizedClient();
         var yesterday = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1));
 
+        // S35 / TASK-3506 — admin-strict If-Match required on PUT. Capture
+        // ETag via GET first so the validator can run (without If-Match the
+        // endpoint returns 428 before reaching the EffectiveFrom check).
+        var getRsp = await client.GetAsync("/api/admin/users/emp001");
+        Assert.Equal(HttpStatusCode.OK, getRsp.StatusCode);
+        var etag = getRsp.Headers.ETag;
+        Assert.NotNull(etag);
+
         // emp001 seeded at agreement_code='AC' — mutate to 'HK' with backdated
         // EffectiveFrom to exercise the validator.
-        var rsp = await client.PutAsJsonAsync("/api/admin/users/emp001", new
+        var req = new HttpRequestMessage(HttpMethod.Put, "/api/admin/users/emp001")
         {
-            agreementCode = "HK",
-            effectiveFrom = yesterday.ToString("yyyy-MM-dd"),
-        });
+            Content = JsonContent.Create(new
+            {
+                agreementCode = "HK",
+                effectiveFrom = yesterday.ToString("yyyy-MM-dd"),
+            }),
+        };
+        req.Headers.IfMatch.Add(etag!);
+        var rsp = await client.SendAsync(req);
         Assert.Equal(HttpStatusCode.UnprocessableEntity, rsp.StatusCode);
 
         var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
@@ -228,11 +241,23 @@ public sealed class AdminEndpointsAgreementCodeTests : IAsyncLifetime
         var client = AuthorizedClient();
         var tomorrow = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(1));
 
-        var rsp = await client.PutAsJsonAsync("/api/admin/users/emp001", new
+        // S35 / TASK-3506 — admin-strict If-Match required (see backdated test
+        // above for rationale).
+        var getRsp = await client.GetAsync("/api/admin/users/emp001");
+        Assert.Equal(HttpStatusCode.OK, getRsp.StatusCode);
+        var etag = getRsp.Headers.ETag;
+        Assert.NotNull(etag);
+
+        var req = new HttpRequestMessage(HttpMethod.Put, "/api/admin/users/emp001")
         {
-            agreementCode = "HK",
-            effectiveFrom = tomorrow.ToString("yyyy-MM-dd"),
-        });
+            Content = JsonContent.Create(new
+            {
+                agreementCode = "HK",
+                effectiveFrom = tomorrow.ToString("yyyy-MM-dd"),
+            }),
+        };
+        req.Headers.IfMatch.Add(etag!);
+        var rsp = await client.SendAsync(req);
         Assert.Equal(HttpStatusCode.UnprocessableEntity, rsp.StatusCode);
     }
 
@@ -271,13 +296,25 @@ public sealed class AdminEndpointsAgreementCodeTests : IAsyncLifetime
         const string userId = "emp001";
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
+        // S35 / TASK-3506 — admin-strict If-Match required on PUT. Capture
+        // ETag via GET first; the new GET endpoint stamps ETag: "<version>".
+        var getRsp = await client.GetAsync($"/api/admin/users/{userId}");
+        Assert.Equal(HttpStatusCode.OK, getRsp.StatusCode);
+        var etag = getRsp.Headers.ETag;
+        Assert.NotNull(etag);
+
         // emp001's user_agreement_codes row was backfilled by the seeder at
         // effective_from='0001-01-01' < today → Case C routing on this PUT.
-        var rsp = await client.PutAsJsonAsync($"/api/admin/users/{userId}", new
+        var req = new HttpRequestMessage(HttpMethod.Put, $"/api/admin/users/{userId}")
         {
-            agreementCode = "HK",
-            effectiveFrom = today.ToString("yyyy-MM-dd"),
-        });
+            Content = JsonContent.Create(new
+            {
+                agreementCode = "HK",
+                effectiveFrom = today.ToString("yyyy-MM-dd"),
+            }),
+        };
+        req.Headers.IfMatch.Add(etag!);
+        var rsp = await client.SendAsync(req);
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
 
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
