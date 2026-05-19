@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Npgsql;
 using StatsTid.Auth;
+using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
@@ -290,6 +291,54 @@ public static class AdminEndpoints
             return Results.Ok(response);
         }).RequireAuthorization("HROrAbove");
 
+        // 3b. GET /api/admin/users/{userId} — Read single user with ETag
+        //
+        // S35 / TASK-3506 — admin-strict If-Match GET partner per ADR-019 D2
+        // (4th application after S25 agreement_configs / position_override_configs /
+        // wage_type_mappings; closest sibling precedent at
+        // EmployeeProfileEndpoints.cs:105-142 GET). Stamps `ETag: "<version>"` from
+        // the same atomic snapshot it serializes (TASK-3505's non-tx
+        // GetByIdWithVersionAsync overload) so the admin UI's subsequent PUT can
+        // compose a coherent If-Match. RBAC HROrAbove matches the existing PUT +
+        // POST on the same resource (cycle-1 Reviewer WARNING absorption: NOT
+        // LocalAdminOrAbove — keeps read access aligned with the GET-list endpoint
+        // above; admin-strict If-Match enforcement happens on the PUT below).
+        // NEVER returns password_hash — body shape mirrors the list-endpoint
+        // projection above (L280-288) plus okVersion/employmentCategory/version.
+        app.MapGet("/api/admin/users/{userId}", async (
+            string userId,
+            UserRepository userRepo,
+            OrgScopeValidator scopeValidator,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            var actor = context.GetActorContext();
+
+            var hit = await userRepo.GetByIdWithVersionAsync(userId, ct);
+            if (hit is null)
+                return Results.NotFound(new { error = "User not found" });
+            var (user, version) = hit.Value;
+
+            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, user.PrimaryOrgId, ct);
+            if (!allowed)
+                return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+
+            context.Response.Headers.ETag = $"\"{version}\"";
+
+            return Results.Ok(new
+            {
+                userId = user.UserId,
+                username = user.Username,
+                displayName = user.DisplayName,
+                email = user.Email,
+                primaryOrgId = user.PrimaryOrgId,
+                agreementCode = user.AgreementCode,
+                okVersion = user.OkVersion,
+                employmentCategory = user.EmploymentCategory,
+                version,
+            });
+        }).RequireAuthorization("HROrAbove");
+
         // 4. POST /api/admin/users — Create user
         app.MapPost("/api/admin/users", async (
             CreateUserRequest request,
@@ -361,6 +410,42 @@ public static class AdminEndpoints
                 cmd.Parameters.AddWithValue("okVersion", request.OkVersion);
                 cmd.Parameters.AddWithValue("now", now);
                 await cmd.ExecuteNonQueryAsync(ct);
+
+                // (1b) users_audit CREATED row in-tx — S35 / TASK-3506 closes the
+                // last unprotected admin write surface under the ADR-019 D8
+                // every-CREATE-gets-a-CREATED-audit-row invariant. Mirrors the
+                // employee_profile_audit CREATED row below (L411-422) + the
+                // user_agreement_codes_audit CREATED row at L456-477. users.version
+                // is schema DEFAULT 1 from TASK-3501; version_before NULL (no
+                // predecessor); version_after = 1. password_hash deliberately
+                // EXCLUDED from new_data — audit JSONB must never carry credentials.
+                var userNewData = JsonSerializer.Serialize(new
+                {
+                    displayName = request.DisplayName,
+                    email = request.Email,
+                    primaryOrgId = request.PrimaryOrgId,
+                    agreementCode = request.AgreementCode,
+                });
+                await using (var userAuditCmd = new NpgsqlCommand(
+                    """
+                    INSERT INTO users_audit (
+                        user_id, action,
+                        previous_data, new_data,
+                        version_before, version_after,
+                        actor_id, actor_role)
+                    VALUES (
+                        @userId, 'CREATED',
+                        NULL, @newData::jsonb,
+                        NULL, 1,
+                        @actorId, @actorRole)
+                    """, conn, tx))
+                {
+                    userAuditCmd.Parameters.AddWithValue("userId", request.UserId);
+                    userAuditCmd.Parameters.AddWithValue("newData", userNewData);
+                    userAuditCmd.Parameters.AddWithValue("actorId", actor.ActorId ?? "unknown");
+                    userAuditCmd.Parameters.AddWithValue("actorRole", actor.ActorRole ?? "unknown");
+                    await userAuditCmd.ExecuteNonQueryAsync(ct);
+                }
 
                 // (2) employee_profiles INSERT — S31 invariant: every active user has
                 // exactly one live profile row (effective_to IS NULL).
@@ -565,6 +650,12 @@ public static class AdminEndpoints
                 throw;
             }
 
+            // S35 / TASK-3506 — stamp ETag: "1" on the 201 response so the admin
+            // UI's subsequent PUT can compose a coherent If-Match without a
+            // round-trip through the new GET. version=1 is the schema DEFAULT from
+            // TASK-3501. Precedents: S25 AgreementConfigEndpoints L78/104/143 +
+            // PositionOverrideEndpoints L64.
+            context.Response.Headers.ETag = "\"1\"";
             return Results.Created($"/api/admin/users/{request.UserId}", new
             {
                 userId = request.UserId,
@@ -573,7 +664,8 @@ public static class AdminEndpoints
                 email = request.Email,
                 primaryOrgId = request.PrimaryOrgId,
                 agreementCode = request.AgreementCode,
-                okVersion = request.OkVersion
+                okVersion = request.OkVersion,
+                version = 1L,
             });
         }).RequireAuthorization("LocalAdminOrAbove");
 
@@ -614,6 +706,20 @@ public static class AdminEndpoints
             var existingUser = await userRepo.GetByIdAsync(userId, ct);
             if (existingUser is null)
                 return Results.NotFound(new { error = "User not found" });
+
+            // S35 / TASK-3506 — admin-strict If-Match parse per ADR-019 D2 (4th
+            // application after S25 agreement_configs / position_override_configs /
+            // wage_type_mappings; closest sibling precedent at
+            // EmployeeProfileEndpoints.cs:206-208). Rejects missing / malformed /
+            // If-None-Match: * with 428. Parsed BEFORE the scope check is
+            // intentional ordering — header validation has no side effects and
+            // mirrors the EmployeeProfileEndpoints PUT shape; the FOR-UPDATE re-read
+            // + version comparison happens INSIDE the tx below so the locked-row
+            // snapshot is canonical (closes audit-trail race where pre-tx
+            // existingUser becomes stale by commit time).
+            if (!EtagHeaderHelper.TryParseIfMatch(
+                    context.Request, out var expectedVersion, out var headerError))
+                return Results.Json(new { error = headerError }, statusCode: 428);
 
             // Validate actor scope covers user's current org
             var (allowedCurrent, reasonCurrent) = await scopeValidator.ValidateOrgAccessAsync(actor, existingUser.PrimaryOrgId, ct);
@@ -674,6 +780,40 @@ public static class AdminEndpoints
 
             try
             {
+                // S35 / TASK-3506 — in-tx FOR-UPDATE re-read of the users row.
+                // Atomic row + version snapshot under a row-level lock prevents the
+                // audit-trail race where the pre-tx existingUser snapshot at the top
+                // of the handler is stale by commit time. Mirrors the
+                // EmployeeProfileEndpoints PUT pattern: lockedUser is canonical for
+                // (a) the If-Match precondition check below, (b) null-fallback
+                // resolution on the UPDATE statement, and (c) the users_audit row's
+                // previous_data JSONB. Closes item #4 stale-snapshot pattern noted
+                // in S34 deferred — pre-S34 inherited outer-users-UPDATE used
+                // pre-tx existingUser for null-coalescing fallbacks, which could
+                // pick up stale data under concurrent admin edits.
+                //
+                // Lock order: users (this read) → user_agreement_codes (the
+                // agreementPredecessor read below, on the mutation branch). users
+                // is the foreign-key parent in conventional admin write flows;
+                // locking the parent first avoids deadlocks against the
+                // UserAgreementCodeBackfillSeeder (UserAgreementCodeBackfillSeeder.cs:107-117)
+                // which reads users plain (no lock) before INSERTing into
+                // user_agreement_codes. The seeder cannot deadlock against this
+                // handler because it never holds a users row lock.
+                var lockedHit = await userRepo.GetByIdWithVersionAsync(conn, tx, userId, ct);
+                if (lockedHit is null)
+                    throw new OptimisticConcurrencyException(
+                        $"User '{userId}' no longer exists (concurrent soft-delete?)",
+                        expectedVersion: expectedVersion,
+                        actualVersion: null);
+                var (lockedUser, lockedVersion) = lockedHit.Value;
+
+                if (lockedVersion != expectedVersion)
+                    throw new OptimisticConcurrencyException(
+                        $"User '{userId}' version is {lockedVersion}, but If-Match: \"{expectedVersion}\"; refresh and retry.",
+                        expectedVersion: expectedVersion,
+                        actualVersion: lockedVersion);
+
                 // S34 / TASK-3407 — predecessor snapshot read in-tx (only when
                 // agreement_code mutated). Captures the full row state for the
                 // UserAgreementCodeSuperseded event payload (PredecessorAssignmentId,
@@ -731,13 +871,32 @@ public static class AdminEndpoints
                     // when the actual transition is <new>→<new>. Case A safety-net
                     // (predecessor null) falls back to existingUser.AgreementCode
                     // since there is no canonical row to read from.
+                    // S35 / TASK-3506 — fallback resolves against the locked users
+                    // row (TASK-3506 Step 2) rather than the pre-tx existingUser
+                    // snapshot, so the entire canonical path operates off locked
+                    // state. agreementPredecessor still wins when its row exists
+                    // (it's also FOR-UPDATE'd above); the safety-net fallback
+                    // (predecessor null) reads from lockedUser, never the stale
+                    // pre-tx snapshot.
                     var canonicalOldAgreementCode =
-                        agreementPredecessor?.AgreementCode ?? existingUser.AgreementCode;
+                        agreementPredecessor?.AgreementCode ?? lockedUser.AgreementCode;
                     if (string.Equals(request.AgreementCode, canonicalOldAgreementCode, StringComparison.Ordinal))
                     {
                         agreementCodeMutated = false;
                     }
                 }
+
+                // S35 / TASK-3506 — UPDATE bumps users.version per ADR-018 D7 row-
+                // version contract. Null-fallbacks resolve against the locked row
+                // (lockedUser), NOT the stale pre-tx existingUser — closes audit-
+                // trail drift item #4 from S34 deferred. newVersion = lockedVersion + 1
+                // is bound to a local for both the users_audit row below and the
+                // ETag/version stamped on the 200 response.
+                var newVersion = lockedVersion + 1;
+                var newDisplayName = request.DisplayName ?? lockedUser.DisplayName;
+                var newEmail = request.Email ?? lockedUser.Email;
+                var newPrimaryOrgId = request.PrimaryOrgId ?? lockedUser.PrimaryOrgId;
+                var newAgreementCode = request.AgreementCode ?? lockedUser.AgreementCode;
 
                 await using var cmd = new NpgsqlCommand(
                     """
@@ -746,16 +905,64 @@ public static class AdminEndpoints
                         email = @email,
                         primary_org_id = @primaryOrgId,
                         agreement_code = @agreementCode,
+                        version = version + 1,
                         updated_at = @now
                     WHERE user_id = @userId AND is_active = TRUE
                     """, conn, tx);
-                cmd.Parameters.AddWithValue("displayName", request.DisplayName ?? existingUser.DisplayName);
-                cmd.Parameters.AddWithValue("email", (object?)(request.Email ?? existingUser.Email) ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("primaryOrgId", request.PrimaryOrgId ?? existingUser.PrimaryOrgId);
-                cmd.Parameters.AddWithValue("agreementCode", request.AgreementCode ?? existingUser.AgreementCode);
+                cmd.Parameters.AddWithValue("displayName", newDisplayName);
+                cmd.Parameters.AddWithValue("email", (object?)newEmail ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("primaryOrgId", newPrimaryOrgId);
+                cmd.Parameters.AddWithValue("agreementCode", newAgreementCode);
                 cmd.Parameters.AddWithValue("now", now);
                 cmd.Parameters.AddWithValue("userId", userId);
                 await cmd.ExecuteNonQueryAsync(ct);
+
+                // S35 / TASK-3506 — users_audit UPDATED row in-tx (ADR-018 D3
+                // atomic-outbox + ADR-019 D8 version-transition columns). Mirrors
+                // the employee_profile_audit shape at EmployeeProfileEndpoints.cs
+                // L347-371 + the user_agreement_codes_audit shape at L858-884 below.
+                // previous_data JSONB = locked row state (pre-UPDATE);
+                // new_data JSONB = post-UPDATE state; version_before = lockedVersion
+                // = predecessor; version_after = newVersion = lockedVersion + 1.
+                // password_hash deliberately EXCLUDED — audit JSONB must never
+                // carry credentials.
+                var previousUserData = JsonSerializer.Serialize(new
+                {
+                    displayName = lockedUser.DisplayName,
+                    email = lockedUser.Email,
+                    primaryOrgId = lockedUser.PrimaryOrgId,
+                    agreementCode = lockedUser.AgreementCode,
+                });
+                var newUserData = JsonSerializer.Serialize(new
+                {
+                    displayName = newDisplayName,
+                    email = newEmail,
+                    primaryOrgId = newPrimaryOrgId,
+                    agreementCode = newAgreementCode,
+                });
+                await using (var userAuditCmd = new NpgsqlCommand(
+                    """
+                    INSERT INTO users_audit (
+                        user_id, action,
+                        previous_data, new_data,
+                        version_before, version_after,
+                        actor_id, actor_role)
+                    VALUES (
+                        @userId, 'UPDATED',
+                        @previousData::jsonb, @newData::jsonb,
+                        @versionBefore, @versionAfter,
+                        @actorId, @actorRole)
+                    """, conn, tx))
+                {
+                    userAuditCmd.Parameters.AddWithValue("userId", userId);
+                    userAuditCmd.Parameters.AddWithValue("previousData", previousUserData);
+                    userAuditCmd.Parameters.AddWithValue("newData", newUserData);
+                    userAuditCmd.Parameters.AddWithValue("versionBefore", lockedVersion);
+                    userAuditCmd.Parameters.AddWithValue("versionAfter", newVersion);
+                    userAuditCmd.Parameters.AddWithValue("actorId", actor.ActorId ?? "unknown");
+                    userAuditCmd.Parameters.AddWithValue("actorRole", actor.ActorRole ?? "unknown");
+                    await userAuditCmd.ExecuteNonQueryAsync(ct);
+                }
 
                 // Emit domain event in-tx (BEFORE CommitAsync) so the users row
                 // and the outbox row commit atomically per ADR-018 D3. UserUpdated
@@ -764,10 +971,10 @@ public static class AdminEndpoints
                 var @event = new UserUpdated
                 {
                     UserId = userId,
-                    DisplayName = request.DisplayName ?? existingUser.DisplayName,
-                    Email = request.Email ?? existingUser.Email,
-                    PrimaryOrgId = request.PrimaryOrgId ?? existingUser.PrimaryOrgId,
-                    AgreementCode = request.AgreementCode ?? existingUser.AgreementCode,
+                    DisplayName = newDisplayName,
+                    Email = newEmail,
+                    PrimaryOrgId = newPrimaryOrgId,
+                    AgreementCode = newAgreementCode,
                     ActorId = actor.ActorId,
                     ActorRole = actor.ActorRole,
                     CorrelationId = actor.CorrelationId
@@ -941,6 +1148,28 @@ public static class AdminEndpoints
 
                 await tx.CommitAsync(ct);
             }
+            catch (OptimisticConcurrencyException ex)
+            {
+                // S35 / TASK-3506 — explicit If-Match enforcement (admin-strict per
+                // ADR-019 D2). S34 cycle-1 absorption added expectedVersion threading
+                // through SupersedeAndCreateAsync but never the endpoint mapping;
+                // this completes the contract — 412 Precondition Failed with
+                // structured expectedVersion/actualVersion body, rather than the
+                // generic 500 the older catch-all would produce. Closes the latent
+                // finding from TASK-3502. Mirrors EmployeeProfileEndpoints PUT
+                // L282-291 precedent — explicit `await tx.RollbackAsync(ct)` BEFORE
+                // returning 412, per S35 cycle-1 absorption (don't rely on
+                // disposal-time rollback; users_audit + outbox emits may have
+                // happened on the agreement-code branch and disciplined rollback is
+                // the canonical pattern).
+                await tx.RollbackAsync(ct);
+                return Results.Json(new
+                {
+                    error = "Concurrency precondition failed",
+                    expectedVersion = ex.ExpectedVersion,
+                    actualVersion = ex.ActualVersion,
+                }, statusCode: 412);
+            }
             catch (ConcurrentSeedConflictException ex)
             {
                 // S35 / TASK-3502 — Case A concurrent-create race on
@@ -968,13 +1197,28 @@ public static class AdminEndpoints
                 throw;
             }
 
+            // S35 / TASK-3506 — stamp ETag: "<newVersion>" + carry `version` in
+            // the body so the admin UI can compose the next If-Match without
+            // re-GETting. ADR-019 D2 explicit ETag contract. newVersion is
+            // mechanically expectedVersion + 1: the If-Match precondition has
+            // already been validated against lockedVersion inside the tx (412
+            // would otherwise have short-circuited via the explicit OCE catch),
+            // and the UPDATE statement bumps version by exactly 1. The
+            // null-fallback policy applied inside the tx (request ?? lockedUser)
+            // converges to (request ?? existingUser) here for the four returned
+            // fields because lockedUser is the FOR-UPDATE'd view of the same row
+            // existingUser came from — outside the try block lockedUser is out
+            // of scope.
+            var newUserVersion = expectedVersion + 1;
+            context.Response.Headers.ETag = $"\"{newUserVersion}\"";
             return Results.Ok(new
             {
                 userId,
                 displayName = request.DisplayName ?? existingUser.DisplayName,
                 email = request.Email ?? existingUser.Email,
                 primaryOrgId = request.PrimaryOrgId ?? existingUser.PrimaryOrgId,
-                agreementCode = request.AgreementCode ?? existingUser.AgreementCode
+                agreementCode = request.AgreementCode ?? existingUser.AgreementCode,
+                version = newUserVersion,
             });
         }).RequireAuthorization("LocalAdminOrAbove");
 
