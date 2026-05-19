@@ -464,6 +464,7 @@ CREATE TABLE IF NOT EXISTS users (
     ok_version          TEXT        NOT NULL DEFAULT 'OK24',
     employment_category TEXT        NOT NULL DEFAULT 'Standard',
     is_active           BOOLEAN     NOT NULL DEFAULT TRUE,
+    version             BIGINT      NOT NULL DEFAULT 1,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -592,6 +593,39 @@ CREATE INDEX IF NOT EXISTS idx_user_agreement_codes_audit_user_id
 -- compat marker if init.sql ever runs against an older database.
 INSERT INTO schema_migrations (migration_id, applied_at)
     VALUES ('s34-d1-user-agreement-codes', NOW())
+    ON CONFLICT (migration_id) DO NOTHING;
+
+-- ── Phase 4e (Sprint 35): users.version + users_audit ──
+-- ADR-018 D7 row-version + If-Match optimistic concurrency on /api/admin/users.
+-- 4th application of the established versioned-config pattern (S29 wage_type_mappings,
+-- S30 entitlement_configs, S31 employee_profiles, S34 user_agreement_codes). users.version
+-- baked into the base users CREATE (above) per greenfield-baked precedent. action CHECK
+-- enum includes all 4 values (CREATED/UPDATED/DELETED/SUPERSEDED) up-front for forward-
+-- compat even though users has no supersession lifecycle today (PUT updates in place;
+-- agreement-code supersession lives on the separate user_agreement_codes_audit stream).
+-- Matches precedent CHECK enum at employee_profile_audit (L514) + user_agreement_codes_audit
+-- (L577). Column name `audit_at` follows the S34 era convention (user_agreement_codes_audit
+-- at L584), NOT the S31 era `timestamp` (employee_profile_audit at L521). No FK on user_id
+-- because supersession + deletion need to leave audit rows untouched.
+CREATE TABLE IF NOT EXISTS users_audit (
+    audit_id          BIGSERIAL    PRIMARY KEY,
+    user_id           TEXT         NOT NULL,
+    action            TEXT         NOT NULL CHECK (action IN ('CREATED','UPDATED','DELETED','SUPERSEDED')),
+    previous_data     JSONB        NULL,
+    new_data          JSONB        NULL,
+    version_before    BIGINT       NULL,
+    version_after     BIGINT       NULL,
+    actor_id          TEXT         NOT NULL,
+    actor_role        TEXT         NOT NULL,
+    audit_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_users_audit_user_id ON users_audit(user_id);
+CREATE INDEX IF NOT EXISTS idx_users_audit_at ON users_audit(audit_at);
+
+-- schema_migrations ledger entry — documentary for S35 greenfield-only, forward-
+-- compat marker if init.sql ever runs against an older database.
+INSERT INTO schema_migrations (migration_id, applied_at)
+    VALUES ('s35-d1-users-version-and-audit', NOW())
     ON CONFLICT (migration_id) DO NOTHING;
 
 -- Role definitions (5 roles)

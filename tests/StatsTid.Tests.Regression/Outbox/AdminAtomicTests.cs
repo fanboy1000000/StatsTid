@@ -221,6 +221,7 @@ public sealed class AdminAtomicTests : IAsyncLifetime
             ok_version          TEXT        NOT NULL DEFAULT 'OK24',
             employment_category TEXT        NOT NULL DEFAULT 'Standard',
             is_active           BOOLEAN     NOT NULL DEFAULT TRUE,
+            version             BIGINT      NOT NULL DEFAULT 1,
             created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
@@ -330,6 +331,25 @@ public sealed class AdminAtomicTests : IAsyncLifetime
             ON user_agreement_codes_audit (assignment_id);
         CREATE INDEX IF NOT EXISTS idx_user_agreement_codes_audit_user_id
             ON user_agreement_codes_audit (user_id);
+
+        -- S35 / TASK-3501 fixture DDL drift: users_audit mirrors the new
+        -- init.sql shape so TASK-3505+ (admin-strict If-Match on /api/admin/users)
+        -- atomic-tx tests can INSERT into users_audit alongside users UPDATE
+        -- + UserUpdated outbox in one tx without 42P01-failing.
+        CREATE TABLE IF NOT EXISTS users_audit (
+            audit_id          BIGSERIAL    PRIMARY KEY,
+            user_id           TEXT         NOT NULL,
+            action            TEXT         NOT NULL CHECK (action IN ('CREATED','UPDATED','DELETED','SUPERSEDED')),
+            previous_data     JSONB        NULL,
+            new_data          JSONB        NULL,
+            version_before    BIGINT       NULL,
+            version_after     BIGINT       NULL,
+            actor_id          TEXT         NOT NULL,
+            actor_role        TEXT         NOT NULL,
+            audit_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS idx_users_audit_user_id ON users_audit(user_id);
+        CREATE INDEX IF NOT EXISTS idx_users_audit_at ON users_audit(audit_at);
 
         INSERT INTO roles (role_id, role_name, hierarchy_level)
         VALUES ('EMPLOYEE', 'Employee', 50)
