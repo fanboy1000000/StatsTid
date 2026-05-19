@@ -57,6 +57,42 @@
 | OvertimeThreshold50 | 37.0 |
 | OvertimeThreshold100 | 40.0 |
 
+## Compensation Model
+
+> Added 2026-05-18 (S35 / TASK-3504). The `DefaultCompensationModel` + `EmployeeCompensationChoice` fields were introduced in S17 (Overtime Governance & Compensation Model) but were never back-filled into this reference doc. Source of truth: the overenskomst cirkulærer cited per agreement below. Encoded values live in `init.sql` agreement_configs seed rows + `CentralAgreementConfigs.cs`.
+
+The two fields govern how overtime/merarbejde compensation is delivered per agreement:
+
+- **`DefaultCompensationModel`** — `"AFSPADSERING"` (time-off-in-lieu) or `"UDBETALING"` (payment).
+- **`EmployeeCompensationChoice`** — `true` if the employee may choose, `false` if the employer determines feasibility per the cirkulære.
+
+| Agreement | DefaultCompensationModel | EmployeeCompensationChoice | Source citation |
+|-----------|--------------------------|----------------------------|-----------------|
+| AC | AFSPADSERING | false | AC overenskomst cirkulære ([oes.dk 043-19](https://oes.dk/media/ik0hm2lr/043-19.pdf)) §4 — afspadsering as far as possible; payment as fallback when afspadsering infeasible; employer determines feasibility |
+| HK | AFSPADSERING | true | HK Stat overenskomst — default afspadsering within 3 months; employee has right to payment if not arranged in time |
+| PROSA | AFSPADSERING | true | PROSA stat overenskomst — default afspadsering or payment 1:1; employee right per agreement |
+| AC_RESEARCH | AFSPADSERING | false | Inherits from AC base agreement |
+| AC_TEACHING | AFSPADSERING | false | Inherits from AC base agreement |
+
+### Historical correction (2026-05-18, S35 / TASK-3503)
+
+The AC family (AC + AC_RESEARCH + AC_TEACHING) seeds originally carried `'UDBETALING'` due to an S17 inheritance trap: the model default in `AgreementRuleConfig.cs:67` is `"UDBETALING"`, and the AC entries in `CentralAgreementConfigs.cs` did not override it. This inverted the cirkulære rule. Classified under the [ROADMAP rule correction policy](../../ROADMAP.md) (committed 2026-05-18) as **bug-with-no-past-impact** — pre-launch posture, no past periods exist, forward-only correction. See commit message of `S35 TASK-3503` for full source URLs (Personalestyrelsen + Akademikerne + Djøf + Folketinget + DM).
+
+### Forward reference (S36+ / ADR-024 — pending)
+
+**Within-OK role distinction is NOT currently modeled.** The state-sector overenskomst distinguishes between *fuldmægtig*, *specialkonsulent*, and *chefkonsulent* under AC; specialkonsulent + chefkonsulent **LOSE the contractual right to merarbejde compensation** per the cirkulære, but the system today treats all AC employees identically. Production chefkonsulent users would receive contractually-wrong compensation.
+
+Modeling gap scheduled for the S36–S41 program (`.claude/plans/PROGRAM-s36-s41-domain-correctness.md`):
+- **S36–S37 Phase A inventory** — source register + role-dimension audit + ruleset audit (with domain-expert validation running parallel as Phase B).
+- **S38 Phase C design** — ADR-024 settles role-within-agreement placement + tri-state `MerarbejdeCompensationRight: CONTRACTUAL / DISCRETIONARY / NONE` replacing the current binary.
+- **S39–S41 implementation** — `role_within_agreement_configs` table + `ConfigResolutionService` extension + payroll mapping cutover + exhaustive D-test matrix.
+
+See ROADMAP Phase 4e "S35 domain-correctness discovery (LAUNCH-BLOCKING)" for the systemic framing.
+
+### Forward reference (S36 source register)
+
+Each cell above will gain full citation + confidence level (HIGH/MEDIUM/LOW) + interpretation authority (Personalestyrelsen / Akademikerne / negotiated / contested) + verification date in the upcoming `docs/references/agreement-source-register.md`.
+
 ## Entitlement Quotas
 
 Source: `DefaultEntitlementConfigs.cs` and `entitlement_configs` seed data.
