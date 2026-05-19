@@ -5,6 +5,7 @@ using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Events;
+using StatsTid.SharedKernel.Exceptions;
 using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Security;
 
@@ -296,10 +297,12 @@ public static class AdminEndpoints
             DbConnectionFactory dbFactory,
             IOutboxEnqueue outbox,
             UserAgreementCodeRepository userAgreementCodeRepo,
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         {
             var actor = context.GetActorContext();
+            var logger = loggerFactory.CreateLogger("StatsTid.Backend.Api.Endpoints.AdminEndpoints.UsersPost");
 
             // Validate actor scope covers target org
             var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, request.PrimaryOrgId, ct);
@@ -536,6 +539,26 @@ public static class AdminEndpoints
 
                 await tx.CommitAsync(ct);
             }
+            catch (ConcurrentSeedConflictException ex)
+            {
+                // S35 / TASK-3502 — Case A concurrent-create race on
+                // user_agreement_codes (partial-unique-index 23505). Two concurrent
+                // admin POSTs for the same user_id can both route through
+                // UserAgreementCodeRepository.SupersedeAndCreateAsync Case A (no
+                // predecessor) and collide on idx_user_agreement_codes_live; the
+                // loser surfaces here. Map to 409 Conflict per RFC 7232 §4.1 —
+                // symmetric to OptimisticConcurrencyException → 412 elsewhere.
+                await tx.RollbackAsync(ct);
+                logger.LogWarning(
+                    "Admin POST /api/admin/users lost a concurrent-create race on user_agreement_codes for user_id='{UserId}' (SqlState 23505); returning 409 Conflict",
+                    ex.UserId);
+                return Results.Conflict(new
+                {
+                    error = "User agreement-code assignment exists due to a concurrent-create race; refresh and retry.",
+                    userId = ex.UserId,
+                    hint = "retry — concurrent seed/create raced"
+                });
+            }
             catch
             {
                 await tx.RollbackAsync(ct);
@@ -580,10 +603,12 @@ public static class AdminEndpoints
             IOutboxEnqueue outbox,
             DbConnectionFactory dbFactory,
             UserAgreementCodeRepository userAgreementCodeRepo,
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         {
             var actor = context.GetActorContext();
+            var logger = loggerFactory.CreateLogger("StatsTid.Backend.Api.Endpoints.AdminEndpoints.UsersPut");
 
             // Look up existing user
             var existingUser = await userRepo.GetByIdAsync(userId, ct);
@@ -915,6 +940,27 @@ public static class AdminEndpoints
                 }
 
                 await tx.CommitAsync(ct);
+            }
+            catch (ConcurrentSeedConflictException ex)
+            {
+                // S35 / TASK-3502 — Case A concurrent-create race on
+                // user_agreement_codes (partial-unique-index 23505). Reachable on
+                // the PUT path only via the pre-S34 straggler safety-net
+                // (agreementPredecessor null → SupersedeAndCreateAsync routes Case A
+                // with expectedVersion=null per L786); two concurrent PUTs both
+                // observing "no live row" can collide on idx_user_agreement_codes_live.
+                // Map to 409 Conflict — symmetric to OptimisticConcurrencyException
+                // → 412 (version-mismatch path on Cases B/C).
+                await tx.RollbackAsync(ct);
+                logger.LogWarning(
+                    "Admin PUT /api/admin/users/{UserId} lost a concurrent-create race on user_agreement_codes (SqlState 23505); returning 409 Conflict",
+                    ex.UserId);
+                return Results.Conflict(new
+                {
+                    error = "User agreement-code assignment exists due to a concurrent-create race; refresh and retry.",
+                    userId = ex.UserId,
+                    hint = "retry — concurrent seed/create raced"
+                });
             }
             catch
             {

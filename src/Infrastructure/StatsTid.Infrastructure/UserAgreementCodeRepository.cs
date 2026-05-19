@@ -1,4 +1,5 @@
 using Npgsql;
+using StatsTid.SharedKernel.Exceptions;
 using StatsTid.SharedKernel.Models;
 
 namespace StatsTid.Infrastructure;
@@ -252,11 +253,28 @@ public sealed class UserAgreementCodeRepository
                     expectedVersion: expectedVersion,
                     actualVersion: null);
             }
-            // Case A: no predecessor → version=1 baseline.
-            var (newAssignmentId, newVersion) =
-                await InsertLiveRowAsync(conn, tx, req, nextVersion: 1L, ct);
-            return new SaveUserAgreementCodeResult(
-                newAssignmentId, newVersion, SaveUserAgreementCodeOutcome.Created);
+            // Case A: no predecessor → version=1 baseline. S35 / TASK-3502 — catch
+            // PostgresException SqlState 23505 from the partial-unique-index
+            // `idx_user_agreement_codes_live` and re-throw as the typed
+            // ConcurrentSeedConflictException so the endpoint can map it to 409
+            // Conflict (symmetric to OptimisticConcurrencyException → 412 above).
+            // The race: two concurrent Case A callers both observe "no live row"
+            // before the partial-unique-index serializes their INSERTs; the loser
+            // raises 23505. Only Case A can hit this — Case B updates the locked
+            // row in-place (no INSERT) and Case C inserts at a new effective_from
+            // AFTER closing the predecessor (effective_to non-NULL on predecessor,
+            // so the partial-unique-index admits the new row by construction).
+            try
+            {
+                var (newAssignmentId, newVersion) =
+                    await InsertLiveRowAsync(conn, tx, req, nextVersion: 1L, ct);
+                return new SaveUserAgreementCodeResult(
+                    newAssignmentId, newVersion, SaveUserAgreementCodeOutcome.Created);
+            }
+            catch (PostgresException ex) when (ex.SqlState == "23505")
+            {
+                throw new ConcurrentSeedConflictException(req.UserId);
+            }
         }
 
         // Hoist out of the nullable tuple now that we've eliminated the null branch.
