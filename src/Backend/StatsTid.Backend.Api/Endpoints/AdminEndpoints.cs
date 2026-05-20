@@ -653,6 +653,30 @@ public static class AdminEndpoints
                     hint = "retry — concurrent seed/create raced"
                 });
             }
+            catch (PostgresException pgEx) when (pgEx.SqlState == "23505")
+            {
+                // S35 Step 7a close — in-flight defect absorption. The pre-flight
+                // existence check at L382-390 runs OUTSIDE the tx, so two concurrent
+                // admin POSTs for the same user_id can both pass it before either
+                // commits. The users INSERT then races at users_pkey (or
+                // users_username_key) BEFORE the user_agreement_codes INSERT has
+                // a chance to fire — so the TASK-3502 ConcurrentSeedConflictException
+                // catch above never runs on this path. Map the typed PostgresException
+                // (users_pkey 23505 or users_username_key 23505) to 409 Conflict for
+                // symmetry with the pre-flight check at L389 and the
+                // ConcurrentSeedConflictException path above; ConstraintName
+                // disambiguates the two races in the log line.
+                await tx.RollbackAsync(ct);
+                logger.LogWarning(
+                    "Admin POST /api/admin/users lost a concurrent-create race on users for user_id='{UserId}' (constraint={ConstraintName}, SqlState 23505); returning 409 Conflict",
+                    request.UserId, pgEx.ConstraintName);
+                return Results.Conflict(new
+                {
+                    error = "User with this ID or username already exists due to a concurrent-create race; refresh and retry.",
+                    userId = request.UserId,
+                    hint = "retry — concurrent users-row create raced"
+                });
+            }
             catch
             {
                 await tx.RollbackAsync(ct);

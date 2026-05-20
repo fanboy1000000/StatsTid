@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
+using StatsTid.Infrastructure.Outbox;
 using StatsTid.SharedKernel.Security;
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Segmentation;
@@ -499,11 +500,17 @@ public sealed class AgreementCodeHttpDeterminismTests : IAsyncLifetime
 
         // Two parallel seeder invocations against the SAME DbConnectionFactory.
         // PostgresEventStore implements IOutboxEnqueue (cf. SPRINT-22.md L653
-        // "PostgresEventStore : IOutboxEnqueue"); we reuse the harness's
-        // PostgresEventStore so the parallel seeder runs share the canonical
-        // outbox enqueue path.
+        // "PostgresEventStore : IOutboxEnqueue"). S35 Step 7a close in-flight
+        // defect absorption: construct PostgresEventStore with an explicit
+        // OutboxServiceContext because the seeder routes through
+        // EnqueueAndReturnIdAsync which requires the context per ADR-018 D3
+        // dual-binding pattern. The harness's `EventStore` field is built
+        // without the context (TestFixtures.cs:395 uses the bare 1-arg ctor),
+        // so it 500s under the seeder's outbox.EnqueueAsync path. Other tests
+        // that need the routed-write path do the same (cf.
+        // SkemaProjectionAtomicTests.cs:98 + ProfileRowVersionTests.cs:96).
         var dbFactory = _harness.Factory;
-        var outbox = _harness.EventStore;
+        var outbox = new PostgresEventStore(dbFactory, new OutboxServiceContext("backend-api"));
         var logger = NullLogger.Instance;
 
         // Both seeder invocations must complete without throwing — the
