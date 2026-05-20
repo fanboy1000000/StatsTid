@@ -368,7 +368,7 @@ Plan Review findings are recorded in the sprint log under "## Plan Review (Step 
 
 ### Cycle Cap
 
-Same as External Review (Step 7a): 2 cycles per lens per sprint. After cycle 2 on either lens, halt and prompt the user — choices: (a) continue iterating, (b) accept findings and proceed to Step 1, (c) defer findings as a new sprint task.
+Same as External Review (Step 7a): every plan-edit gets a verification review, so cycle 2 always runs to verify the cycle-1 edit and cycle 3 always runs to verify the cycle-2 edit. Halt-and-prompt fires AFTER cycle 3 verification IF that verification surfaces new BLOCKERs, before any cycle-4 plan edit begins. At the halt-prompt the user chooses: (a) continue iterating, (b) accept findings and proceed to Step 1, (c) defer findings as a new sprint task. This ensures every plan edit is reviewed at least once before any decision to stop iterating.
 
 ### Constraints
 
@@ -443,14 +443,20 @@ Codex's native output may not use these exact labels. The Orchestrator maps Code
 
 ### Scope-Creep Governance (Review Cycle Cap)
 
-To prevent sprint-commit delays, the Orchestrator tracks Codex review cycles within a single sprint. A **cycle** = one `codex review` invocation. Re-invocation after fixing Codex's own BLOCKERs counts as an additional cycle.
+To prevent sprint-commit delays without leaving any absorption unreviewed, the Orchestrator tracks Codex review cycles within a single sprint. A **cycle** = one `codex review` invocation. Re-invocation after fixing Codex's own BLOCKERs counts as an additional cycle.
 
-- **Cycle 1**: Normal — run Codex, act on findings.
-- **Cycle 2**: Normal — re-run Codex after BLOCKER fixes.
-- **Cycle 3 and beyond**: **Halt and prompt the human operator.** The Orchestrator must not invoke Codex a 3rd time without explicit user direction. The user chooses:
-  - (a) continue iterating (Codex runs again);
+**Core rule: every fix gets a verification review.** The halt fires AFTER the verification cycle, not before — so the cycle-2 fix is always reviewed by cycle 3, and only if cycle 3 itself finds new BLOCKERs does the Orchestrator halt before cycle-4 fix.
+
+- **Cycle 1**: Run Codex on the sprint diff. Act on findings.
+- **Cycle 2**: Re-run Codex to verify the cycle-1 fix. Act on any new findings.
+- **Cycle 3**: Re-run Codex to verify the cycle-2 fix. If clean, sprint proceeds to commit. If new BLOCKERs surface, **halt and prompt the human operator** before cycle-4 fix begins. The user chooses:
+  - (a) continue iterating (cycle-4 fix + cycle-5 verification);
   - (b) accept remaining findings and proceed to commit;
   - (c) split remaining findings off as a new sprint task.
+
+This shape guarantees the last absorption commit in every chain is reviewed at least once.
+
+**Post-Step-7a coverage**: any code-touching commit landed AFTER Step 7a closes (in-flight defects surfaced by full-test runs, last-minute fixes) triggers a new Step-7a review cycle scoped to that fix. The cycle counter resets for the new fix scope. A docs-only sprint-close commit (no code changes) is exempt.
 
 The cap applies **separately** to sprint-end review (Step 7a) and per-task review (Step 5a). Record cycle counts in the sprint log.
 
