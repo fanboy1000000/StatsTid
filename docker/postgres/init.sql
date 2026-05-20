@@ -1779,17 +1779,31 @@ $$;
 -- The base CREATE TABLE block (above, L456-470) bakes `version BIGINT NOT NULL
 -- DEFAULT 1` into greenfield databases. On upgrade, `CREATE TABLE IF NOT EXISTS`
 -- skips the existing users row → the column would otherwise never land. This
--- guarded block carries the explicit ADD COLUMN path that the IF NOT EXISTS
--- CREATE cannot reach on legacy databases. Mirrors the S22/S25 ALTER pattern
--- exactly. users_audit (above, L610-623) is a new-in-S35 table whose
--- `CREATE TABLE IF NOT EXISTS` is sufficient for any database state — no
--- ALTER required for the audit table itself. Step 7a cycle 1 absorption
--- (Codex BLOCKER-1): closes the production upgrade gap that the greenfield-
--- only ledger insert previously masked.
--- Guarded by schema_migrations ledger so re-runs of init.sql are idempotent.
+-- block carries the explicit ADD COLUMN path that the IF NOT EXISTS CREATE
+-- cannot reach on legacy databases. Mirrors the S22/S25 ALTER pattern.
+-- users_audit (above, L610-623) is a new-in-S35 table whose `CREATE TABLE IF
+-- NOT EXISTS` is sufficient for any database state — no ALTER required for
+-- the audit table itself.
+--
+-- Step 7a cycle 1 absorption (Codex BLOCKER-1): closed the production upgrade
+-- gap that the greenfield-only ledger insert previously masked.
+-- Step 7a cycle 2 absorption (Codex BLOCKER-1 cycle-2 missed-facts): the
+-- ALTER is now UNCONDITIONAL (above the IF NOT FOUND guard) so it repairs
+-- DBs that ran the pre-cycle-1 form of init.sql against a legacy schema —
+-- such DBs hold the s35-d1-users-version-and-audit ledger row WITHOUT
+-- users.version. Putting ALTER above the guard makes it idempotent across
+-- all states (ADD COLUMN IF NOT EXISTS is a no-op when the column already
+-- exists). The ledger INSERT + guard still bound any FUTURE one-shot
+-- repair work to a single run.
 -- =========================================================================
 DO $$
 BEGIN
+    -- Unconditional repair — runs whether or not the ledger row already
+    -- exists. Idempotent via ADD COLUMN IF NOT EXISTS. Existing rows
+    -- backfill to version=1 via DEFAULT (matches S22 backfill shape).
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 1;
+
     INSERT INTO schema_migrations (migration_id, notes)
     VALUES ('s35-d1-users-version-and-audit', 'ADR-018 D7 / ADR-019 D2: row-version + If-Match optimistic concurrency on /api/admin/users + users_audit')
     ON CONFLICT (migration_id) DO NOTHING;
@@ -1798,9 +1812,8 @@ BEGIN
         RETURN;
     END IF;
 
-    -- Row-version column. Existing rows backfill to version=1 via DEFAULT.
-    -- Matches the S22 local_agreement_profiles.version backfill shape exactly.
-    ALTER TABLE users
-    ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 1;
+    -- Future one-shot work for this migration goes here (none today —
+    -- the ALTER above is the entire migration body, lifted out of the
+    -- guard for repair idempotency).
 END
 $$;
