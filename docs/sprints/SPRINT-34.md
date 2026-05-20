@@ -1,5 +1,7 @@
 # Sprint 34 — Phase 4e: `agreement_code` Versioned History (Launch-Blocker Close)
 
+> **S35 baseline correction (2026-05-20)**: This row's `858 passing` claim was inaccurate. The `Overtime_PastPeriodBalance_UsesPeriodEffectiveAgreementCode_NotLive` D-test was actually failing at S34 close (Expected `AFSPADSERING` / Actual `UDBETALING` — surfaced the AC family compensation seed bug TASK-3503 corrected in S35). **True S34 baseline: 857 passing** (526 unit + 35 plain regression + **208** Docker-gated + 88 frontend). S35 deltas are computed against the corrected baseline.
+
 | Field | Value |
 |-------|-------|
 | **Sprint** | 34 |
@@ -8,7 +10,7 @@
 | **End Date** | 2026-05-17 |
 | **Orchestrator Approved** | yes |
 | **Build Verified** | yes (0 errors, 19 pre-existing CS0618 warnings unchanged) |
-| **Test Verified** | yes (858 passing total; marquee D-test PASSES) |
+| **Test Verified** | yes (857 passing total — corrected from 858 per S35 baseline note above; marquee D-test PASSES) |
 | **Sprint-start commit base** | `f966c9e` (S33 close, 2026-05-17) |
 | **Sprint type** | Implementation (against ADR-023 D2 option (b)) |
 | **Refinement** | `.claude/refinements/REFINEMENT-s34-agreement-code-versioned-history.md` (READY after 2-cycle dual-lens; gitignored) |
