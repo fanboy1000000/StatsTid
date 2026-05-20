@@ -599,14 +599,17 @@ INSERT INTO schema_migrations (migration_id, applied_at)
 -- ADR-018 D7 row-version + If-Match optimistic concurrency on /api/admin/users.
 -- 4th application of the established versioned-config pattern (S29 wage_type_mappings,
 -- S30 entitlement_configs, S31 employee_profiles, S34 user_agreement_codes). users.version
--- baked into the base users CREATE (above) per greenfield-baked precedent. action CHECK
--- enum includes all 4 values (CREATED/UPDATED/DELETED/SUPERSEDED) up-front for forward-
--- compat even though users has no supersession lifecycle today (PUT updates in place;
--- agreement-code supersession lives on the separate user_agreement_codes_audit stream).
--- Matches precedent CHECK enum at employee_profile_audit (L514) + user_agreement_codes_audit
--- (L577). Column name `audit_at` follows the S34 era convention (user_agreement_codes_audit
--- at L584), NOT the S31 era `timestamp` (employee_profile_audit at L521). No FK on user_id
--- because supersession + deletion need to leave audit rows untouched.
+-- is baked into the base users CREATE (above) — IF NOT EXISTS guards make that a no-op
+-- on legacy databases where the users row already exists; the guarded ALTER block at the
+-- bottom of this file (S35 / D1) carries the ADD COLUMN path that the IF NOT EXISTS CREATE
+-- cannot reach on upgrade. action CHECK enum includes all 4 values
+-- (CREATED/UPDATED/DELETED/SUPERSEDED) up-front for forward-compat even though users has
+-- no supersession lifecycle today (PUT updates in place; agreement-code supersession lives
+-- on the separate user_agreement_codes_audit stream). Matches precedent CHECK enum at
+-- employee_profile_audit (L514) + user_agreement_codes_audit (L577). Column name
+-- `audit_at` follows the S34 era convention (user_agreement_codes_audit at L584), NOT the
+-- S31 era `timestamp` (employee_profile_audit at L521). No FK on user_id because
+-- supersession + deletion need to leave audit rows untouched.
 CREATE TABLE IF NOT EXISTS users_audit (
     audit_id          BIGSERIAL    PRIMARY KEY,
     user_id           TEXT         NOT NULL,
@@ -622,11 +625,9 @@ CREATE TABLE IF NOT EXISTS users_audit (
 CREATE INDEX IF NOT EXISTS idx_users_audit_user_id ON users_audit(user_id);
 CREATE INDEX IF NOT EXISTS idx_users_audit_at ON users_audit(audit_at);
 
--- schema_migrations ledger entry — documentary for S35 greenfield-only, forward-
--- compat marker if init.sql ever runs against an older database.
-INSERT INTO schema_migrations (migration_id, applied_at)
-    VALUES ('s35-d1-users-version-and-audit', NOW())
-    ON CONFLICT (migration_id) DO NOTHING;
+-- schema_migrations ledger row owned by the guarded ALTER block at the bottom of the
+-- file (S35 / D1). Inserting the ledger row here would short-circuit the ALTER's
+-- `IF NOT FOUND THEN RETURN` guard and leave legacy databases without users.version.
 
 -- Role definitions (5 roles)
 CREATE TABLE IF NOT EXISTS roles (
@@ -1769,5 +1770,37 @@ BEGIN
     -- natural key + effective_from tuple, including across closed predecessors.
     CREATE UNIQUE INDEX IF NOT EXISTS idx_ec_natural_key_history
         ON entitlement_configs (entitlement_type, agreement_code, ok_version, effective_from);
+END
+$$;
+
+-- =========================================================================
+-- S35 / D1 — users.version row-version column for ADR-018 D7 row-version +
+--   If-Match optimistic concurrency on /api/admin/users (ADR-019 D2).
+-- The base CREATE TABLE block (above, L456-470) bakes `version BIGINT NOT NULL
+-- DEFAULT 1` into greenfield databases. On upgrade, `CREATE TABLE IF NOT EXISTS`
+-- skips the existing users row → the column would otherwise never land. This
+-- guarded block carries the explicit ADD COLUMN path that the IF NOT EXISTS
+-- CREATE cannot reach on legacy databases. Mirrors the S22/S25 ALTER pattern
+-- exactly. users_audit (above, L610-623) is a new-in-S35 table whose
+-- `CREATE TABLE IF NOT EXISTS` is sufficient for any database state — no
+-- ALTER required for the audit table itself. Step 7a cycle 1 absorption
+-- (Codex BLOCKER-1): closes the production upgrade gap that the greenfield-
+-- only ledger insert previously masked.
+-- Guarded by schema_migrations ledger so re-runs of init.sql are idempotent.
+-- =========================================================================
+DO $$
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s35-d1-users-version-and-audit', 'ADR-018 D7 / ADR-019 D2: row-version + If-Match optimistic concurrency on /api/admin/users + users_audit')
+    ON CONFLICT (migration_id) DO NOTHING;
+
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+
+    -- Row-version column. Existing rows backfill to version=1 via DEFAULT.
+    -- Matches the S22 local_agreement_profiles.version backfill shape exactly.
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 1;
 END
 $$;

@@ -92,18 +92,21 @@ public sealed class S35VersionMigrationTests : IAsyncLifetime
         """;
 
     /// <summary>
-    /// Verbatim copy of the S35 D1 segment from <c>docker/postgres/init.sql</c> lines
-    /// ~598-629. Greenfield-baked (no DO $$ block): an ALTER guarded by
-    /// <c>ADD COLUMN IF NOT EXISTS</c> bakes in <c>users.version</c> on existing schemas;
-    /// <c>CREATE TABLE IF NOT EXISTS</c> handles <c>users_audit</c>; the ledger INSERT
-    /// is guarded by <c>ON CONFLICT (migration_id) DO NOTHING</c>.
+    /// Composite of the S35 D1 migration path in <c>docker/postgres/init.sql</c>:
+    /// the <c>ALTER TABLE users ADD COLUMN IF NOT EXISTS version</c> from the guarded
+    /// DO $$ block at the bottom of init.sql (S35 / D1), plus the
+    /// <c>CREATE TABLE IF NOT EXISTS users_audit</c> + index pair from the base section
+    /// at L610-623, plus the ledger INSERT (carried inside the DO $$ block in
+    /// production; flattened here for test brevity). Step 7a cycle 1 absorption
+    /// (Codex BLOCKER-1) added the guarded ALTER so legacy databases receive
+    /// <c>users.version</c>; before that absorption the ALTER did not exist in init.sql
+    /// and this test only exercised the greenfield-equivalent path.
     ///
     /// <para>
-    /// The init.sql production form bakes <c>users.version</c> directly into the base
-    /// <c>users</c> CREATE at L467 (greenfield path). For this idempotency test we apply
-    /// the same column via <c>ALTER TABLE ... ADD COLUMN IF NOT EXISTS</c> — semantically
-    /// equivalent on a freshly-created users table without the column, and equivalent to
-    /// the forward-compat path the init.sql ledger entry at L627-629 documents.
+    /// The test wraps <c>ApplyAsync</c> via <c>SimpleConnection.ExecuteAsync</c> at
+    /// statement level (no DO $$ wrapper) — semantically equivalent to running the
+    /// init.sql block on a fresh users table without the column, and equivalent to
+    /// the upgrade path the guarded ALTER takes on a legacy database.
     /// </para>
     /// </summary>
     private const string S35MigrationDdl = """

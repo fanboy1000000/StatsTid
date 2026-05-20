@@ -275,17 +275,26 @@ public static class AdminEndpoints
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
-            var users = await userRepo.GetByOrgAsync(orgId, ct);
+            // S35 Step 7a cycle 1 absorption (Codex WARNING-1) — list rows now
+            // carry primaryOrgId (for the UI table render at L368) AND version
+            // (so the frontend `User` interface in useAdmin.ts stays honest
+            // about its row-version field). The edit flow still re-fetches via
+            // the per-user GET endpoint to bind the ETag header before PUT;
+            // list-row version is for type-honesty and forward-compat, not the
+            // source of truth on the next PUT.
+            var users = await userRepo.GetByOrgWithVersionAsync(orgId, ct);
 
             // NEVER return password hashes
-            var response = users.Select(u => new
+            var response = users.Select(row => new
             {
-                userId = u.UserId,
-                username = u.Username,
-                displayName = u.DisplayName,
-                email = u.Email,
-                agreementCode = u.AgreementCode,
-                employmentCategory = u.EmploymentCategory
+                userId = row.User.UserId,
+                username = row.User.Username,
+                displayName = row.User.DisplayName,
+                email = row.User.Email,
+                primaryOrgId = row.User.PrimaryOrgId,
+                agreementCode = row.User.AgreementCode,
+                employmentCategory = row.User.EmploymentCategory,
+                version = row.Version,
             });
 
             return Results.Ok(response);
@@ -778,6 +787,21 @@ public static class AdminEndpoints
             await conn.OpenAsync(ct);
             await using var tx = await conn.BeginTransactionAsync(ct);
 
+            // S35 Step 7a cycle 1 absorption (Reviewer W2) — hoist the four
+            // post-update field values out of the try block so the 200 response
+            // body sources them from the FOR-UPDATE'd lockedUser snapshot
+            // (assigned below inside the try) rather than the pre-tx existingUser
+            // snapshot. Mirrors the EmployeeProfileEndpoints PUT precedent which
+            // builds the response from canonical post-update state. The seed
+            // values from existingUser are dead in any 200 path — every commit
+            // overwrites them inside the try before the response builder runs;
+            // they exist only so the compiler can prove definite assignment.
+            // 412/409/throw all return early before the response builder.
+            string newDisplayName = existingUser.DisplayName;
+            string? newEmail = existingUser.Email;
+            string newPrimaryOrgId = existingUser.PrimaryOrgId;
+            string newAgreementCode = existingUser.AgreementCode;
+
             try
             {
                 // S35 / TASK-3506 — in-tx FOR-UPDATE re-read of the users row.
@@ -891,12 +915,15 @@ public static class AdminEndpoints
                 // (lockedUser), NOT the stale pre-tx existingUser — closes audit-
                 // trail drift item #4 from S34 deferred. newVersion = lockedVersion + 1
                 // is bound to a local for both the users_audit row below and the
-                // ETag/version stamped on the 200 response.
+                // ETag/version stamped on the 200 response. The four newX values
+                // (declared outside the try block per Step 7a cycle 1 Reviewer W2
+                // absorption) are assigned here so the response builder at L1230+
+                // can source them from the locked-row snapshot.
                 var newVersion = lockedVersion + 1;
-                var newDisplayName = request.DisplayName ?? lockedUser.DisplayName;
-                var newEmail = request.Email ?? lockedUser.Email;
-                var newPrimaryOrgId = request.PrimaryOrgId ?? lockedUser.PrimaryOrgId;
-                var newAgreementCode = request.AgreementCode ?? lockedUser.AgreementCode;
+                newDisplayName = request.DisplayName ?? lockedUser.DisplayName;
+                newEmail = request.Email ?? lockedUser.Email;
+                newPrimaryOrgId = request.PrimaryOrgId ?? lockedUser.PrimaryOrgId;
+                newAgreementCode = request.AgreementCode ?? lockedUser.AgreementCode;
 
                 await using var cmd = new NpgsqlCommand(
                     """
@@ -1101,12 +1128,18 @@ public static class AdminEndpoints
                     // value), not from the pre-tx existingUser snapshot. Mirrors the
                     // identical fix on the audit `previous_data` JSONB above + the
                     // UserAgreementCodeSuperseded event payload below — all three sites
-                    // now flow off the same locked row state. Case A safety-net (no live
-                    // row exists) falls back to existingUser.AgreementCode.
+                    // now flow off the same locked row state.
+                    // S35 Step 7a cycle 1 absorption (Reviewer W1) — Case A safety-net
+                    // (no live row exists) now falls back to lockedUser.AgreementCode,
+                    // never the pre-tx existingUser snapshot. Closes the remaining
+                    // outer-users-UPDATE stale-snapshot residual on item #4 from S34
+                    // deferred. Mirrors the canonicalOldAgreementCode fallback at L882
+                    // exactly — both fallback sites now flow off the FOR-UPDATE'd
+                    // users row.
                     var agreementChangedEvent = new UserAgreementCodeChanged
                     {
                         UserId = userId,
-                        OldAgreementCode = agreementPredecessor?.AgreementCode ?? existingUser.AgreementCode,
+                        OldAgreementCode = agreementPredecessor?.AgreementCode ?? lockedUser.AgreementCode,
                         NewAgreementCode = request.AgreementCode!,
                         EffectiveFrom = request.EffectiveFrom,
                         ActorId = actor.ActorId,
@@ -1203,21 +1236,27 @@ public static class AdminEndpoints
             // mechanically expectedVersion + 1: the If-Match precondition has
             // already been validated against lockedVersion inside the tx (412
             // would otherwise have short-circuited via the explicit OCE catch),
-            // and the UPDATE statement bumps version by exactly 1. The
-            // null-fallback policy applied inside the tx (request ?? lockedUser)
-            // converges to (request ?? existingUser) here for the four returned
-            // fields because lockedUser is the FOR-UPDATE'd view of the same row
-            // existingUser came from — outside the try block lockedUser is out
-            // of scope.
+            // and the UPDATE statement bumps version by exactly 1.
+            //
+            // S35 Step 7a cycle 1 absorption (Reviewer W2) — body fields are
+            // sourced from the four newX locals (hoisted above the try block,
+            // assigned inside the try from `request.X ?? lockedUser.X`), NOT
+            // from `request.X ?? existingUser.X`. This makes the response
+            // unambiguously consistent with the UPDATE statement, the
+            // users_audit `new_data` JSONB, and the UserUpdated event payload
+            // — all four sites now flow off the same FOR-UPDATE'd lockedUser
+            // snapshot rather than relying on the global If-Match invariant
+            // to make existingUser converge with lockedUser. Mirrors the
+            // EmployeeProfileEndpoints PUT precedent (builds response inside tx).
             var newUserVersion = expectedVersion + 1;
             context.Response.Headers.ETag = $"\"{newUserVersion}\"";
             return Results.Ok(new
             {
                 userId,
-                displayName = request.DisplayName ?? existingUser.DisplayName,
-                email = request.Email ?? existingUser.Email,
-                primaryOrgId = request.PrimaryOrgId ?? existingUser.PrimaryOrgId,
-                agreementCode = request.AgreementCode ?? existingUser.AgreementCode,
+                displayName = newDisplayName,
+                email = newEmail,
+                primaryOrgId = newPrimaryOrgId,
+                agreementCode = newAgreementCode,
                 version = newUserVersion,
             });
         }).RequireAuthorization("LocalAdminOrAbove");

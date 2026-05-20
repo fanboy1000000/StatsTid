@@ -45,6 +45,37 @@ public sealed class UserRepository
     }
 
     /// <summary>
+    /// Non-tx list read returning each user paired with its row-version. Used by the
+    /// admin GET-by-org list endpoint at <c>/api/admin/organizations/{orgId}/users</c>
+    /// so list rows carry both <c>primaryOrgId</c> (for the table render) and
+    /// <c>version</c> (so the frontend list-row type can remain honest about the
+    /// row-version field without a per-row follow-up GET). Step 7a cycle 1 absorption
+    /// (Codex WARNING-1): closes the list-endpoint contract gap where the table
+    /// rendered an undefined <c>primaryOrgId</c> column and the frontend <c>User</c>
+    /// type lied about a <c>version</c> field the endpoint never returned. Edit
+    /// flow still re-fetches via the per-user GET — list-row <c>version</c> is for
+    /// type-honesty and forward-compat, not the source of truth on the next PUT.
+    /// </summary>
+    public async Task<IReadOnlyList<(User User, long Version)>> GetByOrgWithVersionAsync(
+        string orgId, CancellationToken ct = default)
+    {
+        await using var conn = _connectionFactory.Create();
+        await conn.OpenAsync(ct);
+        await using var cmd = new NpgsqlCommand(
+            "SELECT * FROM users WHERE primary_org_id = @orgId AND is_active = TRUE ORDER BY display_name", conn);
+        cmd.Parameters.AddWithValue("orgId", orgId);
+        var rows = new List<(User, long)>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var user = ReadUser(reader);
+            var version = reader.GetInt64(reader.GetOrdinal("version"));
+            rows.Add((user, version));
+        }
+        return rows;
+    }
+
+    /// <summary>
     /// In-tx FOR-UPDATE atomic row + version read — used by <c>AdminEndpoints</c> PUT
     /// <c>/api/admin/users/{userId}</c> to read user fields and their optimistic-concurrency
     /// <c>version</c> token under a row lock as part of the admin-strict If-Match contract
