@@ -113,7 +113,35 @@ if ($missing.Count -gt 0) {
     exit 2
 }
 
-# --- Verdict line check ---------------------------------------------------
+# --- Resolve HEAD SHA (parent of the pending close commit) ----------------
+# Required for the staleness check below. If git fails (not a repo, etc.),
+# fail-open per existing convention (the gate is best-effort defense).
+
+$headSha = $null
+try {
+    $headSha = (git rev-parse HEAD 2>$null | Out-String).Trim()
+} catch {
+    [Console]::Error.WriteLine("sprint-close-guard: git rev-parse HEAD failed ($_); skipping staleness check")
+}
+
+# --- Verdict line + staleness check ---------------------------------------
+#
+# Stronger contract added post-S38 (after retroactive Codex review caught
+# narrative-edited artifacts slipping through the gate). Each artifact MUST
+# declare which commit it reviewed via a "reviewed-against-commit: <SHA>"
+# line. The SHA must be a prefix of HEAD (i.e., the review must have
+# reviewed the immediate predecessor of the pending close commit).
+#
+# This catches:
+#   - Narrative-edited artifacts (verdict updated but review not re-run)
+#   - Stale artifacts from cycle N when the absorption commit is cycle N+1
+#   - Any close commit attempted before re-running review against latest
+#
+# Bookkeeping pattern: bundle all sprint-close docs (SPRINT-N.md outcomes,
+# INDEX, ROADMAP, MEMORY) into the close commit itself, so the artifact's
+# reviewed-against-commit equals the parent of the close commit.
+# "Close polish" commits (e.g., backfilling sprint-end HEAD hash) land
+# AFTER the close commit and don't trip this gate.
 
 foreach ($artifact in @($codex, $reviewer)) {
     try {
@@ -131,6 +159,50 @@ foreach ($artifact in @($codex, $reviewer)) {
         [Console]::Error.WriteLine('')
         [Console]::Error.WriteLine('Add a line in the form: verdict: <APPROVED | APPROVED-WITH-WARNINGS | BLOCKED | ...>')
         [Console]::Error.WriteLine('Any non-empty verdict value satisfies the gate.')
+        exit 2
+    }
+
+    # Staleness check: artifact must declare which commit was reviewed.
+    # Skip if HEAD resolution failed above (fail-open per existing convention).
+    if (-not $headSha) { continue }
+
+    $reviewedSha = $null
+    if ($content -match '(?im)^\s*reviewed-against-commit\s*:\s*([0-9a-fA-F]{7,40})') {
+        $reviewedSha = $matches[1]
+    }
+
+    if (-not $reviewedSha) {
+        [Console]::Error.WriteLine("sprint-close-guard: BLOCKING sprint S$sprintNum close commit.")
+        [Console]::Error.WriteLine('')
+        [Console]::Error.WriteLine('Artifact missing "reviewed-against-commit:" line:')
+        [Console]::Error.WriteLine("  $artifact")
+        [Console]::Error.WriteLine('')
+        [Console]::Error.WriteLine('Each Step 7a artifact MUST declare which commit was reviewed via:')
+        [Console]::Error.WriteLine('  reviewed-against-commit: <SHA>')
+        [Console]::Error.WriteLine('')
+        [Console]::Error.WriteLine('This is the post-S38 staleness check. Background: S38 retroactive')
+        [Console]::Error.WriteLine('Codex review caught narrative-edited artifacts that satisfied the')
+        [Console]::Error.WriteLine('"verdict line present" check without actually reflecting a run on')
+        [Console]::Error.WriteLine('the current state. The reviewed-against-commit field closes that gap.')
+        exit 2
+    }
+
+    if (-not $headSha.StartsWith($reviewedSha)) {
+        $headShort = if ($headSha.Length -ge 7) { $headSha.Substring(0,7) } else { $headSha }
+        [Console]::Error.WriteLine("sprint-close-guard: BLOCKING sprint S$sprintNum close commit.")
+        [Console]::Error.WriteLine('')
+        [Console]::Error.WriteLine('Artifact is STALE (reviewed against an older commit):')
+        [Console]::Error.WriteLine("  $artifact")
+        [Console]::Error.WriteLine('')
+        [Console]::Error.WriteLine("  reviewed-against-commit: $reviewedSha")
+        [Console]::Error.WriteLine("  HEAD (pending close parent):  $headShort")
+        [Console]::Error.WriteLine('')
+        [Console]::Error.WriteLine('Step 7a was run against an earlier sprint state; commits since then')
+        [Console]::Error.WriteLine('are not covered by the review. Re-run Step 7a against HEAD before close.')
+        [Console]::Error.WriteLine('')
+        [Console]::Error.WriteLine('Bookkeeping pattern: bundle all close-state doc updates (SPRINT-N.md')
+        [Console]::Error.WriteLine('outcomes, INDEX, ROADMAP, MEMORY) into the close commit itself, so the')
+        [Console]::Error.WriteLine("artifact's reviewed-against-commit equals the parent of the close commit.")
         exit 2
     }
 }
