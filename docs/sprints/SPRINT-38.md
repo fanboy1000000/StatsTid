@@ -10,7 +10,7 @@
 | **Build Verified** | N/A — design-only sprint; no code changes |
 | **Test Verified** | N/A — test totals unchanged from S37 (869 total). `sprint-test-validation` SKIP at close per design-only contract. |
 | **Sprint-start commit base** | `7b12ca1` (S37 close polish, 2026-05-21) |
-| **Sprint-end HEAD** | _filled by close commit_ |
+| **Sprint-end HEAD** | `964a872` (TASK-3805 sprint close) |
 | **Sprint type** | **DESIGN-ONLY** — produces ADR-024 + ADR-025 + ADR-013 amendment. Mirrors S28 (ADR-020) + S32 (ADR-023) design-only pattern. |
 | **Plan** | `.claude/plans/PLAN-s38.md` |
 | **Phase** | 4e (Phase C ADR authorship per PROGRAM L121–164) |
