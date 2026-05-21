@@ -62,7 +62,7 @@ The relevant review checkpoint for design-only inventory work is **Phase B domai
 Final assertion (TASK-3610):
 
 - [x] **P1 — Architectural integrity** → No code touched; no schema touched. Reference docs follow existing `docs/references/` convention. PROGRAM file cross-references stay sound across all 5 produced/updated docs.
-- [x] **P2 — Rule engine determinism** → No rule changes. Source register documents intended encoding for downstream verification in S39 Phase E seed-parity tests. AC chefkonsulent gap explicitly flagged as production-incorrect — fix lands S38–S40 per ROADMAP rule correction policy.
+- [x] **P2 — Rule engine determinism** → No rule changes. Source register documents intended encoding for downstream verification in S39 Phase E seed-parity tests. AC chefkonsulent gap flagged as PROVISIONAL production-incorrect pending Phase B paragraph cite (per Step 7a cycle 1 absorption); fix lands S38–S40 per ROADMAP rule correction policy once Phase B confirms direction.
 - [x] **P3 — Event sourcing / auditability** → No event surface changes. Source register becomes the audit-trail artifact for "what cell value was authoritative at what date." `bug_correction_history` + `supersession_history` columns provide per-cell audit trail (S35 AC=AFSPADSERING recorded as first entry).
 - [x] **P4 — Version correctness** → Each register cell carries `ok_version` discriminator. OK26 placeholder bundle pattern preserves traceability across OK transitions; per-cell divergence rows added when OK26 cirkulær publishes.
 - [x] **P5–P9** → Not applicable in design-only sprint (confirmed at close).
@@ -212,7 +212,7 @@ Six register-formatting patterns emerged during the per-agreement fill, all sche
 
 These patterns extend the schema's reach without requiring per-task amendments. PROGRAM L51–67 13-column nominal stands; explicit `row_id` + `notes` made first-class in-file.
 
-### Commit List (10 commits across S36)
+### Commit List (12 commits across S36 + Step 7a absorption)
 
 ```
 f253646 S36 TASK-3600: sprint open — Phase A inventory pass 1 (DESIGN-ONLY)
@@ -225,7 +225,9 @@ b5f5aa6 S36 TASK-3605: AC_RESEARCH + AC_TEACHING OK24 + OK26 entries complete
 821f1f2 S36 TASK-3607: agreement ruleset audit doc (code vs seed vs source)
 04c2f42 S36 TASK-3608: danish-agreements.md cross-references to source register
 a049f7c S36 TASK-3609: Phase B kickoff packaging
-[this commit] S36 TASK-3610: sprint close — Phase A inventory pass 1 complete
+7de54a1 S36 TASK-3610: sprint close — Phase A inventory pass 1 complete
+f92298e S36 close polish: backfill sprint-end HEAD commit hash
+[this commit] S36 Step 7a absorption: convergent verdict-language softening + candidate-bug #2 reclassification
 ```
 
 ### Forward Pointers
@@ -245,4 +247,3 @@ a049f7c S36 TASK-3609: Phase B kickoff packaging
 | Engagement window | week 2 of S36 — package READY (commit `a049f7c`) |
 | Phase B feedback ETA | S37 sprint start (per PROGRAM L100) |
 | Source register status | DRAFT (target APPROVED at S37 close per PROGRAM L114) |
-

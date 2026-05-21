@@ -30,9 +30,9 @@ Per-cell classification per ROADMAP rule correction policy (committed 2026-05-18
 | MATCH | ~25 | EU-derived cells (rest, max-daily, ref-period) + Ferieloven VACATION + universal state-sector norm (37h) where source HIGH-confidence |
 | MATCH-PENDING-SOURCE | ~80 | Dominant case — code = seed, but cirkulær-paragraph cite pending Phase B; expected MATCH on confirmation |
 | DRIFT-IN-CODE | **0** | No A≠B cases detected in current code/seed comparison — they are maintained in parallel and audit found byte-equivalence on all overlap |
-| DRIFT-IN-SEED | **4 candidate** | S35 AC=AFSPADSERING (RESOLVED) + 3 active candidates: AC variants missing entitlement_configs rows + AC variants SLS code divergence + (likely) SENIOR_DAY paired-bug |
-| DRIFT-IN-SOURCE | **2 candidate** | HK / PROSA OvertimeRequiresPreApproval=false (Phase B direction); SENIOR_DAY paired-bug (could land here if Phase B confirms encoding-correct + rule-needs-logic) |
-| DRIFT-UNCLEAR | ~5 | Cells where source confidence is too LOW to classify without Phase B (e.g., AC_TEACHING within-stratum compensation) |
+| DRIFT-IN-SEED | **2 candidate** (1 RESOLVED + 1 active) | RESOLVED: S35 AC=AFSPADSERING. Active: AC variants missing entitlement_configs rows (#1). |
+| DRIFT-IN-SOURCE | **2 candidate** | HK / PROSA OvertimeRequiresPreApproval=false (#4 — Phase B direction); SENIOR_DAY paired-bug (#3 — could land DRIFT-IN-CODE / DRIFT-IN-SEED / DRIFT-IN-SOURCE per Phase B path selection). |
+| DRIFT-UNCLEAR | ~6 | Cells where source confidence is too LOW to classify without Phase B, plus candidate-bug #2 (AC variants SLS divergence — direction-dependent: DRIFT-IN-SEED if S11 authoring bug, DRIFT-IN-SOURCE if intentional separate research-code-block). |
 | **Total cells audited** | **~111** | Matches source register cell count post-TASK-3605 |
 
 **Net pre-launch fix candidates from this audit**: **4 candidate bugs requiring DRIFT-IN-SEED or DRIFT-IN-SOURCE correction** (see § Candidate Bug Routing below). Pre-launch posture means all four ship as free seed/code corrections per ROADMAP rule correction policy.
@@ -98,7 +98,9 @@ These cells have code = seed byte-equivalence + MEDIUM confidence on intended va
 
 **Phase B clarification needed**: confirm AC variants should inherit AC base entitlements verbatim, OR have variant-specific values (e.g., AC_RESEARCH PhD students may have different VACATION accrual than salaried AC staff). If verbatim inheritance is correct, the seed correction is mechanical.
 
-### DRIFT-IN-SEED — CANDIDATE 2: AC variants wage_type_mappings SLS code divergence
+### DRIFT-UNCLEAR — CANDIDATE 2: AC variants wage_type_mappings SLS code divergence
+
+> **Classification note (revised post-Step-7a)**: this candidate is classified **DRIFT-UNCLEAR pending Phase B direction**, not DRIFT-IN-SEED. Per ROADMAP rule correction policy binary framework (was-agreed × materially-wrong), a finding cannot be classified as "bug" until direction adjudication. The S37 routing path depends on which way Phase B confirms (S11 seed authoring bug → DRIFT-IN-SEED with mechanical seed correction; OR intentional separate research-payroll-code-block → DRIFT-IN-SOURCE with SLS reconciliation pattern). The SLS_0210 collision sub-issue (below) is bug-grade regardless of direction.
 
 | Cell (AC variant) | Seed SLS code | AC base SLS code | Divergence type |
 |-------------------|---------------|------------------|-----------------|
@@ -109,7 +111,7 @@ These cells have code = seed byte-equivalence + MEDIUM confidence on intended va
 | `LEAVE_WITHOUT_PAY` | `SLS_0590` | `SLS_0560` | New code not in AC base mapping table |
 | `CHILD_SICK_1` (time_type renamed from `CHILD_SICK_DAY`) | `SLS_0560` | `SLS_0530/0531/0532` (3-day chain) | Time_type rename + single mapping vs AC base's 3-day chain |
 
-**Cumulative**: 6 of 11 wage_type_mappings rows diverge from AC base for AC_RESEARCH + AC_TEACHING × OK24+OK26. **DRIFT-IN-SEED — Phase B HIGH priority**.
+**Cumulative**: 6 of 11 wage_type_mappings rows diverge from AC base for AC_RESEARCH + AC_TEACHING × OK24+OK26. **DRIFT-UNCLEAR pending Phase B direction — HIGH priority**.
 
 **Resolution paths** (mutually exclusive):
 
@@ -193,8 +195,8 @@ Comparison is **seed vs source** (code values N/A — mappings are DB-only). Per
 | AC OK24 + OK26 | 17 mappings + 1 NORM_DEVIATION × 2 OK = 36 cells | SLS technical doc pending | MATCH-PENDING-SOURCE for AC-pinned cells; HIGH-confidence for ID-equivalent cells with HK/PROSA | SR-AC-OK24-037 + cross |
 | HK OK24 + OK26 | ~22 mappings × 2 OK = ~44 cells | SLS technical doc pending | MATCH-PENDING-SOURCE | SR-HK-OK24-030 + cross |
 | PROSA OK24 + OK26 | ~22 mappings × 2 OK = ~44 cells (matches HK) | SLS technical doc pending | MATCH-PENDING-SOURCE | SR-PROSA-OK24-008 + cross |
-| AC_RESEARCH OK24 + OK26 | 12 mappings × 2 OK = 24 cells; 6 of 11 SLS codes diverge from AC base | SLS technical doc pending; divergence direction unclear | **DRIFT-IN-SEED** (or DRIFT-IN-SOURCE if Phase B confirms intentional research-specific code block) | SR-AC_RESEARCH-OK24-006 + Candidate Bug #2 |
-| AC_TEACHING OK24 + OK26 | Same 12 × 2 = 24 cells; same divergence pattern as AC_RESEARCH | Same as AC_RESEARCH | **DRIFT-IN-SEED** (inherits AC_RESEARCH finding) | SR-AC_TEACHING-OK24-006 + cross |
+| AC_RESEARCH OK24 + OK26 | 12 mappings × 2 OK = 24 cells; 6 of 11 SLS codes diverge from AC base | SLS technical doc pending; divergence direction unclear | **DRIFT-UNCLEAR pending Phase B** (resolves to DRIFT-IN-SEED if S11 authoring bug, or DRIFT-IN-SOURCE if intentional research-specific code block) | SR-AC_RESEARCH-OK24-006 + Candidate Bug #2 |
+| AC_TEACHING OK24 + OK26 | Same 12 × 2 = 24 cells; same divergence pattern as AC_RESEARCH | Same as AC_RESEARCH | **DRIFT-UNCLEAR** (inherits AC_RESEARCH finding) | SR-AC_TEACHING-OK24-006 + cross |
 
 **Critical sub-issue (within Candidate Bug #2)**: `MERARBEJDE → SLS_0210` for AC_RESEARCH + AC_TEACHING **collides with** HK / PROSA's `OVERTIME_50 → SLS_0210` mapping. SLS-side payroll cannot distinguish between "research-staff extra work" and "HK overtime tier 1". Resolution must address this collision regardless of whether intent is to mirror AC base or use a separate code block.
 
@@ -223,7 +225,7 @@ All 4 candidate bugs surfaced during S36 inventory route to **either S37 (seed c
 | # | Candidate | Class | Pre-launch action | Sprint |
 |---|-----------|-------|---------------------|--------|
 | 1 | AC variants entitlement_configs absence (20 missing rows) | DRIFT-IN-SEED | Mechanical seed correction (mirror AC base values); pre-launch `bug-with-no-past-impact` | **S37** (absorb after Phase B confirms inheritance is correct) |
-| 2 | AC variants wage_type_mappings SLS code divergence | DRIFT-IN-SEED OR DRIFT-IN-SOURCE | Either (a) S37 mechanical seed correction (mirror AC base) OR (b) S38 ADR-024 D6 SLS reconciliation pattern if Phase B confirms intentional separate research-code-block + needs SLS-side coordination | **S37 or S38** depending on Phase B finding |
+| 2 | AC variants wage_type_mappings SLS code divergence | **DRIFT-UNCLEAR pending Phase B** (resolves to DRIFT-IN-SEED if S11 authoring bug; DRIFT-IN-SOURCE if intentional separate research-code-block) | Either (a) S37 mechanical seed correction (mirror AC base) OR (b) S38 ADR-024 D6 SLS reconciliation pattern if Phase B confirms intentional separate research-code-block + needs SLS-side coordination. Cannot pre-classify as "bug" until Phase B direction adjudication per ROADMAP rule correction policy + PROGRAM L134 ADR-024 D4 governance. | **S37 or S38** depending on Phase B finding |
 | 3 | SENIOR_DAY paired-bug (`quota=0` + `min_age=60`) | DRIFT-IN-SOURCE pending Phase B; could land DRIFT-IN-CODE OR DRIFT-IN-SEED | Resolution depends on Phase B path selection: rule-engine code update (if DRIFT-IN-CODE) OR seed quota update (if DRIFT-IN-SEED) OR ADR-024 D2 tri-state-model integration | **S37 + S39 + potentially S40 cutover** depending on resolution path |
 | 4 | HK / PROSA `OvertimeRequiresPreApproval=false` | DRIFT-IN-SOURCE; could land MATCH-PENDING-SOURCE → MATCH if confirmed correct | If Phase B confirms cirkulær-mandated pre-approval, S37 mechanical seed + code correction (flip to `TRUE`) | **S37** (or no action if MATCH) |
 

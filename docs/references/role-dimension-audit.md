@@ -6,7 +6,7 @@
 
 ## Purpose
 
-This doc enumerates **within-agreement roles** for each of the 5 production agreement codes and audits how the current StatsTid encoding represents them. The headline finding from `PROGRAM-s36-s41-domain-correctness.md` L31–32 is reinforced: **AC chefkonsulent / specialkonsulent strata lose contractual merarbejde compensation right per the AC overenskomst, but the system treats all AC employees identically.** Production users in these roles would receive contractually-wrong compensation today.
+This doc enumerates **within-agreement roles** for each of the 5 production agreement codes and audits how the current StatsTid encoding represents them. The headline finding from `PROGRAM-s36-s41-domain-correctness.md` L31–32 is reinforced **as a structural concern, pending Phase B paragraph cite**: AC chefkonsulent / specialkonsulent strata are widely understood to lose contractual merarbejde compensation right per the AC overenskomst, but the system treats all AC employees identically. If Phase B confirms the cirkulær wording, production users in these roles would receive contractually-wrong compensation today. The specific affected strata + cirkulær-paragraph references are pending Phase B sign-off (see Phase B Sign-Off Tracking table below).
 
 Three downstream uses:
 
@@ -66,12 +66,12 @@ AC = Akademikere i Staten. The AC overenskomst defines several role strata with 
 | Role | Current StatsTid encoding | Cirkulær-stated entitlement (pending Phase B) | Production correctness |
 |------|---------------------------|-----------------------------------------------|------------------------|
 | Fuldmægtig (entry AC) | `HasMerarbejde=true`, `DefaultCompensationModel=AFSPADSERING`, `EmployeeCompensationChoice=false` | CONTRACTUAL merarbejde with employer-determined afspadsering feasibility | ✓ CORRECT |
-| Specialkonsulent (SR position SPECIALIST) | Same as fuldmægtig — `HasMerarbejde=true` at agreement level; no position override | NONE or DISCRETIONARY (Phase B confirms direction) | **❌ POTENTIALLY INCORRECT** — would emit MERARBEJDE events for a senior IC who has no contractual right; the financial impact depends on how SLS-side handles unauthorised MERARBEJDE codes |
-| Chefkonsulent (NOT seeded) | Same as fuldmægtig — would inherit agreement-level encoding regardless of how user is provisioned | **NONE** (clear cirkulær-stated loss of merarbejde) | **❌ DEFINITELY INCORRECT** — production chefkonsulent user receives merarbejde compensation today via agreement-level fallthrough. The headline PROGRAM L31 finding. |
-| Kontorchef (SR position DEPARTMENT_HEAD) | `HasMerarbejde=true` at agreement level + position override changes flex cap + norm period, **not entitlement** | NONE (managerial loss of merarbejde) | **❌ INCORRECT** — managers receive merarbejde via agreement-level fallthrough despite the position override (which only adjusts quantitative cells). Less critical than chefkonsulent because admin / HR practice typically catches managerial overtime separately, but the system encoding is wrong. |
+| Specialkonsulent (SR position SPECIALIST) | Same as fuldmægtig — `HasMerarbejde=true` at agreement level; no position override | NONE or DISCRETIONARY (Phase B confirms direction) | **⚠ POTENTIALLY INCORRECT pending Phase B** — if cirkulær removes merarbejde from specialkonsulent, would emit MERARBEJDE events for a senior IC who has no contractual right; financial impact depends on how SLS-side handles unauthorised MERARBEJDE codes |
+| Chefkonsulent (NOT seeded) | Same as fuldmægtig — would inherit agreement-level encoding regardless of how user is provisioned | NONE (widely understood as cirkulær-stated loss of merarbejde; **pending Phase B paragraph cite**) | **⚠ PROVISIONAL — LIKELY INCORRECT pending Phase B** — if Phase B confirms cirkulær removes merarbejde from chefkonsulent, production chefkonsulent user receives merarbejde compensation today via agreement-level fallthrough. The headline PROGRAM L31 finding. |
+| Kontorchef (SR position DEPARTMENT_HEAD) | `HasMerarbejde=true` at agreement level + position override changes flex cap + norm period, **not entitlement** | NONE (managerial loss of merarbejde; **pending Phase B paragraph cite**) | **⚠ PROVISIONAL — LIKELY INCORRECT pending Phase B** — if confirmed, managers receive merarbejde via agreement-level fallthrough despite the position override (which only adjusts quantitative cells). Less critical than chefkonsulent because admin / HR practice typically catches managerial overtime separately, but the system encoding is wrong. |
 | Forsker (SR position RESEARCHER) | `HasMerarbejde=true` + position override (norm_period_weeks=4 only) | CONTRACTUAL (research-staff retain merarbejde with multi-week norm flexibility) | ✓ CORRECT — though the role-distinction with AC_RESEARCH agreement code needs Phase B clarification (when to use AC + RESEARCHER position vs AC_RESEARCH agreement) |
 
-**Net AC finding**: of 5 enumerated role strata, the system encoding is **correct for 2 (fuldmægtig + forsker)** and **incorrect for 3 (specialkonsulent + chefkonsulent + kontorchef)**. The bug class affects all employees in those 3 roles. Pre-launch posture means no past periods to recompute; correction shipped before launch ships as a free seed + schema-extension correction per ROADMAP rule correction policy.
+**Net AC finding (pending Phase B confirmation of the 3 provisional rows)**: of 5 enumerated role strata, the system encoding is **correct for 2 (fuldmægtig + forsker)** and **provisionally-incorrect for 3 (specialkonsulent + chefkonsulent + kontorchef)** subject to Phase B cirkulær-paragraph verification. If confirmed, the bug class affects all employees in those 3 roles. Pre-launch posture means no past periods to recompute; correction (once confirmed) ships as a free seed + schema-extension correction per ROADMAP rule correction policy.
 
 ---
 
@@ -194,13 +194,13 @@ The 4-field schema is **necessary but not sufficient** for role-level compensati
 
 ---
 
-## Production-Incorrectness Call-Out
+## Production-Incorrectness Call-Out (pending Phase B confirmation)
 
-**Headline finding (PROGRAM L31 reinforced)**:
+**Headline finding (PROGRAM L31 reinforced as a structural concern; awaits Phase B paragraph cite)**:
 
-> An AC chefkonsulent user provisioned with `agreement_code='AC'` (any position, including no position) receives merarbejde compensation today because `agreement_configs.AC.has_merarbejde = true` at agreement level + no role-level override mechanism exists. The same applies to managerial AC roles (DEPARTMENT_HEAD / Kontorchef) and potentially specialkonsulent.
+> An AC chefkonsulent user provisioned with `agreement_code='AC'` (any position, including no position) receives merarbejde compensation today because `agreement_configs.AC.has_merarbejde = true` at agreement level + no role-level override mechanism exists. The same applies to managerial AC roles (DEPARTMENT_HEAD / Kontorchef) and potentially specialkonsulent. **If Phase B confirms cirkulær wording**, this is production-incorrect behavior for the affected strata.
 
-**Specific MERARBEJDE-event-emission risk**: when an AC chefkonsulent's time entry triggers the merarbejde regime (excess hours beyond weekly norm), the rule engine emits a MERARBEJDE event mapped to SLS_0310. SLS-side processes this as if the chefkonsulent has a contractual merarbejde right — payroll downstream emits compensation that the cirkulær says the employee should not receive.
+**Specific MERARBEJDE-event-emission risk (conditional on Phase B confirmation)**: when an AC chefkonsulent's time entry triggers the merarbejde regime (excess hours beyond weekly norm), the rule engine emits a MERARBEJDE event mapped to SLS_0310. SLS-side processes this as if the chefkonsulent has a contractual merarbejde right — payroll downstream emits compensation that the cirkulær (per the widely-understood reading awaiting Phase B verification) says the employee should not receive.
 
 **Pre-launch posture**: per ROADMAP rule correction policy (committed 2026-05-18), this falls under **bug-with-no-past-impact** classification — pre-launch means no past periods exist, so no retroactive recompute is needed. The fix ships as part of the S38 ADR-024 → S39 schema migration → S40 cutover → S41 D-test pipeline.
 
