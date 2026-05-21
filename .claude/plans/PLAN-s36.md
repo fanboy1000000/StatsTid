@@ -280,7 +280,7 @@ _Checked off as the sprint progresses; final assertion in TASK-3610._
 | Field | Value |
 |-------|-------|
 | **ID** | TASK-3607 |
-| **Status** | pending |
+| **Status** | completed (this commit) |
 | **Agent** | Orchestrator-direct |
 | **Components** | `docs/references/agreement-ruleset-audit.md` (NEW) |
 | **Dependencies** | TASK-3606 |
