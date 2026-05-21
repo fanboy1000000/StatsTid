@@ -77,7 +77,7 @@ _Checked off as the sprint progresses; final assertion in TASK-3610._
 | Field | Value |
 |-------|-------|
 | **ID** | TASK-3600 |
-| **Status** | in-progress |
+| **Status** | **completed** (commit `f253646`) |
 | **Agent** | Orchestrator-direct |
 | **Components** | `.claude/plans/PLAN-s36.md`, `docs/sprints/SPRINT-36.md` (this file), `docs/sprints/INDEX.md` |
 | **Dependencies** | none |
@@ -85,14 +85,14 @@ _Checked off as the sprint progresses; final assertion in TASK-3610._
 **Validation Criteria**:
 - [x] `.claude/plans/PLAN-s36.md` filed with full 11-task decomposition + Step 0a + Step 0b SKIP sections
 - [x] `docs/sprints/SPRINT-36.md` exists (this file)
-- [ ] `docs/sprints/INDEX.md` has Sprint 36 row (status=in-progress)
-- [ ] Sprint-open commit lands atop `a094630`
+- [x] `docs/sprints/INDEX.md` has Sprint 36 row (status=in-progress)
+- [x] Sprint-open commit lands atop `a094630`
 
 ---
 
 ### Phase 1 — Source Register Skeleton + Proof-of-Shape (1 task)
 
-- **TASK-3601** — Source register skeleton + first 20 cells from AC OK24 (proof-of-shape). Validates 13-column schema works on real cells before per-agreement fill begins. Per-task detail in PLAN-s36.md.
+- **TASK-3601** — Source register skeleton + first 20 cells from AC OK24 (proof-of-shape). **completed** (this commit) — `docs/references/agreement-source-register.md` filed with 15-column schema (2 enhancements over PROGRAM L51-67 documented in-file: explicit `row_id` + explicit `notes`) + 20 AC OK24 cells (4 quantitative + 4 enum/categorical + 4 rate/multiplier + 4 entitlement + 4 compliance/governance). Schema validation summary at end of file: speculative PROGRAM schema works on real data; no BLOCKERs surfaced; TASK-3602 may dispatch. **1 candidate bug discovery** (SR-AC-OK24-015 SENIOR_DAY quota=0 — encoding semantics unclear, flagged for S37 / Phase B priority). Per-task detail in PLAN-s36.md.
 
 ### Phase 2 — Per-Agreement Fill (4 sequential tasks)
 

@@ -104,7 +104,7 @@ _Checked off as the sprint progresses; final assertion in TASK-3610._
 | Field | Value |
 |-------|-------|
 | **ID** | TASK-3600 |
-| **Status** | in-progress |
+| **Status** | completed (commit `f253646`) |
 | **Agent** | Orchestrator-direct |
 | **Components** | `.claude/plans/PLAN-s36.md` (this file), `docs/sprints/SPRINT-36.md`, `docs/sprints/INDEX.md` (provisional row) |
 | **Dependencies** | none |
@@ -112,9 +112,9 @@ _Checked off as the sprint progresses; final assertion in TASK-3610._
 
 **Validation Criteria**:
 - [x] PLAN-s36.md filed with full task log + Step 0a + Step 0b SKIP sections (this file)
-- [ ] SPRINT-36.md provisional entry created
-- [ ] INDEX.md gains S36 row (status: in-progress; dates: 2026-05-21 → ?; tests: 869 baseline projected unchanged)
-- [ ] Sprint-open commit lands atop `a094630` with message "S36 TASK-3600: sprint open — Phase A inventory pass 1 (DESIGN-ONLY)"
+- [x] SPRINT-36.md provisional entry created
+- [x] INDEX.md gains S36 row (status: in-progress; dates: 2026-05-21 → ?; tests: 869 baseline projected unchanged)
+- [x] Sprint-open commit lands atop `a094630` with message "S36 TASK-3600: sprint open — Phase A inventory pass 1 (DESIGN-ONLY)"
 
 ---
 
@@ -125,7 +125,7 @@ _Checked off as the sprint progresses; final assertion in TASK-3610._
 | Field | Value |
 |-------|-------|
 | **ID** | TASK-3601 |
-| **Status** | pending |
+| **Status** | completed (this commit) |
 | **Agent** | Orchestrator-direct |
 | **Components** | `docs/references/agreement-source-register.md` (NEW) |
 | **Dependencies** | TASK-3600 |
