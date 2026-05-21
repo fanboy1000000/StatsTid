@@ -2084,25 +2084,25 @@ AC_RESEARCH compact form mirrors PROSA's "mirrors HK" convention — bundle non-
 | `disputed?` | false |
 | `notes` | **SECOND concrete application of the ROADMAP rule correction policy's bug-correction-when-classified path** (first was S35 TASK-3503 AC=AFSPADSERING). Same mechanical inheritance pattern. Real Phase B engagement may revisit the 4 overenskomst-driven entitlements with paragraph cites — confidence flips MEDIUM → HIGH on confirmation OR new bug_correction_history entry if expert disagrees. |
 
-### SR-AC_RESEARCH-OK24-006 — wage_type_mappings AC_RESEARCH OK24 bundle (DIVERGENT SLS codes — CANDIDATE BUG)
+### SR-AC_RESEARCH-OK24-006 — wage_type_mappings AC_RESEARCH OK24 bundle (RESOLVED via S37 Bug #2 absorption)
 
 | Field | Value |
 |-------|-------|
 | `row_id` | SR-AC_RESEARCH-OK24-006 |
 | `agreement_code` | AC_RESEARCH |
 | `ok_version` | OK24 |
-| `field` | `wage_type_mappings (time_type, wage_type) for (AC_RESEARCH, OK24, position='')` — bundle of 11 mappings from init.sql:965–976 + 1 NORM_DEVIATION from L1198 |
-| `current_encoded_value` | `NORMAL_HOURS → SLS_0110; MERARBEJDE → SLS_0210; VACATION → SLS_0510; SICK_DAY → SLS_0540; CARE_DAY → SLS_0550; CHILD_SICK_1 → SLS_0560; SENIOR_DAY → SLS_0570; LEAVE_WITH_PAY → SLS_0580; LEAVE_WITHOUT_PAY → SLS_0590; TRAVEL_WORK → SLS_0820; TRAVEL_NON_WORK → SLS_0830; NORM_DEVIATION → SLS_0150` |
-| `authoritative_source` | pending (Phase B PRIORITY — verify whether the SLS codes for AC_RESEARCH are intentionally distinct from AC base or whether this is an S11 seed authoring bug) |
-| `interpretation` | AC_RESEARCH wage type mappings use DIFFERENT SLS codes from AC base on **6 out of 11 time types**: MERARBEJDE → SLS_0210 (vs AC SLS_0310 — notably SLS_0210 is also HK / PROSA's OVERTIME_50 code, raising overlap concern); CARE_DAY → SLS_0550 (vs AC SLS_0520); SENIOR_DAY → SLS_0570 (vs AC SLS_0550); LEAVE_WITH_PAY → SLS_0580 (vs AC SLS_0565); LEAVE_WITHOUT_PAY → SLS_0590 (vs AC SLS_0560); CHILD_SICK_1 → SLS_0560 (vs AC's CHILD_SICK_DAY → SLS_0530). Additionally, AC_RESEARCH uses **different time_type identifiers** (`CHILD_SICK_1` vs AC's `CHILD_SICK_DAY`) and is missing the CHILD_SICK_DAY_2 + _DAY_3 entries that AC base has. Common cells (NORMAL_HOURS, VACATION, TRAVEL_WORK, TRAVEL_NON_WORK, NORM_DEVIATION) match AC base. |
-| `confidence_level` | LOW (encoding correctness unclear; either intentional separate payroll-code-block for research staff OR S11 seed authoring bug) |
+| `field` | `wage_type_mappings (time_type, wage_type) for (AC_RESEARCH, OK24, position='')` — bundle of 13 mappings (post-S37 TASK-3702) + 1 NORM_DEVIATION |
+| `current_encoded_value` | Post-S37: `NORMAL_HOURS → SLS_0110; MERARBEJDE → SLS_0310; VACATION → SLS_0510; SICK_DAY → SLS_0540; CARE_DAY → SLS_0520; CHILD_SICK_DAY → SLS_0530; CHILD_SICK_DAY_2 → SLS_0531; CHILD_SICK_DAY_3 → SLS_0532; SENIOR_DAY → SLS_0550; LEAVE_WITH_PAY → SLS_0565; LEAVE_WITHOUT_PAY → SLS_0560; TRAVEL_WORK → SLS_0820; TRAVEL_NON_WORK → SLS_0830; NORM_DEVIATION → SLS_0150` — fully mirrors AC base. |
+| `authoritative_source` | SLS technical documentation (Personalestyrelsen — pending Phase B reference for the AC base SLS codes that AC variants now inherit by mirror). Verified at grep level: variant-only SLS codes (SLS_0570/0580/0590) had ZERO references outside init.sql seed, confirming safe removal. |
+| `interpretation` | AC_RESEARCH wage type mappings now mirror AC base. Post-S37 fixes pre-existing pre-launch production-broken state: rule engine emits `CHILD_SICK_DAY` (per AbsenceRule.cs:112-114) so the previous AC_RESEARCH `CHILD_SICK_1 → SLS_0560` phantom row never fired — AC variant child-sick events silently dropped. Re-aligned post-S37. MERARBEJDE/SLS_0210 collision with HK/PROSA OVERTIME_50 resolved via remap to AC base SLS_0310. |
+| `confidence_level` | HIGH for AC-base-inheritance (verified equivalent to AC OK24 mappings); MEDIUM for the SLS codes themselves (Phase B should verify against current Personalestyrelsen SLS technical doc, but this gates AC base too — applies to AC + variants uniformly). |
 | `interpretation_authority` | Personalestyrelsen (SLS technical authority) |
-| `last_verified_by` | pending |
-| `decision_date` | pending |
+| `last_verified_by` | Orchestrator (interim, user-confirmed Reading A 2026-05-21) |
+| `decision_date` | 2026-05-21 |
 | `supersession_history` | (none) |
-| `bug_correction_history` | (none — flagged candidate, not yet corrected) |
+| `bug_correction_history` | `[{date: 2026-05-21, from_value: "11 mappings with 6 divergent SLS codes (MERARBEJDE/CARE_DAY/SENIOR_DAY/LEAVE_WITH_PAY/LEAVE_WITHOUT_PAY/CHILD_SICK_1 phantom)", to_value: "13 mappings mirroring AC base (with CHILD_SICK_DAY chain restored)", source: "S37 TASK-3702 + Bug #2 interim-expert decision (Reading A: S11 authoring bug)", commit: "<this S37 commit>", classifier: "Orchestrator (interim, user-confirmed)", was_agreed: NO, materially_wrong: YES_PRE_LAUNCH_BUT_BROKEN, action: "bug-fix-without-recompute"}]` |
 | `disputed?` | false |
-| `notes` | **CANDIDATE BUG — Phase B HIGH priority**. Two specific concerns: (a) MERARBEJDE → SLS_0210 collides with HK/PROSA OVERTIME_50 mapping — same SLS code means SLS-side cannot distinguish AC_RESEARCH merarbejde from HK overtime; (b) The time_type rename `CHILD_SICK_DAY` → `CHILD_SICK_1` and the missing _DAY_2/_DAY_3 entries suggest the S11 seed authoring used a different naming convention; rule-engine emit logic must produce the matching time_type or the mapping fails to apply. **Resolution paths**: (a) audit EntitlementBalanceRule + payroll mapping path for AC_RESEARCH employees to verify which time_type values are actually emitted; (b) if rule-emitted time_types don't match seed mappings, fix one side or the other. Same divergence pattern in AC_TEACHING (TASK-3605 SR-AC_TEACHING-OK24-006). Affects both AC variants uniformly. |
+| `notes` | **THIRD concrete application of the ROADMAP rule correction policy's bug-correction-when-classified path** (after S35 AC=AFSPADSERING + S37 Bug #1 AC variants entitlement_configs). Trust-but-verify result: divergent variant-only SLS codes (SLS_0570/0580/0590) had ZERO references outside the seed; CHILD_SICK_1 was a phantom because rule engine emits CHILD_SICK_DAY. The remap is the production-broken state recovery, not just consistency cleanup. Same correction applied uniformly to AC_TEACHING (SR-AC_TEACHING-OK24-006). |
 
 ### SR-AC_RESEARCH-OK24-007 — position_override_configs explicit absence
 
@@ -2252,23 +2252,23 @@ AC_TEACHING uses the same compact form as AC_RESEARCH: "mirrors AC" bundle + div
 | `disputed?` | false |
 | `notes` | Resolution applies uniformly to AC_RESEARCH + AC_TEACHING. Cross-ref SR-AC_RESEARCH-OK24-005 for full bug-correction context. Real Phase B engagement may revisit AC_TEACHING-specific paragraph cites (e.g., teaching-staff-specific VACATION accrual nuances if any) — confidence flips on confirmation. |
 
-### SR-AC_TEACHING-OK24-006 — wage_type_mappings AC_TEACHING OK24 bundle (inherits CANDIDATE BUG)
+### SR-AC_TEACHING-OK24-006 — wage_type_mappings AC_TEACHING OK24 bundle (RESOLVED via S37 Bug #2 absorption, joint with AC_RESEARCH)
 
 | Field | Value |
 |-------|-------|
 | `row_id` | SR-AC_TEACHING-OK24-006 |
 | `agreement_code` | AC_TEACHING |
 | `ok_version` | OK24 |
-| `field` | `wage_type_mappings (time_type, wage_type) for (AC_TEACHING, OK24, position='')` — bundle of 11 mappings from init.sql:995–1006 + 1 NORM_DEVIATION from L1199 |
-| `current_encoded_value` | Identical to AC_RESEARCH SR-AC_RESEARCH-OK24-006 bundle (init.sql:995–1006 byte-identical to L965–976 except agreement_code substitution). Same 11 + 1 mappings; same divergence from AC base. |
-| `authoritative_source` | pending (same as SR-AC_RESEARCH-OK24-006) |
-| `interpretation` | Same divergence pattern as AC_RESEARCH wage type mappings. Same SLS code mismatches with AC base on 6 of 11 time types. |
-| `confidence_level` | LOW (inherits AC_RESEARCH uncertainty) |
+| `field` | `wage_type_mappings (time_type, wage_type) for (AC_TEACHING, OK24, position='')` — bundle of 13 mappings (post-S37 TASK-3702) + 1 NORM_DEVIATION |
+| `current_encoded_value` | Identical to AC_RESEARCH SR-AC_RESEARCH-OK24-006 bundle post-S37. Same 13 + 1 mappings, all mirroring AC base. |
+| `authoritative_source` | Same as SR-AC_RESEARCH-OK24-006. |
+| `interpretation` | AC_TEACHING wage type mappings now mirror AC base, same correction as AC_RESEARCH. |
+| `confidence_level` | HIGH for AC-base-inheritance; MEDIUM for SLS codes themselves (gates AC base too). |
 | `interpretation_authority` | Personalestyrelsen (SLS technical) |
-| `last_verified_by` | pending |
-| `decision_date` | pending |
+| `last_verified_by` | Orchestrator (interim, user-confirmed Reading A 2026-05-21) |
+| `decision_date` | 2026-05-21 |
 | `supersession_history` | (none) |
-| `bug_correction_history` | (none) |
+| `bug_correction_history` | `[{date: 2026-05-21, from_value: "(same divergent state as AC_RESEARCH per SR-AC_RESEARCH-OK24-006 history)", to_value: "13 mappings mirroring AC base", source: "S37 TASK-3702 + Bug #2 (joint with AC_RESEARCH)", commit: "<this S37 commit>", classifier: "Orchestrator (interim, user-confirmed)", was_agreed: NO, materially_wrong: YES_PRE_LAUNCH_BUT_BROKEN, action: "bug-fix-without-recompute"}]` |
 | `disputed?` | false |
 | `notes` | **CANDIDATE BUG — inherits SR-AC_RESEARCH-OK24-006 finding**. AC variants' divergent SLS codes apply to both AC_RESEARCH + AC_TEACHING uniformly. |
 
