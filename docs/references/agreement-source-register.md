@@ -1973,6 +1973,433 @@ PROSA OK26 mirrors PROSA OK24 per `CentralAgreementConfigs.cs:154` ("PROSA OK26 
 
 ---
 
+## AC_RESEARCH OK24 Cells
+
+AC_RESEARCH = Researchers under AC overenskomst. Distinct agreement code (not a position override) because the **norm model is fundamentally different**: `NormModel = ANNUAL_ACTIVITY` with `AnnualNormHours = 1924h` (vs AC base's `WEEKLY_HOURS` 1-week norm). Used for university researchers, PhD students, lab personnel whose work pattern is project-driven and doesn't map cleanly to weekly hours. Aligns with AC overenskomst's research-staff provisions.
+
+**Two significant findings surfaced during TASK-3605 inventory**:
+
+1. **AC variant wage_type_mappings DIVERGE from AC base on multiple SLS codes** — `MERARBEJDE → SLS_0210` (vs AC's SLS_0310; notably SLS_0210 is the HK/PROSA `OVERTIME_50` code, raising overlap concern); `CARE_DAY → SLS_0550` (vs AC's SLS_0520); `SENIOR_DAY → SLS_0570` (vs AC's SLS_0550); `LEAVE_WITH_PAY → SLS_0580` (vs AC's SLS_0565); `LEAVE_WITHOUT_PAY → SLS_0590` (vs AC's SLS_0560); and AC variants use `CHILD_SICK_1` time_type with single SLS_0560 mapping (vs AC base's CHILD_SICK_DAY / _DAY_2 / _DAY_3 chain mapped to SLS_0530 / 0531 / 0532). Either intentional separate payroll system for research/teaching staff OR S11 seed authoring bug. **Phase B HIGH priority**.
+2. **AC_RESEARCH + AC_TEACHING have NO entitlement_configs rows** — init.sql:1343–1378 only seeds entitlements for AC, HK, PROSA. AC variants have no VACATION / SPECIAL_HOLIDAY / CARE_DAY / CHILD_SICK / SENIOR_DAY rows. Either intentional inheritance from AC base (which would require code path to fall back) OR structural gap that would cause entitlement lookups to fail for AC variant employees. **Phase B HIGH priority**.
+
+AC_RESEARCH compact form mirrors PROSA's "mirrors HK" convention — bundle non-divergent cells + individual rows for divergent + candidate-bug cells.
+
+### SR-AC_RESEARCH-OK24-001 — "mirrors AC" bundle (compound, ~36 cells)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-AC_RESEARCH-OK24-001 |
+| `agreement_code` | AC_RESEARCH |
+| `ok_version` | OK24 |
+| `field` | All AC_RESEARCH OK24 cells in `agreement_configs` EXCEPT `NormModel` (SR-AC_RESEARCH-OK24-002), `AnnualNormHours` (SR-AC_RESEARCH-OK24-003), and `NormPeriodWeeks` (SR-AC_RESEARCH-OK24-004 — semantically inert under ANNUAL_ACTIVITY). All other ~34 columns mirror AC OK24 cell-by-cell. |
+| `current_encoded_value` | Identical to AC OK24 cell-by-cell (init.sql:1170 vs L1134 byte-by-byte except `norm_model`, `annual_norm_hours` is now load-bearing despite same numeric value). See AC rows SR-AC-OK24-005..010 + 011..014 + 017..019 + 021..030. |
+| `authoritative_source` | Inherited from AC rows. AC overenskomst research-staff provisions reuse AC base for non-norm cells. Specific PDF cite pending Phase B verification. |
+| `interpretation` | AC_RESEARCH matches AC base on supplement enablement (all-disabled), on-call/call-in disablement, EU compliance, travel rates, AFSPADSERING compensation model. The norm-model divergence (ANNUAL_ACTIVITY) is the load-bearing distinction. |
+| `confidence_level` | HIGH for IDENTITY claim; inherits AC per-cell confidence |
+| `interpretation_authority` | Personalestyrelsen (AC overenskomst research provisions) |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none — but inherits AC's AC=AFSPADSERING bug correction from S35 TASK-3503; AC_RESEARCH OK24 was one of the 6 rows corrected in commit `cbaea7d`) |
+| `disputed?` | false |
+| `notes` | Compact mirror bundle. Cross-references SR-AC-OK24-NNN rows for source / value / load-bearing-status. **Cells excluded** (separate rows): SR-AC_RESEARCH-OK24-002 (NormModel divergent), 003 (AnnualNormHours load-bearing), 004 (NormPeriodWeeks now inert under ANNUAL_ACTIVITY). |
+
+### SR-AC_RESEARCH-OK24-002 — NormModel (DIVERGENT from AC, load-bearing)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-AC_RESEARCH-OK24-002 |
+| `agreement_code` | AC_RESEARCH |
+| `ok_version` | OK24 |
+| `field` | `NormModel` |
+| `current_encoded_value` | `"ANNUAL_ACTIVITY"` |
+| `authoritative_source` | pending (Phase B — AC overenskomst research-staff provisions establish annual-norm model for project-driven research work) |
+| `interpretation` | AC_RESEARCH employees are measured against an annual norm (1924h) rather than a weekly norm (37h × 1-week period). The ANNUAL_ACTIVITY model accommodates research work's irregular weekly distribution. The S11 NormCheckRule + AnnualActivityRule handle this branch. |
+| `confidence_level` | HIGH (the AC research-staff annual-norm distinction is established cirkulær framework; the encoded `ANNUAL_ACTIVITY` enum value matches the rule-engine convention) |
+| `interpretation_authority` | Personalestyrelsen |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | **DIVERGENT from AC base** (SR-AC-OK24-020 = WEEKLY_HOURS). Load-bearing inversion: changes which rule path evaluates the norm. Cross-ref: S11 introduced ANNUAL_ACTIVITY model + NORM_DEVIATION wage type for annual-norm surplus. |
+
+### SR-AC_RESEARCH-OK24-003 — AnnualNormHours (LOAD-BEARING under ANNUAL_ACTIVITY)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-AC_RESEARCH-OK24-003 |
+| `agreement_code` | AC_RESEARCH |
+| `ok_version` | OK24 |
+| `field` | `AnnualNormHours` |
+| `current_encoded_value` | `1924` |
+| `authoritative_source` | pending (Phase B — 1924h = 37h × 52 weeks; standard full-time annual hours derived from weekly norm) |
+| `interpretation` | AC_RESEARCH annual norm = 1924 hours per calendar year. Same numeric value as AC base's default `AnnualNormHours` field (which is inert in AC base because `NormModel = WEEKLY_HOURS`), but **load-bearing in AC_RESEARCH** because `NormModel = ANNUAL_ACTIVITY`. The S11 AnnualActivityRule consumes this field. |
+| `confidence_level` | HIGH (1924 = 37 × 52 is universal full-time annual derivation; matches state-sector convention) |
+| `interpretation_authority` | Personalestyrelsen |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | Load-bearing. **Same value as AC SR-AC-OK24-020 compound but different semantics** — in AC base the value is forward-compat-only; in AC_RESEARCH it drives the annual norm check. Distinct from AC_TEACHING's reduced 1680h annual norm (SR-AC_TEACHING-OK24-003). |
+
+### SR-AC_RESEARCH-OK24-004 — NormPeriodWeeks (semantically inert under ANNUAL_ACTIVITY)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-AC_RESEARCH-OK24-004 |
+| `agreement_code` | AC_RESEARCH |
+| `ok_version` | OK24 |
+| `field` | `NormPeriodWeeks` |
+| `current_encoded_value` | `1` |
+| `authoritative_source` | n/a-for-agreement (semantically inert under `NormModel = ANNUAL_ACTIVITY`) |
+| `interpretation` | Field value `1` is inherited from AC base default but is **semantically inert in AC_RESEARCH** because the annual-norm model evaluates against `AnnualNormHours` (annual scope), not multi-week periods. The S11 NormCheckRule branches on `NormModel` before consulting `NormPeriodWeeks`. |
+| `confidence_level` | N/A-for-agreement |
+| `interpretation_authority` | (n/a — value inert) |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | Inverse of AC base where NormModel is inert and NormPeriodWeeks is load-bearing. Schema accommodates via `confidence_level = N/A-for-agreement` (same pattern as AC's inert supplement rates). |
+
+### SR-AC_RESEARCH-OK24-005 — entitlement_configs explicit absence (CANDIDATE BUG)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-AC_RESEARCH-OK24-005 |
+| `agreement_code` | AC_RESEARCH |
+| `ok_version` | OK24 |
+| `field` | `entitlement_configs (AC_RESEARCH, OK24, *)` — explicit absence row |
+| `current_encoded_value` | `(no rows in init.sql:1343–1378; AC_RESEARCH has NO entitlement configs seeded)` |
+| `authoritative_source` | pending (Phase B PRIORITY — clarify whether AC_RESEARCH employees inherit AC base entitlements via code-path fallback or whether this is a structural gap) |
+| `interpretation` | AC_RESEARCH has NO entitlement_configs rows for VACATION, SPECIAL_HOLIDAY, CARE_DAY, CHILD_SICK, or SENIOR_DAY. Contrast: init.sql:1343–1378 explicitly seeds these 5 entitlements for AC, HK, PROSA. **As encoded today**, an AC_RESEARCH employee querying entitlements would return zero rows for any type. Either (a) intentional with code-path fallback "lookup AC_RESEARCH, if no rows fall back to AC base" (the EntitlementBalanceRepository would need to implement this), or (b) structural gap — AC_RESEARCH employees would fail entitlement quota lookups silently. |
+| `confidence_level` | LOW (encoding semantics critical to clarify; current behavior unclear from code-side audit alone) |
+| `interpretation_authority` | Personalestyrelsen / Akademikerne |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none — flagged candidate, not yet corrected) |
+| `disputed?` | false |
+| `notes` | **CANDIDATE BUG / STRUCTURAL GAP — Phase B HIGH priority**. Resolution paths: (a) add explicit AC_RESEARCH + AC_TEACHING rows to init.sql:1343–1378 mirroring AC base (5 entitlement types × 2 OK versions × 2 variants = 20 new rows); OR (b) confirm code-path fallback in EntitlementBalanceRepository handles missing rows via AC base lookup; OR (c) classify as intentional zero-entitlement encoding (would contradict standard state-sector vacation rights — Ferieloven applies universally regardless of agreement). Most likely resolution: (a) seed-correction (bug-with-no-past-impact) per ROADMAP rule correction policy. Affects both AC_RESEARCH + AC_TEACHING; pre-launch correction applies uniformly. |
+
+### SR-AC_RESEARCH-OK24-006 — wage_type_mappings AC_RESEARCH OK24 bundle (DIVERGENT SLS codes — CANDIDATE BUG)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-AC_RESEARCH-OK24-006 |
+| `agreement_code` | AC_RESEARCH |
+| `ok_version` | OK24 |
+| `field` | `wage_type_mappings (time_type, wage_type) for (AC_RESEARCH, OK24, position='')` — bundle of 11 mappings from init.sql:965–976 + 1 NORM_DEVIATION from L1198 |
+| `current_encoded_value` | `NORMAL_HOURS → SLS_0110; MERARBEJDE → SLS_0210; VACATION → SLS_0510; SICK_DAY → SLS_0540; CARE_DAY → SLS_0550; CHILD_SICK_1 → SLS_0560; SENIOR_DAY → SLS_0570; LEAVE_WITH_PAY → SLS_0580; LEAVE_WITHOUT_PAY → SLS_0590; TRAVEL_WORK → SLS_0820; TRAVEL_NON_WORK → SLS_0830; NORM_DEVIATION → SLS_0150` |
+| `authoritative_source` | pending (Phase B PRIORITY — verify whether the SLS codes for AC_RESEARCH are intentionally distinct from AC base or whether this is an S11 seed authoring bug) |
+| `interpretation` | AC_RESEARCH wage type mappings use DIFFERENT SLS codes from AC base on **6 out of 11 time types**: MERARBEJDE → SLS_0210 (vs AC SLS_0310 — notably SLS_0210 is also HK / PROSA's OVERTIME_50 code, raising overlap concern); CARE_DAY → SLS_0550 (vs AC SLS_0520); SENIOR_DAY → SLS_0570 (vs AC SLS_0550); LEAVE_WITH_PAY → SLS_0580 (vs AC SLS_0565); LEAVE_WITHOUT_PAY → SLS_0590 (vs AC SLS_0560); CHILD_SICK_1 → SLS_0560 (vs AC's CHILD_SICK_DAY → SLS_0530). Additionally, AC_RESEARCH uses **different time_type identifiers** (`CHILD_SICK_1` vs AC's `CHILD_SICK_DAY`) and is missing the CHILD_SICK_DAY_2 + _DAY_3 entries that AC base has. Common cells (NORMAL_HOURS, VACATION, TRAVEL_WORK, TRAVEL_NON_WORK, NORM_DEVIATION) match AC base. |
+| `confidence_level` | LOW (encoding correctness unclear; either intentional separate payroll-code-block for research staff OR S11 seed authoring bug) |
+| `interpretation_authority` | Personalestyrelsen (SLS technical authority) |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none — flagged candidate, not yet corrected) |
+| `disputed?` | false |
+| `notes` | **CANDIDATE BUG — Phase B HIGH priority**. Two specific concerns: (a) MERARBEJDE → SLS_0210 collides with HK/PROSA OVERTIME_50 mapping — same SLS code means SLS-side cannot distinguish AC_RESEARCH merarbejde from HK overtime; (b) The time_type rename `CHILD_SICK_DAY` → `CHILD_SICK_1` and the missing _DAY_2/_DAY_3 entries suggest the S11 seed authoring used a different naming convention; rule-engine emit logic must produce the matching time_type or the mapping fails to apply. **Resolution paths**: (a) audit EntitlementBalanceRule + payroll mapping path for AC_RESEARCH employees to verify which time_type values are actually emitted; (b) if rule-emitted time_types don't match seed mappings, fix one side or the other. Same divergence pattern in AC_TEACHING (TASK-3605 SR-AC_TEACHING-OK24-006). Affects both AC variants uniformly. |
+
+### SR-AC_RESEARCH-OK24-007 — position_override_configs explicit absence
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-AC_RESEARCH-OK24-007 |
+| `agreement_code` | AC_RESEARCH |
+| `ok_version` | OK24 |
+| `field` | `position_override_configs (AC_RESEARCH, OK24, *)` — explicit absence row |
+| `current_encoded_value` | `(no rows in init.sql; AC_RESEARCH has no position overrides at seed time)` |
+| `authoritative_source` | n/a — explicit-absence row |
+| `interpretation` | AC_RESEARCH has NO position overrides. Note: AC base has `(AC, OK24, RESEARCHER)` override at init.sql:1260 — that's the AC + RESEARCHER position combo (distinct path), NOT an AC_RESEARCH override. The two are independent. |
+| `confidence_level` | HIGH for "no current overrides"; LOW for whether this is correct |
+| `interpretation_authority` | Personalestyrelsen |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | Same explicit-absence pattern as HK / PROSA. Cross-ref distinction: AC + RESEARCHER position override (SR-AC-OK24-039) is a separate path from AC_RESEARCH agreement code. Phase B should clarify the intended use-case split between (a) AC + RESEARCHER position and (b) AC_RESEARCH agreement code. |
+
+### SR-AC_RESEARCH-OK24-008 — Senior-day candidate-bug carries through (no entitlement row)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-AC_RESEARCH-OK24-008 |
+| `agreement_code` | AC_RESEARCH |
+| `ok_version` | OK24 |
+| `field` | `entitlement_configs.SENIOR_DAY` — paired with the broader entitlement-gap finding (SR-AC_RESEARCH-OK24-005) |
+| `current_encoded_value` | `(no row; AC_RESEARCH has no SENIOR_DAY entitlement_configs row)` |
+| `authoritative_source` | pending (Phase B — same paired-bug as AC base if AC_RESEARCH eventually gets entitlement rows mirroring AC) |
+| `interpretation` | AC_RESEARCH inherits the SENIOR_DAY paired-bug candidate by extension. If Phase B resolves SR-AC_RESEARCH-OK24-005 (missing entitlements) by adding AC_RESEARCH entitlement rows mirroring AC base, those rows will carry the same `annual_quota = 0` + `min_age = 60` paired encoding flagged for AC + HK + PROSA. Bug correction (if classified) applies uniformly. |
+| `confidence_level` | LOW (compounds the SR-AC_RESEARCH-OK24-005 entitlement gap with the SR-AC-OK24-015 + 035 paired-bug finding) |
+| `interpretation_authority` | negotiated |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | **Inherits SENIOR_DAY candidate bug pending resolution of entitlement-gap finding**. Phase B priority sequencing: resolve SR-AC_RESEARCH-OK24-005 first (entitlement gap); then SENIOR_DAY paired-bug auto-applies to any newly-seeded AC_RESEARCH entitlement rows. |
+
+---
+
+## AC_TEACHING OK24 Cells
+
+AC_TEACHING = Teaching staff under AC overenskomst. Distinct from AC_RESEARCH by **reduced annual norm**: `AnnualNormHours = 1680h` reflecting teaching obligations (~244 hours less than 1924h baseline; the difference accommodates research / preparation time embedded in the academic contract). All other cells mirror AC_RESEARCH (which itself mirrors AC base except for norm-model divergence).
+
+AC_TEACHING uses the same compact form as AC_RESEARCH: "mirrors AC" bundle + divergent cells individual + candidate-bug rows inherited.
+
+### SR-AC_TEACHING-OK24-001 — "mirrors AC_RESEARCH" bundle (compound, ~36 cells)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-AC_TEACHING-OK24-001 |
+| `agreement_code` | AC_TEACHING |
+| `ok_version` | OK24 |
+| `field` | All AC_TEACHING OK24 cells in `agreement_configs` EXCEPT `AnnualNormHours` (SR-AC_TEACHING-OK24-003). NormModel + NormPeriodWeeks match AC_RESEARCH; all other ~34 columns match AC base via AC_RESEARCH. |
+| `current_encoded_value` | Identical to AC_RESEARCH OK24 cell-by-cell EXCEPT `annual_norm_hours = 1680` (vs AC_RESEARCH's 1924). init.sql:1182 byte-identical to L1170 except for that one column. |
+| `authoritative_source` | Inherited via AC_RESEARCH → AC base. Teaching-staff annual-norm reduction per AC overenskomst teaching provisions. |
+| `interpretation` | AC_TEACHING matches AC_RESEARCH on every cell except `AnnualNormHours`. NormModel = ANNUAL_ACTIVITY, all supplements disabled, on-call/call-in disabled, AFSPADSERING compensation. |
+| `confidence_level` | HIGH for IDENTITY claim; inherits AC_RESEARCH confidence |
+| `interpretation_authority` | Personalestyrelsen (AC overenskomst teaching provisions) |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none — inherits S35 AC=AFSPADSERING correction from `cbaea7d`; AC_TEACHING OK24 was one of the 6 rows corrected) |
+| `disputed?` | false |
+| `notes` | Compact mirror bundle. References AC_RESEARCH cells (which reference AC base). |
+
+### SR-AC_TEACHING-OK24-002 — NormModel (matches AC_RESEARCH, DIVERGENT from AC base)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-AC_TEACHING-OK24-002 |
+| `agreement_code` | AC_TEACHING |
+| `ok_version` | OK24 |
+| `field` | `NormModel` |
+| `current_encoded_value` | `"ANNUAL_ACTIVITY"` |
+| `authoritative_source` | pending (same as SR-AC_RESEARCH-OK24-002) |
+| `interpretation` | Same as AC_RESEARCH — annual-norm model for teaching staff. |
+| `confidence_level` | HIGH |
+| `interpretation_authority` | Personalestyrelsen |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | Matches AC_RESEARCH SR-AC_RESEARCH-OK24-002. Identical load-bearing semantic. |
+
+### SR-AC_TEACHING-OK24-003 — AnnualNormHours (DIVERGENT from AC_RESEARCH, LOAD-BEARING)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-AC_TEACHING-OK24-003 |
+| `agreement_code` | AC_TEACHING |
+| `ok_version` | OK24 |
+| `field` | `AnnualNormHours` |
+| `current_encoded_value` | `1680` |
+| `authoritative_source` | pending (Phase B — AC overenskomst teaching-staff norm reduction; 1680h reflects research/preparation time embedded in academic contract; ~244h less than full-time 1924h) |
+| `interpretation` | AC_TEACHING annual norm = 1680 hours per calendar year (vs AC_RESEARCH's 1924h). The reduction (~244 hours, equivalent to ~6.5 weeks at 37h/week) accommodates teaching staff's research/preparation obligations that the cirkulær recognises but doesn't tabulate hourly. |
+| `confidence_level` | MEDIUM (the 1680 value is well-established in project history per `CentralAgreementConfigs.cs:256`; cirkulær-paragraph cite needed) |
+| `interpretation_authority` | Personalestyrelsen (with Akademikerne / DM negotiation) |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | **DIVERGENT from AC_RESEARCH** (SR-AC_RESEARCH-OK24-003 = 1924h) and AC base (1924 default + WEEKLY_HOURS so inert). The single load-bearing distinction between AC_TEACHING and AC_RESEARCH. Used by S11 AnnualActivityRule when evaluating norm-deviation events for teaching staff. |
+
+### SR-AC_TEACHING-OK24-004 — NormPeriodWeeks (matches AC_RESEARCH, inert)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-AC_TEACHING-OK24-004 |
+| `agreement_code` | AC_TEACHING |
+| `ok_version` | OK24 |
+| `field` | `NormPeriodWeeks` |
+| `current_encoded_value` | `1` |
+| `authoritative_source` | n/a-for-agreement (semantically inert under ANNUAL_ACTIVITY) |
+| `interpretation` | Same as AC_RESEARCH — inert under ANNUAL_ACTIVITY. |
+| `confidence_level` | N/A-for-agreement |
+| `interpretation_authority` | (n/a) |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | Matches AC_RESEARCH SR-AC_RESEARCH-OK24-004 inertness. |
+
+### SR-AC_TEACHING-OK24-005 — entitlement_configs explicit absence (inherits CANDIDATE BUG)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-AC_TEACHING-OK24-005 |
+| `agreement_code` | AC_TEACHING |
+| `ok_version` | OK24 |
+| `field` | `entitlement_configs (AC_TEACHING, OK24, *)` — explicit absence row |
+| `current_encoded_value` | `(no rows; AC_TEACHING has NO entitlement configs seeded)` |
+| `authoritative_source` | pending (Phase B — same finding as SR-AC_RESEARCH-OK24-005) |
+| `interpretation` | Same gap as AC_RESEARCH. No VACATION / SPECIAL_HOLIDAY / CARE_DAY / CHILD_SICK / SENIOR_DAY rows seeded for AC_TEACHING. |
+| `confidence_level` | LOW |
+| `interpretation_authority` | Personalestyrelsen / Akademikerne |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | **CANDIDATE BUG / STRUCTURAL GAP — same finding as AC_RESEARCH**. Resolution applies uniformly to both AC variants. See SR-AC_RESEARCH-OK24-005 for full rationale + Phase B resolution paths. |
+
+### SR-AC_TEACHING-OK24-006 — wage_type_mappings AC_TEACHING OK24 bundle (inherits CANDIDATE BUG)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-AC_TEACHING-OK24-006 |
+| `agreement_code` | AC_TEACHING |
+| `ok_version` | OK24 |
+| `field` | `wage_type_mappings (time_type, wage_type) for (AC_TEACHING, OK24, position='')` — bundle of 11 mappings from init.sql:995–1006 + 1 NORM_DEVIATION from L1199 |
+| `current_encoded_value` | Identical to AC_RESEARCH SR-AC_RESEARCH-OK24-006 bundle (init.sql:995–1006 byte-identical to L965–976 except agreement_code substitution). Same 11 + 1 mappings; same divergence from AC base. |
+| `authoritative_source` | pending (same as SR-AC_RESEARCH-OK24-006) |
+| `interpretation` | Same divergence pattern as AC_RESEARCH wage type mappings. Same SLS code mismatches with AC base on 6 of 11 time types. |
+| `confidence_level` | LOW (inherits AC_RESEARCH uncertainty) |
+| `interpretation_authority` | Personalestyrelsen (SLS technical) |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | **CANDIDATE BUG — inherits SR-AC_RESEARCH-OK24-006 finding**. AC variants' divergent SLS codes apply to both AC_RESEARCH + AC_TEACHING uniformly. |
+
+### SR-AC_TEACHING-OK24-007 — position_override_configs explicit absence
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-AC_TEACHING-OK24-007 |
+| `agreement_code` | AC_TEACHING |
+| `ok_version` | OK24 |
+| `field` | `position_override_configs (AC_TEACHING, OK24, *)` — explicit absence row |
+| `current_encoded_value` | `(no rows; AC_TEACHING has no position overrides at seed time)` |
+| `authoritative_source` | n/a |
+| `interpretation` | AC_TEACHING has NO position overrides. Same explicit-absence pattern as AC_RESEARCH / HK / PROSA. |
+| `confidence_level` | HIGH for "no current overrides"; LOW for whether this is correct |
+| `interpretation_authority` | Personalestyrelsen |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | Explicit-absence row. |
+
+---
+
+## AC_RESEARCH OK26 + AC_TEACHING OK26 Cells (placeholder bundles — 8 rows)
+
+Both AC variants OK26 are placeholders per `CentralAgreementConfigs.cs:211 + 261` ("(same as OK24 for now)") + init.sql:1176 + 1188. Standard placeholder-bundle pattern per data domain.
+
+### SR-AC_RESEARCH-OK26-001 — AC_RESEARCH OK26 agreement_configs placeholder bundle
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-AC_RESEARCH-OK26-001 |
+| `agreement_code` | AC_RESEARCH |
+| `ok_version` | OK26 |
+| `field` | All AC_RESEARCH OK26 cells in `agreement_configs` (mirrors AC_RESEARCH OK24 cell-by-cell; init.sql:1176 byte-identical to L1170) |
+| `current_encoded_value` | Identical to AC_RESEARCH OK24. NormModel=ANNUAL_ACTIVITY, AnnualNormHours=1924, all other cells inherit. |
+| `authoritative_source` | pending — OK26 cirkulær under finalization. |
+| `interpretation` | Placeholder inheritance. |
+| `confidence_level` | LOW |
+| `interpretation_authority` | Personalestyrelsen (anticipated) |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none — inherits S35 AC=AFSPADSERING correction applied to AC_RESEARCH OK26 at init.sql:1176; bug-with-no-past-impact classification applies same as OK24 placeholder) |
+| `disputed?` | false |
+| `notes` | Standard placeholder. Inherits SR-AC_RESEARCH-OK24-005 entitlement-gap + SR-AC_RESEARCH-OK24-006 wage-type-code-divergence findings to OK26. |
+
+### SR-AC_RESEARCH-OK26-002 — AC_RESEARCH OK26 entitlement_configs explicit absence
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-AC_RESEARCH-OK26-002 |
+| `agreement_code` | AC_RESEARCH |
+| `ok_version` | OK26 |
+| `field` | `entitlement_configs (AC_RESEARCH, OK26, *)` — explicit absence |
+| `current_encoded_value` | `(no rows; same gap as AC_RESEARCH OK24)` |
+| `authoritative_source` | pending |
+| `interpretation` | Same entitlement gap as OK24. |
+| `confidence_level` | LOW |
+| `interpretation_authority` | Personalestyrelsen / Akademikerne |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | Inherits SR-AC_RESEARCH-OK24-005 entitlement-gap. Resolution path applies to OK26 simultaneously. |
+
+### SR-AC_RESEARCH-OK26-003 — AC_RESEARCH OK26 wage_type_mappings placeholder bundle
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-AC_RESEARCH-OK26-003 |
+| `agreement_code` | AC_RESEARCH |
+| `ok_version` | OK26 |
+| `field` | All AC_RESEARCH OK26 wage type mappings (mirrors OK24 bundle SR-AC_RESEARCH-OK24-006) |
+| `current_encoded_value` | Identical to AC_RESEARCH OK24 mappings (12 entries; init.sql:980–991 byte-identical to L965–976 except OK version). Inherits same SLS code divergence from AC base. |
+| `authoritative_source` | pending (Phase B — same finding as OK24) |
+| `interpretation` | Same wage-type-code-divergence pattern as OK24. |
+| `confidence_level` | LOW (inherits SR-AC_RESEARCH-OK24-006) |
+| `interpretation_authority` | Personalestyrelsen (SLS technical) |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | Inherits SR-AC_RESEARCH-OK24-006 candidate-bug finding. |
+
+### SR-AC_RESEARCH-OK26-004 — AC_RESEARCH OK26 position_override_configs placeholder bundle (explicit absence)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-AC_RESEARCH-OK26-004 |
+| `agreement_code` | AC_RESEARCH |
+| `ok_version` | OK26 |
+| `field` | `position_override_configs (AC_RESEARCH, OK26, *)` — explicit absence |
+| `current_encoded_value` | `(no rows)` |
+| `authoritative_source` | n/a |
+| `interpretation` | Inherits AC_RESEARCH OK24 explicit-absence pattern. |
+| `confidence_level` | HIGH (no rows present); LOW for whether correct |
+| `interpretation_authority` | Personalestyrelsen |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | Explicit-absence row. |
+
+### SR-AC_TEACHING-OK26-001..004 — AC_TEACHING OK26 placeholder bundles (compound, 4 rows)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-AC_TEACHING-OK26-001..004 |
+| `agreement_code` | AC_TEACHING |
+| `ok_version` | OK26 |
+| `field` | All AC_TEACHING OK26 cells across 4 data domains: 001 = `agreement_configs` (mirrors AC_TEACHING OK24 cell-by-cell; init.sql:1188 byte-identical to L1182); 002 = `entitlement_configs` explicit-absence; 003 = `wage_type_mappings` (mirrors OK24, init.sql:1010–1021); 004 = `position_override_configs` explicit-absence |
+| `current_encoded_value` | Identical to AC_TEACHING OK24 across all 4 domains. AnnualNormHours = 1680 maintained. |
+| `authoritative_source` | pending — OK26 cirkulær under finalization. |
+| `interpretation` | Placeholder inheritance for all 4 data domains. Inherits all AC_TEACHING OK24 findings (entitlement gap, wage-type-code divergence, AnnualNormHours divergence from AC_RESEARCH). |
+| `confidence_level` | LOW (placeholder) |
+| `interpretation_authority` | Personalestyrelsen (anticipated) |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none — inherits S35 AC=AFSPADSERING for OK26 placeholder; entitlement-gap + wage-type-divergence candidate bugs inherit) |
+| `disputed?` | false |
+| `notes` | **Single compound row covering 4 placeholder bundles** for AC_TEACHING OK26 — further compaction of the placeholder pattern justified because both AC variants follow identical placeholder shape (4 bundles per variant; 8 rows total via this row + SR-AC_RESEARCH-OK26-001..004). If TASK-3605 close needs separate rows per data domain for AC_TEACHING (per Phase B preference), this row can be split into 4 later without schema change. |
+
+---
+
 ### TASK-3601 — 20 cells, AC OK24 proof-of-shape
 
 | Cell shape | Count | Schema fit |
@@ -2045,17 +2472,40 @@ PROSA OK26 mirrors PROSA OK24 per `CentralAgreementConfigs.cs:154` ("PROSA OK26 
 - **New documentation pattern: cross-agreement mirror bundle with exclusion list**. Used when agreement B = agreement A on most cells but diverges on a few; the bundle row enumerates "all cells except [list]" + individual rows cover the exclusions. Maintains "every cell has a register row" validation criterion without row inflation. Will apply again in TASK-3605 (AC_RESEARCH + AC_TEACHING are AC-cloned with norm-model divergence).
 - **No new candidate bugs** for PROSA. Both candidate bugs (SENIOR_DAY paired, OvertimeRequiresPreApproval) carry through HK → PROSA. Cross-agreement count for both candidates now stands at 3 of 3 base agreements; AC_RESEARCH + AC_TEACHING (TASK-3605) likely inherit the same encoding.
 
-### Candidate bug discoveries (cumulative through TASK-3604)
+### TASK-3605 — AC_RESEARCH + AC_TEACHING (16 cells across both variants) + OK26 placeholders
 
-| Row(s) | Finding | Severity | Phase B priority |
-|--------|---------|----------|------------------|
-| **SR-AC-OK24-015 + SR-AC-OK24-035 + SR-HK-OK24-029 + SR-PROSA-OK24-006** | SENIOR_DAY `annual_quota = 0` with `min_age = 60` — encoding semantics unclear. Same encoding across all 3 base agreements per init.sql:1373–1378 — fix propagates uniformly per ROADMAP no-per-institution-opt-in policy. | bug-candidate (unconfirmed) | **HIGH** — senior-employee compensation correctness; cross-agreement (3 of 3 base + likely 2 AC variants TBD in TASK-3605) |
-| **SR-HK-OK24-022 + SR-PROSA-OK24-007** | `OvertimeRequiresPreApproval = false` for HK + PROSA — for their real overtime regimes, current `false` may invert cirkulær intent. Seed default carried through without per-agreement consideration in S17. | bug-candidate (unconfirmed) | **MEDIUM-HIGH** — workflow gate affecting all HK + PROSA overtime registration; needs Phase B cirkulær cite to confirm direction (PROSA's joint administration with HK suggests symmetric answer) |
+| Cell shape | Count | Schema fit |
+|------------|-------|------------|
+| AC_RESEARCH OK24 mirrors-AC bundle | 1 (001) | ✓ |
+| AC_RESEARCH OK24 norm-model divergent cluster | 3 (002, 003, 004 — NormModel + AnnualNormHours + NormPeriodWeeks inert) | ✓ |
+| AC_RESEARCH OK24 explicit-absence (entitlement gap) | 1 (005) | ✓ — **major candidate bug** (no entitlement rows seeded for AC variants) |
+| AC_RESEARCH OK24 wage-type-mapping bundle (divergent SLS codes) | 1 (006) | ✓ — **major candidate bug** (6 of 11 time types use different SLS codes from AC base) |
+| AC_RESEARCH OK24 explicit-absence (position overrides) | 1 (007) | ✓ |
+| AC_RESEARCH OK24 SENIOR_DAY inheritance | 1 (008) | ✓ |
+| AC_TEACHING OK24 mirrors-AC_RESEARCH bundle + divergent cells | 7 (001..007) | ✓ — same pattern as AC_RESEARCH with AnnualNormHours = 1680 divergence |
+| AC_RESEARCH OK26 placeholder bundles | 4 (001..004) | ✓ |
+| AC_TEACHING OK26 compound placeholder (4 domains in 1 row) | 1 (001..004 row) | ✓ — **further compaction of placeholder pattern**: single row covers all 4 data domains for AC_TEACHING OK26 because the placeholder shape is identical across variants |
+
+**TASK-3605 findings**:
+- **No new schema BLOCKERs**. The compact "mirrors X" bundle pattern from TASK-3604 extends to chain-references (AC_TEACHING bundle cites AC_RESEARCH bundle, which cites AC base bundle). Schema accommodates without change.
+- **Further compaction of placeholder pattern**: AC_TEACHING OK26 collapsed all 4 data-domain placeholders into a single compound row (SR-AC_TEACHING-OK26-001..004). Justified because the placeholder shape is identical across variants. Can be split into 4 rows later without schema change if Phase B prefers.
+- **TWO new MAJOR candidate bugs surfaced** during AC_RESEARCH wage_type_mappings audit + entitlement_configs absence detection:
+  1. AC variant wage_type_mappings use divergent SLS codes from AC base on 6 of 11 time types (MERARBEJDE→SLS_0210 vs AC's SLS_0310 — notably colliding with HK/PROSA OVERTIME_50 SLS code; CARE_DAY/SENIOR_DAY/LEAVE_WITH_PAY/LEAVE_WITHOUT_PAY all shifted; CHILD_SICK renamed to CHILD_SICK_1 with single mapping vs AC's 3-day chain)
+  2. AC_RESEARCH + AC_TEACHING have NO entitlement_configs rows (init.sql:1343–1378 seeds only AC + HK + PROSA); either intentional code-path fallback OR structural gap that would cause entitlement lookups to fail
+
+### Candidate bug discoveries (cumulative through TASK-3605)
+
+| # | Row(s) | Finding | Severity | Phase B priority |
+|---|--------|---------|----------|------------------|
+| 1 | **SR-AC-OK24-015 + SR-AC-OK24-035 + SR-HK-OK24-029 + SR-PROSA-OK24-006 + SR-AC_RESEARCH-OK24-008 + (implicit for AC_TEACHING)** | SENIOR_DAY `annual_quota = 0` with `min_age = 60` — encoding semantics unclear. Same encoding across all 3 base agreements per init.sql:1373–1378; pending entitlement-gap resolution, applies to 2 AC variants too. | bug-candidate (unconfirmed) | **HIGH** — senior-employee compensation correctness; cross-agreement potentially 5 of 5 |
+| 2 | **SR-HK-OK24-022 + SR-PROSA-OK24-007** | `OvertimeRequiresPreApproval = false` for HK + PROSA — for their real overtime regimes, current `false` may invert cirkulær intent. | bug-candidate (unconfirmed) | **MEDIUM-HIGH** — workflow gate; needs Phase B cirkulær cite to confirm direction |
+| 3 | **SR-AC_RESEARCH-OK24-005 + SR-AC_TEACHING-OK24-005** (+ OK26 inheritance) | AC variants have NO `entitlement_configs` rows (no VACATION / SPECIAL_HOLIDAY / CARE_DAY / CHILD_SICK / SENIOR_DAY seeded). Either intentional code-path fallback OR structural gap causing entitlement lookups to fail silently. | bug-candidate (unconfirmed) — likely seed-correction | **HIGH** — affects all AC_RESEARCH + AC_TEACHING employees' entitlement balance correctness; Ferieloven applies regardless of agreement so absence of VACATION row is most concerning |
+| 4 | **SR-AC_RESEARCH-OK24-006 + SR-AC_TEACHING-OK24-006** (+ OK26 inheritance) | AC variants' `wage_type_mappings` use divergent SLS codes on 6 of 11 time types from AC base (MERARBEJDE→SLS_0210 conflicts with HK/PROSA OVERTIME_50; CARE_DAY/SENIOR_DAY/LEAVE_*/etc. shifted; CHILD_SICK time_type renamed to CHILD_SICK_1 with single mapping vs AC's 3-day chain). Either intentional separate payroll-code-block for research staff OR S11 seed authoring bug. | bug-candidate (unconfirmed) — needs payroll-side SLS verification | **HIGH** — payroll export correctness for AC variant employees; specifically the MERARBEJDE/SLS_0210 collision with HK/PROSA OVERTIME_50 means SLS side cannot distinguish; rule-emitted time_types must match seed mappings for AC variant payroll to flow at all |
 
 These observations feed into:
-- S36 TASK-3607 (agreement-ruleset-audit doc) — both candidates surface as DRIFT-IN-CODE / DRIFT-IN-SOURCE classification candidates
-- S37 Phase B feedback packaging — both are high-priority cells for domain-expert sign-off
-- Phase E continuous-validation tests in S39
+- S36 TASK-3607 (agreement-ruleset-audit doc) — all 4 candidates surface as DRIFT-IN-CODE / DRIFT-IN-SEED classification candidates (with #3 + #4 the most likely pure DRIFT-IN-SEED requiring seed correction)
+- S37 Phase B feedback packaging — all 4 are high-priority cells; #3 + #4 may resolve to seed corrections that ship in S37 itself (bug-with-no-past-impact pre-launch); #1 + #2 likely need Phase B cirkulær cite to adjudicate direction
+- Phase E continuous-validation tests in S39 — the "unknown unknown" test should flag #3 (orphan agreement code without entitlement rows) + #4 (rule-emitted time_type / seeded time_type mismatch)
 
 ---
 
@@ -2066,9 +2516,9 @@ These observations feed into:
 | AC | **39** (20 proof-of-shape TASK-3601 + 19 completion TASK-3602) | **4** (placeholder bundles, TASK-3602) | **43** |
 | HK | **31** (TASK-3603) | **4** (placeholder bundles, TASK-3603) | **35** |
 | PROSA | **9** (TASK-3604, compact "mirrors HK" form) | **4** (placeholder bundles, TASK-3604) | **13** |
-| AC_RESEARCH | 0 (TASK-3605) | 0 | 0 |
-| AC_TEACHING | 0 (TASK-3605) | 0 | 0 |
-| **Total** | **79** | **12** | **91** |
+| AC_RESEARCH | **8** (TASK-3605, compact "mirrors AC" form) | **4** (placeholder bundles, TASK-3605) | **12** |
+| AC_TEACHING | **7** (TASK-3605, "mirrors AC_RESEARCH" chain) | **1** (4-domain compound placeholder, TASK-3605) | **8** |
+| **Total** | **94** | **17** | **111** |
 
 **PROSA OK24 cell coverage by source surface**:
 - `agreement_configs` columns: divergent cells (MaxFlexBalance, FlexCarryoverMax, OvertimeRequiresPreApproval) get individual rows (002, 003, 007); all other ~34 columns covered by "mirrors HK" bundle (001)
