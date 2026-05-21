@@ -10,7 +10,7 @@
 | **Build Verified** | yes — 0 errors, 19 pre-existing CS0618 warnings (unchanged) |
 | **Test Verified** | yes — 526 unit tests pass; Docker-gated deferred to next greenfield bootstrap; total = 869 unchanged from S36 |
 | **Sprint-start commit base** | `ec40d45` (S36 Step 7a absorption, 2026-05-21) |
-| **Sprint-end HEAD** | _filled by close commit_ |
+| **Sprint-end HEAD** | `03f63d7` (TASK-3708 sprint close) |
 | **Sprint type** | **IMPLEMENTATION** — seed corrections + source register annotations + bug_correction_history entries |
 | **Plan** | `.claude/plans/PLAN-s37.md` |
 | **Phase** | 4e (Phase A pass 2 absorption per PROGRAM L105–117; scoped to S36 candidate-bug subset under interim-expert posture) |
