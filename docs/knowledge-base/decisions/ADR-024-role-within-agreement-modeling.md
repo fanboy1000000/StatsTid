@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | DRAFT (S38 TASK-3801 authorship; cycle-1 dual-lens absorbed Codex P1.2 — D6 generalized from per-surface `AgreementConfigBugCorrected` to surface-discriminated `ConfigBugCorrected` covering all 5 config surfaces — plus Reviewer W1+W4 cosmetics absorbed. Cycle 2 dispatched to verify. Flips to ACCEPTED on cycle-2 clean per S28 / S32 design-only precedent.) |
+| **Status** | DRAFT (S38 TASK-3801 authorship; cycle-1 dual-lens absorbed Codex P1.2 / Reviewer W1+W4; cycle-2 dual-lens surfaced Codex P1.NEW-1 + Reviewer B1+B2+W1-cycle2 in same architectural areas; cycle-3 absorption renames `AgreementConfigBugCorrected` → `ConfigBugCorrected` in References + adds `MerarbejdeDiscretionary` to event count (58→69 post-S40). Cycle 3 dispatched to verify. Flips to ACCEPTED on cycle-3 clean per S28 / S32 design-only precedent.) |
 | **Sprint** | S38 (design-only sprint; produces this ADR + ADR-025 + ADR-013 amendment for S39 schema migration + S40 cutover + S41 D-tests). |
 | **Domains** | Backend, Infrastructure, Data Model, SharedKernel, Rule Engine, Payroll Integration. |
 | **Tags** | role-within-agreement, employment-category, role-config-override, merarbejde-compensation-right, bug-correction-policy, classification-governance, interpretation-authority, overtime-authorization, post-hoc-necessity-acknowledgment, design-binding, phase-4e. |
@@ -243,7 +243,7 @@ Migration approach: greenfield-baked + guarded ALTER block per S30 / S31 / S35 p
 ### S40 cutover (Phase D Implementation Sprint 2)
 
 - `RoleConfigOverrideRepository` with full `(conn, tx)` overloads + `SupersedeAndCreateAsync` 3-case routing per ADR-020 D2 + `SoftDeleteAsync` per ADR-023 D8.
-- New event types `RoleConfigOverrideCreated/Updated/Superseded/SoftDeleted` + `OvertimeNecessityAcknowledged` + generalized `ConfigBugCorrected` (per D6 P1.2 absorption replacing the per-surface `AgreementConfigBugCorrected`) = **6 new typeof registrations** (EventSerializer 58 → 64 from ADR-024 alone post-S40; ADR-025 adds 4 more = 58 → 68 net post-S40 combined).
+- New event types from ADR-024: `RoleConfigOverrideCreated/Updated/Superseded/SoftDeleted` (4) + `OvertimeNecessityAcknowledged` (1) + generalized `ConfigBugCorrected` (1, per D6 P1.2 absorption replacing the per-surface `AgreementConfigBugCorrected`) + `MerarbejdeDiscretionary` (1, per D2 tri-state model) = **7 new typeof registrations** (EventSerializer 58 → 65 from ADR-024 alone post-S40; ADR-025 adds 4 more = 58 → 69 net post-S40 combined).
 - `ConfigResolutionService` 4-layer chain (D1 cutover): central → role-override → position-override → local. Dated lookup (S33 ADR-023 D1 pattern) for replay determinism.
 - `OvertimeGovernanceRule` + `PayrollMappingService.BuildLine` read tri-state `MerarbejdeCompensationRight` (D2). `NONE` → no MERARBEJDE emission. `DISCRETIONARY` → flag event for manual trigger.
 - New admin endpoint `/api/admin/role-config-overrides/{...}` with admin-strict If-Match (D1).
@@ -290,9 +290,9 @@ Real Phase B engagement may produce findings that warrant ADR-024 amendments —
 - `docs/references/role-dimension-audit.md` — within-OK role enumeration + production-incorrectness call-out (PROVISIONAL pending Phase B)
 - `docs/references/agreement-ruleset-audit.md` — Candidate Bug Routing Summary
 - ADR-013 (no-cascade) — amended to cross-reference D3 + D6
-- ADR-014 (DB-backed agreement configs) — `AgreementConfigBugCorrected` event distinct from `AgreementConfigPublished`
+- ADR-014 (DB-backed agreement configs) — generalized `ConfigBugCorrected` event (per D6) distinct from `AgreementConfigPublished`
 - ADR-016 D10 (replay determinism) — bug corrections preserve original manifests
-- ADR-018 D3 (atomic outbox) — `AgreementConfigBugCorrected` + `OvertimeNecessityAcknowledged` ride atomic single-tx
+- ADR-018 D3 (atomic outbox) — `ConfigBugCorrected` + `OvertimeNecessityAcknowledged` + role-config-override lifecycle events ride atomic single-tx
 - ADR-019 D2 + D8 (admin-strict If-Match + audit version-transition) — new admin endpoints follow this contract
 - ADR-020 D2 (3-case routing) — `RoleConfigOverrideRepository.SupersedeAndCreateAsync` per pattern
 - ADR-023 D1 (consumption-time lookup) — `ConfigResolutionService` dated lookup for replay determinism

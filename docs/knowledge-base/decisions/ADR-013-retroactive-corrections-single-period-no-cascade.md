@@ -45,7 +45,7 @@ When a correction produces a flex balance delta:
 
 ## Amendment — ADR-024 cross-reference (S38 TASK-3803, 2026-05-21)
 
-ADR-024 D6 (bug correction operational model) introduces a new event type `AgreementConfigBugCorrected` (distinct from existing `AgreementConfigPublished` per ADR-014). When operator-triggered, a bug-correction event MAY produce a flex delta cascade equivalent to a `RetroactiveCorrectionRequested` event in shape.
+ADR-024 D6 (bug correction operational model) introduces a new event type `ConfigBugCorrected` (distinct from existing `AgreementConfigPublished` per ADR-014). When operator-triggered, a bug-correction event MAY produce a flex delta cascade equivalent to a `RetroactiveCorrectionRequested` event in shape.
 
 This amendment clarifies the interaction:
 
@@ -62,6 +62,6 @@ ADR-024 D6 + ADR-027 (post-launch) define the operational model + SLS reconcilia
 | Cross-reference | What it commits to |
 |-----------------|---------------------|
 | **ADR-024 D3** | Codifies the three action types this amendment enumerates |
-| **ADR-024 D6** | New `AgreementConfigBugCorrected` event type as cascade trigger; operator-triggered; global no-opt-in |
+| **ADR-024 D6** | New `ConfigBugCorrected` event type as cascade trigger; operator-triggered; global no-opt-in |
 | **ADR-027** (post-launch) | `bug-fix-with-recompute` operational workflow + SLS reconciliation when first post-launch bug-with-past-impact discovered |
 | **ADR-016 D10** | Replay determinism preserved: original manifest persists; bug correction produces new manifest |
