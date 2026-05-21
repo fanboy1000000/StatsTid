@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | DRAFT (S38 TASK-3802 authorship; flips to ACCEPTED at TASK-3804 Step 7a-equivalent dual-lens). |
+| **Status** | DRAFT (S38 TASK-3802 authorship; cycle-1 dual-lens absorbed Codex P1.1 + Reviewer W2 convergent — D6 overtime feature flags removed; constraint sharpened to UI-only — plus Codex P1.3 — D7 reframed from "codify existing" to "design + implement audit query surface as S40 work"; the assumed code path didn't exist. Cycle 2 dispatched to verify. Flips to ACCEPTED on cycle-2 clean.) |
 | **Sprint** | S38 (companion to ADR-024 + ADR-013 amendment). |
 | **Domains** | Infrastructure, Backend, Frontend, Security, Payroll Integration. |
 | **Tags** | multi-tenant, saas-operations, per-tenant-sls, customer-onboarding, gdpr, noisy-neighbor-fairness, cross-tenant-reporting, feature-flags, audit-visibility, institution-type, design-binding, phase-4e. |
@@ -62,7 +62,7 @@ CREATE TABLE tenant_sls_configurations (
 2. INSERT into `tenant_sls_configurations` with provided SLS endpoint + credential ref + batch prefix (per D1)
 3. INSERT initial LocalAdmin user via existing AdminEndpoints POST logic (per S35 admin-strict If-Match)
 4. INSERT default `local_configurations` profile (if any institution-specific overrides at provision time; else NULL — falls through to central agreement config)
-5. Emit new `InstitutionProvisioned` event (EventSerializer 60 → 61 after S40) for downstream audit + billing trigger
+5. Emit new `InstitutionProvisioned` event (one of 4 new events from this ADR; total post-S40 EventSerializer count: 58 + 6 from ADR-024 + 4 from ADR-025 = 68) for downstream audit + billing trigger
 6. All 5 operations atomic per ADR-018 D3 single-tx pattern
 
 **Runbook doc** (`docs/operations/customer-onboarding-runbook.md`) covers the human steps: gather institution metadata + SLS endpoint + initial LocalAdmin contact + agreement default; invoke the endpoint; verify provisioning; deliver LocalAdmin credentials.
@@ -133,7 +133,7 @@ CREATE TABLE tenant_sls_configurations (
 
 ### D6 — Per-tenant feature flags
 
-**Problem**: institutions may differ on optional feature enablement (e.g., institution A wants overtime governance pre-approval workflow per ADR-024 D7; institution B doesn't want the workflow at all because manager-pre-approval doesn't match their cirkulær interpretation). Where does this configuration live?
+**Problem**: institutions may differ on OPTIONAL UI / surface presentation (e.g., whether the Skema page shows a particular widget, whether a non-mandatory dashboard panel renders). Where does this configuration live?
 
 **Decision**: extend `local_configurations` per ADR-017 with a `feature_flags` JSONB column. Schema:
 
@@ -141,39 +141,90 @@ CREATE TABLE tenant_sls_configurations (
 ALTER TABLE local_configurations ADD COLUMN feature_flags JSONB NOT NULL DEFAULT '{}';
 ```
 
-**Schema for flag values** (TypeScript-style):
+**Schema for flag values** (TypeScript-style; non-controversial examples — actual flag catalog evolves with each feature):
 
 ```typescript
 type FeatureFlags = {
-  overtime_governance_pre_approval?: boolean;       // ADR-024 D7 workflow opt-in
-  overtime_governance_post_hoc_ack?: boolean;       // ADR-024 D7 necessity-ack opt-in
-  // ... future per-tenant toggles
+  flex_carryover_grace_days?: number;          // per-institution UI grace-period display only; rule calc unchanged
+  optional_skema_widget_enabled?: boolean;     // UI widget toggle; no rule-engine impact
+  custom_branding_logo_url?: string;           // tenant branding only
+  // ... future per-tenant UI / surface toggles
 };
 ```
 
-**Resolution chain**: feature flags live on `local_configurations`; consumed by rule engine via `ConfigResolutionService.GetEffectiveFeatureFlags(org_id)`. Falls back to global defaults from `appsettings.json` when not set per-tenant.
+**Resolution chain**: feature flags live on `local_configurations`; consumed at the UI / endpoint surface layer via `ConfigResolutionService.GetEffectiveFeatureFlags(org_id)`. Rule engine code does NOT read feature_flags. Falls back to global defaults from `appsettings.json` when not set per-tenant.
 
-**Why JSONB not separate columns**: feature flags are inherently a growing set; JSONB lets new flags ship without ALTER TABLE migrations. Schema validation lives at the rule-engine consumer (any unknown flag is ignored; documented flag set is enumerated in `docs/operations/feature-flags-catalog.md`).
+**Why JSONB not separate columns**: feature flags are inherently a growing set; JSONB lets new flags ship without ALTER TABLE migrations. Schema validation lives at the consumer (any unknown flag is ignored; documented flag set is enumerated in `docs/operations/feature-flags-catalog.md`).
 
-**Constraint per glocal principle**: feature flags must be **optional-feature toggles**, not interpretation overrides. Per ROADMAP L24: "rule interpretation is GLOBAL — no per-institution interpretation override is permitted". Feature flags toggle which workflows run for a tenant; they do NOT change how the cirkulær is interpreted. The catalog doc enforces this in the per-flag description.
+**Hard constraint per glocal principle (S38 Step 7a P1.1 absorption)**: feature flags are **UI / surface presentation toggles ONLY**. They MUST NOT affect:
 
-**Admin UI**: extension of existing `LocalConfigurationsEditor.tsx` (S12 / S14 origin); add feature-flags pane with per-flag checkbox + documentation tooltip.
+- Rule-engine outputs (any cell in `agreement_configs` / `entitlement_configs` / `wage_type_mappings` / `position_override_configs` / new `role_config_overrides`)
+- Compensability semantics (whether a time entry produces a compensable event)
+- Workflow enablement that changes which payroll lines emit (e.g., the ADR-024 D7 overtime authorization workflow is GLOBAL per D7 §6; feature flags cannot opt institutions out of it)
+- Any cell whose value would differ in the rule-engine evaluation path
 
-### D7 — Tenant-scoped audit visibility
+Per ROADMAP L24 + ADR-024 D6 + ADR-024 D7 §6: "rule interpretation is GLOBAL — no per-institution interpretation override is permitted". Feature flags toggle UI surface presentation; they NEVER cross the rule-engine boundary. Phase E continuous-validation test in S39 asserts: every flag in `docs/operations/feature-flags-catalog.md` MUST declare `surface_scope: "ui-only"` and any new flag attempting `surface_scope: "rule-engine"` rejects at catalog-validation time.
+
+**Catalog doc** enforces this in the per-flag description with explicit `surface_scope` declaration + 1-sentence rationale showing the flag doesn't cross the rule-engine boundary. Example catalog entry:
+
+```yaml
+- name: flex_carryover_grace_days
+  surface_scope: ui-only
+  type: number
+  default: 0
+  rationale: |
+    Display-only grace-period hint for admins viewing flex balance near year-end.
+    Rule engine flex_carryover_max calculation unchanged; this number only
+    influences a UI tooltip "X days until carryover deadline".
+```
+
+**Admin UI**: extension of existing `LocalConfigurationsEditor.tsx` (S12 / S14 origin); add feature-flags pane with per-flag checkbox / value input + documentation tooltip rendering the catalog `rationale`.
+
+**Cross-reference**: ADR-024 D7 §6 "No per-institution opt-in/out" applies to the overtime authorization workflow. The pre-approval-vs-post-hoc-ack choice is per-ENTRY at the workflow level, not per-TENANT. Feature flags cannot expose this choice as a tenant toggle.
+
+### D7 — Tenant-scoped audit visibility (admin query surface design + implementation)
 
 **Problem**: institution-internal auditors need to query the audit log for their institution's events without seeing other institutions'.
 
-**Decision**: confirm + lock in current behavior: `audit_log` queries through `/api/admin/audit/` already pass through `OrgScopeValidator.ValidateOrgScopeAsync(org_id)` (per S6/S7 RBAC + S18 BLOCKER remediation). This ADR formalises the contract:
+**Current state** (verified S38 Step 7a P1.3 absorption): there is **no `/api/admin/audit/` endpoint** today. `AuditLogRepository` (S3) exposes only `GetByActorAsync` + `GetByCorrelationIdAsync` — both actor/correlation-based, not org-scoped. The `OrgScopeValidator` class exposes `ValidateOrgAccessAsync` (not `ValidateOrgScopeAsync` as previously misstated in this ADR's earlier draft). The tenant-scoped audit-visibility surface **does not exist** and was incorrectly assumed in the cycle-1 draft.
 
-**Contract**:
-- All `audit_log` queries scope to the requesting actor's accessible org subtree (via materialized-path)
-- GlobalAdmin sees all; LocalAdmin sees only their institution subtree
-- HR / employee roles see further-restricted slices per existing RBAC
-- New explicit D-test in S41 asserts cross-tenant audit_log leakage is impossible: 3 institutions × LocalAdmin querying → each sees only their subtree
+**Decision (revised)**: design + implement the admin audit-query surface as **new S40 work**, not documentary-only. Scope:
 
-**No schema change required**. The S40 work is documentary (codify the contract in `docs/SECURITY.md`) + S41 D-test confirming the existing implementation.
+**Schema** — no changes needed; `audit_log` table already carries `actor_id` + `resource` + `resource_id` + standard columns. The org-scope-derivation is at query time via JOIN through `users` table (`audit_log.actor_id` → `users.user_id` → `users.primary_org_id`) + materialized-path subtree check.
 
-**Audit-trail completeness**: the new events introduced by ADR-024 D6 (`AgreementConfigBugCorrected`) + ADR-025 D1/D2/D3/D5 (`InstitutionProvisioned`, `InstitutionDataExported`, `UserPiiErased`, `CrossTenantReportAccessed`) all flow through `audit_log` per existing infrastructure. The audit-visibility contract covers them by inheritance.
+**Endpoint design** (S40 implementation scope):
+
+```
+GET /api/admin/audit?from=<date>&to=<date>&actor_id=<optional>&resource=<optional>&page=<optional>
+  Authorization: LocalAdminOrAbove
+  OrgScope: requesting actor's accessible subtree
+
+  Implementation:
+    1. Parse query params
+    2. Look up requesting actor's accessible org subtree via OrgScopeValidator.GetAccessibleOrgsAsync(actor_id)
+    3. SELECT FROM audit_log JOIN users ON audit_log.actor_id = users.user_id
+       WHERE users.primary_org_id IN (subtree_org_ids)
+         AND audit_log.timestamp BETWEEN @from AND @to
+         [+ optional actor_id / resource filters]
+       ORDER BY audit_log.timestamp DESC
+       LIMIT 100 OFFSET (page * 100)
+    4. Return list + total count for pagination
+```
+
+**Repository extension**: new `AuditLogRepository.GetByOrgScopeAsync(IReadOnlyList<string> orgIds, AuditLogFilter filter, CancellationToken ct)` method matching the established repository-extension pattern (S30/S31 versioned-config additions).
+
+**Admin UI**: new `AuditLogView.tsx` page (LocalAdminOrAbove) — replaces the current absence of any admin-facing audit query. GlobalAdmin sees all orgs; LocalAdmin sees only their subtree (visual: org column + filter chips).
+
+**Audit-trail completeness**: the new events introduced by ADR-024 D6 (`ConfigBugCorrected` per the generalized event from P1.2 absorption) + ADR-025 D1/D2/D3/D5 (`InstitutionProvisioned`, `InstitutionDataExported`, `UserPiiErased`, `CrossTenantReportAccessed`) all flow through `audit_log` per existing infrastructure (post-S3 audit-log middleware writes a row per state-changing endpoint invocation). The new `GET /api/admin/audit` surface queries them by inheritance.
+
+**Bypass exception for D5 cross-tenant reports**: `/api/admin/reports/cross-tenant/` queries via the bypass per D5 produce `CrossTenantReportAccessed` audit events. Those events themselves are scoped per D7 (LocalAdmin viewing their own audit log sees only events the LocalAdmin actor produced; GlobalAdmin querying cross-tenant report endpoints produces events visible across orgs to other GlobalAdmins via the D7 endpoint with no scope restriction).
+
+**S41 D-tests**: 3 D-tests verify the new endpoint:
+1. Cross-tenant leakage impossible — 3 institutions × LocalAdmin querying → each sees only own subtree
+2. GlobalAdmin sees all
+3. Audit-trail completeness — every new event type from this ADR + ADR-024 surfaces in the audit log query
+
+**No Phase B dependency** — D7 is system-design + security-correctness; not cirkulær-dependent.
 
 ### D8 — Explicit `Institution` type vs generic top-level org
 
@@ -235,7 +286,7 @@ Ledger entries: `s39-d1-tenant-sls-configs` + `s39-d3-erased-users-audit` + `s39
 - `local_configurations.feature_flags` consumer in `ConfigResolutionService.GetEffectiveFeatureFlags(org_id)` (D6) + admin UI extension + `feature-flags-catalog.md`
 - `InstitutionsRepository` + 1:1 enforcement on `organizations` top-level rows (D8) + backfill seeder
 
-**New event types** (alongside ADR-024's): `InstitutionProvisioned` + `InstitutionDataExported` + `UserPiiErased` + `CrossTenantReportAccessed` (EventSerializer 60 → 64 after S40 ADR-024+ADR-025 combined).
+**New event types** (alongside ADR-024's): `InstitutionProvisioned` + `InstitutionDataExported` + `UserPiiErased` + `CrossTenantReportAccessed` (4 events; combined with ADR-024's 6 new events, EventSerializer 58 → 68 after S40).
 
 ### S41 D-tests + governance bake-in
 

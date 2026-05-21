@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | DRAFT (S38 TASK-3801 authorship; flips to ACCEPTED at TASK-3804 Step 7a-equivalent dual-lens review per S28 / S32 design-only precedent). |
+| **Status** | DRAFT (S38 TASK-3801 authorship; cycle-1 dual-lens absorbed Codex P1.2 — D6 generalized from per-surface `AgreementConfigBugCorrected` to surface-discriminated `ConfigBugCorrected` covering all 5 config surfaces — plus Reviewer W1+W4 cosmetics absorbed. Cycle 2 dispatched to verify. Flips to ACCEPTED on cycle-2 clean per S28 / S32 design-only precedent.) |
 | **Sprint** | S38 (design-only sprint; produces this ADR + ADR-025 + ADR-013 amendment for S39 schema migration + S40 cutover + S41 D-tests). |
 | **Domains** | Backend, Infrastructure, Data Model, SharedKernel, Rule Engine, Payroll Integration. |
 | **Tags** | role-within-agreement, employment-category, role-config-override, merarbejde-compensation-right, bug-correction-policy, classification-governance, interpretation-authority, overtime-authorization, post-hoc-necessity-acknowledgment, design-binding, phase-4e. |
@@ -146,20 +146,59 @@ Per ROADMAP commitment (2026-05-18), **default interpretation authority is Perso
 
 S39 Phase E tests assert per-cell `interpretation_authority` field consistency: cells with `disputed?: true` MUST have a non-default value documented.
 
+**No Phase B dependency** — D5 is policy/architecture; cirkulær wording doesn't change the policy choice.
+
 ### D6 — Bug correction operational model
 
 **Operator-triggered, not per-institution choice**. Per ROADMAP no-per-institution-opt-in policy: bug corrections apply globally to all 150 institutions or to none. Customer cannot opt out of a bug fix; this preserves the glocal interpretation principle.
 
-**New event type**: `AgreementConfigBugCorrected` (distinct from existing `AgreementConfigPublished` per ADR-014 lifecycle). The new event:
-- Emitted from a new admin endpoint `/api/admin/agreement-configs/{configId}/correct-as-bug`
-- GlobalAdminOnly RBAC (operator decision; not customer-side)
-- Includes classification metadata: `was_agreed`, `materially_wrong`, `action` fields per D3 schema
-- Routes through atomic outbox per ADR-018 D3 (single tx: row update + audit append + event emit)
-- Registered with EventSerializer (typeof 59 → 60 after S40)
+**Surface coverage (S38 Step 7a P1.2 absorption)**: bug corrections per D3 apply across **5 config surfaces** that the 5 cumulative bug-correction applications (S35 + S37 Bugs #1-#4) have touched:
 
-**SLS reconciliation pattern** for bug-with-past-impact corrections: **defer to ADR-027 (post-launch)**. Pre-launch posture means no past periods exist that need recompute; the in-band recompute path can be designed when first needed. ADR-027 placeholder filed for the first post-launch bug-with-past-impact discovery.
+| Config surface | Example bug application |
+|----------------|--------------------------|
+| `agreement_configs` | S35 AC=AFSPADSERING; S37 Bug #4 (decision-recorded for HK/PROSA OvertimeRequiresPreApproval) |
+| `entitlement_configs` | S37 Bug #1 (AC variants missing entitlement rows); S37 Bug #3 (SENIOR_DAY paired-bug) |
+| `wage_type_mappings` | S37 Bug #2 (AC variants divergent SLS codes + CHILD_SICK_DAY chain restoration) |
+| `position_override_configs` | not yet applied; available for future bug corrections |
+| `role_config_overrides` (new per D1) | not yet applied; available for future bug corrections |
 
-**Replay determinism preserved**: bug corrections produce a NEW segment manifest with corrected result; the original manifest persists and remains replayable byte-identically per ADR-016 D10. "Current truth for period P" = latest manifest's result; "historical truth at time T" = the manifest that existed at T.
+D6 generalizes the bug-correction model across all 5 surfaces via **a single surface-discriminated event** + **a single endpoint pattern**:
+
+**Single event type**: `ConfigBugCorrected` (NOT `AgreementConfigBugCorrected` — generalized from S35 → S37 → S38 evolution). EventSerializer registration per PAT-004. Payload:
+
+```typescript
+type ConfigBugCorrected = {
+  // Discriminator: which config surface
+  configSurface: 'agreement_configs' | 'entitlement_configs' | 'wage_type_mappings'
+              | 'position_override_configs' | 'role_config_overrides';
+  // Natural-key of the corrected row (varies per surface — JSONB shape)
+  configKey: object;
+  // Classification metadata per D3
+  classification: {
+    wasAgreed: 'YES' | 'NO' | 'PENDING';
+    materiallyWrong: 'NO_PRE_LAUNCH' | 'YES_PRE_LAUNCH_BUT_BROKEN' | 'PENDING_S<NN>' | 'YES_WITH_PAST_IMPACT';
+    action: 'bug-fix-without-recompute' | 'bug-fix-with-recompute' | 'decision-recorded-fix-deferred';
+    classifier: string;
+    decisionDate: string;     // YYYY-MM-DD
+    sourceCirkular: string;   // URL + paragraph OR free-form reference
+  };
+  // From/to values for audit
+  fromValue: object | null;
+  toValue: object;
+};
+```
+
+**Single endpoint pattern**: `POST /api/admin/{surface}/{id}/correct-as-bug` where `{surface}` ∈ the 5 enumerated surfaces. GlobalAdminOnly RBAC (operator decision; not customer-side). Routes through atomic outbox per ADR-018 D3 (single tx: surface-table row update + surface-specific audit table append + `ConfigBugCorrected` event emit).
+
+**Why one event type with discriminator vs per-surface event types**: 5 surfaces × bug-correction = 5 event types is registration overhead without consumer-side benefit (downstream replays + audit queries treat all 5 identically; the only consumer-side variance is the natural-key shape, which the `configKey` JSONB carries). One event with discriminator preserves all the auditability + replay properties + matches PAT-004 polymorphism convention without 5× registration.
+
+**SLS reconciliation pattern** for bug-with-past-impact corrections: **defer to ADR-027 (post-launch)**. Pre-launch posture means no past periods exist that need recompute; the in-band recompute path can be designed when first needed. ADR-027 placeholder filed for the first post-launch bug-with-past-impact discovery. ADR-027 covers the recompute workflow uniformly across all 5 surfaces using the same `ConfigBugCorrected` event as the trigger.
+
+**Replay determinism preserved**: bug corrections produce a NEW segment manifest with corrected result; the original manifest persists and remains replayable byte-identically per ADR-016 D10. "Current truth for period P" = latest manifest's result; "historical truth at time T" = the manifest that existed at T. Holds uniformly across all 5 surfaces.
+
+**Source register `bug_correction_history` `source` field** records which surface was corrected; matches the event's `configSurface` discriminator for cross-reference auditing. S39 Phase E test asserts this 1:1 mapping.
+
+**No Phase B dependency**: D6 is operational/architecture; stands on its own.
 
 ### D7 — Overtime authorization model (pre-approval + post-hoc necessity-acknowledgment)
 
@@ -204,7 +243,7 @@ Migration approach: greenfield-baked + guarded ALTER block per S30 / S31 / S35 p
 ### S40 cutover (Phase D Implementation Sprint 2)
 
 - `RoleConfigOverrideRepository` with full `(conn, tx)` overloads + `SupersedeAndCreateAsync` 3-case routing per ADR-020 D2 + `SoftDeleteAsync` per ADR-023 D8.
-- New event types `RoleConfigOverrideCreated/Updated/Superseded/SoftDeleted` + `OvertimeNecessityAcknowledged` (EventSerializer 5 new typeof registrations).
+- New event types `RoleConfigOverrideCreated/Updated/Superseded/SoftDeleted` + `OvertimeNecessityAcknowledged` + generalized `ConfigBugCorrected` (per D6 P1.2 absorption replacing the per-surface `AgreementConfigBugCorrected`) = **6 new typeof registrations** (EventSerializer 58 → 64 from ADR-024 alone post-S40; ADR-025 adds 4 more = 58 → 68 net post-S40 combined).
 - `ConfigResolutionService` 4-layer chain (D1 cutover): central → role-override → position-override → local. Dated lookup (S33 ADR-023 D1 pattern) for replay determinism.
 - `OvertimeGovernanceRule` + `PayrollMappingService.BuildLine` read tri-state `MerarbejdeCompensationRight` (D2). `NONE` → no MERARBEJDE emission. `DISCRETIONARY` → flag event for manual trigger.
 - New admin endpoint `/api/admin/role-config-overrides/{...}` with admin-strict If-Match (D1).
