@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | DRAFT (S38b TASK-38B-01 authorship + cycle 1-2 absorption. Cycle 1: Codex B1+B2+B3 + Reviewer W1+W2+W3; absorbed D2 dispatch reframe + D3 event names + 3-tier visibility_scope enum + mapper count ~24→~34. Cycle 2: B2/B3/W1 CLOSED; NEW-B1 (Consequences L336 ghost from cycle-1's same edit citing rejected `IEventHandler<T>`) + W-new-1 (mapper count still ~34, actual ~53) absorbed in cycle-2 textual cleanup per `feedback_missed_facts_vs_thrash.md` (same edit, partial absorption, not architectural thrash). Cycle 3 dispatched to verify. Flips to ACCEPTED on cycle-3 clean.) |
+| **Status** | ACCEPTED (S38b TASK-38B-01 authorship + 3-cycle Step 7a dual-lens trail with cycle-3 lens convergence on 2026-05-21. Cycle 1: Codex BLOCKED 3 P1 (B1 dispatch / B2 event names / B3 NULL-target overload) + Reviewer W1+W2+W3; absorbed `ceda80d` (D2 dispatch reframe to S27 endpoint-direct + D3 event names + 3-tier visibility_scope enum). Cycle 2: B2/B3/W1 CLOSED; NEW-B1 Consequences L336 same-edit ghost + W-new-1 mapper count ~34 vs actual ~53; absorbed `1b374e6` (L336 explicit "NO event-handler bus" + mapper count fully recounted). Cycle 3: both lenses APPROVED, no new same-area BLOCKERs, halt-and-prompt did NOT fire. First session application of post-S35 governance `a094630` cycle-2-absorption + cycle-3-verification flow.) |
 | **Sprint** | S38b (single-ADR sub-sprint absorbing the deferred ADR-025 D7) |
 | **Domains** | Backend, Infrastructure, Security, Data Model, Frontend. |
 | **Tags** | audit-visibility, tenant-scoping, event-projection, sync-in-tx-projection, audit_projection, scope-by-target, per-event-declaration, design-binding, phase-4e. |

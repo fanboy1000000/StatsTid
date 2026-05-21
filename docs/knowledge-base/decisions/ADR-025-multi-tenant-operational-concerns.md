@@ -182,9 +182,9 @@ Per ROADMAP L24 + ADR-024 D6 + ADR-024 D7 §6: "rule interpretation is GLOBAL �
 
 **Cross-reference**: ADR-024 D7 §6 "No per-institution opt-in/out" applies to the overtime authorization workflow. The pre-approval-vs-post-hoc-ack choice is per-ENTRY at the workflow level, not per-TENANT. Feature flags cannot expose this choice as a tenant toggle.
 
-### D7 — DEFERRED to ADR-026 (Audit Visibility Surface — dedicated design sprint)
+### D7 — SUPERSEDED by ADR-026 (Audit Visibility Surface, ACCEPTED S38b 2026-05-21)
 
-**Status (cycle-3 halt-and-prompt resolution, 2026-05-21)**: this decision is DEFERRED from ADR-025 to a dedicated future ADR — **ADR-026 (Audit Visibility Surface)** — per user adjudication at S38 Step 7a cycle-3 halt-and-prompt per `feedback_thrash_defer_real_world.md`.
+**Status (post-S38b 2026-05-21)**: this decision is SUPERSEDED by **ADR-026 (Audit Visibility Surface)** which lands path (C) event-projection per ADR-018 D13 in a dedicated sub-sprint with 3-cycle Step 7a dual-lens convergence. The S38 cycle-3 halt-and-prompt deferral that originally moved D7 to ADR-026 placeholder resolved cleanly in S38b. ADR-026 is now the canonical decision; this D7 stays as placeholder for cross-reference traceability.
 
 **Why deferred**: cycle-1 / cycle-2 / cycle-3 Step 7a reviews each surfaced new defects in this same architectural area — first the missing endpoint surface (cycle 1), then the row-shape gap (cycle 2), then the internal contradiction between honest row-shape acknowledgment and event-type-completeness D-test claims (cycle 3). Three cycles disclosing new defects in the same area is the canonical signal that the architectural seam is wider than one decision in a multi-decision ADR can carry. The audit-visibility surface needs its own dedicated design pass.
 
