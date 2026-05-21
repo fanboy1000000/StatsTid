@@ -391,7 +391,7 @@ The 20 cells below validate the 15-column schema works on real AC OK24 data, bef
 | `disputed?` | false |
 | `notes` | Cross-table reference. Reset month = 1, no carryover, not pro-rated. |
 
-### SR-AC-OK24-015 — entitlement_configs.SENIOR_DAY.annual_quota
+### SR-AC-OK24-015 — entitlement_configs.SENIOR_DAY.annual_quota (RESOLVED via S37 Bug #3 absorption)
 
 | Field | Value |
 |-------|-------|
@@ -399,17 +399,17 @@ The 20 cells below validate the 15-column schema works on real AC OK24 data, bef
 | `agreement_code` | AC |
 | `ok_version` | OK24 |
 | `field` | `entitlement_configs.SENIOR_DAY.annual_quota` |
-| `current_encoded_value` | `0` |
-| `authoritative_source` | pending (Phase B — `0` with `min_age = 60` suggests the rule is "age-based grant, no automatic quota" rather than "0 days for everyone") |
-| `interpretation` | Sentinel `0` with `min_age = 60` predicate. The intended encoding is "no automatic grant; eligibility starts at age 60+ and quota is determined per-employee (likely 1–5 days depending on age band)". As encoded today, `0` returns no days regardless of age — likely incomplete encoding. |
-| `confidence_level` | LOW (encoding semantics unclear; this is exactly the kind of cell Phase B should adjudicate) |
-| `interpretation_authority` | negotiated |
-| `last_verified_by` | pending |
-| `decision_date` | pending |
+| `current_encoded_value` | `2` (post-S37 TASK-3703; was `0`) |
+| `authoritative_source` | Per interim-expert decision (Path B seed-side fix): 2 days/year for state-sector senior employees age 62+. Paragraph cite from cirkulær pending real Phase B. |
+| `interpretation` | Flat-grant SENIOR_DAY entitlement: 2 days/year for employees age 62+ (gate via `min_age = 62` co-stored on the same row; see SR-AC-OK24-035). Rule engine reads quota directly with min_age as the eligibility gate; no banded structure. |
+| `confidence_level` | MEDIUM (interim-expert decision; real Phase B should confirm paragraph cite for the specific quota value) |
+| `interpretation_authority` | negotiated (Personalestyrelsen + Akademikerne) |
+| `last_verified_by` | Orchestrator (interim, user-confirmed decision 2026-05-21) |
+| `decision_date` | 2026-05-21 |
 | `supersession_history` | (none) |
-| `bug_correction_history` | (none) |
+| `bug_correction_history` | `[{date: 2026-05-21, from_value: "annual_quota=0 + min_age=60 (paired structural inconsistency)", to_value: "annual_quota=2 + min_age=62 (flat-grant Path B per interim-expert)", source: "S37 TASK-3703 + Bug #3 interim-expert decision", commit: "<this S37 commit>", classifier: "Orchestrator (interim, user-confirmed)", was_agreed: NO, materially_wrong: NO_PRE_LAUNCH, action: "bug-fix-without-recompute"}]` |
 | `disputed?` | false |
-| `notes` | **Candidate bug discovery**. The `0` quota means SENIOR_DAY entitlement never grants any days even for age-60+ employees. Either (a) the encoding is incomplete (rule logic should override `0` with age-banded quota lookup), or (b) the `0` is correct and senior days are not granted via this table (but then `min_age = 60` is vestigial). Flag for S37 absorption + Phase B sign-off. Priority for S37 because senior-employee compensation correctness is a domain-correctness concern. |
+| `notes` | Fourth concrete application of bug-correction-when-classified path. User-corrected min_age from 60 → 62 in the same fix (rationale: state-sector senior eligibility threshold is age 62+, not 60). Same correction applied uniformly across all 5 agreements (AC + HK + PROSA + AC variants); 10 rows total. Cross-ref SR-AC-OK24-035 + SR-HK-OK24-029 + SR-PROSA-OK24-006 + AC variants inheritance via SR-AC_RESEARCH-OK24-008. |
 
 ### SR-AC-OK24-016 — entitlement_configs.CHILD_SICK.annual_quota
 
@@ -799,17 +799,17 @@ The 20 cells below validate the 15-column schema works on real AC OK24 data, bef
 | `agreement_code` | AC |
 | `ok_version` | OK24 |
 | `field` | `entitlement_configs.SENIOR_DAY.{accrual_model, reset_month, carryover_max, pro_rate_by_part_time, is_per_episode, min_age}` |
-| `current_encoded_value` | `IMMEDIATE / 1 / 0 / false / false / 60` |
-| `authoritative_source` | pending (Phase B priority — same LOW-confidence concern as SR-AC-OK24-015; the `min_age = 60` with `annual_quota = 0` encoding is unclear) |
-| `interpretation` | The `min_age = 60` field gates eligibility to employees aged 60+. **However**, paired with `annual_quota = 0` (see SR-AC-OK24-015), no days are actually granted. The intended semantic is likely "age-banded grant lookup outside this table" (e.g., 1 day at age 60–61, 2 days at age 62–63, ...) but as encoded the system never grants any senior days regardless of age. **Bug candidate**. |
-| `confidence_level` | LOW (encoding semantics unclear; paired with SR-AC-OK24-015 LOW finding) |
-| `interpretation_authority` | negotiated |
-| `last_verified_by` | pending |
-| `decision_date` | pending |
+| `current_encoded_value` | `IMMEDIATE / 1 / 0 / false / false / 62` (post-S37 TASK-3703; was `... / 60`) |
+| `authoritative_source` | Per interim-expert decision; cirkulær paragraph pending real Phase B. |
+| `interpretation` | Senior-day eligibility gated by min_age=62. Quota (in main row SR-AC-OK24-015) is 2 days/year flat-grant. Pro-rate=false (whole-person benefit). |
+| `confidence_level` | MEDIUM (paired with SR-AC-OK24-015) |
+| `interpretation_authority` | negotiated (Personalestyrelsen + Akademikerne) |
+| `last_verified_by` | Orchestrator (interim, user-confirmed 2026-05-21) |
+| `decision_date` | 2026-05-21 |
 | `supersession_history` | (none) |
-| `bug_correction_history` | (none) |
+| `bug_correction_history` | `[{date: 2026-05-21, from_value: "min_age=60 paired with quota=0 (structurally inconsistent)", to_value: "min_age=62 (paired with quota=2 per SR-AC-OK24-015)", source: "S37 TASK-3703 + Bug #3", commit: "<this S37 commit>", classifier: "Orchestrator (interim, user-confirmed)", was_agreed: NO, materially_wrong: NO_PRE_LAUNCH, action: "bug-fix-without-recompute"}]` |
 | `disputed?` | false |
-| `notes` | **Candidate bug** (paired with SR-AC-OK24-015). The `min_age = 60` field is non-NULL only for SENIOR_DAY entitlements — schema design implies age-based grant. Phase B priority. |
+| `notes` | Co-located with SR-AC-OK24-015 main quota cell. The min_age=62 user-correction is the substantive change vs the paired-bug original (was 60). |
 
 ### SR-AC-OK24-036 — entitlement_configs.SPECIAL_HOLIDAY sub-fields (compound)
 
@@ -1545,7 +1545,7 @@ HK = Handels- og Kontorfunktionærer i Staten. Distinct cirkulær from AC; subst
 | `disputed?` | false |
 | `notes` | **DIVERGENT from AC** (SR-AC-OK24-016 = 1 day). The AC=1 / HK=2 / PROSA=3 progression matches established convention; Phase B should confirm cirkulær-paragraph. |
 
-### SR-HK-OK24-029 — entitlement_configs.SENIOR_DAY (compound, inherits paired bug candidate)
+### SR-HK-OK24-029 — entitlement_configs.SENIOR_DAY (RESOLVED via S37 Bug #3 absorption)
 
 | Field | Value |
 |-------|-------|
@@ -1553,15 +1553,15 @@ HK = Handels- og Kontorfunktionærer i Staten. Distinct cirkulær from AC; subst
 | `agreement_code` | HK |
 | `ok_version` | OK24 |
 | `field` | `entitlement_configs.SENIOR_DAY.{annual_quota, accrual_model, reset_month, carryover_max, pro_rate_by_part_time, is_per_episode, min_age}` |
-| `current_encoded_value` | `0 / IMMEDIATE / 1 / 0 / false / false / 60` |
-| `authoritative_source` | pending (Phase B PRIORITY — same paired-bug-candidate as AC SR-AC-OK24-015 + 035) |
-| `interpretation` | Same encoding as AC: `annual_quota = 0` with `min_age = 60`. As encoded, no senior days grant regardless of age. **Bug candidate** — likely incomplete encoding (rule should override with age-banded lookup) or vestigial `min_age` field. |
-| `confidence_level` | LOW (same as AC paired finding) |
+| `current_encoded_value` | `2 / IMMEDIATE / 1 / 0 / false / false / 62` (post-S37 TASK-3703) |
+| `authoritative_source` | Per interim-expert decision (Path B, applied uniformly across AC + HK + PROSA + variants); cirkulær cite pending real Phase B. |
+| `interpretation` | Same flat-grant encoding as AC base: 2 days/year for HK employees age 62+. Resolution applied uniformly. |
+| `confidence_level` | MEDIUM (paired with SR-AC-OK24-015) |
 | `interpretation_authority` | negotiated |
-| `last_verified_by` | pending |
-| `decision_date` | pending |
+| `last_verified_by` | Orchestrator (interim, user-confirmed 2026-05-21) |
+| `decision_date` | 2026-05-21 |
 | `supersession_history` | (none) |
-| `bug_correction_history` | (none) |
+| `bug_correction_history` | `[{date: 2026-05-21, from_value: "quota=0 + min_age=60", to_value: "quota=2 + min_age=62 (joint with AC + PROSA + variants)", source: "S37 TASK-3703 + Bug #3 Path B uniform application", commit: "<this S37 commit>", classifier: "Orchestrator (interim, user-confirmed)", was_agreed: NO, materially_wrong: NO_PRE_LAUNCH, action: "bug-fix-without-recompute"}]` |
 | `disputed?` | false |
 | `notes` | **CANDIDATE BUG** — inherits paired finding from SR-AC-OK24-015 + 035. Same encoding across AC / HK / PROSA / AC_RESEARCH / AC_TEACHING — bug correction (if classified) applies uniformly to all 5 agreements per ROADMAP no-per-institution-opt-in policy. |
 
@@ -1805,7 +1805,7 @@ PROSA cirkulær source: PROSA + Personalestyrelsen / Medst joint administration;
 | `disputed?` | false |
 | `notes` | **DIVERGENT from HK** (SR-HK-OK24-028 = 2) and AC (SR-AC-OK24-016 = 1). The AC < HK < PROSA progression is established. |
 
-### SR-PROSA-OK24-006 — entitlement_configs.SENIOR_DAY (compound, inherits paired bug)
+### SR-PROSA-OK24-006 — entitlement_configs.SENIOR_DAY (RESOLVED via S37 Bug #3 absorption)
 
 | Field | Value |
 |-------|-------|
@@ -1813,17 +1813,17 @@ PROSA cirkulær source: PROSA + Personalestyrelsen / Medst joint administration;
 | `agreement_code` | PROSA |
 | `ok_version` | OK24 |
 | `field` | `entitlement_configs.SENIOR_DAY.{annual_quota, accrual_model, reset_month, carryover_max, pro_rate_by_part_time, is_per_episode, min_age}` |
-| `current_encoded_value` | `0 / IMMEDIATE / 1 / 0 / false / false / 60` |
-| `authoritative_source` | pending (same paired-bug-candidate as AC + HK; init.sql:1377 confirms identical encoding across all 3 base agreements) |
-| `interpretation` | Same encoding as AC + HK: `annual_quota = 0` with `min_age = 60`. As encoded, no senior days grant regardless of age. **Bug candidate** — same structural inconsistency as SR-AC-OK24-015 + 035 + SR-HK-OK24-029. |
-| `confidence_level` | LOW |
+| `current_encoded_value` | `2 / IMMEDIATE / 1 / 0 / false / false / 62` (post-S37 TASK-3703) |
+| `authoritative_source` | Per interim-expert decision (Path B uniform application); cirkulær cite pending real Phase B. |
+| `interpretation` | Same flat-grant encoding as AC + HK base: 2 days/year for PROSA employees age 62+. |
+| `confidence_level` | MEDIUM (uniform with AC + HK) |
 | `interpretation_authority` | negotiated |
-| `last_verified_by` | pending |
-| `decision_date` | pending |
+| `last_verified_by` | Orchestrator (interim, user-confirmed 2026-05-21) |
+| `decision_date` | 2026-05-21 |
 | `supersession_history` | (none) |
-| `bug_correction_history` | (none) |
+| `bug_correction_history` | `[{date: 2026-05-21, from_value: "quota=0 + min_age=60", to_value: "quota=2 + min_age=62 (joint with AC + HK + variants)", source: "S37 TASK-3703 + Bug #3 Path B uniform application", commit: "<this S37 commit>", classifier: "Orchestrator (interim, user-confirmed)", was_agreed: NO, materially_wrong: NO_PRE_LAUNCH, action: "bug-fix-without-recompute"}]` |
 | `disputed?` | false |
-| `notes` | **CANDIDATE BUG** — inherits paired finding from AC + HK. Cross-agreement: 3 of 3 base agreements + 2 AC variants (covered in TASK-3605) likely all share this encoding. Bug correction (if classified) applies uniformly to all 5 agreements per ROADMAP no-per-institution-opt-in policy. |
+| `notes` | Resolved uniformly across all 5 agreements per ROADMAP no-per-institution-opt-in policy. |
 
 ### SR-PROSA-OK24-007 — OvertimeRequiresPreApproval (inherits HK candidate bug)
 
@@ -2124,25 +2124,25 @@ AC_RESEARCH compact form mirrors PROSA's "mirrors HK" convention — bundle non-
 | `disputed?` | false |
 | `notes` | Same explicit-absence pattern as HK / PROSA. Cross-ref distinction: AC + RESEARCHER position override (SR-AC-OK24-039) is a separate path from AC_RESEARCH agreement code. Phase B should clarify the intended use-case split between (a) AC + RESEARCHER position and (b) AC_RESEARCH agreement code. |
 
-### SR-AC_RESEARCH-OK24-008 — Senior-day candidate-bug carries through (no entitlement row)
+### SR-AC_RESEARCH-OK24-008 — entitlement_configs.SENIOR_DAY (RESOLVED via S37 Bug #1 + #3 absorption, sequenced)
 
 | Field | Value |
 |-------|-------|
 | `row_id` | SR-AC_RESEARCH-OK24-008 |
 | `agreement_code` | AC_RESEARCH |
 | `ok_version` | OK24 |
-| `field` | `entitlement_configs.SENIOR_DAY` — paired with the broader entitlement-gap finding (SR-AC_RESEARCH-OK24-005) |
-| `current_encoded_value` | `(no row; AC_RESEARCH has no SENIOR_DAY entitlement_configs row)` |
-| `authoritative_source` | pending (Phase B — same paired-bug as AC base if AC_RESEARCH eventually gets entitlement rows mirroring AC) |
-| `interpretation` | AC_RESEARCH inherits the SENIOR_DAY paired-bug candidate by extension. If Phase B resolves SR-AC_RESEARCH-OK24-005 (missing entitlements) by adding AC_RESEARCH entitlement rows mirroring AC base, those rows will carry the same `annual_quota = 0` + `min_age = 60` paired encoding flagged for AC + HK + PROSA. Bug correction (if classified) applies uniformly. |
-| `confidence_level` | LOW (compounds the SR-AC_RESEARCH-OK24-005 entitlement gap with the SR-AC-OK24-015 + 035 paired-bug finding) |
+| `field` | `entitlement_configs.SENIOR_DAY` (now exists per S37 TASK-3701 Bug #1 row insertion + TASK-3703 Bug #3 quota+min_age correction) |
+| `current_encoded_value` | `2 / IMMEDIATE / 1 / 0 / false / false / 62` (uniform with AC base post-Bug #3; AC_TEACHING inherits identically) |
+| `authoritative_source` | Per interim-expert decision (Path B uniform application); cirkulær cite pending real Phase B. |
+| `interpretation` | AC_RESEARCH gets the same flat-grant SENIOR_DAY entitlement as AC base post-S37: 2 days/year for employees age 62+. Resolution sequenced: Bug #1 added the row (initially with the broken paired values); Bug #3 corrected those values uniformly. |
+| `confidence_level` | MEDIUM (uniform with AC base) |
 | `interpretation_authority` | negotiated |
-| `last_verified_by` | pending |
-| `decision_date` | pending |
+| `last_verified_by` | Orchestrator (interim, user-confirmed 2026-05-21) |
+| `decision_date` | 2026-05-21 |
 | `supersession_history` | (none) |
-| `bug_correction_history` | (none) |
+| `bug_correction_history` | `[{date: 2026-05-21, from_value: "(no row)", to_value: "quota=2 + min_age=62 (final post-Bug-#1-and-#3 sequenced)", source: "S37 TASK-3701 + TASK-3703 sequence", commit: "<this S37 commit + earlier TASK-3701 commit>", classifier: "Orchestrator (interim, user-confirmed)", was_agreed: NO, materially_wrong: NO_PRE_LAUNCH, action: "bug-fix-without-recompute"}]` |
 | `disputed?` | false |
-| `notes` | **Inherits SENIOR_DAY candidate bug pending resolution of entitlement-gap finding**. Phase B priority sequencing: resolve SR-AC_RESEARCH-OK24-005 first (entitlement gap); then SENIOR_DAY paired-bug auto-applies to any newly-seeded AC_RESEARCH entitlement rows. |
+| `notes` | Two bug corrections applied in sequence: Bug #1 (TASK-3701) created the missing row inheriting AC base; Bug #3 (TASK-3703) corrected the inherited values across all 5 agreements uniformly. AC_TEACHING SR-AC_TEACHING-OK24-008 (if separately referenced) inherits identically. |
 
 ---
 

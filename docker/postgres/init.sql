@@ -1384,13 +1384,14 @@ INSERT INTO entitlement_configs (entitlement_type, agreement_code, ok_version, a
     ('CHILD_SICK', 'HK', 'OK26', 2, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barn syg – 2 dage per episode', '0001-01-01'),
     ('CHILD_SICK', 'PROSA', 'OK24', 3, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barn syg – 3 dage per episode', '0001-01-01'),
     ('CHILD_SICK', 'PROSA', 'OK26', 3, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barn syg – 3 dage per episode', '0001-01-01'),
-    -- SENIOR_DAY: 0 days default, min_age=60
-    ('SENIOR_DAY', 'AC', 'OK24', 0, 'IMMEDIATE', 1, 0, false, false, 60, 'Seniordage – kræver alder 60+', '0001-01-01'),
-    ('SENIOR_DAY', 'AC', 'OK26', 0, 'IMMEDIATE', 1, 0, false, false, 60, 'Seniordage – kræver alder 60+', '0001-01-01'),
-    ('SENIOR_DAY', 'HK', 'OK24', 0, 'IMMEDIATE', 1, 0, false, false, 60, 'Seniordage – kræver alder 60+', '0001-01-01'),
-    ('SENIOR_DAY', 'HK', 'OK26', 0, 'IMMEDIATE', 1, 0, false, false, 60, 'Seniordage – kræver alder 60+', '0001-01-01'),
-    ('SENIOR_DAY', 'PROSA', 'OK24', 0, 'IMMEDIATE', 1, 0, false, false, 60, 'Seniordage – kræver alder 60+', '0001-01-01'),
-    ('SENIOR_DAY', 'PROSA', 'OK26', 0, 'IMMEDIATE', 1, 0, false, false, 60, 'Seniordage – kræver alder 60+', '0001-01-01'),
+    -- SENIOR_DAY: 2 days/year for age 62+ (S37 TASK-3703 Bug #3 absorption 2026-05-21, Path B seed-side fix
+    -- per interim-expert decision; previously paired-broken with quota=0 + min_age=60). Bug-with-no-past-impact.
+    ('SENIOR_DAY', 'AC',    'OK24', 2, 'IMMEDIATE', 1, 0, false, false, 62, 'Seniordage – kræver alder 62+', '0001-01-01'),
+    ('SENIOR_DAY', 'AC',    'OK26', 2, 'IMMEDIATE', 1, 0, false, false, 62, 'Seniordage – kræver alder 62+', '0001-01-01'),
+    ('SENIOR_DAY', 'HK',    'OK24', 2, 'IMMEDIATE', 1, 0, false, false, 62, 'Seniordage – kræver alder 62+', '0001-01-01'),
+    ('SENIOR_DAY', 'HK',    'OK26', 2, 'IMMEDIATE', 1, 0, false, false, 62, 'Seniordage – kræver alder 62+', '0001-01-01'),
+    ('SENIOR_DAY', 'PROSA', 'OK24', 2, 'IMMEDIATE', 1, 0, false, false, 62, 'Seniordage – kræver alder 62+', '0001-01-01'),
+    ('SENIOR_DAY', 'PROSA', 'OK26', 2, 'IMMEDIATE', 1, 0, false, false, 62, 'Seniordage – kræver alder 62+', '0001-01-01'),
     -- S37 TASK-3701 Bug #1 absorption: AC variants (AC_RESEARCH + AC_TEACHING) mirror AC base values
     -- per interim-expert decision 2026-05-21. Bug-with-no-past-impact under pre-launch posture.
     -- VACATION inherits Ferieloven (universal); other 4 inherit AC overenskomst by structural inheritance.
@@ -1410,10 +1411,10 @@ INSERT INTO entitlement_configs (entitlement_type, agreement_code, ok_version, a
     ('CHILD_SICK',      'AC_RESEARCH', 'OK26',  1, 'IMMEDIATE', 1, 0, false, true,  NULL, 'Barn syg – 1 dag per episode',     '0001-01-01'),
     ('CHILD_SICK',      'AC_TEACHING', 'OK24',  1, 'IMMEDIATE', 1, 0, false, true,  NULL, 'Barn syg – 1 dag per episode',     '0001-01-01'),
     ('CHILD_SICK',      'AC_TEACHING', 'OK26',  1, 'IMMEDIATE', 1, 0, false, true,  NULL, 'Barn syg – 1 dag per episode',     '0001-01-01'),
-    ('SENIOR_DAY',      'AC_RESEARCH', 'OK24',  0, 'IMMEDIATE', 1, 0, false, false, 60,   'Seniordage – kræver alder 60+',    '0001-01-01'),
-    ('SENIOR_DAY',      'AC_RESEARCH', 'OK26',  0, 'IMMEDIATE', 1, 0, false, false, 60,   'Seniordage – kræver alder 60+',    '0001-01-01'),
-    ('SENIOR_DAY',      'AC_TEACHING', 'OK24',  0, 'IMMEDIATE', 1, 0, false, false, 60,   'Seniordage – kræver alder 60+',    '0001-01-01'),
-    ('SENIOR_DAY',      'AC_TEACHING', 'OK26',  0, 'IMMEDIATE', 1, 0, false, false, 60,   'Seniordage – kræver alder 60+',    '0001-01-01')
+    ('SENIOR_DAY',      'AC_RESEARCH', 'OK24',  2, 'IMMEDIATE', 1, 0, false, false, 62,   'Seniordage – kræver alder 62+',    '0001-01-01'),
+    ('SENIOR_DAY',      'AC_RESEARCH', 'OK26',  2, 'IMMEDIATE', 1, 0, false, false, 62,   'Seniordage – kræver alder 62+',    '0001-01-01'),
+    ('SENIOR_DAY',      'AC_TEACHING', 'OK24',  2, 'IMMEDIATE', 1, 0, false, false, 62,   'Seniordage – kræver alder 62+',    '0001-01-01'),
+    ('SENIOR_DAY',      'AC_TEACHING', 'OK26',  2, 'IMMEDIATE', 1, 0, false, false, 62,   'Seniordage – kræver alder 62+',    '0001-01-01')
 ON CONFLICT (entitlement_type, agreement_code, ok_version, effective_from) DO NOTHING;
 
 -- ============================================================
