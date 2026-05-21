@@ -112,7 +112,7 @@ Per-task detail in PLAN-s36.md.
 
 ### Phase 4 — Existing Doc Cross-Reference (1 task)
 
-- **TASK-3608** — `danish-agreements.md` cross-reference update. Add source-register row IDs to existing cells. No prose rewrite (deferred to S41 TASK-4106).
+- **TASK-3608** — `danish-agreements.md` cross-reference update. **completed** (this commit). SR row references added inline as "SR rows" columns to 7 tables (Key Behavioral Differences / Supplement Time Windows / Overtime Thresholds / Compensation Model / Entitlement Quotas / Position Overrides + per-agreement bundle SR refs above wage type mappings sections). Header note added cross-referencing the 3 S36-produced docs (source-register + role-dimension-audit + ruleset-audit). No prose rewriting beyond the row-ID insertion and brief candidate-bug call-outs (SENIOR_DAY paired-bug; AC variants entitlement gap; AC variants SLS code divergence; MERARBEJDE SLS_0210 collision). Compensation Model section gets SR rows column matching S35 TASK-3504 addition. Full prose rewrite deferred to S41 TASK-4106.
 
 ### Phase 5 — Phase B Kickoff + Sprint Close (2 tasks)
 

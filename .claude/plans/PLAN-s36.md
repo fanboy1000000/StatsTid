@@ -309,7 +309,7 @@ _Checked off as the sprint progresses; final assertion in TASK-3610._
 | Field | Value |
 |-------|-------|
 | **ID** | TASK-3608 |
-| **Status** | pending |
+| **Status** | completed (this commit) |
 | **Agent** | Orchestrator-direct |
 | **Components** | `docs/references/danish-agreements.md` (UPDATE — cross-reference only; no prose rewrite) |
 | **Dependencies** | TASK-3607 |
