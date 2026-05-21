@@ -9,7 +9,7 @@
 | **Orchestrator Approved** | yes — 2026-05-21 |
 | **Build Verified** | N/A — design-only sprint; no code changes; no `dotnet build` verification needed (S28 / S32 precedent) |
 | **Test Verified** | N/A — design-only sprint; test totals unchanged from S35 close (869 total = 526 unit + 35 plain regression + 218 Docker-gated + 90 frontend). `sprint-test-validation` skill SKIP with rationale per design-only sprint contract. |
-| **Sprint-end HEAD** | _filled by close commit_ |
+| **Sprint-end HEAD** | `7de54a1` (TASK-3610 sprint close) |
 | **Sprint-start commit base** | `a094630` (post-S35 governance commit, 2026-05-20 — cap-fires-after-verification + post-7a-coverage governance edits) |
 | **Sprint type** | **DESIGN-ONLY** — produces 3 NEW reference docs (`agreement-source-register.md` + `role-dimension-audit.md` + `agreement-ruleset-audit.md`) + 1 UPDATE (`danish-agreements.md` cross-reference) + 1 NEW handoff doc (`phase-b-handoff-package.md`). No code changes; no test changes. Mirrors S28 / S32 design-only pattern. |
 | **Refinement** | Not filed. `.claude/plans/PROGRAM-s36-s41-domain-correctness.md` is the de facto refinement artifact — its design absorbed dual-lens scrutiny during S35 cycle-1 absorption (committed 2026-05-18). |
