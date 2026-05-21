@@ -116,7 +116,7 @@ Per-task detail in PLAN-s36.md.
 
 ### Phase 5 — Phase B Kickoff + Sprint Close (2 tasks)
 
-- **TASK-3609** — Phase B kickoff packaging (`docs/references/phase-b-handoff-package.md`); domain-expert handoff package with review-form template
+- **TASK-3609** — Phase B kickoff packaging (`docs/references/phase-b-handoff-package.md`). **completed** (this commit). Domain-expert handoff package with 4-tier priority sequencing (Tier 1 = 4 candidate bugs requiring direction-adjudication; Tier 2 = ~8 MEDIUM-HIGH baseline cells; Tier 3 = ~80 MATCH-PENDING-SOURCE cells; Tier 4 = ~5 DRIFT-UNCLEAR). Per-cell review-form template + bulk-review shortcut for MATCH cells. Candidate domain-expert profile table (6 expert types: internal customer HR/payroll + union consultants per agreement + retired Personalestyrelsen + external legal counsel). Recommended engagement model (primary customer reviewer + secondary union consultants in parallel + dispute resolution per ROADMAP employer-side default). Engagement protocol per PROGRAM L94-99. Tracking dashboard for Phase B status. Forward pointers to S37 absorption tasks (TASK-3700..3709). Per-task detail in PLAN-s36.md.
 - **TASK-3610** — Sprint close (SPRINT-36.md close sections + INDEX.md finalization + ROADMAP Phase 4e Phase A pass 1 marked COMPLETE + MEMORY.md S36 line)
 
 Per-task detail in PLAN-s36.md.

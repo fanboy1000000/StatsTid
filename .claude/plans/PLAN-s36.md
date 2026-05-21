@@ -331,7 +331,7 @@ _Checked off as the sprint progresses; final assertion in TASK-3610._
 | Field | Value |
 |-------|-------|
 | **ID** | TASK-3609 |
-| **Status** | pending |
+| **Status** | completed (this commit) |
 | **Agent** | Orchestrator-direct |
 | **Components** | `docs/references/phase-b-handoff-package.md` (NEW) |
 | **Dependencies** | TASK-3608 |
