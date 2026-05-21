@@ -1405,7 +1405,7 @@ HK = Handels- og Kontorfunktionærer i Staten. Distinct cirkulær from AC; subst
 | `disputed?` | false |
 | `notes` | Same value as AC SR-AC-OK24-005 + PROSA equivalent. The HK / PROSA / AC family difference is `EmployeeCompensationChoice` (HK / PROSA = true; AC = false), not `DefaultCompensationModel`. |
 
-### SR-HK-OK24-022 — OvertimeRequiresPreApproval (candidate bug)
+### SR-HK-OK24-022 — OvertimeRequiresPreApproval (DECISION RECORDED; seed flip GATED on ADR-024 D7 workflow extension landing S40)
 
 | Field | Value |
 |-------|-------|
@@ -1413,17 +1413,17 @@ HK = Handels- og Kontorfunktionærer i Staten. Distinct cirkulær from AC; subst
 | `agreement_code` | HK |
 | `ok_version` | OK24 |
 | `field` | `OvertimeRequiresPreApproval` |
-| `current_encoded_value` | `false` |
-| `authoritative_source` | pending (Phase B PRIORITY — HK overtime is the load-bearing overtime regime; the cirkulær may require leader pre-approval for non-emergency overtime; current `false` may be incorrect) |
-| `interpretation` | Pre-approval workflow gate. `false` means HK overtime can be entered without prior manager pre-approval; the S17 overtime governance rule will emit warnings but not block. Question for Phase B: does HK overenskomst require pre-approval for non-emergency overtime? If yes, current encoding inverts the rule. |
-| `confidence_level` | LOW (encoding may be incorrect; Phase B priority) |
-| `interpretation_authority` | Personalestyrelsen |
-| `last_verified_by` | pending |
-| `decision_date` | pending |
+| `current_encoded_value` | `false` (seed unchanged in S37; flip to `true` deferred to S40) |
+| `authoritative_source` | HK Stat overenskomst (employer-ordered overtime concept, "beordret overarbejde"); cirkulær paragraph cite pending real Phase B. |
+| `interpretation` | Pre-approval workflow gate. Per interim-expert decision 2026-05-21 (Path A): HK overtime requires manager pre-approval per cirkulær framework — current `false` inverts the rule. **However**, seed flip to `true` is GATED on **ADR-024 D7 workflow extension** landing in S40, because the cirkulær framework also permits post-hoc necessity-acknowledgment ("manager later marks entry as ordered/necessary") which the current S17 OvertimeGovernanceRule does not implement. Flipping `false → true` without the necessity-acknowledgment path would block legitimate necessity-driven overtime that currently flows through. |
+| `confidence_level` | HIGH for direction (Path A); MEDIUM for the specific cirkulær paragraph cite |
+| `interpretation_authority` | Personalestyrelsen / HK union |
+| `last_verified_by` | Orchestrator (interim, user-confirmed Path A 2026-05-21) |
+| `decision_date` | 2026-05-21 |
 | `supersession_history` | (none) |
-| `bug_correction_history` | (none — flagged candidate, not yet corrected) |
+| `bug_correction_history` | `[{date: 2026-05-21, from_value: "false (with no decision)", to_value: "false (with decision recorded; flip gated on ADR-024 D7)", source: "S37 TASK-3704 + Bug #4 split routing", commit: "<this S37 commit>", classifier: "Orchestrator (interim, user-confirmed)", was_agreed: NO, materially_wrong: PENDING_S40, action: "decision-recorded-fix-deferred"}]` |
 | `disputed?` | false |
-| `notes` | **CANDIDATE BUG**. Current value `false` for HK matches AC's `false` (where pre-approval is moot because AC has merarbejde-routing). For HK with real overtime, pre-approval requirement IS a governance question. The seed default at init.sql column DEFAULT = `FALSE` carried through without explicit per-agreement consideration in S17. Phase B priority for HIGH-impact resolution: if HK requires pre-approval, this is a bug-with-no-past-impact correction (per ROADMAP rule correction policy); if not, flag stays as documented MEDIUM-confidence. |
+| `notes` | **Split routing per S37 interim-expert decision**: S37 records direction (Path A) + new ADR-024 D7 added to S38 backlog ("Overtime authorization model — pre-approval + post-hoc necessity-acknowledgment"); S40 implements workflow extension + seed flip lands together. This is the FIRST instance of "decision recorded but fix deferred" in the bug_correction_history convention — previous bug corrections shipped seed change in the same commit as the decision. The split is necessary because the workflow extension is a separate scope from the seed flip; flipping the seed without the workflow would create an intermediate-state regression. |
 
 ### SR-HK-OK24-023 — EU-derived compliance cluster (compound, 4 columns)
 
@@ -1825,7 +1825,7 @@ PROSA cirkulær source: PROSA + Personalestyrelsen / Medst joint administration;
 | `disputed?` | false |
 | `notes` | Resolved uniformly across all 5 agreements per ROADMAP no-per-institution-opt-in policy. |
 
-### SR-PROSA-OK24-007 — OvertimeRequiresPreApproval (inherits HK candidate bug)
+### SR-PROSA-OK24-007 — OvertimeRequiresPreApproval (DECISION RECORDED; seed flip GATED on ADR-024 D7 — joint with HK)
 
 | Field | Value |
 |-------|-------|
@@ -1833,17 +1833,17 @@ PROSA cirkulær source: PROSA + Personalestyrelsen / Medst joint administration;
 | `agreement_code` | PROSA |
 | `ok_version` | OK24 |
 | `field` | `OvertimeRequiresPreApproval` |
-| `current_encoded_value` | `false` |
-| `authoritative_source` | pending (Phase B PRIORITY — same as HK SR-HK-OK24-022; PROSA's real overtime regime mirrors HK so the same pre-approval question applies) |
-| `interpretation` | Pre-approval workflow gate. `false` means PROSA overtime can be entered without prior manager pre-approval. Question for Phase B: does PROSA cirkulær require pre-approval for non-emergency overtime? PROSA's joint administration with HK suggests the same answer should apply to both. |
-| `confidence_level` | LOW (encoding may be incorrect — same candidate as HK SR-HK-OK24-022) |
+| `current_encoded_value` | `false` (seed unchanged in S37; flip to `true` deferred to S40 jointly with HK) |
+| `authoritative_source` | PROSA Stat overenskomst (same employer-ordered overtime framework as HK per joint administration); cirkulær cite pending real Phase B. |
+| `interpretation` | Same direction as HK SR-HK-OK24-022 (Path A). PROSA's joint administration with HK justifies symmetric treatment. Same workflow-extension gating applies. |
+| `confidence_level` | HIGH for direction (uniform with HK); MEDIUM for paragraph cite |
 | `interpretation_authority` | Personalestyrelsen / PROSA union |
-| `last_verified_by` | pending |
-| `decision_date` | pending |
+| `last_verified_by` | Orchestrator (interim, user-confirmed Path A symmetric-with-HK 2026-05-21) |
+| `decision_date` | 2026-05-21 |
 | `supersession_history` | (none) |
-| `bug_correction_history` | (none — flagged candidate, not yet corrected) |
+| `bug_correction_history` | `[{date: 2026-05-21, from_value: "false (with no decision)", to_value: "false (with decision recorded; flip gated on ADR-024 D7; joint with HK)", source: "S37 TASK-3704 + Bug #4 split routing", commit: "<this S37 commit>", classifier: "Orchestrator (interim, user-confirmed)", was_agreed: NO, materially_wrong: PENDING_S40, action: "decision-recorded-fix-deferred"}]` |
 | `disputed?` | false |
-| `notes` | **CANDIDATE BUG** — inherits HK SR-HK-OK24-022. Pulled out of the "mirrors HK" bundle (SR-PROSA-OK24-001) into its own row because the candidate bug status warrants explicit traceability for Phase B review. If Phase B confirms HK requires pre-approval, the correction likely applies to PROSA too. |
+| `notes` | Resolution uniform with HK SR-HK-OK24-022. Same split routing (S37 records, S38 designs ADR-024 D7, S40 implements + flips). |
 
 ### SR-PROSA-OK24-008 — wage_type_mappings PROSA OK24 bundle (compound, matches HK)
 

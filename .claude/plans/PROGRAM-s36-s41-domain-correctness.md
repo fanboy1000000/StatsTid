@@ -124,7 +124,7 @@ Address three systemic domain-correctness gaps discovered during S35:
 
 #### ADR-024 — Role-Within-Agreement Modeling + Correction Policy + Classification Governance
 
-Six decisions:
+Seven decisions (D7 added 2026-05-21 per S37 TASK-3704 Bug #4 split-routing):
 
 | D | Topic | Options to adjudicate |
 |---|-------|----------------------|
@@ -134,6 +134,7 @@ Six decisions:
 | **D4** | Classification governance | Who classifies a discovered discrepancy? Encoding owner + product owner review BEFORE any code change; workflow for surfacing + adjudicating disputed classification |
 | **D5** | Interpretation authority | Default Personalestyrelsen / Medst cirkulær (employer-side) per ROADMAP commitment; deviations documented in source register per cell |
 | **D6** | Bug correction operational model | Operator-triggered (not per-institution choice); applies globally to all 150 institutions or to none; new `AgreementConfigBugCorrected` event type (distinct from existing `AgreementConfigPublished`); SLS reconciliation pattern — defer to ADR-027 post-launch |
+| **D7** | **Overtime authorization model** — pre-approval + post-hoc necessity-acknowledgment (added 2026-05-21 per S37 Bug #4 split-routing decision) | The Danish state-sector "beordret merarbejde/overarbejde" concept requires employer authorization for compensable overtime — but authorization can be either (a) **prior pre-approval** via the existing `OvertimePreApproval` workflow, OR (b) **post-hoc necessity-acknowledgment** ("manager later marks entry as ordered/necessary"). The S17 OvertimeGovernanceRule only handles (a). Without (b), flipping `OvertimeRequiresPreApproval=true` for HK/PROSA (the resolution direction from S37 Bug #4) would block legitimate necessity-driven overtime that currently flows through under `false`. **Design scope**: schema (new event type or extension to `OvertimePreApprovalApproved`; new column on `overtime_pre_approvals` or new table for necessity-acknowledgments); endpoint (post-hoc acknowledgment); UI (manager flow); audit-trail discipline (post-hoc acknowledgments must be distinguishable from prior approvals — audit log records temporal direction explicitly). **Implementation lands S40 jointly with the HK/PROSA seed flip** so the flip never ships without the workflow that makes it usable. **No per-institution opt-in/out** (uniform with ADR-024 D6 operational model). |
 
 #### ADR-025 — Multi-Tenant Operational Concerns
 
