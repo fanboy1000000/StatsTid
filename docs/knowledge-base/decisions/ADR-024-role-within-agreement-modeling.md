@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | DRAFT (S38 TASK-3801 authorship; cycle-1 dual-lens absorbed Codex P1.2 / Reviewer W1+W4; cycle-2 dual-lens surfaced Codex P1.NEW-1 + Reviewer B1+B2+W1-cycle2 in same architectural areas; cycle-3 absorption renames `AgreementConfigBugCorrected` → `ConfigBugCorrected` in References + adds `MerarbejdeDiscretionary` to event count (58→69 post-S40). Cycle 3 dispatched to verify. Flips to ACCEPTED on cycle-3 clean per S28 / S32 design-only precedent.) |
+| **Status** | ACCEPTED (S38 TASK-3801; cycles 1-3 trail closed all ADR-024 defects: cycle 1 D6 surface coverage; cycle 2 event-name propagation to ADR-013/References; cycle 3 verified clean by both lenses. D7 (overtime authorization model) ships in this ADR — distinct from ADR-025's deferred D7 audit-visibility surface. ACCEPTED per S28 / S32 design-only precedent at cycle-3 lens convergence on this ADR.) |
 | **Sprint** | S38 (design-only sprint; produces this ADR + ADR-025 + ADR-013 amendment for S39 schema migration + S40 cutover + S41 D-tests). |
 | **Domains** | Backend, Infrastructure, Data Model, SharedKernel, Rule Engine, Payroll Integration. |
 | **Tags** | role-within-agreement, employment-category, role-config-override, merarbejde-compensation-right, bug-correction-policy, classification-governance, interpretation-authority, overtime-authorization, post-hoc-necessity-acknowledgment, design-binding, phase-4e. |

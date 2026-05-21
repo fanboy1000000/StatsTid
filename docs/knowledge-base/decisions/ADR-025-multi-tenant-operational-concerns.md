@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | DRAFT (S38 TASK-3802 authorship; cycle-1 dual-lens absorbed Codex P1.1 + Reviewer W2 convergent + Codex P1.3; cycle-2 dual-lens surfaced Codex P1.NEW-2 (substantive audit-log row-shape gap) + Reviewer B1+B2 (mechanical citation defects); cycle-3 absorption: D7 reframed to explicit minimal-scope-by-actor path + forward-pointer to schema-extension future ADR; commissioned `OrgScopeValidator.GetAccessibleOrgsAsync` + `AuditLogRepository.QueryByOrgScopeAsync` as NEW S40 work explicitly; fixed AuditLogRepository method-name citations (Query* prefix); added audit endpoint/UI to S40 cutover list; ROADMAP feature-flag example reframed; EventSerializer count 58→69. Cycle 3 dispatched to verify. Flips to ACCEPTED on cycle-3 clean.) |
+| **Status** | ACCEPTED-WITH-D7-DEFERRED (S38 TASK-3802; cycle-3 halt-and-prompt 2026-05-21 resolved by user adjudication: D7 deferred to dedicated ADR-026 per `feedback_thrash_defer_real_world.md` thrash-defer pattern. Cycles 1-3 trail: cycle 1 (Codex P1.1+P1.2+P1.3; Reviewer W2 convergent); cycle 2 (Codex P1.NEW-1+P1.NEW-2 same-areas; Reviewer B1+B2 same-area); cycle 3 (P1.NEW-1+B1+B2+W1-cycle2 CLOSED via cycle-2 absorption; Codex cycle-3 P1.C3-1 = NEW BLOCKER in same D7 area — internal contradiction between row-shape acknowledgment + event-type completeness D-test). Three cycles disclosing D7 defects in same area = canonical thrash signal → user authorized defer-D7. Decisions D1-D6 + D8 ship as ACCEPTED. D7 placeholder records the open problem + the two known paths (A scope-by-actor / B schema-extension) + an event-sourcing-aligned third option for ADR-026 to adjudicate.) |
 | **Sprint** | S38 (companion to ADR-024 + ADR-013 amendment). |
 | **Domains** | Infrastructure, Backend, Frontend, Security, Payroll Integration. |
 | **Tags** | multi-tenant, saas-operations, per-tenant-sls, customer-onboarding, gdpr, noisy-neighbor-fairness, cross-tenant-reporting, feature-flags, audit-visibility, institution-type, design-binding, phase-4e. |
@@ -182,71 +182,28 @@ Per ROADMAP L24 + ADR-024 D6 + ADR-024 D7 §6: "rule interpretation is GLOBAL �
 
 **Cross-reference**: ADR-024 D7 §6 "No per-institution opt-in/out" applies to the overtime authorization workflow. The pre-approval-vs-post-hoc-ack choice is per-ENTRY at the workflow level, not per-TENANT. Feature flags cannot expose this choice as a tenant toggle.
 
-### D7 — Tenant-scoped audit visibility (admin query surface design + implementation)
+### D7 — DEFERRED to ADR-026 (Audit Visibility Surface — dedicated design sprint)
 
-**Problem**: institution-internal auditors need to query the audit log for their institution's events without seeing other institutions'.
+**Status (cycle-3 halt-and-prompt resolution, 2026-05-21)**: this decision is DEFERRED from ADR-025 to a dedicated future ADR — **ADR-026 (Audit Visibility Surface)** — per user adjudication at S38 Step 7a cycle-3 halt-and-prompt per `feedback_thrash_defer_real_world.md`.
 
-**Current state** (verified S38 Step 7a cycle-2 absorption against actual code):
+**Why deferred**: cycle-1 / cycle-2 / cycle-3 Step 7a reviews each surfaced new defects in this same architectural area — first the missing endpoint surface (cycle 1), then the row-shape gap (cycle 2), then the internal contradiction between honest row-shape acknowledgment and event-type-completeness D-test claims (cycle 3). Three cycles disclosing new defects in the same area is the canonical signal that the architectural seam is wider than one decision in a multi-decision ADR can carry. The audit-visibility surface needs its own dedicated design pass.
 
-- There is **no `/api/admin/audit/` endpoint** today.
-- `AuditLogRepository` (S3) exposes only `QueryByActorAsync` (L42) + `QueryByCorrelationAsync` (L62) — actor/correlation-based, not org-scoped.
-- `OrgScopeValidator` class exposes `ValidateEmployeeAccessAsync` (L32) + `ValidateOrgAccessAsync` (L85). **No `GetAccessibleOrgsAsync` helper** that enumerates a subtree exists today.
-- `AuditLoggingMiddleware.cs:37` records `(actor_id, http_path, http_status, details)` per request. Crucially: it does NOT populate `resource_id`, `target_org_id`, or an explicit `event_type` column. The audit_log row currently records WHO did WHAT request but not necessarily WHICH TENANT'S resource was affected (when the actor's primary_org is outside the target subtree, e.g., operator/system actions affecting institution X via GlobalAdmin actor whose primary_org is "ops").
+**Open problem (carried into ADR-026)**: institution-internal auditors need to query the audit log for their institution's events without seeing other institutions'. Two known architectural paths:
 
-**Scope honest acknowledgment (cycle-2 absorption of Codex P1.NEW-2)**: the audit_log row-shape limitation means tenant-scoped audit visibility via scope-by-actor-primary-org has a **documented gap** — operator/system actions affecting a tenant whose actor's primary_org is outside the subtree are NOT visible to that tenant's LocalAdmin. Two reasonable architectural paths exist; this ADR picks the minimal one and commissions the wider one as a forward pointer.
+- **(A) Minimal scope-by-actor** — JOIN `audit_log.actor_id → users.primary_org_id` + materialized-path subtree check. Limitation: operator/system actions affecting a tenant from an outside-actor are NOT visible. Implementable on current `audit_log` row shape (`actor_id, http_path, http_status, details`).
+- **(B) Schema extension for scope-by-target** — ALTER `audit_log` ADD `target_org_id NULL` + `target_resource_id NULL` + `event_type NULL`. Retrofit `AuditLoggingMiddleware` to populate these from per-endpoint context. Touches every state-changing endpoint. Enables event-type-completeness + tenant-targeted query semantics.
 
-**Decision (cycle-2-revised)**: D7 commissions a **minimal scope-by-actor query surface** as S40 work + an explicit forward-pointer for the schema-extension path (deferred to a future ADR / S40b).
+ADR-026 design sprint adjudicates between (A) + (B) + hybrid + an event-sourcing-aligned alternative (project audit-relevant events into a dedicated `audit_projection` table with explicit `target_org_id` per ADR-018 D13 sync-in-tx projection pattern — preserving event-log immutability + enabling tenant-scoped queries without retrofitting the request-middleware audit row).
 
-**Path chosen (S40 minimal-scope)**: scope-by-actor; LocalAdmin sees audit rows where the ACTOR's primary_org is in their subtree. Operator/system actions whose actor is outside the subtree are NOT visible. This matches what the existing audit_log row-shape supports without schema extension.
+**Verified existing-code state** (cycle-2 verification preserved for ADR-026 design input):
+- No `/api/admin/audit/` endpoint exists today
+- `AuditLogRepository.cs` exposes only `QueryByActorAsync` (L42) + `QueryByCorrelationAsync` (L62)
+- `OrgScopeValidator.cs` exposes `ValidateEmployeeAccessAsync` (L32) + `ValidateOrgAccessAsync` (L85). No subtree-enumeration helper.
+- `AuditLoggingMiddleware.cs:37` records `(actor_id, http_path, http_status, details)` per request; no `target_org_id` / `target_resource_id` / `event_type` columns.
 
-**Path NOT chosen (S40b candidate, forward-pointer)**: extend `audit_log` schema with `target_org_id NULL` + `target_resource_id NULL` + `event_type TEXT NULL` columns; retrofit `AuditLoggingMiddleware` to populate these from the endpoint-specific context (when the endpoint operates on a target tenant resource). Then scope-by-target-org becomes possible. This expands D7 scope significantly (middleware retrofit + every state-changing endpoint must declare its target_org_id mapping) and is appropriately deferred to a separate design pass.
+**Forward pointer**: ADR-026 placeholder filed at `docs/knowledge-base/decisions/ADR-026-audit-visibility-surface.md` with Status: PLANNED. Sprint slot: TBD (likely between S39 and S40, or folded into S40 prep if the schema-extension path lands as scope-creep there). Pre-launch posture: audit-visibility surface is launch-required for first-customer go-live commitment per PROGRAM L279 + ADR-025 final §Customer-go-live commitment — so ADR-026 cannot defer past S39.
 
-**Endpoint design** (S40 implementation scope, minimal-scope path):
-
-```
-GET /api/admin/audit?from=<date>&to=<date>&actor_id=<optional>&resource=<optional>&page=<optional>
-  Authorization: LocalAdminOrAbove
-  OrgScope: actor-primary-org within requesting admin's accessible subtree
-            (NOT target-tenant scoping; see "Scope honest acknowledgment" above)
-
-  Implementation (commissioned new code in S40):
-    1. Parse query params
-    2. NEW HELPER (commissioned by this D7): OrgScopeValidator.GetAccessibleOrgsAsync(actorId)
-       — returns IReadOnlyList<string> of org_ids in the requesting admin's
-         accessible subtree (via materialized-path query on organizations).
-       This method does NOT exist today; S40 implementation must add it.
-    3. NEW REPOSITORY METHOD (commissioned by this D7): 
-       AuditLogRepository.QueryByOrgScopeAsync(IReadOnlyList<string> orgIds,
-                                                AuditLogFilter filter,
-                                                CancellationToken ct)
-       — matches the established repository-extension naming convention
-         (Query* prefix per existing QueryByActorAsync/QueryByCorrelationAsync).
-       SQL: SELECT * FROM audit_log
-             JOIN users ON audit_log.actor_id = users.user_id
-             WHERE users.primary_org_id IN (orgIds)
-               AND audit_log.timestamp BETWEEN @from AND @to
-               [+ optional actor_id / resource filters]
-             ORDER BY audit_log.timestamp DESC
-             LIMIT 100 OFFSET (page * 100)
-    4. Return list + total count for pagination
-```
-
-**Repository extension**: new `AuditLogRepository.QueryByOrgScopeAsync` (Query* prefix per existing naming convention). New helper `OrgScopeValidator.GetAccessibleOrgsAsync` (commissioned by this D7; does not exist today).
-
-**Admin UI**: new `AuditLogView.tsx` page (LocalAdminOrAbove) — replaces the current absence of any admin-facing audit query. GlobalAdmin sees all orgs; LocalAdmin sees only their subtree (scope-by-actor). UI explicitly shows the scope-by-actor caveat: page header notes "showing audit events by actors in your institution; operator/system actions affecting your institution from outside accounts are not visible".
-
-**Audit-trail completeness (revised)**: the new events introduced by ADR-024 D6 (`ConfigBugCorrected`) + D7 (`OvertimeNecessityAcknowledged`) + D2 (`MerarbejdeDiscretionary`) + role-config-override lifecycle events + ADR-025 D1/D2/D3/D5 (`InstitutionProvisioned`, `InstitutionDataExported`, `UserPiiErased`, `CrossTenantReportAccessed`) all flow through `audit_log` per existing infrastructure (audit-log middleware writes a row per state-changing endpoint invocation). The new query surface returns them when the actor is in the requesting admin's subtree.
-
-**Bypass exception for D5 cross-tenant reports**: `/api/admin/reports/cross-tenant/` queries via the bypass per D5 produce `CrossTenantReportAccessed` audit events. Per the scope-by-actor model: when a GlobalAdmin (whose primary_org may be "ops" or similar) runs a cross-tenant report, the event is NOT visible to any tenant LocalAdmin (the GlobalAdmin actor isn't in any tenant's subtree). The bypass therefore has a documented audit-visibility limitation: cross-tenant report invocations are auditable only via GlobalAdmin-side queries OR the future schema-extension path.
-
-**S41 D-tests** (3 D-tests):
-1. Scope-by-actor leakage impossible — 3 institutions × LocalAdmin querying → each sees only audit rows where actor's primary_org is in own subtree
-2. GlobalAdmin sees all (no scope restriction)
-3. Audit-trail completeness within scope — every new ADR-024 + ADR-025 event type surfaces when emitted by an actor in the requesting admin's subtree
-
-**Forward pointer (future ADR / S40b)**: schema extension to support scope-by-target-org. Add `target_org_id NULL` + `target_resource_id NULL` + `event_type NULL` columns to `audit_log`; retrofit middleware. Deferred because the retrofit touches every state-changing endpoint and warrants its own design pass; pre-launch posture means scope-by-actor is sufficient for first-customer onboarding audit needs.
-
-**No Phase B dependency** — D7 is system-design + security-correctness; not cirkulær-dependent.
+**No Phase B dependency** — audit-visibility is system-design + security-correctness; not cirkulær-dependent.
 
 ### D8 — Explicit `Institution` type vs generic top-level org
 
@@ -307,7 +264,8 @@ Ledger entries: `s39-d1-tenant-sls-configs` + `s39-d3-erased-users-audit` + `s39
 - `/api/admin/reports/cross-tenant/` endpoint suite + `CrossTenantReports.tsx` GlobalAdmin page (D5)
 - `local_configurations.feature_flags` consumer in `ConfigResolutionService.GetEffectiveFeatureFlags(org_id)` (D6) + admin UI extension + `feature-flags-catalog.md`
 - `InstitutionsRepository` + 1:1 enforcement on `organizations` top-level rows (D8) + backfill seeder
-- `GET /api/admin/audit` endpoint + `AuditLogRepository.QueryByOrgScopeAsync` + new `OrgScopeValidator.GetAccessibleOrgsAsync` helper + `AuditLogView.tsx` admin page (D7 minimal-scope path)
+
+**D7 audit-visibility surface DEFERRED to ADR-026** (filed as placeholder; sprint slot TBD, cannot defer past S39 per launch commitment).
 
 **New event types** (alongside ADR-024's 7): `InstitutionProvisioned` + `InstitutionDataExported` + `UserPiiErased` + `CrossTenantReportAccessed` (4 events; combined with ADR-024's 7 new events, **EventSerializer 58 → 69** after S40).
 
@@ -318,7 +276,7 @@ Ledger entries: `s39-d1-tenant-sls-configs` + `s39-d3-erased-users-audit` + `s39
 - D3 D-test: per-tenant export scoping (LocalAdmin sees only own institution) + Article 17 erasure NULL-out semantics + past-payroll replay-after-erasure produces NULL PII
 - D5 D-test: cross-tenant report endpoint authorisation (LocalAdmin gets 403; GlobalAdmin succeeds) + audit emission on each query
 - D6 D-test: feature_flags JSONB resolution + unknown-flag-ignored + per-flag opt-in/out semantics
-- D7 D-test (the audit-visibility contract): 3 institutions × LocalAdmin querying audit_log → each sees only own subtree
+- (D7 D-tests deferred to ADR-026 — audit-visibility surface design pass)
 - D8 D-test: institutions row 1:1 with top-level org; cascade on org soft-delete; backfill seeder idempotency
 
 `docs/SECURITY.md` updated to document the D5 cross-tenant report bypass as the single canonical scope-binding exception. `docs/ARCHITECTURE.md` updated for D8 institutions-table.
@@ -348,3 +306,4 @@ Ledger entries: `s39-d1-tenant-sls-configs` + `s39-d3-erased-users-audit` + `s39
 - ADR-019 D2 (admin-strict If-Match) — D1 versioned-config endpoint inherits
 - ADR-024 (companion; S38 TASK-3801) — role-within-agreement modeling; orthogonal
 - ADR-013 amendment (companion; S38 TASK-3803) — cross-reference D3 + D6 bug correction
+- **ADR-026** (placeholder filed S38 TASK-3804 cycle-3 halt-and-prompt resolution) — audit visibility surface design sprint; absorbs the deferred D7 design
