@@ -1691,7 +1691,287 @@ HK OK26 mirrors HK OK24 per `CentralAgreementConfigs.cs:123` ("HK OK26 (placehol
 | `disputed?` | false |
 | `notes` | Explicit-absence row, same pattern as SR-HK-OK24-031. |
 
+---
 
+## PROSA OK24 Cells
+
+PROSA = IT-faglig organisation (IT-professional union). Distinct cirkulær from AC + HK, administered jointly by Personalestyrelsen + PROSA union. **PROSA is structurally HK-cloned** with 3 specific divergences from HK:
+
+1. `MaxFlexBalance` / `FlexCarryoverMax` = **120h** (vs HK's 100h; AC's 150h)
+2. `CHILD_SICK` annual_quota = **3 days per episode** (vs HK's 2, AC's 1)
+3. (Inherited HK candidate bugs apply: `OvertimeRequiresPreApproval=false`, `SENIOR_DAY` paired finding)
+
+PROSA cirkulær source: PROSA + Personalestyrelsen / Medst joint administration; specific PDF URL pending Phase B verification. PROSA union page at prosa.dk/loen-vilkaar/overenskomst.
+
+**Compact register form for PROSA**: divergent cells get individual rows; non-divergent cells get a single "mirrors HK" compound bundle row citing HK row IDs. This avoids duplicating ~28 rows of HK content where the only added information is "PROSA = same as HK". The bundle row clearly enumerates every cell so the validation criterion "all PROSA OK24 cells have register rows" is satisfied.
+
+### SR-PROSA-OK24-001 — PROSA OK24 "mirrors HK" bundle (compound, ~28 cells)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-PROSA-OK24-001 |
+| `agreement_code` | PROSA |
+| `ok_version` | OK24 |
+| `field` | All PROSA OK24 cells in `agreement_configs` EXCEPT `MaxFlexBalance` (SR-PROSA-OK24-002), `FlexCarryoverMax` (SR-PROSA-OK24-003), and `OvertimeRequiresPreApproval` (SR-PROSA-OK24-007). Specifically: `WeeklyNormHours + NormPeriodWeeks + NormModel + AnnualNormHours + HasOvertime + HasMerarbejde + OvertimeThreshold50 + OvertimeThreshold100 + EveningSupplementEnabled + NightSupplementEnabled + WeekendSupplementEnabled + HolidaySupplementEnabled + EveningStart + EveningEnd + NightStart + NightEnd + EveningRate + NightRate + WeekendSaturdayRate + WeekendSundayRate + HolidayRate + OnCallDutyEnabled + OnCallDutyRate + CallInWorkEnabled + CallInMinimumHours + CallInRate + TravelTimeEnabled + WorkingTravelRate + NonWorkingTravelRate + MaxDailyHours + MinimumRestHours + RestPeriodDerogationAllowed + WeeklyMaxHoursReferencePeriod + VoluntaryUnsocialHoursAllowed + DefaultCompensationModel + EmployeeCompensationChoice + MaxOvertimeHoursPerPeriod` (~34 columns covered) |
+| `current_encoded_value` | Identical to HK OK24 cell-by-cell (init.sql:1158 vs L1146 byte-by-byte except for `max_flex_balance` + `flex_carryover_max`). See HK rows SR-HK-OK24-001 + 004..009 + 010..014 + 015..017 + 018 + 019..024 for per-cell values. |
+| `authoritative_source` | Inherited from HK rows. PROSA cirkulær mirrors HK cirkulær on these cells per joint administration. Specific PDF cite pending Phase B verification. |
+| `interpretation` | PROSA matches HK on the overtime regime + supplement enablement + on-call + call-in + EU compliance + compensation model. The structural identity is intentional — both PROSA and HK represent the "non-academic" state-sector tier with the same overtime + supplement framework. |
+| `confidence_level` | HIGH for the IDENTITY claim (cells match HK byte-by-byte); inherits HK's per-cell confidence levels for the underlying values (HIGH for EU-derived, MEDIUM for HK-specific). |
+| `interpretation_authority` | Personalestyrelsen (with PROSA union counterpart) |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none — but inherits HK's OvertimeRequiresPreApproval candidate bug; see SR-PROSA-OK24-007) |
+| `disputed?` | false |
+| `notes` | **Compact "mirrors HK" bundle pattern** — new documentation convention introduced this task. The bundle covers every non-divergent cell with a single row + cross-references to the per-cell HK rows for source / value / load-bearing-status. Phase B verification cycles can address PROSA cells via the bundle (confirm "yes PROSA = HK on this cell") or via individual rows if divergence surfaces during expert review. **Cells excluded from this bundle** (per separate rows for explicit traceability): SR-PROSA-OK24-002 + 003 (divergent flex caps), SR-PROSA-OK24-007 (inherited candidate bug warranting Phase B attention). |
+
+### SR-PROSA-OK24-002 — MaxFlexBalance (DIVERGENT from HK)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-PROSA-OK24-002 |
+| `agreement_code` | PROSA |
+| `ok_version` | OK24 |
+| `field` | `MaxFlexBalance` |
+| `current_encoded_value` | `120.0` |
+| `authoritative_source` | pending (Phase B — PROSA cirkulær on flex ceiling; 120h is PROSA-specific value) |
+| `interpretation` | Maximum positive flex balance for PROSA employees = 120 hours. Sits between HK (100h) and AC (150h), reflecting PROSA's IT-faglig role flexibility. |
+| `confidence_level` | MEDIUM (120h baseline is well-established in project history; glocal cell — institutional override permitted via `local_configurations` per ADR-017) |
+| `interpretation_authority` | Personalestyrelsen / PROSA union (negotiated) |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | **DIVERGENT from HK** (SR-HK-OK24-002 = 100h) and from AC (SR-AC-OK24-011 = 150h). The 100 / 120 / 150 progression across HK / PROSA / AC matches established convention. Glocal cell. |
+
+### SR-PROSA-OK24-003 — FlexCarryoverMax (DIVERGENT from HK)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-PROSA-OK24-003 |
+| `agreement_code` | PROSA |
+| `ok_version` | OK24 |
+| `field` | `FlexCarryoverMax` |
+| `current_encoded_value` | `120.0` |
+| `authoritative_source` | pending (Phase B — paired with MaxFlexBalance) |
+| `interpretation` | PROSA flex carryover ceiling = 120h, equal to MaxFlexBalance (full carryover, no year-boundary truncation). |
+| `confidence_level` | MEDIUM (same rationale as SR-PROSA-OK24-002) |
+| `interpretation_authority` | Personalestyrelsen / PROSA union |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | **DIVERGENT from HK** (SR-HK-OK24-003 = 100h). Co-located with SR-PROSA-OK24-002. Glocal cell. |
+
+### SR-PROSA-OK24-004 — entitlement_configs.VACATION + SPECIAL_HOLIDAY + CARE_DAY (compound, matches HK)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-PROSA-OK24-004 |
+| `agreement_code` | PROSA |
+| `ok_version` | OK24 |
+| `field` | `entitlement_configs.{VACATION, SPECIAL_HOLIDAY, CARE_DAY}` (full sub-field sets) |
+| `current_encoded_value` | Identical to HK SR-HK-OK24-025 + 026 + 027. VACATION = `25 / IMMEDIATE / 9 / 5 / true / false`; SPECIAL_HOLIDAY = `5 / IMMEDIATE / 9 / 0 / true / false`; CARE_DAY = `2 / IMMEDIATE / 1 / 0 / false / false`. |
+| `authoritative_source` | Ferieloven (VACATION); Personalestyrelsen / PROSA union (others) |
+| `interpretation` | PROSA matches HK + AC on these 3 entitlement types. VACATION universal statutory (Ferieloven); SPECIAL_HOLIDAY + CARE_DAY universal state-sector convention. |
+| `confidence_level` | HIGH for VACATION (Ferieloven); MEDIUM for SPECIAL_HOLIDAY + CARE_DAY (consistent across AC / HK / PROSA — cirkulær paragraph pending) |
+| `interpretation_authority` | Folketinget (VACATION) / Personalestyrelsen + unions (others) |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | Compound bundle covering 3 entitlement types matching HK. CHILD_SICK + SENIOR_DAY excluded — see SR-PROSA-OK24-005 + 006. |
+
+### SR-PROSA-OK24-005 — entitlement_configs.CHILD_SICK (compound, DIVERGENT quota)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-PROSA-OK24-005 |
+| `agreement_code` | PROSA |
+| `ok_version` | OK24 |
+| `field` | `entitlement_configs.CHILD_SICK.{annual_quota, accrual_model, reset_month, carryover_max, pro_rate_by_part_time, is_per_episode}` |
+| `current_encoded_value` | `3 / IMMEDIATE / 1 / 0 / false / true` |
+| `authoritative_source` | pending (Phase B — PROSA cirkulær on barn-syg quota; 3 days per episode is PROSA's most-generous-of-the-three value) |
+| `interpretation` | 3 days per episode (per-episode semantic). Each child-illness episode grants 3 days; no annual cumulative limit. **PROSA has the most generous CHILD_SICK quota of the 3 base agreements** (AC=1, HK=2, PROSA=3). |
+| `confidence_level` | MEDIUM (the AC=1 / HK=2 / PROSA=3 progression matches established convention; PROSA-specific cirkulær cite needed) |
+| `interpretation_authority` | Personalestyrelsen / PROSA union (negotiated) |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | **DIVERGENT from HK** (SR-HK-OK24-028 = 2) and AC (SR-AC-OK24-016 = 1). The AC < HK < PROSA progression is established. |
+
+### SR-PROSA-OK24-006 — entitlement_configs.SENIOR_DAY (compound, inherits paired bug)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-PROSA-OK24-006 |
+| `agreement_code` | PROSA |
+| `ok_version` | OK24 |
+| `field` | `entitlement_configs.SENIOR_DAY.{annual_quota, accrual_model, reset_month, carryover_max, pro_rate_by_part_time, is_per_episode, min_age}` |
+| `current_encoded_value` | `0 / IMMEDIATE / 1 / 0 / false / false / 60` |
+| `authoritative_source` | pending (same paired-bug-candidate as AC + HK; init.sql:1377 confirms identical encoding across all 3 base agreements) |
+| `interpretation` | Same encoding as AC + HK: `annual_quota = 0` with `min_age = 60`. As encoded, no senior days grant regardless of age. **Bug candidate** — same structural inconsistency as SR-AC-OK24-015 + 035 + SR-HK-OK24-029. |
+| `confidence_level` | LOW |
+| `interpretation_authority` | negotiated |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | **CANDIDATE BUG** — inherits paired finding from AC + HK. Cross-agreement: 3 of 3 base agreements + 2 AC variants (covered in TASK-3605) likely all share this encoding. Bug correction (if classified) applies uniformly to all 5 agreements per ROADMAP no-per-institution-opt-in policy. |
+
+### SR-PROSA-OK24-007 — OvertimeRequiresPreApproval (inherits HK candidate bug)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-PROSA-OK24-007 |
+| `agreement_code` | PROSA |
+| `ok_version` | OK24 |
+| `field` | `OvertimeRequiresPreApproval` |
+| `current_encoded_value` | `false` |
+| `authoritative_source` | pending (Phase B PRIORITY — same as HK SR-HK-OK24-022; PROSA's real overtime regime mirrors HK so the same pre-approval question applies) |
+| `interpretation` | Pre-approval workflow gate. `false` means PROSA overtime can be entered without prior manager pre-approval. Question for Phase B: does PROSA cirkulær require pre-approval for non-emergency overtime? PROSA's joint administration with HK suggests the same answer should apply to both. |
+| `confidence_level` | LOW (encoding may be incorrect — same candidate as HK SR-HK-OK24-022) |
+| `interpretation_authority` | Personalestyrelsen / PROSA union |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none — flagged candidate, not yet corrected) |
+| `disputed?` | false |
+| `notes` | **CANDIDATE BUG** — inherits HK SR-HK-OK24-022. Pulled out of the "mirrors HK" bundle (SR-PROSA-OK24-001) into its own row because the candidate bug status warrants explicit traceability for Phase B review. If Phase B confirms HK requires pre-approval, the correction likely applies to PROSA too. |
+
+### SR-PROSA-OK24-008 — wage_type_mappings PROSA OK24 bundle (compound, matches HK)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-PROSA-OK24-008 |
+| `agreement_code` | PROSA |
+| `ok_version` | OK24 |
+| `field` | `wage_type_mappings (time_type, wage_type) for (PROSA, OK24, position='')` — bundle of PROSA OK24 mappings (init.sql:219, 222, 224, etc. — same 22 mappings as HK) |
+| `current_encoded_value` | Identical to HK SR-HK-OK24-030 bundle. Same 22 mappings: NORMAL_HOURS / OVERTIME_50 / OVERTIME_100 / EVENING_SUPPLEMENT / NIGHT_SUPPLEMENT / WEEKEND_SUPPLEMENT / HOLIDAY_SUPPLEMENT / VACATION / CARE_DAY / CHILD_SICK_DAY / CHILD_SICK_DAY_2 / CHILD_SICK_DAY_3 / PARENTAL_LEAVE / SENIOR_DAY / LEAVE_WITHOUT_PAY / LEAVE_WITH_PAY / SPECIAL_HOLIDAY_ALLOWANCE / FLEX_PAYOUT / ON_CALL_DUTY / CALL_IN_WORK / TRAVEL_WORK / TRAVEL_NON_WORK. |
+| `authoritative_source` | SLS technical documentation (Personalestyrelsen). Mapping identity with HK reflects joint administration. |
+| `interpretation` | PROSA wage type mappings byte-identical to HK. No PROSA-specific time types or wage codes at seed time. SLS codes stable across agreements. |
+| `confidence_level` | HIGH for the IDENTITY-with-HK claim; inherits HK confidence (HIGH for AC-pinned-equivalents, MEDIUM for HK-distinct mappings) |
+| `interpretation_authority` | Personalestyrelsen (SLS technical) |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | Compound bundle. **Note**: PROSA has CHILD_SICK quota = 3 but wage_type_mappings has CHILD_SICK_DAY / CHILD_SICK_DAY_2 / CHILD_SICK_DAY_3 mapped (3 separate wage types for the 3 episode-day events). PROSA's 3-day quota interacts cleanly with the 3 sequential wage type mappings — Phase B should confirm the relationship is intentional (i.e., day 1 → SLS_0530, day 2 → SLS_0531, day 3 → SLS_0532 per episode). |
+
+### SR-PROSA-OK24-009 — position_override_configs PROSA OK24 — none (explicit absence)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-PROSA-OK24-009 |
+| `agreement_code` | PROSA |
+| `ok_version` | OK24 |
+| `field` | `position_override_configs (PROSA, OK24, *)` — explicit absence row |
+| `current_encoded_value` | `(no rows in init.sql; PROSA has no position overrides at seed time)` |
+| `authoritative_source` | n/a — explicit-absence row |
+| `interpretation` | PROSA has NO position overrides at seed time. Same explicit-absence pattern as HK SR-HK-OK24-031. Within-PROSA role distinctions (if any) not currently encoded; covered by S38 ADR-024 D1. |
+| `confidence_level` | HIGH for "no current overrides"; LOW for whether this is correct |
+| `interpretation_authority` | Personalestyrelsen |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | Explicit-absence row, same pattern as SR-HK-OK24-031. Cross-ref: `role-dimension-audit.md` (TASK-3606) will enumerate within-PROSA strata if any exist. |
+
+---
+
+## PROSA OK26 Cells (placeholder bundles — 4 rows)
+
+PROSA OK26 mirrors PROSA OK24 per `CentralAgreementConfigs.cs:154` ("PROSA OK26 (placeholder)") + init.sql:1164. Standard placeholder-bundle pattern per data domain.
+
+### SR-PROSA-OK26-001 — PROSA OK26 agreement_configs placeholder bundle
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-PROSA-OK26-001 |
+| `agreement_code` | PROSA |
+| `ok_version` | OK26 |
+| `field` | All PROSA OK26 cells in `agreement_configs` (mirrors PROSA OK24 cell-by-cell; init.sql:1164 byte-identical to L1158) |
+| `current_encoded_value` | Identical to PROSA OK24 (see SR-PROSA-OK24-001 + 002 + 003 + 007). |
+| `authoritative_source` | pending — OK26 cirkulær between Personalestyrelsen + PROSA union under finalization. |
+| `interpretation` | Placeholder inheritance from OK24. Phase B priority on OK26 cirkulær publication. |
+| `confidence_level` | LOW (placeholder) |
+| `interpretation_authority` | Personalestyrelsen (anticipated) |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none — OvertimeRequiresPreApproval candidate inherits) |
+| `disputed?` | false |
+| `notes` | Standard placeholder. |
+
+### SR-PROSA-OK26-002 — PROSA OK26 entitlement_configs placeholder bundle
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-PROSA-OK26-002 |
+| `agreement_code` | PROSA |
+| `ok_version` | OK26 |
+| `field` | All PROSA OK26 entitlement cells (mirrors PROSA OK24 SR-PROSA-OK24-004 + 005 + 006). |
+| `current_encoded_value` | Identical to PROSA OK24. CHILD_SICK = 3 days per episode + SENIOR_DAY paired bug candidate inherit. |
+| `authoritative_source` | Ferieloven (VACATION); pending for overenskomst-driven |
+| `interpretation` | Placeholder inheritance. |
+| `confidence_level` | HIGH for VACATION; LOW for overenskomst-driven |
+| `interpretation_authority` | Folketinget / Personalestyrelsen + PROSA union |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none — SENIOR_DAY candidate inherits) |
+| `disputed?` | false |
+| `notes` | Same shape as HK OK26 bundle. |
+
+### SR-PROSA-OK26-003 — PROSA OK26 wage_type_mappings placeholder bundle
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-PROSA-OK26-003 |
+| `agreement_code` | PROSA |
+| `ok_version` | OK26 |
+| `field` | All PROSA OK26 wage type mappings (mirrors PROSA OK24 bundle SR-PROSA-OK24-008). |
+| `current_encoded_value` | Identical to PROSA OK24 (22 mappings, same as HK). |
+| `authoritative_source` | SLS technical documentation |
+| `interpretation` | Placeholder inheritance. SLS codes stable. |
+| `confidence_level` | HIGH for existing mappings; LOW for completeness |
+| `interpretation_authority` | Personalestyrelsen (SLS technical) |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | Same shape as HK OK26 bundle. |
+
+### SR-PROSA-OK26-004 — PROSA OK26 position_override_configs placeholder bundle (explicit absence)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-PROSA-OK26-004 |
+| `agreement_code` | PROSA |
+| `ok_version` | OK26 |
+| `field` | `position_override_configs (PROSA, OK26, *)` — explicit absence |
+| `current_encoded_value` | `(no rows; PROSA has no position overrides — inherits PROSA OK24 absence)` |
+| `authoritative_source` | n/a |
+| `interpretation` | PROSA OK26 has no position overrides at seed time. Inherits from PROSA OK24 explicit-absence pattern. |
+| `confidence_level` | HIGH (no rows present); LOW for whether this is correct |
+| `interpretation_authority` | Personalestyrelsen |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | Explicit-absence row pattern. |
+
+---
 
 ### TASK-3601 — 20 cells, AC OK24 proof-of-shape
 
@@ -1748,12 +2028,29 @@ HK OK26 mirrors HK OK24 per `CentralAgreementConfigs.cs:123` ("HK OK26 (placehol
 - **New pattern: explicit-absence row** (SR-HK-OK24-031) documents "this agreement has no rows in this data domain — verified intentional". Distinguishes from "missing by oversight". Will be re-used for PROSA / AC_RESEARCH / AC_TEACHING where applicable.
 - **New candidate bug discovery**: HK `OvertimeRequiresPreApproval = false` (SR-HK-OK24-022). The seed default (column DEFAULT = `FALSE`) carried through to HK without explicit per-agreement consideration in S17. For HK with real overtime regime, pre-approval requirement IS a governance question. If Phase B confirms HK overenskomst requires pre-approval, this is a bug-with-no-past-impact correction.
 
-### Candidate bug discoveries (cumulative through TASK-3603)
+### TASK-3604 — PROSA OK24 (9 cells: 001–009) + PROSA OK26 placeholder (4 bundles)
+
+| Cell shape | Count | Schema fit |
+|------------|-------|------------|
+| "Mirrors HK" compound bundle (~34 cells under 1 row) | 1 (001) | ✓ — **new pattern documented**: cross-agreement mirror bundle with explicit per-cell exclusion list for divergent / candidate-bug cells |
+| Divergent individual rows (flex caps) | 2 (002, 003) | ✓ |
+| Entitlement compounds | 3 (004 matches-HK 3-entitlement bundle, 005 divergent CHILD_SICK, 006 paired SENIOR_DAY bug) | ✓ |
+| Inherited candidate-bug standalone | 1 (007 — OvertimeRequiresPreApproval) | ✓ — pulled out of mirrors-HK bundle into own row because candidate-bug status warrants explicit Phase B traceability |
+| Wage type mappings bundle (matches HK) | 1 (008) | ✓ |
+| Explicit-absence row (no position overrides) | 1 (009) | ✓ |
+| OK26 placeholder bundles | 4 | ✓ |
+
+**TASK-3604 findings**:
+- **No new schema BLOCKERs**. The compact "mirrors HK" bundle pattern (SR-PROSA-OK24-001) confirms the register can handle structurally-similar agreement pairs without duplicating 30+ rows. The cross-agreement-mirror convention works via cross-row-ID reference rather than a structural mirror-field.
+- **New documentation pattern: cross-agreement mirror bundle with exclusion list**. Used when agreement B = agreement A on most cells but diverges on a few; the bundle row enumerates "all cells except [list]" + individual rows cover the exclusions. Maintains "every cell has a register row" validation criterion without row inflation. Will apply again in TASK-3605 (AC_RESEARCH + AC_TEACHING are AC-cloned with norm-model divergence).
+- **No new candidate bugs** for PROSA. Both candidate bugs (SENIOR_DAY paired, OvertimeRequiresPreApproval) carry through HK → PROSA. Cross-agreement count for both candidates now stands at 3 of 3 base agreements; AC_RESEARCH + AC_TEACHING (TASK-3605) likely inherit the same encoding.
+
+### Candidate bug discoveries (cumulative through TASK-3604)
 
 | Row(s) | Finding | Severity | Phase B priority |
 |--------|---------|----------|------------------|
-| **SR-AC-OK24-015 + SR-AC-OK24-035 + SR-HK-OK24-029** | SENIOR_DAY `annual_quota = 0` with `min_age = 60` — encoding semantics unclear. Either (a) rule overrides with age-banded lookup (incomplete encoding), or (b) `min_age` field is vestigial. As encoded, no senior days ever grant regardless of age. Same encoding across all 5 agreements per init.sql:1373–1378 — fix propagates uniformly per ROADMAP no-per-institution-opt-in policy. | bug-candidate (unconfirmed) | **HIGH** — senior-employee compensation correctness; cross-agreement |
-| **SR-HK-OK24-022** | HK `OvertimeRequiresPreApproval = false` — for HK's real overtime regime, current `false` may invert cirkulær intent. The seed default carried through without per-agreement consideration in S17. | bug-candidate (unconfirmed) | **MEDIUM-HIGH** — workflow gate affecting all HK overtime registration; needs Phase B cirkulær cite to confirm direction |
+| **SR-AC-OK24-015 + SR-AC-OK24-035 + SR-HK-OK24-029 + SR-PROSA-OK24-006** | SENIOR_DAY `annual_quota = 0` with `min_age = 60` — encoding semantics unclear. Same encoding across all 3 base agreements per init.sql:1373–1378 — fix propagates uniformly per ROADMAP no-per-institution-opt-in policy. | bug-candidate (unconfirmed) | **HIGH** — senior-employee compensation correctness; cross-agreement (3 of 3 base + likely 2 AC variants TBD in TASK-3605) |
+| **SR-HK-OK24-022 + SR-PROSA-OK24-007** | `OvertimeRequiresPreApproval = false` for HK + PROSA — for their real overtime regimes, current `false` may invert cirkulær intent. Seed default carried through without per-agreement consideration in S17. | bug-candidate (unconfirmed) | **MEDIUM-HIGH** — workflow gate affecting all HK + PROSA overtime registration; needs Phase B cirkulær cite to confirm direction (PROSA's joint administration with HK suggests symmetric answer) |
 
 These observations feed into:
 - S36 TASK-3607 (agreement-ruleset-audit doc) — both candidates surface as DRIFT-IN-CODE / DRIFT-IN-SOURCE classification candidates
@@ -1768,15 +2065,21 @@ These observations feed into:
 |-----------|------------|------------|-------|
 | AC | **39** (20 proof-of-shape TASK-3601 + 19 completion TASK-3602) | **4** (placeholder bundles, TASK-3602) | **43** |
 | HK | **31** (TASK-3603) | **4** (placeholder bundles, TASK-3603) | **35** |
-| PROSA | 0 (TASK-3604) | 0 | 0 |
+| PROSA | **9** (TASK-3604, compact "mirrors HK" form) | **4** (placeholder bundles, TASK-3604) | **13** |
 | AC_RESEARCH | 0 (TASK-3605) | 0 | 0 |
 | AC_TEACHING | 0 (TASK-3605) | 0 | 0 |
-| **Total** | **70** | **8** | **78** |
+| **Total** | **79** | **12** | **91** |
+
+**PROSA OK24 cell coverage by source surface**:
+- `agreement_configs` columns: divergent cells (MaxFlexBalance, FlexCarryoverMax, OvertimeRequiresPreApproval) get individual rows (002, 003, 007); all other ~34 columns covered by "mirrors HK" bundle (001)
+- `entitlement_configs` rows: 3 entitlement types covered by matches-HK bundle (004); CHILD_SICK divergent individual row (005); SENIOR_DAY paired-bug inherited row (006)
+- `wage_type_mappings` rows: matches-HK bundle (008)
+- `position_override_configs` rows: explicit-absence pattern (009)
+
+**PROSA OK26 cell coverage**: all data domains covered via 4 placeholder bundles (SR-PROSA-OK26-001..004).
 
 **HK OK24 cell coverage by source surface**:
 - `agreement_configs` columns: all ~37 effective columns covered across SR-HK-OK24-001..024
-- `entitlement_configs` rows: 5 entitlement types fully covered via SR-HK-OK24-025..029 (one row per entitlement type with all sub-fields)
-- `wage_type_mappings` rows: ~22 mappings covered in SR-HK-OK24-030 bundle (HK has supplements + overtime mappings that AC doesn't)
-- `position_override_configs` rows: explicit-absence pattern via SR-HK-OK24-031 (HK has no overrides seeded)
-
-**HK OK26 cell coverage**: all data domains covered via 4 placeholder bundles (SR-HK-OK26-001..004).
+- `entitlement_configs` rows: 5 entitlement types fully covered via SR-HK-OK24-025..029
+- `wage_type_mappings` rows: ~22 mappings covered in SR-HK-OK24-030 bundle
+- `position_override_configs` rows: explicit-absence pattern via SR-HK-OK24-031
