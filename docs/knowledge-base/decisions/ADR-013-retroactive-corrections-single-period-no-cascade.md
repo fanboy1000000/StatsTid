@@ -42,3 +42,26 @@ When a correction produces a flex balance delta:
 
 1. **Full automatic cascade**: Re-run all subsequent periods automatically. Rejected — unbounded blast radius, payroll safety risk.
 2. **Cascade with approval gate**: Queue downstream corrections for admin approval. Rejected — adds significant complexity (correction queue, partial state, approval workflow for cascades) for a rare scenario.
+
+## Amendment — ADR-024 cross-reference (S38 TASK-3803, 2026-05-21)
+
+ADR-024 D6 (bug correction operational model) introduces a new event type `AgreementConfigBugCorrected` (distinct from existing `AgreementConfigPublished` per ADR-014). When operator-triggered, a bug-correction event MAY produce a flex delta cascade equivalent to a `RetroactiveCorrectionRequested` event in shape.
+
+This amendment clarifies the interaction:
+
+**Bug corrections become an explicit-cascade trigger under this ADR's no-cascade discipline.** The cascade remains **explicit (operator-triggered)** rather than **implicit (rule-engine-derived)**. Specifically:
+
+- A `bug-fix-without-recompute` action (per ADR-024 D3, pre-launch posture) produces NO cascade — there are no past periods to recompute. The bug correction ships forward-only.
+- A `bug-fix-with-recompute` action (per ADR-024 D3, post-launch posture; covered by ADR-027 placeholder) explicitly invokes the retroactive recompute path. The operator triggers it; the action is reviewable + auditable; no implicit cascade.
+- A `decision-recorded-fix-deferred` action (per ADR-024 D3, S37 Bug #4 pattern) produces NO cascade — no seed change ships in the recording sprint; the implementation sprint (S40 in the Bug #4 case) ships the change forward-only.
+
+The no-cascade-discipline invariant (single-period, operator-authorized, payroll-safe) holds across all three action types. **Bug correction is a new cascade trigger source, not a new cascade mode.**
+
+ADR-024 D6 + ADR-027 (post-launch) define the operational model + SLS reconciliation pattern for `bug-fix-with-recompute`. This ADR's invariants apply to the resulting cascade per the explicit-not-implicit principle.
+
+| Cross-reference | What it commits to |
+|-----------------|---------------------|
+| **ADR-024 D3** | Codifies the three action types this amendment enumerates |
+| **ADR-024 D6** | New `AgreementConfigBugCorrected` event type as cascade trigger; operator-triggered; global no-opt-in |
+| **ADR-027** (post-launch) | `bug-fix-with-recompute` operational workflow + SLS reconciliation when first post-launch bug-with-past-impact discovered |
+| **ADR-016 D10** | Replay determinism preserved: original manifest persists; bug correction produces new manifest |
