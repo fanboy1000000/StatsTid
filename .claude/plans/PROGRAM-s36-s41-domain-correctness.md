@@ -7,7 +7,7 @@
 | **Phase** | 4e (general hardening — launch-blocking program) |
 | **Authored** | 2026-05-18 (during S35 refinement discussion) |
 | **Trigger** | AC=UDBETALING seed bug discovered during S35 cycle-1 absorption surfaced systemic gaps |
-| **Status** | PLANNED — execution starts after S35 close |
+| **Status** | IN PROGRESS — S35/S36/S37/S38/S38b COMPLETE 2026-05-21; S39+S40+S41 pending |
 | **Dependencies** | S35 close (clears narrow hardening); pre-launch posture (last-free-correction window) |
 
 ---
@@ -260,9 +260,9 @@ Cross-reference ADR-024 D3 — bug corrections become an explicit-cascade trigge
 | ADR-013 | Amended (S38) | No-cascade + bug-correction as explicit cascade trigger |
 | ADR-016 | Preserved (S34 closed D10 for dated inputs) | Replay determinism inviolable; bug corrections produce new manifests, originals preserved |
 | ADR-017 | Preserved | Local profile model unchanged |
-| ADR-024 | Filed (S38) | Role-within-agreement modeling + correction policy + classification governance + interpretation authority (6 decisions D1-D6) |
-| ADR-025 | Filed (S38) | Multi-tenant operational concerns (8 decisions D1-D8) |
-| ADR-026 | REJECTED (per glocal principle) | Never filed |
+| ADR-024 | ACCEPTED (S38) | Role-within-agreement modeling + correction policy + classification governance + interpretation authority (**7 decisions D1-D7**; D8 candidate from S37 merged into D3 per user adjudication; D7 added S37 TASK-3704 for overtime authorization model with post-hoc necessity-acknowledgment workflow) |
+| ADR-025 | ACCEPTED-WITH-D7-DEFERRED (S38) | Multi-tenant operational concerns (7 of 8 decisions: D1-D6 + D8). D7 audit-visibility surface deferred to ADR-026 per `feedback_thrash_defer_real_world.md` halt-and-prompt at cycle 3. |
+| **ADR-026** | **ACCEPTED (S38b)** — Audit Visibility Surface (path C event-projection per ADR-018 D13). Prior PROGRAM entry "REJECTED per glocal principle" superseded by S38 halt-and-prompt outcome: tenant-scoped audit visibility is launch-required, not rejected. 7 decisions D1-D7 covering new audit_projection table + per-event mappers + 3-tier visibility_scope enum + cross-tenant bypass reconciliation + new GET /api/admin/audit endpoint + admin UI + 5 Phase E tests. |
 | ADR-027 | Deferred (post-launch) | Bug correction workflow + event + SLS reconciliation |
 
 ---
