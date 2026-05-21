@@ -3,12 +3,13 @@
 | Field | Value |
 |-------|-------|
 | **Sprint** | 36 |
-| **Status** | in-progress |
+| **Status** | **complete** |
 | **Start Date** | 2026-05-21 |
-| **End Date** | _pending_ |
-| **Orchestrator Approved** | _pending TASK-3610_ |
+| **End Date** | 2026-05-21 |
+| **Orchestrator Approved** | yes — 2026-05-21 |
 | **Build Verified** | N/A — design-only sprint; no code changes; no `dotnet build` verification needed (S28 / S32 precedent) |
-| **Test Verified** | N/A — design-only sprint; test totals unchanged from S35 close (869 total). `sprint-test-validation` skill SKIP with rationale at sprint close. |
+| **Test Verified** | N/A — design-only sprint; test totals unchanged from S35 close (869 total = 526 unit + 35 plain regression + 218 Docker-gated + 90 frontend). `sprint-test-validation` skill SKIP with rationale per design-only sprint contract. |
+| **Sprint-end HEAD** | _filled by close commit_ |
 | **Sprint-start commit base** | `a094630` (post-S35 governance commit, 2026-05-20 — cap-fires-after-verification + post-7a-coverage governance edits) |
 | **Sprint type** | **DESIGN-ONLY** — produces 3 NEW reference docs (`agreement-source-register.md` + `role-dimension-audit.md` + `agreement-ruleset-audit.md`) + 1 UPDATE (`danish-agreements.md` cross-reference) + 1 NEW handoff doc (`phase-b-handoff-package.md`). No code changes; no test changes. Mirrors S28 / S32 design-only pattern. |
 | **Refinement** | Not filed. `.claude/plans/PROGRAM-s36-s41-domain-correctness.md` is the de facto refinement artifact — its design absorbed dual-lens scrutiny during S35 cycle-1 absorption (committed 2026-05-18). |
@@ -58,13 +59,13 @@ The relevant review checkpoint for design-only inventory work is **Phase B domai
 
 ## Architectural Constraints Verified
 
-_Checked off as the sprint progresses; final assertion in TASK-3610._
+Final assertion (TASK-3610):
 
-- [ ] **P1 — Architectural integrity** → No code touched; no schema touched. Reference docs follow existing `docs/references/` convention. PROGRAM file cross-references stay sound.
-- [ ] **P2 — Rule engine determinism** → No rule changes. Source register documents intended encoding for downstream verification in S39 Phase E seed-parity tests.
-- [ ] **P3 — Event sourcing / auditability** → No event surface changes. Source register becomes the audit-trail artifact for "what cell value was authoritative at what date."
-- [ ] **P4 — Version correctness** → Each register cell carries `ok_version` discriminator + `supersession_history` column; multi-OK reasoning baked in from row one.
-- [ ] **P5–P9** → Not applicable in design-only sprint.
+- [x] **P1 — Architectural integrity** → No code touched; no schema touched. Reference docs follow existing `docs/references/` convention. PROGRAM file cross-references stay sound across all 5 produced/updated docs.
+- [x] **P2 — Rule engine determinism** → No rule changes. Source register documents intended encoding for downstream verification in S39 Phase E seed-parity tests. AC chefkonsulent gap explicitly flagged as production-incorrect — fix lands S38–S40 per ROADMAP rule correction policy.
+- [x] **P3 — Event sourcing / auditability** → No event surface changes. Source register becomes the audit-trail artifact for "what cell value was authoritative at what date." `bug_correction_history` + `supersession_history` columns provide per-cell audit trail (S35 AC=AFSPADSERING recorded as first entry).
+- [x] **P4 — Version correctness** → Each register cell carries `ok_version` discriminator. OK26 placeholder bundle pattern preserves traceability across OK transitions; per-cell divergence rows added when OK26 cirkulær publishes.
+- [x] **P5–P9** → Not applicable in design-only sprint (confirmed at close).
 
 ## Task Log
 
@@ -117,7 +118,7 @@ Per-task detail in PLAN-s36.md.
 ### Phase 5 — Phase B Kickoff + Sprint Close (2 tasks)
 
 - **TASK-3609** — Phase B kickoff packaging (`docs/references/phase-b-handoff-package.md`). **completed** (this commit). Domain-expert handoff package with 4-tier priority sequencing (Tier 1 = 4 candidate bugs requiring direction-adjudication; Tier 2 = ~8 MEDIUM-HIGH baseline cells; Tier 3 = ~80 MATCH-PENDING-SOURCE cells; Tier 4 = ~5 DRIFT-UNCLEAR). Per-cell review-form template + bulk-review shortcut for MATCH cells. Candidate domain-expert profile table (6 expert types: internal customer HR/payroll + union consultants per agreement + retired Personalestyrelsen + external legal counsel). Recommended engagement model (primary customer reviewer + secondary union consultants in parallel + dispute resolution per ROADMAP employer-side default). Engagement protocol per PROGRAM L94-99. Tracking dashboard for Phase B status. Forward pointers to S37 absorption tasks (TASK-3700..3709). Per-task detail in PLAN-s36.md.
-- **TASK-3610** — Sprint close (SPRINT-36.md close sections + INDEX.md finalization + ROADMAP Phase 4e Phase A pass 1 marked COMPLETE + MEMORY.md S36 line)
+- **TASK-3610** — Sprint close. **completed** (this commit). SPRINT-36.md close sections filled with outcomes summary + candidate-bug inventory + documentation-patterns-surfaced list + 11-commit list + forward pointers + Phase B engagement-status tracker. INDEX.md S36 row flipped to complete. ROADMAP Phase 4e Phase A pass 1 marked COMPLETE. MEMORY.md S36 summary added. Per-task detail in PLAN-s36.md.
 
 Per-task detail in PLAN-s36.md.
 
@@ -173,4 +174,75 @@ Per `sprint-test-validation` skill: **SKIP with rationale** — design-only spri
 
 ---
 
-_Updated at sprint close (TASK-3610): outcomes summary, finding counts per agreement, candidate-bug list for S37, commit list, sprint duration, MEMORY.md entry._
+## Sprint Close (TASK-3610)
+
+### Outcomes Summary
+
+5 docs produced or updated across `docs/references/`:
+
+| Doc | Status | Cell count / scope |
+|-----|--------|--------------------|
+| `agreement-source-register.md` (NEW) | DRAFT — awaits Phase B sign-off | **111 cells** across 5 agreements × 2 OK versions: AC OK24=39, AC OK26=4 bundles, HK OK24=31, HK OK26=4 bundles, PROSA OK24=9 (mirrors-HK form), PROSA OK26=4 bundles, AC_RESEARCH OK24=8 (mirrors-AC form), AC_RESEARCH OK26=4 bundles, AC_TEACHING OK24=7 (mirrors-AC_RESEARCH chain), AC_TEACHING OK26=1 compound 4-domain bundle |
+| `role-dimension-audit.md` (NEW) | DRAFT — awaits Phase B 9-cell sign-off | Per-agreement within-OK role enumeration; production-incorrectness call-out for AC chefkonsulent / kontorchef / specialkonsulent; `PositionOverrideConfigs` 6-field schema gap analysis; `User.EmploymentCategory` vestigial confirmation |
+| `agreement-ruleset-audit.md` (NEW) | DRAFT — awaits Phase B | 3-column code/seed/source comparison; classification summary (~25 MATCH / ~80 MATCH-PENDING-SOURCE / 0 DRIFT-IN-CODE / 4 candidate DRIFT-IN-SEED-or-SOURCE / ~5 DRIFT-UNCLEAR / 1 RESOLVED S35); Candidate Bug Routing Summary |
+| `danish-agreements.md` (UPDATE) | UPDATED | SR row references added to 7 tables (no prose rewrite); header gains cross-references block to 3 S36-produced docs; full prose rewrite deferred to S41 TASK-4106 |
+| `phase-b-handoff-package.md` (NEW) | READY FOR DISPATCH | 4-tier priority sequencing (Tier 1 = 4 candidate bugs blocking S37 absorption); candidate domain-expert profile (6 types); recommended primary + secondary engagement model; per-cell review-form template (Sections A–D + bulk-review shortcut); tracking dashboard |
+
+### Candidate-Bug Inventory (4 surfaced for S37 / S38 routing)
+
+| # | Candidate bug | Affected SR rows | S37/S38 path |
+|---|---------------|-------------------|----------------|
+| 1 | AC variants missing entitlement_configs rows (20 missing rows for VACATION + SPECIAL_HOLIDAY + CARE_DAY + CHILD_SICK + SENIOR_DAY across AC_RESEARCH + AC_TEACHING × OK24 + OK26) | SR-AC_RESEARCH-OK24-005 + SR-AC_TEACHING-OK24-005 + OK26 inheritance | S37 mechanical seed correction if Phase B confirms verbatim inheritance from AC base |
+| 2 | AC variants wage_type_mappings divergent SLS codes on 6 of 11 time types; MERARBEJDE → SLS_0210 **collides with HK/PROSA OVERTIME_50 → SLS_0210** | SR-AC_RESEARCH-OK24-006 + SR-AC_TEACHING-OK24-006 | S37 (if S11 authoring bug) or S38 ADR-024 D6 (if intentional separate code-block needing SLS reconciliation) |
+| 3 | SENIOR_DAY paired bug — `annual_quota=0` + `min_age=60` structurally inconsistent; same encoding across 3 base agreements per init.sql:1373–1378 | SR-AC-OK24-015 + 035 + SR-HK-OK24-029 + SR-PROSA-OK24-006 + AC variant inheritance via SR-AC_RESEARCH-OK24-008 | S37 (seed quota fix), S39 (rule logic), or S40 cutover depending on Phase B path selection |
+| 4 | HK + PROSA `OvertimeRequiresPreApproval=false` — seed default carried through S17 without per-agreement consideration | SR-HK-OK24-022 + SR-PROSA-OK24-007 | S37 (if cirkulær-mandated, flip to TRUE) or MATCH on no-op |
+
+Plus 1 RESOLVED historical DRIFT-IN-SEED recorded (S35 AC=AFSPADSERING in SR-AC-OK24-005 `bug_correction_history`).
+
+### Documentation Patterns Surfaced
+
+Six register-formatting patterns emerged during the per-agreement fill, all schema-compatible without changes:
+
+1. **15-column schema with `row_id` + `notes` first-class** (TASK-3601 enhancement over PROGRAM L51–67 13-column nominal)
+2. **`confidence_level = N/A-for-agreement` for inert cells** (AC supplement-disabled rates; TASK-3601)
+3. **Compound cells** via string-joined `field` (`NormModel + NormPeriodWeeks + AnnualNormHours` group; 11-column supplement bundles; 17-mapping wage-type bundles; TASK-3601 → TASK-3602)
+4. **"DIVERGENT from X" annotation via cross-row-ID reference** + **"LOAD-BEARING in X (inert in Y)" pairing** (TASK-3603)
+5. **Cross-agreement mirror bundle with exclusion list** for structurally-cloned agreements (PROSA "mirrors HK"; AC_RESEARCH "mirrors AC"; AC_TEACHING "mirrors AC_RESEARCH" chain; TASK-3604 → TASK-3605)
+6. **Explicit-absence row** for "no rows in this domain — verified intentional, not missing by oversight" (TASK-3603 → TASK-3605)
+
+These patterns extend the schema's reach without requiring per-task amendments. PROGRAM L51–67 13-column nominal stands; explicit `row_id` + `notes` made first-class in-file.
+
+### Commit List (10 commits across S36)
+
+```
+f253646 S36 TASK-3600: sprint open — Phase A inventory pass 1 (DESIGN-ONLY)
+f27b3f0 S36 TASK-3601: source register skeleton + AC OK24 proof-of-shape (20 cells)
+dea9eb9 S36 TASK-3602: AC OK24 + OK26 source register entries complete
+403038e S36 TASK-3603: HK OK24 + OK26 source register entries complete
+e2113b9 S36 TASK-3604: PROSA OK24 + OK26 source register entries complete
+b5f5aa6 S36 TASK-3605: AC_RESEARCH + AC_TEACHING OK24 + OK26 entries complete
+94f2e41 S36 TASK-3606: role dimension audit doc
+821f1f2 S36 TASK-3607: agreement ruleset audit doc (code vs seed vs source)
+04c2f42 S36 TASK-3608: danish-agreements.md cross-references to source register
+a049f7c S36 TASK-3609: Phase B kickoff packaging
+[this commit] S36 TASK-3610: sprint close — Phase A inventory pass 1 complete
+```
+
+### Forward Pointers
+
+- **S37 Phase A finalization (per PROGRAM L105–117)** — domain-expert sign-off absorption; 4 candidate bugs adjudicated; source register status → APPROVED; bug-with-no-past-impact seed corrections shipped if Phase B confirms direction
+- **S38 Phase C ADR authorship (per PROGRAM L121–164)** — ADR-024 (role-within-agreement modeling + correction policy + classification governance, 6 decisions D1-D6) + ADR-025 (multi-tenant operational concerns, 8 decisions D1-D8) + ADR-013 amendment
+- **S39 schema migration + Phase E continuous-validation tests** — `role_within_agreement_configs` table + seed-parity tests + "unknown unknown" tests + DRAFT-OK rule enforcement
+- **S40 cutover** — `ConfigResolutionService` + rule engine + payroll mapping read role layer
+- **S41 exhaustive D-test matrix + danish-agreements.md rewrite + WORKFLOW.md OK-transition checklist + QUALITY.md re-grade**
+
+### Phase B Engagement Status (handoff to S37)
+
+| Field | Status at S36 close |
+|-------|---------------------|
+| Candidate identification | started 2026-05-20 (S35 close week per PROGRAM L101) |
+| Candidate(s) selected | _pending — to be filled before S37 sprint open_ |
+| Engagement window | week 2 of S36 — package READY (commit `a049f7c`) |
+| Phase B feedback ETA | S37 sprint start (per PROGRAM L100) |
+| Source register status | DRAFT (target APPROVED at S37 close per PROGRAM L114) |
+

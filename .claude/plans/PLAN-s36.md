@@ -356,7 +356,7 @@ _Checked off as the sprint progresses; final assertion in TASK-3610._
 | Field | Value |
 |-------|-------|
 | **ID** | TASK-3610 |
-| **Status** | pending |
+| **Status** | completed (this commit) |
 | **Agent** | Orchestrator-direct |
 | **Components** | `docs/sprints/SPRINT-36.md` (close sections), `docs/sprints/INDEX.md` (final row), `ROADMAP.md` (Phase 4e Phase A pass-1 entry — mark COMPLETE; pass-2 = S37 pending), `~/.claude/projects/C--StatsTid/memory/MEMORY.md` (S36 line) |
 | **Dependencies** | TASK-3609 |
