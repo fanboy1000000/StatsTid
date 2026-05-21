@@ -1375,7 +1375,30 @@ INSERT INTO entitlement_configs (entitlement_type, agreement_code, ok_version, a
     ('SENIOR_DAY', 'HK', 'OK24', 0, 'IMMEDIATE', 1, 0, false, false, 60, 'Seniordage – kræver alder 60+', '0001-01-01'),
     ('SENIOR_DAY', 'HK', 'OK26', 0, 'IMMEDIATE', 1, 0, false, false, 60, 'Seniordage – kræver alder 60+', '0001-01-01'),
     ('SENIOR_DAY', 'PROSA', 'OK24', 0, 'IMMEDIATE', 1, 0, false, false, 60, 'Seniordage – kræver alder 60+', '0001-01-01'),
-    ('SENIOR_DAY', 'PROSA', 'OK26', 0, 'IMMEDIATE', 1, 0, false, false, 60, 'Seniordage – kræver alder 60+', '0001-01-01')
+    ('SENIOR_DAY', 'PROSA', 'OK26', 0, 'IMMEDIATE', 1, 0, false, false, 60, 'Seniordage – kræver alder 60+', '0001-01-01'),
+    -- S37 TASK-3701 Bug #1 absorption: AC variants (AC_RESEARCH + AC_TEACHING) mirror AC base values
+    -- per interim-expert decision 2026-05-21. Bug-with-no-past-impact under pre-launch posture.
+    -- VACATION inherits Ferieloven (universal); other 4 inherit AC overenskomst by structural inheritance.
+    ('VACATION',        'AC_RESEARCH', 'OK24', 25, 'IMMEDIATE', 9, 5, true,  false, NULL, 'Ferie – 25 dage',                  '0001-01-01'),
+    ('VACATION',        'AC_RESEARCH', 'OK26', 25, 'IMMEDIATE', 9, 5, true,  false, NULL, 'Ferie – 25 dage',                  '0001-01-01'),
+    ('VACATION',        'AC_TEACHING', 'OK24', 25, 'IMMEDIATE', 9, 5, true,  false, NULL, 'Ferie – 25 dage',                  '0001-01-01'),
+    ('VACATION',        'AC_TEACHING', 'OK26', 25, 'IMMEDIATE', 9, 5, true,  false, NULL, 'Ferie – 25 dage',                  '0001-01-01'),
+    ('SPECIAL_HOLIDAY', 'AC_RESEARCH', 'OK24',  5, 'IMMEDIATE', 9, 0, true,  false, NULL, 'Særlige feriedage – 5 dage',       '0001-01-01'),
+    ('SPECIAL_HOLIDAY', 'AC_RESEARCH', 'OK26',  5, 'IMMEDIATE', 9, 0, true,  false, NULL, 'Særlige feriedage – 5 dage',       '0001-01-01'),
+    ('SPECIAL_HOLIDAY', 'AC_TEACHING', 'OK24',  5, 'IMMEDIATE', 9, 0, true,  false, NULL, 'Særlige feriedage – 5 dage',       '0001-01-01'),
+    ('SPECIAL_HOLIDAY', 'AC_TEACHING', 'OK26',  5, 'IMMEDIATE', 9, 0, true,  false, NULL, 'Særlige feriedage – 5 dage',       '0001-01-01'),
+    ('CARE_DAY',        'AC_RESEARCH', 'OK24',  2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage',             '0001-01-01'),
+    ('CARE_DAY',        'AC_RESEARCH', 'OK26',  2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage',             '0001-01-01'),
+    ('CARE_DAY',        'AC_TEACHING', 'OK24',  2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage',             '0001-01-01'),
+    ('CARE_DAY',        'AC_TEACHING', 'OK26',  2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage',             '0001-01-01'),
+    ('CHILD_SICK',      'AC_RESEARCH', 'OK24',  1, 'IMMEDIATE', 1, 0, false, true,  NULL, 'Barn syg – 1 dag per episode',     '0001-01-01'),
+    ('CHILD_SICK',      'AC_RESEARCH', 'OK26',  1, 'IMMEDIATE', 1, 0, false, true,  NULL, 'Barn syg – 1 dag per episode',     '0001-01-01'),
+    ('CHILD_SICK',      'AC_TEACHING', 'OK24',  1, 'IMMEDIATE', 1, 0, false, true,  NULL, 'Barn syg – 1 dag per episode',     '0001-01-01'),
+    ('CHILD_SICK',      'AC_TEACHING', 'OK26',  1, 'IMMEDIATE', 1, 0, false, true,  NULL, 'Barn syg – 1 dag per episode',     '0001-01-01'),
+    ('SENIOR_DAY',      'AC_RESEARCH', 'OK24',  0, 'IMMEDIATE', 1, 0, false, false, 60,   'Seniordage – kræver alder 60+',    '0001-01-01'),
+    ('SENIOR_DAY',      'AC_RESEARCH', 'OK26',  0, 'IMMEDIATE', 1, 0, false, false, 60,   'Seniordage – kræver alder 60+',    '0001-01-01'),
+    ('SENIOR_DAY',      'AC_TEACHING', 'OK24',  0, 'IMMEDIATE', 1, 0, false, false, 60,   'Seniordage – kræver alder 60+',    '0001-01-01'),
+    ('SENIOR_DAY',      'AC_TEACHING', 'OK26',  0, 'IMMEDIATE', 1, 0, false, false, 60,   'Seniordage – kræver alder 60+',    '0001-01-01')
 ON CONFLICT (entitlement_type, agreement_code, ok_version, effective_from) DO NOTHING;
 
 -- ============================================================

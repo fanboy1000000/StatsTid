@@ -2064,25 +2064,25 @@ AC_RESEARCH compact form mirrors PROSA's "mirrors HK" convention — bundle non-
 | `disputed?` | false |
 | `notes` | Inverse of AC base where NormModel is inert and NormPeriodWeeks is load-bearing. Schema accommodates via `confidence_level = N/A-for-agreement` (same pattern as AC's inert supplement rates). |
 
-### SR-AC_RESEARCH-OK24-005 — entitlement_configs explicit absence (CANDIDATE BUG)
+### SR-AC_RESEARCH-OK24-005 — entitlement_configs "mirrors AC base" bundle (RESOLVED via S37 Bug #1 absorption)
 
 | Field | Value |
 |-------|-------|
 | `row_id` | SR-AC_RESEARCH-OK24-005 |
 | `agreement_code` | AC_RESEARCH |
 | `ok_version` | OK24 |
-| `field` | `entitlement_configs (AC_RESEARCH, OK24, *)` — explicit absence row |
-| `current_encoded_value` | `(no rows in init.sql:1343–1378; AC_RESEARCH has NO entitlement configs seeded)` |
-| `authoritative_source` | pending (Phase B PRIORITY — clarify whether AC_RESEARCH employees inherit AC base entitlements via code-path fallback or whether this is a structural gap) |
-| `interpretation` | AC_RESEARCH has NO entitlement_configs rows for VACATION, SPECIAL_HOLIDAY, CARE_DAY, CHILD_SICK, or SENIOR_DAY. Contrast: init.sql:1343–1378 explicitly seeds these 5 entitlements for AC, HK, PROSA. **As encoded today**, an AC_RESEARCH employee querying entitlements would return zero rows for any type. Either (a) intentional with code-path fallback "lookup AC_RESEARCH, if no rows fall back to AC base" (the EntitlementBalanceRepository would need to implement this), or (b) structural gap — AC_RESEARCH employees would fail entitlement quota lookups silently. |
-| `confidence_level` | LOW (encoding semantics critical to clarify; current behavior unclear from code-side audit alone) |
-| `interpretation_authority` | Personalestyrelsen / Akademikerne |
-| `last_verified_by` | pending |
-| `decision_date` | pending |
+| `field` | `entitlement_configs (AC_RESEARCH, OK24, *)` — 5 entitlement rows mirroring AC base values per S37 TASK-3701 |
+| `current_encoded_value` | All 5 entitlement types mirror AC base post-S37 (with SENIOR_DAY further corrected by Bug #3 to quota=2 + min_age=62): VACATION=25/IMMEDIATE/9/5/true/false; SPECIAL_HOLIDAY=5/IMMEDIATE/9/0/true/false; CARE_DAY=2/IMMEDIATE/1/0/false/false; CHILD_SICK=1/IMMEDIATE/1/0/false/true; SENIOR_DAY=2/IMMEDIATE/1/0/false/false/min_age=62 (post-S37 TASK-3703). |
+| `authoritative_source` | Ferieloven (LBK nr 230 af 12/02/2021) §8 + §15 for VACATION (universal statutory regardless of agreement); AC overenskomst (oes.dk/media/ik0hm2lr/043-19.pdf) by structural inheritance for the other 4 entitlements (pending paragraph-level cite from real Phase B engagement). |
+| `interpretation` | AC_RESEARCH employees receive identical entitlements to AC base. Resolved S37 (interim-expert decision 2026-05-21) per ROADMAP rule correction policy: was-agreed=NO (the parties never agreed AC variants get zero entitlements; the absence was an S11 seed oversight) + materially-wrong-past-impact=NO (pre-launch posture). |
+| `confidence_level` | HIGH for VACATION (Ferieloven universal); MEDIUM for the 4 overenskomst-driven entitlements (interim verification; real Phase B should confirm paragraph cites) |
+| `interpretation_authority` | Folketinget (VACATION/Ferieloven); Personalestyrelsen + Akademikerne (others, anticipated) |
+| `last_verified_by` | Orchestrator (interim, user-confirmed decision 2026-05-21) |
+| `decision_date` | 2026-05-21 |
 | `supersession_history` | (none) |
-| `bug_correction_history` | (none — flagged candidate, not yet corrected) |
+| `bug_correction_history` | `[{date: 2026-05-21, from_value: "(no rows seeded)", to_value: "20 rows mirroring AC base × 5 entitlements × 2 OK × 2 variants", source: "S37 TASK-3701 + Bug #1 interim-expert decision", commit: "<this S37 commit>", classifier: "Orchestrator (interim, user-confirmed)", was_agreed: NO, materially_wrong: NO_PRE_LAUNCH, action: "bug-fix-without-recompute"}]` |
 | `disputed?` | false |
-| `notes` | **CANDIDATE BUG / STRUCTURAL GAP — Phase B HIGH priority**. Resolution paths: (a) add explicit AC_RESEARCH + AC_TEACHING rows to init.sql:1343–1378 mirroring AC base (5 entitlement types × 2 OK versions × 2 variants = 20 new rows); OR (b) confirm code-path fallback in EntitlementBalanceRepository handles missing rows via AC base lookup; OR (c) classify as intentional zero-entitlement encoding (would contradict standard state-sector vacation rights — Ferieloven applies universally regardless of agreement). Most likely resolution: (a) seed-correction (bug-with-no-past-impact) per ROADMAP rule correction policy. Affects both AC_RESEARCH + AC_TEACHING; pre-launch correction applies uniformly. |
+| `notes` | **SECOND concrete application of the ROADMAP rule correction policy's bug-correction-when-classified path** (first was S35 TASK-3503 AC=AFSPADSERING). Same mechanical inheritance pattern. Real Phase B engagement may revisit the 4 overenskomst-driven entitlements with paragraph cites — confidence flips MEDIUM → HIGH on confirmation OR new bug_correction_history entry if expert disagrees. |
 
 ### SR-AC_RESEARCH-OK24-006 — wage_type_mappings AC_RESEARCH OK24 bundle (DIVERGENT SLS codes — CANDIDATE BUG)
 
@@ -2232,25 +2232,25 @@ AC_TEACHING uses the same compact form as AC_RESEARCH: "mirrors AC" bundle + div
 | `disputed?` | false |
 | `notes` | Matches AC_RESEARCH SR-AC_RESEARCH-OK24-004 inertness. |
 
-### SR-AC_TEACHING-OK24-005 — entitlement_configs explicit absence (inherits CANDIDATE BUG)
+### SR-AC_TEACHING-OK24-005 — entitlement_configs "mirrors AC base" bundle (RESOLVED via S37 Bug #1 absorption)
 
 | Field | Value |
 |-------|-------|
 | `row_id` | SR-AC_TEACHING-OK24-005 |
 | `agreement_code` | AC_TEACHING |
 | `ok_version` | OK24 |
-| `field` | `entitlement_configs (AC_TEACHING, OK24, *)` — explicit absence row |
-| `current_encoded_value` | `(no rows; AC_TEACHING has NO entitlement configs seeded)` |
-| `authoritative_source` | pending (Phase B — same finding as SR-AC_RESEARCH-OK24-005) |
-| `interpretation` | Same gap as AC_RESEARCH. No VACATION / SPECIAL_HOLIDAY / CARE_DAY / CHILD_SICK / SENIOR_DAY rows seeded for AC_TEACHING. |
-| `confidence_level` | LOW |
-| `interpretation_authority` | Personalestyrelsen / Akademikerne |
-| `last_verified_by` | pending |
-| `decision_date` | pending |
+| `field` | `entitlement_configs (AC_TEACHING, OK24, *)` — 5 entitlement rows mirroring AC base values per S37 TASK-3701 |
+| `current_encoded_value` | Identical to SR-AC_RESEARCH-OK24-005 post-S37 (same AC-base inheritance applied to AC_TEACHING). |
+| `authoritative_source` | Ferieloven §8 + §15 for VACATION; AC overenskomst by structural inheritance for the other 4. |
+| `interpretation` | AC_TEACHING employees receive identical entitlements to AC base — same resolution as AC_RESEARCH per the same interim-expert decision. |
+| `confidence_level` | HIGH for VACATION; MEDIUM for the other 4. |
+| `interpretation_authority` | Folketinget (VACATION) / Personalestyrelsen + Akademikerne (others). |
+| `last_verified_by` | Orchestrator (interim, user-confirmed decision 2026-05-21) |
+| `decision_date` | 2026-05-21 |
 | `supersession_history` | (none) |
-| `bug_correction_history` | (none) |
+| `bug_correction_history` | `[{date: 2026-05-21, from_value: "(no rows seeded)", to_value: "20 rows mirroring AC base × 5 entitlements × 2 OK × 2 variants (joint with SR-AC_RESEARCH-OK24-005)", source: "S37 TASK-3701 + Bug #1 interim-expert decision", commit: "<this S37 commit>", classifier: "Orchestrator (interim, user-confirmed)", was_agreed: NO, materially_wrong: NO_PRE_LAUNCH, action: "bug-fix-without-recompute"}]` |
 | `disputed?` | false |
-| `notes` | **CANDIDATE BUG / STRUCTURAL GAP — same finding as AC_RESEARCH**. Resolution applies uniformly to both AC variants. See SR-AC_RESEARCH-OK24-005 for full rationale + Phase B resolution paths. |
+| `notes` | Resolution applies uniformly to AC_RESEARCH + AC_TEACHING. Cross-ref SR-AC_RESEARCH-OK24-005 for full bug-correction context. Real Phase B engagement may revisit AC_TEACHING-specific paragraph cites (e.g., teaching-staff-specific VACATION accrual nuances if any) — confidence flips on confirmation. |
 
 ### SR-AC_TEACHING-OK24-006 — wage_type_mappings AC_TEACHING OK24 bundle (inherits CANDIDATE BUG)
 
