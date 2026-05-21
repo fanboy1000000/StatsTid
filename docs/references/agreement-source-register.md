@@ -979,7 +979,719 @@ AC OK26 is a placeholder in `CentralAgreementConfigs.cs:100` — the comment rea
 
 ---
 
-## Schema Validation (TASK-3601 + TASK-3602 self-checks)
+## HK OK24 Cells
+
+HK = Handels- og Kontorfunktionærer i Staten. Distinct cirkulær from AC; substantially different compensation model. HK uses the standard overtime regime (`HasOvertime = true`, `HasMerarbejde = false` — inverting AC), all hourly supplements enabled, on-call + call-in active. This inverts the AC pattern across ~12 cells; each load-bearing inversion gets its own row.
+
+**HK cirkulær source**: Personalestyrelsen / Medst administers the HK overenskomst per state-sector convention; specific PDF URL pending Phase B verification. HK union counterpart published at hk.dk/raadgivning/overenskomst/stat. Cells with HK-specific values that mirror established state-sector convention carry MEDIUM confidence pending paragraph cite.
+
+### SR-HK-OK24-001 — WeeklyNormHours + NormModel + NormPeriodWeeks + AnnualNormHours (compound)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-HK-OK24-001 |
+| `agreement_code` | HK |
+| `ok_version` | OK24 |
+| `field` | `WeeklyNormHours + NormModel + NormPeriodWeeks + AnnualNormHours` |
+| `current_encoded_value` | `37.0 / "WEEKLY_HOURS" / 1 / 1924` |
+| `authoritative_source` | https://oes.dk/media/ik0hm2lr/043-19.pdf §2 (the 37h weekly norm is universal state-sector convention; the same Aftale om arbejdstid governs); HK cirkulær mirrors |
+| `interpretation` | HK weekly norm = 37h, standard WEEKLY_HOURS model with 1-week norm period. Same as AC OK24 (SR-AC-OK24-001, SR-AC-OK24-020) — universal state-sector norm. |
+| `confidence_level` | HIGH (universal convention) |
+| `interpretation_authority` | Personalestyrelsen |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | Compound row covering 4 columns. Same values as AC; semantics identical (standard WEEKLY_HOURS norm). |
+
+### SR-HK-OK24-002 — MaxFlexBalance (DIVERGENT from AC)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-HK-OK24-002 |
+| `agreement_code` | HK |
+| `ok_version` | OK24 |
+| `field` | `MaxFlexBalance` |
+| `current_encoded_value` | `100.0` |
+| `authoritative_source` | pending (Phase B — HK overenskomst flex ceiling; PROSA = 120h, AC = 150h, HK = 100h hierarchy) |
+| `interpretation` | Maximum positive flex balance for HK employees = 100 hours. Lower than AC (150h) and PROSA (120h), reflecting HK's tighter overtime-regime balance handling. Excess hours convert to OVERTIME_50 / OVERTIME_100 events directly per `HasOvertime = true` (see SR-HK-OK24-004). |
+| `confidence_level` | MEDIUM (the 100h baseline is well-established in project history; glocal cell — institutional override permitted via `local_configurations` per ADR-017) |
+| `interpretation_authority` | Personalestyrelsen / negotiated |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | **DIVERGENT from AC** (SR-AC-OK24-011 = 150h). The lower ceiling reflects HK's overtime-regime: balance growth has a direct payroll-export path (OVERTIME_50/100), so a tighter cap reduces accumulation pressure. Glocal cell. |
+
+### SR-HK-OK24-003 — FlexCarryoverMax (DIVERGENT from AC)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-HK-OK24-003 |
+| `agreement_code` | HK |
+| `ok_version` | OK24 |
+| `field` | `FlexCarryoverMax` |
+| `current_encoded_value` | `100.0` |
+| `authoritative_source` | pending (Phase B — paired with MaxFlexBalance) |
+| `interpretation` | HK flex carryover ceiling = 100h, equal to MaxFlexBalance (full carryover, no year-boundary truncation). |
+| `confidence_level` | MEDIUM (same rationale as SR-HK-OK24-002) |
+| `interpretation_authority` | Personalestyrelsen / negotiated |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | **DIVERGENT from AC** (SR-AC-OK24-012 = 150h). Co-located with SR-HK-OK24-002. Glocal cell. |
+
+### SR-HK-OK24-004 — HasOvertime (DIVERGENT from AC)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-HK-OK24-004 |
+| `agreement_code` | HK |
+| `ok_version` | OK24 |
+| `field` | `HasOvertime` |
+| `current_encoded_value` | `true` |
+| `authoritative_source` | pending (Phase B — HK overenskomst establishes the overtime regime with 50% / 100% supplement tiers) |
+| `interpretation` | HK employees ARE subject to the standard overtime regime. Hours beyond `OvertimeThreshold50` (37h/week) trigger 50% supplement; hours beyond `OvertimeThreshold100` (40h/week) trigger 100%. Distinct from AC's merarbejde regime (where excess hours route through afspadsering / udbetaling). |
+| `confidence_level` | HIGH (HK's overtime-regime is well-established cirkulær framework; the boolean inversion AC↔HK is project-internal but reflects the underlying cirkulær distinction cleanly) |
+| `interpretation_authority` | Personalestyrelsen |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | **DIVERGENT from AC** (SR-AC-OK24-021 = false). Mutually exclusive with `HasMerarbejde` in project convention. Renders SR-HK-OK24-006 (OvertimeThreshold50) and SR-HK-OK24-007 (OvertimeThreshold100) load-bearing for HK (vs inert for AC). |
+
+### SR-HK-OK24-005 — HasMerarbejde (DIVERGENT from AC)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-HK-OK24-005 |
+| `agreement_code` | HK |
+| `ok_version` | OK24 |
+| `field` | `HasMerarbejde` |
+| `current_encoded_value` | `false` |
+| `authoritative_source` | pending (Phase B — HK overenskomst silent on merarbejde; HK uses overtime instead) |
+| `interpretation` | HK employees are NOT subject to merarbejde. Excess hours route through OVERTIME_50 / OVERTIME_100 events, not MERARBEJDE. |
+| `confidence_level` | HIGH (HK's no-merarbejde stance is the inverse of AC's merarbejde-only stance; well-established) |
+| `interpretation_authority` | Personalestyrelsen |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | **DIVERGENT from AC** (SR-AC-OK24-007 = true). Mutually exclusive with HasOvertime per project convention. |
+
+### SR-HK-OK24-006 — OvertimeThreshold50 (LOAD-BEARING for HK)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-HK-OK24-006 |
+| `agreement_code` | HK |
+| `ok_version` | OK24 |
+| `field` | `OvertimeThreshold50` |
+| `current_encoded_value` | `37.0` |
+| `authoritative_source` | pending (Phase B — HK cirkulær establishes the 50% supplement starts at the weekly norm boundary; matches OK-published overtime tiers) |
+| `interpretation` | Hours per week beyond 37 (the weekly norm) trigger 50% supplement (OVERTIME_50 → SLS_0210). Standard state-sector overtime tier. |
+| `confidence_level` | MEDIUM (37h-as-trigger is universal; specific cirkulær paragraph pending) |
+| `interpretation_authority` | Personalestyrelsen |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | **LOAD-BEARING in HK** (inert in AC per SR-AC-OK24-022). Same value across HK / PROSA (both have `HasOvertime = true`). Used by OvertimeRule. |
+
+### SR-HK-OK24-007 — OvertimeThreshold100 (LOAD-BEARING)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-HK-OK24-007 |
+| `agreement_code` | HK |
+| `ok_version` | OK24 |
+| `field` | `OvertimeThreshold100` |
+| `current_encoded_value` | `40.0` |
+| `authoritative_source` | pending (Phase B — HK cirkulær on 100% supplement tier) |
+| `interpretation` | Hours per week beyond 40 trigger 100% supplement (OVERTIME_100 → SLS_0220). |
+| `confidence_level` | MEDIUM |
+| `interpretation_authority` | Personalestyrelsen |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | **LOAD-BEARING in HK**. Same value across HK / PROSA. |
+
+### SR-HK-OK24-008 — Supplement-enablement quad (compound, 4 boolean flags ON)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-HK-OK24-008 |
+| `agreement_code` | HK |
+| `ok_version` | OK24 |
+| `field` | `EveningSupplementEnabled + NightSupplementEnabled + WeekendSupplementEnabled + HolidaySupplementEnabled` (compound — 4 columns) |
+| `current_encoded_value` | `true / true / true / true` |
+| `authoritative_source` | pending (Phase B — HK cirkulær establishes the 4 supplement categories with rates) |
+| `interpretation` | All 4 hourly supplements enabled for HK. Activates supplement rates (SR-HK-OK24-010..014) and time windows (SR-HK-OK24-009). Each enabled flag is a load-bearing decision: supplement events emit at payroll mapping time when the time entry falls within the configured window. |
+| `confidence_level` | HIGH for the 4 flags-all-true semantic (HK gets supplements is universal state-sector knowledge; cirkulær specifies rates which are listed in SR-HK-OK24-010..014) |
+| `interpretation_authority` | Personalestyrelsen |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | **DIVERGENT from AC** (SR-AC-OK24-024 = all-false bundle). Compound row covering 4 columns. The flags-all-true pattern repeats for PROSA. Inverts AC's all-inert supplement structure. |
+
+### SR-HK-OK24-009 — Supplement time windows (compound, 4 columns)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-HK-OK24-009 |
+| `agreement_code` | HK |
+| `ok_version` | OK24 |
+| `field` | `EveningStart + EveningEnd + NightStart + NightEnd` (compound — 4 columns) |
+| `current_encoded_value` | `17 / 23 / 23 / 6` |
+| `authoritative_source` | pending (Phase B — HK cirkulær specifies evening window 17–23 + night window 23–06) |
+| `interpretation` | Evening supplement applies to hours worked between 17:00–23:00. Night supplement applies to hours between 23:00–06:00 (crosses midnight). Standard state-sector hour boundaries. |
+| `confidence_level` | HIGH (17–23 + 23–06 is universal Danish convention for evening / night supplement boundaries) |
+| `interpretation_authority` | Personalestyrelsen |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | **LOAD-BEARING in HK** (inert in AC per SR-AC-OK24-024). The hour-of-day boundaries are encoded as integers; the cross-midnight night window (23–06) is handled correctly by the supplement rule. Used by EveningSupplementRule + NightSupplementRule. |
+
+### SR-HK-OK24-010 — EveningRate (LOAD-BEARING)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-HK-OK24-010 |
+| `agreement_code` | HK |
+| `ok_version` | OK24 |
+| `field` | `EveningRate` |
+| `current_encoded_value` | `1.25` |
+| `authoritative_source` | pending (Phase B — HK cirkulær on evening supplement rate; 25% supplement is established state-sector standard) |
+| `interpretation` | Evening supplement = 25% on top of standard hourly wage for hours worked between 17:00–23:00. Encoded as `1.25` multiplier. Emits EVENING_SUPPLEMENT → SLS_0410 event at payroll mapping. |
+| `confidence_level` | MEDIUM (25% evening supplement is standard convention; cirkulær paragraph cite pending) |
+| `interpretation_authority` | Personalestyrelsen |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | **LOAD-BEARING in HK** (inert in AC per SR-AC-OK24-009). Same value across HK / PROSA. |
+
+### SR-HK-OK24-011 — NightRate (LOAD-BEARING)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-HK-OK24-011 |
+| `agreement_code` | HK |
+| `ok_version` | OK24 |
+| `field` | `NightRate` |
+| `current_encoded_value` | `1.50` |
+| `authoritative_source` | pending (Phase B — HK cirkulær on night supplement; 50% supplement) |
+| `interpretation` | Night supplement = 50% supplement for hours worked between 23:00–06:00. Emits NIGHT_SUPPLEMENT → SLS_0420. |
+| `confidence_level` | MEDIUM |
+| `interpretation_authority` | Personalestyrelsen |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | **LOAD-BEARING in HK**. |
+
+### SR-HK-OK24-012 — WeekendSaturdayRate (LOAD-BEARING)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-HK-OK24-012 |
+| `agreement_code` | HK |
+| `ok_version` | OK24 |
+| `field` | `WeekendSaturdayRate` |
+| `current_encoded_value` | `1.50` |
+| `authoritative_source` | pending (Phase B — Saturday supplement = 50% per state-sector convention) |
+| `interpretation` | Saturday supplement = 50% for hours worked on Saturday. Emits WEEKEND_SUPPLEMENT → SLS_0430. |
+| `confidence_level` | MEDIUM |
+| `interpretation_authority` | Personalestyrelsen |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | **LOAD-BEARING in HK**. Note: the Saturday + Sunday rates are encoded as separate columns (Saturday = 1.50, Sunday = 2.0). Both emit the same wage type (SLS_0430) but the rule applies the day-specific multiplier. |
+
+### SR-HK-OK24-013 — WeekendSundayRate (LOAD-BEARING)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-HK-OK24-013 |
+| `agreement_code` | HK |
+| `ok_version` | OK24 |
+| `field` | `WeekendSundayRate` |
+| `current_encoded_value` | `2.0` |
+| `authoritative_source` | pending (Phase B — Sunday supplement = 100% per state-sector convention) |
+| `interpretation` | Sunday supplement = 100% (double) for hours worked on Sunday. Emits WEEKEND_SUPPLEMENT → SLS_0430. |
+| `confidence_level` | MEDIUM |
+| `interpretation_authority` | Personalestyrelsen |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | **LOAD-BEARING in HK**. The Sunday-higher-than-Saturday pattern is universal state-sector convention. |
+
+### SR-HK-OK24-014 — HolidayRate (LOAD-BEARING)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-HK-OK24-014 |
+| `agreement_code` | HK |
+| `ok_version` | OK24 |
+| `field` | `HolidayRate` |
+| `current_encoded_value` | `2.0` |
+| `authoritative_source` | pending (Phase B — public-holiday supplement = 100%, matching Sunday rate) |
+| `interpretation` | Public-holiday supplement = 100% for hours worked on public holidays. Emits HOLIDAY_SUPPLEMENT → SLS_0440. |
+| `confidence_level` | MEDIUM |
+| `interpretation_authority` | Personalestyrelsen |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | **LOAD-BEARING in HK**. Public-holiday list is project-internal (Danish public holidays — påske, pinse, jul, nytår, etc.); Phase B should confirm the public-holiday set is comprehensive. |
+
+### SR-HK-OK24-015 — OnCallDutyEnabled (DIVERGENT from AC)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-HK-OK24-015 |
+| `agreement_code` | HK |
+| `ok_version` | OK24 |
+| `field` | `OnCallDutyEnabled` |
+| `current_encoded_value` | `true` |
+| `authoritative_source` | pending (Phase B — HK on-call (rådighedsvagt) is established cirkulær feature for HK roles with on-call obligations) |
+| `interpretation` | HK employees can be assigned on-call duty with compensation per `OnCallDutyRate` (33%). Activates the on-call rule path. |
+| `confidence_level` | MEDIUM (HK's on-call enablement at agreement level is well-established; cirkulær paragraph pending) |
+| `interpretation_authority` | Personalestyrelsen |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | **DIVERGENT from AC** (SR-AC-OK24-025 = false). Activates SR-HK-OK24-016 (OnCallDutyRate) as load-bearing. |
+
+### SR-HK-OK24-016 — OnCallDutyRate (LOAD-BEARING)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-HK-OK24-016 |
+| `agreement_code` | HK |
+| `ok_version` | OK24 |
+| `field` | `OnCallDutyRate` |
+| `current_encoded_value` | `0.33` |
+| `authoritative_source` | pending (Phase B — 33% of standard hourly wage per on-call hour is established state-sector convention) |
+| `interpretation` | On-call compensation = 33% of standard hourly wage per on-call hour (not full working-time accrual; on-call is paid waiting). Emits ON_CALL_DUTY → SLS_0710. |
+| `confidence_level` | MEDIUM |
+| `interpretation_authority` | Personalestyrelsen |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | **LOAD-BEARING in HK** (inert in AC per SR-AC-OK24-026). |
+
+### SR-HK-OK24-017 — CallInWorkEnabled + CallInMinimumHours + CallInRate (compound, LOAD-BEARING)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-HK-OK24-017 |
+| `agreement_code` | HK |
+| `ok_version` | OK24 |
+| `field` | `CallInWorkEnabled + CallInMinimumHours + CallInRate` (compound — 3 columns) |
+| `current_encoded_value` | `true / 3.0 / 1.0` |
+| `authoritative_source` | pending (Phase B — HK call-in (tilkald) cirkulær establishes the 3-hour minimum guarantee) |
+| `interpretation` | HK employees called in outside ordinary hours receive guaranteed compensation for a minimum of 3 hours (even if the actual call lasts less), at standard hourly rate (1.0 multiplier — supplements apply on top via the standard supplement rules). Emits CALL_IN_WORK → SLS_0810. |
+| `confidence_level` | MEDIUM (3-hour minimum guarantee is standard state-sector convention; cirkulær paragraph pending) |
+| `interpretation_authority` | Personalestyrelsen |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | **DIVERGENT from AC** (SR-AC-OK24-027 = `false / 3.0 / 1.0` with the boolean flipped). Compound row covering 3 columns. The 3.0-hour minimum becomes load-bearing in HK because the rule fires; the rate of 1.0 means base hourly rate (any supplements stack on top). |
+
+### SR-HK-OK24-018 — Travel cluster (compound, 3 columns matching AC)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-HK-OK24-018 |
+| `agreement_code` | HK |
+| `ok_version` | OK24 |
+| `field` | `TravelTimeEnabled + WorkingTravelRate + NonWorkingTravelRate` (compound — 3 columns; same values as AC counterparts SR-AC-OK24-028..030) |
+| `current_encoded_value` | `true / 1.0 / 0.5` |
+| `authoritative_source` | pending (Phase B — universal state-sector convention for travel time) |
+| `interpretation` | HK employees on official travel receive travel-time compensation: in-hours full rate (1.0×), out-of-hours half rate (0.5×). Identical to AC SR-AC-OK24-028..030. |
+| `confidence_level` | MEDIUM (same as AC; universal state-sector convention) |
+| `interpretation_authority` | Personalestyrelsen |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | Same values + load-bearing semantics as AC. Compound row collapses the 3 cells because there's no divergence from AC. |
+
+### SR-HK-OK24-019 — RestPeriodDerogationAllowed (DIVERGENT from AC)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-HK-OK24-019 |
+| `agreement_code` | HK |
+| `ok_version` | OK24 |
+| `field` | `RestPeriodDerogationAllowed` |
+| `current_encoded_value` | `true` |
+| `authoritative_source` | EU WTD 2003/88/EC Article 17 (derogation permitted under specific worker categories) + HK cirkulær (HK roles with on-call obligations get derogation with compensatory rest) |
+| `interpretation` | HK employees MAY derogate from the 11-hour minimum daily rest under specific operational circumstances (most commonly: on-call disruption). Compensatory rest must be granted per `compensatory_rest` table (S16). The derogation is the EU WTD Article 17 exception, NOT a waiver of the rest requirement. |
+| `confidence_level` | HIGH (EU directive + HK overenskomst alignment well-established; HK's on-call enablement makes derogation operationally necessary) |
+| `interpretation_authority` | EU + Personalestyrelsen |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | **DIVERGENT from AC** (SR-AC-OK24-017 = false). Compensatory-rest tracking (S16 `compensatory_rest` table) is mandatory when this flag is `true` + a derogation actually occurs. |
+
+### SR-HK-OK24-020 — EmployeeCompensationChoice (DIVERGENT from AC, LOAD-BEARING)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-HK-OK24-020 |
+| `agreement_code` | HK |
+| `ok_version` | OK24 |
+| `field` | `EmployeeCompensationChoice` |
+| `current_encoded_value` | `true` |
+| `authoritative_source` | pending (Phase B — HK cirkulær establishes employee right to choose between afspadsering and udbetaling for overtime compensation within agreement rules) |
+| `interpretation` | HK employees CAN choose between afspadsering (time-off-in-lieu) and udbetaling (payment) for overtime compensation, subject to rules in the cirkulær (e.g., budget approval for high udbetaling rates). The choice is employee-initiated; employer may not override absent contractual basis. |
+| `confidence_level` | MEDIUM (HK employee-choice semantic is well-established; cirkulær paragraph pending) |
+| `interpretation_authority` | Personalestyrelsen / negotiated |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | **DIVERGENT from AC** (SR-AC-OK24-006 = false). Used by S17 OvertimeGovernanceRule + payroll compensation-model mapping. The Overtime D-test `Overtime_PastPeriodBalance_UsesPeriodEffectiveAgreementCode_NotLive` (S35 TASK-3508) discriminates on this field's HK=true vs AC=false. |
+
+### SR-HK-OK24-021 — DefaultCompensationModel
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-HK-OK24-021 |
+| `agreement_code` | HK |
+| `ok_version` | OK24 |
+| `field` | `DefaultCompensationModel` |
+| `current_encoded_value` | `"AFSPADSERING"` |
+| `authoritative_source` | pending (Phase B — HK cirkulær on default compensation model; AFSPADSERING is the established default state-sector across all 3 base agreements) |
+| `interpretation` | HK default compensation = afspadsering. Employee may elect udbetaling per `EmployeeCompensationChoice = true` (SR-HK-OK24-020). The default applies when no employee election is recorded. |
+| `confidence_level` | MEDIUM (default-afspadsering is universal state-sector convention; cirkulær paragraph pending) |
+| `interpretation_authority` | Personalestyrelsen |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none — HK seed was already correctly `AFSPADSERING` pre-S35; the S35 TASK-3503 bug correction applied only to AC family) |
+| `disputed?` | false |
+| `notes` | Same value as AC SR-AC-OK24-005 + PROSA equivalent. The HK / PROSA / AC family difference is `EmployeeCompensationChoice` (HK / PROSA = true; AC = false), not `DefaultCompensationModel`. |
+
+### SR-HK-OK24-022 — OvertimeRequiresPreApproval (candidate bug)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-HK-OK24-022 |
+| `agreement_code` | HK |
+| `ok_version` | OK24 |
+| `field` | `OvertimeRequiresPreApproval` |
+| `current_encoded_value` | `false` |
+| `authoritative_source` | pending (Phase B PRIORITY — HK overtime is the load-bearing overtime regime; the cirkulær may require leader pre-approval for non-emergency overtime; current `false` may be incorrect) |
+| `interpretation` | Pre-approval workflow gate. `false` means HK overtime can be entered without prior manager pre-approval; the S17 overtime governance rule will emit warnings but not block. Question for Phase B: does HK overenskomst require pre-approval for non-emergency overtime? If yes, current encoding inverts the rule. |
+| `confidence_level` | LOW (encoding may be incorrect; Phase B priority) |
+| `interpretation_authority` | Personalestyrelsen |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none — flagged candidate, not yet corrected) |
+| `disputed?` | false |
+| `notes` | **CANDIDATE BUG**. Current value `false` for HK matches AC's `false` (where pre-approval is moot because AC has merarbejde-routing). For HK with real overtime, pre-approval requirement IS a governance question. The seed default at init.sql column DEFAULT = `FALSE` carried through without explicit per-agreement consideration in S17. Phase B priority for HIGH-impact resolution: if HK requires pre-approval, this is a bug-with-no-past-impact correction (per ROADMAP rule correction policy); if not, flag stays as documented MEDIUM-confidence. |
+
+### SR-HK-OK24-023 — EU-derived compliance cluster (compound, 4 columns)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-HK-OK24-023 |
+| `agreement_code` | HK |
+| `ok_version` | OK24 |
+| `field` | `MinimumRestHours + MaxDailyHours + WeeklyMaxHoursReferencePeriod + VoluntaryUnsocialHoursAllowed` (compound — 4 columns; EU-derived + governance) |
+| `current_encoded_value` | `11.0 / 13.0 / 17 / true` |
+| `authoritative_source` | EU WTD 2003/88/EC Articles 3, 6, 16 + Danish transposition (Lov om arbejdstid). Same EU floor as AC. |
+| `interpretation` | EU-mandated working time compliance values. Identical across all 5 base agreements + variants (EU floor). HK's `VoluntaryUnsocialHoursAllowed = true` is consistent with HK's enabled-supplement model (voluntary unsocial hours emit supplements normally). |
+| `confidence_level` | HIGH for the 3 EU-derived cells (rest, max-daily, ref-period); MEDIUM for VoluntaryUnsocialHoursAllowed (system-design gate) |
+| `interpretation_authority` | EU (3 cells) + negotiated (1 cell) |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | Same values as AC counterparts (SR-AC-OK24-003 + 004 + 018 + 019). Compound row collapses across cells matching AC. |
+
+### SR-HK-OK24-024 — MaxOvertimeHoursPerPeriod
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-HK-OK24-024 |
+| `agreement_code` | HK |
+| `ok_version` | OK24 |
+| `field` | `MaxOvertimeHoursPerPeriod` |
+| `current_encoded_value` | `0` |
+| `authoritative_source` | pending (Phase B — HK cirkulær on overtime caps; the sentinel `0` matches AC SR-AC-OK24-002 "no cap" convention) |
+| `interpretation` | Sentinel `0` = no fixed cap on overtime hours per period for HK. The S17 OvertimeGovernanceRule still emits warnings but does not hard-cap. |
+| `confidence_level` | MEDIUM (sentinel-zero convention same as AC; HK-specific cirkulær cite needed) |
+| `interpretation_authority` | Personalestyrelsen |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | Same sentinel-zero convention as AC SR-AC-OK24-002. **Phase B should confirm whether HK overenskomst specifies a hard cap** (e.g., "no more than 200 overtime hours per quarter") that should be encoded here instead of `0`. |
+
+### SR-HK-OK24-025 — entitlement_configs.VACATION (compound, all sub-fields)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-HK-OK24-025 |
+| `agreement_code` | HK |
+| `ok_version` | OK24 |
+| `field` | `entitlement_configs.VACATION.{annual_quota, accrual_model, reset_month, carryover_max, pro_rate_by_part_time, is_per_episode}` |
+| `current_encoded_value` | `25 / IMMEDIATE / 9 / 5 / true / false` |
+| `authoritative_source` | Ferieloven (LBK nr 230 af 12/02/2021) §8 + §15 |
+| `interpretation` | Same as AC: 25 vacation days, IMMEDIATE accrual, ferieår resets September 1, up to 5 days carryover, pro-rated by part-time fraction. Universal Danish statutory minimum. |
+| `confidence_level` | HIGH (Ferieloven explicit) |
+| `interpretation_authority` | Folketinget (statutory) |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | Cross-table reference. Identical to AC SR-AC-OK24-013 + 032 (Ferieloven is OK-version-invariant). |
+
+### SR-HK-OK24-026 — entitlement_configs.SPECIAL_HOLIDAY (compound)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-HK-OK24-026 |
+| `agreement_code` | HK |
+| `ok_version` | OK24 |
+| `field` | `entitlement_configs.SPECIAL_HOLIDAY.{annual_quota, accrual_model, reset_month, carryover_max, pro_rate_by_part_time, is_per_episode}` |
+| `current_encoded_value` | `5 / IMMEDIATE / 9 / 0 / true / false` |
+| `authoritative_source` | pending (Phase B — same as AC SR-AC-OK24-031 + 036) |
+| `interpretation` | 5 særlige feriedage, IMMEDIATE accrual, ferieår-aligned (September), no carryover, pro-rated. Same as AC SR-AC-OK24-031 + 036. |
+| `confidence_level` | MEDIUM |
+| `interpretation_authority` | Personalestyrelsen / HK union |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | Cross-table. Same shape as AC. |
+
+### SR-HK-OK24-027 — entitlement_configs.CARE_DAY (compound)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-HK-OK24-027 |
+| `agreement_code` | HK |
+| `ok_version` | OK24 |
+| `field` | `entitlement_configs.CARE_DAY.{annual_quota, accrual_model, reset_month, carryover_max, pro_rate_by_part_time, is_per_episode}` |
+| `current_encoded_value` | `2 / IMMEDIATE / 1 / 0 / false / false` |
+| `authoritative_source` | pending (Phase B — same as AC SR-AC-OK24-014 + 033) |
+| `interpretation` | 2 omsorgsdage per calendar year. Not pro-rated. Same as AC. |
+| `confidence_level` | MEDIUM |
+| `interpretation_authority` | Personalestyrelsen / HK union |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | Cross-table. Same shape as AC. |
+
+### SR-HK-OK24-028 — entitlement_configs.CHILD_SICK (compound, DIVERGENT quota)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-HK-OK24-028 |
+| `agreement_code` | HK |
+| `ok_version` | OK24 |
+| `field` | `entitlement_configs.CHILD_SICK.{annual_quota, accrual_model, reset_month, carryover_max, pro_rate_by_part_time, is_per_episode}` |
+| `current_encoded_value` | `2 / IMMEDIATE / 1 / 0 / false / true` |
+| `authoritative_source` | pending (Phase B — HK cirkulær on barn-syg quota; 2 days per episode is HK-specific value) |
+| `interpretation` | 2 days per episode (per-episode semantic). Each child-illness episode grants 2 days; no annual cumulative limit. **DIVERGENT from AC** (1 day) and PROSA (3 days). |
+| `confidence_level` | MEDIUM (per-episode semantic universal; HK-specific 2-day quota is the project encoding — Phase B confirms) |
+| `interpretation_authority` | Personalestyrelsen / HK union (negotiated) |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | **DIVERGENT from AC** (SR-AC-OK24-016 = 1 day). The AC=1 / HK=2 / PROSA=3 progression matches established convention; Phase B should confirm cirkulær-paragraph. |
+
+### SR-HK-OK24-029 — entitlement_configs.SENIOR_DAY (compound, inherits paired bug candidate)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-HK-OK24-029 |
+| `agreement_code` | HK |
+| `ok_version` | OK24 |
+| `field` | `entitlement_configs.SENIOR_DAY.{annual_quota, accrual_model, reset_month, carryover_max, pro_rate_by_part_time, is_per_episode, min_age}` |
+| `current_encoded_value` | `0 / IMMEDIATE / 1 / 0 / false / false / 60` |
+| `authoritative_source` | pending (Phase B PRIORITY — same paired-bug-candidate as AC SR-AC-OK24-015 + 035) |
+| `interpretation` | Same encoding as AC: `annual_quota = 0` with `min_age = 60`. As encoded, no senior days grant regardless of age. **Bug candidate** — likely incomplete encoding (rule should override with age-banded lookup) or vestigial `min_age` field. |
+| `confidence_level` | LOW (same as AC paired finding) |
+| `interpretation_authority` | negotiated |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | **CANDIDATE BUG** — inherits paired finding from SR-AC-OK24-015 + 035. Same encoding across AC / HK / PROSA / AC_RESEARCH / AC_TEACHING — bug correction (if classified) applies uniformly to all 5 agreements per ROADMAP no-per-institution-opt-in policy. |
+
+### SR-HK-OK24-030 — wage_type_mappings HK OK24 bundle (compound, ~17 mappings including supplements + overtime)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-HK-OK24-030 |
+| `agreement_code` | HK |
+| `ok_version` | OK24 |
+| `field` | `wage_type_mappings (time_type, wage_type) for (HK, OK24, position='')` — bundle of HK OK24 mappings (init.sql:218–285) |
+| `current_encoded_value` | `NORMAL_HOURS → SLS_0110; OVERTIME_50 → SLS_0210; OVERTIME_100 → SLS_0220; EVENING_SUPPLEMENT → SLS_0410; NIGHT_SUPPLEMENT → SLS_0420; WEEKEND_SUPPLEMENT → SLS_0430; HOLIDAY_SUPPLEMENT → SLS_0440; VACATION → SLS_0510; CARE_DAY → SLS_0520; CHILD_SICK_DAY → SLS_0530; CHILD_SICK_DAY_2 → SLS_0531; CHILD_SICK_DAY_3 → SLS_0532; PARENTAL_LEAVE → SLS_0540; SENIOR_DAY → SLS_0550; LEAVE_WITHOUT_PAY → SLS_0560; LEAVE_WITH_PAY → SLS_0565; SPECIAL_HOLIDAY_ALLOWANCE → SLS_0570; FLEX_PAYOUT → SLS_0610; ON_CALL_DUTY → SLS_0710; CALL_IN_WORK → SLS_0810; TRAVEL_WORK → SLS_0820; TRAVEL_NON_WORK → SLS_0830` |
+| `authoritative_source` | SLS technical documentation (Personalestyrelsen — pending Phase B reference). |
+| `interpretation` | HK OK24 wage type mappings cover normal hours, BOTH overtime tiers, ALL 4 supplements, on-call, call-in, travel, all absences, flex payout. The supplement + overtime mappings distinguish HK from AC (which has no overtime + no supplements). **No MERARBEJDE mapping for HK** (correctly omitted because `HasMerarbejde = false`). |
+| `confidence_level` | HIGH for AC-pinned-equivalent mappings (NORMAL_HOURS, absences, travel, flex); MEDIUM for HK-distinct mappings (OVERTIME_50/100, 4 supplements) pending SLS code verification |
+| `interpretation_authority` | Personalestyrelsen (SLS technical authority) |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | **Compound row covering ~22 mappings**. Differs from AC SR-AC-OK24-037 by adding 2 overtime + 4 supplement mappings + omitting MERARBEJDE + NORM_DEVIATION (NORM_DEVIATION is AC-family-only per init.sql:1197). |
+
+### SR-HK-OK24-031 — position_override_configs HK OK24 — none (explicit absence)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-HK-OK24-031 |
+| `agreement_code` | HK |
+| `ok_version` | OK24 |
+| `field` | `position_override_configs (HK, OK24, *)` — explicit absence row |
+| `current_encoded_value` | `(no rows in init.sql; HK has no position overrides at seed time)` |
+| `authoritative_source` | n/a — explicit-absence row |
+| `interpretation` | HK has NO position overrides at seed time. Contrast AC which has 2 (DEPARTMENT_HEAD + RESEARCHER per SR-AC-OK24-038 + 039). Within-HK role distinctions (if any) are not currently encoded; any such encoding would land via Phase B + S38 ADR-024 D1 (role-within-agreement modeling). |
+| `confidence_level` | HIGH for "no current overrides" (init.sql:1257-1262 explicitly enumerates only AC overrides); LOW for whether this is correct (Phase B may identify HK roles needing overrides) |
+| `interpretation_authority` | Personalestyrelsen |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | **Explicit-absence row pattern**. Used when an agreement has no rows in a data domain to document "this is intentional + verified", distinguishing from "this is missing by oversight". Phase B should confirm. Cross-ref: `role-dimension-audit.md` (TASK-3606) will enumerate within-HK strata if any exist. |
+
+---
+
+## HK OK26 Cells (placeholder bundles — 4 rows)
+
+HK OK26 mirrors HK OK24 per `CentralAgreementConfigs.cs:123` ("HK OK26 (placeholder)") + init.sql:1152. Pattern matches AC OK26 (placeholder bundles per data domain).
+
+### SR-HK-OK26-001 — HK OK26 agreement_configs placeholder bundle
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-HK-OK26-001 |
+| `agreement_code` | HK |
+| `ok_version` | OK26 |
+| `field` | All HK OK26 cells in `agreement_configs` (~37 columns; mirrors HK OK24 cell-by-cell) |
+| `current_encoded_value` | Identical to HK OK24 (see SR-HK-OK24-001 through SR-HK-OK24-024). init.sql:1152 is byte-identical to L1146 (HK OK24). |
+| `authoritative_source` | pending — OK26 cirkulær between Personalestyrelsen + HK union under finalization. |
+| `interpretation` | HK OK26 currently inherits HK OK24 cell-by-cell as placeholder. Phase B verification when OK26 cirkulær publishes. |
+| `confidence_level` | LOW (placeholder) |
+| `interpretation_authority` | Personalestyrelsen (anticipated) |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none — OvertimeRequiresPreApproval candidate bug from SR-HK-OK24-022 inherits to OK26; if confirmed bug, correction propagates) |
+| `disputed?` | false |
+| `notes` | Phase B priority on OK26 cirkulær publication (recurring item per S41 TASK-4107). HK-specific OvertimeRequiresPreApproval candidate-bug carries through. |
+
+### SR-HK-OK26-002 — HK OK26 entitlement_configs placeholder bundle
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-HK-OK26-002 |
+| `agreement_code` | HK |
+| `ok_version` | OK26 |
+| `field` | All HK OK26 cells in `entitlement_configs` (5 entitlement types × ~6 sub-fields; mirrors HK OK24) |
+| `current_encoded_value` | Identical to HK OK24 (see SR-HK-OK24-025..029). |
+| `authoritative_source` | Ferieloven (VACATION); pending for overenskomst-driven entitlements |
+| `interpretation` | HK OK26 entitlements inherit HK OK24 row-by-row. CHILD_SICK quota (HK = 2 days per episode) and SENIOR_DAY candidate-bug inherit to OK26. |
+| `confidence_level` | HIGH for VACATION (statutory); MEDIUM-LOW for overenskomst-driven entitlements |
+| `interpretation_authority` | Folketinget (VACATION) / Personalestyrelsen + HK union (others) |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none — SENIOR_DAY candidate inherits) |
+| `disputed?` | false |
+| `notes` | Same shape as AC OK26 bundle (SR-AC-OK26-002). |
+
+### SR-HK-OK26-003 — HK OK26 wage_type_mappings placeholder bundle
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-HK-OK26-003 |
+| `agreement_code` | HK |
+| `ok_version` | OK26 |
+| `field` | All HK OK26 cells in `wage_type_mappings` (mirrors HK OK24 mappings) |
+| `current_encoded_value` | Identical to HK OK24 (see SR-HK-OK24-030 bundle). |
+| `authoritative_source` | pending — SLS technical documentation; codes stable across OK24 → OK26 transition |
+| `interpretation` | HK OK26 wage type mappings mirror HK OK24. SLS codes stable. |
+| `confidence_level` | HIGH for existing mappings (stable infrastructure); LOW for completeness (OK26 may introduce new wage types) |
+| `interpretation_authority` | Personalestyrelsen (SLS technical) |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | Same shape as AC OK26 bundle (SR-AC-OK26-003). |
+
+### SR-HK-OK26-004 — HK OK26 position_override_configs placeholder bundle (explicit absence)
+
+| Field | Value |
+|-------|-------|
+| `row_id` | SR-HK-OK26-004 |
+| `agreement_code` | HK |
+| `ok_version` | OK26 |
+| `field` | `position_override_configs (HK, OK26, *)` — explicit absence |
+| `current_encoded_value` | `(no rows; HK OK26 has no position overrides — inherits HK OK24 absence per SR-HK-OK24-031)` |
+| `authoritative_source` | n/a — explicit-absence row |
+| `interpretation` | HK OK26 has no position overrides at seed time. Inherits from HK OK24 explicit-absence pattern. |
+| `confidence_level` | HIGH (no rows present); LOW for whether this is correct |
+| `interpretation_authority` | Personalestyrelsen |
+| `last_verified_by` | pending |
+| `decision_date` | pending |
+| `supersession_history` | (none) |
+| `bug_correction_history` | (none) |
+| `disputed?` | false |
+| `notes` | Explicit-absence row, same pattern as SR-HK-OK24-031. |
+
+
 
 ### TASK-3601 — 20 cells, AC OK24 proof-of-shape
 
@@ -1015,16 +1727,38 @@ AC OK26 is a placeholder in `CentralAgreementConfigs.cs:100` — the comment rea
 - **OK26 placeholder pattern works**. Single bundle row per data domain (`agreement_configs`, `entitlement_configs`, `wage_type_mappings`, `position_override_configs`) cites OK24 inheritance + flags placeholder status without inflating row count. When OK26 cirkulær lands and Phase B verifies, divergent cells get their own SR-AC-OK26-NNN rows; identical cells stay under the bundle.
 - **One observation to monitor in TASK-3603 (HK)**: HK has all supplements ENABLED, which inverts the AC pattern — HK's supplement-rate cells will be load-bearing individual rows, not compound inert bundles. Schema accommodates this without change (the same per-cell row pattern works); just expect more individual rows for HK / PROSA.
 
-### Candidate bug discoveries (TASK-3601 + TASK-3602 cumulative)
+### TASK-3603 — HK OK24 completion (31 cells: 001–031) + HK OK26 placeholder (4 bundles)
 
-| Row | Finding | Severity | Phase B priority |
-|-----|---------|----------|------------------|
-| **SR-AC-OK24-015 + SR-AC-OK24-035** | SENIOR_DAY `annual_quota = 0` with `min_age = 60` — encoding semantics unclear. Either (a) rule overrides with age-banded lookup (incomplete encoding), or (b) `min_age` field is vestigial. As encoded, no senior days ever grant regardless of age. | bug-candidate (unconfirmed) | **HIGH** — senior-employee compensation correctness; affects all 3 base agreements (AC / HK / PROSA) per init.sql:1373–1378 |
+| Cell shape | Count | Schema fit |
+|------------|-------|------------|
+| Universal-state-sector compound (norm) | 1 (001) | ✓ |
+| HK-divergent-from-AC individual | 7 (002, 003, 004, 005, 015, 017, 019, 020) | ✓ — explicit `DIVERGENT from AC` annotation pattern works cleanly; cross-references AC row IDs |
+| Load-bearing-in-HK (inert-in-AC) individual | 8 (006, 007, 010, 011, 012, 013, 014, 016) | ✓ — "LOAD-BEARING in HK" marker pattern paired with cross-ref to AC counterpart |
+| Compound load-bearing bundles (HK supplements + windows + call-in) | 3 (008, 009, 017) | ✓ |
+| Compound matches-AC cluster (travel, EU compliance) | 2 (018, 023) | ✓ — saves repeating identical AC content |
+| Same-as-AC standalone | 2 (021, 024 — DefaultCompensationModel, MaxOvertimeHoursPerPeriod) | ✓ |
+| Candidate-bug standalone | 1 (022 — OvertimeRequiresPreApproval) | ✓ — `confidence_level = LOW` + explicit candidate-bug notes |
+| Entitlement compound | 5 (025–029) | ✓ — all sub-fields in one row per entitlement type |
+| Wage type mappings bundle | 1 (030) | ✓ — ~22 mappings including supplements + overtime tiers |
+| Explicit-absence row | 1 (031 — no HK position overrides) | ✓ — **new pattern** documented; `current_encoded_value = "(no rows...)"` cleanly carries "intentional absence vs missing by oversight" distinction |
+| OK26 placeholder bundles | 4 | ✓ |
+
+**TASK-3603 findings**:
+- **No new schema BLOCKERs**. The "DIVERGENT from AC" + "LOAD-BEARING in HK" annotation patterns work cleanly as cross-references via row ID (e.g., `SR-AC-OK24-024`) rather than needing a structural cross-agreement-cell-reference field.
+- **New pattern: explicit-absence row** (SR-HK-OK24-031) documents "this agreement has no rows in this data domain — verified intentional". Distinguishes from "missing by oversight". Will be re-used for PROSA / AC_RESEARCH / AC_TEACHING where applicable.
+- **New candidate bug discovery**: HK `OvertimeRequiresPreApproval = false` (SR-HK-OK24-022). The seed default (column DEFAULT = `FALSE`) carried through to HK without explicit per-agreement consideration in S17. For HK with real overtime regime, pre-approval requirement IS a governance question. If Phase B confirms HK overenskomst requires pre-approval, this is a bug-with-no-past-impact correction.
+
+### Candidate bug discoveries (cumulative through TASK-3603)
+
+| Row(s) | Finding | Severity | Phase B priority |
+|--------|---------|----------|------------------|
+| **SR-AC-OK24-015 + SR-AC-OK24-035 + SR-HK-OK24-029** | SENIOR_DAY `annual_quota = 0` with `min_age = 60` — encoding semantics unclear. Either (a) rule overrides with age-banded lookup (incomplete encoding), or (b) `min_age` field is vestigial. As encoded, no senior days ever grant regardless of age. Same encoding across all 5 agreements per init.sql:1373–1378 — fix propagates uniformly per ROADMAP no-per-institution-opt-in policy. | bug-candidate (unconfirmed) | **HIGH** — senior-employee compensation correctness; cross-agreement |
+| **SR-HK-OK24-022** | HK `OvertimeRequiresPreApproval = false` — for HK's real overtime regime, current `false` may invert cirkulær intent. The seed default carried through without per-agreement consideration in S17. | bug-candidate (unconfirmed) | **MEDIUM-HIGH** — workflow gate affecting all HK overtime registration; needs Phase B cirkulær cite to confirm direction |
 
 These observations feed into:
-- S36 TASK-3607 (agreement-ruleset-audit doc) — the SENIOR_DAY discovery surfaces as a DRIFT-IN-CODE classification candidate (rule logic disagrees with seed semantic)
-- S37 Phase B feedback packaging — high-priority cell for domain-expert sign-off
-- Phase E continuous-validation tests in S39 — the "unknown unknown" test should flag this kind of incomplete encoding (a cell with `min_age` populated but `annual_quota = 0` is a structural inconsistency)
+- S36 TASK-3607 (agreement-ruleset-audit doc) — both candidates surface as DRIFT-IN-CODE / DRIFT-IN-SOURCE classification candidates
+- S37 Phase B feedback packaging — both are high-priority cells for domain-expert sign-off
+- Phase E continuous-validation tests in S39
 
 ---
 
@@ -1032,17 +1766,17 @@ These observations feed into:
 
 | Agreement | OK24 cells | OK26 cells | Total |
 |-----------|------------|------------|-------|
-| AC | **39** (20 proof-of-shape from TASK-3601 + 19 completion from TASK-3602) | **4** (placeholder bundles, TASK-3602) | **43** |
-| HK | 0 (TASK-3603) | 0 | 0 |
+| AC | **39** (20 proof-of-shape TASK-3601 + 19 completion TASK-3602) | **4** (placeholder bundles, TASK-3602) | **43** |
+| HK | **31** (TASK-3603) | **4** (placeholder bundles, TASK-3603) | **35** |
 | PROSA | 0 (TASK-3604) | 0 | 0 |
 | AC_RESEARCH | 0 (TASK-3605) | 0 | 0 |
 | AC_TEACHING | 0 (TASK-3605) | 0 | 0 |
-| **Total** | **39** | **4** | **43** |
+| **Total** | **70** | **8** | **78** |
 
-**Cell coverage by source surface** (for AC OK24, TASK-3602 close):
-- `agreement_configs` columns: 44 effective columns (excluding 5 keys + 7 metadata); all covered across SR-AC-OK24-001..030 (some compound)
-- `entitlement_configs` rows: 5 entitlement types × ~6 sub-fields = ~30 sub-cells; all covered across SR-AC-OK24-013..016 + 031–036
-- `wage_type_mappings` rows: 17 + 1 = 18 mappings; all covered in SR-AC-OK24-037 bundle
-- `position_override_configs` rows: 2 overrides (DEPARTMENT_HEAD + RESEARCHER); both covered in SR-AC-OK24-038 + 039
+**HK OK24 cell coverage by source surface**:
+- `agreement_configs` columns: all ~37 effective columns covered across SR-HK-OK24-001..024
+- `entitlement_configs` rows: 5 entitlement types fully covered via SR-HK-OK24-025..029 (one row per entitlement type with all sub-fields)
+- `wage_type_mappings` rows: ~22 mappings covered in SR-HK-OK24-030 bundle (HK has supplements + overtime mappings that AC doesn't)
+- `position_override_configs` rows: explicit-absence pattern via SR-HK-OK24-031 (HK has no overrides seeded)
 
-**Cell coverage for AC OK26**: all data domains covered via 4 placeholder bundles (SR-AC-OK26-001..004); per-cell rows will be added when OK26 cirkulær publishes + Phase B verifies divergent cells.
+**HK OK26 cell coverage**: all data domains covered via 4 placeholder bundles (SR-HK-OK26-001..004).
