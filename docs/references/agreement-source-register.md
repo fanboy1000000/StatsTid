@@ -33,7 +33,7 @@ Fixed by `.claude/plans/PROGRAM-s36-s41-domain-correctness.md` L51–67.
 | 10 | `last_verified_by` | string | Name of person who signed off OR `pending` if Phase B has not adjudicated yet. |
 | 11 | `decision_date` | YYYY-MM-DD | When the cell was last verified OR `pending`. |
 | 12 | `supersession_history` | list | Chronological list of supersession events (interpretation change, encoded value updated for new OK version). Each entry `{date, from_value, to_value, source_url, commit}`. |
-| 13 | `bug_correction_history` | list | Chronological list of bug correction events per cell (per ROADMAP rule correction policy). Each entry `{date, from_value, to_value, source_url, commit, classifier, was_agreed, materially_wrong}`. |
+| 13 | `bug_correction_history` | list | Chronological list of bug correction events per cell (per ROADMAP rule correction policy). Each entry `{date, from_value, to_value, source (or source_url), commit, classifier, was_agreed, materially_wrong, action}`. Field semantics extended in S37 TASK-3707 absorption: **`action`** ∈ `{"bug-fix-without-recompute"` (Bugs #1/#2/#3 pattern — seed change shipped same commit as decision), `"decision-recorded-fix-deferred"` (Bug #4 pattern — direction recorded but implementation deferred to a later sprint due to prerequisite scope)`}`. **`materially_wrong`** ∈ `{NO_PRE_LAUNCH, YES_PRE_LAUNCH_BUT_BROKEN, PENDING_S<NN>, YES_WITH_PAST_IMPACT}` — final value awaits post-launch ADR-027 framing. S38 ADR-024 D8 candidate: formalize this schema row in the ADR. |
 | 14 | `disputed?` | boolean | Does the source register record disagreement between parties? If `true`, `notes` SHOULD enumerate the disagreement. |
 | 15 | `notes` | text | Free-form. Use for: feature-inert clarifications, dispute summaries, classifier rationale, role-specific overrides that the cell doesn't itself express (e.g., `HasMerarbejde=true` on AC but chefkonsulent loses entitlement per role distinction). |
 
@@ -63,6 +63,8 @@ Fixed by `.claude/plans/PROGRAM-s36-s41-domain-correctness.md` L51–67.
 | **MEDIUM** | Inferred from the primary source via strong precedent, OR universally-accepted state-sector convention (e.g., the 37h weekly norm), OR cited only in secondary guidance with no contradicting primary source. |
 | **LOW** | Ambiguous in source, contested between parties, OR inferred without firm primary-source backing. Flagged for Phase B adjudication priority. |
 | **N/A-for-agreement** | Field is functionally inert in this agreement (feature flag disabled at agreement level; the value exists in seed but never reaches a rule's decision). Value still recorded for migration / cutover safety but doesn't reach production behavior. |
+
+> **Note on OK26 placeholder bundles + S37 inheritance** (added 2026-05-21 S37 TASK-3707): OK26 placeholder bundle rows (SR-XX-OK26-NNN) inherit cell-by-cell from their OK24 counterparts. S37 corrections applied to OK24 cells propagate to OK26 by inheritance even when individual OK26 bundle rows still contain "candidate bug" / "inherits candidate" language from the S36 authoring pass. **The OK24 SR rows are canonical for post-S37 state**. OK26 bundle text refresh deferred — addressing each bundle individually would be ~10 small edits with no substantive change. Phase B engagement (when it lands) revisits OK26 bundles per-cell once the OK26 cirkulær publishes; bulk-refresh happens then.
 
 ## Cross-References
 
@@ -1563,7 +1565,7 @@ HK = Handels- og Kontorfunktionærer i Staten. Distinct cirkulær from AC; subst
 | `supersession_history` | (none) |
 | `bug_correction_history` | `[{date: 2026-05-21, from_value: "quota=0 + min_age=60", to_value: "quota=2 + min_age=62 (joint with AC + PROSA + variants)", source: "S37 TASK-3703 + Bug #3 Path B uniform application", commit: "<this S37 commit>", classifier: "Orchestrator (interim, user-confirmed)", was_agreed: NO, materially_wrong: NO_PRE_LAUNCH, action: "bug-fix-without-recompute"}]` |
 | `disputed?` | false |
-| `notes` | **CANDIDATE BUG** — inherits paired finding from SR-AC-OK24-015 + 035. Same encoding across AC / HK / PROSA / AC_RESEARCH / AC_TEACHING — bug correction (if classified) applies uniformly to all 5 agreements per ROADMAP no-per-institution-opt-in policy. |
+| `notes` | **RESOLVED uniformly with AC + variants per S37 TASK-3703** (paired-bug applied uniformly across all 5 agreements per ROADMAP no-per-institution-opt-in policy). Cross-ref SR-AC-OK24-015 + 035 master entries. |
 
 ### SR-HK-OK24-030 — wage_type_mappings HK OK24 bundle (compound, ~17 mappings including supplements + overtime)
 
@@ -2270,7 +2272,7 @@ AC_TEACHING uses the same compact form as AC_RESEARCH: "mirrors AC" bundle + div
 | `supersession_history` | (none) |
 | `bug_correction_history` | `[{date: 2026-05-21, from_value: "(same divergent state as AC_RESEARCH per SR-AC_RESEARCH-OK24-006 history)", to_value: "13 mappings mirroring AC base", source: "S37 TASK-3702 + Bug #2 (joint with AC_RESEARCH)", commit: "<this S37 commit>", classifier: "Orchestrator (interim, user-confirmed)", was_agreed: NO, materially_wrong: YES_PRE_LAUNCH_BUT_BROKEN, action: "bug-fix-without-recompute"}]` |
 | `disputed?` | false |
-| `notes` | **CANDIDATE BUG — inherits SR-AC_RESEARCH-OK24-006 finding**. AC variants' divergent SLS codes apply to both AC_RESEARCH + AC_TEACHING uniformly. |
+| `notes` | **RESOLVED jointly with AC_RESEARCH per S37 TASK-3702** (Reading A: S11 authoring bug, both variants mirror AC base). Cross-ref SR-AC_RESEARCH-OK24-006 master entry for full bug_correction_history context. |
 
 ### SR-AC_TEACHING-OK24-007 — position_override_configs explicit absence
 
