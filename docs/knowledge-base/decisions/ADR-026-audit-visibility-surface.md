@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | DRAFT (S38b TASK-38B-01 authorship; cycle-1 Step 7a dual-lens absorbed Codex B1+B2+B3 + Reviewer convergent W1+W3 + Reviewer-only W2: D2 dispatch mechanism reframed to S27-precedent endpoint-direct pattern; D3 event names corrected against actual EventSerializer + ~24 → ~34 mapper count; D4 introduces 3-tier visibility_scope enum resolving the NULL-target overload; D5 SQL updated to scope by visibility class. Cycle 2 dispatched to verify. Flips to ACCEPTED on cycle-2 clean.) |
+| **Status** | DRAFT (S38b TASK-38B-01 authorship + cycle 1-2 absorption. Cycle 1: Codex B1+B2+B3 + Reviewer W1+W2+W3; absorbed D2 dispatch reframe + D3 event names + 3-tier visibility_scope enum + mapper count ~24→~34. Cycle 2: B2/B3/W1 CLOSED; NEW-B1 (Consequences L336 ghost from cycle-1's same edit citing rejected `IEventHandler<T>`) + W-new-1 (mapper count still ~34, actual ~53) absorbed in cycle-2 textual cleanup per `feedback_missed_facts_vs_thrash.md` (same edit, partial absorption, not architectural thrash). Cycle 3 dispatched to verify. Flips to ACCEPTED on cycle-3 clean.) |
 | **Sprint** | S38b (single-ADR sub-sprint absorbing the deferred ADR-025 D7) |
 | **Domains** | Backend, Infrastructure, Security, Data Model, Frontend. |
 | **Tags** | audit-visibility, tenant-scoping, event-projection, sync-in-tx-projection, audit_projection, scope-by-target, per-event-declaration, design-binding, phase-4e. |
@@ -191,7 +191,7 @@ Events NOT audit-relevant (no projection; reduces storage):
 - `OvertimeBalanceAdjusted` / `EntitlementBalanceAdjusted` (S15/S17) — balance projections; future revisit
 - `EmploymentProfile*` (S31/S33) — versioned config; pre-existing audit captured by upstream user_agreement_code lifecycle events
 
-**S40 mapping authorship**: counted from inventory above ≈ **34 mappers** (11 new + ~23 retrofit) — Reviewer W2 was right that ~24 was understated. Each mapper is ~10-line file per S27 projection-mapper precedent. Total S40 LOC for mappers ≈ 340 lines.
+**S40 mapping authorship**: counted from inventory above = **~53 mappers** (11 new + ~42 retrofit). Each mapper is ~10-line file per S27 projection-mapper precedent. Total S40 LOC for mappers ≈ 530 lines. (Cycle-1 understated as ~24; cycle-1 absorption corrected to ~34; S38b cycle-2 absorption fully recounted per Reviewer W-new-1.)
 
 **No Phase B dependency**.
 
@@ -331,9 +331,9 @@ New ledger entry: `s39-d1-audit-projection-table` (this ADR's D1 schema). Total 
 ### S40 cutover (adds to ADR-024+ADR-025 cutover scope)
 
 - `AuditProjectionRepository.InsertAsync(conn, tx, projection)` + `QueryByOrgScopeAsync(targetOrgIds?, filter, page, ct)`
-- `IAuditProjectionMapper<T>` interface (D2) + ~34 implementations across `audit-projection-mappers/` namespace (cycle-2 absorption: corrected from prior ~24 estimate per Reviewer W2 W-cycle1)
+- `IAuditProjectionMapper<T>` interface (D2) + **~53 implementations** across `audit-projection-mappers/` namespace (S38b cycle-2 absorption: ~42 retrofit per D3 enumeration + 11 new from ADR-024+ADR-025; cycle-1 understated as ~24, corrected to ~34 in cycle-1 absorption, fully recounted to ~53 in cycle-2 absorption per Reviewer W-new-1). Total S40 LOC for mapper authorship ≈ 530 lines at ~10 LOC/mapper.
 - `OrgScopeValidator.GetAccessibleOrgsAsync(actorId)` — commissioned helper (carries forward from ADR-025 D7 cycle-2 commission; lives in the same place)
-- DI wiring per established `IEventHandler<T>` pattern; OutboxPublisher invokes registered projections inline in source-event transaction
+- DI registers `IAuditProjectionMapper<T>` per type (S40 implementation refinement chooses constructor-injection vs `IAuditProjectionMapperRegistry` lookup keyed by event type); endpoints invoke the mapper inline in the source-event transaction per D2 endpoint-direct pattern. **NO event-handler bus; NO `IEventHandler<T>` infrastructure; NO `OutboxPublisher` auto-dispatch** — the dispatch model is endpoint-direct per S27 precedent (`TimeEndpoints.cs:96-111`). (S38b cycle-2 absorption of Codex NEW-B1 + Reviewer NEW-B1 convergent: prior cycle-1 absorption rewrote D2 prose but left this Consequences-section bullet asserting the rejected dispatch model; cycle-2 makes the bullet match D2 prose.)
 - `GET /api/admin/audit` endpoint (~80 LOC)
 - `AuditLogView.tsx` admin page (~200 LOC)
 - `AuditProjectionBackfillService` (~150 LOC; mirrors S27 ProjectionBackfillService pattern)
