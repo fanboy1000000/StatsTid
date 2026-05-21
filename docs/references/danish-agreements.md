@@ -112,17 +112,17 @@ Source: `DefaultEntitlementConfigs.cs` and `entitlement_configs` seed data.
 | CHILD_SICK (AC) | 1 day | January (1) | Yes | No | 0 | -- | Barns sygedag | SR-AC-OK24-016 + SR-AC-OK24-034 |
 | CHILD_SICK (HK) | 2 days | January (1) | Yes | No | 0 | -- | Barns sygedag | SR-HK-OK24-028 |
 | CHILD_SICK (PROSA) | 3 days | January (1) | Yes | No | 0 | -- | Barns sygedag | SR-PROSA-OK24-005 (divergent quota) |
-| SENIOR_DAY | 0 (age-dependent) | January (1) | No | No | 0 | 60 | Seniordage, resolved at runtime — **PAIRED-BUG CANDIDATE** (Phase B HIGH priority) | SR-AC-OK24-015 + SR-AC-OK24-035 + SR-HK-OK24-029 + SR-PROSA-OK24-006 |
+| SENIOR_DAY | 2 days | January (1) | No | No | 0 | 62 | Seniordage — RESOLVED S37 TASK-3703 (was 0 + 60, paired-bug; user-corrected to 2 + 62 uniform across all 5 agreements). | SR-AC-OK24-015 + SR-AC-OK24-035 + SR-HK-OK24-029 + SR-PROSA-OK24-006 |
 
 All entitlements use IMMEDIATE accrual model. VACATION and SPECIAL_HOLIDAY are pro-rated by part-time fraction. CHILD_SICK is the only per-episode entitlement and varies by agreement.
 
-> **AC_RESEARCH + AC_TEACHING gap**: NO entitlement rows seeded for the 2 AC variants (init.sql:1343–1378 seeds only AC + HK + PROSA). Either intentional code-path fallback OR structural gap. See SR-AC_RESEARCH-OK24-005 + SR-AC_TEACHING-OK24-005 (candidate bug #3 in `agreement-ruleset-audit.md`). Phase B HIGH priority.
+> **AC_RESEARCH + AC_TEACHING gap (RESOLVED S37 TASK-3701)**: previously NO entitlement rows seeded for the 2 AC variants. Per interim-expert decision 2026-05-21, AC variants now have 20 rows mirroring AC base values (5 entitlements × 2 OK × 2 variants). See SR-AC_RESEARCH-OK24-005 + SR-AC_TEACHING-OK24-005 (canonical candidate bug **#1** in `agreement-ruleset-audit.md`). Bug-with-no-past-impact per ROADMAP rule correction policy.
 
 ## Wage Type Mappings (SLS Codes)
 
 Source: `wage_type_mappings` seed data in `init.sql`. All mappings are identical for OK24 and OK26.
 
-Per-agreement bundle SR row references: SR-AC-OK24-037 (AC bundle, 18 mappings) / SR-HK-OK24-030 (HK bundle, ~22 mappings) / SR-PROSA-OK24-008 (mirrors HK) / SR-AC_RESEARCH-OK24-006 + SR-AC_TEACHING-OK24-006 (variants — SLS code divergence flagged as candidate bug #2 in `agreement-ruleset-audit.md`).
+Per-agreement bundle SR row references: SR-AC-OK24-037 (AC bundle, 18 mappings) / SR-HK-OK24-030 (HK bundle, ~22 mappings) / SR-PROSA-OK24-008 (mirrors HK) / SR-AC_RESEARCH-OK24-006 + SR-AC_TEACHING-OK24-006 (variants — SLS code divergence resolved S37 TASK-3702 via mirror-AC-base per interim-expert decision; canonical candidate bug **#2** in `agreement-ruleset-audit.md`).
 
 ### Core Time Types (all agreements)
 
@@ -178,24 +178,28 @@ Per-agreement bundle SR row references: SR-AC-OK24-037 (AC bundle, 18 mappings) 
 
 ### Academic Agreement Mappings (AC_RESEARCH / AC_TEACHING)
 
-These use a partially different SLS code set. **6 of 11 mappings DIVERGE from AC base — flagged as candidate bug #2 in `agreement-ruleset-audit.md` (Phase B HIGH priority)**:
+**Resolved post-S37 TASK-3702 (canonical candidate bug #2)**: previously 6 of 11 mappings DIVERGED from AC base. Per interim-expert decision 2026-05-21 (Reading A: S11 seed authoring bug), now mirror AC base. The reference table below reflects the previous (pre-S37) state and is preserved as historical context for the bug correction — the actual current seed values are AC-base-identical post-S37 TASK-3702 commit `ce1bf68`.
+
+**Current seed values (post-S37 TASK-3702, mirroring AC base)**:
 
 | Time Type | SLS Code | Description |
 |-----------|----------|-------------|
 | NORMAL_HOURS | SLS_0110 | Normal hours |
 | NORM_DEVIATION | SLS_0150 | Norm deviation |
-| MERARBEJDE | SLS_0210 | Merarbejde (note: SLS_0210, not SLS_0310; **COLLIDES with HK/PROSA OVERTIME_50 SLS code**) |
+| MERARBEJDE | SLS_0310 | Merarbejde (corrected from SLS_0210 in S37; resolves the HK/PROSA OVERTIME_50 collision) |
 | VACATION | SLS_0510 | Vacation |
 | SICK_DAY | SLS_0540 | Sick day |
-| CARE_DAY | SLS_0550 | Care day (note: SLS_0550, not SLS_0520) |
-| CHILD_SICK_1 | SLS_0560 | Child sick day (note: renamed time_type vs AC's CHILD_SICK_DAY; single mapping vs AC's 3-day chain) |
-| SENIOR_DAY | SLS_0570 | Senior day |
-| LEAVE_WITH_PAY | SLS_0580 | Leave with pay (note: SLS_0580, not SLS_0565) |
-| LEAVE_WITHOUT_PAY | SLS_0590 | Leave without pay (note: SLS_0590, not SLS_0560) |
+| CARE_DAY | SLS_0520 | Care day (corrected from SLS_0550 in S37) |
+| CHILD_SICK_DAY | SLS_0530 | Child's 1st sick day (renamed from `CHILD_SICK_1` + chain restored in S37) |
+| CHILD_SICK_DAY_2 | SLS_0531 | Child's 2nd sick day (added in S37) |
+| CHILD_SICK_DAY_3 | SLS_0532 | Child's 3rd sick day (added in S37) |
+| SENIOR_DAY | SLS_0550 | Senior day (corrected from SLS_0570 in S37) |
+| LEAVE_WITH_PAY | SLS_0565 | Leave with pay (corrected from SLS_0580 in S37) |
+| LEAVE_WITHOUT_PAY | SLS_0560 | Leave without pay (corrected from SLS_0590 in S37) |
 | TRAVEL_WORK | SLS_0820 | Travel time (working) |
 | TRAVEL_NON_WORK | SLS_0830 | Travel time (non-working) |
 
-Note the SLS code divergence between base AC and academic variants for MERARBEJDE, CARE_DAY, SENIOR_DAY, LEAVE_WITH_PAY, and LEAVE_WITHOUT_PAY. The MERARBEJDE/SLS_0210 collision with HK/PROSA OVERTIME_50 means SLS-side payroll cannot distinguish — must be addressed regardless of Phase B finding direction. See SR-AC_RESEARCH-OK24-006 + SR-AC_TEACHING-OK24-006.
+All AC variant mappings now equal AC base. The `CHILD_SICK_DAY` rename also fixes a pre-existing pre-launch production-broken state where rule engine emitted `CHILD_SICK_DAY` per `AbsenceRule.cs:112-114` but AC variants seed only had `CHILD_SICK_1` (phantom row never consulted). See SR-AC_RESEARCH-OK24-006 + SR-AC_TEACHING-OK24-006 bug_correction_history.
 
 ## Position Overrides
 

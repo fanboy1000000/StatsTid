@@ -28,7 +28,7 @@ Fixed by `.claude/plans/PROGRAM-s36-s41-domain-correctness.md` L51–67.
 | 5 | `current_encoded_value` | scalar | What's actually in DB seed + `CentralAgreementConfigs.cs` today (post-S35). Format must be exact (string with quotes for enums; numeric without; boolean `true`/`false`). |
 | 6 | `authoritative_source` | URL + paragraph | PDF URL + paragraph (e.g., `https://oes.dk/media/ik0hm2lr/043-19.pdf §4`). `pending` if Phase B will determine. |
 | 7 | `interpretation` | plain text | One-line rule statement in plain language. Should answer "what does this cell mean?" without requiring the reader to click the source. |
-| 8 | `confidence_level` | enum | HIGH / MEDIUM / LOW. HIGH = explicit cirkulær statement; MEDIUM = inferred with strong precedent or universally-accepted convention; LOW = ambiguous, contested, or inferred from secondary source only. **An `N/A-for-agreement` value MAY appear** when the field is functionally inert for this agreement (e.g., `EveningRate` for AC where supplement is disabled). |
+| 8 | `confidence_level` | enum (4 values) | **HIGH / MEDIUM / LOW / N/A-for-agreement**. HIGH = explicit cirkulær statement; MEDIUM = inferred with strong precedent or universally-accepted convention; LOW = ambiguous, contested, or inferred from secondary source only; **N/A-for-agreement = field is functionally inert in this agreement** (feature flag disabled at agreement level; value exists in seed but never reaches a rule's decision — e.g., `EveningRate` for AC where supplement is disabled). PROGRAM L51-67 nominally enumerated 3 values (HIGH / MEDIUM / LOW); TASK-3601 extended to 4 to handle inert-cell semantics cleanly (formalized in this schema row per S37 TASK-3705 cosmetic absorption of Reviewer W2 finding). **Phase E continuous-validation tests (S39 TASK-3905) must filter `N/A-for-agreement` cells** to avoid spurious failures on inert supplement rates — seed-parity tests assert intended encoding only on non-inert cells. |
 | 9 | `interpretation_authority` | enum | Personalestyrelsen (employer-side default per ROADMAP commitment) / Akademikerne / DM / HK / PROSA / negotiated / contested / EU (for WTD-transposed cells). |
 | 10 | `last_verified_by` | string | Name of person who signed off OR `pending` if Phase B has not adjudicated yet. |
 | 11 | `decision_date` | YYYY-MM-DD | When the cell was last verified OR `pending`. |
@@ -2493,19 +2493,23 @@ Both AC variants OK26 are placeholders per `CentralAgreementConfigs.cs:211 + 261
   1. AC variant wage_type_mappings use divergent SLS codes from AC base on 6 of 11 time types (MERARBEJDE→SLS_0210 vs AC's SLS_0310 — notably colliding with HK/PROSA OVERTIME_50 SLS code; CARE_DAY/SENIOR_DAY/LEAVE_WITH_PAY/LEAVE_WITHOUT_PAY all shifted; CHILD_SICK renamed to CHILD_SICK_1 with single mapping vs AC's 3-day chain)
   2. AC_RESEARCH + AC_TEACHING have NO entitlement_configs rows (init.sql:1343–1378 seeds only AC + HK + PROSA); either intentional code-path fallback OR structural gap that would cause entitlement lookups to fail
 
-### Candidate bug discoveries (cumulative through TASK-3605)
+### Candidate bug discoveries (cumulative through S37; canonical numbering matches `agreement-ruleset-audit.md`)
 
-| # | Row(s) | Finding | Severity | Phase B priority |
-|---|--------|---------|----------|------------------|
-| 1 | **SR-AC-OK24-015 + SR-AC-OK24-035 + SR-HK-OK24-029 + SR-PROSA-OK24-006 + SR-AC_RESEARCH-OK24-008 + (implicit for AC_TEACHING)** | SENIOR_DAY `annual_quota = 0` with `min_age = 60` — encoding semantics unclear. Same encoding across all 3 base agreements per init.sql:1373–1378; pending entitlement-gap resolution, applies to 2 AC variants too. | bug-candidate (unconfirmed) | **HIGH** — senior-employee compensation correctness; cross-agreement potentially 5 of 5 |
-| 2 | **SR-HK-OK24-022 + SR-PROSA-OK24-007** | `OvertimeRequiresPreApproval = false` for HK + PROSA — for their real overtime regimes, current `false` may invert cirkulær intent. | bug-candidate (unconfirmed) | **MEDIUM-HIGH** — workflow gate; needs Phase B cirkulær cite to confirm direction |
-| 3 | **SR-AC_RESEARCH-OK24-005 + SR-AC_TEACHING-OK24-005** (+ OK26 inheritance) | AC variants have NO `entitlement_configs` rows (no VACATION / SPECIAL_HOLIDAY / CARE_DAY / CHILD_SICK / SENIOR_DAY seeded). Either intentional code-path fallback OR structural gap causing entitlement lookups to fail silently. | bug-candidate (unconfirmed) — likely seed-correction | **HIGH** — affects all AC_RESEARCH + AC_TEACHING employees' entitlement balance correctness; Ferieloven applies regardless of agreement so absence of VACATION row is most concerning |
-| 4 | **SR-AC_RESEARCH-OK24-006 + SR-AC_TEACHING-OK24-006** (+ OK26 inheritance) | AC variants' `wage_type_mappings` use divergent SLS codes on 6 of 11 time types from AC base (MERARBEJDE→SLS_0210 conflicts with HK/PROSA OVERTIME_50; CARE_DAY/SENIOR_DAY/LEAVE_*/etc. shifted; CHILD_SICK time_type renamed to CHILD_SICK_1 with single mapping vs AC's 3-day chain). Either intentional separate payroll-code-block for research staff OR S11 seed authoring bug. | bug-candidate (unconfirmed) — needs payroll-side SLS verification | **HIGH** — payroll export correctness for AC variant employees; specifically the MERARBEJDE/SLS_0210 collision with HK/PROSA OVERTIME_50 means SLS side cannot distinguish; rule-emitted time_types must match seed mappings for AC variant payroll to flow at all |
+| # | Row(s) | Finding | Status (post-S37) |
+|---|--------|---------|---------------------|
+| **1** | **SR-AC_RESEARCH-OK24-005 + SR-AC_TEACHING-OK24-005** | AC variants had NO `entitlement_configs` rows. | **RESOLVED** S37 TASK-3701 (`3eea4f5`). Mechanical seed correction: 20 new rows mirroring AC base. Interim-expert decision (user-confirmed) 2026-05-21. |
+| **2** | **SR-AC_RESEARCH-OK24-006 + SR-AC_TEACHING-OK24-006** | AC variants `wage_type_mappings` diverged from AC base on 6 of 11 time types; MERARBEJDE/SLS_0210 collided with HK/PROSA OVERTIME_50. | **RESOLVED** S37 TASK-3702 (`ce1bf68`). Path A: S11 seed authoring bug; mirror AC base. Fixes pre-existing pre-launch production-broken state (rule engine emitted CHILD_SICK_DAY but seed had CHILD_SICK_1 phantom). |
+| **3** | **SR-AC-OK24-015 + SR-AC-OK24-035 + SR-HK-OK24-029 + SR-PROSA-OK24-006 + SR-AC_RESEARCH-OK24-008** | SENIOR_DAY `annual_quota = 0` paired with `min_age = 60` was structurally inconsistent. | **RESOLVED** S37 TASK-3703 (`2eaa021`). Path B seed-side fix: `quota=2` + `min_age=62` (user-corrected) + description "alder 62+". Uniform across all 5 agreements + AC variants. |
+| **4** | **SR-HK-OK24-022 + SR-PROSA-OK24-007** | HK + PROSA `OvertimeRequiresPreApproval = false` may invert cirkulær intent. | **DECISION RECORDED** (Path A) S37 TASK-3704 (`fa00d97`); **SEED FLIP DEFERRED to S40** alongside ADR-024 D7 workflow extension (post-hoc necessity-acknowledgment path). Flipping `false → true` without the necessity-ack workflow would create intermediate-state regression. |
 
-These observations feed into:
-- S36 TASK-3607 (agreement-ruleset-audit doc) — all 4 candidates surface as DRIFT-IN-CODE / DRIFT-IN-SEED classification candidates (with #3 + #4 the most likely pure DRIFT-IN-SEED requiring seed correction)
-- S37 Phase B feedback packaging — all 4 are high-priority cells; #3 + #4 may resolve to seed corrections that ship in S37 itself (bug-with-no-past-impact pre-launch); #1 + #2 likely need Phase B cirkulær cite to adjudicate direction
-- Phase E continuous-validation tests in S39 — the "unknown unknown" test should flag #3 (orphan agreement code without entitlement rows) + #4 (rule-emitted time_type / seeded time_type mismatch)
+**Net post-S37**: 3 bugs fully resolved (seed corrections shipped); 1 bug direction-recorded with implementation deferred to S40. All 4 classified as bug-with-no-past-impact under pre-launch posture per ROADMAP rule correction policy.
+
+These observations fed into:
+- S36 TASK-3607 (agreement-ruleset-audit doc) — Candidate Bug Routing Summary table sequenced the resolutions
+- **S37 absorption (this sprint)** — 3 mechanical seed corrections + 1 split-routing decision
+- **S38 ADR-024 D7** — new ADR question on overtime authorization model (added per Bug #4)
+- **S40 cutover** — Bug #4 workflow extension + seed flip land together
+- Phase E continuous-validation tests in S39 — seed-parity tests verify the corrections held
 
 ---
 
