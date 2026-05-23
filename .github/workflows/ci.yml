@@ -38,6 +38,19 @@ jobs:
       - name: Restore dependencies
         run: dotnet restore StatsTid.sln
 
+      - name: Check for vulnerable packages (High/Critical = fail; Low/Moderate = warn)
+        run: |
+          set +e
+          output=$(dotnet list package --vulnerable --include-transitive 2>&1)
+          echo "$output"
+          if echo "$output" | grep -qE '\s(High|Critical)\s+https://'; then
+            echo "::error::High or Critical severity CVE detected — see log above"
+            exit 1
+          fi
+          if echo "$output" | grep -qE '\s(Low|Moderate)\s+https://'; then
+            echo "::warning::Low or Moderate severity CVE detected (logged, not failing)"
+          fi
+
       - name: Build
         run: dotnet build StatsTid.sln --no-restore --configuration Release
 
