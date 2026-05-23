@@ -9,6 +9,8 @@
 | **Supersedes** | none |
 | **Amends** | ROADMAP "Deployment Model" L16-27 (no rewrite; this ADR fills in operational details the deployment model implies). |
 
+> **Pre-rule projection disclaimer** (added 2026-05-23): This ADR was authored before `docs/WORKFLOW.md` § "Binding to Architectural Events, Not Sprint Numbers" landed. **Sprint-number references in this ADR (S39, S40, S41, TASK-39XX, etc.) are projections at time of authoring, not binding architectural commitments.** The binding architectural constraint is on operational-concern decisions (schema → cutover → D-tests) shipping before customer-go-live. Current sprint plan in `ROADMAP.md` supersedes specific sprint slot mapping. Re-prioritisations re-map Phase→sprint without invalidating this ADR.
+
 ## Context
 
 ROADMAP "Deployment Model" (committed 2026-05-18) settled the high-level shape: single logical deployment, single PostgreSQL database, single application instance serving ~150 institutions at launch. Tenants map to top-level organizations in the materialized-path org hierarchy (ADR-008). Agreements are GLOBAL across tenants; per-institution variations live in `local_configurations` per ADR-017.

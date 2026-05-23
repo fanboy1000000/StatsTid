@@ -161,6 +161,28 @@ When new requirements arrive that change the planned execution order, the Orches
 - Completed sprints are never renumbered — they are historical records
 - SYSTEM_TARGET.md must be updated if the new requirements introduce functional areas not yet documented
 
+## Binding to Architectural Events, Not Sprint Numbers
+
+**Architectural commitments don't bind to projected sprint numbers.** ADRs, PROGRAMs, KB entries, and other long-lived governance docs must phrase binding constraints in terms of architectural events (Phases, milestones, externally-observable conditions like "before customer-go-live"). Sprint numbers in these docs are non-binding projections that the current sprint plan supersedes. Re-prioritisations re-map Phase→sprint without requiring doc edits.
+
+✅ Good:
+- *"Binding for Phase D Implementation Sprint 1"*
+- *"Cannot defer past customer-go-live"*
+- *"D6 cutover blocks the OvertimePreApprovalAcknowledged event landing"*
+- *"This ADR's binding implementation lands before the launch window closes"*
+
+❌ Bad:
+- *"Binding for S39 schema migration"*
+- *"Cannot defer past S39"*
+- *"Lands in S40 TASK-4006"*
+- *"S39 + S40 + S41 implementation sprints"*
+
+**Rationale**: Sprint numbers track execution order (per § Sequential Sprint Numbers above) and shift on every Tier-2 re-prioritisation. Binding architectural docs to projected sprint numbers means every re-prioritisation triggers a cascade rename across all binding-doc references — high-cost, zero-engineering-value work. Phase / event / milestone names are stable across re-prioritisations.
+
+**Authoring guidance**: Sprint numbers MAY appear in ADRs / PROGRAMs as **projection annotations** (e.g., "projected for S40 per current ROADMAP"), but the binding constraint must be stated in Phase/event terms separately. The projection is informational; the Phase/event reference is the contract.
+
+**Migration of pre-rule docs**: ADRs authored before this rule landed may contain sprint-number-shaped bindings. Pre-rule docs are NOT auto-migrated — they get a one-line projection disclaimer at the top pointing to this rule. Current sprint plan in ROADMAP.md supersedes the in-body projections.
+
 # Entropy Management
 
 The project uses scheduled entropy scans to prevent drift and accumulation between sprints. This is inspired by the "garbage collection" pattern from harness engineering.

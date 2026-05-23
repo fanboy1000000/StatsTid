@@ -9,6 +9,8 @@
 | **Supersedes** | none |
 | **Amends** | none (companion ADR-013 amendment lands separately under TASK-3803 to cross-reference D3 + D6 below). |
 
+> **Pre-rule projection disclaimer** (added 2026-05-23): This ADR was authored before `docs/WORKFLOW.md` § "Binding to Architectural Events, Not Sprint Numbers" landed. **Sprint-number references in this ADR (S39, S40, S41, TASK-39XX, etc.) are projections at time of authoring, not binding architectural commitments.** The binding architectural constraint is on Phase D implementation (schema → cutover → D-tests) shipping before customer-go-live. Current sprint plan in `ROADMAP.md` supersedes specific sprint slot mapping. Re-prioritisations re-map Phase→sprint without invalidating this ADR.
+
 ## Context
 
 S36 Phase A inventory + S37 interim-expert absorption surfaced three systemic gaps that this ADR settles architecturally. The headline finding (PROGRAM-s36-s41-domain-correctness.md L31, reinforced by `role-dimension-audit.md`) is that **AC chefkonsulent / kontorchef / specialkonsulent are widely understood to lose contractual merarbejde compensation right per the AC overenskomst, but the system treats all AC employees identically** — an AC chefkonsulent user provisioned today receives merarbejde compensation via agreement-level fallthrough. `User.EmploymentCategory` exists but no rule in `src/RuleEngine/` reads it (verified S36 TASK-3606 via grep). `PositionOverrideConfigs` schema covers only 4 quantitative fields and cannot express "no entitlement". The role distinction is unmodeled.

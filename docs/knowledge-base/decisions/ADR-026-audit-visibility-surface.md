@@ -9,6 +9,8 @@
 | **Supersedes** | ADR-025 D7 (was deferred PLACEHOLDER at S38 cycle-3 halt-and-prompt; this ADR settles the design). |
 | **Amends** | none — companion to ADR-024 + ADR-025 + ADR-013 amendment. |
 
+> **Pre-rule projection disclaimer** (added 2026-05-23): This ADR was authored before `docs/WORKFLOW.md` § "Binding to Architectural Events, Not Sprint Numbers" landed. **Sprint-number references in this ADR (S39, S40, S41, TASK-39XX, etc.) are projections at time of authoring, not binding architectural commitments.** The binding architectural constraint is on audit-visibility shipping before customer-go-live — Phase / milestone language, not sprint slot. Current sprint plan in `ROADMAP.md` supersedes specific sprint slot mapping. Re-prioritisations re-map Phase→sprint without invalidating this ADR. The L367 phrasing "cannot defer past S39" specifically should read as "cannot defer past customer-go-live" per the binding-on-events rule.
+
 ## Context
 
 ADR-025 D7 was deferred to this dedicated ADR per `feedback_thrash_defer_real_world.md` halt-and-prompt at S38 Step 7a cycle 3 (2026-05-21). The deferral resolved 3 cycles of new defects in the same audit-visibility architectural area:
