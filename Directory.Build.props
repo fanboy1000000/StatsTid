@@ -2,12 +2,12 @@
 
   <!--
     Repo-root MSBuild props applied to every csproj automatically.
-    Authored S39 TASK-3908 (2026-05-23).
+    Authored S39 TASK-3908 (2026-05-23); per-project opt-outs added
+    by S39 TASK-3909 (same commit chain).
 
     Deduplicates Nullable + ImplicitUsings that were previously set
-    on every csproj individually. Adds the warn-as-error default
-    (false at root; opted in per-project by TASK-3909 below).
-    Individual csprojs can still override.
+    on every csproj individually. Sets warn-as-error default ON;
+    individual non-production projects opt OUT below.
   -->
 
   <PropertyGroup>
@@ -15,13 +15,48 @@
     <ImplicitUsings>enable</ImplicitUsings>
 
     <!--
-      Warn-as-error default = OFF. Production csprojs opt in by setting
-      <TreatWarningsAsErrors>true</TreatWarningsAsErrors> in their own
-      project file (S39 TASK-3909). Test projects + tooling + mock
-      services intentionally stay off because they carry intentional
-      [Obsolete] usage warnings (CS0618) from validating deprecated
-      APIs that are still in the surviving call set.
+      Warn-as-error DEFAULT = TRUE. Production csprojs inherit this.
+      Test projects, tooling, mock services, and specific deferred-debt
+      production projects opt OUT below.
     -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <!--
+    Production opt-outs with explicit rationale.
+    Each entry must cite the deferred-debt reason; cleanup is tracked
+    in docs/QUALITY.md "Pre-S39 Warning Baseline" + a follow-up tooling
+    sprint candidate.
+  -->
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'StatsTid.Integrations.Payroll'">
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <!--
+      Baseline: 1 CS0618 at Program.cs:198 — calls deferred-retirement
+      `PeriodCalculationService.CalculateAsync(EmploymentProfile, …)`
+      legacy overload. Per S20 Step 0b W2: "The single surviving caller
+      is the /calculate-and-export endpoint; full retirement is deferred."
+      Intentional debt with explicit rationale; not a cleanup target until
+      the legacy endpoint retires.
+    -->
+  </PropertyGroup>
+
+  <!--
+    Non-production opt-outs (no rationale needed — these are by design):
+    - Test projects: intentionally exercise [Obsolete] APIs to validate
+      deprecation paths. Note: cannot use $(IsTestProject) here because
+      Directory.Build.props is evaluated BEFORE the csproj sets that
+      property; must enumerate project names instead.
+    - Tooling projects: ProjectionBackfill is a one-shot migration tool;
+      strict mode adds friction without value.
+    - Mock services: docker/mock-* are dev stubs; lower bar acceptable.
+  -->
+  <PropertyGroup Condition="
+       '$(MSBuildProjectName)' == 'StatsTid.Tests.Unit'
+    OR '$(MSBuildProjectName)' == 'StatsTid.Tests.Regression'
+    OR '$(MSBuildProjectName)' == 'StatsTid.Tests.Smoke'
+    OR '$(MSBuildProjectName)' == 'ProjectionBackfill'
+    OR '$(MSBuildProjectName)' == 'MockPayroll'
+    OR '$(MSBuildProjectName)' == 'MockExternal'">
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
   </PropertyGroup>
 
