@@ -118,6 +118,56 @@ public sealed class OrgScopeValidator
     }
 
     /// <summary>
+    /// S44 / TASK-4405 — ADR-026 D5 audit-visibility surface read-path scope resolution.
+    /// Returns the set of org_ids the actor can access for scope-by-target queries
+    /// against <c>audit_projection</c>.
+    ///
+    /// <para>Per-role contract:</para>
+    /// <list type="bullet">
+    ///   <item><description><b>GlobalAdmin</b> (any scope with <c>ScopeType == "GLOBAL"</c>) →
+    ///   returns <c>null</c> sentinel meaning "no filter" — caller treats as unrestricted.
+    ///   Used by <c>AuditProjectionRepository.QueryByOrgScopeAsync</c> to include
+    ///   <c>visibility_scope = 'GLOBAL_ADMIN_ONLY'</c> rows.</description></item>
+    ///   <item><description><b>LocalAdmin / Manager</b> (scopes with non-null
+    ///   <c>OrgId</c>) → returns the union of materialized-path descendants of each
+    ///   scope org. Allows scope-by-target queries to filter
+    ///   <c>target_org_id = ANY(@accessibleOrgIds)</c>.</description></item>
+    ///   <item><description><b>Employee / no scopes</b> → returns empty list. Caller
+    ///   treats as 403 at endpoint layer.</description></item>
+    /// </list>
+    ///
+    /// <para>Signature takes full <see cref="ActorContext"/> per S44 Step 4 cycle 1
+    /// Reviewer W3 absorption (matches the sibling <see cref="ValidateEmployeeAccessAsync"/>
+    /// + <see cref="ValidateOrgAccessAsync"/> shape; both read role + scopes).</para>
+    /// </summary>
+    public async Task<IReadOnlyList<string>?> GetAccessibleOrgsAsync(
+        ActorContext actor, CancellationToken ct = default)
+    {
+        if (actor.Scopes is null || actor.Scopes.Length == 0)
+            return Array.Empty<string>();
+
+        // GlobalAdmin short-circuit — any GLOBAL scope means "see everything".
+        if (actor.Scopes.Any(s => string.Equals(s.ScopeType, "GLOBAL", StringComparison.Ordinal)))
+            return null;
+
+        // Non-global: collect materialized-path descendants of each scope org.
+        var accessibleOrgIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var scope in actor.Scopes)
+        {
+            if (scope.OrgId is null)
+                continue;
+
+            // Include the scope org itself + its descendants (GetDescendantsAsync
+            // returns the subtree rooted at orgId per materialized-path predicate).
+            var descendants = await _organizationRepository.GetDescendantsAsync(scope.OrgId, ct);
+            foreach (var org in descendants)
+                accessibleOrgIds.Add(org.OrgId);
+        }
+
+        return accessibleOrgIds.ToArray();
+    }
+
+    /// <summary>
     /// Returns true if the actor only holds the Employee role (no higher-privilege scopes).
     /// </summary>
     private static bool IsEmployeeOnly(ActorContext actor)
