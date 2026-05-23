@@ -5,6 +5,17 @@ namespace StatsTid.SharedKernel.Audit;
 /// event-specific projection payload from a typed domain event.
 ///
 /// <para>
+/// <b>Signature evolution from ADR-026 D2 L90-110</b> (Step 7a cycle 1
+/// Codex W2 documentation): the ADR's draft signature names
+/// <c>MapToRow</c> with <c>DateTime OccurredAt</c> and
+/// <c>JsonDocument Details</c>. Implementation ships with shorter
+/// <c>Map</c>, timezone-aware <c>DateTimeOffset</c>, and pre-serialized
+/// <c>string DetailsJson</c> (avoids JsonDocument disposal). S44 mapper
+/// authors follow the live signature; the ADR text retains the draft as
+/// historical authoring intent.
+/// </para>
+///
+/// <para>
 /// <b>Pure mapper.</b> Implementations are synchronous + side-effect-free —
 /// they do NOT open connections, hit the database, or call other services.
 /// Cross-table lookups (e.g., resolving an employee_id to their primary_org_id

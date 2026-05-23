@@ -29,11 +29,19 @@ public sealed class AuditProjectionMapperRegistry : IAuditProjectionMapperRegist
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly ConcurrentDictionary<Type, MethodInfo?> _mapMethodCache = new();
+    private readonly HashSet<string> _registeredEventTypeNames;
 
-    public AuditProjectionMapperRegistry(IServiceProvider serviceProvider)
+    public AuditProjectionMapperRegistry(
+        IServiceProvider serviceProvider,
+        IEnumerable<RegisteredAuditEventType>? registeredEventTypes = null)
     {
         _serviceProvider = serviceProvider;
+        _registeredEventTypeNames = (registeredEventTypes ?? Array.Empty<RegisteredAuditEventType>())
+            .Select(r => r.EventTypeName)
+            .ToHashSet(StringComparer.Ordinal);
     }
+
+    public IReadOnlyCollection<string> RegisteredEventTypeNames => _registeredEventTypeNames;
 
     public object? GetMapperFor(Type eventType)
     {

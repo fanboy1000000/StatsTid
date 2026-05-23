@@ -40,4 +40,26 @@ public interface IAuditProjectionMapperRegistry
     /// closed-generic mapper interface.
     /// </summary>
     AuditProjectionRowData? TryMap(object @event, AuditProjectionContext context);
+
+    /// <summary>
+    /// Set of registered event type names (matching
+    /// <c>EventSerializer.Serialize</c>'s <c>EventType</c> property + the
+    /// <c>events.event_type</c> column value). Used by
+    /// <c>AuditProjectionBackfillService</c> to narrow the SELECT by event
+    /// type so the backfill doesn't scan the full events log when only a
+    /// subset have mappers. Empty when no mappers are registered (Sub-Sprint
+    /// 1 default) — backfill returns 0 rows scanned and skips the loop.
+    /// Per Step 7a cycle 1 Codex W1 absorption.
+    /// </summary>
+    IReadOnlyCollection<string> RegisteredEventTypeNames { get; }
 }
+
+/// <summary>
+/// Marker registration used by the audit projection mapper DI pipeline.
+/// Sub-Sprint 2 mapper registration extension methods will add one
+/// <see cref="RegisteredAuditEventType"/> instance per mapper alongside
+/// the <see cref="IAuditProjectionMapper{TEvent}"/> registration so the
+/// registry can enumerate the registered set without IServiceProvider
+/// introspection.
+/// </summary>
+public sealed record RegisteredAuditEventType(Type EventType, string EventTypeName);

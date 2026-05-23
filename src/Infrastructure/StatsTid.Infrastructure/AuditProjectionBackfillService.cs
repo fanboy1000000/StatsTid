@@ -48,14 +48,26 @@ namespace StatsTid.Infrastructure;
 /// <summary>
 /// Counters returned by <see cref="AuditProjectionBackfillService.RunAsync"/>.
 /// Allows callers (startup hook, console app, Phase E tests) to assert on
-/// the insert / conflict / no-mapper / pre-S22-skip split.
+/// the insert / conflict / no-mapper / null-outbox-skip split.
+///
+/// <para>
+/// <see cref="NullOutboxSkipped"/> covers BOTH legitimate pre-S22 events (no
+/// matching outbox row by design) AND post-S22 anomalies (events whose
+/// stored_at is post-S22 but with no outbox row, e.g. mid-tx crash before
+/// the outbox INSERT landed). The anomaly case is warn-logged at scan time;
+/// the counter rolls both into the same skip total — observability surfaces
+/// should treat any non-zero <see cref="NullOutboxSkipped"/> as worth
+/// investigating in steady state. Per Step 7a cycle 1 Reviewer W2
+/// absorption (renamed from <c>NullOutboxSkipped</c> to remove the implication
+/// that this only catches the pre-S22 path).
+/// </para>
 /// </summary>
 public sealed record AuditProjectionBackfillResult(
     int Scanned,
     int Inserted,
     int Conflicts,
     int NoMapper,
-    int PreS22Skipped,
+    int NullOutboxSkipped,
     int UnknownEventTypes,
     int DeserializationErrors);
 
@@ -79,8 +91,15 @@ public sealed class AuditProjectionBackfillService
         DateTime.Parse(S22DeployDate, CultureInfo.InvariantCulture),
         DateTimeKind.Utc);
 
-    // SELECT all events joined to their outbox row. No WHERE filter — the
-    // mapper registry is the source of truth for audit-relevance.
+    // SELECT events joined to their outbox row, filtered by event types
+    // that have registered mappers. Per Step 7a cycle 1 Codex W1 absorption:
+    // earlier draft scanned the full events log (O(total events) at every
+    // boot) which doesn't scale; the registry's RegisteredEventTypeNames
+    // narrows the scan to only events that could possibly produce a
+    // projection row. Sub-Sprint 1 default = empty set → backfill is a no-op
+    // (the WHERE clause filters to nothing). Sub-Sprint 2 mapper registration
+    // populates the set.
+    //
     // Ordered by (stream_id, stream_version) so per-stream replay
     // determinism is preserved per ADR-016 D10.
     private const string SelectSql = @"
@@ -92,6 +111,7 @@ public sealed class AuditProjectionBackfillService
             events.stored_at
         FROM events
         LEFT JOIN outbox_events ON events.event_id = outbox_events.event_id
+        WHERE events.event_type = ANY(@eventTypes)
         ORDER BY events.stream_id, events.stream_version
     ";
 
@@ -110,9 +130,21 @@ public sealed class AuditProjectionBackfillService
     /// <summary>
     /// Replays the events table into <c>audit_projection</c>. Idempotent.
     /// Tolerant of an empty events table.
+    /// Tolerant of an empty registered-event-types set (Sub-Sprint 1
+    /// default) — scans nothing, returns all-zero counters, exits early.
     /// </summary>
     public async Task<AuditProjectionBackfillResult> RunAsync(CancellationToken ct = default)
     {
+        // Fast path: no mappers registered → nothing to backfill.
+        // Sub-Sprint 1 default state; expected zero-cost no-op.
+        var eventTypeFilter = _registry.RegisteredEventTypeNames.ToArray();
+        if (eventTypeFilter.Length == 0)
+        {
+            _logger.LogInformation(
+                "Audit projection backfill: no mapper-registered event types — skipping scan (Sub-Sprint 1 default state; Sub-Sprint 2 mapper registrations will populate the filter).");
+            return new AuditProjectionBackfillResult(0, 0, 0, 0, 0, 0, 0);
+        }
+
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
@@ -121,6 +153,8 @@ public sealed class AuditProjectionBackfillService
         // run INSERTs while a DataReader is open on the same connection).
         var rows = new List<(Guid EventId, string EventType, string Data, long? OutboxId, DateTime StoredAt)>();
         await using (var selectCmd = new NpgsqlCommand(SelectSql, conn, tx))
+        {
+            selectCmd.Parameters.AddWithValue("eventTypes", eventTypeFilter);
         await using (var reader = await selectCmd.ExecuteReaderAsync(ct))
         {
             while (await reader.ReadAsync(ct))
@@ -134,12 +168,13 @@ public sealed class AuditProjectionBackfillService
                 ));
             }
         }
+        }
 
         int scanned = 0;
         int inserted = 0;
         int conflicts = 0;
         int noMapper = 0;
-        int preS22Skipped = 0;
+        int nullOutboxSkipped = 0;
         int unknownEventTypes = 0;
         int deserializationErrors = 0;
 
@@ -158,7 +193,7 @@ public sealed class AuditProjectionBackfillService
                         "Post-S22 event {EventId} (stored_at={StoredAt:O}) has no matching outbox_events row; skipping audit projection backfill (anomalous in steady state).",
                         row.EventId, row.StoredAt);
                 }
-                preS22Skipped++;
+                nullOutboxSkipped++;
                 continue;
             }
 
@@ -217,15 +252,15 @@ public sealed class AuditProjectionBackfillService
         await tx.CommitAsync(ct);
 
         _logger.LogInformation(
-            "Audit projection backfill complete: scanned={Scanned} inserted={Inserted} conflicts={Conflicts} noMapper={NoMapper} preS22Skipped={PreS22Skipped} unknownEventTypes={UnknownTypes} deserializationErrors={Errors}",
-            scanned, inserted, conflicts, noMapper, preS22Skipped, unknownEventTypes, deserializationErrors);
+            "Audit projection backfill complete: scanned={Scanned} inserted={Inserted} conflicts={Conflicts} noMapper={NoMapper} nullOutboxSkipped={NullOutboxSkipped} unknownEventTypes={UnknownTypes} deserializationErrors={Errors}",
+            scanned, inserted, conflicts, noMapper, nullOutboxSkipped, unknownEventTypes, deserializationErrors);
 
         return new AuditProjectionBackfillResult(
             Scanned: scanned,
             Inserted: inserted,
             Conflicts: conflicts,
             NoMapper: noMapper,
-            PreS22Skipped: preS22Skipped,
+            NullOutboxSkipped: nullOutboxSkipped,
             UnknownEventTypes: unknownEventTypes,
             DeserializationErrors: deserializationErrors);
     }

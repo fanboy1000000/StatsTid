@@ -153,9 +153,9 @@ using (var scope = app.Services.CreateScope())
     var auditBackfill = scope.ServiceProvider.GetRequiredService<AuditProjectionBackfillService>();
     var result = await auditBackfill.RunAsync();
     app.Logger.LogInformation(
-        "Audit projection backfill on startup: scanned={Scanned}, inserted={Inserted}, conflicts={Conflicts}, noMapper={NoMapper}, preS22Skipped={PreS22Skipped}, unknown={Unknown}, errors={Errors}",
+        "Audit projection backfill on startup: scanned={Scanned}, inserted={Inserted}, conflicts={Conflicts}, noMapper={NoMapper}, nullOutboxSkipped={NullOutboxSkipped}, unknown={Unknown}, errors={Errors}",
         result.Scanned, result.Inserted, result.Conflicts, result.NoMapper,
-        result.PreS22Skipped, result.UnknownEventTypes, result.DeserializationErrors);
+        result.NullOutboxSkipped, result.UnknownEventTypes, result.DeserializationErrors);
 }
 
 // ── Middleware ──

@@ -102,7 +102,7 @@ if (target == "audit_projection" || target == "all")
     using var sp = services.BuildServiceProvider();
     var auditService = sp.GetRequiredService<AuditProjectionBackfillService>();
     var auditResult = await auditService.RunAsync();
-    Console.WriteLine($"audit_projection: scanned={auditResult.Scanned}, inserted={auditResult.Inserted}, conflicts={auditResult.Conflicts}, noMapper={auditResult.NoMapper}, preS22Skipped={auditResult.PreS22Skipped}, unknown={auditResult.UnknownEventTypes}, errors={auditResult.DeserializationErrors}");
+    Console.WriteLine($"audit_projection: scanned={auditResult.Scanned}, inserted={auditResult.Inserted}, conflicts={auditResult.Conflicts}, noMapper={auditResult.NoMapper}, nullOutboxSkipped={auditResult.NullOutboxSkipped}, unknown={auditResult.UnknownEventTypes}, errors={auditResult.DeserializationErrors}");
 }
 
 return 0;

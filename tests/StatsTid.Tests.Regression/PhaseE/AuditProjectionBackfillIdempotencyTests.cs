@@ -65,7 +65,11 @@ public sealed class AuditProjectionBackfillIdempotencyTests : IAsyncLifetime
         }
 
         // DI container: registry + repository + backfill service + inline
-        // test mapper for OrganizationCreated.
+        // test mapper for OrganizationCreated + RegisteredAuditEventType
+        // marker so the backfill scans OrganizationCreated events
+        // (Step 7a cycle 1 Codex W1 absorption — backfill filters by
+        // RegisteredEventTypeNames; absence of the marker means fast-path
+        // no-op).
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddSingleton(_harness.Factory);
@@ -73,6 +77,7 @@ public sealed class AuditProjectionBackfillIdempotencyTests : IAsyncLifetime
         services.AddSingleton<IAuditProjectionMapperRegistry, AuditProjectionMapperRegistry>();
         services.AddSingleton<AuditProjectionBackfillService>();
         services.AddSingleton<IAuditProjectionMapper<OrganizationCreated>, TestOrganizationCreatedMapper>();
+        services.AddSingleton(new RegisteredAuditEventType(typeof(OrganizationCreated), nameof(OrganizationCreated)));
         _sp = services.BuildServiceProvider();
 
         _service = _sp.GetRequiredService<AuditProjectionBackfillService>();
@@ -110,7 +115,7 @@ public sealed class AuditProjectionBackfillIdempotencyTests : IAsyncLifetime
         Assert.Equal(1, run1.Inserted);
         Assert.Equal(0, run1.Conflicts);
         Assert.Equal(0, run1.NoMapper);
-        Assert.Equal(0, run1.PreS22Skipped);
+        Assert.Equal(0, run1.NullOutboxSkipped);
         Assert.Equal(0, run1.UnknownEventTypes);
         Assert.Equal(0, run1.DeserializationErrors);
 
@@ -131,24 +136,24 @@ public sealed class AuditProjectionBackfillIdempotencyTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Sub-Sprint 1 default state: backfill scans events with no registered
-    /// mappers → all events count as NoMapper, 0 inserts. Verifies the
-    /// "no concrete mappers" Sub-Sprint 1 contract: Sub-Sprint 2 will
-    /// progressively populate mappers and re-runs will pick them up
-    /// idempotently.
+    /// Sub-Sprint 1 default state: backfill with NO RegisteredAuditEventType
+    /// markers triggers the fast-path no-op exit (scanned=0; no events
+    /// scanned at all per Step 7a cycle 1 Codex W1 absorption). Sub-Sprint 2
+    /// progressively adds RegisteredAuditEventType + IAuditProjectionMapper
+    /// pairs and re-runs pick them up idempotently.
     /// </summary>
     [Fact]
-    public async Task Backfill_WithoutRegisteredMapper_CountsAsNoMapper()
+    public async Task Backfill_WithoutRegisteredEventTypes_FastPathsNoOp()
     {
-        // Bring up a sibling service with NO mappers registered.
+        // Bring up a sibling service with NO mappers + NO marker registrations.
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddSingleton(_harness.Factory);
         services.AddSingleton<AuditProjectionRepository>();
         services.AddSingleton<IAuditProjectionMapperRegistry, AuditProjectionMapperRegistry>();
         services.AddSingleton<AuditProjectionBackfillService>();
-        await using var noMapperSp = services.BuildServiceProvider();
-        var noMapperService = noMapperSp.GetRequiredService<AuditProjectionBackfillService>();
+        await using var emptySp = services.BuildServiceProvider();
+        var emptyService = emptySp.GetRequiredService<AuditProjectionBackfillService>();
 
         var evt = new OrganizationCreated
         {
@@ -172,11 +177,11 @@ public sealed class AuditProjectionBackfillIdempotencyTests : IAsyncLifetime
         }
         await SeedEventAndOutboxRowAsync(evt, $"org-{evt.OrgId}", streamVersion: 1);
 
-        var run = await noMapperService.RunAsync();
-        Assert.Equal(1, run.Scanned);
+        var run = await emptyService.RunAsync();
+        Assert.Equal(0, run.Scanned);
         Assert.Equal(0, run.Inserted);
         Assert.Equal(0, run.Conflicts);
-        Assert.Equal(1, run.NoMapper);
+        Assert.Equal(0, run.NoMapper);
     }
 
     /// <summary>
