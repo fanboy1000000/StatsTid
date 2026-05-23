@@ -22,13 +22,36 @@ The 7-column markdown table below is **structurally pinned** — Sub-Sprint 3 Te
 | `mapper_kind` | `interface` (payload-only mapper) OR `endpoint-direct` (mapper needs cross-table lookup so endpoint constructs row data) OR `TBD-*` (Sub-Sprint 2 decides) | populated at Sub-Sprint 2 mapper authorship time |
 | `sprint_landed` | Commit hash where the mapper landed | populated at Sub-Sprint 2 close (or later) |
 
-## Known TBD-with-suffix markers (Step 0b cycle 1 absorption)
+## TBD marker taxonomy (S44 TASK-4404)
 
-**Two known seams blocked from `interface` / `endpoint-direct` resolution at Sub-Sprint 1 close**:
+Catalog rows whose `mapper_kind` is `TBD` (plain) are simply pending mapper authorship in S44b/c. Rows with a `TBD-<suffix>` marker carry an architectural-question semantic that must be resolved BEFORE mapper authorship — Phase E Test #1 (S45+) treats each suffix as deferred-with-named-follow-up rather than "ready to assert". Each suffix has a named follow-up sprint or sprint family.
 
-1. **`TBD-payroll-dispatch-seam`** — `RetroactiveCorrectionRequested` is emitted from `src/Integrations/StatsTid.Integrations.Payroll/Services/RetroactiveCorrectionService.cs:222` via `IEventStore.AppendAsync` (self-managed connection; fire-and-forget try/catch), NOT via `IOutboxEnqueue.EnqueueAndReturnIdAsync(conn, tx, ...)` which ADR-026 D2 dispatch requires. Sub-Sprint 2 resolves via EITHER (i) rewrite `RetroactiveCorrectionService.cs:222` to (conn, tx) + IOutboxEnqueue pattern (gives Payroll service a `DbConnectionFactory`), OR (ii) narrow ADR-026 errata explicitly excluding this single event from D3 (acknowledges it stays invisible to audit until cross-process dispatch is solved holistically). NO backfill-only path — async backfill violates ADR-026 D2's sync-in-tx requirement (Step 0b cycle 1 Codex BLOCKER B1 absorption).
+### Active TBD suffix markers
 
-2. **`TBD-l194-reconciliation`** — ADR-026 has an internal contradiction: D3 L182 includes `EmployeeProfileCreated/Updated/Superseded/SoftDeleted` as TENANT_TARGETED retrofit candidates, but D3 L194 NOT-audit-relevant prose says `EmploymentProfile*` (fictive name) is excluded as "versioned config; pre-existing audit captured by upstream user_agreement_code lifecycle events." Reading L194 charitably as referring to `EmployeeProfile*` produces a contradiction with L182. Sub-Sprint 2 resolves via EITHER (a) commit ADR-026 errata removing the 4 EmployeeProfile* rows from D3 INCLUDE list (L194's intent wins; user_agreement_code lifecycle events cover the equivalent visibility), OR (b) commit ADR-026 errata removing L194 reference (L182's intent wins; EmployeeProfile* events get their own mappers). NOT silently "corrected as typo" per Step 0b cycle 1 Reviewer BLOCKER absorption.
+1. **`TBD-cross-process-deferred`** (1 row) — Event emitted from a cross-process boundary (`src/Integrations/**`) via `IEventStore.AppendAsync` with self-managed connection. ADR-026 D2 sync-in-tx contract requires `(conn, tx)` + `IOutboxEnqueue.EnqueueAndReturnIdAsync` shape; the emitting service lacks the DI surface to participate.
+   - Single row: `RetroactiveCorrectionRequested` at `src/Integrations/StatsTid.Integrations.Payroll/Services/RetroactiveCorrectionService.cs:222`.
+   - Named follow-up: **S44-cross-process sprint** (sized as ~1 event scope; solves Payroll DbConnectionFactory introduction + atomic-tx-spanning-process-boundary architectural question holistically).
+   - Originated at S43 Step 4 cycle 1 dual-lens (caller-census discipline catch); resolved direction at S44 Step 4 cycle 1 (option iii: defer).
+
+2. **`TBD-adr025-implementation-pending`** (4 rows) — Event class referenced in ADR-026 D3 inventory but NOT registered in EventSerializer; the underlying feature (ADR-025 multi-tenant operational concerns) was DESIGN-ONLY at S38 with no endpoints, RBAC, or frontend yet implemented.
+   - Rows: `InstitutionProvisioned`, `InstitutionDataExported`, `UserPiiErased`, `CrossTenantReportAccessed`.
+   - Named follow-up: dedicated post-launch ADR-025-feature-implementation sprints — each event corresponds to a feature with endpoint + RBAC + frontend surface.
+   - 4× rot risk (Reviewer NOTE absorption): each future ADR-025 sprint MUST include "remove TBD marker from catalog row" as an explicit acceptance criterion. Phase E Test #1 will fail loudly if rows remain TBD-marked when the underlying event-class registration lands.
+
+3. **`TBD-defined-but-unemitted`** (1 row) — Event class IS defined in `src/SharedKernel/StatsTid.SharedKernel/Events/` + registered in EventSerializer, but caller-census surfaced **zero production emit sites** in `src/`. Vestigial S22-era class.
+   - Single row: `PayrollExportGenerated`.
+   - Named follow-up: **S44f** — decides between (a) add emit-site code in the payroll-export pipeline + mapper, OR (b) delete the vestigial event class + EventSerializer entry + catalog row.
+
+### Phase E Test #1 parser contract (S45+)
+
+The future Test #1 (catalog ↔ DI registrations ↔ EventSerializer parity) parses this markdown table and treats `mapper_kind` cells per these rules:
+- `interface` or `endpoint-direct` → **assert**: matching `IAuditProjectionMapper<T>` DI registration must exist; matching `RegisteredAuditEventType` marker must exist; EventSerializer must register the event class.
+- `TBD` (plain) → **defer**: not yet asserted; future sub-sprint will populate.
+- `TBD-<suffix>` → **defer with named follow-up**: not yet asserted; the suffix names the resolution sprint. Test passes; resolution-sprint acceptance criterion is responsible for marker removal.
+
+## Pre-existing naming drifts (informational)
+
+- **`ix_*` vs `idx_*`** — ADR-026 D5 SQL block uses `ix_audit_projection_*` index names; init.sql:2057-2077 ships them as `idx_audit_projection_*` (matches codebase convention of 75/75 existing indexes). Refinement + caller-census + this catalog all cite the `idx_*` names per init.sql. Reviewer N4 (S44 Step 0b cycle 1) flagged this as pre-existing; doc-only fix when ADR-026 next opens.
 
 ## Catalog
 
