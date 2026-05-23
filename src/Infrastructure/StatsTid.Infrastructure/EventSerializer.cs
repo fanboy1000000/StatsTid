@@ -93,6 +93,19 @@ public static class EventSerializer
         // Superseded — cross-day Case C supersession (predecessor closed + new live row created) via TASK-3407 PUT.
         ["UserAgreementCodeSeeded"] = typeof(UserAgreementCodeSeeded),
         ["UserAgreementCodeSuperseded"] = typeof(UserAgreementCodeSuperseded),
+        // Sprint 40: ADR-024 role-within-agreement + correction policy + overtime authorization events.
+        // RoleConfigOverride lifecycle (4) per ADR-024 D1 + ADR-020 D2 3-case routing.
+        // OvertimeNecessityAcknowledged per ADR-024 D7 post-hoc necessity-ack workflow.
+        // ConfigBugCorrected per ADR-024 D6 generalized correction policy.
+        // MerarbejdeDiscretionary per ADR-024 D2 tri-state flag event.
+        // Schema + plumbing only — no S40 production emitters; S41 cutover wires endpoint emission.
+        ["RoleConfigOverrideCreated"] = typeof(RoleConfigOverrideCreated),
+        ["RoleConfigOverrideUpdated"] = typeof(RoleConfigOverrideUpdated),
+        ["RoleConfigOverrideSuperseded"] = typeof(RoleConfigOverrideSuperseded),
+        ["RoleConfigOverrideSoftDeleted"] = typeof(RoleConfigOverrideSoftDeleted),
+        ["OvertimeNecessityAcknowledged"] = typeof(OvertimeNecessityAcknowledged),
+        ["ConfigBugCorrected"] = typeof(ConfigBugCorrected),
+        ["MerarbejdeDiscretionary"] = typeof(MerarbejdeDiscretionary),
     };
 
     public static string Serialize(IDomainEvent @event)
