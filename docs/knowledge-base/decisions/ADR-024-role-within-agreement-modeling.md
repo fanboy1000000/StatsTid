@@ -537,3 +537,72 @@ User-adjudication call at that point.
 S41a's lesson was *"dense ADR text requires line-by-line reading against the codebase BEFORE refinement drafting"*. S42a extends that lesson:
 
 **Cross-process surfaces are doubly-easy to miss**: ADR-024's in-body D2 text said "OvertimeRule reads tri-state via ConfigResolutionService" but didn't acknowledge that OvertimeRule runs in a SEPARATE process (RuleEngine.Api) reached via HTTP, not via direct DI. The S41a amendment fixed the rule-name (OvertimeGovernanceRule → OvertimeRule) but didn't notice the cross-process boundary because both lenses were grounding in the rule code itself, not the HTTP contract that connects PCS to it. Refinement Step 4 cycle 1 caught it because Codex traced the full PCS → HTTP → RuleRegistry → rule path. **Lesson**: when settling cross-component seams, both lenses must verify the COMPLETE call path including HTTP/IPC boundaries, not just the endpoint method signatures.
+
+---
+
+## Amendment 2026-05-23 — D1+D2 Cutover Suspended (Discipline Rollback)
+
+**Why this amendment exists**: the S42a 2nd amendment (above) explicitly stated: *"if S43 refinement cycle 1 surfaces ANOTHER architectural seam, that's cycle 7 of same-area thrash — the discipline calls for ROLL BACK of ADR-024 D1+D2 cutover entirely."* That threshold was crossed at **S42a Step 7a itself** (the amendment's own validation gate), not at S43 cycle 1. Reviewer Agent found ANOTHER cross-process caller (`Orchestrator.WeeklyCalculationPipeline`) — a production rule-execution path that bypasses the Backend.Api PCS path and hardcodes `employmentCategory = "Standard"` — that the 2nd amendment's Seam E text did not enumerate as a caller needing the MergedConfig contract. Per `feedback_thrash_defer_real_world.md` smoke-alarm discipline + user adjudication 2026-05-23, **ROLLBACK is applied**.
+
+### What is suspended
+
+- **ADR-024 D1+D2 implementation cutover** — the ConfigResolutionService 4-layer extension + OvertimeRule HasMerarbejde-via-merge suppression + PCS DISCRETIONARY emission + admin endpoints + frontend admin page that S41a/S42a amendments were designing. The architectural decisions in D1 + D2 + the amendments STAY ACCEPTED as design — they're not contradicted by the rollback. What's suspended is the implementation work against the current cross-process architecture.
+- **Sprint slots S43 (planned cutover) + S44 (planned D7+D6+Bug #4) + S45 (planned D-test matrix)** — re-allocated to other work per user direction at sprint open.
+
+### What stays in place
+
+- **S40 schema + repository + events** — DORMANT plumbing. `role_config_overrides` table + `role_config_override_audit` + `overtime_pre_approvals` D7 extension + `overtime_authorization_audit` + `RoleConfigOverrideRepository` (878 LOC) + 7 EventSerializer-registered event types + 8 seeded AC strata rows all remain in the codebase. No consumer wired; the system continues to function as if these don't exist.
+- **S35 AC=AFSPADSERING bug-fix baseline** — production-correctness for AC employees on standard category (Fuldmægtig + Specialkonsulent) preserved.
+- **D3 correction policy + D4 governance + D5 interpretation authority + D7 overtime authorization model design** — all unchanged.
+
+### What is deferred to post-launch
+
+- **Chefkonsulent + Kontorchef merarbejde-loss correction** — the production-incorrectness flagged in `docs/references/role-dimension-audit.md` for AC chefkonsulent / kontorchef employees stays open. Customer-go-live posture: NO chefkonsulent / kontorchef employees on the platform at launch (interim mitigation — operator screens for these strata during onboarding).
+- **HK/PROSA OvertimeRequiresPreApproval = false → true seed flip (Bug #4)** — stays in `decision-recorded-fix-deferred` state per S37 absorption. Resolves with D7 necessity-ack workflow whenever that lands.
+
+### Resumption criteria
+
+ADR-024 D1+D2 implementation cutover resumes when a post-launch architectural sprint focused on **cross-process config delivery semantics** has authored a clean architectural shape that covers ALL rule-evaluate callers uniformly:
+
+- PCS (Backend.Api → RuleEngine.Api HTTP path) ✓ partially addressed by S42a Seam E
+- `Orchestrator.WeeklyCalculationPipeline` (Orchestrator → RuleEngine.Api HTTP path) — NEWLY surfaced at S42a Step 7a
+- `TaskDispatcher.cs:45` ("rule-evaluation" task type — Orchestrator-routed)
+- Any future rule-evaluate caller added by S43+ work in unrelated sub-systems
+
+The architectural shape might be:
+- (a) Make `MergedConfig` REQUIRED on `EvaluateRequest` + every caller pre-merges → forces uniform discipline at the cost of more invasive cutover
+- (b) Move `ConfigResolutionService` into a shared library consumable by both Backend.Api + Orchestrator + RuleEngine.Api → de-duplicates merge logic but adds project-graph complexity
+- (c) Move role-override merge into RuleEngine.Api itself (each rule-evaluate call inside RuleEngine.Api does its own merge with role-override lookup) → simplifies caller contracts but adds DI to RuleEngine.Api
+
+These options + others not yet enumerated are the substance of the future post-launch architectural sprint. **None of them fit within the current ADR-024 D1+D2 amendment cycle** without continuing the cycle-trail thrash pattern.
+
+### Cycle-trail final tally (7 cycles)
+
+| # | Cycle | Findings | Resolution |
+|---|-------|----------|------------|
+| 1 | S38b ADR-026 authorship (3-cycle internal trail) | Audit-visibility design path-C resolution | Resolved |
+| 2 | S40 refinement cycle 1 | 7 BLOCKERs on tri-ADR bundling | User: split per-ADR |
+| 3 | S40 refinement cycle 2 | 4 BLOCKERs on ADR-024-full | User: honor sub-sprint split |
+| 4 | S41 refinement cycle 1 | 3-4 architectural BLOCKERs (rule-name + sig mismatch + BuildLine staticness + employment_category gap) | S41a 1st amendment |
+| 5 | S41a Step 7a | 1 BLOCKER (Seam B citation + DI gap) + WARNINGs absorbed | S41a closed clean |
+| 6 | S42 refinement cycle 1 | 5+ BLOCKERs including NEW Seam E (HTTP boundary) | S42a 2nd amendment |
+| 7 | **S42a Step 7a (this gate)** | **2 NEW BLOCKERs including Seam H (Orchestrator caller) + recovery-claim contradiction** | **DISCIPLINE-ROLLBACK** |
+
+### Lesson (final extension)
+
+The S41a + S42a + (this) S42a-rollback lesson sequence:
+
+1. **S41a**: dense ADR text requires line-by-line reading against the codebase BEFORE refinement drafting.
+2. **S42a**: cross-process surfaces require complete-call-path verification (HTTP/IPC boundaries).
+3. **THIS rollback**: **even with explicit cross-process-path discipline, cross-process surfaces with MULTIPLE callers (PCS + Orchestrator + future) cannot be settled incrementally per-caller — they require an architectural sprint with explicit caller enumeration as a precondition to writing the seam decision.** The 2nd amendment named PCS as "the" caller of the HTTP boundary; it was wrong about uniqueness, not about the boundary itself. Three options for resumption (above) all start from a complete caller census.
+
+Recorded in feedback memory as `feedback_cross_process_caller_census_required.md` for future cross-process ADR work.
+
+### Status update
+
+ADR-024 status field stays **ACCEPTED** (the design decisions D1-D7 are sound). A new field below the Status indicates implementation suspension:
+
+| Field | Value |
+|-------|-------|
+| **Implementation status** | D1+D2 cutover SUSPENDED 2026-05-23 per discipline-rollback. D7 + D6 implementation also deferred (was bundled into the same Sub-Sprint 2/3 sequence). S40 schema + repository + events remain in place as dormant plumbing. |
+| **Resumption** | Post-launch architectural sprint authoring complete caller census + cross-process config-delivery shape (3 options enumerated above). |
