@@ -5,6 +5,7 @@ using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
+using StatsTid.SharedKernel.Audit;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Exceptions;
 using StatsTid.SharedKernel.Interfaces;
@@ -73,6 +74,8 @@ public static class AdminEndpoints
             OrgScopeValidator scopeValidator,
             DbConnectionFactory dbFactory,
             IOutboxEnqueue outbox,
+            IAuditProjectionMapper<OrganizationCreated> auditMapper,
+            AuditProjectionRepository auditRepo,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -151,7 +154,18 @@ public static class AdminEndpoints
                     ActorRole = actor.ActorRole,
                     CorrelationId = actor.CorrelationId
                 };
-                await outbox.EnqueueAsync(conn, tx, $"org-{request.OrgId}", @event, ct);
+                // S44 TASK-4413: capture outbox_id for audit_projection insert
+                // (ADR-026 D2 sync-in-tx projection write — atomic with the
+                // organizations row + outbox row per ADR-018 D3/D13).
+                var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"org-{request.OrgId}", @event, ct);
+
+                var auditCtx = new AuditProjectionContext(
+                    ActorId: actor.ActorId,
+                    ActorPrimaryOrgId: actor.OrgId,
+                    CorrelationId: actor.CorrelationId,
+                    OccurredAt: new DateTimeOffset(@event.OccurredAt));
+                var auditRow = auditMapper.Map(@event, auditCtx);
+                await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
 
                 await tx.CommitAsync(ct);
             }
@@ -181,6 +195,8 @@ public static class AdminEndpoints
             OrgScopeValidator scopeValidator,
             DbConnectionFactory dbFactory,
             IOutboxEnqueue outbox,
+            IAuditProjectionMapper<OrganizationUpdated> auditMapper,
+            AuditProjectionRepository auditRepo,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -234,7 +250,15 @@ public static class AdminEndpoints
                     ActorRole = actor.ActorRole,
                     CorrelationId = actor.CorrelationId
                 };
-                await outbox.EnqueueAsync(conn, tx, $"org-{orgId}", @event, ct);
+                // S44 TASK-4413: capture outbox_id + audit_projection insert
+                var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"org-{orgId}", @event, ct);
+                var auditCtx = new AuditProjectionContext(
+                    ActorId: actor.ActorId,
+                    ActorPrimaryOrgId: actor.OrgId,
+                    CorrelationId: actor.CorrelationId,
+                    OccurredAt: new DateTimeOffset(@event.OccurredAt));
+                var auditRow = auditMapper.Map(@event, auditCtx);
+                await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
 
                 await tx.CommitAsync(ct);
             }
@@ -355,6 +379,8 @@ public static class AdminEndpoints
             DbConnectionFactory dbFactory,
             IOutboxEnqueue outbox,
             UserAgreementCodeRepository userAgreementCodeRepo,
+            IAuditProjectionMapper<UserCreated> auditMapper,
+            AuditProjectionRepository auditRepo,
             ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
@@ -584,7 +610,19 @@ public static class AdminEndpoints
                     ActorRole = actor.ActorRole,
                     CorrelationId = actor.CorrelationId
                 };
-                await outbox.EnqueueAsync(conn, tx, $"user-{request.UserId}", @event, ct);
+                // S44 TASK-4413: UserCreated enqueue converted to capture outbox_id +
+                // audit_projection insert (ADR-026 D2 sync-in-tx). The other 2 enqueues
+                // in this tx (EmployeeProfileCreated@L635 + UserAgreementCodeSeeded
+                // below) remain EnqueueAsync — their mappers land in S44c + S44b
+                // respectively (same-endpoint coupling per refinement Risk #5).
+                var userCreatedOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"user-{request.UserId}", @event, ct);
+                var userCreatedAuditCtx = new AuditProjectionContext(
+                    ActorId: actor.ActorId,
+                    ActorPrimaryOrgId: actor.OrgId,
+                    CorrelationId: actor.CorrelationId,
+                    OccurredAt: new DateTimeOffset(@event.OccurredAt));
+                var userCreatedAuditRow = auditMapper.Map(@event, userCreatedAuditCtx);
+                await auditRepo.InsertAsync(conn, tx, @event.EventId, userCreatedOutboxId, @event.EventType, userCreatedAuditRow, userCreatedAuditCtx, ct);
 
                 // (4) EmployeeProfileCreated outbox emit in-tx. Stream
                 // employee-profile-{employeeId} per ADR-018 D6 + S31. EffectiveFrom
@@ -728,6 +766,8 @@ public static class AdminEndpoints
             IOutboxEnqueue outbox,
             DbConnectionFactory dbFactory,
             UserAgreementCodeRepository userAgreementCodeRepo,
+            IAuditProjectionMapper<UserUpdated> auditMapper,
+            AuditProjectionRepository auditRepo,
             ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
@@ -1030,7 +1070,21 @@ public static class AdminEndpoints
                     ActorRole = actor.ActorRole,
                     CorrelationId = actor.CorrelationId
                 };
-                await outbox.EnqueueAsync(conn, tx, $"user-{userId}", @event, ct);
+                // S44 TASK-4413: UserUpdated enqueue converted to capture outbox_id +
+                // audit_projection insert (ADR-026 D2 sync-in-tx). UserAgreementCodeChanged +
+                // UserAgreementCodeSuperseded enqueues below remain EnqueueAsync — their
+                // mappers land in S44b (same-endpoint coupling per refinement Risk #5).
+                // ResolvedTargetOrgId fallback to newPrimaryOrgId — PUT may carry null
+                // PrimaryOrgId (no change requested); mapper requires SOME non-null value.
+                var userUpdatedOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"user-{userId}", @event, ct);
+                var userUpdatedAuditCtx = new AuditProjectionContext(
+                    ActorId: actor.ActorId,
+                    ActorPrimaryOrgId: actor.OrgId,
+                    CorrelationId: actor.CorrelationId,
+                    OccurredAt: new DateTimeOffset(@event.OccurredAt),
+                    ResolvedTargetOrgId: newPrimaryOrgId);
+                var userUpdatedAuditRow = auditMapper.Map(@event, userUpdatedAuditCtx);
+                await auditRepo.InsertAsync(conn, tx, @event.EventId, userUpdatedOutboxId, @event.EventType, userUpdatedAuditRow, userUpdatedAuditCtx, ct);
 
                 // S34 / TASK-3407 (ADR-023 D2 option (b)) — agreement_code routing.
                 // Extends the S33 / TASK-3309 narrow-signal UserAgreementCodeChanged
@@ -1333,6 +1387,8 @@ public static class AdminEndpoints
             OrgScopeValidator scopeValidator,
             DbConnectionFactory dbFactory,
             IOutboxEnqueue outbox,
+            IAuditProjectionMapper<RoleAssignmentGranted> auditMapper,
+            AuditProjectionRepository auditRepo,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -1426,7 +1482,19 @@ public static class AdminEndpoints
                     ActorRole = actor.ActorRole,
                     CorrelationId = actor.CorrelationId
                 };
-                await outbox.EnqueueAsync(conn, tx, $"user-{request.UserId}", @event, ct);
+                // S44 TASK-4413: RoleAssignmentGranted cutover. Mapper requires
+                // ResolvedTargetOrgId = user's primary_org_id (NOT in event payload —
+                // event carries the scope OrgId distinct from user's primary org per
+                // catalog L59). targetUser fetched at L1410 carries PrimaryOrgId.
+                var grantOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"user-{request.UserId}", @event, ct);
+                var grantAuditCtx = new AuditProjectionContext(
+                    ActorId: actor.ActorId,
+                    ActorPrimaryOrgId: actor.OrgId,
+                    CorrelationId: actor.CorrelationId,
+                    OccurredAt: new DateTimeOffset(@event.OccurredAt),
+                    ResolvedTargetOrgId: targetUser.PrimaryOrgId);
+                var grantAuditRow = auditMapper.Map(@event, grantAuditCtx);
+                await auditRepo.InsertAsync(conn, tx, @event.EventId, grantOutboxId, @event.EventType, grantAuditRow, grantAuditCtx, ct);
 
                 await tx.CommitAsync(ct);
             }
@@ -1457,6 +1525,8 @@ public static class AdminEndpoints
             OrgScopeValidator scopeValidator,
             DbConnectionFactory dbFactory,
             IOutboxEnqueue outbox,
+            IAuditProjectionMapper<RoleAssignmentRevoked> auditMapper,
+            AuditProjectionRepository auditRepo,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -1539,7 +1609,22 @@ public static class AdminEndpoints
                     ActorRole = actor.ActorRole,
                     CorrelationId = actor.CorrelationId
                 };
-                await outbox.EnqueueAsync(conn, tx, $"user-{assignmentUserId}", @event, ct);
+                // S44 TASK-4413: RoleAssignmentRevoked cutover. Mapper requires
+                // ResolvedTargetOrgId = the affected user's primary_org_id (catalog
+                // L59). Look up the user record now to obtain it (the original
+                // assignment lookup at L1532 only carried user_id, not org).
+                var revokeOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"user-{assignmentUserId}", @event, ct);
+                var affectedUser = await userRepo.GetByIdAsync(assignmentUserId, ct);
+                var revokeAuditCtx = new AuditProjectionContext(
+                    ActorId: actor.ActorId,
+                    ActorPrimaryOrgId: actor.OrgId,
+                    CorrelationId: actor.CorrelationId,
+                    OccurredAt: new DateTimeOffset(@event.OccurredAt),
+                    ResolvedTargetOrgId: affectedUser?.PrimaryOrgId
+                        ?? throw new InvalidOperationException(
+                            $"RoleAssignmentRevoked: affected user {assignmentUserId} disappeared mid-revoke; cannot resolve primary_org_id for audit projection."));
+                var revokeAuditRow = auditMapper.Map(@event, revokeAuditCtx);
+                await auditRepo.InsertAsync(conn, tx, @event.EventId, revokeOutboxId, @event.EventType, revokeAuditRow, revokeAuditCtx, ct);
 
                 await tx.CommitAsync(ct);
             }
