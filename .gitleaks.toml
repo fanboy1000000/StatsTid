@@ -1,0 +1,48 @@
+# gitleaks v8.x configuration for StatsTid
+# Inherits the full default ruleset (100+ patterns: AWS keys, GitHub tokens,
+# connection strings, JWT, generic-secret, etc.) and adds project-specific
+# allowlist entries for known non-secrets.
+#
+# Authored S39 TASK-3901 (2026-05-23) per refinement REFINEMENT-s39-tooling-debt.md.
+
+[extend]
+# Include the upstream default ruleset shipped with gitleaks itself.
+useDefault = true
+
+[allowlist]
+description = "StatsTid project allowlist — known non-secrets"
+
+# --- Path-based exclusions ---
+paths = [
+    # Review transcripts, refinements, plans, and worktree artifacts contain
+    # quoted secret-shaped strings from absorption commits + cycle traces.
+    # These are not live secrets; they're snapshots of editor state.
+    '''^\.claude/''',
+    # Sprint docs + ROADMAP + KB entries reference secret-shaped patterns in
+    # context (e.g., bcrypt hash regex, JWT signing-key constant name).
+    '''^docs/sprints/''',
+    '''^docs/knowledge-base/''',
+    '''^ROADMAP\.md$''',
+    # Markdown files at repo root carry meta-discussion of secrets handling
+    # without containing live secrets.
+    '''^(CLAUDE|MEMORY|SYSTEM_TARGET)\.md$''',
+]
+
+# --- Regex-based allowlist ---
+# Patterns that match real secret SHAPES but are known to be non-secrets
+# in the StatsTid context.
+regexes = [
+    # bcrypt $2a$11$ dev hashes seeded for "password" in docker/postgres/init.sql:831-837
+    # All 7 dev test users share the same hash. Production deploys never seed users this way.
+    '''\$2a\$11\$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL\.TdUKq2Aw0e6k0Te''',
+
+    # Dev JWT signing-key fallback at src/Auth/StatsTid.Auth/JwtValidationSetup.cs:18.
+    # The string is deliberately non-secret and only used when no Jwt:SigningKey is
+    # configured AND DOTNET_ENVIRONMENT == Development. Production fails fast at startup
+    # if this fallback is hit (per S18 TASK-1804 fail-fast remediation).
+    '''StatsTid_Sprint3_DevKey_MustBeAtLeast32BytesLong!''',
+]
+
+# --- Per-rule overrides (none currently) ---
+# If a specific gitleaks rule (e.g., generic-api-key) flags a legitimate
+# pattern we can't avoid via path/regex, add `[[rules]]` overrides here.

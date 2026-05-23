@@ -7,6 +7,25 @@ on:
     branches: [master]
 
 jobs:
+  gitleaks:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # gitleaks needs full history for `detect` mode
+
+      - name: Install gitleaks
+        run: |
+          GITLEAKS_VERSION=8.18.4
+          wget -q "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -O gitleaks.tar.gz
+          tar -xzf gitleaks.tar.gz gitleaks
+          sudo mv gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: Scan repo for secrets
+        run: gitleaks detect --config .gitleaks.toml --no-banner --verbose --redact
+
   build-and-test:
     runs-on: ubuntu-latest
     steps:
