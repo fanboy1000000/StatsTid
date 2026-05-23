@@ -1936,6 +1936,29 @@ BEGIN
 END
 $$;
 
+-- S40 / TASK-4005 — Greenfield seed for role_config_overrides.
+-- 4 AC strata × 2 OK versions = 8 rows. Standard category NOT seeded — ConfigResolutionService
+-- falls through to agreement_configs when no row matches.
+-- Tri-state values per ADR-024 L46-50 (PROVISIONAL pending Phase B):
+--   Fuldmægtig       → CONTRACTUAL (documents the encoded default explicitly)
+--   Specialkonsulent → DISCRETIONARY (PROVISIONAL pending Phase B cirkulær cite)
+--   Chefkonsulent    → NONE         (PROVISIONAL pending Phase B cirkulær cite)
+--   Kontorchef       → NONE         (PROVISIONAL pending Phase B cirkulær cite)
+-- All other override columns (booleans + quantitative) stay NULL → inherit from agreement_configs.
+-- effective_from = '0001-01-01' per the history-covering anchor convention (post-S33
+-- EmployeeProfileSeeder pattern — first PUT after seed triggers Case C cross-day cleanly).
+-- Source-register bug_correction_history annotations land at sprint close (TASK-4007).
+INSERT INTO role_config_overrides (employment_category, agreement_code, ok_version, effective_from, merarbejde_compensation_right, created_by, created_by_role) VALUES
+    ('Fuldmægtig',       'AC', 'OK24', '0001-01-01', 'CONTRACTUAL',   'SYSTEM_SEED', 'SYSTEM_SEED'),
+    ('Fuldmægtig',       'AC', 'OK26', '0001-01-01', 'CONTRACTUAL',   'SYSTEM_SEED', 'SYSTEM_SEED'),
+    ('Specialkonsulent', 'AC', 'OK24', '0001-01-01', 'DISCRETIONARY', 'SYSTEM_SEED', 'SYSTEM_SEED'),
+    ('Specialkonsulent', 'AC', 'OK26', '0001-01-01', 'DISCRETIONARY', 'SYSTEM_SEED', 'SYSTEM_SEED'),
+    ('Chefkonsulent',    'AC', 'OK24', '0001-01-01', 'NONE',          'SYSTEM_SEED', 'SYSTEM_SEED'),
+    ('Chefkonsulent',    'AC', 'OK26', '0001-01-01', 'NONE',          'SYSTEM_SEED', 'SYSTEM_SEED'),
+    ('Kontorchef',       'AC', 'OK24', '0001-01-01', 'NONE',          'SYSTEM_SEED', 'SYSTEM_SEED'),
+    ('Kontorchef',       'AC', 'OK26', '0001-01-01', 'NONE',          'SYSTEM_SEED', 'SYSTEM_SEED')
+ON CONFLICT DO NOTHING;
+
 -- =========================================================================
 -- S40 / ADR-024 D7 — overtime_pre_approvals extension + overtime_authorization_audit.
 -- Adds 4 columns to overtime_pre_approvals (S17 introduction at L1504) and
