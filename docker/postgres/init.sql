@@ -2004,3 +2004,83 @@ BEGIN
     ON CONFLICT (migration_id) DO NOTHING;
 END
 $$;
+
+-- =========================================================================
+-- S43 / ADR-026 D1 — audit_projection table (Phase 4e audit visibility surface).
+--
+-- 3rd projection table after time_entries_projection + absences_projection
+-- (S27 sync-in-tx pattern per ADR-018 D13). Path C event-projection per
+-- ADR-026 (path A/B intentionally avoided to prevent the cross-process issues
+-- that derailed ADR-024).
+--
+-- 13 columns matching ADR-026 D1 schema at L40-65. visibility_scope CHECK
+-- constraint enforces the 3-tier semantic at insert time; the companion
+-- chk_target_org_required_when_tenant CHECK constraint enforces that
+-- TENANT_TARGETED rows MUST have target_org_id NOT NULL (and global rows
+-- may have target_org_id NULL).
+--
+-- 5 partial indexes covering: (a) target-org-scoped queries; (b) global-
+-- tenant-visible scans; (c) actor-org-scoped queries (per ADR-026 D5
+-- secondary scope-by-actor pattern); (d) event-type+time queries (audit
+-- search-by-type); (e) outbox_id backfill ordering per ADR-018 D13.
+--
+-- Naming: idx_* convention (75/75 existing indexes use idx_*); diverges
+-- from ADR-026 L60-64 ix_* text per Step 4 cycle 1 absorption.
+--
+-- Sub-Sprint 1 (S43) ships schema + repo + interface + registry + backfill.
+-- Sub-Sprint 2 (S44) wires ~53 endpoint mapper sites + GET endpoint.
+-- Sub-Sprint 3 (S45) lands cutover-dependent Phase E tests #1, #3, #4.
+-- =========================================================================
+
+CREATE TABLE IF NOT EXISTS audit_projection (
+    projection_id            UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    event_id                 UUID         NOT NULL UNIQUE,
+    outbox_id                BIGINT       NOT NULL,
+    event_type               TEXT         NOT NULL,
+    visibility_scope         TEXT         NOT NULL CHECK (visibility_scope IN ('TENANT_TARGETED', 'GLOBAL_TENANT_VISIBLE', 'GLOBAL_ADMIN_ONLY')),
+    target_org_id            TEXT         NULL REFERENCES organizations(org_id),
+    target_resource_id       TEXT         NULL,
+    actor_id                 TEXT         NULL,
+    actor_primary_org_id     TEXT         NULL,
+    occurred_at              TIMESTAMPTZ  NOT NULL,
+    correlation_id           UUID         NULL,
+    details                  JSONB        NOT NULL,
+    projected_at             TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_target_org_required_when_tenant
+        CHECK (
+            (visibility_scope = 'TENANT_TARGETED'      AND target_org_id IS NOT NULL) OR
+            (visibility_scope IN ('GLOBAL_TENANT_VISIBLE', 'GLOBAL_ADMIN_ONLY'))
+        )
+);
+
+-- Target-org-scoped queries (LocalAdmin scope-by-target primary path).
+CREATE INDEX IF NOT EXISTS idx_audit_projection_target_org_time
+    ON audit_projection (target_org_id, occurred_at DESC)
+    WHERE target_org_id IS NOT NULL;
+
+-- Global-tenant-visible scans (any-org-admin can see).
+CREATE INDEX IF NOT EXISTS idx_audit_projection_global_visible
+    ON audit_projection (occurred_at DESC)
+    WHERE visibility_scope = 'GLOBAL_TENANT_VISIBLE';
+
+-- Actor-org-scoped queries (LocalAdmin scope-by-actor secondary path per ADR-026 D5).
+CREATE INDEX IF NOT EXISTS idx_audit_projection_actor_org_time
+    ON audit_projection (actor_primary_org_id, occurred_at DESC)
+    WHERE actor_primary_org_id IS NOT NULL;
+
+-- Event-type+time queries (audit search-by-type).
+CREATE INDEX IF NOT EXISTS idx_audit_projection_event_type_time
+    ON audit_projection (event_type, occurred_at DESC);
+
+-- Backfill ordering per ADR-018 D13 (outbox_id is the canonical ordering column).
+CREATE INDEX IF NOT EXISTS idx_audit_projection_outbox_id
+    ON audit_projection (outbox_id);
+
+-- Ledger entry for s43-d1 per a0e30ed governance (ADRs project sprint numbers; actual execution at S43).
+DO $$
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s43-d1-audit-projection-table', 'ADR-026 D1: audit_projection table + 5 partial indexes + chk_target_org_required_when_tenant CHECK; Sub-Sprint 1 plumbing per path C event-projection')
+    ON CONFLICT (migration_id) DO NOTHING;
+END
+$$;
