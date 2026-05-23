@@ -4,7 +4,7 @@
 
 ## Domain Quality Matrix
 
-Last updated: Sprint 35 (2026-05-20)
+Last updated: Sprint 39 (2026-05-23)
 
 | Domain | Test Coverage | Pattern Compliance | Documentation | Tech Debt | Grade | Trend |
 |--------|-------------|-------------------|---------------|-----------|-------|-------|
@@ -16,9 +16,10 @@ Last updated: Sprint 35 (2026-05-20)
 | Security | Low — no dedicated security unit tests; coverage via integration paths; S35 adds barrier-synchronized concurrent-admin-PUT D-test (TASK-3509) + concurrent-POST users_pkey 23505 race D-test | Full — JWT, RBAC, scope validation (ADR-007, ADR-009); StatsTid.Auth assembly post-S19; ETag/If-Match D2.1 concurrency now on ALL admin write surfaces (S25 + S35) — last unprotected admin write closed | Good — ADR-007, ADR-009, FAIL-001, ADR-017 D2.1, ADR-018 D7, ADR-019 D2 | Low-Medium — admin-strict If-Match propagation complete; FindAll fix legacy reference remains; no dedicated security unit-test suite | **B+** | ▲ |
 | Backend API | Medium — endpoint logic tested indirectly via smoke tests; admin-strict If-Match contract now D-test-covered on all 4 admin write surfaces (S25 + S35 TASK-3509 8 net-new D-tests including concurrent-PUT race + stale If-Match + missing If-Match + null-fallback lockedUser snapshot) | Full — ADR-019 D2 admin-strict If-Match contract applied 4th and final time on `/api/admin/users` (closes the last unprotected admin write); ADR-018 D7 row-version on `users.version`; ADR-019 D8 audit version-transition columns on `users_audit`; ADR-018 D3 atomic outbox preserved across PUT + POST | Good — ADR-018 D7, ADR-019 D2 + D8 documented; admin surface lineage in SPRINT-25 + SPRINT-35 | Low — same-hook + local-fetch gaps on legacy admin pages remain (Phase 5 polish); production-readiness legacy-DB-upgrade sweep deferred to a coherent Phase 4e runbook sprint | **A** | ▲ |
 | Payroll Integration | High — mapping tests, SLS format tests, correction tests, compensation mapping, mixed-version export, manifest creation/replay/projection-rebuild tests, boundary scenarios; LocalProfileActivation hydration test (S21); WTM marquee replay-determinism test (S29) | Full — traceability chain (PAT-005), correction format (ADR-013), compensation-aware mapping, planner-driven calculation (ADR-016 D1, D8), per-line OK stamping (S20), profile-activation hydration (ADR-017 D9c); WTM versioned history + export-time effective-date lookup closes ADR-016 D10 for WTM (ADR-018 D14, S29) | Strong — PAT-005, PAT-006, DEP-002, ADR-016, ADR-017 D9c, ADR-018 D14, ADR-020 | Low — `/calculate-and-export` is last `[Obsolete]` shim customer | **A** | ▲ |
-| Frontend | Low-Medium — 48 vitest tests (was 41 pre-S21; +7 from MondayDatePicker + ProfileEditor), no E2E, no visual regression | Partial — some pages use local fetch instead of shared hooks; ProfileEditor uses shared `useConfig` hook | Sparse — ADR-011 covers design system, no component docs; ADR-017 documents profile editor scope | Medium — CORS fixes were reactive, some pages inconsistent; ProfileEditor explicitly basic (Phase-5 polish deferral) | **C+** | ● |
+| Frontend | Medium — 90 vitest tests (was 88 pre-S35; +2 from S35 UserManagement banner-with-retry), **now CI-enforced** (S39 TASK-3907); no E2E, no visual regression | Partial — some pages use local fetch instead of shared hooks; ProfileEditor uses shared `useConfig` hook | Sparse — ADR-011 covers design system, no component docs; ADR-017 documents profile editor scope | Medium — CORS fixes were reactive, some pages inconsistent; ProfileEditor explicitly basic (Phase-5 polish deferral) | **B-** | ▲ |
 | PostgreSQL Schema | N/A (schema, not code) | Full — unique constraints, indexes, seed data; segment_manifests + GIN index (S20); local_agreement_profiles partial-unique-index `WHERE effective_to IS NULL` + local_agreement_profile_audit (S21) | Partial — init.sql is self-documenting, no ER diagram; migration plan documented in SPRINT-21.md | Low | **B+** | ● |
-| Docker/Infrastructure | N/A (config, not code) | Full — 8-service compose (ADR-006) | Good — ADR-006 | Low | **B+** | ● |
+| Docker/Infrastructure | N/A (config, not code) | Full — 8-service compose (ADR-006); container-side healthchecks call curl which isn't shipped in .NET runtime images — broken everywhere, surfaced by S39 TASK-3905; CI uses host-side loop to side-step; Dockerfile curl install deferred to Phase 4e | Good — ADR-006 | Low-Medium — container healthcheck breakage now documented; fix scheduled | **B+** | ● |
+| CI/Tooling | High — gitleaks secret scan + dotnet vulnerable-package check + smoke-tests harness + vitest + lizard CCN + coverage baseline all in CI (S39); Dependabot active on 4 ecosystems (nuget/npm/github-actions/docker, staggered cron); 7 of 8 production csprojs gate strict warn-as-error with in-box .NET Analyzers security mode | Full — Directory.Build.props + global.json + .gitleaks.toml + coverlet.runsettings + dependabot.yml all repo-root-managed | Good — TASK comments in each config file cite rationale | Low — single deferred-debt opt-out (StatsTid.Integrations.Payroll, CS0618 deferred-retirement legacy CalculateAsync per S20 Step 0b W2) | **B+** | ▲ (new domain) |
 
 ### Grade Legend
 - **A**: High coverage, full compliance, well-documented, low debt
@@ -34,9 +35,11 @@ Last updated: Sprint 35 (2026-05-20)
 
 ## Priority Improvement Areas
 
-1. **Frontend (C+)**: Needs E2E tests, shared hook refactoring, component documentation
-2. **Security (B-)**: Needs dedicated security unit tests (auth flow, scope validation, claim parsing)
-3. **Backend API (B-)**: Should extract remaining inline logic to proper service layers
+1. **Frontend (B-)**: Still needs E2E tests, shared hook refactoring (some pages bypass `useConfig` / `apiFetchWithEtag` helpers), component documentation. Vitest CI integration landed in S39 closes the "tests not enforced" gap.
+2. **Security (B+)**: Admin-strict If-Match propagation complete on all 4 admin write surfaces (S35). Remaining gap: no dedicated security unit-test suite — auth flow / scope validation / claim parsing tested only through integration paths.
+3. **Backend API (A)**: Last unprotected admin write closed in S35. Remaining gap: legacy admin pages still inline fetch instead of using shared hooks (Phase 5 polish); production-readiness legacy-DB-upgrade sweep deferred to a coherent Phase 4e runbook sprint.
+4. **Coverage gating** (new — S39): baseline recorded but `≥X%` gate not enforced. Strategy decision (no-regression / ratchet / hard-80%-blanket) deferred to post-launch sprint. See "Coverage Baseline" section.
+5. **Container healthchecks (new — S39 finding)**: 7 Dockerfiles invoke curl in healthchecks but base image (mcr.microsoft.com/dotnet/aspnet:8.0) doesn't ship curl. CI works around it via host-side loop; for production deploy a Dockerfile fix or healthcheck rewrite is Phase 4e candidate.
 
 ## Historical Grades
 
