@@ -43,10 +43,10 @@ The 7-column markdown table below is **structurally pinned** — Sub-Sprint 3 Te
 | `MerarbejdeDiscretionary` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{employee_id, period, hours, decision_pending}` | TBD | |
 | `OvertimeNecessityAcknowledged` | TENANT_TARGETED | `employee → users.primary_org_id` | `overtime_pre_approval_id` | `{employee_id, necessity_reason, acknowledged_for_entries}` | TBD | |
 | `ConfigBugCorrected` | GLOBAL_TENANT_VISIBLE | NULL | configKey JSONB stringified | `{configSurface, configKey, classification, fromValue, toValue}` | TBD | |
-| `InstitutionProvisioned` | TENANT_TARGETED | new institution's `org_id` | `institution_id` | `{org_id, legal_name, subscription_tier, onboarded_by}` | TBD | |
-| `InstitutionDataExported` | TENANT_TARGETED | exported institution's `org_id` | export request id | `{org_id, requesting_actor_id, export_size_bytes}` | TBD | |
-| `UserPiiErased` | TENANT_TARGETED | user's `primary_org_id` (recorded BEFORE NULL-out) | `user_id` | `{user_id, erased_columns, erasure_token_hash}` | TBD | |
-| `CrossTenantReportAccessed` | GLOBAL_ADMIN_ONLY | NULL | `report_id` | `{report_type, parameter_hash}` | TBD | |
+| `InstitutionProvisioned` | TENANT_TARGETED | new institution's `org_id` | `institution_id` | `{org_id, legal_name, subscription_tier, onboarded_by}` | **TBD-adr025-implementation-pending** | |
+| `InstitutionDataExported` | TENANT_TARGETED | exported institution's `org_id` | export request id | `{org_id, requesting_actor_id, export_size_bytes}` | **TBD-adr025-implementation-pending** | |
+| `UserPiiErased` | TENANT_TARGETED | user's `primary_org_id` (recorded BEFORE NULL-out) | `user_id` | `{user_id, erased_columns, erasure_token_hash}` | **TBD-adr025-implementation-pending** | |
+| `CrossTenantReportAccessed` | GLOBAL_ADMIN_ONLY | NULL | `report_id` | `{report_type, parameter_hash}` | **TBD-adr025-implementation-pending** | |
 
 ### Retrofit candidates (42)
 
@@ -85,15 +85,15 @@ The 7-column markdown table below is **structurally pinned** — Sub-Sprint 3 Te
 | `OvertimePreApprovalCreated` | TENANT_TARGETED | `employee → users.primary_org_id` | `preapproval_id` | `{employee_id, hours, period}` | TBD | |
 | `OvertimePreApprovalApproved` | TENANT_TARGETED | `employee → users.primary_org_id` | `preapproval_id` | `{preapproval_id, approved_by, approved_at}` | TBD | |
 | `OvertimePreApprovalRejected` | TENANT_TARGETED | `employee → users.primary_org_id` | `preapproval_id` | `{preapproval_id, rejected_by, rejection_reason}` | TBD | |
-| `RetroactiveCorrectionRequested` | TENANT_TARGETED | `employee → users.primary_org_id` | `correction_id` | `{employee_id, period, correction_type, ...}` | **TBD-payroll-dispatch-seam** | |
-| `PayrollExportGenerated` | TENANT_TARGETED | `employee → users.primary_org_id` (one row per (export, employee) OR `target_org_id = NULL` + scope=GLOBAL_TENANT_VISIBLE — Sub-Sprint 2 picks per ADR-026 D3 L180 deferred user-decision) | export request id | `{export_id, period, employee_count, file_format}` | TBD | |
+| `RetroactiveCorrectionRequested` | TENANT_TARGETED | `employee → users.primary_org_id` | `correction_id` | `{employee_id, period, correction_type, ...}` | **TBD-cross-process-deferred** | |
+| `PayrollExportGenerated` | TENANT_TARGETED | `employee → users.primary_org_id` (one row per (export, employee) OR `target_org_id = NULL` + scope=GLOBAL_TENANT_VISIBLE — Sub-Sprint 2 picks per ADR-026 D3 L180 deferred user-decision) | export request id | `{export_id, period, employee_count, file_format}` | **TBD-defined-but-unemitted** | |
 | `UserAgreementCodeChanged` | TENANT_TARGETED | `user → users.primary_org_id` | `user_id` | `{user_id, old_agreement_code, new_agreement_code, effective_from}` | TBD | |
 | `UserAgreementCodeSeeded` | TENANT_TARGETED | `user → users.primary_org_id` | `user_id` | `{user_id, agreement_code, ok_version, effective_from}` | TBD | |
 | `UserAgreementCodeSuperseded` | TENANT_TARGETED | `user → users.primary_org_id` | `user_id` | `{previous_id, new_id, effective_from}` | TBD | |
-| `EmployeeProfileCreated` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{employee_id, weekly_norm_hours, part_time_fraction, position}` | **TBD-l194-reconciliation** | |
-| `EmployeeProfileUpdated` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{employee_id, before, after}` | **TBD-l194-reconciliation** | |
-| `EmployeeProfileSuperseded` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{previous_id, new_id, effective_from}` | **TBD-l194-reconciliation** | |
-| `EmployeeProfileSoftDeleted` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{deleted_at}` | **TBD-l194-reconciliation** | |
+| `EmployeeProfileCreated` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{employee_id, weekly_norm_hours, part_time_fraction, position}` | TBD | |
+| `EmployeeProfileUpdated` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{employee_id, before, after}` | TBD | |
+| `EmployeeProfileSuperseded` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{previous_id, new_id, effective_from}` | TBD | |
+| `EmployeeProfileSoftDeleted` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{deleted_at}` | TBD | |
 
 **Total**: 53 rows (11 new + 42 retrofit). Matches ADR-026 D3 inventory count.
 
