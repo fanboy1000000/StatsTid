@@ -62,6 +62,7 @@ builder.Services.AddSingleton<AbsenceProjectionRepository>();
 builder.Services.AddSingleton<CompensatoryRestRepository>();
 builder.Services.AddSingleton<OvertimeBalanceRepository>();
 builder.Services.AddSingleton<OvertimePreApprovalRepository>();
+builder.Services.AddSingleton<AuditProjectionRepository>();
 builder.Services.AddSingleton<IAuditProjectionMapperRegistry, AuditProjectionMapperRegistry>();
 
 // ── Services ──
