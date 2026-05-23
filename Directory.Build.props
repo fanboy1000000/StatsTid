@@ -20,6 +20,23 @@
       production projects opt OUT below.
     -->
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+
+    <!--
+      In-box .NET Analyzers (replaces unmaintained SecurityCodeScan.VS2019
+      per Reviewer cycle-1 WARNING #4). EnableNETAnalyzers is implicitly
+      true on net5.0+ but we set it explicitly for clarity.
+
+      AnalysisLevel=latest opts into the newest analyzer pack shipped with
+      the SDK. AnalysisModeSecurity=All enables ALL security-category rules
+      (CA3xxx injection, CA5xxx cryptography/auth) at their default
+      warning severity — which warn-as-error then elevates to errors on
+      production projects. Other categories (Style/Reliability/Usage/etc.)
+      stay at default; we don't want hundreds of stylistic warnings.
+      S39 TASK-3910 (2026-05-23).
+    -->
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <AnalysisModeSecurity>All</AnalysisModeSecurity>
   </PropertyGroup>
 
   <!--
