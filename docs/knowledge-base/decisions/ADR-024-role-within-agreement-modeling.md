@@ -328,11 +328,25 @@ The 4 seams + decisions:
 
 **The mismatch**: `PayrollMappingService.BuildLine` (`src/Integrations/StatsTid.Integrations.Payroll/Services/PayrollMappingService.cs:217`) is an `internal static` pure constructor taking a `WageTypeMapping` parameter. It has no `AgreementRuleConfig` access, no DB access, no outbox enqueue capability. Cannot emit events as scoped.
 
-**Amendment decision**: the `MerarbejdeDiscretionary` event-emit seam is **`PeriodCalculationService` orchestration** (specifically `MapCalculationResultAsync` at PCS.cs:1288 or the equivalent post-rule-engine orchestration point), NOT `PayrollMappingService.BuildLine`. PCS has DB + outbox + audit access via injected dependencies; BuildLine remains a pure-function builder.
+**Amendment decision**: the `MerarbejdeDiscretionary` event-emit seam is **`PeriodCalculationService.MapSegmentToExportLinesAsync`** at `src/Integrations/StatsTid.Integrations.Payroll/Services/PeriodCalculationService.cs:1200` — the orchestration method that loops over segments and constructs payroll export lines via `PayrollMappingService.BuildLine(...)`. NOT `PayrollMappingService.BuildLine` itself (`BuildLine` is `internal static` pure-function and stays so). NOT `PayrollMappingService.MapCalculationResultAsync` either (that's a separate orchestration on PayrollMappingService, not PCS).
 
-**Detection logic in PCS**: for each segment, PCS looks up the role-merged config via the dated `ConfigResolutionService.ResolveAsync(...)` overload (Seam C). For any segment where `merarbejde_compensation_right = DISCRETIONARY` AND the segment carries overtime hours > 0, PCS emits `MerarbejdeDiscretionary` event in the atomic tx alongside payroll-line construction. The event payload carries `(EmployeeId, Date, MerarbejdeHours, EmploymentCategory)` per the S40 TASK-4004 event-class definition.
+**PCS DI extension required** — Step 7a Codex+Reviewer convergent absorption: PCS currently injects `IEventStore` + `DbConnectionFactory` per `PeriodCalculationService.cs:76, 118`; it does NOT inject `IOutboxEnqueue`. The existing `EmitManifestAsync` at PCS.cs:949-1033 uses degraded-audit two-step persistence (event append + projection insert with separate catch blocks returning `AuditState.EventOnly / ProjectionOnly / BothFailed`) — that pattern is **not** the ADR-018 D3 atomic single-tx contract needed for `MerarbejdeDiscretionary` emission. S42 must:
+1. Add `IOutboxEnqueue` to PCS constructor injection alongside the existing dependencies (`Payroll.Integrations.Program.cs:17` already registers `IOutboxEnqueue` for the payroll service container — DI plumbing exists; just unwired from PCS today).
+2. Use `IOutboxEnqueue.EnqueueAsync(conn, tx, ...)` for `MerarbejdeDiscretionary` emission, NOT `_eventStore.AppendAsync` — to satisfy ADR-018 D3 atomic-tx contract.
+3. The single tx wraps the existing payroll-line construction + the new event-emit; tx boundary is established once per segment-emission cycle.
 
-`BuildLine` signature unchanged. PCS owns the orchestration that ties together rule output + payroll line construction + event emission.
+**Detection logic in PCS** (Step 7a Reviewer+Codex convergent absorption — DISCRETIONARY asymmetry): Seam A sets `HasMerarbejde=false` for BOTH `NONE` and `DISCRETIONARY`. That means `OvertimeRule` does not emit MERARBEJDE wage-line items in either case → PCS cannot detect "would-have-emitted-MERARBEJDE" by inspecting rule output line items.
+
+PCS detection logic instead:
+1. PCS reads the role-merged config via the dated `ConfigResolutionService.ResolveAsync(...)` overload (Seam C).
+2. PCS inspects `merarbejde_compensation_right` per segment directly (not via rule output).
+3. For `DISCRETIONARY` segments, PCS **independently derives** the overtime-hours candidate from segment entries (`totalHours - normHours` for the segment span; matching the same threshold logic that `OvertimeRule` uses internally per `OvertimeRule.cs:45`).
+4. If `excessHours > 0` AND tri-state is `DISCRETIONARY` → emit `MerarbejdeDiscretionary` event in the atomic tx with payload `(EmployeeId, Date, MerarbejdeHours = excessHours, EmploymentCategory)`. Audit-line entry `compensation_choice: 'DISCRETIONARY_PENDING_ADMIN'` for visibility.
+5. For `NONE` segments: no event emit (admin doesn't need to act); audit-line entry `compensation_choice: 'NONE_NO_ENTITLEMENT'` for visibility.
+
+Alternative considered + rejected: have `OvertimeRule` emit a SUPPRESSED-but-trackable signal (e.g., add `excessHoursTracked` field to `CalculationResult`). Rejected because it pollutes the rule-engine output contract for a payroll-side concern; PCS-side derivation keeps the rule-engine layer tri-state-naive (preserves Seam A's purity).
+
+`BuildLine` signature unchanged. PCS owns the orchestration that ties together rule output + payroll line construction + event emission via the extended DI.
 
 **Consequences for S42 implementation**:
 - TASK-4103 (PayrollMappingService cutover) is now actually a **PCS cutover** — modify `PeriodCalculationService.MapCalculationResultAsync` to: (a) read role-merged config via Seam C signature; (b) inspect tri-state per segment; (c) emit `MerarbejdeDiscretionary` in atomic tx for DISCRETIONARY + overtime>0 segments; (d) audit-line entry `compensation_choice: 'DISCRETIONARY_PENDING_ADMIN'` for visibility.
@@ -406,7 +420,7 @@ Phase E test at `BugCorrectionHistorySchemaTests.cs` updates to accept the new a
 
 ### Replay determinism load-bearing D-test (Seam A/B consequence)
 
-ADR-024 D2 L71 + D7 L222-224 + L258 said the chefkonsulent past-period replay determinism D-test lands in **S41** (now S42 post-amendment). The amendment preserves this commitment. The D-test asserts byte-identity of `JsonSerializer.Serialize(segmentRuleResults)` between baseline forward-calc and replay-after-Case-C-supersession on the role_config_overrides row — analogous to S33 EmployeeProfile + S34 UserAgreementCode marquee D-tests. Caveat per Seam D: the D-test exercises the role_config_overrides dated lookup, NOT the employment_category dating; the latter is the Phase 4e candidate. The chefkonsulent D-test will pass post-S42 as long as the employment_category itself doesn't change between baseline calc and replay (which the test fixture controls).
+ADR-024 D2 L71 + D7 L222-224 + L258 said the chefkonsulent past-period replay determinism D-test lands in **S41**. Post-amendment sprint-sequencing resolution (Step 7a Codex convergent finding): the marquee D-test lands at **S44** — the ADR-024 Sub-Sprint 3 D-test matrix sprint — alongside the per-agreement × per-stratum D-test matrix and overtime authorization D-tests. The S42 cutover sprint validates correctness via unit tests at the ConfigResolutionService + PCS detection boundaries (matching S33 + S34 cutover-test pattern); the marquee replay-byte-identity D-test ships in S44 against the established cutover. The D-test asserts byte-identity of `JsonSerializer.Serialize(segmentRuleResults)` between baseline forward-calc and replay-after-Case-C-supersession on the role_config_overrides row — analogous to S33 EmployeeProfile + S34 UserAgreementCode marquee D-tests. Caveat per Seam D: the D-test exercises the role_config_overrides dated lookup, NOT the employment_category dating; the latter is the Phase 4e candidate. The chefkonsulent D-test will pass post-S42 as long as the employment_category itself doesn't change between baseline calc and replay (which the test fixture controls).
 
 ### Cycle-trail record
 
