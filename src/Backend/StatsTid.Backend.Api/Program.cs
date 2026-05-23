@@ -2,8 +2,10 @@ using StatsTid.Auth;
 using StatsTid.Backend.Api.Endpoints;
 using StatsTid.Backend.Api.Validators;
 using StatsTid.Infrastructure;
+using StatsTid.Infrastructure.Audit;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
+using StatsTid.SharedKernel.Audit;
 using StatsTid.SharedKernel.Interfaces;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -60,6 +62,7 @@ builder.Services.AddSingleton<AbsenceProjectionRepository>();
 builder.Services.AddSingleton<CompensatoryRestRepository>();
 builder.Services.AddSingleton<OvertimeBalanceRepository>();
 builder.Services.AddSingleton<OvertimePreApprovalRepository>();
+builder.Services.AddSingleton<IAuditProjectionMapperRegistry, AuditProjectionMapperRegistry>();
 
 // ── Services ──
 builder.Services.AddSingleton<ConfigResolutionService>();
