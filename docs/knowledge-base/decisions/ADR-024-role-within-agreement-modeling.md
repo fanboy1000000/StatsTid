@@ -299,3 +299,122 @@ Real Phase B engagement may produce findings that warrant ADR-024 amendments —
 - ADR-020 D2 (3-case routing) — `RoleConfigOverrideRepository.SupersedeAndCreateAsync` per pattern
 - ADR-023 D1 (consumption-time lookup) — `ConfigResolutionService` dated lookup for replay determinism
 - S37 absorption commits: 3eea4f5 (Bug #1) + ce1bf68 (Bug #2) + 2eaa021 (Bug #3) + fa00d97 (Bug #4) + 65f9866 (cosmetics) + e4c6517 (Step 7a) + 03f63d7 (sprint close)
+
+---
+
+## Amendment 2026-05-23 — Cutover Seams (S41a)
+
+**Why this amendment exists**: S41 refinement cycle 1 surfaced 4 architectural BLOCKERs (both Codex + Reviewer Agent lenses convergent) when the original D1+D2 cutover scope was translated into implementation tasks. The BLOCKERs were not transcription nits — they were genuine architectural seams that the in-body D1+D2 text described in terms that didn't match the existing codebase. Per `feedback_thrash_defer_real_world.md` smoke-alarm discipline (this was cycle 4 of same-area ADR-024 read-through misses across the session), user adjudicated 2026-05-23 to author an amendment settling each seam explicitly rather than absorb-and-redraft another refinement cycle.
+
+The 4 seams + decisions:
+
+### Seam A — Rule-engine consumer of MERARBEJDE suppression
+
+**In-body text (L69)** said: *"`OvertimeGovernanceRule` + `PayrollMappingService.BuildLine` read the tri-state via `ConfigResolutionService.GetEffectiveConfig(employee_id, date)`. For `NONE` categories, MERARBEJDE emission is suppressed."*
+
+**The mismatch**: `OvertimeGovernanceRule.cs` is a WARNING-only ceiling checker (S17/S35 surface; emits `ComplianceViolation`s with `Severity=WARNING`); it does NOT emit MERARBEJDE wage-line items. The actual MERARBEJDE emitter is `OvertimeRule.cs` (RuleId="OVERTIME_CALC"), invoked by `RuleRegistry.cs:220` in the rule-engine pipeline.
+
+**Amendment decision**: `OvertimeRule.cs` (RuleId="OVERTIME_CALC") consumes the tri-state **INDIRECTLY** via the existing `HasMerarbejde` boolean disabler on `AgreementRuleConfig`. The role-override merge logic in `ConfigResolutionService` (per Seam C decision below) computes: when `merarbejde_compensation_right ∈ {DISCRETIONARY, NONE}`, the merged config returned to the rule pipeline has `HasMerarbejde=false`. `OvertimeRule`'s existing `if (HasMerarbejde && HasOvertime)` short-circuit (already in the code per S17) suppresses MERARBEJDE wage-line emission without any rule-side code change. The rule-engine layer stays **tri-state-naive** — it operates on the merged boolean disabler contract that has been the API since S17.
+
+**`OvertimeGovernanceRule`** stays unchanged per its existing S17/S35 scope (WARNING-only ceiling checker). No tri-state consumption there.
+
+**Consequences for S42 implementation**:
+- TASK-4101 (ConfigResolutionService 4-layer extension) implements the **merge logic**: NONE → `HasMerarbejde=false`; DISCRETIONARY → `HasMerarbejde=false`; CONTRACTUAL → preserve agreement_configs default.
+- TASK-4102 (rule-engine cutover) is now **a non-task**: zero changes to `OvertimeRule.cs` or any other rule file. New unit tests verify the merged-config short-circuit behavior (which is testable at the ConfigResolutionService boundary, not the rule).
+
+### Seam B — DISCRETIONARY event-emit seam
+
+**In-body text (L64 + L69)** said: *"For `DISCRETIONARY`, a new `MerarbejdeDiscretionary` event type is emitted (registration via PAT-004); admin UI surfaces it for manual one-off-payment trigger."* And: *"`PayrollMappingService.BuildLine` reads the tri-state."*
+
+**The mismatch**: `PayrollMappingService.BuildLine` (`src/Integrations/StatsTid.Integrations.Payroll/Services/PayrollMappingService.cs:217`) is an `internal static` pure constructor taking a `WageTypeMapping` parameter. It has no `AgreementRuleConfig` access, no DB access, no outbox enqueue capability. Cannot emit events as scoped.
+
+**Amendment decision**: the `MerarbejdeDiscretionary` event-emit seam is **`PeriodCalculationService` orchestration** (specifically `MapCalculationResultAsync` at PCS.cs:1288 or the equivalent post-rule-engine orchestration point), NOT `PayrollMappingService.BuildLine`. PCS has DB + outbox + audit access via injected dependencies; BuildLine remains a pure-function builder.
+
+**Detection logic in PCS**: for each segment, PCS looks up the role-merged config via the dated `ConfigResolutionService.ResolveAsync(...)` overload (Seam C). For any segment where `merarbejde_compensation_right = DISCRETIONARY` AND the segment carries overtime hours > 0, PCS emits `MerarbejdeDiscretionary` event in the atomic tx alongside payroll-line construction. The event payload carries `(EmployeeId, Date, MerarbejdeHours, EmploymentCategory)` per the S40 TASK-4004 event-class definition.
+
+`BuildLine` signature unchanged. PCS owns the orchestration that ties together rule output + payroll line construction + event emission.
+
+**Consequences for S42 implementation**:
+- TASK-4103 (PayrollMappingService cutover) is now actually a **PCS cutover** — modify `PeriodCalculationService.MapCalculationResultAsync` to: (a) read role-merged config via Seam C signature; (b) inspect tri-state per segment; (c) emit `MerarbejdeDiscretionary` in atomic tx for DISCRETIONARY + overtime>0 segments; (d) audit-line entry `compensation_choice: 'DISCRETIONARY_PENDING_ADMIN'` for visibility.
+- For `NONE`: PCS doesn't emit `MerarbejdeDiscretionary`; the rule-engine layer already suppressed MERARBEJDE emission per Seam A. Audit-line entry `compensation_choice: 'NONE_NO_ENTITLEMENT'` for visibility.
+
+### Seam C — ConfigResolutionService signature change
+
+**In-body text (L69)** said: *"`ConfigResolutionService.GetEffectiveConfig(employee_id, date)`"*.
+
+**The mismatch**: actual signature at `src/Infrastructure/StatsTid.Infrastructure/ConfigResolutionService.cs:115` is `ResolveAsync(string orgId, string agreementCode, string okVersion, string? position, CancellationToken ct)`. No `employeeId`, no `date`, no `employmentCategory`. The "GetEffectiveConfig" name doesn't exist.
+
+**Amendment decision**: introduce a new dated-lookup overload alongside the existing live-only overload:
+
+```csharp
+// Existing — preserved as live-only form for backward-compat (admin endpoints, JWT mint, current-period reads):
+public async Task<AgreementRuleConfig> ResolveAsync(
+    string orgId, string agreementCode, string okVersion, string? position,
+    CancellationToken ct = default);
+
+// NEW — dated-lookup form for replay-sensitive paths (PCS planner, payroll export, retroactive correction):
+public async Task<AgreementRuleConfig> ResolveAsync(
+    string orgId, string agreementCode, string okVersion, string? position,
+    string? employmentCategory, DateOnly asOfDate,
+    CancellationToken ct = default);
+```
+
+The dated overload routes through `RoleConfigOverrideRepository.GetByEmploymentCategoryAtAsync(employmentCategory, agreementCode, okVersion, asOfDate)` for the role-override layer. When `employmentCategory` is null or no row matches, falls through to position-override / local-config layers (existing behavior preserved).
+
+**Migration path**:
+- PCS callers switch to the dated overload (replay-sensitive — must use dated lookup per ADR-016 D10)
+- `BalanceEndpoints` + `ComplianceEndpoints` + Skema/Overtime endpoints stay on the live-only overload for current-period reads (matches S33 ADR-023 D3 split: dated for replay, live for current)
+- Admin endpoints stay on the live-only overload (admin UI is always current-period)
+- JWT mint stays on the live-only overload
+
+**Consequences for S42 implementation**:
+- TASK-4101 (ConfigResolutionService 4-layer extension) implements the new dated overload + the role-override merge logic (per Seam A). Existing overload stays.
+- Pattern reference: mirror S33's `IEmploymentProfileResolver.GetByEmployeeIdAtAsync(employeeId, asOfDate, ct)` dated-lookup signature.
+
+### Seam D — employment_category determinism gap
+
+**In-body text** (D1 L40) acknowledged the gap: *"`User.EmploymentCategory` ... becomes load-bearing. ... future Phase 4e work will move ok_version / employment_category / primary_org_id into dated history tables too."*
+
+**The depth of the gap** (under-specified in D2): `EmploymentProfileResolver` (`src/Infrastructure/StatsTid.Infrastructure/EmploymentProfileResolver.cs:116, 153`) joins `users.employment_category` LIVE (not dated), per its docstring L26-29. The dated `RoleConfigOverrideRepository.GetByEmploymentCategoryAtAsync(employmentCategory, asOfDate)` is the dated tri-state lookup — **but the `employmentCategory` argument itself is sourced from a live read**. If an admin promotes an employee Fuldmægtig → Chefkonsulent today, past-period replay of last month's calc would look up the role-override using TODAY's category (Chefkonsulent → NONE) instead of the period-effective category (Fuldmægtig → CONTRACTUAL) → byte-identity vs original manifest BREAKS.
+
+**Amendment decision**: the gap is **EXPLICITLY DOCUMENTED** as a Phase 4e launch-blocking candidate. Pre-launch posture means no past periods exist that could expose the gap; the role-override + dated-tri-state lookup ships in S42 with the gap documented as a known caveat.
+
+**Caveat text added to source register**: each `role_config_overrides` seed row's `bug_correction_history` annotation carries the new action `provisional-pending-phase-4e:employment-category-dating` (extends the enum at D3 L111 — the Phase E `bug_correction_history` schema validation test at `tests/StatsTid.Tests.Regression/PhaseE/BugCorrectionHistorySchemaTests.cs` will need updating to accept this action value).
+
+**Phase 4e candidate sprint** (post-S42 audit-visibility close; launch-blocking): add dated `employment_category` via one of two options:
+- **(a)** Extend `employee_profiles` table with a versioned `employment_category` column (small schema delta; piggybacks on S31 EmployeeProfile bitemporal pattern)
+- **(b)** Introduce new `user_employment_categories` versioned-config table mirroring the S34 `user_agreement_codes` shape (cleaner separation; matches the 5 existing versioned-config repo pattern; 6th versioned-config repo overall)
+
+**Recommended option**: **(b)** for consistency with established versioned-config repo pattern. ADR amendment defers the binding choice between (a) and (b) to the Phase 4e candidate sprint refinement.
+
+**Pre-launch posture acknowledgement**: byte-identity replay determinism for chefkonsulent role-stratum changes IS NOT GUARANTEED until Phase 4e employment_category dating lands. The risk is purely theoretical pre-launch (no past periods to replay). Once the first customer goes live AND the first role-stratum change occurs AND that customer requests a past-period recompute (e.g., SLS correction for the affected period), the gap would expose. Phase 4e fix is launch-blocking for that scenario.
+
+### Updated bug_correction_history action enum (per Seam D)
+
+The D3 L111 enum gains:
+- `provisional-pending-phase-b` (already in use per S40 TASK-4005 seed annotations)
+- `provisional-pending-phase-4e:<feature>` (new; e.g., `provisional-pending-phase-4e:employment-category-dating`)
+
+Phase E test at `BugCorrectionHistorySchemaTests.cs` updates to accept the new action values (regex pattern `provisional-pending-(phase-b|phase-4e:[a-z-]+)`).
+
+### Consequences for sprint sequencing
+
+- **S42 = ADR-024 D1+D2 cutover** (re-drafted refinement against amended ADR): TASK-4101 ConfigResolutionService dated overload + role-override merge logic (per Seams A + C); TASK-4102 deleted (no rule-engine code change per Seam A); TASK-4103 PCS event-emit cutover (per Seam B); TASK-4104 admin endpoints; TASK-4105 frontend; TASK-4106 source-register annotations for S40-seeded rows; TASK-4107 sprint close. **~7 tasks** — same ballpark as the original S41 refinement target.
+- **S43 = ADR-024 Sub-Sprint 2b**: D7 necessity-ack endpoint + Approval UI + HK/PROSA Bug #4 seed flip + D6 generalized correct-as-bug endpoint pattern across 5 surfaces + source-register annotations.
+- **S44 = ADR-024 Sub-Sprint 3**: D-test matrix + Phase E completion + WORKFLOW.md governance bake-in.
+- **Phase 4e launch-blocking candidate** (post-S44): `employment_category` dating per Seam D option (a) or (b).
+
+### Replay determinism load-bearing D-test (Seam A/B consequence)
+
+ADR-024 D2 L71 + D7 L222-224 + L258 said the chefkonsulent past-period replay determinism D-test lands in **S41** (now S42 post-amendment). The amendment preserves this commitment. The D-test asserts byte-identity of `JsonSerializer.Serialize(segmentRuleResults)` between baseline forward-calc and replay-after-Case-C-supersession on the role_config_overrides row — analogous to S33 EmployeeProfile + S34 UserAgreementCode marquee D-tests. Caveat per Seam D: the D-test exercises the role_config_overrides dated lookup, NOT the employment_category dating; the latter is the Phase 4e candidate. The chefkonsulent D-test will pass post-S42 as long as the employment_category itself doesn't change between baseline calc and replay (which the test fixture controls).
+
+### Cycle-trail record
+
+This amendment is itself the smoke-alarm response artifact — preserved here at the bottom of ADR-024 rather than in `.claude/refinements/` so future readers of ADR-024 see the architectural decisions inline with the original D-decisions. The 4 cycles of same-area thrash that produced this amendment:
+
+1. **S38b ADR-026 authorship** (resolved via path C event-projection; same dense-ADR-text class of issue)
+2. **S40 refinement cycle 1** (7 BLOCKERs on tri-ADR S40 bundling) → user adjudication: split per-ADR
+3. **S40 refinement cycle 2** (4 BLOCKERs on ADR-024-full bundling) → user adjudication: honor ADR-author sub-sprint split
+4. **S41 refinement cycle 1** (3-4 architectural BLOCKERs surfacing this amendment) → user adjudication: amendment authorship via S41a
+
+Lesson recorded: **dense ADR text requires line-by-line reading against the codebase BEFORE refinement drafting; ADR-author intent statements can mis-identify codebase surfaces (Seam A) or assume signatures that don't exist (Seam C) or ascribe capabilities to pure functions (Seam B) — the refinement process catches these but only when both lenses run with codebase-grounding criteria.**
