@@ -549,6 +549,17 @@ public sealed class RoleConfigOverrideRepository
     /// </list>
     /// </para>
     /// </summary>
+    // Step 7a Codex WARNING absorption (S40 close): AgreementConfigRepository
+    // exposes 3 AppendAuditAsync overloads matching its 5 action types
+    // (CREATED / UPDATED / PUBLISHED / ARCHIVED / CLONED) which differ on
+    // which fields make sense per action. Our 4 actions (CREATED / UPDATED /
+    // SUPERSEDED / SOFT_DELETED) all follow the same shape — action +
+    // version_before + version_after + previous_data + new_data +
+    // (actor_id, actor_role) — so a single overload suffices. S41 cutover
+    // endpoint emitters call this method directly and pass NULL for unused
+    // version-transition fields on the first INSERT case per ADR-019 D8
+    // convention. Expanding to a 3-overload trio when no caller needs the
+    // distinction would be ceremony without value.
     public async Task AppendAuditAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
         Guid overrideId, string action,

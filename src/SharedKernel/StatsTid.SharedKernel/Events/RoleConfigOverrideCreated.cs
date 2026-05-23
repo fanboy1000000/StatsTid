@@ -1,9 +1,12 @@
 namespace StatsTid.SharedKernel.Events;
 
 /// <summary>
-/// Emitted when a fresh role-within-agreement override row is INSERTED. Covers
-/// ADR-020 D2 Case A (no predecessor) and Case B (fresh INSERT after the
-/// predecessor was closed via <see cref="RoleConfigOverrideSuperseded"/>).
+/// Emitted when a fresh role-within-agreement override row is INSERTED.
+/// Covers ADR-020 D2 Case A only (no live predecessor — first-ever INSERT
+/// for a (employment_category, agreement_code, ok_version) tuple at v=1).
+/// Case B (same-day UPDATE-in-place) emits <see cref="RoleConfigOverrideUpdated"/>.
+/// Case C (cross-day fresh INSERT after predecessor close) emits
+/// <see cref="RoleConfigOverrideSuperseded"/>.
 /// ADR-024 D1 role-within-agreement scope. Sprint 40 / Phase 4d-4.
 /// </summary>
 public sealed class RoleConfigOverrideCreated : DomainEventBase
