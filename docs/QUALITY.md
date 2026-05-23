@@ -53,3 +53,25 @@ Last updated: Sprint 35 (2026-05-20)
 | Frontend | C | C+ | C+ | C+ | C+ | C+ | C+ | C+ | C+ | C+ | C+ (S35: `UserManagement.tsx` migrated to `apiFetchWithEtag<T>` + banner-with-retry mirroring `EmployeeProfileEditor.tsx` precedent. New `useAdmin.ts` `WithEtag<T>` extension + `makeUserMutationError` helper. List endpoint cutover from `GetByOrgAsync` → `GetByOrgWithVersionAsync` so `primaryOrgId` + `version` actually render (Step 7a cycle 1 absorption). 2 net-new vitest cases pin the 412 banner-with-retry happy path end-to-end. Pre-existing 13 TS errors in unrelated legacy files persist; deferred to Phase 5.) |
 | PostgreSQL Schema | B | B | B | B+ | B+ | B+ | A- | A- | A- | A- | A- (S35: new `users.version BIGINT NOT NULL DEFAULT 1` baked into the base CREATE + guarded ALTER block at the bottom of init.sql with unconditional `ADD COLUMN IF NOT EXISTS` (Step 7a cycle 2 absorption — repairs ledger-poisoned legacy DBs). New `users_audit` table mirroring the S31/S33/S34 audit shape. action CHECK enum includes all 4 values (CREATED/UPDATED/DELETED/SUPERSEDED) up-front for forward-compat. AC family `DefaultCompensationModel` seed rows corrected (6 init.sql rows: AC + AC_RESEARCH + AC_TEACHING × OK24 + OK26) per TASK-3503 source-cited bug-with-no-past-impact policy application. Same Phase 4e production-readiness deferral as S30/S31 — coherent legacy-DB-upgrade runbook sprint outstanding.) |
 | Docker/Infrastructure | B+ | B+ | B+ | B+ | B+ | B+ | B+ | B+ | B+ | B+ | B+ |
+
+## Pre-S39 Warning Baseline
+
+Captured at S39 TASK-3908.1 (2026-05-23) via `dotnet build StatsTid.sln -c Release -p:TreatWarningsAsErrors=true`. Baseline is the per-csproj warning count under strict mode — used as the per-project escape-hatch threshold for TASK-3909 warn-as-error rollout. Production projects intended to clear strict; test/tool/mock projects intentionally remain at warn-as-info.
+
+| Project | Strict-mode errors | Notes |
+|---------|-------------------:|-------|
+| StatsTid.Auth | 0 | clean |
+| StatsTid.Backend.Api | 0 | clean |
+| StatsTid.Infrastructure | 0 | clean |
+| StatsTid.Integrations.External | 0 | clean |
+| **StatsTid.Integrations.Payroll** | **1** | CS0618 at `Program.cs:198` — calls deferred-retirement `PeriodCalculationService.CalculateAsync(EmploymentProfile, …)` legacy overload. Per S20 Step 0b W2: "The single surviving caller is the /calculate-and-export endpoint; full retirement is deferred." This is intentional debt with explicit rationale. T-3909 escape hatch applied to this project only. |
+| StatsTid.Orchestrator | 0 | clean |
+| StatsTid.RuleEngine.Api | 0 | clean |
+| StatsTid.SharedKernel | 0 | clean |
+| StatsTid.Tests.Unit (excluded from strict — test project) | ~9 | CS0618 obsolete usages of `ConfigResolutionService.ValidateLocalOverride` from Sprint12AgreementConfigTests + others. Test projects exercise deprecated APIs by design. |
+| StatsTid.Tests.Regression (excluded) | ~9 | same shape as Unit |
+| StatsTid.Tests.Smoke (excluded) | 0 | clean (small test surface) |
+| ProjectionBackfill (excluded — tooling) | 0 | clean |
+| MockPayroll, MockExternal (excluded — docker/mock-* dev stubs) | 0 | clean |
+
+**Outcome for TASK-3909**: 7 of 8 production csprojs land strict (`<TreatWarningsAsErrors>true</TreatWarningsAsErrors>`) immediately; **Payroll opts out** with rationale documented in the csproj. Exceeds the >5-of-8 acceptance criterion comfortably.

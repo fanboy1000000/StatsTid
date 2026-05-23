@@ -1,0 +1,28 @@
+<Project>
+
+  <!--
+    Repo-root MSBuild props applied to every csproj automatically.
+    Authored S39 TASK-3908 (2026-05-23).
+
+    Deduplicates Nullable + ImplicitUsings that were previously set
+    on every csproj individually. Adds the warn-as-error default
+    (false at root; opted in per-project by TASK-3909 below).
+    Individual csprojs can still override.
+  -->
+
+  <PropertyGroup>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <!--
+      Warn-as-error default = OFF. Production csprojs opt in by setting
+      <TreatWarningsAsErrors>true</TreatWarningsAsErrors> in their own
+      project file (S39 TASK-3909). Test projects + tooling + mock
+      services intentionally stay off because they carry intentional
+      [Obsolete] usage warnings (CS0618) from validating deprecated
+      APIs that are still in the surviving call set.
+    -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+</Project>
