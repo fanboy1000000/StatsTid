@@ -69,6 +69,7 @@ builder.Services.AddSingleton<IAuditProjectionMapperRegistry, AuditProjectionMap
 builder.Services.AddSingleton<ConfigResolutionService>();
 builder.Services.AddSingleton<ProfileAlignmentValidator>();
 builder.Services.AddSingleton<ProjectionBackfillService>();
+builder.Services.AddSingleton<AuditProjectionBackfillService>();
 
 var useDbAuth = builder.Configuration.GetValue<bool>("Auth:UseDatabase", false);
 
@@ -137,6 +138,24 @@ using (var scope = app.Services.CreateScope())
         "Projection backfill on startup: scanned={Scanned}, time inserted={InsertedTime}, absences inserted={InsertedAbsences}, conflicts={Conflicts}, fallback warnings={Warnings}",
         result.Scanned, result.InsertedTime, result.InsertedAbsences,
         result.ConflictsTime + result.ConflictsAbsences, result.FallbackWarnings);
+}
+
+// ── S43 / ADR-026 D7 audit projection backfill (single source of truth) ──
+// Unconditional invocation per S27 precedent (no row-count gate; Step 0b
+// cycle 1 BLOCKER B2 absorption — a row-count gate would prevent S44's
+// newly-mappable events from backfilling once their mappers land).
+// Idempotent via AuditProjectionRepository's ON CONFLICT (event_id) DO NOTHING.
+// Sub-Sprint 1 (S43) has no concrete mappers — backfill counters report
+// all events as `NoMapper`; Sub-Sprint 2 mapper landings populate
+// progressively on subsequent restarts.
+using (var scope = app.Services.CreateScope())
+{
+    var auditBackfill = scope.ServiceProvider.GetRequiredService<AuditProjectionBackfillService>();
+    var result = await auditBackfill.RunAsync();
+    app.Logger.LogInformation(
+        "Audit projection backfill on startup: scanned={Scanned}, inserted={Inserted}, conflicts={Conflicts}, noMapper={NoMapper}, preS22Skipped={PreS22Skipped}, unknown={Unknown}, errors={Errors}",
+        result.Scanned, result.Inserted, result.Conflicts, result.NoMapper,
+        result.PreS22Skipped, result.UnknownEventTypes, result.DeserializationErrors);
 }
 
 // ── Middleware ──

@@ -53,7 +53,10 @@ public sealed class AuditProjectionRepository
     /// and absorbs any double-emit at the endpoint layer without surfacing
     /// PostgresException 23505 to the caller.
     /// </summary>
-    public async Task InsertAsync(
+    /// <returns>1 when the row was inserted; 0 when ON CONFLICT short-circuited
+    /// (duplicate event_id). Callers use this to distinguish first-write from
+    /// replay/conflict cases.</returns>
+    public async Task<int> InsertAsync(
         NpgsqlConnection conn,
         NpgsqlTransaction tx,
         Guid eventId,
@@ -86,7 +89,7 @@ public sealed class AuditProjectionRepository
         cmd.Parameters.AddWithValue("occurredAt", ctx.OccurredAt);
         cmd.Parameters.AddWithValue("correlationId", (object?)ctx.CorrelationId ?? DBNull.Value);
         cmd.Parameters.Add(new NpgsqlParameter("details", NpgsqlDbType.Jsonb) { Value = rowData.DetailsJson });
-        await cmd.ExecuteNonQueryAsync(ct);
+        return await cmd.ExecuteNonQueryAsync(ct);
     }
 
     /// <summary>

@@ -30,4 +30,14 @@ public interface IAuditProjectionMapperRegistry
     /// concrete type is <see cref="IAuditProjectionMapper{TEvent}"/> with
     /// <c>TEvent = eventType</c>.</returns>
     object? GetMapperFor(Type eventType);
+
+    /// <summary>
+    /// Non-generic dispatch helper — resolves the mapper for
+    /// <c>@event.GetType()</c> and invokes <c>Map</c>, returning the
+    /// projection row data or <c>null</c> when no mapper is registered for
+    /// that event type. Used by <c>AuditProjectionBackfillService</c> which
+    /// iterates events by stored type and can't statically resolve the
+    /// closed-generic mapper interface.
+    /// </summary>
+    AuditProjectionRowData? TryMap(object @event, AuditProjectionContext context);
 }

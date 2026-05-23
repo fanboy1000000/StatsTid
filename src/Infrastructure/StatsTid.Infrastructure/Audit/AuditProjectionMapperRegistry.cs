@@ -1,4 +1,5 @@
-using Microsoft.Extensions.DependencyInjection;
+using System.Collections.Concurrent;
+using System.Reflection;
 using StatsTid.SharedKernel.Audit;
 
 namespace StatsTid.Infrastructure.Audit;
@@ -16,10 +17,18 @@ namespace StatsTid.Infrastructure.Audit;
 /// cleanup discipline (RuleEngine.Api references SharedKernel without
 /// pulling DI packages).
 /// </para>
+///
+/// <para>
+/// <see cref="TryMap"/> resolves the mapper for the runtime event type and
+/// invokes <c>Map</c> via cached <see cref="MethodInfo"/> reflection so
+/// dispatch cost stays bounded across the backfill loop (one MethodInfo
+/// lookup per distinct event type, not per row).
+/// </para>
 /// </summary>
 public sealed class AuditProjectionMapperRegistry : IAuditProjectionMapperRegistry
 {
     private readonly IServiceProvider _serviceProvider;
+    private readonly ConcurrentDictionary<Type, MethodInfo?> _mapMethodCache = new();
 
     public AuditProjectionMapperRegistry(IServiceProvider serviceProvider)
     {
@@ -30,5 +39,19 @@ public sealed class AuditProjectionMapperRegistry : IAuditProjectionMapperRegist
     {
         var mapperType = typeof(IAuditProjectionMapper<>).MakeGenericType(eventType);
         return _serviceProvider.GetService(mapperType);
+    }
+
+    public AuditProjectionRowData? TryMap(object @event, AuditProjectionContext context)
+    {
+        ArgumentNullException.ThrowIfNull(@event);
+        var eventType = @event.GetType();
+        var mapper = GetMapperFor(eventType);
+        if (mapper is null) return null;
+
+        var mapMethod = _mapMethodCache.GetOrAdd(eventType, t =>
+            typeof(IAuditProjectionMapper<>).MakeGenericType(t).GetMethod("Map"));
+        if (mapMethod is null) return null;
+
+        return (AuditProjectionRowData?)mapMethod.Invoke(mapper, new object[] { @event, context });
     }
 }
