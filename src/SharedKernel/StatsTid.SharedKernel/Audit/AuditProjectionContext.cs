@@ -13,8 +13,17 @@ namespace StatsTid.SharedKernel.Audit;
 /// <param name="CorrelationId">Correlation ID from the request scope per
 /// <c>CorrelationIdMiddleware</c>.</param>
 /// <param name="OccurredAt">Event occurrence time (from the event itself).</param>
+/// <param name="ResolvedTargetOrgId">Pre-resolved target_org_id for events
+/// where the mapper can't compute it from the event payload alone (e.g.,
+/// <c>RoleAssignmentGranted</c> needs the user's primary_org_id but the
+/// event only carries the scope org). Endpoint resolves before invoking
+/// the mapper; mapper uses this when the event payload doesn't carry the
+/// target. <c>null</c> when not applicable. Per ADR-026 D2 L134 "endpoint
+/// resolves the lookup BEFORE invoking the mapper and passes the resolved
+/// value through the Context parameter." Added at S44 / TASK-4407.</param>
 public sealed record AuditProjectionContext(
     string? ActorId,
     string? ActorPrimaryOrgId,
     Guid? CorrelationId,
-    DateTimeOffset OccurredAt);
+    DateTimeOffset OccurredAt,
+    string? ResolvedTargetOrgId = null);

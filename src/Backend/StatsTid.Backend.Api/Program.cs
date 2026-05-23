@@ -1,4 +1,5 @@
 using StatsTid.Auth;
+using StatsTid.Backend.Api.AuditMappers;
 using StatsTid.Backend.Api.Endpoints;
 using StatsTid.Backend.Api.Validators;
 using StatsTid.Infrastructure;
@@ -6,6 +7,7 @@ using StatsTid.Infrastructure.Audit;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Audit;
+using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Interfaces;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -64,6 +66,22 @@ builder.Services.AddSingleton<OvertimeBalanceRepository>();
 builder.Services.AddSingleton<OvertimePreApprovalRepository>();
 builder.Services.AddSingleton<AuditProjectionRepository>();
 builder.Services.AddSingleton<IAuditProjectionMapperRegistry, AuditProjectionMapperRegistry>();
+// S44 TASK-4407..4412 — 6 IAuditProjectionMapper<T> + 6 RegisteredAuditEventType marker pairs.
+// Mapper + marker registered together so the registry's RegisteredEventTypeNames filter
+// matches the set of mappers actually wired. Adding 6 mappers without their marker would
+// leave the backfill blind to them; adding markers without mappers would log NoMapper.
+builder.Services.AddSingleton<IAuditProjectionMapper<OrganizationCreated>, OrganizationCreatedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(OrganizationCreated), nameof(OrganizationCreated)));
+builder.Services.AddSingleton<IAuditProjectionMapper<OrganizationUpdated>, OrganizationUpdatedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(OrganizationUpdated), nameof(OrganizationUpdated)));
+builder.Services.AddSingleton<IAuditProjectionMapper<UserCreated>, UserCreatedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(UserCreated), nameof(UserCreated)));
+builder.Services.AddSingleton<IAuditProjectionMapper<UserUpdated>, UserUpdatedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(UserUpdated), nameof(UserUpdated)));
+builder.Services.AddSingleton<IAuditProjectionMapper<RoleAssignmentGranted>, RoleAssignmentGrantedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(RoleAssignmentGranted), nameof(RoleAssignmentGranted)));
+builder.Services.AddSingleton<IAuditProjectionMapper<RoleAssignmentRevoked>, RoleAssignmentRevokedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(RoleAssignmentRevoked), nameof(RoleAssignmentRevoked)));
 
 // ── Services ──
 builder.Services.AddSingleton<ConfigResolutionService>();
