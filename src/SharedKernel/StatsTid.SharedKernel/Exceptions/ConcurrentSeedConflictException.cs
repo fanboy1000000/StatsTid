@@ -38,11 +38,56 @@ namespace StatsTid.SharedKernel.Exceptions;
 /// </summary>
 public sealed class ConcurrentSeedConflictException : InvalidOperationException
 {
-    public string UserId { get; }
+    /// <summary>
+    /// The natural-key string that lost the concurrent-create race. For the original
+    /// S35 caller (<c>UserAgreementCodeRepository</c>) this is the user_id; for the
+    /// composite-key callers (S40 <c>RoleConfigOverrideRepository</c> et al.) this is
+    /// the composite key serialized as a single string (see <see cref="ResourceType"/>
+    /// for the originating table). The legacy <see cref="UserId"/> getter aliases this
+    /// for the existing S35 endpoint catch sites.
+    /// </summary>
+    public string ResourceKey { get; }
 
+    /// <summary>
+    /// Identifies which versioned-config table raised the race — e.g.
+    /// <c>"user_agreement_codes"</c> (S35) or <c>"role_config_overrides"</c> (S40).
+    /// Endpoints use this to dispatch the right log-line / response body shape.
+    /// </summary>
+    public string ResourceType { get; }
+
+    /// <summary>
+    /// Legacy alias for <see cref="ResourceKey"/> preserved for the S35
+    /// <c>UserAgreementCodeRepository</c> endpoint catch sites (AdminEndpoints
+    /// L636 + L1230). Returns the same value as <see cref="ResourceKey"/>.
+    /// </summary>
+    public string UserId => ResourceKey;
+
+    /// <summary>
+    /// S35 original constructor — assumes the resource is a <c>user_agreement_codes</c>
+    /// row keyed by user_id. Preserved unchanged for the existing AdminEndpoints
+    /// callers; new repositories should use the
+    /// <see cref="ConcurrentSeedConflictException(string, string)"/> overload.
+    /// </summary>
     public ConcurrentSeedConflictException(string userId)
         : base($"User agreement-code assignment for user_id='{userId}' lost a concurrent-create race (unique-index 23505); the live row exists. Refresh and retry.")
     {
-        UserId = userId;
+        ResourceKey = userId;
+        ResourceType = "user_agreement_codes";
+    }
+
+    /// <summary>
+    /// S40 / TASK-4003 generalized constructor — accepts an arbitrary
+    /// <paramref name="resourceType"/> (table name) + <paramref name="resourceKey"/>
+    /// (natural-key string, typically composite-keys joined with <c>'|'</c>). Used by
+    /// <c>RoleConfigOverrideRepository.SupersedeAndCreateAsync</c> on Case A 23505
+    /// races where the composite key
+    /// <c>(employment_category, agreement_code, ok_version)</c> cannot fit the
+    /// single-string user_id contract of the S35 constructor.
+    /// </summary>
+    public ConcurrentSeedConflictException(string resourceType, string resourceKey)
+        : base($"{resourceType} row for key='{resourceKey}' lost a concurrent-create race (unique-index 23505); the live row exists. Refresh and retry.")
+    {
+        ResourceKey = resourceKey;
+        ResourceType = resourceType;
     }
 }
