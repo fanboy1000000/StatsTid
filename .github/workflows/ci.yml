@@ -60,12 +60,28 @@ jobs:
       - name: Run regression tests
         run: dotnet test tests/StatsTid.Tests.Regression --no-build -c Release --logger "trx"
 
+      - name: Collect coverage (baseline-recording only — no ≥X% gate this sprint)
+        run: |
+          dotnet test tests/StatsTid.Tests.Unit \
+            --no-build -c Release \
+            --collect:"XPlat Code Coverage" \
+            --settings coverlet.runsettings \
+            --results-directory TestResults/Coverage
+        continue-on-error: true  # coverage failure must not fail the build during baseline window
+
       - name: Upload test results
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: test-results
           path: '**/TestResults/*.trx'
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-cobertura
+          path: 'TestResults/Coverage/**/coverage.cobertura.xml'
 
   smoke-tests:
     name: Smoke tests (docker-compose harness)

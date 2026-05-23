@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  coverlet runsettings for StatsTid CI coverage collection.
+  Authored S39 TASK-3911 (2026-05-23).
+
+  Format: cobertura (Codecov/Cobertura-compatible XML; the de-facto
+  artifact format for cross-tool consumption).
+
+  Excludes test projects (we measure coverage OF production code, not
+  test code) and the tooling/mock dev stubs (not production surface).
+
+  NO `≥80%` gate this sprint per refinement Open Question 3 — gating
+  strategy decision deferred to post-launch when audit-visibility
+  implementation has stabilized. This file records baseline only.
+-->
+<RunSettings>
+  <DataCollectionRunSettings>
+    <DataCollectors>
+      <DataCollector friendlyName="XPlat code coverage">
+        <Configuration>
+          <Format>cobertura</Format>
+          <Exclude>[xunit*]*,[*.Tests.*]*,[ProjectionBackfill]*,[MockPayroll]*,[MockExternal]*</Exclude>
+          <ExcludeByAttribute>Obsolete,GeneratedCodeAttribute,CompilerGeneratedAttribute</ExcludeByAttribute>
+          <IncludeTestAssembly>false</IncludeTestAssembly>
+          <SingleHit>false</SingleHit>
+          <UseSourceLink>true</UseSourceLink>
+        </Configuration>
+      </DataCollector>
+    </DataCollectors>
+  </DataCollectionRunSettings>
+</RunSettings>

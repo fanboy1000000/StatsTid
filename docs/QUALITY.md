@@ -75,3 +75,30 @@ Captured at S39 TASK-3908.1 (2026-05-23) via `dotnet build StatsTid.sln -c Relea
 | MockPayroll, MockExternal (excluded — docker/mock-* dev stubs) | 0 | clean |
 
 **Outcome for TASK-3909**: 7 of 8 production csprojs land strict (`<TreatWarningsAsErrors>true</TreatWarningsAsErrors>`) immediately; **Payroll opts out** with rationale documented in the csproj. Exceeds the >5-of-8 acceptance criterion comfortably.
+
+## Coverage Baseline
+
+Recorded at S39 TASK-3911 (2026-05-23) via `dotnet test tests/StatsTid.Tests.Unit --collect:"XPlat Code Coverage" --settings coverlet.runsettings`. **Unit-tests-only baseline** — Regression / Smoke / Docker-gated suites contribute additional coverage but aren't measured here (most go through HTTP integration paths against running services, which coverlet doesn't instrument across process boundaries).
+
+**No `≥X%` gate this sprint** per refinement Open Question 3 — strategy decision deferred to post-launch. Baseline-recording mode only.
+
+| Package | Line coverage | Branch coverage | Complexity |
+|---------|--------------:|----------------:|-----------:|
+| StatsTid.Auth | 89.5% | 66.7% | 89 |
+| StatsTid.RuleEngine.Api | 84.1% | 65.0% | 270 |
+| StatsTid.SharedKernel | 74.7% | 64.2% | 392 |
+| StatsTid.Orchestrator | 40.7% | 51.2% | 89 |
+| StatsTid.Integrations.Payroll | 32.3% | 29.3% | 148 |
+| StatsTid.Infrastructure | 24.0% | 7.8% | 324 |
+| StatsTid.Backend.Api | 0.5% | 18.6% | 211 |
+| **Overall (Unit only)** | **18.78%** | **42.59%** | — |
+
+**Reading the numbers honestly**:
+- High Unit coverage for Auth, RuleEngine, SharedKernel reflects that those domains are designed as pure functions or have heavy unit-test surface
+- Low Unit coverage for Backend.Api, Infrastructure reflects that they're integration-tested (Regression suite + Docker-gated D-tests), not unit-tested — coverlet doesn't cross the test-host boundary
+- True effective coverage is significantly higher than 18.78% once Regression + Docker tests are factored in; capturing that requires a more elaborate coverlet config (out of scope for baseline-recording)
+
+**Future gating strategy options** (decision deferred to post-launch sprint):
+- (a) "no regression below baseline per assembly" — current default lean
+- (b) "ratchet upward N% per sprint" — best long-term, more overhead
+- (c) "hard 80% blanket" — would require excluding Backend.Api + Infrastructure (they need integration-test coverage, not unit)
