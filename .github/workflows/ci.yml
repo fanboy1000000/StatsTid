@@ -143,3 +143,7 @@ jobs:
       - name: Build frontend
         run: npm run build
         working-directory: frontend
+
+      - name: Run vitest
+        run: npm run test
+        working-directory: frontend
