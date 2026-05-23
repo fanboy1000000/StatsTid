@@ -7,6 +7,38 @@ on:
     branches: [master]
 
 jobs:
+  lizard:
+    name: Cyclomatic complexity report (lizard)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install lizard via pipx
+        run: pipx install lizard
+
+      - name: Run lizard on production C# (report-only, threshold 15)
+        # S39 TASK-3912: report-only baseline. Threshold 15 chosen because the Rule Engine
+        # has legitimate switch-over-enum patterns that exceed CCN 10 per ADR-002 purity.
+        # `--warnings_only` prints only methods exceeding the threshold; exit code is 0 even
+        # when warnings are emitted (controlled by absence of -W).  We DO NOT pass `--CCN 15
+        # -W` (which exits non-zero) — gating-vs-baseline decision deferred to post-launch.
+        run: |
+          set +e
+          lizard src/ -l cs -C 15 --warnings_only | tee lizard-report.txt
+          echo "Lizard complexity scan complete (report-only; exit code ignored)."
+          exit 0
+
+      - name: Upload lizard report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lizard-ccn-report
+          path: lizard-report.txt
+
   gitleaks:
     name: Secret scan (gitleaks)
     runs-on: ubuntu-latest
