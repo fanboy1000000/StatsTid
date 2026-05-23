@@ -1856,3 +1856,82 @@ BEGIN
     -- guard for repair idempotency).
 END
 $$;
+
+-- =========================================================================
+-- S40 / ADR-024 D1 + D2 — role_config_overrides table (role-within-agreement
+--   layer between agreement_configs and position_override_configs in the
+--   ConfigResolutionService chain — S41 cutover wires it up). 5th versioned-
+--   config table after WTM (S29) / EntitlementConfig (S30) /
+--   EmployeeProfile (S31) / UserAgreementCode (S34).
+--
+-- Schema per ADR-024 L38: 6 boolean disablers + tri-state
+-- merarbejde_compensation_right (D2) + 4 quantitative nullable overrides.
+-- Composite natural key (employment_category, agreement_code, ok_version).
+--
+-- Audit columns follow agreement_config_audit pattern (actor_id, actor_role,
+-- timestamp) at init.sql:1116-1125. Version-transition columns per ADR-019 D8.
+-- =========================================================================
+
+CREATE TABLE IF NOT EXISTS role_config_overrides (
+    override_id              UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    employment_category      TEXT         NOT NULL,
+    agreement_code           TEXT         NOT NULL,
+    ok_version               TEXT         NOT NULL,
+    effective_from           DATE         NOT NULL DEFAULT '0001-01-01',
+    effective_to             DATE         NULL,   -- end-exclusive; NULL = open
+    version                  BIGINT       NOT NULL DEFAULT 1,
+    -- D2 tri-state
+    merarbejde_compensation_right TEXT    NULL CHECK (merarbejde_compensation_right IN ('CONTRACTUAL', 'DISCRETIONARY', 'NONE')),
+    -- 6 Boolean disablers per ADR-024 L38 (NULL = inherit from agreement_configs)
+    has_merarbejde           BOOLEAN      NULL,
+    has_overtime             BOOLEAN      NULL,
+    has_evening_supplement   BOOLEAN      NULL,
+    has_night_supplement     BOOLEAN      NULL,
+    has_weekend_supplement   BOOLEAN      NULL,
+    has_holiday_supplement   BOOLEAN      NULL,
+    -- Quantitative nullable overrides per ADR-024 L38 (NULL = inherit from agreement_configs)
+    -- Explicit precision per S27 Step 7a cycle-2 lossy-NUMERIC absorption.
+    max_flex_balance         NUMERIC(7,2) NULL,
+    flex_carryover_max       NUMERIC(7,2) NULL,
+    norm_period_weeks        INT          NULL,
+    weekly_norm_hours        NUMERIC(5,2) NULL,
+    -- Audit metadata
+    created_at               TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    created_by               TEXT         NOT NULL,
+    created_by_role          TEXT         NOT NULL
+);
+
+-- Partial-unique-index: only one ACTIVE row per natural key (D2.1 pattern from S21).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_role_config_overrides_live
+    ON role_config_overrides (employment_category, agreement_code, ok_version)
+    WHERE effective_to IS NULL;
+
+-- History-unique-index: one row per natural key per effective_from
+-- (ADR-021 D3 conflict-target pattern).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_role_config_overrides_history
+    ON role_config_overrides (employment_category, agreement_code, ok_version, effective_from);
+
+-- Audit table mirrors agreement_config_audit shape + ADR-019 D8 version-transition columns.
+CREATE TABLE IF NOT EXISTS role_config_override_audit (
+    audit_id                 BIGSERIAL    PRIMARY KEY,
+    override_id              UUID         NOT NULL REFERENCES role_config_overrides(override_id),
+    action                   TEXT         NOT NULL CHECK (action IN ('CREATED', 'UPDATED', 'SUPERSEDED', 'SOFT_DELETED')),
+    version_before           BIGINT       NULL,  -- per ADR-019 D8
+    version_after            BIGINT       NULL,
+    previous_data            JSONB        NULL,
+    new_data                 JSONB        NULL,
+    actor_id                 TEXT         NOT NULL,
+    actor_role               TEXT         NOT NULL,
+    timestamp                TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_role_config_override_audit_override
+    ON role_config_override_audit(override_id);
+
+-- Ledger entry for s40-d1.
+DO $$
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s40-d1-role-config-overrides', 'ADR-024 D1 + D2: role-within-agreement layer + tri-state MerarbejdeCompensationRight + audit')
+    ON CONFLICT (migration_id) DO NOTHING;
+END
+$$;
