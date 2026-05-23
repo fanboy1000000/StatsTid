@@ -1935,3 +1935,49 @@ BEGIN
     ON CONFLICT (migration_id) DO NOTHING;
 END
 $$;
+
+-- =========================================================================
+-- S40 / ADR-024 D7 — overtime_pre_approvals extension + overtime_authorization_audit.
+-- Adds 4 columns to overtime_pre_approvals (S17 introduction at L1504) and
+-- creates a new companion audit table. Per ADR-024 D7 L211-216:
+--   - authorization_mode CHECK ('PRIOR_APPROVAL', 'POST_HOC_NECESSITY')
+--   - necessity_reason (required when mode=POST_HOC_NECESSITY at endpoint layer)
+--   - acknowledged_at + acknowledged_by (for post-hoc necessity acknowledgments)
+-- New endpoint POST /api/overtime-pre-approvals/{id}/acknowledge-necessity
+-- lands in S41 cutover; S40 ships schema only.
+--
+-- FK target verified: overtime_pre_approvals(id) per init.sql:1504-1515
+-- (Step 0b cycle 1 absorption — earlier draft incorrectly used pre_approval_id).
+-- Audit shape follows agreement_config_audit pattern at init.sql:1116-1125.
+-- =========================================================================
+
+-- Idempotent ALTER for the existing overtime_pre_approvals table.
+ALTER TABLE overtime_pre_approvals
+    ADD COLUMN IF NOT EXISTS authorization_mode TEXT NOT NULL DEFAULT 'PRIOR_APPROVAL' CHECK (authorization_mode IN ('PRIOR_APPROVAL', 'POST_HOC_NECESSITY')),
+    ADD COLUMN IF NOT EXISTS necessity_reason TEXT NULL,
+    ADD COLUMN IF NOT EXISTS acknowledged_at TIMESTAMPTZ NULL,
+    ADD COLUMN IF NOT EXISTS acknowledged_by TEXT NULL;
+
+CREATE TABLE IF NOT EXISTS overtime_authorization_audit (
+    audit_id                 BIGSERIAL    PRIMARY KEY,
+    pre_approval_id          UUID         NOT NULL REFERENCES overtime_pre_approvals(id),
+    action                   TEXT         NOT NULL CHECK (action IN ('CREATED', 'UPDATED', 'NECESSITY_ACKNOWLEDGED')),
+    version_before           BIGINT       NULL,
+    version_after            BIGINT       NULL,
+    previous_data            JSONB        NULL,
+    new_data                 JSONB        NULL,
+    actor_id                 TEXT         NOT NULL,
+    actor_role               TEXT         NOT NULL,
+    timestamp                TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_overtime_authorization_audit_pre_approval
+    ON overtime_authorization_audit(pre_approval_id);
+
+-- Ledger entry for s40-d7.
+DO $$
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s40-d7-overtime-authorization-extension', 'ADR-024 D7: overtime_pre_approvals authorization_mode + necessity acknowledgment columns + audit table')
+    ON CONFLICT (migration_id) DO NOTHING;
+END
+$$;
