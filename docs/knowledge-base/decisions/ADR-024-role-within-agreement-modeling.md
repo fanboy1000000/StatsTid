@@ -432,3 +432,108 @@ This amendment is itself the smoke-alarm response artifact — preserved here at
 4. **S41 refinement cycle 1** (3-4 architectural BLOCKERs surfacing this amendment) → user adjudication: amendment authorship via S41a
 
 Lesson recorded: **dense ADR text requires line-by-line reading against the codebase BEFORE refinement drafting; ADR-author intent statements can mis-identify codebase surfaces (Seam A) or assume signatures that don't exist (Seam C) or ascribe capabilities to pure functions (Seam B) — the refinement process catches these but only when both lenses run with codebase-grounding criteria.**
+
+---
+
+## Amendment 2026-05-23 — Cross-Process Boundary + Tx Envelope (S42a)
+
+**Why this amendment exists**: the S41a 1st amendment settled 4 cutover seams (A: rule consumer; B: PCS event-emit; C: ResolveAsync signature; D: employment_category determinism gap). S42 refinement cycle 1 immediately surfaced 3 NEW seams the 1st amendment hadn't covered — most importantly **the cross-process HTTP boundary between Backend.Api and RuleEngine.Api**, which silently discards the S41a Seam A merge. Per smoke-alarm discipline (5th cycle of same-area ADR-024 work) + user adjudication 2026-05-23, this 2nd amendment settles the 3 new seams explicitly.
+
+The 3 new seams + decisions:
+
+### Seam E — Rule-engine HTTP boundary doesn't carry merged config
+
+**The mismatch**: PCS calls `/api/rules/evaluate` with body `{ruleId, profile, entries, periodStart, periodEnd}` per `EvaluateRequest.cs:5`. `RuleEngine.Api.RuleRegistry` at `RuleRegistry.cs:211, 220` then loads the agreement config via STATIC `AgreementConfigProvider.GetConfig(agreementCode, okVersion)`. Backend.Api's `ConfigResolutionService.ResolveAsync` merge — including the new dated overload Seam C added — therefore never reaches OvertimeRule's execution context. The S41a Seam A premise ("OvertimeRule's `if (HasMerarbejde && HasOvertime)` short-circuit suppresses MERARBEJDE emission via merged HasMerarbejde=false") is broken because the merge is lost at the HTTP boundary.
+
+**Amendment decision**: extend `EvaluateRequest` with an optional `MergedConfig: AgreementRuleConfig?` field. When supplied by the caller, `RuleRegistry` uses the supplied config instead of `AgreementConfigProvider.GetConfig(...)`. When null, falls back to `AgreementConfigProvider.GetConfig(...)` (backward compat for any direct-test or admin-debug invocations that haven't pre-merged).
+
+Backend.Api PCS path:
+1. `ConfigResolutionService.ResolveAsync` (dated overload, Seam C) returns merged `AgreementRuleConfig` with role-override layer applied
+2. PCS includes the merged config in `EvaluateRequest.MergedConfig`
+3. RuleEngine.Api consumes the supplied config; OvertimeRule's existing short-circuit sees `HasMerarbejde=false` for NONE/DISCRETIONARY → no MERARBEJDE wage-line emission
+4. Backward compat: any caller passing `MergedConfig: null` (admin debug endpoints, direct test invocations) sees existing static-config behavior
+
+**Architectural rationale**: keeps `RoleConfigOverrideRepository` DI in Backend.Api + Payroll.Integrations only; RuleEngine.Api stays as a stateless calculator that operates on the config its caller provides. Preserves the Backend-computes-RuleEngine-executes division S20 established. Alternative considered + rejected: move `RoleConfigOverrideRepository` to RuleEngine.Api project — more invasive cross-project surface; violates the existing division of labor; requires duplicating DI registration across both Program.cs files.
+
+**Consequences for S43 implementation**:
+- TASK extends `EvaluateRequest` contract (RuleEngine.Api `Contracts/EvaluateRequest.cs`) with the new `MergedConfig` property
+- TASK modifies `RuleRegistry` to check `MergedConfig` first; falls back to `AgreementConfigProvider.GetConfig(...)` when null
+- TASK modifies PCS to populate `EvaluateRequest.MergedConfig` from the dated `ConfigResolutionService.ResolveAsync` result
+- Backward compat test: existing rule-engine HTTP callers that don't supply `MergedConfig` see no behavior change
+
+### Seam F — Tx envelope vs EmitManifestAsync degraded-audit pattern
+
+**The mismatch**: S41a Seam B said *"CalculateAsync opens a tx envelope; emits pending DISCRETIONARY events via `_outboxEnqueue.EnqueueAsync(conn, tx, ...)` per ADR-018 D3"*. But `EmitManifestAsync` at PCS.cs:949-1033 deliberately opens its OWN connection at L990 and uses two-independent-try/catch degraded-audit semantic returning `AuditState.EventOnly / ProjectionOnly / BothFailed`. The in-method docs at L943-947 explicitly document the degraded-audit pattern as load-bearing per ADR-016 D10 + S20 Step 7a findings. Wrapping CalculateAsync (which calls EmitManifestAsync) in a tx loses the degraded-audit recovery property — a transient projection-insert failure would now roll back the manifest event + the DISCRETIONARY emits, instead of degrading audit-state and preserving manifest persistence.
+
+**Amendment decision**: keep `EmitManifestAsync` self-tx-managed (preserves degraded-audit recovery per ADR-016 D10 + S20). PCS opens a SEPARATE tx solely for DISCRETIONARY event emission — **one tx per segment that emits a DISCRETIONARY event**. Manifest emit + DISCRETIONARY emits land in SEPARATE atomic boundaries.
+
+**Trade-off accepted**: cross-manifest-and-discretionary atomicity is lost — a manifest could succeed (possibly in degraded-audit state) while a DISCRETIONARY emit rolls back independently, or vice versa. The admin would still see the audit-trail entry (per Seam G's `compensation_choice_audit` table, which writes in the same per-segment tx as the DISCRETIONARY emit). The trade-off favors preserving the existing degraded-audit recovery semantic over a synthetic atomicity that the architecture deliberately didn't bind.
+
+**Architectural rationale**: degraded-audit is intentionally degraded-but-recoverable per ADR-016 D10 + S20 Step 7a discussion; conflating it with the DISCRETIONARY emit creates a forced-coupling the existing architecture deliberately avoided. The DISCRETIONARY semantic is "admin needs to act on this entry" — a missed DISCRETIONARY-event-emit-but-successful-manifest is a recoverable state (admin can manually re-trigger from `compensation_choice_audit`). A successful-event-but-failed-manifest is also recoverable (the manifest replay path re-derives + re-emits).
+
+**Consequences for S43 implementation**:
+- PCS opens `NpgsqlConnection` + `BeginTransactionAsync` ONLY around the DISCRETIONARY event emit + the new `compensation_choice_audit` INSERT (Seam G below) — NOT around EmitManifestAsync
+- Tx is per-segment (loop body level), not per-calculation
+- Failure semantic: if the per-segment tx fails, just that segment's DISCRETIONARY event + audit entry don't land; manifest emit + payroll-line construction continue unaffected
+- Test fixture: mock IOutboxEnqueue to verify per-segment tx isolation
+
+### Seam G — Audit-line entry contract: NEW compensation_choice_audit table
+
+**The mismatch**: S41a amendment L344-345 mandated audit-line entries `compensation_choice: 'DISCRETIONARY_PENDING_ADMIN'` and `compensation_choice: 'NONE_NO_ENTITLEMENT'` for visibility, but didn't specify WHERE these entries live. `PayrollExportLine` has no `compensation_choice` field. The existing `audit_log` table is general-purpose request-level auditing, not per-segment-per-employee semantic auditing.
+
+**Amendment decision**: new dedicated table `compensation_choice_audit`:
+
+```sql
+CREATE TABLE IF NOT EXISTS compensation_choice_audit (
+    audit_id              BIGSERIAL    PRIMARY KEY,
+    employee_id           TEXT         NOT NULL,
+    date                  DATE         NOT NULL,
+    segment_id            UUID         NULL,
+    employment_category   TEXT         NOT NULL,
+    compensation_choice   TEXT         NOT NULL CHECK (compensation_choice IN ('CONTRACTUAL_NORMAL', 'DISCRETIONARY_PENDING_ADMIN', 'NONE_NO_ENTITLEMENT')),
+    merarbejde_hours      NUMERIC(7,2) NULL,
+    manifest_id           UUID         NULL REFERENCES segment_manifests(manifest_id),
+    recorded_at           TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_compensation_choice_audit_employee_date
+    ON compensation_choice_audit (employee_id, date);
+CREATE INDEX IF NOT EXISTS idx_compensation_choice_audit_choice
+    ON compensation_choice_audit (compensation_choice);
+```
+
+Written by PCS in the SAME per-segment tx as the DISCRETIONARY event emit (per Seam F scope). For NONE segments: write `NONE_NO_ENTITLEMENT` row (no event emit). For DISCRETIONARY segments: write `DISCRETIONARY_PENDING_ADMIN` row + emit `MerarbejdeDiscretionary` event in the same tx. For CONTRACTUAL segments with merarbejde hours: optionally write `CONTRACTUAL_NORMAL` row (S43 decision: cosmetic-only audit — implementer chooses based on storage/visibility trade-off).
+
+**Architectural rationale**: dedicated table provides the admin-visible audit trail per ADR-024 D2 L64 ("Admin UI surfaces a one-off-payment trigger") without polluting `PayrollExportLine` with role-stratum metadata that doesn't belong on the line item. The admin UI (post-launch backlog per S41a D2 emit-only deferral) queries `compensation_choice_audit WHERE compensation_choice = 'DISCRETIONARY_PENDING_ADMIN' AND admin_acknowledged_at IS NULL` to surface pending entries.
+
+**Consequences for S43 implementation**:
+- Schema migration ledger entry `s43-d2-compensation-choice-audit` lands at S43 sprint open (TASK-4301 equivalent)
+- New `CompensationChoiceAuditRepository` with `InsertAsync(conn, tx, ...)` overload matching the Pattern B audit-bearing shape
+- PCS writes audit entry in Seam F tx; uses repository's `(conn, tx)` overload
+- Schema migration test verifies CHECK constraint enforcement
+
+### Sprint sequencing post-2nd-amendment
+
+- **S43 = ADR-024 D1+D2 cutover** (re-drafted refinement against doubly-amended ADR). ~9-11 tasks given the added Seam E + Seam G surfaces:
+  - TASK-4301 `compensation_choice_audit` schema + repository (Seam G)
+  - TASK-4302 `EvaluateRequest.MergedConfig` extension + RuleRegistry conditional consumption (Seam E)
+  - TASK-4303 `ConfigResolutionService` 4-layer extension + dated overload (Seams A + C from S41a)
+  - TASK-4304 PCS DI + per-segment tx for DISCRETIONARY emit + audit-write (Seam F)
+  - TASK-4305 RoleConfigOverride admin endpoint suite
+  - TASK-4306 Frontend RoleConfigOverrideEditor
+  - TASK-4307 Source-register annotations (deferred from S40)
+  - TASK-4308 Phase E test parser regex extension
+  - TASK-4309 sprint close
+- **S44 = ADR-024 D7+D6+Bug #4** (was S43 pre-2nd-amendment)
+- **S45 = ADR-024 Sub-Sprint 3** (D-test matrix + Phase E completion; was S44)
+
+### Cycle-trail discipline observation
+
+This is now the **6th sprint slot on ADR-024 work** (S38 design + S40 schema + S41 abandoned-refinement + S41a 1st amendment + S42 abandoned-refinement + S42a 2nd amendment). **If S43 refinement cycle 1 surfaces ANOTHER architectural seam, that's cycle 7 of same-area thrash — the discipline calls for ROLL BACK of ADR-024 D1+D2 cutover entirely**, declaring it under-specified-for-current-architecture and deferring chefkonsulent merarbejde-loss correction to post-launch. The S35 AC=AFSPADSERING bug-fix baseline + S40 dormant plumbing would remain in place; chefkonsulent rule-stratum work would await a separate architectural sprint focused on the cross-process config-delivery semantic.
+
+User-adjudication call at that point.
+
+### Lesson recorded (extends the S41a lesson)
+
+S41a's lesson was *"dense ADR text requires line-by-line reading against the codebase BEFORE refinement drafting"*. S42a extends that lesson:
+
+**Cross-process surfaces are doubly-easy to miss**: ADR-024's in-body D2 text said "OvertimeRule reads tri-state via ConfigResolutionService" but didn't acknowledge that OvertimeRule runs in a SEPARATE process (RuleEngine.Api) reached via HTTP, not via direct DI. The S41a amendment fixed the rule-name (OvertimeGovernanceRule → OvertimeRule) but didn't notice the cross-process boundary because both lenses were grounding in the rule code itself, not the HTTP contract that connects PCS to it. Refinement Step 4 cycle 1 caught it because Codex traced the full PCS → HTTP → RuleRegistry → rule path. **Lesson**: when settling cross-component seams, both lenses must verify the COMPLETE call path including HTTP/IPC boundaries, not just the endpoint method signatures.
