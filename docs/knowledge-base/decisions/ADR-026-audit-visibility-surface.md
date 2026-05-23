@@ -191,7 +191,19 @@ Events NOT audit-relevant (no projection; reduces storage):
 - `IntegrationDeliveryTracked` (S5) — outbox delivery telemetry
 - `SegmentManifestCreated` (S20) — PCS internals
 - `OvertimeBalanceAdjusted` / `EntitlementBalanceAdjusted` (S15/S17) — balance projections; future revisit
-- `EmploymentProfile*` (S31/S33) — versioned config; pre-existing audit captured by upstream user_agreement_code lifecycle events
+- ~~`EmploymentProfile*` (S31/S33) — versioned config; pre-existing audit captured by upstream user_agreement_code lifecycle events~~
+
+> **ADR-026 clarification 2026-05-23 (S44):** The bullet above (originally listing `EmploymentProfile*` as NOT audit-relevant) is **incorrect** and is struck through here.
+>
+> Two errors in the original prose:
+>
+> 1. **Wrong event class name** — there are no `EmploymentProfile*` events in EventSerializer. The actual versioned-config events authored at S31+S33 are `EmployeeProfile*` (Created/Updated/Superseded/SoftDeleted). The prose was a draft-time typo.
+>
+> 2. **Wrong factual claim** — `EmployeeProfile*` events carry `weekly_norm_hours`, `part_time_fraction`, and `position`, which are NOT present in `user_agreement_code` lifecycle events (those carry `agreement_code` + `ok_version` + `effective_from`). A manager modifying an employee's contract hours leaves an audit trail in `EmployeeProfileUpdated` but NOT in any `UserAgreementCode*` event. The "covered by upstream user_agreement_code" claim is false.
+>
+> **Authoritative reading**: L182 INCLUDE remains as written. The 4 `EmployeeProfile*` events ARE audit-relevant (TENANT_TARGETED; target_org_id resolved via `employee → users.primary_org_id`; resource_id = `employee_id`; details = profile field deltas). Mappers land in S44b/c (HR-sensitive payload-redaction review required at S44c refinement).
+>
+> This clarification preserves ADR-026's `ACCEPTED` status. Follows the post-ACCEPTED clarification-block pattern established by the pre-rule projection disclaimer (commit `a0e30ed` 2026-05-23). Bound to architectural finding at S44 Step 4 cycle 1 dual-lens consensus (Codex + Reviewer Agent both flagged L182/L194 contradiction); resolution committed at S44 / TASK-4402 / commit [this commit].
 
 **S40 mapping authorship**: counted from inventory above = **~53 mappers** (11 new + ~42 retrofit). Each mapper is ~10-line file per S27 projection-mapper precedent. Total S40 LOC for mappers ≈ 530 lines. (Cycle-1 understated as ~24; cycle-1 absorption corrected to ~34; S38b cycle-2 absorption fully recounted per Reviewer W-new-1.)
 
