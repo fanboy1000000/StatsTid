@@ -90,9 +90,9 @@ if (target == "time_absences" || target == "all")
 
 if (target == "audit_projection" || target == "all")
 {
-    // Minimal DI for audit backfill — Sub-Sprint 2 adds mapper registrations
-    // alongside the endpoint cutover. For Sub-Sprint 1 the registry resolves
-    // to nothing, so backfill counters all roll into NoMapper.
+    // Minimal DI for audit backfill — Sub-Sprint 2 adds RegisteredAuditEventType
+    // markers + IAuditProjectionMapper<T> pairs alongside the endpoint cutover.
+    // For Sub-Sprint 1 the marker set is empty → backfill fast-paths (no scan).
     var services = new ServiceCollection();
     services.AddLogging(b => b.AddSimpleConsole());
     services.AddSingleton(dbFactory);

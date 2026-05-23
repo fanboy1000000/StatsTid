@@ -3,10 +3,14 @@
 | Field | Value |
 |-------|-------|
 | **Sprint** | 43 |
-| **Status** | provisional (sprint-open) |
+| **Status** | complete |
 | **Start Date** | 2026-05-23 |
-| **End Date** | _pending_ |
+| **End Date** | 2026-05-23 |
 | **Sprint-start commit base** | `b2519ea` (S42a close) |
+| **Sprint-close commit** | _this commit_ |
+| **Build Verified** | 0 errors / 0 net-new warnings |
+| **Test Verified** | 7 S43 Phase E tests pass first run (6 net new + 1 sibling); 875 total |
+| **Orchestrator Approved** | yes — 2026-05-23 |
 | **Sprint type** | Implementation (plumbing only — schema + repo + interface + registry + backfill + catalog + 2 cutover-independent Phase E tests + 1 legacy-migration safety test) |
 | **Phase** | 4e (Phase E audit visibility) |
 | **Plan** | `.claude/plans/PLAN-s43.md` |
@@ -40,16 +44,29 @@ The new caller-census discipline (`feedback_cross_process_caller_census_required
 
 ## Tasks
 
-| Task | Status | Owner | Notes |
-|------|--------|-------|-------|
-| TASK-4300 | in_progress | Orchestrator | Sprint open (this commit) |
-| TASK-4301 | pending | Orchestrator | `audit_projection` schema + 5 idx_* indexes + CHECK constraint |
-| TASK-4302 | pending | Builder | `AuditProjectionRepository` (InsertAsync + CountAsync + CountByEventIdAsync); Backend.Api DI only (Payroll deferred to S44) |
-| TASK-4303 | pending | Orchestrator | `IAuditProjectionMapper<T>` + records + `IAuditProjectionMapperRegistry` (interface in SharedKernel; impl in Infrastructure) |
-| TASK-4304 | pending | Builder | `AuditProjectionBackfillService` (S27 SSOT pattern); unconditional Backend startup hook |
-| TASK-4305 | pending | Orchestrator | `docs/operations/audit-projection-catalog.md` initial draft with locked 7-column markdown table |
-| TASK-4306 | pending | Builder | Phase E tests #2 + #5 + #6 (backfill idempotency strengthened + schema CHECK + legacy migration safety) |
-| TASK-4307 | pending | Orchestrator | Sprint close (Step 7a dual-lens + INDEX + ROADMAP + MEMORY + QUALITY re-grade) |
+| Task | Status | Commit | Notes |
+|------|--------|--------|-------|
+| TASK-4300 | complete | `bea7d75` | Sprint open (PLAN + SPRINT doc + INDEX provisional) |
+| TASK-4301 | complete | `8fd9295` | `audit_projection` schema + 5 idx_* indexes + 2 CHECK constraints |
+| TASK-4302 | complete | `911679f` | `AuditProjectionRepository`; Backend.Api DI only |
+| TASK-4303 | complete | `5db2118` | `IAuditProjectionMapper<T>` + records + Registry interface in SharedKernel; impl in Infrastructure |
+| TASK-4304 | complete | `4f92ab9` | `AuditProjectionBackfillService` mirroring S27 SSOT + unconditional Backend startup hook + tools/ProjectionBackfill --target flag |
+| TASK-4305 | complete | `795c0ca` | `docs/operations/audit-projection-catalog.md` with 53 rows + 2 TBD-with-suffix markers per Step 0b cycle 1 absorptions |
+| TASK-4306 | complete | `dca434b` | Phase E tests #2 + #5 + #6 — 6 net new Docker-gated tests passing first run |
+| TASK-4307 | complete | `e482b24` (cycle 1 absorption) + this commit | Step 7a dual-lens (0 BLOCKERs, 4 WARNINGs absorbed); INDEX + ROADMAP + MEMORY + QUALITY updates |
+
+## Step 7a Outcome
+
+Both lenses **APPROVED-WITH-WARNINGS**, 0 BLOCKERs, divergent first-cycle findings (no overlap between lenses — normal divergence pattern). All 4 WARNINGs absorbed inline in `e482b24`:
+
+- **Codex W1** (backfill full-scan) → added `RegisteredEventTypeNames` filter + `RegisteredAuditEventType` marker; empty filter = fast-path no-op
+- **Codex W2** (ADR-026 D2 signature drift) → explicit xmldoc paragraph in `IAuditProjectionMapper.cs` documenting Map vs MapToRow + DateTimeOffset vs DateTime + string vs JsonDocument
+- **Reviewer W1** (4 ADR-025 events unregistered) → catalog "Known inventory gaps" extended with explicit S44 follow-up
+- **Reviewer W2** (counter naming) → `PreS22Skipped` → `NullOutboxSkipped` (also catches post-S22 anomalies)
+
+5 NOTEs acknowledged in artifacts; 1 absorbed (project path correction); 4 deferred (cosmetic / parallels S27 / Phase 4e candidates).
+
+Step 7a artifacts: `.claude/reviews/SPRINT-43-step7a-codex.md` + `.claude/reviews/SPRINT-43-step7a-reviewer.md` with verdict + reviewed-against-commit per sprint-close-guard hook contract.
 
 ## Forward Pointers
 

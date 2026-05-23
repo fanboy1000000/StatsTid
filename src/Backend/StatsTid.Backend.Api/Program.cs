@@ -145,9 +145,10 @@ using (var scope = app.Services.CreateScope())
 // cycle 1 BLOCKER B2 absorption — a row-count gate would prevent S44's
 // newly-mappable events from backfilling once their mappers land).
 // Idempotent via AuditProjectionRepository's ON CONFLICT (event_id) DO NOTHING.
-// Sub-Sprint 1 (S43) has no concrete mappers — backfill counters report
-// all events as `NoMapper`; Sub-Sprint 2 mapper landings populate
-// progressively on subsequent restarts.
+// Sub-Sprint 1 (S43) has zero RegisteredAuditEventType markers → backfill
+// triggers the fast-path no-op exit (Step 7a cycle 1 Codex W1 absorption).
+// Sub-Sprint 2 progressively adds RegisteredAuditEventType + mapper pairs;
+// each restart picks up newly-covered events idempotently.
 using (var scope = app.Services.CreateScope())
 {
     var auditBackfill = scope.ServiceProvider.GetRequiredService<AuditProjectionBackfillService>();
