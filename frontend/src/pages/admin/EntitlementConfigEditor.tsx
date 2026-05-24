@@ -87,8 +87,8 @@ const emptyCreateForm: CreateFormState = {
   resetMonth: '1',
 }
 
-function parseIntField(value: string, fallback: number): number {
-  const parsed = Number.parseInt(value, 10)
+function parseNumericField(value: string, fallback: number): number {
+  const parsed = Number.parseFloat(value)
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
@@ -119,8 +119,8 @@ function configToEditForm(c: EntitlementConfig): EditFormState {
 
 function editFormToPatch(f: EditFormState): EntitlementConfigPatch {
   return {
-    annualQuota: parseIntField(f.annualQuota, 0),
-    carryoverMax: parseIntField(f.carryoverMax, 0),
+    annualQuota: parseNumericField(f.annualQuota, 0),
+    carryoverMax: parseNumericField(f.carryoverMax, 0),
     description: f.description.trim() ? f.description.trim() : null,
     proRateByPartTime: f.proRateByPartTime,
     isPerEpisode: f.isPerEpisode,
@@ -135,7 +135,7 @@ function createFormToRequest(f: CreateFormState): EntitlementConfigCreateRequest
     agreementCode: f.agreementCode.trim(),
     okVersion: f.okVersion.trim(),
     accrualModel: f.accrualModel,
-    resetMonth: parseIntField(f.resetMonth, 1),
+    resetMonth: parseNumericField(f.resetMonth, 1),
   }
 }
 
@@ -472,7 +472,7 @@ export function EntitlementConfigEditor() {
                     type="number"
                     required
                     min={0}
-                    step={1}
+                    step={0.01}
                     value={createForm.annualQuota}
                     onChange={setCreateField('annualQuota')}
                   />
@@ -486,7 +486,7 @@ export function EntitlementConfigEditor() {
                     id="ec-carryover"
                     type="number"
                     min={0}
-                    step={1}
+                    step={0.01}
                     value={createForm.carryoverMax}
                     onChange={setCreateField('carryoverMax')}
                   />
@@ -650,7 +650,7 @@ export function EntitlementConfigEditor() {
                     type="number"
                     required
                     min={0}
-                    step={1}
+                    step={0.01}
                     value={editForm.annualQuota}
                     onChange={setEditField('annualQuota')}
                   />
@@ -664,7 +664,7 @@ export function EntitlementConfigEditor() {
                     id="ec-edit-carryover"
                     type="number"
                     min={0}
-                    step={1}
+                    step={0.01}
                     value={editForm.carryoverMax}
                     onChange={setEditField('carryoverMax')}
                   />
