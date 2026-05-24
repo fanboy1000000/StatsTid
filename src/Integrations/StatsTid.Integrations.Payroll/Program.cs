@@ -41,6 +41,9 @@ builder.Services.AddSingleton<PayrollMappingService>();
 builder.Services.AddSingleton<PayrollExportService>();
 builder.Services.AddSingleton<PeriodCalculationService>();
 builder.Services.AddSingleton<RetroactiveCorrectionService>();
+// S45: cross-process audit projection for RetroactiveCorrectionRequested
+builder.Services.AddSingleton<AuditProjectionRepository>();
+builder.Services.AddSingleton<StatsTid.SharedKernel.Audit.IAuditProjectionMapper<StatsTid.SharedKernel.Events.RetroactiveCorrectionRequested>, StatsTid.Infrastructure.AuditMappers.RetroactiveCorrectionRequestedAuditMapper>();
 builder.Services.AddSingleton<ApprovalPeriodRepository>();
 builder.Services.AddSingleton<LocalConfigurationRepository>();
 // S21 TASK-2108 (ADR-017 D9c): hydrates BoundarySources.LocalProfileActivations on

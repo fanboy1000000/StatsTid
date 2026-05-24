@@ -176,6 +176,9 @@ builder.Services.AddSingleton<IAuditProjectionMapper<OvertimeNecessityAcknowledg
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(OvertimeNecessityAcknowledged), nameof(OvertimeNecessityAcknowledged)));
 builder.Services.AddSingleton<IAuditProjectionMapper<ConfigBugCorrected>, ConfigBugCorrectedAuditMapper>();
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(ConfigBugCorrected), nameof(ConfigBugCorrected)));
+// S45 — cross-process mapper (lives in Infrastructure, not Backend.Api)
+builder.Services.AddSingleton<IAuditProjectionMapper<RetroactiveCorrectionRequested>, StatsTid.Infrastructure.AuditMappers.RetroactiveCorrectionRequestedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(RetroactiveCorrectionRequested), nameof(RetroactiveCorrectionRequested)));
 
 // ── Services ──
 builder.Services.AddSingleton<ConfigResolutionService>();
