@@ -126,7 +126,7 @@ The future Test #1 (catalog ↔ DI registrations ↔ EventSerializer parity) par
 
 **6 rows remain deferred with TBD-* markers:**
 - 1× `TBD-cross-process-deferred` (RetroactiveCorrectionRequested)
-- 1× `TBD-defined-but-unemitted` (PayrollExportGenerated)
+- 1× `TBD-defined-but-unemitted` (PayrollExportGenerated — intentionally deferred; vestigial S22 event class in EventSerializer with zero production emit sites; harmless for backward-compat; if payroll-export audit trail is needed, gets its own future sprint with emit site + mapper)
 - 4× `TBD-adr025-implementation-pending` (InstitutionProvisioned, InstitutionDataExported, UserPiiErased, CrossTenantReportAccessed)
 
 **9 mapper-only rows** (mapper + DI exist, no endpoint emit site): LocalConfigurationChanged (legacy pre-S21), EntitlementConfigSeeded (never emitted), RoleConfigOverride×4 (ADR-024 suspended), MerarbejdeDiscretionary, OvertimeNecessityAcknowledged, ConfigBugCorrected. Endpoint cutovers ship with feature sprints.
