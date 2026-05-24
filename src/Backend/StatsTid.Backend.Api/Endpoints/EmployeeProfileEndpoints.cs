@@ -411,8 +411,9 @@ public static class EmployeeProfileEndpoints
                     // (ADR-026 D2 sync-in-tx projection write — atomic with the
                     // employee_profiles row + outbox row per ADR-018 D3/D13).
                     var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, updatedEvent, ct);
-                    var auditRow = updatedAuditMapper.Map(updatedEvent, auditCtx);
-                    await auditRepo.InsertAsync(conn, tx, updatedEvent.EventId, outboxId, updatedEvent.EventType, auditRow, auditCtx, ct);
+                    var updatedAuditCtx = auditCtx with { OccurredAt = new DateTimeOffset(updatedEvent.OccurredAt) };
+                    var auditRow = updatedAuditMapper.Map(updatedEvent, updatedAuditCtx);
+                    await auditRepo.InsertAsync(conn, tx, updatedEvent.EventId, outboxId, updatedEvent.EventType, auditRow, updatedAuditCtx, ct);
                 }
                 else
                 {
@@ -442,8 +443,9 @@ public static class EmployeeProfileEndpoints
                     // (ADR-026 D2 sync-in-tx projection write — atomic with the
                     // employee_profiles row + outbox row per ADR-018 D3/D13).
                     var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, supersededEvent, ct);
-                    var auditRow = supersededAuditMapper.Map(supersededEvent, auditCtx);
-                    await auditRepo.InsertAsync(conn, tx, supersededEvent.EventId, outboxId, supersededEvent.EventType, auditRow, auditCtx, ct);
+                    var supersededAuditCtx = auditCtx with { OccurredAt = new DateTimeOffset(supersededEvent.OccurredAt) };
+                    var auditRow = supersededAuditMapper.Map(supersededEvent, supersededAuditCtx);
+                    await auditRepo.InsertAsync(conn, tx, supersededEvent.EventId, outboxId, supersededEvent.EventType, auditRow, supersededAuditCtx, ct);
                 }
 
                 await tx.CommitAsync(ct);
