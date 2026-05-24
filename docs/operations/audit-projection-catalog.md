@@ -75,17 +75,17 @@ The future Test #1 (catalog ↔ DI registrations ↔ EventSerializer parity) par
 
 | event_type | visibility_scope | target_org_resolution | target_resource_id | details_shape | mapper_kind | sprint_landed |
 |------------|------------------|-----------------------|--------------------|---------------|-------------|---------------|
-| `OrganizationCreated` | TENANT_TARGETED | the org itself | NULL | `{org_id, org_name, parent_org_id?}` | TBD | |
-| `OrganizationUpdated` | TENANT_TARGETED | the org itself | NULL | `{org_id, before, after}` | TBD | |
-| `UserCreated` | TENANT_TARGETED | `user → users.primary_org_id` | `user_id` | `{user_id, primary_org_id, roles}` | TBD | |
-| `UserUpdated` | TENANT_TARGETED | `user → users.primary_org_id` | `user_id` | `{user_id, before, after}` | TBD | |
-| `RoleAssignmentGranted` | TENANT_TARGETED | `user → users.primary_org_id` | `user_id` | `{user_id, role, scope}` | TBD | |
-| `RoleAssignmentRevoked` | TENANT_TARGETED | `user → users.primary_org_id` | `user_id` | `{user_id, role, scope}` | TBD | |
-| `AgreementConfigCreated` | GLOBAL_TENANT_VISIBLE | NULL | `config_id` | `{config_id, agreement_code, ok_version, status}` | TBD | |
-| `AgreementConfigUpdated` | GLOBAL_TENANT_VISIBLE | NULL | `config_id` | `{config_id, before, after}` | TBD | |
-| `AgreementConfigPublished` | GLOBAL_TENANT_VISIBLE | NULL | `config_id` | `{config_id, supersedes?}` | TBD | |
-| `AgreementConfigArchived` | GLOBAL_TENANT_VISIBLE | NULL | `config_id` | `{config_id, archived_at}` | TBD | |
-| `AgreementConfigCloned` | GLOBAL_TENANT_VISIBLE | NULL | `config_id` | `{new_config_id, source_config_id}` | TBD | |
+| `OrganizationCreated` | TENANT_TARGETED | the org itself | NULL | `{org_id, org_name, parent_org_id?}` | interface | S44 `bba76aa` |
+| `OrganizationUpdated` | TENANT_TARGETED | the org itself | NULL | `{org_id, before, after}` | interface | S44 `bba76aa` |
+| `UserCreated` | TENANT_TARGETED | `user → users.primary_org_id` | `user_id` | `{user_id, primary_org_id, roles}` | interface | S44 `bba76aa` |
+| `UserUpdated` | TENANT_TARGETED | `user → users.primary_org_id` | `user_id` | `{user_id, before, after}` | interface | S44 `bba76aa` |
+| `RoleAssignmentGranted` | TENANT_TARGETED | `user → users.primary_org_id` | `user_id` | `{user_id, role, scope}` | interface | S44 `bba76aa` |
+| `RoleAssignmentRevoked` | TENANT_TARGETED | `user → users.primary_org_id` | `user_id` | `{user_id, role, scope}` | interface | S44 `bba76aa` |
+| `AgreementConfigCreated` | GLOBAL_TENANT_VISIBLE | NULL | `config_id` | `{config_id, agreement_code, ok_version}` | interface | S44b |
+| `AgreementConfigUpdated` | GLOBAL_TENANT_VISIBLE | NULL | `config_id` | `{config_id, agreement_code, ok_version}` | interface | S44b |
+| `AgreementConfigPublished` | GLOBAL_TENANT_VISIBLE | NULL | `config_id` | `{config_id, agreement_code, ok_version, archived_config_id?}` | interface | S44b |
+| `AgreementConfigArchived` | GLOBAL_TENANT_VISIBLE | NULL | `config_id` | `{config_id, agreement_code, ok_version}` | interface | S44b |
+| `AgreementConfigCloned` | GLOBAL_TENANT_VISIBLE | NULL | `config_id` | `{config_id, source_config_id, agreement_code, ok_version}` | interface | S44b |
 | `LocalConfigurationChanged` | TENANT_TARGETED | the local config's `org_id` | NULL | `{org_id, key, before, after}` | TBD | |
 | `PositionOverrideCreated` | GLOBAL_TENANT_VISIBLE | NULL | `override_id` | `{override_id, position_id, ...}` | TBD | |
 | `PositionOverrideUpdated` | GLOBAL_TENANT_VISIBLE | NULL | `override_id` | `{override_id, before, after}` | TBD | |
@@ -100,19 +100,19 @@ The future Test #1 (catalog ↔ DI registrations ↔ EventSerializer parity) par
 | `EntitlementConfigSuperseded` | GLOBAL_TENANT_VISIBLE | NULL | `config_id` | `{previous_id, new_id, effective_from}` | TBD | |
 | `EntitlementConfigSoftDeleted` | GLOBAL_TENANT_VISIBLE | NULL | `config_id` | `{deleted_at}` | TBD | |
 | `LocalAgreementProfileChanged` | TENANT_TARGETED | the profile's `org_id` | `profile_id` | `{org_id, profile_id, before, after}` | TBD | |
-| `PeriodSubmitted` | TENANT_TARGETED | `employee → users.primary_org_id` | `period_id` | `{employee_id, period_id, period_start, period_end}` | TBD | |
-| `PeriodApproved` | TENANT_TARGETED | `employee → users.primary_org_id` | `period_id` | `{employee_id, period_id, approved_by}` | TBD | |
-| `PeriodRejected` | TENANT_TARGETED | `employee → users.primary_org_id` | `period_id` | `{employee_id, period_id, rejection_reason}` | TBD | |
-| `PeriodEmployeeApproved` | TENANT_TARGETED | `employee → users.primary_org_id` | `period_id` | `{employee_id, period_id}` | TBD | |
-| `PeriodReopened` | TENANT_TARGETED | `employee → users.primary_org_id` | `period_id` | `{employee_id, period_id, reopened_by}` | TBD | |
-| `OvertimePreApprovalCreated` | TENANT_TARGETED | `employee → users.primary_org_id` | `preapproval_id` | `{employee_id, hours, period}` | TBD | |
-| `OvertimePreApprovalApproved` | TENANT_TARGETED | `employee → users.primary_org_id` | `preapproval_id` | `{preapproval_id, approved_by, approved_at}` | TBD | |
-| `OvertimePreApprovalRejected` | TENANT_TARGETED | `employee → users.primary_org_id` | `preapproval_id` | `{preapproval_id, rejected_by, rejection_reason}` | TBD | |
+| `PeriodSubmitted` | TENANT_TARGETED | `employee → users.primary_org_id` | `period_id` | `{period_id, employee_id, period_start, period_end, period_type}` | interface | S44b |
+| `PeriodApproved` | TENANT_TARGETED | `employee → users.primary_org_id` | `period_id` | `{period_id, employee_id, period_start, period_end, approved_by}` | interface | S44b |
+| `PeriodRejected` | TENANT_TARGETED | `employee → users.primary_org_id` | `period_id` | `{period_id, employee_id, period_start, period_end, rejected_by, rejection_reason}` | interface | S44b |
+| `PeriodEmployeeApproved` | TENANT_TARGETED | `employee → users.primary_org_id` | `period_id` | `{period_id, employee_id, period_start, period_end}` | interface | S44b |
+| `PeriodReopened` | TENANT_TARGETED | `employee → users.primary_org_id` | `period_id` | `{period_id, employee_id, period_start, period_end, reason}` | interface | S44b |
+| `OvertimePreApprovalCreated` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{employee_id, period_start, period_end, max_hours, status}` | interface | S44b |
+| `OvertimePreApprovalApproved` | TENANT_TARGETED | `employee → users.primary_org_id` | `preapproval_id` | `{preapproval_id, employee_id, approved_by, reason}` | interface | S44b |
+| `OvertimePreApprovalRejected` | TENANT_TARGETED | `employee → users.primary_org_id` | `preapproval_id` | `{preapproval_id, employee_id, rejected_by, reason}` | interface | S44b |
 | `RetroactiveCorrectionRequested` | TENANT_TARGETED | `employee → users.primary_org_id` | `correction_id` | `{employee_id, period, correction_type, ...}` | **TBD-cross-process-deferred** | |
 | `PayrollExportGenerated` | TENANT_TARGETED | `employee → users.primary_org_id` (one row per (export, employee) OR `target_org_id = NULL` + scope=GLOBAL_TENANT_VISIBLE — Sub-Sprint 2 picks per ADR-026 D3 L180 deferred user-decision) | export request id | `{export_id, period, employee_count, file_format}` | **TBD-defined-but-unemitted** | |
-| `UserAgreementCodeChanged` | TENANT_TARGETED | `user → users.primary_org_id` | `user_id` | `{user_id, old_agreement_code, new_agreement_code, effective_from}` | TBD | |
-| `UserAgreementCodeSeeded` | TENANT_TARGETED | `user → users.primary_org_id` | `user_id` | `{user_id, agreement_code, ok_version, effective_from}` | TBD | |
-| `UserAgreementCodeSuperseded` | TENANT_TARGETED | `user → users.primary_org_id` | `user_id` | `{previous_id, new_id, effective_from}` | TBD | |
+| `UserAgreementCodeChanged` | TENANT_TARGETED | `user → users.primary_org_id` | `user_id` | `{user_id, old_agreement_code, new_agreement_code, effective_from}` | interface | S44b |
+| `UserAgreementCodeSeeded` | TENANT_TARGETED | `user → users.primary_org_id` | `user_id` | `{user_id, agreement_code, effective_from, row_version}` | interface | S44b |
+| `UserAgreementCodeSuperseded` | TENANT_TARGETED | `user → users.primary_org_id` | `user_id` | `{predecessor_assignment_id, new_assignment_id, user_id, ...effective_dates, old/new_agreement_code, version_before/after}` | interface | S44b |
 | `EmployeeProfileCreated` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{employee_id, weekly_norm_hours, part_time_fraction, position}` | TBD | |
 | `EmployeeProfileUpdated` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{employee_id, before, after}` | TBD | |
 | `EmployeeProfileSuperseded` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{previous_id, new_id, effective_from}` | TBD | |
@@ -122,8 +122,8 @@ The future Test #1 (catalog ↔ DI registrations ↔ EventSerializer parity) par
 
 ## Known inventory gaps (Sub-Sprint 2 to resolve)
 
-- **`UserAgreementCodeSoftDeleted`** — ADR-026 D3 L181 enumerates only 3 UserAgreementCode events but `MEMORY S34` documents 4 (Changed + Seeded + Superseded + SoftDeleted). Catalog reflects ADR-026 L181 fidelity (3 rows) — Sub-Sprint 2 verifies completeness against actual EventSerializer typeofs + either adds the row OR confirms intentional omission.
-- **`OrganizationDeleted`** / **`UserDeleted`** — If org / user deletion paths exist or are added, they belong here. Verify against EventSerializer typeofs at Sub-Sprint 2 mapper authorship.
+- **`UserAgreementCodeSoftDeleted`** — RESOLVED at S44b: grep confirmed NO event class, NO EventSerializer registration, NO emit sites exist. S34 MEMORY entry was inaccurate on this point (3 UserAgreementCode events is the correct count: Changed + Seeded + Superseded). No catalog row needed.
+- **`OrganizationDeleted`** / **`UserDeleted`** — No event classes or emit sites exist. No catalog rows needed until deletion endpoints are added.
 - **4 ADR-025 events not yet implemented**: `InstitutionProvisioned`, `InstitutionDataExported`, `UserPiiErased`, `CrossTenantReportAccessed` are listed under "New events from S38 ADRs (11)" but NOT registered in `EventSerializer.cs` — ADR-025 was authored DESIGN-ONLY at S38 (no code emitted). Sub-Sprint 2 either (a) implements the endpoints that emit these events alongside their mappers OR (b) explicitly defers them to a separate sprint (catalog rows then carry `mapper_kind: TBD-adr025-implementation-pending`). Step 7a cycle 1 Reviewer W1 absorption — Phase E Test #1 (Sub-Sprint 3) will assert catalog ↔ EventSerializer parity; today, these 4 rows would fail the assertion.
 
 ## Explicitly NOT audit-relevant (per ADR-026 D3 L184-194)
