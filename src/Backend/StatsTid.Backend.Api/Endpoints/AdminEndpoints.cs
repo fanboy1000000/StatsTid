@@ -1614,7 +1614,7 @@ public static class AdminEndpoints
                 // L59). Look up the user record now to obtain it (the original
                 // assignment lookup at L1532 only carried user_id, not org).
                 var revokeOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"user-{assignmentUserId}", @event, ct);
-                var affectedUser = await userRepo.GetByIdAsync(assignmentUserId, ct);
+                var affectedUser = await userRepo.GetByIdAsync(conn, tx, assignmentUserId, ct);
                 var revokeAuditCtx = new AuditProjectionContext(
                     ActorId: actor.ActorId,
                     ActorPrimaryOrgId: actor.OrgId,

@@ -96,6 +96,16 @@ public sealed class UserRepository
     /// soft-deleted users are not addressable through admin edit).
     /// </para>
     /// </summary>
+    public async Task<User?> GetByIdAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, string userId, CancellationToken ct = default)
+    {
+        await using var cmd = new NpgsqlCommand(
+            "SELECT * FROM users WHERE user_id = @userId AND is_active = TRUE", conn, tx);
+        cmd.Parameters.AddWithValue("userId", userId);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct) ? ReadUser(reader) : null;
+    }
+
     public async Task<(User User, long Version)?> GetByIdWithVersionAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx, string userId, CancellationToken ct = default)
     {
