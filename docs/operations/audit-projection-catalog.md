@@ -59,13 +59,13 @@ The future Test #1 (catalog ↔ DI registrations ↔ EventSerializer parity) par
 
 | event_type | visibility_scope | target_org_resolution | target_resource_id | details_shape | mapper_kind | sprint_landed |
 |------------|------------------|-----------------------|--------------------|---------------|-------------|---------------|
-| `RoleConfigOverrideCreated` | GLOBAL_TENANT_VISIBLE | NULL | `(agreement_code, ok_version, employment_category)` tuple | `{agreement_code, ok_version, employment_category, ...override-fields}` | TBD | |
-| `RoleConfigOverrideUpdated` | GLOBAL_TENANT_VISIBLE | NULL | same | `{before, after}` diff | TBD | |
-| `RoleConfigOverrideSuperseded` | GLOBAL_TENANT_VISIBLE | NULL | same | `{previous_id, new_id, effective_from}` | TBD | |
-| `RoleConfigOverrideSoftDeleted` | GLOBAL_TENANT_VISIBLE | NULL | same | `{deleted_at, deleted_by}` | TBD | |
-| `MerarbejdeDiscretionary` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{employee_id, period, hours, decision_pending}` | TBD | |
-| `OvertimeNecessityAcknowledged` | TENANT_TARGETED | `employee → users.primary_org_id` | `overtime_pre_approval_id` | `{employee_id, necessity_reason, acknowledged_for_entries}` | TBD | |
-| `ConfigBugCorrected` | GLOBAL_TENANT_VISIBLE | NULL | configKey JSONB stringified | `{configSurface, configKey, classification, fromValue, toValue}` | TBD | |
+| `RoleConfigOverrideCreated` | GLOBAL_TENANT_VISIBLE | NULL | `(employment_category:agreement_code:ok_version)` | `{overrideId, employmentCategory, agreementCode, okVersion, effectiveFrom}` | interface (mapper-only, no emit site) | S44c |
+| `RoleConfigOverrideUpdated` | GLOBAL_TENANT_VISIBLE | NULL | `override_id` | `{overrideId, versionBefore, versionAfter}` | interface (mapper-only) | S44c |
+| `RoleConfigOverrideSuperseded` | GLOBAL_TENANT_VISIBLE | NULL | `predecessor_override_id` | `{predecessorOverrideId, successorOverrideId, effectiveFrom, ...}` | interface (mapper-only) | S44c |
+| `RoleConfigOverrideSoftDeleted` | GLOBAL_TENANT_VISIBLE | NULL | `override_id` | `{overrideId, effectiveTo, employmentCategory, ...}` | interface (mapper-only) | S44c |
+| `MerarbejdeDiscretionary` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{employeeId, date, merarbejdeHours, employmentCategory}` | interface (mapper-only) | S44c |
+| `OvertimeNecessityAcknowledged` | TENANT_TARGETED | `employee → users.primary_org_id` | `preapproval_id` | `{preApprovalId, necessityReason, acknowledgedEntryCount}` | interface (mapper-only) | S44c |
+| `ConfigBugCorrected` | GLOBAL_TENANT_VISIBLE | NULL | `config_key` | `{configSurface, configKey, fromValue, toValue, source, classifier, action}` | interface (mapper-only) | S44c |
 | `InstitutionProvisioned` | TENANT_TARGETED | new institution's `org_id` | `institution_id` | `{org_id, legal_name, subscription_tier, onboarded_by}` | **TBD-adr025-implementation-pending** | |
 | `InstitutionDataExported` | TENANT_TARGETED | exported institution's `org_id` | export request id | `{org_id, requesting_actor_id, export_size_bytes}` | **TBD-adr025-implementation-pending** | |
 | `UserPiiErased` | TENANT_TARGETED | user's `primary_org_id` (recorded BEFORE NULL-out) | `user_id` | `{user_id, erased_columns, erasure_token_hash}` | **TBD-adr025-implementation-pending** | |
@@ -86,20 +86,20 @@ The future Test #1 (catalog ↔ DI registrations ↔ EventSerializer parity) par
 | `AgreementConfigPublished` | GLOBAL_TENANT_VISIBLE | NULL | `config_id` | `{config_id, agreement_code, ok_version, archived_config_id?}` | interface | S44b |
 | `AgreementConfigArchived` | GLOBAL_TENANT_VISIBLE | NULL | `config_id` | `{config_id, agreement_code, ok_version}` | interface | S44b |
 | `AgreementConfigCloned` | GLOBAL_TENANT_VISIBLE | NULL | `config_id` | `{config_id, source_config_id, agreement_code, ok_version}` | interface | S44b |
-| `LocalConfigurationChanged` | TENANT_TARGETED | the local config's `org_id` | NULL | `{org_id, key, before, after}` | TBD | |
-| `PositionOverrideCreated` | GLOBAL_TENANT_VISIBLE | NULL | `override_id` | `{override_id, position_id, ...}` | TBD | |
-| `PositionOverrideUpdated` | GLOBAL_TENANT_VISIBLE | NULL | `override_id` | `{override_id, before, after}` | TBD | |
-| `PositionOverrideActivated` | GLOBAL_TENANT_VISIBLE | NULL | `override_id` | `{override_id, activated_at}` | TBD | |
-| `PositionOverrideDeactivated` | GLOBAL_TENANT_VISIBLE | NULL | `override_id` | `{override_id, deactivated_at}` | TBD | |
-| `WageTypeMappingCreated` | GLOBAL_TENANT_VISIBLE | NULL | `mapping_id` | `{mapping_id, ...natural_key}` | TBD | |
-| `WageTypeMappingUpdated` | GLOBAL_TENANT_VISIBLE | NULL | `mapping_id` | `{mapping_id, before, after}` | TBD | |
-| `WageTypeMappingDeleted` | GLOBAL_TENANT_VISIBLE | NULL | `mapping_id` | `{mapping_id, deleted_at}` | TBD | |
-| `WageTypeMappingSuperseded` | GLOBAL_TENANT_VISIBLE | NULL | `mapping_id` | `{previous_id, new_id, effective_from}` | TBD | |
-| `EntitlementConfigSeeded` | GLOBAL_TENANT_VISIBLE | NULL | `config_id` | `{config_id, type, ...natural_key}` | TBD | |
-| `EntitlementConfigCreated` | GLOBAL_TENANT_VISIBLE | NULL | `config_id` | `{config_id, type, ...}` | TBD | |
-| `EntitlementConfigSuperseded` | GLOBAL_TENANT_VISIBLE | NULL | `config_id` | `{previous_id, new_id, effective_from}` | TBD | |
-| `EntitlementConfigSoftDeleted` | GLOBAL_TENANT_VISIBLE | NULL | `config_id` | `{deleted_at}` | TBD | |
-| `LocalAgreementProfileChanged` | TENANT_TARGETED | the profile's `org_id` | `profile_id` | `{org_id, profile_id, before, after}` | TBD | |
+| `LocalConfigurationChanged` | TENANT_TARGETED | the local config's `org_id` | `config_id` | `{configId, orgId, configArea, configKey, configValue, previousValue}` | interface (mapper-only, no emit site — legacy pre-S21) | S44c |
+| `PositionOverrideCreated` | GLOBAL_TENANT_VISIBLE | NULL | `override_id` | `{overrideId, agreementCode, okVersion, positionCode}` | interface | S44c |
+| `PositionOverrideUpdated` | GLOBAL_TENANT_VISIBLE | NULL | `override_id` | `{overrideId, agreementCode, okVersion, positionCode}` | interface | S44c |
+| `PositionOverrideActivated` | GLOBAL_TENANT_VISIBLE | NULL | `override_id` | `{overrideId, agreementCode, okVersion, positionCode}` | interface | S44c |
+| `PositionOverrideDeactivated` | GLOBAL_TENANT_VISIBLE | NULL | `override_id` | `{overrideId, agreementCode, okVersion, positionCode}` | interface | S44c |
+| `WageTypeMappingCreated` | GLOBAL_TENANT_VISIBLE | NULL | `(timeType:agreementCode:okVersion:position)` | `{timeType, wageType, okVersion, agreementCode, position}` | interface | S44c |
+| `WageTypeMappingUpdated` | GLOBAL_TENANT_VISIBLE | NULL | `(timeType:agreementCode:okVersion:position)` | `{timeType, wageType, okVersion, agreementCode, position}` | interface | S44c |
+| `WageTypeMappingDeleted` | GLOBAL_TENANT_VISIBLE | NULL | `(timeType:agreementCode:okVersion:position)` | `{timeType, okVersion, agreementCode, position}` | interface | S44c |
+| `WageTypeMappingSuperseded` | GLOBAL_TENANT_VISIBLE | NULL | `(timeType:agreementCode:okVersion:position)` | `{timeType, wageType, okVersion, agreementCode, position}` | interface | S44c |
+| `EntitlementConfigSeeded` | GLOBAL_TENANT_VISIBLE | NULL | `(agreementCode:okVersion)` | `{agreementCode, okVersion, configCount}` | interface (mapper-only, no emit site) | S44c |
+| `EntitlementConfigCreated` | GLOBAL_TENANT_VISIBLE | NULL | `config_id` | `{configId, entitlementType, agreementCode, okVersion, effectiveFrom, annualQuota, accrualModel, resetMonth}` | interface | S44c |
+| `EntitlementConfigSuperseded` | GLOBAL_TENANT_VISIBLE | NULL | `config_id` | `{configId, entitlementType, supersededByConfigId, effectiveFrom}` | interface | S44c |
+| `EntitlementConfigSoftDeleted` | GLOBAL_TENANT_VISIBLE | NULL | `config_id` | `{configId, entitlementType, agreementCode, okVersion}` | interface | S44c |
+| `LocalAgreementProfileChanged` | TENANT_TARGETED | the profile's `org_id` | `profile_id` | `{profileId, orgId, agreementCode, okVersion, effectiveFrom}` | interface | S44c |
 | `PeriodSubmitted` | TENANT_TARGETED | `employee → users.primary_org_id` | `period_id` | `{period_id, employee_id, period_start, period_end, period_type}` | interface | S44b |
 | `PeriodApproved` | TENANT_TARGETED | `employee → users.primary_org_id` | `period_id` | `{period_id, employee_id, period_start, period_end, approved_by}` | interface | S44b |
 | `PeriodRejected` | TENANT_TARGETED | `employee → users.primary_org_id` | `period_id` | `{period_id, employee_id, period_start, period_end, rejected_by, rejection_reason}` | interface | S44b |
@@ -113,18 +113,27 @@ The future Test #1 (catalog ↔ DI registrations ↔ EventSerializer parity) par
 | `UserAgreementCodeChanged` | TENANT_TARGETED | `user → users.primary_org_id` | `user_id` | `{user_id, old_agreement_code, new_agreement_code, effective_from}` | interface | S44b |
 | `UserAgreementCodeSeeded` | TENANT_TARGETED | `user → users.primary_org_id` | `user_id` | `{user_id, agreement_code, effective_from, row_version}` | interface | S44b |
 | `UserAgreementCodeSuperseded` | TENANT_TARGETED | `user → users.primary_org_id` | `user_id` | `{predecessor_assignment_id, new_assignment_id, user_id, ...effective_dates, old/new_agreement_code, version_before/after}` | interface | S44b |
-| `EmployeeProfileCreated` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{employee_id, weekly_norm_hours, part_time_fraction, position}` | TBD | |
-| `EmployeeProfileUpdated` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{employee_id, before, after}` | TBD | |
-| `EmployeeProfileSuperseded` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{previous_id, new_id, effective_from}` | TBD | |
-| `EmployeeProfileSoftDeleted` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{deleted_at}` | TBD | |
+| `EmployeeProfileCreated` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{profileId, employeeId, weeklyNormHours, partTimeFraction, position, effectiveFrom}` | interface | S44c |
+| `EmployeeProfileUpdated` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{profileId, employeeId, weeklyNormHours, partTimeFraction, position, versionBefore, versionAfter}` | interface | S44c |
+| `EmployeeProfileSuperseded` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{predecessorProfileId, newProfileId, employeeId, predecessorEffectiveFrom, newEffectiveFrom, ...}` | interface | S44c |
+| `EmployeeProfileSoftDeleted` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{profileId, employeeId, effectiveTo}` | interface | S44c |
 
 **Total**: 53 rows (11 new + 42 retrofit). Matches ADR-026 D3 inventory count.
 
-## Known inventory gaps (Sub-Sprint 2 to resolve)
+## Catalog closure status (S44c)
 
-- **`UserAgreementCodeSoftDeleted`** — RESOLVED at S44b: grep confirmed NO event class, NO EventSerializer registration, NO emit sites exist. S34 MEMORY entry was inaccurate on this point (3 UserAgreementCode events is the correct count: Changed + Seeded + Superseded). No catalog row needed.
-- **`OrganizationDeleted`** / **`UserDeleted`** — No event classes or emit sites exist. No catalog rows needed until deletion endpoints are added.
-- **4 ADR-025 events not yet implemented**: `InstitutionProvisioned`, `InstitutionDataExported`, `UserPiiErased`, `CrossTenantReportAccessed` are listed under "New events from S38 ADRs (11)" but NOT registered in `EventSerializer.cs` — ADR-025 was authored DESIGN-ONLY at S38 (no code emitted). Sub-Sprint 2 either (a) implements the endpoints that emit these events alongside their mappers OR (b) explicitly defers them to a separate sprint (catalog rows then carry `mapper_kind: TBD-adr025-implementation-pending`). Step 7a cycle 1 Reviewer W1 absorption — Phase E Test #1 (Sub-Sprint 3) will assert catalog ↔ EventSerializer parity; today, these 4 rows would fail the assertion.
+**47 of 53 rows have `mapper_kind = interface`** — all mappers shipped across S44/S44b/S44c.
+
+**6 rows remain deferred with TBD-* markers:**
+- 1× `TBD-cross-process-deferred` (RetroactiveCorrectionRequested)
+- 1× `TBD-defined-but-unemitted` (PayrollExportGenerated)
+- 4× `TBD-adr025-implementation-pending` (InstitutionProvisioned, InstitutionDataExported, UserPiiErased, CrossTenantReportAccessed)
+
+**9 mapper-only rows** (mapper + DI exist, no endpoint emit site): LocalConfigurationChanged (legacy pre-S21), EntitlementConfigSeeded (never emitted), RoleConfigOverride×4 (ADR-024 suspended), MerarbejdeDiscretionary, OvertimeNecessityAcknowledged, ConfigBugCorrected. Endpoint cutovers ship with feature sprints.
+
+**Resolved gaps:**
+- `UserAgreementCodeSoftDeleted` — RESOLVED at S44b (does not exist).
+- `OrganizationDeleted` / `UserDeleted` — no event classes exist.
 
 ## Explicitly NOT audit-relevant (per ADR-026 D3 L184-194)
 
