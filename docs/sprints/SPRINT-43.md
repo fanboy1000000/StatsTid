@@ -70,6 +70,6 @@ Step 7a artifacts: `.claude/reviews/SPRINT-43-step7a-codex.md` + `.claude/review
 
 ## Forward Pointers
 
-- **S44 = ADR-026 Sub-Sprint 2 (Cutover)**: ~53 per-event mapper implementations + `OrgScopeValidator.GetAccessibleOrgsAsync` + `GET /api/admin/audit` + `AuditLogView.tsx`. Resolves both Sub-Sprint 1 seams (`TBD-payroll-dispatch-seam` + `TBD-l194-reconciliation`).
+- **S44 = ADR-026 Sub-Sprint 2 (Cutover, NARROWED)**: 6-mapper exemplar family (Org/User/RoleAssignment) + `OrgScopeValidator.GetAccessibleOrgsAsync` + `AuditProjectionRepository.QueryByOrgScopeAsync` + 3 adjudication errata + 18 Phase E D-tests. Resolves `TBD-l194-reconciliation` seam (OQ3 L182 wins). `TBD-payroll-dispatch-seam` reframed to `TBD-cross-process-deferred`. Remaining ~47 mappers + GET endpoint + frontend split across S44b/c/f per cycle-trail discipline.
 - **S45 = ADR-026 Sub-Sprint 3 (D-tests)**: 3 cutover-dependent Phase E tests (#1 event-coverage + #3 sync-in-tx + #4 per-class visibility).
 - **Customer-go-live** unblocked architecturally after S44 close per ROADMAP L391/L394.

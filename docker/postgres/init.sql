@@ -2028,7 +2028,9 @@ $$;
 -- from ADR-026 L60-64 ix_* text per Step 4 cycle 1 absorption.
 --
 -- Sub-Sprint 1 (S43) ships schema + repo + interface + registry + backfill.
--- Sub-Sprint 2 (S44) wires ~53 endpoint mapper sites + GET endpoint.
+-- Sub-Sprint 2 (S44) wires 6-mapper exemplar family (Org/User/RoleAssignment).
+-- Sub-Sprint 2b/c (S44b/c) wires remaining ~47 mapper families.
+-- Sub-Sprint 2f (S44f) ships GET /api/admin/audit + AuditLogView.tsx.
 -- Sub-Sprint 3 (S45) lands cutover-dependent Phase E tests #1, #3, #4.
 -- =========================================================================
 

@@ -3,10 +3,14 @@
 | Field | Value |
 |-------|-------|
 | **Sprint** | 44 |
-| **Status** | provisional (sprint-open) |
+| **Status** | complete |
 | **Start Date** | 2026-05-23 |
-| **End Date** | _pending_ |
+| **End Date** | 2026-05-24 |
 | **Sprint-start commit base** | `f62b8cb` (S43 close) |
+| **Sprint-close commit** | _this commit_ |
+| **Build Verified** | 0 errors / 0 net-new warnings |
+| **Test Verified** | 18 net new Docker-gated D-tests (12 cutover + 6 query); 893 total |
+| **Orchestrator Approved** | yes — 2026-05-24 |
 | **Sprint type** | Implementation (cutover-class, first of multi-sub-sprint cutover series) |
 | **Phase** | 4e (Phase E audit visibility — ADR-026 Sub-Sprint 2, narrowed) |
 | **Plan** | `.claude/plans/PLAN-s44.md` |
@@ -33,29 +37,53 @@ Lay the cutover plumbing per ADR-026 D2 + ship 1 exemplar mapper family (Org/Use
 
 **Plan Step 0b cycle 1**: 1 BLOCKER (Codex — forced-rollback test design unimplementable as written) + 3 Codex WARNINGs (ActorContext binding, JsonSerializerOptions, QueryByOrgScopeAsync deferral hint) + 0 Reviewer BLOCKERs + 7 Reviewer NOTEs (2 convergent with Codex). All absorbed; no cycle 2.
 
-## Cycle-trail discipline note
-
-New `feedback_no_launch_gate_scope_logic.md` (this session) prohibits using launch-gate logic to shape scope. Narrow-S44 framing rests on cycle-trail discipline + sprint-sizing precedent alone. New `feedback_cross_process_caller_census_required.md` (from S42a) applied at refinement Phase A — caller-census surfaced single cross-process audit emitter (RetroactiveCorrectionRequested) + 1 vestigial event class (PayrollExportGenerated) BEFORE plan-writing.
-
 ## Tasks
 
-| Task | Status | Owner | Notes |
-|------|--------|-------|-------|
-| TASK-4400 | in_progress | Orchestrator | Sprint open (this commit) |
-| TASK-4401 | pending | Orchestrator | `docs/operations/audit-projection-caller-census.md` |
-| TASK-4402 | pending | Orchestrator | ADR-026 D3 clarification block above L194 (OQ3) |
-| TASK-4403 | pending | Orchestrator | Catalog TBD-* marker updates (OQ2 + OQ4 + PayrollExportGenerated) |
-| TASK-4404 | pending | Orchestrator | Catalog header marker semantics doc + ix/idx naming note |
-| TASK-4405 | pending | Builder | `OrgScopeValidator.GetAccessibleOrgsAsync(ActorContext, ct)` |
-| TASK-4406 | pending | Builder | `AuditProjectionRepository.QueryByOrgScopeAsync` + Docker-gated D-test |
-| TASK-4407..4412 | pending | Builder | 6 mappers + shared `AuditMapperJsonOptions` (7 files) + DI registration pairs |
-| TASK-4413 | pending | Builder | 6 AdminEndpoints.cs cutover sites (L154/237/587/1033/1429/1542) + Minimal API binding pattern |
-| TASK-4414 | pending | Builder | 13 Phase E D-tests (6 happy + 6 forced-rollback two-shape + 1 QueryByOrgScopeAsync) |
-| TASK-4415 | pending | Orchestrator | Sprint close (Step 7a + INDEX + SPRINT-44 + SPRINT-43 + init.sql forward-pointer reconciliation + ROADMAP + MEMORY + QUALITY) |
+| Task | Status | Commit | Notes |
+|------|--------|--------|-------|
+| TASK-4400 | complete | `f38bad6` | Sprint open |
+| TASK-4401 | complete | `546c57a` | `docs/operations/audit-projection-caller-census.md` |
+| TASK-4402 | complete | `53df715` | ADR-026 D3 clarification block above L194 (OQ3) |
+| TASK-4403 | complete | `a8eb046` | Catalog TBD-* marker updates (OQ2 + OQ4 + PayrollExportGenerated) |
+| TASK-4404 | complete | `2036103` | Catalog header TBD-suffix marker taxonomy + ix/idx drift note |
+| TASK-4405 | complete | `23fd7d6` | `OrgScopeValidator.GetAccessibleOrgsAsync(ActorContext, ct)` |
+| TASK-4406 | complete | `3ca0756` | `AuditProjectionRepository.QueryByOrgScopeAsync` + 6 D-tests |
+| TASK-4407..4412 | complete | `2de58c6` | 6 IAuditProjectionMapper impls + shared AuditMapperJsonOptions |
+| TASK-4413 | complete | `630800d` | 6 AdminEndpoints.cs cutover sites (EnqueueAsync → EnqueueAndReturnIdAsync + audit insert) |
+| TASK-4414 | complete | `bba76aa` | 12 Phase E D-tests (6 happy-path + 6 forced-rollback cutover atomicity) |
+| TASK-4415 | complete | _this commit_ | Sprint close (Step 7a + INDEX + SPRINT-44 + stale-pointer reconciliation) |
+
+## Step 7a Outcome
+
+Both lenses **APPROVED-WITH-WARNINGS**, 0 BLOCKERs. Cycle-cap = 1 per lens (no cycle 2 needed — all findings are WARNINGs/NOTEs, no architectural surprises).
+
+**Convergent findings**:
+- **W1 (Codex + Reviewer)**: `RoleAssignmentRevoked` endpoint at `AdminEndpoints.cs:1617` calls `userRepo.GetByIdAsync(assignmentUserId, ct)` which opens its own connection outside the active `(conn, tx)` — architecturally inconsistent with the S24 pattern where all reads inside the tx boundary use `(conn, tx)` overloads. Not a correctness bug under normal operation (rollback path still works correctly), but violates the established pattern. **Deferred to S44b** — requires adding a `(conn, tx)` overload to `UserRepository.GetByIdAsync` which is an Infrastructure domain change.
+
+**Divergent findings**:
+- **Codex W2**: `filter.TargetOrgId` in `QueryByOrgScopeAsync` is not validated against `accessibleOrgIds` for GLOBAL_TENANT_VISIBLE rows — a LocalAdmin could see GTV rows with a non-null `target_org_id` outside their scope if such rows existed (no mapper currently writes GTV with non-null target_org_id). Low risk; consider adding a CHECK constraint `(visibility_scope != 'GLOBAL_TENANT_VISIBLE' OR target_org_id IS NULL)` at S44f.
+- **Reviewer W2**: `AuditQueryFilter.ActorId` clause `(actor_id = @actorId OR actor_primary_org_id = @actorId)` compares a user-ID against an org-ID column — semantic type confusion. Not a security issue (read filter for display), but could produce surprising results if IDs overlap. Deferred to S44f.
+- **Codex N1**: `new DateTimeOffset(@event.OccurredAt)` at all 6 endpoint sites doesn't defensively `SpecifyKind(Utc)` like the test helper does. Low risk — `DomainEventBase.OccurredAt` defaults to `DateTime.UtcNow`.
+- **Codex N2**: `ActorContext.OrgId` → `ActorPrimaryOrgId` naming asymmetry. Cosmetic.
+- **Reviewer N1-N6**: SQL parenthesization verified correct; `GetDescendantsAsync` scope-org-inclusive confirmed by D-test; single-enqueue rollback tests are trivially-true by design (audit insert never executes); cross-domain boundary respected; SQL fully parameterized.
+
+## Test Counts
+
+| Suite | S43 | S44 | Delta |
+|-------|-----|-----|-------|
+| Unit | 526 | 526 | 0 |
+| Plain regression | 40 | 40 | 0 |
+| Docker-gated | 219 | 237 | +18 |
+| Frontend vitest | 90 | 90 | 0 |
+| **Total** | **875** | **893** | **+18** |
+
+S44 new D-tests:
+- `AuditProjectionQueryTests.cs`: 6 D-tests (org-scope filter across 3 visibility tiers × positive/negative/GlobalAdmin)
+- `AuditProjectionCutoverTests.cs`: 12 D-tests (6 happy-path endpoint emit chain + 4 single-enqueue forced-rollback + 2 multi-enqueue post-audit-insert forced-rollback)
 
 ## Forward Pointers
 
-- **S44b** = mid-size mapper families (Config + Period + Overtime + UserAgreementCode — partition decided at S44b refinement)
-- **S44c** = remaining mapper families including EmployeeProfile* (from OQ3 resolution; HR-sensitive payload redaction check at refinement) + LocalAgreementProfileChanged
-- **S44f** = GET /api/admin/audit endpoint + AuditLogView.tsx + Phase E Test #1 (catalog ↔ DI ↔ EventSerializer parity) + Test #3 (sync-in-tx assertion) + Test #4 (per-class visibility enforcement) + PayrollExportGenerated emit-or-delete decision
+- **S44b** = mid-size mapper families (Config + Period + Overtime + UserAgreementCode — partition decided at S44b refinement) + convergent W1 fix (UserRepository.GetByIdAsync `(conn, tx)` overload)
+- **S44c** = remaining mapper families including EmployeeProfile* (from OQ3 resolution; HR-sensitive payload-redaction check at refinement) + LocalAgreementProfileChanged
+- **S44f** = GET /api/admin/audit endpoint + AuditLogView.tsx + Phase E Test #1 (catalog ↔ DI ↔ EventSerializer parity) + Test #3 (sync-in-tx assertion) + Test #4 (per-class visibility enforcement) + PayrollExportGenerated emit-or-delete decision + Codex W2 (GTV CHECK constraint) + Reviewer W2 (ActorId/OrgId type confusion)
 - **S44-cross-process** = dedicated 1-event sprint solving RetroactiveCorrectionRequested + Payroll DbConnectionFactory introduction holistically
