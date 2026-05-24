@@ -5,10 +5,15 @@ import {
   type EntitlementConfig,
   type EntitlementConfigPatch,
   type EntitlementConfigCreateRequest,
-  type EntitlementType,
-  type AccrualModel,
   type WithEtag,
 } from '../../hooks/useEntitlementConfig'
+import type { EntitlementType, AccrualModel } from '../../lib/entitlementConstants'
+import {
+  TYPE_LABELS,
+  TYPE_OPTIONS,
+  ACCRUAL_OPTIONS,
+  MONTH_LABELS,
+} from '../../lib/entitlementConstants'
 import { Spinner } from '../../components/ui'
 import styles from './EntitlementConfigEditor.module.css'
 
@@ -18,40 +23,6 @@ import styles from './EntitlementConfigEditor.module.css'
 // mirrors S29 ProfileEditor for the same-day-only-edit semantics by NOT
 // exposing an effective_from picker (per Q4 + ADR-021 §3, the server stamps
 // effective_from = today and same-day edits in-place vs cross-day supersede).
-
-type EntitlementTypeLabel = Record<EntitlementType, string>
-const TYPE_LABELS: EntitlementTypeLabel = {
-  VACATION: 'Ferie',
-  SPECIAL_HOLIDAY: 'Saerlig feriedag',
-  CARE_DAY: 'Omsorgsdag',
-  CHILD_SICK: 'Barnets sygedag',
-  SENIOR_DAY: 'Seniordag',
-}
-
-const TYPE_OPTIONS: EntitlementType[] = [
-  'VACATION',
-  'SPECIAL_HOLIDAY',
-  'CARE_DAY',
-  'CHILD_SICK',
-  'SENIOR_DAY',
-]
-
-const ACCRUAL_OPTIONS: AccrualModel[] = ['IMMEDIATE', 'MONTHLY_ACCRUAL']
-
-const MONTH_LABELS: Record<number, string> = {
-  1: 'Januar',
-  2: 'Februar',
-  3: 'Marts',
-  4: 'April',
-  5: 'Maj',
-  6: 'Juni',
-  7: 'Juli',
-  8: 'August',
-  9: 'September',
-  10: 'Oktober',
-  11: 'November',
-  12: 'December',
-}
 
 interface EditFormState {
   annualQuota: string

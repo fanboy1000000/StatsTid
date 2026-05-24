@@ -24,16 +24,15 @@ const hrItems: NavItem[] = [
 
 const adminItems: NavItem[] = [
   { label: 'Organisation', to: '/admin/orgs' },
-  { label: 'Roller', to: '/admin/roles' },
   { label: 'Projekter', to: '/admin/projects' },
-  { label: 'Konfiguration', to: '/config' },
+  { label: 'Roller', to: '/admin/roles' },
+  { label: 'Lokal konfiguration', to: '/config' },
 ]
 
 const globalAdminItems: NavItem[] = [
   { label: 'Overenskomster', to: '/admin/agreements' },
+  { label: 'Lønartstilknytninger', to: '/admin/wage-type-mappings' },
   { label: 'Positionstilpasninger', to: '/admin/position-overrides' },
-  { label: 'Lonartstilknytninger', to: '/admin/wage-type-mappings' },
-  { label: 'Berettigelser', to: '/admin/entitlement-configs' },
 ]
 
 function NavSection({ items }: { items: NavItem[] }) {

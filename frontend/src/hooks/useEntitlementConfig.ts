@@ -8,14 +8,10 @@ import { formatVersionAsIfMatch, resolveEtag } from '../lib/etag'
 // throwing a typed mutation error carrying status + 412 body so the page's
 // banner-with-retry handler can read `expectedVersion` / `actualVersion`.
 
-export type EntitlementType =
-  | 'VACATION'
-  | 'SPECIAL_HOLIDAY'
-  | 'CARE_DAY'
-  | 'CHILD_SICK'
-  | 'SENIOR_DAY'
-
-export type AccrualModel = 'IMMEDIATE' | 'MONTHLY_ACCRUAL'
+// Re-export from shared constants — single source of truth for both the
+// standalone EntitlementConfigEditor page and inline EntitlementSection.
+export type { EntitlementType, AccrualModel } from '../lib/entitlementConstants'
+import type { EntitlementType, AccrualModel } from '../lib/entitlementConstants'
 
 export interface EntitlementConfig {
   configId: string

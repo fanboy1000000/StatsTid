@@ -4,8 +4,16 @@ import { apiFetchWithEtag } from '../../lib/api'
 import { formatVersionAsIfMatch, resolveEtag } from '../../lib/etag'
 import { useAgreementConfigActions } from '../../hooks/useAgreementConfigs'
 import type { AgreementConfig } from '../../hooks/useAgreementConfigs'
+import { EntitlementSection, type Entitlement } from '../../components/admin/EntitlementSection'
 import { Spinner } from '../../components/ui'
 import styles from './AgreementConfigEditor.module.css'
+
+/** Extended response shape returned by GET /api/agreement-configs/{configId}
+ *  when entitlements are included inline (TASK-1B-3). */
+interface AgreementConfigWithEntitlements extends AgreementConfig {
+  entitlements?: Entitlement[]
+  entitlementsReadOnly?: boolean
+}
 
 type ConfigForm = Omit<AgreementConfig, 'configId' | 'version' | 'createdBy' | 'createdAt' | 'updatedAt' | 'publishedAt' | 'archivedAt' | 'clonedFromId'>
 
@@ -128,6 +136,9 @@ export function AgreementConfigEditor() {
   const { createConfig, updateConfig, cloneConfig, publishConfig, archiveConfig } = useAgreementConfigActions()
 
   const [config, setConfig] = useState<AgreementConfig | null>(null)
+  // TASK-1B-3: inline entitlements from the by-id GET response.
+  const [entitlements, setEntitlements] = useState<Entitlement[]>([])
+  const [entitlementsReadOnly, setEntitlementsReadOnly] = useState(false)
   // S25 / TASK-2506 (ADR-019 pending): track the wire-format ETag for the
   // currently-loaded config so the next PUT/Publish/Archive can If-Match on
   // it. Sourced from the GET response header (with body.version fallback).
@@ -149,13 +160,16 @@ export function AgreementConfigEditor() {
     setError(null)
     // S25 / TASK-2506: capture the by-id ETag header for the next If-Match
     // (header-preferred, body.version fallback for cross-origin deployments).
-    const result = await apiFetchWithEtag<AgreementConfig>(`/api/agreement-configs/${configId}`)
+    // TASK-1B-3: the by-id response now includes entitlements + entitlementsReadOnly.
+    const result = await apiFetchWithEtag<AgreementConfigWithEntitlements>(`/api/agreement-configs/${configId}`)
     if (result.ok) {
       const { data, etag: rawEtag } = result.data
       const { etag: resolvedEtag } = resolveEtag(rawEtag, data)
       setConfig(data)
       setEtag(resolvedEtag ?? formatVersionAsIfMatch(data.version))
       setForm(configToForm(data))
+      setEntitlements(data.entitlements ?? [])
+      setEntitlementsReadOnly(data.entitlementsReadOnly ?? false)
     } else {
       setError(result.error)
     }
@@ -584,6 +598,16 @@ export function AgreementConfigEditor() {
             <span className={styles.metadataValue}>{config.clonedFromId ?? '\u2014'}</span>
           </div>
         </div>
+      )}
+
+      {/* Berettigelser (TASK-1B-3) */}
+      {!isNew && configId && (
+        <EntitlementSection
+          configId={configId}
+          entitlements={entitlements}
+          readOnly={entitlementsReadOnly}
+          onRefresh={fetchConfig}
+        />
       )}
 
       {/* Confirm dialogs */}

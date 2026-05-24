@@ -34,6 +34,32 @@ public sealed class EntitlementConfigRepository
         return await ReadConfigsAsync(cmd, ct);
     }
 
+    /// <summary>
+    /// Returns all currently-open entitlement config rows (<c>effective_to IS NULL</c>) for the
+    /// supplied (agreement_code, ok_version) pair, ordered by entitlement_type. Used by the
+    /// agreement-config GET by-ID endpoint to inline entitlements in the response (Phase 5
+    /// frontend integration). Mirrors <see cref="GetAllAsync"/> open-row filter but scoped to a
+    /// single agreement+version pair (at most 5 rows: VACATION / SPECIAL_HOLIDAY / CARE_DAY /
+    /// CHILD_SICK / SENIOR_DAY).
+    /// </summary>
+    public async Task<IReadOnlyList<EntitlementConfig>> GetOpenByAgreementAsync(
+        string agreementCode, string okVersion, CancellationToken ct = default)
+    {
+        await using var conn = _connectionFactory.Create();
+        await conn.OpenAsync(ct);
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT * FROM entitlement_configs
+            WHERE agreement_code = @agreementCode
+              AND ok_version = @okVersion
+              AND effective_to IS NULL
+            ORDER BY entitlement_type
+            """, conn);
+        cmd.Parameters.AddWithValue("agreementCode", agreementCode);
+        cmd.Parameters.AddWithValue("okVersion", okVersion);
+        return await ReadConfigsAsync(cmd, ct);
+    }
+
     public async Task<EntitlementConfig?> GetByTypeAsync(
         string entitlementType, string agreementCode, string okVersion, CancellationToken ct = default)
     {

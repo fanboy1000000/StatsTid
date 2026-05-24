@@ -296,6 +296,7 @@ app.MapAgreementConfigEndpoints();
 app.MapPositionOverrideEndpoints();
 app.MapWageTypeMappingEndpoints();
 app.MapEntitlementConfigEndpoints();
+app.MapAgreementEntitlementEndpoints();
 app.MapEmployeeProfileEndpoints();
 app.MapBalanceEndpoints();
 app.MapComplianceEndpoints();

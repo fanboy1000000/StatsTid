@@ -1,8 +1,9 @@
-import { useState, useCallback, type FormEvent } from 'react'
+import { useState, useCallback, useMemo, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAgreementConfigs, useAgreementConfigActions } from '../../hooks/useAgreementConfigs'
 import type { AgreementConfig, WithEtag } from '../../hooks/useAgreementConfigs'
 import { Spinner } from '../../components/ui'
+import { Badge } from '../../components/ui/Badge'
 import styles from './AgreementConfigList.module.css'
 
 type StatusFilter = '' | 'DRAFT' | 'ACTIVE' | 'ARCHIVED'
@@ -22,21 +23,111 @@ function formatDate(dateStr: string): string {
   }
 }
 
-function statusBadgeClass(status: string): string {
-  switch (status) {
-    case 'ACTIVE':
-      return `${styles.badge} ${styles.badgeActive}`
-    case 'ARCHIVED':
-      return `${styles.badge} ${styles.badgeArchived}`
-    default:
-      return styles.badge
-  }
+/** Sort-order for statuses within a group: ACTIVE first, then DRAFT, then ARCHIVED */
+const STATUS_SORT_ORDER: Record<string, number> = {
+  ACTIVE: 0,
+  DRAFT: 1,
+  ARCHIVED: 2,
 }
 
+/** Labels for the clone dialog source info */
 const STATUS_LABELS: Record<string, string> = {
   DRAFT: 'Kladde',
   ACTIVE: 'Aktiv',
   ARCHIVED: 'Arkiveret',
+}
+
+type BadgeVariant = 'success' | 'warning' | 'info' | 'default'
+
+interface ConfigBadge {
+  label: string
+  variant: BadgeVariant
+}
+
+/**
+ * Determine the display badge for a config within its agreement_code group.
+ * The ACTIVE config with the most recent publishedAt is "Gaeldende" (current).
+ * Other ACTIVE configs are "Historisk (aktiv)".
+ * DRAFT configs are "Kladde". ARCHIVED configs are "Arkiveret".
+ */
+function resolveConfigBadge(
+  config: WithEtag<AgreementConfig>,
+  newestActiveId: string | null,
+): ConfigBadge {
+  switch (config.status) {
+    case 'ACTIVE':
+      if (config.configId === newestActiveId) {
+        return { label: 'Gaeldende', variant: 'success' }
+      }
+      return { label: 'Historisk (aktiv)', variant: 'warning' }
+    case 'DRAFT':
+      return { label: 'Kladde', variant: 'info' }
+    case 'ARCHIVED':
+      return { label: 'Arkiveret', variant: 'default' }
+    default:
+      return { label: config.status, variant: 'default' }
+  }
+}
+
+interface GroupedConfigs {
+  agreementCode: string
+  configs: WithEtag<AgreementConfig>[]
+  /** configId of the ACTIVE config with the newest publishedAt, or null if none */
+  newestActiveId: string | null
+}
+
+/**
+ * Group configs by agreementCode, sort groups alphabetically,
+ * and sort configs within each group by status then publishedAt.
+ */
+function groupAndSort(configs: WithEtag<AgreementConfig>[]): GroupedConfigs[] {
+  const groupMap = new Map<string, WithEtag<AgreementConfig>[]>()
+  for (const config of configs) {
+    const existing = groupMap.get(config.agreementCode)
+    if (existing) {
+      existing.push(config)
+    } else {
+      groupMap.set(config.agreementCode, [config])
+    }
+  }
+
+  const groups: GroupedConfigs[] = []
+  for (const [agreementCode, groupConfigs] of groupMap) {
+    // Sort within group: ACTIVE first (newest publishedAt first), then DRAFT, then ARCHIVED
+    groupConfigs.sort((a, b) => {
+      const statusDiff = (STATUS_SORT_ORDER[a.status] ?? 9) - (STATUS_SORT_ORDER[b.status] ?? 9)
+      if (statusDiff !== 0) return statusDiff
+      // Within same status, sort by publishedAt descending (newest first) for ACTIVE,
+      // by createdAt descending for others
+      if (a.status === 'ACTIVE' && a.publishedAt && b.publishedAt) {
+        return new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime()
+      }
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    })
+
+    // Find the ACTIVE config with the most recent publishedAt
+    let newestActiveId: string | null = null
+    for (const c of groupConfigs) {
+      if (c.status === 'ACTIVE' && c.publishedAt) {
+        if (
+          newestActiveId === null ||
+          new Date(c.publishedAt).getTime() >
+            new Date(
+              groupConfigs.find((gc) => gc.configId === newestActiveId)!.publishedAt!,
+            ).getTime()
+        ) {
+          newestActiveId = c.configId
+        }
+      }
+    }
+
+    groups.push({ agreementCode, configs: groupConfigs, newestActiveId })
+  }
+
+  // Sort groups alphabetically by agreement code
+  groups.sort((a, b) => a.agreementCode.localeCompare(b.agreementCode, 'da'))
+
+  return groups
 }
 
 export function AgreementConfigList() {
@@ -44,6 +135,8 @@ export function AgreementConfigList() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('')
   const { configs, loading, error, refetch } = useAgreementConfigs(statusFilter || undefined)
   const { cloneConfig } = useAgreementConfigActions()
+
+  const groups = useMemo(() => groupAndSort(configs), [configs])
 
   const [cloneDialogOpen, setCloneDialogOpen] = useState(false)
   const [cloneSource, setCloneSource] = useState<WithEtag<AgreementConfig> | null>(null)
@@ -156,51 +249,53 @@ export function AgreementConfigList() {
         <div className={styles.emptyState}>Ingen overenskomster fundet</div>
       )}
 
-      {!loading && configs.length > 0 && (
-        <table className={styles.table}>
-          <thead>
-            <tr>
-              <th>Overenskomst</th>
-              <th>OK-version</th>
-              <th>Status</th>
-              <th>Ugentlig norm</th>
-              <th>Oprettet</th>
-              <th>Beskrivelse</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {configs.map((config) => (
-              <tr
-                key={config.configId}
-                className={styles.clickableRow}
-                onClick={() => handleRowClick(config.configId)}
-              >
-                <td>{config.agreementCode}</td>
-                <td>{config.okVersion}</td>
-                <td>
-                  <span className={statusBadgeClass(config.status)}>
-                    {STATUS_LABELS[config.status] ?? config.status}
-                  </span>
-                </td>
-                <td>{config.weeklyNormHours} t</td>
-                <td>{formatDate(config.createdAt)}</td>
-                <td className={styles.descriptionCell}>
-                  {config.description ?? '\u2014'}
-                </td>
-                <td>
-                  <button
-                    className={styles.cloneBtn}
-                    onClick={(e) => handleCloneOpen(e, config)}
-                  >
-                    Klon
-                  </button>
-                </td>
+      {!loading && configs.length > 0 && groups.map((group) => (
+        <section key={group.agreementCode} className={styles.group}>
+          <h2 className={styles.groupHeader}>{group.agreementCode}</h2>
+          <table className={styles.table}>
+            <thead>
+              <tr>
+                <th>OK-version</th>
+                <th>Status</th>
+                <th>Ugentlig norm</th>
+                <th>Oprettet</th>
+                <th>Beskrivelse</th>
+                <th></th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+            </thead>
+            <tbody>
+              {group.configs.map((config) => {
+                const badge = resolveConfigBadge(config, group.newestActiveId)
+                return (
+                  <tr
+                    key={config.configId}
+                    className={`${styles.clickableRow}${config.status === 'ARCHIVED' ? ` ${styles.archivedRow}` : ''}`}
+                    onClick={() => handleRowClick(config.configId)}
+                  >
+                    <td>{config.okVersion}</td>
+                    <td>
+                      <Badge variant={badge.variant}>{badge.label}</Badge>
+                    </td>
+                    <td>{config.weeklyNormHours} t</td>
+                    <td>{formatDate(config.createdAt)}</td>
+                    <td className={styles.descriptionCell}>
+                      {config.description ?? '\u2014'}
+                    </td>
+                    <td>
+                      <button
+                        className={styles.cloneBtn}
+                        onClick={(e) => handleCloneOpen(e, config)}
+                      >
+                        Klon
+                      </button>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </section>
+      ))}
 
       {cloneDialogOpen && cloneSource && (
         <div className={styles.overlay} onClick={handleCloneClose}>

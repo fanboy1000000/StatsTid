@@ -48,6 +48,7 @@ public static class AgreementConfigEndpoints
         app.MapGet("/api/agreement-configs/{configId:guid}", async (
             Guid configId,
             AgreementConfigRepository agreementConfigRepo,
+            EntitlementConfigRepository entitlementConfigRepo,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -55,8 +56,18 @@ public static class AgreementConfigEndpoints
             if (entity is null)
                 return Results.NotFound(new { error = "Agreement config not found" });
 
+            // Fetch open entitlement configs for this agreement's (agreement_code, ok_version).
+            var entitlements = await entitlementConfigRepo.GetOpenByAgreementAsync(
+                entity.AgreementCode, entity.OkVersion, ct);
+
+            // Entitlements are read-only when another agreement_configs row shares the same
+            // (agreement_code, ok_version) — edits must target the canonical (ACTIVE) config.
+            var siblingConfigs = await agreementConfigRepo.GetByAgreementAsync(
+                entity.AgreementCode, entity.OkVersion, ct);
+            var entitlementsReadOnly = siblingConfigs.Count > 1;
+
             context.Response.Headers.ETag = $"\"{entity.Version}\"";
-            return Results.Ok(MapEntityToResponse(entity));
+            return Results.Ok(MapEntityToResponseWithEntitlements(entity, entitlements, entitlementsReadOnly));
         }).RequireAuthorization("GlobalAdminOnly");
 
         // ═══════════════════════════════════════════
@@ -713,6 +724,109 @@ public static class AgreementConfigEndpoints
         archivedAt = e.ArchivedAt,
         clonedFromId = e.ClonedFromId,
         description = e.Description,
+    };
+
+    /// <summary>
+    /// Extended response mapper for the GET by-ID endpoint — includes inline entitlements and
+    /// the read-only flag. The parent agreement config's ETag is still the sole HTTP ETag header;
+    /// each entitlement's <c>version</c> field is in the body only (for the frontend to compose
+    /// child <c>If-Match</c> headers on per-entitlement mutations).
+    /// </summary>
+    private static object MapEntityToResponseWithEntitlements(
+        AgreementConfigEntity e,
+        IReadOnlyList<EntitlementConfig> entitlements,
+        bool entitlementsReadOnly) => new
+    {
+        configId = e.ConfigId,
+        agreementCode = e.AgreementCode,
+        okVersion = e.OkVersion,
+        status = e.Status.ToString(),
+        version = e.Version,
+        // Norm settings
+        weeklyNormHours = e.WeeklyNormHours,
+        normPeriodWeeks = e.NormPeriodWeeks,
+        normModel = e.NormModel.ToString(),
+        annualNormHours = e.AnnualNormHours,
+        // Flex settings
+        maxFlexBalance = e.MaxFlexBalance,
+        flexCarryoverMax = e.FlexCarryoverMax,
+        // Overtime settings
+        hasOvertime = e.HasOvertime,
+        hasMerarbejde = e.HasMerarbejde,
+        overtimeThreshold50 = e.OvertimeThreshold50,
+        overtimeThreshold100 = e.OvertimeThreshold100,
+        // Supplement toggles
+        eveningSupplementEnabled = e.EveningSupplementEnabled,
+        nightSupplementEnabled = e.NightSupplementEnabled,
+        weekendSupplementEnabled = e.WeekendSupplementEnabled,
+        holidaySupplementEnabled = e.HolidaySupplementEnabled,
+        // Supplement time windows
+        eveningStart = e.EveningStart,
+        eveningEnd = e.EveningEnd,
+        nightStart = e.NightStart,
+        nightEnd = e.NightEnd,
+        // Supplement rates
+        eveningRate = e.EveningRate,
+        nightRate = e.NightRate,
+        weekendSaturdayRate = e.WeekendSaturdayRate,
+        weekendSundayRate = e.WeekendSundayRate,
+        holidayRate = e.HolidayRate,
+        // On-call duty
+        onCallDutyEnabled = e.OnCallDutyEnabled,
+        onCallDutyRate = e.OnCallDutyRate,
+        // Call-in work
+        callInWorkEnabled = e.CallInWorkEnabled,
+        callInMinimumHours = e.CallInMinimumHours,
+        callInRate = e.CallInRate,
+        // Travel time
+        travelTimeEnabled = e.TravelTimeEnabled,
+        workingTravelRate = e.WorkingTravelRate,
+        nonWorkingTravelRate = e.NonWorkingTravelRate,
+        // Working time compliance
+        maxDailyHours = e.MaxDailyHours,
+        minimumRestHours = e.MinimumRestHours,
+        restPeriodDerogationAllowed = e.RestPeriodDerogationAllowed,
+        weeklyMaxHoursReferencePeriod = e.WeeklyMaxHoursReferencePeriod,
+        voluntaryUnsocialHoursAllowed = e.VoluntaryUnsocialHoursAllowed,
+        // Metadata
+        createdBy = e.CreatedBy,
+        createdAt = e.CreatedAt,
+        updatedAt = e.UpdatedAt,
+        publishedAt = e.PublishedAt,
+        archivedAt = e.ArchivedAt,
+        clonedFromId = e.ClonedFromId,
+        description = e.Description,
+        // Inline entitlements — open rows for this (agreement_code, ok_version) pair.
+        // Each entitlement includes its own version for the frontend to compose child If-Match.
+        entitlements = entitlements.Select(MapEntitlementToResponse).ToList(),
+        // True when another agreement_configs row shares this (agreement_code, ok_version),
+        // meaning entitlement edits should be disabled on this config's detail page to avoid
+        // ambiguity about which config "owns" the entitlements.
+        entitlementsReadOnly,
+    };
+
+    /// <summary>
+    /// Maps an <see cref="EntitlementConfig"/> to the inline response shape used by the
+    /// GET by-ID endpoint's <c>entitlements</c> array. Mirrors the shape from
+    /// <c>EntitlementConfigEndpoints.MapToResponse</c>.
+    /// </summary>
+    private static object MapEntitlementToResponse(EntitlementConfig c) => new
+    {
+        configId = c.ConfigId,
+        entitlementType = c.EntitlementType,
+        agreementCode = c.AgreementCode,
+        okVersion = c.OkVersion,
+        annualQuota = c.AnnualQuota,
+        accrualModel = c.AccrualModel,
+        resetMonth = c.ResetMonth,
+        carryoverMax = c.CarryoverMax,
+        proRateByPartTime = c.ProRateByPartTime,
+        isPerEpisode = c.IsPerEpisode,
+        minAge = c.MinAge,
+        description = c.Description,
+        effectiveFrom = c.EffectiveFrom,
+        effectiveTo = c.EffectiveTo,
+        version = c.Version,
     };
 
     // ── Validation ──
