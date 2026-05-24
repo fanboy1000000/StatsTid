@@ -297,6 +297,7 @@ app.MapEmployeeProfileEndpoints();
 app.MapBalanceEndpoints();
 app.MapComplianceEndpoints();
 app.MapOvertimeEndpoints();
+app.MapAuditEndpoints();
 
 app.Run();
 
