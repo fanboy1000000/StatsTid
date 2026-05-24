@@ -1,13 +1,12 @@
 .gridWrapper {
-  overflow-x: auto;
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--border-radius);
 }
 
 .grid {
   border-collapse: collapse;
-  width: max-content;
-  min-width: 100%;
+  table-layout: fixed;
+  width: 100%;
   font-family: var(--font-family);
   font-size: 13px;
 }
@@ -20,17 +19,14 @@
 
 /* Header */
 .labelHeader {
-  position: sticky;
-  left: 0;
-  z-index: 2;
   background-color: var(--color-gray-100);
-  min-width: 120px;
+  width: 100px;
   padding: var(--space-1) var(--space-2);
+  text-align: left;
 }
 
 .dayHeader {
-  padding: var(--space-1) var(--space-1);
-  min-width: 44px;
+  padding: var(--space-1) 0;
   background-color: var(--color-gray-100);
   font-weight: var(--font-weight-medium);
 }
@@ -49,22 +45,21 @@
 
 .sumHeader {
   padding: var(--space-1) var(--space-2);
-  min-width: 52px;
+  width: 50px;
   background-color: var(--color-gray-100);
   font-weight: var(--font-weight-semibold);
 }
 
 /* Row label (sticky first column) */
 .rowLabel {
-  position: sticky;
-  left: 0;
-  z-index: 1;
   background-color: var(--color-white);
   text-align: left;
   padding: var(--space-1) var(--space-2);
   white-space: nowrap;
   font-weight: var(--font-weight-medium);
-  min-width: 120px;
+  width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Cells */
@@ -74,7 +69,6 @@
 
 .cellInput {
   width: 100%;
-  min-width: 40px;
   border: none;
   outline: none;
   text-align: center;
@@ -218,7 +212,7 @@
   padding: var(--space-1) var(--space-2);
   font-weight: var(--font-weight-medium);
   background-color: var(--color-gray-50, var(--color-gray-100));
-  min-width: 52px;
+  width: 50px;
 }
 
 /* Separator */

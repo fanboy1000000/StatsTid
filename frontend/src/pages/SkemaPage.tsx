@@ -69,7 +69,8 @@ export function SkemaPage() {
   const [year, setYear] = useState(now.getFullYear())
   const [month, setMonth] = useState(now.getMonth() + 1)
 
-  const { data, loading, error, quotaError, clearQuotaError, refetch, saveMonth, employeeApprove } = useSkema(employeeId, year, month)
+  const { data, loading, error, quotaError, clearQuotaError, refetch, saveMonth, employeeApprove, submitAndApprove } = useSkema(employeeId, year, month)
+  const { orgId, agreementCode } = useAuth()
   const { session, loading: timerLoading, checkIn, checkOut, sessions: timerSessions, checkInClientTime } = useTimer(employeeId)
   const { data: balanceData, loading: balanceLoading } = useBalanceSummary(employeeId, year, month)
   const { result: complianceResult, loading: complianceLoading } = useCompliance(employeeId, year, month)
@@ -296,12 +297,20 @@ export function SkemaPage() {
     timerHoursToday > 0 &&
     Math.abs(allocatedHoursToday - timerHoursToday) > 0.1
 
-  // Handle employee approve
+  const [approving, setApproving] = useState(false)
+
   const handleApprove = useCallback(async () => {
-    if (data?.approval?.periodId) {
-      await employeeApprove(data.approval.periodId)
+    setApproving(true)
+    try {
+      if (data?.approval?.periodId) {
+        await employeeApprove(data.approval.periodId)
+      } else if (orgId && agreementCode) {
+        await submitAndApprove(orgId, agreementCode)
+      }
+    } finally {
+      setApproving(false)
     }
-  }, [data, employeeApprove])
+  }, [data, employeeApprove, submitAndApprove, orgId, agreementCode])
 
   if (loading && !data) {
     return (
@@ -389,6 +398,7 @@ export function SkemaPage() {
           approval={data?.approval ?? null}
           onApprove={handleApprove}
           onRefetch={refetch}
+          approving={approving}
         />
       </div>
     </div>
@@ -414,9 +424,10 @@ interface ApprovalFooterProps {
   } | null
   onApprove: () => void
   onRefetch: () => void
+  approving?: boolean
 }
 
-function ApprovalFooter({ approval, onApprove, onRefetch }: ApprovalFooterProps) {
+function ApprovalFooter({ approval, onApprove, onRefetch, approving }: ApprovalFooterProps) {
   if (!approval || approval.status === 'DRAFT') {
     return (
       <div className={styles.footerContent}>
@@ -425,8 +436,8 @@ function ApprovalFooter({ approval, onApprove, onRefetch }: ApprovalFooterProps)
             Frist: {formatDeadline(approval.employeeDeadline)}
           </span>
         )}
-        <Button variant="primary" onClick={onApprove}>
-          Godkend maaned
+        <Button variant="primary" onClick={onApprove} disabled={approving}>
+          {approving ? 'Godkender...' : 'Godkend maaned'}
         </Button>
       </div>
     )

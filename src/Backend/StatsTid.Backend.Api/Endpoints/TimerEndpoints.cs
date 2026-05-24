@@ -2,6 +2,7 @@ using StatsTid.Auth;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Security;
@@ -100,6 +101,8 @@ public static class TimerEndpoints
             CheckOutRequest request,
             DbConnectionFactory connectionFactory,
             TimerSessionRepository timerRepo,
+            TimeEntryProjectionRepository timeProjectionRepo,
+            UserRepository userRepo,
             IOutboxEnqueue outbox,
             OrgScopeValidator scopeValidator,
             HttpContext context,
@@ -118,18 +121,27 @@ public static class TimerEndpoints
                     return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
             }
 
-            // Find active session
+            // Find active session — idempotency guard: if the session is already
+            // checked out (isActive = false) GetActiveByEmployeeAsync returns null,
+            // so a retry cannot create a duplicate time entry.
             var session = await timerRepo.GetActiveByEmployeeAsync(request.EmployeeId, ct);
             if (session is null)
                 return Results.NotFound(new { error = "No active timer session found" });
 
+            // Look up the employee's agreement code for the auto-registered time entry.
+            var user = await userRepo.GetByIdAsync(request.EmployeeId, ct);
+            if (user is null)
+                return Results.NotFound(new { error = "Employee user record not found" });
+
             var now = DateTime.UtcNow;
             var clockedHours = Math.Round((decimal)(now - session.CheckInAt).TotalHours, 2);
 
-            // Atomic in-tx write: timer_sessions UPDATE + outbox enqueue commit together
-            // (ADR-018 D3). Replaces the legacy post-commit eventStore.AppendAsync shape.
-            var streamId = $"timer-{request.EmployeeId}";
-            var @event = new TimerCheckedOut
+            // Resolve OK version server-side from the session date (ADR-003).
+            var resolvedOkVersion = OkVersionResolver.ResolveVersion(session.Date);
+
+            // ── Timer check-out event (timer stream) ──
+            var timerStreamId = $"timer-{request.EmployeeId}";
+            var timerEvent = new TimerCheckedOut
             {
                 EmployeeId = request.EmployeeId,
                 Date = session.Date,
@@ -140,6 +152,29 @@ public static class TimerEndpoints
                 CorrelationId = actor.CorrelationId
             };
 
+            // ── Auto-registered time entry event (employee stream) ──
+            // Mirrors the POST /api/time-entries atomic pattern (TASK-2707).
+            // StartTime/EndTime derived from the timer session for traceability.
+            var employeeStreamId = $"employee-{request.EmployeeId}";
+            var timeEntryEvent = new TimeEntryRegistered
+            {
+                EmployeeId = request.EmployeeId,
+                Date = session.Date,
+                Hours = clockedHours,
+                StartTime = TimeOnly.FromDateTime(session.CheckInAt),
+                EndTime = TimeOnly.FromDateTime(now),
+                TaskId = session.SessionId.ToString(),
+                ActivityType = "timer",
+                AgreementCode = user.AgreementCode,
+                OkVersion = resolvedOkVersion,
+                ActorId = actor.ActorId,
+                ActorRole = actor.ActorRole,
+                CorrelationId = actor.CorrelationId
+            };
+
+            // Atomic in-tx write: timer_sessions UPDATE + TimerCheckedOut outbox
+            // + TimeEntryRegistered outbox + time_entries_projection INSERT all
+            // commit or roll back together (ADR-018 D3 + D13 projection pattern).
             await using (var conn = connectionFactory.Create())
             {
                 await conn.OpenAsync(ct);
@@ -147,7 +182,14 @@ public static class TimerEndpoints
                 try
                 {
                     await timerRepo.CheckOutAsync(conn, tx, session.SessionId, now, ct);
-                    await outbox.EnqueueAsync(conn, tx, streamId, @event, ct);
+                    await outbox.EnqueueAsync(conn, tx, timerStreamId, timerEvent, ct);
+
+                    // Time entry: outbox enqueue first (returns outbox_id), then
+                    // projection insert second (consumes the outbox_id for monotonic
+                    // per-employee ordering). Same ordering as TimeEndpoints POST.
+                    var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, employeeStreamId, timeEntryEvent, ct);
+                    await timeProjectionRepo.InsertAsync(conn, tx, timeEntryEvent, outboxId, ct);
+
                     await tx.CommitAsync(ct);
                 }
                 catch
@@ -165,7 +207,9 @@ public static class TimerEndpoints
                 checkInAt = session.CheckInAt,
                 checkOutAt = now,
                 clockedHours,
-                isActive = false
+                isActive = false,
+                timeEntryCreated = true,
+                timeEntryEventId = timeEntryEvent.EventId
             });
         }).RequireAuthorization("EmployeeOrAbove");
 

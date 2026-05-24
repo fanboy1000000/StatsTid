@@ -17,6 +17,7 @@ interface UseSkemaResult {
   refetch: () => void
   saveMonth: (cells: { rowKey: string; date: string; hours: number | null }[]) => Promise<void>
   employeeApprove: (periodId: string) => Promise<void>
+  submitAndApprove: (orgId: string, agreementCode: string) => Promise<void>
 }
 
 export function useSkema(employeeId: string, year: number, month: number): UseSkemaResult {
@@ -87,5 +88,38 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
     [fetchData]
   )
 
-  return { data, loading, error, quotaError, clearQuotaError, refetch: fetchData, saveMonth, employeeApprove }
+  const submitAndApprove = useCallback(
+    async (orgId: string, agreementCode: string) => {
+      const periodStart = `${year}-${String(month).padStart(2, '0')}-01`
+      const lastDay = new Date(year, month, 0).getDate()
+      const periodEnd = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
+      const okVersion = year >= 2026 ? 'OK26' : 'OK24'
+
+      const submitResult = await apiClient.post<{ periodId: string }>('/api/approval/submit', {
+        employeeId,
+        orgId,
+        periodStart,
+        periodEnd,
+        periodType: 'MONTHLY',
+        agreementCode,
+        okVersion,
+      })
+      if (!submitResult.ok) {
+        setError(submitResult.error)
+        return
+      }
+
+      const approveResult = await apiClient.post<void>(
+        `/api/approval/${submitResult.data.periodId}/employee-approve`, {}
+      )
+      if (approveResult.ok) {
+        await fetchData()
+      } else {
+        setError(approveResult.error)
+      }
+    },
+    [employeeId, year, month, fetchData]
+  )
+
+  return { data, loading, error, quotaError, clearQuotaError, refetch: fetchData, saveMonth, employeeApprove, submitAndApprove }
 }

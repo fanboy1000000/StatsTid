@@ -428,9 +428,8 @@ public static class ApprovalEndpoints
                     return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
             }
 
-            // Only DRAFT or REJECTED periods can be employee-approved
-            if (period.Status is not ("DRAFT" or "REJECTED"))
-                return Results.Conflict(new { error = $"Cannot employee-approve period with status {period.Status}. Only DRAFT or REJECTED periods can be employee-approved." });
+            if (period.Status is not ("DRAFT" or "SUBMITTED" or "REJECTED"))
+                return Results.Conflict(new { error = $"Cannot employee-approve period with status {period.Status}. Only DRAFT, SUBMITTED, or REJECTED periods can be employee-approved." });
 
             // Atomic state-change + deadlines + audit + outbox enqueue (ADR-018 D3).
             await using var conn = connectionFactory.Create();

@@ -342,6 +342,42 @@ public static class SkemaEndpoints
             if (period is not null && period.Status is "EMPLOYEE_APPROVED" or "APPROVED")
                 return Results.Conflict(new { error = $"Cannot save entries for a period with status {period.Status}" });
 
+            // ── Per-day absence validation (S47 TASK-2C) ──
+            // Reject early if the request contains duplicate absence types on the same day
+            // or if total absence hours for any single day exceed the standard norm (7.4h).
+            if (request.Absences is not null && request.Absences.Length > 0)
+            {
+                var absencesByDateAndType = request.Absences
+                    .GroupBy(a => new { a.Date, a.AbsenceType });
+                foreach (var group in absencesByDateAndType)
+                {
+                    if (group.Count() > 1)
+                    {
+                        return Results.Json(new
+                        {
+                            error = "Duplicate absence type on same day",
+                            date = group.Key.Date,
+                            absenceType = group.Key.AbsenceType,
+                            count = group.Count(),
+                        }, statusCode: 422);
+                    }
+                }
+
+                var absenceHoursByDate = request.Absences
+                    .GroupBy(a => a.Date)
+                    .Where(g => g.Sum(a => a.Hours) > StandardDayHours);
+                foreach (var overDay in absenceHoursByDate)
+                {
+                    return Results.Json(new
+                    {
+                        error = "Total absence hours exceed norm day",
+                        date = overDay.Key,
+                        totalHours = overDay.Sum(a => a.Hours),
+                        maxHours = StandardDayHours,
+                    }, statusCode: 422);
+                }
+            }
+
             // ── Pre-compute entitlement data for validation and post-save adjustment ──
             // Aggregate requested hours per entitlement type
             var entitlementData = new Dictionary<string, (decimal RequestedDays, int EntitlementYear, decimal EffectiveQuota)>(StringComparer.Ordinal);
