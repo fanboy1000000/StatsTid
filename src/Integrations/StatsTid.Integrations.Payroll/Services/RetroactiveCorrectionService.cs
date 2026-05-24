@@ -1,3 +1,6 @@
+using StatsTid.Infrastructure;
+using StatsTid.Infrastructure.Outbox;
+using StatsTid.SharedKernel.Audit;
 using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Interfaces;
@@ -37,16 +40,25 @@ namespace StatsTid.Integrations.Payroll.Services;
 public sealed class RetroactiveCorrectionService
 {
     private readonly PeriodCalculationService _calculationService;
-    private readonly IEventStore _eventStore;
+    private readonly DbConnectionFactory _connectionFactory;
+    private readonly IOutboxEnqueue _outbox;
+    private readonly AuditProjectionRepository _auditRepo;
+    private readonly IAuditProjectionMapper<RetroactiveCorrectionRequested> _auditMapper;
     private readonly ILogger<RetroactiveCorrectionService> _logger;
 
     public RetroactiveCorrectionService(
         PeriodCalculationService calculationService,
-        IEventStore eventStore,
+        DbConnectionFactory connectionFactory,
+        IOutboxEnqueue outbox,
+        AuditProjectionRepository auditRepo,
+        IAuditProjectionMapper<RetroactiveCorrectionRequested> auditMapper,
         ILogger<RetroactiveCorrectionService> logger)
     {
         _calculationService = calculationService;
-        _eventStore = eventStore;
+        _connectionFactory = connectionFactory;
+        _outbox = outbox;
+        _auditRepo = auditRepo;
+        _auditMapper = auditMapper;
         _logger = logger;
     }
 
@@ -219,9 +231,22 @@ public sealed class RetroactiveCorrectionService
                 ManifestId = manifestId
             };
 
-            await _eventStore.AppendAsync(
-                $"retro-correction-{profile.EmployeeId}-{periodStart:yyyy-MM-dd}",
-                correctionEvent, ct);
+            var streamId = $"retro-correction-{profile.EmployeeId}-{periodStart:yyyy-MM-dd}";
+            await using var conn = _connectionFactory.Create();
+            await conn.OpenAsync(ct);
+            await using var tx = await conn.BeginTransactionAsync(ct);
+            var outboxId = await _outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, correctionEvent, ct);
+            var auditCtx = new AuditProjectionContext(
+                ActorId: actorId,
+                ActorPrimaryOrgId: profile.OrgId,
+                CorrelationId: correlationId,
+                OccurredAt: new DateTimeOffset(correctionEvent.OccurredAt),
+                ResolvedTargetOrgId: profile.OrgId
+                    ?? throw new InvalidOperationException(
+                        $"Audit projection: employee {profile.EmployeeId} has no OrgId; cannot resolve target_org_id."));
+            var auditRow = _auditMapper.Map(correctionEvent, auditCtx);
+            await _auditRepo.InsertAsync(conn, tx, correctionEvent.EventId, outboxId, correctionEvent.EventType, auditRow, auditCtx, ct);
+            await tx.CommitAsync(ct);
         }
         catch (Exception ex)
         {
