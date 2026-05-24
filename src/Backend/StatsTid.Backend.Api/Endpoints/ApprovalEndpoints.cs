@@ -116,7 +116,9 @@ public static class ApprovalEndpoints
                 ActorPrimaryOrgId: actor.OrgId,
                 CorrelationId: actor.CorrelationId,
                 OccurredAt: new DateTimeOffset(@event.OccurredAt),
-                ResolvedTargetOrgId: auditUser?.PrimaryOrgId);
+                ResolvedTargetOrgId: auditUser?.PrimaryOrgId
+                        ?? throw new InvalidOperationException(
+                            $"Audit projection: employee {@event.EmployeeId} not found or inactive."));
             var auditRow = auditMapper.Map(@event, auditCtx);
             await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
 
@@ -190,7 +192,9 @@ public static class ApprovalEndpoints
                 ActorPrimaryOrgId: actor.OrgId,
                 CorrelationId: actor.CorrelationId,
                 OccurredAt: new DateTimeOffset(@event.OccurredAt),
-                ResolvedTargetOrgId: auditUser?.PrimaryOrgId);
+                ResolvedTargetOrgId: auditUser?.PrimaryOrgId
+                        ?? throw new InvalidOperationException(
+                            $"Audit projection: employee {@event.EmployeeId} not found or inactive."));
             var auditRow = auditMapper.Map(@event, auditCtx);
             await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
 
@@ -266,7 +270,9 @@ public static class ApprovalEndpoints
                 ActorPrimaryOrgId: actor.OrgId,
                 CorrelationId: actor.CorrelationId,
                 OccurredAt: new DateTimeOffset(@event.OccurredAt),
-                ResolvedTargetOrgId: auditUser?.PrimaryOrgId);
+                ResolvedTargetOrgId: auditUser?.PrimaryOrgId
+                        ?? throw new InvalidOperationException(
+                            $"Audit projection: employee {@event.EmployeeId} not found or inactive."));
             var auditRow = auditMapper.Map(@event, auditCtx);
             await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
 
@@ -468,7 +474,9 @@ public static class ApprovalEndpoints
                 ActorPrimaryOrgId: actor.OrgId,
                 CorrelationId: actor.CorrelationId,
                 OccurredAt: new DateTimeOffset(@event.OccurredAt),
-                ResolvedTargetOrgId: auditUser?.PrimaryOrgId);
+                ResolvedTargetOrgId: auditUser?.PrimaryOrgId
+                        ?? throw new InvalidOperationException(
+                            $"Audit projection: employee {@event.EmployeeId} not found or inactive."));
             var auditRow = auditMapper.Map(@event, auditCtx);
             await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
 
@@ -543,7 +551,9 @@ public static class ApprovalEndpoints
                 ActorPrimaryOrgId: actor.OrgId,
                 CorrelationId: actor.CorrelationId,
                 OccurredAt: new DateTimeOffset(@event.OccurredAt),
-                ResolvedTargetOrgId: auditUser?.PrimaryOrgId);
+                ResolvedTargetOrgId: auditUser?.PrimaryOrgId
+                        ?? throw new InvalidOperationException(
+                            $"Audit projection: employee {@event.EmployeeId} not found or inactive."));
             var auditRow = auditMapper.Map(@event, auditCtx);
             await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
 

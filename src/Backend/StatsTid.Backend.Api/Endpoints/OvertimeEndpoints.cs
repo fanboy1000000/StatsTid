@@ -201,7 +201,9 @@ public static class OvertimeEndpoints
                         ActorPrimaryOrgId: actor.OrgId,
                         CorrelationId: actor.CorrelationId,
                         OccurredAt: new DateTimeOffset(evt.OccurredAt),
-                        ResolvedTargetOrgId: auditUser?.PrimaryOrgId);
+                        ResolvedTargetOrgId: auditUser?.PrimaryOrgId
+                            ?? throw new InvalidOperationException(
+                                $"Audit projection: employee {request.EmployeeId} not found or inactive."));
                     var auditRow = auditMapper.Map(evt, auditCtx);
                     await auditRepo.InsertAsync(conn, tx, evt.EventId, outboxId, evt.EventType, auditRow, auditCtx, ct);
                     await tx.CommitAsync(ct);
@@ -328,7 +330,9 @@ public static class OvertimeEndpoints
                     ActorPrimaryOrgId: actor.OrgId,
                     CorrelationId: actor.CorrelationId,
                     OccurredAt: new DateTimeOffset(@event.OccurredAt),
-                    ResolvedTargetOrgId: auditUser?.PrimaryOrgId);
+                    ResolvedTargetOrgId: auditUser?.PrimaryOrgId
+                            ?? throw new InvalidOperationException(
+                                $"Audit projection: employee {existing?.EmployeeId ?? "unknown"} not found or inactive."));
                 var auditRow = auditMapper.Map(@event, auditCtx);
                 await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
                 await tx.CommitAsync(ct);
@@ -396,7 +400,9 @@ public static class OvertimeEndpoints
                     ActorPrimaryOrgId: actor.OrgId,
                     CorrelationId: actor.CorrelationId,
                     OccurredAt: new DateTimeOffset(@event.OccurredAt),
-                    ResolvedTargetOrgId: auditUser?.PrimaryOrgId);
+                    ResolvedTargetOrgId: auditUser?.PrimaryOrgId
+                            ?? throw new InvalidOperationException(
+                                $"Audit projection: employee {existing?.EmployeeId ?? "unknown"} not found or inactive."));
                 var auditRow = auditMapper.Map(@event, auditCtx);
                 await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
                 await tx.CommitAsync(ct);
