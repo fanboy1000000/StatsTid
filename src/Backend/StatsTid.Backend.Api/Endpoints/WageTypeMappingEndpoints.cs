@@ -4,6 +4,7 @@ using StatsTid.Auth;
 using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
+using StatsTid.SharedKernel.Audit;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Models;
 
@@ -83,6 +84,9 @@ public static class WageTypeMappingEndpoints
             WageTypeMappingRepository repo,
             DbConnectionFactory connectionFactory,
             IOutboxEnqueue outbox,
+            IAuditProjectionMapper<WageTypeMappingCreated> createdMapper,
+            IAuditProjectionMapper<WageTypeMappingUpdated> updatedMapper,
+            AuditProjectionRepository auditRepo,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -318,7 +322,21 @@ public static class WageTypeMappingEndpoints
                         auditAction, previousDataJson, JsonSerializer.Serialize(body),
                         actorId, actorRole, ct);
                 }
-                await outbox.EnqueueAsync(conn, tx, streamId, @event, ct);
+                // S44 TASK-4413: capture outbox_id for audit_projection insert
+                // (ADR-026 D2 sync-in-tx projection write — atomic with the
+                // wage_type_mappings row + outbox row per ADR-018 D3/D13).
+                // GLOBAL_TENANT_VISIBLE — no ResolvedTargetOrgId.
+                var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, @event, ct);
+
+                var auditCtx = new AuditProjectionContext(
+                    ActorId: actor.ActorId,
+                    ActorPrimaryOrgId: actor.OrgId,
+                    CorrelationId: actor.CorrelationId,
+                    OccurredAt: new DateTimeOffset(@event.OccurredAt));
+                var auditRow = @event is WageTypeMappingCreated createdEvt
+                    ? createdMapper.Map(createdEvt, auditCtx)
+                    : updatedMapper.Map((WageTypeMappingUpdated)@event, auditCtx);
+                await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
 
                 await tx.CommitAsync(ct);
 
@@ -378,6 +396,9 @@ public static class WageTypeMappingEndpoints
             WageTypeMappingRepository repo,
             DbConnectionFactory connectionFactory,
             IOutboxEnqueue outbox,
+            IAuditProjectionMapper<WageTypeMappingUpdated> updatedMapper,
+            IAuditProjectionMapper<WageTypeMappingSuperseded> supersededMapper,
+            AuditProjectionRepository auditRepo,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -476,10 +497,24 @@ public static class WageTypeMappingEndpoints
                             ActorRole = actorRole,
                             CorrelationId = actor.CorrelationId,
                         };
-                    await outbox.EnqueueAsync(
+                    // S44 TASK-4413: capture outbox_id for audit_projection insert
+                    // (ADR-026 D2 sync-in-tx projection write — atomic with the
+                    // wage_type_mappings row + outbox row per ADR-018 D3/D13).
+                    // GLOBAL_TENANT_VISIBLE — no ResolvedTargetOrgId.
+                    var outboxId = await outbox.EnqueueAndReturnIdAsync(
                         conn, tx,
                         $"wage-type-mapping-{body.AgreementCode}-{body.OkVersion}-{body.TimeType}",
                         @event, ct);
+
+                    var auditCtx = new AuditProjectionContext(
+                        ActorId: actor.ActorId,
+                        ActorPrimaryOrgId: actor.OrgId,
+                        CorrelationId: actor.CorrelationId,
+                        OccurredAt: new DateTimeOffset(@event.OccurredAt));
+                    var auditRow = isCrossDay
+                        ? supersededMapper.Map((WageTypeMappingSuperseded)@event, auditCtx)
+                        : updatedMapper.Map((WageTypeMappingUpdated)@event, auditCtx);
+                    await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
 
                     await tx.CommitAsync(ct);
                 }
@@ -532,6 +567,8 @@ public static class WageTypeMappingEndpoints
             WageTypeMappingRepository repo,
             DbConnectionFactory connectionFactory,
             IOutboxEnqueue outbox,
+            IAuditProjectionMapper<WageTypeMappingDeleted> deletedMapper,
+            AuditProjectionRepository auditRepo,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -597,10 +634,22 @@ public static class WageTypeMappingEndpoints
                         ActorRole = actorRole,
                         CorrelationId = actor.CorrelationId,
                     };
-                    await outbox.EnqueueAsync(
+                    // S44 TASK-4413: capture outbox_id for audit_projection insert
+                    // (ADR-026 D2 sync-in-tx projection write — atomic with the
+                    // wage_type_mappings row + outbox row per ADR-018 D3/D13).
+                    // GLOBAL_TENANT_VISIBLE — no ResolvedTargetOrgId.
+                    var outboxId = await outbox.EnqueueAndReturnIdAsync(
                         conn, tx,
                         $"wage-type-mapping-{agreementCode}-{okVersion}-{timeType}",
                         @event, ct);
+
+                    var auditCtx = new AuditProjectionContext(
+                        ActorId: actor.ActorId,
+                        ActorPrimaryOrgId: actor.OrgId,
+                        CorrelationId: actor.CorrelationId,
+                        OccurredAt: new DateTimeOffset(@event.OccurredAt));
+                    var auditRow = deletedMapper.Map(@event, auditCtx);
+                    await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
 
                     await tx.CommitAsync(ct);
                 }
