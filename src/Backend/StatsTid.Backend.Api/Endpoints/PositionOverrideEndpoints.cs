@@ -4,6 +4,7 @@ using StatsTid.Auth;
 using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
+using StatsTid.SharedKernel.Audit;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Models;
 
@@ -76,6 +77,8 @@ public static class PositionOverrideEndpoints
             DbConnectionFactory connectionFactory,
             PositionOverrideRepository repo,
             IOutboxEnqueue outbox,
+            IAuditProjectionMapper<PositionOverrideCreated> createdMapper,
+            AuditProjectionRepository auditRepo,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -126,7 +129,18 @@ public static class PositionOverrideEndpoints
                     ActorRole = actorRole,
                     CorrelationId = actor.CorrelationId,
                 };
-                await outbox.EnqueueAsync(conn, tx, $"position-override-{overrideId}", @event, ct);
+                // S44 TASK-4413: capture outbox_id for audit_projection insert
+                // (ADR-026 D2 sync-in-tx projection write — atomic with the
+                // position_override row + outbox row per ADR-018 D3/D13).
+                var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"position-override-{overrideId}", @event, ct);
+
+                var auditCtx = new AuditProjectionContext(
+                    ActorId: actor.ActorId,
+                    ActorPrimaryOrgId: actor.OrgId,
+                    CorrelationId: actor.CorrelationId,
+                    OccurredAt: new DateTimeOffset(@event.OccurredAt));
+                var auditRow = createdMapper.Map(@event, auditCtx);
+                await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
 
                 await tx.CommitAsync(ct);
             }
@@ -154,6 +168,8 @@ public static class PositionOverrideEndpoints
             DbConnectionFactory connectionFactory,
             PositionOverrideRepository repo,
             IOutboxEnqueue outbox,
+            IAuditProjectionMapper<PositionOverrideUpdated> updatedMapper,
+            AuditProjectionRepository auditRepo,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -229,7 +245,17 @@ public static class PositionOverrideEndpoints
                         ActorRole = actorRole,
                         CorrelationId = actor.CorrelationId,
                     };
-                    await outbox.EnqueueAsync(conn, tx, $"position-override-{overrideId}", @event, ct);
+                    // S44 TASK-4413: capture outbox_id for audit_projection insert
+                    // (ADR-026 D2 sync-in-tx projection write).
+                    var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"position-override-{overrideId}", @event, ct);
+
+                    var auditCtx = new AuditProjectionContext(
+                        ActorId: actor.ActorId,
+                        ActorPrimaryOrgId: actor.OrgId,
+                        CorrelationId: actor.CorrelationId,
+                        OccurredAt: new DateTimeOffset(@event.OccurredAt));
+                    var auditRow = updatedMapper.Map(@event, auditCtx);
+                    await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
 
                     await tx.CommitAsync(ct);
                 }
@@ -267,6 +293,8 @@ public static class PositionOverrideEndpoints
             DbConnectionFactory connectionFactory,
             PositionOverrideRepository repo,
             IOutboxEnqueue outbox,
+            IAuditProjectionMapper<PositionOverrideDeactivated> deactivatedMapper,
+            AuditProjectionRepository auditRepo,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -315,7 +343,17 @@ public static class PositionOverrideEndpoints
                         ActorRole = actorRole,
                         CorrelationId = actor.CorrelationId,
                     };
-                    await outbox.EnqueueAsync(conn, tx, $"position-override-{overrideId}", @event, ct);
+                    // S44 TASK-4413: capture outbox_id for audit_projection insert
+                    // (ADR-026 D2 sync-in-tx projection write).
+                    var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"position-override-{overrideId}", @event, ct);
+
+                    var auditCtx = new AuditProjectionContext(
+                        ActorId: actor.ActorId,
+                        ActorPrimaryOrgId: actor.OrgId,
+                        CorrelationId: actor.CorrelationId,
+                        OccurredAt: new DateTimeOffset(@event.OccurredAt));
+                    var auditRow = deactivatedMapper.Map(@event, auditCtx);
+                    await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
 
                     await tx.CommitAsync(ct);
                 }
@@ -363,6 +401,8 @@ public static class PositionOverrideEndpoints
             DbConnectionFactory connectionFactory,
             PositionOverrideRepository repo,
             IOutboxEnqueue outbox,
+            IAuditProjectionMapper<PositionOverrideActivated> activatedMapper,
+            AuditProjectionRepository auditRepo,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -415,7 +455,17 @@ public static class PositionOverrideEndpoints
                         ActorRole = actorRole,
                         CorrelationId = actor.CorrelationId,
                     };
-                    await outbox.EnqueueAsync(conn, tx, $"position-override-{overrideId}", @event, ct);
+                    // S44 TASK-4413: capture outbox_id for audit_projection insert
+                    // (ADR-026 D2 sync-in-tx projection write).
+                    var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"position-override-{overrideId}", @event, ct);
+
+                    var auditCtx = new AuditProjectionContext(
+                        ActorId: actor.ActorId,
+                        ActorPrimaryOrgId: actor.OrgId,
+                        CorrelationId: actor.CorrelationId,
+                        OccurredAt: new DateTimeOffset(@event.OccurredAt));
+                    var auditRow = activatedMapper.Map(@event, auditCtx);
+                    await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
 
                     await tx.CommitAsync(ct);
                 }
