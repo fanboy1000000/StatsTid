@@ -4,6 +4,7 @@ using StatsTid.Auth;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
+using StatsTid.SharedKernel.Audit;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Security;
@@ -135,6 +136,9 @@ public static class OvertimeEndpoints
             OvertimePreApprovalRepository preApprovalRepo,
             DbConnectionFactory connectionFactory,
             IOutboxEnqueue outbox,
+            IAuditProjectionMapper<OvertimePreApprovalCreated> auditMapper,
+            AuditProjectionRepository auditRepo,
+            UserRepository userRepo,
             OrgScopeValidator scopeValidator,
             HttpContext context,
             CancellationToken ct) =>
@@ -187,8 +191,19 @@ public static class OvertimeEndpoints
                 try
                 {
                     await preApprovalRepo.CreateAsync(conn, tx, approval, ct);
-                    await outbox.EnqueueAsync(
+                    // S44 TASK-4413: capture outbox_id for audit_projection insert
+                    // (ADR-026 D2 sync-in-tx — TENANT_TARGETED, resolve employee org).
+                    var outboxId = await outbox.EnqueueAndReturnIdAsync(
                         conn, tx, $"overtime-preapproval-{approval.Id}", evt, ct);
+                    var auditUser = await userRepo.GetByIdAsync(conn, tx, request.EmployeeId, ct);
+                    var auditCtx = new AuditProjectionContext(
+                        ActorId: actor.ActorId,
+                        ActorPrimaryOrgId: actor.OrgId,
+                        CorrelationId: actor.CorrelationId,
+                        OccurredAt: new DateTimeOffset(evt.OccurredAt),
+                        ResolvedTargetOrgId: auditUser?.PrimaryOrgId);
+                    var auditRow = auditMapper.Map(evt, auditCtx);
+                    await auditRepo.InsertAsync(conn, tx, evt.EventId, outboxId, evt.EventType, auditRow, auditCtx, ct);
                     await tx.CommitAsync(ct);
                 }
                 catch
@@ -260,6 +275,9 @@ public static class OvertimeEndpoints
             OvertimePreApprovalRepository preApprovalRepo,
             DbConnectionFactory connectionFactory,
             IOutboxEnqueue outbox,
+            IAuditProjectionMapper<OvertimePreApprovalApproved> auditMapper,
+            AuditProjectionRepository auditRepo,
+            UserRepository userRepo,
             OrgScopeValidator scopeValidator,
             HttpContext context,
             CancellationToken ct) =>
@@ -301,7 +319,18 @@ public static class OvertimeEndpoints
                     ActorRole = actor.ActorRole,
                     CorrelationId = actor.CorrelationId,
                 };
-                await outbox.EnqueueAsync(conn, tx, $"overtime-preapproval-{id}", @event, ct);
+                // S44 TASK-4413: capture outbox_id for audit_projection insert
+                // (ADR-026 D2 sync-in-tx — TENANT_TARGETED, resolve employee org).
+                var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"overtime-preapproval-{id}", @event, ct);
+                var auditUser = await userRepo.GetByIdAsync(conn, tx, existing.EmployeeId, ct);
+                var auditCtx = new AuditProjectionContext(
+                    ActorId: actor.ActorId,
+                    ActorPrimaryOrgId: actor.OrgId,
+                    CorrelationId: actor.CorrelationId,
+                    OccurredAt: new DateTimeOffset(@event.OccurredAt),
+                    ResolvedTargetOrgId: auditUser?.PrimaryOrgId);
+                var auditRow = auditMapper.Map(@event, auditCtx);
+                await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
                 await tx.CommitAsync(ct);
             }
             catch
@@ -320,6 +349,9 @@ public static class OvertimeEndpoints
             OvertimePreApprovalRepository preApprovalRepo,
             DbConnectionFactory connectionFactory,
             IOutboxEnqueue outbox,
+            IAuditProjectionMapper<OvertimePreApprovalRejected> auditMapper,
+            AuditProjectionRepository auditRepo,
+            UserRepository userRepo,
             OrgScopeValidator scopeValidator,
             HttpContext context,
             CancellationToken ct) =>
@@ -355,7 +387,18 @@ public static class OvertimeEndpoints
                     ActorRole = actor.ActorRole,
                     CorrelationId = actor.CorrelationId,
                 };
-                await outbox.EnqueueAsync(conn, tx, $"overtime-preapproval-{id}", @event, ct);
+                // S44 TASK-4413: capture outbox_id for audit_projection insert
+                // (ADR-026 D2 sync-in-tx — TENANT_TARGETED, resolve employee org).
+                var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"overtime-preapproval-{id}", @event, ct);
+                var auditUser = await userRepo.GetByIdAsync(conn, tx, existing.EmployeeId, ct);
+                var auditCtx = new AuditProjectionContext(
+                    ActorId: actor.ActorId,
+                    ActorPrimaryOrgId: actor.OrgId,
+                    CorrelationId: actor.CorrelationId,
+                    OccurredAt: new DateTimeOffset(@event.OccurredAt),
+                    ResolvedTargetOrgId: auditUser?.PrimaryOrgId);
+                var auditRow = auditMapper.Map(@event, auditCtx);
+                await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
                 await tx.CommitAsync(ct);
             }
             catch
