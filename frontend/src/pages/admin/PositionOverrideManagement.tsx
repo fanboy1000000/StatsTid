@@ -1,5 +1,6 @@
 import { useState, type ChangeEvent, type FormEvent } from 'react'
 import { usePositionOverrides, type PositionOverrideConfig, type WithEtag } from '../../hooks/usePositionOverrides'
+import { Spinner } from '../../components/ui'
 import styles from './PositionOverrideManagement.module.css'
 
 interface CreateForm {
@@ -314,7 +315,7 @@ export function PositionOverrideManagement() {
         </div>
       )}
 
-      {loading && <div className={styles.spinner}>Henter positionstilpasninger...</div>}
+      {loading && <div className={styles.spinner}><Spinner size="lg" /></div>}
 
       {!loading && !error && data.length === 0 && (
         <div className={styles.emptyState}>Ingen positionstilpasninger fundet</div>

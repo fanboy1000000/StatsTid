@@ -18,6 +18,7 @@ export interface Organization {
   parentOrgId: string | null
   materializedPath?: string
   agreementCode: string
+  okVersion?: string
 }
 
 export interface User {
@@ -80,7 +81,20 @@ export function useOrganizations() {
     return result.data
   }
 
-  return { organizations, loading, error, fetchOrganizations, createOrganization }
+  const updateOrganization = async (
+    orgId: string,
+    body: { orgName: string; agreementCode: string; okVersion: string },
+  ) => {
+    const result = await apiClient.put<Organization>(
+      `/api/admin/organizations/${encodeURIComponent(orgId)}`,
+      body,
+    )
+    if (!result.ok) throw new Error(result.error)
+    await fetchOrganizations()
+    return result.data
+  }
+
+  return { organizations, loading, error, fetchOrganizations, createOrganization, updateOrganization }
 }
 
 /**

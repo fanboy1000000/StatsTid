@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { apiClient } from '../../lib/api'
+import { useToast } from '../../components/ui/Toast'
+import { Spinner } from '../../components/ui'
 import styles from './OvertimePreApprovalManagement.module.css'
 
 interface PreApproval {
@@ -39,6 +41,7 @@ export function OvertimePreApprovalManagement() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
+  const { toast } = useToast()
 
   const fetchPreApprovals = useCallback(async () => {
     setLoading(true)
@@ -61,6 +64,7 @@ export function OvertimePreApprovalManagement() {
     const result = await apiClient.put<void>(`/api/overtime/pre-approval/${id}/approve`)
     setActionLoading(null)
     if (result.ok) {
+      toast({ title: 'Godkendt', description: 'Forhåndsgodkendelse godkendt', variant: 'success' })
       await fetchPreApprovals()
     } else {
       setError(result.error)
@@ -72,6 +76,7 @@ export function OvertimePreApprovalManagement() {
     const result = await apiClient.put<void>(`/api/overtime/pre-approval/${id}/reject`)
     setActionLoading(null)
     if (result.ok) {
+      toast({ title: 'Afvist', description: 'Forhåndsgodkendelse afvist', variant: 'success' })
       await fetchPreApprovals()
     } else {
       setError(result.error)
@@ -86,7 +91,7 @@ export function OvertimePreApprovalManagement() {
 
       {error && <div className={styles.alert}>{error}</div>}
 
-      {loading && <div className={styles.spinner}>Henter godkendelser...</div>}
+      {loading && <div className={styles.spinner}><Spinner size="lg" /></div>}
 
       {!loading && !error && preApprovals.length === 0 && (
         <div className={styles.emptyState}>Ingen ventende godkendelser</div>

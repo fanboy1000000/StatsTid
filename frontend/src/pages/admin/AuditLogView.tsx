@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { apiClient } from '../../lib/api'
+import { Spinner } from '../../components/ui'
 import styles from './AuditLogView.module.css'
 
 interface AuditRow {
@@ -210,7 +211,7 @@ export function AuditLogView() {
 
       {error && <div className={styles.alert}>{error}</div>}
 
-      {loading && <div className={styles.spinner}>Henter auditlog...</div>}
+      {loading && <div className={styles.spinner}><Spinner size="lg" /></div>}
 
       {!loading && !error && rows.length === 0 && (
         <div className={styles.emptyState}>Ingen rækker fundet</div>

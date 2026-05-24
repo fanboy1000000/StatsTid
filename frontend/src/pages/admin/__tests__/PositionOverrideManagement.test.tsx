@@ -74,7 +74,7 @@ describe('PositionOverrideManagement', () => {
   it('shows loading state initially', () => {
     mockFetch.mockReturnValue(new Promise(() => {}))
     render(<PositionOverrideManagement />)
-    expect(screen.getByText('Henter positionstilpasninger...')).toBeDefined()
+    expect(screen.getByRole('status')).toBeDefined()
   })
 
   it('renders table with data after loading', async () => {

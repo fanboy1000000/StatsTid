@@ -9,6 +9,7 @@ import {
   type AccrualModel,
   type WithEtag,
 } from '../../hooks/useEntitlementConfig'
+import { Spinner } from '../../components/ui'
 import styles from './EntitlementConfigEditor.module.css'
 
 // TASK-3009 / Phase 4d-2 / ADR-021 pending: admin CRUD UI for entitlement
@@ -326,7 +327,7 @@ export function EntitlementConfigEditor() {
       )}
       {error && <div className={styles.alert}>{error}</div>}
 
-      {loading && <div className={styles.spinner}>Henter berettigelser...</div>}
+      {loading && <div className={styles.spinner}><Spinner size="lg" /></div>}
 
       {!loading && !error && configs.length === 0 && (
         <div className={styles.emptyState}>Ingen berettigelser fundet</div>

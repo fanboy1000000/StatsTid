@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
+import { ToastProvider } from './components/ui/Toast'
 import { AppLayout } from './components/layout/AppLayout'
 import { RequireAuth } from './components/guards/RequireAuth'
 import { RequireRole } from './components/guards/RequireRole'
@@ -26,9 +27,11 @@ import './styles/tokens.css'
 export function App() {
   return (
     <AuthProvider>
-      <BrowserRouter>
-        <AppRoutes />
-      </BrowserRouter>
+      <ToastProvider>
+        <BrowserRouter>
+          <AppRoutes />
+        </BrowserRouter>
+      </ToastProvider>
     </AuthProvider>
   )
 }

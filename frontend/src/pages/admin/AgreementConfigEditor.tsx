@@ -4,6 +4,7 @@ import { apiFetchWithEtag } from '../../lib/api'
 import { formatVersionAsIfMatch, resolveEtag } from '../../lib/etag'
 import { useAgreementConfigActions } from '../../hooks/useAgreementConfigs'
 import type { AgreementConfig } from '../../hooks/useAgreementConfigs'
+import { Spinner } from '../../components/ui'
 import styles from './AgreementConfigEditor.module.css'
 
 type ConfigForm = Omit<AgreementConfig, 'configId' | 'version' | 'createdBy' | 'createdAt' | 'updatedAt' | 'publishedAt' | 'archivedAt' | 'clonedFromId'>
@@ -275,7 +276,7 @@ export function AgreementConfigEditor() {
   }
 
   if (loading) {
-    return <div className={styles.page}><div className={styles.spinner}>Henter konfiguration...</div></div>
+    return <div className={styles.page}><div className={styles.spinner}><Spinner size="lg" /></div></div>
   }
 
   if (!isNew && !config && error) {

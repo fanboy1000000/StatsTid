@@ -1,5 +1,6 @@
 import { useState, type ChangeEvent, type FormEvent } from 'react'
 import { useWageTypeMappings, type WageTypeMappingItem, type WithEtag } from '../../hooks/useWageTypeMappings'
+import { Spinner } from '../../components/ui'
 import styles from './WageTypeMappingManagement.module.css'
 
 interface CreateForm {
@@ -261,7 +262,7 @@ export function WageTypeMappingManagement() {
         </div>
       )}
 
-      {loading && <div className={styles.spinner}>Henter lonartstilknytninger...</div>}
+      {loading && <div className={styles.spinner}><Spinner size="lg" /></div>}
 
       {!loading && !error && data.length === 0 && (
         <div className={styles.emptyState}>Ingen lonartstilknytninger fundet</div>

@@ -7,6 +7,7 @@ import {
   type EmployeeProfile,
   type EmployeeProfileUpdateRequest,
 } from '../../hooks/useEmployeeProfile'
+import { Spinner } from '../../components/ui'
 import styles from './EntitlementConfigEditor.module.css'
 
 // TASK-3109 / Phase 4d-3 Part 1 (S31). HR-only admin page for the
@@ -255,7 +256,7 @@ export function EmployeeProfileEditor() {
             Organisation
           </label>
           {orgsLoading ? (
-            <div className={styles.spinner}>Henter...</div>
+            <div className={styles.spinner}><Spinner size="sm" /></div>
           ) : (
             <select
               className={styles.input}
@@ -277,7 +278,7 @@ export function EmployeeProfileEditor() {
             Medarbejder
           </label>
           {usersLoading ? (
-            <div className={styles.spinner}>Henter...</div>
+            <div className={styles.spinner}><Spinner size="sm" /></div>
           ) : (
             <select
               className={styles.input}
@@ -300,7 +301,7 @@ export function EmployeeProfileEditor() {
       {profileError && <div className={styles.alert}>{profileError}</div>}
 
       {selectedEmployeeId && profileLoading && (
-        <div className={styles.spinner}>Henter profil...</div>
+        <div className={styles.spinner}><Spinner size="lg" /></div>
       )}
 
       {selectedEmployeeId && !profileLoading && profile && (

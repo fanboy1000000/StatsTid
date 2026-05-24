@@ -11,6 +11,7 @@
 // refetch GET).
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { ToastProvider } from '../../../components/ui/Toast'
 import { UserManagement } from '../UserManagement'
 
 const mockFetch = vi.fn()
@@ -91,7 +92,7 @@ describe('UserManagement — 412 banner-with-retry', () => {
       text: async () => JSON.stringify(stalePayload),
     })
 
-    render(<UserManagement />)
+    render(<ToastProvider><UserManagement /></ToastProvider>)
 
     // Wait for the user row to render in the table.
     await waitFor(() => {
@@ -159,7 +160,7 @@ describe('UserManagement — 412 banner-with-retry', () => {
       json: async () => ({ ...mockUser, version: 5 }),
     })
 
-    render(<UserManagement />)
+    render(<ToastProvider><UserManagement /></ToastProvider>)
 
     await waitFor(() => {
       expect(screen.getByText('Test Bruger')).toBeDefined()

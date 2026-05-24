@@ -2,6 +2,7 @@ import { useState, useCallback, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAgreementConfigs, useAgreementConfigActions } from '../../hooks/useAgreementConfigs'
 import type { AgreementConfig, WithEtag } from '../../hooks/useAgreementConfigs'
+import { Spinner } from '../../components/ui'
 import styles from './AgreementConfigList.module.css'
 
 type StatusFilter = '' | 'DRAFT' | 'ACTIVE' | 'ARCHIVED'
@@ -148,7 +149,7 @@ export function AgreementConfigList() {
       {error && <div className={styles.alert}>{error}</div>}
 
       {loading && (
-        <div className={styles.spinner}>Henter overenskomster...</div>
+        <div className={styles.spinner}><Spinner size="lg" /></div>
       )}
 
       {!loading && !error && configs.length === 0 && (

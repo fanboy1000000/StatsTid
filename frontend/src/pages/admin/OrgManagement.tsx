@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback, type FormEvent } from 'react'
+import { useState, type FormEvent } from 'react'
+import { useOrganizations, type Organization } from '../../hooks/useAdmin'
+import { useToast } from '../../components/ui/Toast'
+import { Spinner } from '../../components/ui'
 import styles from './OrgManagement.module.css'
-
-const TOKEN_KEY = 'statstid_token'
 
 const AGREEMENT_CODES = ['AC', 'HK', 'PROSA'] as const
 
@@ -19,16 +20,6 @@ const ORG_TYPE_LABELS: Record<string, string> = {
   TEAM: 'Team',
 }
 
-interface Organization {
-  orgId: string
-  orgName: string
-  orgType: string
-  parentOrgId: string | null
-  materializedPath: string
-  agreementCode: string
-  okVersion?: string
-}
-
 interface CreateOrgForm {
   orgId: string
   orgName: string
@@ -37,97 +28,15 @@ interface CreateOrgForm {
   agreementCode: string
 }
 
-function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY)
-}
-
 function getPathDepth(path: string): number {
   if (!path) return 0
   const parts = path.split('/').filter(Boolean)
   return Math.max(0, parts.length - 1)
 }
 
-function useOrganizations() {
-  const [organizations, setOrganizations] = useState<Organization[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
-  const fetchOrganizations = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const token = getToken()
-      const res = await fetch(`/api/admin/organizations`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const data: Organization[] = await res.json()
-      setOrganizations(data)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    void fetchOrganizations()
-  }, [fetchOrganizations])
-
-  const createOrganization = useCallback(
-    async (org: {
-      orgId: string
-      orgName: string
-      orgType: string
-      parentOrgId: string | null
-      agreementCode: string
-    }) => {
-      const token = getToken()
-      const res = await fetch(`/api/admin/organizations`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify(org),
-      })
-      if (!res.ok) {
-        const text = await res.text().catch(() => '')
-        throw new Error(text || `HTTP ${res.status}`)
-      }
-      await fetchOrganizations()
-    },
-    [fetchOrganizations]
-  )
-
-  const updateOrganization = useCallback(
-    async (
-      orgId: string,
-      updates: { orgName: string; agreementCode: string; okVersion: string }
-    ) => {
-      const token = getToken()
-      const res = await fetch(`/api/admin/organizations/${orgId}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify(updates),
-      })
-      if (!res.ok) {
-        const text = await res.text().catch(() => '')
-        throw new Error(text || `HTTP ${res.status}`)
-      }
-      await fetchOrganizations()
-    },
-    [fetchOrganizations]
-  )
-
-  return { organizations, loading, error, createOrganization, updateOrganization, refetch: fetchOrganizations }
-}
-
 export function OrgManagement() {
   const { organizations, loading, error, createOrganization, updateOrganization } = useOrganizations()
+  const { toast } = useToast()
   const [dialogOpen, setDialogOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
@@ -153,7 +62,7 @@ export function OrgManagement() {
   const [editFormError, setEditFormError] = useState<string | null>(null)
 
   const sortedOrgs = [...organizations].sort((a, b) =>
-    a.materializedPath.localeCompare(b.materializedPath)
+    (a.materializedPath ?? '').localeCompare(b.materializedPath ?? '')
   )
 
   const resetForm = () => {
@@ -189,6 +98,7 @@ export function OrgManagement() {
         parentOrgId: form.parentOrgId || null,
         agreementCode: form.agreementCode,
       })
+      toast({ title: 'Oprettet', description: 'Organisation oprettet', variant: 'success' })
       handleClose()
     } catch (err) {
       setFormError(err instanceof Error ? err.message : String(err))
@@ -226,6 +136,7 @@ export function OrgManagement() {
         agreementCode: editForm.agreementCode,
         okVersion: editForm.okVersion,
       })
+      toast({ title: 'Gemt', description: 'Organisation opdateret', variant: 'success' })
       handleEditClose()
     } catch (err) {
       setEditFormError(err instanceof Error ? err.message : String(err))
@@ -246,7 +157,7 @@ export function OrgManagement() {
       {error && <div className={styles.alert}>{error}</div>}
 
       {loading && (
-        <div className={styles.spinner}>Henter organisationer...</div>
+        <div className={styles.spinner}><Spinner size="lg" /></div>
       )}
 
       {!loading && !error && sortedOrgs.length === 0 && (
@@ -268,7 +179,7 @@ export function OrgManagement() {
           </thead>
           <tbody>
             {sortedOrgs.map((org) => {
-              const depth = getPathDepth(org.materializedPath)
+              const depth = getPathDepth(org.materializedPath ?? '')
               return (
                 <tr key={org.orgId}>
                   <td>{org.orgId}</td>

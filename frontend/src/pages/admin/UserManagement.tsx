@@ -1,24 +1,10 @@
 import { useState, useEffect, type FormEvent } from 'react'
 import styles from './UserManagement.module.css'
-import { useOrgUsers, type User, type WithEtag } from '../../hooks/useAdmin'
-
-const TOKEN_KEY = 'statstid_token'
+import { useOrganizations, useOrgUsers, type User, type WithEtag } from '../../hooks/useAdmin'
+import { useToast } from '../../components/ui/Toast'
+import { Spinner } from '../../components/ui'
 
 const AGREEMENT_CODES = ['AC', 'HK', 'PROSA'] as const
-
-interface Organization {
-  orgId: string
-  orgName: string
-  orgType: string
-  parentOrgId: string | null
-  materializedPath: string
-  agreementCode: string
-}
-
-// S35 TASK-3507 (ADR-019 D2 admin-strict If-Match). The local `User` shape was
-// replaced by the canonical `User` exported from `useAdmin.ts` which adds the
-// required `version` field. The local declaration is kept commented as
-// reference but the import above is authoritative.
 
 interface CreateUserForm {
   userId: string
@@ -37,10 +23,6 @@ interface EditUserForm {
   agreementCode: string
 }
 
-function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY)
-}
-
 // S34 TASK-3409 (ADR-023 D8). UTC year-month-day matches the backend's
 // `DateTime.UtcNow` reference for the same-day-only-edit validator (TASK-3407).
 // Mirrors `EmployeeProfileEditor.tsx` precedent (S33 TASK-3311); using local
@@ -49,39 +31,9 @@ function todayIsoUtc(): string {
   return new Date().toISOString().slice(0, 10)
 }
 
-function useOrganizations() {
-  const [organizations, setOrganizations] = useState<Organization[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    async function load() {
-      setLoading(true)
-      setError(null)
-      try {
-        const token = getToken()
-        const res = await fetch(`/api/admin/organizations`, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const data: Organization[] = await res.json()
-        if (!cancelled) setOrganizations(data)
-      } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err))
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
-    }
-    void load()
-    return () => { cancelled = true }
-  }, [])
-
-  return { organizations, loading, error }
-}
-
 export function UserManagement() {
   const { organizations, loading: orgsLoading, error: orgsError } = useOrganizations()
+  const { toast } = useToast()
   const [selectedOrgId, setSelectedOrgId] = useState('')
   // S35 TASK-3507 — migrated to the shared `useOrgUsers` from `useAdmin.ts`
   // which now routes through `apiFetchWithEtag<T>`; the local raw-fetch hook
@@ -172,6 +124,7 @@ export function UserManagement() {
         primaryOrgId: createForm.primaryOrgId,
         agreementCode: createForm.agreementCode,
       })
+      toast({ title: 'Oprettet', description: 'Bruger oprettet', variant: 'success' })
       handleCloseCreate()
     } catch (err) {
       setFormError(err instanceof Error ? err.message : String(err))
@@ -271,6 +224,7 @@ export function UserManagement() {
       // the same dialog composes If-Match against the new version without a
       // round-trip GET.
       setEditingUser(updated)
+      toast({ title: 'Gemt', description: 'Bruger opdateret', variant: 'success' })
       handleCloseEdit()
     } catch (err) {
       // S35 TASK-3507. 412 -> show banner-with-retry; other errors -> generic
@@ -305,7 +259,7 @@ export function UserManagement() {
           Organisation
         </label>
         {orgsLoading ? (
-          <div className={styles.spinner}>Henter organisationer...</div>
+          <div className={styles.spinner}><Spinner size="lg" /></div>
         ) : (
           <select
             className={styles.select}
@@ -335,7 +289,7 @@ export function UserManagement() {
             {usersError && <div className={styles.alert}>{usersError}</div>}
 
             {usersLoading && (
-              <div className={styles.spinner}>Henter brugere...</div>
+              <div className={styles.spinner}><Spinner size="lg" /></div>
             )}
 
             {!usersLoading && !usersError && users.length === 0 && (
