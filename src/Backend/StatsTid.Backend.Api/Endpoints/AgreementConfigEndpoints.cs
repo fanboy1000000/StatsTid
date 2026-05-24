@@ -3,6 +3,7 @@ using StatsTid.Auth;
 using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
+using StatsTid.SharedKernel.Audit;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Models;
 
@@ -84,6 +85,8 @@ public static class AgreementConfigEndpoints
             AgreementConfigRepository agreementConfigRepo,
             DbConnectionFactory connectionFactory,
             IOutboxEnqueue outbox,
+            IAuditProjectionMapper<AgreementConfigCreated> createdMapper,
+            AuditProjectionRepository auditRepo,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -123,7 +126,18 @@ public static class AgreementConfigEndpoints
                     ActorRole = actor.ActorRole,
                     CorrelationId = actor.CorrelationId,
                 };
-                await outbox.EnqueueAsync(conn, tx, $"agreement-config-{configId}", @event, ct);
+                // S44 TASK-4413: capture outbox_id for audit_projection insert
+                // (ADR-026 D2 sync-in-tx projection write — atomic with the
+                // agreement_configs row + outbox row per ADR-018 D3/D13).
+                var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"agreement-config-{configId}", @event, ct);
+
+                var auditCtx = new AuditProjectionContext(
+                    ActorId: actor.ActorId,
+                    ActorPrimaryOrgId: actor.OrgId,
+                    CorrelationId: actor.CorrelationId,
+                    OccurredAt: new DateTimeOffset(@event.OccurredAt));
+                var auditRow = createdMapper.Map(@event, auditCtx);
+                await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
 
                 await tx.CommitAsync(ct);
             }
@@ -149,6 +163,8 @@ public static class AgreementConfigEndpoints
             AgreementConfigRepository agreementConfigRepo,
             DbConnectionFactory connectionFactory,
             IOutboxEnqueue outbox,
+            IAuditProjectionMapper<AgreementConfigCloned> clonedMapper,
+            AuditProjectionRepository auditRepo,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -233,7 +249,17 @@ public static class AgreementConfigEndpoints
                     ActorRole = actor.ActorRole,
                     CorrelationId = actor.CorrelationId,
                 };
-                await outbox.EnqueueAsync(conn, tx, $"agreement-config-{newConfigId}", @event, ct);
+                // S44 TASK-4413: capture outbox_id for audit_projection insert
+                // (ADR-026 D2 sync-in-tx projection write).
+                var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"agreement-config-{newConfigId}", @event, ct);
+
+                var auditCtx = new AuditProjectionContext(
+                    ActorId: actor.ActorId,
+                    ActorPrimaryOrgId: actor.OrgId,
+                    CorrelationId: actor.CorrelationId,
+                    OccurredAt: new DateTimeOffset(@event.OccurredAt));
+                var auditRow = clonedMapper.Map(@event, auditCtx);
+                await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
 
                 await tx.CommitAsync(ct);
             }
@@ -260,6 +286,8 @@ public static class AgreementConfigEndpoints
             AgreementConfigRepository agreementConfigRepo,
             DbConnectionFactory connectionFactory,
             IOutboxEnqueue outbox,
+            IAuditProjectionMapper<AgreementConfigUpdated> updatedMapper,
+            AuditProjectionRepository auditRepo,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -324,7 +352,17 @@ public static class AgreementConfigEndpoints
                         ActorRole = actor.ActorRole,
                         CorrelationId = actor.CorrelationId,
                     };
-                    await outbox.EnqueueAsync(conn, tx, $"agreement-config-{configId}", @event, ct);
+                    // S44 TASK-4413: capture outbox_id for audit_projection insert
+                    // (ADR-026 D2 sync-in-tx projection write).
+                    var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"agreement-config-{configId}", @event, ct);
+
+                    var auditCtx = new AuditProjectionContext(
+                        ActorId: actor.ActorId,
+                        ActorPrimaryOrgId: actor.OrgId,
+                        CorrelationId: actor.CorrelationId,
+                        OccurredAt: new DateTimeOffset(@event.OccurredAt));
+                    var auditRow = updatedMapper.Map(@event, auditCtx);
+                    await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
 
                     await tx.CommitAsync(ct);
                 }
@@ -365,6 +403,9 @@ public static class AgreementConfigEndpoints
             AgreementConfigRepository agreementConfigRepo,
             DbConnectionFactory connectionFactory,
             IOutboxEnqueue outbox,
+            IAuditProjectionMapper<AgreementConfigPublished> publishedMapper,
+            IAuditProjectionMapper<AgreementConfigArchived> archivedMapper,
+            AuditProjectionRepository auditRepo,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -423,7 +464,17 @@ public static class AgreementConfigEndpoints
                         ActorRole = actor.ActorRole,
                         CorrelationId = actor.CorrelationId,
                     };
-                    await outbox.EnqueueAsync(conn, tx, $"agreement-config-{configId}", @event, ct);
+                    // S44 TASK-4413: capture outbox_id for audit_projection insert
+                    // (ADR-026 D2 sync-in-tx projection write).
+                    var publishOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"agreement-config-{configId}", @event, ct);
+
+                    var publishAuditCtx = new AuditProjectionContext(
+                        ActorId: actor.ActorId,
+                        ActorPrimaryOrgId: actor.OrgId,
+                        CorrelationId: actor.CorrelationId,
+                        OccurredAt: new DateTimeOffset(@event.OccurredAt));
+                    var publishAuditRow = publishedMapper.Map(@event, publishAuditCtx);
+                    await auditRepo.InsertAsync(conn, tx, @event.EventId, publishOutboxId, @event.EventType, publishAuditRow, publishAuditCtx, ct);
 
                     // ADR-019 D1: when a prior ACTIVE was archived as part of this publish,
                     // emit the matching ARCHIVED audit + outbox for the archived config_id.
@@ -445,8 +496,18 @@ public static class AgreementConfigEndpoints
                             ActorRole = actor.ActorRole,
                             CorrelationId = actor.CorrelationId,
                         };
-                        await outbox.EnqueueAsync(
+                        // S44 TASK-4413: capture outbox_id for audit_projection insert
+                        // (dual-emit — second audit row for the superseded config).
+                        var archivedOutboxId = await outbox.EnqueueAndReturnIdAsync(
                             conn, tx, $"agreement-config-{archivedId}", archivedEvent, ct);
+
+                        var archivedAuditCtx = new AuditProjectionContext(
+                            ActorId: actor.ActorId,
+                            ActorPrimaryOrgId: actor.OrgId,
+                            CorrelationId: actor.CorrelationId,
+                            OccurredAt: new DateTimeOffset(archivedEvent.OccurredAt));
+                        var archivedAuditRow = archivedMapper.Map(archivedEvent, archivedAuditCtx);
+                        await auditRepo.InsertAsync(conn, tx, archivedEvent.EventId, archivedOutboxId, archivedEvent.EventType, archivedAuditRow, archivedAuditCtx, ct);
                     }
 
                     await tx.CommitAsync(ct);
@@ -490,6 +551,8 @@ public static class AgreementConfigEndpoints
             AgreementConfigRepository agreementConfigRepo,
             DbConnectionFactory connectionFactory,
             IOutboxEnqueue outbox,
+            IAuditProjectionMapper<AgreementConfigArchived> archivedMapper,
+            AuditProjectionRepository auditRepo,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -540,7 +603,17 @@ public static class AgreementConfigEndpoints
                         ActorRole = actor.ActorRole,
                         CorrelationId = actor.CorrelationId,
                     };
-                    await outbox.EnqueueAsync(conn, tx, $"agreement-config-{configId}", @event, ct);
+                    // S44 TASK-4413: capture outbox_id for audit_projection insert
+                    // (ADR-026 D2 sync-in-tx projection write).
+                    var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"agreement-config-{configId}", @event, ct);
+
+                    var auditCtx = new AuditProjectionContext(
+                        ActorId: actor.ActorId,
+                        ActorPrimaryOrgId: actor.OrgId,
+                        CorrelationId: actor.CorrelationId,
+                        OccurredAt: new DateTimeOffset(@event.OccurredAt));
+                    var auditRow = archivedMapper.Map(@event, auditCtx);
+                    await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
 
                     await tx.CommitAsync(ct);
                 }
