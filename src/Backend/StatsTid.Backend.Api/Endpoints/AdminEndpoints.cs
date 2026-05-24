@@ -380,6 +380,7 @@ public static class AdminEndpoints
             IOutboxEnqueue outbox,
             UserAgreementCodeRepository userAgreementCodeRepo,
             IAuditProjectionMapper<UserCreated> auditMapper,
+            IAuditProjectionMapper<UserAgreementCodeSeeded> uacSeededMapper,
             AuditProjectionRepository auditRepo,
             ILoggerFactory loggerFactory,
             HttpContext context,
@@ -611,10 +612,10 @@ public static class AdminEndpoints
                     CorrelationId = actor.CorrelationId
                 };
                 // S44 TASK-4413: UserCreated enqueue converted to capture outbox_id +
-                // audit_projection insert (ADR-026 D2 sync-in-tx). The other 2 enqueues
-                // in this tx (EmployeeProfileCreated@L635 + UserAgreementCodeSeeded
-                // below) remain EnqueueAsync — their mappers land in S44c + S44b
-                // respectively (same-endpoint coupling per refinement Risk #5).
+                // audit_projection insert (ADR-026 D2 sync-in-tx). EmployeeProfileCreated
+                // @L635 remains EnqueueAsync — its mapper lands in S44c (same-endpoint
+                // coupling per refinement Risk #5). UserAgreementCodeSeeded below
+                // converted in S44b TASK-4413b.
                 var userCreatedOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"user-{request.UserId}", @event, ct);
                 var userCreatedAuditCtx = new AuditProjectionContext(
                     ActorId: actor.ActorId,
@@ -667,7 +668,19 @@ public static class AdminEndpoints
                     ActorRole = actor.ActorRole,
                     CorrelationId = actor.CorrelationId,
                 };
-                await outbox.EnqueueAsync(conn, tx, $"user-{request.UserId}", agreementSeededEvent, ct);
+                // S44b TASK-4413b: UserAgreementCodeSeeded cutover to
+                // EnqueueAndReturnIdAsync + audit_projection insert (ADR-026 D2
+                // sync-in-tx). TENANT_TARGETED — ResolvedTargetOrgId from the
+                // request's PrimaryOrgId (the user being created).
+                var uacSeededOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"user-{request.UserId}", agreementSeededEvent, ct);
+                var uacSeededCtx = new AuditProjectionContext(
+                    ActorId: actor.ActorId,
+                    ActorPrimaryOrgId: actor.OrgId,
+                    CorrelationId: actor.CorrelationId,
+                    OccurredAt: new DateTimeOffset(agreementSeededEvent.OccurredAt),
+                    ResolvedTargetOrgId: request.PrimaryOrgId);
+                var uacSeededRow = uacSeededMapper.Map(agreementSeededEvent, uacSeededCtx);
+                await auditRepo.InsertAsync(conn, tx, agreementSeededEvent.EventId, uacSeededOutboxId, agreementSeededEvent.EventType, uacSeededRow, uacSeededCtx, ct);
 
                 await tx.CommitAsync(ct);
             }
@@ -767,6 +780,8 @@ public static class AdminEndpoints
             DbConnectionFactory dbFactory,
             UserAgreementCodeRepository userAgreementCodeRepo,
             IAuditProjectionMapper<UserUpdated> auditMapper,
+            IAuditProjectionMapper<UserAgreementCodeChanged> uacChangedMapper,
+            IAuditProjectionMapper<UserAgreementCodeSuperseded> uacSupersededMapper,
             AuditProjectionRepository auditRepo,
             ILoggerFactory loggerFactory,
             HttpContext context,
@@ -1072,8 +1087,7 @@ public static class AdminEndpoints
                 };
                 // S44 TASK-4413: UserUpdated enqueue converted to capture outbox_id +
                 // audit_projection insert (ADR-026 D2 sync-in-tx). UserAgreementCodeChanged +
-                // UserAgreementCodeSuperseded enqueues below remain EnqueueAsync — their
-                // mappers land in S44b (same-endpoint coupling per refinement Risk #5).
+                // UserAgreementCodeSuperseded enqueues below converted in S44b TASK-4413b.
                 // ResolvedTargetOrgId fallback to newPrimaryOrgId — PUT may carry null
                 // PrimaryOrgId (no change requested); mapper requires SOME non-null value.
                 var userUpdatedOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"user-{userId}", @event, ct);
@@ -1224,7 +1238,19 @@ public static class AdminEndpoints
                         ActorRole = actor.ActorRole,
                         CorrelationId = actor.CorrelationId
                     };
-                    await outbox.EnqueueAsync(conn, tx, $"user-{userId}", agreementChangedEvent, ct);
+                    // S44b TASK-4413b: UserAgreementCodeChanged cutover to
+                    // EnqueueAndReturnIdAsync + audit_projection insert (ADR-026 D2
+                    // sync-in-tx). TENANT_TARGETED — ResolvedTargetOrgId from
+                    // newPrimaryOrgId (the user's effective PrimaryOrgId after this PUT).
+                    var uacChangedOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"user-{userId}", agreementChangedEvent, ct);
+                    var uacChangedCtx = new AuditProjectionContext(
+                        ActorId: actor.ActorId,
+                        ActorPrimaryOrgId: actor.OrgId,
+                        CorrelationId: actor.CorrelationId,
+                        OccurredAt: new DateTimeOffset(agreementChangedEvent.OccurredAt),
+                        ResolvedTargetOrgId: newPrimaryOrgId);
+                    var uacChangedRow = uacChangedMapper.Map(agreementChangedEvent, uacChangedCtx);
+                    await auditRepo.InsertAsync(conn, tx, agreementChangedEvent.EventId, uacChangedOutboxId, agreementChangedEvent.EventType, uacChangedRow, uacChangedCtx, ct);
 
                     // S34 / TASK-3407 (NEW) — UserAgreementCodeSuperseded emits
                     // ADDITIONALLY on Case C (cross-day supersession). Dual emission
@@ -1253,7 +1279,20 @@ public static class AdminEndpoints
                             ActorRole = actor.ActorRole,
                             CorrelationId = actor.CorrelationId,
                         };
-                        await outbox.EnqueueAsync(conn, tx, $"user-{userId}", supersededEvent, ct);
+                        // S44b TASK-4413b: UserAgreementCodeSuperseded cutover to
+                        // EnqueueAndReturnIdAsync + audit_projection insert (ADR-026
+                        // D2 sync-in-tx). TENANT_TARGETED — same ResolvedTargetOrgId
+                        // as UserAgreementCodeChanged above (newPrimaryOrgId). Only
+                        // emitted on Case C (cross-day supersession).
+                        var uacSupersededOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"user-{userId}", supersededEvent, ct);
+                        var uacSupersededCtx = new AuditProjectionContext(
+                            ActorId: actor.ActorId,
+                            ActorPrimaryOrgId: actor.OrgId,
+                            CorrelationId: actor.CorrelationId,
+                            OccurredAt: new DateTimeOffset(supersededEvent.OccurredAt),
+                            ResolvedTargetOrgId: newPrimaryOrgId);
+                        var uacSupersededRow = uacSupersededMapper.Map(supersededEvent, uacSupersededCtx);
+                        await auditRepo.InsertAsync(conn, tx, supersededEvent.EventId, uacSupersededOutboxId, supersededEvent.EventType, uacSupersededRow, uacSupersededCtx, ct);
                     }
                 }
 
