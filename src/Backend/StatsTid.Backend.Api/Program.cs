@@ -119,6 +119,63 @@ builder.Services.AddSingleton<IAuditProjectionMapper<UserAgreementCodeSeeded>, U
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(UserAgreementCodeSeeded), nameof(UserAgreementCodeSeeded)));
 builder.Services.AddSingleton<IAuditProjectionMapper<UserAgreementCodeSuperseded>, UserAgreementCodeSupersededAuditMapper>();
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(UserAgreementCodeSuperseded), nameof(UserAgreementCodeSuperseded)));
+// S44c TASK-44C-01..06 — 25 IAuditProjectionMapper<T> + 25 RegisteredAuditEventType marker pairs.
+// PositionOverride family (4)
+builder.Services.AddSingleton<IAuditProjectionMapper<PositionOverrideCreated>, PositionOverrideCreatedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(PositionOverrideCreated), nameof(PositionOverrideCreated)));
+builder.Services.AddSingleton<IAuditProjectionMapper<PositionOverrideUpdated>, PositionOverrideUpdatedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(PositionOverrideUpdated), nameof(PositionOverrideUpdated)));
+builder.Services.AddSingleton<IAuditProjectionMapper<PositionOverrideActivated>, PositionOverrideActivatedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(PositionOverrideActivated), nameof(PositionOverrideActivated)));
+builder.Services.AddSingleton<IAuditProjectionMapper<PositionOverrideDeactivated>, PositionOverrideDeactivatedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(PositionOverrideDeactivated), nameof(PositionOverrideDeactivated)));
+// WageTypeMapping family (4)
+builder.Services.AddSingleton<IAuditProjectionMapper<WageTypeMappingCreated>, WageTypeMappingCreatedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(WageTypeMappingCreated), nameof(WageTypeMappingCreated)));
+builder.Services.AddSingleton<IAuditProjectionMapper<WageTypeMappingUpdated>, WageTypeMappingUpdatedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(WageTypeMappingUpdated), nameof(WageTypeMappingUpdated)));
+builder.Services.AddSingleton<IAuditProjectionMapper<WageTypeMappingDeleted>, WageTypeMappingDeletedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(WageTypeMappingDeleted), nameof(WageTypeMappingDeleted)));
+builder.Services.AddSingleton<IAuditProjectionMapper<WageTypeMappingSuperseded>, WageTypeMappingSupersededAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(WageTypeMappingSuperseded), nameof(WageTypeMappingSuperseded)));
+// EntitlementConfig family (4 — incl Seeded, mapper-only)
+builder.Services.AddSingleton<IAuditProjectionMapper<EntitlementConfigSeeded>, EntitlementConfigSeededAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(EntitlementConfigSeeded), nameof(EntitlementConfigSeeded)));
+builder.Services.AddSingleton<IAuditProjectionMapper<EntitlementConfigCreated>, EntitlementConfigCreatedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(EntitlementConfigCreated), nameof(EntitlementConfigCreated)));
+builder.Services.AddSingleton<IAuditProjectionMapper<EntitlementConfigSuperseded>, EntitlementConfigSupersededAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(EntitlementConfigSuperseded), nameof(EntitlementConfigSuperseded)));
+builder.Services.AddSingleton<IAuditProjectionMapper<EntitlementConfigSoftDeleted>, EntitlementConfigSoftDeletedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(EntitlementConfigSoftDeleted), nameof(EntitlementConfigSoftDeleted)));
+// EmployeeProfile family (4)
+builder.Services.AddSingleton<IAuditProjectionMapper<EmployeeProfileCreated>, EmployeeProfileCreatedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(EmployeeProfileCreated), nameof(EmployeeProfileCreated)));
+builder.Services.AddSingleton<IAuditProjectionMapper<EmployeeProfileUpdated>, EmployeeProfileUpdatedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(EmployeeProfileUpdated), nameof(EmployeeProfileUpdated)));
+builder.Services.AddSingleton<IAuditProjectionMapper<EmployeeProfileSuperseded>, EmployeeProfileSupersededAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(EmployeeProfileSuperseded), nameof(EmployeeProfileSuperseded)));
+builder.Services.AddSingleton<IAuditProjectionMapper<EmployeeProfileSoftDeleted>, EmployeeProfileSoftDeletedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(EmployeeProfileSoftDeleted), nameof(EmployeeProfileSoftDeleted)));
+// Local config family (2 — LocalConfigurationChanged is mapper-only)
+builder.Services.AddSingleton<IAuditProjectionMapper<LocalAgreementProfileChanged>, LocalAgreementProfileChangedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(LocalAgreementProfileChanged), nameof(LocalAgreementProfileChanged)));
+builder.Services.AddSingleton<IAuditProjectionMapper<LocalConfigurationChanged>, LocalConfigurationChangedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(LocalConfigurationChanged), nameof(LocalConfigurationChanged)));
+// ADR-024 events (7 — all mapper-only, no emit sites)
+builder.Services.AddSingleton<IAuditProjectionMapper<RoleConfigOverrideCreated>, RoleConfigOverrideCreatedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(RoleConfigOverrideCreated), nameof(RoleConfigOverrideCreated)));
+builder.Services.AddSingleton<IAuditProjectionMapper<RoleConfigOverrideUpdated>, RoleConfigOverrideUpdatedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(RoleConfigOverrideUpdated), nameof(RoleConfigOverrideUpdated)));
+builder.Services.AddSingleton<IAuditProjectionMapper<RoleConfigOverrideSuperseded>, RoleConfigOverrideSupersededAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(RoleConfigOverrideSuperseded), nameof(RoleConfigOverrideSuperseded)));
+builder.Services.AddSingleton<IAuditProjectionMapper<RoleConfigOverrideSoftDeleted>, RoleConfigOverrideSoftDeletedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(RoleConfigOverrideSoftDeleted), nameof(RoleConfigOverrideSoftDeleted)));
+builder.Services.AddSingleton<IAuditProjectionMapper<MerarbejdeDiscretionary>, MerarbejdeDiscretionaryAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(MerarbejdeDiscretionary), nameof(MerarbejdeDiscretionary)));
+builder.Services.AddSingleton<IAuditProjectionMapper<OvertimeNecessityAcknowledged>, OvertimeNecessityAcknowledgedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(OvertimeNecessityAcknowledged), nameof(OvertimeNecessityAcknowledged)));
+builder.Services.AddSingleton<IAuditProjectionMapper<ConfigBugCorrected>, ConfigBugCorrectedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(ConfigBugCorrected), nameof(ConfigBugCorrected)));
 
 // ── Services ──
 builder.Services.AddSingleton<ConfigResolutionService>();
