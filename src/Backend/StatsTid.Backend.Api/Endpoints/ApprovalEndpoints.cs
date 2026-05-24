@@ -2,6 +2,7 @@ using StatsTid.Auth;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
+using StatsTid.SharedKernel.Audit;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Security;
@@ -20,6 +21,9 @@ public static class ApprovalEndpoints
             OrgScopeValidator scopeValidator,
             DbConnectionFactory connectionFactory,
             IOutboxEnqueue outbox,
+            IAuditProjectionMapper<PeriodSubmitted> auditMapper,
+            AuditProjectionRepository auditRepo,
+            UserRepository userRepo,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -101,7 +105,20 @@ public static class ApprovalEndpoints
                 ActorRole = actor.ActorRole,
                 CorrelationId = actor.CorrelationId
             };
-            await outbox.EnqueueAsync(conn, tx, streamId, @event, ct);
+            // S44 TASK-4413: capture outbox_id for audit_projection insert
+            // (ADR-026 D2 sync-in-tx projection write — atomic with the
+            // approval_periods row + outbox row per ADR-018 D3/D13).
+            var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, @event, ct);
+
+            var auditUser = await userRepo.GetByIdAsync(conn, tx, @event.EmployeeId, ct);
+            var auditCtx = new AuditProjectionContext(
+                ActorId: actor.ActorId,
+                ActorPrimaryOrgId: actor.OrgId,
+                CorrelationId: actor.CorrelationId,
+                OccurredAt: new DateTimeOffset(@event.OccurredAt),
+                ResolvedTargetOrgId: auditUser?.PrimaryOrgId);
+            var auditRow = auditMapper.Map(@event, auditCtx);
+            await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
 
             await tx.CommitAsync(ct);
 
@@ -117,6 +134,9 @@ public static class ApprovalEndpoints
             OrganizationRepository orgRepo,
             DbConnectionFactory connectionFactory,
             IOutboxEnqueue outbox,
+            IAuditProjectionMapper<PeriodApproved> auditMapper,
+            AuditProjectionRepository auditRepo,
+            UserRepository userRepo,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -161,7 +181,18 @@ public static class ApprovalEndpoints
                 ActorRole = actor.ActorRole,
                 CorrelationId = actor.CorrelationId
             };
-            await outbox.EnqueueAsync(conn, tx, streamId, @event, ct);
+            // S44 TASK-4413: capture outbox_id for audit_projection insert
+            var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, @event, ct);
+
+            var auditUser = await userRepo.GetByIdAsync(conn, tx, @event.EmployeeId, ct);
+            var auditCtx = new AuditProjectionContext(
+                ActorId: actor.ActorId,
+                ActorPrimaryOrgId: actor.OrgId,
+                CorrelationId: actor.CorrelationId,
+                OccurredAt: new DateTimeOffset(@event.OccurredAt),
+                ResolvedTargetOrgId: auditUser?.PrimaryOrgId);
+            var auditRow = auditMapper.Map(@event, auditCtx);
+            await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
 
             await tx.CommitAsync(ct);
 
@@ -178,6 +209,9 @@ public static class ApprovalEndpoints
             OrganizationRepository orgRepo,
             DbConnectionFactory connectionFactory,
             IOutboxEnqueue outbox,
+            IAuditProjectionMapper<PeriodRejected> auditMapper,
+            AuditProjectionRepository auditRepo,
+            UserRepository userRepo,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -223,7 +257,18 @@ public static class ApprovalEndpoints
                 ActorRole = actor.ActorRole,
                 CorrelationId = actor.CorrelationId
             };
-            await outbox.EnqueueAsync(conn, tx, streamId, @event, ct);
+            // S44 TASK-4413: capture outbox_id for audit_projection insert
+            var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, @event, ct);
+
+            var auditUser = await userRepo.GetByIdAsync(conn, tx, @event.EmployeeId, ct);
+            var auditCtx = new AuditProjectionContext(
+                ActorId: actor.ActorId,
+                ActorPrimaryOrgId: actor.OrgId,
+                CorrelationId: actor.CorrelationId,
+                OccurredAt: new DateTimeOffset(@event.OccurredAt),
+                ResolvedTargetOrgId: auditUser?.PrimaryOrgId);
+            var auditRow = auditMapper.Map(@event, auditCtx);
+            await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
 
             await tx.CommitAsync(ct);
 
@@ -351,6 +396,8 @@ public static class ApprovalEndpoints
             OrgScopeValidator scopeValidator,
             DbConnectionFactory connectionFactory,
             IOutboxEnqueue outbox,
+            IAuditProjectionMapper<PeriodEmployeeApproved> auditMapper,
+            AuditProjectionRepository auditRepo,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -412,7 +459,18 @@ public static class ApprovalEndpoints
                 ActorRole = actor.ActorRole,
                 CorrelationId = actor.CorrelationId
             };
-            await outbox.EnqueueAsync(conn, tx, streamId, @event, ct);
+            // S44 TASK-4413: capture outbox_id for audit_projection insert
+            var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, @event, ct);
+
+            var auditUser = await userRepo.GetByIdAsync(conn, tx, @event.EmployeeId, ct);
+            var auditCtx = new AuditProjectionContext(
+                ActorId: actor.ActorId,
+                ActorPrimaryOrgId: actor.OrgId,
+                CorrelationId: actor.CorrelationId,
+                OccurredAt: new DateTimeOffset(@event.OccurredAt),
+                ResolvedTargetOrgId: auditUser?.PrimaryOrgId);
+            var auditRow = auditMapper.Map(@event, auditCtx);
+            await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
 
             await tx.CommitAsync(ct);
 
@@ -428,6 +486,9 @@ public static class ApprovalEndpoints
             OrgScopeValidator scopeValidator,
             DbConnectionFactory connectionFactory,
             IOutboxEnqueue outbox,
+            IAuditProjectionMapper<PeriodReopened> auditMapper,
+            AuditProjectionRepository auditRepo,
+            UserRepository userRepo,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -473,7 +534,18 @@ public static class ApprovalEndpoints
                 ActorRole = actor.ActorRole,
                 CorrelationId = actor.CorrelationId
             };
-            await outbox.EnqueueAsync(conn, tx, streamId, @event, ct);
+            // S44 TASK-4413: capture outbox_id for audit_projection insert
+            var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, @event, ct);
+
+            var auditUser = await userRepo.GetByIdAsync(conn, tx, @event.EmployeeId, ct);
+            var auditCtx = new AuditProjectionContext(
+                ActorId: actor.ActorId,
+                ActorPrimaryOrgId: actor.OrgId,
+                CorrelationId: actor.CorrelationId,
+                OccurredAt: new DateTimeOffset(@event.OccurredAt),
+                ResolvedTargetOrgId: auditUser?.PrimaryOrgId);
+            var auditRow = auditMapper.Map(@event, auditCtx);
+            await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
 
             await tx.CommitAsync(ct);
 
