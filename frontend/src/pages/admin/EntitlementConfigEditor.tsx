@@ -135,7 +135,7 @@ function createFormToRequest(f: CreateFormState): EntitlementConfigCreateRequest
     agreementCode: f.agreementCode.trim(),
     okVersion: f.okVersion.trim(),
     accrualModel: f.accrualModel,
-    resetMonth: parseNumericField(f.resetMonth, 1),
+    resetMonth: Number.parseInt(f.resetMonth, 10) || 1,
   }
 }
 
