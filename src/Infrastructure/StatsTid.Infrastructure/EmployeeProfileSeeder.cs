@@ -74,6 +74,7 @@ public static class EmployeeProfileSeeder
         logger.LogInformation("Seeding employee_profiles for {Count} users without live rows...", missing.Count);
 
         var seeded = 0;
+        var skippedRace = 0;
         foreach (var employeeId in missing)
         {
             // Each seed insert rides its own atomic tx (row INSERT + outbox event in one
@@ -156,6 +157,14 @@ public static class EmployeeProfileSeeder
                 await tx.CommitAsync(ct);
                 seeded++;
             }
+            catch (PostgresException pgEx) when (pgEx.SqlState == "23505")
+            {
+                await tx.RollbackAsync(ct);
+                logger.LogWarning(
+                    "EmployeeProfile seed for {EmployeeId} lost concurrent-startup race (23505 on idx_employee_profiles_live); skipping",
+                    employeeId);
+                skippedRace++;
+            }
             catch (Exception ex)
             {
                 logger.LogError(ex, "Failed to seed employee_profile for user {EmployeeId} — rolling back this row", employeeId);
@@ -164,6 +173,8 @@ public static class EmployeeProfileSeeder
             }
         }
 
-        logger.LogInformation("Employee profile seeding complete — {Seeded} rows inserted with EmployeeProfileCreated events", seeded);
+        logger.LogInformation(
+            "Employee profile seeding complete — {Seeded} rows inserted, {SkippedRace} skipped (concurrent-startup race)",
+            seeded, skippedRace);
     }
 }
