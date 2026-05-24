@@ -19,6 +19,7 @@ const leaderItems: NavItem[] = [
 const hrItems: NavItem[] = [
   { label: 'Medarbejdere', to: '/admin/users' },
   { label: 'Medarbejderprofiler', to: '/admin/employee-profiles' },
+  { label: 'Auditlog', to: '/admin/audit' },
 ]
 
 const adminItems: NavItem[] = [
