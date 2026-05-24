@@ -5,6 +5,7 @@ using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
+using StatsTid.SharedKernel.Audit;
 using StatsTid.SharedKernel.Events;
 
 namespace StatsTid.Backend.Api.Endpoints;
@@ -174,6 +175,10 @@ public static class EmployeeProfileEndpoints
             EmployeeProfileRepository repository,
             DbConnectionFactory connectionFactory,
             IOutboxEnqueue outbox,
+            IAuditProjectionMapper<EmployeeProfileUpdated> updatedAuditMapper,
+            IAuditProjectionMapper<EmployeeProfileSuperseded> supersededAuditMapper,
+            AuditProjectionRepository auditRepo,
+            UserRepository userRepo,
             OrgScopeValidator scopeValidator,
             HttpContext context,
             CancellationToken ct) =>
@@ -372,6 +377,18 @@ public static class EmployeeProfileEndpoints
 
                 // Atomic-outbox emission (same tx as UPDATE + audit per ADR-018 D3).
                 // Event type discriminated by SaveEmployeeProfileOutcome per ADR-020 D2.
+                // S44 TASK-4413: resolve employee org for audit projection
+                // (TENANT_TARGETED — need employee's primary_org_id).
+                var auditUser = await userRepo.GetByIdAsync(conn, tx, employeeId, ct);
+                var auditCtx = new AuditProjectionContext(
+                    ActorId: actor.ActorId,
+                    ActorPrimaryOrgId: actor.OrgId,
+                    CorrelationId: actor.CorrelationId,
+                    OccurredAt: DateTimeOffset.UtcNow,
+                    ResolvedTargetOrgId: auditUser?.PrimaryOrgId
+                        ?? throw new InvalidOperationException(
+                            $"Audit projection: employee {employeeId} not found or inactive."));
+
                 if (result.Outcome == SaveEmployeeProfileOutcome.Updated)
                 {
                     // Case B — same-day in-place edit. EmployeeProfileUpdated carries
@@ -390,7 +407,12 @@ public static class EmployeeProfileEndpoints
                         ActorRole = actorRole,
                         CorrelationId = actor.CorrelationId,
                     };
-                    await outbox.EnqueueAsync(conn, tx, streamId, updatedEvent, ct);
+                    // S44 TASK-4413: capture outbox_id for audit_projection insert
+                    // (ADR-026 D2 sync-in-tx projection write — atomic with the
+                    // employee_profiles row + outbox row per ADR-018 D3/D13).
+                    var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, updatedEvent, ct);
+                    var auditRow = updatedAuditMapper.Map(updatedEvent, auditCtx);
+                    await auditRepo.InsertAsync(conn, tx, updatedEvent.EventId, outboxId, updatedEvent.EventType, auditRow, auditCtx, ct);
                 }
                 else
                 {
@@ -416,7 +438,12 @@ public static class EmployeeProfileEndpoints
                         ActorRole = actorRole,
                         CorrelationId = actor.CorrelationId,
                     };
-                    await outbox.EnqueueAsync(conn, tx, streamId, supersededEvent, ct);
+                    // S44 TASK-4413: capture outbox_id for audit_projection insert
+                    // (ADR-026 D2 sync-in-tx projection write — atomic with the
+                    // employee_profiles row + outbox row per ADR-018 D3/D13).
+                    var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, supersededEvent, ct);
+                    var auditRow = supersededAuditMapper.Map(supersededEvent, auditCtx);
+                    await auditRepo.InsertAsync(conn, tx, supersededEvent.EventId, outboxId, supersededEvent.EventType, auditRow, auditCtx, ct);
                 }
 
                 await tx.CommitAsync(ct);
@@ -470,6 +497,9 @@ public static class EmployeeProfileEndpoints
             EmployeeProfileRepository repository,
             DbConnectionFactory connectionFactory,
             IOutboxEnqueue outbox,
+            IAuditProjectionMapper<EmployeeProfileSoftDeleted> softDeletedAuditMapper,
+            AuditProjectionRepository auditRepo,
+            UserRepository userRepo,
             OrgScopeValidator scopeValidator,
             HttpContext context,
             CancellationToken ct) =>
@@ -594,7 +624,24 @@ public static class EmployeeProfileEndpoints
                     ActorRole = actorRole,
                     CorrelationId = actor.CorrelationId,
                 };
-                await outbox.EnqueueAsync(conn, tx, streamId, softDeletedEvent, ct);
+                // S44 TASK-4413: capture outbox_id for audit_projection insert
+                // (ADR-026 D2 sync-in-tx projection write — atomic with the
+                // employee_profiles row + outbox row per ADR-018 D3/D13).
+                var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, softDeletedEvent, ct);
+
+                // S44 TASK-4413: resolve employee org for audit projection
+                // (TENANT_TARGETED — need employee's primary_org_id).
+                var auditUser = await userRepo.GetByIdAsync(conn, tx, employeeId, ct);
+                var auditCtx = new AuditProjectionContext(
+                    ActorId: actor.ActorId,
+                    ActorPrimaryOrgId: actor.OrgId,
+                    CorrelationId: actor.CorrelationId,
+                    OccurredAt: new DateTimeOffset(softDeletedEvent.OccurredAt),
+                    ResolvedTargetOrgId: auditUser?.PrimaryOrgId
+                        ?? throw new InvalidOperationException(
+                            $"Audit projection: employee {employeeId} not found or inactive."));
+                var auditRow = softDeletedAuditMapper.Map(softDeletedEvent, auditCtx);
+                await auditRepo.InsertAsync(conn, tx, softDeletedEvent.EventId, outboxId, softDeletedEvent.EventType, auditRow, auditCtx, ct);
 
                 await tx.CommitAsync(ct);
 
