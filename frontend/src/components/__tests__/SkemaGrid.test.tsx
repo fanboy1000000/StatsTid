@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, fireEvent } from '@testing-library/react'
 import { SkemaGrid } from '../SkemaGrid'
 import type { SkemaRow } from '../../types'
 

@@ -1,5 +1,6 @@
 import { useState, type ChangeEvent } from 'react'
 import { useOrganizations, useOrgUsers, useUserRoles } from '../../hooks/useAdmin'
+import { useToast } from '../../components/ui/Toast'
 import {
   Button,
   Select,
@@ -12,7 +13,7 @@ import {
   Input,
   Table,
 } from '../../components/ui'
-import type { RoleAssignment, Organization, User } from '../../types'
+import type { RoleAssignment, Organization, User } from '../../hooks/useAdmin'
 import styles from './RoleManagement.module.css'
 
 const ROLE_OPTIONS = [
@@ -59,6 +60,7 @@ function formatDate(dateStr: string | null): string {
 
 export function RoleManagement() {
   const { organizations } = useOrganizations()
+  const { toast } = useToast()
 
   const [selectedOrgId, setSelectedOrgId] = useState('')
   const [selectedUserId, setSelectedUserId] = useState('')
@@ -114,6 +116,7 @@ export function RoleManagement() {
         scopeType: grantScopeType,
         expiresAt: grantExpiresAt || undefined,
       })
+      toast({ title: 'Tildelt', description: 'Rolle tildelt', variant: 'success' })
       setGrantDialogOpen(false)
     } catch (err) {
       setGrantError(err instanceof Error ? err.message : String(err))
@@ -137,6 +140,7 @@ export function RoleManagement() {
         userId: selectedUserId,
         assignmentId: revokeTarget.assignmentId,
       })
+      toast({ title: 'Fjernet', description: 'Rolle fjernet', variant: 'success' })
       setRevokeDialogOpen(false)
       setRevokeTarget(null)
     } catch (err) {
@@ -239,8 +243,8 @@ export function RoleManagement() {
                       {scopeDanishLabel(assignment.scopeType)}
                     </Badge>
                   </td>
-                  <td>{assignment.assignedBy}</td>
-                  <td>{formatDate(assignment.assignedAt)}</td>
+                  <td>{assignment.grantedBy}</td>
+                  <td>{formatDate(assignment.grantedAt)}</td>
                   <td>{formatDate(assignment.expiresAt)}</td>
                   <td>
                     <Button

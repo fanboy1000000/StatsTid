@@ -62,7 +62,7 @@ function toWorkInterval(checkInAt: string, checkOutAt: string | null): WorkInter
 }
 
 export function SkemaPage() {
-  const { user, orgId } = useAuth()
+  const { user } = useAuth()
   const employeeId = user?.employeeId ?? ''
 
   const now = new Date()
@@ -70,7 +70,7 @@ export function SkemaPage() {
   const [month, setMonth] = useState(now.getMonth() + 1)
 
   const { data, loading, error, quotaError, clearQuotaError, refetch, saveMonth, employeeApprove } = useSkema(employeeId, year, month)
-  const { session, loading: timerLoading, checkIn, checkOut, elapsed, sessions: timerSessions, checkInClientTime } = useTimer(employeeId)
+  const { session, loading: timerLoading, checkIn, checkOut, sessions: timerSessions, checkInClientTime } = useTimer(employeeId)
   const { data: balanceData, loading: balanceLoading } = useBalanceSummary(employeeId, year, month)
   const { result: complianceResult, loading: complianceLoading } = useCompliance(employeeId, year, month)
 

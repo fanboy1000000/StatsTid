@@ -295,7 +295,6 @@ export function SkemaGrid({
               {days.map((day) => {
                 const dateKey = formatDateKey(day)
                 const diff = diffPerDay.get(dateKey)
-                const hasValue = diff !== undefined && diff !== 0
                 return (
                   <td
                     key={dateKey}

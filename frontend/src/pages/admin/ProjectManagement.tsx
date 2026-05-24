@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react'
 import { useAuth } from '../../contexts/AuthContext'
 import { useProjects } from '../../hooks/useProjects'
+import { useToast } from '../../components/ui/Toast'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
@@ -19,6 +20,7 @@ const emptyForm: ProjectFormData = { projectCode: '', projectName: '', sortOrder
 export function ProjectManagement() {
   const { orgId } = useAuth()
   const { projects, loading, error, createProject, updateProject, deleteProject } = useProjects(orgId ?? '')
+  const { toast } = useToast()
 
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -67,18 +69,26 @@ export function ProjectManagement() {
     }
 
     if (success) {
+      toast({
+        title: editingId ? 'Gemt' : 'Oprettet',
+        description: editingId ? 'Projekt opdateret' : 'Projekt oprettet',
+        variant: 'success',
+      })
       handleCancel()
     } else {
       setFormError('Kunne ikke gemme projekt')
     }
-  }, [editingId, formData, createProject, updateProject, handleCancel])
+  }, [editingId, formData, createProject, updateProject, handleCancel, toast])
 
   const handleDelete = useCallback(
     async (projectId: string) => {
-      await deleteProject(projectId)
+      const success = await deleteProject(projectId)
+      if (success) {
+        toast({ title: 'Slettet', description: 'Projekt deaktiveret', variant: 'success' })
+      }
       setConfirmDeleteId(null)
     },
-    [deleteProject]
+    [deleteProject, toast]
   )
 
   if (loading && projects.length === 0) {
@@ -116,6 +126,7 @@ export function ProjectManagement() {
               <div className={styles.formField}>
                 <label className={styles.label}>Projektkode</label>
                 <Input
+                  id="project-code"
                   value={formData.projectCode}
                   onChange={(e) =>
                     setFormData((prev) => ({ ...prev, projectCode: e.target.value }))
@@ -126,6 +137,7 @@ export function ProjectManagement() {
               <div className={styles.formField}>
                 <label className={styles.label}>Projektnavn</label>
                 <Input
+                  id="project-name"
                   value={formData.projectName}
                   onChange={(e) =>
                     setFormData((prev) => ({ ...prev, projectName: e.target.value }))
@@ -136,6 +148,7 @@ export function ProjectManagement() {
               <div className={styles.formField}>
                 <label className={styles.label}>Sortering</label>
                 <Input
+                  id="project-description"
                   type="number"
                   value={String(formData.sortOrder)}
                   onChange={(e) =>
