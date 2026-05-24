@@ -7,6 +7,7 @@ using StatsTid.Backend.Api.Validators;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
+using StatsTid.SharedKernel.Audit;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Security;
@@ -125,6 +126,8 @@ public static class ConfigEndpoints
             ProfileAlignmentValidator alignmentValidator,
             OrgScopeValidator scopeValidator,
             IOutboxEnqueue outbox,
+            IAuditProjectionMapper<LocalAgreementProfileChanged> auditMapper,
+            AuditProjectionRepository auditRepo,
             ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
@@ -301,7 +304,19 @@ public static class ConfigEndpoints
                             ActorRole = actor.ActorRole,
                             CorrelationId = actor.CorrelationId,
                         };
-                        await outbox.EnqueueAsync(conn, tx, streamId, @event, ct);
+                        // S44 TASK-4413c: capture outbox_id for audit_projection insert
+                        // (ADR-026 D2 sync-in-tx projection write — atomic with the
+                        // profile row + outbox row per ADR-018 D3/D13).
+                        var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, @event, ct);
+
+                        var auditCtx = new AuditProjectionContext(
+                            ActorId: actor.ActorId,
+                            ActorPrimaryOrgId: actor.OrgId,
+                            CorrelationId: actor.CorrelationId,
+                            OccurredAt: new DateTimeOffset(@event.OccurredAt),
+                            ResolvedTargetOrgId: @event.OrgId);
+                        var auditRow = auditMapper.Map(@event, auditCtx);
+                        await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
                     }
 
                     // Always commit — on no-op the tx held only the lock SELECT, no writes.
