@@ -926,6 +926,14 @@ CREATE TABLE IF NOT EXISTS projects (
 );
 CREATE INDEX IF NOT EXISTS idx_projects_org ON projects(org_id);
 
+CREATE TABLE IF NOT EXISTS user_project_selections (
+    employee_id     TEXT        NOT NULL,
+    project_id      UUID        NOT NULL REFERENCES projects(project_id),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (employee_id, project_id)
+);
+CREATE INDEX IF NOT EXISTS idx_user_project_sel_employee ON user_project_selections(employee_id);
+
 CREATE TABLE IF NOT EXISTS timer_sessions (
     session_id      UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     employee_id     TEXT        NOT NULL,

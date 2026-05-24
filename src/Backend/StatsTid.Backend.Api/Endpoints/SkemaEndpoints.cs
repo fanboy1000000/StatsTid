@@ -161,8 +161,12 @@ public static class SkemaEndpoints
                 employeeId, monthStart, ct);
             var agreementCode = pastEffectiveAgreementCode ?? user.AgreementCode;
 
-            // Fetch projects for the employee's org
-            var projects = await projectRepo.GetByOrgAsync(user.PrimaryOrgId, ct);
+            // Fetch selected projects for the employee, falling back to all org
+            // projects when no selections exist (backwards compatible for first-time users).
+            var selectedProjects = await projectRepo.GetSelectedByEmployeeAsync(employeeId, user.PrimaryOrgId, ct);
+            var projects = selectedProjects.Count > 0
+                ? selectedProjects
+                : await projectRepo.GetByOrgAsync(user.PrimaryOrgId, ct);
 
             // Fetch absence type visibility for this org
             var visibilityEntries = await visibilityRepo.GetByOrgAsync(user.PrimaryOrgId, ct);

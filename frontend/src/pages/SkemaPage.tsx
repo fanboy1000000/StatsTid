@@ -6,6 +6,7 @@ import { SkemaGrid, type WorkInterval, type WorkIntervalsMap } from '../componen
 import { TimerControl } from '../components/TimerControl'
 import { BalanceSummary } from '../components/BalanceSummary'
 import { ComplianceWarnings } from '../components/ComplianceWarnings'
+import { ProjectPicker } from '../components/ProjectPicker'
 import { useBalanceSummary } from '../hooks/useBalanceSummary'
 import { useCompliance } from '../hooks/useCompliance'
 import { Button } from '../components/ui/Button'
@@ -298,6 +299,7 @@ export function SkemaPage() {
     Math.abs(allocatedHoursToday - timerHoursToday) > 0.1
 
   const [approving, setApproving] = useState(false)
+  const [projectPickerOpen, setProjectPickerOpen] = useState(false)
 
   const handleApprove = useCallback(async () => {
     setApproving(true)
@@ -342,7 +344,17 @@ export function SkemaPage() {
             Naeste &rarr;
           </Button>
         </div>
+        <Button variant="secondary" size="sm" onClick={() => setProjectPickerOpen(true)}>
+          Administrer projekter
+        </Button>
       </div>
+
+      {/* Project picker dialog */}
+      <ProjectPicker
+        open={projectPickerOpen}
+        onOpenChange={setProjectPickerOpen}
+        onSelectionChanged={refetch}
+      />
 
       {/* Balance summary */}
       <BalanceSummary data={balanceData} loading={balanceLoading} />

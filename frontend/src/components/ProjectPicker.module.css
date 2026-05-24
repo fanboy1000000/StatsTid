@@ -1,0 +1,114 @@
+.searchInput {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--font-family);
+  font-size: 16px;
+  color: var(--color-text);
+  background-color: var(--color-white);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--border-radius);
+  line-height: 1.5;
+  transition: border-color 0.15s ease;
+  margin-bottom: var(--space-4);
+}
+
+.searchInput:focus-visible {
+  outline: var(--focus-outline);
+  outline-offset: var(--focus-outline-offset);
+  border-color: var(--border-focus);
+}
+
+.searchInput::placeholder {
+  color: var(--color-gray-400);
+}
+
+.selectedCount {
+  font-family: var(--font-family);
+  font-size: 14px;
+  color: var(--color-gray-500);
+  margin-bottom: var(--space-3);
+}
+
+.projectList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.projectItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--border-width) solid var(--color-gray-100);
+  transition: background-color 0.1s ease;
+}
+
+.projectItem:last-child {
+  border-bottom: none;
+}
+
+.projectItem:hover {
+  background-color: var(--color-gray-100);
+}
+
+.projectCode {
+  font-family: var(--font-family);
+  font-size: 13px;
+  font-weight: var(--font-weight-medium);
+  color: var(--color-gray-500);
+  min-width: 100px;
+  flex-shrink: 0;
+}
+
+.projectName {
+  font-family: var(--font-family);
+  font-size: 15px;
+  color: var(--color-text);
+  flex: 1;
+}
+
+.loadingContainer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-8);
+  color: var(--color-gray-500);
+  font-family: var(--font-family);
+  font-size: 14px;
+}
+
+.errorText {
+  font-family: var(--font-family);
+  font-size: 14px;
+  color: var(--color-error);
+  padding: var(--space-4);
+}
+
+.emptyText {
+  font-family: var(--font-family);
+  font-size: 14px;
+  color: var(--color-gray-500);
+  padding: var(--space-4);
+  text-align: center;
+}
+
+.footer {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: var(--space-4);
+  border-top: var(--border-width) solid var(--color-gray-200);
+  margin-top: var(--space-4);
+}
+
+.togglingItem {
+  opacity: 0.6;
+  pointer-events: none;
+}

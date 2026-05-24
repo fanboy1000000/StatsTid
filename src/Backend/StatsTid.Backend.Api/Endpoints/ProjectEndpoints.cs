@@ -73,6 +73,81 @@ public static class ProjectEndpoints
             });
         }).RequireAuthorization("LocalAdminOrAbove");
 
+        // ── GET /api/projects/{orgId}/available — List projects with per-employee selection flag ──
+
+        app.MapGet("/api/projects/{orgId}/available", async (
+            string orgId,
+            ProjectRepository projectRepo,
+            OrgScopeValidator scopeValidator,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            var actor = context.GetActorContext();
+
+            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, orgId, ct);
+            if (!allowed)
+                return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+
+            var projects = await projectRepo.GetByOrgAsync(orgId, ct);
+            var selectedIds = await projectRepo.GetSelectionIdsAsync(actor.ActorId!, ct);
+
+            return Results.Ok(projects.Select(p => new
+            {
+                projectId = p.ProjectId,
+                projectCode = p.ProjectCode,
+                projectName = p.ProjectName,
+                sortOrder = p.SortOrder,
+                selected = selectedIds.Contains(p.ProjectId),
+            }).ToList());
+        }).RequireAuthorization("EmployeeOrAbove");
+
+        // ── POST /api/projects/{orgId}/select/{projectId} — Add project to employee selection ──
+
+        app.MapPost("/api/projects/{orgId}/select/{projectId:guid}", async (
+            string orgId,
+            Guid projectId,
+            ProjectRepository projectRepo,
+            OrgScopeValidator scopeValidator,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            var actor = context.GetActorContext();
+
+            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, orgId, ct);
+            if (!allowed)
+                return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+
+            // Validate the project belongs to this org
+            var projects = await projectRepo.GetByOrgAsync(orgId, ct);
+            if (!projects.Any(p => p.ProjectId == projectId))
+                return Results.NotFound(new { error = "Project not found in this organization" });
+
+            await projectRepo.AddSelectionAsync(actor.ActorId!, projectId, ct);
+
+            return Results.Ok(new { projectId, selected = true });
+        }).RequireAuthorization("EmployeeOrAbove");
+
+        // ── DELETE /api/projects/{orgId}/select/{projectId} — Remove project from employee selection ──
+
+        app.MapDelete("/api/projects/{orgId}/select/{projectId:guid}", async (
+            string orgId,
+            Guid projectId,
+            ProjectRepository projectRepo,
+            OrgScopeValidator scopeValidator,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            var actor = context.GetActorContext();
+
+            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, orgId, ct);
+            if (!allowed)
+                return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+
+            await projectRepo.RemoveSelectionAsync(actor.ActorId!, projectId, ct);
+
+            return Results.NoContent();
+        }).RequireAuthorization("EmployeeOrAbove");
+
         // ── PUT /api/projects/{orgId}/{projectId} — Update project ──
 
         app.MapPut("/api/projects/{orgId}/{projectId}", async (

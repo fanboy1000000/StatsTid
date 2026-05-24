@@ -1,3 +1,4 @@
+using Npgsql;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
@@ -401,6 +402,8 @@ public static class ApprovalEndpoints
             UserRepository userRepo,
             OrgScopeValidator scopeValidator,
             DbConnectionFactory connectionFactory,
+            TimeEntryProjectionRepository timeEntryRepo,
+            AbsenceProjectionRepository absenceRepo,
             IOutboxEnqueue outbox,
             IAuditProjectionMapper<PeriodEmployeeApproved> auditMapper,
             AuditProjectionRepository auditRepo,
@@ -430,6 +433,65 @@ public static class ApprovalEndpoints
 
             if (period.Status is not ("DRAFT" or "SUBMITTED" or "REJECTED"))
                 return Results.Conflict(new { error = $"Cannot employee-approve period with status {period.Status}. Only DRAFT, SUBMITTED, or REJECTED periods can be employee-approved." });
+
+            // ── Workday coverage validation ──
+            // Before allowing employee approval, verify all expected workdays in the
+            // period have at least one time entry or absence registration. This is a
+            // read-only check — outside the write transaction.
+
+            // 1. Query Danish public holidays in the period range.
+            var holidays = new HashSet<DateOnly>();
+            await using var holidayConn = connectionFactory.Create();
+            await holidayConn.OpenAsync(ct);
+            await using var holidayCmd = new NpgsqlCommand(
+                "SELECT holiday_date FROM danish_public_holidays WHERE holiday_date >= @start AND holiday_date <= @end",
+                holidayConn);
+            holidayCmd.Parameters.AddWithValue("start", period.PeriodStart);
+            holidayCmd.Parameters.AddWithValue("end", period.PeriodEnd);
+            await using var holidayReader = await holidayCmd.ExecuteReaderAsync(ct);
+            while (await holidayReader.ReadAsync(ct))
+                holidays.Add(holidayReader.GetFieldValue<DateOnly>(0));
+
+            // 2. Build list of expected workdays (weekdays minus public holidays).
+            var expectedWorkdays = new List<DateOnly>();
+            for (var d = period.PeriodStart; d <= period.PeriodEnd; d = d.AddDays(1))
+            {
+                if (d.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
+                    continue;
+                if (holidays.Contains(d))
+                    continue;
+                expectedWorkdays.Add(d);
+            }
+
+            // 3. Query time entries and absences for the employee + date range.
+            var timeEntries = await timeEntryRepo.GetByEmployeeAndDateRangeAsync(
+                period.EmployeeId, period.PeriodStart, period.PeriodEnd, ct);
+            var absences = await absenceRepo.GetByEmployeeAndDateRangeAsync(
+                period.EmployeeId, period.PeriodStart, period.PeriodEnd, ct);
+
+            // 4. Determine which workdays have at least one registration.
+            var entryDates = new HashSet<DateOnly>(
+                timeEntries.Select(e => e.Date));
+            var absenceDates = new HashSet<DateOnly>(
+                absences.Select(a => a.Date));
+
+            var uncoveredDays = expectedWorkdays
+                .Where(d => !entryDates.Contains(d) && !absenceDates.Contains(d))
+                .ToList();
+
+            // 5. Reject if any workdays are uncovered.
+            if (uncoveredDays.Count > 0)
+            {
+                var coveredCount = expectedWorkdays.Count - uncoveredDays.Count;
+                return Results.UnprocessableEntity(new
+                {
+                    error = "Ikke alle arbejdsdage er dækket",
+                    message = "Følgende arbejdsdage mangler registreringer",
+                    missingDays = uncoveredDays.Select(d => d.ToString("yyyy-MM-dd")).ToList(),
+                    coveredDays = coveredCount,
+                    totalWorkdays = expectedWorkdays.Count,
+                });
+            }
 
             // Atomic state-change + deadlines + audit + outbox enqueue (ADR-018 D3).
             await using var conn = connectionFactory.Create();

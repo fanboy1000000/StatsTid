@@ -65,6 +65,68 @@ public sealed class ProjectRepository
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
+    public async Task<IReadOnlyList<Project>> GetSelectedByEmployeeAsync(string employeeId, string orgId, CancellationToken ct = default)
+    {
+        await using var conn = _connectionFactory.Create();
+        await conn.OpenAsync(ct);
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT p.project_id, p.org_id, p.project_code, p.project_name, p.is_active, p.sort_order, p.created_by, p.created_at
+            FROM projects p
+            INNER JOIN user_project_selections ups ON p.project_id = ups.project_id
+            WHERE ups.employee_id = @employeeId
+              AND p.org_id = @orgId
+              AND p.is_active = TRUE
+            ORDER BY p.sort_order, p.project_code
+            """, conn);
+        cmd.Parameters.AddWithValue("employeeId", employeeId);
+        cmd.Parameters.AddWithValue("orgId", orgId);
+        return await ReadProjectsAsync(cmd, ct);
+    }
+
+    public async Task AddSelectionAsync(string employeeId, Guid projectId, CancellationToken ct = default)
+    {
+        await using var conn = _connectionFactory.Create();
+        await conn.OpenAsync(ct);
+        await using var cmd = new NpgsqlCommand(
+            """
+            INSERT INTO user_project_selections (employee_id, project_id)
+            VALUES (@employeeId, @projectId)
+            ON CONFLICT DO NOTHING
+            """, conn);
+        cmd.Parameters.AddWithValue("employeeId", employeeId);
+        cmd.Parameters.AddWithValue("projectId", projectId);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task RemoveSelectionAsync(string employeeId, Guid projectId, CancellationToken ct = default)
+    {
+        await using var conn = _connectionFactory.Create();
+        await conn.OpenAsync(ct);
+        await using var cmd = new NpgsqlCommand(
+            """
+            DELETE FROM user_project_selections
+            WHERE employee_id = @employeeId AND project_id = @projectId
+            """, conn);
+        cmd.Parameters.AddWithValue("employeeId", employeeId);
+        cmd.Parameters.AddWithValue("projectId", projectId);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<HashSet<Guid>> GetSelectionIdsAsync(string employeeId, CancellationToken ct = default)
+    {
+        await using var conn = _connectionFactory.Create();
+        await conn.OpenAsync(ct);
+        await using var cmd = new NpgsqlCommand(
+            "SELECT project_id FROM user_project_selections WHERE employee_id = @employeeId", conn);
+        cmd.Parameters.AddWithValue("employeeId", employeeId);
+        var ids = new HashSet<Guid>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            ids.Add(reader.GetGuid(0));
+        return ids;
+    }
+
     private static async Task<IReadOnlyList<Project>> ReadProjectsAsync(NpgsqlCommand cmd, CancellationToken ct)
     {
         var projects = new List<Project>();
