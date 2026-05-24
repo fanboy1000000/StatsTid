@@ -12,6 +12,7 @@ COPY src/Orchestrator/ src/Orchestrator/
 RUN dotnet publish src/Orchestrator/StatsTid.Orchestrator/StatsTid.Orchestrator.csproj -c Release -o /app
 
 FROM mcr.microsoft.com/dotnet/aspnet:8.0
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /app .
 ENV ASPNETCORE_URLS=http://+:8080
