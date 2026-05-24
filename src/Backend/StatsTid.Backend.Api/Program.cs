@@ -82,6 +82,43 @@ builder.Services.AddSingleton<IAuditProjectionMapper<RoleAssignmentGranted>, Rol
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(RoleAssignmentGranted), nameof(RoleAssignmentGranted)));
 builder.Services.AddSingleton<IAuditProjectionMapper<RoleAssignmentRevoked>, RoleAssignmentRevokedAuditMapper>();
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(RoleAssignmentRevoked), nameof(RoleAssignmentRevoked)));
+// S44b TASK-44B-02..05 — 16 IAuditProjectionMapper<T> + 16 RegisteredAuditEventType marker pairs.
+// AgreementConfig family (5)
+builder.Services.AddSingleton<IAuditProjectionMapper<AgreementConfigCreated>, AgreementConfigCreatedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(AgreementConfigCreated), nameof(AgreementConfigCreated)));
+builder.Services.AddSingleton<IAuditProjectionMapper<AgreementConfigUpdated>, AgreementConfigUpdatedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(AgreementConfigUpdated), nameof(AgreementConfigUpdated)));
+builder.Services.AddSingleton<IAuditProjectionMapper<AgreementConfigPublished>, AgreementConfigPublishedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(AgreementConfigPublished), nameof(AgreementConfigPublished)));
+builder.Services.AddSingleton<IAuditProjectionMapper<AgreementConfigArchived>, AgreementConfigArchivedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(AgreementConfigArchived), nameof(AgreementConfigArchived)));
+builder.Services.AddSingleton<IAuditProjectionMapper<AgreementConfigCloned>, AgreementConfigClonedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(AgreementConfigCloned), nameof(AgreementConfigCloned)));
+// Period family (5)
+builder.Services.AddSingleton<IAuditProjectionMapper<PeriodSubmitted>, PeriodSubmittedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(PeriodSubmitted), nameof(PeriodSubmitted)));
+builder.Services.AddSingleton<IAuditProjectionMapper<PeriodApproved>, PeriodApprovedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(PeriodApproved), nameof(PeriodApproved)));
+builder.Services.AddSingleton<IAuditProjectionMapper<PeriodRejected>, PeriodRejectedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(PeriodRejected), nameof(PeriodRejected)));
+builder.Services.AddSingleton<IAuditProjectionMapper<PeriodEmployeeApproved>, PeriodEmployeeApprovedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(PeriodEmployeeApproved), nameof(PeriodEmployeeApproved)));
+builder.Services.AddSingleton<IAuditProjectionMapper<PeriodReopened>, PeriodReopenedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(PeriodReopened), nameof(PeriodReopened)));
+// Overtime family (3)
+builder.Services.AddSingleton<IAuditProjectionMapper<OvertimePreApprovalCreated>, OvertimePreApprovalCreatedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(OvertimePreApprovalCreated), nameof(OvertimePreApprovalCreated)));
+builder.Services.AddSingleton<IAuditProjectionMapper<OvertimePreApprovalApproved>, OvertimePreApprovalApprovedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(OvertimePreApprovalApproved), nameof(OvertimePreApprovalApproved)));
+builder.Services.AddSingleton<IAuditProjectionMapper<OvertimePreApprovalRejected>, OvertimePreApprovalRejectedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(OvertimePreApprovalRejected), nameof(OvertimePreApprovalRejected)));
+// UserAgreementCode family (3)
+builder.Services.AddSingleton<IAuditProjectionMapper<UserAgreementCodeChanged>, UserAgreementCodeChangedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(UserAgreementCodeChanged), nameof(UserAgreementCodeChanged)));
+builder.Services.AddSingleton<IAuditProjectionMapper<UserAgreementCodeSeeded>, UserAgreementCodeSeededAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(UserAgreementCodeSeeded), nameof(UserAgreementCodeSeeded)));
+builder.Services.AddSingleton<IAuditProjectionMapper<UserAgreementCodeSuperseded>, UserAgreementCodeSupersededAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(UserAgreementCodeSuperseded), nameof(UserAgreementCodeSuperseded)));
 
 // ── Services ──
 builder.Services.AddSingleton<ConfigResolutionService>();
