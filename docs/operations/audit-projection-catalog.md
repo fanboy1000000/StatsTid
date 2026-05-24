@@ -108,7 +108,7 @@ The future Test #1 (catalog ↔ DI registrations ↔ EventSerializer parity) par
 | `OvertimePreApprovalCreated` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{employee_id, period_start, period_end, max_hours, status}` | interface | S44b |
 | `OvertimePreApprovalApproved` | TENANT_TARGETED | `employee → users.primary_org_id` | `preapproval_id` | `{preapproval_id, employee_id, approved_by, reason}` | interface | S44b |
 | `OvertimePreApprovalRejected` | TENANT_TARGETED | `employee → users.primary_org_id` | `preapproval_id` | `{preapproval_id, employee_id, rejected_by, reason}` | interface | S44b |
-| `RetroactiveCorrectionRequested` | TENANT_TARGETED | `employee → users.primary_org_id` | `correction_id` | `{employee_id, period, correction_type, ...}` | **TBD-cross-process-deferred** | |
+| `RetroactiveCorrectionRequested` | TENANT_TARGETED | `employee → users.primary_org_id` (via EmploymentProfile.OrgId) | `employee_id` | `{employeeId, originalPeriodStart, originalPeriodEnd, agreementCode, okVersion, reason, correctedByActorId, correctionLineCount, totalDifferenceHours, manifestId}` | interface (cross-process — mapper in Infrastructure, not Backend.Api) | S45 |
 | `PayrollExportGenerated` | TENANT_TARGETED | `employee → users.primary_org_id` (one row per (export, employee) OR `target_org_id = NULL` + scope=GLOBAL_TENANT_VISIBLE — Sub-Sprint 2 picks per ADR-026 D3 L180 deferred user-decision) | export request id | `{export_id, period, employee_count, file_format}` | **TBD-defined-but-unemitted** | |
 | `UserAgreementCodeChanged` | TENANT_TARGETED | `user → users.primary_org_id` | `user_id` | `{user_id, old_agreement_code, new_agreement_code, effective_from}` | interface | S44b |
 | `UserAgreementCodeSeeded` | TENANT_TARGETED | `user → users.primary_org_id` | `user_id` | `{user_id, agreement_code, effective_from, row_version}` | interface | S44b |
@@ -122,10 +122,9 @@ The future Test #1 (catalog ↔ DI registrations ↔ EventSerializer parity) par
 
 ## Catalog closure status (S44c)
 
-**47 of 53 rows have `mapper_kind = interface`** — all mappers shipped across S44/S44b/S44c.
+**48 of 53 rows have `mapper_kind = interface`** — all mappers shipped across S44/S44b/S44c/S45.
 
-**6 rows remain deferred with TBD-* markers:**
-- 1× `TBD-cross-process-deferred` (RetroactiveCorrectionRequested)
+**5 rows remain deferred with TBD-* markers:**
 - 1× `TBD-defined-but-unemitted` (PayrollExportGenerated — intentionally deferred; vestigial S22 event class in EventSerializer with zero production emit sites; harmless for backward-compat; if payroll-export audit trail is needed, gets its own future sprint with emit site + mapper)
 - 4× `TBD-adr025-implementation-pending` (InstitutionProvisioned, InstitutionDataExported, UserPiiErased, CrossTenantReportAccessed)
 

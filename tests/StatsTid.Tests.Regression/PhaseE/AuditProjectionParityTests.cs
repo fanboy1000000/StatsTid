@@ -158,8 +158,12 @@ public sealed class AuditProjectionParityTests
         var interfaceRows = GetInterfaceRows(catalog);
         var eventTypeMap = GetEventTypeMap();
 
-        // Reference assembly containing the mapper implementations
-        var backendAssembly = typeof(StatsTid.Backend.Api.AuditMappers.OrganizationCreatedAuditMapper).Assembly;
+        // Reference assemblies containing mapper implementations (Backend.Api + Infrastructure for cross-process)
+        var mapperAssemblies = new[]
+        {
+            typeof(StatsTid.Backend.Api.AuditMappers.OrganizationCreatedAuditMapper).Assembly,
+            typeof(StatsTid.Infrastructure.AuditMappers.RetroactiveCorrectionRequestedAuditMapper).Assembly,
+        };
 
         Assert.NotEmpty(interfaceRows);
 
@@ -173,7 +177,8 @@ public sealed class AuditProjectionParityTests
             }
 
             var closedMapperType = typeof(IAuditProjectionMapper<>).MakeGenericType(eventType);
-            var implementations = backendAssembly.GetTypes()
+            var implementations = mapperAssemblies
+                .SelectMany(a => a.GetTypes())
                 .Where(t => t.IsClass && !t.IsAbstract && closedMapperType.IsAssignableFrom(t))
                 .ToList();
 
@@ -187,27 +192,23 @@ public sealed class AuditProjectionParityTests
 
     /// <summary>
     /// Exactly 6 TBD-* deferred rows must exist in the catalog:
-    /// 1 <c>TBD-cross-process-deferred</c>, 1 <c>TBD-defined-but-unemitted</c>,
+    /// 1 <c>TBD-defined-but-unemitted</c>,
     /// 4 <c>TBD-adr025-implementation-pending</c>. Catches silent
     /// additions/removals of TBD markers.
+    /// S45: cross-process-deferred resolved (RetroactiveCorrectionRequested → interface).
     /// </summary>
     [Fact]
     public void AllTbdDeferredRows_AreExplicitlyMarked()
     {
         var catalog = ParseCatalog();
 
-        // Find rows where mapper_kind starts with TBD- (with or without bold markdown)
         var tbdRows = catalog.Where(r =>
         {
             var kind = r.MapperKind.TrimStart('*');
             return kind.StartsWith("TBD-", StringComparison.OrdinalIgnoreCase);
         }).ToList();
 
-        Assert.Equal(6, tbdRows.Count);
-
-        // Verify the expected composition: 1 cross-process + 1 unemitted + 4 adr025
-        var crossProcess = tbdRows.Where(r => r.MapperKind.Contains("TBD-cross-process-deferred")).ToList();
-        Assert.Single(crossProcess);
+        Assert.Equal(5, tbdRows.Count);
 
         var unemitted = tbdRows.Where(r => r.MapperKind.Contains("TBD-defined-but-unemitted")).ToList();
         Assert.Single(unemitted);

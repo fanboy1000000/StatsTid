@@ -105,7 +105,11 @@ public sealed class AuditProjectionVisibilityTests
     {
         var catalog = ParseCatalog();
         var eventTypeMap = GetEventTypeMap();
-        var backendAssembly = typeof(StatsTid.Backend.Api.AuditMappers.OrganizationCreatedAuditMapper).Assembly;
+        var mapperAssemblies = new[]
+        {
+            typeof(StatsTid.Backend.Api.AuditMappers.OrganizationCreatedAuditMapper).Assembly,
+            typeof(StatsTid.Infrastructure.AuditMappers.RetroactiveCorrectionRequestedAuditMapper).Assembly,
+        };
 
         // Filter to interface rows only
         var interfaceRows = catalog.Where(r =>
@@ -137,7 +141,8 @@ public sealed class AuditProjectionVisibilityTests
 
             // Find mapper implementation in Backend.Api assembly
             var closedMapperType = typeof(IAuditProjectionMapper<>).MakeGenericType(eventType);
-            var mapperImplType = backendAssembly.GetTypes()
+            var mapperImplType = mapperAssemblies
+                .SelectMany(a => a.GetTypes())
                 .FirstOrDefault(t => t.IsClass && !t.IsAbstract && closedMapperType.IsAssignableFrom(t));
 
             if (mapperImplType is null)
