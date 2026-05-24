@@ -813,44 +813,100 @@ INSERT INTO roles (role_id, role_name, description, hierarchy_level) VALUES
     ('EMPLOYEE', 'Employee', 'Registers own time, views own data', 5)
 ON CONFLICT DO NOTHING;
 
--- Seed test organization hierarchy (Finansministeriet example)
+-- Seed test organization hierarchy — two ministries for multi-tenant testing
+-- Ministry 1: Finansministeriet (existing)
+-- Ministry 2: Beskaeftigelsesministeriet (new — provides cross-institution isolation testing)
 INSERT INTO organizations (org_id, org_name, org_type, parent_org_id, materialized_path, agreement_code, ok_version) VALUES
     ('MIN01', 'Finansministeriet', 'MINISTRY', NULL, '/MIN01/', 'AC', 'OK24'),
     ('STY01', 'Medarbejder- og Kompetencestyrelsen', 'STYRELSE', 'MIN01', '/MIN01/STY01/', 'AC', 'OK24'),
     ('STY02', 'Statens IT', 'STYRELSE', 'MIN01', '/MIN01/STY02/', 'HK', 'OK24'),
     ('STY03', 'Ekonomistyrelsen', 'STYRELSE', 'MIN01', '/MIN01/STY03/', 'AC', 'OK24'),
     ('AFD01', 'IT-Drift', 'AFDELING', 'STY02', '/MIN01/STY02/AFD01/', 'HK', 'OK24'),
-    ('AFD02', 'Systemudvikling', 'AFDELING', 'STY02', '/MIN01/STY02/AFD02/', 'PROSA', 'OK24')
+    ('AFD02', 'Systemudvikling', 'AFDELING', 'STY02', '/MIN01/STY02/AFD02/', 'PROSA', 'OK24'),
+    ('MIN02', 'Beskaeftigelsesministeriet', 'MINISTRY', NULL, '/MIN02/', 'AC', 'OK24'),
+    ('STY04', 'Styrelsen for Arbejdsmarked og Rekruttering', 'STYRELSE', 'MIN02', '/MIN02/STY04/', 'AC', 'OK24'),
+    ('STY05', 'Arbejdstilsynet', 'STYRELSE', 'MIN02', '/MIN02/STY05/', 'HK', 'OK24'),
+    ('AFD03', 'Tilsyn Nord', 'AFDELING', 'STY05', '/MIN02/STY05/AFD03/', 'HK', 'OK24'),
+    ('AFD04', 'Tilsyn Syd', 'AFDELING', 'STY05', '/MIN02/STY05/AFD04/', 'HK', 'OK24'),
+    ('AFD05', 'Forskning og Analyse', 'AFDELING', 'STY04', '/MIN02/STY04/AFD05/', 'AC', 'OK24')
 ON CONFLICT DO NOTHING;
 
 -- Seed test users (bcrypt hashes for simple dev passwords)
 -- ALL users share the same dev password: "password" (bcrypt hash below)
--- admin01/password, ladm01/password, hr01/password, mgr01/password, emp001-003/password
--- Note: These are bcrypt($2a$10$) hashes for development ONLY — never use in production
+-- Note: These are bcrypt($2a$11$) hashes for development ONLY — never use in production
+--
+-- User overview:
+-- ┌─────────┬──────────────────────────────┬──────────────┬─────────┬───────┐
+-- │ User    │ Name                         │ Role         │ Org     │ Agr.  │
+-- ├─────────┼──────────────────────────────┼──────────────┼─────────┼───────┤
+-- │ admin01 │ Anna Vestergaard             │ GLOBAL_ADMIN │ MIN01   │ AC    │
+-- │ admin02 │ Bo Kristensen                │ GLOBAL_ADMIN │ MIN02   │ AC    │
+-- │ ladm01  │ Christine Dahl               │ LOCAL_ADMIN  │ STY02   │ HK    │
+-- │ ladm02  │ Daniel Friis                 │ LOCAL_ADMIN  │ STY05   │ HK    │
+-- │ hr01    │ Eva Mortensen                │ LOCAL_HR     │ MIN01   │ HK    │
+-- │ hr02    │ Frederik Bak                 │ LOCAL_HR     │ MIN02   │ AC    │
+-- │ mgr01   │ Gitte Holm                   │ LOCAL_LEADER │ AFD01   │ HK    │
+-- │ mgr02   │ Henrik Noergaard             │ LOCAL_LEADER │ AFD03   │ HK    │
+-- │ mgr03   │ Ida Soerensen                │ LOCAL_LEADER │ STY01   │ AC    │
+-- │ emp001  │ Jesper Andersen              │ EMPLOYEE     │ STY01   │ AC    │
+-- │ emp002  │ Karen Nielsen                │ EMPLOYEE     │ AFD01   │ HK    │
+-- │ emp003  │ Lars Pedersen                │ EMPLOYEE     │ AFD02   │ PROSA │
+-- │ emp004  │ Mette Hansen                 │ EMPLOYEE     │ STY03   │ AC    │
+-- │ emp005  │ Niels Joergensen             │ EMPLOYEE     │ AFD01   │ HK    │
+-- │ emp006  │ Olivia Madsen                │ EMPLOYEE     │ STY04   │ AC    │
+-- │ emp007  │ Peter Larsen                 │ EMPLOYEE     │ AFD03   │ HK    │
+-- │ emp008  │ Rikke Thomsen                │ EMPLOYEE     │ AFD04   │ HK    │
+-- │ emp009  │ Soeren Jensen                │ EMPLOYEE     │ AFD05   │ AC    │
+-- │ emp010  │ Tina Christensen             │ EMPLOYEE     │ AFD02   │ PROSA │
+-- └─────────┴──────────────────────────────┴──────────────┴─────────┴───────┘
 INSERT INTO users (user_id, username, password_hash, display_name, email, primary_org_id, agreement_code, ok_version) VALUES
-    ('admin01', 'admin01', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Global Administrator', 'admin@statstid.dk', 'MIN01', 'AC', 'OK24'),
-    ('hr01', 'hr01', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'HR Medarbejder', 'hr@statens-it.dk', 'STY02', 'HK', 'OK24'),
-    ('mgr01', 'mgr01', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Team Leder', 'leder@statens-it.dk', 'AFD01', 'HK', 'OK24'),
-    ('emp001', 'emp001', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'AC Medarbejder', 'emp.ac@mfk.dk', 'STY01', 'AC', 'OK24'),
-    ('emp002', 'emp002', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'HK Medarbejder', 'emp.hk@statens-it.dk', 'AFD01', 'HK', 'OK24'),
-    ('emp003', 'emp003', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'PROSA Medarbejder', 'emp.prosa@statens-it.dk', 'AFD02', 'PROSA', 'OK24'),
-    ('ladm01', 'ladm01', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Lokal Administrator', 'lokal.admin@statens-it.dk', 'STY02', 'HK', 'OK24')
+    ('admin01', 'admin01', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Anna Vestergaard', 'anna.vestergaard@fm.dk', 'MIN01', 'AC', 'OK24'),
+    ('admin02', 'admin02', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Bo Kristensen', 'bo.kristensen@bm.dk', 'MIN02', 'AC', 'OK24'),
+    ('ladm01', 'ladm01', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Christine Dahl', 'christine.dahl@statens-it.dk', 'STY02', 'HK', 'OK24'),
+    ('ladm02', 'ladm02', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Daniel Friis', 'daniel.friis@at.dk', 'STY05', 'HK', 'OK24'),
+    ('hr01', 'hr01', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Eva Mortensen', 'eva.mortensen@fm.dk', 'STY02', 'HK', 'OK24'),
+    ('hr02', 'hr02', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Frederik Bak', 'frederik.bak@bm.dk', 'STY04', 'AC', 'OK24'),
+    ('mgr01', 'mgr01', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Gitte Holm', 'gitte.holm@statens-it.dk', 'AFD01', 'HK', 'OK24'),
+    ('mgr02', 'mgr02', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Henrik Noergaard', 'henrik.noergaard@at.dk', 'AFD03', 'HK', 'OK24'),
+    ('mgr03', 'mgr03', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Ida Soerensen', 'ida.soerensen@mfk.dk', 'STY01', 'AC', 'OK24'),
+    ('emp001', 'emp001', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Jesper Andersen', 'jesper.andersen@mfk.dk', 'STY01', 'AC', 'OK24'),
+    ('emp002', 'emp002', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Karen Nielsen', 'karen.nielsen@statens-it.dk', 'AFD01', 'HK', 'OK24'),
+    ('emp003', 'emp003', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Lars Pedersen', 'lars.pedersen@statens-it.dk', 'AFD02', 'PROSA', 'OK24'),
+    ('emp004', 'emp004', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Mette Hansen', 'mette.hansen@oes.dk', 'STY03', 'AC', 'OK24'),
+    ('emp005', 'emp005', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Niels Joergensen', 'niels.joergensen@statens-it.dk', 'AFD01', 'HK', 'OK24'),
+    ('emp006', 'emp006', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Olivia Madsen', 'olivia.madsen@star.dk', 'STY04', 'AC', 'OK24'),
+    ('emp007', 'emp007', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Peter Larsen', 'peter.larsen@at.dk', 'AFD03', 'HK', 'OK24'),
+    ('emp008', 'emp008', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Rikke Thomsen', 'rikke.thomsen@at.dk', 'AFD04', 'HK', 'OK24'),
+    ('emp009', 'emp009', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Soeren Jensen', 'soeren.jensen@star.dk', 'AFD05', 'AC', 'OK24'),
+    ('emp010', 'emp010', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Tina Christensen', 'tina.christensen@statens-it.dk', 'AFD02', 'PROSA', 'OK24')
 ON CONFLICT DO NOTHING;
 
 -- Seed role assignments
--- admin01: Global Admin (covers everything)
--- ladm01: Local Admin for Statens IT (covers STY02 + descendants)
--- hr01: Local HR for Finansministeriet subtree (centralized HR in child org covering ministry)
--- mgr01: Local Leader for IT-Drift department
--- emp001-003: Employees at their respective orgs
+-- Global Admins: admin01 (Finansministeriet), admin02 (Beskaeftigelsesministeriet)
+-- Local Admins: ladm01 (Statens IT subtree), ladm02 (Arbejdstilsynet subtree)
+-- Local HR: hr01 (Finansministeriet subtree), hr02 (Beskaeftigelsesministeriet subtree)
+-- Local Leaders: mgr01 (IT-Drift), mgr02 (Tilsyn Nord), mgr03 (MFK)
+-- Employees: emp001-010 at their respective departments
 INSERT INTO role_assignments (user_id, role_id, org_id, scope_type, assigned_by) VALUES
     ('admin01', 'GLOBAL_ADMIN', NULL, 'GLOBAL', 'system'),
+    ('admin02', 'GLOBAL_ADMIN', NULL, 'GLOBAL', 'system'),
     ('ladm01', 'LOCAL_ADMIN', 'STY02', 'ORG_AND_DESCENDANTS', 'admin01'),
+    ('ladm02', 'LOCAL_ADMIN', 'STY05', 'ORG_AND_DESCENDANTS', 'admin02'),
     ('hr01', 'LOCAL_HR', 'MIN01', 'ORG_AND_DESCENDANTS', 'admin01'),
+    ('hr02', 'LOCAL_HR', 'MIN02', 'ORG_AND_DESCENDANTS', 'admin02'),
     ('mgr01', 'LOCAL_LEADER', 'AFD01', 'ORG_AND_DESCENDANTS', 'ladm01'),
-    ('emp001', 'EMPLOYEE', 'STY01', 'ORG_ONLY', 'admin01'),
+    ('mgr02', 'LOCAL_LEADER', 'AFD03', 'ORG_AND_DESCENDANTS', 'ladm02'),
+    ('mgr03', 'LOCAL_LEADER', 'STY01', 'ORG_AND_DESCENDANTS', 'admin01'),
+    ('emp001', 'EMPLOYEE', 'STY01', 'ORG_ONLY', 'mgr03'),
     ('emp002', 'EMPLOYEE', 'AFD01', 'ORG_ONLY', 'mgr01'),
-    ('emp003', 'EMPLOYEE', 'AFD02', 'ORG_ONLY', 'ladm01')
+    ('emp003', 'EMPLOYEE', 'AFD02', 'ORG_ONLY', 'ladm01'),
+    ('emp004', 'EMPLOYEE', 'STY03', 'ORG_ONLY', 'admin01'),
+    ('emp005', 'EMPLOYEE', 'AFD01', 'ORG_ONLY', 'mgr01'),
+    ('emp006', 'EMPLOYEE', 'STY04', 'ORG_ONLY', 'hr02'),
+    ('emp007', 'EMPLOYEE', 'AFD03', 'ORG_ONLY', 'mgr02'),
+    ('emp008', 'EMPLOYEE', 'AFD04', 'ORG_ONLY', 'ladm02'),
+    ('emp009', 'EMPLOYEE', 'AFD05', 'ORG_ONLY', 'hr02'),
+    ('emp010', 'EMPLOYEE', 'AFD02', 'ORG_ONLY', 'ladm01')
 ON CONFLICT DO NOTHING;
 
 -- ============================================================
