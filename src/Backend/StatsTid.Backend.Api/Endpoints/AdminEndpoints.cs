@@ -380,6 +380,7 @@ public static class AdminEndpoints
             IOutboxEnqueue outbox,
             UserAgreementCodeRepository userAgreementCodeRepo,
             IAuditProjectionMapper<UserCreated> auditMapper,
+            IAuditProjectionMapper<EmployeeProfileCreated> profileCreatedMapper,
             IAuditProjectionMapper<UserAgreementCodeSeeded> uacSeededMapper,
             AuditProjectionRepository auditRepo,
             ILoggerFactory loggerFactory,
@@ -613,8 +614,7 @@ public static class AdminEndpoints
                 };
                 // S44 TASK-4413: UserCreated enqueue converted to capture outbox_id +
                 // audit_projection insert (ADR-026 D2 sync-in-tx). EmployeeProfileCreated
-                // @L635 remains EnqueueAsync — its mapper lands in S44c (same-endpoint
-                // coupling per refinement Risk #5). UserAgreementCodeSeeded below
+                // below converted in S44c TASK-4413c. UserAgreementCodeSeeded below
                 // converted in S44b TASK-4413b.
                 var userCreatedOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"user-{request.UserId}", @event, ct);
                 var userCreatedAuditCtx = new AuditProjectionContext(
@@ -647,7 +647,19 @@ public static class AdminEndpoints
                     ActorRole = actor.ActorRole,
                     CorrelationId = actor.CorrelationId,
                 };
-                await outbox.EnqueueAsync(conn, tx, $"employee-profile-{request.UserId}", profileEvent, ct);
+                // S44c TASK-4413c: EmployeeProfileCreated cutover to
+                // EnqueueAndReturnIdAsync + audit_projection insert (ADR-026 D2
+                // sync-in-tx). TENANT_TARGETED — ResolvedTargetOrgId from the
+                // request's PrimaryOrgId (the user being created).
+                var profileOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"employee-profile-{request.UserId}", profileEvent, ct);
+                var profileAuditCtx = new AuditProjectionContext(
+                    ActorId: actor.ActorId,
+                    ActorPrimaryOrgId: actor.OrgId,
+                    CorrelationId: actor.CorrelationId,
+                    OccurredAt: new DateTimeOffset(profileEvent.OccurredAt),
+                    ResolvedTargetOrgId: request.PrimaryOrgId);
+                var profileAuditRow = profileCreatedMapper.Map(profileEvent, profileAuditCtx);
+                await auditRepo.InsertAsync(conn, tx, profileEvent.EventId, profileOutboxId, profileEvent.EventType, profileAuditRow, profileAuditCtx, ct);
 
                 // (5) UserAgreementCodeSeeded outbox emit in-tx (S34 / TASK-3407,
                 // ADR-023 D2). Same canonical user-{userId} stream as UserCreated
