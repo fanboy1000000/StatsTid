@@ -4,6 +4,7 @@ using StatsTid.Auth;
 using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
+using StatsTid.SharedKernel.Audit;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Models;
 
@@ -146,6 +147,8 @@ public static class EntitlementConfigEndpoints
             EntitlementConfigRepository repo,
             DbConnectionFactory connectionFactory,
             IOutboxEnqueue outbox,
+            IAuditProjectionMapper<EntitlementConfigCreated> createdMapper,
+            AuditProjectionRepository auditRepo,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -279,7 +282,18 @@ public static class EntitlementConfigEndpoints
                     ActorRole = actorRole,
                     CorrelationId = actor.CorrelationId,
                 };
-                await outbox.EnqueueAsync(conn, tx, streamId, createdEvent, ct);
+                // S44 TASK-4413: capture outbox_id for audit_projection insert
+                // (ADR-026 D2 sync-in-tx projection write — atomic with the
+                // entitlement_configs row + outbox row per ADR-018 D3/D13).
+                var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, createdEvent, ct);
+
+                var auditCtx = new AuditProjectionContext(
+                    ActorId: actor.ActorId,
+                    ActorPrimaryOrgId: actor.OrgId,
+                    CorrelationId: actor.CorrelationId,
+                    OccurredAt: new DateTimeOffset(createdEvent.OccurredAt));
+                var auditRow = createdMapper.Map(createdEvent, auditCtx);
+                await auditRepo.InsertAsync(conn, tx, createdEvent.EventId, outboxId, createdEvent.EventType, auditRow, auditCtx, ct);
 
                 await tx.CommitAsync(ct);
 
@@ -333,6 +347,9 @@ public static class EntitlementConfigEndpoints
             EntitlementConfigRepository repo,
             DbConnectionFactory connectionFactory,
             IOutboxEnqueue outbox,
+            IAuditProjectionMapper<EntitlementConfigCreated> createdMapper,
+            IAuditProjectionMapper<EntitlementConfigSuperseded> supersededMapper,
+            AuditProjectionRepository auditRepo,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -492,7 +509,18 @@ public static class EntitlementConfigEndpoints
                         ActorRole = actorRole,
                         CorrelationId = actor.CorrelationId,
                     };
-                    await outbox.EnqueueAsync(conn, tx, streamId, supersededEvent, ct);
+                    // S44 TASK-4413: capture outbox_id for audit_projection insert
+                    // (ADR-026 D2 sync-in-tx — dual-emit first audit row for the
+                    // superseded predecessor).
+                    var supersededOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, supersededEvent, ct);
+
+                    var supersededAuditCtx = new AuditProjectionContext(
+                        ActorId: actor.ActorId,
+                        ActorPrimaryOrgId: actor.OrgId,
+                        CorrelationId: actor.CorrelationId,
+                        OccurredAt: new DateTimeOffset(supersededEvent.OccurredAt));
+                    var supersededAuditRow = supersededMapper.Map(supersededEvent, supersededAuditCtx);
+                    await auditRepo.InsertAsync(conn, tx, supersededEvent.EventId, supersededOutboxId, supersededEvent.EventType, supersededAuditRow, supersededAuditCtx, ct);
 
                     // Emission 2: new row CREATED audit + EntitlementConfigCreated outbox on
                     // the new config_id. Same natural-key stream (replay determinism per
@@ -545,7 +573,18 @@ public static class EntitlementConfigEndpoints
                     ActorRole = actorRole,
                     CorrelationId = actor.CorrelationId,
                 };
-                await outbox.EnqueueAsync(conn, tx, streamId, createdEvent, ct);
+                // S44 TASK-4413: capture outbox_id for audit_projection insert
+                // (ADR-026 D2 sync-in-tx projection write — covers both Case B
+                // emission 2 and Case C single-emission).
+                var createdOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, createdEvent, ct);
+
+                var createdAuditCtx = new AuditProjectionContext(
+                    ActorId: actor.ActorId,
+                    ActorPrimaryOrgId: actor.OrgId,
+                    CorrelationId: actor.CorrelationId,
+                    OccurredAt: new DateTimeOffset(createdEvent.OccurredAt));
+                var createdAuditRow = createdMapper.Map(createdEvent, createdAuditCtx);
+                await auditRepo.InsertAsync(conn, tx, createdEvent.EventId, createdOutboxId, createdEvent.EventType, createdAuditRow, createdAuditCtx, ct);
 
                 await tx.CommitAsync(ct);
 
@@ -575,6 +614,8 @@ public static class EntitlementConfigEndpoints
             EntitlementConfigRepository repo,
             DbConnectionFactory connectionFactory,
             IOutboxEnqueue outbox,
+            IAuditProjectionMapper<EntitlementConfigSoftDeleted> softDeletedMapper,
+            AuditProjectionRepository auditRepo,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -698,7 +739,18 @@ public static class EntitlementConfigEndpoints
                     ActorRole = actorRole,
                     CorrelationId = actor.CorrelationId,
                 };
-                await outbox.EnqueueAsync(conn, tx, streamId, softDeletedEvent, ct);
+                // S44 TASK-4413: capture outbox_id for audit_projection insert
+                // (ADR-026 D2 sync-in-tx projection write — atomic with the
+                // entitlement_configs close + outbox row per ADR-018 D3/D13).
+                var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, softDeletedEvent, ct);
+
+                var auditCtx = new AuditProjectionContext(
+                    ActorId: actor.ActorId,
+                    ActorPrimaryOrgId: actor.OrgId,
+                    CorrelationId: actor.CorrelationId,
+                    OccurredAt: new DateTimeOffset(softDeletedEvent.OccurredAt));
+                var auditRow = softDeletedMapper.Map(softDeletedEvent, auditCtx);
+                await auditRepo.InsertAsync(conn, tx, softDeletedEvent.EventId, outboxId, softDeletedEvent.EventType, auditRow, auditCtx, ct);
 
                 await tx.CommitAsync(ct);
 
