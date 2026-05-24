@@ -231,6 +231,9 @@ public sealed class RetroactiveCorrectionService
                 ManifestId = manifestId
             };
 
+            var resolvedOrgId = profile.OrgId
+                ?? throw new InvalidOperationException(
+                    $"Audit projection: employee {profile.EmployeeId} has no OrgId; cannot resolve target_org_id.");
             var streamId = $"retro-correction-{profile.EmployeeId}-{periodStart:yyyy-MM-dd}";
             await using var conn = _connectionFactory.Create();
             await conn.OpenAsync(ct);
@@ -238,12 +241,10 @@ public sealed class RetroactiveCorrectionService
             var outboxId = await _outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, correctionEvent, ct);
             var auditCtx = new AuditProjectionContext(
                 ActorId: actorId,
-                ActorPrimaryOrgId: profile.OrgId,
+                ActorPrimaryOrgId: resolvedOrgId,
                 CorrelationId: correlationId,
                 OccurredAt: new DateTimeOffset(correctionEvent.OccurredAt),
-                ResolvedTargetOrgId: profile.OrgId
-                    ?? throw new InvalidOperationException(
-                        $"Audit projection: employee {profile.EmployeeId} has no OrgId; cannot resolve target_org_id."));
+                ResolvedTargetOrgId: resolvedOrgId);
             var auditRow = _auditMapper.Map(correctionEvent, auditCtx);
             await _auditRepo.InsertAsync(conn, tx, correctionEvent.EventId, outboxId, correctionEvent.EventType, auditRow, auditCtx, ct);
             await tx.CommitAsync(ct);
