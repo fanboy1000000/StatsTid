@@ -2314,3 +2314,19 @@ BEGIN
     ON CONFLICT (migration_id) DO NOTHING;
 END
 $$;
+
+-- ── S52 seed data for S49-S51 features ──
+
+-- Enforcement: STY02 (Statens IT) uses REQUIRED mode — all employees have PRIMARY lines.
+INSERT INTO reporting_line_tree_settings (tree_root_org_id, enforcement_mode, version, updated_by, updated_at)
+VALUES ('STY02', 'REQUIRED', 1, 'SYSTEM', NOW())
+ON CONFLICT DO NOTHING;
+
+-- Self-delegation example: mgr01 (Gitte Holm) delegated to ladm01 (Christine Dahl)
+-- for vacation until 2026-07-01. Creates ACTING lines for mgr01's PRIMARY reports
+-- (emp002, emp005) with scheduled_expiry.
+-- Note: emp002 already has a MANUAL ACTING line to ladm01 — skip (admin takes precedence).
+-- emp005 gets the SELF_DELEGATION ACTING line.
+INSERT INTO reporting_lines (employee_id, manager_id, tree_root_org_id, relationship, effective_from, source, created_by, scheduled_expiry)
+VALUES ('emp005', 'ladm01', 'STY02', 'ACTING', '2026-06-01', 'SELF_DELEGATION', 'mgr01', '2026-07-01')
+ON CONFLICT DO NOTHING;
