@@ -11,4 +11,5 @@ public sealed class PeriodRejected : DomainEventBase
     public required DateOnly PeriodEnd { get; init; }
     public required string RejectedBy { get; init; }
     public string? RejectionReason { get; init; }
+    public bool ExplicitFallbackConfirmation { get; init; }
 }

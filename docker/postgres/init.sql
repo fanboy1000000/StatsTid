@@ -2269,3 +2269,29 @@ BEGIN
     ON CONFLICT (migration_id) DO NOTHING;
 END
 $$;
+
+-- =========================================================================
+-- S50 / ADR-027 Phase 4 — Enforcement Toggle
+--   Per-tree settings: PREFERRED (default) or REQUIRED (soft enforcement).
+--   explicit_fallback_confirmation tracks when a non-designated approver
+--   explicitly confirmed the org-scope fallback under REQUIRED mode.
+-- =========================================================================
+
+CREATE TABLE IF NOT EXISTS reporting_line_tree_settings (
+    tree_root_org_id    TEXT        PRIMARY KEY REFERENCES organizations(org_id),
+    enforcement_mode    TEXT        NOT NULL DEFAULT 'PREFERRED'
+                        CHECK (enforcement_mode IN ('PREFERRED', 'REQUIRED')),
+    version             BIGINT      NOT NULL DEFAULT 1,
+    updated_by          TEXT        NOT NULL,
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE approval_periods ADD COLUMN IF NOT EXISTS explicit_fallback_confirmation BOOLEAN DEFAULT FALSE;
+
+DO $$
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s50-d1-enforcement-toggle', 'ADR-027 Phase 4: reporting_line_tree_settings table + explicit_fallback_confirmation on approval_periods')
+    ON CONFLICT (migration_id) DO NOTHING;
+END
+$$;

@@ -216,4 +216,113 @@ describe('ApprovalDashboard', () => {
       expect(screen.getByText('EMP003')).toBeDefined()
     })
   })
+
+  it('shows enforcement dialog on 428 response', async () => {
+    const user = userEvent.setup()
+
+    // Route initial fetches as usual, but intercept approve POST with 428
+    mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (typeof url === 'string' && url.includes('/approve') && init?.method === 'POST') {
+        return {
+          ok: false,
+          status: 428,
+          headers: new Headers(),
+          json: async () => ({ designatedApproverId: 'MGR01' }),
+          text: async () => JSON.stringify({ designatedApproverId: 'MGR01' }),
+        }
+      }
+      if (typeof url === 'string' && url.includes('my-reports=true')) {
+        return jsonResponse(mockMyReportPeriods)
+      }
+      if (typeof url === 'string' && url.includes('/api/approval/pending')) {
+        return jsonResponse(mockAllPeriods)
+      }
+      if (typeof url === 'string' && url.includes('/api/compliance/')) {
+        return jsonResponse({ ruleId: '', employeeId: '', success: true, violations: [], warnings: [] })
+      }
+      return jsonResponse({})
+    })
+
+    render(<ApprovalDashboard />)
+
+    // Wait for the "Mine medarbejdere" tab data to load
+    await waitFor(() => {
+      expect(screen.getByText('EMP001')).toBeDefined()
+    })
+
+    // Click the first "Godkend" button
+    const approveButtons = screen.getAllByText('Godkend')
+    await user.click(approveButtons[0])
+
+    // Assert the enforcement confirmation dialog appears
+    await waitFor(() => {
+      expect(screen.getByText('Haandhaevelse aktiv')).toBeDefined()
+    })
+    // Verify the designated approver is shown
+    expect(screen.getByText(/MGR01/)).toBeDefined()
+  })
+
+  it('re-submits with confirmFallback on dialog confirm', async () => {
+    const user = userEvent.setup()
+
+    let approveCallCount = 0
+    mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (typeof url === 'string' && url.includes('/approve') && init?.method === 'POST') {
+        approveCallCount++
+        if (!url.includes('confirmFallback=true')) {
+          // First call: return 428
+          return {
+            ok: false,
+            status: 428,
+            headers: new Headers(),
+            json: async () => ({ designatedApproverId: 'MGR01' }),
+            text: async () => JSON.stringify({ designatedApproverId: 'MGR01' }),
+          }
+        }
+        // Second call with confirmFallback: return success
+        return jsonResponse({ periodId: 'p-1', status: 'APPROVED' })
+      }
+      if (typeof url === 'string' && url.includes('my-reports=true')) {
+        return jsonResponse(mockMyReportPeriods)
+      }
+      if (typeof url === 'string' && url.includes('/api/approval/pending')) {
+        return jsonResponse(mockAllPeriods)
+      }
+      if (typeof url === 'string' && url.includes('/api/compliance/')) {
+        return jsonResponse({ ruleId: '', employeeId: '', success: true, violations: [], warnings: [] })
+      }
+      return jsonResponse({})
+    })
+
+    render(<ApprovalDashboard />)
+
+    // Wait for data to load
+    await waitFor(() => {
+      expect(screen.getByText('EMP001')).toBeDefined()
+    })
+
+    // Click the first "Godkend" button — triggers the 428
+    const approveButtons = screen.getAllByText('Godkend')
+    await user.click(approveButtons[0])
+
+    // Wait for the enforcement dialog to appear
+    await waitFor(() => {
+      expect(screen.getByText('Haandhaevelse aktiv')).toBeDefined()
+    })
+
+    // Click the "Godkend alligevel" button inside the dialog
+    const confirmButton = screen.getByText('Godkend alligevel')
+    await user.click(confirmButton)
+
+    // Assert that fetch was called again with confirmFallback=true
+    await waitFor(() => {
+      const fallbackCalls = mockFetch.mock.calls.filter(
+        (call: unknown[]) => {
+          const u = call[0] as string
+          return u.includes('confirmFallback=true')
+        },
+      )
+      expect(fallbackCalls.length).toBeGreaterThanOrEqual(1)
+    })
+  })
 })

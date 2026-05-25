@@ -66,6 +66,7 @@ builder.Services.AddSingleton<OvertimeBalanceRepository>();
 builder.Services.AddSingleton<OvertimePreApprovalRepository>();
 builder.Services.AddSingleton<AuditProjectionRepository>();
 builder.Services.AddSingleton<ReportingLineRepository>();
+builder.Services.AddSingleton<TreeSettingsRepository>();
 builder.Services.AddSingleton<IAuditProjectionMapperRegistry, AuditProjectionMapperRegistry>();
 // S44 TASK-4407..4412 — 6 IAuditProjectionMapper<T> + 6 RegisteredAuditEventType marker pairs.
 // Mapper + marker registered together so the registry's RegisteredEventTypeNames filter

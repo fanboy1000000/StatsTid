@@ -218,40 +218,43 @@ public sealed class ApprovalPeriodRepository
         Guid periodId, string status, string? actorId = null,
         string? rejectionReason = null,
         string? designatedApproverId = null, string? approvalMethod = null,
+        bool explicitFallbackConfirmation = false,
         CancellationToken ct = default)
     {
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
-        await using var cmd = BuildUpdateStatusCommand(conn, null, periodId, status, actorId, rejectionReason, designatedApproverId, approvalMethod);
+        await using var cmd = BuildUpdateStatusCommand(conn, null, periodId, status, actorId, rejectionReason, designatedApproverId, approvalMethod, explicitFallbackConfirmation);
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
     /// <summary>
-    /// In-transaction sibling overload of <see cref="UpdateStatusAsync(Guid, string, string?, string?, string?, string?, CancellationToken)"/>.
+    /// In-transaction sibling overload of <see cref="UpdateStatusAsync(Guid, string, string?, string?, string?, string?, bool, CancellationToken)"/>.
     /// </summary>
     public async Task UpdateStatusAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
         Guid periodId, string status, string? actorId = null,
         string? rejectionReason = null,
         string? designatedApproverId = null, string? approvalMethod = null,
+        bool explicitFallbackConfirmation = false,
         CancellationToken ct = default)
     {
-        await using var cmd = BuildUpdateStatusCommand(conn, tx, periodId, status, actorId, rejectionReason, designatedApproverId, approvalMethod);
+        await using var cmd = BuildUpdateStatusCommand(conn, tx, periodId, status, actorId, rejectionReason, designatedApproverId, approvalMethod, explicitFallbackConfirmation);
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
     private static NpgsqlCommand BuildUpdateStatusCommand(
         NpgsqlConnection conn, NpgsqlTransaction? tx,
         Guid periodId, string status, string? actorId, string? rejectionReason,
-        string? designatedApproverId = null, string? approvalMethod = null)
+        string? designatedApproverId = null, string? approvalMethod = null,
+        bool explicitFallbackConfirmation = false)
     {
         var sql = status switch
         {
             "SUBMITTED" => "UPDATE approval_periods SET status = 'SUBMITTED', submitted_at = NOW(), submitted_by = @actorId WHERE period_id = @periodId",
             "EMPLOYEE_APPROVED" => "UPDATE approval_periods SET status = 'EMPLOYEE_APPROVED', employee_approved_at = NOW(), employee_approved_by = @actorId WHERE period_id = @periodId",
-            "APPROVED" => "UPDATE approval_periods SET status = 'APPROVED', approved_by = @actorId, approved_at = NOW(), designated_approver_id = @designatedApproverId, approval_method = @approvalMethod WHERE period_id = @periodId",
-            "REJECTED" => "UPDATE approval_periods SET status = 'REJECTED', approved_by = @actorId, approved_at = NOW(), rejection_reason = @rejectionReason, designated_approver_id = @designatedApproverId, approval_method = @approvalMethod WHERE period_id = @periodId",
-            "DRAFT" => "UPDATE approval_periods SET status = 'DRAFT', submitted_at = NULL, submitted_by = NULL, approved_by = NULL, approved_at = NULL, rejection_reason = NULL, employee_approved_at = NULL, employee_approved_by = NULL WHERE period_id = @periodId",
+            "APPROVED" => "UPDATE approval_periods SET status = 'APPROVED', approved_by = @actorId, approved_at = NOW(), designated_approver_id = @designatedApproverId, approval_method = @approvalMethod, explicit_fallback_confirmation = @explicitFallback WHERE period_id = @periodId",
+            "REJECTED" => "UPDATE approval_periods SET status = 'REJECTED', approved_by = @actorId, approved_at = NOW(), rejection_reason = @rejectionReason, designated_approver_id = @designatedApproverId, approval_method = @approvalMethod, explicit_fallback_confirmation = @explicitFallback WHERE period_id = @periodId",
+            "DRAFT" => "UPDATE approval_periods SET status = 'DRAFT', submitted_at = NULL, submitted_by = NULL, approved_by = NULL, approved_at = NULL, rejection_reason = NULL, employee_approved_at = NULL, employee_approved_by = NULL, explicit_fallback_confirmation = FALSE WHERE period_id = @periodId",
             _ => throw new ArgumentException($"Invalid status: {status}")
         };
 
@@ -264,6 +267,7 @@ public sealed class ApprovalPeriodRepository
         {
             cmd.Parameters.AddWithValue("designatedApproverId", (object?)designatedApproverId ?? DBNull.Value);
             cmd.Parameters.AddWithValue("approvalMethod", (object?)approvalMethod ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("explicitFallback", explicitFallbackConfirmation);
         }
         return cmd;
     }
@@ -368,6 +372,7 @@ public sealed class ApprovalPeriodRepository
         OkVersion = reader.GetString(reader.GetOrdinal("ok_version")),
         DesignatedApproverId = reader.IsDBNull(reader.GetOrdinal("designated_approver_id")) ? null : reader.GetString(reader.GetOrdinal("designated_approver_id")),
         ApprovalMethod = reader.IsDBNull(reader.GetOrdinal("approval_method")) ? null : reader.GetString(reader.GetOrdinal("approval_method")),
+        ExplicitFallbackConfirmation = !reader.IsDBNull(reader.GetOrdinal("explicit_fallback_confirmation")) && reader.GetBoolean(reader.GetOrdinal("explicit_fallback_confirmation")),
         CreatedAt = reader.GetDateTime(reader.GetOrdinal("created_at"))
     };
 }

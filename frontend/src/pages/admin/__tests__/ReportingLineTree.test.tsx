@@ -356,4 +356,122 @@ describe('ReportingLineTree', () => {
     // The dialog result div contains "Total: 6" which the toast does NOT
     expect(screen.getByText(/Total: 6/)).toBeDefined()
   })
+
+  it('enforcement toggle renders with current mode', async () => {
+    // Use URL-based routing to handle all 3 initial fetches (orgs + tree + settings)
+    mockFetch.mockImplementation(async (url: string) => {
+      if (typeof url === 'string' && url.includes('/settings')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'ETag': '"1"' }),
+          json: async () => ({ enforcementMode: 'PREFERRED', version: 1 }),
+          text: async () => JSON.stringify({ enforcementMode: 'PREFERRED', version: 1 }),
+        }
+      }
+      if (typeof url === 'string' && url.includes('/api/admin/reporting-lines/tree/')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => mockTreeEntries,
+        }
+      }
+      if (typeof url === 'string' && url.includes('/api/admin/organization')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => mockOrgs,
+        }
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        json: async () => ({}),
+      }
+    })
+
+    renderPage()
+
+    // Wait for the settings row to appear
+    await waitFor(() => {
+      expect(screen.getByText('Foretrukket', { exact: false })).toBeDefined()
+    })
+    // The button should say "Aktiver haandhaevelse" since mode is PREFERRED
+    expect(screen.getByText('Aktiver haandhaevelse')).toBeDefined()
+  })
+
+  it('enforcement toggle shows error on 409', async () => {
+    // Use URL-based routing for initial loads + PUT intercept
+    let putCalled = false
+    mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      // Intercept the PUT for settings (toggle click)
+      if (
+        typeof url === 'string' &&
+        url.includes('/settings') &&
+        init?.method === 'PUT'
+      ) {
+        putCalled = true
+        return {
+          ok: false,
+          status: 409,
+          headers: new Headers(),
+          json: async () => ({ error: 'Cannot enable', unassignedEmployeeIds: ['EMP999'] }),
+          text: async () => JSON.stringify({ error: 'Cannot enable', unassignedEmployeeIds: ['EMP999'] }),
+        }
+      }
+      // GET settings
+      if (typeof url === 'string' && url.includes('/settings')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'ETag': '"1"' }),
+          json: async () => ({ enforcementMode: 'PREFERRED', version: 1 }),
+          text: async () => JSON.stringify({ enforcementMode: 'PREFERRED', version: 1 }),
+        }
+      }
+      // GET tree
+      if (typeof url === 'string' && url.includes('/api/admin/reporting-lines/tree/')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => mockTreeEntries,
+        }
+      }
+      // GET orgs
+      if (typeof url === 'string' && url.includes('/api/admin/organization')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => mockOrgs,
+        }
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        json: async () => ({}),
+      }
+    })
+
+    renderPage()
+
+    // Wait for the toggle button to appear
+    await waitFor(() => {
+      expect(screen.getByText('Aktiver haandhaevelse')).toBeDefined()
+    })
+
+    // Click the toggle button
+    fireEvent.click(screen.getByText('Aktiver haandhaevelse'))
+
+    // Assert the error message appears with the unassigned employee ID
+    await waitFor(() => {
+      expect(screen.getByText(/EMP999/)).toBeDefined()
+    })
+    expect(screen.getByText(/Kan ikke aktivere/)).toBeDefined()
+  })
 })

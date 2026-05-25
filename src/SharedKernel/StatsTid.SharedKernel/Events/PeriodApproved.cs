@@ -10,4 +10,5 @@ public sealed class PeriodApproved : DomainEventBase
     public required DateOnly PeriodStart { get; init; }
     public required DateOnly PeriodEnd { get; init; }
     public required string ApprovedBy { get; init; }
+    public bool ExplicitFallbackConfirmation { get; init; }
 }

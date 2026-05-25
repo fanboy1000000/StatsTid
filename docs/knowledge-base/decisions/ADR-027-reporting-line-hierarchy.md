@@ -81,7 +81,7 @@ REST import endpoint: `POST /api/admin/reporting-lines/import`. GLOBAL_ADMIN onl
 |-------|-------|-------------|
 | Phase 1 (S48) | Schema + repository + admin API + admin UI | Reporting lines optional — employees without one use org-scope as today |
 | Phase 2+3 (S49) | HR import endpoint + bulk import UI + designated-approver resolution + "My Reports" tab + `designated_approver_id`/`approval_method` on approval_periods | Trees populated via import; approval dashboard routes to designated manager; org-scope fallback still active |
-| Phase 4 | Enforcement toggle (per-tree feature flag per ADR-025 D6) | Opt-in: approval requires designated manager or fallback |
+| Phase 4 (S50) | Enforcement toggle via `reporting_line_tree_settings` table (NOT ADR-025 D6 — workflow enforcement is a first-class config, not a UI feature flag) | Opt-in REQUIRED mode: non-designated approvers get 428 + must confirm fallback. Population gate: cannot enable unless all employees have PRIMARY lines. `explicit_fallback_confirmation` on approval_periods for audit. |
 
 ### D9 — Root invariant
 
@@ -102,6 +102,16 @@ Five domain events on `reporting-line-{employeeId}` stream (ADR-018 D6):
 | `FallbackTraversalWarning` | Designated-approver resolution depth > 3 (S49 amendment) |
 
 All registered in EventSerializer (DEP-003). Atomic outbox emission per ADR-018 D3.
+
+### D11 — Enforcement model (S50 amendment)
+
+Enforcement is a **first-class per-tree config** via `reporting_line_tree_settings` table, NOT an ADR-025 D6 feature flag. ADR-025 D6 prohibits workflow-affecting flags ("must NEVER affect workflow enablement"). Enforcement changes approval authorization behavior, so it needs its own config surface.
+
+**Modes**: `PREFERRED` (default — routing only, current behavior) or `REQUIRED` (soft enforcement — 428 + confirmation dialog for non-designated approvers).
+
+**Population gate**: Cannot set `REQUIRED` unless every non-root employee in the tree has an active PRIMARY reporting line. Validated at write time.
+
+**Soft enforcement**: 428 response with `confirmFallback=true` query param override. Never hard 403. `explicit_fallback_confirmation` boolean on `approval_periods` tracks confirmed fallbacks for audit.
 
 ## Consequences
 

@@ -135,6 +135,7 @@ public static class ApprovalEndpoints
             Guid periodId,
             ApprovalPeriodRepository approvalRepo,
             ReportingLineRepository reportingLineRepo,
+            TreeSettingsRepository treeSettingsRepo,
             OrgScopeValidator scopeValidator,
             OrganizationRepository orgRepo,
             DbConnectionFactory connectionFactory,
@@ -173,6 +174,30 @@ public static class ApprovalEndpoints
             else
                 approvalMethod = "ORG_SCOPE_FALLBACK"; // Actor is not the designated approver
 
+            // S50 TASK-5007: Enforcement check.
+            var treeRoot = await reportingLineRepo.ResolveTreeRootOrgIdAsync(period.OrgId, ct);
+            var enforcementMode = await treeSettingsRepo.GetEnforcementModeAsync(treeRoot, ct);
+            var explicitFallback = false;
+
+            if (enforcementMode == "REQUIRED" && approvalMethod == "ORG_SCOPE_FALLBACK")
+            {
+                if (context.Request.Query.ContainsKey("confirmFallback") &&
+                    context.Request.Query["confirmFallback"] == "true")
+                {
+                    explicitFallback = true;
+                }
+                else
+                {
+                    return Results.Json(new
+                    {
+                        error = "Enforcement enabled — designated manager required",
+                        enforcementMode,
+                        designatedApproverId = designatedManagerId,
+                        treeRootOrgId = treeRoot,
+                    }, statusCode: 428);
+                }
+            }
+
             // Atomic state-change + audit + outbox enqueue (ADR-018 D3).
             await using var conn = connectionFactory.Create();
             await conn.OpenAsync(ct);
@@ -186,7 +211,7 @@ public static class ApprovalEndpoints
                     EmployeeId = period.EmployeeId,
                     ResolvedManagerId = designatedManagerId,
                     Depth = depth,
-                    TreeRootOrgId = await reportingLineRepo.ResolveTreeRootOrgIdAsync(period.OrgId, ct),
+                    TreeRootOrgId = treeRoot,
                     ActorId = actor.ActorId,
                     ActorRole = actor.ActorRole,
                     CorrelationId = actor.CorrelationId,
@@ -199,6 +224,7 @@ public static class ApprovalEndpoints
                 rejectionReason: null,
                 designatedApproverId: designatedManagerId,
                 approvalMethod: approvalMethod,
+                explicitFallbackConfirmation: explicitFallback,
                 ct: ct);
 
             // Write approval audit (in-tx).
@@ -215,6 +241,7 @@ public static class ApprovalEndpoints
                 PeriodStart = period.PeriodStart,
                 PeriodEnd = period.PeriodEnd,
                 ApprovedBy = actor.ActorId ?? "unknown",
+                ExplicitFallbackConfirmation = explicitFallback,
                 ActorId = actor.ActorId,
                 ActorRole = actor.ActorRole,
                 CorrelationId = actor.CorrelationId
@@ -246,6 +273,7 @@ public static class ApprovalEndpoints
             RejectPeriodRequest request,
             ApprovalPeriodRepository approvalRepo,
             ReportingLineRepository reportingLineRepo,
+            TreeSettingsRepository treeSettingsRepo,
             OrgScopeValidator scopeValidator,
             OrganizationRepository orgRepo,
             DbConnectionFactory connectionFactory,
@@ -284,6 +312,30 @@ public static class ApprovalEndpoints
             else
                 approvalMethod = "ORG_SCOPE_FALLBACK"; // Actor is not the designated approver
 
+            // S50 TASK-5007: Enforcement check.
+            var treeRoot = await reportingLineRepo.ResolveTreeRootOrgIdAsync(period.OrgId, ct);
+            var enforcementMode = await treeSettingsRepo.GetEnforcementModeAsync(treeRoot, ct);
+            var explicitFallback = false;
+
+            if (enforcementMode == "REQUIRED" && approvalMethod == "ORG_SCOPE_FALLBACK")
+            {
+                if (context.Request.Query.ContainsKey("confirmFallback") &&
+                    context.Request.Query["confirmFallback"] == "true")
+                {
+                    explicitFallback = true;
+                }
+                else
+                {
+                    return Results.Json(new
+                    {
+                        error = "Enforcement enabled — designated manager required",
+                        enforcementMode,
+                        designatedApproverId = designatedManagerId,
+                        treeRootOrgId = treeRoot,
+                    }, statusCode: 428);
+                }
+            }
+
             // Atomic state-change + audit + outbox enqueue (ADR-018 D3).
             await using var conn = connectionFactory.Create();
             await conn.OpenAsync(ct);
@@ -297,7 +349,7 @@ public static class ApprovalEndpoints
                     EmployeeId = period.EmployeeId,
                     ResolvedManagerId = designatedManagerId,
                     Depth = depth,
-                    TreeRootOrgId = await reportingLineRepo.ResolveTreeRootOrgIdAsync(period.OrgId, ct),
+                    TreeRootOrgId = treeRoot,
                     ActorId = actor.ActorId,
                     ActorRole = actor.ActorRole,
                     CorrelationId = actor.CorrelationId,
@@ -310,6 +362,7 @@ public static class ApprovalEndpoints
                 rejectionReason: request.Reason,
                 designatedApproverId: designatedManagerId,
                 approvalMethod: approvalMethod,
+                explicitFallbackConfirmation: explicitFallback,
                 ct: ct);
 
             // Write approval audit (in-tx).
@@ -327,6 +380,7 @@ public static class ApprovalEndpoints
                 PeriodEnd = period.PeriodEnd,
                 RejectedBy = actor.ActorId ?? "unknown",
                 RejectionReason = request.Reason,
+                ExplicitFallbackConfirmation = explicitFallback,
                 ActorId = actor.ActorId,
                 ActorRole = actor.ActorRole,
                 CorrelationId = actor.CorrelationId

@@ -30,5 +30,10 @@ public sealed class ApprovalPeriod
     /// One of DESIGNATED_MANAGER, ORG_SCOPE_FALLBACK, ACTING_MANAGER, PRE_REPORTING_LINE.
     /// </summary>
     public string? ApprovalMethod { get; init; }
+    /// <summary>
+    /// Sprint 50 (ADR-027 Phase 4): true when the approver explicitly confirmed the org-scope
+    /// fallback under REQUIRED enforcement mode.
+    /// </summary>
+    public bool ExplicitFallbackConfirmation { get; init; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
 }

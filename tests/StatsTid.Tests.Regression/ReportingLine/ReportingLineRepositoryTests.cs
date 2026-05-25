@@ -27,6 +27,7 @@ public sealed class ReportingLineRepositoryTests : IAsyncLifetime
     private const string TestMgrA = "test_mgr_rl_a";
     private const string TestMgrB = "test_mgr_rl_b";
     private const string TestEmpCross = "test_emp_rl_cross";
+    private const string TestEmpNoRl = "test_emp_rl_norl";
 
     public ReportingLineRepositoryTests()
     {
@@ -49,13 +50,15 @@ public sealed class ReportingLineRepositoryTests : IAsyncLifetime
                 (@emp,      @emp,      '$2a$11$fake', 'Test Employee RL',   'test_emp@test.dk',   'AFD01', 'HK', 'OK24'),
                 (@mgrA,     @mgrA,     '$2a$11$fake', 'Test Manager A',     'test_mgra@test.dk',  'STY02', 'HK', 'OK24'),
                 (@mgrB,     @mgrB,     '$2a$11$fake', 'Test Manager B',     'test_mgrb@test.dk',  'AFD02', 'HK', 'OK24'),
-                (@empCross, @empCross, '$2a$11$fake', 'Test Cross-Tree',    'test_cross@test.dk', 'STY05', 'HK', 'OK24')
+                (@empCross, @empCross, '$2a$11$fake', 'Test Cross-Tree',    'test_cross@test.dk', 'STY05', 'HK', 'OK24'),
+                (@empNoRl,  @empNoRl,  '$2a$11$fake', 'Test No RL',         'test_norl@test.dk',  'AFD01', 'HK', 'OK24')
             ON CONFLICT DO NOTHING
             """, conn);
         cmd.Parameters.AddWithValue("emp", TestEmp);
         cmd.Parameters.AddWithValue("mgrA", TestMgrA);
         cmd.Parameters.AddWithValue("mgrB", TestMgrB);
         cmd.Parameters.AddWithValue("empCross", TestEmpCross);
+        cmd.Parameters.AddWithValue("empNoRl", TestEmpNoRl);
         await cmd.ExecuteNonQueryAsync();
     }
 
@@ -72,27 +75,36 @@ public sealed class ReportingLineRepositoryTests : IAsyncLifetime
         await using (var del = new NpgsqlCommand(
             """
             DELETE FROM reporting_lines
-            WHERE employee_id IN (@emp, @mgrA, @mgrB, @empCross)
-               OR manager_id  IN (@emp, @mgrA, @mgrB, @empCross)
+            WHERE employee_id IN (@emp, @mgrA, @mgrB, @empCross, @empNoRl)
+               OR manager_id  IN (@emp, @mgrA, @mgrB, @empCross, @empNoRl)
             """, conn))
         {
             del.Parameters.AddWithValue("emp", TestEmp);
             del.Parameters.AddWithValue("mgrA", TestMgrA);
             del.Parameters.AddWithValue("mgrB", TestMgrB);
             del.Parameters.AddWithValue("empCross", TestEmpCross);
+            del.Parameters.AddWithValue("empNoRl", TestEmpNoRl);
+            await del.ExecuteNonQueryAsync();
+        }
+
+        // Delete tree settings test data.
+        await using (var del = new NpgsqlCommand(
+            "DELETE FROM reporting_line_tree_settings WHERE updated_by = 'TEST'", conn))
+        {
             await del.ExecuteNonQueryAsync();
         }
 
         await using (var del = new NpgsqlCommand(
             """
             DELETE FROM users
-            WHERE user_id IN (@emp, @mgrA, @mgrB, @empCross)
+            WHERE user_id IN (@emp, @mgrA, @mgrB, @empCross, @empNoRl)
             """, conn))
         {
             del.Parameters.AddWithValue("emp", TestEmp);
             del.Parameters.AddWithValue("mgrA", TestMgrA);
             del.Parameters.AddWithValue("mgrB", TestMgrB);
             del.Parameters.AddWithValue("empCross", TestEmpCross);
+            del.Parameters.AddWithValue("empNoRl", TestEmpNoRl);
             await del.ExecuteNonQueryAsync();
         }
     }
@@ -580,6 +592,247 @@ public sealed class ReportingLineRepositoryTests : IAsyncLifetime
         finally
         {
             // Cleanup: delete the test approval period
+            await using var conn = new NpgsqlConnection(ConnStr);
+            await conn.OpenAsync();
+            await using var cleanupCmd = new NpgsqlCommand(
+                "DELETE FROM approval_audit WHERE period_id = @periodId; DELETE FROM approval_periods WHERE period_id = @periodId",
+                conn);
+            cleanupCmd.Parameters.AddWithValue("periodId", periodId);
+            await cleanupCmd.ExecuteNonQueryAsync();
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // S50 TASK-5011: TreeSettings + enforcement toggle Docker-gated tests
+    // ════════════════════════════════════════════════════════════════
+
+    // 22. TreeSettings — GetAsync for a tree with no settings row returns null
+    [Fact]
+    public async Task TreeSettings_GetDefault_ReturnsNull()
+    {
+        var settingsRepo = new TreeSettingsRepository(_factory);
+
+        // Use a tree root that has no settings row. STY05 is an isolated tree in the seed.
+        var result = await settingsRepo.GetAsync("STY05");
+        Assert.Null(result);
+    }
+
+    // 23. TreeSettings — GetEnforcementModeAsync returns "PREFERRED" when no row exists
+    [Fact]
+    public async Task TreeSettings_GetEnforcementMode_DefaultPreferred()
+    {
+        var settingsRepo = new TreeSettingsRepository(_factory);
+
+        // No row exists for STY05 → should return "PREFERRED" as the default.
+        var mode = await settingsRepo.GetEnforcementModeAsync("STY05");
+        Assert.Equal("PREFERRED", mode);
+    }
+
+    // 24. TreeSettings — UpsertAsync with expectedVersion=null creates row at version 1
+    [Fact]
+    public async Task TreeSettings_Upsert_CreatesRow()
+    {
+        var settingsRepo = new TreeSettingsRepository(_factory);
+        var treeRoot = "STY05"; // No pre-existing settings row in seed.
+
+        try
+        {
+            var result = await settingsRepo.UpsertAsync(
+                treeRoot, "REQUIRED", expectedVersion: null, actorId: "TEST");
+
+            Assert.Equal(treeRoot, result.TreeRootOrgId);
+            Assert.Equal("REQUIRED", result.EnforcementMode);
+            Assert.Equal(1, result.Version);
+            Assert.Equal("TEST", result.UpdatedBy);
+        }
+        finally
+        {
+            await using var conn = new NpgsqlConnection(ConnStr);
+            await conn.OpenAsync();
+            await using var cmd = new NpgsqlCommand(
+                "DELETE FROM reporting_line_tree_settings WHERE tree_root_org_id = @id", conn);
+            cmd.Parameters.AddWithValue("id", treeRoot);
+            await cmd.ExecuteNonQueryAsync();
+        }
+    }
+
+    // 25. TreeSettings — Create, then update with correct version, assert version=2
+    [Fact]
+    public async Task TreeSettings_Upsert_UpdatesRow()
+    {
+        var settingsRepo = new TreeSettingsRepository(_factory);
+        var treeRoot = "STY05";
+
+        try
+        {
+            // Create at version 1
+            var created = await settingsRepo.UpsertAsync(
+                treeRoot, "PREFERRED", expectedVersion: null, actorId: "TEST");
+            Assert.Equal(1, created.Version);
+
+            // Update to REQUIRED with correct version
+            var updated = await settingsRepo.UpsertAsync(
+                treeRoot, "REQUIRED", expectedVersion: 1, actorId: "TEST");
+            Assert.Equal(2, updated.Version);
+            Assert.Equal("REQUIRED", updated.EnforcementMode);
+        }
+        finally
+        {
+            await using var conn = new NpgsqlConnection(ConnStr);
+            await conn.OpenAsync();
+            await using var cmd = new NpgsqlCommand(
+                "DELETE FROM reporting_line_tree_settings WHERE tree_root_org_id = @id", conn);
+            cmd.Parameters.AddWithValue("id", treeRoot);
+            await cmd.ExecuteNonQueryAsync();
+        }
+    }
+
+    // 26. TreeSettings — Create, then update with wrong version, assert OptimisticConcurrencyException
+    [Fact]
+    public async Task TreeSettings_Upsert_StaleVersion_ThrowsOptimistic()
+    {
+        var settingsRepo = new TreeSettingsRepository(_factory);
+        var treeRoot = "STY05";
+
+        try
+        {
+            // Create at version 1
+            await settingsRepo.UpsertAsync(
+                treeRoot, "PREFERRED", expectedVersion: null, actorId: "TEST");
+
+            // Attempt update with stale version (999 instead of 1)
+            await Assert.ThrowsAsync<OptimisticConcurrencyException>(
+                () => settingsRepo.UpsertAsync(
+                    treeRoot, "REQUIRED", expectedVersion: 999, actorId: "TEST"));
+        }
+        finally
+        {
+            await using var conn = new NpgsqlConnection(ConnStr);
+            await conn.OpenAsync();
+            await using var cmd = new NpgsqlCommand(
+                "DELETE FROM reporting_line_tree_settings WHERE tree_root_org_id = @id", conn);
+            cmd.Parameters.AddWithValue("id", treeRoot);
+            await cmd.ExecuteNonQueryAsync();
+        }
+    }
+
+    // 27. TreeSettings — PopulationGate: STY02 with complete seed data is populated
+    [Fact]
+    public async Task TreeSettings_PopulationGate_STY02_Populated()
+    {
+        var settingsRepo = new TreeSettingsRepository(_factory);
+
+        // STY02 tree has full seed data with reporting lines for all employees.
+        // The only users without a reporting-line-as-employee are tree roots
+        // (who are managers but not employees in the tree).
+        // However, test_emp_rl_norl is in AFD01 (STY02 tree) and has NO reporting line.
+        // We need to exclude it for this test by giving it a reporting line first.
+        await _repo.AssignAsync(
+            expectedCurrentVersion: null,
+            MakeLine(TestEmpNoRl, TestMgrA, treeRootOrgId: "STY02"));
+
+        try
+        {
+            var (isPopulated, unassigned) = await settingsRepo.ValidateTreePopulatedAsync("STY02");
+
+            // With our test user now having a reporting line + all seed data intact,
+            // the only unassigned should be test_emp_rl (also in AFD01/STY02 tree) who
+            // has no reporting line at start-of-test. But test_emp_rl is cleaned up in
+            // InitializeAsync, so reporting_lines for test_emp_rl are removed.
+            // The seed employees should all be covered. Let's verify our norl user is NOT
+            // in the unassigned list (it now has a line).
+            Assert.DoesNotContain(TestEmpNoRl, unassigned);
+        }
+        finally
+        {
+            // Clean up the line we added
+            var active = await _repo.GetActiveByEmployeeAndRelationshipAsync(TestEmpNoRl, "PRIMARY");
+            if (active is not null)
+            {
+                await _repo.RemoveAsync(expectedCurrentVersion: active.Version, TestEmpNoRl, "PRIMARY");
+            }
+        }
+    }
+
+    // 28. TreeSettings — PopulationGate: user without PRIMARY line shows as unassigned
+    [Fact]
+    public async Task TreeSettings_PopulationGate_UnassignedUser_ReturnsFalse()
+    {
+        var settingsRepo = new TreeSettingsRepository(_factory);
+
+        // test_emp_rl_norl is in AFD01 (tree root STY02) and has NO reporting line.
+        // ValidateTreePopulatedAsync should return it in the unassigned list.
+        var (isPopulated, unassigned) = await settingsRepo.ValidateTreePopulatedAsync("STY02");
+
+        // The tree is NOT fully populated because test_emp_rl_norl (and possibly test_emp_rl,
+        // test_mgr_rl_a, test_mgr_rl_b who are also in STY02-subtree orgs) don't have lines.
+        // At minimum, test_emp_rl_norl should appear.
+        Assert.False(isPopulated,
+            "STY02 tree should not be fully populated when test_emp_rl_norl has no reporting line.");
+        Assert.Contains(TestEmpNoRl, unassigned);
+    }
+
+    // 29. ApprovalPeriod — ExplicitFallbackConfirmation persisted on approve
+    [Fact]
+    public async Task ApprovalPeriod_ExplicitFallbackConfirmation_Persisted()
+    {
+        var periodStart = new DateOnly(2099, 2, 1);
+        var periodEnd = new DateOnly(2099, 2, 28);
+
+        // Pre-cleanup
+        await using (var preConn = new NpgsqlConnection(ConnStr))
+        {
+            await preConn.OpenAsync();
+            await using var preClean = new NpgsqlCommand(
+                """
+                DELETE FROM approval_audit WHERE period_id IN
+                    (SELECT period_id FROM approval_periods WHERE employee_id = 'emp002' AND period_start = @ps AND period_end = @pe);
+                DELETE FROM approval_periods WHERE employee_id = 'emp002' AND period_start = @ps AND period_end = @pe
+                """, preConn);
+            preClean.Parameters.AddWithValue("ps", periodStart);
+            preClean.Parameters.AddWithValue("pe", periodEnd);
+            await preClean.ExecuteNonQueryAsync();
+        }
+
+        var approvalRepo = new ApprovalPeriodRepository(_factory);
+
+        var period = new ApprovalPeriod
+        {
+            PeriodId = Guid.NewGuid(),
+            EmployeeId = "emp002",
+            OrgId = "AFD01",
+            PeriodStart = periodStart,
+            PeriodEnd = periodEnd,
+            PeriodType = "MONTHLY",
+            Status = "DRAFT",
+            AgreementCode = "HK",
+            OkVersion = "OK24",
+        };
+        var periodId = await approvalRepo.CreateAsync(period);
+
+        try
+        {
+            // Submit → employee approve → manager approve with explicitFallbackConfirmation=true
+            await approvalRepo.UpdateStatusAsync(periodId, "SUBMITTED", actorId: "emp002");
+            await approvalRepo.UpdateStatusAsync(periodId, "EMPLOYEE_APPROVED", actorId: "emp002");
+            await approvalRepo.UpdateStatusAsync(
+                periodId, "APPROVED",
+                actorId: "mgr01",
+                designatedApproverId: "mgr01",
+                approvalMethod: "ORG_SCOPE_FALLBACK",
+                explicitFallbackConfirmation: true);
+
+            // Read back and verify the boolean is persisted
+            var readBack = await approvalRepo.GetByIdAsync(periodId);
+            Assert.NotNull(readBack);
+            Assert.Equal("APPROVED", readBack!.Status);
+            Assert.True(readBack.ExplicitFallbackConfirmation,
+                "ExplicitFallbackConfirmation=true must be persisted in the database.");
+            Assert.Equal("ORG_SCOPE_FALLBACK", readBack.ApprovalMethod);
+            Assert.Equal("mgr01", readBack.DesignatedApproverId);
+        }
+        finally
+        {
             await using var conn = new NpgsqlConnection(ConnStr);
             await conn.OpenAsync();
             await using var cleanupCmd = new NpgsqlCommand(

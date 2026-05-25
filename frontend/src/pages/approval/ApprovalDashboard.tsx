@@ -139,6 +139,15 @@ export function ApprovalDashboard() {
   // Track which period is being approved
   const [approvingId, setApprovingId] = useState<string | null>(null)
 
+  // Enforcement confirmation dialog state (428 response)
+  const [enforcementDialog, setEnforcementDialog] = useState<{
+    periodId: string
+    action: 'approve' | 'reject'
+    designatedApproverId: string | null
+    reason?: string
+  } | null>(null)
+  const [enforcementConfirming, setEnforcementConfirming] = useState(false)
+
   // Compliance results per period — shared across both tabs
   const [complianceMap, setComplianceMap] = useState<Record<string, ComplianceCheckResult>>({})
 
@@ -185,16 +194,29 @@ export function ApprovalDashboard() {
     await Promise.all([fetchAll(), fetchPendingMyReports()])
   }, [fetchAll, fetchPendingMyReports])
 
-  const handleApprove = async (periodId: string) => {
+  const handleApprove = async (periodId: string, confirmFallback?: boolean) => {
     setApprovingId(periodId)
     try {
       const token = getToken()
-      const res = await fetch(`/api/approval/${periodId}/approve`, {
+      const url = confirmFallback
+        ? `/api/approval/${periodId}/approve?confirmFallback=true`
+        : `/api/approval/${periodId}/approve`
+      const res = await fetch(url, {
         method: 'POST',
         headers: {
           ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
         },
       })
+      if (res.status === 428) {
+        let body: { designatedApproverId?: string | null } = {}
+        try { body = await res.json() } catch { /* ignore */ }
+        setEnforcementDialog({
+          periodId,
+          action: 'approve',
+          designatedApproverId: body.designatedApproverId ?? null,
+        })
+        return
+      }
       if (!res.ok) { handle401(res); throw new Error(`HTTP ${res.status}`) }
       showToast('Periode godkendt.', 'success')
       await refreshAll()
@@ -216,12 +238,15 @@ export function ApprovalDashboard() {
     setRejecting(false)
   }
 
-  const handleReject = async () => {
+  const handleReject = async (confirmFallback?: boolean) => {
     if (!rejectTarget) return
     setRejecting(true)
     try {
       const token = getToken()
-      const res = await fetch(`/api/approval/${rejectTarget.periodId}/reject`, {
+      const url = confirmFallback
+        ? `/api/approval/${rejectTarget.periodId}/reject?confirmFallback=true`
+        : `/api/approval/${rejectTarget.periodId}/reject`
+      const res = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -229,6 +254,18 @@ export function ApprovalDashboard() {
         },
         body: JSON.stringify({ reason: rejectReason }),
       })
+      if (res.status === 428) {
+        let body: { designatedApproverId?: string | null } = {}
+        try { body = await res.json() } catch { /* ignore */ }
+        setEnforcementDialog({
+          periodId: rejectTarget.periodId,
+          action: 'reject',
+          designatedApproverId: body.designatedApproverId ?? null,
+          reason: rejectReason,
+        })
+        closeRejectDialog()
+        return
+      }
       if (!res.ok) { handle401(res); throw new Error(`HTTP ${res.status}`) }
       showToast('Periode afvist.', 'success')
       closeRejectDialog()
@@ -236,6 +273,42 @@ export function ApprovalDashboard() {
     } catch (e) {
       showToast(String(e instanceof Error ? e.message : e), 'error')
       setRejecting(false)
+    }
+  }
+
+  const closeEnforcementDialog = () => {
+    setEnforcementDialog(null)
+    setEnforcementConfirming(false)
+  }
+
+  const handleEnforcementConfirm = async () => {
+    if (!enforcementDialog) return
+    setEnforcementConfirming(true)
+    try {
+      if (enforcementDialog.action === 'approve') {
+        await handleApprove(enforcementDialog.periodId, true)
+      } else {
+        // For reject, we need to call the reject endpoint directly with confirmFallback
+        const token = getToken()
+        const res = await fetch(
+          `/api/approval/${enforcementDialog.periodId}/reject?confirmFallback=true`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+            },
+            body: JSON.stringify({ reason: enforcementDialog.reason }),
+          },
+        )
+        if (!res.ok) { handle401(res); throw new Error(`HTTP ${res.status}`) }
+        showToast('Periode afvist.', 'success')
+        await refreshAll()
+      }
+      closeEnforcementDialog()
+    } catch (e) {
+      showToast(String(e instanceof Error ? e.message : e), 'error')
+      setEnforcementConfirming(false)
     }
   }
 
@@ -309,11 +382,48 @@ export function ApprovalDashboard() {
               </button>
               <button
                 className={styles.confirmRejectButton}
-                onClick={handleReject}
+                onClick={() => handleReject()}
                 disabled={rejecting || !rejectReason.trim()}
                 type="button"
               >
                 {rejecting ? 'Afviser...' : 'Afvis periode'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Enforcement confirmation dialog (428 response) */}
+      {enforcementDialog && (
+        <div className={styles.dialogOverlay} onClick={closeEnforcementDialog}>
+          <div className={styles.dialog} onClick={e => e.stopPropagation()}>
+            <h3 className={styles.dialogTitle}>Haandhaevelse aktiv</h3>
+            <p className={styles.dialogDescription}>
+              Godkendelse kraever den udpegede leder. Du er ikke den udpegede leder for denne medarbejder.
+              Vil du {enforcementDialog.action === 'approve' ? 'godkende' : 'afvise'} alligevel med organisationskopet?
+            </p>
+            {enforcementDialog.designatedApproverId && (
+              <p className={styles.dialogDescription}>
+                Udpeget leder: {enforcementDialog.designatedApproverId}
+              </p>
+            )}
+            <div className={styles.dialogActions}>
+              <button
+                className={styles.cancelButton}
+                onClick={closeEnforcementDialog}
+                type="button"
+              >
+                Annuller
+              </button>
+              <button
+                className={styles.approveButton}
+                onClick={handleEnforcementConfirm}
+                disabled={enforcementConfirming}
+                type="button"
+              >
+                {enforcementConfirming
+                  ? (enforcementDialog.action === 'approve' ? 'Godkender...' : 'Afviser...')
+                  : (enforcementDialog.action === 'approve' ? 'Godkend alligevel' : 'Afvis alligevel')}
               </button>
             </div>
           </div>

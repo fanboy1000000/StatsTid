@@ -953,6 +953,117 @@ public static class ReportingLineEndpoints
             return Results.Ok(new { imported, superseded, skipped, total = request.Rows.Count });
         }).RequireAuthorization("GlobalAdminOnly");
 
+        // ═══════════════════════════════════════════
+        // Endpoint 9: GET /api/admin/reporting-lines/tree/{treeRootOrgId}/settings — Get tree settings
+        // ═══════════════════════════════════════════
+
+        app.MapGet("/api/admin/reporting-lines/tree/{treeRootOrgId}/settings", async (
+            string treeRootOrgId,
+            TreeSettingsRepository settingsRepo,
+            OrgScopeValidator scopeValidator,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            var actor = context.GetActorContext();
+            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, treeRootOrgId, ct);
+            if (!allowed)
+                return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+
+            var settings = await settingsRepo.GetAsync(treeRootOrgId, ct);
+            if (settings is null)
+            {
+                // Default: PREFERRED, version 0 (no row exists)
+                context.Response.Headers.ETag = "\"0\"";
+                return Results.Ok(new { enforcementMode = "PREFERRED", version = 0 });
+            }
+
+            context.Response.Headers.ETag = $"\"{settings.Version}\"";
+            return Results.Ok(new { enforcementMode = settings.EnforcementMode, version = settings.Version });
+        }).RequireAuthorization("LocalAdminOrAbove");
+
+        // ═══════════════════════════════════════════
+        // Endpoint 10: PUT /api/admin/reporting-lines/tree/{treeRootOrgId}/settings — Update tree settings
+        // ═══════════════════════════════════════════
+
+        app.MapPut("/api/admin/reporting-lines/tree/{treeRootOrgId}/settings", async (
+            string treeRootOrgId,
+            UpdateTreeSettingsRequest request,
+            TreeSettingsRepository settingsRepo,
+            OrganizationRepository orgRepo,
+            OrgScopeValidator scopeValidator,
+            DbConnectionFactory connectionFactory,
+            IOutboxEnqueue outbox,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            var actor = context.GetActorContext();
+            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, treeRootOrgId, ct);
+            if (!allowed)
+                return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+
+            // Validate treeRootOrgId is actually a MINISTRY or STYRELSE (Codex S50 W2).
+            var treeRootOrg = await orgRepo.GetByIdAsync(treeRootOrgId, ct);
+            if (treeRootOrg is null)
+                return Results.NotFound(new { error = $"Organization {treeRootOrgId} not found" });
+            if (treeRootOrg.OrgType is not ("MINISTRY" or "STYRELSE"))
+                return Results.BadRequest(new { error = $"Organization {treeRootOrgId} is type {treeRootOrg.OrgType}, not a tree root (must be MINISTRY or STYRELSE)" });
+
+            // Parse If-Match
+            if (!EtagHeaderHelper.TryParseIfMatch(context.Request, out var expectedVersion, out var headerError))
+            {
+                return Results.Json(new { error = headerError }, statusCode: 428);
+            }
+
+            // Validate enforcement mode
+            if (request.EnforcementMode is not ("PREFERRED" or "REQUIRED"))
+                return Results.BadRequest(new { error = "enforcementMode must be PREFERRED or REQUIRED" });
+
+            // Population gate: cannot enable REQUIRED unless tree is fully populated
+            if (request.EnforcementMode == "REQUIRED")
+            {
+                var (isPopulated, unassigned) = await settingsRepo.ValidateTreePopulatedAsync(treeRootOrgId, ct);
+                if (!isPopulated)
+                {
+                    return Results.Json(new
+                    {
+                        error = "Cannot enable enforcement: some employees have no designated manager",
+                        unassignedEmployeeIds = unassigned,
+                        unassignedCount = unassigned.Count,
+                    }, statusCode: 409);
+                }
+            }
+
+            // Atomic tx: upsert + outbox event
+            try
+            {
+                await using var conn = connectionFactory.Create();
+                await conn.OpenAsync(ct);
+                await using var tx = await conn.BeginTransactionAsync(IsolationLevel.RepeatableRead, ct);
+                try
+                {
+                    var settings = await settingsRepo.UpsertAsync(conn, tx, treeRootOrgId, request.EnforcementMode, expectedVersion, actor.ActorId ?? "system", ct);
+
+                    await tx.CommitAsync(ct);
+                    context.Response.Headers.ETag = $"\"{settings.Version}\"";
+                    return Results.Ok(new { enforcementMode = settings.EnforcementMode, version = settings.Version });
+                }
+                catch
+                {
+                    await tx.RollbackAsync(ct);
+                    throw;
+                }
+            }
+            catch (OptimisticConcurrencyException ex)
+            {
+                return Results.Json(new
+                {
+                    error = "Stale version",
+                    expectedVersion = ex.ExpectedVersion,
+                    actualVersion = ex.ActualVersion,
+                }, statusCode: 412);
+            }
+        }).RequireAuthorization("LocalAdminOrAbove");
+
         return app;
     }
 
@@ -1048,4 +1159,8 @@ public static class ReportingLineEndpoints
 
     private sealed record ImportReportingLinesRequest(string TreeRootOrgId, List<ImportRow> Rows);
     private sealed record ImportRow(string EmployeeId, string ManagerId, string EffectiveFrom);
+
+    // ── Settings DTOs ──
+
+    private sealed record UpdateTreeSettingsRequest(string EnforcementMode);
 }

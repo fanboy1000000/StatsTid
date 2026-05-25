@@ -29,15 +29,21 @@ export function useApprovals(employeeId: string) {
     return result.data
   }
 
-  const approvePeriod = async (periodId: string) => {
-    const result = await apiClient.post<ApprovalPeriod>(`/api/approval/${periodId}/approve`)
+  const approvePeriod = async (periodId: string, confirmFallback?: boolean) => {
+    const url = confirmFallback
+      ? `/api/approval/${periodId}/approve?confirmFallback=true`
+      : `/api/approval/${periodId}/approve`
+    const result = await apiClient.post<ApprovalPeriod>(url)
     if (!result.ok) throw new Error(result.error)
     await fetchPeriods()
     return result.data
   }
 
-  const rejectPeriod = async (periodId: string, reason: string) => {
-    const result = await apiClient.post<ApprovalPeriod>(`/api/approval/${periodId}/reject`, { reason })
+  const rejectPeriod = async (periodId: string, reason: string, confirmFallback?: boolean) => {
+    const url = confirmFallback
+      ? `/api/approval/${periodId}/reject?confirmFallback=true`
+      : `/api/approval/${periodId}/reject`
+    const result = await apiClient.post<ApprovalPeriod>(url, { reason })
     if (!result.ok) throw new Error(result.error)
     await fetchPeriods()
     return result.data

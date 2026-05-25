@@ -145,6 +145,37 @@ export function useReportingLines() {
     [],
   )
 
+  const fetchTreeSettings = useCallback(
+    async (treeRootOrgId: string): Promise<ApiResult<{ enforcementMode: string; version: number }>> => {
+      return apiClient.get<{ enforcementMode: string; version: number }>(
+        `/api/admin/reporting-lines/tree/${encodeURIComponent(treeRootOrgId)}/settings`,
+      )
+    },
+    [],
+  )
+
+  const updateTreeSettings = useCallback(
+    async (
+      treeRootOrgId: string,
+      body: { enforcementMode: string },
+      ifMatch: string,
+    ): Promise<ApiResult<{ enforcementMode: string; version: number }>> => {
+      const result = await apiFetchWithEtag<{ enforcementMode: string; version: number }>(
+        `/api/admin/reporting-lines/tree/${encodeURIComponent(treeRootOrgId)}/settings`,
+        {
+          method: 'PUT',
+          body: JSON.stringify(body),
+          headers: { 'If-Match': ifMatch },
+        },
+      )
+      if (!result.ok) {
+        return { ok: false, error: result.error, status: result.status, body: result.body }
+      }
+      return { ok: true, data: result.data.data }
+    },
+    [],
+  )
+
   const importLines = useCallback(
     async (body: {
       treeRootOrgId: string
@@ -167,5 +198,7 @@ export function useReportingLines() {
     assignActingManager,
     removeActingManager,
     importLines,
+    fetchTreeSettings,
+    updateTreeSettings,
   }
 }

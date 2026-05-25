@@ -128,6 +128,8 @@ export function ReportingLineTree() {
     removeManager,
     removeActingManager,
     importLines,
+    fetchTreeSettings,
+    updateTreeSettings,
   } = useReportingLines()
   const { toast } = useToast()
 
@@ -152,6 +154,12 @@ export function ReportingLineTree() {
   const [importParseError, setImportParseError] = useState<string | null>(null)
   const [importSubmitting, setImportSubmitting] = useState(false)
   const [importResult, setImportResult] = useState<ImportResult | null>(null)
+
+  // Enforcement settings state
+  const [enforcementMode, setEnforcementMode] = useState<string>('PREFERRED')
+  const [enforcementVersion, setEnforcementVersion] = useState<number>(0)
+  const [enforcementError, setEnforcementError] = useState<string | null>(null)
+  const [enforcementLoading, setEnforcementLoading] = useState(false)
 
   // Filter to MINISTRY/STYRELSE for tree root selection
   const treeRootOrgs = organizations.filter(
@@ -181,6 +189,64 @@ export function ReportingLineTree() {
   useEffect(() => {
     loadTree()
   }, [loadTree])
+
+  // Load enforcement settings when tree root changes
+  const loadEnforcementSettings = useCallback(async () => {
+    if (!selectedTreeRoot) return
+    setEnforcementError(null)
+    const result = await fetchTreeSettings(selectedTreeRoot)
+    if (result.ok) {
+      setEnforcementMode(result.data.enforcementMode)
+      setEnforcementVersion(result.data.version)
+    } else {
+      // Settings may not exist yet — default to PREFERRED silently on 404
+      if (!result.ok && result.status === 404) {
+        setEnforcementMode('PREFERRED')
+        setEnforcementVersion(0)
+      } else {
+        setEnforcementError(result.error)
+      }
+    }
+  }, [selectedTreeRoot, fetchTreeSettings])
+
+  useEffect(() => {
+    loadEnforcementSettings()
+  }, [loadEnforcementSettings])
+
+  const handleToggleEnforcement = async () => {
+    if (!selectedTreeRoot) return
+    setEnforcementLoading(true)
+    setEnforcementError(null)
+    const newMode = enforcementMode === 'REQUIRED' ? 'PREFERRED' : 'REQUIRED'
+    const ifMatch = formatVersionAsIfMatch(enforcementVersion)
+    const result = await updateTreeSettings(selectedTreeRoot, { enforcementMode: newMode }, ifMatch)
+    if (result.ok) {
+      setEnforcementMode(result.data.enforcementMode)
+      setEnforcementVersion(result.data.version)
+      toast({
+        title: 'Opdateret',
+        description: `Haandhaevelse sat til ${newMode === 'REQUIRED' ? 'Paakraevet' : 'Foretrukket'}`,
+        variant: 'success',
+      })
+    } else if (!result.ok && result.status === 409) {
+      // Population gate — show unassigned employee IDs from response body
+      const body = result.body as { unassignedEmployeeIds?: string[] } | undefined
+      const ids = body?.unassignedEmployeeIds ?? []
+      setEnforcementError(
+        `Kan ikke aktivere haandhaevelse. Foelgende medarbejdere mangler en udpeget leder: ${ids.join(', ') || '(se serverloggen)'}`,
+      )
+    } else if (!result.ok && result.status === 412) {
+      toast({
+        title: 'Fejl',
+        description: 'Indstillingerne er aendret af en anden bruger. Genindlaeser...',
+        variant: 'error',
+      })
+      await loadEnforcementSettings()
+    } else {
+      setEnforcementError(result.ok ? null : result.error)
+    }
+    setEnforcementLoading(false)
+  }
 
   const depthMap = buildDepthMap(treeEntries)
   const sortedEntries = sortByTree(treeEntries)
@@ -380,6 +446,26 @@ export function ReportingLineTree() {
           </select>
         )}
       </div>
+
+      {selectedTreeRoot && (
+        <div className={styles.settingsRow}>
+          <span>
+            Haandhaevelse: {enforcementMode === 'REQUIRED' ? 'Paakraevet' : 'Foretrukket'}
+          </span>
+          <button
+            className={enforcementMode === 'REQUIRED' ? styles.dangerBtn : styles.createBtn}
+            onClick={handleToggleEnforcement}
+            disabled={enforcementLoading}
+          >
+            {enforcementLoading
+              ? 'Opdaterer...'
+              : enforcementMode === 'REQUIRED'
+                ? 'Deaktiver haandhaevelse'
+                : 'Aktiver haandhaevelse'}
+          </button>
+          {enforcementError && <div className={styles.alert} style={{ marginBottom: 0 }}>{enforcementError}</div>}
+        </div>
+      )}
 
       {treeError && <div className={styles.alert}>{treeError}</div>}
 
