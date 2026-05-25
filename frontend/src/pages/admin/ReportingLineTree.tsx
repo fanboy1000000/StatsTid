@@ -116,6 +116,16 @@ function sortByTree(
   return sorted
 }
 
+function parseCsv(text: string): ImportRow[] {
+  const lines = text.trim().split('\n')
+  if (lines.length < 2) return []
+  // Skip header line
+  return lines.slice(1).map(line => {
+    const [employeeId, managerId, effectiveFrom] = line.split(',').map(s => s.trim())
+    return { employeeId, managerId, effectiveFrom }
+  }).filter(r => r.employeeId && r.managerId && r.effectiveFrom)
+}
+
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10)
 }
@@ -336,6 +346,8 @@ export function ReportingLineTree() {
     }
     setImportFileName(file.name)
 
+    const isCsv = file.name.toLowerCase().endsWith('.csv')
+
     const reader = new FileReader()
     reader.onload = (ev) => {
       try {
@@ -344,40 +356,52 @@ export function ReportingLineTree() {
           setImportParseError('Kunne ikke laese filen.')
           return
         }
-        const parsed: unknown = JSON.parse(text)
-        if (!Array.isArray(parsed)) {
-          setImportParseError('JSON skal vaere et array af raekkeobjekter.')
-          return
-        }
-        // Validate each row
-        const validatedRows: ImportRow[] = []
-        for (let i = 0; i < parsed.length; i++) {
-          const row = parsed[i] as Record<string, unknown>
-          if (
-            typeof row !== 'object' ||
-            row === null ||
-            typeof row.employeeId !== 'string' ||
-            typeof row.managerId !== 'string' ||
-            typeof row.effectiveFrom !== 'string'
-          ) {
-            setImportParseError(
-              `Raekke ${i + 1} mangler paakraevede felter (employeeId, managerId, effectiveFrom).`,
-            )
+
+        let validatedRows: ImportRow[]
+
+        if (isCsv) {
+          validatedRows = parseCsv(text)
+          if (validatedRows.length === 0) {
+            setImportParseError('CSV-filen indeholder ingen gyldige raekker.')
             return
           }
-          validatedRows.push({
-            employeeId: row.employeeId,
-            managerId: row.managerId,
-            effectiveFrom: row.effectiveFrom,
-          })
+        } else {
+          const parsed: unknown = JSON.parse(text)
+          if (!Array.isArray(parsed)) {
+            setImportParseError('JSON skal vaere et array af raekkeobjekter.')
+            return
+          }
+          // Validate each row
+          validatedRows = []
+          for (let i = 0; i < parsed.length; i++) {
+            const row = parsed[i] as Record<string, unknown>
+            if (
+              typeof row !== 'object' ||
+              row === null ||
+              typeof row.employeeId !== 'string' ||
+              typeof row.managerId !== 'string' ||
+              typeof row.effectiveFrom !== 'string'
+            ) {
+              setImportParseError(
+                `Raekke ${i + 1} mangler paakraevede felter (employeeId, managerId, effectiveFrom).`,
+              )
+              return
+            }
+            validatedRows.push({
+              employeeId: row.employeeId,
+              managerId: row.managerId,
+              effectiveFrom: row.effectiveFrom,
+            })
+          }
+          if (validatedRows.length === 0) {
+            setImportParseError('Filen indeholder ingen raekker.')
+            return
+          }
         }
-        if (validatedRows.length === 0) {
-          setImportParseError('Filen indeholder ingen raekker.')
-          return
-        }
+
         setImportRows(validatedRows)
       } catch {
-        setImportParseError('Ugyldig JSON. Kontroller filformatet.')
+        setImportParseError('Ugyldig fil. Kontroller filformatet.')
       }
     }
     reader.readAsText(file)
@@ -627,13 +651,13 @@ export function ReportingLineTree() {
 
             <div className={styles.formField}>
               <label className={styles.formLabel} htmlFor="importFile">
-                Vaelg JSON-fil
+                Vaelg JSON- eller CSV-fil
               </label>
               <input
                 className={styles.input}
                 id="importFile"
                 type="file"
-                accept=".json"
+                accept=".json,.csv"
                 onChange={handleFileSelect}
               />
             </div>

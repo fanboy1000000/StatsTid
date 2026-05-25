@@ -791,6 +791,7 @@ public static class AdminEndpoints
             IOutboxEnqueue outbox,
             DbConnectionFactory dbFactory,
             UserAgreementCodeRepository userAgreementCodeRepo,
+            ReportingLineRepository reportingLineRepo,
             IAuditProjectionMapper<UserUpdated> auditMapper,
             IAuditProjectionMapper<UserAgreementCodeChanged> uacChangedMapper,
             IAuditProjectionMapper<UserAgreementCodeSuperseded> uacSupersededMapper,
@@ -1016,6 +1017,12 @@ public static class AdminEndpoints
                 newPrimaryOrgId = request.PrimaryOrgId ?? lockedUser.PrimaryOrgId;
                 newAgreementCode = request.AgreementCode ?? lockedUser.AgreementCode;
 
+                // S52 / ADR-027 deferred — detect user deactivation (was active,
+                // request explicitly sets is_active = false). lockedUser.IsActive is
+                // always true here (the FOR-UPDATE read above filtered is_active = TRUE).
+                var newIsActive = request.IsActive ?? lockedUser.IsActive;
+                var isDeactivating = lockedUser.IsActive && !newIsActive;
+
                 await using var cmd = new NpgsqlCommand(
                     """
                     UPDATE users
@@ -1023,6 +1030,7 @@ public static class AdminEndpoints
                         email = @email,
                         primary_org_id = @primaryOrgId,
                         agreement_code = @agreementCode,
+                        is_active = @isActive,
                         version = version + 1,
                         updated_at = @now
                     WHERE user_id = @userId AND is_active = TRUE
@@ -1031,6 +1039,7 @@ public static class AdminEndpoints
                 cmd.Parameters.AddWithValue("email", (object?)newEmail ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("primaryOrgId", newPrimaryOrgId);
                 cmd.Parameters.AddWithValue("agreementCode", newAgreementCode);
+                cmd.Parameters.AddWithValue("isActive", newIsActive);
                 cmd.Parameters.AddWithValue("now", now);
                 cmd.Parameters.AddWithValue("userId", userId);
                 await cmd.ExecuteNonQueryAsync(ct);
@@ -1305,6 +1314,30 @@ public static class AdminEndpoints
                             ResolvedTargetOrgId: newPrimaryOrgId);
                         var uacSupersededRow = uacSupersededMapper.Map(supersededEvent, uacSupersededCtx);
                         await auditRepo.InsertAsync(conn, tx, supersededEvent.EventId, uacSupersededOutboxId, supersededEvent.EventType, uacSupersededRow, uacSupersededCtx, ct);
+                    }
+                }
+
+                // S52 / ADR-027 deferred — when deactivating a user who is a manager,
+                // emit ReportingLineManagerDeactivated events for each active reporting
+                // line where they are the manager. The read + enqueue happen inside the
+                // same atomic tx so the events are consistent with the user's new
+                // is_active = false state.
+                if (isDeactivating)
+                {
+                    var managedLines = await reportingLineRepo.GetDirectReportsAsync(conn, tx, userId, ct);
+                    foreach (var line in managedLines)
+                    {
+                        var deactivatedEvent = new ReportingLineManagerDeactivated
+                        {
+                            ReportingLineId = line.ReportingLineId,
+                            EmployeeId = line.EmployeeId,
+                            ManagerId = line.ManagerId,
+                            TreeRootOrgId = line.TreeRootOrgId,
+                            ActorId = actor.ActorId,
+                            ActorRole = actor.ActorRole,
+                            CorrelationId = actor.CorrelationId,
+                        };
+                        await outbox.EnqueueAsync(conn, tx, $"reporting-line-{line.EmployeeId}", deactivatedEvent, ct);
                     }
                 }
 
@@ -1791,6 +1824,13 @@ public static class AdminEndpoints
         /// backfilled <c>'0001-01-01'</c> predecessor).
         /// </summary>
         public DateOnly EffectiveFrom { get; init; }
+        /// <summary>
+        /// S52 / ADR-027 deferred item — optional. When explicitly set to <c>false</c>
+        /// on a currently-active user, the handler emits
+        /// <see cref="ReportingLineManagerDeactivated"/> events for each active
+        /// reporting line where the user is the manager.
+        /// </summary>
+        public bool? IsActive { get; init; }
     }
 
     private sealed class GrantRoleRequest

@@ -105,6 +105,27 @@ public sealed class ReportingLineRepository
     }
 
     /// <summary>
+    /// In-transaction sibling overload of <see cref="GetDirectReportsAsync(string, CancellationToken)"/>.
+    /// Reuses the caller-supplied <paramref name="conn"/> + <paramref name="tx"/> so the read
+    /// participates in the same atomic transaction (e.g. when emitting
+    /// <c>ReportingLineManagerDeactivated</c> events during user deactivation).
+    /// </summary>
+    public async Task<IReadOnlyList<ReportingLine>> GetDirectReportsAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string managerId, CancellationToken ct = default)
+    {
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT * FROM reporting_lines
+            WHERE manager_id = @managerId
+              AND effective_to IS NULL
+            ORDER BY employee_id
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("managerId", managerId);
+        return await ReadLinesAsync(cmd, ct);
+    }
+
+    /// <summary>
     /// Returns all active lines in the given reporting tree,
     /// ordered by manager_id then employee_id.
     /// </summary>

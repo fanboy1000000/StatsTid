@@ -123,19 +123,37 @@ public sealed class ApprovalPeriodRepository
         }
 
         var sql = $"""
+            WITH RECURSIVE managed_employees AS (
+                -- Direct reports (where actor is designated approver per ACTING-precedence)
+                SELECT rl.employee_id
+                FROM reporting_lines rl
+                LEFT JOIN reporting_lines acting ON acting.employee_id = rl.employee_id
+                    AND acting.relationship = 'ACTING'
+                    AND acting.effective_to IS NULL
+                WHERE rl.manager_id = @actorId
+                  AND rl.effective_to IS NULL
+                  AND (
+                      rl.relationship = 'ACTING'
+                      OR (rl.relationship = 'PRIMARY' AND acting.reporting_line_id IS NULL)
+                  )
+                UNION
+                -- Transitive reports (reports of reports, following ACTING-precedence chain)
+                SELECT rl2.employee_id
+                FROM reporting_lines rl2
+                JOIN managed_employees me ON rl2.manager_id = me.employee_id
+                LEFT JOIN reporting_lines acting2 ON acting2.employee_id = rl2.employee_id
+                    AND acting2.relationship = 'ACTING'
+                    AND acting2.effective_to IS NULL
+                WHERE rl2.effective_to IS NULL
+                  AND (
+                      rl2.relationship = 'ACTING' AND rl2.manager_id = me.employee_id
+                      OR (rl2.relationship = 'PRIMARY' AND acting2.reporting_line_id IS NULL)
+                  )
+            )
             SELECT DISTINCT ap.* FROM approval_periods ap
-            JOIN reporting_lines rl ON rl.employee_id = ap.employee_id
-                AND rl.manager_id = @actorId
-                AND rl.effective_to IS NULL
-            LEFT JOIN reporting_lines acting ON acting.employee_id = ap.employee_id
-                AND acting.relationship = 'ACTING'
-                AND acting.effective_to IS NULL
+            JOIN managed_employees me ON me.employee_id = ap.employee_id
             JOIN organizations o ON o.org_id = ap.org_id
             WHERE ap.status IN ('SUBMITTED', 'EMPLOYEE_APPROVED')
-              AND (
-                  rl.relationship = 'ACTING'
-                  OR (rl.relationship = 'PRIMARY' AND acting.reporting_line_id IS NULL)
-              )
               {orgScopeClause}
             ORDER BY ap.period_start
             """;
