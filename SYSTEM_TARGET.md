@@ -115,6 +115,8 @@ Organizations are linked to agreements (agreement_code, ok_version)
 Some ministries have centralized HR placed in a child organization (e.g. a styrelse) that covers the entire ministry subtree
 Subtree resolution must be efficient (single query) for scope-based authorization
 
+Reporting-line hierarchy (ADR-027): Complementing the org-unit hierarchy, each employee may have a designated manager via a temporal reporting-line model. Each Ministry or Styrelse is an independent reporting-tree root. Relationships: PRIMARY (one per employee) and ACTING (temporary delegation / vikarierende leder). Cross-org management within the same tree is permitted. The reporting line determines approval routing; org-scope authority determines approval authorization.
+
 Examples:
 Finansministeriet (Ministry)
 ├── Økonomistyrelsen (Styrelse) — may host centralized HR for all of Finansministeriet
@@ -178,7 +180,7 @@ System must support:
 Period types: weekly or monthly
 Period status lifecycle: DRAFT → SUBMITTED → APPROVED or REJECTED
 Employees submit their own periods
-Leaders approve/reject periods for employees within their organizational scope
+Leaders approve/reject periods for employees within their organizational scope. The system routes pending approvals to the employee's designated manager (ADR-027); any leader with matching org scope retains approval authority
 Only APPROVED periods may be exported to payroll
 Rejection must include a reason
 All status transitions must be auditable (who, when, reason)

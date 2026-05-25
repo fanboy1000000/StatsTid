@@ -1,8 +1,10 @@
 import { useState, useEffect, type FormEvent } from 'react'
 import styles from './UserManagement.module.css'
 import { useOrganizations, useOrgUsers, type User, type WithEtag } from '../../hooks/useAdmin'
+import { useReportingLines, type ReportingLineEntry } from '../../hooks/useReportingLines'
 import { useToast } from '../../components/ui/Toast'
 import { Spinner } from '../../components/ui'
+import { formatVersionAsIfMatch } from '../../lib/etag'
 
 const AGREEMENT_CODES = ['AC', 'HK', 'PROSA'] as const
 
@@ -64,6 +66,22 @@ export function UserManagement() {
     expected?: number
     actual?: number
   } | null>(null)
+
+  // S48 TASK-4810. Reporting-line display in user detail.
+  const {
+    fetchEmployeeLines,
+    assignManager: assignReportingLine,
+    removeActingManager,
+  } = useReportingLines()
+  const [activeLines, setActiveLines] = useState<ReportingLineEntry[]>([])
+  const [linesLoading, setLinesLoading] = useState(false)
+  const [managerDialogOpen, setManagerDialogOpen] = useState(false)
+  const [managerForm, setManagerForm] = useState<{
+    managerId: string
+    effectiveFrom: string
+  }>({ managerId: '', effectiveFrom: '' })
+  const [managerSubmitting, setManagerSubmitting] = useState(false)
+  const [managerFormError, setManagerFormError] = useState<string | null>(null)
 
   const [createForm, setCreateForm] = useState<CreateUserForm>({
     userId: '',
@@ -141,6 +159,7 @@ export function UserManagement() {
   const handleRowClick = async (user: User) => {
     setFormError(null)
     setStaleConflict(null)
+    setActiveLines([])
     setEditForm({
       displayName: user.displayName,
       email: user.email ?? '',
@@ -157,9 +176,27 @@ export function UserManagement() {
         agreementCode: fresh.agreementCode,
       })
       setEditDialogOpen(true)
+      // S48 TASK-4810. Fetch reporting lines for the selected user.
+      setLinesLoading(true)
+      const linesResult = await fetchEmployeeLines(user.userId)
+      if (linesResult.ok) {
+        setActiveLines(linesResult.data.active)
+      }
+      setLinesLoading(false)
     } catch (err) {
+      setLinesLoading(false)
       setFormError(err instanceof Error ? err.message : String(err))
     }
+  }
+
+  // S48 TASK-4810. Reload reporting lines for the currently editing user.
+  const reloadLines = async (userId: string) => {
+    setLinesLoading(true)
+    const linesResult = await fetchEmployeeLines(userId)
+    if (linesResult.ok) {
+      setActiveLines(linesResult.data.active)
+    }
+    setLinesLoading(false)
   }
 
   const handleCloseEdit = () => {
@@ -167,6 +204,58 @@ export function UserManagement() {
     setEditingUser(null)
     setFormError(null)
     setStaleConflict(null)
+    setActiveLines([])
+    setManagerDialogOpen(false)
+    setManagerFormError(null)
+  }
+
+  // S48 TASK-4810. Open "Change Manager" dialog.
+  const handleOpenManagerDialog = () => {
+    setManagerForm({ managerId: '', effectiveFrom: todayIsoUtc() })
+    setManagerFormError(null)
+    setManagerDialogOpen(true)
+  }
+
+  const handleCloseManagerDialog = () => {
+    setManagerDialogOpen(false)
+    setManagerFormError(null)
+  }
+
+  const handleManagerSubmit = async (e: FormEvent) => {
+    e.preventDefault()
+    if (!editingUser) return
+    setManagerSubmitting(true)
+    setManagerFormError(null)
+    try {
+      const result = await assignReportingLine({
+        employeeId: editingUser.userId,
+        managerId: managerForm.managerId,
+        effectiveFrom: managerForm.effectiveFrom,
+      })
+      if (!result.ok) {
+        setManagerFormError(result.error)
+      } else {
+        toast({ title: 'Tildelt', description: 'Leder tildelt', variant: 'success' })
+        handleCloseManagerDialog()
+        await reloadLines(editingUser.userId)
+      }
+    } catch (err) {
+      setManagerFormError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setManagerSubmitting(false)
+    }
+  }
+
+  const handleRemoveActing = async (line: ReportingLineEntry) => {
+    if (!editingUser) return
+    const ifMatch = formatVersionAsIfMatch(line.version)
+    const result = await removeActingManager(line.employeeId, ifMatch)
+    if (result.ok) {
+      toast({ title: 'Fjernet', description: 'Vikarierende leder fjernet', variant: 'success' })
+      await reloadLines(editingUser.userId)
+    } else {
+      toast({ title: 'Fejl', description: result.error, variant: 'error' })
+    }
   }
 
   /**
@@ -612,6 +701,126 @@ export function UserManagement() {
                   disabled={submitting}
                 >
                   {submitting ? 'Gemmer...' : 'Gem'}
+                </button>
+              </div>
+            </form>
+
+            {/* S48 TASK-4810. Reporting-line display below the edit form. */}
+            <div style={{ marginTop: 20, borderTop: '1px solid #e0e0e0', paddingTop: 16 }}>
+              <div className={styles.formLabel} style={{ fontWeight: 600, fontSize: 14, marginBottom: 8 }}>
+                Ledelseslinjer
+              </div>
+              {linesLoading && <div style={{ fontSize: 13, color: '#666' }}>Indlaeser...</div>}
+              {!linesLoading && activeLines.length === 0 && (
+                <div style={{ fontSize: 13, color: '#666' }}>Ingen ledelseslinjer registreret</div>
+              )}
+              {!linesLoading && activeLines.map((line) => {
+                const isPrimary = line.relationship === 'PRIMARY'
+                return (
+                  <div key={line.reportingLineId} style={{ fontSize: 13, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span>
+                      {isPrimary ? 'Naermeste leder' : 'Vikarierende leder'}:{' '}
+                      <strong>{line.managerId}</strong>{' '}
+                      ({isPrimary ? 'PRIMARY' : 'ACTING'})
+                    </span>
+                    {isPrimary && (
+                      <button
+                        type="button"
+                        className={styles.actionBtn}
+                        onClick={handleOpenManagerDialog}
+                      >
+                        Skift leder
+                      </button>
+                    )}
+                    {!isPrimary && (
+                      <button
+                        type="button"
+                        className={styles.actionBtn}
+                        onClick={() => handleRemoveActing(line)}
+                      >
+                        Fjern vikar
+                      </button>
+                    )}
+                  </div>
+                )
+              })}
+              {!linesLoading && activeLines.length > 0 && !activeLines.some((l) => l.relationship === 'PRIMARY') && (
+                <button
+                  type="button"
+                  className={styles.actionBtn}
+                  onClick={handleOpenManagerDialog}
+                  style={{ marginTop: 4 }}
+                >
+                  Tildel leder
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* S48 TASK-4810. Change manager dialog */}
+      {managerDialogOpen && editingUser && (
+        <div className={styles.overlay} onClick={handleCloseManagerDialog}>
+          <div className={styles.dialog} onClick={(e) => e.stopPropagation()}>
+            <h2 className={styles.dialogTitle}>Skift leder</h2>
+            <form onSubmit={handleManagerSubmit}>
+              <div className={styles.formField}>
+                <label className={styles.formLabel} htmlFor="mgrSelectId">
+                  Ny leder <span className={styles.required}>*</span>
+                </label>
+                <select
+                  className={styles.select}
+                  id="mgrSelectId"
+                  required
+                  value={managerForm.managerId}
+                  onChange={(e) =>
+                    setManagerForm((f) => ({ ...f, managerId: e.target.value }))
+                  }
+                >
+                  <option value="">Vaelg leder...</option>
+                  {users
+                    .filter((u) => u.userId !== editingUser.userId)
+                    .map((u) => (
+                      <option key={u.userId} value={u.userId}>
+                        {u.displayName} ({u.userId})
+                      </option>
+                    ))}
+                </select>
+              </div>
+
+              <div className={styles.formField}>
+                <label className={styles.formLabel} htmlFor="mgrEffectiveFrom">
+                  Gyldig fra <span className={styles.required}>*</span>
+                </label>
+                <input
+                  className={styles.input}
+                  id="mgrEffectiveFrom"
+                  type="date"
+                  required
+                  value={managerForm.effectiveFrom}
+                  onChange={(e) =>
+                    setManagerForm((f) => ({ ...f, effectiveFrom: e.target.value }))
+                  }
+                />
+              </div>
+
+              {managerFormError && <div className={styles.alert}>{managerFormError}</div>}
+
+              <div className={styles.dialogActions}>
+                <button
+                  type="button"
+                  className={styles.cancelBtn}
+                  onClick={handleCloseManagerDialog}
+                >
+                  Annuller
+                </button>
+                <button
+                  type="submit"
+                  className={styles.createBtn}
+                  disabled={managerSubmitting}
+                >
+                  {managerSubmitting ? 'Gemmer...' : 'Gem'}
                 </button>
               </div>
             </form>

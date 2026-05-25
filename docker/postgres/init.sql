@@ -2150,3 +2150,104 @@ BEGIN
     ON CONFLICT (migration_id) DO NOTHING;
 END
 $$;
+
+-- =========================================================================
+-- S48 / ADR-027 — Reporting-Line Hierarchy (Migration Phase 1)
+--   Temporal reporting_lines table complementing ADR-008 org hierarchy.
+--   Tree boundary: per MINISTRY/STYRELSE (tree_root_org_id).
+--   Relationships: PRIMARY (one per employee) + ACTING (vikarierende leder).
+--   Pattern: follows local_agreement_profiles (ADR-017 D1) temporal model.
+-- =========================================================================
+
+CREATE TABLE IF NOT EXISTS reporting_lines (
+    reporting_line_id   UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    employee_id         TEXT        NOT NULL REFERENCES users(user_id),
+    manager_id          TEXT        NOT NULL REFERENCES users(user_id),
+    tree_root_org_id    TEXT        NOT NULL REFERENCES organizations(org_id),
+    relationship        TEXT        NOT NULL DEFAULT 'PRIMARY'
+                        CHECK (relationship IN ('PRIMARY', 'ACTING')),
+    effective_from      DATE        NOT NULL,
+    effective_to        DATE,
+    source              TEXT        NOT NULL DEFAULT 'MANUAL'
+                        CHECK (source IN ('MANUAL', 'HR_IMPORT')),
+    version             BIGINT      NOT NULL DEFAULT 1,
+    created_by          TEXT        NOT NULL,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (employee_id <> manager_id)
+);
+
+-- ADR-027 D1 / ADR-017 D1 pattern: at most one active PRIMARY per employee.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_reporting_line_active_primary
+    ON reporting_lines (employee_id)
+    WHERE effective_to IS NULL AND relationship = 'PRIMARY';
+
+-- At most one active ACTING per employee (one acting-manager at a time).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_reporting_line_active_acting
+    ON reporting_lines (employee_id)
+    WHERE effective_to IS NULL AND relationship = 'ACTING';
+
+-- Lookup: "who are my direct reports?" (active lines by manager).
+CREATE INDEX IF NOT EXISTS idx_reporting_lines_manager
+    ON reporting_lines (manager_id)
+    WHERE effective_to IS NULL;
+
+-- Lookup: history for an employee (reverse chronological).
+CREATE INDEX IF NOT EXISTS idx_reporting_lines_employee_history
+    ON reporting_lines (employee_id, effective_from DESC);
+
+-- Tree-scoped queries (per styrelse/ministry).
+CREATE INDEX IF NOT EXISTS idx_reporting_lines_tree_root
+    ON reporting_lines (tree_root_org_id)
+    WHERE effective_to IS NULL;
+
+-- Audit trail for reporting-line lifecycle events.
+CREATE TABLE IF NOT EXISTS reporting_line_audit (
+    audit_id            BIGSERIAL   PRIMARY KEY,
+    reporting_line_id   UUID        NOT NULL,
+    action              TEXT        NOT NULL CHECK (action IN (
+        'ASSIGNED', 'SUPERSEDED', 'ACTING_ASSIGNED', 'ACTING_ENDED',
+        'BULK_IMPORTED', 'MANAGER_DEACTIVATED'
+    )),
+    actor_id            TEXT        NOT NULL,
+    correlation_id      UUID,
+    version_before      BIGINT,
+    version_after       BIGINT,
+    metadata            JSONB,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_reporting_line_audit_line
+    ON reporting_line_audit(reporting_line_id);
+
+-- ── Seed reporting lines (12 PRIMARY + 1 ACTING = 13 rows across 7 trees) ──
+-- Tree roots have NO reporting line (they are root by absence of a row).
+-- tree_root_org_id derivation: nearest MINISTRY or STYRELSE ancestor.
+INSERT INTO reporting_lines (employee_id, manager_id, tree_root_org_id, relationship, effective_from, source, created_by) VALUES
+    -- Tree STY01 (Medarbejder- og Kompetencestyrelsen): root = mgr03
+    ('emp001', 'mgr03',  'STY01', 'PRIMARY', '2024-01-01', 'MANUAL', 'SYSTEM'),
+    -- Tree STY02 (Statens IT): root = ladm01
+    ('hr01',   'ladm01', 'STY02', 'PRIMARY', '2024-01-01', 'MANUAL', 'SYSTEM'),
+    ('mgr01',  'ladm01', 'STY02', 'PRIMARY', '2024-01-01', 'MANUAL', 'SYSTEM'),
+    ('emp002', 'mgr01',  'STY02', 'PRIMARY', '2024-01-01', 'MANUAL', 'SYSTEM'),
+    ('emp005', 'mgr01',  'STY02', 'PRIMARY', '2024-01-01', 'MANUAL', 'SYSTEM'),
+    ('emp003', 'ladm01', 'STY02', 'PRIMARY', '2024-01-01', 'MANUAL', 'SYSTEM'),
+    ('emp010', 'ladm01', 'STY02', 'PRIMARY', '2024-01-01', 'MANUAL', 'SYSTEM'),
+    -- Tree STY04 (Styrelsen for Arbejdsmarked og Rekruttering): root = hr02
+    ('emp006', 'hr02',   'STY04', 'PRIMARY', '2024-01-01', 'MANUAL', 'SYSTEM'),
+    ('emp009', 'hr02',   'STY04', 'PRIMARY', '2024-01-01', 'MANUAL', 'SYSTEM'),
+    -- Tree STY05 (Arbejdstilsynet): root = ladm02
+    ('mgr02',  'ladm02', 'STY05', 'PRIMARY', '2024-01-01', 'MANUAL', 'SYSTEM'),
+    ('emp007', 'mgr02',  'STY05', 'PRIMARY', '2024-01-01', 'MANUAL', 'SYSTEM'),
+    ('emp008', 'ladm02', 'STY05', 'PRIMARY', '2024-01-01', 'MANUAL', 'SYSTEM'),
+    -- Trees MIN01/MIN02/STY03: single-person roots (admin01, admin02, emp004) — no lines needed.
+    -- ACTING line: emp002 has acting manager ladm01 (simulating mgr01 on vacation)
+    ('emp002', 'ladm01', 'STY02', 'ACTING',  '2024-06-01', 'MANUAL', 'SYSTEM')
+ON CONFLICT DO NOTHING;
+
+-- Ledger entry for S48
+DO $$
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s48-d1-reporting-lines-table', 'ADR-027 D1: reporting_lines + reporting_line_audit tables, 5 indexes (2 partial-unique + 3 lookup), 13 seed rows (12 PRIMARY + 1 ACTING)')
+    ON CONFLICT (migration_id) DO NOTHING;
+END
+$$;

@@ -21,6 +21,7 @@ import { PositionOverrideManagement } from './pages/admin/PositionOverrideManage
 import { WageTypeMappingManagement } from './pages/admin/WageTypeMappingManagement'
 import { EmployeeProfileEditor } from './pages/admin/EmployeeProfileEditor'
 import { AuditLogView } from './pages/admin/AuditLogView'
+import { ReportingLineTree } from './pages/admin/ReportingLineTree'
 import './styles/tokens.css'
 
 export function App() {
@@ -74,6 +75,7 @@ function AppRoutes() {
             <Route path="admin/orgs" element={<OrgManagement />} />
             <Route path="admin/roles" element={<RoleManagement />} />
             <Route path="admin/projects" element={<ProjectManagement />} />
+            <Route path="admin/reporting-lines" element={<ReportingLineTree />} />
             <Route path="config" element={<ConfigManagement />} />
           </Route>
 

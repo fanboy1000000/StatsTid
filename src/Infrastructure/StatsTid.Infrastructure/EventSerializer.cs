@@ -106,6 +106,11 @@ public static class EventSerializer
         ["OvertimeNecessityAcknowledged"] = typeof(OvertimeNecessityAcknowledged),
         ["ConfigBugCorrected"] = typeof(ConfigBugCorrected),
         ["MerarbejdeDiscretionary"] = typeof(MerarbejdeDiscretionary),
+        // Sprint 48: Reporting line hierarchy events (Phase 5 manager delegation)
+        ["ReportingLineAssigned"] = typeof(ReportingLineAssigned),
+        ["ReportingLineSuperseded"] = typeof(ReportingLineSuperseded),
+        ["ReportingLineBulkImported"] = typeof(ReportingLineBulkImported),
+        ["ReportingLineManagerDeactivated"] = typeof(ReportingLineManagerDeactivated),
     };
 
     public static string Serialize(IDomainEvent @event)

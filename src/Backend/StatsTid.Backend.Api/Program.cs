@@ -65,6 +65,7 @@ builder.Services.AddSingleton<CompensatoryRestRepository>();
 builder.Services.AddSingleton<OvertimeBalanceRepository>();
 builder.Services.AddSingleton<OvertimePreApprovalRepository>();
 builder.Services.AddSingleton<AuditProjectionRepository>();
+builder.Services.AddSingleton<ReportingLineRepository>();
 builder.Services.AddSingleton<IAuditProjectionMapperRegistry, AuditProjectionMapperRegistry>();
 // S44 TASK-4407..4412 — 6 IAuditProjectionMapper<T> + 6 RegisteredAuditEventType marker pairs.
 // Mapper + marker registered together so the registry's RegisteredEventTypeNames filter
@@ -179,6 +180,11 @@ builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(ConfigBugCorre
 // S45 — cross-process mapper (lives in Infrastructure, not Backend.Api)
 builder.Services.AddSingleton<IAuditProjectionMapper<RetroactiveCorrectionRequested>, StatsTid.Infrastructure.AuditMappers.RetroactiveCorrectionRequestedAuditMapper>();
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(RetroactiveCorrectionRequested), nameof(RetroactiveCorrectionRequested)));
+// S48 ADR-027 — reporting-line audit mappers
+builder.Services.AddSingleton<IAuditProjectionMapper<ReportingLineAssigned>, ReportingLineAssignedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(ReportingLineAssigned), nameof(ReportingLineAssigned)));
+builder.Services.AddSingleton<IAuditProjectionMapper<ReportingLineSuperseded>, ReportingLineSupersededAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(ReportingLineSuperseded), nameof(ReportingLineSuperseded)));
 
 // ── Services ──
 builder.Services.AddSingleton<ConfigResolutionService>();
@@ -302,6 +308,7 @@ app.MapBalanceEndpoints();
 app.MapComplianceEndpoints();
 app.MapOvertimeEndpoints();
 app.MapAuditEndpoints();
+app.MapReportingLineEndpoints();
 
 app.Run();
 

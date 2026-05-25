@@ -26,6 +26,7 @@ const adminItems: NavItem[] = [
   { label: 'Organisation', to: '/admin/orgs' },
   { label: 'Projekter', to: '/admin/projects' },
   { label: 'Roller', to: '/admin/roles' },
+  { label: 'Ledelseslinjer', to: '/admin/reporting-lines' },
   { label: 'Lokal konfiguration', to: '/config' },
 ]
 
