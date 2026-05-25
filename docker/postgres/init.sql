@@ -2251,3 +2251,21 @@ BEGIN
     ON CONFLICT (migration_id) DO NOTHING;
 END
 $$;
+
+-- =========================================================================
+-- S49 / ADR-027 Phase 2+3 — Approval routing columns on approval_periods
+--   designated_approver_id: who SHOULD have approved (per reporting line)
+--   approval_method: how the approver was determined
+-- =========================================================================
+
+ALTER TABLE approval_periods ADD COLUMN IF NOT EXISTS designated_approver_id TEXT;
+ALTER TABLE approval_periods ADD COLUMN IF NOT EXISTS approval_method TEXT DEFAULT 'PRE_REPORTING_LINE'
+    CHECK (approval_method IN ('DESIGNATED_MANAGER', 'ORG_SCOPE_FALLBACK', 'ACTING_MANAGER', 'PRE_REPORTING_LINE'));
+
+DO $$
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s49-d1-approval-routing-columns', 'ADR-027 Phase 3: designated_approver_id + approval_method on approval_periods; existing rows get PRE_REPORTING_LINE default')
+    ON CONFLICT (migration_id) DO NOTHING;
+END
+$$;

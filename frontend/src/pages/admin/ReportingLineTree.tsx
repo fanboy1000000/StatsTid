@@ -16,6 +16,19 @@ interface AssignForm {
   effectiveFrom: string
 }
 
+interface ImportRow {
+  employeeId: string
+  managerId: string
+  effectiveFrom: string
+}
+
+interface ImportResult {
+  imported: number
+  superseded: number
+  skipped: number
+  total: number
+}
+
 /** Build a depth map from tree entries. Managers who never appear as employees
  *  in the tree are depth 0 (root). Their direct reports are depth 1, etc. */
 function buildDepthMap(entries: ReportingLineTreeEntry[]): Map<string, number> {
@@ -114,6 +127,7 @@ export function ReportingLineTree() {
     assignManager,
     removeManager,
     removeActingManager,
+    importLines,
   } = useReportingLines()
   const { toast } = useToast()
 
@@ -130,6 +144,14 @@ export function ReportingLineTree() {
     managerId: '',
     effectiveFrom: todayIso(),
   })
+
+  // Import dialog state
+  const [importDialogOpen, setImportDialogOpen] = useState(false)
+  const [importFileName, setImportFileName] = useState<string | null>(null)
+  const [importRows, setImportRows] = useState<ImportRow[]>([])
+  const [importParseError, setImportParseError] = useState<string | null>(null)
+  const [importSubmitting, setImportSubmitting] = useState(false)
+  const [importResult, setImportResult] = useState<ImportResult | null>(null)
 
   // Filter to MINISTRY/STYRELSE for tree root selection
   const treeRootOrgs = organizations.filter(
@@ -220,13 +242,120 @@ export function ReportingLineTree() {
     }
   }
 
+  const handleOpenImport = () => {
+    setImportFileName(null)
+    setImportRows([])
+    setImportParseError(null)
+    setImportResult(null)
+    setImportDialogOpen(true)
+  }
+
+  const handleCloseImport = () => {
+    setImportDialogOpen(false)
+    setImportFileName(null)
+    setImportRows([])
+    setImportParseError(null)
+    setImportResult(null)
+  }
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setImportParseError(null)
+    setImportRows([])
+    setImportResult(null)
+
+    const file = e.target.files?.[0]
+    if (!file) {
+      setImportFileName(null)
+      return
+    }
+    setImportFileName(file.name)
+
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      try {
+        const text = ev.target?.result
+        if (typeof text !== 'string') {
+          setImportParseError('Kunne ikke laese filen.')
+          return
+        }
+        const parsed: unknown = JSON.parse(text)
+        if (!Array.isArray(parsed)) {
+          setImportParseError('JSON skal vaere et array af raekkeobjekter.')
+          return
+        }
+        // Validate each row
+        const validatedRows: ImportRow[] = []
+        for (let i = 0; i < parsed.length; i++) {
+          const row = parsed[i] as Record<string, unknown>
+          if (
+            typeof row !== 'object' ||
+            row === null ||
+            typeof row.employeeId !== 'string' ||
+            typeof row.managerId !== 'string' ||
+            typeof row.effectiveFrom !== 'string'
+          ) {
+            setImportParseError(
+              `Raekke ${i + 1} mangler paakraevede felter (employeeId, managerId, effectiveFrom).`,
+            )
+            return
+          }
+          validatedRows.push({
+            employeeId: row.employeeId,
+            managerId: row.managerId,
+            effectiveFrom: row.effectiveFrom,
+          })
+        }
+        if (validatedRows.length === 0) {
+          setImportParseError('Filen indeholder ingen raekker.')
+          return
+        }
+        setImportRows(validatedRows)
+      } catch {
+        setImportParseError('Ugyldig JSON. Kontroller filformatet.')
+      }
+    }
+    reader.readAsText(file)
+  }
+
+  const handleImportSubmit = async () => {
+    if (!selectedTreeRoot || importRows.length === 0) return
+    setImportSubmitting(true)
+    setImportParseError(null)
+    try {
+      const result = await importLines({
+        treeRootOrgId: selectedTreeRoot,
+        rows: importRows,
+      })
+      if (result.ok) {
+        setImportResult(result.data)
+        toast({
+          title: 'Importeret',
+          description: `Importeret: ${result.data.imported}, Erstattet: ${result.data.superseded}, Sprunget over: ${result.data.skipped}`,
+          variant: 'success',
+        })
+        await loadTree()
+      } else {
+        setImportParseError(result.error)
+      }
+    } catch (err) {
+      setImportParseError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setImportSubmitting(false)
+    }
+  }
+
   return (
     <div className={styles.page}>
       <div className={styles.header}>
         <h1 className={styles.title}>Ledelseslinjer</h1>
-        <button className={styles.createBtn} onClick={handleOpenAssign}>
-          Tildel leder
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className={styles.createBtn} onClick={handleOpenImport}>
+            Importer
+          </button>
+          <button className={styles.createBtn} onClick={handleOpenAssign}>
+            Tildel leder
+          </button>
+        </div>
       </div>
 
       <div className={styles.treeSelector}>
@@ -400,6 +529,98 @@ export function ReportingLineTree() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Import dialog */}
+      {importDialogOpen && (
+        <div className={styles.overlay} onClick={handleCloseImport}>
+          <div className={styles.dialog} onClick={(e) => e.stopPropagation()} style={{ minWidth: 520 }}>
+            <h2 className={styles.dialogTitle}>Importer ledelseslinjer</h2>
+
+            <div className={styles.formField}>
+              <label className={styles.formLabel} htmlFor="importFile">
+                Vaelg JSON-fil
+              </label>
+              <input
+                className={styles.input}
+                id="importFile"
+                type="file"
+                accept=".json"
+                onChange={handleFileSelect}
+              />
+            </div>
+
+            {importParseError && (
+              <div className={styles.alert}>{importParseError}</div>
+            )}
+
+            {importRows.length > 0 && !importResult && (
+              <div style={{ marginBottom: 16 }}>
+                <p className={styles.formLabel} style={{ marginBottom: 8 }}>
+                  Forhaandsvisning &mdash; {importFileName} ({importRows.length} raekker)
+                </p>
+                <table className={styles.table}>
+                  <thead>
+                    <tr>
+                      <th>Medarbejder-ID</th>
+                      <th>Leder-ID</th>
+                      <th>Gyldig fra</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {importRows.slice(0, 5).map((row, idx) => (
+                      <tr key={idx}>
+                        <td>{row.employeeId}</td>
+                        <td>{row.managerId}</td>
+                        <td>{row.effectiveFrom}</td>
+                      </tr>
+                    ))}
+                    {importRows.length > 5 && (
+                      <tr>
+                        <td colSpan={3} style={{ fontStyle: 'italic', color: '#6b7280' }}>
+                          ... og {importRows.length - 5} flere raekker
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {importResult && (
+              <div style={{
+                padding: '12px 16px',
+                border: '1px solid #10b981',
+                background: '#ecfdf5',
+                color: '#065f46',
+                fontSize: 14,
+                marginBottom: 16,
+              }}>
+                Importeret: {importResult.imported}, Erstattet: {importResult.superseded}, Sprunget over: {importResult.skipped}, Total: {importResult.total}
+              </div>
+            )}
+
+            <div className={styles.dialogActions}>
+              <button
+                type="button"
+                className={styles.cancelBtn}
+                onClick={handleCloseImport}
+              >
+                {importResult ? 'Luk' : 'Annuller'}
+              </button>
+              {!importResult && (
+                <button
+                  type="button"
+                  className={styles.createBtn}
+                  disabled={importSubmitting || importRows.length === 0 || !selectedTreeRoot}
+                  onClick={handleImportSubmit}
+                >
+                  {importSubmitting ? 'Importerer...' : 'Importer'}
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}

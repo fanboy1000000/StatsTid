@@ -145,6 +145,19 @@ export function useReportingLines() {
     [],
   )
 
+  const importLines = useCallback(
+    async (body: {
+      treeRootOrgId: string
+      rows: { employeeId: string; managerId: string; effectiveFrom: string }[]
+    }): Promise<ApiResult<{ imported: number; superseded: number; skipped: number; total: number }>> => {
+      return apiClient.post<{ imported: number; superseded: number; skipped: number; total: number }>(
+        '/api/admin/reporting-lines/import',
+        body,
+      )
+    },
+    [],
+  )
+
   return {
     fetchTree,
     fetchEmployeeLines,
@@ -153,5 +166,6 @@ export function useReportingLines() {
     removeManager,
     assignActingManager,
     removeActingManager,
+    importLines,
   }
 }

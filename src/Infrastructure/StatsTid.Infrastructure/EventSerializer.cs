@@ -111,6 +111,8 @@ public static class EventSerializer
         ["ReportingLineSuperseded"] = typeof(ReportingLineSuperseded),
         ["ReportingLineBulkImported"] = typeof(ReportingLineBulkImported),
         ["ReportingLineManagerDeactivated"] = typeof(ReportingLineManagerDeactivated),
+        // Sprint 49: Approval delegation fallback traversal warning (Phase 5 ADR-027 D5)
+        ["FallbackTraversalWarning"] = typeof(FallbackTraversalWarning),
     };
 
     public static string Serialize(IDomainEvent @event)

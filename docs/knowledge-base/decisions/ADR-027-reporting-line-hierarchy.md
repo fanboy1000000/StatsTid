@@ -80,8 +80,7 @@ REST import endpoint: `POST /api/admin/reporting-lines/import`. GLOBAL_ADMIN onl
 | Phase | Scope | Enforcement |
 |-------|-------|-------------|
 | Phase 1 (S48) | Schema + repository + admin API + admin UI | Reporting lines optional — employees without one use org-scope as today |
-| Phase 2 | HR import + bulk import UI + data population | Trees populated manually or via HR import |
-| Phase 3 | Approval routing (designated-approver queue, "My Reports" tab) | Designated approver shown; org-scope fallback still active |
+| Phase 2+3 (S49) | HR import endpoint + bulk import UI + designated-approver resolution + "My Reports" tab + `designated_approver_id`/`approval_method` on approval_periods | Trees populated via import; approval dashboard routes to designated manager; org-scope fallback still active |
 | Phase 4 | Enforcement toggle (per-tree feature flag per ADR-025 D6) | Opt-in: approval requires designated manager or fallback |
 
 ### D9 — Root invariant
@@ -92,14 +91,15 @@ The tree root need not hold any system admin role — the root of the people hie
 
 ### D10 — Event types
 
-Four domain events on `reporting-line-{employeeId}` stream (ADR-018 D6):
+Five domain events on `reporting-line-{employeeId}` stream (ADR-018 D6):
 
 | Event | When |
 |-------|------|
 | `ReportingLineAssigned` | New PRIMARY or ACTING line created |
 | `ReportingLineSuperseded` | Existing line closed (effective_to set) |
-| `ReportingLineBulkImported` | HR import batch processed (Phase 2) |
-| `ReportingLineManagerDeactivated` | Manager's is_active set to false (Phase 3/4) |
+| `ReportingLineBulkImported` | HR import batch processed |
+| `ReportingLineManagerDeactivated` | Manager's is_active set to false (Phase 4) |
+| `FallbackTraversalWarning` | Designated-approver resolution depth > 3 (S49 amendment) |
 
 All registered in EventSerializer (DEP-003). Atomic outbox emission per ADR-018 D3.
 

@@ -409,6 +409,81 @@ public sealed class ReportingLineRepository
     }
 
     // ──────────────────────────────────────────────────────────────────────
+    //  Approval delegation — designated approver resolution (ADR-027 D5)
+    // ──────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Resolves the designated approver for an employee per ADR-027 D5:
+    /// ACTING → PRIMARY → recurse up inactive chain → NULL.
+    /// Returns (managerId, approvalMethod, depth) where approvalMethod is one of
+    /// "ACTING_MANAGER", "DESIGNATED_MANAGER", or null (caller uses ORG_SCOPE_FALLBACK).
+    /// Depth indicates how many levels the traversal walked up through inactive managers;
+    /// the caller can use depth > 3 to emit a <see cref="StatsTid.SharedKernel.Events.FallbackTraversalWarning"/>.
+    /// </summary>
+    public async Task<(string? ManagerId, string? ApprovalMethod, int Depth)> ResolveDesignatedApproverAsync(
+        string employeeId, CancellationToken ct = default)
+    {
+        await using var conn = _connectionFactory.Create();
+        await conn.OpenAsync(ct);
+
+        var currentEmployeeId = employeeId;
+        var depth = 0;
+
+        while (depth < 10)
+        {
+            // 1. Check ACTING line — takes precedence over PRIMARY.
+            var actingLine = await GetActiveLineAsync(conn, currentEmployeeId, "ACTING", ct);
+            if (actingLine is not null)
+            {
+                var isActive = await IsUserActiveAsync(conn, actingLine.ManagerId, ct);
+                if (isActive)
+                    return (actingLine.ManagerId, "ACTING_MANAGER", depth);
+            }
+
+            // 2. Check PRIMARY line.
+            var primaryLine = await GetActiveLineAsync(conn, currentEmployeeId, "PRIMARY", ct);
+            if (primaryLine is null)
+                return (null, null, depth); // No reporting line — org-scope fallback.
+
+            var primaryManagerActive = await IsUserActiveAsync(conn, primaryLine.ManagerId, ct);
+            if (primaryManagerActive)
+                return (primaryLine.ManagerId, "DESIGNATED_MANAGER", depth);
+
+            // 3. Manager is inactive — walk up the chain.
+            currentEmployeeId = primaryLine.ManagerId;
+            depth++;
+        }
+
+        return (null, null, depth); // Depth exceeded — org-scope fallback.
+    }
+
+    private static async Task<ReportingLine?> GetActiveLineAsync(
+        NpgsqlConnection conn, string employeeId, string relationship, CancellationToken ct)
+    {
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT * FROM reporting_lines
+            WHERE employee_id = @employeeId
+              AND relationship = @relationship
+              AND effective_to IS NULL
+            """, conn);
+        cmd.Parameters.AddWithValue("employeeId", employeeId);
+        cmd.Parameters.AddWithValue("relationship", relationship);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct) ? MapReader(reader) : null;
+    }
+
+    private static async Task<bool> IsUserActiveAsync(
+        NpgsqlConnection conn, string userId, CancellationToken ct)
+    {
+        await using var cmd = new NpgsqlCommand(
+            "SELECT is_active FROM users WHERE user_id = @userId", conn);
+        cmd.Parameters.AddWithValue("userId", userId);
+        var result = await cmd.ExecuteScalarAsync(ct);
+        return result is true;
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
     //  Lock + precondition (internal, following LocalAgreementProfileRepository)
     // ──────────────────────────────────────────────────────────────────────
 

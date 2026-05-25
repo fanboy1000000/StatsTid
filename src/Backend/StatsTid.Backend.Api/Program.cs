@@ -185,6 +185,9 @@ builder.Services.AddSingleton<IAuditProjectionMapper<ReportingLineAssigned>, Rep
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(ReportingLineAssigned), nameof(ReportingLineAssigned)));
 builder.Services.AddSingleton<IAuditProjectionMapper<ReportingLineSuperseded>, ReportingLineSupersededAuditMapper>();
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(ReportingLineSuperseded), nameof(ReportingLineSuperseded)));
+// S49 TASK-4908 — bulk import audit mapper
+builder.Services.AddSingleton<IAuditProjectionMapper<ReportingLineBulkImported>, ReportingLineBulkImportedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(ReportingLineBulkImported), nameof(ReportingLineBulkImported)));
 
 // ── Services ──
 builder.Services.AddSingleton<ConfigResolutionService>();

@@ -20,5 +20,15 @@ public sealed class ApprovalPeriod
     public DateOnly? ManagerDeadline { get; init; }
     public required string AgreementCode { get; init; }
     public required string OkVersion { get; init; }
+    /// <summary>
+    /// Sprint 49 (ADR-027 D5): who SHOULD have approved per reporting-line resolution.
+    /// NULL for pre-reporting-line periods (approval_method = PRE_REPORTING_LINE).
+    /// </summary>
+    public string? DesignatedApproverId { get; init; }
+    /// <summary>
+    /// Sprint 49 (ADR-027 D5): how the approver was determined.
+    /// One of DESIGNATED_MANAGER, ORG_SCOPE_FALLBACK, ACTING_MANAGER, PRE_REPORTING_LINE.
+    /// </summary>
+    public string? ApprovalMethod { get; init; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
 }

@@ -692,8 +692,294 @@ public static class ReportingLineEndpoints
             return Results.NoContent();
         }).RequireAuthorization("LocalAdminOrAbove");
 
+        // ═══════════════════════════════════════════
+        // Endpoint 8: POST /api/admin/reporting-lines/import — Bulk HR import
+        // ═══════════════════════════════════════════
+
+        app.MapPost("/api/admin/reporting-lines/import", async (
+            ImportReportingLinesRequest request,
+            ReportingLineRepository repo,
+            DbConnectionFactory connectionFactory,
+            IOutboxEnqueue outbox,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            var actor = context.GetActorContext();
+
+            // 1. Basic payload validation.
+            if (string.IsNullOrWhiteSpace(request.TreeRootOrgId))
+                return Results.BadRequest(new { error = "treeRootOrgId is required" });
+            if (request.Rows is null || request.Rows.Count == 0)
+                return Results.BadRequest(new { error = "rows must not be empty" });
+
+            // 2. Pre-validation pass — collect per-row errors without touching the database.
+            var errors = new List<object>();
+
+            // Collect all unique user IDs for batch lookup.
+            var allUserIds = new HashSet<string>(StringComparer.Ordinal);
+            for (var i = 0; i < request.Rows.Count; i++)
+            {
+                var row = request.Rows[i];
+                if (string.IsNullOrWhiteSpace(row.EmployeeId))
+                    errors.Add(new { row = i, employeeId = row.EmployeeId, managerId = row.ManagerId, reason = "employeeId is required" });
+                else
+                    allUserIds.Add(row.EmployeeId);
+
+                if (string.IsNullOrWhiteSpace(row.ManagerId))
+                    errors.Add(new { row = i, employeeId = row.EmployeeId, managerId = row.ManagerId, reason = "managerId is required" });
+                else
+                    allUserIds.Add(row.ManagerId);
+
+                if (!string.IsNullOrWhiteSpace(row.EmployeeId) && !string.IsNullOrWhiteSpace(row.ManagerId) && row.EmployeeId == row.ManagerId)
+                    errors.Add(new { row = i, employeeId = row.EmployeeId, managerId = row.ManagerId, reason = "Employee cannot be their own manager" });
+
+                if (string.IsNullOrWhiteSpace(row.EffectiveFrom) || !DateOnly.TryParse(row.EffectiveFrom, out _))
+                    errors.Add(new { row = i, employeeId = row.EmployeeId, managerId = row.ManagerId, reason = $"Invalid effectiveFrom date: '{row.EffectiveFrom}'" });
+            }
+
+            // If we already have structural errors, return early.
+            if (errors.Count > 0)
+                return Results.Json(new { error = "Validation failed", errors }, statusCode: 400);
+
+            // Batch lookup: existence + active status.
+            Dictionary<string, (bool IsActive, string PrimaryOrgId)> userLookup;
+            {
+                await using var lookupConn = connectionFactory.Create();
+                await lookupConn.OpenAsync(ct);
+                await using var lookupCmd = new NpgsqlCommand(
+                    "SELECT user_id, is_active, primary_org_id FROM users WHERE user_id = ANY(@ids)",
+                    lookupConn);
+                lookupCmd.Parameters.AddWithValue("ids", allUserIds.ToArray());
+                userLookup = new Dictionary<string, (bool, string)>(StringComparer.Ordinal);
+                await using var reader = await lookupCmd.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                {
+                    var userId = reader.GetString(0);
+                    var isActive = reader.GetBoolean(1);
+                    var primaryOrgId = reader.GetString(2);
+                    userLookup[userId] = (isActive, primaryOrgId);
+                }
+            }
+
+            // Batch resolve unique org IDs to tree roots.
+            var uniqueOrgIds = new HashSet<string>(userLookup.Values.Select(v => v.PrimaryOrgId), StringComparer.Ordinal);
+            var orgToTreeRoot = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var orgId in uniqueOrgIds)
+            {
+                try
+                {
+                    var treeRoot = await repo.ResolveTreeRootOrgIdAsync(orgId, ct);
+                    orgToTreeRoot[orgId] = treeRoot;
+                }
+                catch (InvalidOperationException)
+                {
+                    // Will surface as per-row error below.
+                }
+            }
+
+            // Validate each row against lookup data.
+            for (var i = 0; i < request.Rows.Count; i++)
+            {
+                var row = request.Rows[i];
+                if (string.IsNullOrWhiteSpace(row.EmployeeId) || string.IsNullOrWhiteSpace(row.ManagerId))
+                    continue; // Already caught above.
+
+                // Employee exists and active?
+                if (!userLookup.TryGetValue(row.EmployeeId, out var empInfo))
+                {
+                    errors.Add(new { row = i, employeeId = row.EmployeeId, managerId = row.ManagerId, reason = $"Employee '{row.EmployeeId}' not found" });
+                    continue;
+                }
+                if (!empInfo.IsActive)
+                {
+                    errors.Add(new { row = i, employeeId = row.EmployeeId, managerId = row.ManagerId, reason = $"Employee '{row.EmployeeId}' is inactive" });
+                    continue;
+                }
+
+                // Manager exists and active?
+                if (!userLookup.TryGetValue(row.ManagerId, out var mgrInfo))
+                {
+                    errors.Add(new { row = i, employeeId = row.EmployeeId, managerId = row.ManagerId, reason = $"Manager '{row.ManagerId}' not found" });
+                    continue;
+                }
+                if (!mgrInfo.IsActive)
+                {
+                    errors.Add(new { row = i, employeeId = row.EmployeeId, managerId = row.ManagerId, reason = $"Manager '{row.ManagerId}' is inactive" });
+                    continue;
+                }
+
+                // Both resolve to the same tree root as treeRootOrgId?
+                if (!orgToTreeRoot.TryGetValue(empInfo.PrimaryOrgId, out var empTreeRoot))
+                {
+                    errors.Add(new { row = i, employeeId = row.EmployeeId, managerId = row.ManagerId, reason = $"Cannot resolve tree root for employee '{row.EmployeeId}'" });
+                    continue;
+                }
+                if (empTreeRoot != request.TreeRootOrgId)
+                {
+                    errors.Add(new { row = i, employeeId = row.EmployeeId, managerId = row.ManagerId, reason = $"Employee '{row.EmployeeId}' belongs to tree '{empTreeRoot}', not '{request.TreeRootOrgId}'" });
+                    continue;
+                }
+
+                if (!orgToTreeRoot.TryGetValue(mgrInfo.PrimaryOrgId, out var mgrTreeRoot))
+                {
+                    errors.Add(new { row = i, employeeId = row.EmployeeId, managerId = row.ManagerId, reason = $"Cannot resolve tree root for manager '{row.ManagerId}'" });
+                    continue;
+                }
+                if (mgrTreeRoot != request.TreeRootOrgId)
+                {
+                    errors.Add(new { row = i, employeeId = row.EmployeeId, managerId = row.ManagerId, reason = $"Manager '{row.ManagerId}' belongs to tree '{mgrTreeRoot}', not '{request.TreeRootOrgId}'" });
+                    continue;
+                }
+            }
+
+            if (errors.Count > 0)
+                return Results.Json(new { error = "Validation failed", errors }, statusCode: 400);
+
+            // 3. Atomic write pass — single RepeatableRead transaction.
+            int imported = 0, superseded = 0, skipped = 0;
+            try
+            {
+                await using var conn = connectionFactory.Create();
+                await conn.OpenAsync(ct);
+                await using var tx = await conn.BeginTransactionAsync(IsolationLevel.RepeatableRead, ct);
+                try
+                {
+                    foreach (var row in request.Rows)
+                    {
+                        var effectiveFrom = DateOnly.Parse(row.EffectiveFrom);
+
+                        // Read current active PRIMARY line via the shared conn/tx.
+                        ReportingLine? current;
+                        {
+                            await using var readCmd = new NpgsqlCommand(
+                                """
+                                SELECT * FROM reporting_lines
+                                WHERE employee_id = @empId
+                                  AND relationship = 'PRIMARY'
+                                  AND effective_to IS NULL
+                                """, conn, tx);
+                            readCmd.Parameters.AddWithValue("empId", row.EmployeeId);
+                            await using var rdr = await readCmd.ExecuteReaderAsync(ct);
+                            current = await rdr.ReadAsync(ct) ? MapReaderForImport(rdr) : null;
+                        }
+
+                        if (current is not null && current.ManagerId == row.ManagerId)
+                        {
+                            // Idempotent — same manager already assigned.
+                            skipped++;
+                            continue;
+                        }
+
+                        var newLine = new ReportingLine
+                        {
+                            ReportingLineId = Guid.NewGuid(),
+                            EmployeeId = row.EmployeeId,
+                            ManagerId = row.ManagerId,
+                            TreeRootOrgId = request.TreeRootOrgId,
+                            Relationship = "PRIMARY",
+                            EffectiveFrom = effectiveFrom,
+                            EffectiveTo = null,
+                            Source = "HR_IMPORT",
+                            Version = 1,
+                            CreatedBy = actor.ActorId ?? "system",
+                            CreatedAt = DateTime.UtcNow,
+                        };
+
+                        ReportingLine persisted;
+                        if (current is not null)
+                        {
+                            // Supersede: pass current version for concurrency.
+                            persisted = await repo.AssignAsync(conn, tx, current.Version, newLine, ct);
+                            superseded++;
+                        }
+                        else
+                        {
+                            // First assignment.
+                            persisted = await repo.AssignAsync(conn, tx, null, newLine, ct);
+                            imported++;
+                        }
+
+                        // Audit row for each non-skipped row.
+                        await using var auditCmd = new NpgsqlCommand(
+                            """
+                            INSERT INTO reporting_line_audit
+                                (reporting_line_id, action, actor_id, correlation_id, version_before, version_after, metadata)
+                            VALUES
+                                (@lineId, 'BULK_IMPORTED', @actorId, @correlationId, @versionBefore, @versionAfter, @metadata::jsonb)
+                            """, conn, tx);
+                        auditCmd.Parameters.AddWithValue("lineId", persisted.ReportingLineId);
+                        auditCmd.Parameters.AddWithValue("actorId", actor.ActorId ?? "system");
+                        auditCmd.Parameters.AddWithValue("correlationId", (object?)actor.CorrelationId ?? DBNull.Value);
+                        auditCmd.Parameters.AddWithValue("versionBefore", current is not null ? (object)current.Version : DBNull.Value);
+                        auditCmd.Parameters.AddWithValue("versionAfter", (object)persisted.Version);
+                        auditCmd.Parameters.AddWithValue("metadata", (object?)null ?? DBNull.Value);
+                        await auditCmd.ExecuteNonQueryAsync(ct);
+                    }
+
+                    // Emit a single batch event via outbox.
+                    var batchEvent = new ReportingLineBulkImported
+                    {
+                        BatchId = Guid.NewGuid(),
+                        TreeRootOrgId = request.TreeRootOrgId,
+                        LineCount = imported + superseded,
+                        Source = "HR_IMPORT",
+                        ActorId = actor.ActorId,
+                        ActorRole = actor.ActorRole,
+                        CorrelationId = actor.CorrelationId,
+                    };
+                    await outbox.EnqueueAsync(conn, tx, $"reporting-line-import-{request.TreeRootOrgId}", batchEvent, ct);
+
+                    await tx.CommitAsync(ct);
+                }
+                catch
+                {
+                    await tx.RollbackAsync(ct);
+                    throw;
+                }
+            }
+            catch (CrossTreeAssignmentException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+            catch (OptimisticConcurrencyException)
+            {
+                return Results.Json(new { error = "Concurrent modification detected; retry the import" }, statusCode: 409);
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { error = "Import failed", detail = ex.Message }, statusCode: 500);
+            }
+
+            return Results.Ok(new { imported, superseded, skipped, total = request.Rows.Count });
+        }).RequireAuthorization("GlobalAdminOnly");
+
         return app;
     }
+
+    // ── Helper: MapReaderForImport — inline reader mapper for import endpoint ──
+
+    /// <summary>
+    /// Maps a <see cref="NpgsqlDataReader"/> to <see cref="ReportingLine"/>.
+    /// Duplicated from <see cref="ReportingLineRepository"/> because the private
+    /// MapReader is inaccessible from the endpoint file. Used only by the import
+    /// endpoint's in-tx read.
+    /// </summary>
+    private static ReportingLine MapReaderForImport(NpgsqlDataReader reader) => new()
+    {
+        ReportingLineId = reader.GetGuid(reader.GetOrdinal("reporting_line_id")),
+        EmployeeId = reader.GetString(reader.GetOrdinal("employee_id")),
+        ManagerId = reader.GetString(reader.GetOrdinal("manager_id")),
+        TreeRootOrgId = reader.GetString(reader.GetOrdinal("tree_root_org_id")),
+        Relationship = reader.GetString(reader.GetOrdinal("relationship")),
+        EffectiveFrom = DateOnly.FromDateTime(reader.GetDateTime(reader.GetOrdinal("effective_from"))),
+        EffectiveTo = reader.IsDBNull(reader.GetOrdinal("effective_to"))
+            ? null
+            : DateOnly.FromDateTime(reader.GetDateTime(reader.GetOrdinal("effective_to"))),
+        Source = reader.GetString(reader.GetOrdinal("source")),
+        Version = reader.GetInt64(reader.GetOrdinal("version")),
+        CreatedBy = reader.GetString(reader.GetOrdinal("created_by")),
+        CreatedAt = reader.GetDateTime(reader.GetOrdinal("created_at")),
+    };
 
     // ── Helper: look up display names for a batch of user IDs ──
 
@@ -757,4 +1043,9 @@ public static class ReportingLineEndpoints
         public required string ManagerId { get; init; }
         public required DateOnly EffectiveFrom { get; init; }
     }
+
+    // ── Import DTOs ──
+
+    private sealed record ImportReportingLinesRequest(string TreeRootOrgId, List<ImportRow> Rows);
+    private sealed record ImportRow(string EmployeeId, string ManagerId, string EffectiveFrom);
 }

@@ -416,4 +416,177 @@ public sealed class ReportingLineRepositoryTests : IAsyncLifetime
             () => cmd.ExecuteNonQueryAsync());
         Assert.Equal("23505", ex.SqlState); // unique_violation
     }
+
+    // ════════════════════════════════════════════════════════════════
+    // S49 TASK-4912: Designated approver resolution tests
+    // ════════════════════════════════════════════════════════════════
+
+    // 16. ResolveDesignatedApprover — active PRIMARY returns DESIGNATED_MANAGER
+    [Fact]
+    public async Task ResolveDesignatedApprover_ActivePrimary_ReturnsDesignatedManager()
+    {
+        // Assign test_emp_rl → test_mgr_rl_a (PRIMARY)
+        await _repo.AssignAsync(
+            expectedCurrentVersion: null,
+            MakeLine(TestEmp, TestMgrA));
+
+        var (managerId, approvalMethod, depth) = await _repo.ResolveDesignatedApproverAsync(TestEmp);
+
+        Assert.Equal(TestMgrA, managerId);
+        Assert.Equal("DESIGNATED_MANAGER", approvalMethod);
+        Assert.Equal(0, depth);
+    }
+
+    // 17. ResolveDesignatedApprover — ACTING takes precedence over PRIMARY
+    [Fact]
+    public async Task ResolveDesignatedApprover_ActiveActing_ReturnsActingManager()
+    {
+        // Assign PRIMARY first
+        await _repo.AssignAsync(
+            expectedCurrentVersion: null,
+            MakeLine(TestEmp, TestMgrA, relationship: "PRIMARY"));
+
+        // Assign ACTING — takes precedence
+        await _repo.AssignAsync(
+            expectedCurrentVersion: null,
+            MakeLine(TestEmp, TestMgrB, relationship: "ACTING"));
+
+        var (managerId, approvalMethod, depth) = await _repo.ResolveDesignatedApproverAsync(TestEmp);
+
+        Assert.Equal(TestMgrB, managerId);
+        Assert.Equal("ACTING_MANAGER", approvalMethod);
+        Assert.Equal(0, depth);
+    }
+
+    // 18. ResolveDesignatedApprover — no line returns null
+    [Fact]
+    public async Task ResolveDesignatedApprover_NoLine_ReturnsNull()
+    {
+        // TestEmp has no reporting line (cleanup runs before each test via InitializeAsync)
+        var (managerId, approvalMethod, depth) = await _repo.ResolveDesignatedApproverAsync(TestEmp);
+
+        Assert.Null(managerId);
+        Assert.Null(approvalMethod);
+        Assert.Equal(0, depth);
+    }
+
+    // 19. Import — batch assign creates lines with HR_IMPORT source
+    [Fact]
+    public async Task Import_BatchAssign_CreatesLinesWithHrImportSource()
+    {
+        var line = MakeLine(TestEmp, TestMgrA, source: "HR_IMPORT");
+        var result = await _repo.AssignAsync(expectedCurrentVersion: null, line);
+
+        Assert.Equal("HR_IMPORT", result.Source);
+        Assert.Equal(1, result.Version);
+        Assert.Equal(TestMgrA, result.ManagerId);
+        Assert.Null(result.EffectiveTo);
+
+        // Verify via direct read
+        var active = await _repo.GetActiveByEmployeeAndRelationshipAsync(TestEmp, "PRIMARY");
+        Assert.NotNull(active);
+        Assert.Equal("HR_IMPORT", active!.Source);
+    }
+
+    // 20. Import — idempotent: second identical assign creates version 2 (repo does not skip)
+    [Fact]
+    public async Task Import_Idempotent_SecondIdenticalAssignCreatesVersion2()
+    {
+        // First assign
+        var first = await _repo.AssignAsync(
+            expectedCurrentVersion: null,
+            MakeLine(TestEmp, TestMgrA, source: "HR_IMPORT"));
+        Assert.Equal(1, first.Version);
+
+        // Second assign with same manager — repo supersedes (endpoint would skip,
+        // but at repository level a second call creates version 2)
+        var second = await _repo.AssignAsync(
+            expectedCurrentVersion: first.Version,
+            MakeLine(TestEmp, TestMgrA, source: "HR_IMPORT"));
+        Assert.Equal(2, second.Version);
+        Assert.Equal(TestMgrA, second.ManagerId);
+
+        // Only one active line (the second), predecessor closed
+        var active = await _repo.GetActiveByEmployeeAndRelationshipAsync(TestEmp, "PRIMARY");
+        Assert.NotNull(active);
+        Assert.Equal(2, active!.Version);
+
+        var history = await _repo.GetHistoryAsync(TestEmp);
+        Assert.Equal(2, history.Count);
+        Assert.Single(history.Where(l => l.EffectiveTo is null));       // 1 active
+        Assert.Single(history.Where(l => l.EffectiveTo is not null));   // 1 closed
+    }
+
+    // 21. ApprovalPeriod — approve populates routing fields
+    [Fact]
+    public async Task ApprovalPeriod_ApprovePopulatesRoutingFields()
+    {
+        // Use seed employee emp002 (org AFD01, HK, OK24) who has a reporting line to mgr01.
+        // Use a distant date range to avoid collisions with seed or other test data.
+        var periodStart = new DateOnly(2099, 1, 1);
+        var periodEnd = new DateOnly(2099, 1, 31);
+
+        // Pre-cleanup: remove any leftover from a previous interrupted run.
+        await using (var preConn = new NpgsqlConnection(ConnStr))
+        {
+            await preConn.OpenAsync();
+            await using var preClean = new NpgsqlCommand(
+                """
+                DELETE FROM approval_audit WHERE period_id IN
+                    (SELECT period_id FROM approval_periods WHERE employee_id = 'emp002' AND period_start = @ps AND period_end = @pe);
+                DELETE FROM approval_periods WHERE employee_id = 'emp002' AND period_start = @ps AND period_end = @pe
+                """, preConn);
+            preClean.Parameters.AddWithValue("ps", periodStart);
+            preClean.Parameters.AddWithValue("pe", periodEnd);
+            await preClean.ExecuteNonQueryAsync();
+        }
+
+        var approvalRepo = new ApprovalPeriodRepository(_factory);
+
+        // Create a draft period
+        var period = new StatsTid.SharedKernel.Models.ApprovalPeriod
+        {
+            PeriodId = Guid.NewGuid(),
+            EmployeeId = "emp002",
+            OrgId = "AFD01",
+            PeriodStart = periodStart,
+            PeriodEnd = periodEnd,
+            PeriodType = "MONTHLY",
+            Status = "DRAFT",
+            AgreementCode = "HK",
+            OkVersion = "OK24",
+        };
+        var periodId = await approvalRepo.CreateAsync(period);
+
+        try
+        {
+            // Submit, then employee-approve, then manager-approve with routing fields
+            await approvalRepo.UpdateStatusAsync(periodId, "SUBMITTED", actorId: "emp002");
+            await approvalRepo.UpdateStatusAsync(periodId, "EMPLOYEE_APPROVED", actorId: "emp002");
+            await approvalRepo.UpdateStatusAsync(
+                periodId, "APPROVED",
+                actorId: "mgr01",
+                designatedApproverId: "mgr01",
+                approvalMethod: "DESIGNATED_MANAGER");
+
+            // Read back and verify routing fields
+            var readBack = await approvalRepo.GetByIdAsync(periodId);
+            Assert.NotNull(readBack);
+            Assert.Equal("APPROVED", readBack!.Status);
+            Assert.Equal("mgr01", readBack.DesignatedApproverId);
+            Assert.Equal("DESIGNATED_MANAGER", readBack.ApprovalMethod);
+            Assert.Equal("mgr01", readBack.ApprovedBy);
+        }
+        finally
+        {
+            // Cleanup: delete the test approval period
+            await using var conn = new NpgsqlConnection(ConnStr);
+            await conn.OpenAsync();
+            await using var cleanupCmd = new NpgsqlCommand(
+                "DELETE FROM approval_audit WHERE period_id = @periodId; DELETE FROM approval_periods WHERE period_id = @periodId",
+                conn);
+            cleanupCmd.Parameters.AddWithValue("periodId", periodId);
+            await cleanupCmd.ExecuteNonQueryAsync();
+        }
+    }
 }

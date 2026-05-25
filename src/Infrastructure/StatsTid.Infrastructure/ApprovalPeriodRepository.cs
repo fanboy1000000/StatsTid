@@ -1,5 +1,6 @@
 using Npgsql;
 using StatsTid.SharedKernel.Models;
+using StatsTid.SharedKernel.Security;
 
 namespace StatsTid.Infrastructure;
 
@@ -73,6 +74,89 @@ public sealed class ApprovalPeriodRepository
     }
 
     /// <summary>
+    /// Returns pending approval periods for employees where the given actor is the
+    /// designated approver (ACTING-precedence), intersected with the actor's org scope.
+    /// Uses a single SQL query with ACTING-precedence logic: includes the employee if the
+    /// actor holds an ACTING line (always takes precedence), or a PRIMARY line when no
+    /// active ACTING line exists for that employee.
+    /// </summary>
+    public async Task<List<ApprovalPeriod>> GetPendingForDesignatedReportsAsync(
+        string actorId, IReadOnlyList<RoleScope> actorScopes, CancellationToken ct = default)
+    {
+        await using var conn = _connectionFactory.Create();
+        await conn.OpenAsync(ct);
+
+        // Build org-scope filter dynamically from actorScopes.
+        var hasGlobal = actorScopes.Any(s => s.ScopeType == "GLOBAL");
+        var orgScopeClause = "";
+        var orgParams = new List<NpgsqlParameter>();
+
+        if (!hasGlobal)
+        {
+            var conditions = new List<string>();
+            var paramIndex = 0;
+
+            foreach (var scope in actorScopes)
+            {
+                if (scope.OrgId is null) continue;
+
+                if (scope.ScopeType == "ORG_AND_DESCENDANTS")
+                {
+                    var paramName = $"@scopeOrgId_{paramIndex}";
+                    conditions.Add($"o.materialized_path LIKE (SELECT materialized_path FROM organizations WHERE org_id = {paramName}) || '%'");
+                    orgParams.Add(new NpgsqlParameter($"scopeOrgId_{paramIndex}", scope.OrgId));
+                    paramIndex++;
+                }
+                else if (scope.ScopeType == "ORG_ONLY")
+                {
+                    var paramName = $"@orgId_{paramIndex}";
+                    conditions.Add($"o.org_id = {paramName}");
+                    orgParams.Add(new NpgsqlParameter($"orgId_{paramIndex}", scope.OrgId));
+                    paramIndex++;
+                }
+            }
+
+            if (conditions.Count == 0)
+                return new List<ApprovalPeriod>(); // No org coverage → no results.
+
+            orgScopeClause = $"AND ({string.Join(" OR ", conditions)})";
+        }
+
+        var sql = $"""
+            SELECT DISTINCT ap.* FROM approval_periods ap
+            JOIN reporting_lines rl ON rl.employee_id = ap.employee_id
+                AND rl.manager_id = @actorId
+                AND rl.effective_to IS NULL
+            LEFT JOIN reporting_lines acting ON acting.employee_id = ap.employee_id
+                AND acting.relationship = 'ACTING'
+                AND acting.effective_to IS NULL
+            JOIN organizations o ON o.org_id = ap.org_id
+            WHERE ap.status IN ('SUBMITTED', 'EMPLOYEE_APPROVED')
+              AND (
+                  rl.relationship = 'ACTING'
+                  OR (rl.relationship = 'PRIMARY' AND acting.reporting_line_id IS NULL)
+              )
+              {orgScopeClause}
+            ORDER BY ap.period_start
+            """;
+
+        // CA2100 suppression: orgScopeClause is constructed entirely from RoleScope enum values
+        // and parameterized placeholders (@pathPrefix_N, @orgId_N); no user input is string-concatenated.
+#pragma warning disable CA2100
+        await using var cmd = new NpgsqlCommand(sql, conn);
+#pragma warning restore CA2100
+        cmd.Parameters.AddWithValue("actorId", actorId);
+        foreach (var p in orgParams)
+            cmd.Parameters.Add(p);
+
+        var periods = new List<ApprovalPeriod>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            periods.Add(ReadPeriod(reader));
+        return periods;
+    }
+
+    /// <summary>
     /// Self-managed overload of <see cref="CreateAsync(NpgsqlConnection, NpgsqlTransaction, ApprovalPeriod, CancellationToken)"/>:
     /// opens its own connection (no transaction). For atomic outbox + audit + state mutation
     /// (ADR-018 D3) call the in-transaction sibling.
@@ -132,36 +216,41 @@ public sealed class ApprovalPeriodRepository
 
     public async Task UpdateStatusAsync(
         Guid periodId, string status, string? actorId = null,
-        string? rejectionReason = null, CancellationToken ct = default)
+        string? rejectionReason = null,
+        string? designatedApproverId = null, string? approvalMethod = null,
+        CancellationToken ct = default)
     {
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
-        await using var cmd = BuildUpdateStatusCommand(conn, null, periodId, status, actorId, rejectionReason);
+        await using var cmd = BuildUpdateStatusCommand(conn, null, periodId, status, actorId, rejectionReason, designatedApproverId, approvalMethod);
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
     /// <summary>
-    /// In-transaction sibling overload of <see cref="UpdateStatusAsync(Guid, string, string?, string?, CancellationToken)"/>.
+    /// In-transaction sibling overload of <see cref="UpdateStatusAsync(Guid, string, string?, string?, string?, string?, CancellationToken)"/>.
     /// </summary>
     public async Task UpdateStatusAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
         Guid periodId, string status, string? actorId = null,
-        string? rejectionReason = null, CancellationToken ct = default)
+        string? rejectionReason = null,
+        string? designatedApproverId = null, string? approvalMethod = null,
+        CancellationToken ct = default)
     {
-        await using var cmd = BuildUpdateStatusCommand(conn, tx, periodId, status, actorId, rejectionReason);
+        await using var cmd = BuildUpdateStatusCommand(conn, tx, periodId, status, actorId, rejectionReason, designatedApproverId, approvalMethod);
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
     private static NpgsqlCommand BuildUpdateStatusCommand(
         NpgsqlConnection conn, NpgsqlTransaction? tx,
-        Guid periodId, string status, string? actorId, string? rejectionReason)
+        Guid periodId, string status, string? actorId, string? rejectionReason,
+        string? designatedApproverId = null, string? approvalMethod = null)
     {
         var sql = status switch
         {
             "SUBMITTED" => "UPDATE approval_periods SET status = 'SUBMITTED', submitted_at = NOW(), submitted_by = @actorId WHERE period_id = @periodId",
             "EMPLOYEE_APPROVED" => "UPDATE approval_periods SET status = 'EMPLOYEE_APPROVED', employee_approved_at = NOW(), employee_approved_by = @actorId WHERE period_id = @periodId",
-            "APPROVED" => "UPDATE approval_periods SET status = 'APPROVED', approved_by = @actorId, approved_at = NOW() WHERE period_id = @periodId",
-            "REJECTED" => "UPDATE approval_periods SET status = 'REJECTED', approved_by = @actorId, approved_at = NOW(), rejection_reason = @rejectionReason WHERE period_id = @periodId",
+            "APPROVED" => "UPDATE approval_periods SET status = 'APPROVED', approved_by = @actorId, approved_at = NOW(), designated_approver_id = @designatedApproverId, approval_method = @approvalMethod WHERE period_id = @periodId",
+            "REJECTED" => "UPDATE approval_periods SET status = 'REJECTED', approved_by = @actorId, approved_at = NOW(), rejection_reason = @rejectionReason, designated_approver_id = @designatedApproverId, approval_method = @approvalMethod WHERE period_id = @periodId",
             "DRAFT" => "UPDATE approval_periods SET status = 'DRAFT', submitted_at = NULL, submitted_by = NULL, approved_by = NULL, approved_at = NULL, rejection_reason = NULL, employee_approved_at = NULL, employee_approved_by = NULL WHERE period_id = @periodId",
             _ => throw new ArgumentException($"Invalid status: {status}")
         };
@@ -171,6 +260,11 @@ public sealed class ApprovalPeriodRepository
         cmd.Parameters.AddWithValue("actorId", (object?)actorId ?? DBNull.Value);
         if (status == "REJECTED")
             cmd.Parameters.AddWithValue("rejectionReason", (object?)rejectionReason ?? DBNull.Value);
+        if (status is "APPROVED" or "REJECTED")
+        {
+            cmd.Parameters.AddWithValue("designatedApproverId", (object?)designatedApproverId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("approvalMethod", (object?)approvalMethod ?? DBNull.Value);
+        }
         return cmd;
     }
 
@@ -272,6 +366,8 @@ public sealed class ApprovalPeriodRepository
         ManagerDeadline = reader.IsDBNull(reader.GetOrdinal("manager_deadline")) ? null : DateOnly.FromDateTime(reader.GetDateTime(reader.GetOrdinal("manager_deadline"))),
         AgreementCode = reader.GetString(reader.GetOrdinal("agreement_code")),
         OkVersion = reader.GetString(reader.GetOrdinal("ok_version")),
+        DesignatedApproverId = reader.IsDBNull(reader.GetOrdinal("designated_approver_id")) ? null : reader.GetString(reader.GetOrdinal("designated_approver_id")),
+        ApprovalMethod = reader.IsDBNull(reader.GetOrdinal("approval_method")) ? null : reader.GetString(reader.GetOrdinal("approval_method")),
         CreatedAt = reader.GetDateTime(reader.GetOrdinal("created_at"))
     };
 }

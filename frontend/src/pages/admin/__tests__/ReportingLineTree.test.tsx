@@ -266,4 +266,94 @@ describe('ReportingLineTree', () => {
       expect(deleteCalls[0][0]).toContain('EMP001')
     })
   })
+
+  it('bulk import dialog opens with "Importer" button', async () => {
+    // 1) Orgs GET
+    mockOrgsResponse()
+    // 2) Tree GET
+    mockTreeResponse()
+
+    renderPage()
+
+    // Wait for entries to render
+    await waitFor(() => {
+      expect(screen.getByText('Anders Andersen')).toBeDefined()
+    })
+
+    // Click the "Importer" button in the header
+    const importButton = screen.getByText('Importer')
+    fireEvent.click(importButton)
+
+    // Assert dialog appears with file input and title
+    await waitFor(() => {
+      expect(screen.getByText('Importer ledelseslinjer')).toBeDefined()
+    })
+    expect(screen.getByLabelText(/Vaelg JSON-fil/)).toBeDefined()
+  })
+
+  it('import result shows counts after successful import', async () => {
+    // 1) Orgs GET
+    mockOrgsResponse()
+    // 2) Tree GET
+    mockTreeResponse()
+
+    renderPage()
+
+    // Wait for entries to render
+    await waitFor(() => {
+      expect(screen.getByText('Anders Andersen')).toBeDefined()
+    })
+
+    // Open import dialog
+    const importButton = screen.getByText('Importer')
+    fireEvent.click(importButton)
+
+    await waitFor(() => {
+      expect(screen.getByText('Importer ledelseslinjer')).toBeDefined()
+    })
+
+    // Simulate file selection by creating a File and dispatching a change event
+    const fileInput = screen.getByLabelText(/Vaelg JSON-fil/) as HTMLInputElement
+    const importData = JSON.stringify([
+      { employeeId: 'EMP010', managerId: 'MGR001', effectiveFrom: '2026-03-01' },
+      { employeeId: 'EMP011', managerId: 'MGR001', effectiveFrom: '2026-03-01' },
+      { employeeId: 'EMP012', managerId: 'MGR002', effectiveFrom: '2026-03-01' },
+    ])
+    const file = new File([importData], 'lines.json', { type: 'application/json' })
+    fireEvent.change(fileInput, { target: { files: [file] } })
+
+    // Wait for the preview table to appear (file parsed)
+    await waitFor(() => {
+      expect(screen.getByText('EMP010')).toBeDefined()
+    })
+
+    // Queue the import POST response
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      json: async () => ({ imported: 3, superseded: 1, skipped: 2, total: 6 }),
+      text: async () => JSON.stringify({ imported: 3, superseded: 1, skipped: 2, total: 6 }),
+    })
+    // Queue the tree refresh GET that follows a successful import
+    mockTreeResponse()
+
+    // Click the submit button in the dialog (the one labelled "Importer" inside the dialog)
+    // The dialog has a submit button that says "Importer" — but there's also the
+    // header button. The dialog submit button is the one that's not disabled.
+    const dialogButtons = screen.getAllByText('Importer')
+    // The last "Importer" button in the DOM is the dialog's submit button
+    const submitBtn = dialogButtons[dialogButtons.length - 1]
+    fireEvent.click(submitBtn)
+
+    // Assert the result summary appears in the dialog. The toast also
+    // contains partial text, so we use getAllByText and verify at least one
+    // match exists. The full combined line "Importeret: 3, Erstattet: 1,
+    // Sprunget over: 2, Total: 6" is unique to the dialog result div.
+    await waitFor(() => {
+      expect(screen.getAllByText(/Importeret: 3/).length).toBeGreaterThanOrEqual(1)
+    })
+    // The dialog result div contains "Total: 6" which the toast does NOT
+    expect(screen.getByText(/Total: 6/)).toBeDefined()
+  })
 })

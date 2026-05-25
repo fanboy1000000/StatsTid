@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Mvc;
 using Npgsql;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
@@ -133,6 +134,7 @@ public static class ApprovalEndpoints
         app.MapPost("/api/approval/{periodId}/approve", async (
             Guid periodId,
             ApprovalPeriodRepository approvalRepo,
+            ReportingLineRepository reportingLineRepo,
             OrgScopeValidator scopeValidator,
             OrganizationRepository orgRepo,
             DbConnectionFactory connectionFactory,
@@ -158,13 +160,46 @@ public static class ApprovalEndpoints
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
+            // Resolve designated approver for audit trail (ADR-027 D5).
+            var (designatedManagerId, resolvedMethod, depth) =
+                await reportingLineRepo.ResolveDesignatedApproverAsync(period.EmployeeId, ct);
+
+            // Derive approval_method based on who's actually approving vs who should be.
+            string approvalMethod;
+            if (designatedManagerId is null)
+                approvalMethod = "ORG_SCOPE_FALLBACK";
+            else if (actor.ActorId == designatedManagerId)
+                approvalMethod = resolvedMethod!; // "ACTING_MANAGER" or "DESIGNATED_MANAGER"
+            else
+                approvalMethod = "ORG_SCOPE_FALLBACK"; // Actor is not the designated approver
+
             // Atomic state-change + audit + outbox enqueue (ADR-018 D3).
             await using var conn = connectionFactory.Create();
             await conn.OpenAsync(ct);
             await using var tx = await conn.BeginTransactionAsync(ct);
 
+            // Emit FallbackTraversalWarning if depth > 3 (ADR-027 D5).
+            if (depth > 3)
+            {
+                var warning = new FallbackTraversalWarning
+                {
+                    EmployeeId = period.EmployeeId,
+                    ResolvedManagerId = designatedManagerId,
+                    Depth = depth,
+                    TreeRootOrgId = await reportingLineRepo.ResolveTreeRootOrgIdAsync(period.OrgId, ct),
+                    ActorId = actor.ActorId,
+                    ActorRole = actor.ActorRole,
+                    CorrelationId = actor.CorrelationId,
+                };
+                await outbox.EnqueueAsync(conn, tx, $"reporting-line-{period.EmployeeId}", warning, ct);
+            }
+
             // Transition to APPROVED
-            await approvalRepo.UpdateStatusAsync(conn, tx, periodId, "APPROVED", actor.ActorId, ct: ct);
+            await approvalRepo.UpdateStatusAsync(conn, tx, periodId, "APPROVED", actor.ActorId,
+                rejectionReason: null,
+                designatedApproverId: designatedManagerId,
+                approvalMethod: approvalMethod,
+                ct: ct);
 
             // Write approval audit (in-tx).
             await approvalRepo.AppendAuditAsync(
@@ -210,6 +245,7 @@ public static class ApprovalEndpoints
             Guid periodId,
             RejectPeriodRequest request,
             ApprovalPeriodRepository approvalRepo,
+            ReportingLineRepository reportingLineRepo,
             OrgScopeValidator scopeValidator,
             OrganizationRepository orgRepo,
             DbConnectionFactory connectionFactory,
@@ -235,13 +271,46 @@ public static class ApprovalEndpoints
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
+            // Resolve designated approver for audit trail (ADR-027 D5).
+            var (designatedManagerId, resolvedMethod, depth) =
+                await reportingLineRepo.ResolveDesignatedApproverAsync(period.EmployeeId, ct);
+
+            // Derive approval_method based on who's actually rejecting vs who should be.
+            string approvalMethod;
+            if (designatedManagerId is null)
+                approvalMethod = "ORG_SCOPE_FALLBACK";
+            else if (actor.ActorId == designatedManagerId)
+                approvalMethod = resolvedMethod!; // "ACTING_MANAGER" or "DESIGNATED_MANAGER"
+            else
+                approvalMethod = "ORG_SCOPE_FALLBACK"; // Actor is not the designated approver
+
             // Atomic state-change + audit + outbox enqueue (ADR-018 D3).
             await using var conn = connectionFactory.Create();
             await conn.OpenAsync(ct);
             await using var tx = await conn.BeginTransactionAsync(ct);
 
+            // Emit FallbackTraversalWarning if depth > 3 (ADR-027 D5).
+            if (depth > 3)
+            {
+                var warning = new FallbackTraversalWarning
+                {
+                    EmployeeId = period.EmployeeId,
+                    ResolvedManagerId = designatedManagerId,
+                    Depth = depth,
+                    TreeRootOrgId = await reportingLineRepo.ResolveTreeRootOrgIdAsync(period.OrgId, ct),
+                    ActorId = actor.ActorId,
+                    ActorRole = actor.ActorRole,
+                    CorrelationId = actor.CorrelationId,
+                };
+                await outbox.EnqueueAsync(conn, tx, $"reporting-line-{period.EmployeeId}", warning, ct);
+            }
+
             // Transition to REJECTED
-            await approvalRepo.UpdateStatusAsync(conn, tx, periodId, "REJECTED", actor.ActorId, request.Reason, ct);
+            await approvalRepo.UpdateStatusAsync(conn, tx, periodId, "REJECTED", actor.ActorId,
+                rejectionReason: request.Reason,
+                designatedApproverId: designatedManagerId,
+                approvalMethod: approvalMethod,
+                ct: ct);
 
             // Write approval audit (in-tx).
             await approvalRepo.AppendAuditAsync(
@@ -285,7 +354,9 @@ public static class ApprovalEndpoints
         // ── Get Pending Periods ──
 
         app.MapGet("/api/approval/pending", async (
+            [FromQuery(Name = "my-reports")] bool? myReports,
             ApprovalPeriodRepository approvalRepo,
+            ReportingLineRepository reportingLineRepo,
             OrganizationRepository orgRepo,
             OrgScopeValidator scopeValidator,
             HttpContext context,
@@ -295,6 +366,28 @@ public static class ApprovalEndpoints
 
             if (actor.Scopes is null || actor.Scopes.Length == 0)
                 return Results.Json(new { error = "Access denied", reason = "No scopes assigned" }, statusCode: 403);
+
+            // When my-reports=true, return only periods for employees where the actor
+            // is the designated approver (ACTING-precedence), intersected with org scope.
+            if (myReports == true)
+            {
+                var myReportPeriods = await approvalRepo.GetPendingForDesignatedReportsAsync(
+                    actor.ActorId!, actor.Scopes, ct);
+
+                var myResult = myReportPeriods.Select(p => new
+                {
+                    periodId = p.PeriodId,
+                    employeeId = p.EmployeeId,
+                    orgId = p.OrgId,
+                    periodStart = p.PeriodStart,
+                    periodEnd = p.PeriodEnd,
+                    periodType = p.PeriodType,
+                    status = p.Status,
+                    submittedAt = p.SubmittedAt
+                }).ToList();
+
+                return Results.Ok(myResult);
+            }
 
             var allPending = new List<ApprovalPeriod>();
             var seenIds = new HashSet<Guid>();

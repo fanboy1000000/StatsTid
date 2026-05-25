@@ -67,3 +67,25 @@ export function usePendingApprovals() {
 
   return { periods, loading, error, fetchPending }
 }
+
+export function usePendingMyReports() {
+  const [periods, setPeriods] = useState<ApprovalPeriod[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const fetchPendingMyReports = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    const result = await apiClient.get<ApprovalPeriod[]>('/api/approval/pending?my-reports=true')
+    if (result.ok) {
+      setPeriods(result.data)
+    } else {
+      setError(result.error)
+    }
+    setLoading(false)
+  }, [])
+
+  useEffect(() => { fetchPendingMyReports() }, [fetchPendingMyReports])
+
+  return { periods, loading, error, fetchPendingMyReports }
+}

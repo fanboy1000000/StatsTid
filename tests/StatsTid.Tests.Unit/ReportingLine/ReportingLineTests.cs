@@ -334,4 +334,64 @@ public class ReportingLineTests
                 m => m.FullName == "System.Runtime.CompilerServices.IsExternalInit");
         }
     }
+
+    // ---------------------------------------------------------------
+    // S49 TASK-4911: FallbackTraversalWarning — round-trip + registration
+    // ---------------------------------------------------------------
+
+    [Fact]
+    public void EventSerializer_RoundTrips_FallbackTraversalWarning()
+    {
+        var eventId = Guid.NewGuid();
+        var correlationId = Guid.NewGuid();
+        var occurredAt = new DateTime(2026, 5, 25, 9, 0, 0, DateTimeKind.Utc);
+
+        var original = new FallbackTraversalWarning
+        {
+            EventId = eventId,
+            OccurredAt = occurredAt,
+            Version = 1,
+            ActorId = "system",
+            ActorRole = "GLOBAL_ADMIN",
+            CorrelationId = correlationId,
+            EmployeeId = "emp001",
+            ResolvedManagerId = "mgr03",
+            Depth = 4,
+            TreeRootOrgId = "STY02",
+        };
+
+        var json = EventSerializer.Serialize(original);
+        var deserialized = EventSerializer.Deserialize("FallbackTraversalWarning", json);
+
+        var result = Assert.IsType<FallbackTraversalWarning>(deserialized);
+        Assert.Equal(eventId, result.EventId);
+        Assert.Equal(occurredAt, result.OccurredAt);
+        Assert.Equal("FallbackTraversalWarning", result.EventType);
+        Assert.Equal(1, result.Version);
+        Assert.Equal("system", result.ActorId);
+        Assert.Equal("GLOBAL_ADMIN", result.ActorRole);
+        Assert.Equal(correlationId, result.CorrelationId);
+        Assert.Equal("emp001", result.EmployeeId);
+        Assert.Equal("mgr03", result.ResolvedManagerId);
+        Assert.Equal(4, result.Depth);
+        Assert.Equal("STY02", result.TreeRootOrgId);
+    }
+
+    [Fact]
+    public void EventSerializer_Registers_FallbackTraversalWarning()
+    {
+        var mapField = typeof(EventSerializer).GetField(
+            "EventTypeMap",
+            BindingFlags.NonPublic | BindingFlags.Static);
+
+        Assert.NotNull(mapField);
+        var map = (IReadOnlyDictionary<string, Type>)mapField!.GetValue(null)!;
+
+        Assert.True(
+            map.TryGetValue("FallbackTraversalWarning", out var registeredType),
+            "EventSerializer.EventTypeMap is missing discriminator 'FallbackTraversalWarning'. " +
+            "Add [FallbackTraversalWarning] = typeof(FallbackTraversalWarning) to the map.");
+
+        Assert.Equal(typeof(FallbackTraversalWarning), registeredType);
+    }
 }
