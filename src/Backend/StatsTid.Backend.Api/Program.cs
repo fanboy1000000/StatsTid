@@ -31,6 +31,7 @@ builder.Services.AddSingleton<PostgresEventStore>(sp => new PostgresEventStore(
 builder.Services.AddSingleton<IEventStore>(sp => sp.GetRequiredService<PostgresEventStore>());
 builder.Services.AddSingleton<IOutboxEnqueue>(sp => sp.GetRequiredService<PostgresEventStore>());
 builder.Services.AddHostedService<OutboxPublisher>();
+builder.Services.AddHostedService<DelegationExpiryService>();
 
 builder.Services.AddHttpClient();
 

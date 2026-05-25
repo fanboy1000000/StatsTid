@@ -14,6 +14,7 @@ const employeeItems: NavItem[] = [
 
 const leaderItems: NavItem[] = [
   { label: 'Godkendelser', to: '/approval' },
+  { label: 'Vikariering', to: '/delegation' },
 ]
 
 const hrItems: NavItem[] = [

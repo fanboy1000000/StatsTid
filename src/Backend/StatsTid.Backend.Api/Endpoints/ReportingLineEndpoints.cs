@@ -1064,6 +1064,423 @@ public static class ReportingLineEndpoints
             }
         }).RequireAuthorization("LocalAdminOrAbove");
 
+        // ═══════════════════════════════════════════
+        // Endpoint 11: GET /api/reporting-lines/delegate — Get active self-delegation status
+        // ═══════════════════════════════════════════
+
+        app.MapGet("/api/reporting-lines/delegate", async (
+            ReportingLineRepository repo,
+            DbConnectionFactory connectionFactory,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            var actor = context.GetActorContext();
+            var actorId = actor.ActorId;
+            if (string.IsNullOrEmpty(actorId))
+                return Results.Json(new { error = "Actor identity required" }, statusCode: 401);
+
+            // Query active ACTING lines where source='SELF_DELEGATION' AND created_by=actor
+            await using var conn = connectionFactory.Create();
+            await conn.OpenAsync(ct);
+            await using var cmd = new NpgsqlCommand(
+                """
+                SELECT rl.reporting_line_id, rl.employee_id, rl.manager_id,
+                       rl.effective_from, rl.scheduled_expiry
+                FROM reporting_lines rl
+                WHERE rl.source = 'SELF_DELEGATION'
+                  AND rl.created_by = @actorId
+                  AND rl.effective_to IS NULL
+                ORDER BY rl.employee_id
+                """, conn);
+            cmd.Parameters.AddWithValue("actorId", actorId);
+
+            var delegatedEmployees = new List<(string EmployeeId, string ManagerId, DateOnly EffectiveFrom, DateOnly? ScheduledExpiry)>();
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                delegatedEmployees.Add((
+                    reader.GetString(reader.GetOrdinal("employee_id")),
+                    reader.GetString(reader.GetOrdinal("manager_id")),
+                    DateOnly.FromDateTime(reader.GetDateTime(reader.GetOrdinal("effective_from"))),
+                    reader.IsDBNull(reader.GetOrdinal("scheduled_expiry"))
+                        ? null
+                        : DateOnly.FromDateTime(reader.GetDateTime(reader.GetOrdinal("scheduled_expiry")))
+                ));
+            }
+
+            if (delegatedEmployees.Count == 0)
+            {
+                return Results.Ok(new
+                {
+                    active = false,
+                    actingManagerId = (string?)null,
+                    effectiveFrom = (DateOnly?)null,
+                    effectiveTo = (DateOnly?)null,
+                    delegatedEmployees = Array.Empty<object>(),
+                });
+            }
+
+            // Enrich with display names
+            var employeeIds = new HashSet<string>(delegatedEmployees.Select(d => d.EmployeeId), StringComparer.Ordinal);
+            var displayNames = await LookupDisplayNamesAsync(connectionFactory, employeeIds, ct);
+
+            var first = delegatedEmployees[0];
+            return Results.Ok(new
+            {
+                active = true,
+                actingManagerId = first.ManagerId,
+                effectiveFrom = first.EffectiveFrom,
+                effectiveTo = first.ScheduledExpiry,
+                delegatedEmployees = delegatedEmployees.Select(d => new
+                {
+                    employeeId = d.EmployeeId,
+                    displayName = displayNames.GetValueOrDefault(d.EmployeeId),
+                }),
+            });
+        }).RequireAuthorization("LeaderOrAbove");
+
+        // ═══════════════════════════════════════════
+        // Endpoint 12: POST /api/reporting-lines/delegate — Self-service delegation
+        // ═══════════════════════════════════════════
+
+        app.MapPost("/api/reporting-lines/delegate", async (
+            DelegateRequest request,
+            ReportingLineRepository repo,
+            RoleAssignmentRepository roleRepo,
+            OrganizationRepository orgRepo,
+            DbConnectionFactory connectionFactory,
+            IOutboxEnqueue outbox,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            var actor = context.GetActorContext();
+            var actorId = actor.ActorId;
+            if (string.IsNullOrEmpty(actorId))
+                return Results.Json(new { error = "Actor identity required" }, statusCode: 401);
+
+            // 1. Parse and validate effectiveTo date.
+            if (!DateOnly.TryParse(request.EffectiveTo, out var effectiveTo))
+                return Results.BadRequest(new { error = $"Invalid effectiveTo date: '{request.EffectiveTo}'" });
+
+            var effectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow);
+            if (effectiveTo <= effectiveFrom)
+                return Results.BadRequest(new { error = "effectiveTo must be after today" });
+
+            // 2. Cannot delegate to self.
+            if (string.Equals(actorId, request.ActingManagerId, StringComparison.Ordinal))
+                return Results.BadRequest(new { error = "Cannot delegate to yourself" });
+
+            // 3. Get actor's PRIMARY direct reports.
+            var directReports = (await repo.GetDirectReportsAsync(actorId, ct))
+                .Where(r => r.Relationship == "PRIMARY").ToList();
+            if (directReports.Count == 0)
+                return Results.BadRequest(new { error = "You have no direct reports to delegate" });
+
+            // 4. Check no active self-delegation exists.
+            {
+                await using var checkConn = connectionFactory.Create();
+                await checkConn.OpenAsync(ct);
+                await using var checkCmd = new NpgsqlCommand(
+                    """
+                    SELECT 1 FROM reporting_lines
+                    WHERE source = 'SELF_DELEGATION'
+                      AND created_by = @actorId
+                      AND effective_to IS NULL
+                    LIMIT 1
+                    """, checkConn);
+                checkCmd.Parameters.AddWithValue("actorId", actorId);
+                var existing = await checkCmd.ExecuteScalarAsync(ct);
+                if (existing is not null)
+                    return Results.Json(new { error = "Active self-delegation already exists; revoke it first" }, statusCode: 409);
+            }
+
+            // 5. Validate acting manager exists and has LocalLeader+ role.
+            var actingManagerRoles = await roleRepo.GetByUserIdAsync(request.ActingManagerId, ct);
+            var qualifyingRoleIds = new HashSet<string>(StringComparer.Ordinal)
+                { "GLOBAL_ADMIN", "LOCAL_ADMIN", "LOCAL_HR", "LOCAL_LEADER" };
+            var qualifyingAssignments = actingManagerRoles
+                .Where(ra => qualifyingRoleIds.Contains(ra.RoleId))
+                .ToList();
+
+            if (qualifyingAssignments.Count == 0)
+                return Results.BadRequest(new { error = $"Acting manager '{request.ActingManagerId}' does not hold a qualifying role (LocalLeader or above)" });
+
+            // 6. Validate acting manager's org-scope covers ALL direct reports (TASK-5105).
+            //    Inline scope validation: for each direct report, resolve their org's
+            //    materialized_path and check if any of the acting manager's scopes covers it.
+            var hasGlobalScope = qualifyingAssignments.Any(ra =>
+                string.Equals(ra.ScopeType, "GLOBAL", StringComparison.Ordinal));
+
+            if (!hasGlobalScope)
+            {
+                // Build scope org paths for the acting manager's qualifying assignments.
+                var scopeOrgPaths = new List<(string OrgId, string? MaterializedPath, string ScopeType)>();
+                foreach (var ra in qualifyingAssignments)
+                {
+                    if (ra.OrgId is null) continue;
+                    var scopeOrg = await orgRepo.GetByIdAsync(ra.OrgId, ct);
+                    scopeOrgPaths.Add((ra.OrgId, scopeOrg?.MaterializedPath, ra.ScopeType));
+                }
+
+                // For each direct report, resolve their org and check coverage.
+                var uncoveredEmployees = new List<string>();
+                var orgPathCache = new Dictionary<string, string?>(StringComparer.Ordinal);
+                foreach (var report in directReports)
+                {
+                    // Resolve employee's org materialized_path.
+                    string? empOrgPath;
+                    {
+                        await using var empConn = connectionFactory.Create();
+                        await empConn.OpenAsync(ct);
+                        await using var empCmd = new NpgsqlCommand(
+                            """
+                            SELECT o.materialized_path FROM users u
+                            JOIN organizations o ON o.org_id = u.primary_org_id
+                            WHERE u.user_id = @employeeId AND u.is_active = TRUE AND o.is_active = TRUE
+                            """, empConn);
+                        empCmd.Parameters.AddWithValue("employeeId", report.EmployeeId);
+                        var result = await empCmd.ExecuteScalarAsync(ct);
+                        empOrgPath = result as string;
+                    }
+
+                    if (empOrgPath is null)
+                    {
+                        uncoveredEmployees.Add(report.EmployeeId);
+                        continue;
+                    }
+
+                    // Check if any scope covers this employee.
+                    var covered = false;
+                    foreach (var (_, scopePath, scopeType) in scopeOrgPaths)
+                    {
+                        if (scopePath is null) continue;
+                        if (scopeType == "ORG_AND_DESCENDANTS" &&
+                            empOrgPath.StartsWith(scopePath, StringComparison.Ordinal))
+                        {
+                            covered = true;
+                            break;
+                        }
+                        if (scopeType == "ORG_ONLY" &&
+                            string.Equals(empOrgPath, scopePath, StringComparison.Ordinal))
+                        {
+                            covered = true;
+                            break;
+                        }
+                    }
+
+                    if (!covered)
+                        uncoveredEmployees.Add(report.EmployeeId);
+                }
+
+                if (uncoveredEmployees.Count > 0)
+                {
+                    return Results.BadRequest(new
+                    {
+                        error = "Acting manager's org-scope does not cover all direct reports",
+                        uncoveredEmployeeIds = uncoveredEmployees,
+                        uncoveredCount = uncoveredEmployees.Count,
+                    });
+                }
+            }
+
+            // 7. Atomic tx: create ACTING lines for each direct report (skip admin ACTING).
+            int delegated = 0, skipped = 0;
+            await using var conn = connectionFactory.Create();
+            await conn.OpenAsync(ct);
+            await using var tx = await conn.BeginTransactionAsync(IsolationLevel.RepeatableRead, ct);
+            try
+            {
+                foreach (var report in directReports)
+                {
+                    // Check if employee already has an admin-created ACTING line.
+                    await using var existingCmd = new NpgsqlCommand(
+                        """
+                        SELECT 1 FROM reporting_lines
+                        WHERE employee_id = @empId
+                          AND relationship = 'ACTING'
+                          AND effective_to IS NULL
+                          AND source != 'SELF_DELEGATION'
+                        LIMIT 1
+                        """, conn, tx);
+                    existingCmd.Parameters.AddWithValue("empId", report.EmployeeId);
+                    var hasAdminActing = await existingCmd.ExecuteScalarAsync(ct);
+                    if (hasAdminActing is not null)
+                    {
+                        skipped++;
+                        continue;
+                    }
+
+                    var actingLine = new ReportingLine
+                    {
+                        ReportingLineId = Guid.NewGuid(),
+                        EmployeeId = report.EmployeeId,
+                        ManagerId = request.ActingManagerId,
+                        TreeRootOrgId = report.TreeRootOrgId,
+                        Relationship = "ACTING",
+                        EffectiveFrom = effectiveFrom,
+                        Source = "SELF_DELEGATION",
+                        Version = 1,
+                        CreatedBy = actorId,
+                        ScheduledExpiry = effectiveTo,
+                    };
+
+                    await repo.AssignAsync(conn, tx, null, actingLine, ct);
+
+                    // Audit row per line.
+                    await using var auditCmd = new NpgsqlCommand(
+                        """
+                        INSERT INTO reporting_line_audit
+                            (reporting_line_id, action, actor_id, correlation_id, version_before, version_after, metadata)
+                        VALUES
+                            (@lineId, 'SELF_DELEGATED', @actorId, @correlationId, NULL, @versionAfter, @metadata::jsonb)
+                        """, conn, tx);
+                    auditCmd.Parameters.AddWithValue("lineId", actingLine.ReportingLineId);
+                    auditCmd.Parameters.AddWithValue("actorId", actorId);
+                    auditCmd.Parameters.AddWithValue("correlationId", (object?)actor.CorrelationId ?? DBNull.Value);
+                    auditCmd.Parameters.AddWithValue("versionAfter", (object)1L);
+                    auditCmd.Parameters.AddWithValue("metadata", (object?)null ?? DBNull.Value);
+                    await auditCmd.ExecuteNonQueryAsync(ct);
+
+                    delegated++;
+                }
+
+                // Emit batch event.
+                var batchEvent = new ReportingLineSelfDelegated
+                {
+                    BatchId = Guid.NewGuid(),
+                    DelegatingManagerId = actorId,
+                    ActingManagerId = request.ActingManagerId,
+                    DelegatedCount = delegated,
+                    SkippedCount = skipped,
+                    EffectiveFrom = effectiveFrom,
+                    EffectiveTo = effectiveTo,
+                    ActorId = actor.ActorId,
+                    ActorRole = actor.ActorRole,
+                    CorrelationId = actor.CorrelationId,
+                };
+                await outbox.EnqueueAsync(conn, tx, $"reporting-line-{actorId}", batchEvent, ct);
+
+                await tx.CommitAsync(ct);
+            }
+            catch
+            {
+                await tx.RollbackAsync(ct);
+                throw;
+            }
+
+            return Results.Ok(new
+            {
+                delegatedCount = delegated,
+                skippedCount = skipped,
+                actingManagerId = request.ActingManagerId,
+                effectiveFrom,
+                effectiveTo,
+            });
+        }).RequireAuthorization("LeaderOrAbove");
+
+        // ═══════════════════════════════════════════
+        // Endpoint 13: DELETE /api/reporting-lines/delegate — Revoke self-delegation
+        // ═══════════════════════════════════════════
+
+        app.MapDelete("/api/reporting-lines/delegate", async (
+            ReportingLineRepository repo,
+            DbConnectionFactory connectionFactory,
+            IOutboxEnqueue outbox,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            var actor = context.GetActorContext();
+            var actorId = actor.ActorId;
+            if (string.IsNullOrEmpty(actorId))
+                return Results.Json(new { error = "Actor identity required" }, statusCode: 401);
+
+            // Find all active self-delegated ACTING lines created by this actor.
+            await using var conn = connectionFactory.Create();
+            await conn.OpenAsync(ct);
+            await using var tx = await conn.BeginTransactionAsync(IsolationLevel.RepeatableRead, ct);
+            try
+            {
+                // Lock and close all active self-delegation lines in a single UPDATE.
+                await using var closeCmd = new NpgsqlCommand(
+                    """
+                    UPDATE reporting_lines
+                    SET effective_to = CURRENT_DATE, version = version + 1
+                    WHERE source = 'SELF_DELEGATION'
+                      AND created_by = @actorId
+                      AND effective_to IS NULL
+                    RETURNING reporting_line_id, employee_id, manager_id, tree_root_org_id,
+                              effective_from, effective_to, version
+                    """, conn, tx);
+                closeCmd.Parameters.AddWithValue("actorId", actorId);
+
+                var closedLines = new List<(Guid LineId, string EmployeeId, string ManagerId, string TreeRootOrgId,
+                    DateOnly EffectiveFrom, DateOnly EffectiveTo, long Version)>();
+                await using var reader = await closeCmd.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                {
+                    closedLines.Add((
+                        reader.GetGuid(reader.GetOrdinal("reporting_line_id")),
+                        reader.GetString(reader.GetOrdinal("employee_id")),
+                        reader.GetString(reader.GetOrdinal("manager_id")),
+                        reader.GetString(reader.GetOrdinal("tree_root_org_id")),
+                        DateOnly.FromDateTime(reader.GetDateTime(reader.GetOrdinal("effective_from"))),
+                        DateOnly.FromDateTime(reader.GetDateTime(reader.GetOrdinal("effective_to"))),
+                        reader.GetInt64(reader.GetOrdinal("version"))
+                    ));
+                }
+
+                if (closedLines.Count == 0)
+                    return Results.NotFound(new { error = "No active self-delegation to revoke" });
+
+                // Emit ReportingLineSuperseded event for each closed line + audit rows.
+                foreach (var line in closedLines)
+                {
+                    // Audit row.
+                    await using var auditCmd = new NpgsqlCommand(
+                        """
+                        INSERT INTO reporting_line_audit
+                            (reporting_line_id, action, actor_id, correlation_id, version_before, version_after, metadata)
+                        VALUES
+                            (@lineId, 'DELEGATION_REVOKED', @actorId, @correlationId, @versionBefore, @versionAfter, @metadata::jsonb)
+                        """, conn, tx);
+                    auditCmd.Parameters.AddWithValue("lineId", line.LineId);
+                    auditCmd.Parameters.AddWithValue("actorId", actorId);
+                    auditCmd.Parameters.AddWithValue("correlationId", (object?)actor.CorrelationId ?? DBNull.Value);
+                    auditCmd.Parameters.AddWithValue("versionBefore", (object)(line.Version - 1));
+                    auditCmd.Parameters.AddWithValue("versionAfter", (object)line.Version);
+                    auditCmd.Parameters.AddWithValue("metadata", (object?)null ?? DBNull.Value);
+                    await auditCmd.ExecuteNonQueryAsync(ct);
+
+                    // Outbox event per closed line.
+                    var streamId = $"reporting-line-{line.EmployeeId}";
+                    var supersededEvent = new ReportingLineSuperseded
+                    {
+                        ReportingLineId = line.LineId,
+                        EmployeeId = line.EmployeeId,
+                        PreviousManagerId = line.ManagerId,
+                        NewManagerId = null,
+                        TreeRootOrgId = line.TreeRootOrgId,
+                        EffectiveFrom = line.EffectiveFrom,
+                        EffectiveTo = line.EffectiveTo,
+                        RowVersion = line.Version,
+                        ActorId = actor.ActorId,
+                        ActorRole = actor.ActorRole,
+                        CorrelationId = actor.CorrelationId,
+                    };
+                    await outbox.EnqueueAsync(conn, tx, streamId, supersededEvent, ct);
+                }
+
+                await tx.CommitAsync(ct);
+
+                return Results.Ok(new { revokedCount = closedLines.Count });
+            }
+            catch
+            {
+                await tx.RollbackAsync(ct);
+                throw;
+            }
+        }).RequireAuthorization("LeaderOrAbove");
+
         return app;
     }
 
@@ -1163,4 +1580,8 @@ public static class ReportingLineEndpoints
     // ── Settings DTOs ──
 
     private sealed record UpdateTreeSettingsRequest(string EnforcementMode);
+
+    // ── Self-service delegation DTOs ──
+
+    private sealed record DelegateRequest(string ActingManagerId, string EffectiveTo);
 }

@@ -11,6 +11,7 @@ public sealed class ReportingLine
     public DateOnly? EffectiveTo { get; init; }
     public required string Source { get; init; }
     public required long Version { get; init; }
+    public DateOnly? ScheduledExpiry { get; init; }
     public required string CreatedBy { get; init; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
 }

@@ -405,7 +405,6 @@ describe('ReportingLineTree', () => {
 
   it('enforcement toggle shows error on 409', async () => {
     // Use URL-based routing for initial loads + PUT intercept
-    let putCalled = false
     mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
       // Intercept the PUT for settings (toggle click)
       if (

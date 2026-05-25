@@ -2295,3 +2295,22 @@ BEGIN
     ON CONFLICT (migration_id) DO NOTHING;
 END
 $$;
+
+-- =========================================================================
+-- S51 — Self-Service Acting-Manager Delegation
+--   scheduled_expiry: auto-close ACTING lines when delegation expires.
+--   source constraint expanded: SELF_DELEGATION for manager-initiated delegation.
+-- =========================================================================
+
+ALTER TABLE reporting_lines ADD COLUMN IF NOT EXISTS scheduled_expiry DATE;
+ALTER TABLE reporting_lines DROP CONSTRAINT IF EXISTS reporting_lines_source_check;
+ALTER TABLE reporting_lines ADD CONSTRAINT reporting_lines_source_check
+    CHECK (source IN ('MANUAL', 'HR_IMPORT', 'SELF_DELEGATION'));
+
+DO $$
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s51-d1-delegation-schema', 'ADR-027 S51: scheduled_expiry column + SELF_DELEGATION source on reporting_lines')
+    ON CONFLICT (migration_id) DO NOTHING;
+END
+$$;

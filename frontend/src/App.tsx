@@ -22,6 +22,7 @@ import { WageTypeMappingManagement } from './pages/admin/WageTypeMappingManageme
 import { EmployeeProfileEditor } from './pages/admin/EmployeeProfileEditor'
 import { AuditLogView } from './pages/admin/AuditLogView'
 import { ReportingLineTree } from './pages/admin/ReportingLineTree'
+import { DelegationPage } from './pages/delegation/DelegationPage'
 import './styles/tokens.css'
 
 export function App() {
@@ -61,6 +62,7 @@ function AppRoutes() {
           {/* Leader routes */}
           <Route element={<RequireRole minRole="LocalLeader" />}>
             <Route path="approval" element={<ApprovalDashboard />} />
+            <Route path="delegation" element={<DelegationPage />} />
           </Route>
 
           {/* HR routes */}

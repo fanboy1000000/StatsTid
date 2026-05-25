@@ -113,6 +113,16 @@ Enforcement is a **first-class per-tree config** via `reporting_line_tree_settin
 
 **Soft enforcement**: 428 response with `confirmFallback=true` query param override. Never hard 403. `explicit_fallback_confirmation` boolean on `approval_periods` tracks confirmed fallbacks for audit.
 
+### D12 — Self-service delegation (S51 amendment)
+
+Managers (LocalLeader+) can delegate their approval queue via `POST /api/reporting-lines/delegate`. Creates ACTING lines with `source = 'SELF_DELEGATION'` and `scheduled_expiry` for auto-closure. The `DelegationExpiryService` (BackgroundService) polls every 5 minutes and atomically closes expired lines with outbox event emission (ADR-018 D3).
+
+**Temporal model**: `scheduled_expiry DATE` column on `reporting_lines` (nullable). Read queries remain `effective_to IS NULL` — no regression. Lines are "active" until the expiry service closes them by setting `effective_to = scheduled_expiry`.
+
+**Org-scope validation**: Acting manager's role-assignment scopes must cover ALL direct reports' organizations. Validated at delegation time via `RoleScope.CoversOrg` pattern.
+
+**Invariant**: One active delegation per manager. Second POST returns 409 — cancel first, then re-delegate.
+
 ## Consequences
 
 ### S48 schema (Phase 1)

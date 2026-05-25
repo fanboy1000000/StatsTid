@@ -248,6 +248,7 @@ public sealed class ReportingLineRepository
             EffectiveTo = null,
             Source = newLine.Source,
             Version = nextVersion,
+            ScheduledExpiry = newLine.ScheduledExpiry,
             CreatedBy = newLine.CreatedBy,
             CreatedAt = createdAt,
         };
@@ -608,11 +609,11 @@ public sealed class ReportingLineRepository
             INSERT INTO reporting_lines (
                 reporting_line_id, employee_id, manager_id, tree_root_org_id,
                 relationship, effective_from, effective_to,
-                source, version, created_by, created_at)
+                source, version, scheduled_expiry, created_by, created_at)
             VALUES (
                 @reportingLineId, @employeeId, @managerId, @treeRootOrgId,
                 @relationship, @effectiveFrom, NULL,
-                @source, @version, @createdBy, @createdAt)
+                @source, @version, @scheduledExpiry, @createdBy, @createdAt)
             """, conn, tx);
         insertCmd.Parameters.AddWithValue("reportingLineId", newId);
         insertCmd.Parameters.AddWithValue("employeeId", newLine.EmployeeId);
@@ -622,6 +623,7 @@ public sealed class ReportingLineRepository
         insertCmd.Parameters.AddWithValue("effectiveFrom", newLine.EffectiveFrom);
         insertCmd.Parameters.AddWithValue("source", newLine.Source);
         insertCmd.Parameters.AddWithValue("version", version);
+        insertCmd.Parameters.AddWithValue("scheduledExpiry", (object?)newLine.ScheduledExpiry?.ToDateTime(TimeOnly.MinValue) ?? DBNull.Value);
         insertCmd.Parameters.AddWithValue("createdBy", newLine.CreatedBy);
         insertCmd.Parameters.AddWithValue("createdAt", createdAt);
         await insertCmd.ExecuteNonQueryAsync(ct);
@@ -653,6 +655,9 @@ public sealed class ReportingLineRepository
             : DateOnly.FromDateTime(reader.GetDateTime(reader.GetOrdinal("effective_to"))),
         Source = reader.GetString(reader.GetOrdinal("source")),
         Version = reader.GetInt64(reader.GetOrdinal("version")),
+        ScheduledExpiry = reader.IsDBNull(reader.GetOrdinal("scheduled_expiry"))
+            ? null
+            : DateOnly.FromDateTime(reader.GetDateTime(reader.GetOrdinal("scheduled_expiry"))),
         CreatedBy = reader.GetString(reader.GetOrdinal("created_by")),
         CreatedAt = reader.GetDateTime(reader.GetOrdinal("created_at")),
     };

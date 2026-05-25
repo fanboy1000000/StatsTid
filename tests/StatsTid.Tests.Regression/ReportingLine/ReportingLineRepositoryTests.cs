@@ -28,6 +28,7 @@ public sealed class ReportingLineRepositoryTests : IAsyncLifetime
     private const string TestMgrB = "test_mgr_rl_b";
     private const string TestEmpCross = "test_emp_rl_cross";
     private const string TestEmpNoRl = "test_emp_rl_norl";
+    private const string TestMgrC = "test_mgr_rl_c";
 
     public ReportingLineRepositoryTests()
     {
@@ -51,7 +52,8 @@ public sealed class ReportingLineRepositoryTests : IAsyncLifetime
                 (@mgrA,     @mgrA,     '$2a$11$fake', 'Test Manager A',     'test_mgra@test.dk',  'STY02', 'HK', 'OK24'),
                 (@mgrB,     @mgrB,     '$2a$11$fake', 'Test Manager B',     'test_mgrb@test.dk',  'AFD02', 'HK', 'OK24'),
                 (@empCross, @empCross, '$2a$11$fake', 'Test Cross-Tree',    'test_cross@test.dk', 'STY05', 'HK', 'OK24'),
-                (@empNoRl,  @empNoRl,  '$2a$11$fake', 'Test No RL',         'test_norl@test.dk',  'AFD01', 'HK', 'OK24')
+                (@empNoRl,  @empNoRl,  '$2a$11$fake', 'Test No RL',         'test_norl@test.dk',  'AFD01', 'HK', 'OK24'),
+                (@mgrC,     @mgrC,     '$2a$11$fake', 'Test Manager C',     'test_mgrc@test.dk',  'AFD01', 'HK', 'OK24')
             ON CONFLICT DO NOTHING
             """, conn);
         cmd.Parameters.AddWithValue("emp", TestEmp);
@@ -59,6 +61,7 @@ public sealed class ReportingLineRepositoryTests : IAsyncLifetime
         cmd.Parameters.AddWithValue("mgrB", TestMgrB);
         cmd.Parameters.AddWithValue("empCross", TestEmpCross);
         cmd.Parameters.AddWithValue("empNoRl", TestEmpNoRl);
+        cmd.Parameters.AddWithValue("mgrC", TestMgrC);
         await cmd.ExecuteNonQueryAsync();
     }
 
@@ -75,8 +78,8 @@ public sealed class ReportingLineRepositoryTests : IAsyncLifetime
         await using (var del = new NpgsqlCommand(
             """
             DELETE FROM reporting_lines
-            WHERE employee_id IN (@emp, @mgrA, @mgrB, @empCross, @empNoRl)
-               OR manager_id  IN (@emp, @mgrA, @mgrB, @empCross, @empNoRl)
+            WHERE employee_id IN (@emp, @mgrA, @mgrB, @empCross, @empNoRl, @mgrC)
+               OR manager_id  IN (@emp, @mgrA, @mgrB, @empCross, @empNoRl, @mgrC)
             """, conn))
         {
             del.Parameters.AddWithValue("emp", TestEmp);
@@ -84,6 +87,7 @@ public sealed class ReportingLineRepositoryTests : IAsyncLifetime
             del.Parameters.AddWithValue("mgrB", TestMgrB);
             del.Parameters.AddWithValue("empCross", TestEmpCross);
             del.Parameters.AddWithValue("empNoRl", TestEmpNoRl);
+            del.Parameters.AddWithValue("mgrC", TestMgrC);
             await del.ExecuteNonQueryAsync();
         }
 
@@ -97,7 +101,7 @@ public sealed class ReportingLineRepositoryTests : IAsyncLifetime
         await using (var del = new NpgsqlCommand(
             """
             DELETE FROM users
-            WHERE user_id IN (@emp, @mgrA, @mgrB, @empCross, @empNoRl)
+            WHERE user_id IN (@emp, @mgrA, @mgrB, @empCross, @empNoRl, @mgrC)
             """, conn))
         {
             del.Parameters.AddWithValue("emp", TestEmp);
@@ -105,6 +109,7 @@ public sealed class ReportingLineRepositoryTests : IAsyncLifetime
             del.Parameters.AddWithValue("mgrB", TestMgrB);
             del.Parameters.AddWithValue("empCross", TestEmpCross);
             del.Parameters.AddWithValue("empNoRl", TestEmpNoRl);
+            del.Parameters.AddWithValue("mgrC", TestMgrC);
             await del.ExecuteNonQueryAsync();
         }
     }
@@ -841,5 +846,250 @@ public sealed class ReportingLineRepositoryTests : IAsyncLifetime
             cleanupCmd.Parameters.AddWithValue("periodId", periodId);
             await cleanupCmd.ExecuteNonQueryAsync();
         }
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // S51 TASK-5110: Self-service delegation — ScheduledExpiry + SELF_DELEGATION source
+    // ════════════════════════════════════════════════════════════════
+
+    // 30. AssignAsync with ScheduledExpiry — persists field
+    [Fact]
+    public async Task AssignAsync_WithScheduledExpiry_PersistsField()
+    {
+        var expiry = new DateOnly(2026, 7, 1);
+        var line = MakeLine(TestEmp, TestMgrA, relationship: "ACTING", source: "SELF_DELEGATION");
+        var lineWithExpiry = new SharedKernel.Models.ReportingLine
+        {
+            ReportingLineId = line.ReportingLineId,
+            EmployeeId = line.EmployeeId,
+            ManagerId = line.ManagerId,
+            TreeRootOrgId = line.TreeRootOrgId,
+            Relationship = line.Relationship,
+            EffectiveFrom = line.EffectiveFrom,
+            Source = line.Source,
+            Version = line.Version,
+            ScheduledExpiry = expiry,
+            CreatedBy = line.CreatedBy,
+        };
+
+        var result = await _repo.AssignAsync(expectedCurrentVersion: null, lineWithExpiry);
+
+        Assert.NotEqual(Guid.Empty, result.ReportingLineId);
+        Assert.Equal(expiry, result.ScheduledExpiry);
+
+        // Also read back via direct query to confirm DB column is populated
+        await using var conn = new NpgsqlConnection(ConnStr);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "SELECT scheduled_expiry FROM reporting_lines WHERE reporting_line_id = @id", conn);
+        cmd.Parameters.AddWithValue("id", result.ReportingLineId);
+        var dbValue = await cmd.ExecuteScalarAsync();
+        Assert.NotNull(dbValue);
+        Assert.NotEqual(DBNull.Value, dbValue);
+        var dbDate = DateOnly.FromDateTime((DateTime)dbValue!);
+        Assert.Equal(expiry, dbDate);
+    }
+
+    // 31. AssignAsync without ScheduledExpiry — null field
+    [Fact]
+    public async Task AssignAsync_WithoutScheduledExpiry_NullField()
+    {
+        var line = MakeLine(TestEmp, TestMgrA, relationship: "ACTING", source: "SELF_DELEGATION");
+        var result = await _repo.AssignAsync(expectedCurrentVersion: null, line);
+
+        Assert.Null(result.ScheduledExpiry);
+
+        // Also read back via direct query
+        await using var conn = new NpgsqlConnection(ConnStr);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "SELECT scheduled_expiry FROM reporting_lines WHERE reporting_line_id = @id", conn);
+        cmd.Parameters.AddWithValue("id", result.ReportingLineId);
+        var dbValue = await cmd.ExecuteScalarAsync();
+        Assert.True(dbValue is null || dbValue == DBNull.Value,
+            "scheduled_expiry must be NULL when not set");
+    }
+
+    // 32. DelegationExpiry — closes expired SELF_DELEGATION ACTING lines
+    [Fact]
+    public async Task DelegationExpiry_ClosesExpiredLines()
+    {
+        var yesterday = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1));
+        var line = new SharedKernel.Models.ReportingLine
+        {
+            ReportingLineId = Guid.Empty,
+            EmployeeId = TestEmp,
+            ManagerId = TestMgrC,
+            TreeRootOrgId = "STY02",
+            Relationship = "ACTING",
+            EffectiveFrom = new DateOnly(2026, 5, 1),
+            Source = "SELF_DELEGATION",
+            Version = 0,
+            ScheduledExpiry = yesterday,
+            CreatedBy = "TEST",
+        };
+        var assigned = await _repo.AssignAsync(expectedCurrentVersion: null, line);
+
+        // Run expiry SQL directly
+        await using var conn = new NpgsqlConnection(ConnStr);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            UPDATE reporting_lines
+            SET effective_to = scheduled_expiry, version = version + 1
+            WHERE source = 'SELF_DELEGATION' AND relationship = 'ACTING'
+              AND scheduled_expiry IS NOT NULL AND scheduled_expiry <= CURRENT_DATE
+              AND effective_to IS NULL
+            """, conn);
+        var affected = await cmd.ExecuteNonQueryAsync();
+        Assert.True(affected >= 1, $"Expected at least 1 row affected, got {affected}");
+
+        // Verify the line is closed
+        var active = await _repo.GetActiveByEmployeeAndRelationshipAsync(TestEmp, "ACTING");
+        Assert.Null(active);
+
+        // Verify via history that it was closed with scheduled_expiry as effective_to
+        var history = await _repo.GetHistoryAsync(TestEmp);
+        var closedLine = history.FirstOrDefault(l => l.ReportingLineId == assigned.ReportingLineId);
+        Assert.NotNull(closedLine);
+        Assert.Equal(yesterday, closedLine!.EffectiveTo);
+    }
+
+    // 33. DelegationExpiry — skips non-SELF_DELEGATION lines
+    [Fact]
+    public async Task DelegationExpiry_SkipsNonSelfDelegation()
+    {
+        var yesterday = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1));
+        // Insert a MANUAL ACTING line with scheduled_expiry via direct SQL
+        // (the repo MakeLine helper defaults to MANUAL)
+        var lineId = Guid.NewGuid();
+        await using var conn = new NpgsqlConnection(ConnStr);
+        await conn.OpenAsync();
+        await using var insertCmd = new NpgsqlCommand(
+            """
+            INSERT INTO reporting_lines
+                (reporting_line_id, employee_id, manager_id, tree_root_org_id, relationship,
+                 effective_from, source, version, scheduled_expiry, created_by)
+            VALUES
+                (@id, @emp, @mgr, 'STY02', 'ACTING',
+                 '2026-05-01', 'MANUAL', 1, @expiry, 'TEST')
+            """, conn);
+        insertCmd.Parameters.AddWithValue("id", lineId);
+        insertCmd.Parameters.AddWithValue("emp", TestEmp);
+        insertCmd.Parameters.AddWithValue("mgr", TestMgrC);
+        insertCmd.Parameters.AddWithValue("expiry", yesterday.ToDateTime(TimeOnly.MinValue));
+        await insertCmd.ExecuteNonQueryAsync();
+
+        // Run expiry SQL
+        await using var expiryCmd = new NpgsqlCommand(
+            """
+            UPDATE reporting_lines
+            SET effective_to = scheduled_expiry, version = version + 1
+            WHERE source = 'SELF_DELEGATION' AND relationship = 'ACTING'
+              AND scheduled_expiry IS NOT NULL AND scheduled_expiry <= CURRENT_DATE
+              AND effective_to IS NULL
+            """, conn);
+        await expiryCmd.ExecuteNonQueryAsync();
+
+        // Verify the MANUAL line is still open
+        await using var checkCmd = new NpgsqlCommand(
+            "SELECT effective_to FROM reporting_lines WHERE reporting_line_id = @id", conn);
+        checkCmd.Parameters.AddWithValue("id", lineId);
+        var effectiveTo = await checkCmd.ExecuteScalarAsync();
+        Assert.True(effectiveTo is null || effectiveTo == DBNull.Value,
+            "MANUAL ACTING line with scheduled_expiry should NOT be closed by expiry SQL");
+    }
+
+    // 34. DelegationExpiry — skips future-expiry lines
+    [Fact]
+    public async Task DelegationExpiry_SkipsFutureExpiry()
+    {
+        var tomorrow = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(1));
+        var line = new SharedKernel.Models.ReportingLine
+        {
+            ReportingLineId = Guid.Empty,
+            EmployeeId = TestEmp,
+            ManagerId = TestMgrC,
+            TreeRootOrgId = "STY02",
+            Relationship = "ACTING",
+            EffectiveFrom = new DateOnly(2026, 5, 1),
+            Source = "SELF_DELEGATION",
+            Version = 0,
+            ScheduledExpiry = tomorrow,
+            CreatedBy = "TEST",
+        };
+        var assigned = await _repo.AssignAsync(expectedCurrentVersion: null, line);
+
+        // Run expiry SQL
+        await using var conn = new NpgsqlConnection(ConnStr);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            UPDATE reporting_lines
+            SET effective_to = scheduled_expiry, version = version + 1
+            WHERE source = 'SELF_DELEGATION' AND relationship = 'ACTING'
+              AND scheduled_expiry IS NOT NULL AND scheduled_expiry <= CURRENT_DATE
+              AND effective_to IS NULL
+            """, conn);
+        await cmd.ExecuteNonQueryAsync();
+
+        // Verify the line is still open
+        var active = await _repo.GetActiveByEmployeeAndRelationshipAsync(TestEmp, "ACTING");
+        Assert.NotNull(active);
+        Assert.Equal(assigned.ReportingLineId, active!.ReportingLineId);
+        Assert.Null(active.EffectiveTo);
+    }
+
+    // 35. SelfDelegation source constraint — accepts SELF_DELEGATION
+    [Fact]
+    public async Task SelfDelegation_SourceConstraint_AcceptsSelfDelegation()
+    {
+        var line = MakeLine(TestEmp, TestMgrA, relationship: "ACTING", source: "SELF_DELEGATION");
+        var result = await _repo.AssignAsync(expectedCurrentVersion: null, line);
+
+        Assert.Equal("SELF_DELEGATION", result.Source);
+        Assert.Equal(1, result.Version);
+    }
+
+    // 36. SelfDelegation source constraint — rejects INVALID
+    [Fact]
+    public async Task SelfDelegation_SourceConstraint_RejectsInvalid()
+    {
+        await using var conn = new NpgsqlConnection(ConnStr);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            INSERT INTO reporting_lines
+                (employee_id, manager_id, tree_root_org_id, relationship,
+                 effective_from, source, created_by)
+            VALUES
+                (@emp, @mgr, 'STY02', 'ACTING',
+                 '2026-05-01', 'INVALID', 'TEST')
+            """, conn);
+        cmd.Parameters.AddWithValue("emp", TestEmp);
+        cmd.Parameters.AddWithValue("mgr", TestMgrC);
+
+        var ex = await Assert.ThrowsAsync<PostgresException>(
+            () => cmd.ExecuteNonQueryAsync());
+        Assert.Equal("23514", ex.SqlState); // check_violation
+    }
+
+    // 37. GetDirectReports — includes SELF_DELEGATION ACTING lines
+    [Fact]
+    public async Task GetDirectReports_IncludesSelfDelegatedActing()
+    {
+        // Assign TestEmp under TestMgrC via SELF_DELEGATION ACTING
+        var line = MakeLine(TestEmp, TestMgrC, relationship: "ACTING", source: "SELF_DELEGATION");
+        await _repo.AssignAsync(expectedCurrentVersion: null, line);
+
+        var reports = await _repo.GetDirectReportsAsync(TestMgrC);
+
+        var employeeIds = reports.Select(r => r.EmployeeId).ToHashSet();
+        Assert.Contains(TestEmp, employeeIds);
+
+        // Verify the returned line is ACTING + SELF_DELEGATION
+        var delegatedLine = reports.First(r => r.EmployeeId == TestEmp);
+        Assert.Equal("ACTING", delegatedLine.Relationship);
+        Assert.Equal("SELF_DELEGATION", delegatedLine.Source);
     }
 }

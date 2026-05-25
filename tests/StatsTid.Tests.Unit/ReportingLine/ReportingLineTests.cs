@@ -539,4 +539,111 @@ public class ReportingLineTests
         Assert.Contains("UpdatedAt", propertyNames);
         Assert.Equal(5, propertyNames.Count);
     }
+
+    // ---------------------------------------------------------------
+    // S51 TASK-5109: Self-service delegation — ScheduledExpiry + ReportingLineSelfDelegated
+    // ---------------------------------------------------------------
+
+    [Fact]
+    public void ReportingLine_ScheduledExpiry_RoundTrips()
+    {
+        var expiry = new DateOnly(2026, 6, 15);
+        var line = new ReportingLineModel
+        {
+            ReportingLineId = Guid.NewGuid(),
+            EmployeeId = "emp001",
+            ManagerId = "mgr01",
+            TreeRootOrgId = "STY02",
+            Relationship = "ACTING",
+            EffectiveFrom = new DateOnly(2026, 5, 1),
+            Source = "SELF_DELEGATION",
+            Version = 1,
+            ScheduledExpiry = expiry,
+            CreatedBy = "mgr01",
+        };
+
+        Assert.Equal(expiry, line.ScheduledExpiry);
+    }
+
+    [Fact]
+    public void ReportingLine_ScheduledExpiry_IsNullable()
+    {
+        var line = new ReportingLineModel
+        {
+            ReportingLineId = Guid.NewGuid(),
+            EmployeeId = "emp002",
+            ManagerId = "mgr02",
+            TreeRootOrgId = "STY02",
+            Relationship = "PRIMARY",
+            EffectiveFrom = new DateOnly(2026, 5, 1),
+            Source = "MANUAL",
+            Version = 1,
+            CreatedBy = "admin01",
+        };
+
+        Assert.Null(line.ScheduledExpiry);
+    }
+
+    [Fact]
+    public void ReportingLineSelfDelegated_RoundTrips()
+    {
+        var eventId = Guid.NewGuid();
+        var correlationId = Guid.NewGuid();
+        var batchId = Guid.NewGuid();
+        var occurredAt = new DateTime(2026, 5, 25, 15, 0, 0, DateTimeKind.Utc);
+
+        var original = new ReportingLineSelfDelegated
+        {
+            EventId = eventId,
+            OccurredAt = occurredAt,
+            Version = 1,
+            ActorId = "mgr01",
+            ActorRole = "MANAGER",
+            CorrelationId = correlationId,
+            BatchId = batchId,
+            DelegatingManagerId = "mgr01",
+            ActingManagerId = "mgr02",
+            DelegatedCount = 5,
+            SkippedCount = 1,
+            EffectiveFrom = new DateOnly(2026, 5, 25),
+            EffectiveTo = new DateOnly(2026, 6, 15),
+        };
+
+        var json = EventSerializer.Serialize(original);
+        var deserialized = EventSerializer.Deserialize("ReportingLineSelfDelegated", json);
+
+        var result = Assert.IsType<ReportingLineSelfDelegated>(deserialized);
+        Assert.Equal(eventId, result.EventId);
+        Assert.Equal(occurredAt, result.OccurredAt);
+        Assert.Equal("ReportingLineSelfDelegated", result.EventType);
+        Assert.Equal(1, result.Version);
+        Assert.Equal("mgr01", result.ActorId);
+        Assert.Equal("MANAGER", result.ActorRole);
+        Assert.Equal(correlationId, result.CorrelationId);
+        Assert.Equal(batchId, result.BatchId);
+        Assert.Equal("mgr01", result.DelegatingManagerId);
+        Assert.Equal("mgr02", result.ActingManagerId);
+        Assert.Equal(5, result.DelegatedCount);
+        Assert.Equal(1, result.SkippedCount);
+        Assert.Equal(new DateOnly(2026, 5, 25), result.EffectiveFrom);
+        Assert.Equal(new DateOnly(2026, 6, 15), result.EffectiveTo);
+    }
+
+    [Fact]
+    public void EventSerializer_Registers_ReportingLineSelfDelegated()
+    {
+        var mapField = typeof(EventSerializer).GetField(
+            "EventTypeMap",
+            BindingFlags.NonPublic | BindingFlags.Static);
+
+        Assert.NotNull(mapField);
+        var map = (IReadOnlyDictionary<string, Type>)mapField!.GetValue(null)!;
+
+        Assert.True(
+            map.TryGetValue("ReportingLineSelfDelegated", out var registeredType),
+            "EventSerializer.EventTypeMap is missing discriminator 'ReportingLineSelfDelegated'. " +
+            "Add [ReportingLineSelfDelegated] = typeof(ReportingLineSelfDelegated) to the map.");
+
+        Assert.Equal(typeof(ReportingLineSelfDelegated), registeredType);
+    }
 }

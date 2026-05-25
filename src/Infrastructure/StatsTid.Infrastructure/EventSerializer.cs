@@ -111,6 +111,8 @@ public static class EventSerializer
         ["ReportingLineSuperseded"] = typeof(ReportingLineSuperseded),
         ["ReportingLineBulkImported"] = typeof(ReportingLineBulkImported),
         ["ReportingLineManagerDeactivated"] = typeof(ReportingLineManagerDeactivated),
+        // Sprint 51: Self-service delegation batch event (Phase 5 TASK-5104)
+        ["ReportingLineSelfDelegated"] = typeof(ReportingLineSelfDelegated),
         // Sprint 49: Approval delegation fallback traversal warning (Phase 5 ADR-027 D5)
         ["FallbackTraversalWarning"] = typeof(FallbackTraversalWarning),
     };
