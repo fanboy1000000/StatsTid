@@ -288,7 +288,7 @@ describe('ReportingLineTree', () => {
     await waitFor(() => {
       expect(screen.getByText('Importer ledelseslinjer')).toBeDefined()
     })
-    expect(screen.getByLabelText(/Vaelg JSON-fil/)).toBeDefined()
+    expect(screen.getByLabelText(/Vaelg JSON/)).toBeDefined()
   })
 
   it('import result shows counts after successful import', async () => {
@@ -313,7 +313,7 @@ describe('ReportingLineTree', () => {
     })
 
     // Simulate file selection by creating a File and dispatching a change event
-    const fileInput = screen.getByLabelText(/Vaelg JSON-fil/) as HTMLInputElement
+    const fileInput = screen.getByLabelText(/Vaelg JSON/) as HTMLInputElement
     const importData = JSON.stringify([
       { employeeId: 'EMP010', managerId: 'MGR001', effectiveFrom: '2026-03-01' },
       { employeeId: 'EMP011', managerId: 'MGR001', effectiveFrom: '2026-03-01' },
@@ -412,7 +412,6 @@ describe('ReportingLineTree', () => {
         url.includes('/settings') &&
         init?.method === 'PUT'
       ) {
-        putCalled = true
         return {
           ok: false,
           status: 409,

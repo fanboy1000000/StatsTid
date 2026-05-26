@@ -26,7 +26,6 @@ public sealed class EmployeeProfileSuperseded : DomainEventBase
     public required DateOnly NewEffectiveFrom { get; init; }
 
     // New-row payload (post-mutation state of the successor)
-    public required decimal WeeklyNormHours { get; init; }
     public required decimal PartTimeFraction { get; init; }
     public string? Position { get; init; }
 

@@ -17,7 +17,6 @@ public sealed class EmployeeProfileUpdatedAuditMapper : IAuditProjectionMapper<E
         {
             profileId = @event.ProfileId,
             employeeId = @event.EmployeeId,
-            weeklyNormHours = @event.WeeklyNormHours,
             partTimeFraction = @event.PartTimeFraction,
             position = @event.Position,
             versionBefore = @event.VersionBefore,

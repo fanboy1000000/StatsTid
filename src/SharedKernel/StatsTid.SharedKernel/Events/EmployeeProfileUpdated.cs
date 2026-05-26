@@ -16,7 +16,6 @@ public sealed class EmployeeProfileUpdated : DomainEventBase
     public required string EmployeeId { get; init; }
 
     // Payload — post-mutation state
-    public required decimal WeeklyNormHours { get; init; }
     public required decimal PartTimeFraction { get; init; }
     public string? Position { get; init; }
 

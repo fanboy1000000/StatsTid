@@ -178,6 +178,11 @@ public sealed class AuditProjectionBackfillService
         int unknownEventTypes = 0;
         int deserializationErrors = 0;
 
+        // Batch-load user→org mapping for employee-scoped events whose
+        // payload carries EmployeeId but not OrgId. Single query, cached
+        // for the duration of the backfill run.
+        var userOrgLookup = await LoadUserOrgLookupAsync(conn, tx, ct);
+
         foreach (var row in rows)
         {
             scanned++;
@@ -223,16 +228,20 @@ public sealed class AuditProjectionBackfillService
             // (DomainEventBase ActorId / CorrelationId / OccurredAt).
             // actor_primary_org_id stays NULL for backfilled rows (see
             // file header).
+            // ResolvedTargetOrgId is extracted from the event payload
+            // (OrgId property if present, otherwise employee→user lookup).
             var occurredAtUtc = DateTime.SpecifyKind(
                 domainEvent.OccurredAt.Kind == DateTimeKind.Utc
                     ? domainEvent.OccurredAt
                     : DateTime.SpecifyKind(domainEvent.OccurredAt, DateTimeKind.Utc),
                 DateTimeKind.Utc);
+            var resolvedOrgId = ResolveTargetOrgId(domainEvent, userOrgLookup);
             var ctx = new AuditProjectionContext(
                 ActorId: domainEvent.ActorId,
                 ActorPrimaryOrgId: null,
                 CorrelationId: domainEvent.CorrelationId,
-                OccurredAt: new DateTimeOffset(occurredAtUtc, TimeSpan.Zero));
+                OccurredAt: new DateTimeOffset(occurredAtUtc, TimeSpan.Zero),
+                ResolvedTargetOrgId: resolvedOrgId);
 
             var rowData = _registry.TryMap(domainEvent, ctx);
             if (rowData is null)
@@ -263,5 +272,47 @@ public sealed class AuditProjectionBackfillService
             NullOutboxSkipped: nullOutboxSkipped,
             UnknownEventTypes: unknownEventTypes,
             DeserializationErrors: deserializationErrors);
+    }
+
+    private static async Task<Dictionary<string, string>> LoadUserOrgLookupAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, CancellationToken ct)
+    {
+        var lookup = new Dictionary<string, string>(StringComparer.Ordinal);
+        await using var cmd = new NpgsqlCommand(
+            "SELECT user_id, primary_org_id FROM users WHERE primary_org_id IS NOT NULL", conn, tx);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            lookup[reader.GetString(0)] = reader.GetString(1);
+        }
+        return lookup;
+    }
+
+    private static string? ResolveTargetOrgId(
+        IDomainEvent domainEvent, Dictionary<string, string> userOrgLookup)
+    {
+        // Events that carry OrgId directly — use it.
+        var orgProp = domainEvent.GetType().GetProperty("OrgId");
+        if (orgProp?.GetValue(domainEvent) is string orgId)
+            return orgId;
+
+        // Events that carry PrimaryOrgId (e.g. UserCreated) — use it.
+        var primaryOrgProp = domainEvent.GetType().GetProperty("PrimaryOrgId");
+        if (primaryOrgProp?.GetValue(domainEvent) is string primaryOrgId)
+            return primaryOrgId;
+
+        // Events that carry EmployeeId — look up user's primary_org_id.
+        var empProp = domainEvent.GetType().GetProperty("EmployeeId");
+        if (empProp?.GetValue(domainEvent) is string employeeId &&
+            userOrgLookup.TryGetValue(employeeId, out var empOrg))
+            return empOrg;
+
+        // Events that carry UserId (e.g. UserUpdated) — look up.
+        var userProp = domainEvent.GetType().GetProperty("UserId");
+        if (userProp?.GetValue(domainEvent) is string userId &&
+            userOrgLookup.TryGetValue(userId, out var userOrg))
+            return userOrg;
+
+        return null;
     }
 }

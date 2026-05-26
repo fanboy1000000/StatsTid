@@ -31,7 +31,6 @@ namespace StatsTid.Infrastructure;
 /// </summary>
 public static class EmployeeProfileSeeder
 {
-    private const decimal DefaultWeeklyNormHours = 37.0m;
     private const decimal DefaultPartTimeFraction = 1.000m;
 
     public static async Task SeedAsync(
@@ -97,13 +96,12 @@ public static class EmployeeProfileSeeder
                 await using var insertCmd = new NpgsqlCommand(
                     """
                     INSERT INTO employee_profiles
-                        (profile_id, employee_id, weekly_norm_hours, part_time_fraction, position)
+                        (profile_id, employee_id, part_time_fraction, position)
                     VALUES
-                        (@profileId, @employeeId, @weeklyNormHours, @partTimeFraction, NULL)
+                        (@profileId, @employeeId, @partTimeFraction, NULL)
                     """, conn, tx);
                 insertCmd.Parameters.AddWithValue("profileId", profileId);
                 insertCmd.Parameters.AddWithValue("employeeId", employeeId);
-                insertCmd.Parameters.AddWithValue("weeklyNormHours", DefaultWeeklyNormHours);
                 insertCmd.Parameters.AddWithValue("partTimeFraction", DefaultPartTimeFraction);
                 await insertCmd.ExecuteNonQueryAsync(ct);
 
@@ -116,7 +114,6 @@ public static class EmployeeProfileSeeder
                 // ActorId so audit + outbox cross-reference cleanly).
                 var newData = JsonSerializer.Serialize(new
                 {
-                    weeklyNormHours = DefaultWeeklyNormHours,
                     partTimeFraction = DefaultPartTimeFraction,
                     position = (string?)null,
                 });
@@ -144,7 +141,6 @@ public static class EmployeeProfileSeeder
                 {
                     ProfileId = profileId,
                     EmployeeId = employeeId,
-                    WeeklyNormHours = DefaultWeeklyNormHours,
                     PartTimeFraction = DefaultPartTimeFraction,
                     Position = null,
                     EffectiveFrom = new DateOnly(1, 1, 1),

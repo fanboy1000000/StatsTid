@@ -57,7 +57,7 @@ public static class NormCheckRule
         return config.NormModel switch
         {
             NormModel.ANNUAL_ACTIVITY => EvaluateAnnualCore(RuleId, profile, entries, periodStart, periodEnd, config),
-            _ => EvaluateWeeksCore(RuleId, profile, entries, periodStart, periodEnd, config.NormPeriodWeeks),
+            _ => EvaluateWeeksCore(RuleId, profile, entries, periodStart, periodEnd, config.NormPeriodWeeks, config.WeeklyNormHours),
         };
     }
 
@@ -70,8 +70,9 @@ public static class NormCheckRule
         EmploymentProfile profile,
         IReadOnlyList<TimeEntry> entries,
         DateOnly periodStart,
-        DateOnly periodEnd) =>
-        EvaluateWeeksCore(WeeklyRuleId, profile, entries, periodStart, periodEnd, 1);
+        DateOnly periodEnd,
+        AgreementRuleConfig config) =>
+        EvaluateWeeksCore(WeeklyRuleId, profile, entries, periodStart, periodEnd, 1, config.WeeklyNormHours);
 
     /// <summary>
     /// S20 — multi-week-norm entry point (2/4/8/12 weeks per
@@ -86,7 +87,7 @@ public static class NormCheckRule
         DateOnly periodStart,
         DateOnly periodEnd,
         AgreementRuleConfig config) =>
-        EvaluateWeeksCore(MultiWeekRuleId, profile, entries, periodStart, periodEnd, config.NormPeriodWeeks);
+        EvaluateWeeksCore(MultiWeekRuleId, profile, entries, periodStart, periodEnd, config.NormPeriodWeeks, config.WeeklyNormHours);
 
     /// <summary>
     /// S20 — annual activity (academic) norm entry point. Tags result with
@@ -160,7 +161,7 @@ public static class NormCheckRule
         DateOnly periodStart,
         DateOnly periodEnd,
         int normPeriodWeeks) =>
-        EvaluateWeeksCore(RuleId, profile, entries, periodStart, periodEnd, normPeriodWeeks);
+        EvaluateWeeksCore(RuleId, profile, entries, periodStart, periodEnd, normPeriodWeeks, StandardWeeklyNorm);
 
     private static CalculationResult EvaluateWeeksCore(
         string ruleId,
@@ -168,10 +169,11 @@ public static class NormCheckRule
         IReadOnlyList<TimeEntry> entries,
         DateOnly periodStart,
         DateOnly periodEnd,
-        int normPeriodWeeks)
+        int normPeriodWeeks,
+        decimal weeklyNormHours)
     {
         var effectiveNormPeriodWeeks = ValidNormPeriodWeeks.Contains(normPeriodWeeks) ? normPeriodWeeks : 1;
-        var normHours = profile.WeeklyNormHours * profile.PartTimeFraction * effectiveNormPeriodWeeks;
+        var normHours = weeklyNormHours * profile.PartTimeFraction * effectiveNormPeriodWeeks;
 
         var periodEntries = entries
             .Where(e => e.Date >= periodStart && e.Date <= periodEnd)

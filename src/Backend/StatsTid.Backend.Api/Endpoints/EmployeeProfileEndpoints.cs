@@ -134,7 +134,6 @@ public static class EmployeeProfileEndpoints
             return Results.Ok(new
             {
                 employeeId = profile.EmployeeId,
-                weeklyNormHours = profile.WeeklyNormHours,
                 partTimeFraction = profile.PartTimeFraction,
                 position = profile.Position,
                 isPartTime = profile.IsPartTime,
@@ -230,7 +229,7 @@ public static class EmployeeProfileEndpoints
                 PredecessorSnapshot? preUpdate;
                 await using (var preCmd = new NpgsqlCommand(
                     """
-                    SELECT profile_id, weekly_norm_hours, part_time_fraction, position,
+                    SELECT profile_id, part_time_fraction, position,
                            effective_from, version
                     FROM employee_profiles
                     WHERE employee_id = @employeeId
@@ -247,11 +246,10 @@ public static class EmployeeProfileEndpoints
                     {
                         preUpdate = new PredecessorSnapshot(
                             ProfileId: preReader.GetGuid(0),
-                            WeeklyNormHours: preReader.GetDecimal(1),
-                            PartTimeFraction: preReader.GetDecimal(2),
-                            Position: preReader.IsDBNull(3) ? null : preReader.GetString(3),
-                            EffectiveFrom: preReader.GetFieldValue<DateOnly>(4),
-                            Version: preReader.GetInt64(5));
+                            PartTimeFraction: preReader.GetDecimal(1),
+                            Position: preReader.IsDBNull(2) ? null : preReader.GetString(2),
+                            EffectiveFrom: preReader.GetFieldValue<DateOnly>(3),
+                            Version: preReader.GetInt64(4));
                     }
                 }
 
@@ -277,7 +275,6 @@ public static class EmployeeProfileEndpoints
                 {
                     var supersedeRequest = new EmployeeProfileSupersedeRequest(
                         EmployeeId: employeeId,
-                        WeeklyNormHours: body.WeeklyNormHours,
                         PartTimeFraction: body.PartTimeFraction,
                         Position: body.Position,
                         EffectiveFrom: body.EffectiveFrom);
@@ -339,13 +336,11 @@ public static class EmployeeProfileEndpoints
                 //   visible state delta on the employee's profile lineage.
                 var previousData = JsonSerializer.Serialize(new
                 {
-                    weeklyNormHours = preUpdate.WeeklyNormHours,
                     partTimeFraction = preUpdate.PartTimeFraction,
                     position = preUpdate.Position,
                 });
                 var newData = JsonSerializer.Serialize(new
                 {
-                    weeklyNormHours = body.WeeklyNormHours,
                     partTimeFraction = body.PartTimeFraction,
                     position = body.Position,
                 });
@@ -398,7 +393,6 @@ public static class EmployeeProfileEndpoints
                     {
                         ProfileId = profileId,
                         EmployeeId = employeeId,
-                        WeeklyNormHours = body.WeeklyNormHours,
                         PartTimeFraction = body.PartTimeFraction,
                         Position = body.Position,
                         VersionBefore = expectedVersion,
@@ -430,7 +424,6 @@ public static class EmployeeProfileEndpoints
                         PredecessorEffectiveFrom = preUpdate.EffectiveFrom,
                         PredecessorEffectiveTo = body.EffectiveFrom,
                         NewEffectiveFrom = body.EffectiveFrom,
-                        WeeklyNormHours = body.WeeklyNormHours,
                         PartTimeFraction = body.PartTimeFraction,
                         Position = body.Position,
                         PredecessorVersion = preUpdate.Version,
@@ -455,7 +448,6 @@ public static class EmployeeProfileEndpoints
                 return Results.Ok(new
                 {
                     employeeId,
-                    weeklyNormHours = body.WeeklyNormHours,
                     partTimeFraction = body.PartTimeFraction,
                     position = body.Position,
                     isPartTime,
@@ -581,7 +573,6 @@ public static class EmployeeProfileEndpoints
                 // logically "current" payload after the close).
                 var previousData = JsonSerializer.Serialize(new
                 {
-                    weeklyNormHours = preDelete.WeeklyNormHours,
                     partTimeFraction = preDelete.PartTimeFraction,
                     position = preDelete.Position,
                 });
@@ -687,7 +678,6 @@ public static class EmployeeProfileEndpoints
     {
         /// <summary>S33 — required. Validator narrows to today (UTC) per ADR-023 D8.</summary>
         public DateOnly EffectiveFrom { get; init; }
-        public decimal WeeklyNormHours { get; init; }
         public decimal PartTimeFraction { get; init; }
         public string? Position { get; init; }
     }
@@ -701,7 +691,6 @@ public static class EmployeeProfileEndpoints
     /// </summary>
     private sealed record PredecessorSnapshot(
         Guid ProfileId,
-        decimal WeeklyNormHours,
         decimal PartTimeFraction,
         string? Position,
         DateOnly EffectiveFrom,

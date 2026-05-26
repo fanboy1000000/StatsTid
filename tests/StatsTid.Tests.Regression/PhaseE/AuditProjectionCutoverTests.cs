@@ -358,7 +358,7 @@ public sealed class AuditProjectionCutoverTests : IAsyncLifetime
                 var secondaryEv = new EmployeeProfileCreated
                 {
                     ProfileId = Guid.NewGuid(), EmployeeId = userId,
-                    WeeklyNormHours = 37m, PartTimeFraction = 1m, Position = null,
+                    PartTimeFraction = 1m, Position = null,
                     EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow),
                 };
                 await throwingOutbox.EnqueueAsync(conn, tx, $"employee-profile-{userId}", secondaryEv); // THROWS

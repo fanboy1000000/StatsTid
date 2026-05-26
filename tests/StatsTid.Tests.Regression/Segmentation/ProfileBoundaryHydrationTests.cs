@@ -63,7 +63,6 @@ public sealed class ProfileBoundaryHydrationTests : IAsyncLifetime
             EmployeeId = "EMP-2110",
             AgreementCode = AgreementCode,
             OkVersion = OkVersion,
-            WeeklyNormHours = 37m,
             EmploymentCategory = "Standard",
             OrgId = OrgId,
         };
@@ -91,7 +90,6 @@ public sealed class ProfileBoundaryHydrationTests : IAsyncLifetime
             EmployeeId = "EMP-2110",
             AgreementCode = AgreementCode,
             OkVersion = OkVersion,
-            WeeklyNormHours = 37m,
             EmploymentCategory = "Standard",
             OrgId = null,
         };

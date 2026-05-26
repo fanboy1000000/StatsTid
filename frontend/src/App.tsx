@@ -19,7 +19,6 @@ import { AgreementConfigList } from './pages/admin/AgreementConfigList'
 import { AgreementConfigEditor } from './pages/admin/AgreementConfigEditor'
 import { PositionOverrideManagement } from './pages/admin/PositionOverrideManagement'
 import { WageTypeMappingManagement } from './pages/admin/WageTypeMappingManagement'
-import { EmployeeProfileEditor } from './pages/admin/EmployeeProfileEditor'
 import { AuditLogView } from './pages/admin/AuditLogView'
 import { ReportingLineTree } from './pages/admin/ReportingLineTree'
 import { DelegationPage } from './pages/delegation/DelegationPage'
@@ -68,7 +67,6 @@ function AppRoutes() {
           {/* HR routes */}
           <Route element={<RequireRole minRole="LocalHR" />}>
             <Route path="admin/users" element={<UserManagement />} />
-            <Route path="admin/employee-profiles" element={<EmployeeProfileEditor />} />
             <Route path="admin/audit" element={<AuditLogView />} />
           </Route>
 

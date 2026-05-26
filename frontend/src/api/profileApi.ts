@@ -14,28 +14,12 @@
 // (`"5"`). Parsing/formatting lives in `lib/etag.ts`; this module imports the
 // helpers so the contract is explicit at the network boundary.
 //
-// `apiClient` from `lib/api.ts` does not currently expose response headers, so
-// this module talks to `fetch` directly. (Cross-domain note: extending
-// `apiClient` was the alternative — kept narrow here because only the profile
-// endpoints need header access.)
+// S53 / TASK-5304: Auth header logic consolidated through `apiFetchWithEtag`
+// from `lib/api.ts` (which also handles 401 auto-clear + reload). The previous
+// local `TOKEN_KEY` / `getToken` / `authHeaders` helpers are removed.
 import type { LocalAgreementProfile, ProfileSaveError } from '../hooks/useConfig'
 import { parseVersionFromETag, formatVersionAsIfMatch, resolveEtag } from '../lib/etag'
-
-const TOKEN_KEY = 'statstid_token'
-
-function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY)
-}
-
-function authHeaders(extra?: Record<string, string>): Record<string, string> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  const token = getToken()
-  if (token) headers['Authorization'] = `Bearer ${token}`
-  if (extra) {
-    for (const [k, v] of Object.entries(extra)) headers[k] = v
-  }
-  return headers
-}
+import { apiFetchWithEtag } from '../lib/api'
 
 export interface ProfileGetSuccess {
   ok: true
@@ -60,25 +44,20 @@ export async function getCurrentProfile(
   okVersion: string,
 ): Promise<ProfileGetResult> {
   const url = `/api/config/${encodeURIComponent(orgId)}/profile/${encodeURIComponent(agreementCode)}/${encodeURIComponent(okVersion)}`
-  try {
-    const res = await fetch(url, { method: 'GET', headers: authHeaders() })
-    if (res.status === 404) {
+  const result = await apiFetchWithEtag<LocalAgreementProfile>(url, { method: 'GET' })
+  if (!result.ok) {
+    if (result.status === 404) {
       // No active profile is the "central applies" steady state, not an error.
       return { ok: true, profile: null, etag: null, version: null }
     }
-    if (!res.ok) {
-      const text = await res.text().catch(() => '')
-      return { ok: false, error: text || `HTTP ${res.status}`, status: res.status }
-    }
-    const data = (await res.json()) as LocalAgreementProfile
-    // S23 / TASK-2303: prefer ETag header, fall back to body `version` for
-    // cross-origin deployments where the header isn't exposed. Strict body-
-    // version validation guards against `"undefined"` token synthesis.
-    const { etag, version } = resolveEtag(res.headers.get('ETag'), data)
-    return { ok: true, profile: data, etag, version }
-  } catch (e) {
-    return { ok: false, error: String(e), status: 0 }
+    return { ok: false, error: result.error, status: result.status }
   }
+  const { data, etag: rawEtag } = result.data
+  // S23 / TASK-2303: prefer ETag header, fall back to body `version` for
+  // cross-origin deployments where the header isn't exposed. Strict body-
+  // version validation guards against `"undefined"` token synthesis.
+  const { etag, version } = resolveEtag(rawEtag, data)
+  return { ok: true, profile: data, etag, version }
 }
 
 export async function getProfileHistory(
@@ -87,17 +66,11 @@ export async function getProfileHistory(
   okVersion: string,
 ): Promise<{ ok: true; history: LocalAgreementProfile[] } | { ok: false; error: string; status: number }> {
   const url = `/api/config/${encodeURIComponent(orgId)}/profile/${encodeURIComponent(agreementCode)}/${encodeURIComponent(okVersion)}/history`
-  try {
-    const res = await fetch(url, { method: 'GET', headers: authHeaders() })
-    if (!res.ok) {
-      const text = await res.text().catch(() => '')
-      return { ok: false, error: text || `HTTP ${res.status}`, status: res.status }
-    }
-    const data = (await res.json()) as LocalAgreementProfile[]
-    return { ok: true, history: data ?? [] }
-  } catch (e) {
-    return { ok: false, error: String(e), status: 0 }
+  const result = await apiFetchWithEtag<LocalAgreementProfile[]>(url, { method: 'GET' })
+  if (!result.ok) {
+    return { ok: false, error: result.error, status: result.status }
   }
+  return { ok: true, history: result.data.data ?? [] }
 }
 
 export interface ProfileSaveRequest {
@@ -157,39 +130,34 @@ export async function saveProfile(
       : { 'If-Match': etag }
   }
 
-  try {
-    const res = await fetch(url, {
-      method: 'PUT',
-      headers: authHeaders(precondition),
-      body: JSON.stringify(body),
-    })
+  const result = await apiFetchWithEtag<LocalAgreementProfile>(url, {
+    method: 'PUT',
+    headers: precondition,
+    body: JSON.stringify(body),
+  })
 
-    if (!res.ok) {
-      const text = await res.text().catch(() => '')
-      let parsed: ProfileSaveError | undefined
-      try {
-        parsed = text ? (JSON.parse(text) as ProfileSaveError) : undefined
-      } catch {
-        // Non-JSON body — leave parsed undefined.
-      }
-      return { ok: false, status: res.status, error: text || `HTTP ${res.status}`, body: parsed }
+  if (!result.ok) {
+    let parsed: ProfileSaveError | undefined
+    try {
+      parsed = result.body ? (result.body as ProfileSaveError) : undefined
+    } catch {
+      // Non-structured body — leave parsed undefined.
     }
+    return { ok: false, status: result.status, error: result.error, body: parsed }
+  }
 
-    const saved = (await res.json()) as LocalAgreementProfile
-    // S23 / TASK-2303: same fallback as getCurrentProfile — header preferred,
-    // body.version fallback with strict runtime validation, both null on
-    // validation failure (no `"undefined"` token).
-    const { etag: newEtag, version: newVersion } = resolveEtag(
-      res.headers.get('ETag'),
-      saved,
-    )
-    return {
-      ok: true,
-      savedProfile: saved,
-      newEtag,
-      newVersion,
-    }
-  } catch (e) {
-    return { ok: false, status: 0, error: String(e) }
+  const saved = result.data.data
+  // S23 / TASK-2303: same fallback as getCurrentProfile — header preferred,
+  // body.version fallback with strict runtime validation, both null on
+  // validation failure (no `"undefined"` token).
+  const { etag: newEtag, version: newVersion } = resolveEtag(
+    result.data.etag,
+    saved,
+  )
+  return {
+    ok: true,
+    savedProfile: saved,
+    newEtag,
+    newVersion,
   }
 }

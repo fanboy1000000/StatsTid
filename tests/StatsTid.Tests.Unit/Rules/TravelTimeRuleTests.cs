@@ -42,7 +42,6 @@ public class TravelTimeRuleTests
             EmployeeId = "EMP001",
             AgreementCode = agreement,
             OkVersion = "OK24",
-            WeeklyNormHours = 37.0m,
             EmploymentCategory = "Standard"
         };
 

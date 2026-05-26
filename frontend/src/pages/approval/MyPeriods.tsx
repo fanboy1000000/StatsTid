@@ -1,8 +1,7 @@
 import { useState, useEffect, useCallback, type FormEvent } from 'react'
 import { useAuth } from '../../hooks/useAuth'
+import { apiClient } from '../../lib/api'
 import styles from './MyPeriods.module.css'
-
-const TOKEN_KEY = 'statstid_token'
 
 interface ApprovalPeriod {
   periodId: string
@@ -19,18 +18,6 @@ interface ApprovalPeriod {
   approvedAt: string | null
   rejectionReason: string | null
   createdAt: string
-}
-
-function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY)
-}
-
-function handle401(res: Response) {
-  if (res.status === 401) {
-    localStorage.removeItem(TOKEN_KEY)
-    localStorage.removeItem('statstid_user')
-    window.location.reload()
-  }
 }
 
 const PERIOD_TYPES = [
@@ -94,19 +81,13 @@ export function MyPeriods() {
     if (!employeeId) return
     setLoading(true)
     setError(null)
-    try {
-      const token = getToken()
-      const res = await fetch(`/api/approval/employee/${employeeId}`, {
-        headers: token ? { 'Authorization': `Bearer ${token}` } : {},
-      })
-      if (!res.ok) { handle401(res); throw new Error(`HTTP ${res.status}`) }
-      const data: ApprovalPeriod[] = await res.json()
-      setPeriods(data)
-    } catch (e) {
-      setError(String(e instanceof Error ? e.message : e))
-    } finally {
-      setLoading(false)
+    const result = await apiClient.get<ApprovalPeriod[]>(`/api/approval/${employeeId}`)
+    if (result.ok) {
+      setPeriods(result.data)
+    } else {
+      setError(result.error)
     }
+    setLoading(false)
   }, [employeeId])
 
   useEffect(() => { fetchPeriods() }, [fetchPeriods])
@@ -119,29 +100,15 @@ export function MyPeriods() {
     agreementCode: string
     okVersion: string
   }) => {
-    const token = getToken()
-    const res = await fetch(`/api/approval/submit`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify(payload),
-    })
-    if (!res.ok) { handle401(res); throw new Error(`HTTP ${res.status}`) }
-    return res.json()
+    const result = await apiClient.post<ApprovalPeriod>('/api/approval/submit', payload)
+    if (!result.ok) throw new Error(result.error)
+    return result.data
   }
 
   const resubmitPeriod = async (periodId: string) => {
-    const token = getToken()
-    const res = await fetch(`/api/approval/${periodId}/submit`, {
-      method: 'POST',
-      headers: {
-        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
-      },
-    })
-    if (!res.ok) { handle401(res); throw new Error(`HTTP ${res.status}`) }
-    return res.json()
+    const result = await apiClient.post<ApprovalPeriod>(`/api/approval/${periodId}/employee-approve`)
+    if (!result.ok) throw new Error(result.error)
+    return result.data
   }
 
   const handleSubmit = async (e: FormEvent) => {

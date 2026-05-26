@@ -95,8 +95,7 @@ public static class BalanceEndpoints
 
             // Get agreement config — try DB first (ACTIVE), fall back to central static config
             var dbConfig = await configRepo.GetActiveAsync(agreementCode, user.OkVersion, ct);
-            var weeklyNormHours = datedProfile?.WeeklyNormHours
-                ?? dbConfig?.WeeklyNormHours
+            var weeklyNormHours = dbConfig?.WeeklyNormHours
                 ?? CentralAgreementConfigs.TryGetConfig(agreementCode, user.OkVersion)?.WeeklyNormHours
                 ?? 37.0m;
             var hasMerarbejde = dbConfig?.HasMerarbejde

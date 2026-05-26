@@ -34,7 +34,6 @@ internal static class TestFixtures
         EmployeeId = employeeId,
         AgreementCode = "HK",
         OkVersion = okVersion,
-        WeeklyNormHours = 37.0m,
         EmploymentCategory = "Standard",
         PartTimeFraction = 1.0m,
     };

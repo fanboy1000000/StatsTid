@@ -94,7 +94,7 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
             new UserAgreementCodeRepository(_harness.Factory));
         _repo = new EmployeeProfileRepository(_harness.Factory);
 
-        await SeedUserAndProfileAsync(weeklyNormHours: 37.0m, partTimeFraction: 1.000m);
+        await SeedUserAndProfileAsync(partTimeFraction: 1.000m);
         await TestFixtures.SeedWageTypeMappingsAsync(_harness.Factory);
     }
 
@@ -105,20 +105,20 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
     }
 
     // ═════════════════════════════════════════════════════════════════════
-    // Marquee variant 1 — weekly_norm_hours
+    // Marquee variant 1 — part_time_fraction (replay determinism)
     // ═════════════════════════════════════════════════════════════════════
     /// <summary>
-    /// Forward-calc against the seeded profile (weekly_norm_hours=37.0),
+    /// Forward-calc against the seeded profile (part_time_fraction=1.000),
     /// supersede via Case C cross-day routing today (closes predecessor at
-    /// today; new live row at weekly_norm_hours=32.0), then replay against
+    /// today; new live row at part_time_fraction=0.800), then replay against
     /// the original manifest. The dated resolver lookup at
     /// segment.StartDate=PeriodStart=2026-04-01 must return the predecessor
-    /// row (whose window now ends end-exclusive at today=2026-05-17 — still
-    /// covers April 2026), so the rule-engine inputs are byte-identical
-    /// between baseline and replay.
+    /// row (whose window now ends end-exclusive at today — still covers
+    /// April 2026), so the rule-engine inputs are byte-identical between
+    /// baseline and replay.
     /// </summary>
     [Fact]
-    public async Task ReplayAsync_StableUnderEmployeeProfileMutation_WeeklyNormHours_ResultByteIdentical()
+    public async Task ReplayAsync_StableUnderEmployeeProfileMutation_PartTimeFraction_Variant1_ResultByteIdentical()
     {
         var pcs = BuildPcsWithResolver(_resolver);
 
@@ -145,16 +145,16 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
 
         var baselineJson = JsonSerializer.Serialize(baseline.RuleResults, SerializerOptions);
 
-        // ── Case C cross-day supersession on weekly_norm_hours: 37.0 → 32.0.
+        // ── Case C cross-day supersession on part_time_fraction: 1.000 → 0.800.
         // SeedUserAndProfileAsync inserts the live row with the schema DEFAULT
         // effective_from='0001-01-01', so this supersession at Today creates
         // Case C cross-day routing: predecessor closed at effective_to=Today
         // (window ['0001-01-01', Today)), new row at effective_from=Today.
         // Replay at segment.StartDate=2026-04-01 falls in the predecessor's
-        // window (today > 2026-04-01), so the resolver reads weekly_norm_hours=37.
+        // window (today > 2026-04-01), so the resolver reads the predecessor's
+        // part_time_fraction=1.000.
         await SupersedeAsync(
-            newWeeklyNormHours: 32.0m,
-            newPartTimeFraction: 1.000m,
+            newPartTimeFraction: 0.800m,
             effectiveFrom: Today);
 
         // ── Replay against the baseline's manifest id. Result must serialize
@@ -174,11 +174,10 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
     // ═════════════════════════════════════════════════════════════════════
     /// <summary>
     /// Same shape as variant 1 but mutates <c>part_time_fraction</c>
-    /// 1.000 → 0.750 via Case C cross-day supersession. The second factor
-    /// in <c>profile.WeeklyNormHours * profile.PartTimeFraction</c> at
-    /// <c>NormCheckRule.cs:174</c> is what this variant exercises — the
-    /// PCS rule-input must be the dated predecessor value, not the post-
-    /// mutation live row.
+    /// 1.000 → 0.750 via Case C cross-day supersession. The factor
+    /// <c>profile.PartTimeFraction</c> at <c>NormCheckRule.cs</c> is what
+    /// this variant exercises — the PCS rule-input must be the dated
+    /// predecessor value, not the post-mutation live row.
     /// </summary>
     [Fact]
     public async Task ReplayAsync_StableUnderEmployeeProfileMutation_PartTimeFraction_ResultByteIdentical()
@@ -201,7 +200,6 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
 
         // Case C cross-day supersession on part_time_fraction: 1.000 → 0.750.
         await SupersedeAsync(
-            newWeeklyNormHours: 37.0m,
             newPartTimeFraction: 0.750m,
             effectiveFrom: Today);
 
@@ -354,7 +352,7 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
     /// today-effective Case C supersession closes a row that covered the
     /// entire test period.
     /// </summary>
-    private async Task SeedUserAndProfileAsync(decimal weeklyNormHours, decimal partTimeFraction)
+    private async Task SeedUserAndProfileAsync(decimal partTimeFraction)
     {
         await using var conn = _harness.Factory.Create();
         await conn.OpenAsync();
@@ -398,16 +396,15 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
         await using (var epCmd = new NpgsqlCommand(
             """
             INSERT INTO employee_profiles (
-                profile_id, employee_id, weekly_norm_hours, part_time_fraction, position,
+                profile_id, employee_id, part_time_fraction, position,
                 effective_from, effective_to, version)
             VALUES (
-                gen_random_uuid(), @employeeId, @weeklyNormHours, @partTimeFraction, NULL,
+                gen_random_uuid(), @employeeId, @partTimeFraction, NULL,
                 DEFAULT, NULL, 1)
             ON CONFLICT DO NOTHING
             """, conn))
         {
             epCmd.Parameters.AddWithValue("employeeId", EmployeeId);
-            epCmd.Parameters.AddWithValue("weeklyNormHours", weeklyNormHours);
             epCmd.Parameters.AddWithValue("partTimeFraction", partTimeFraction);
             await epCmd.ExecuteNonQueryAsync();
         }
@@ -442,14 +439,13 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
     /// '0001-01-01').
     /// </summary>
     private async Task SupersedeAsync(
-        decimal newWeeklyNormHours, decimal newPartTimeFraction, DateOnly effectiveFrom)
+        decimal newPartTimeFraction, DateOnly effectiveFrom)
     {
         await using var conn = _harness.Factory.Create();
         await conn.OpenAsync();
         await using var tx = await conn.BeginTransactionAsync();
         var req = new EmployeeProfileSupersedeRequest(
             EmployeeId: EmployeeId,
-            WeeklyNormHours: newWeeklyNormHours,
             PartTimeFraction: newPartTimeFraction,
             Position: null,
             EffectiveFrom: effectiveFrom);

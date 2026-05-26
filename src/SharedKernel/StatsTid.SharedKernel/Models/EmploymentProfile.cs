@@ -18,7 +18,6 @@ public sealed record class EmploymentProfile
     /// </summary>
     public required string AgreementCode { get; init; }
     public required string OkVersion { get; init; }
-    public required decimal WeeklyNormHours { get; init; }
     public required string EmploymentCategory { get; init; }
     public bool IsPartTime { get; init; }
     public decimal PartTimeFraction { get; init; } = 1.0m;

@@ -20,7 +20,6 @@ public sealed class EmployeeProfileSupersededAuditMapper : IAuditProjectionMappe
             employeeId = @event.EmployeeId,
             predecessorEffectiveFrom = @event.PredecessorEffectiveFrom,
             newEffectiveFrom = @event.NewEffectiveFrom,
-            weeklyNormHours = @event.WeeklyNormHours,
             partTimeFraction = @event.PartTimeFraction,
             position = @event.Position,
         };

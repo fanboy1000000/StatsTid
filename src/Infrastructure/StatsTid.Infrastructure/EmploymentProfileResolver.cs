@@ -109,7 +109,6 @@ public sealed class EmploymentProfileResolver : IEmploymentProfileResolver
         const string sql =
             """
             SELECT
-                ep.weekly_norm_hours,
                 ep.part_time_fraction,
                 ep.position,
                 u.ok_version,
@@ -128,7 +127,6 @@ public sealed class EmploymentProfileResolver : IEmploymentProfileResolver
         cmd.Parameters.AddWithValue("employeeId", employeeId);
         cmd.Parameters.AddWithValue("asOfDate", asOfDate);
 
-        decimal weeklyNormHours;
         decimal partTimeFraction;
         string? position;
         string okVersion;
@@ -144,7 +142,6 @@ public sealed class EmploymentProfileResolver : IEmploymentProfileResolver
                 return null;
             }
 
-            weeklyNormHours = reader.GetDecimal(reader.GetOrdinal("weekly_norm_hours"));
             partTimeFraction = reader.GetDecimal(reader.GetOrdinal("part_time_fraction"));
             position = reader.IsDBNull(reader.GetOrdinal("position"))
                 ? null
@@ -175,7 +172,6 @@ public sealed class EmploymentProfileResolver : IEmploymentProfileResolver
         return new EmploymentProfile
         {
             EmployeeId = employeeId,
-            WeeklyNormHours = weeklyNormHours,
             PartTimeFraction = partTimeFraction,
             Position = position,
             AgreementCode = datedAgreementCode,

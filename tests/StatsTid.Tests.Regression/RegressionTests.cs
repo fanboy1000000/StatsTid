@@ -12,7 +12,6 @@ public class RegressionTests
         EmployeeId = "EMP001",
         AgreementCode = agreement,
         OkVersion = okVersion,
-        WeeklyNormHours = 37.0m,
         EmploymentCategory = "Standard",
         PartTimeFraction = 1.0m
     };

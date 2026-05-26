@@ -6,13 +6,11 @@ namespace StatsTid.Tests.Unit;
 public class NormCheckRuleTests
 {
     private static EmploymentProfile CreateProfile(
-        decimal weeklyNorm = 37m,
         decimal partTimeFraction = 1.0m) => new()
     {
         EmployeeId = "EMP001",
         AgreementCode = "AC",
         OkVersion = "OK24",
-        WeeklyNormHours = weeklyNorm,
         EmploymentCategory = "Standard",
         PartTimeFraction = partTimeFraction
     };

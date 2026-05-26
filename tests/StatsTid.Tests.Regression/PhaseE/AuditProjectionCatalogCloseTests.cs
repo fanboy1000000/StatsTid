@@ -148,7 +148,7 @@ public sealed class AuditProjectionCatalogCloseTests : IAsyncLifetime
         var ev = new EmployeeProfileCreated
         {
             ProfileId = Guid.NewGuid(), EmployeeId = "EMP_TEST",
-            WeeklyNormHours = 37m, PartTimeFraction = 1m,
+            PartTimeFraction = 1m,
             EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow),
         };
 
@@ -276,7 +276,7 @@ public sealed class AuditProjectionCatalogCloseTests : IAsyncLifetime
         var ev = new EmployeeProfileCreated
         {
             ProfileId = Guid.NewGuid(), EmployeeId = "EMP_TEST",
-            WeeklyNormHours = 37m, PartTimeFraction = 1m,
+            PartTimeFraction = 1m,
             EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow),
         };
         var throwingOutbox = new ForcedRollbackHarness.ThrowingOutboxEnqueue();

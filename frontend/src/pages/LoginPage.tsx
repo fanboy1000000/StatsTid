@@ -58,12 +58,14 @@ export function LoginPage({ onLogin }: Props) {
             </div>
           </form>
         </Card>
-        <div className={styles.hint}>
-          <p>Adgangskode for alle: <strong>password</strong></p>
-          <p>Admin: admin01, admin02 | Lokal admin: ladm01, ladm02</p>
-          <p>HR: hr01, hr02 | Leder: mgr01, mgr02, mgr03</p>
-          <p>Medarbejdere: emp001–emp010</p>
-        </div>
+        {import.meta.env.DEV && (
+          <div className={styles.hint}>
+            <p>Adgangskode for alle: <strong>password</strong></p>
+            <p>Admin: admin01, admin02 | Lokal admin: ladm01, ladm02</p>
+            <p>HR: hr01, hr02 | Leder: mgr01, mgr02, mgr03</p>
+            <p>Medarbejdere: emp001–emp010</p>
+          </div>
+        )}
       </div>
     </div>
   )

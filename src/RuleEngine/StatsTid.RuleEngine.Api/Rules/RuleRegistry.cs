@@ -213,7 +213,7 @@ public sealed class RuleRegistry
         return ruleId switch
         {
             NormCheckRule.RuleId          => NormCheckRule.Evaluate(profile, entries, periodStart, periodEnd, config),
-            NormCheckRule.WeeklyRuleId    => NormCheckRule.EvaluateWeekly(profile, entries, periodStart, periodEnd),
+            NormCheckRule.WeeklyRuleId    => NormCheckRule.EvaluateWeekly(profile, entries, periodStart, periodEnd, config),
             NormCheckRule.MultiWeekRuleId => NormCheckRule.EvaluateMultiWeek(profile, entries, periodStart, periodEnd, config),
             NormCheckRule.AnnualRuleId    => NormCheckRule.EvaluateAnnual(profile, entries, periodStart, periodEnd, config),
             SupplementRule.RuleId         => SupplementRule.Evaluate(profile, entries, periodStart, periodEnd, config),

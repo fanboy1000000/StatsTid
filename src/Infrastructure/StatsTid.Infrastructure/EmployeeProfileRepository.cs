@@ -4,9 +4,10 @@ using StatsTid.SharedKernel.Models;
 namespace StatsTid.Infrastructure;
 
 /// <summary>
-/// S31 / TASK-3102 — Phase 4d-3 Part 1 authoritative store for the three employment-profile
+/// S31 / TASK-3102 — Phase 4d-3 Part 1 authoritative store for the employment-profile
 /// fields previously sourced from request payloads (TimeEndpoints) or hardcoded constants
-/// (ComplianceEndpoints): <c>weekly_norm_hours</c>, <c>part_time_fraction</c>, and <c>position</c>.
+/// (ComplianceEndpoints): <c>part_time_fraction</c> and <c>position</c>.
+/// (<c>weekly_norm_hours</c> removed in S53 TASK-5306 — norm hours sourced from config chain.)
 /// Sibling fields (<c>agreement_code</c>, <c>ok_version</c>, <c>employment_category</c>,
 /// <c>primary_org_id</c>) stay on the <c>users</c> table per S31 refinement Q3 LEAVE and are
 /// joined in at read time so <see cref="GetByEmployeeIdAsync(string, CancellationToken)"/>
@@ -180,8 +181,8 @@ public sealed class EmployeeProfileRepository
         NpgsqlConnection conn, NpgsqlTransaction? tx,
         string employeeId, CancellationToken ct)
     {
-        // S31 employee_profiles columns are the source of truth for weekly_norm_hours,
-        // part_time_fraction, and position. The sibling fields (agreement_code, ok_version,
+        // S31 employee_profiles columns are the source of truth for
+        // part_time_fraction and position (weekly_norm_hours removed in S53 TASK-5306). The sibling fields (agreement_code, ok_version,
         // employment_category, primary_org_id) stay on `users` per refinement Q3 LEAVE and
         // are joined in here so the returned EmploymentProfile is consumable by PCS / rule
         // engine paths unchanged. `ep.version` joins in the row's optimistic-concurrency
@@ -190,7 +191,6 @@ public sealed class EmployeeProfileRepository
         const string sql =
             """
             SELECT
-                ep.weekly_norm_hours,
                 ep.part_time_fraction,
                 ep.position,
                 ep.version,
@@ -216,7 +216,6 @@ public sealed class EmployeeProfileRepository
             EmployeeId = employeeId,
             AgreementCode = reader.GetString(reader.GetOrdinal("agreement_code")),
             OkVersion = reader.GetString(reader.GetOrdinal("ok_version")),
-            WeeklyNormHours = reader.GetDecimal(reader.GetOrdinal("weekly_norm_hours")),
             EmploymentCategory = reader.GetString(reader.GetOrdinal("employment_category")),
             // S31 cycle 2 absorption: IsPartTime is computed, not stored. No is_part_time
             // column in the schema.
@@ -277,16 +276,15 @@ public sealed class EmployeeProfileRepository
         await using var cmd = new NpgsqlCommand(
             """
             INSERT INTO employee_profiles (
-                profile_id, employee_id, weekly_norm_hours, part_time_fraction, position,
+                profile_id, employee_id, part_time_fraction, position,
                 effective_from, effective_to, version)
             VALUES (
-                @profileId, @employeeId, @weeklyNormHours, @partTimeFraction, @position,
+                @profileId, @employeeId, @partTimeFraction, @position,
                 @effectiveFrom, NULL, 1)
             RETURNING profile_id, version
             """, conn, tx);
         cmd.Parameters.AddWithValue("profileId", newProfileId);
         cmd.Parameters.AddWithValue("employeeId", req.EmployeeId);
-        cmd.Parameters.AddWithValue("weeklyNormHours", req.WeeklyNormHours);
         cmd.Parameters.AddWithValue("partTimeFraction", req.PartTimeFraction);
         cmd.Parameters.AddWithValue("position", (object?)req.Position ?? DBNull.Value);
         cmd.Parameters.AddWithValue("effectiveFrom", DateOnly.FromDateTime(DateTime.UtcNow));
@@ -496,7 +494,6 @@ public sealed class EmployeeProfileRepository
     {
         var supersedeRequest = new EmployeeProfileSupersedeRequest(
             EmployeeId: req.EmployeeId,
-            WeeklyNormHours: req.WeeklyNormHours,
             PartTimeFraction: req.PartTimeFraction,
             Position: req.Position,
             EffectiveFrom: DateOnly.FromDateTime(DateTime.UtcNow));
@@ -741,16 +738,15 @@ public sealed class EmployeeProfileRepository
         await using var cmd = new NpgsqlCommand(
             """
             INSERT INTO employee_profiles (
-                profile_id, employee_id, weekly_norm_hours, part_time_fraction, position,
+                profile_id, employee_id, part_time_fraction, position,
                 effective_from, effective_to, version)
             VALUES (
-                @profileId, @employeeId, @weeklyNormHours, @partTimeFraction, @position,
+                @profileId, @employeeId, @partTimeFraction, @position,
                 @effectiveFrom, NULL, @version)
             RETURNING profile_id, version
             """, conn, tx);
         cmd.Parameters.AddWithValue("profileId", newProfileId);
         cmd.Parameters.AddWithValue("employeeId", req.EmployeeId);
-        cmd.Parameters.AddWithValue("weeklyNormHours", req.WeeklyNormHours);
         cmd.Parameters.AddWithValue("partTimeFraction", req.PartTimeFraction);
         cmd.Parameters.AddWithValue("position", (object?)req.Position ?? DBNull.Value);
         cmd.Parameters.AddWithValue("effectiveFrom", req.EffectiveFrom);
@@ -781,7 +777,6 @@ public sealed class EmployeeProfileRepository
         await using var cmd = new NpgsqlCommand(
             """
             UPDATE employee_profiles SET
-                weekly_norm_hours = @weeklyNormHours,
                 part_time_fraction = @partTimeFraction,
                 position = @position,
                 version = version + 1,
@@ -790,7 +785,6 @@ public sealed class EmployeeProfileRepository
             RETURNING profile_id, version
             """, conn, tx);
         cmd.Parameters.AddWithValue("profileId", profileId);
-        cmd.Parameters.AddWithValue("weeklyNormHours", req.WeeklyNormHours);
         cmd.Parameters.AddWithValue("partTimeFraction", req.PartTimeFraction);
         cmd.Parameters.AddWithValue("position", (object?)req.Position ?? DBNull.Value);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -838,7 +832,6 @@ public sealed class EmployeeProfileRepository
 /// </summary>
 public sealed record EmployeeProfileUpsertRequest(
     string EmployeeId,
-    decimal WeeklyNormHours,
     decimal PartTimeFraction,
     string? Position);
 
@@ -850,7 +843,6 @@ public sealed record EmployeeProfileUpsertRequest(
 /// </summary>
 public sealed record EmployeeProfileCreateRequest(
     string EmployeeId,
-    decimal WeeklyNormHours,
     decimal PartTimeFraction,
     string? Position);
 
@@ -866,7 +858,6 @@ public sealed record EmployeeProfileCreateRequest(
 /// </summary>
 public sealed record EmployeeProfileSupersedeRequest(
     string EmployeeId,
-    decimal WeeklyNormHours,
     decimal PartTimeFraction,
     string? Position,
     DateOnly EffectiveFrom);

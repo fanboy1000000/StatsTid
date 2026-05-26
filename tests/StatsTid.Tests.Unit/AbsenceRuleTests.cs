@@ -10,7 +10,6 @@ public class AbsenceRuleTests
         EmployeeId = "EMP001",
         AgreementCode = "AC",
         OkVersion = "OK24",
-        WeeklyNormHours = 37.0m,
         EmploymentCategory = "Standard",
         PartTimeFraction = partTime
     };

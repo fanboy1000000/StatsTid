@@ -118,7 +118,6 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
 
         var req = new EmployeeProfileSupersedeRequest(
             EmployeeId: employeeId,
-            WeeklyNormHours: 30.0m,
             PartTimeFraction: 0.800m,
             Position: "Specialist",
             EffectiveFrom: today);
@@ -171,7 +170,6 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
             await using var tx = await conn.BeginTransactionAsync();
             var seedReq = new EmployeeProfileSupersedeRequest(
                 EmployeeId: employeeId,
-                WeeklyNormHours: 37.0m,
                 PartTimeFraction: 1.000m,
                 Position: null,
                 EffectiveFrom: today);
@@ -189,7 +187,6 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
             await using var tx = await conn.BeginTransactionAsync();
             var editReq = new EmployeeProfileSupersedeRequest(
                 EmployeeId: employeeId,
-                WeeklyNormHours: 32.0m,
                 PartTimeFraction: 0.750m,
                 Position: "Department Head",
                 EffectiveFrom: today);
@@ -280,7 +277,6 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
             await using var tx = await conn.BeginTransactionAsync();
             var req = new EmployeeProfileSupersedeRequest(
                 EmployeeId: employeeId,
-                WeeklyNormHours: 30.0m,
                 PartTimeFraction: 0.800m,
                 Position: "Specialist",
                 EffectiveFrom: today);

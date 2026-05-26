@@ -17,7 +17,6 @@ public sealed class EmployeeProfileCreated : DomainEventBase
     public required string EmployeeId { get; init; }
 
     // Payload — full new-row fields needed by downstream consumers + replay
-    public required decimal WeeklyNormHours { get; init; }
     public required decimal PartTimeFraction { get; init; }
     public string? Position { get; init; }
 

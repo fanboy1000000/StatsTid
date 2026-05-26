@@ -496,15 +496,14 @@ public static class AdminEndpoints
                 await using var profileCmd = new NpgsqlCommand(
                     """
                     INSERT INTO employee_profiles
-                        (profile_id, employee_id, weekly_norm_hours, part_time_fraction, position,
+                        (profile_id, employee_id, part_time_fraction, position,
                          effective_from)
                     VALUES
-                        (@profileId, @employeeId, @weeklyNormHours, @partTimeFraction, NULL,
+                        (@profileId, @employeeId, @partTimeFraction, NULL,
                          @effectiveFrom)
                     """, conn, tx);
                 profileCmd.Parameters.AddWithValue("profileId", profileId);
                 profileCmd.Parameters.AddWithValue("employeeId", request.UserId);
-                profileCmd.Parameters.AddWithValue("weeklyNormHours", 37.0m);
                 profileCmd.Parameters.AddWithValue("partTimeFraction", 1.000m);
                 profileCmd.Parameters.AddWithValue("effectiveFrom", DateOnly.FromDateTime(DateTime.UtcNow));
                 await profileCmd.ExecuteNonQueryAsync(ct);
@@ -517,7 +516,6 @@ public static class AdminEndpoints
                 // version_after = 1.
                 var profileNewData = JsonSerializer.Serialize(new
                 {
-                    weeklyNormHours = 37.0m,
                     partTimeFraction = 1.000m,
                     position = (string?)null,
                 });
@@ -639,7 +637,6 @@ public static class AdminEndpoints
                 {
                     ProfileId = profileId,
                     EmployeeId = request.UserId,
-                    WeeklyNormHours = 37.0m,
                     PartTimeFraction = 1.000m,
                     Position = null,
                     EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow),

@@ -480,7 +480,6 @@ CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 CREATE TABLE IF NOT EXISTS employee_profiles (
     profile_id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     employee_id         TEXT        NOT NULL REFERENCES users(user_id),
-    weekly_norm_hours   NUMERIC(5,2) NOT NULL,
     part_time_fraction  NUMERIC(4,3) NOT NULL DEFAULT 1.000,
     position            TEXT        NULL,
     effective_from      DATE        NOT NULL DEFAULT '0001-01-01',

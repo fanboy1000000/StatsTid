@@ -4,9 +4,92 @@ import { useOrganizations, useOrgUsers, type User, type WithEtag } from '../../h
 import { useReportingLines, type ReportingLineEntry } from '../../hooks/useReportingLines'
 import { useToast } from '../../components/ui/Toast'
 import { Spinner } from '../../components/ui'
-import { formatVersionAsIfMatch } from '../../lib/etag'
+import { apiFetchWithEtag } from '../../lib/api'
+import { formatVersionAsIfMatch, resolveEtag } from '../../lib/etag'
 
 const AGREEMENT_CODES = ['AC', 'HK', 'PROSA'] as const
+
+// S53 TASK-5306e. Employee profile fields inlined into UserManagement after
+// EmployeeProfileEditor page removal. The backend employee_profiles table
+// stays as invisible plumbing — when HR saves changes here, a separate PUT
+// to `/api/admin/employee-profiles/{employeeId}` persists the profile fields.
+interface EmployeeProfileSnapshot {
+  employeeId: string
+  partTimeFraction: number
+  position: string | null
+  isPartTime: boolean
+  version: number
+  etag: string
+}
+
+async function fetchEmployeeProfile(employeeId: string): Promise<EmployeeProfileSnapshot | null> {
+  const result = await apiFetchWithEtag<{
+    employeeId: string
+    weeklyNormHours: number
+    partTimeFraction: number
+    position: string | null
+    isPartTime: boolean
+    version: number
+  }>(`/api/admin/employee-profiles/${encodeURIComponent(employeeId)}`)
+  if (!result.ok) return null
+  const { data, etag } = result.data
+  const { etag: resolvedEtag } = resolveEtag(etag, data)
+  return {
+    employeeId: data.employeeId,
+    partTimeFraction: data.partTimeFraction,
+    position: data.position,
+    isPartTime: data.isPartTime,
+    version: data.version,
+    etag: resolvedEtag ?? formatVersionAsIfMatch(data.version),
+  }
+}
+
+async function saveEmployeeProfile(
+  employeeId: string,
+  ifMatch: string,
+  body: { effectiveFrom: string; partTimeFraction: number; position: string | null },
+): Promise<EmployeeProfileSnapshot> {
+  // The backend PUT requires weeklyNormHours in the body even though it is
+  // being phased out. Send 0 as a placeholder — the backend ignores it for
+  // domain logic but the DTO shape requires it.
+  const wireBody = {
+    effectiveFrom: body.effectiveFrom,
+    weeklyNormHours: 0,
+    partTimeFraction: body.partTimeFraction,
+    position: body.position,
+  }
+  const result = await apiFetchWithEtag<{
+    employeeId: string
+    weeklyNormHours: number
+    partTimeFraction: number
+    position: string | null
+    isPartTime: boolean
+    version: number
+  }>(`/api/admin/employee-profiles/${encodeURIComponent(employeeId)}`, {
+    method: 'PUT',
+    headers: { 'If-Match': ifMatch },
+    body: JSON.stringify(wireBody),
+  })
+  if (!result.ok) {
+    const err = new Error(result.error) as Error & {
+      status: number
+      body?: unknown
+    }
+    err.status = result.status
+    err.body = result.body
+    throw err
+  }
+  const { data, etag } = result.data
+  const { etag: resolvedEtag } = resolveEtag(etag, data)
+  return {
+    employeeId: data.employeeId,
+    partTimeFraction: data.partTimeFraction,
+    position: data.position,
+    isPartTime: data.isPartTime,
+    version: data.version,
+    etag: resolvedEtag ?? formatVersionAsIfMatch(data.version),
+  }
+}
 
 interface CreateUserForm {
   userId: string
@@ -23,6 +106,9 @@ interface EditUserForm {
   email: string
   primaryOrgId: string
   agreementCode: string
+  // S53 TASK-5306e. Profile fields surfaced on the user-edit dialog.
+  partTimeFraction: string
+  position: string
 }
 
 // S34 TASK-3409 (ADR-023 D8). UTC year-month-day matches the backend's
@@ -98,7 +184,16 @@ export function UserManagement() {
     email: '',
     primaryOrgId: '',
     agreementCode: 'AC',
+    partTimeFraction: '1.000',
+    position: '',
   })
+  // S53 TASK-5306e. Holds the employee profile snapshot for the user being edited.
+  // Fetched alongside the per-user GET when the edit dialog opens. Used for
+  // If-Match on the profile PUT and for pre-populating the form fields.
+  const [editingProfile, setEditingProfile] = useState<EmployeeProfileSnapshot | null>(null)
+  // Per-user profile map for showing part-time fraction in the table without
+  // N+1 GETs. Populated lazily the first time a user list loads for the org.
+  const [profileMap, setProfileMap] = useState<Record<string, EmployeeProfileSnapshot>>({})
 
   // Set default org once loaded
   useEffect(() => {
@@ -106,6 +201,34 @@ export function UserManagement() {
       setSelectedOrgId(organizations[0].orgId)
     }
   }, [organizations, selectedOrgId])
+
+  // S53 TASK-5306e. Fetch employee profiles for all loaded users so the table
+  // "Deltid" column can render without N+1 GET-on-row-render. The fetch runs
+  // in parallel per user; failures are silently swallowed (the column shows
+  // a dash instead). The map resets when the org changes (users changes).
+  useEffect(() => {
+    if (users.length === 0) {
+      setProfileMap({})
+      return
+    }
+    let cancelled = false
+    async function loadProfiles() {
+      const entries = await Promise.all(
+        users.map(async (u) => {
+          const p = await fetchEmployeeProfile(u.userId)
+          return [u.userId, p] as const
+        }),
+      )
+      if (cancelled) return
+      const map: Record<string, EmployeeProfileSnapshot> = {}
+      for (const [uid, p] of entries) {
+        if (p) map[uid] = p
+      }
+      setProfileMap(map)
+    }
+    void loadProfiles()
+    return () => { cancelled = true }
+  }, [users])
 
   const selectedOrg = organizations.find((o) => o.orgId === selectedOrgId)
 
@@ -160,20 +283,30 @@ export function UserManagement() {
     setFormError(null)
     setStaleConflict(null)
     setActiveLines([])
+    setEditingProfile(null)
     setEditForm({
       displayName: user.displayName,
       email: user.email ?? '',
       primaryOrgId: user.primaryOrgId,
       agreementCode: user.agreementCode,
+      partTimeFraction: '1.000',
+      position: '',
     })
     try {
-      const fresh = await fetchUser(user.userId)
+      // Fetch user + employee profile in parallel.
+      const [fresh, profile] = await Promise.all([
+        fetchUser(user.userId),
+        fetchEmployeeProfile(user.userId),
+      ])
       setEditingUser(fresh)
+      setEditingProfile(profile)
       setEditForm({
         displayName: fresh.displayName,
         email: fresh.email ?? '',
         primaryOrgId: fresh.primaryOrgId,
         agreementCode: fresh.agreementCode,
+        partTimeFraction: profile ? profile.partTimeFraction.toFixed(3) : '1.000',
+        position: profile?.position ?? '',
       })
       setEditDialogOpen(true)
       // S48 TASK-4810. Fetch reporting lines for the selected user.
@@ -202,6 +335,7 @@ export function UserManagement() {
   const handleCloseEdit = () => {
     setEditDialogOpen(false)
     setEditingUser(null)
+    setEditingProfile(null)
     setFormError(null)
     setStaleConflict(null)
     setActiveLines([])
@@ -269,13 +403,19 @@ export function UserManagement() {
       return
     }
     try {
-      const fresh = await fetchUser(editingUser.userId)
+      const [fresh, profile] = await Promise.all([
+        fetchUser(editingUser.userId),
+        fetchEmployeeProfile(editingUser.userId),
+      ])
       setEditingUser(fresh)
+      setEditingProfile(profile)
       setEditForm({
         displayName: fresh.displayName,
         email: fresh.email ?? '',
         primaryOrgId: fresh.primaryOrgId,
         agreementCode: fresh.agreementCode,
+        partTimeFraction: profile ? profile.partTimeFraction.toFixed(3) : '1.000',
+        position: profile?.position ?? '',
       })
       setStaleConflict(null)
     } catch (err) {
@@ -289,35 +429,47 @@ export function UserManagement() {
     setSubmitting(true)
     setFormError(null)
     try {
+      // S53 TASK-5306e. Save user fields and profile fields. The user PUT and
+      // the profile PUT are independent — the user PUT goes first; if the
+      // profile PUT fails the user changes are already committed (acceptable
+      // because profile is a secondary store). If there is no profile snapshot
+      // (edge case: profile not found on initial fetch), skip the profile PUT.
       const updated = await updateUser(
         editingUser.userId,
         {
-          // S34 TASK-3409 (ADR-023 D8). Inject today's UTC date so the wire
-          // body satisfies TASK-3407's `UpdateUserRequest` required
-          // `EffectiveFrom` field. UTC matches the backend's
-          // `DateTime.UtcNow` same-day-only-edit validator. No UI affordance —
-          // pure wire-shape sync (admin user-edit ergonomics differ from
-          // `EmployeeProfileEditor`'s as-of-date toggle).
           effectiveFrom: todayIsoUtc(),
           displayName: editForm.displayName,
           email: editForm.email || undefined,
           primaryOrgId: editForm.primaryOrgId,
           agreementCode: editForm.agreementCode,
         },
-        // S35 TASK-3507 (ADR-019 D2 admin-strict If-Match). The freshest
-        // ETag from the most recent GET / prior PUT — captured into the
-        // `editingUser.etag` field above.
         editingUser.etag,
       )
-      // Successful save — rebind to the post-save ETag so a second edit in
-      // the same dialog composes If-Match against the new version without a
-      // round-trip GET.
       setEditingUser(updated)
+
+      // Profile PUT — only if we have a profile snapshot (ETag) to compose
+      // the If-Match against. parseFloat discipline per S31 EmployeeProfileEditor.
+      if (editingProfile) {
+        const ptf = Number.parseFloat(editForm.partTimeFraction)
+        const parsedPtf = Number.isFinite(ptf) ? ptf : 1.0
+        const positionTrimmed = editForm.position.trim()
+        const updatedProfile = await saveEmployeeProfile(
+          editingUser.userId,
+          editingProfile.etag,
+          {
+            effectiveFrom: todayIsoUtc(),
+            partTimeFraction: parsedPtf,
+            position: positionTrimmed || null,
+          },
+        )
+        setEditingProfile(updatedProfile)
+        // Update the profile map so the table column reflects the save immediately.
+        setProfileMap((prev) => ({ ...prev, [editingUser.userId]: updatedProfile }))
+      }
+
       toast({ title: 'Gemt', description: 'Bruger opdateret', variant: 'success' })
       handleCloseEdit()
     } catch (err) {
-      // S35 TASK-3507. 412 -> show banner-with-retry; other errors -> generic
-      // form-level error message. Mirrors EmployeeProfileEditor.handleMutationError.
       const e2 = err as Error & {
         status?: number
         body?: { expectedVersion?: number; actualVersion?: number }
@@ -397,6 +549,7 @@ export function UserManagement() {
                     <th>E-mail</th>
                     <th>Organisation</th>
                     <th>Overenskomst</th>
+                    <th>Deltid</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -410,6 +563,13 @@ export function UserManagement() {
                       </td>
                       <td>{user.primaryOrgId}</td>
                       <td>{user.agreementCode}</td>
+                      <td>
+                        {profileMap[user.userId]
+                          ? profileMap[user.userId].partTimeFraction < 1.0
+                            ? profileMap[user.userId].partTimeFraction.toFixed(2)
+                            : '100%'
+                          : '—'}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -683,6 +843,53 @@ export function UserManagement() {
                     </option>
                   ))}
                 </select>
+              </div>
+
+              {/* S53 TASK-5306e. Profile fields inlined from EmployeeProfileEditor. */}
+              <div className={styles.formField}>
+                <label className={styles.formLabel} htmlFor="editPartTimeFraction">
+                  Deltidsfraktion <span className={styles.required}>*</span>
+                </label>
+                <input
+                  className={styles.input}
+                  id="editPartTimeFraction"
+                  type="number"
+                  required
+                  min={0.1}
+                  max={1.0}
+                  step={0.001}
+                  value={editForm.partTimeFraction}
+                  onChange={(e) =>
+                    setEditForm((f) => ({
+                      ...f,
+                      partTimeFraction: e.target.value,
+                    }))
+                  }
+                  disabled={!editingProfile}
+                  title={!editingProfile ? 'Profil ikke fundet for denne medarbejder' : undefined}
+                />
+              </div>
+
+              <div className={styles.formField}>
+                <label className={styles.formLabel} htmlFor="editPosition">
+                  Stilling
+                </label>
+                <input
+                  className={styles.input}
+                  id="editPosition"
+                  type="text"
+                  maxLength={100}
+                  value={editForm.position}
+                  onChange={(e) =>
+                    setEditForm((f) => ({
+                      ...f,
+                      position: e.target.value,
+                    }))
+                  }
+                  placeholder="f.eks. Fuldmaegtig"
+                  disabled={!editingProfile}
+                  title={!editingProfile ? 'Profil ikke fundet for denne medarbejder' : undefined}
+                />
               </div>
 
               {formError && <div className={styles.alert}>{formError}</div>}
