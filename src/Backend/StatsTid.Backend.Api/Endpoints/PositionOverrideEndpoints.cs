@@ -25,7 +25,7 @@ public static class PositionOverrideEndpoints
         {
             var overrides = await repo.GetAllAsync(ct);
             return Results.Ok(overrides.Select(MapEntityToResponse).ToList());
-        }).RequireAuthorization("GlobalAdminOnly");
+        }).RequireAuthorization("LocalAdminOrAbove");
 
         // ═══════════════════════════════════════════
         // 2. GET /api/admin/position-overrides/{overrideId:guid} — Get single by ID
@@ -43,7 +43,7 @@ public static class PositionOverrideEndpoints
 
             context.Response.Headers.ETag = $"\"{entity.Version}\"";
             return Results.Ok(MapEntityToResponse(entity));
-        }).RequireAuthorization("GlobalAdminOnly");
+        }).RequireAuthorization("LocalAdminOrAbove");
 
         // ═══════════════════════════════════════════
         // 3. GET /api/admin/position-overrides/agreement/{agreementCode}/{okVersion} — Get by agreement
@@ -58,7 +58,7 @@ public static class PositionOverrideEndpoints
         {
             var overrides = await repo.GetByAgreementAsync(agreementCode, okVersion, ct);
             return Results.Ok(overrides.Select(MapEntityToResponse).ToList());
-        }).RequireAuthorization("GlobalAdminOnly");
+        }).RequireAuthorization("LocalAdminOrAbove");
 
         // ═══════════════════════════════════════════
         // 4. POST /api/admin/position-overrides — Create new override
@@ -153,7 +153,7 @@ public static class PositionOverrideEndpoints
             context.Response.Headers.ETag = $"\"{(created?.Version ?? 1L)}\"";
             return Results.Created($"/api/admin/position-overrides/{overrideId}",
                 created is not null ? MapEntityToResponse(created) : (object)new { overrideId });
-        }).RequireAuthorization("GlobalAdminOnly");
+        }).RequireAuthorization("LocalAdminOrAbove");
 
         // ═══════════════════════════════════════════
         // 5. PUT /api/admin/position-overrides/{overrideId:guid} — Update an active override
@@ -282,7 +282,7 @@ public static class PositionOverrideEndpoints
             // 4. Set ETag for the next If-Match and return the post-write snapshot.
             context.Response.Headers.ETag = $"\"{saveResult.Version}\"";
             return Results.Ok(MapEntityToResponse(saveResult.Override));
-        }).RequireAuthorization("GlobalAdminOnly");
+        }).RequireAuthorization("LocalAdminOrAbove");
 
         // ═══════════════════════════════════════════
         // 6. POST /api/admin/position-overrides/{overrideId:guid}/deactivate — Deactivate
@@ -382,7 +382,7 @@ public static class PositionOverrideEndpoints
                 status = saveResult.Status,
                 deactivated = true,
             });
-        }).RequireAuthorization("GlobalAdminOnly");
+        }).RequireAuthorization("LocalAdminOrAbove");
 
         // ═══════════════════════════════════════════
         // 7. POST /api/admin/position-overrides/{overrideId:guid}/activate — Activate
@@ -511,7 +511,7 @@ public static class PositionOverrideEndpoints
                 status = saveResult.Status,
                 activated = true,
             });
-        }).RequireAuthorization("GlobalAdminOnly");
+        }).RequireAuthorization("LocalAdminOrAbove");
 
         return app;
     }

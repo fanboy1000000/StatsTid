@@ -218,7 +218,7 @@ export function AgreementConfigEditor() {
     try {
       if (isNew) {
         const result = await createConfig(form)
-        navigate(`/admin/agreements/${result.configId}`, { replace: true })
+        navigate(`/global/overenskomster/${result.configId}`, { replace: true })
       } else if (configId) {
         if (!etag) {
           setError('ETag mangler — genindlaes konfigurationen.')
@@ -247,7 +247,7 @@ export function AgreementConfigEditor() {
     setStaleConflict(null)
     try {
       await publishConfig(configId, etag)
-      navigate('/admin/agreements')
+      navigate('/global/overenskomster')
     } catch (err) {
       handleMutationError(err)
     } finally {
@@ -267,7 +267,7 @@ export function AgreementConfigEditor() {
     setStaleConflict(null)
     try {
       await archiveConfig(configId, etag)
-      navigate('/admin/agreements')
+      navigate('/global/overenskomster')
     } catch (err) {
       handleMutationError(err)
     } finally {
@@ -281,7 +281,7 @@ export function AgreementConfigEditor() {
     setError(null)
     try {
       const result = await cloneConfig(configId)
-      navigate(`/admin/agreements/${result.configId}`)
+      navigate(`/global/overenskomster/${result.configId}`)
     } catch (err) {
       handleMutationError(err)
     } finally {
@@ -297,7 +297,7 @@ export function AgreementConfigEditor() {
     return (
       <div className={styles.page}>
         <div className={styles.alert}>{error}</div>
-        <button className={styles.secondaryBtn} onClick={() => navigate('/admin/agreements')}>Tilbage</button>
+        <button className={styles.secondaryBtn} onClick={() => navigate('/global/overenskomster')}>Tilbage</button>
       </div>
     )
   }
@@ -343,7 +343,7 @@ export function AgreementConfigEditor() {
               Arkiver
             </button>
           )}
-          <button className={styles.secondaryBtn} onClick={() => navigate('/admin/agreements')}>
+          <button className={styles.secondaryBtn} onClick={() => navigate('/global/overenskomster')}>
             Tilbage
           </button>
         </div>

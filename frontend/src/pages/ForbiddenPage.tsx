@@ -12,7 +12,7 @@ export function ForbiddenPage() {
           <p className={styles.message}>
             Du har ikke tilstraekkelige rettigheder til at se denne side.
           </p>
-          <Link to="/" className={styles.link}>
+          <Link to="/tid/registrering" className={styles.link}>
             Gaa til forsiden
           </Link>
         </div>

@@ -152,7 +152,7 @@ export function AgreementConfigList() {
   const [staleConflict, setStaleConflict] = useState<{ expected?: number; actual?: number } | null>(null)
 
   const handleRowClick = useCallback((configId: string) => {
-    navigate(`/admin/agreements/${configId}`)
+    navigate(`/global/overenskomster/${configId}`)
   }, [navigate])
 
   const handleCloneOpen = useCallback((e: React.MouseEvent, config: WithEtag<AgreementConfig>) => {
@@ -183,7 +183,7 @@ export function AgreementConfigList() {
       )
       handleCloneClose()
       await refetch()
-      navigate(`/admin/agreements/${result.configId}`)
+      navigate(`/global/overenskomster/${result.configId}`)
     } catch (err) {
       // S25 / TASK-2506 banner-with-retry pattern: 412 surfaces stale
       // expectedVersion/actualVersion via the thrown ConfigMutationError.
@@ -209,7 +209,7 @@ export function AgreementConfigList() {
         <h1 className={styles.title}>Overenskomster</h1>
         <button
           className={styles.createBtn}
-          onClick={() => navigate('/admin/agreements/new')}
+          onClick={() => navigate('/global/overenskomster/new')}
         >
           Opret ny
         </button>

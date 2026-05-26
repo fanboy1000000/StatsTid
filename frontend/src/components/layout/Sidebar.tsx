@@ -1,100 +1,93 @@
-import { NavLink } from 'react-router-dom'
+import { NavLink, useLocation } from 'react-router-dom'
 import { useAuth } from '../../contexts/AuthContext'
 import { hasMinRole } from '../../lib/roles'
 import styles from './Sidebar.module.css'
 
-interface NavItem {
+interface MenuItem {
   label: string
   to: string
+  minRole: string | null
 }
 
-const employeeItems: NavItem[] = [
-  { label: 'Min Tid', to: '/' },
-]
-
-const leaderItems: NavItem[] = [
-  { label: 'Godkendelser', to: '/approval' },
-  { label: 'Vikariering', to: '/delegation' },
-]
-
-const hrItems: NavItem[] = [
-  { label: 'Medarbejdere', to: '/admin/users' },
-  { label: 'Auditlog', to: '/admin/audit' },
-]
-
-const adminItems: NavItem[] = [
-  { label: 'Organisation', to: '/admin/orgs' },
-  { label: 'Projekter', to: '/admin/projects' },
-  { label: 'Roller', to: '/admin/roles' },
-  { label: 'Ledelseslinjer', to: '/admin/reporting-lines' },
-  { label: 'Lokal konfiguration', to: '/config' },
-]
-
-const globalAdminItems: NavItem[] = [
-  { label: 'Overenskomster', to: '/admin/agreements' },
-  { label: 'Lønartstilknytninger', to: '/admin/wage-type-mappings' },
-  { label: 'Positionstilpasninger', to: '/admin/position-overrides' },
-]
-
-function NavSection({ items }: { items: NavItem[] }) {
-  return (
-    <>
-      {items.map((item) => (
-        <NavLink
-          key={item.to}
-          to={item.to}
-          end={item.to === '/'}
-          className={({ isActive }) =>
-            `${styles.navLink} ${isActive ? styles.navLinkActive : ''}`
-          }
-        >
-          {item.label}
-        </NavLink>
-      ))}
-    </>
-  )
+interface TabGroup {
+  prefix: string
+  items: MenuItem[]
 }
+
+const tabGroups: TabGroup[] = [
+  {
+    prefix: '/tid',
+    items: [
+      { label: 'Registrering', to: '/tid/registrering', minRole: null },
+      { label: 'Oversigt', to: '/tid/oversigt', minRole: null },
+    ],
+  },
+  {
+    prefix: '/godkend',
+    items: [
+      { label: 'Godkendelser', to: '/godkend/godkendelser', minRole: 'LocalLeader' },
+      { label: 'Vikariering', to: '/godkend/vikariering', minRole: 'LocalLeader' },
+    ],
+  },
+  {
+    prefix: '/admin',
+    items: [
+      { label: 'Medarbejdere', to: '/admin/medarbejdere', minRole: 'LocalHR' },
+      { label: 'Audit log', to: '/admin/auditlog', minRole: 'LocalHR' },
+      { label: 'Projekter', to: '/admin/projekter', minRole: 'LocalAdmin' },
+      { label: 'Ledelseslinjer', to: '/admin/ledelseslinjer', minRole: 'LocalAdmin' },
+      { label: 'Brugerrettigheder', to: '/admin/brugerrettigheder', minRole: 'LocalAdmin' },
+    ],
+  },
+  {
+    prefix: '/lokal',
+    items: [
+      { label: 'Lokal OK konfiguration', to: '/lokal/ok-konfiguration', minRole: 'LocalAdmin' },
+      { label: 'Lokale stillingstilpasninger', to: '/lokal/stillingstilpasninger', minRole: 'LocalAdmin' },
+    ],
+  },
+  {
+    prefix: '/global',
+    items: [
+      { label: 'Overenskomster', to: '/global/overenskomster', minRole: 'GlobalAdmin' },
+      { label: 'Organisation', to: '/global/organisation', minRole: 'GlobalAdmin' },
+      { label: 'Lønartstilknytning', to: '/global/loenartstilknytning', minRole: 'GlobalAdmin' },
+    ],
+  },
+]
 
 export function Sidebar() {
   const { role } = useAuth()
+  const { pathname } = useLocation()
 
-  const showLeader = hasMinRole(role, 'LocalLeader')
-  const showHR = hasMinRole(role, 'LocalHR')
-  const showAdmin = hasMinRole(role, 'LocalAdmin')
-  const showGlobalAdmin = hasMinRole(role, 'GlobalAdmin')
+  const activeGroup = tabGroups.find((g) => pathname.startsWith(g.prefix))
+  if (!activeGroup) {
+    return (
+      <aside className={styles.sidebar}>
+        <nav className={styles.nav} />
+      </aside>
+    )
+  }
+
+  const visibleItems = activeGroup.items.filter(
+    (item) => item.minRole === null || hasMinRole(role, item.minRole),
+  )
 
   return (
     <aside className={styles.sidebar}>
       <nav className={styles.nav}>
-        <NavSection items={employeeItems} />
-
-        {showLeader && (
-          <>
-            <hr className={styles.sectionDivider} />
-            <NavSection items={leaderItems} />
-          </>
-        )}
-
-        {showHR && (
-          <>
-            <hr className={styles.sectionDivider} />
-            <NavSection items={hrItems} />
-          </>
-        )}
-
-        {showAdmin && (
-          <>
-            <hr className={styles.sectionDivider} />
-            <NavSection items={adminItems} />
-          </>
-        )}
-
-        {showGlobalAdmin && (
-          <>
-            <hr className={styles.sectionDivider} />
-            <NavSection items={globalAdminItems} />
-          </>
-        )}
+        {visibleItems.map((item) => (
+          <NavLink
+            key={item.to}
+            to={item.to}
+            end={item.to === '/tid/registrering'}
+            className={({ isActive }) =>
+              `${styles.navLink} ${isActive ? styles.navLinkActive : ''}`
+            }
+          >
+            {item.label}
+          </NavLink>
+        ))}
       </nav>
     </aside>
   )

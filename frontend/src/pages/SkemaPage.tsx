@@ -14,7 +14,7 @@ import { Badge } from '../components/ui/Badge'
 import { Alert } from '../components/ui/Alert'
 import { Spinner } from '../components/ui/Spinner'
 import { Card } from '../components/ui/Card'
-import type { QuotaError } from '../hooks/useSkema'
+import type { QuotaError, ApprovalValidationError } from '../hooks/useSkema'
 import type { SkemaRow } from '../types'
 import styles from './SkemaPage.module.css'
 
@@ -31,6 +31,20 @@ function formatQuotaError(q: QuotaError): string {
   const remaining = q.remaining.toFixed(1).replace('.', ',')
   const requested = q.requested.toFixed(1).replace('.', ',')
   return `Du har overskredet din kvote for ${label}. Du har ${remaining} dage tilbage, men forsoegte at registrere ${requested} dage.`
+}
+
+function formatDanishDate(dateStr: string): string {
+  try {
+    const d = new Date(dateStr + 'T00:00:00')
+    return d.toLocaleDateString('da-DK', { weekday: 'long', day: 'numeric', month: 'long' })
+  } catch {
+    return dateStr
+  }
+}
+
+function formatApprovalValidationError(err: ApprovalValidationError): string {
+  const daysList = err.missingDays.map(formatDanishDate).join(', ')
+  return `Ikke alle arbejdsdage er dækket (${err.coveredDays} af ${err.totalWorkdays}). Følgende dage mangler registreringer: ${daysList}`
 }
 
 const DANISH_MONTHS = [
@@ -70,7 +84,7 @@ export function SkemaPage() {
   const [year, setYear] = useState(now.getFullYear())
   const [month, setMonth] = useState(now.getMonth() + 1)
 
-  const { data, loading, error, quotaError, clearQuotaError, refetch, saveMonth, employeeApprove, submitAndApprove } = useSkema(employeeId, year, month)
+  const { data, loading, error, quotaError, approvalValidationError, clearQuotaError, clearApprovalValidationError, refetch, saveMonth, employeeApprove, submitAndApprove, reopenPeriod } = useSkema(employeeId, year, month)
   const { orgId, agreementCode } = useAuth()
   const { session, loading: timerLoading, checkIn, checkOut, sessions: timerSessions, checkInClientTime } = useTimer(employeeId)
   const { data: balanceData, loading: balanceLoading } = useBalanceSummary(employeeId, year, month)
@@ -389,6 +403,13 @@ export function SkemaPage() {
         </Alert>
       )}
 
+      {/* Approval validation error (422 — uncovered workdays) */}
+      {approvalValidationError && (
+        <Alert variant="error" onDismiss={clearApprovalValidationError}>
+          {formatApprovalValidationError(approvalValidationError)}
+        </Alert>
+      )}
+
       {/* Skema grid */}
       <Card>
         <SkemaGrid
@@ -409,7 +430,7 @@ export function SkemaPage() {
         <ApprovalFooter
           approval={data?.approval ?? null}
           onApprove={handleApprove}
-          onRefetch={refetch}
+          onReopen={reopenPeriod}
           approving={approving}
         />
       </div>
@@ -435,11 +456,23 @@ interface ApprovalFooterProps {
     rejectionReason: string | null
   } | null
   onApprove: () => void
-  onRefetch: () => void
+  onReopen: (periodId: string) => Promise<void>
   approving?: boolean
 }
 
-function ApprovalFooter({ approval, onApprove, onRefetch, approving }: ApprovalFooterProps) {
+function ApprovalFooter({ approval, onApprove, onReopen, approving }: ApprovalFooterProps) {
+  const [reopening, setReopening] = useState(false)
+
+  const handleReopen = useCallback(async () => {
+    if (!approval?.periodId) return
+    setReopening(true)
+    try {
+      await onReopen(approval.periodId)
+    } finally {
+      setReopening(false)
+    }
+  }, [approval?.periodId, onReopen])
+
   if (!approval || approval.status === 'DRAFT') {
     return (
       <div className={styles.footerContent}>
@@ -458,13 +491,16 @@ function ApprovalFooter({ approval, onApprove, onRefetch, approving }: ApprovalF
   if (approval.status === 'EMPLOYEE_APPROVED') {
     return (
       <div className={styles.footerContent}>
-        <Badge variant="info">Godkendt af dig</Badge>
-        <span className={styles.footerText}>Afventer leder</span>
+        <Badge variant="info">Indsendt</Badge>
+        <span className={styles.footerText}>Afventer leder godkendelse</span>
         {approval.managerDeadline && (
           <span className={styles.deadline}>
             Lederfrist: {formatDeadline(approval.managerDeadline)}
           </span>
         )}
+        <Button variant="secondary" onClick={handleReopen} disabled={reopening}>
+          {reopening ? 'Genåbner...' : 'Genåbn'}
+        </Button>
       </div>
     )
   }
@@ -483,8 +519,8 @@ function ApprovalFooter({ approval, onApprove, onRefetch, approving }: ApprovalF
         <Alert variant="error">
           Afvist: {approval.rejectionReason ?? 'Ingen begrundelse'}
         </Alert>
-        <Button variant="secondary" onClick={onRefetch}>
-          Genaabn
+        <Button variant="primary" onClick={onApprove} disabled={approving}>
+          {approving ? 'Godkender...' : 'Godkend maaned'}
         </Button>
       </div>
     )

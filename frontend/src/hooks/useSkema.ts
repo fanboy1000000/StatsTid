@@ -8,16 +8,25 @@ export interface QuotaError {
   requested: number
 }
 
+export interface ApprovalValidationError {
+  missingDays: string[]
+  coveredDays: number
+  totalWorkdays: number
+}
+
 interface UseSkemaResult {
   data: SkemaMonthData | null
   loading: boolean
   error: string | null
   quotaError: QuotaError | null
+  approvalValidationError: ApprovalValidationError | null
   clearQuotaError: () => void
+  clearApprovalValidationError: () => void
   refetch: () => void
   saveMonth: (cells: { rowKey: string; date: string; hours: number | null }[]) => Promise<void>
   employeeApprove: (periodId: string) => Promise<void>
   submitAndApprove: (orgId: string, agreementCode: string) => Promise<void>
+  reopenPeriod: (periodId: string) => Promise<void>
 }
 
 export function useSkema(employeeId: string, year: number, month: number): UseSkemaResult {
@@ -25,6 +34,7 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [quotaError, setQuotaError] = useState<QuotaError | null>(null)
+  const [approvalValidationError, setApprovalValidationError] = useState<ApprovalValidationError | null>(null)
 
   const fetchData = useCallback(async () => {
     setLoading(true)
@@ -45,6 +55,7 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
   }, [fetchData])
 
   const clearQuotaError = useCallback(() => setQuotaError(null), [])
+  const clearApprovalValidationError = useCallback(() => setApprovalValidationError(null), [])
 
   const saveMonth = useCallback(
     async (cells: { rowKey: string; date: string; hours: number | null }[]) => {
@@ -90,6 +101,7 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
 
   const submitAndApprove = useCallback(
     async (orgId: string, agreementCode: string) => {
+      setApprovalValidationError(null)
       const periodStart = `${year}-${String(month).padStart(2, '0')}-01`
       const lastDay = new Date(year, month, 0).getDate()
       const periodEnd = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
@@ -115,11 +127,42 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
       if (approveResult.ok) {
         await fetchData()
       } else {
+        if (approveResult.status === 422) {
+          try {
+            const body = JSON.parse(approveResult.error)
+            if (body.missingDays && Array.isArray(body.missingDays)) {
+              setApprovalValidationError({
+                missingDays: body.missingDays,
+                coveredDays: body.coveredDays ?? 0,
+                totalWorkdays: body.totalWorkdays ?? 0,
+              })
+              // Still refetch so the grid shows current state (period was created but not approved)
+              await fetchData()
+              return
+            }
+          } catch {
+            // Not valid JSON, fall through to generic error
+          }
+        }
         setError(approveResult.error)
+        // Refetch even on error — the period may have been created (SUBMITTED) before approve failed
+        await fetchData()
       }
     },
     [employeeId, year, month, fetchData]
   )
 
-  return { data, loading, error, quotaError, clearQuotaError, refetch: fetchData, saveMonth, employeeApprove, submitAndApprove }
+  const reopenPeriod = useCallback(
+    async (periodId: string) => {
+      const result = await apiClient.post<void>(`/api/approval/${periodId}/reopen`, { reason: 'Genåbnet af medarbejder' })
+      if (result.ok) {
+        await fetchData()
+      } else {
+        setError(result.error)
+      }
+    },
+    [fetchData]
+  )
+
+  return { data, loading, error, quotaError, approvalValidationError, clearQuotaError, clearApprovalValidationError, refetch: fetchData, saveMonth, employeeApprove, submitAndApprove, reopenPeriod }
 }

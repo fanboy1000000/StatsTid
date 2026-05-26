@@ -6,6 +6,7 @@ import { RequireAuth } from './components/guards/RequireAuth'
 import { RequireRole } from './components/guards/RequireRole'
 import { LoginPage } from './pages/LoginPage'
 import { SkemaPage } from './pages/SkemaPage'
+import { OversightPlaceholder } from './pages/OversightPlaceholder'
 import { HealthDashboard } from './pages/HealthDashboard'
 import { NotFoundPage } from './pages/NotFoundPage'
 import { MyPeriods } from './pages/approval/MyPeriods'
@@ -44,50 +45,60 @@ function AppRoutes() {
       <Route
         path="/login"
         element={
-          isAuthenticated ? <Navigate to="/" replace /> : <LoginContent />
+          isAuthenticated ? <Navigate to="/tid/registrering" replace /> : <LoginContent />
         }
       />
 
       {/* Protected routes */}
       <Route element={<RequireAuth />}>
         <Route element={<AppLayout />}>
-          {/* Employee routes (all authenticated users) */}
-          <Route index element={<SkemaPage />} />
+          {/* Root redirect */}
+          <Route index element={<Navigate to="/tid/registrering" replace />} />
+
+          {/* === Min tid (Employee — all authenticated) === */}
+          <Route path="tid/registrering" element={<SkemaPage />} />
+          <Route path="tid/oversigt" element={<OversightPlaceholder />} />
+          <Route path="tid/mine-perioder" element={<MyPeriods />} />
+
+          {/* === Godkend tid (LocalLeader+) === */}
+          <Route element={<RequireRole minRole="LocalLeader" />}>
+            <Route path="godkend/godkendelser" element={<ApprovalDashboard />} />
+            <Route path="godkend/vikariering" element={<DelegationPage />} />
+          </Route>
+
+          {/* === Administration (mixed: LocalHR and LocalAdmin) === */}
+          {/* LocalHR routes */}
+          <Route element={<RequireRole minRole="LocalHR" />}>
+            <Route path="admin/medarbejdere" element={<UserManagement />} />
+            <Route path="admin/auditlog" element={<AuditLogView />} />
+          </Route>
+          {/* LocalAdmin routes within Administration */}
+          <Route element={<RequireRole minRole="LocalAdmin" />}>
+            <Route path="admin/projekter" element={<ProjectManagement />} />
+            <Route path="admin/ledelseslinjer" element={<ReportingLineTree />} />
+            <Route path="admin/brugerrettigheder" element={<RoleManagement />} />
+          </Route>
+
+          {/* === Lokale tilpasninger (LocalAdmin+) === */}
+          <Route element={<RequireRole minRole="LocalAdmin" />}>
+            <Route path="lokal/ok-konfiguration" element={<ConfigManagement />} />
+            <Route path="lokal/stillingstilpasninger" element={<PositionOverrideManagement />} />
+          </Route>
+
+          {/* === Global administration (GlobalAdmin) === */}
+          <Route element={<RequireRole minRole="GlobalAdmin" />}>
+            <Route path="global/overenskomster" element={<AgreementConfigList />} />
+            <Route path="global/overenskomster/new" element={<AgreementConfigEditor />} />
+            <Route path="global/overenskomster/:configId" element={<AgreementConfigEditor />} />
+            <Route path="global/organisation" element={<OrgManagement />} />
+            <Route path="global/loenartstilknytning" element={<WageTypeMappingManagement />} />
+            <Route path="global/entitlement-configs" element={<Navigate to="/global/overenskomster" replace />} />
+          </Route>
+
+          {/* Health (Employee, hidden from nav) */}
           <Route path="health" element={<HealthDashboard />} />
 
-          {/* Approval routes */}
-          <Route path="approval/mine" element={<MyPeriods />} />
-
-          {/* Leader routes */}
-          <Route element={<RequireRole minRole="LocalLeader" />}>
-            <Route path="approval" element={<ApprovalDashboard />} />
-            <Route path="delegation" element={<DelegationPage />} />
-          </Route>
-
-          {/* HR routes */}
-          <Route element={<RequireRole minRole="LocalHR" />}>
-            <Route path="admin/users" element={<UserManagement />} />
-            <Route path="admin/audit" element={<AuditLogView />} />
-          </Route>
-
-          {/* Admin routes */}
-          <Route element={<RequireRole minRole="LocalAdmin" />}>
-            <Route path="admin/orgs" element={<OrgManagement />} />
-            <Route path="admin/roles" element={<RoleManagement />} />
-            <Route path="admin/projects" element={<ProjectManagement />} />
-            <Route path="admin/reporting-lines" element={<ReportingLineTree />} />
-            <Route path="config" element={<ConfigManagement />} />
-          </Route>
-
-          {/* GlobalAdmin routes */}
-          <Route element={<RequireRole minRole="GlobalAdmin" />}>
-            <Route path="admin/agreements" element={<AgreementConfigList />} />
-            <Route path="admin/agreements/:configId" element={<AgreementConfigEditor />} />
-            <Route path="admin/position-overrides" element={<PositionOverrideManagement />} />
-            <Route path="admin/wage-type-mappings" element={<WageTypeMappingManagement />} />
-            <Route path="admin/entitlement-configs" element={<Navigate to="/admin/agreements" replace />} />
-          </Route>
-
+          {/* Catch-all */}
           <Route path="*" element={<NotFoundPage />} />
         </Route>
       </Route>

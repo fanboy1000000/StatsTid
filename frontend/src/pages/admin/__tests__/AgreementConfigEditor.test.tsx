@@ -80,9 +80,9 @@ beforeEach(() => {
 
 function renderEditor() {
   return render(
-    <MemoryRouter initialEntries={['/admin/agreements/11111111-1111-1111-1111-111111111111']}>
+    <MemoryRouter initialEntries={['/global/overenskomster/11111111-1111-1111-1111-111111111111']}>
       <Routes>
-        <Route path="/admin/agreements/:configId" element={<AgreementConfigEditor />} />
+        <Route path="/global/overenskomster/:configId" element={<AgreementConfigEditor />} />
       </Routes>
     </MemoryRouter>,
   )

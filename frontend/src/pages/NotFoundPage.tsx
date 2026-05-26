@@ -12,7 +12,7 @@ export function NotFoundPage() {
           <p className={styles.message}>
             Den side du leder efter findes ikke eller er blevet flyttet.
           </p>
-          <Link to="/" className={styles.link}>
+          <Link to="/tid/registrering" className={styles.link}>
             Gaa til forsiden
           </Link>
         </div>
