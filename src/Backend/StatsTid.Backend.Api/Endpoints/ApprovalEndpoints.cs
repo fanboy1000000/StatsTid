@@ -437,7 +437,8 @@ public static class ApprovalEndpoints
                     periodEnd = p.PeriodEnd,
                     periodType = p.PeriodType,
                     status = p.Status,
-                    submittedAt = p.SubmittedAt
+                    submittedAt = p.SubmittedAt,
+                    agreementCode = p.AgreementCode
                 }).ToList();
 
                 return Results.Ok(myResult);
@@ -489,7 +490,107 @@ public static class ApprovalEndpoints
                 periodEnd = p.PeriodEnd,
                 periodType = p.PeriodType,
                 status = p.Status,
-                submittedAt = p.SubmittedAt
+                submittedAt = p.SubmittedAt,
+                agreementCode = p.AgreementCode
+            }).ToList();
+
+            return Results.Ok(result);
+        }).RequireAuthorization("LeaderOrAbove");
+
+        // ── Get Periods by Month ──
+
+        app.MapGet("/api/approval/by-month", async (
+            [FromQuery] int year,
+            [FromQuery] int month,
+            [FromQuery(Name = "my-reports")] bool? myReports,
+            ApprovalPeriodRepository approvalRepo,
+            ReportingLineRepository reportingLineRepo,
+            OrganizationRepository orgRepo,
+            OrgScopeValidator scopeValidator,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            if (year < 2020 || year > 2100)
+                return Results.BadRequest(new { error = "Invalid year. Must be between 2020 and 2100." });
+            if (month < 1 || month > 12)
+                return Results.BadRequest(new { error = "Invalid month. Must be between 1 and 12." });
+
+            var actor = context.GetActorContext();
+
+            if (actor.Scopes is null || actor.Scopes.Length == 0)
+                return Results.Json(new { error = "Access denied", reason = "No scopes assigned" }, statusCode: 403);
+
+            // When my-reports=true, return only periods for employees where the actor
+            // is the designated approver (ACTING-precedence), intersected with org scope.
+            if (myReports == true)
+            {
+                var myReportPeriods = await approvalRepo.GetByMonthForDesignatedReportsAsync(
+                    actor.ActorId!, actor.Scopes, year, month, ct);
+
+                var myResult = myReportPeriods.Select(p => new
+                {
+                    periodId = p.PeriodId,
+                    employeeId = p.EmployeeId,
+                    orgId = p.OrgId,
+                    periodStart = p.PeriodStart,
+                    periodEnd = p.PeriodEnd,
+                    periodType = p.PeriodType,
+                    status = p.Status,
+                    submittedAt = p.SubmittedAt,
+                    agreementCode = p.AgreementCode
+                }).ToList();
+
+                return Results.Ok(myResult);
+            }
+
+            var allPeriods = new List<ApprovalPeriod>();
+            var seenIds = new HashSet<Guid>();
+
+            foreach (var scope in actor.Scopes)
+            {
+                IReadOnlyList<ApprovalPeriod> scopePeriods;
+
+                if (scope.ScopeType == "GLOBAL")
+                {
+                    // GLOBAL scope: get all periods (use "/" as root path prefix)
+                    scopePeriods = await approvalRepo.GetByMonthAndOrgPathAsync("/", year, month, ct);
+                }
+                else if (scope.ScopeType == "ORG_AND_DESCENDANTS" && scope.OrgId is not null)
+                {
+                    // Get the scope org's materialized path, then query by path prefix
+                    var scopeOrg = await orgRepo.GetByIdAsync(scope.OrgId, ct);
+                    if (scopeOrg is null) continue;
+                    scopePeriods = await approvalRepo.GetByMonthAndOrgPathAsync(scopeOrg.MaterializedPath, year, month, ct);
+                }
+                else if (scope.ScopeType == "ORG_ONLY" && scope.OrgId is not null)
+                {
+                    // ORG_ONLY: get periods for that specific org
+                    scopePeriods = await approvalRepo.GetByMonthAndOrgAsync(scope.OrgId, year, month, ct);
+                }
+                else
+                {
+                    continue;
+                }
+
+                // Deduplicate across scopes
+                foreach (var period in scopePeriods)
+                {
+                    if (seenIds.Add(period.PeriodId))
+                        allPeriods.Add(period);
+                }
+            }
+
+            var result = allPeriods.Select(p => new
+            {
+                periodId = p.PeriodId,
+                employeeId = p.EmployeeId,
+                orgId = p.OrgId,
+                periodStart = p.PeriodStart,
+                periodEnd = p.PeriodEnd,
+                periodType = p.PeriodType,
+                status = p.Status,
+                submittedAt = p.SubmittedAt,
+                agreementCode = p.AgreementCode
             }).ToList();
 
             return Results.Ok(result);
@@ -714,14 +815,28 @@ public static class ApprovalEndpoints
             if (period is null)
                 return Results.NotFound(new { error = "Period not found" });
 
-            // Validate actor scope covers the period's org
-            var (allowed2, reason2) = await scopeValidator.ValidateOrgAccessAsync(actor, period.OrgId, ct);
-            if (!allowed2)
-                return Results.Json(new { error = "Access denied", reason = reason2 }, statusCode: 403);
+            var isEmployee = actor.ActorRole == StatsTidRoles.Employee;
 
-            // Only EMPLOYEE_APPROVED periods can be reopened (not APPROVED — once manager approves it's final)
-            if (period.Status != "EMPLOYEE_APPROVED")
-                return Results.Conflict(new { error = $"Cannot reopen period with status {period.Status}. Only EMPLOYEE_APPROVED periods can be reopened." });
+            if (isEmployee)
+            {
+                // Employee can only reopen own EMPLOYEE_APPROVED period
+                var (allowed2, reason2) = await scopeValidator.ValidateEmployeeAccessAsync(actor, period.EmployeeId, ct);
+                if (!allowed2)
+                    return Results.Json(new { error = "Access denied", reason = reason2 }, statusCode: 403);
+
+                if (period.Status != "EMPLOYEE_APPROVED")
+                    return Results.Json(new { error = "Access denied", reason = "Employee can only reopen EMPLOYEE_APPROVED periods" }, statusCode: 403);
+            }
+            else
+            {
+                // Leader+: validate org scope, allow EMPLOYEE_APPROVED or APPROVED
+                var (allowed2, reason2) = await scopeValidator.ValidateOrgAccessAsync(actor, period.OrgId, ct);
+                if (!allowed2)
+                    return Results.Json(new { error = "Access denied", reason = reason2 }, statusCode: 403);
+
+                if (period.Status is not ("EMPLOYEE_APPROVED" or "APPROVED"))
+                    return Results.Conflict(new { error = $"Cannot reopen period with status {period.Status}. Only EMPLOYEE_APPROVED or APPROVED periods can be reopened." });
+            }
 
             // Atomic state-change + audit + outbox enqueue (ADR-018 D3).
             await using var conn = connectionFactory.Create();
@@ -729,11 +844,12 @@ public static class ApprovalEndpoints
             await using var tx = await conn.BeginTransactionAsync(ct);
 
             // Transition back to DRAFT
+            var previousStatus = period.Status;
             await approvalRepo.UpdateStatusAsync(conn, tx, periodId, "DRAFT", actor.ActorId, ct: ct);
 
             // Write audit trail (in-tx).
             await approvalRepo.AppendAuditAsync(
-                conn, tx, periodId, "REOPENED", actor.ActorId!, actor.ActorRole ?? StatsTidRoles.LocalLeader,
+                conn, tx, periodId, "REOPENED", actor.ActorId!, actor.ActorRole ?? StatsTidRoles.Employee,
                 request.Reason, ct);
 
             // Enqueue PeriodReopened event in the same transaction.
@@ -746,6 +862,7 @@ public static class ApprovalEndpoints
                 PeriodStart = period.PeriodStart,
                 PeriodEnd = period.PeriodEnd,
                 Reason = request.Reason,
+                PreviousStatus = previousStatus,
                 ActorId = actor.ActorId,
                 ActorRole = actor.ActorRole,
                 CorrelationId = actor.CorrelationId
@@ -768,7 +885,7 @@ public static class ApprovalEndpoints
             await tx.CommitAsync(ct);
 
             return Results.Ok(new { periodId, status = "DRAFT" });
-        }).RequireAuthorization("LeaderOrAbove");
+        }).RequireAuthorization("EmployeeOrAbove");
 
         return app;
     }

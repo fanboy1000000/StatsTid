@@ -95,3 +95,51 @@ export function usePendingMyReports() {
 
   return { periods, loading, error, fetchPendingMyReports }
 }
+
+export function useApprovalsByMonth(year: number, month: number) {
+  const [periods, setPeriods] = useState<ApprovalPeriod[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const fetchByMonth = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    const result = await apiClient.get<ApprovalPeriod[]>(
+      `/api/approval/by-month?year=${year}&month=${month}`
+    )
+    if (result.ok) {
+      setPeriods(result.data)
+    } else {
+      setError(result.error)
+    }
+    setLoading(false)
+  }, [year, month])
+
+  useEffect(() => { fetchByMonth() }, [fetchByMonth])
+
+  return { periods, loading, error, refetch: fetchByMonth }
+}
+
+export function useMyReportsByMonth(year: number, month: number) {
+  const [periods, setPeriods] = useState<ApprovalPeriod[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const fetchByMonth = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    const result = await apiClient.get<ApprovalPeriod[]>(
+      `/api/approval/by-month?year=${year}&month=${month}&my-reports=true`
+    )
+    if (result.ok) {
+      setPeriods(result.data)
+    } else {
+      setError(result.error)
+    }
+    setLoading(false)
+  }, [year, month])
+
+  useEffect(() => { fetchByMonth() }, [fetchByMonth])
+
+  return { periods, loading, error, refetch: fetchByMonth }
+}

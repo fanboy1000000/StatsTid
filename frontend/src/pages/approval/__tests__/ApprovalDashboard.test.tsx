@@ -7,6 +7,21 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ApprovalDashboard } from '../ApprovalDashboard'
 
+// Mock useAuth to provide role without needing AuthProvider
+vi.mock('../../../contexts/AuthContext', () => ({
+  useAuth: () => ({
+    token: 'test-token',
+    user: { employeeId: 'EMP_SELF', role: 'LocalLeader' },
+    role: 'LocalLeader',
+    orgId: 'ORG1',
+    agreementCode: 'AC',
+    scopes: [],
+    isAuthenticated: true,
+    login: vi.fn(),
+    logout: vi.fn(),
+  }),
+}))
+
 const mockFetch = vi.fn()
 vi.stubGlobal('fetch', mockFetch)
 
@@ -102,8 +117,8 @@ function jsonResponse(body: unknown, status = 200) {
 
 /**
  * Queue the two initial fetch calls that fire on mount:
- *   1. usePendingApprovals  -> GET /api/approval/pending
- *   2. usePendingMyReports  -> GET /api/approval/pending?my-reports=true
+ *   1. useApprovalsByMonth   -> GET /api/approval/by-month?year=X&month=Y
+ *   2. useMyReportsByMonth   -> GET /api/approval/by-month?year=X&month=Y&my-reports=true
  *
  * The order these hooks fire is deterministic (both useEffect callbacks run
  * in declaration order during the same commit phase). We use mockImplementation
@@ -120,7 +135,7 @@ function mockInitialFetches(
     if (typeof url === 'string' && url.includes('my-reports=true')) {
       return jsonResponse(myReportData)
     }
-    if (typeof url === 'string' && url.includes('/api/approval/pending')) {
+    if (typeof url === 'string' && url.includes('/api/approval/by-month')) {
       return jsonResponse(allData)
     }
     // Compliance endpoint — return empty result
@@ -180,13 +195,13 @@ describe('ApprovalDashboard', () => {
     const alleTab = screen.getByText(/Alle i omraade/)
     fireEvent.click(alleTab)
 
-    // Both hooks fire on mount, so /api/approval/pending (without my-reports)
+    // Both hooks fire on mount, so /api/approval/by-month (without my-reports)
     // should have been called
     await waitFor(() => {
       const pendingCalls = mockFetch.mock.calls.filter(
         (call: unknown[]) => {
           const url = call[0] as string
-          return url.includes('/api/approval/pending') && !url.includes('my-reports')
+          return url.includes('/api/approval/by-month') && !url.includes('my-reports')
         },
       )
       expect(pendingCalls.length).toBeGreaterThanOrEqual(1)
@@ -234,7 +249,7 @@ describe('ApprovalDashboard', () => {
       if (typeof url === 'string' && url.includes('my-reports=true')) {
         return jsonResponse(mockMyReportPeriods)
       }
-      if (typeof url === 'string' && url.includes('/api/approval/pending')) {
+      if (typeof url === 'string' && url.includes('/api/approval/by-month')) {
         return jsonResponse(mockAllPeriods)
       }
       if (typeof url === 'string' && url.includes('/api/compliance/')) {
@@ -285,7 +300,7 @@ describe('ApprovalDashboard', () => {
       if (typeof url === 'string' && url.includes('my-reports=true')) {
         return jsonResponse(mockMyReportPeriods)
       }
-      if (typeof url === 'string' && url.includes('/api/approval/pending')) {
+      if (typeof url === 'string' && url.includes('/api/approval/by-month')) {
         return jsonResponse(mockAllPeriods)
       }
       if (typeof url === 'string' && url.includes('/api/compliance/')) {

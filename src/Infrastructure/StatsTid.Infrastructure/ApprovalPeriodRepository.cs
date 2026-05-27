@@ -73,6 +73,145 @@ public sealed class ApprovalPeriodRepository
         return await ReadPeriodsAsync(cmd, ct);
     }
 
+    public async Task<IReadOnlyList<ApprovalPeriod>> GetByMonthAndOrgPathAsync(
+        string orgPathPrefix, int year, int month, CancellationToken ct = default)
+    {
+        await using var conn = _connectionFactory.Create();
+        await conn.OpenAsync(ct);
+        var monthStart = new DateOnly(year, month, 1);
+        var nextMonthStart = monthStart.AddMonths(1);
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT ap.* FROM approval_periods ap
+            JOIN organizations o ON ap.org_id = o.org_id
+            WHERE o.materialized_path LIKE @pathPrefix AND ap.period_start < @nextMonthStart AND ap.period_end >= @monthStart
+            ORDER BY ap.period_start
+            """, conn);
+        cmd.Parameters.AddWithValue("pathPrefix", orgPathPrefix + "%");
+        cmd.Parameters.AddWithValue("monthStart", monthStart);
+        cmd.Parameters.AddWithValue("nextMonthStart", nextMonthStart);
+        return await ReadPeriodsAsync(cmd, ct);
+    }
+
+    public async Task<IReadOnlyList<ApprovalPeriod>> GetByMonthAndOrgAsync(
+        string orgId, int year, int month, CancellationToken ct = default)
+    {
+        await using var conn = _connectionFactory.Create();
+        await conn.OpenAsync(ct);
+        var monthStart = new DateOnly(year, month, 1);
+        var nextMonthStart = monthStart.AddMonths(1);
+        await using var cmd = new NpgsqlCommand(
+            "SELECT * FROM approval_periods WHERE org_id = @orgId AND period_start < @nextMonthStart AND period_end >= @monthStart ORDER BY period_start", conn);
+        cmd.Parameters.AddWithValue("orgId", orgId);
+        cmd.Parameters.AddWithValue("monthStart", monthStart);
+        cmd.Parameters.AddWithValue("nextMonthStart", nextMonthStart);
+        return await ReadPeriodsAsync(cmd, ct);
+    }
+
+    /// <summary>
+    /// Returns approval periods (any status) for a given month for employees where the
+    /// given actor is the designated approver (ACTING-precedence), intersected with the
+    /// actor's org scope.
+    /// </summary>
+    public async Task<List<ApprovalPeriod>> GetByMonthForDesignatedReportsAsync(
+        string actorId, IReadOnlyList<RoleScope> actorScopes, int year, int month, CancellationToken ct = default)
+    {
+        await using var conn = _connectionFactory.Create();
+        await conn.OpenAsync(ct);
+
+        var monthStart = new DateOnly(year, month, 1);
+        var nextMonthStart = monthStart.AddMonths(1);
+
+        // Build org-scope filter dynamically from actorScopes.
+        var hasGlobal = actorScopes.Any(s => s.ScopeType == "GLOBAL");
+        var orgScopeClause = "";
+        var orgParams = new List<NpgsqlParameter>();
+
+        if (!hasGlobal)
+        {
+            var conditions = new List<string>();
+            var paramIndex = 0;
+
+            foreach (var scope in actorScopes)
+            {
+                if (scope.OrgId is null) continue;
+
+                if (scope.ScopeType == "ORG_AND_DESCENDANTS")
+                {
+                    var paramName = $"@scopeOrgId_{paramIndex}";
+                    conditions.Add($"o.materialized_path LIKE (SELECT materialized_path FROM organizations WHERE org_id = {paramName}) || '%'");
+                    orgParams.Add(new NpgsqlParameter($"scopeOrgId_{paramIndex}", scope.OrgId));
+                    paramIndex++;
+                }
+                else if (scope.ScopeType == "ORG_ONLY")
+                {
+                    var paramName = $"@orgId_{paramIndex}";
+                    conditions.Add($"o.org_id = {paramName}");
+                    orgParams.Add(new NpgsqlParameter($"orgId_{paramIndex}", scope.OrgId));
+                    paramIndex++;
+                }
+            }
+
+            if (conditions.Count == 0)
+                return new List<ApprovalPeriod>(); // No org coverage → no results.
+
+            orgScopeClause = $"AND ({string.Join(" OR ", conditions)})";
+        }
+
+        var sql = $"""
+            WITH RECURSIVE managed_employees AS (
+                -- Direct reports (where actor is designated approver per ACTING-precedence)
+                SELECT rl.employee_id
+                FROM reporting_lines rl
+                LEFT JOIN reporting_lines acting ON acting.employee_id = rl.employee_id
+                    AND acting.relationship = 'ACTING'
+                    AND acting.effective_to IS NULL
+                WHERE rl.manager_id = @actorId
+                  AND rl.effective_to IS NULL
+                  AND (
+                      rl.relationship = 'ACTING'
+                      OR (rl.relationship = 'PRIMARY' AND acting.reporting_line_id IS NULL)
+                  )
+                UNION
+                -- Transitive reports (reports of reports, following ACTING-precedence chain)
+                SELECT rl2.employee_id
+                FROM reporting_lines rl2
+                JOIN managed_employees me ON rl2.manager_id = me.employee_id
+                LEFT JOIN reporting_lines acting2 ON acting2.employee_id = rl2.employee_id
+                    AND acting2.relationship = 'ACTING'
+                    AND acting2.effective_to IS NULL
+                WHERE rl2.effective_to IS NULL
+                  AND (
+                      rl2.relationship = 'ACTING' AND rl2.manager_id = me.employee_id
+                      OR (rl2.relationship = 'PRIMARY' AND acting2.reporting_line_id IS NULL)
+                  )
+            )
+            SELECT DISTINCT ap.* FROM approval_periods ap
+            JOIN managed_employees me ON me.employee_id = ap.employee_id
+            JOIN organizations o ON o.org_id = ap.org_id
+            WHERE ap.period_start < @nextMonthStart AND ap.period_end >= @monthStart
+              {orgScopeClause}
+            ORDER BY ap.period_start
+            """;
+
+        // CA2100 suppression: orgScopeClause is constructed entirely from RoleScope enum values
+        // and parameterized placeholders (@pathPrefix_N, @orgId_N); no user input is string-concatenated.
+#pragma warning disable CA2100
+        await using var cmd = new NpgsqlCommand(sql, conn);
+#pragma warning restore CA2100
+        cmd.Parameters.AddWithValue("actorId", actorId);
+        cmd.Parameters.AddWithValue("monthStart", monthStart);
+        cmd.Parameters.AddWithValue("nextMonthStart", nextMonthStart);
+        foreach (var p in orgParams)
+            cmd.Parameters.Add(p);
+
+        var periods = new List<ApprovalPeriod>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            periods.Add(ReadPeriod(reader));
+        return periods;
+    }
+
     /// <summary>
     /// Returns pending approval periods for employees where the given actor is the
     /// designated approver (ACTING-precedence), intersected with the actor's org scope.

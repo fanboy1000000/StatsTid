@@ -9,4 +9,5 @@ public sealed class PeriodReopened : DomainEventBase
     public required DateOnly PeriodStart { get; init; }
     public required DateOnly PeriodEnd { get; init; }
     public string? Reason { get; init; }
+    public string? PreviousStatus { get; init; }
 }

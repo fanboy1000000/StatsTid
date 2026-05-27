@@ -1,9 +1,14 @@
-import { useState, useEffect, useCallback } from 'react'
-import { usePendingApprovals, usePendingMyReports } from '../../hooks/useApprovals'
+import React, { useState, useCallback } from 'react'
+import { useApprovalsByMonth, useMyReportsByMonth } from '../../hooks/useApprovals'
+import { useAuth } from '../../contexts/AuthContext'
+import { hasMinRole } from '../../lib/roles'
+import { formatMonthLabel } from '../../lib/locale'
 import { apiClient } from '../../lib/api'
 import { Tabs } from '../../components/ui/Tabs'
+import { Button } from '../../components/ui/Button'
+import { Badge } from '../../components/ui/Badge'
+import { ApprovalDetailPanel } from './ApprovalDetailPanel'
 import type { ApprovalPeriod } from '../../types'
-import type { ComplianceCheckResult } from '../../hooks/useCompliance'
 import styles from './ApprovalDashboard.module.css'
 
 function formatDate(dateStr: string | null): string {
@@ -20,27 +25,51 @@ const PERIOD_TYPE_LABELS: Record<string, string> = {
   MONTHLY: 'Maanedlig',
 }
 
-interface PendingTableProps {
+interface PeriodsTableProps {
   periods: ApprovalPeriod[]
   loading: boolean
   error: string | null
-  complianceMap: Record<string, ComplianceCheckResult>
   approvingId: string | null
+  reopeningId: string | null
+  userRole: string | null
   onApprove: (periodId: string) => void
   onReject: (period: ApprovalPeriod) => void
+  onReopen: (periodId: string) => void
 }
 
-function PendingTable({
+function PeriodsTable({
   periods,
   loading,
   error,
-  complianceMap,
   approvingId,
+  reopeningId,
+  userRole,
   onApprove,
   onReject,
-}: PendingTableProps) {
+  onReopen,
+}: PeriodsTableProps) {
+  const STATUS_LABELS: Record<string, string> = {
+    DRAFT: 'Kladde',
+    SUBMITTED: 'Indsendt',
+    EMPLOYEE_APPROVED: 'Medarb. godkendt',
+    APPROVED: 'Godkendt',
+    REJECTED: 'Afvist',
+  }
+
+  const STATUS_VARIANTS: Record<string, 'default' | 'success' | 'error' | 'warning' | 'info'> = {
+    DRAFT: 'default',
+    SUBMITTED: 'info',
+    EMPLOYEE_APPROVED: 'info',
+    APPROVED: 'success',
+    REJECTED: 'error',
+  }
+
+  const [expandedPeriodId, setExpandedPeriodId] = useState<string | null>(null)
+  const toggleExpand = (periodId: string) =>
+    setExpandedPeriodId(prev => (prev === periodId ? null : periodId))
+
   if (loading) {
-    return <div className={styles.spinner}>Henter ventende perioder...</div>
+    return <div className={styles.spinner}>Henter perioder...</div>
   }
 
   if (error) {
@@ -48,53 +77,78 @@ function PendingTable({
   }
 
   if (periods.length === 0) {
-    return <p className={styles.emptyState}>Ingen ventende perioder.</p>
+    return <p className={styles.emptyState}>Ingen perioder for denne maaned.</p>
   }
 
   return (
     <table className={styles.table}>
       <thead>
         <tr>
+          <th className={styles.expandCell}></th>
           <th>Medarbejder</th>
           <th>Organisation</th>
           <th>Periode</th>
           <th>Type</th>
           <th>Overenskomst</th>
-          <th>Indsendt</th>
-          <th>Compliance</th>
+          <th>Status</th>
           <th>Handlinger</th>
         </tr>
       </thead>
       <tbody>
         {periods.map(p => (
-          <tr key={p.periodId}>
-            <td>{p.employeeId}</td>
-            <td>{p.orgId}</td>
-            <td>{formatDate(p.periodStart)} &ndash; {formatDate(p.periodEnd)}</td>
-            <td>{PERIOD_TYPE_LABELS[p.periodType] ?? p.periodType}</td>
-            <td>{p.agreementCode}</td>
-            <td>{formatDate(p.submittedAt)}</td>
-            <td>
-              <ComplianceBadge result={complianceMap[p.periodId] ?? null} />
-            </td>
-            <td>
-              <div className={styles.actionCell}>
-                <button
-                  className={styles.approveButton}
-                  onClick={() => onApprove(p.periodId)}
-                  disabled={approvingId === p.periodId}
-                >
-                  {approvingId === p.periodId ? 'Godkender...' : 'Godkend'}
-                </button>
-                <button
-                  className={styles.rejectButton}
-                  onClick={() => onReject(p)}
-                >
-                  Afvis
-                </button>
-              </div>
-            </td>
-          </tr>
+          <React.Fragment key={p.periodId}>
+            <tr
+              className={`${styles.periodRow}${expandedPeriodId === p.periodId ? ` ${styles.periodRowExpanded}` : ''}`}
+              onClick={() => toggleExpand(p.periodId)}
+            >
+              <td className={styles.expandCell}>
+                {expandedPeriodId === p.periodId ? '▾' : '▸'}
+              </td>
+              <td>{p.employeeId}</td>
+              <td>{p.orgId}</td>
+              <td>{formatDate(p.periodStart)} &ndash; {formatDate(p.periodEnd)}</td>
+              <td>{PERIOD_TYPE_LABELS[p.periodType] ?? p.periodType}</td>
+              <td>{p.agreementCode}</td>
+              <td><Badge variant={STATUS_VARIANTS[p.status] ?? 'default'}>{STATUS_LABELS[p.status] ?? p.status}</Badge></td>
+              <td>
+                <div className={styles.actionCell}>
+                  {(p.status === 'SUBMITTED' || p.status === 'EMPLOYEE_APPROVED') && (
+                    <>
+                      <button
+                        className={styles.approveButton}
+                        onClick={e => { e.stopPropagation(); onApprove(p.periodId) }}
+                        disabled={approvingId === p.periodId}
+                      >
+                        {approvingId === p.periodId ? 'Godkender...' : 'Godkend'}
+                      </button>
+                      <button
+                        className={styles.rejectButton}
+                        onClick={e => { e.stopPropagation(); onReject(p) }}
+                      >
+                        Afvis
+                      </button>
+                    </>
+                  )}
+                  {p.status === 'APPROVED' && hasMinRole(userRole, 'LocalHR') && (
+                    <button
+                      className={styles.reopenButton}
+                      onClick={e => { e.stopPropagation(); onReopen(p.periodId) }}
+                      disabled={reopeningId === p.periodId}
+                    >
+                      {reopeningId === p.periodId ? 'Genåbner...' : 'Genåbn'}
+                    </button>
+                  )}
+                </div>
+              </td>
+            </tr>
+            {expandedPeriodId === p.periodId && (
+              <tr className={styles.detailRow}>
+                <td colSpan={8}>
+                  <ApprovalDetailPanel period={p} />
+                </td>
+              </tr>
+            )}
+          </React.Fragment>
         ))}
       </tbody>
     </table>
@@ -102,19 +156,24 @@ function PendingTable({
 }
 
 export function ApprovalDashboard() {
+  const { role } = useAuth()
+  const now = new Date()
+  const [year, setYear] = useState(now.getFullYear())
+  const [month, setMonth] = useState(now.getMonth() + 1)
+
   const {
     periods: allPeriods,
     loading: allLoading,
     error: allError,
-    fetchPending: fetchAll,
-  } = usePendingApprovals()
+    refetch: fetchAll,
+  } = useApprovalsByMonth(year, month)
 
   const {
     periods: myReportPeriods,
     loading: myReportsLoading,
     error: myReportsError,
-    fetchPendingMyReports,
-  } = usePendingMyReports()
+    refetch: fetchPendingMyReports,
+  } = useMyReportsByMonth(year, month)
 
   const [toast, setToast] = useState<{ message: string; variant: 'success' | 'error' } | null>(null)
 
@@ -135,49 +194,36 @@ export function ApprovalDashboard() {
   } | null>(null)
   const [enforcementConfirming, setEnforcementConfirming] = useState(false)
 
-  // Compliance results per period — shared across both tabs
-  const [complianceMap, setComplianceMap] = useState<Record<string, ComplianceCheckResult>>({})
-
   const showToast = useCallback((message: string, variant: 'success' | 'error') => {
     setToast({ message, variant })
     setTimeout(() => setToast(null), 4000)
   }, [])
 
-  // Merge periods from both sources for compliance fetching (deduplicate by periodId)
-  const allUniquePeriods = [...allPeriods, ...myReportPeriods].reduce<ApprovalPeriod[]>(
-    (acc, p) => {
-      if (!acc.some(existing => existing.periodId === p.periodId)) {
-        acc.push(p)
-      }
-      return acc
-    },
-    [],
-  )
-
-  // Fetch compliance for each unique pending period
-  useEffect(() => {
-    async function fetchCompliance() {
-      const results: Record<string, ComplianceCheckResult> = {}
-      for (const p of allUniquePeriods) {
-        try {
-          const start = new Date(p.periodStart)
-          const result = await apiClient.get<ComplianceCheckResult>(
-            `/api/compliance/${p.employeeId}/period?year=${start.getFullYear()}&month=${start.getMonth() + 1}`,
-          )
-          if (result.ok) {
-            results[p.periodId] = result.data
-          }
-        } catch { /* ignore */ }
-      }
-      setComplianceMap(results)
-    }
-    if (allUniquePeriods.length > 0) fetchCompliance()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allPeriods, myReportPeriods])
-
   const refreshAll = useCallback(async () => {
     await Promise.all([fetchAll(), fetchPendingMyReports()])
   }, [fetchAll, fetchPendingMyReports])
+
+  const goToPrevMonth = useCallback(() => {
+    setMonth(prev => { if (prev === 1) { setYear(y => y - 1); return 12 } return prev - 1 })
+  }, [])
+  const goToNextMonth = useCallback(() => {
+    setMonth(prev => { if (prev === 12) { setYear(y => y + 1); return 1 } return prev + 1 })
+  }, [])
+
+  const [reopeningId, setReopeningId] = useState<string | null>(null)
+  const handleReopen = async (periodId: string) => {
+    setReopeningId(periodId)
+    try {
+      const result = await apiClient.post<unknown>(`/api/approval/${periodId}/reopen`, { reason: 'Genåbnet af leder' })
+      if (!result.ok) throw new Error(result.error)
+      showToast('Periode genåbnet.', 'success')
+      await refreshAll()
+    } catch (e) {
+      showToast(String(e instanceof Error ? e.message : e), 'error')
+    } finally {
+      setReopeningId(null)
+    }
+  }
 
   const handleApprove = async (periodId: string, confirmFallback?: boolean) => {
     setApprovingId(periodId)
@@ -284,14 +330,16 @@ export function ApprovalDashboard() {
       value: 'my-reports',
       label: `Mine medarbejdere (${myReportPeriods.length})`,
       content: (
-        <PendingTable
+        <PeriodsTable
           periods={myReportPeriods}
           loading={myReportsLoading}
           error={myReportsError}
-          complianceMap={complianceMap}
           approvingId={approvingId}
+          reopeningId={reopeningId}
+          userRole={role}
           onApprove={handleApprove}
           onReject={openRejectDialog}
+          onReopen={handleReopen}
         />
       ),
     },
@@ -299,14 +347,16 @@ export function ApprovalDashboard() {
       value: 'all',
       label: `Alle i omraade (${allPeriods.length})`,
       content: (
-        <PendingTable
+        <PeriodsTable
           periods={allPeriods}
           loading={allLoading}
           error={allError}
-          complianceMap={complianceMap}
           approvingId={approvingId}
+          reopeningId={reopeningId}
+          userRole={role}
           onApprove={handleApprove}
           onReject={openRejectDialog}
+          onReopen={handleReopen}
         />
       ),
     },
@@ -314,7 +364,11 @@ export function ApprovalDashboard() {
 
   return (
     <div className={styles.page}>
-      <h2 className={styles.pageTitle}>Godkendelser</h2>
+      <div className={styles.monthNav}>
+        <Button variant="ghost" size="sm" onClick={goToPrevMonth}>&larr; Forrige</Button>
+        <h2 className={styles.monthTitle}>{formatMonthLabel(year, month)}</h2>
+        <Button variant="ghost" size="sm" onClick={goToNextMonth}>Naeste &rarr;</Button>
+      </div>
 
       {toast && (
         <div className={toast.variant === 'success' ? styles.alertSuccess : styles.alert}>
@@ -400,23 +454,3 @@ export function ApprovalDashboard() {
   )
 }
 
-function ComplianceBadge({ result }: { result: ComplianceCheckResult | null }) {
-  if (!result) {
-    return <span className={styles.complianceLoading}>...</span>
-  }
-  if (result.violations.length > 0) {
-    return (
-      <span className={styles.complianceViolation} title={`${result.violations.length} overtraedelse(r)`}>
-        {result.violations.length} overtr.
-      </span>
-    )
-  }
-  if (result.warnings.length > 0) {
-    return (
-      <span className={styles.complianceWarning} title={`${result.warnings.length} advarsel(er)`}>
-        {result.warnings.length} adv.
-      </span>
-    )
-  }
-  return <span className={styles.complianceOk}>OK</span>
-}

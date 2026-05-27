@@ -250,3 +250,9 @@
 .today {
   background-color: var(--color-info-light);
 }
+
+.gridReadOnly {
+  opacity: 0.6;
+  pointer-events: none;
+  user-select: none;
+}

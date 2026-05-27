@@ -10,6 +10,8 @@ import { ProjectPicker } from '../components/ProjectPicker'
 import { useBalanceSummary } from '../hooks/useBalanceSummary'
 import { useCompliance } from '../hooks/useCompliance'
 import { Button } from '../components/ui/Button'
+import { hasMinRole } from '../lib/roles'
+import { formatMonthLabel } from '../lib/locale'
 import { Badge } from '../components/ui/Badge'
 import { Alert } from '../components/ui/Alert'
 import { Spinner } from '../components/ui/Spinner'
@@ -45,15 +47,6 @@ function formatDanishDate(dateStr: string): string {
 function formatApprovalValidationError(err: ApprovalValidationError): string {
   const daysList = err.missingDays.map(formatDanishDate).join(', ')
   return `Ikke alle arbejdsdage er dækket (${err.coveredDays} af ${err.totalWorkdays}). Følgende dage mangler registreringer: ${daysList}`
-}
-
-const DANISH_MONTHS = [
-  'Januar', 'Februar', 'Marts', 'April', 'Maj', 'Juni',
-  'Juli', 'August', 'September', 'Oktober', 'November', 'December',
-]
-
-function formatMonthLabel(year: number, month: number): string {
-  return `${DANISH_MONTHS[month - 1]} ${year}`
 }
 
 function formatDeadline(dateStr: string | null): string {
@@ -103,12 +96,12 @@ export function SkemaPage() {
     }
     const cells = new Map<string, number>()
     for (const entry of data.entries) {
-      if (entry.hours > 0) {
+      if (entry.hours !== 0) {
         cells.set(`${entry.projectCode}:${entry.date}`, entry.hours)
       }
     }
     for (const absence of data.absences) {
-      if (absence.hours > 0) {
+      if (absence.hours !== 0) {
         cells.set(`${absence.absenceType}:${absence.date}`, absence.hours)
       }
     }
@@ -316,6 +309,20 @@ export function SkemaPage() {
   const [projectPickerOpen, setProjectPickerOpen] = useState(false)
 
   const handleApprove = useCallback(async () => {
+    clearApprovalValidationError()
+
+    // Flush any pending debounced saves before approving
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current)
+      saveTimerRef.current = null
+    }
+    const pending = [...pendingChangesRef.current]
+    pendingChangesRef.current = []
+    if (pending.length > 0) {
+      const saved = await saveMonth(pending)
+      if (!saved) return
+    }
+
     setApproving(true)
     try {
       if (data?.approval?.periodId) {
@@ -326,7 +333,7 @@ export function SkemaPage() {
     } finally {
       setApproving(false)
     }
-  }, [data, employeeApprove, submitAndApprove, orgId, agreementCode])
+  }, [data, employeeApprove, submitAndApprove, orgId, agreementCode, saveMonth, clearApprovalValidationError])
 
   if (loading && !data) {
     return (
@@ -456,24 +463,26 @@ interface ApprovalFooterProps {
     rejectionReason: string | null
   } | null
   onApprove: () => void
-  onReopen: (periodId: string) => Promise<void>
+  onReopen: (periodId: string, reason?: string) => Promise<void>
   approving?: boolean
 }
 
 function ApprovalFooter({ approval, onApprove, onReopen, approving }: ApprovalFooterProps) {
   const [reopening, setReopening] = useState(false)
+  const { role } = useAuth()
 
   const handleReopen = useCallback(async () => {
     if (!approval?.periodId) return
     setReopening(true)
     try {
-      await onReopen(approval.periodId)
+      const reason = approval.status === 'APPROVED' ? 'Genåbnet af leder' : undefined
+      await onReopen(approval.periodId, reason)
     } finally {
       setReopening(false)
     }
-  }, [approval?.periodId, onReopen])
+  }, [approval?.periodId, approval?.status, onReopen])
 
-  if (!approval || approval.status === 'DRAFT') {
+  if (!approval || approval.status === 'DRAFT' || approval.status === 'SUBMITTED') {
     return (
       <div className={styles.footerContent}>
         {approval?.employeeDeadline && (
@@ -506,9 +515,15 @@ function ApprovalFooter({ approval, onApprove, onReopen, approving }: ApprovalFo
   }
 
   if (approval.status === 'APPROVED') {
+    const canReopen = hasMinRole(role, 'LocalLeader')
     return (
       <div className={styles.footerContent}>
         <Badge variant="success">Godkendt</Badge>
+        {canReopen && (
+          <Button variant="secondary" onClick={handleReopen} disabled={reopening}>
+            {reopening ? 'Genåbner...' : 'Genåbn'}
+          </Button>
+        )}
       </div>
     )
   }

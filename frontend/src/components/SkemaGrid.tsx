@@ -249,7 +249,7 @@ export function SkemaGrid({
 
   return (
     <>
-      <div className={styles.gridWrapper}>
+      <div className={`${styles.gridWrapper} ${readOnly ? styles.gridReadOnly : ''}`}>
         <table className={styles.grid}>
           <thead>
             <tr>
@@ -322,7 +322,7 @@ export function SkemaGrid({
                   return (
                     <td key={dateKey} className={`${styles.cell} ${getColumnClass(day)}`}>
                       {readOnly ? (
-                        <span className={styles.cellDisplay}>{val ? val : ''}</span>
+                        <span className={styles.cellDisplay}>{val != null ? val : ''}</span>
                       ) : (
                         <input
                           type="number"
@@ -359,7 +359,7 @@ export function SkemaGrid({
                   return (
                     <td key={dateKey} className={`${styles.cell} ${getColumnClass(day)}`}>
                       {readOnly ? (
-                        <span className={styles.cellDisplay}>{val ? val : ''}</span>
+                        <span className={styles.cellDisplay}>{val != null ? val : ''}</span>
                       ) : (
                         <input
                           type="number"
