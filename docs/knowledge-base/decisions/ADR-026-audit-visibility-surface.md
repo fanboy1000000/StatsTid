@@ -185,7 +185,7 @@ Events NOT audit-relevant (no projection; reduces storage):
 
 - `TimeEntryRegistered` (S1/S5) — too high volume; visible via `time_entries_projection` (S27); audit-relevant transitions captured at approval boundary
 - `AbsenceRegistered` (S2) — too high volume; covered by `absences_projection` (S27)
-- `TimerCheckedIn` / `TimerCheckedOut` (S9) — operational; not auditable user action
+- `TimerCheckedIn` / `TimerCheckedOut` (S9) — operational; not auditable user action. **Timer write path RETIRED in S56 (ADR-028 D5); these event types are retained in EventSerializer (deserialize-only) for historical replay — no new emission.**
 - `NormCheckCompleted` / `FlexBalanceUpdated` / `SupplementCalculated` / `OvertimeCalculated` / `PeriodCalculationCompleted` / `OvertimeCompensationApplied` (rule-engine internals) — calculation mechanics
 - `RestPeriodViolationDetected` / `CompensatoryRestGranted` (S16) — compliance flags; future revisit if tenant audits demand
 - `IntegrationDeliveryTracked` (S5) — outbox delivery telemetry

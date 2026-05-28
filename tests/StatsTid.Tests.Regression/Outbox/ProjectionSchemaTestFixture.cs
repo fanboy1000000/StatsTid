@@ -4,7 +4,8 @@ namespace StatsTid.Tests.Regression.Outbox;
 
 /// <summary>
 /// SQL DDL extension for the S27 / TASK-2702 projection tables
-/// (<c>time_entries_projection</c> + <c>absences_projection</c>). Layered on top of
+/// (<c>time_entries_projection</c> + <c>absences_projection</c>) plus the S56 /
+/// TASK-5603 <c>work_time_projection</c> table. Layered on top of
 /// <see cref="Segmentation.TestFixtures.DockerHarness.SchemaDdl"/> +
 /// <see cref="OutboxTestSchema"/> for the S27 / TASK-2710 atomic-projection,
 /// publisher-stall RYW, parity, and backfill tests.
@@ -63,6 +64,23 @@ internal static class ProjectionSchemaTestFixture
             ON absences_projection(employee_id, date, outbox_id);
         CREATE INDEX IF NOT EXISTS idx_absences_proj_emp_outbox
             ON absences_projection(employee_id, outbox_id);
+
+        -- S56 TASK-5603 work_time_projection: LATEST-WINS read-model keyed
+        -- (employee_id, date). Mirrors init.sql:1551-1562 byte-for-byte for the
+        -- covered columns. Backs the Skema workTime round-trip, approval-survival,
+        -- backfill-replay, and allocation-gate tests.
+        CREATE TABLE IF NOT EXISTS work_time_projection (
+            employee_id     TEXT            NOT NULL,
+            date            DATE            NOT NULL,
+            intervals       JSONB           NOT NULL DEFAULT '[]'::jsonb,
+            manual_hours    NUMERIC(8,4)    NOT NULL DEFAULT 0,
+            occurred_at     TIMESTAMPTZ     NOT NULL,
+            actor_id        TEXT,
+            actor_role      TEXT,
+            correlation_id  UUID,
+            outbox_id       BIGINT          NOT NULL,
+            PRIMARY KEY (employee_id, date)
+        );
 
         -- entitlement_balances reused by Skema bundle-rollback + multi-absence quota
         -- breach tests (Slot 2 + Slot 3). Mirrors init.sql:1108-1119. Idempotent.

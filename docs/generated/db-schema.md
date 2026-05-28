@@ -459,27 +459,31 @@ Purpose: Project codes configurable per org unit for time registration.
 
 Introduced: Sprint 9
 
-### timer_sessions
+### work_time_projection
 
-Purpose: Check-in/check-out timer for automatic arrival/departure tracking.
+Purpose: Read-path projection for self-recorded "Arbejdstid" work time (Min Tid), fed by the
+`WorkTimeRegistered` event (ADR-028 D1, ADR-018 D13 sync-in-tx). LATEST-WINS aggregate — one row per
+(employee, date); re-saving a day emits a superseding event and the projection holds the latest state.
 
 | Column | Type | Constraints |
 |--------|------|-------------|
-| session_id | UUID | PRIMARY KEY DEFAULT gen_random_uuid() |
 | employee_id | TEXT | NOT NULL |
 | date | DATE | NOT NULL |
-| check_in_at | TIMESTAMPTZ | NOT NULL |
-| check_out_at | TIMESTAMPTZ | |
-| is_active | BOOLEAN | NOT NULL DEFAULT TRUE |
-| created_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
+| intervals | JSONB | NOT NULL DEFAULT '[]'::jsonb — `[{"start":"HH:mm","end":"HH:mm"}]` |
+| manual_hours | NUMERIC(8,4) | NOT NULL DEFAULT 0 — "Tilføj timer" direct daily hours |
+| occurred_at | TIMESTAMPTZ | NOT NULL |
+| actor_id | TEXT | |
+| actor_role | TEXT | |
+| correlation_id | UUID | |
+| outbox_id | BIGINT | NOT NULL — event ordering / latest-wins guard |
 
-**Unique constraint**: (employee_id, date)
+**Primary key**: (employee_id, date) — also serves month-range reads (employee_id + date BETWEEN)
 
-**Indexes**:
-- idx_timer_employee ON timer_sessions(employee_id)
-- idx_timer_active ON timer_sessions(is_active) WHERE is_active = TRUE (partial)
+Introduced: Sprint 56
 
-Introduced: Sprint 9
+> **Retired (Sprint 56, ADR-028 D5)**: `timer_sessions` (introduced S9) was DROPPED. The check-in/out
+> timer write path was removed; self-recorded work time now lives in `work_time_projection`. The
+> `TimerCheckedIn`/`TimerCheckedOut` events remain registered in EventSerializer for historical replay.
 
 ### absence_type_visibility
 

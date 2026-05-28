@@ -933,17 +933,14 @@ CREATE TABLE IF NOT EXISTS user_project_selections (
 );
 CREATE INDEX IF NOT EXISTS idx_user_project_sel_employee ON user_project_selections(employee_id);
 
-CREATE TABLE IF NOT EXISTS timer_sessions (
-    session_id      UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    employee_id     TEXT        NOT NULL,
-    date            DATE        NOT NULL,
-    check_in_at     TIMESTAMPTZ NOT NULL,
-    check_out_at    TIMESTAMPTZ,
-    is_active       BOOLEAN     NOT NULL DEFAULT TRUE,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_timer_employee ON timer_sessions(employee_id);
-CREATE INDEX IF NOT EXISTS idx_timer_active ON timer_sessions(is_active) WHERE is_active = TRUE;
+-- SPRINT 56 (TASK-5602B): timer feature retired. The check-in/out timer write path
+-- (the /api/timer/* endpoints + TimerSessionRepository) was removed; self-recorded work
+-- time now lives in work_time_projection (above). This DROP is idempotent — a no-op on a
+-- fresh DB (table never created) and a cleanup on existing deployments. Co-landed with the
+-- TASK-5605 code removal after a grep-zero check that no code references timer_sessions.
+-- NOTE: TimerCheckedIn/TimerCheckedOut events are RETAINED in EventSerializer for historical
+-- event replay/backfill (append-only store) — only the table + live write path are dropped.
+DROP TABLE IF EXISTS timer_sessions;
 
 CREATE TABLE IF NOT EXISTS absence_type_visibility (
     id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1542,6 +1539,28 @@ CREATE INDEX IF NOT EXISTS idx_absences_proj_emp_date_outbox
     ON absences_projection(employee_id, date, outbox_id);
 CREATE INDEX IF NOT EXISTS idx_absences_proj_emp_outbox
     ON absences_projection(employee_id, outbox_id);
+
+-- ============================================================
+-- SPRINT 56 (TASK-5602A): Self-recorded work-time projection
+-- ============================================================
+-- Read-path projection for "Arbejdstid" self-recorded work time, fed by WorkTimeRegistered
+-- (ADR-018 D13 sync-in-tx). Unlike time_entries_projection (append-per-event), this is a
+-- LATEST-WINS aggregate per (employee_id, date): re-saving a day emits a NEW superseding event,
+-- and the projection holds only the latest state. outbox_id carries event ordering so a stale
+-- event never overwrites a newer one (apply only when incoming outbox_id >= stored).
+CREATE TABLE IF NOT EXISTS work_time_projection (
+    employee_id     TEXT            NOT NULL,
+    date            DATE            NOT NULL,
+    intervals       JSONB           NOT NULL DEFAULT '[]'::jsonb,  -- [{ "start":"HH:mm", "end":"HH:mm" }, ...]
+    manual_hours    NUMERIC(8,4)    NOT NULL DEFAULT 0,            -- "Tilføj timer" direct daily hours
+    occurred_at     TIMESTAMPTZ     NOT NULL,
+    actor_id        TEXT,
+    actor_role      TEXT,
+    correlation_id  UUID,
+    outbox_id       BIGINT          NOT NULL,                      -- event ordering / latest-wins guard
+    PRIMARY KEY (employee_id, date)
+);
+-- PK (employee_id, date) already serves month-range reads (employee_id + date BETWEEN).
 
 -- ============================================================
 -- SPRINT 17: Overtime Governance & Compensation Model

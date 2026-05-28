@@ -13,6 +13,46 @@ namespace StatsTid.Backend.Api.Endpoints;
 
 public static class ApprovalEndpoints
 {
+    /// <summary>
+    /// Single shared tolerance for the TASK-5604 allocation-reconciliation gate.
+    /// worked and allocated are both rounded to 2 decimals BEFORE comparing; at
+    /// that scale the smallest real mismatch is 0.01, so a &lt; 0.005 threshold
+    /// treats only pure rounding noise as balanced (7.40 vs 7.4 passes) while a
+    /// genuine 0.01 mismatch blocks the approval.
+    /// </summary>
+    private const decimal AllocationTolerance = 0.005m;
+
+    /// <summary>
+    /// Sums work-interval hours for a day, mirroring the frontend grid calc
+    /// (SkemaGrid.tsx <c>calcIntervalHours</c>): each {start,end} is parsed as a
+    /// wall-clock "HH:mm" / "HH:mm:ss" string into seconds, only positive
+    /// (end - start) deltas are counted, and the total is converted to hours.
+    /// </summary>
+    private static decimal SumIntervalHours(IReadOnlyList<WorkInterval> intervals)
+    {
+        long totalSec = 0;
+        foreach (var iv in intervals)
+        {
+            if (string.IsNullOrEmpty(iv.Start) || string.IsNullOrEmpty(iv.End))
+                continue;
+            var startSec = ParseToSeconds(iv.Start);
+            var endSec = ParseToSeconds(iv.End);
+            var diff = endSec - startSec;
+            if (diff > 0)
+                totalSec += diff;
+        }
+        return totalSec / 3600m;
+    }
+
+    private static long ParseToSeconds(string hhmmss)
+    {
+        var parts = hhmmss.Split(':');
+        long h = parts.Length > 0 ? long.Parse(parts[0]) : 0;
+        long m = parts.Length > 1 ? long.Parse(parts[1]) : 0;
+        long s = parts.Length > 2 ? long.Parse(parts[2]) : 0;
+        return h * 3600 + m * 60 + s;
+    }
+
     public static WebApplication MapApprovalEndpoints(this WebApplication app)
     {
         // ── Submit Period ──
@@ -652,6 +692,7 @@ public static class ApprovalEndpoints
             DbConnectionFactory connectionFactory,
             TimeEntryProjectionRepository timeEntryRepo,
             AbsenceProjectionRepository absenceRepo,
+            WorkTimeProjectionRepository workTimeRepo,
             IOutboxEnqueue outbox,
             IAuditProjectionMapper<PeriodEmployeeApproved> auditMapper,
             AuditProjectionRepository auditRepo,
@@ -738,6 +779,68 @@ public static class ApprovalEndpoints
                     missingDays = uncoveredDays.Select(d => d.ToString("yyyy-MM-dd")).ToList(),
                     coveredDays = coveredCount,
                     totalWorkdays = expectedWorkdays.Count,
+                });
+            }
+
+            // ── Allocation-reconciliation gate (TASK-5604) ──
+            // HARD precondition ALONGSIDE coverage: for EVERY day in the period,
+            // the recorded worked hours (work_time_projection: interval hours +
+            // manual_hours) must match the allocated project hours (NORMAL time
+            // entries with a non-null TaskId) within rounding tolerance. This is
+            // a deterministic, read-only check on projections — no events, no
+            // rule-engine call (P2). Absences are excluded (not in time_entries).
+            // The NORMAL + non-null-TaskId allowlist mirrors the grid's allocation
+            // predicate so this backend gate and the frontend "Ikke fordelt" row
+            // agree (historical activity_type='timer' and null-TaskId rows excluded).
+
+            // worked(day): interval hours + manual_hours from work_time_projection.
+            var workTimeRows = await workTimeRepo.GetByEmployeeAndDateRangeAsync(
+                period.EmployeeId, period.PeriodStart, period.PeriodEnd, ct);
+            var workedByDay = new Dictionary<DateOnly, decimal>();
+            foreach (var row in workTimeRows)
+            {
+                var worked = SumIntervalHours(row.Intervals) + row.ManualHours;
+                workedByDay[row.Date] = workedByDay.TryGetValue(row.Date, out var existing)
+                    ? existing + worked
+                    : worked;
+            }
+
+            // allocated(day): reuse the time-entry list already loaded for the
+            // coverage check (no re-query); filter to NORMAL + non-null TaskId.
+            var allocatedByDay = new Dictionary<DateOnly, decimal>();
+            foreach (var entry in timeEntries)
+            {
+                if (entry.ActivityType != "NORMAL" || entry.TaskId is null)
+                    continue;
+                allocatedByDay[entry.Date] = allocatedByDay.TryGetValue(entry.Date, out var existing)
+                    ? existing + entry.Hours
+                    : entry.Hours;
+            }
+
+            // Compare every day that has either worked or allocated hours. Days
+            // with worked==0 AND allocated==0 are implicitly balanced (skipped).
+            var unbalancedDays = new List<object>();
+            foreach (var day in workedByDay.Keys.Union(allocatedByDay.Keys).OrderBy(d => d))
+            {
+                var worked = Math.Round(workedByDay.GetValueOrDefault(day), 2);
+                var allocated = Math.Round(allocatedByDay.GetValueOrDefault(day), 2);
+                if (Math.Abs(worked - allocated) < AllocationTolerance)
+                    continue;
+                unbalancedDays.Add(new
+                {
+                    date = day.ToString("yyyy-MM-dd"),
+                    worked,
+                    allocated,
+                    direction = worked > allocated ? "under" : "over",
+                });
+            }
+
+            if (unbalancedDays.Count > 0)
+            {
+                return Results.UnprocessableEntity(new
+                {
+                    kind = "allocation",
+                    unbalancedDays,
                 });
             }
 

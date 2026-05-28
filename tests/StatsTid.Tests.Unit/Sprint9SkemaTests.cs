@@ -6,7 +6,7 @@ namespace StatsTid.Tests.Unit;
 
 /// <summary>
 /// Tests for Sprint 9: Skema (monthly spreadsheet) feature.
-/// Covers: Project model, TimerSession model, two-step approval state machine,
+/// Covers: Project model, two-step approval state machine,
 /// Skema composite endpoint response shape, and event serialization roundtrips
 /// for PeriodEmployeeApproved, PeriodReopened, TimerCheckedIn, TimerCheckedOut.
 /// </summary>
@@ -163,93 +163,11 @@ public class Sprint9SkemaTests
     }
 
     // ---------------------------------------------------------------
-    // 2. Timer session tests
+    // 2. (Removed) Timer session model tests — S56 removed the timer write
+    //    path (endpoints + TimerSessionRepository + timer_sessions table).
+    //    The TimerCheckedIn/TimerCheckedOut EVENT round-trip tests are
+    //    retained in section 5 (events kept for deserialize-only).
     // ---------------------------------------------------------------
-
-    [Fact]
-    public void TimerSession_CheckIn_CreatesActiveSession()
-    {
-        var now = DateTime.UtcNow;
-        var session = new TimerSession
-        {
-            SessionId = Guid.NewGuid(),
-            EmployeeId = "EMP001",
-            Date = DateOnly.FromDateTime(now),
-            CheckInAt = now,
-            IsActive = true
-        };
-
-        Assert.True(session.IsActive);
-        Assert.Equal("EMP001", session.EmployeeId);
-        Assert.Equal(DateOnly.FromDateTime(now), session.Date);
-        Assert.Null(session.CheckOutAt);
-    }
-
-    [Fact]
-    public void TimerSession_CheckOut_CalculatesClockedHours()
-    {
-        var checkIn = new DateTime(2026, 3, 5, 8, 0, 0, DateTimeKind.Utc);
-        var checkOut = new DateTime(2026, 3, 5, 16, 30, 0, DateTimeKind.Utc);
-
-        var clockedHours = Math.Round((decimal)(checkOut - checkIn).TotalHours, 2);
-
-        Assert.Equal(8.50m, clockedHours);
-    }
-
-    [Fact]
-    public void TimerSession_CheckOut_SetsInactive()
-    {
-        var checkIn = new DateTime(2026, 3, 5, 8, 0, 0, DateTimeKind.Utc);
-        var checkOut = new DateTime(2026, 3, 5, 16, 0, 0, DateTimeKind.Utc);
-
-        // After check-out, the session is stored with IsActive = false
-        var completedSession = new TimerSession
-        {
-            SessionId = Guid.NewGuid(),
-            EmployeeId = "EMP001",
-            Date = DateOnly.FromDateTime(checkIn),
-            CheckInAt = checkIn,
-            CheckOutAt = checkOut,
-            IsActive = false
-        };
-
-        Assert.False(completedSession.IsActive);
-        Assert.NotNull(completedSession.CheckOutAt);
-        Assert.Equal(checkOut, completedSession.CheckOutAt);
-    }
-
-    [Fact]
-    public void TimerSession_DuplicateCheckIn_PreventsDouble()
-    {
-        // One active session per employee — simulate by checking existing session
-        var existingSession = new TimerSession
-        {
-            SessionId = Guid.NewGuid(),
-            EmployeeId = "EMP001",
-            Date = DateOnly.FromDateTime(DateTime.UtcNow),
-            CheckInAt = DateTime.UtcNow.AddHours(-1),
-            IsActive = true
-        };
-
-        // If an active session exists, the endpoint returns Conflict
-        // Simulate the duplicate prevention check
-        Assert.True(existingSession.IsActive);
-        Assert.Equal("EMP001", existingSession.EmployeeId);
-
-        // A second check-in attempt should detect the existing active session
-        var hasActiveSession = existingSession is { IsActive: true };
-        Assert.True(hasActiveSession);
-    }
-
-    [Fact]
-    public void TimerSession_CheckOut_WithoutCheckIn_Returns404()
-    {
-        // When no active session exists, the endpoint returns NotFound
-        TimerSession? activeSession = null;
-
-        Assert.Null(activeSession);
-        // The endpoint checks: if (session is null) return Results.NotFound(...)
-    }
 
     // ---------------------------------------------------------------
     // 3. Two-step approval state machine tests
@@ -560,19 +478,6 @@ public class Sprint9SkemaTests
 
         Assert.Equal(2, visibleAbsenceTypes.Count);
         Assert.DoesNotContain("CARE_DAY", visibleAbsenceTypes);
-
-        // Timer session
-        var timerSession = new TimerSession
-        {
-            SessionId = Guid.NewGuid(),
-            EmployeeId = "EMP001",
-            Date = new DateOnly(2026, 3, 5),
-            CheckInAt = new DateTime(2026, 3, 5, 8, 0, 0, DateTimeKind.Utc),
-            IsActive = true
-        };
-
-        Assert.NotNull(timerSession);
-        Assert.True(timerSession.IsActive);
 
         // Approval
         var approval = new ApprovalPeriod
@@ -917,5 +822,46 @@ public class Sprint9SkemaTests
         Assert.Equal(new DateOnly(2026, 3, 5), rt4.Date);
         Assert.Equal(8.0m, rt4.ClockedHours);
         Assert.Equal(originalTimerCheckedOut.CheckOutAt, rt4.CheckOutAt);
+    }
+
+    /// <summary>
+    /// S56 / TASK-5603: WorkTimeRegistered round-trips through the
+    /// EventSerializer — the interval list (start/end strings) and the
+    /// manual-hours scalar survive serialize → deserialize. This is the event
+    /// the Skema save path enqueues and the backfill replays into
+    /// work_time_projection, so its fidelity is load-bearing.
+    /// </summary>
+    [Fact]
+    public void EventSerializer_WorkTimeRegistered_RoundTrips()
+    {
+        var original = new WorkTimeRegistered
+        {
+            EventId = Guid.NewGuid(),
+            OccurredAt = new DateTime(2026, 3, 5, 8, 0, 0, DateTimeKind.Utc),
+            EmployeeId = "EMP001",
+            Date = new DateOnly(2026, 3, 5),
+            Intervals = new[]
+            {
+                new WorkInterval { Start = "08:00", End = "12:00" },
+                new WorkInterval { Start = "12:30", End = "16:00" },
+            },
+            ManualHours = 0.5m,
+            ActorId = "EMP001",
+            ActorRole = "Employee",
+        };
+
+        var json = EventSerializer.Serialize(original);
+        Assert.Contains("WorkTimeRegistered", json);
+
+        var deserialized = EventSerializer.Deserialize("WorkTimeRegistered", json);
+        Assert.IsType<WorkTimeRegistered>(deserialized);
+        var rt = (WorkTimeRegistered)deserialized;
+        Assert.Equal(original.EventId, rt.EventId);
+        Assert.Equal("EMP001", rt.EmployeeId);
+        Assert.Equal(new DateOnly(2026, 3, 5), rt.Date);
+        Assert.Equal(0.5m, rt.ManualHours);
+        Assert.Collection(rt.Intervals,
+            iv => { Assert.Equal("08:00", iv.Start); Assert.Equal("12:00", iv.End); },
+            iv => { Assert.Equal("12:30", iv.Start); Assert.Equal("16:00", iv.End); });
     }
 }

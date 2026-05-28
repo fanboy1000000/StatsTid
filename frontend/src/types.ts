@@ -97,27 +97,26 @@ export interface Project {
   sortOrder: number
 }
 
-export interface TimerSessionEntry {
-  sessionId: string
-  checkInAt: string
-  checkOutAt: string | null
-  isActive: boolean
-}
-
-export interface TimerSession {
-  sessionId: string
-  employeeId: string
-  date: string
-  checkInAt: string
-  checkOutAt: string | null
-  isActive: boolean
-  sessions?: TimerSessionEntry[]
-}
-
 export interface SkemaRow {
   type: 'project' | 'absence'
   key: string
   label: string
+}
+
+export interface WorkTimeInterval {
+  start: string  // "HH:mm"
+  end: string    // "HH:mm"
+}
+
+export interface WorkTimeDay {
+  date: string  // "YYYY-MM-DD"
+  intervals: WorkTimeInterval[]
+  manualHours: number
+}
+
+export interface DailyNormDay {
+  date: string         // "YYYY-MM-DD"
+  hours: number | null // 0 on weekends; null for academic ANNUAL_ACTIVITY (render blank)
 }
 
 export interface SkemaMonthData {
@@ -128,7 +127,6 @@ export interface SkemaMonthData {
   absenceTypes: { type: string; label: string }[]
   entries: { date: string; projectCode: string; hours: number }[]
   absences: { date: string; absenceType: string; hours: number }[]
-  timerSession: TimerSession | null
   approval: {
     periodId: string
     status: string
@@ -137,5 +135,6 @@ export interface SkemaMonthData {
     employeeApprovedAt: string | null
     rejectionReason: string | null
   } | null
-  arrivalDepartures: { date: string; arrival: string | null; departure: string | null }[]
+  workTime: WorkTimeDay[]
+  dailyNorm: DailyNormDay[]
 }

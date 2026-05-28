@@ -179,8 +179,45 @@ public class EventSerializerCoverageTests
                     prop.SetValue(instance, string.Empty);
                 }
             }
+            // Non-nullable collection properties (e.g. WorkTimeRegistered.Intervals,
+            // a required IReadOnlyList<WorkInterval>) serialize to JSON null when left
+            // unset, which then fails to round-trip through a `required` initializer.
+            // Populate them with an empty collection so the minimal instance is
+            // round-trippable. Generic across closed generic collection interfaces /
+            // concrete list types so future events need no per-type handling.
+            else if (prop.GetValue(instance) is null
+                     && IsSupportedCollection(prop.PropertyType, out var emptyValue))
+            {
+                prop.SetValue(instance, emptyValue);
+            }
         }
 
         return instance;
+    }
+
+    /// <summary>
+    /// True when <paramref name="type"/> is a closed generic <c>IReadOnlyList&lt;T&gt;</c>,
+    /// <c>IList&lt;T&gt;</c>, <c>ICollection&lt;T&gt;</c>, <c>IEnumerable&lt;T&gt;</c>, or
+    /// <c>List&lt;T&gt;</c>; <paramref name="emptyValue"/> receives a fresh empty
+    /// <c>List&lt;T&gt;</c> assignable to it. Lets <see cref="ConstructMinimalInstance"/>
+    /// populate required non-nullable collection properties generically.
+    /// </summary>
+    private static bool IsSupportedCollection(Type type, out object? emptyValue)
+    {
+        emptyValue = null;
+        if (!type.IsGenericType)
+            return false;
+
+        var def = type.GetGenericTypeDefinition();
+        if (def != typeof(IReadOnlyList<>) && def != typeof(IList<>)
+            && def != typeof(ICollection<>) && def != typeof(IEnumerable<>)
+            && def != typeof(IReadOnlyCollection<>) && def != typeof(List<>))
+        {
+            return false;
+        }
+
+        var elementType = type.GetGenericArguments()[0];
+        emptyValue = Activator.CreateInstance(typeof(List<>).MakeGenericType(elementType));
+        return true;
     }
 }

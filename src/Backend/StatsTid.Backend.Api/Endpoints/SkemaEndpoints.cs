@@ -4,7 +4,10 @@ using StatsTid.Auth;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Events;
+using StatsTid.SharedKernel.Interfaces;
+using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Security;
 
 namespace StatsTid.Backend.Api.Endpoints;
@@ -108,7 +111,6 @@ public static class SkemaEndpoints
             UserAgreementCodeRepository userAgreementCodeRepo,
             ProjectRepository projectRepo,
             AbsenceTypeVisibilityRepository visibilityRepo,
-            TimerSessionRepository timerRepo,
             ApprovalPeriodRepository approvalRepo,
             // S27 TASK-2706 GET migration: Skema month reads now serve from
             // time_entries_projection + absences_projection (TASK-2702 schema,
@@ -120,6 +122,10 @@ public static class SkemaEndpoints
             // by this handler.
             TimeEntryProjectionRepository timeEntryProjectionRepo,
             AbsenceProjectionRepository absenceProjectionRepo,
+            // TASK-5603 — self-recorded work time read-model + per-day norm resolution.
+            WorkTimeProjectionRepository workTimeProjectionRepo,
+            IEmploymentProfileResolver profileResolver,
+            ConfigResolutionService configResolver,
             OrgScopeValidator scopeValidator,
             HttpContext context,
             CancellationToken ct) =>
@@ -214,19 +220,76 @@ public static class SkemaEndpoints
                 })
                 .ToList();
 
-            // Get active timer session
-            var activeTimer = await timerRepo.GetActiveByEmployeeAsync(employeeId, ct);
-            object? timerSession = activeTimer is not null
-                ? new
+            // ── TASK-5603 self-recorded work time ("Arbejdstid") ──
+            // Latest-wins per-day rows from work_time_projection (read-your-write
+            // satisfied: the atomic POST upserts in the same tx as the
+            // WorkTimeRegistered event). Intervals are already deserialized by the repo.
+            var workTimeRows = await workTimeProjectionRepo.GetByEmployeeAndDateRangeAsync(
+                employeeId, monthStart, monthEnd, ct);
+            var workTime = workTimeRows
+                .Select(w => new
                 {
-                    sessionId = activeTimer.SessionId,
-                    employeeId = activeTimer.EmployeeId,
-                    date = activeTimer.Date,
-                    checkInAt = activeTimer.CheckInAt,
-                    checkOutAt = activeTimer.CheckOutAt,
-                    isActive = activeTimer.IsActive
+                    date = w.Date,
+                    intervals = w.Intervals.Select(i => new { start = i.Start, end = i.End }).ToList(),
+                    manualHours = w.ManualHours
+                })
+                .ToList();
+
+            // ── TASK-5603 per-day norm (dailyNorm) ──
+            // PURE READ — no rule-engine HTTP call, no rule logic (P2). Resolve the
+            // employee's REAL per-day norm via the dated employment profile (per day,
+            // so a mid-month part_time_fraction change is reflected) + the merged
+            // agreement config (ConfigResolutionService → WeeklyNormHours / NormModel).
+            // OK version is resolved per day via OkVersionResolver (NOT year>=2026 — the
+            // OK24→OK26 switch is 2026-04-01). Daily norm = WeeklyNorm × fraction / 5,
+            // rounded to 2 decimals; weekends → 0. ANNUAL_ACTIVITY (academic) → null
+            // (a weekday split would be wrong — do NOT approximate).
+            //
+            // Config resolution is cached per (okVersion, agreementCode, position,
+            // fraction) within this request so we don't re-resolve the merged config for
+            // every weekday in the month.
+            var dailyNorm = new List<object>(daysInMonth);
+            var normCache = new Dictionary<string, (decimal WeeklyNormHours, NormModel NormModel)>(StringComparer.Ordinal);
+            for (var day = monthStart; day <= monthEnd; day = day.AddDays(1))
+            {
+                if (day.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
+                {
+                    dailyNorm.Add(new { date = day, hours = (decimal?)0m });
+                    continue;
                 }
-                : null;
+
+                // Dated profile for THIS day (part_time_fraction, position, agreement, org).
+                var profile = await profileResolver.GetByEmployeeIdAtAsync(employeeId, day, ct);
+                if (profile is null)
+                {
+                    // No dated profile covering this day — graceful: blank norm rather
+                    // than fabricating one (mirrors the ADR-023 D3 graceful-fallback split
+                    // for HTTP read consumers).
+                    dailyNorm.Add(new { date = day, hours = (decimal?)null });
+                    continue;
+                }
+
+                var okVersion = OkVersionResolver.ResolveVersion(day);
+                var orgId = profile.OrgId ?? user.PrimaryOrgId;
+                var cacheKey = $"{okVersion}|{profile.AgreementCode}|{profile.Position}|{profile.PartTimeFraction}|{orgId}";
+                if (!normCache.TryGetValue(cacheKey, out var resolved))
+                {
+                    var config = await configResolver.ResolveAsync(
+                        orgId, profile.AgreementCode, okVersion, profile.Position, ct);
+                    resolved = (config.WeeklyNormHours, config.NormModel);
+                    normCache[cacheKey] = resolved;
+                }
+
+                if (resolved.NormModel == NormModel.ANNUAL_ACTIVITY)
+                {
+                    // Academic annual-activity norm: a per-weekday split is not meaningful.
+                    dailyNorm.Add(new { date = day, hours = (decimal?)null });
+                    continue;
+                }
+
+                var hours = Math.Round(resolved.WeeklyNormHours * profile.PartTimeFraction / 5m, 2);
+                dailyNorm.Add(new { date = day, hours = (decimal?)hours });
+            }
 
             // Get approval period for this month
             var period = await approvalRepo.GetByEmployeeAndPeriodAsync(employeeId, monthStart, monthEnd, ct);
@@ -261,7 +324,8 @@ public static class SkemaEndpoints
                 absenceTypes,
                 entries,
                 absences,
-                timerSession,
+                workTime,
+                dailyNorm,
                 approval,
                 employeeDeadline,
                 managerDeadline
@@ -292,6 +356,7 @@ public static class SkemaEndpoints
             IOutboxEnqueue outbox,
             TimeEntryProjectionRepository timeEntryProjectionRepo,
             AbsenceProjectionRepository absenceProjectionRepo,
+            WorkTimeProjectionRepository workTimeProjectionRepo,
             OrgScopeValidator scopeValidator,
             HttpContext context,
             CancellationToken ct) =>
@@ -345,6 +410,25 @@ public static class SkemaEndpoints
             var period = await approvalRepo.GetByEmployeeAndPeriodAsync(employeeId, monthStart, monthEnd, ct);
             if (period is not null && period.Status is "EMPLOYEE_APPROVED" or "APPROVED")
                 return Results.Conflict(new { error = $"Cannot save entries for a period with status {period.Status}" });
+
+            // ── Work-time date-range validation (S56 / Step 7a BLOCKER fix) ──
+            // The approval-lock check above is scoped to the REQUESTED month. Reject any
+            // work-time day outside [monthStart, monthEnd] up front (before the tx) so that
+            // lock governs every written date. Without this, a save targeting an unlocked
+            // month could smuggle in a date belonging to an already-approved/locked month and
+            // overwrite its work_time_projection row, bypassing the period lock.
+            if (request.WorkTime is not null)
+            {
+                foreach (var day in request.WorkTime)
+                {
+                    if (day.Date < monthStart || day.Date > monthEnd)
+                        return Results.BadRequest(new
+                        {
+                            error = "work_time_date_out_of_range",
+                            message = $"Work-time date {day.Date:yyyy-MM-dd} is outside the requested period {request.Year}-{request.Month:D2}."
+                        });
+                }
+            }
 
             // ── Per-day absence validation (S47 TASK-2C) ──
             // Reject early if the request contains duplicate absence types on the same day
@@ -541,6 +625,39 @@ public static class SkemaEndpoints
                         }
                     }
 
+                    // ── TASK-5603 self-recorded work time ("Arbejdstid") ──
+                    // Dedicated branch (NOT the project-entry / absence classifier).
+                    // Each day emits a latest-wins WorkTimeRegistered event: enqueue
+                    // FIRST (allocates outbox_id), then UpsertAsync SECOND consuming that
+                    // id — same per-event ordering invariant as the time-entry branch
+                    // above, all inside the outer atomic tx (ADR-018 D3/D13). Re-saving a
+                    // day emits a NEW event; latest-wins is resolved by the projection's
+                    // outbox_id guard so a stale replay cannot clobber a newer row.
+                    if (request.WorkTime is not null)
+                    {
+                        foreach (var day in request.WorkTime)
+                        {
+                            var intervals = (day.Intervals ?? Array.Empty<SkemaWorkInterval>())
+                                .Select(i => new WorkInterval { Start = i.Start, End = i.End })
+                                .ToList();
+
+                            var @event = new WorkTimeRegistered
+                            {
+                                EmployeeId = employeeId,
+                                Date = day.Date,
+                                Intervals = intervals,
+                                ManualHours = day.ManualHours,
+                                ActorId = actor.ActorId,
+                                ActorRole = actor.ActorRole,
+                                CorrelationId = actor.CorrelationId
+                            };
+                            // Per-event ordering: enqueue FIRST (allocates outbox_id), projection SECOND.
+                            var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, @event, ct);
+                            await workTimeProjectionRepo.UpsertAsync(conn, tx, @event, outboxId, ct);
+                            savedCount++;
+                        }
+                    }
+
                     // Save absences and atomically adjust entitlement balances.
                     if (request.Absences is not null)
                     {
@@ -667,6 +784,13 @@ public static class SkemaEndpoints
         public required int Month { get; init; }
         public SkemaEntry[]? Entries { get; init; }
         public SkemaAbsence[]? Absences { get; init; }
+
+        // TASK-5603 — optional self-recorded work-time block ("Arbejdstid").
+        // Routed through a DEDICATED handler branch (NOT the project-entry /
+        // absence classifier). Each day emits a latest-wins WorkTimeRegistered
+        // event; re-saving a day supersedes the prior row via the projection's
+        // outbox_id guard.
+        public SkemaWorkTimeDay[]? WorkTime { get; init; }
     }
 
     private sealed class SkemaEntry
@@ -674,6 +798,23 @@ public static class SkemaEndpoints
         public required DateOnly Date { get; init; }
         public required string ProjectCode { get; init; }
         public required decimal Hours { get; init; }
+    }
+
+    // TASK-5603 — one day's self-recorded work time: a list of wall-clock
+    // intervals plus a manual daily-hours scalar. Mirrors the
+    // WorkTimeRegistered event shape (EmployeeId is taken from the route, not
+    // the body, so it cannot be spoofed).
+    private sealed class SkemaWorkTimeDay
+    {
+        public required DateOnly Date { get; init; }
+        public SkemaWorkInterval[]? Intervals { get; init; }
+        public decimal ManualHours { get; init; }
+    }
+
+    private sealed class SkemaWorkInterval
+    {
+        public required string Start { get; init; }
+        public required string End { get; init; }
     }
 
     private sealed class SkemaAbsence

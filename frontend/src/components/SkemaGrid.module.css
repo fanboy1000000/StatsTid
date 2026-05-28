@@ -137,6 +137,45 @@
   color: var(--color-gray-500);
 }
 
+/* Tilføj timer (manual hours) row */
+.manualHoursRow td {
+  font-size: 12px;
+}
+
+/* Ikke fordelt (unallocated) row */
+.unallocatedRow td {
+  font-size: 11px;
+}
+
+.unallocatedDisplay {
+  display: block;
+  padding: 2px 0;
+  min-height: 22px;
+  line-height: 22px;
+  font-weight: var(--font-weight-semibold);
+}
+
+.allocBalanced {
+  color: var(--color-success, #1a7f37);
+}
+
+.allocUnder {
+  color: var(--color-warning, #b58105);
+  background-color: var(--color-warning-light, #fff8e1);
+}
+
+.allocOver {
+  color: var(--color-error, #c00);
+  background-color: var(--color-error-light, #fee);
+}
+
+/* Month-total "Ikke fordelt" when at least one day is unbalanced (S56 Step 7a fix).
+   Not green — the per-day gate will block approval until every day balances. */
+.allocUnbalanced {
+  color: var(--color-warning, #b58105);
+  background-color: var(--color-warning-light, #fff8e1);
+}
+
 /* Work intervals dialog */
 .intervalsContainer {
   display: flex;

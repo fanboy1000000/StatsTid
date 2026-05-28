@@ -1,5 +1,6 @@
 using System.Data;
 using System.Globalization;
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 using NpgsqlTypes;
@@ -57,7 +58,14 @@ public sealed record ProjectionBackfillResult(
     int ConflictsTime,
     int ConflictsAbsences,
     int FallbackWarnings,
-    int UnknownEventTypes);
+    int UnknownEventTypes,
+    // S56 TASK-5603: work_time_projection backfill counters. Optional (defaulted)
+    // so existing 7-arg positional callers (console app, startup, pre-S56 tests)
+    // keep compiling. work_time_projection is LATEST-WINS keyed (employee_id, date),
+    // so "Applied" = upsert affected a row; "Skipped" = the outbox_id<=guard blocked
+    // a stale-event overwrite (a no-op, not an error).
+    int AppliedWorkTime = 0,
+    int SkippedWorkTime = 0);
 
 /// <summary>
 /// Replays <c>TimeEntryRegistered</c> + <c>AbsenceRegistered</c> events from
@@ -96,9 +104,16 @@ public sealed class ProjectionBackfillService
             events.stored_at
         FROM events
         LEFT JOIN outbox_events ON events.event_id = outbox_events.event_id
-        WHERE events.event_type IN ('TimeEntryRegistered', 'AbsenceRegistered')
+        WHERE events.event_type IN ('TimeEntryRegistered', 'AbsenceRegistered', 'WorkTimeRegistered')
         ORDER BY events.stream_id, events.stream_version
     ";
+
+    // S56 TASK-5603: camelCase matches WorkTimeProjectionRepository.IntervalsJsonOptions
+    // so the JSONB shape written by backfill is byte-identical to the live POST path.
+    private static readonly JsonSerializerOptions IntervalsJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+    };
 
     private const string InsertTimeSql = @"
         INSERT INTO time_entries_projection (
@@ -126,6 +141,29 @@ public sealed class ProjectionBackfillService
             @actorId, @actorRole, @correlationId, @outboxId
         )
         ON CONFLICT (event_id) DO NOTHING
+    ";
+
+    // S56 TASK-5603: LATEST-WINS upsert — IDENTICAL to WorkTimeProjectionRepository.UpsertAsync.
+    // Replaying in (stream_id, stream_version) order with the outbox_id<= guard yields the
+    // correct final per-(employee,date) state; re-running is idempotent (equal outbox_id
+    // re-applies the same values; a newer live row is never clobbered by an older replayed event).
+    private const string UpsertWorkTimeSql = @"
+        INSERT INTO work_time_projection (
+            employee_id, date, intervals, manual_hours,
+            occurred_at, actor_id, actor_role, correlation_id, outbox_id
+        ) VALUES (
+            @employeeId, @date, @intervals, @manualHours,
+            @occurredAt, @actorId, @actorRole, @correlationId, @outboxId
+        )
+        ON CONFLICT (employee_id, date) DO UPDATE SET
+            intervals = EXCLUDED.intervals,
+            manual_hours = EXCLUDED.manual_hours,
+            occurred_at = EXCLUDED.occurred_at,
+            actor_id = EXCLUDED.actor_id,
+            actor_role = EXCLUDED.actor_role,
+            correlation_id = EXCLUDED.correlation_id,
+            outbox_id = EXCLUDED.outbox_id
+        WHERE work_time_projection.outbox_id <= EXCLUDED.outbox_id
     ";
 
     public ProjectionBackfillService(
@@ -188,6 +226,17 @@ public sealed class ProjectionBackfillService
         insertAbsCmd.Parameters.Add("correlationId", NpgsqlDbType.Uuid);
         insertAbsCmd.Parameters.Add("outboxId", NpgsqlDbType.Bigint);
 
+        await using var upsertWorkTimeCmd = new NpgsqlCommand(UpsertWorkTimeSql, conn, tx);
+        upsertWorkTimeCmd.Parameters.Add("employeeId", NpgsqlDbType.Text);
+        upsertWorkTimeCmd.Parameters.Add("date", NpgsqlDbType.Date);
+        upsertWorkTimeCmd.Parameters.Add("intervals", NpgsqlDbType.Jsonb);
+        upsertWorkTimeCmd.Parameters.Add("manualHours", NpgsqlDbType.Numeric);
+        upsertWorkTimeCmd.Parameters.Add("occurredAt", NpgsqlDbType.TimestampTz);
+        upsertWorkTimeCmd.Parameters.Add("actorId", NpgsqlDbType.Text);
+        upsertWorkTimeCmd.Parameters.Add("actorRole", NpgsqlDbType.Text);
+        upsertWorkTimeCmd.Parameters.Add("correlationId", NpgsqlDbType.Uuid);
+        upsertWorkTimeCmd.Parameters.Add("outboxId", NpgsqlDbType.Bigint);
+
         // Buffer rows from the SELECT before issuing INSERTs. We can't run
         // INSERT statements while a DataReader is open on the same
         // connection in Npgsql.
@@ -215,6 +264,8 @@ public sealed class ProjectionBackfillService
         int conflictsAbs = 0;
         int fallbackWarns = 0;
         int unknownEventTypes = 0;
+        int appliedWorkTime = 0;
+        int skippedWorkTime = 0;
 
         foreach (var row in rows)
         {
@@ -309,6 +360,27 @@ public sealed class ProjectionBackfillService
                 if (affected == 1) insertedAbs++;
                 else conflictsAbs++;
             }
+            else if (domainEvent is WorkTimeRegistered wt)
+            {
+                upsertWorkTimeCmd.Parameters["employeeId"].Value = wt.EmployeeId;
+                upsertWorkTimeCmd.Parameters["date"].Value = wt.Date;
+                upsertWorkTimeCmd.Parameters["intervals"].Value =
+                    JsonSerializer.Serialize(wt.Intervals, IntervalsJsonOptions);
+                upsertWorkTimeCmd.Parameters["manualHours"].Value = wt.ManualHours;
+                upsertWorkTimeCmd.Parameters["occurredAt"].Value = wt.OccurredAt.Kind == DateTimeKind.Utc
+                    ? wt.OccurredAt
+                    : DateTime.SpecifyKind(wt.OccurredAt, DateTimeKind.Utc);
+                upsertWorkTimeCmd.Parameters["actorId"].Value = (object?)wt.ActorId ?? DBNull.Value;
+                upsertWorkTimeCmd.Parameters["actorRole"].Value = (object?)wt.ActorRole ?? DBNull.Value;
+                upsertWorkTimeCmd.Parameters["correlationId"].Value = (object?)wt.CorrelationId ?? DBNull.Value;
+                upsertWorkTimeCmd.Parameters["outboxId"].Value = outboxId;
+
+                // affected==1 → inserted or updated; affected==0 → outbox_id<= guard
+                // blocked a stale-event overwrite (a no-op, not a conflict error).
+                var affected = await upsertWorkTimeCmd.ExecuteNonQueryAsync(ct);
+                if (affected == 1) appliedWorkTime++;
+                else skippedWorkTime++;
+            }
             // Any other type is impossible given the SELECT WHERE clause;
             // the unknown-type branch above already handles deserialization
             // mismatches.
@@ -323,6 +395,8 @@ public sealed class ProjectionBackfillService
             ConflictsTime: conflictsTime,
             ConflictsAbsences: conflictsAbs,
             FallbackWarnings: fallbackWarns,
-            UnknownEventTypes: unknownEventTypes);
+            UnknownEventTypes: unknownEventTypes,
+            AppliedWorkTime: appliedWorkTime,
+            SkippedWorkTime: skippedWorkTime);
     }
 }

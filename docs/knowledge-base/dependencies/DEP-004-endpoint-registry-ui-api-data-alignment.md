@@ -29,16 +29,17 @@ Lightweight structural contract mapping every API endpoint to its UI consumer(s)
 
 | Endpoint | Method | UI Consumer | Hook | Data Model | Event | Auth |
 |----------|--------|-------------|------|------------|-------|------|
-| `/api/skema/{employeeId}/month` | GET | SkemaPage | useSkema | TimeEntry, AbsenceEntry, Project, TimerSession, ApprovalPeriod | — | Employee+ |
-| `/api/skema/{employeeId}/save` | POST | SkemaPage | useSkema | TimeEntry, AbsenceEntry | TimeEntryRegistered, AbsenceRegistered | Employee+ |
+| `/api/skema/{employeeId}/month` | GET | SkemaPage | useSkema | TimeEntry, AbsenceEntry, Project, WorkTimeProjection, ApprovalPeriod | — | Employee+ |
+| `/api/skema/{employeeId}/save` | POST | SkemaPage | useSkema | TimeEntry, AbsenceEntry, WorkTimeProjection | TimeEntryRegistered, AbsenceRegistered, WorkTimeRegistered | Employee+ |
 
-### Timer
+> GET now returns `workTime` (intervals + manualHours) + `dailyNorm` (per-day norm) instead of `timerSession`; POST `/save` accepts an optional `workTime` block (S56, ADR-028). The allocation gate lives in the existing `/api/approval/{periodId}/employee-approve` endpoint (discriminated 422).
 
-| Endpoint | Method | UI Consumer | Hook | Data Model | Event | Auth |
-|----------|--------|-------------|------|------------|-------|------|
-| `/api/timer/check-in` | POST | SkemaPage | useTimer | TimerSession | TimerCheckedIn | Employee+ |
-| `/api/timer/check-out` | POST | SkemaPage | useTimer | TimerSession | TimerCheckedOut | Employee+ |
-| `/api/timer/{employeeId}` | GET | SkemaPage | useTimer | TimerSession | — | Employee+ |
+### Timer (RETIRED — Sprint 56, ADR-028 D5)
+
+The three `/api/timer/*` endpoints (check-in / check-out / GET), the `useTimer` hook, `TimerControl`,
+the `TimerSession` model, and the `timer_sessions` table were REMOVED. Self-recorded work time now
+flows through the Skema save/GET above. The `TimerCheckedIn`/`TimerCheckedOut` events remain registered
+in EventSerializer (deserialize-only) for historical event replay.
 
 ### Approval Workflow
 

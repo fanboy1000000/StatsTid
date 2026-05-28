@@ -1072,64 +1072,6 @@ public sealed class TxContractTests : IAsyncLifetime
         Assert.Equal(0m, afspadAfter);
     }
 
-    // ── TimerSessionRepository ────────────────────────────────────────────────────────
-
-    [Fact]
-    public async Task TimerRepo_CheckInAsync_ParticipatesInCallerTx()
-    {
-        var repo = new TimerSessionRepository(_harness.Factory);
-        var session = new TimerSession
-        {
-            SessionId = Guid.NewGuid(),
-            EmployeeId = "EMP_TX_TIMER_IN",
-            Date = new DateOnly(2026, 5, 7),
-            CheckInAt = DateTime.UtcNow,
-            IsActive = true,
-        };
-
-        await using var conn = _harness.Factory.Create();
-        await conn.OpenAsync();
-        await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
-
-        await repo.CheckInAsync(conn, tx, session);
-
-        await AssertTxStillUsable(conn, tx);
-        Assert.Equal(1L, await CountInsideTx(conn, tx, "timer_sessions", "session_id", session.SessionId));
-        await tx.RollbackAsync();
-        Assert.Equal(0L, await CountFreshConn("timer_sessions", "session_id", session.SessionId));
-    }
-
-    [Fact]
-    public async Task TimerRepo_CheckOutAsync_ParticipatesInCallerTx()
-    {
-        var repo = new TimerSessionRepository(_harness.Factory);
-        var session = new TimerSession
-        {
-            SessionId = Guid.NewGuid(),
-            EmployeeId = "EMP_TX_TIMER_OUT",
-            Date = new DateOnly(2026, 5, 7),
-            CheckInAt = DateTime.UtcNow,
-            IsActive = true,
-        };
-        await repo.CheckInAsync(session);
-
-        await using var conn = _harness.Factory.Create();
-        await conn.OpenAsync();
-        await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
-
-        var checkOutAt = DateTime.UtcNow.AddHours(8);
-        await repo.CheckOutAsync(conn, tx, session.SessionId, checkOutAt);
-
-        await AssertTxStillUsable(conn, tx);
-        var isActiveInside = await ScalarInsideTx<bool>(
-            conn, tx, "SELECT is_active FROM timer_sessions WHERE session_id = @id", session.SessionId);
-        Assert.False(isActiveInside);
-        await tx.RollbackAsync();
-        var isActiveAfter = await ScalarFreshConn<bool>(
-            "SELECT is_active FROM timer_sessions WHERE session_id = @id", session.SessionId);
-        Assert.True(isActiveAfter); // rollback reverted
-    }
-
     // ── TimeEntryProjectionRepository (S27 / TASK-2710 Slot 7) ────────────────────────
 
     /// <summary>

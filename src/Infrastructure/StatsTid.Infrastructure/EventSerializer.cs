@@ -115,6 +115,9 @@ public static class EventSerializer
         ["ReportingLineSelfDelegated"] = typeof(ReportingLineSelfDelegated),
         // Sprint 49: Approval delegation fallback traversal warning (Phase 5 ADR-027 D5)
         ["FallbackTraversalWarning"] = typeof(FallbackTraversalWarning),
+        // Sprint 56: Self-recorded work-time state per (employee, date) — intervals + manual hours.
+        // Latest-wins superseding event; projection resolves latest (TASK-5601).
+        ["WorkTimeRegistered"] = typeof(WorkTimeRegistered),
     };
 
     public static string Serialize(IDomainEvent @event)

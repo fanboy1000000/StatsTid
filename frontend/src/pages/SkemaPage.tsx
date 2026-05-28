@@ -1,10 +1,9 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 import { useSkema } from '../hooks/useSkema'
-import { useTimer } from '../hooks/useTimer'
-import { SkemaGrid, type WorkInterval, type WorkIntervalsMap } from '../components/SkemaGrid'
-import { TimerControl } from '../components/TimerControl'
+import { SkemaGrid, type WorkInterval, type WorkIntervalsMap, type ManualHoursMap, type DailyNormMap } from '../components/SkemaGrid'
 import { BalanceSummary } from '../components/BalanceSummary'
+import { AllocationSummary, type AllocationProjectBreakdown } from '../components/AllocationSummary'
 import { ComplianceWarnings } from '../components/ComplianceWarnings'
 import { ProjectPicker } from '../components/ProjectPicker'
 import { useBalanceSummary } from '../hooks/useBalanceSummary'
@@ -17,7 +16,7 @@ import { Alert } from '../components/ui/Alert'
 import { Spinner } from '../components/ui/Spinner'
 import { Card } from '../components/ui/Card'
 import type { QuotaError, ApprovalValidationError } from '../hooks/useSkema'
-import type { SkemaRow } from '../types'
+import type { SkemaRow, WorkTimeDay } from '../types'
 import styles from './SkemaPage.module.css'
 
 const DANISH_ABSENCE_LABELS: Record<string, string> = {
@@ -44,9 +43,26 @@ function formatDanishDate(dateStr: string): string {
   }
 }
 
-function formatApprovalValidationError(err: ApprovalValidationError): string {
+function formatHoursDa(h: number): string {
+  return h.toFixed(2).replace(/\.?0+$/, '').replace('.', ',')
+}
+
+function formatApprovalValidationError(err: ApprovalValidationError): string[] {
+  if (err.kind === 'allocation') {
+    return err.unbalancedDays.map((d) => {
+      const dato = formatDanishDate(d.date)
+      if (d.direction === 'under') {
+        const remaining = formatHoursDa(d.worked - d.allocated)
+        return `Fordel de resterende ${remaining} t på projekter for ${dato}`
+      }
+      const excess = formatHoursDa(d.allocated - d.worked)
+      return `Registrér arbejdstid for de ${excess} t for ${dato}`
+    })
+  }
   const daysList = err.missingDays.map(formatDanishDate).join(', ')
-  return `Ikke alle arbejdsdage er dækket (${err.coveredDays} af ${err.totalWorkdays}). Følgende dage mangler registreringer: ${daysList}`
+  return [
+    `Ikke alle arbejdsdage er dækket (${err.coveredDays} af ${err.totalWorkdays}). Følgende dage mangler registreringer: ${daysList}`,
+  ]
 }
 
 function formatDeadline(dateStr: string | null): string {
@@ -59,16 +75,6 @@ function formatDeadline(dateStr: string | null): string {
   }
 }
 
-function toTimeString(d: Date): string {
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`
-}
-
-function toWorkInterval(checkInAt: string, checkOutAt: string | null): WorkInterval {
-  const start = new Date(checkInAt)
-  const end = checkOutAt ? new Date(checkOutAt) : start
-  return { start: toTimeString(start), end: toTimeString(end) }
-}
-
 export function SkemaPage() {
   const { user } = useAuth()
   const employeeId = user?.employeeId ?? ''
@@ -79,7 +85,6 @@ export function SkemaPage() {
 
   const { data, loading, error, quotaError, approvalValidationError, clearQuotaError, clearApprovalValidationError, refetch, saveMonth, employeeApprove, submitAndApprove, reopenPeriod } = useSkema(employeeId, year, month)
   const { orgId, agreementCode } = useAuth()
-  const { session, loading: timerLoading, checkIn, checkOut, sessions: timerSessions, checkInClientTime } = useTimer(employeeId)
   const { data: balanceData, loading: balanceLoading } = useBalanceSummary(employeeId, year, month)
   const { result: complianceResult, loading: complianceLoading } = useCompliance(employeeId, year, month)
 
@@ -125,71 +130,88 @@ export function SkemaPage() {
     return [...projectRows, ...absenceRows]
   }, [data])
 
-  // Build work intervals map from arrival/departure data
-  const workIntervals = useMemo<WorkIntervalsMap>(() => {
+  // Build work intervals + manual hours maps from backend workTime
+  const workIntervalsFromData = useMemo<WorkIntervalsMap>(() => {
     const map: WorkIntervalsMap = new Map()
-    if (data?.arrivalDepartures) {
-      for (const ad of data.arrivalDepartures) {
-        if (ad.arrival || ad.departure) {
-          map.set(ad.date, [{ start: ad.arrival ?? '', end: ad.departure ?? '' }])
-        }
+    for (const wt of data?.workTime ?? []) {
+      if (wt.intervals && wt.intervals.length > 0) {
+        map.set(wt.date, wt.intervals.map(iv => ({ start: iv.start, end: iv.end })))
       }
     }
     return map
   }, [data])
 
-  // Local work intervals state (for edits before save)
-  const [localWorkIntervals, setLocalWorkIntervals] = useState<WorkIntervalsMap>(new Map())
-  const syncedSessionIdsRef = useRef<Set<string>>(new Set())
-  const activeSessionIdRef = useRef<string | null>(null)
-
-  // Sync from data when it changes
-  useEffect(() => {
-    setLocalWorkIntervals(workIntervals)
-  }, [workIntervals])
-
-  // Sync timer sessions into work intervals for today
-  // Uses session ID tracking — once synced, a session is never re-added (even if user deletes the interval)
-  useEffect(() => {
-    if (timerSessions.length === 0) return
-    const todayKey = formatTodayKey()
-
-    for (const s of timerSessions) {
-      if (syncedSessionIdsRef.current.has(s.sessionId)) {
-        // Already synced — but check if active session just completed (check-out)
-        if (activeSessionIdRef.current === s.sessionId && !s.isActive && s.checkOutAt) {
-          const updatedEnd = toTimeString(new Date(s.checkOutAt))
-          setLocalWorkIntervals(prev => {
-            const next = new Map(prev)
-            const existing = next.get(todayKey) ?? []
-            if (existing.length > 0) {
-              const updated = [...existing]
-              updated[updated.length - 1] = { ...updated[updated.length - 1], end: updatedEnd }
-              next.set(todayKey, updated)
-            }
-            return next
-          })
-          activeSessionIdRef.current = null
-        }
-        continue
+  const manualHoursFromData = useMemo<ManualHoursMap>(() => {
+    const map: ManualHoursMap = new Map()
+    for (const wt of data?.workTime ?? []) {
+      if (wt.manualHours && wt.manualHours !== 0) {
+        map.set(wt.date, wt.manualHours)
       }
-
-      // New session — mark as synced and append interval
-      syncedSessionIdsRef.current.add(s.sessionId)
-      const interval = toWorkInterval(s.checkInAt, s.checkOutAt)
-
-      if (s.isActive) {
-        activeSessionIdRef.current = s.sessionId
-      }
-
-      setLocalWorkIntervals(prev => {
-        const next = new Map(prev)
-        const existing = next.get(todayKey) ?? []
-        next.set(todayKey, [...existing, interval])
-        return next
-      })
     }
-  }, [timerSessions])
+    return map
+  }, [data])
+
+  // Daily norm map (per-day; null -> blank)
+  const dailyNorm = useMemo<DailyNormMap>(() => {
+    const map: DailyNormMap = new Map()
+    for (const dn of data?.dailyNorm ?? []) {
+      map.set(dn.date, dn.hours)
+    }
+    return map
+  }, [data])
+
+  // Local editable work-time state (intervals + manual hours)
+  const [localWorkIntervals, setLocalWorkIntervals] = useState<WorkIntervalsMap>(new Map())
+  const [localManualHours, setLocalManualHours] = useState<ManualHoursMap>(new Map())
+
+  // Rehydrate local state when backend data changes (after fetch/save/approve)
+  useEffect(() => {
+    setLocalWorkIntervals(workIntervalsFromData)
+  }, [workIntervalsFromData])
+  useEffect(() => {
+    setLocalManualHours(manualHoursFromData)
+  }, [manualHoursFromData])
+
+  // Live refs so the debounced work-time save reads the latest local state
+  const workIntervalsRef = useRef<WorkIntervalsMap>(localWorkIntervals)
+  const manualHoursRef = useRef<ManualHoursMap>(localManualHours)
+  useEffect(() => { workIntervalsRef.current = localWorkIntervals }, [localWorkIntervals])
+  useEffect(() => { manualHoursRef.current = localManualHours }, [localManualHours])
+
+  // Debounced work-time save (intervals + manual hours)
+  const workTimeDirtyRef = useRef<Set<string>>(new Set())
+  const workTimeSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const buildWorkTimePayload = useCallback((): WorkTimeDay[] => {
+    const dates = [...workTimeDirtyRef.current]
+    return dates.map((date) => ({
+      date,
+      intervals: (workIntervalsRef.current.get(date) ?? []).map(iv => ({ start: iv.start, end: iv.end })),
+      manualHours: manualHoursRef.current.get(date) ?? 0,
+    }))
+  }, [])
+
+  const flushWorkTimeSave = useCallback(async (): Promise<boolean> => {
+    if (workTimeSaveTimerRef.current) {
+      clearTimeout(workTimeSaveTimerRef.current)
+      workTimeSaveTimerRef.current = null
+    }
+    if (workTimeDirtyRef.current.size === 0) return true
+    const payload = buildWorkTimePayload()
+    workTimeDirtyRef.current = new Set()
+    return saveMonth([], payload)
+  }, [buildWorkTimePayload, saveMonth])
+
+  const scheduleWorkTimeSave = useCallback((date: string) => {
+    workTimeDirtyRef.current.add(date)
+    if (workTimeSaveTimerRef.current) clearTimeout(workTimeSaveTimerRef.current)
+    workTimeSaveTimerRef.current = setTimeout(() => {
+      const payload = buildWorkTimePayload()
+      workTimeDirtyRef.current = new Set()
+      workTimeSaveTimerRef.current = null
+      if (payload.length > 0) void saveMonth([], payload)
+    }, 1000)
+  }, [buildWorkTimePayload, saveMonth])
 
   const handleWorkIntervalsChange = useCallback(
     (date: string, intervals: WorkInterval[]) => {
@@ -202,8 +224,25 @@ export function SkemaPage() {
         }
         return next
       })
+      scheduleWorkTimeSave(date)
     },
-    []
+    [scheduleWorkTimeSave]
+  )
+
+  const handleManualHoursChange = useCallback(
+    (date: string, hours: number | null) => {
+      setLocalManualHours(prev => {
+        const next = new Map(prev)
+        if (hours === null) {
+          next.delete(date)
+        } else {
+          next.set(date, hours)
+        }
+        return next
+      })
+      scheduleWorkTimeSave(date)
+    },
+    [scheduleWorkTimeSave]
   )
 
   // Approval status
@@ -248,11 +287,14 @@ export function SkemaPage() {
     [saveMonth]
   )
 
-  // Cleanup save timer on unmount
+  // Cleanup save timers on unmount
   useEffect(() => {
     return () => {
       if (saveTimerRef.current) {
         clearTimeout(saveTimerRef.current)
+      }
+      if (workTimeSaveTimerRef.current) {
+        clearTimeout(workTimeSaveTimerRef.current)
       }
     }
   }, [])
@@ -279,31 +321,46 @@ export function SkemaPage() {
     })
   }, [])
 
-  // Compute timer hours for today
-  const timerHoursToday = useMemo(() => {
-    if (!session?.isActive || !session.checkInAt) return 0
-    const checkInTime = new Date(session.checkInAt).getTime()
-    const endTime = session.checkOutAt ? new Date(session.checkOutAt).getTime() : Date.now()
-    return (endTime - checkInTime) / (1000 * 60 * 60)
-  }, [session])
-
-  // Compute allocated hours for today
-  const allocatedHoursToday = useMemo(() => {
-    const todayKey = formatTodayKey()
-    let total = 0
-    for (const [key, val] of localCells) {
-      if (key.endsWith(`:${todayKey}`)) {
-        total += val
+  // Allocation summary data (monthly worked vs project-allocated)
+  const allocationSummary = useMemo(() => {
+    const projectCodes = new Set((data?.projects ?? []).map(p => p.projectCode))
+    // Worked = period interval hours + manual hours for the month
+    let worked = 0
+    for (const intervals of localWorkIntervals.values()) {
+      for (const iv of intervals) {
+        if (iv.start && iv.end) {
+          const sp = iv.start.split(':').map(Number)
+          const ep = iv.end.split(':').map(Number)
+          const diff = (ep[0] * 60 + ep[1]) - (sp[0] * 60 + sp[1])
+          if (diff > 0) worked += diff / 60
+        }
       }
     }
-    return total
-  }, [localCells])
+    for (const h of localManualHours.values()) worked += h
 
-  // Show warning if clocked vs allocated differ
-  const showTimerWarning =
-    session != null &&
-    timerHoursToday > 0 &&
-    Math.abs(allocatedHoursToday - timerHoursToday) > 0.1
+    // Allocated per project (NORMAL allocation; absences excluded)
+    const perProject = new Map<string, number>()
+    for (const [key, val] of localCells) {
+      const code = key.slice(0, key.lastIndexOf(':'))
+      if (projectCodes.has(code)) {
+        perProject.set(code, (perProject.get(code) ?? 0) + val)
+      }
+    }
+    let allocated = 0
+    for (const v of perProject.values()) allocated += v
+
+    const projects: AllocationProjectBreakdown[] = (data?.projects ?? []).map(p => ({
+      projectCode: p.projectCode,
+      projectName: p.projectName,
+      hours: Math.round((perProject.get(p.projectCode) ?? 0) * 100) / 100,
+    }))
+
+    return {
+      worked: Math.round(worked * 100) / 100,
+      allocated: Math.round(allocated * 100) / 100,
+      projects,
+    }
+  }, [data, localWorkIntervals, localManualHours, localCells])
 
   const [approving, setApproving] = useState(false)
   const [projectPickerOpen, setProjectPickerOpen] = useState(false)
@@ -323,6 +380,10 @@ export function SkemaPage() {
       if (!saved) return
     }
 
+    // Flush any pending work-time (intervals + manual hours) before approving
+    const workTimeSaved = await flushWorkTimeSave()
+    if (!workTimeSaved) return
+
     setApproving(true)
     try {
       if (data?.approval?.periodId) {
@@ -333,7 +394,7 @@ export function SkemaPage() {
     } finally {
       setApproving(false)
     }
-  }, [data, employeeApprove, submitAndApprove, orgId, agreementCode, saveMonth, clearApprovalValidationError])
+  }, [data, employeeApprove, submitAndApprove, orgId, agreementCode, saveMonth, flushWorkTimeSave, clearApprovalValidationError])
 
   if (loading && !data) {
     return (
@@ -383,25 +444,12 @@ export function SkemaPage() {
       {/* Compliance warnings */}
       <ComplianceWarnings result={complianceResult} loading={complianceLoading} />
 
-      {/* Timer control (hidden when read-only) */}
-      {!isReadOnly && (
-        <TimerControl
-          session={session}
-          onCheckIn={checkIn}
-          onCheckOut={checkOut}
-          loading={timerLoading}
-          todayIntervals={localWorkIntervals.get(formatTodayKey()) ?? []}
-          checkInClientTime={checkInClientTime}
-        />
-      )}
-
-      {/* Timer warning */}
-      {showTimerWarning && (
-        <Alert variant="warning">
-          Registrerede timer ({allocatedHoursToday.toFixed(1)}t) afviger fra stemplede timer (
-          {timerHoursToday.toFixed(1)}t)
-        </Alert>
-      )}
+      {/* Allocation summary (Fordeling af arbejdstid) */}
+      <AllocationSummary
+        workedHours={allocationSummary.worked}
+        allocatedHours={allocationSummary.allocated}
+        projects={allocationSummary.projects}
+      />
 
       {/* Quota error */}
       {quotaError && (
@@ -410,10 +458,18 @@ export function SkemaPage() {
         </Alert>
       )}
 
-      {/* Approval validation error (422 — uncovered workdays) */}
+      {/* Approval validation error (422 — coverage or allocation) */}
       {approvalValidationError && (
         <Alert variant="error" onDismiss={clearApprovalValidationError}>
-          {formatApprovalValidationError(approvalValidationError)}
+          {(() => {
+            const messages = formatApprovalValidationError(approvalValidationError)
+            if (messages.length === 1) return messages[0]
+            return (
+              <ul className={styles.validationList}>
+                {messages.map((m, i) => <li key={i}>{m}</li>)}
+              </ul>
+            )
+          })()}
         </Alert>
       )}
 
@@ -426,9 +482,11 @@ export function SkemaPage() {
           cellValues={localCells}
           readOnly={isReadOnly}
           onCellChange={handleCellChange}
-          timerHoursToday={timerHoursToday}
           workIntervals={localWorkIntervals}
           onWorkIntervalsChange={handleWorkIntervalsChange}
+          manualHours={localManualHours}
+          onManualHoursChange={handleManualHoursChange}
+          dailyNorm={dailyNorm}
         />
       </Card>
 
@@ -443,14 +501,6 @@ export function SkemaPage() {
       </div>
     </div>
   )
-}
-
-function formatTodayKey(): string {
-  const today = new Date()
-  const y = today.getFullYear()
-  const m = String(today.getMonth() + 1).padStart(2, '0')
-  const d = String(today.getDate()).padStart(2, '0')
-  return `${y}-${m}-${d}`
 }
 
 interface ApprovalFooterProps {

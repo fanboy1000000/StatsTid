@@ -95,4 +95,91 @@ describe('SkemaGrid', () => {
     const displays = container.querySelectorAll('span')
     expect(displays.length).toBeGreaterThan(0)
   })
+
+  // ── S56 Step 7a fix: "Ikke fordelt" MONTH-TOTAL must be per-day, not netted ──
+  // The month-total cell is green (✓ / .allocBalanced) ONLY when every gated day
+  // is individually balanced (allDaysBalanced via classifyAllocation), NOT when
+  // workedSumMonth nets against allocatedSumMonth. A month with one under-allocated
+  // day (+X) and one over-allocated day (−X) nets to 0 but MUST NOT show green,
+  // because the backend approval gate fails BOTH days.
+  //
+  // We drive `worked` per day via `manualHours` and `allocated` per day via project
+  // cellValues. The "Ikke fordelt" row only renders when manualHours (or
+  // workIntervals) is supplied; its last <td> is the month-total cell.
+  const monthTotalCell = (container: HTMLElement): HTMLElement => {
+    const unallocRow = container.querySelector('tr.unallocatedRow')
+    expect(unallocRow).not.toBeNull()
+    const cells = unallocRow!.querySelectorAll('td')
+    // [0] = "Ikke fordelt" label, [1..31] = days, last = month-total sum cell.
+    return cells[cells.length - 1] as HTMLElement
+  }
+
+  it('month-total is NOT green when days net to zero but are individually unbalanced', () => {
+    // Day 2 (Mon): worked 7.4, allocated 4.4 → under by +3.0
+    // Day 3 (Tue): worked 7.4, allocated 10.4 → over by −3.0
+    // Net month: worked 14.8 vs allocated 14.8 → 0. Old (netting) logic = green ✓.
+    // New (per-day) logic = unbalanced (both days fail the gate).
+    const cellValues = new Map<string, number>([
+      ['DRIFT:2026-03-02', 4.4],
+      ['DRIFT:2026-03-03', 10.4],
+    ])
+    const manualHours = new Map<string, number>([
+      ['2026-03-02', 7.4],
+      ['2026-03-03', 7.4],
+    ])
+
+    const { container } = render(
+      <SkemaGrid
+        year={2026}
+        month={3}
+        rows={mockRows}
+        cellValues={cellValues}
+        readOnly={true}
+        onCellChange={vi.fn()}
+        manualHours={manualHours}
+      />
+    )
+
+    const cell = monthTotalCell(container)
+    // Must NOT be the green/balanced cell despite net-zero.
+    expect(cell.className).not.toContain('allocBalanced')
+    expect(cell.className).toContain('allocUnbalanced')
+    // Must NOT render the ✓ checkmark — renders the (net) signed unallocated
+    // hours string instead (here net is 0). The point is it is NOT the green ✓.
+    expect(cell.textContent).not.toContain('✓')
+    expect(cell.textContent).toContain('t') // an hours readout, not the checkmark
+    // Carries the blocked-approval tooltip.
+    expect(cell.getAttribute('title')).toBeTruthy()
+  })
+
+  it('month-total IS green when every gated day is individually balanced', () => {
+    // Both days worked 7.4 and allocated 7.4 → each balanced → month green ✓.
+    const cellValues = new Map<string, number>([
+      ['DRIFT:2026-03-02', 7.4],
+      ['DRIFT:2026-03-03', 7.4],
+    ])
+    const manualHours = new Map<string, number>([
+      ['2026-03-02', 7.4],
+      ['2026-03-03', 7.4],
+    ])
+
+    const { container } = render(
+      <SkemaGrid
+        year={2026}
+        month={3}
+        rows={mockRows}
+        cellValues={cellValues}
+        readOnly={true}
+        onCellChange={vi.fn()}
+        manualHours={manualHours}
+      />
+    )
+
+    const cell = monthTotalCell(container)
+    expect(cell.className).toContain('allocBalanced')
+    expect(cell.className).not.toContain('allocUnbalanced')
+    expect(cell.textContent).toContain('✓')
+    // No blocked tooltip when balanced.
+    expect(cell.getAttribute('title')).toBeNull()
+  })
 })

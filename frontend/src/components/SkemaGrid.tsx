@@ -2,6 +2,8 @@ import { useState, useMemo, useCallback } from 'react'
 import type { SkemaRow } from '../types'
 import { Dialog } from './ui/Dialog'
 import { Button } from './ui/Button'
+import { parseDanishNumber, formatDanishNumber } from '../lib/locale'
+import { classifyAllocation, unallocated } from '../lib/allocation'
 import styles from './SkemaGrid.module.css'
 
 export interface WorkInterval {
@@ -10,6 +12,8 @@ export interface WorkInterval {
 }
 
 export type WorkIntervalsMap = Map<string, WorkInterval[]>  // dateKey -> intervals
+export type ManualHoursMap = Map<string, number>            // dateKey -> manual hours
+export type DailyNormMap = Map<string, number | null>       // dateKey -> norm hours (null = blank)
 
 interface SkemaGridProps {
   year: number
@@ -18,10 +22,11 @@ interface SkemaGridProps {
   cellValues: Map<string, number>
   readOnly: boolean
   onCellChange: (rowKey: string, date: string, hours: number | null) => void
-  timerHoursToday?: number
   workIntervals?: WorkIntervalsMap
   onWorkIntervalsChange?: (date: string, intervals: WorkInterval[]) => void
-  dailyNormHours?: number  // e.g. 7.4 for 37h/week
+  manualHours?: ManualHoursMap
+  onManualHoursChange?: (date: string, hours: number | null) => void
+  dailyNorm?: DailyNormMap
 }
 
 const DA_DAY_ABBREV = ['So', 'Ma', 'Ti', 'On', 'To', 'Fr', 'Lo']
@@ -89,6 +94,12 @@ function formatDiff(diff: number): string {
   return `${sign}${hours}t ${mins}m`
 }
 
+/** Signed hours with Danish decimal comma (e.g. "+7,4 t", "0 t"). */
+function formatSignedHours(value: number): string {
+  const sign = value > 0 ? '+' : value < 0 ? '-' : ''
+  return `${sign}${formatDanishNumber(Math.abs(value), 2)} t`
+}
+
 function formatDateLabel(dateKey: string): string {
   const [y, m, d] = dateKey.split('-')
   return `${d}/${m}-${y}`
@@ -103,7 +114,9 @@ export function SkemaGrid({
   onCellChange,
   workIntervals,
   onWorkIntervalsChange,
-  dailyNormHours = 7.4,
+  manualHours,
+  onManualHoursChange,
+  dailyNorm,
 }: SkemaGridProps) {
   const days = useMemo(() => getDaysInMonth(year, month), [year, month])
 
@@ -159,8 +172,8 @@ export function SkemaGrid({
     return sum
   }, [rowSums])
 
-  // Compute work hours per day from intervals
-  const workHoursPerDay = useMemo(() => {
+  // "Tilføj periode" hours per day (summed work intervals)
+  const periodHoursPerDay = useMemo(() => {
     const map = new Map<string, number>()
     if (workIntervals) {
       for (const [dateKey, intervals] of workIntervals) {
@@ -171,26 +184,46 @@ export function SkemaGrid({
     return map
   }, [workIntervals])
 
-  // Work hours sum for the month
-  const workHoursSum = useMemo(() => {
+  const periodHoursSum = useMemo(() => {
     let sum = 0
-    for (const h of workHoursPerDay.values()) sum += h
+    for (const h of periodHoursPerDay.values()) sum += h
     return Math.round(sum * 100) / 100
-  }, [workHoursPerDay])
+  }, [periodHoursPerDay])
 
-  // Difference per day: arbejdstid hours - norm (only when hours are registered)
+  // "Tilføj timer" — direct manual daily hours
+  const manualHoursSum = useMemo(() => {
+    let sum = 0
+    if (manualHours) for (const h of manualHours.values()) sum += h
+    return Math.round(sum * 100) / 100
+  }, [manualHours])
+
+  // Worked per day = period interval hours + manual hours
+  const workedPerDay = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const day of days) {
+      const dateKey = formatDateKey(day)
+      const period = periodHoursPerDay.get(dateKey) ?? 0
+      const manual = manualHours?.get(dateKey) ?? 0
+      const worked = Math.round((period + manual) * 100) / 100
+      if (worked > 0) map.set(dateKey, worked)
+    }
+    return map
+  }, [days, periodHoursPerDay, manualHours])
+
+  // Diff. fra normtid per day: worked - dailyNorm.hours.
+  // Shown only when worked>0 and norm is non-null; blank when norm is null.
   const diffPerDay = useMemo(() => {
     const map = new Map<string, number>()
     for (const day of days) {
       const dateKey = formatDateKey(day)
-      const worked = workHoursPerDay.get(dateKey) ?? 0
-      if (worked > 0) {
-        const norm = isWeekend(day) ? 0 : dailyNormHours
-        map.set(dateKey, Math.round((worked - norm) * 100) / 100)
-      }
+      const worked = workedPerDay.get(dateKey) ?? 0
+      if (worked <= 0) continue
+      const norm = dailyNorm?.get(dateKey)
+      if (norm === null || norm === undefined) continue // academic ANNUAL_ACTIVITY -> blank
+      map.set(dateKey, Math.round((worked - norm) * 100) / 100)
     }
     return map
-  }, [days, workHoursPerDay, dailyNormHours])
+  }, [days, workedPerDay, dailyNorm])
 
   const diffSum = useMemo(() => {
     let sum = 0
@@ -198,13 +231,83 @@ export function SkemaGrid({
     return Math.round(sum * 100) / 100
   }, [diffPerDay])
 
+  // Allocated per day = sum of project-row cells (absences excluded)
+  const allocatedPerDay = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const day of days) {
+      const dateKey = formatDateKey(day)
+      let total = 0
+      for (const row of projectRows) {
+        total += cellValues.get(`${row.key}:${dateKey}`) ?? 0
+      }
+      map.set(dateKey, Math.round(total * 100) / 100)
+    }
+    return map
+  }, [days, projectRows, cellValues])
+
+  // Ikke fordelt (unallocated) per day = worked - allocated
+  const unallocatedPerDay = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const day of days) {
+      const dateKey = formatDateKey(day)
+      const worked = workedPerDay.get(dateKey) ?? 0
+      const allocated = allocatedPerDay.get(dateKey) ?? 0
+      if (worked === 0 && allocated === 0) continue
+      map.set(dateKey, unallocated(worked, allocated))
+    }
+    return map
+  }, [days, workedPerDay, allocatedPerDay])
+
+  const workedSumMonth = useMemo(() => {
+    let sum = 0
+    for (const h of workedPerDay.values()) sum += h
+    return Math.round(sum * 100) / 100
+  }, [workedPerDay])
+
+  const allocatedSumMonth = useMemo(() => {
+    let sum = 0
+    for (const h of allocatedPerDay.values()) sum += h
+    return Math.round(sum * 100) / 100
+  }, [allocatedPerDay])
+
+  const unallocatedMonth = useMemo(
+    () => unallocated(workedSumMonth, allocatedSumMonth),
+    [workedSumMonth, allocatedSumMonth]
+  )
+
+  // S56 Step 7a WARNING fix: the month-total cell must NOT net days against each other —
+  // the backend gate is PER-DAY, so a +X day and an offsetting -X day both fail the gate
+  // even though their sum is 0. The total is "balanced" (green ✓) ONLY when every gated day
+  // (worked>0 or allocated>0) is individually balanced; this matches the set the approval
+  // gate accepts.
+  const allDaysBalanced = useMemo(() => {
+    for (const day of days) {
+      const dateKey = formatDateKey(day)
+      const worked = workedPerDay.get(dateKey) ?? 0
+      const allocated = allocatedPerDay.get(dateKey) ?? 0
+      if (worked === 0 && allocated === 0) continue
+      if (classifyAllocation(worked, allocated) !== 'balanced') return false
+    }
+    return true
+  }, [days, workedPerDay, allocatedPerDay])
+
   const handleCellChange = useCallback(
     (rowKey: string, date: string, value: string) => {
-      const num = value === '' ? null : parseFloat(value)
+      const num = value === '' ? null : parseDanishNumber(value)
       if (num !== null && isNaN(num)) return
       onCellChange(rowKey, date, num === 0 ? null : num)
     },
     [onCellChange]
+  )
+
+  const handleManualHoursChange = useCallback(
+    (date: string, value: string) => {
+      if (!onManualHoursChange) return
+      const num = value === '' ? null : parseDanishNumber(value)
+      if (num !== null && isNaN(num)) return
+      onManualHoursChange(date, num === 0 ? null : num)
+    },
+    [onManualHoursChange]
   )
 
   const openDialog = useCallback((dateKey: string) => {
@@ -264,13 +367,13 @@ export function SkemaGrid({
             </tr>
           </thead>
           <tbody>
-            {/* Arbejdstid row */}
+            {/* "Tilføj periode" row — work intervals via dialog */}
             {workIntervals && onWorkIntervalsChange && (
               <tr className={styles.arbejdstidRow}>
-                <td className={styles.rowLabel}>Arbejdstid</td>
+                <td className={styles.rowLabel}>Tilføj periode</td>
                 {days.map((day) => {
                   const dateKey = formatDateKey(day)
-                  const hours = workHoursPerDay.get(dateKey) ?? 0
+                  const hours = periodHoursPerDay.get(dateKey) ?? 0
                   return (
                     <td
                       key={dateKey}
@@ -284,14 +387,45 @@ export function SkemaGrid({
                   )
                 })}
                 <td className={styles.sumCell}>
-                  {workHoursSum > 0 ? formatHours(workHoursSum) : ''}
+                  {periodHoursSum > 0 ? formatHours(periodHoursSum) : ''}
                 </td>
               </tr>
             )}
 
-            {/* Difference row */}
+            {/* "Tilføj timer" row — direct numeric daily hours */}
+            {manualHours && onManualHoursChange && (
+              <tr className={styles.manualHoursRow}>
+                <td className={styles.rowLabel}>Tilføj timer</td>
+                {days.map((day) => {
+                  const dateKey = formatDateKey(day)
+                  const val = manualHours.get(dateKey)
+                  return (
+                    <td key={dateKey} className={`${styles.cell} ${getColumnClass(day)}`}>
+                      {readOnly ? (
+                        <span className={styles.cellDisplay}>
+                          {val != null ? formatDanishNumber(val, 2) : ''}
+                        </span>
+                      ) : (
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          className={styles.cellInput}
+                          value={val != null ? formatDanishNumber(val, 2) : ''}
+                          onChange={(e) => handleManualHoursChange(dateKey, e.target.value)}
+                        />
+                      )}
+                    </td>
+                  )
+                })}
+                <td className={styles.sumCell}>
+                  {manualHoursSum > 0 ? formatDanishNumber(manualHoursSum, 2) : ''}
+                </td>
+              </tr>
+            )}
+
+            {/* "Diff. fra normtid" row */}
             <tr className={styles.diffRow}>
-              <td className={styles.rowLabel}>Difference</td>
+              <td className={styles.rowLabel}>Diff. fra normtid</td>
               {days.map((day) => {
                 const dateKey = formatDateKey(day)
                 const diff = diffPerDay.get(dateKey)
@@ -340,6 +474,42 @@ export function SkemaGrid({
                 <td className={styles.sumCell}>{rowSums.get(row.key) || ''}</td>
               </tr>
             ))}
+
+            {/* Ikke fordelt (unallocated) row — read-only computed */}
+            {(workIntervals || manualHours) && (
+              <tr className={styles.unallocatedRow}>
+                <td className={styles.rowLabel}>Ikke fordelt</td>
+                {days.map((day) => {
+                  const dateKey = formatDateKey(day)
+                  const worked = workedPerDay.get(dateKey) ?? 0
+                  const allocated = allocatedPerDay.get(dateKey) ?? 0
+                  const value = unallocatedPerDay.get(dateKey)
+                  const hasValue = value !== undefined
+                  const state = hasValue ? classifyAllocation(worked, allocated) : null
+                  const stateClass =
+                    state === 'balanced' ? styles.allocBalanced
+                      : state === 'under' ? styles.allocUnder
+                      : state === 'over' ? styles.allocOver
+                      : ''
+                  return (
+                    <td
+                      key={dateKey}
+                      className={`${styles.cell} ${styles.unallocatedCell} ${stateClass} ${getColumnClass(day)}`}
+                    >
+                      <span className={styles.unallocatedDisplay}>
+                        {!hasValue ? '' : state === 'balanced' ? '✓' : formatSignedHours(value)}
+                      </span>
+                    </td>
+                  )
+                })}
+                <td
+                  className={`${styles.sumCell} ${allDaysBalanced ? styles.allocBalanced : styles.allocUnbalanced}`}
+                  title={allDaysBalanced ? undefined : 'Ikke alle dage er fordelt — godkendelse blokeres til hver dag balancerer'}
+                >
+                  {allDaysBalanced ? '✓' : formatSignedHours(unallocatedMonth)}
+                </td>
+              </tr>
+            )}
 
             {/* Separator */}
             {absenceRows.length > 0 && (
