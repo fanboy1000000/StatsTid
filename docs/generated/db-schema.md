@@ -1,826 +1,1128 @@
 # StatsTid Database Schema
 
-> Generated from docker/postgres/init.sql. Do not edit manually -- update init.sql and regenerate.
-> Last generated: Sprint 17 (2026-03-11)
+> **GENERATED FILE — do not edit by hand.**
+> Produced by `tools/generate_db_schema.py` from `docker/postgres/init.sql`.
+> Update the schema in `init.sql`, then run `python tools/generate_db_schema.py`.
+> CI fails (`tools/check_docs.py`) if this file drifts from init.sql.
+
+**Total: 53 tables** (39 primary, 14 audit).
 
 ---
 
-## 1. Event Store
-
-### event_streams
-
-Purpose: Registry of event streams (one per aggregate).
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| stream_id | TEXT | PRIMARY KEY |
-| created_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
-
-Introduced: Sprint 2
-
-### events
-
-Purpose: Core append-only event log with per-stream versioning.
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| global_position | BIGSERIAL | PRIMARY KEY |
-| event_id | UUID | NOT NULL UNIQUE |
-| stream_id | TEXT | NOT NULL, FK -> event_streams(stream_id) |
-| stream_version | INT | NOT NULL |
-| event_type | TEXT | NOT NULL |
-| data | JSONB | NOT NULL |
-| occurred_at | TIMESTAMPTZ | NOT NULL |
-| stored_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
-| actor_id | TEXT | (added S3) |
-| actor_role | TEXT | (added S3) |
-| correlation_id | UUID | (added S3) |
-
-**Unique constraint**: (stream_id, stream_version)
-
-**Indexes**:
-- idx_events_stream_id ON events(stream_id)
-- idx_events_event_type ON events(event_type)
-- idx_events_occurred_at ON events(occurred_at)
-- idx_events_actor_id ON events(actor_id) (S3)
-- idx_events_correlation_id ON events(correlation_id) (S3)
-
-Introduced: Sprint 2 (actor tracking columns added Sprint 3)
-
----
-
-## 2. Outbox & Orchestration
-
-### outbox_messages
-
-Purpose: Guaranteed delivery outbox pattern for async messaging.
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| message_id | UUID | PRIMARY KEY DEFAULT gen_random_uuid() |
-| destination | TEXT | NOT NULL |
-| payload | JSONB | NOT NULL |
-| status | TEXT | NOT NULL DEFAULT 'pending' |
-| attempt_count | INT | NOT NULL DEFAULT 0 |
-| created_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
-| last_attempt_at | TIMESTAMPTZ | |
-| delivered_at | TIMESTAMPTZ | |
-| error_message | TEXT | |
-| idempotency_token | UUID | UNIQUE |
-
-**Indexes**:
-- idx_outbox_status ON outbox_messages(status)
-- idx_outbox_created_at ON outbox_messages(created_at)
-- idx_outbox_destination_status ON outbox_messages(destination, status)
-
-Introduced: Sprint 2
-
-### orchestrator_tasks
-
-Purpose: Audit trail and status tracking for orchestrator-dispatched tasks.
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| task_id | UUID | PRIMARY KEY DEFAULT gen_random_uuid() |
-| task_type | TEXT | NOT NULL |
-| status | TEXT | NOT NULL DEFAULT 'pending' |
-| input_data | JSONB | |
-| output_data | JSONB | |
-| assigned_agent | TEXT | |
-| created_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
-| started_at | TIMESTAMPTZ | |
-| completed_at | TIMESTAMPTZ | |
-| error_message | TEXT | |
-
-**Indexes**:
-- idx_orch_tasks_status ON orchestrator_tasks(status)
-
-Introduced: Sprint 2
-
----
-
-## 3. Rules & Wage Types
-
-### rule_versions
-
-Purpose: Versioned rule definitions per OK agreement and agreement code.
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| rule_id | TEXT | NOT NULL |
-| ok_version | TEXT | NOT NULL |
-| rule_name | TEXT | NOT NULL |
-| agreement_code | TEXT | NOT NULL |
-| effective_from | DATE | NOT NULL |
-| effective_to | DATE | |
-| created_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
-
-**Primary key**: (rule_id, ok_version, agreement_code)
-
-Introduced: Sprint 2
-
-### wage_type_mappings
-
-Purpose: Maps time types to SLS wage codes, versioned per OK agreement and optionally per position.
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| time_type | TEXT | NOT NULL |
-| wage_type | TEXT | NOT NULL |
-| ok_version | TEXT | NOT NULL |
-| agreement_code | TEXT | NOT NULL |
-| position | TEXT | NOT NULL DEFAULT '' |
-| description | TEXT | |
-| created_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
-
-**Primary key**: (time_type, ok_version, agreement_code, position)
-
-Introduced: Sprint 2 (position column added Sprint 11)
-
----
-
-## 4. Flex & Holidays
-
-### flex_balance_snapshots
-
-Purpose: Point-in-time snapshots of employee flex balances.
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| snapshot_id | UUID | PRIMARY KEY DEFAULT gen_random_uuid() |
-| employee_id | TEXT | NOT NULL |
-| period_start | DATE | NOT NULL |
-| period_end | DATE | NOT NULL |
-| balance_hours | DECIMAL | NOT NULL |
-| delta | DECIMAL | NOT NULL |
-| ok_version | TEXT | NOT NULL |
-| agreement_code | TEXT | NOT NULL |
-| created_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
-
-**Indexes**:
-- idx_flex_snapshots_employee ON flex_balance_snapshots(employee_id)
-- idx_flex_snapshots_period ON flex_balance_snapshots(period_start, period_end)
-
-Introduced: Sprint 2
-
-### danish_public_holidays
-
-Purpose: Reference table for Danish public holidays (pre-computed via Computus algorithm).
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| holiday_date | DATE | NOT NULL |
-| holiday_name | TEXT | NOT NULL |
-| ok_version | TEXT | NOT NULL |
-
-**Primary key**: (holiday_date, ok_version)
-
-Introduced: Sprint 2
-
----
-
-## 5. Audit
-
-### audit_log
-
-Purpose: Append-only audit log for all HTTP requests and security events.
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| log_id | BIGSERIAL | PRIMARY KEY |
-| timestamp | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
-| actor_id | TEXT | |
-| actor_role | TEXT | |
-| action | TEXT | NOT NULL |
-| resource | TEXT | NOT NULL |
-| resource_id | TEXT | |
-| correlation_id | UUID | |
-| http_method | TEXT | |
-| http_path | TEXT | |
-| http_status | INT | |
-| result | TEXT | NOT NULL DEFAULT 'success' |
-| details | JSONB | |
-| ip_address | TEXT | |
-
-**Indexes**:
-- idx_audit_log_actor ON audit_log(actor_id)
-- idx_audit_log_correlation ON audit_log(correlation_id)
-- idx_audit_log_timestamp ON audit_log(timestamp)
-
-Introduced: Sprint 3
-
----
-
-## 6. Organizations & Users
-
-### organizations
-
-Purpose: Organizational hierarchy (Ministry -> Styrelse -> Afdeling -> Team) with materialized path.
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| org_id | TEXT | PRIMARY KEY |
-| org_name | TEXT | NOT NULL |
-| org_type | TEXT | NOT NULL, CHECK IN ('MINISTRY', 'STYRELSE', 'AFDELING', 'TEAM') |
-| parent_org_id | TEXT | FK -> organizations(org_id) |
-| materialized_path | TEXT | NOT NULL |
-| agreement_code | TEXT | NOT NULL DEFAULT 'AC' |
-| ok_version | TEXT | NOT NULL DEFAULT 'OK24' |
-| is_active | BOOLEAN | NOT NULL DEFAULT TRUE |
-| created_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
-| updated_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
-
-**Indexes**:
-- idx_org_parent ON organizations(parent_org_id)
-- idx_org_path ON organizations USING btree (materialized_path text_pattern_ops)
-- idx_org_type ON organizations(org_type)
-
-Introduced: Sprint 6
-
-### users
-
-Purpose: User accounts with org membership and agreement assignment.
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| user_id | TEXT | PRIMARY KEY |
-| username | TEXT | NOT NULL UNIQUE |
-| password_hash | TEXT | NOT NULL |
-| display_name | TEXT | NOT NULL |
-| email | TEXT | |
-| primary_org_id | TEXT | NOT NULL, FK -> organizations(org_id) |
-| agreement_code | TEXT | NOT NULL DEFAULT 'AC' |
-| ok_version | TEXT | NOT NULL DEFAULT 'OK24' |
-| employment_category | TEXT | NOT NULL DEFAULT 'Standard' |
-| is_active | BOOLEAN | NOT NULL DEFAULT TRUE |
-| created_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
-| updated_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
-
-**Indexes**:
-- idx_users_org ON users(primary_org_id)
-- idx_users_username ON users(username)
-
-Introduced: Sprint 6
-
-### roles
-
-Purpose: Role definitions for RBAC (5 roles with hierarchy levels).
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| role_id | TEXT | PRIMARY KEY |
-| role_name | TEXT | NOT NULL |
-| description | TEXT | |
-| hierarchy_level | INT | NOT NULL |
-| created_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
-
-Introduced: Sprint 6
-
-### role_assignments
-
-Purpose: Assigns roles to users with organizational scope.
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| assignment_id | UUID | PRIMARY KEY DEFAULT gen_random_uuid() |
-| user_id | TEXT | NOT NULL, FK -> users(user_id) |
-| role_id | TEXT | NOT NULL, FK -> roles(role_id) |
-| org_id | TEXT | FK -> organizations(org_id) |
-| scope_type | TEXT | NOT NULL, CHECK IN ('GLOBAL', 'ORG_ONLY', 'ORG_AND_DESCENDANTS') |
-| assigned_by | TEXT | NOT NULL |
-| assigned_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
-| expires_at | TIMESTAMPTZ | |
-| is_active | BOOLEAN | NOT NULL DEFAULT TRUE |
-
-**Unique constraint**: (user_id, role_id, org_id)
-
-**Indexes**:
-- idx_role_assignments_user ON role_assignments(user_id)
-- idx_role_assignments_org ON role_assignments(org_id)
-- idx_role_assignments_role ON role_assignments(role_id)
-
-Introduced: Sprint 6
-
-### role_assignment_audit
-
-Purpose: Append-only audit trail for role assignment changes.
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| audit_id | BIGSERIAL | PRIMARY KEY |
-| assignment_id | UUID | NOT NULL |
-| action | TEXT | NOT NULL, CHECK IN ('GRANTED', 'REVOKED', 'EXPIRED', 'MODIFIED') |
-| actor_id | TEXT | NOT NULL |
-| actor_role | TEXT | NOT NULL |
-| details | JSONB | |
-| timestamp | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
-
-**Indexes**:
-- idx_role_audit_assignment ON role_assignment_audit(assignment_id)
-
-Introduced: Sprint 6
-
----
-
-## 7. Configuration
-
-### local_configurations
-
-Purpose: Local configuration overrides per org unit, validated against central constraints.
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| config_id | UUID | PRIMARY KEY DEFAULT gen_random_uuid() |
-| org_id | TEXT | NOT NULL, FK -> organizations(org_id) |
-| config_area | TEXT | NOT NULL, CHECK IN ('WORKING_TIME', 'FLEX_RULES', 'ORG_STRUCTURE', 'LOCAL_AGREEMENT', 'OPERATIONAL') |
-| config_key | TEXT | NOT NULL |
-| config_value | JSONB | NOT NULL |
-| effective_from | DATE | NOT NULL |
-| effective_to | DATE | |
-| version | INT | NOT NULL DEFAULT 1 |
-| agreement_code | TEXT | NOT NULL |
-| ok_version | TEXT | NOT NULL |
-| created_by | TEXT | NOT NULL |
-| approved_by | TEXT | |
-| approved_at | TIMESTAMPTZ | |
-| is_active | BOOLEAN | NOT NULL DEFAULT TRUE |
-| created_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
-
-**Unique constraint**: (org_id, config_area, config_key, effective_from, agreement_code, ok_version)
-
-**Indexes**:
-- idx_local_config_org ON local_configurations(org_id)
-- idx_local_config_area ON local_configurations(config_area)
-
-Introduced: Sprint 7
-
-### local_configuration_audit
-
-Purpose: Append-only audit trail for local configuration changes.
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| audit_id | BIGSERIAL | PRIMARY KEY |
-| config_id | UUID | NOT NULL |
-| action | TEXT | NOT NULL, CHECK IN ('CREATED', 'MODIFIED', 'DEACTIVATED', 'APPROVED') |
-| previous_value | JSONB | |
-| new_value | JSONB | |
-| actor_id | TEXT | NOT NULL |
-| actor_role | TEXT | NOT NULL |
-| timestamp | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
-
-**Indexes**:
-- idx_local_config_audit_config ON local_configuration_audit(config_id)
-
-Introduced: Sprint 7
-
----
-
-## 8. Approval
-
-### approval_periods
-
-Purpose: Period approval workflow with two-step employee/manager approval.
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| period_id | UUID | PRIMARY KEY DEFAULT gen_random_uuid() |
-| employee_id | TEXT | NOT NULL |
-| org_id | TEXT | NOT NULL, FK -> organizations(org_id) |
-| period_start | DATE | NOT NULL |
-| period_end | DATE | NOT NULL |
-| period_type | TEXT | NOT NULL, CHECK IN ('WEEKLY', 'MONTHLY') |
-| status | TEXT | NOT NULL DEFAULT 'DRAFT', CHECK IN ('DRAFT', 'EMPLOYEE_APPROVED', 'SUBMITTED', 'APPROVED', 'REJECTED') |
-| submitted_at | TIMESTAMPTZ | |
-| submitted_by | TEXT | |
-| approved_by | TEXT | |
-| approved_at | TIMESTAMPTZ | |
-| rejection_reason | TEXT | |
-| agreement_code | TEXT | NOT NULL |
-| ok_version | TEXT | NOT NULL |
-| created_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
-| employee_approved_at | TIMESTAMPTZ | (added S9) |
-| employee_approved_by | TEXT | (added S9) |
-| employee_deadline | DATE | (added S9) |
-| manager_deadline | DATE | (added S9) |
-
-**Unique constraint**: (employee_id, period_start, period_end)
-
-**Indexes**:
-- idx_approval_employee ON approval_periods(employee_id)
-- idx_approval_org ON approval_periods(org_id)
-- idx_approval_status ON approval_periods(status)
-- idx_approval_period ON approval_periods(period_start, period_end)
-
-Introduced: Sprint 6 (extended Sprint 9 with employee approval and deadlines)
-
-### approval_audit
-
-Purpose: Append-only audit trail for period approval state transitions.
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| audit_id | BIGSERIAL | PRIMARY KEY |
-| period_id | UUID | NOT NULL |
-| action | TEXT | NOT NULL, CHECK IN ('CREATED', 'SUBMITTED', 'APPROVED', 'REJECTED', 'REOPENED') |
-| actor_id | TEXT | NOT NULL |
-| actor_role | TEXT | NOT NULL |
-| comment | TEXT | |
-| timestamp | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
-
-**Indexes**:
-- idx_approval_audit_period ON approval_audit(period_id)
-
-Introduced: Sprint 6 (REOPENED action added Sprint 9)
-
----
-
-## 9. Skema
-
-### projects
-
-Purpose: Project codes configurable per org unit for time registration.
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| project_id | UUID | PRIMARY KEY DEFAULT gen_random_uuid() |
-| org_id | TEXT | NOT NULL, FK -> organizations(org_id) |
-| project_code | TEXT | NOT NULL |
-| project_name | TEXT | NOT NULL |
-| is_active | BOOLEAN | NOT NULL DEFAULT TRUE |
-| sort_order | INT | NOT NULL DEFAULT 0 |
-| created_by | TEXT | NOT NULL |
-| created_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
-
-**Unique constraint**: (org_id, project_code)
-
-**Indexes**:
-- idx_projects_org ON projects(org_id)
-
-Introduced: Sprint 9
-
-### work_time_projection
-
-Purpose: Read-path projection for self-recorded "Arbejdstid" work time (Min Tid), fed by the
-`WorkTimeRegistered` event (ADR-028 D1, ADR-018 D13 sync-in-tx). LATEST-WINS aggregate — one row per
-(employee, date); re-saving a day emits a superseding event and the projection holds the latest state.
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| employee_id | TEXT | NOT NULL |
-| date | DATE | NOT NULL |
-| intervals | JSONB | NOT NULL DEFAULT '[]'::jsonb — `[{"start":"HH:mm","end":"HH:mm"}]` |
-| manual_hours | NUMERIC(8,4) | NOT NULL DEFAULT 0 — "Tilføj timer" direct daily hours |
-| occurred_at | TIMESTAMPTZ | NOT NULL |
-| actor_id | TEXT | |
-| actor_role | TEXT | |
-| correlation_id | UUID | |
-| outbox_id | BIGINT | NOT NULL — event ordering / latest-wins guard |
-
-**Primary key**: (employee_id, date) — also serves month-range reads (employee_id + date BETWEEN)
-
-Introduced: Sprint 56
-
-> **Retired (Sprint 56, ADR-028 D5)**: `timer_sessions` (introduced S9) was DROPPED. The check-in/out
-> timer write path was removed; self-recorded work time now lives in `work_time_projection`. The
-> `TimerCheckedIn`/`TimerCheckedOut` events remain registered in EventSerializer for historical replay.
-
-### absence_type_visibility
-
-Purpose: Per-org visibility control for absence types (LocalAdmin can hide types).
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| id | UUID | PRIMARY KEY DEFAULT gen_random_uuid() |
-| org_id | TEXT | NOT NULL, FK -> organizations(org_id) |
-| absence_type | TEXT | NOT NULL |
-| is_hidden | BOOLEAN | NOT NULL DEFAULT FALSE |
-| set_by | TEXT | NOT NULL |
-| set_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
-
-**Unique constraint**: (org_id, absence_type)
-
-**Indexes**:
-- idx_absence_vis_org ON absence_type_visibility(org_id)
-
-Introduced: Sprint 9
-
----
-
-## 10. Positions
-
-### positions
-
-Purpose: Position registry for AC agreement position codes.
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| position_code | TEXT | PRIMARY KEY |
-| display_label | TEXT | NOT NULL |
-| agreement_code | TEXT | NOT NULL |
-| is_active | BOOLEAN | NOT NULL DEFAULT true |
-| created_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
-
-Introduced: Sprint 11
-
----
-
-## 11. Agreement Configs
-
-### agreement_configs
-
-Purpose: Database-backed agreement rule configurations with lifecycle (DRAFT -> ACTIVE -> ARCHIVED). ADR-014.
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| config_id | UUID | PRIMARY KEY DEFAULT gen_random_uuid() |
-| agreement_code | TEXT | NOT NULL |
-| ok_version | TEXT | NOT NULL |
-| status | TEXT | NOT NULL DEFAULT 'DRAFT', CHECK IN ('DRAFT', 'ACTIVE', 'ARCHIVED') |
-| weekly_norm_hours | DECIMAL | NOT NULL |
-| norm_period_weeks | INT | NOT NULL DEFAULT 1 |
-| norm_model | TEXT | NOT NULL DEFAULT 'WEEKLY_HOURS' |
-| annual_norm_hours | DECIMAL | NOT NULL DEFAULT 1924 |
-| max_flex_balance | DECIMAL | NOT NULL |
-| flex_carryover_max | DECIMAL | NOT NULL |
-| has_overtime | BOOLEAN | NOT NULL |
-| has_merarbejde | BOOLEAN | NOT NULL |
-| overtime_threshold_50 | DECIMAL | NOT NULL DEFAULT 37.0 |
-| overtime_threshold_100 | DECIMAL | NOT NULL DEFAULT 40.0 |
-| evening_supplement_enabled | BOOLEAN | NOT NULL DEFAULT FALSE |
-| night_supplement_enabled | BOOLEAN | NOT NULL DEFAULT FALSE |
-| weekend_supplement_enabled | BOOLEAN | NOT NULL DEFAULT FALSE |
-| holiday_supplement_enabled | BOOLEAN | NOT NULL DEFAULT FALSE |
-| evening_start | INT | NOT NULL DEFAULT 17 |
-| evening_end | INT | NOT NULL DEFAULT 23 |
-| night_start | INT | NOT NULL DEFAULT 23 |
-| night_end | INT | NOT NULL DEFAULT 6 |
-| evening_rate | DECIMAL | NOT NULL DEFAULT 1.25 |
-| night_rate | DECIMAL | NOT NULL DEFAULT 1.50 |
-| weekend_saturday_rate | DECIMAL | NOT NULL DEFAULT 1.50 |
-| weekend_sunday_rate | DECIMAL | NOT NULL DEFAULT 2.0 |
-| holiday_rate | DECIMAL | NOT NULL DEFAULT 2.0 |
-| on_call_duty_enabled | BOOLEAN | NOT NULL DEFAULT FALSE |
-| on_call_duty_rate | DECIMAL | NOT NULL DEFAULT 0.33 |
-| call_in_work_enabled | BOOLEAN | NOT NULL DEFAULT FALSE |
-| call_in_minimum_hours | DECIMAL | NOT NULL DEFAULT 3.0 |
-| call_in_rate | DECIMAL | NOT NULL DEFAULT 1.0 |
-| travel_time_enabled | BOOLEAN | NOT NULL DEFAULT FALSE |
-| working_travel_rate | DECIMAL | NOT NULL DEFAULT 1.0 |
-| non_working_travel_rate | DECIMAL | NOT NULL DEFAULT 0.5 |
-| created_by | TEXT | NOT NULL DEFAULT 'SYSTEM_SEED' |
-| created_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
-| updated_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
-| published_at | TIMESTAMPTZ | |
-| archived_at | TIMESTAMPTZ | |
-| cloned_from_id | UUID | FK -> agreement_configs(config_id) |
-| description | TEXT | |
-
-**Indexes**:
-- idx_agreement_configs_active ON agreement_configs (agreement_code, ok_version) WHERE status = 'ACTIVE' (partial unique)
-- idx_agreement_configs_code_version ON agreement_configs (agreement_code, ok_version)
-- idx_agreement_configs_status ON agreement_configs (status)
-
-Introduced: Sprint 12
-
-### agreement_config_audit
-
-Purpose: Append-only audit trail for agreement config lifecycle changes.
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| audit_id | BIGSERIAL | PRIMARY KEY |
-| config_id | UUID | NOT NULL |
-| action | TEXT | NOT NULL, CHECK IN ('CREATED', 'UPDATED', 'PUBLISHED', 'ARCHIVED', 'CLONED') |
-| previous_data | JSONB | |
-| new_data | JSONB | |
-| actor_id | TEXT | NOT NULL |
-| actor_role | TEXT | NOT NULL |
-| timestamp | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
-
-**Indexes**:
-- idx_agreement_config_audit_config ON agreement_config_audit(config_id)
-
-Introduced: Sprint 12
-
----
-
-## 12. Position Overrides
-
-### position_override_configs
-
-Purpose: Database-backed position override configurations (partial config overrides per position).
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| override_id | UUID | PRIMARY KEY DEFAULT gen_random_uuid() |
-| agreement_code | TEXT | NOT NULL |
-| ok_version | TEXT | NOT NULL |
-| position_code | TEXT | NOT NULL, FK -> positions(position_code) |
-| status | TEXT | NOT NULL DEFAULT 'ACTIVE', CHECK IN ('ACTIVE', 'INACTIVE') |
-| max_flex_balance | DECIMAL | |
-| flex_carryover_max | DECIMAL | |
-| norm_period_weeks | INT | |
-| weekly_norm_hours | DECIMAL | |
-| created_by | TEXT | NOT NULL DEFAULT 'SYSTEM_SEED' |
-| created_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
-| updated_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
-| description | TEXT | |
-
-**Indexes**:
-- idx_position_override_active_unique ON position_override_configs (agreement_code, ok_version, position_code) WHERE status = 'ACTIVE' (partial unique)
-
-Introduced: Sprint 14
-
-### position_override_config_audit
-
-Purpose: Append-only audit trail for position override config changes.
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| audit_id | BIGSERIAL | PRIMARY KEY |
-| override_id | UUID | NOT NULL |
-| action | TEXT | NOT NULL, CHECK IN ('CREATED', 'UPDATED', 'ACTIVATED', 'DEACTIVATED') |
-| previous_data | JSONB | |
-| new_data | JSONB | |
-| actor_id | TEXT | NOT NULL |
-| actor_role | TEXT | NOT NULL |
-| timestamp | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
-
-Introduced: Sprint 14
-
-### wage_type_mapping_audit
-
-Purpose: Append-only audit trail for wage type mapping changes.
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| audit_id | BIGSERIAL | PRIMARY KEY |
-| time_type | TEXT | NOT NULL |
-| ok_version | TEXT | NOT NULL |
-| agreement_code | TEXT | NOT NULL |
-| position | TEXT | NOT NULL DEFAULT '' |
-| action | TEXT | NOT NULL, CHECK IN ('CREATED', 'UPDATED', 'DELETED') |
-| previous_data | JSONB | |
-| new_data | JSONB | |
-| actor_id | TEXT | NOT NULL |
-| actor_role | TEXT | NOT NULL |
-| timestamp | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
-
-Introduced: Sprint 14
-
----
-
-## 13. Entitlements
-
-### entitlement_configs
-
-Purpose: Entitlement type definitions per agreement and OK version (vacation, care days, etc.).
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| config_id | UUID | PRIMARY KEY DEFAULT gen_random_uuid() |
-| entitlement_type | TEXT | NOT NULL |
-| agreement_code | TEXT | NOT NULL |
-| ok_version | TEXT | NOT NULL |
-| annual_quota | DECIMAL | NOT NULL |
-| accrual_model | TEXT | NOT NULL DEFAULT 'IMMEDIATE' |
-| reset_month | INT | NOT NULL DEFAULT 1 |
-| carryover_max | DECIMAL | NOT NULL DEFAULT 0 |
-| pro_rate_by_part_time | BOOLEAN | NOT NULL DEFAULT true |
-| is_per_episode | BOOLEAN | NOT NULL DEFAULT false |
-| min_age | INT | |
-| description | TEXT | |
-| created_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
-
-**Unique constraint**: (entitlement_type, agreement_code, ok_version)
-
-Introduced: Sprint 15
-
-### entitlement_balances
-
-Purpose: Per-employee entitlement balance tracking (used, planned, carryover).
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| balance_id | UUID | PRIMARY KEY DEFAULT gen_random_uuid() |
-| employee_id | TEXT | NOT NULL |
-| entitlement_type | TEXT | NOT NULL |
-| entitlement_year | INT | NOT NULL |
-| total_quota | DECIMAL | NOT NULL |
-| used | DECIMAL | NOT NULL DEFAULT 0 |
-| planned | DECIMAL | NOT NULL DEFAULT 0 |
-| carryover_in | DECIMAL | NOT NULL DEFAULT 0 |
-| updated_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
-
-**Unique constraint**: (employee_id, entitlement_type, entitlement_year)
-
-Introduced: Sprint 15
-
----
-
-## 14. Compliance
-
-### compensatory_rest
-
-Purpose: Tracks compensatory rest grants when rest period derogation is used.
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| rest_id | UUID | PRIMARY KEY DEFAULT gen_random_uuid() |
-| employee_id | TEXT | NOT NULL |
-| grant_date | DATE | NOT NULL |
-| hours_owed | DECIMAL | NOT NULL |
-| hours_taken | DECIMAL | NOT NULL DEFAULT 0 |
-| status | TEXT | NOT NULL DEFAULT 'PENDING', CHECK IN ('PENDING', 'PARTIAL', 'FULFILLED') |
-| related_violation_date | DATE | |
-| created_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
-| updated_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
-
-**Unique constraint**: (employee_id, grant_date)
-
-Introduced: Sprint 16
-
----
-
-## 15. Overtime
-
-### overtime_balances
-
-Purpose: Per-employee overtime balance tracking with compensation model (afspadsering vs udbetaling).
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| balance_id | UUID | PRIMARY KEY DEFAULT gen_random_uuid() |
-| employee_id | TEXT | NOT NULL |
-| agreement_code | TEXT | NOT NULL |
-| period_year | INT | NOT NULL |
-| accumulated | DECIMAL | NOT NULL DEFAULT 0 |
-| paid_out | DECIMAL | NOT NULL DEFAULT 0 |
-| afspadsering_used | DECIMAL | NOT NULL DEFAULT 0 |
-| compensation_model | TEXT | NOT NULL DEFAULT 'AFSPADSERING' |
-| updated_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
-
-**Unique constraint**: (employee_id, period_year)
-
-Introduced: Sprint 17
-
-### overtime_pre_approvals
-
-Purpose: Overtime pre-approval workflow with PENDING/APPROVED/REJECTED lifecycle.
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| id | UUID | PRIMARY KEY DEFAULT gen_random_uuid() |
-| employee_id | TEXT | NOT NULL |
-| period_start | DATE | NOT NULL |
-| period_end | DATE | NOT NULL |
-| max_hours | DECIMAL | NOT NULL |
-| approved_by | TEXT | |
-| approved_at | TIMESTAMPTZ | |
-| status | TEXT | NOT NULL DEFAULT 'PENDING', CHECK IN ('PENDING', 'APPROVED', 'REJECTED') |
-| reason | TEXT | |
-| created_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() |
-
-Introduced: Sprint 17
+## schema_migrations
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| migration_id | TEXT | No | PK |  |
+| applied_at | TIMESTAMPTZ | No |  | NOW() |
+| notes | TEXT | Yes |  |  |
+
+## event_streams
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| stream_id | TEXT | No | PK |  |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+
+## events
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| global_position | BIGSERIAL | No | PK |  |
+| event_id | UUID | No | UNIQUE |  |
+| stream_id | TEXT | No | FK→event_streams |  |
+| stream_version | INT | No |  |  |
+| event_type | TEXT | No |  |  |
+| data | JSONB | No |  |  |
+| occurred_at | TIMESTAMPTZ | No |  |  |
+| stored_at | TIMESTAMPTZ | No |  | NOW() |
+| actor_id | TEXT | Yes |  |  |
+| actor_role | TEXT | Yes |  |  |
+| correlation_id | UUID | Yes |  |  |
+
+**Table constraints:**
+- UNIQUE (stream_id, stream_version)
+
+**Indexes:**
+- `idx_events_stream_id` on (stream_id)
+- `idx_events_event_type` on (event_type)
+- `idx_events_occurred_at` on (occurred_at)
+- `idx_events_actor_id` on (actor_id)
+- `idx_events_correlation_id` on (correlation_id)
+
+## outbox_events
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| outbox_id | BIGSERIAL | No | PK |  |
+| service_id | TEXT | No |  |  |
+| stream_id | TEXT | No |  |  |
+| event_id | UUID | No | UNIQUE |  |
+| event_type | TEXT | No |  |  |
+| event_payload | JSONB | No |  |  |
+| correlation_id | TEXT | Yes |  |  |
+| actor_id | TEXT | Yes |  |  |
+| actor_role | TEXT | Yes |  |  |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+| published_at | TIMESTAMPTZ | Yes |  |  |
+| stream_version | INT | Yes |  |  |
+| attempts | INT | No |  | 0 |
+| last_error | TEXT | Yes |  |  |
+| last_attempt_at | TIMESTAMPTZ | Yes |  |  |
+
+**Indexes:**
+- `idx_outbox_unpublished` on (service_id, outbox_id) WHERE published_at IS NULL
+- `idx_outbox_attempts` on (service_id, attempts, last_attempt_at) WHERE published_at IS NULL AND attempts > 0
+- `idx_outbox_stream` on (stream_id, outbox_id) WHERE published_at IS NULL
+
+## outbox_messages
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| message_id | UUID | No | PK | gen_random_uuid() |
+| destination | TEXT | No |  |  |
+| payload | JSONB | No |  |  |
+| status | TEXT | No |  | 'pending' |
+| attempt_count | INT | No |  | 0 |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+| last_attempt_at | TIMESTAMPTZ | Yes |  |  |
+| delivered_at | TIMESTAMPTZ | Yes |  |  |
+| error_message | TEXT | Yes |  |  |
+| idempotency_token | UUID | Yes | UNIQUE |  |
+
+**Indexes:**
+- `idx_outbox_status` on (status)
+- `idx_outbox_created_at` on (created_at)
+- `idx_outbox_destination_status` on (destination, status)
+
+## orchestrator_tasks
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| task_id | UUID | No | PK | gen_random_uuid() |
+| task_type | TEXT | No |  |  |
+| status | TEXT | No |  | 'pending' |
+| input_data | JSONB | Yes |  |  |
+| output_data | JSONB | Yes |  |  |
+| assigned_agent | TEXT | Yes |  |  |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+| started_at | TIMESTAMPTZ | Yes |  |  |
+| completed_at | TIMESTAMPTZ | Yes |  |  |
+| error_message | TEXT | Yes |  |  |
+
+**Indexes:**
+- `idx_orch_tasks_status` on (status)
+
+## rule_versions
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| rule_id | TEXT | No |  |  |
+| ok_version | TEXT | No |  |  |
+| rule_name | TEXT | No |  |  |
+| agreement_code | TEXT | No |  |  |
+| effective_from | DATE | No |  |  |
+| effective_to | DATE | Yes |  |  |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+
+**Table constraints:**
+- PRIMARY KEY (rule_id, ok_version, agreement_code)
+
+## wage_type_mappings
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| mapping_id | UUID | No |  | gen_random_uuid() |
+| time_type | TEXT | No |  |  |
+| wage_type | TEXT | No |  |  |
+| ok_version | TEXT | No |  |  |
+| agreement_code | TEXT | No |  |  |
+| position | TEXT | No |  | '' |
+| description | TEXT | Yes |  |  |
+| effective_from | DATE | No |  |  |
+| effective_to | DATE | Yes |  |  |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+| version | BIGINT | No |  | 1 |
+
+**Table constraints:**
+- PRIMARY KEY (mapping_id)
+
+**Indexes:**
+- `idx_wtm_natural_key_open` (UNIQUE) on (time_type, ok_version, agreement_code, position) WHERE effective_to IS NULL
+- `idx_wtm_natural_key_history` (UNIQUE) on (time_type, ok_version, agreement_code, position, effective_from)
+- `idx_wtm_natural_key_open` (UNIQUE) on (time_type, ok_version, agreement_code, position) WHERE effective_to IS NULL
+- `idx_wtm_natural_key_history` (UNIQUE) on (time_type, ok_version, agreement_code, position, effective_from)
+
+## flex_balance_snapshots
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| snapshot_id | UUID | No | PK | gen_random_uuid() |
+| employee_id | TEXT | No |  |  |
+| period_start | DATE | No |  |  |
+| period_end | DATE | No |  |  |
+| balance_hours | DECIMAL | No |  |  |
+| delta | DECIMAL | No |  |  |
+| ok_version | TEXT | No |  |  |
+| agreement_code | TEXT | No |  |  |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+
+**Indexes:**
+- `idx_flex_snapshots_employee` on (employee_id)
+- `idx_flex_snapshots_period` on (period_start, period_end)
+
+## danish_public_holidays
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| holiday_date | DATE | No |  |  |
+| holiday_name | TEXT | No |  |  |
+| ok_version | TEXT | No |  |  |
+
+**Table constraints:**
+- PRIMARY KEY (holiday_date, ok_version)
+
+## audit_log
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| log_id | BIGSERIAL | No | PK |  |
+| timestamp | TIMESTAMPTZ | No |  | NOW() |
+| actor_id | TEXT | Yes |  |  |
+| actor_role | TEXT | Yes |  |  |
+| action | TEXT | No |  |  |
+| resource | TEXT | No |  |  |
+| resource_id | TEXT | Yes |  |  |
+| correlation_id | UUID | Yes |  |  |
+| http_method | TEXT | Yes |  |  |
+| http_path | TEXT | Yes |  |  |
+| http_status | INT | Yes |  |  |
+| result | TEXT | No |  | 'success' |
+| details | JSONB | Yes |  |  |
+| ip_address | TEXT | Yes |  |  |
+
+**Indexes:**
+- `idx_audit_log_actor` on (actor_id)
+- `idx_audit_log_correlation` on (correlation_id)
+- `idx_audit_log_timestamp` on (timestamp)
+
+## organizations
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| org_id | TEXT | No | PK |  |
+| org_name | TEXT | No |  |  |
+| org_type | TEXT | No |  |  |
+| parent_org_id | TEXT | Yes | FK→organizations |  |
+| materialized_path | TEXT | No |  |  |
+| agreement_code | TEXT | No |  | 'AC' |
+| ok_version | TEXT | No |  | 'OK24' |
+| is_active | BOOLEAN | No |  | TRUE |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+| updated_at | TIMESTAMPTZ | No |  | NOW() |
+
+**Indexes:**
+- `idx_org_parent` on (parent_org_id)
+- `idx_org_path` on (materialized_path text_pattern_ops)
+- `idx_org_type` on (org_type)
+
+## users
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| user_id | TEXT | No | PK |  |
+| username | TEXT | No | UNIQUE |  |
+| password_hash | TEXT | No |  |  |
+| display_name | TEXT | No |  |  |
+| email | TEXT | Yes |  |  |
+| primary_org_id | TEXT | No | FK→organizations |  |
+| agreement_code | TEXT | No |  | 'AC' |
+| ok_version | TEXT | No |  | 'OK24' |
+| employment_category | TEXT | No |  | 'Standard' |
+| is_active | BOOLEAN | No |  | TRUE |
+| version | BIGINT | No |  | 1 |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+| updated_at | TIMESTAMPTZ | No |  | NOW() |
+
+**Indexes:**
+- `idx_users_org` on (primary_org_id)
+- `idx_users_username` on (username)
+
+## employee_profiles
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| profile_id | UUID | No | PK | gen_random_uuid() |
+| employee_id | TEXT | No | FK→users |  |
+| part_time_fraction | NUMERIC(4,3) | No |  | 1.000 |
+| position | TEXT | Yes |  |  |
+| effective_from | DATE | No |  | '0001-01-01' |
+| effective_to | DATE | Yes |  |  |
+| version | BIGINT | No |  | 1 |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+| updated_at | TIMESTAMPTZ | No |  | NOW() |
+
+**Indexes:**
+- `idx_employee_profiles_live` (UNIQUE) on (employee_id) WHERE effective_to IS NULL
+- `idx_employee_profiles_history` (UNIQUE) on (employee_id, effective_from)
+
+## employee_profile_audit
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| audit_id | BIGSERIAL | No | PK |  |
+| profile_id | UUID | No |  |  |
+| employee_id | TEXT | No |  |  |
+| action | TEXT | No |  |  |
+| previous_data | JSONB | Yes |  |  |
+| new_data | JSONB | Yes |  |  |
+| version_before | BIGINT | Yes |  |  |
+| version_after | BIGINT | Yes |  |  |
+| actor_id | TEXT | No |  |  |
+| actor_role | TEXT | No |  |  |
+| timestamp | TIMESTAMPTZ | No |  | NOW() |
+
+**Indexes:**
+- `idx_employee_profile_audit_profile_id` on (profile_id)
+- `idx_employee_profile_audit_employee_id` on (employee_id)
+
+## user_agreement_codes
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| assignment_id | UUID | No | PK |  |
+| user_id | TEXT | No | FK→users |  |
+| agreement_code | TEXT | No |  |  |
+| effective_from | DATE | No |  | '0001-01-01' |
+| effective_to | DATE | Yes |  |  |
+| version | BIGINT | No |  | 1 |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+| updated_at | TIMESTAMPTZ | No |  | NOW() |
+
+**Indexes:**
+- `idx_user_agreement_codes_live` (UNIQUE) on (user_id) WHERE effective_to IS NULL
+- `idx_user_agreement_codes_history` (UNIQUE) on (user_id, effective_from)
+
+## user_agreement_codes_audit
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| audit_id | BIGSERIAL | No | PK |  |
+| assignment_id | UUID | No |  |  |
+| user_id | TEXT | No |  |  |
+| action | TEXT | No |  |  |
+| previous_data | JSONB | Yes |  |  |
+| new_data | JSONB | Yes |  |  |
+| version_before | BIGINT | Yes |  |  |
+| version_after | BIGINT | Yes |  |  |
+| actor_id | TEXT | No |  |  |
+| actor_role | TEXT | No |  |  |
+| audit_at | TIMESTAMPTZ | No |  | NOW() |
+
+**Indexes:**
+- `idx_user_agreement_codes_audit_assignment_id` on (assignment_id)
+- `idx_user_agreement_codes_audit_user_id` on (user_id)
+
+## users_audit
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| audit_id | BIGSERIAL | No | PK |  |
+| user_id | TEXT | No |  |  |
+| action | TEXT | No |  |  |
+| previous_data | JSONB | Yes |  |  |
+| new_data | JSONB | Yes |  |  |
+| version_before | BIGINT | Yes |  |  |
+| version_after | BIGINT | Yes |  |  |
+| actor_id | TEXT | No |  |  |
+| actor_role | TEXT | No |  |  |
+| audit_at | TIMESTAMPTZ | No |  | NOW() |
+
+**Indexes:**
+- `idx_users_audit_user_id` on (user_id)
+- `idx_users_audit_at` on (audit_at)
+
+## roles
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| role_id | TEXT | No | PK |  |
+| role_name | TEXT | No |  |  |
+| description | TEXT | Yes |  |  |
+| hierarchy_level | INT | No |  |  |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+
+## role_assignments
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| assignment_id | UUID | No | PK | gen_random_uuid() |
+| user_id | TEXT | No | FK→users |  |
+| role_id | TEXT | No | FK→roles |  |
+| org_id | TEXT | Yes | FK→organizations |  |
+| scope_type | TEXT | No |  |  |
+| assigned_by | TEXT | No |  |  |
+| assigned_at | TIMESTAMPTZ | No |  | NOW() |
+| expires_at | TIMESTAMPTZ | Yes |  |  |
+| is_active | BOOLEAN | No |  | TRUE |
+
+**Table constraints:**
+- UNIQUE (user_id, role_id, org_id)
+
+**Indexes:**
+- `idx_role_assignments_user` on (user_id)
+- `idx_role_assignments_org` on (org_id)
+- `idx_role_assignments_role` on (role_id)
+
+## role_assignment_audit
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| audit_id | BIGSERIAL | No | PK |  |
+| assignment_id | UUID | No |  |  |
+| action | TEXT | No |  |  |
+| actor_id | TEXT | No |  |  |
+| actor_role | TEXT | No |  |  |
+| details | JSONB | Yes |  |  |
+| timestamp | TIMESTAMPTZ | No |  | NOW() |
+
+**Indexes:**
+- `idx_role_audit_assignment` on (assignment_id)
+
+## local_configurations
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| config_id | UUID | No | PK | gen_random_uuid() |
+| org_id | TEXT | No | FK→organizations |  |
+| config_area | TEXT | No |  |  |
+| config_key | TEXT | No |  |  |
+| config_value | JSONB | No |  |  |
+| effective_from | DATE | No |  |  |
+| effective_to | DATE | Yes |  |  |
+| version | INT | No |  | 1 |
+| agreement_code | TEXT | No |  |  |
+| ok_version | TEXT | No |  |  |
+| created_by | TEXT | No |  |  |
+| approved_by | TEXT | Yes |  |  |
+| approved_at | TIMESTAMPTZ | Yes |  |  |
+| is_active | BOOLEAN | No |  | TRUE |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+
+**Table constraints:**
+- UNIQUE (org_id, config_area, config_key, effective_from, agreement_code, ok_version)
+
+**Indexes:**
+- `idx_local_config_org` on (org_id)
+- `idx_local_config_area` on (config_area)
+
+## local_configuration_audit
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| audit_id | BIGSERIAL | No | PK |  |
+| config_id | UUID | No |  |  |
+| action | TEXT | No |  |  |
+| previous_value | JSONB | Yes |  |  |
+| new_value | JSONB | Yes |  |  |
+| actor_id | TEXT | No |  |  |
+| actor_role | TEXT | No |  |  |
+| timestamp | TIMESTAMPTZ | No |  | NOW() |
+
+**Indexes:**
+- `idx_local_config_audit_config` on (config_id)
+
+## local_agreement_profiles
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| profile_id | UUID | No | PK | gen_random_uuid() |
+| org_id | TEXT | No | FK→organizations |  |
+| agreement_code | TEXT | No |  |  |
+| ok_version | TEXT | No |  |  |
+| effective_from | DATE | No |  |  |
+| effective_to | DATE | Yes |  |  |
+| weekly_norm_hours | NUMERIC(5,2) | Yes |  |  |
+| max_flex_balance | NUMERIC(6,2) | Yes |  |  |
+| flex_carryover_max | NUMERIC(6,2) | Yes |  |  |
+| max_overtime_hours_per_period | NUMERIC(6,2) | Yes |  |  |
+| overtime_requires_pre_approval | BOOLEAN | Yes |  |  |
+| created_by | TEXT | No |  |  |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+| version | BIGINT | No |  | 1 |
+
+**Indexes:**
+- `uq_local_agreement_profile_active` (UNIQUE) on (org_id, agreement_code, ok_version) WHERE effective_to IS NULL
+- `idx_local_agreement_profile_org` on (org_id)
+- `idx_local_agreement_profile_history` on (org_id, agreement_code, ok_version, effective_from DESC)
+
+## local_agreement_profile_audit
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| audit_id | BIGSERIAL | No | PK |  |
+| profile_id | UUID | No |  |  |
+| action | TEXT | No |  |  |
+| delta_jsonb | JSONB | No |  |  |
+| actor_id | TEXT | No |  |  |
+| actor_role | TEXT | No |  |  |
+| timestamp | TIMESTAMPTZ | No |  | NOW() |
+
+**Indexes:**
+- `idx_local_profile_audit_profile` on (profile_id)
+
+## approval_periods
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| period_id | UUID | No | PK | gen_random_uuid() |
+| employee_id | TEXT | No |  |  |
+| org_id | TEXT | No | FK→organizations |  |
+| period_start | DATE | No |  |  |
+| period_end | DATE | No |  |  |
+| period_type | TEXT | No |  |  |
+| status | TEXT | No |  | 'DRAFT' |
+| submitted_at | TIMESTAMPTZ | Yes |  |  |
+| submitted_by | TEXT | Yes |  |  |
+| approved_by | TEXT | Yes |  |  |
+| approved_at | TIMESTAMPTZ | Yes |  |  |
+| rejection_reason | TEXT | Yes |  |  |
+| agreement_code | TEXT | No |  |  |
+| ok_version | TEXT | No |  |  |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+| employee_approved_at | TIMESTAMPTZ | Yes |  |  |
+| employee_approved_by | TEXT | Yes |  |  |
+| employee_deadline | DATE | Yes |  |  |
+| manager_deadline | DATE | Yes |  |  |
+| designated_approver_id | TEXT | Yes |  |  |
+| approval_method | TEXT | Yes |  | 'PRE_REPORTING_LINE' |
+| explicit_fallback_confirmation | BOOLEAN | Yes |  | FALSE |
+
+**Table constraints:**
+- UNIQUE (employee_id, period_start, period_end)
+
+**Indexes:**
+- `idx_approval_employee` on (employee_id)
+- `idx_approval_org` on (org_id)
+- `idx_approval_status` on (status)
+- `idx_approval_period` on (period_start, period_end)
+
+## approval_audit
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| audit_id | BIGSERIAL | No | PK |  |
+| period_id | UUID | No |  |  |
+| action | TEXT | No |  |  |
+| actor_id | TEXT | No |  |  |
+| actor_role | TEXT | No |  |  |
+| comment | TEXT | Yes |  |  |
+| timestamp | TIMESTAMPTZ | No |  | NOW() |
+
+**Indexes:**
+- `idx_approval_audit_period` on (period_id)
+
+## projects
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| project_id | UUID | No | PK | gen_random_uuid() |
+| org_id | TEXT | No | FK→organizations |  |
+| project_code | TEXT | No |  |  |
+| project_name | TEXT | No |  |  |
+| is_active | BOOLEAN | No |  | TRUE |
+| sort_order | INT | No |  | 0 |
+| created_by | TEXT | No |  |  |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+
+**Table constraints:**
+- UNIQUE (org_id, project_code)
+
+**Indexes:**
+- `idx_projects_org` on (org_id)
+
+## user_project_selections
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| employee_id | TEXT | No |  |  |
+| project_id | UUID | No | FK→projects |  |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+
+**Table constraints:**
+- PRIMARY KEY (employee_id, project_id)
+
+**Indexes:**
+- `idx_user_project_sel_employee` on (employee_id)
+
+## absence_type_visibility
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| id | UUID | No | PK | gen_random_uuid() |
+| org_id | TEXT | No | FK→organizations |  |
+| absence_type | TEXT | No |  |  |
+| is_hidden | BOOLEAN | No |  | FALSE |
+| set_by | TEXT | No |  |  |
+| set_at | TIMESTAMPTZ | No |  | NOW() |
+
+**Table constraints:**
+- UNIQUE (org_id, absence_type)
+
+**Indexes:**
+- `idx_absence_vis_org` on (org_id)
+
+## positions
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| position_code | TEXT | No | PK |  |
+| display_label | TEXT | No |  |  |
+| agreement_code | TEXT | No |  |  |
+| is_active | BOOLEAN | No |  | true |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+
+## agreement_configs
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| config_id | UUID | No | PK | gen_random_uuid() |
+| agreement_code | TEXT | No |  |  |
+| ok_version | TEXT | No |  |  |
+| status | TEXT | No |  | 'DRAFT' |
+| weekly_norm_hours | DECIMAL | No |  |  |
+| norm_period_weeks | INT | No |  | 1 |
+| norm_model | TEXT | No |  | 'WEEKLY_HOURS' |
+| annual_norm_hours | DECIMAL | No |  | 1924 |
+| max_flex_balance | DECIMAL | No |  |  |
+| flex_carryover_max | DECIMAL | No |  |  |
+| has_overtime | BOOLEAN | No |  |  |
+| has_merarbejde | BOOLEAN | No |  |  |
+| overtime_threshold_50 | DECIMAL | No |  | 37.0 |
+| overtime_threshold_100 | DECIMAL | No |  | 40.0 |
+| evening_supplement_enabled | BOOLEAN | No |  | FALSE |
+| night_supplement_enabled | BOOLEAN | No |  | FALSE |
+| weekend_supplement_enabled | BOOLEAN | No |  | FALSE |
+| holiday_supplement_enabled | BOOLEAN | No |  | FALSE |
+| evening_start | INT | No |  | 17 |
+| evening_end | INT | No |  | 23 |
+| night_start | INT | No |  | 23 |
+| night_end | INT | No |  | 6 |
+| evening_rate | DECIMAL | No |  | 1.25 |
+| night_rate | DECIMAL | No |  | 1.50 |
+| weekend_saturday_rate | DECIMAL | No |  | 1.50 |
+| weekend_sunday_rate | DECIMAL | No |  | 2.0 |
+| holiday_rate | DECIMAL | No |  | 2.0 |
+| on_call_duty_enabled | BOOLEAN | No |  | FALSE |
+| on_call_duty_rate | DECIMAL | No |  | 0.33 |
+| call_in_work_enabled | BOOLEAN | No |  | FALSE |
+| call_in_minimum_hours | DECIMAL | No |  | 3.0 |
+| call_in_rate | DECIMAL | No |  | 1.0 |
+| travel_time_enabled | BOOLEAN | No |  | FALSE |
+| working_travel_rate | DECIMAL | No |  | 1.0 |
+| non_working_travel_rate | DECIMAL | No |  | 0.5 |
+| max_daily_hours | DECIMAL | No |  | 13.0 |
+| minimum_rest_hours | DECIMAL | No |  | 11.0 |
+| rest_period_derogation_allowed | BOOLEAN | No |  | FALSE |
+| weekly_max_hours_reference_period | INT | No |  | 17 |
+| voluntary_unsocial_hours_allowed | BOOLEAN | No |  | TRUE |
+| default_compensation_model | TEXT | No |  | 'UDBETALING' |
+| employee_compensation_choice | BOOLEAN | No |  | FALSE |
+| max_overtime_hours_per_period | DECIMAL | No |  | 0 |
+| overtime_requires_pre_approval | BOOLEAN | No |  | FALSE |
+| created_by | TEXT | No |  | 'SYSTEM_SEED' |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+| updated_at | TIMESTAMPTZ | No |  | NOW() |
+| published_at | TIMESTAMPTZ | Yes |  |  |
+| archived_at | TIMESTAMPTZ | Yes |  |  |
+| cloned_from_id | UUID | Yes | FK→agreement_configs |  |
+| description | TEXT | Yes |  |  |
+| version | BIGINT | No |  | 1 |
+
+**Indexes:**
+- `idx_agreement_configs_active` (UNIQUE) on (agreement_code, ok_version) WHERE status = 'ACTIVE'
+- `idx_agreement_configs_code_version` on (agreement_code, ok_version)
+- `idx_agreement_configs_status` on (status)
+
+## agreement_config_audit
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| audit_id | BIGSERIAL | No | PK |  |
+| config_id | UUID | No |  |  |
+| action | TEXT | No |  |  |
+| previous_data | JSONB | Yes |  |  |
+| new_data | JSONB | Yes |  |  |
+| actor_id | TEXT | No |  |  |
+| actor_role | TEXT | No |  |  |
+| timestamp | TIMESTAMPTZ | No |  | NOW() |
+| version_before | BIGINT | Yes |  |  |
+| version_after | BIGINT | Yes |  |  |
+
+**Indexes:**
+- `idx_agreement_config_audit_config` on (config_id)
+
+## compensatory_rest
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| id | UUID | No | PK | gen_random_uuid() |
+| employee_id | TEXT | No |  |  |
+| source_date | DATE | No |  |  |
+| compensatory_date | DATE | Yes |  |  |
+| hours | DECIMAL | No |  |  |
+| status | TEXT | No |  | 'PENDING' |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+
+**Indexes:**
+- `idx_compensatory_rest_employee` on (employee_id)
+- `idx_compensatory_rest_status` on (status)
+
+## position_override_configs
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| override_id | UUID | No | PK | gen_random_uuid() |
+| agreement_code | TEXT | No |  |  |
+| ok_version | TEXT | No |  |  |
+| position_code | TEXT | No | FK→positions |  |
+| status | TEXT | No |  | 'ACTIVE' |
+| max_flex_balance | DECIMAL | Yes |  |  |
+| flex_carryover_max | DECIMAL | Yes |  |  |
+| norm_period_weeks | INT | Yes |  |  |
+| weekly_norm_hours | DECIMAL | Yes |  |  |
+| created_by | TEXT | No |  | 'SYSTEM_SEED' |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+| updated_at | TIMESTAMPTZ | No |  | NOW() |
+| description | TEXT | Yes |  |  |
+| version | BIGINT | No |  | 1 |
+
+**Indexes:**
+- `idx_position_override_active_unique` (UNIQUE) on (agreement_code, ok_version, position_code) WHERE status = 'ACTIVE'
+
+## position_override_config_audit
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| audit_id | BIGSERIAL | No | PK |  |
+| override_id | UUID | No |  |  |
+| action | TEXT | No |  |  |
+| previous_data | JSONB | Yes |  |  |
+| new_data | JSONB | Yes |  |  |
+| actor_id | TEXT | No |  |  |
+| actor_role | TEXT | No |  |  |
+| timestamp | TIMESTAMPTZ | No |  | NOW() |
+| version_before | BIGINT | Yes |  |  |
+| version_after | BIGINT | Yes |  |  |
+
+## wage_type_mapping_audit
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| audit_id | BIGSERIAL | No | PK |  |
+| time_type | TEXT | No |  |  |
+| ok_version | TEXT | No |  |  |
+| agreement_code | TEXT | No |  |  |
+| position | TEXT | No |  | '' |
+| action | TEXT | No |  |  |
+| previous_data | JSONB | Yes |  |  |
+| new_data | JSONB | Yes |  |  |
+| actor_id | TEXT | No |  |  |
+| actor_role | TEXT | No |  |  |
+| timestamp | TIMESTAMPTZ | No |  | NOW() |
+| version_before | BIGINT | Yes |  |  |
+| version_after | BIGINT | Yes |  |  |
+
+## entitlement_configs
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| config_id | UUID | No | PK | gen_random_uuid() |
+| entitlement_type | TEXT | No |  |  |
+| agreement_code | TEXT | No |  |  |
+| ok_version | TEXT | No |  |  |
+| annual_quota | DECIMAL | No |  |  |
+| accrual_model | TEXT | No |  | 'IMMEDIATE' |
+| reset_month | INT | No |  | 1 |
+| carryover_max | DECIMAL | No |  | 0 |
+| pro_rate_by_part_time | BOOLEAN | No |  | true |
+| is_per_episode | BOOLEAN | No |  | false |
+| min_age | INT | Yes |  |  |
+| description | TEXT | Yes |  |  |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+| effective_from | DATE | No |  | '0001-01-01' |
+| effective_to | DATE | Yes |  |  |
+| version | BIGINT | No |  | 1 |
+
+**Indexes:**
+- `idx_ec_natural_key_open` (UNIQUE) on (entitlement_type, agreement_code, ok_version) WHERE effective_to IS NULL
+- `idx_ec_natural_key_history` (UNIQUE) on (entitlement_type, agreement_code, ok_version, effective_from)
+- `idx_ec_natural_key_open` (UNIQUE) on (entitlement_type, agreement_code, ok_version) WHERE effective_to IS NULL
+- `idx_ec_natural_key_history` (UNIQUE) on (entitlement_type, agreement_code, ok_version, effective_from)
+
+## entitlement_config_audit
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| audit_id | BIGSERIAL | No | PK |  |
+| config_id | UUID | No |  |  |
+| entitlement_type | TEXT | No |  |  |
+| agreement_code | TEXT | No |  |  |
+| ok_version | TEXT | No |  |  |
+| action | TEXT | No |  |  |
+| previous_data | JSONB | Yes |  |  |
+| new_data | JSONB | Yes |  |  |
+| version_before | BIGINT | Yes |  |  |
+| version_after | BIGINT | Yes |  |  |
+| actor_id | TEXT | No |  |  |
+| actor_role | TEXT | No |  |  |
+| timestamp | TIMESTAMPTZ | No |  | NOW() |
+
+## entitlement_balances
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| balance_id | UUID | No | PK | gen_random_uuid() |
+| employee_id | TEXT | No |  |  |
+| entitlement_type | TEXT | No |  |  |
+| entitlement_year | INT | No |  |  |
+| total_quota | DECIMAL | No |  |  |
+| used | DECIMAL | No |  | 0 |
+| planned | DECIMAL | No |  | 0 |
+| carryover_in | DECIMAL | No |  | 0 |
+| updated_at | TIMESTAMPTZ | No |  | NOW() |
+
+**Table constraints:**
+- UNIQUE (employee_id, entitlement_type, entitlement_year)
+
+## time_entries_projection
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| event_id | UUID | No | PK |  |
+| employee_id | TEXT | No |  |  |
+| date | DATE | No |  |  |
+| hours | NUMERIC(8,4) | No |  |  |
+| start_time | TIME | Yes |  |  |
+| end_time | TIME | Yes |  |  |
+| task_id | TEXT | Yes |  |  |
+| activity_type | TEXT | Yes |  |  |
+| agreement_code | TEXT | No |  |  |
+| ok_version | TEXT | No |  |  |
+| voluntary_unsocial_hours | BOOLEAN | No |  | false |
+| occurred_at | TIMESTAMPTZ | No |  |  |
+| actor_id | TEXT | Yes |  |  |
+| actor_role | TEXT | Yes |  |  |
+| correlation_id | UUID | Yes |  |  |
+| outbox_id | BIGINT | No |  |  |
+
+**Indexes:**
+- `idx_time_entries_proj_emp_date_outbox` on (employee_id, date, outbox_id)
+- `idx_time_entries_proj_emp_outbox` on (employee_id, outbox_id)
+
+## absences_projection
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| event_id | UUID | No | PK |  |
+| employee_id | TEXT | No |  |  |
+| date | DATE | No |  |  |
+| absence_type | TEXT | No |  |  |
+| hours | NUMERIC(8,4) | No |  |  |
+| agreement_code | TEXT | No |  |  |
+| ok_version | TEXT | No |  |  |
+| occurred_at | TIMESTAMPTZ | No |  |  |
+| actor_id | TEXT | Yes |  |  |
+| actor_role | TEXT | Yes |  |  |
+| correlation_id | UUID | Yes |  |  |
+| outbox_id | BIGINT | No |  |  |
+
+**Indexes:**
+- `idx_absences_proj_emp_date_outbox` on (employee_id, date, outbox_id)
+- `idx_absences_proj_emp_outbox` on (employee_id, outbox_id)
+
+## work_time_projection
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| employee_id | TEXT | No |  |  |
+| date | DATE | No |  |  |
+| intervals | JSONB | No |  | '[]'::jsonb |
+| manual_hours | NUMERIC(8,4) | No |  | 0 |
+| occurred_at | TIMESTAMPTZ | No |  |  |
+| actor_id | TEXT | Yes |  |  |
+| actor_role | TEXT | Yes |  |  |
+| correlation_id | UUID | Yes |  |  |
+| outbox_id | BIGINT | No |  |  |
+
+**Table constraints:**
+- PRIMARY KEY (employee_id, date)
+
+## overtime_balances
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| balance_id | UUID | No | PK | gen_random_uuid() |
+| employee_id | TEXT | No |  |  |
+| agreement_code | TEXT | No |  |  |
+| period_year | INT | No |  |  |
+| accumulated | DECIMAL | No |  | 0 |
+| paid_out | DECIMAL | No |  | 0 |
+| afspadsering_used | DECIMAL | No |  | 0 |
+| compensation_model | TEXT | No |  | 'UDBETALING' |
+| updated_at | TIMESTAMPTZ | No |  | NOW() |
+
+**Table constraints:**
+- UNIQUE (employee_id, period_year)
+
+**Indexes:**
+- `idx_overtime_balances_employee` on (employee_id)
+
+## overtime_pre_approvals
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| id | UUID | No | PK | gen_random_uuid() |
+| employee_id | TEXT | No |  |  |
+| period_start | DATE | No |  |  |
+| period_end | DATE | No |  |  |
+| max_hours | DECIMAL | No |  |  |
+| approved_by | TEXT | Yes |  |  |
+| approved_at | TIMESTAMPTZ | Yes |  |  |
+| status | TEXT | No |  | 'PENDING' |
+| reason | TEXT | Yes |  |  |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+| authorization_mode | TEXT | No |  | 'PRIOR_APPROVAL' |
+| necessity_reason | TEXT | Yes |  |  |
+| acknowledged_at | TIMESTAMPTZ | Yes |  |  |
+| acknowledged_by | TEXT | Yes |  |  |
+
+**Indexes:**
+- `idx_overtime_pre_approvals_employee` on (employee_id)
+- `idx_overtime_pre_approvals_status` on (status)
+
+## segment_manifests
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| manifest_id | UUID | No | PK |  |
+| period_start | DATE | No |  |  |
+| period_end | DATE | No |  |  |
+| employee_id | TEXT | No |  |  |
+| calculation_kind | TEXT | No |  |  |
+| boundary_cause_summary | TEXT[] | No |  |  |
+| created_at | TIMESTAMPTZ | No |  | now() |
+| segments_jsonb | JSONB | No |  |  |
+
+**Indexes:**
+- `idx_segment_manifests_employee_period` on (employee_id, period_start)
+- `idx_segment_manifests_boundary_cause` on (boundary_cause_summary)
+
+## role_config_overrides
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| override_id | UUID | No | PK | gen_random_uuid() |
+| employment_category | TEXT | No |  |  |
+| agreement_code | TEXT | No |  |  |
+| ok_version | TEXT | No |  |  |
+| effective_from | DATE | No |  | '0001-01-01' |
+| effective_to | DATE | Yes |  |  |
+| version | BIGINT | No |  | 1 |
+| merarbejde_compensation_right | TEXT | Yes |  |  |
+| has_merarbejde | BOOLEAN | Yes |  |  |
+| has_overtime | BOOLEAN | Yes |  |  |
+| has_evening_supplement | BOOLEAN | Yes |  |  |
+| has_night_supplement | BOOLEAN | Yes |  |  |
+| has_weekend_supplement | BOOLEAN | Yes |  |  |
+| has_holiday_supplement | BOOLEAN | Yes |  |  |
+| max_flex_balance | NUMERIC(7,2) | Yes |  |  |
+| flex_carryover_max | NUMERIC(7,2) | Yes |  |  |
+| norm_period_weeks | INT | Yes |  |  |
+| weekly_norm_hours | NUMERIC(5,2) | Yes |  |  |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+| created_by | TEXT | No |  |  |
+| created_by_role | TEXT | No |  |  |
+
+**Indexes:**
+- `idx_role_config_overrides_live` (UNIQUE) on (employment_category, agreement_code, ok_version) WHERE effective_to IS NULL
+- `idx_role_config_overrides_history` (UNIQUE) on (employment_category, agreement_code, ok_version, effective_from)
+
+## role_config_override_audit
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| audit_id | BIGSERIAL | No | PK |  |
+| override_id | UUID | No | FK→role_config_overrides |  |
+| action | TEXT | No |  |  |
+| version_before | BIGINT | Yes |  |  |
+| version_after | BIGINT | Yes |  |  |
+| previous_data | JSONB | Yes |  |  |
+| new_data | JSONB | Yes |  |  |
+| actor_id | TEXT | No |  |  |
+| actor_role | TEXT | No |  |  |
+| timestamp | TIMESTAMPTZ | No |  | NOW() |
+
+**Indexes:**
+- `idx_role_config_override_audit_override` on (override_id)
+
+## overtime_authorization_audit
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| audit_id | BIGSERIAL | No | PK |  |
+| pre_approval_id | UUID | No | FK→overtime_pre_approvals |  |
+| action | TEXT | No |  |  |
+| version_before | BIGINT | Yes |  |  |
+| version_after | BIGINT | Yes |  |  |
+| previous_data | JSONB | Yes |  |  |
+| new_data | JSONB | Yes |  |  |
+| actor_id | TEXT | No |  |  |
+| actor_role | TEXT | No |  |  |
+| timestamp | TIMESTAMPTZ | No |  | NOW() |
+
+**Indexes:**
+- `idx_overtime_authorization_audit_pre_approval` on (pre_approval_id)
+
+## audit_projection
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| projection_id | UUID | No | PK | gen_random_uuid() |
+| event_id | UUID | No | UNIQUE |  |
+| outbox_id | BIGINT | No |  |  |
+| event_type | TEXT | No |  |  |
+| visibility_scope | TEXT | No |  |  |
+| target_org_id | TEXT | Yes | FK→organizations |  |
+| target_resource_id | TEXT | Yes |  |  |
+| actor_id | TEXT | Yes |  |  |
+| actor_primary_org_id | TEXT | Yes |  |  |
+| occurred_at | TIMESTAMPTZ | No |  |  |
+| correlation_id | UUID | Yes |  |  |
+| details | JSONB | No |  |  |
+| projected_at | TIMESTAMPTZ | No |  | NOW() |
+
+**Table constraints:**
+- CONSTRAINT chk_target_org_required_when_tenant CHECK ( (visibility_scope = 'TENANT_TARGETED' AND target_org_id IS NOT NULL) OR (visibility_scope IN ('GLOBAL_TENANT_VISIBLE', 'GLOBAL_ADMIN_ONLY')) )
+
+**Indexes:**
+- `idx_audit_projection_target_org_time` on (target_org_id, occurred_at DESC) WHERE target_org_id IS NOT NULL
+- `idx_audit_projection_global_visible` on (occurred_at DESC) WHERE visibility_scope = 'GLOBAL_TENANT_VISIBLE'
+- `idx_audit_projection_actor_org_time` on (actor_primary_org_id, occurred_at DESC) WHERE actor_primary_org_id IS NOT NULL
+- `idx_audit_projection_event_type_time` on (event_type, occurred_at DESC)
+- `idx_audit_projection_outbox_id` on (outbox_id)
+
+## reporting_lines
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| reporting_line_id | UUID | No | PK | gen_random_uuid() |
+| employee_id | TEXT | No | FK→users |  |
+| manager_id | TEXT | No | FK→users |  |
+| tree_root_org_id | TEXT | No | FK→organizations |  |
+| relationship | TEXT | No |  | 'PRIMARY' |
+| effective_from | DATE | No |  |  |
+| effective_to | DATE | Yes |  |  |
+| source | TEXT | No |  | 'MANUAL' |
+| version | BIGINT | No |  | 1 |
+| created_by | TEXT | No |  |  |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+| scheduled_expiry | DATE | Yes |  |  |
+
+**Table constraints:**
+- CHECK (employee_id <> manager_id)
+
+**Indexes:**
+- `uq_reporting_line_active_primary` (UNIQUE) on (employee_id) WHERE effective_to IS NULL AND relationship = 'PRIMARY'
+- `uq_reporting_line_active_acting` (UNIQUE) on (employee_id) WHERE effective_to IS NULL AND relationship = 'ACTING'
+- `idx_reporting_lines_manager` on (manager_id) WHERE effective_to IS NULL
+- `idx_reporting_lines_employee_history` on (employee_id, effective_from DESC)
+- `idx_reporting_lines_tree_root` on (tree_root_org_id) WHERE effective_to IS NULL
+
+## reporting_line_audit
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| audit_id | BIGSERIAL | No | PK |  |
+| reporting_line_id | UUID | No |  |  |
+| action | TEXT | No |  |  |
+| actor_id | TEXT | No |  |  |
+| correlation_id | UUID | Yes |  |  |
+| version_before | BIGINT | Yes |  |  |
+| version_after | BIGINT | Yes |  |  |
+| metadata | JSONB | Yes |  |  |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+
+**Indexes:**
+- `idx_reporting_line_audit_line` on (reporting_line_id)
+
+## reporting_line_tree_settings
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| tree_root_org_id | TEXT | No | PK, FK→organizations |  |
+| enforcement_mode | TEXT | No |  | 'PREFERRED' |
+| version | BIGINT | No |  | 1 |
+| updated_by | TEXT | No |  |  |
+| updated_at | TIMESTAMPTZ | No |  | NOW() |
 
 ---
 
 ## Table Summary
 
-| # | Table | Domain | Sprint | Audit Table |
-|---|-------|--------|--------|-------------|
-| 1 | event_streams | Event Store | S2 | -- |
-| 2 | events | Event Store | S2 (S3) | -- |
-| 3 | outbox_messages | Outbox | S2 | -- |
-| 4 | orchestrator_tasks | Orchestration | S2 | -- |
-| 5 | rule_versions | Rules | S2 | -- |
-| 6 | wage_type_mappings | Wage Types | S2 (S11) | wage_type_mapping_audit (S14) |
-| 7 | flex_balance_snapshots | Flex | S2 | -- |
-| 8 | danish_public_holidays | Holidays | S2 | -- |
-| 9 | audit_log | Audit | S3 | -- (is audit) |
-| 10 | organizations | Org | S6 | -- |
-| 11 | users | Users | S6 | -- |
-| 12 | roles | RBAC | S6 | -- |
-| 13 | role_assignments | RBAC | S6 | role_assignment_audit (S6) |
-| 14 | role_assignment_audit | RBAC Audit | S6 | -- (is audit) |
-| 15 | local_configurations | Config | S7 | local_configuration_audit (S7) |
-| 16 | local_configuration_audit | Config Audit | S7 | -- (is audit) |
-| 17 | approval_periods | Approval | S6 (S9) | approval_audit (S6) |
-| 18 | approval_audit | Approval Audit | S6 (S9) | -- (is audit) |
-| 19 | projects | Skema | S9 | -- |
-| 20 | timer_sessions | Skema | S9 | -- |
-| 21 | absence_type_visibility | Skema | S9 | -- |
-| 22 | positions | Positions | S11 | -- |
-| 23 | agreement_configs | Agreement Configs | S12 | agreement_config_audit (S12) |
-| 24 | agreement_config_audit | Agreement Config Audit | S12 | -- (is audit) |
-| 25 | position_override_configs | Position Overrides | S14 | position_override_config_audit (S14) |
-| 26 | position_override_config_audit | Position Override Audit | S14 | -- (is audit) |
-| 27 | wage_type_mapping_audit | Wage Type Audit | S14 | -- (is audit) |
-| 28 | entitlement_configs | Entitlements | S15 | -- |
-| 29 | entitlement_balances | Entitlements | S15 | -- |
-| 30 | compensatory_rest | Compliance | S16 | -- |
-| 31 | overtime_balances | Overtime | S17 | -- |
-| 32 | overtime_pre_approvals | Overtime | S17 | -- |
+| # | Table | Audit? |
+|---|-------|--------|
+| 1 | schema_migrations | -- |
+| 2 | event_streams | -- |
+| 3 | events | -- |
+| 4 | outbox_events | -- |
+| 5 | outbox_messages | -- |
+| 6 | orchestrator_tasks | -- |
+| 7 | rule_versions | -- |
+| 8 | wage_type_mappings | -- |
+| 9 | flex_balance_snapshots | -- |
+| 10 | danish_public_holidays | -- |
+| 11 | audit_log | -- |
+| 12 | organizations | -- |
+| 13 | users | -- |
+| 14 | employee_profiles | -- |
+| 15 | employee_profile_audit | audit |
+| 16 | user_agreement_codes | -- |
+| 17 | user_agreement_codes_audit | audit |
+| 18 | users_audit | audit |
+| 19 | roles | -- |
+| 20 | role_assignments | -- |
+| 21 | role_assignment_audit | audit |
+| 22 | local_configurations | -- |
+| 23 | local_configuration_audit | audit |
+| 24 | local_agreement_profiles | -- |
+| 25 | local_agreement_profile_audit | audit |
+| 26 | approval_periods | -- |
+| 27 | approval_audit | audit |
+| 28 | projects | -- |
+| 29 | user_project_selections | -- |
+| 30 | absence_type_visibility | -- |
+| 31 | positions | -- |
+| 32 | agreement_configs | -- |
+| 33 | agreement_config_audit | audit |
+| 34 | compensatory_rest | -- |
+| 35 | position_override_configs | -- |
+| 36 | position_override_config_audit | audit |
+| 37 | wage_type_mapping_audit | audit |
+| 38 | entitlement_configs | -- |
+| 39 | entitlement_config_audit | audit |
+| 40 | entitlement_balances | -- |
+| 41 | time_entries_projection | -- |
+| 42 | absences_projection | -- |
+| 43 | work_time_projection | -- |
+| 44 | overtime_balances | -- |
+| 45 | overtime_pre_approvals | -- |
+| 46 | segment_manifests | -- |
+| 47 | role_config_overrides | -- |
+| 48 | role_config_override_audit | audit |
+| 49 | overtime_authorization_audit | audit |
+| 50 | audit_projection | -- |
+| 51 | reporting_lines | -- |
+| 52 | reporting_line_audit | audit |
+| 53 | reporting_line_tree_settings | -- |
 
-**Total: 32 tables** (11 audit tables, 21 primary tables)

@@ -54,20 +54,38 @@ if ($command -notmatch '(?i)git\s+commit') {
     exit 0  # not a commit attempt
 }
 
-if ($command -notmatch '(?i)TASK-\d+:\s+sprint\s+close') {
-    exit 0  # commit, but not a sprint-close commit
+# Close-commit detection. Broadened 2026-05-31: the original trigger required the
+# rigid `TASK-\d+: sprint close` phrasing, which the S56 close commit ("S56 Work-Time
+# Persistence...") did not match — so the gate silently no-op'd. We now fire on any
+# `sprint close` / `sprint-close` phrasing. NOTE: message-based detection is
+# fundamentally best-effort (a close commit that names no close marker can't be caught
+# here). The durable backstop is `tools/check_docs.py` (CI `docs` job), whose
+# sprint-inventory check fails when a sprint shipped in git history has no SPRINT-<n>.md.
+# Require a WHITESPACE-separated "sprint close" (the form real close commits use,
+# e.g. "S47 TASK-4705: sprint close — ..."). This deliberately does NOT match
+# hyphenated identifiers like "sprint-close-guard" appearing in a commit that merely
+# edits or discusses the hook — that incidental-mention over-trigger is what an earlier
+# `[\s-]?` form caused.
+if ($command -notmatch '(?i)sprint\s+close') {
+    exit 0  # commit, but not a recognizable sprint-close commit
 }
 
 # --- Extract sprint number ------------------------------------------------
 
 $sprintNum = $null
-if ($command -match '(?i)S(?<num>\d+)\s+TASK-\d+:\s+sprint\s+close') {
+# Prefer the canonical "S<N> ... sprint close" shape; fall back to any S<N> token.
+if ($command -match '(?i)S(?<num>\d+)[a-z]?\b.*sprint\s+close') {
+    $sprintNum = $matches['num']
+} elseif ($command -match '(?i)\bS(?<num>\d+)[a-z]?\b') {
     $sprintNum = $matches['num']
 }
 if (-not $sprintNum) {
-    [Console]::Error.WriteLine("sprint-close-guard: detected 'sprint close' pattern but could not extract sprint number from command.")
-    [Console]::Error.WriteLine("Expected format: 'S<N> TASK-<NN>: sprint close ...'")
-    exit 2
+    # The phrase "sprint close" appeared but there's no S<N> token — this is almost
+    # certainly NOT a real sprint-close commit (e.g. `git commit -m "docs: explain the
+    # sprint close guard"`). Don't block; a real close carries an S<N>. The CI
+    # `tools/check_docs.py` sprint-inventory check is the backstop for missing logs.
+    [Console]::Error.WriteLine("sprint-close-guard: 'sprint close' phrase without an 'S<N>' token; treating as a non-close commit and allowing.")
+    exit 0
 }
 
 # --- Resolve artifact paths -----------------------------------------------

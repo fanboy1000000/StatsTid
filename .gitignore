@@ -42,3 +42,7 @@ coverage/
 .claude/scheduled_tasks.lock
 .claude/worktrees/
 .claude/codex-*.txt
+
+# Python tooling artifacts
+__pycache__/
+*.pyc

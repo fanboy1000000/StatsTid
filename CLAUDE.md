@@ -30,7 +30,7 @@ This file is the hub. It defines the priority order and points to deeper sources
 | [docs/SECURITY.md](docs/SECURITY.md) | JWT patterns, RBAC model, scope validation, known gotchas (FAIL-001) |
 | [docs/FRONTEND.md](docs/FRONTEND.md) | Design system, component library, routing, hooks, CSS conventions |
 | [docs/references/danish-agreements.md](docs/references/danish-agreements.md) | AC/HK/PROSA agreement rules, entitlement quotas, wage type mappings |
-| [docs/generated/db-schema.md](docs/generated/db-schema.md) | All 29 database tables with columns, keys, indexes (generated from init.sql) |
+| [docs/generated/db-schema.md](docs/generated/db-schema.md) | All database tables with columns, keys, indexes — **generated** by `tools/generate_db_schema.py` from init.sql; drift fails CI via `tools/check_docs.py` |
 
 ## Governance & Workflow
 | Document | Purpose |
@@ -38,8 +38,27 @@ This file is the hub. It defines the priority order and points to deeper sources
 | [docs/AGENTS.md](docs/AGENTS.md) | All agent definitions, scopes, prompt templates, Constraint Validator, Reviewer |
 | [docs/WORKFLOW.md](docs/WORKFLOW.md) | Orchestrator workflow (steps 0-7), sprint management, entropy scans, metrics, harness evolution |
 | [docs/QUALITY.md](docs/QUALITY.md) | Per-domain quality grading matrix (A-F), updated each sprint |
-| [docs/knowledge-base/INDEX.md](docs/knowledge-base/INDEX.md) | 26 structured KB entries: ADR, PAT, DEP, RES, FAIL |
-| [docs/sprints/INDEX.md](docs/sprints/INDEX.md) | Sprint logs, test progression, constraint coverage, effectiveness metrics |
+| [docs/knowledge-base/INDEX.md](docs/knowledge-base/INDEX.md) | Structured KB entries (ADR, PAT, DEP, RES, FAIL); INDEX completeness vs disk is CI-checked by `tools/check_docs.py` |
+| [docs/sprints/INDEX.md](docs/sprints/INDEX.md) | Sprint logs, test progression, constraint coverage, effectiveness metrics; sprint-log inventory is CI-checked |
+
+## Operations & Reference Dossiers
+| Document | Purpose |
+|----------|---------|
+| [docs/SYSTEM_DOCUMENTATION.md](docs/SYSTEM_DOCUMENTATION.md) | Long-form onboarding guide (product + architecture + process). Human-facing; verify against the canonical docs above before trusting specifics |
+| [docs/operations/legacy-db-upgrade-runbook.md](docs/operations/legacy-db-upgrade-runbook.md) | Operational runbook: upgrading pre-existing (non-greenfield) databases |
+| [docs/operations/audit-projection-catalog.md](docs/operations/audit-projection-catalog.md) | `IAuditProjectionMapper` family catalog (ADR-026) |
+| [docs/operations/audit-projection-caller-census.md](docs/operations/audit-projection-caller-census.md) | Cross-process caller census for the audit-projection cutover |
+| [docs/references/agreement-source-register.md](docs/references/agreement-source-register.md) | DRAFT S36 agreement source-cell register (Phase A) |
+| [docs/references/agreement-ruleset-audit.md](docs/references/agreement-ruleset-audit.md) | DRAFT S36 ruleset coverage audit |
+| [docs/references/role-dimension-audit.md](docs/references/role-dimension-audit.md) | DRAFT S36 role-within-agreement gap audit |
+| [docs/references/phase-b-handoff-package.md](docs/references/phase-b-handoff-package.md) | Phase B expert-engagement handoff package |
+| [docs/reviews/](docs/reviews/) | Ad-hoc external review archive (tracked). Per-sprint Step 7a artifacts live separately under `.claude/reviews/` (gitignored, gated by `sprint-close-guard.ps1`) |
+
+## Tooling & Generated
+| Tool | Purpose |
+|------|---------|
+| [tools/generate_db_schema.py](tools/generate_db_schema.py) | Regenerates `docs/generated/db-schema.md` from init.sql. Run after any schema change. |
+| [tools/check_docs.py](tools/check_docs.py) | Doc-consistency gate (db-schema sync, KB INDEX completeness, sprint-log inventory, freshness). Run in CI (`docs` job) and at entropy-scan time. |
 
 # Agent Architecture
 

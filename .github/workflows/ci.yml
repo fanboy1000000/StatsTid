@@ -195,3 +195,21 @@ jobs:
       - name: Run vitest
         run: npm run test
         working-directory: frontend
+
+  docs-consistency:
+    name: Documentation consistency (check_docs.py)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # sprint-inventory check needs full git history
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run doc-consistency gate
+        # Hard-fails on: db-schema.md drift vs init.sql, KB INDEX orphans/dangling links,
+        # and sprints that shipped in git with no SPRINT-<n>.md log. Freshness is report-only.
+        # See tools/check_docs.py and the 2026-05-31 doc-health reconciliation.
+        run: python tools/check_docs.py

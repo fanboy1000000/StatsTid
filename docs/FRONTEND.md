@@ -103,17 +103,22 @@ All UI components are barrel-exported from `ui/index.ts`.
 |-----------|------|-------------|
 | BalanceSummary | `BalanceSummary.tsx` | Employee balance overview (norm, flex, absence) |
 | FlexBalanceCard | `FlexBalanceCard.tsx` | Flex balance display card |
-| SkemaGrid | `SkemaGrid.tsx` | Monthly spreadsheet grid (days x projects/absence rows) |
-| TimeEntryForm | `TimeEntryForm.tsx` | Time entry input form |
-| TimerControl | `TimerControl.tsx` | Check-in / check-out timer (Tjek ind/Tjek ud) |
-| WeekGrid | `WeekGrid.tsx` | Weekly time overview grid |
+| SkemaGrid | `SkemaGrid.tsx` | Monthly spreadsheet grid (days x projects/absence rows); supports read-only/locked rendering (S55) |
+| AllocationSummary | `AllocationSummary.tsx` | Work-time allocation reconciliation summary (S56/ADR-028) |
+| ComplianceWarnings | `ComplianceWarnings.tsx` | EU-WTD compliance warnings |
+| ProjectPicker | `ProjectPicker.tsx` | Project selector for work-time rows |
+| TimeEntryForm _(legacy)_ | `TimeEntryForm.tsx` | Superseded by SkemaPage; only referenced by unrouted legacy pages |
+| WeekGrid _(legacy)_ | `WeekGrid.tsx` | Superseded by SkemaGrid; only referenced by unrouted `WeeklyView` |
+
+> Removed S56 (ADR-028 timer retirement): `TimerControl.tsx` and the `useTimer` hook no longer exist.
 
 ### Layout Components
 | Component | File | Description |
 |-----------|------|-------------|
-| AppLayout | `layout/AppLayout.tsx` | Main layout: Sidebar + Header + Outlet |
+| AppLayout | `layout/AppLayout.tsx` | Main layout: `Header` → `TopNav` → (`Sidebar` + `<Outlet/>`) |
 | Header | `layout/Header.tsx` | Top bar with user info |
-| Sidebar | `layout/Sidebar.tsx` | Left nav with role-based menu items |
+| TopNav | `layout/TopNav.tsx` | Level-1 group tabs (S54 two-level nav), role-gated by group prefix |
+| Sidebar | `layout/Sidebar.tsx` | Level-2 nav: items for the active group only, each filtered by `hasMinRole` |
 
 ### Route Guards
 | Component | File | Description |
@@ -121,36 +126,57 @@ All UI components are barrel-exported from `ui/index.ts`.
 | RequireAuth | `guards/RequireAuth.tsx` | Redirects to `/login` if unauthenticated |
 | RequireRole | `guards/RequireRole.tsx` | Checks `hasMinRole`, renders ForbiddenPage if insufficient |
 
-## Layout System
-- `AppLayout` wraps all authenticated routes with Sidebar + Header + `<Outlet />`
-- `Sidebar` renders navigation items conditionally based on user role:
-  - **Employee**: Min Tid (skema), Min balance
-  - **LocalLeader+**: Godkendelser (approval dashboard)
-  - **LocalAdmin+**: Organisation, Roller, Projekter, Konfiguration
-  - **GlobalAdmin**: Overenskomster, Positioner, Lontypekortlaegning
-- Guards compose via nested `<Route element={...}>` wrappers
+## Layout System (two-level navigation — S54)
+`AppLayout` wraps all authenticated routes: `Header` → `TopNav` → (`Sidebar` + `<Outlet/>`).
+Guards compose via nested `<Route element={<RequireRole minRole=.../>}>` wrappers (see `App.tsx`).
+
+**Level 1 — `TopNav` group tabs** (visible by role, Danish labels):
+
+| Tab | Path prefix | Min Role | First route |
+|-----|-------------|----------|-------------|
+| Min tid | `/tid` | any auth | `/tid/registrering` |
+| Godkend tid | `/godkend` | LocalLeader | `/godkend/godkendelser` |
+| Administration | `/admin` | LocalHR | `/admin/medarbejdere` |
+| Lokale tilpasninger | `/lokal` | LocalAdmin | `/lokal/ok-konfiguration` |
+| Global administration | `/global` | GlobalAdmin | `/global/overenskomster` |
+
+**Level 2 — `Sidebar`** shows items for the active group only, each filtered by `hasMinRole`:
+- **Min tid**: Registrering (`/tid/registrering`), Oversigt (`/tid/oversigt`)
+- **Godkend tid**: Godkendelser (`/godkend/godkendelser`), Vikariering (`/godkend/vikariering`)
+- **Administration**: Medarbejdere (LocalHR), Audit log (LocalHR), Projekter, Ledelseslinjer, Brugerrettigheder (LocalAdmin)
+- **Lokale tilpasninger**: Lokal OK konfiguration, Lokale stillingstilpasninger
+- **Global administration**: Overenskomster, Organisation, Lønartstilknytning
 
 ## Pages & Routes
 
-| Route | Page Component | Min Role | Description |
-|-------|---------------|----------|-------------|
-| `/` (index) | `SkemaPage` | Employee | Monthly time registration spreadsheet |
-| `/login` | `LoginPage` | Public | Login form |
-| `/health` | `HealthDashboard` | Employee | Service health status |
-| `/approval/mine` | `MyPeriods` | Employee | Employee's own period submissions |
-| `/approval` | `ApprovalDashboard` | LocalLeader | Manager approval of submitted periods |
-| `/admin/users` | `UserManagement` | LocalHR | User CRUD |
-| `/admin/orgs` | `OrgManagement` | LocalAdmin | Organization unit hierarchy |
-| `/admin/roles` | `RoleManagement` | LocalAdmin | Role assignment management |
-| `/admin/projects` | `ProjectManagement` | LocalAdmin | Project configuration per org |
-| `/config` | `ConfigManagement` | LocalAdmin | Local agreement config overrides |
-| `/admin/agreements` | `AgreementConfigList` | GlobalAdmin | Agreement config overview with filters |
-| `/admin/agreements/:configId` | `AgreementConfigEditor` | GlobalAdmin | Agreement config form editor |
-| `/admin/position-overrides` | `PositionOverrideManagement` | GlobalAdmin | Position override config management |
-| `/admin/wage-type-mappings` | `WageTypeMappingManagement` | GlobalAdmin | Wage type mapping administration |
-| `*` | `NotFoundPage` | Employee | 404 fallback |
+Routes are defined in `frontend/src/App.tsx`. Unauthenticated → `/login`; authenticated index → `/tid/registrering`.
 
-Legacy pages still present in source but no longer routed: `AbsenceRegistration`, `TimeRegistration`, `WeeklyView` (superseded by SkemaPage in Sprint 9).
+| Route | Page Component | Min Role | Notes |
+|-------|---------------|----------|-------|
+| `/login` | `LoginPage` | Public | Redirects to `/tid/registrering` if already authenticated |
+| `/` (index) | → redirect | — | → `/tid/registrering` |
+| `/tid/registrering` | `SkemaPage` | any auth | Monthly time registration (three-row work-time, S56) |
+| `/tid/oversigt` | `OversightPlaceholder` | any auth | Overview placeholder |
+| `/tid/mine-perioder` | `MyPeriods` | any auth | Own submitted periods (no nav item) |
+| `/godkend/godkendelser` | `ApprovalDashboard` | LocalLeader | Manager approval; expandable `ApprovalDetailPanel` (S55) |
+| `/godkend/vikariering` | `DelegationPage` | LocalLeader | Delegation / vikariering (ADR-027) |
+| `/admin/medarbejdere` | `UserManagement` | LocalHR | Employee/user administration |
+| `/admin/auditlog` | `AuditLogView` | LocalHR | Audit log viewer (ADR-026) |
+| `/admin/projekter` | `ProjectManagement` | LocalAdmin | Project configuration per org |
+| `/admin/ledelseslinjer` | `ReportingLineTree` | LocalAdmin | Reporting-line hierarchy (ADR-027) |
+| `/admin/brugerrettigheder` | `RoleManagement` | LocalAdmin | Role / access-rights assignment |
+| `/lokal/ok-konfiguration` | `ConfigManagement` | LocalAdmin | Local agreement (OK) config overrides |
+| `/lokal/stillingstilpasninger` | `PositionOverrideManagement` | LocalAdmin | Local position overrides |
+| `/global/overenskomster` | `AgreementConfigList` | GlobalAdmin | Agreement config overview |
+| `/global/overenskomster/new` | `AgreementConfigEditor` | GlobalAdmin | Create agreement config |
+| `/global/overenskomster/:configId` | `AgreementConfigEditor` | GlobalAdmin | Edit agreement config |
+| `/global/organisation` | `OrgManagement` | GlobalAdmin | Organization unit hierarchy |
+| `/global/loenartstilknytning` | `WageTypeMappingManagement` | GlobalAdmin | Wage type mapping administration |
+| `/global/entitlement-configs` | → redirect | GlobalAdmin | → `/global/overenskomster` |
+| `/health` | `HealthDashboard` | any auth | Service health (hidden from nav) |
+| `*` | `NotFoundPage` | any auth | 404 fallback |
+
+Legacy/orphaned pages still in source but **not routed**: `AbsenceRegistration`, `TimeRegistration`, `WeeklyView` (superseded by `SkemaPage`); `EntitlementConfigEditor`, `OvertimePreApprovalManagement` (not imported by `App.tsx`).
 
 ## Hooks (`src/hooks/`)
 
@@ -166,10 +192,16 @@ Legacy pages still present in source but no longer routed: `AbsenceRegistration`
 | `useFlexBalance` | Fetch flex balance data |
 | `usePositionOverrides` | Position override CRUD for GlobalAdmin |
 | `useProjects` | Project management per org unit |
-| `useSkema` | Monthly skema data (time entries by day/project) |
+| `useSkema` | Monthly skema data + approval/reopen plumbing |
 | `useTimeEntries` | Time entry CRUD operations |
-| `useTimer` | Timer check-in/check-out state management |
 | `useWageTypeMappings` | Wage type mapping CRUD for GlobalAdmin |
+| `useCompliance` | EU-WTD compliance warnings |
+| `useCompensationChoice` | Overtime compensation-model choice |
+| `useEntitlementConfig` | Entitlement config (GlobalAdmin) |
+| `useReportingLines` | Reporting-line hierarchy (ADR-027) |
+| `useDelegation` | Acting-manager delegation / vikariering |
+
+> Removed S56: `useTimer` (timer retired, ADR-028). 18 hook files total (excluding tests).
 
 ## State Management
 
@@ -211,7 +243,7 @@ Centralized fetch wrapper. All API calls go through this client.
   - `src/hooks/__tests__/`
   - `src/pages/__tests__/`
   - `src/pages/admin/__tests__/`
-- **Approx. test count**: ~38 frontend tests
+- **Test count**: 128 tests across 20 test files (`npm run test`, verified 2026-05-31)
 
 ## File Structure Summary
 ```
@@ -223,15 +255,17 @@ frontend/
     components/
       ui/                      # 19 reusable UI components (13 scratch + 6 Radix)
         index.ts               # Barrel export
-      layout/                  # AppLayout, Header, Sidebar
+      layout/                  # AppLayout, Header, TopNav, Sidebar
       guards/                  # RequireAuth, RequireRole
       BalanceSummary.tsx        # Domain: balance overview
       FlexBalanceCard.tsx       # Domain: flex display
-      SkemaGrid.tsx             # Domain: monthly spreadsheet
-      TimeEntryForm.tsx         # Domain: time entry
-      TimerControl.tsx          # Domain: check-in/out
-      WeekGrid.tsx              # Domain: weekly grid
-    hooks/                     # 14 data-fetching hooks
+      SkemaGrid.tsx             # Domain: monthly spreadsheet (lockable)
+      AllocationSummary.tsx     # Domain: work-time allocation (S56)
+      ComplianceWarnings.tsx    # Domain: EU-WTD warnings
+      ProjectPicker.tsx         # Domain: project selector
+      TimeEntryForm.tsx         # Domain: legacy (unrouted)
+      WeekGrid.tsx              # Domain: legacy (unrouted)
+    hooks/                     # 18 data-fetching hooks
     lib/
       api.ts                   # apiClient fetch wrapper
       jwt.ts                   # JWT decode utility
@@ -242,9 +276,10 @@ frontend/
       HealthDashboard.tsx      # Service health
       ForbiddenPage.tsx        # 403 display
       NotFoundPage.tsx         # 404 display
-      admin/                   # Admin pages (7 pages)
-      approval/                # Approval pages (2 pages)
-      config/                  # Config pages (1 page)
+      admin/                   # Admin pages (7 routed + 2 orphaned legacy)
+      approval/                # Approval pages (MyPeriods, ApprovalDashboard, ApprovalDetailPanel)
+      delegation/              # DelegationPage (vikariering)
+      config/                  # Config pages (ConfigManagement)
     styles/
       tokens.css               # Design tokens (colors, spacing, typography)
     test/
