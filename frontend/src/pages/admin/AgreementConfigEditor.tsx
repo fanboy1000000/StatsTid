@@ -131,7 +131,7 @@ function statusBadgeClass(status: string): string {
 export function AgreementConfigEditor() {
   const { configId } = useParams<{ configId: string }>()
   const navigate = useNavigate()
-  const isNew = configId === 'new'
+  const isNew = !configId
 
   const { createConfig, updateConfig, cloneConfig, publishConfig, archiveConfig } = useAgreementConfigActions()
 
