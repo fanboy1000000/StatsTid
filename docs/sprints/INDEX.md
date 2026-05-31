@@ -1,5 +1,6 @@
 # StatsTid Sprint Log
 
+<!-- anchor-sprint: 56 -->
 > **Governance**: The Sprint Log is a formal governance artifact. Only the Orchestrator may create, modify, or approve sprint log entries. Agents report task completion to the Orchestrator, who validates and records them here.
 
 ## Sprint Index
@@ -95,7 +96,45 @@
 | S22 | 8 | SharedKernel, Infrastructure (outbox), Backend API, PostgreSQL, Frontend, Tests | ADR-018 |
 | S23 | 5 | Infrastructure (outbox + repo), Backend API, Frontend (lib + api), Tests, Sprint log | — (Step 7a cycle 1 P1 absorbed in cycle 2 fix; no new ADR/PAT) |
 | S24 | 8 | Infrastructure (7 repos: conn-tx overloads), Backend API (6 endpoint files atomic outbox conversion), Tests (TxContractTests + ForcedRollbackHarness + 6 atomic test classes), Governance (AGENTS.md cross-domain authorization), Sprint log | — (no new ADR; propagates ADR-018 D2/D3/D5 only) |
-| **Total** | **228** | — | **30 entries** |
+| S25 | 11 | Infrastructure, Backend API, Frontend, Data Model, Tests | ADR-019 |
+| S26 | 10 | Infrastructure, Backend API (Admin/Overtime), Tests | — |
+| S27 | 11 | Infrastructure (projections), Backend API, Tests | — |
+| S28 | 4 | Knowledge Base (design-only sprint) | ADR-020 |
+| S29 | 12 | SharedKernel, Infrastructure, Backend API, Payroll, Frontend, Tests | — (ADR-018 D14 amendment only) |
+| S30 | 11 | Infrastructure, Backend API, Frontend, Data Model, Tests | ADR-021 |
+| S31 | 12 | Infrastructure, Backend API, Frontend, Data Model, Tests | ADR-022 |
+| S32 | 4 | Knowledge Base (design-only sprint) | ADR-023 |
+| S33 | 13 | SharedKernel, Infrastructure, Backend API, Payroll, Frontend, Tests | — (implements ADR-023) |
+| S34 | 16 | Infrastructure, Backend API, Auth, Frontend, Data Model, Tests | — |
+| S35 | 11 | Infrastructure, Backend API, Frontend, Data Model, Tests | — |
+| S36 | 11 | Docs/References (design-only inventory sprint) | — |
+| S37 | 9 | Data Model (seed), Infrastructure, Governance | — |
+| S38 | 6 | Knowledge Base (design-only ADR sprint) | ADR-024, ADR-025 |
+| S38b | 5 | Knowledge Base (design-only ADR sprint) | ADR-026 |
+| S39 | 14 | CI/CD, Tooling, Infrastructure, Tests | — |
+| S40 | 8 | Data Model, Infrastructure (repo), Backend API, Tests | — (implements ADR-024) |
+| S41a | 4 | Knowledge Base (design-only amendment sprint) | — (ADR-024 amendment only) |
+| S42a | 4 | Knowledge Base (design-only; rollback verdict) | — (ADR-024 amendment only) |
+| S43 | 8 | Infrastructure, Backend API, Data Model, Tests | — |
+| S44 | 15 | Infrastructure, Backend API, Frontend, Tests | — |
+| S44b | 10 | Infrastructure, Backend API, Tests | — |
+| S44c | 11 | Backend API, Infrastructure, Frontend, Tests | — |
+| S44f | 8 | Backend API, Frontend, Tests | — |
+| S45 | 7 | Infrastructure, Backend API, Tests | — |
+| S46 | 7 | Infrastructure (Dockerfiles), Backend API, Frontend | — |
+| S47 | 6 | Frontend | — |
+| S48 | 16 | Data Model, Infrastructure, Backend API, Frontend, Tests | ADR-027 |
+| S49 | 13 | Backend API, Data Model, Frontend, Tests | — |
+| S50 | 14 | Data Model, Backend API, Frontend, Tests | — |
+| S51 | 12 | Infrastructure, Backend API, Frontend, Tests | — |
+| S52 | 4 | Infrastructure, Backend API, Data Model | — |
+| S53 | 6 | Backend API, Frontend, Tests | — |
+| S54 | 7 | Frontend, Backend API (RBAC) | — |
+| S55 | 3 | Backend API, Frontend (log reconstructed) | — |
+| S56 | 8 | Backend API, Infrastructure, Data Model, Frontend | ADR-028 |
+| **Total (S1–S24)** | **228** | — | 30 entries |
+| **Total (S25–S56)** | **332** | — | 10 entries (ADR-019…ADR-028) |
+| **Grand Total (S1–S56)** | **560** | — | **40 KB entries on disk** |
 
 ## Test Progression
 
@@ -125,14 +164,54 @@
 | S22 | 517 + 48 FE | 35 plain + 50 Docker (18 S21 + 16 S22 + 17 S20 segmentation) | 4 | 650 (without Docker: 600) |
 | S23 | 525 + 76 FE | 35 plain + 61 Docker (50 S22 + 11 S23) | 4 | 697 (without Docker: 636) |
 | S24 | 525 + 76 FE | 35 plain + 105 Docker (61 S23 + 23 S24 TxContractTests + 21 S24 ForcedRollback) | 4 | 741 (without Docker: 636) |
-| S44 | 526 + 90 FE | 40 plain + 237 Docker (219 S43 + 18 S44: 6 QueryByOrgScope + 12 Cutover) | 4 | 893 (without Docker: 656) |
-| S44b | 526 + 90 FE | 40 plain + 246 Docker (237 S44 + 9 S44b: 4 happy + 4 rollback + 1 dual-emit) | 4 | 902 (without Docker: 656) |
-| S44c | 526 + 90 FE | 40 plain + 256 Docker (246 S44b + 10 S44c: 5 happy + 4 rollback + 1 mapper-only) | 4 | 912 (without Docker: 656) |
-| S44f | 526 + 90 FE | 44 plain + 258 Docker (256 S44c + 2 S44f sync-in-tx) | 4 | 918 (without Docker: 660) |
+| S25 | 526 + 88 FE | 35 plain + 129 Docker | 4 | 777 |
+| S26 | 526 + 88 FE | 35 plain + 134 Docker | 4 | 782 |
+| S27 | 526 + 88 FE | 35 plain + 147 Docker | 4 | 795 |
+| S28 | 526 + 88 FE | 35 plain + 147 Docker | 4 | 795 (design-only — unchanged) |
+| S29 | 526 + 88 FE | 35 plain + 158 Docker | 4 | 807 * |
+| S30 | 526 + 88 FE | 35 plain + 166 Docker | 4 | 815 |
+| S31 | 526 + 88 FE | 35 plain + 184 Docker | 4 | 833 |
+| S32 | 526 + 88 FE | 35 plain + 184 Docker | 4 | 833 (design-only — unchanged) |
+| S33 | 526 + 88 FE | 35 plain + 204 Docker | 4 | 853 |
+| S34 | 526 + 88 FE | 35 plain + 209 Docker | 4 | 858 ** |
+| S35 | 526 + 90 FE | 35 plain + 218 Docker | 4 | 869 |
+| S36 | 526 + 90 FE | 35 plain + 218 Docker | 4 | 869 (design-only — unchanged) |
+| S37 | 526 + 90 FE | 35 plain + 218 Docker | 4 | 869 (seed-only — unchanged) |
+| S38 | 526 + 90 FE | 35 plain + 218 Docker | 4 | 869 (design-only — unchanged) |
+| S38b | 526 + 90 FE | 35 plain + 218 Docker | 4 | 869 (design-only — unchanged) |
+| S39 | 526 + 90 FE | 35 plain + 218 Docker | 4 | 869 (tooling — unchanged) |
+| S40 | 526 + 90 FE | 40 plain + 218 Docker | 4 | 874 |
+| S41a | 526 + 90 FE | 40 plain + 218 Docker | 4 | 874 (design-only — unchanged) |
+| S42a | 526 + 90 FE | 40 plain + 218 Docker | 4 | 874 (design-only — unchanged) |
+| S43 | 526 + 90 FE | 40 plain + 219 Docker | 4 | 875 |
+| S44 | 526 + 90 FE | 40 plain + 237 Docker (219 S43 + 18 S44) | 4 | 893 (without Docker: 656) |
+| S44b | 526 + 90 FE | 40 plain + 246 Docker | 4 | 902 (without Docker: 656) |
+| S44c | 526 + 90 FE | 40 plain + 256 Docker | 4 | 912 (without Docker: 656) |
+| S44f | 526 + 90 FE | 44 plain + 258 Docker | 4 | 918 (without Docker: 660) |
+| S45 | 526 + 90 FE | 44 plain + 260 Docker | 4 | 920 |
+| S46 | 526 + 90 FE | 44 plain + 260 Docker | 4 | 920 (hardening — unchanged) |
+| S47 | 526 + 90 FE | 44 plain + 260 Docker | 4 | 920 (frontend-only — unchanged) |
+| S48 | 536 + 96 FE | 44 plain + 275 Docker | 4 | 951 |
+| S49 | 538 + 102 FE | 44 plain + 281 Docker | 4 | 965 |
+| S50 | 542 + 106 FE | 44 plain + 289 Docker | 4 | 981 |
+| S51 | 546 + 110 FE | 44 plain + 297 Docker | 4 | 997 |
+| S52 | 546 + 110 FE | 44 plain + 297 Docker | 4 | 997 |
+| S53 | 546 + 110 FE | 44 plain (Docker-gated deferred) | 4 | 700 *** |
+| S54 | 546 + 110 FE | 44 plain (Docker-gated deferred) | 4 | 700 *** |
+| S55 | ~700 (not recorded) | not recorded | 4 | ~700 **** |
+| S56 | 552 + 128 FE | 44 plain + 15 new S56 Docker | 4 | 552 unit + 128 FE + 15 Docker (no consolidated headline recorded) *** |
+
+**Footnotes**:
+- `*` **S29**: headline 807, but SPRINT-30.md records the reported "158 Docker-gated passing" over-counted 18 pre-existing failures (true delta ~789 at `41b6e89`). 807 is the figure in the S29 Index row.
+- `**` **S34/S35**: S34 Index row headline = 858, but SPRINT-34.md's correction note (cited in S35) records the true S34 baseline as **857** (Overtime D-test failing at close); S35's +12 is computed off 857.
+- `***` **S53–S56 methodology shift**: from S53 the headline drops the Docker-gated suite ("Docker-gated deferred"). S56 never recorded a single consolidated headline — the Index row lists `552 unit + 128 FE + 15 new S56 Docker`.
+- `****` **S55**: log reconstructed 2026-05-31 from `df036c3`; no contemporaneous test count exists.
 
 ## Architectural Constraint Coverage
 
 Shows which priorities were verified in each sprint.
+
+> **Maintenance note (2026-05-31):** this per-sprint ✓-matrix was kept current only through **S16** and is not reconstructed for S17–S56 — the contemporaneous "which priority did this sprint touch" signal was not recorded at the time, and back-filling 40 sprints of it from memory would be guesswork. From S17 onward, per-sprint priority verification lives in each `SPRINT-<N>.md` "## Architectural Constraints Verified" checklist, and is independently enforced by Step 0b plan review + Step 7a external review. **Current state:** all nine priorities have ongoing coverage; P1–P4 (architectural integrity, rule-engine determinism, event-sourcing, OK-version correctness) are exercised every sprint that touches the rule/segmentation/replay surface, with marquee byte-identical replay D-tests closing ADR-016 D10 for all four dated rule-engine inputs (through S34).
 
 | Priority | Description | S1 | S2 | S3 | S4 | S5 | S6 | S7 | S8 | S9 | S10 | S11 | S12 | S13 | S14 | S15 | S16 |
 |----------|-------------|----|----|-----|-----|-----|-----|-----|-----|-----|------|------|------|------|------|------|------|
@@ -148,6 +227,8 @@ Shows which priorities were verified in each sprint.
 
 ## Legal & Payroll Verification Status
 
+> **Maintenance note (2026-05-31):** like the constraint matrix above, this per-sprint table was kept current only through **S16**; S17–S56 are not back-filled. Per-sprint legal/payroll verification now lives in each `SPRINT-<N>.md` "## Legal & Payroll Verification" table. **Current state:** the AC-family `DefaultCompensationModel` seed bug was found and corrected (S35, `UDBETALING`→`AFSPADSERING`, source-cited); the S36–S37 Phase-A agreement audit produced a 111-cell source register (`docs/references/agreement-source-register.md`, DRAFT pending real Phase-B expert sign-off); ADR-024 role-within-agreement compensation modelling shipped its schema/repo (S40) but the rule-engine cutover (D1/D2) remains **SUSPENDED** since the S42a discipline-rollback. Wage-type → SLS mapping and retroactive-recalculation stability are covered by marquee replay-determinism D-tests.
+
 | Check | S1 | S2 | S3 | S4 | S5 | S6 | S7 | S8 | S9 | S10 | S11 | S12 | S13 | S14 | S15 | S16 |
 |-------|----|----|-----|-----|-----|-----|-----|-----|-----|------|------|------|------|------|------|------|
 | Agreement rules match legal requirements | ✓ | ✓ | ✓ | ✓ | ✓ | N/A | N/A | N/A | N/A | ✓ | ✓ | ✓ | N/A | N/A | ✓ | ✓ | ✓ |
@@ -159,6 +240,8 @@ Shows which priorities were verified in each sprint.
 ## Agent Effectiveness Metrics
 
 Tracks agent quality signals to enable data-driven improvement of prompts and governance. See CLAUDE.md "Agent Effectiveness Metrics" for definitions.
+
+> **Maintenance note (2026-05-31):** detailed per-sprint effectiveness rows were maintained only through **S24** (with S18–S21 already missing) and are not reconstructed for S25–S56 — the per-task constraint-violation / reviewer-finding / re-dispatch counts were not consistently recorded contemporaneously, and the cumulative First-Pass figure below is therefore a **historical sample (through S24), not a current total**. The richest recoverable signal for S25+ is the Step 0b / Step 7a finding trail in each `SPRINT-<N>.md` "## External Review" section. **Qualitative read of S25–S56:** first-pass remained high (most sprints landed with 0 agent re-dispatches); the dominant quality signal shifted from agent re-dispatch to Step 7a dual-lens (Codex + Reviewer) BLOCKER absorption under the cycle-cap-2 discipline, with the S42a discipline-rollback the most notable "review caught it" event.
 
 | Sprint | Tasks | Constraint Violations | Reviewer Findings | External Findings | Re-dispatches | First-Pass Rate |
 |--------|-------|-----------------------|-------------------|-------------------|---------------|-----------------|

@@ -1,10 +1,11 @@
 # StatsTid Quality Grading
 
+<!-- anchor-sprint: 56 -->
 > **Governance**: Updated by the Orchestrator at sprint end or during entropy scan. See CLAUDE.md "Quality Grading" section for grade definitions.
 
 ## Domain Quality Matrix
 
-Last updated: Sprint 44 (2026-05-24)
+Last updated: **Sprint 56 (2026-05-31)**. The per-cell detail in the matrix below reflects the **S35** assessment (most domains were not materially changed by the S36–S56 work — Rule Engine, SharedKernel Models/Segmentation, Payroll all held grade). The **"S36–S56 Refresh"** section immediately after the matrix records every grade change, the new domains, and corrected counts since S35. Where a grade changed, the **Grade** column below shows the current value with a `→` note.
 
 | Domain | Test Coverage | Pattern Compliance | Documentation | Tech Debt | Grade | Trend |
 |--------|-------------|-------------------|---------------|-----------|-------|-------|
@@ -16,9 +17,9 @@ Last updated: Sprint 44 (2026-05-24)
 | Security | Low — no dedicated security unit tests; coverage via integration paths; S35 adds barrier-synchronized concurrent-admin-PUT D-test (TASK-3509) + concurrent-POST users_pkey 23505 race D-test | Full — JWT, RBAC, scope validation (ADR-007, ADR-009); StatsTid.Auth assembly post-S19; ETag/If-Match D2.1 concurrency now on ALL admin write surfaces (S25 + S35) — last unprotected admin write closed | Good — ADR-007, ADR-009, FAIL-001, ADR-017 D2.1, ADR-018 D7, ADR-019 D2 | Low-Medium — admin-strict If-Match propagation complete; FindAll fix legacy reference remains; no dedicated security unit-test suite | **B+** | ▲ |
 | Backend API | Medium — endpoint logic tested indirectly via smoke tests; admin-strict If-Match contract now D-test-covered on all 4 admin write surfaces (S25 + S35 TASK-3509 8 net-new D-tests including concurrent-PUT race + stale If-Match + missing If-Match + null-fallback lockedUser snapshot) | Full — ADR-019 D2 admin-strict If-Match contract applied 4th and final time on `/api/admin/users` (closes the last unprotected admin write); ADR-018 D7 row-version on `users.version`; ADR-019 D8 audit version-transition columns on `users_audit`; ADR-018 D3 atomic outbox preserved across PUT + POST | Good — ADR-018 D7, ADR-019 D2 + D8 documented; admin surface lineage in SPRINT-25 + SPRINT-35 | Low — same-hook + local-fetch gaps on legacy admin pages remain (Phase 5 polish); production-readiness legacy-DB-upgrade sweep deferred to a coherent Phase 4e runbook sprint | **A** | ▲ |
 | Payroll Integration | High — mapping tests, SLS format tests, correction tests, compensation mapping, mixed-version export, manifest creation/replay/projection-rebuild tests, boundary scenarios; LocalProfileActivation hydration test (S21); WTM marquee replay-determinism test (S29) | Full — traceability chain (PAT-005), correction format (ADR-013), compensation-aware mapping, planner-driven calculation (ADR-016 D1, D8), per-line OK stamping (S20), profile-activation hydration (ADR-017 D9c); WTM versioned history + export-time effective-date lookup closes ADR-016 D10 for WTM (ADR-018 D14, S29) | Strong — PAT-005, PAT-006, DEP-002, ADR-016, ADR-017 D9c, ADR-018 D14, ADR-020 | Low — `/calculate-and-export` is last `[Obsolete]` shim customer | **A** | ▲ |
-| Frontend | Medium — 90 vitest tests (was 88 pre-S35; +2 from S35 UserManagement banner-with-retry), **now CI-enforced** (S39 TASK-3907); no E2E, no visual regression | Partial — some pages use local fetch instead of shared hooks; ProfileEditor uses shared `useConfig` hook | Sparse — ADR-011 covers design system, no component docs; ADR-017 documents profile editor scope | Medium — CORS fixes were reactive, some pages inconsistent; ProfileEditor explicitly basic (Phase-5 polish deferral) | **B-** | ▲ |
+| Frontend | Medium — 90 vitest tests (was 88 pre-S35; +2 from S35 UserManagement banner-with-retry), **now CI-enforced** (S39 TASK-3907); no E2E, no visual regression | Partial — some pages use local fetch instead of shared hooks; ProfileEditor uses shared `useConfig` hook | Sparse — ADR-011 covers design system, no component docs; ADR-017 documents profile editor scope | Medium — CORS fixes were reactive, some pages inconsistent; ProfileEditor explicitly basic (Phase-5 polish deferral) | **B** → (↑ from B- — S47 Phase-5 polish: 9 TS errors→0, shared-hook migration, toasts; S53 fixed 5 FE test failures; S54 two-level nav; 128 vitest tests, CI-enforced) | ▲ |
 | PostgreSQL Schema | N/A (schema, not code) | Full — unique constraints, indexes, seed data; segment_manifests + GIN index (S20); local_agreement_profiles partial-unique-index `WHERE effective_to IS NULL` + local_agreement_profile_audit (S21) | Partial — init.sql is self-documenting, no ER diagram; migration plan documented in SPRINT-21.md | Low | **B+** | ● |
-| Docker/Infrastructure | N/A (config, not code) | Full — 8-service compose (ADR-006); container-side healthchecks call curl which isn't shipped in .NET runtime images — broken everywhere, surfaced by S39 TASK-3905; CI uses host-side loop to side-step; Dockerfile curl install deferred to Phase 4e | Good — ADR-006 | Low-Medium — container healthcheck breakage now documented; fix scheduled | **B+** | ● |
+| Docker/Infrastructure | N/A (config, not code) | Full — 8-service compose (ADR-006); container healthchecks fixed in **S46** (curl installed in 7 Dockerfiles, closing the S39 TASK-3905 breakage) | Good — ADR-006 | Low | **A-** → (↑ from B+ — S46 healthcheck fix) | ▲ |
 | CI/Tooling | High — gitleaks secret scan + dotnet vulnerable-package check + smoke-tests harness + vitest + lizard CCN + coverage baseline all in CI (S39); Dependabot active on 4 ecosystems (nuget/npm/github-actions/docker, staggered cron); 7 of 8 production csprojs gate strict warn-as-error with in-box .NET Analyzers security mode | Full — Directory.Build.props + global.json + .gitleaks.toml + coverlet.runsettings + dependabot.yml all repo-root-managed | Good — TASK comments in each config file cite rationale | Low — single deferred-debt opt-out (StatsTid.Integrations.Payroll, CS0618 deferred-retirement legacy CalculateAsync per S20 Step 0b W2) | **B+** | ▲ (new domain) |
 
 ### Grade Legend
@@ -33,13 +34,37 @@ Last updated: Sprint 44 (2026-05-24)
 - ● Stable (no change)
 - ▼ Declining (new debt or degradation)
 
+## S36–S56 Refresh (2026-05-31)
+
+Delta since the S35 matrix freeze. This pass updates grades and counts; it does not re-author every cell's prose (most domains held).
+
+**Held grade (no material change S36–S56):** Rule Engine (A++), SharedKernel Models (A), SharedKernel Segmentation (A), Payroll Integration (A), Security (B+), Backend API (A), Infrastructure (A). These domains saw additive work (ADR-026 audit-projection layer, ADR-027 reporting-line hierarchy, ADR-028 work-time persistence) that extended rather than re-shaped them.
+
+**Grade changes:**
+- **Frontend B- → B** (▲): S47 Phase-5 polish (9 TS errors → 0, shared-hook migration, toast notifications), S53 frontend-health fixes (5 failing tests), S54 two-level navigation restructure; **128 vitest tests** (was 90), CI-enforced since S39. Still no E2E / visual regression — keeps it below A.
+- **Docker/Infrastructure B+ → A-** (▲): S46 installed curl in 7 Dockerfiles, fixing the container healthchecks that were broken everywhere (the S39 finding).
+
+**New domains:**
+- **Domain Correctness — B** (new): the S36–S37 Phase-A agreement audit (111-cell source register, 4 candidate bugs surfaced) + the S35/S37 seed corrections (AC `DefaultCompensationModel`, CHILD_SICK SLS remap, SENIOR_DAY quota). Held at B not higher because the **ADR-024 role-within-agreement rule-engine cutover (D1/D2) is SUSPENDED** since the S42a discipline-rollback (schema/repo shipped S40, dormant), and the source register is still **DRAFT** pending real Phase-B expert sign-off.
+- **Reporting-Line & Approval Routing — A-** (new): ADR-027 shipped end-to-end across S48–S52 (temporal `reporting_lines` table, repository, 7 admin endpoints, HR bulk import, designated-approver routing with ACTING precedence, enforcement toggle, self-service delegation). Well-tested (D-tests through S52) and documented (ADR-027 D1–D12). A- not A pending the broader integration-test maturity the rest of Backend has.
+
+**Corrected counts (were stale in the S35 matrix prose):**
+- EventSerializer registered event types: **72** (was "58" at S35; grew via S40 +7 role-config, ADR-027 events S48–S52, ADR-028 S56).
+- Frontend tests: **128** (was 90).
+- Database tables: **53** (the schema doc had frozen at "32"; now generated by `tools/generate_db_schema.py`).
+- KB entries: **40** (was tracked as 30 through S24).
+
+**CI/Tooling (B+, held):** gained the doc-consistency gate this reconciliation added — `tools/check_docs.py` (db-schema sync, KB INDEX completeness, sprint-log inventory) + `tools/generate_db_schema.py`, wired into the CI `docs-consistency` job.
+
 ## Priority Improvement Areas
 
-1. **Frontend (B-)**: Still needs E2E tests, shared hook refactoring (some pages bypass `useConfig` / `apiFetchWithEtag` helpers), component documentation. Vitest CI integration landed in S39 closes the "tests not enforced" gap.
+1. **Frontend (B)**: Still needs E2E / visual-regression tests and component documentation (the gap keeping it below A). S47/S53/S54 closed the shared-hook and TS-error gaps; vitest is CI-enforced (S39).
 2. **Security (B+)**: Admin-strict If-Match propagation complete on all 4 admin write surfaces (S35). Remaining gap: no dedicated security unit-test suite — auth flow / scope validation / claim parsing tested only through integration paths.
 3. **Backend API (A)**: Last unprotected admin write closed in S35. Remaining gap: legacy admin pages still inline fetch instead of using shared hooks (Phase 5 polish); production-readiness legacy-DB-upgrade sweep deferred to a coherent Phase 4e runbook sprint.
 4. **Coverage gating** (new — S39): baseline recorded but `≥X%` gate not enforced. Strategy decision (no-regression / ratchet / hard-80%-blanket) deferred to post-launch sprint. See "Coverage Baseline" section.
-5. **Container healthchecks (new — S39 finding)**: 7 Dockerfiles invoke curl in healthchecks but base image (mcr.microsoft.com/dotnet/aspnet:8.0) doesn't ship curl. CI works around it via host-side loop; for production deploy a Dockerfile fix or healthcheck rewrite is Phase 4e candidate.
+5. **Container healthchecks** — ✅ **RESOLVED S46** (curl installed in 7 Dockerfiles; the S39 host-side CI workaround can be retired).
+6. **Domain Correctness (B) — highest open correctness risk**: the ADR-024 role-within-agreement rule-engine cutover (D1/D2) is **SUSPENDED** since the S42a discipline-rollback — schema/repo shipped (S40) but no rule reads `employment_category`, so specialkonsulent/chefkonsulent merarbejde rules are not yet enforced. The agreement source register is **DRAFT** pending real Phase-B expert sign-off. Launch-blocking per ADR-024.
+7. **QUALITY.md / metrics cadence**: this doc and the sprint INDEX cumulative-metrics matrices lapsed (S35 / S16–S24 respectively) before the 2026-05-31 refresh. Re-establish the sprint-end update step (WORKFLOW 5c) so they don't refreeze.
 
 ## Historical Grades
 
@@ -56,6 +81,25 @@ Last updated: Sprint 44 (2026-05-24)
 | Frontend | C | C+ | C+ | C+ | C+ | C+ | C+ | C+ | C+ | C+ | C+ (S35: `UserManagement.tsx` migrated to `apiFetchWithEtag<T>` + banner-with-retry mirroring `EmployeeProfileEditor.tsx` precedent. New `useAdmin.ts` `WithEtag<T>` extension + `makeUserMutationError` helper. List endpoint cutover from `GetByOrgAsync` → `GetByOrgWithVersionAsync` so `primaryOrgId` + `version` actually render (Step 7a cycle 1 absorption). 2 net-new vitest cases pin the 412 banner-with-retry happy path end-to-end. Pre-existing 13 TS errors in unrelated legacy files persist; deferred to Phase 5.) |
 | PostgreSQL Schema | B | B | B | B+ | B+ | B+ | A- | A- | A- | A- | A- (S35: new `users.version BIGINT NOT NULL DEFAULT 1` baked into the base CREATE + guarded ALTER block at the bottom of init.sql with unconditional `ADD COLUMN IF NOT EXISTS` (Step 7a cycle 2 absorption — repairs ledger-poisoned legacy DBs). New `users_audit` table mirroring the S31/S33/S34 audit shape. action CHECK enum includes all 4 values (CREATED/UPDATED/DELETED/SUPERSEDED) up-front for forward-compat. AC family `DefaultCompensationModel` seed rows corrected (6 init.sql rows: AC + AC_RESEARCH + AC_TEACHING × OK24 + OK26) per TASK-3503 source-cited bug-with-no-past-impact policy application. Same Phase 4e production-readiness deferral as S30/S31 — coherent legacy-DB-upgrade runbook sprint outstanding.) |
 | Docker/Infrastructure | B+ | B+ | B+ | B+ | B+ | B+ | B+ | B+ | B+ | B+ | B+ |
+
+> **Note (2026-05-31):** the per-sprint historical columns above stop at **S35**; S36–S55 grades were not individually tracked (the assessment cadence lapsed). Rather than back-fill 20 fabricated columns, here is the current **S56 snapshot**:
+
+| Domain | S56 Grade | vs S35 |
+|--------|-----------|--------|
+| Rule Engine | A++ | held |
+| SharedKernel (Models) | A | held |
+| SharedKernel (Events) | A- | held |
+| SharedKernel (Segmentation) | A | held |
+| Infrastructure | A | held |
+| Security | B+ | held |
+| Backend API | A | held |
+| Payroll Integration | A | held |
+| Frontend | B | ▲ from B- |
+| PostgreSQL Schema | A- | held |
+| Docker/Infrastructure | A- | ▲ from B+ |
+| CI/Tooling | B+ | held |
+| Domain Correctness | B | new |
+| Reporting-Line & Approval Routing | A- | new |
 
 ## Pre-S39 Warning Baseline
 
