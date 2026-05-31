@@ -96,15 +96,15 @@
 | S22 | 8 | SharedKernel, Infrastructure (outbox), Backend API, PostgreSQL, Frontend, Tests | ADR-018 |
 | S23 | 5 | Infrastructure (outbox + repo), Backend API, Frontend (lib + api), Tests, Sprint log | — (Step 7a cycle 1 P1 absorbed in cycle 2 fix; no new ADR/PAT) |
 | S24 | 8 | Infrastructure (7 repos: conn-tx overloads), Backend API (6 endpoint files atomic outbox conversion), Tests (TxContractTests + ForcedRollbackHarness + 6 atomic test classes), Governance (AGENTS.md cross-domain authorization), Sprint log | — (no new ADR; propagates ADR-018 D2/D3/D5 only) |
-| S25 | 11 | Infrastructure, Backend API, Frontend, Data Model, Tests | ADR-019 |
-| S26 | 10 | Infrastructure, Backend API (Admin/Overtime), Tests | — |
+| S25 | 8 | Infrastructure, Backend API, Frontend, Data Model, Tests | ADR-019 |
+| S26 | 9 | Infrastructure, Backend API (Admin/Overtime), Tests | — |
 | S27 | 11 | Infrastructure (projections), Backend API, Tests | — |
 | S28 | 4 | Knowledge Base (design-only sprint) | ADR-020 |
-| S29 | 12 | SharedKernel, Infrastructure, Backend API, Payroll, Frontend, Tests | — (ADR-018 D14 amendment only) |
-| S30 | 11 | Infrastructure, Backend API, Frontend, Data Model, Tests | ADR-021 |
-| S31 | 12 | Infrastructure, Backend API, Frontend, Data Model, Tests | ADR-022 |
+| S29 | 11 | SharedKernel, Infrastructure, Backend API, Payroll, Frontend, Tests | — (ADR-018 D14 amendment only) |
+| S30 | 14 | Infrastructure, Backend API, Frontend, Data Model, Tests | ADR-021 |
+| S31 | 13 | Infrastructure, Backend API, Frontend, Data Model, Tests | ADR-022 |
 | S32 | 4 | Knowledge Base (design-only sprint) | ADR-023 |
-| S33 | 13 | SharedKernel, Infrastructure, Backend API, Payroll, Frontend, Tests | — (implements ADR-023) |
+| S33 | 14 | SharedKernel, Infrastructure, Backend API, Payroll, Frontend, Tests | — (implements ADR-023) |
 | S34 | 16 | Infrastructure, Backend API, Auth, Frontend, Data Model, Tests | — |
 | S35 | 11 | Infrastructure, Backend API, Frontend, Data Model, Tests | — |
 | S36 | 11 | Docs/References (design-only inventory sprint) | — |
@@ -123,7 +123,7 @@
 | S45 | 7 | Infrastructure, Backend API, Tests | — |
 | S46 | 7 | Infrastructure (Dockerfiles), Backend API, Frontend | — |
 | S47 | 6 | Frontend | — |
-| S48 | 16 | Data Model, Infrastructure, Backend API, Frontend, Tests | ADR-027 |
+| S48 | 15 | Data Model, Infrastructure, Backend API, Frontend, Tests | ADR-027 |
 | S49 | 13 | Backend API, Data Model, Frontend, Tests | — |
 | S50 | 14 | Data Model, Backend API, Frontend, Tests | — |
 | S51 | 12 | Infrastructure, Backend API, Frontend, Tests | — |
@@ -133,8 +133,10 @@
 | S55 | 3 | Backend API, Frontend (log reconstructed) | — |
 | S56 | 8 | Backend API, Infrastructure, Data Model, Frontend | ADR-028 |
 | **Total (S1–S24)** | **228** | — | 30 entries |
-| **Total (S25–S56)** | **332** | — | 10 entries (ADR-019…ADR-028) |
-| **Grand Total (S1–S56)** | **560** | — | **40 KB entries on disk** |
+| **Total (S25–S56)** | **~330** \* | — | 10 entries (ADR-019…ADR-028) |
+| **Grand Total (S1–S56)** | **~558** \* | — | **40 KB entries on disk** |
+
+> \* **Task-count methodology (verified 2026-05-31):** S25–S56 counts are **authoritative** (number of `## Task Log` TASK entries) for sprints that kept a Task Log — e.g. S25=8, S30=14, S33=14, S48=15. They are **approximate** (declared count from the sprint narrative) for design-only / compressed-format sprints (most of S34–S47, S50–S54) and for S40 (whose tasks are recorded as a Phase Decomposition, not a Task Log). The grand total is therefore approximate. (A first Codex pass caught the S25 over-count of 11→8 and a 332-vs-331 subtotal slip; both fixed here along with S26/S29/S30/S31/S33/S48.)
 
 ## Test Progression
 
