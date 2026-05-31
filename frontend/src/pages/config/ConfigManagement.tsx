@@ -186,7 +186,7 @@ function RowWithDelta({ row, expanded, onToggle }: RowWithDeltaProps) {
       </tr>
       {expanded && (
         <tr>
-          <td colSpan={5} style={{ background: 'var(--color-bg-subtle, #f9fafb)' }}>
+          <td colSpan={5} style={{ background: 'var(--color-bg-muted)' }}>
             <div style={{ padding: '0.5rem', fontSize: '0.875rem' }}>
               <div><strong>Profil-ID:</strong> {row.profileId}</div>
               <div style={{ marginTop: '0.5rem' }}><strong>Vaerdier paa denne profil:</strong></div>

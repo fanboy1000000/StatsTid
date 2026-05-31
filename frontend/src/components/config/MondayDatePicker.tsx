@@ -111,7 +111,7 @@ export function MondayDatePicker({
         disabled={disabled}
       />
       {warning && (
-        <div role="alert" style={{ color: 'var(--color-error, #dc2626)', fontSize: '0.8125rem', marginTop: '0.25rem' }}>
+        <div role="alert" style={{ color: 'var(--color-error)', fontSize: '0.8125rem', marginTop: '0.25rem' }}>
           {warning}
         </div>
       )}

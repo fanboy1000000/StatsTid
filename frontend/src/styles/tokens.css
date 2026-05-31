@@ -1,26 +1,66 @@
 :root {
-  /* Colors (from ADR-011 / designsystem.dk) */
-  --color-primary: #0059B3;
-  --color-primary-dark: #004993;
-  --color-primary-darker: #003972;
-  --color-text: #1A1A1A;
-  --color-gray-100: #F5F5F5;
-  --color-gray-200: #DCDCDC;
-  --color-gray-300: #BFBFBF;
-  --color-gray-400: #8E8E8E;
-  --color-gray-500: #707070;
-  --color-gray-600: #454545;
-  --color-white: #FFFFFF;
-  --color-success: #358000;
-  --color-success-light: #DDF7CE;
-  --color-error: #CC0000;
-  --color-error-light: #FFE0E0;
-  --color-warning: #FEBB30;
-  --color-warning-light: #FFEECC;
-  --color-info: #1B86C3;
-  --color-info-light: #E2F2FB;
-  --color-link: #004D99;
-  --color-link-visited: #800080;
+  /* ============================================================
+     Colors — oes.dk (Økonomistyrelsen) palette, WCAG 2.1 AA adjusted.
+     Hues taken from oes.dk; text-role tokens darkened to ≥4.5:1 on white
+     (oes uses some hues only as banner backgrounds, which fail as text).
+     Default theme only — per-tenant theming deferred (ADR-025 D6).
+     See ADR-011 (palette section amended S57). All text tokens verified
+     ≥4.5:1 on #fff and white-on-fill ≥4.5:1 for filled buttons/badges.
+     ============================================================ */
+
+  /* Brand / primary (green) */
+  --color-primary: #066b43;          /* 6.58:1 on white */
+  --color-primary-hover: #055638;    /* hover */
+  --color-primary-dark: #055638;     /* alias of hover */
+  --color-primary-darker: #04412b;   /* pressed/active */
+
+  /* Text */
+  --color-text: #343536;             /* 12.3:1 */
+  --color-text-secondary: #6b6b6e;   /* 5.31:1 — AA-safe secondary text */
+  --color-text-muted: #6b6b6e;       /* alias */
+
+  /* Neutrals / grays (oes warm-neutral scale) */
+  --color-white: #ffffff;
+  --color-bg: #ffffff;
+  --color-surface: #ffffff;
+  --color-bg-hover: #f3f2f2;
+  --color-bg-muted: #f3f2f2;
+  --color-gray-50: #f7f6f6;          /* lightest neutral (subtle stripes/bg) */
+  --color-bg-subtle: #f3f2f2;        /* alias of gray-100 (subtle surface) */
+  --color-gray-100: #f3f2f2;
+  --color-gray-200: #e8e6e6;
+  --color-gray-300: #cac8c8;
+  --color-gray-400: #a7a6a8;         /* UI / disabled / borders only — NOT text (2.42:1) */
+  --color-gray-500: #6b6b6e;         /* secondary text, AA-safe (5.31:1) */
+  --color-gray-600: #55565a;         /* focus / strong (7.3:1) */
+  --color-neutral-200: var(--color-gray-100);
+  --color-neutral-600: var(--color-gray-500);
+
+  /* Borders */
+  --color-border: #e8e6e6;           /* gray-200 */
+  --color-border-strong: #55565a;    /* gray-600 */
+
+  /* Status — success (teal-green) */
+  --color-success: #0f766e;          /* 5.47:1 (oes #00897a fails as text) */
+  --color-success-light: #ccfbf1;    /* oes banner-success bg */
+
+  /* Status — error / danger (alias) */
+  --color-error: #cc0000;            /* 5.89:1 */
+  --color-error-light: #fee2e2;      /* oes banner-danger bg */
+  --color-danger: var(--color-error);
+  --color-danger-bg: var(--color-error-light);
+
+  /* Status — warning (amber; AA-safe for text/icon/border) */
+  --color-warning: #8a6a00;          /* 5.07:1 (oes #b09400 fails) */
+  --color-warning-light: #fef9c3;    /* oes banner-warning bg */
+
+  /* Status — info (blue) */
+  --color-info: #1a6a86;             /* 6.1:1 on white, 4.97:1 on info-light (Step 7a AA fix for .info badge) */
+  --color-info-light: #ddeaf3;       /* oes light blue */
+
+  /* Links */
+  --color-link: #3e72a6;             /* 5.05:1 */
+  --color-link-visited: #6b4d8a;     /* 6.88:1 (darkened for AA) */
 
   /* Spacing (8px baseline grid) */
   --space-1: 4px;

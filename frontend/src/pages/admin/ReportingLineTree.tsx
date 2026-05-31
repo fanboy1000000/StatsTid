@@ -689,7 +689,7 @@ export function ReportingLineTree() {
                     ))}
                     {importRows.length > 5 && (
                       <tr>
-                        <td colSpan={3} style={{ fontStyle: 'italic', color: '#6b7280' }}>
+                        <td colSpan={3} style={{ fontStyle: 'italic', color: 'var(--color-text-secondary)' }}>
                           ... og {importRows.length - 5} flere raekker
                         </td>
                       </tr>
@@ -702,9 +702,9 @@ export function ReportingLineTree() {
             {importResult && (
               <div style={{
                 padding: '12px 16px',
-                border: '1px solid #10b981',
-                background: '#ecfdf5',
-                color: '#065f46',
+                border: '1px solid var(--color-success)',
+                background: 'var(--color-success-light)',
+                color: 'var(--color-success)',
                 fontSize: 14,
                 marginBottom: 16,
               }}>

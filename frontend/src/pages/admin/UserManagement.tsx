@@ -913,13 +913,13 @@ export function UserManagement() {
             </form>
 
             {/* S48 TASK-4810. Reporting-line display below the edit form. */}
-            <div style={{ marginTop: 20, borderTop: '1px solid #e0e0e0', paddingTop: 16 }}>
+            <div style={{ marginTop: 20, borderTop: '1px solid var(--color-border)', paddingTop: 16 }}>
               <div className={styles.formLabel} style={{ fontWeight: 600, fontSize: 14, marginBottom: 8 }}>
                 Ledelseslinjer
               </div>
-              {linesLoading && <div style={{ fontSize: 13, color: '#666' }}>Indlaeser...</div>}
+              {linesLoading && <div style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>Indlaeser...</div>}
               {!linesLoading && activeLines.length === 0 && (
-                <div style={{ fontSize: 13, color: '#666' }}>Ingen ledelseslinjer registreret</div>
+                <div style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>Ingen ledelseslinjer registreret</div>
               )}
               {!linesLoading && activeLines.map((line) => {
                 const isPrimary = line.relationship === 'PRIMARY'

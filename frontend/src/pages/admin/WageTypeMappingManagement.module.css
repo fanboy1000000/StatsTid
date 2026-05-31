@@ -21,9 +21,9 @@
 .createBtn {
   font-family: 'IBM Plex Sans', sans-serif;
   padding: 8px 16px;
-  background: var(--color-primary, #0066cc);
-  color: #fff;
-  border: 1px solid var(--color-primary, #0066cc);
+  background: var(--color-primary);
+  color: var(--color-white);
+  border: 1px solid var(--color-primary);
   border-radius: 0px;
   cursor: pointer;
   font-size: 14px;
@@ -31,7 +31,7 @@
 }
 
 .createBtn:hover {
-  background: var(--color-primary-hover, #0052a3);
+  background: var(--color-primary-hover);
 }
 
 .createBtn:disabled {
@@ -43,23 +43,23 @@
   font-family: 'IBM Plex Sans', sans-serif;
   padding: 8px 16px;
   background: transparent;
-  color: var(--color-text, #1a1a1a);
-  border: 1px solid var(--color-border, #d0d0d0);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
   border-radius: 0px;
   cursor: pointer;
   font-size: 14px;
 }
 
 .cancelBtn:hover {
-  background: var(--color-bg-hover, #f5f5f5);
+  background: var(--color-bg-hover);
 }
 
 .saveBtn {
   font-family: 'IBM Plex Sans', sans-serif;
   padding: 4px 10px;
-  background: var(--color-primary, #0066cc);
-  color: #fff;
-  border: 1px solid var(--color-primary, #0066cc);
+  background: var(--color-primary);
+  color: var(--color-white);
+  border: 1px solid var(--color-primary);
   border-radius: 0px;
   cursor: pointer;
   font-size: 12px;
@@ -68,7 +68,7 @@
 }
 
 .saveBtn:hover {
-  background: var(--color-primary-hover, #0052a3);
+  background: var(--color-primary-hover);
 }
 
 .saveBtn:disabled {
@@ -80,8 +80,8 @@
   font-family: 'IBM Plex Sans', sans-serif;
   padding: 4px 10px;
   background: transparent;
-  color: var(--color-text, #1a1a1a);
-  border: 1px solid var(--color-border, #d0d0d0);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
   border-radius: 0px;
   cursor: pointer;
   font-size: 12px;
@@ -89,17 +89,17 @@
 }
 
 .actionBtn:hover {
-  background: var(--color-bg-hover, #f5f5f5);
+  background: var(--color-bg-hover);
 }
 
 .deleteBtn {
   composes: actionBtn;
-  color: var(--color-danger, #d32f2f);
-  border-color: var(--color-danger, #d32f2f);
+  color: var(--color-danger);
+  border-color: var(--color-danger);
 }
 
 .deleteBtn:hover {
-  background: var(--color-danger-bg, #ffeaea);
+  background: var(--color-danger-bg);
 }
 
 .table {
@@ -111,21 +111,21 @@
 .table th {
   text-align: left;
   padding: 10px 12px;
-  border-bottom: 2px solid var(--color-border-strong, #333);
+  border-bottom: 2px solid var(--color-border-strong);
   font-weight: 600;
   font-size: 13px;
-  color: var(--color-text-secondary, #555);
+  color: var(--color-text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.03em;
 }
 
 .table td {
   padding: 10px 12px;
-  border-bottom: 1px solid var(--color-border, #e0e0e0);
+  border-bottom: 1px solid var(--color-border);
 }
 
 .table tr:hover {
-  background: var(--color-bg-hover, #f9f9f9);
+  background: var(--color-bg-hover);
 }
 
 .generalBadge {
@@ -134,18 +134,18 @@
   font-size: 12px;
   font-weight: 500;
   font-style: italic;
-  border: 1px solid var(--color-border, #d0d0d0);
+  border: 1px solid var(--color-border);
   border-radius: 0px;
-  background: var(--color-bg-muted, #f0f0f0);
-  color: var(--color-text-secondary, #666);
+  background: var(--color-bg-muted);
+  color: var(--color-text-secondary);
 }
 
 .createForm {
-  border: 1px solid var(--color-border, #d0d0d0);
+  border: 1px solid var(--color-border);
   border-radius: 0px;
   padding: 20px;
   margin-bottom: var(--spacing-lg, 24px);
-  background: var(--color-bg-muted, #fafafa);
+  background: var(--color-bg-muted);
 }
 
 .createFormTitle {
@@ -171,11 +171,11 @@
   font-size: 13px;
   font-weight: 500;
   margin-bottom: 4px;
-  color: var(--color-text, #1a1a1a);
+  color: var(--color-text);
 }
 
 .required {
-  color: var(--color-danger, #d32f2f);
+  color: var(--color-danger);
   margin-left: 2px;
 }
 
@@ -183,7 +183,7 @@
   font-family: 'IBM Plex Sans', sans-serif;
   width: 100%;
   padding: 8px 10px;
-  border: 1px solid var(--color-border, #d0d0d0);
+  border: 1px solid var(--color-border);
   border-radius: 0px;
   font-size: 14px;
   box-sizing: border-box;
@@ -191,14 +191,14 @@
 
 .input:focus {
   outline: none;
-  border-color: var(--color-primary, #0066cc);
-  box-shadow: 0 0 0 1px var(--color-primary, #0066cc);
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 1px var(--color-primary);
 }
 
 .inlineInput {
   font-family: 'IBM Plex Sans', sans-serif;
   padding: 4px 8px;
-  border: 1px solid var(--color-border, #d0d0d0);
+  border: 1px solid var(--color-border);
   border-radius: 0px;
   font-size: 13px;
   width: 100px;
@@ -207,8 +207,8 @@
 
 .inlineInput:focus {
   outline: none;
-  border-color: var(--color-primary, #0066cc);
-  box-shadow: 0 0 0 1px var(--color-primary, #0066cc);
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 1px var(--color-primary);
 }
 
 .formActions {
@@ -222,15 +222,15 @@
   align-items: center;
   justify-content: center;
   padding: 48px 0;
-  color: var(--color-text-secondary, #666);
+  color: var(--color-text-secondary);
   font-size: 14px;
 }
 
 .alert {
   padding: 12px 16px;
-  border: 1px solid var(--color-danger, #d32f2f);
-  background: var(--color-danger-bg, #ffeaea);
-  color: var(--color-danger, #d32f2f);
+  border: 1px solid var(--color-danger);
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
   border-radius: 0px;
   font-size: 14px;
   margin-bottom: 16px;
@@ -239,6 +239,6 @@
 .emptyState {
   text-align: center;
   padding: 48px 0;
-  color: var(--color-text-secondary, #666);
+  color: var(--color-text-secondary);
   font-size: 14px;
 }

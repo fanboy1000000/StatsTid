@@ -1,7 +1,9 @@
 # StatsTid Quality Grading
 
-<!-- anchor-sprint: 56 -->
+<!-- anchor-sprint: 57 -->
 > **Governance**: Updated by the Orchestrator at sprint end or during entropy scan. See CLAUDE.md "Quality Grading" section for grade definitions.
+
+> **S57 (2026-05-31):** Frontend held at **B** but **pattern compliance improved materially** — the oes.dk re-skin completed the design-token system (defined ~14 previously-phantom tokens) and migrated all ~124 hardcoded hex colors to tokens, so ADR-011's "no hardcoded colors" mandate is now actually enforced (residual hardcoded-hex = 0). E2E/visual-regression remains the gap keeping it below A. New default palette is oes-derived + WCAG-AA (ADR-011 amended).
 
 ## Domain Quality Matrix
 

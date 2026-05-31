@@ -90,6 +90,7 @@
 | Sprint 54 | UI Restructuring: Two-Level Navigation + Skema Approval Flow | 5 role-gated tabs + per-tab sidebar + Skema approval fixes (Genåbn, Indsendt status, validation, reopen); 2 RBAC changes (OrgManagement→GlobalAdmin, PositionOverrideManagement→LocalAdmin); Codex-reviewed (2B+2W) | 700 *⁵ |
 | Sprint 55 | Skema Approval Flow: locked grid, reopen, expandable detail, month navigation | Locked approved grid + Genåbn reopen + ApprovalDetailPanel + month navigation; `PeriodReopened.PreviousStatus`; ApprovalDashboard + ApprovalEndpoints + ApprovalPeriodRepository + useApprovals/useSkema. **Sprint log reconstructed 2026-05-31 from `df036c3`** — no contemporaneous log | ~700 *⁶ |
 | Sprint 56 | Arbejdstid Work-Time Persistence + Three-Row Redesign + Timer Retirement + Allocation Gate (ADR-028) | Event-sourced `WorkTimeRegistered` + latest-wins `work_time_projection` (fixes disappear-on-approval); Min Tid three rows (Tilføj periode / Tilføj timer / Diff. fra normtid via dated resolver); HARD allocation gate at employee-approve (422); timer write path removed (`timer_sessions` dropped, Timer events retained for replay) | 695 *⁷ |
+| Sprint 57 | UI Re-skin: oes.dk (Økonomistyrelsen) AA-safe palette | tokens.css → green-led AA-safe palette (primary `#066b43`); completed token system (~14 phantom tokens defined → ~316 fallback refs resolved); migrated ~124 hardcoded hexes across 25 files to tokens; ADR-011 palette amended; default theme only (per-tenant deferred, ADR-025 D6); dual-lens Step 7a (1 AA fix). Presentation-only | 128 FE (no change) |
 
 > **Test-count footnotes** (methodology shifts mean these are not strictly comparable):
 > *¹ S29 807 headline; true delta vs S28 was +26 (reported "158 Docker-gated" double-counted 18 pre-existing failures — see S30 row).
@@ -103,13 +104,13 @@
 
 This roadmap uses a **rolling detail** pattern: only the next sprint has task-level planning. Future phases have milestone-level descriptions. After each sprint completes, the next sprint is promoted to detailed planning.
 
-<!-- anchor-sprint: 56 -->
-> **Current position (as of S56, 2026-05-31).** The phase sections below were authored far earlier; their phase→sprint numbers are **historical projections, retained as planning record, NOT current state**. What actually shipped:
+<!-- anchor-sprint: 57 -->
+> **Current position (as of S57, 2026-05-31).** The phase sections below were authored far earlier; their phase→sprint numbers are **historical projections, retained as planning record, NOT current state**. What actually shipped:
 > - **Phase 4 (Production Hardening)** completed ~**S46** (not the projected S22–~29); Phase 4e alone ran S34–S46.
 > - **Phase 5 (UI/UX Refinements)** shipped at **S47** (not the projected ~S30).
 > - **ADR-027 reporting-line hierarchy**: S48–S52. **ADR-024/025 role-within-agreement + multi-tenant** design: S38–S41a (D1/D2 cutover SUSPENDED at the S42a discipline-rollback; S40 plumbing dormant). **ADR-026 audit-visibility**: S43–S45.
 > - **S53–S56**: two-level nav restructure (S53–S54), Skema approval flow (S55, log reconstructed), Arbejdstid work-time persistence + timer retirement (S56 / ADR-028).
-> - **Next sprint: S57** (detailed plan TBD; promoted when scoped).
+> - **S57** (done): UI re-skin to the oes.dk AA-safe palette (ADR-011 amended; default theme only). **Next sprint: S58** (detailed plan TBD; promoted when scoped).
 > Per WORKFLOW.md § "Binding to Architectural Events, Not Sprint Numbers," the projections below are non-binding. The SYSTEM_TARGET coverage tracker further down is likewise frozen at the S18 column and is not current.
 
 > **Sprint numbering rule**: Sprint numbers are strictly sequential (see CLAUDE.md § Sprint Numbering & Re-prioritization). Phase-to-sprint mappings below are projections. When execution order changes, the Orchestrator replans affected sprints and updates these mappings — sprint numbers are never skipped or reordered.

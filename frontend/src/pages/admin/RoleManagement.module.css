@@ -6,14 +6,14 @@
   font-size: 1.5rem;
   font-weight: 600;
   margin: 0 0 1.5rem 0;
-  color: var(--color-text, #111);
+  color: var(--color-text);
 }
 
 .sectionTitle {
   font-size: 1.125rem;
   font-weight: 600;
   margin: 1.5rem 0 0.75rem 0;
-  color: var(--color-text, #111);
+  color: var(--color-text);
 }
 
 .orgSelector {
@@ -25,7 +25,7 @@
   font-size: 0.875rem;
   font-weight: 500;
   margin-bottom: 0.375rem;
-  color: var(--color-text-secondary, #555);
+  color: var(--color-text-secondary);
 }
 
 .userTable {
@@ -38,7 +38,7 @@
 .userTable td {
   text-align: left;
   padding: 0.5rem 0.75rem;
-  border-bottom: 1px solid var(--color-border, #d1d5db);
+  border-bottom: 1px solid var(--color-border);
 }
 
 .userTable th {
@@ -46,8 +46,8 @@
   font-size: 0.8125rem;
   text-transform: uppercase;
   letter-spacing: 0.025em;
-  color: var(--color-text-secondary, #555);
-  border-bottom: 2px solid var(--color-border-strong, #333);
+  color: var(--color-text-secondary);
+  border-bottom: 2px solid var(--color-border-strong);
 }
 
 .userRow {
@@ -55,11 +55,11 @@
 }
 
 .userRow:hover {
-  background: var(--color-bg-hover, #f3f4f6);
+  background: var(--color-bg-hover);
 }
 
 .userRowSelected {
-  background: var(--color-bg-selected, #e0e7ff);
+  background: var(--color-info-light);
 }
 
 .roleHeader {
@@ -78,7 +78,7 @@
 .roleTable td {
   text-align: left;
   padding: 0.5rem 0.75rem;
-  border-bottom: 1px solid var(--color-border, #d1d5db);
+  border-bottom: 1px solid var(--color-border);
 }
 
 .roleTable th {
@@ -86,8 +86,8 @@
   font-size: 0.8125rem;
   text-transform: uppercase;
   letter-spacing: 0.025em;
-  color: var(--color-text-secondary, #555);
-  border-bottom: 2px solid var(--color-border-strong, #333);
+  color: var(--color-text-secondary);
+  border-bottom: 2px solid var(--color-border-strong);
 }
 
 .dialogForm {
@@ -107,12 +107,12 @@
 .emptyState {
   padding: 2rem;
   text-align: center;
-  color: var(--color-text-secondary, #555);
+  color: var(--color-text-secondary);
   font-size: 0.875rem;
 }
 
 .errorText {
-  color: var(--color-error, #dc2626);
+  color: var(--color-error);
   font-size: 0.875rem;
   margin-bottom: 0.5rem;
 }
@@ -126,5 +126,5 @@
 .confirmText {
   margin: 1rem 0;
   font-size: 0.875rem;
-  color: var(--color-text, #111);
+  color: var(--color-text);
 }

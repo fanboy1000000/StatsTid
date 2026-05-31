@@ -9,11 +9,11 @@
 }
 
 .card {
-  border: 1px solid #d1d5db;
+  border: 1px solid var(--color-border);
   border-radius: 0px;
   padding: 1.25rem;
   margin-bottom: 1.5rem;
-  background: #fff;
+  background: var(--color-white);
 }
 
 .cardHeaderRow {
@@ -35,9 +35,9 @@
   font-size: 0.75rem;
   font-weight: 600;
   border-radius: 0px;
-  border: 1px solid #2563eb;
-  background: #eff6ff;
-  color: #1d4ed8;
+  border: 1px solid var(--color-primary);
+  background: var(--color-info-light);
+  color: var(--color-primary-hover);
 }
 
 .table {
@@ -48,14 +48,14 @@
 .table th {
   text-align: left;
   padding: 0.5rem;
-  border-bottom: 2px solid #333;
+  border-bottom: 2px solid var(--color-text);
   font-size: 0.875rem;
   font-weight: 600;
 }
 
 .table td {
   padding: 0.5rem;
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid var(--color-border);
   font-size: 0.875rem;
 }
 
@@ -66,9 +66,9 @@
 
 .approveButton {
   padding: 0.25rem 0.75rem;
-  background: #2563eb;
-  color: #fff;
-  border: 1px solid #2563eb;
+  background: var(--color-primary);
+  color: var(--color-white);
+  border: 1px solid var(--color-primary);
   border-radius: 0px;
   font-family: 'IBM Plex Sans', system-ui, sans-serif;
   font-size: 0.75rem;
@@ -77,7 +77,7 @@
 }
 
 .approveButton:hover {
-  background: #1d4ed8;
+  background: var(--color-primary-hover);
 }
 
 .approveButton:disabled {
@@ -87,9 +87,9 @@
 
 .rejectButton {
   padding: 0.25rem 0.75rem;
-  background: #fff;
-  color: #dc2626;
-  border: 1px solid #dc2626;
+  background: var(--color-white);
+  color: var(--color-error);
+  border: 1px solid var(--color-error);
   border-radius: 0px;
   font-family: 'IBM Plex Sans', system-ui, sans-serif;
   font-size: 0.75rem;
@@ -98,7 +98,7 @@
 }
 
 .rejectButton:hover {
-  background: #fef2f2;
+  background: var(--color-error-light);
 }
 
 .rejectButton:disabled {
@@ -110,32 +110,32 @@
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  color: #6b7280;
+  color: var(--color-text-secondary);
   font-size: 0.875rem;
 }
 
 .alert {
-  border: 1px solid #ef4444;
+  border: 1px solid var(--color-error);
   border-radius: 0px;
-  background: #fef2f2;
-  color: #991b1b;
+  background: var(--color-error-light);
+  color: var(--color-error);
   padding: 0.75rem 1rem;
   font-size: 0.875rem;
   margin-bottom: 1rem;
 }
 
 .alertSuccess {
-  border: 1px solid #10b981;
+  border: 1px solid var(--color-success);
   border-radius: 0px;
-  background: #ecfdf5;
-  color: #065f46;
+  background: var(--color-success-light);
+  color: var(--color-success);
   padding: 0.75rem 1rem;
   font-size: 0.875rem;
   margin-bottom: 1rem;
 }
 
 .emptyState {
-  color: #6b7280;
+  color: var(--color-text-secondary);
   font-style: italic;
   padding: 1rem 0;
 }
@@ -155,8 +155,8 @@
 }
 
 .dialog {
-  background: #fff;
-  border: 1px solid #d1d5db;
+  background: var(--color-white);
+  border: 1px solid var(--color-border);
   border-radius: 0px;
   padding: 1.5rem;
   min-width: 400px;
@@ -171,7 +171,7 @@
 
 .dialogDescription {
   font-size: 0.875rem;
-  color: #6b7280;
+  color: var(--color-text-secondary);
   margin: 0 0 1rem 0;
 }
 
@@ -179,7 +179,7 @@
   width: 100%;
   min-height: 80px;
   padding: 0.5rem;
-  border: 1px solid #d1d5db;
+  border: 1px solid var(--color-border);
   border-radius: 0px;
   font-family: 'IBM Plex Sans', system-ui, sans-serif;
   font-size: 0.875rem;
@@ -188,7 +188,7 @@
 }
 
 .dialogTextarea:focus {
-  outline: 2px solid #2563eb;
+  outline: 2px solid var(--color-primary);
   outline-offset: -1px;
 }
 
@@ -201,9 +201,9 @@
 
 .cancelButton {
   padding: 0.5rem 1rem;
-  background: #fff;
-  color: #374151;
-  border: 1px solid #d1d5db;
+  background: var(--color-white);
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border);
   border-radius: 0px;
   font-family: 'IBM Plex Sans', system-ui, sans-serif;
   font-size: 0.875rem;
@@ -211,14 +211,14 @@
 }
 
 .cancelButton:hover {
-  background: #f9fafb;
+  background: var(--color-bg-muted);
 }
 
 .confirmRejectButton {
   padding: 0.5rem 1rem;
-  background: #dc2626;
-  color: #fff;
-  border: 1px solid #dc2626;
+  background: var(--color-error);
+  color: var(--color-white);
+  border: 1px solid var(--color-error);
   border-radius: 0px;
   font-family: 'IBM Plex Sans', system-ui, sans-serif;
   font-size: 0.875rem;
@@ -227,7 +227,7 @@
 }
 
 .confirmRejectButton:hover {
-  background: #b91c1c;
+  background: var(--color-error);
 }
 
 .confirmRejectButton:disabled {
@@ -237,25 +237,25 @@
 
 /* Compliance badges */
 .complianceOk {
-  color: #166534;
+  color: var(--color-success);
   font-weight: 600;
   font-size: 0.875rem;
 }
 
 .complianceWarning {
-  color: #92400e;
+  color: var(--color-warning);
   font-weight: 600;
   font-size: 0.875rem;
 }
 
 .complianceViolation {
-  color: #991b1b;
+  color: var(--color-error);
   font-weight: 600;
   font-size: 0.875rem;
 }
 
 .complianceLoading {
-  color: var(--color-text-secondary, #666);
+  color: var(--color-text-secondary);
   font-size: 0.875rem;
 }
 
@@ -266,31 +266,31 @@
 }
 
 .periodRow:hover {
-  background-color: var(--color-gray-50, #f9fafb);
+  background-color: var(--color-bg-hover);
 }
 
 .periodRowExpanded {
-  background-color: var(--color-info-light, #eff6ff);
+  background-color: var(--color-info-light);
 }
 
 .expandCell {
   width: 2rem;
   text-align: center;
   font-size: 0.75rem;
-  color: var(--color-gray-500, #6b7280);
+  color: var(--color-gray-500);
   user-select: none;
 }
 
 /* Detail panel (expanded content) */
 .detailRow > td {
   padding: 0 !important;
-  border-bottom: 2px solid var(--color-primary, #2563eb);
+  border-bottom: 2px solid var(--color-primary);
 }
 
 .detailPanel {
   padding: var(--space-4, 1rem) var(--space-2, 0.5rem) var(--space-6, 1.5rem);
-  background: var(--color-gray-50, #fafbfc);
-  border-top: 1px solid var(--border-color, #e5e7eb);
+  background: var(--color-bg-muted);
+  border-top: 1px solid var(--border-color);
 }
 
 .detailPanelTitle {
@@ -313,7 +313,7 @@
 
 .detailEmpty {
   padding: var(--space-4, 1rem);
-  color: var(--color-gray-500, #6b7280);
+  color: var(--color-gray-500);
   font-size: 0.875rem;
   font-style: italic;
 }
@@ -323,7 +323,7 @@
   display: flex;
   align-items: center;
   gap: var(--space-2, 0.5rem);
-  color: var(--color-gray-500, #6b7280);
+  color: var(--color-gray-500);
   font-size: 0.875rem;
 }
 
@@ -348,9 +348,9 @@
 
 .reopenButton {
   padding: 0.25rem 0.75rem;
-  background: #fff;
-  color: #d97706;
-  border: 1px solid #d97706;
+  background: var(--color-white);
+  color: var(--color-warning);
+  border: 1px solid var(--color-warning);
   border-radius: 0;
   font-family: var(--font-family, 'IBM Plex Sans', system-ui, sans-serif);
   font-size: 0.75rem;
@@ -359,7 +359,7 @@
 }
 
 .reopenButton:hover {
-  background: #fffbeb;
+  background: var(--color-warning-light);
 }
 
 .reopenButton:disabled {

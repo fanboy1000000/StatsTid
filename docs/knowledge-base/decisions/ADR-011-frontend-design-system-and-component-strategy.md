@@ -17,6 +17,8 @@ A design language and component strategy was needed that balances institutional 
 
 ## Decision
 
+> **AMENDMENT (S57, 2026-05-31) — default color palette replaced.** The color-token *values* in the "Color palette" table below are **superseded** by the Økonomistyrelsen (oes.dk)-derived, WCAG-2.1-AA-adjusted palette now in `frontend/src/styles/tokens.css`. The color *reference* is now oes.dk (itself a designsystem.dk-based site); **typography, spacing, 0px corners, component strategy, and token architecture are UNCHANGED** by this amendment. Default theme only — per-tenant theming remains deferred (ADR-025 D6); this is a global product-brand decision, not tenant branding. New values: primary `#066b43` (green), text `#343536`, links `#3e72a6`, success `#0f766e`, warning `#8a6a00`, error `#cc0000`, info `#1e7796`, grays `#f3f2f2`→`#55565a`. oes hues used only as banner backgrounds were darkened so every text token is ≥4.5:1 on white. See `docs/sprints/SPRINT-57.md` + `.claude/refinements/REFINEMENT-s57-oes-palette.md`. The table below is retained as the pre-S57 (designsystem.dk blue) baseline.
+
 ### Design Reference
 The visual language is inspired by **Det Fælles Designsystem** (designsystem.dk) — the Danish government's shared design system. We use their aesthetic as reference only: layout, spacing, typography hierarchy, component structure, and color palette. We do NOT use their code, CSS classes, or component implementations.
 

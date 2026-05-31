@@ -256,10 +256,10 @@ export function ProfileEditor({
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
           <div>
             <div style={{ fontWeight: 600 }}>{orgLabel}</div>
-            <div style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary, #555)' }}>
+            <div style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)' }}>
               {agreementCode} / {okVersion}
             </div>
-            <div style={{ fontSize: '0.8125rem', color: 'var(--color-text-secondary, #555)', marginTop: '0.25rem' }}>
+            <div style={{ fontSize: '0.8125rem', color: 'var(--color-text-secondary)', marginTop: '0.25rem' }}>
               {profile
                 ? `Profil-ID: ${profile.profileId}`
                 : 'Ingen lokal profil — central konfiguration gaelder. Gem for at oprette.'}
@@ -355,14 +355,14 @@ export function ProfileEditor({
         {centralConfig ? (
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem 1rem', fontSize: '0.875rem' }}>
             {READ_ONLY_FIELDS.map(spec => (
-              <div key={spec.key} style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--color-border, #e5e7eb)', padding: '0.25rem 0' }}>
-                <span style={{ color: 'var(--color-text-secondary, #555)' }}>{spec.label}</span>
+              <div key={spec.key} style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--color-border)', padding: '0.25rem 0' }}>
+                <span style={{ color: 'var(--color-text-secondary)' }}>{spec.label}</span>
                 <span>{formatCentralValue(centralConfig[spec.key])}</span>
               </div>
             ))}
           </div>
         ) : (
-          <div style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary, #555)' }}>
+          <div style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)' }}>
             Ingen aktiv central konfiguration fundet for {agreementCode}/{okVersion}.
           </div>
         )}
@@ -418,7 +418,7 @@ function NumberOverrideRow({
             error={Boolean(fieldError)}
           />
         ) : (
-          <span style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary, #555)' }}>
+          <span style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)' }}>
             Central: {centralValue ?? '—'}
           </span>
         )}
@@ -460,7 +460,7 @@ function BoolOverrideRow({
             disabled={disabled}
           />
         ) : (
-          <span style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary, #555)' }}>
+          <span style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)' }}>
             Central: {centralValue === null ? '—' : centralValue ? 'Ja' : 'Nej'}
           </span>
         )}

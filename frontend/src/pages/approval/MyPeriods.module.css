@@ -9,11 +9,11 @@
 }
 
 .card {
-  border: 1px solid #d1d5db;
+  border: 1px solid var(--color-border);
   border-radius: 0px;
   padding: 1.25rem;
   margin-bottom: 1.5rem;
-  background: #fff;
+  background: var(--color-white);
 }
 
 .cardHeader {
@@ -38,18 +38,18 @@
 .formLabel {
   font-size: 0.875rem;
   font-weight: 500;
-  color: #374151;
+  color: var(--color-text-secondary);
 }
 
 .formLabel.required::after {
   content: ' *';
-  color: #dc2626;
+  color: var(--color-error);
 }
 
 .formInput,
 .formSelect {
   padding: 0.5rem;
-  border: 1px solid #d1d5db;
+  border: 1px solid var(--color-border);
   border-radius: 0px;
   font-family: 'IBM Plex Sans', system-ui, sans-serif;
   font-size: 0.875rem;
@@ -57,15 +57,15 @@
 
 .formInput:focus,
 .formSelect:focus {
-  outline: 2px solid #2563eb;
+  outline: 2px solid var(--color-primary);
   outline-offset: -1px;
 }
 
 .submitButton {
   padding: 0.5rem 1.5rem;
-  background: #2563eb;
-  color: #fff;
-  border: 1px solid #2563eb;
+  background: var(--color-primary);
+  color: var(--color-white);
+  border: 1px solid var(--color-primary);
   border-radius: 0px;
   font-family: 'IBM Plex Sans', system-ui, sans-serif;
   font-size: 0.875rem;
@@ -75,7 +75,7 @@
 }
 
 .submitButton:hover {
-  background: #1d4ed8;
+  background: var(--color-primary-hover);
 }
 
 .submitButton:disabled {
@@ -85,9 +85,9 @@
 
 .resubmitButton {
   padding: 0.25rem 0.75rem;
-  background: #2563eb;
-  color: #fff;
-  border: 1px solid #2563eb;
+  background: var(--color-primary);
+  color: var(--color-white);
+  border: 1px solid var(--color-primary);
   border-radius: 0px;
   font-family: 'IBM Plex Sans', system-ui, sans-serif;
   font-size: 0.75rem;
@@ -96,7 +96,7 @@
 }
 
 .resubmitButton:hover {
-  background: #1d4ed8;
+  background: var(--color-primary-hover);
 }
 
 .resubmitButton:disabled {
@@ -112,14 +112,14 @@
 .table th {
   text-align: left;
   padding: 0.5rem;
-  border-bottom: 2px solid #333;
+  border-bottom: 2px solid var(--color-text);
   font-size: 0.875rem;
   font-weight: 600;
 }
 
 .table td {
   padding: 0.5rem;
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid var(--color-border);
   font-size: 0.875rem;
 }
 
@@ -133,31 +133,31 @@
 }
 
 .badgeDefault {
-  background: #f3f4f6;
-  color: #374151;
-  border-color: #d1d5db;
+  background: var(--color-bg-muted);
+  color: var(--color-text-secondary);
+  border-color: var(--color-border);
 }
 
 .badgeWarning {
-  background: #fef3c7;
-  color: #92400e;
-  border-color: #f59e0b;
+  background: var(--color-warning-light);
+  color: var(--color-warning);
+  border-color: var(--color-warning);
 }
 
 .badgeSuccess {
-  background: #d1fae5;
-  color: #065f46;
-  border-color: #10b981;
+  background: var(--color-success-light);
+  color: var(--color-success);
+  border-color: var(--color-success);
 }
 
 .badgeError {
-  background: #fee2e2;
-  color: #991b1b;
-  border-color: #ef4444;
+  background: var(--color-error-light);
+  color: var(--color-error);
+  border-color: var(--color-error);
 }
 
 .rejectionText {
-  color: #dc2626;
+  color: var(--color-error);
   font-size: 0.8125rem;
 }
 
@@ -165,32 +165,32 @@
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  color: #6b7280;
+  color: var(--color-text-secondary);
   font-size: 0.875rem;
 }
 
 .alert {
-  border: 1px solid #ef4444;
+  border: 1px solid var(--color-error);
   border-radius: 0px;
-  background: #fef2f2;
-  color: #991b1b;
+  background: var(--color-error-light);
+  color: var(--color-error);
   padding: 0.75rem 1rem;
   font-size: 0.875rem;
   margin-bottom: 1rem;
 }
 
 .alertSuccess {
-  border: 1px solid #10b981;
+  border: 1px solid var(--color-success);
   border-radius: 0px;
-  background: #ecfdf5;
-  color: #065f46;
+  background: var(--color-success-light);
+  color: var(--color-success);
   padding: 0.75rem 1rem;
   font-size: 0.875rem;
   margin-bottom: 1rem;
 }
 
 .emptyState {
-  color: #6b7280;
+  color: var(--color-text-secondary);
   font-style: italic;
   padding: 1rem 0;
 }
