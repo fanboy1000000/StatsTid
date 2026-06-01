@@ -210,16 +210,20 @@ export function SkemaGrid({
     return map
   }, [days, periodHoursPerDay, manualHours])
 
-  // Diff. fra normtid per day: worked - dailyNorm.hours.
-  // Shown only when worked>0 and norm is non-null; blank when norm is null.
+  // Diff. fra normtid per day: (worked ?? 0) - dailyNorm.hours.
+  // Shown on every day that HAS a norm (norm>0) so a workday with no registered
+  // work time still surfaces its full -norm shortfall; also shown when work time
+  // was registered on a 0-norm day (e.g. weekend overtime -> +worked). Blank when
+  // norm is null (academic ANNUAL_ACTIVITY) or when there is neither norm nor work.
+  // formatDiff(0) renders blank, so a perfectly-on-norm day shows nothing.
   const diffPerDay = useMemo(() => {
     const map = new Map<string, number>()
     for (const day of days) {
       const dateKey = formatDateKey(day)
-      const worked = workedPerDay.get(dateKey) ?? 0
-      if (worked <= 0) continue
       const norm = dailyNorm?.get(dateKey)
       if (norm === null || norm === undefined) continue // academic ANNUAL_ACTIVITY -> blank
+      const worked = workedPerDay.get(dateKey) ?? 0
+      if (norm <= 0 && worked <= 0) continue // 0-norm day with no work -> blank
       map.set(dateKey, Math.round((worked - norm) * 100) / 100)
     }
     return map
@@ -245,18 +249,24 @@ export function SkemaGrid({
     return map
   }, [days, projectRows, cellValues])
 
-  // Ikke fordelt (unallocated) per day = worked - allocated
+  // Ikke fordelt (unallocated) per day = worked - allocated.
+  // Parallel to "Diff. fra normtid": shown on every day that has a norm (norm>0)
+  // as well as any day with work time or allocation. An empty norm-day (0 - 0)
+  // classifies as balanced (✓) — nothing is left to distribute yet. Days with no
+  // norm and no activity stay blank.
   const unallocatedPerDay = useMemo(() => {
     const map = new Map<string, number>()
     for (const day of days) {
       const dateKey = formatDateKey(day)
+      const norm = dailyNorm?.get(dateKey)
+      const hasNorm = norm !== null && norm !== undefined && norm > 0
       const worked = workedPerDay.get(dateKey) ?? 0
       const allocated = allocatedPerDay.get(dateKey) ?? 0
-      if (worked === 0 && allocated === 0) continue
+      if (!hasNorm && worked === 0 && allocated === 0) continue
       map.set(dateKey, unallocated(worked, allocated))
     }
     return map
-  }, [days, workedPerDay, allocatedPerDay])
+  }, [days, workedPerDay, allocatedPerDay, dailyNorm])
 
   const workedSumMonth = useMemo(() => {
     let sum = 0

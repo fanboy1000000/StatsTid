@@ -182,4 +182,60 @@ describe('SkemaGrid', () => {
     // No blocked tooltip when balanced.
     expect(cell.getAttribute('title')).toBeNull()
   })
+
+  // ── Per-day "Diff. fra normtid" / "Ikke fordelt" on every norm day ──
+  // A day that HAS a norm but no registered work time must surface its full
+  // -norm shortfall (Diff) and a balanced ✓ (Ikke fordelt), instead of blank.
+  // cells: [0] = row label, [1..N] = days, last = month-total/sum cell.
+  const dayCell = (container: HTMLElement, rowSelector: string, dayOfMonth: number): HTMLElement => {
+    const row = container.querySelector(rowSelector)
+    expect(row).not.toBeNull()
+    const cells = row!.querySelectorAll('td')
+    return cells[dayOfMonth] as HTMLElement // [1] = day 1, [2] = day 2, ...
+  }
+
+  it('Diff. fra normtid shows -norm on a workday with a norm but no registered work time', () => {
+    // March 2 2026 is a Monday (workday). Norm 7,4 t, nothing worked → -7,4 t.
+    const dailyNorm = new Map<string, number | null>([['2026-03-02', 7.4]])
+
+    const { container } = render(
+      <SkemaGrid
+        year={2026}
+        month={3}
+        rows={mockRows}
+        cellValues={new Map()}
+        readOnly={true}
+        onCellChange={vi.fn()}
+        dailyNorm={dailyNorm}
+      />
+    )
+
+    // formatDiff(-7.4) === '-7t 24m'
+    expect(dayCell(container, 'tr.diffRow', 2).textContent).toContain('-7t 24m')
+    // A day with no norm entry stays blank (day 3 not in the map).
+    expect(dayCell(container, 'tr.diffRow', 3).textContent?.trim()).toBe('')
+  })
+
+  it('Ikke fordelt shows balanced ✓ on a norm day with no work and no allocation', () => {
+    const dailyNorm = new Map<string, number | null>([['2026-03-02', 7.4]])
+
+    const { container } = render(
+      <SkemaGrid
+        year={2026}
+        month={3}
+        rows={mockRows}
+        cellValues={new Map()}
+        readOnly={true}
+        onCellChange={vi.fn()}
+        manualHours={new Map()}
+        dailyNorm={dailyNorm}
+      />
+    )
+
+    const cell = dayCell(container, 'tr.unallocatedRow', 2)
+    expect(cell.textContent).toContain('✓')
+    expect(cell.className).toContain('allocBalanced')
+    // A day with no norm and no activity stays blank (day 3).
+    expect(dayCell(container, 'tr.unallocatedRow', 3).textContent?.trim()).toBe('')
+  })
 })
