@@ -170,6 +170,27 @@
   margin-left: 2px;
 }
 
+/* S59 TASK-5908. Helper text under the DOB / child-sick controls explaining the
+   senior auto-grant and the child-sick opt-in. Secondary, smaller than labels. */
+.helperText {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  margin-top: 4px;
+  line-height: 1.4;
+}
+
+/* S59 TASK-5908. Inline checkbox + label row for the child-sick eligibility
+   toggle. Mirrors the formLabel weight but lays the checkbox alongside the text. */
+.checkboxRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
 .input {
   font-family: 'IBM Plex Sans', sans-serif;
   width: 100%;

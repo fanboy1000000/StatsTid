@@ -140,13 +140,13 @@ public static class DefaultEntitlementConfigs
         EntitlementType = "SENIOR_DAY",
         AgreementCode = agreementCode,
         OkVersion = okVersion,
-        AnnualQuota = 0m,  // Age-dependent, resolved at runtime
+        AnnualQuota = 2m,  // S37 TASK-3703: 2 days/year, age-gated by MinAge (was paired-bug 0 + 60)
         AccrualModel = "IMMEDIATE",
         ResetMonth = 1,  // Calendar year
         CarryoverMax = 0m,
         ProRateByPartTime = false,
         IsPerEpisode = false,
-        MinAge = 60,
-        Description = "Seniordage (aldersbetinget, fra 60 år)"
+        MinAge = 62,
+        Description = "Seniordage (aldersbetinget, fra 62 år)"
     };
 }

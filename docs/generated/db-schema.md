@@ -5,7 +5,7 @@
 > Update the schema in `init.sql`, then run `python tools/generate_db_schema.py`.
 > CI fails (`tools/check_docs.py`) if this file drifts from init.sql.
 
-**Total: 53 tables** (39 primary, 14 audit).
+**Total: 55 tables** (40 primary, 15 audit).
 
 ---
 
@@ -243,6 +243,7 @@
 | version | BIGINT | No |  | 1 |
 | created_at | TIMESTAMPTZ | No |  | NOW() |
 | updated_at | TIMESTAMPTZ | No |  | NOW() |
+| birth_date | DATE | Yes |  |  |
 
 **Indexes:**
 - `idx_users_org` on (primary_org_id)
@@ -1066,6 +1067,44 @@
 | updated_by | TEXT | No |  |  |
 | updated_at | TIMESTAMPTZ | No |  | NOW() |
 
+## employee_entitlement_eligibility
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| id | UUID | No | PK | gen_random_uuid() |
+| employee_id | TEXT | No | FK→users |  |
+| entitlement_type | TEXT | No |  |  |
+| eligible | BOOLEAN | No |  |  |
+| effective_from | DATE | No |  | '0001-01-01' |
+| effective_to | DATE | Yes |  |  |
+| version | BIGINT | No |  | 1 |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+| updated_at | TIMESTAMPTZ | No |  | NOW() |
+
+**Indexes:**
+- `idx_employee_entitlement_eligibility_live` (UNIQUE) on (employee_id, entitlement_type) WHERE effective_to IS NULL
+- `idx_employee_entitlement_eligibility_history` (UNIQUE) on (employee_id, entitlement_type, effective_from)
+
+## employee_entitlement_eligibility_audit
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| audit_id | BIGSERIAL | No | PK |  |
+| eligibility_id | UUID | No |  |  |
+| employee_id | TEXT | No |  |  |
+| action | TEXT | No |  |  |
+| previous_data | JSONB | Yes |  |  |
+| new_data | JSONB | Yes |  |  |
+| version_before | BIGINT | Yes |  |  |
+| version_after | BIGINT | Yes |  |  |
+| actor_id | TEXT | No |  |  |
+| actor_role | TEXT | No |  |  |
+| timestamp | TIMESTAMPTZ | No |  | NOW() |
+
+**Indexes:**
+- `idx_employee_entitlement_eligibility_audit_eligibility_id` on (eligibility_id)
+- `idx_employee_entitlement_eligibility_audit_employee_id` on (employee_id)
+
 ---
 
 ## Table Summary
@@ -1125,4 +1164,6 @@
 | 51 | reporting_lines | -- |
 | 52 | reporting_line_audit | audit |
 | 53 | reporting_line_tree_settings | -- |
+| 54 | employee_entitlement_eligibility | -- |
+| 55 | employee_entitlement_eligibility_audit | audit |
 

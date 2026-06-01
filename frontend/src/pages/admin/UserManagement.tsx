@@ -2,6 +2,7 @@ import { useState, useEffect, type FormEvent } from 'react'
 import styles from './UserManagement.module.css'
 import { useOrganizations, useOrgUsers, type User, type WithEtag } from '../../hooks/useAdmin'
 import { useReportingLines, type ReportingLineEntry } from '../../hooks/useReportingLines'
+import { useEntitlementEligibility } from '../../hooks/useEntitlementEligibility'
 import { useToast } from '../../components/ui/Toast'
 import { Spinner } from '../../components/ui'
 import { apiFetchWithEtag } from '../../lib/api'
@@ -161,6 +162,29 @@ export function UserManagement() {
   } = useReportingLines()
   const [activeLines, setActiveLines] = useState<ReportingLineEntry[]>([])
   const [linesLoading, setLinesLoading] = useState(false)
+
+  // S59 TASK-5908 (ADR-029). HR-only per-employee entitlement controls surfaced
+  // on the user-edit dialog: (B) CHILD_SICK eligibility opt-in toggle, and
+  // (A) date of birth which drives the age-derived SENIOR_DAY gate automatically.
+  const { fetchChildSickEligibility, setChildSick, fetchBirthDate, setBirthDate } =
+    useEntitlementEligibility()
+  // S59 follow-up: eligibility now has an HR-only GET. On dialog open we read it
+  // to pre-populate the toggle AND capture rowExists + version, so the save
+  // composes the correct precondition (If-Match when a row exists, else
+  // If-None-Match: *). `childSickRowExists` / `childSickVersion` carry that read
+  // (and are re-stamped read-your-write after a successful write). `childSickDirty`
+  // tracks whether HR changed the toggle so an untouched dialog never writes a
+  // spurious eligibility row.
+  const [childSickEligible, setChildSickEligible] = useState(false)
+  const [childSickRowExists, setChildSickRowExists] = useState(false)
+  const [childSickVersion, setChildSickVersion] = useState<number | null>(null)
+  const [childSickDirty, setChildSickDirty] = useState(false)
+  // DOB is readable (HR-only GET) so the field pre-populates. `birthDate` is the
+  // ISO yyyy-MM-dd string (or '' for none); `birthDateVersion` carries
+  // users.version for the admin-strict If-Match PUT.
+  const [birthDate, setBirthDateValue] = useState('')
+  const [birthDateInitial, setBirthDateInitial] = useState('')
+  const [birthDateVersion, setBirthDateVersion] = useState<number | null>(null)
   const [managerDialogOpen, setManagerDialogOpen] = useState(false)
   const [managerForm, setManagerForm] = useState<{
     managerId: string
@@ -284,6 +308,16 @@ export function UserManagement() {
     setStaleConflict(null)
     setActiveLines([])
     setEditingProfile(null)
+    // S59 TASK-5908. Reset per-employee entitlement controls to the opt-in
+    // default; the live eligibility + DOB are repopulated from the parallel
+    // fetch below.
+    setChildSickEligible(false)
+    setChildSickRowExists(false)
+    setChildSickVersion(null)
+    setChildSickDirty(false)
+    setBirthDateValue('')
+    setBirthDateInitial('')
+    setBirthDateVersion(null)
     setEditForm({
       displayName: user.displayName,
       email: user.email ?? '',
@@ -293,13 +327,27 @@ export function UserManagement() {
       position: '',
     })
     try {
-      // Fetch user + employee profile in parallel.
-      const [fresh, profile] = await Promise.all([
+      // Fetch user + employee profile + DOB + CHILD_SICK eligibility in parallel.
+      const [fresh, profile, dob, elig] = await Promise.all([
         fetchUser(user.userId),
         fetchEmployeeProfile(user.userId),
+        fetchBirthDate(user.userId).catch(() => null),
+        fetchChildSickEligibility(user.userId).catch(() => null),
       ])
       setEditingUser(fresh)
       setEditingProfile(profile)
+      if (dob) {
+        setBirthDateValue(dob.birthDate ?? '')
+        setBirthDateInitial(dob.birthDate ?? '')
+        setBirthDateVersion(dob.version)
+      }
+      // S59 follow-up: pre-populate the toggle from the live row and capture
+      // rowExists + version for the read-then-If-Match write on save.
+      if (elig) {
+        setChildSickEligible(elig.eligible)
+        setChildSickRowExists(elig.rowExists)
+        setChildSickVersion(elig.version)
+      }
       setEditForm({
         displayName: fresh.displayName,
         email: fresh.email ?? '',
@@ -467,18 +515,68 @@ export function UserManagement() {
         setProfileMap((prev) => ({ ...prev, [editingUser.userId]: updatedProfile }))
       }
 
+      // S59 TASK-5908 (A). DOB write — only when HR changed it. Admin-strict
+      // If-Match composed from users.version. Read-your-write: re-stamp local
+      // state from the PUT response so a follow-up save in the same session
+      // carries the bumped version. '' (no DOB) maps to null on the wire.
+      if (birthDate !== birthDateInitial && birthDateVersion !== null) {
+        const savedDob = await setBirthDate(
+          editingUser.userId,
+          birthDate || null,
+          birthDateVersion,
+        )
+        setBirthDateValue(savedDob.birthDate ?? '')
+        setBirthDateInitial(savedDob.birthDate ?? '')
+        setBirthDateVersion(savedDob.version)
+      }
+
+      // S59 TASK-5908 (B) + S59 follow-up. CHILD_SICK eligibility — only when HR
+      // touched the toggle (childSickDirty), so an untouched dialog never writes a
+      // spurious eligibility row. Read-then-If-Match: a row that already existed
+      // (childSickRowExists, version from the dialog-open GET) updates with
+      // If-Match; an absent row creates with If-None-Match: *. Read-your-write:
+      // re-stamp rowExists + version from the PUT response.
+      if (childSickDirty) {
+        const savedElig = await setChildSick(
+          editingUser.userId,
+          childSickEligible,
+          childSickRowExists,
+          childSickVersion,
+        )
+        setChildSickEligible(savedElig.eligible)
+        setChildSickRowExists(savedElig.rowExists)
+        setChildSickVersion(savedElig.version)
+        setChildSickDirty(false)
+      }
+
       toast({ title: 'Gemt', description: 'Bruger opdateret', variant: 'success' })
       handleCloseEdit()
     } catch (err) {
       const e2 = err as Error & {
         status?: number
-        body?: { expectedVersion?: number; actualVersion?: number }
+        body?: { expectedVersion?: number; actualVersion?: number; currentVersion?: number }
       }
       if (e2.status === 412) {
         setStaleConflict({
           expected: e2.body?.expectedVersion,
           actual: e2.body?.actualVersion,
         })
+      } else if (e2.status === 409) {
+        // S59 follow-up: lost-update on the eligibility create (If-None-Match: *
+        // raced an existing row). Re-read so the toggle now carries rowExists +
+        // version, surface a clear message, and let HR re-save with If-Match.
+        if (editingUser) {
+          try {
+            const elig = await fetchChildSickEligibility(editingUser.userId)
+            setChildSickEligible(elig.eligible)
+            setChildSickRowExists(elig.rowExists)
+            setChildSickVersion(elig.version)
+            setChildSickDirty(false)
+          } catch {
+            // Re-read failed too; the message below still tells HR to retry.
+          }
+        }
+        setFormError(err instanceof Error ? err.message : String(err))
       } else {
         setFormError(err instanceof Error ? err.message : String(err))
       }
@@ -890,6 +988,50 @@ export function UserManagement() {
                   disabled={!editingProfile}
                   title={!editingProfile ? 'Profil ikke fundet for denne medarbejder' : undefined}
                 />
+              </div>
+
+              {/* S59 TASK-5908 (A). Foedselsdato — drives the age-derived
+                  seniordag-berettigelse automatically (seniordage gives fra 62 aar).
+                  HR-only field; DOB never leaves the Backend except as derived age. */}
+              <div className={styles.formField}>
+                <label className={styles.formLabel} htmlFor="editBirthDate">
+                  Fødselsdato
+                </label>
+                <input
+                  className={styles.input}
+                  id="editBirthDate"
+                  type="date"
+                  value={birthDate}
+                  onChange={(e) => setBirthDateValue(e.target.value)}
+                  disabled={birthDateVersion === null}
+                  title={birthDateVersion === null ? 'Kunne ikke indlæse fødselsdato' : undefined}
+                  data-testid="birth-date-input"
+                />
+                <div className={styles.helperText}>
+                  Seniordage tildeles automatisk fra det fyldte 62. år ud fra fødselsdatoen.
+                </div>
+              </div>
+
+              {/* S59 TASK-5908 (B). Barns sygedag-berettigelse — per-employee
+                  opt-in (default ikke berettiget). CHILD_SICK only; senior is
+                  age-derived (no toggle). */}
+              <div className={styles.formField}>
+                <label className={styles.checkboxRow} htmlFor="editChildSick">
+                  <input
+                    id="editChildSick"
+                    type="checkbox"
+                    checked={childSickEligible}
+                    onChange={(e) => {
+                      setChildSickEligible(e.target.checked)
+                      setChildSickDirty(true)
+                    }}
+                    data-testid="child-sick-toggle"
+                  />
+                  <span>Barns sygedag – berettiget</span>
+                </label>
+                <div className={styles.helperText}>
+                  Giver medarbejderen adgang til at registrere barns 1./2./3. sygedag.
+                </div>
               </div>
 
               {formError && <div className={styles.alert}>{formError}</div>}

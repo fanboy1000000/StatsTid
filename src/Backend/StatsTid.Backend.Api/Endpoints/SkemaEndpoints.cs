@@ -74,6 +74,29 @@ public static class SkemaEndpoints
     private const decimal StandardDayHours = 7.4m;
 
     /// <summary>
+    /// Resolve an absence type to its entitlement type (null = no entitlement gating),
+    /// reusing the <see cref="AbsenceToEntitlementType"/> map. Unknown types ⇒ null.
+    /// </summary>
+    private static string? GetEntitlementType(string absenceType)
+        => AbsenceToEntitlementType.TryGetValue(absenceType, out var et) ? et : null;
+
+    /// <summary>
+    /// S59 / TASK-5907 — pure integer-age computation as-of a date from a birth date.
+    /// No <c>DateTime.Now</c>; deterministic so both the GET display filter (anchor =
+    /// month-end) and the POST gate (anchor = absence date) read the same way. Returns the
+    /// completed years lived as-of <paramref name="asOf"/> (i.e. the birthday must have
+    /// already occurred on/before <paramref name="asOf"/> in that year).
+    /// </summary>
+    private static int AgeAsOf(DateOnly birthDate, DateOnly asOf)
+    {
+        var age = asOf.Year - birthDate.Year;
+        // Subtract one if this year's birthday has not yet been reached on the as-of date.
+        if (asOf < birthDate.AddYears(age))
+            age--;
+        return age;
+    }
+
+    /// <summary>
     /// Resolve the entitlement year for a given date based on the reset month.
     /// If resetMonth is 9 (ferieår) and date is September+, year = date.Year; else year = date.Year - 1.
     /// </summary>
@@ -112,6 +135,10 @@ public static class SkemaEndpoints
             ProjectRepository projectRepo,
             AbsenceTypeVisibilityRepository visibilityRepo,
             ApprovalPeriodRepository approvalRepo,
+            // S59 / TASK-5907 — per-employee CHILD_SICK eligibility (dated read) and the
+            // resolved SENIOR_DAY config (MinAge) for the DOB-derived senior age gate.
+            EmployeeEntitlementEligibilityRepository eligibilityRepo,
+            EntitlementConfigRepository entitlementConfigRepo,
             // S27 TASK-2706 GET migration: Skema month reads now serve from
             // time_entries_projection + absences_projection (TASK-2702 schema,
             // TASK-2704 repos) instead of the event stream. Projections commit
@@ -180,10 +207,43 @@ public static class SkemaEndpoints
                 visibilityEntries.Where(v => v.IsHidden).Select(v => v.AbsenceType),
                 StringComparer.Ordinal);
 
-            // Build absence types list (filtered by agreement and org visibility)
+            // ── S59 / TASK-5907 per-employee eligibility display filter ──
+            // After the org-level absence_type_visibility filter, additionally hide
+            // absence types the employee is personally ineligible for. This is a DISPLAY
+            // affordance only (what can be added to this month); the POST gate per
+            // absence.Date is authoritative. Anchor = MONTH-END (single, well-defined UI
+            // anchor). The POST gate intentionally uses a different anchor (per-row
+            // absence.Date) — see the note on the POST gate below; the two are NOT
+            // required to agree mid-month (refinement line 19, SPRINT-59 TASK-5907).
+            //
+            // (a) CHILD_SICK: drop all child-sick variants (those mapping to entitlement
+            //     CHILD_SICK) when the employee is ineligible as-of month-end. Absent
+            //     eligibility row ⇒ ineligible (opt-in default).
+            var childSickEligible = (await eligibilityRepo
+                .GetEligibleAsOfAsync(employeeId, "CHILD_SICK", monthEnd, ct)).Eligible;
+
+            // (b) SENIOR_DAY: DOB-derived age gate. Hide when the employee is under the
+            //     resolved SENIOR_DAY MinAge as-of month-end, OR has no BirthDate
+            //     (fail-closed). The age decision itself mirrors the rule-engine gate
+            //     (TASK-5904) but here it is only a display affordance; the POST gate
+            //     re-validates per row via the rule engine.
+            // S59 / Step-7a BLOCKER 2 — resolve the SENIOR_DAY config AS-OF the display anchor
+            // (month-end), not the live/open row, so min_age and the age computation share the
+            // same anchor (determinism, P4 / ADR-020). Mirrors the dated quota read on POST.
+            var seniorConfig = await entitlementConfigRepo.GetByTypeAtAsync(
+                "SENIOR_DAY", agreementCode, user.OkVersion, monthEnd, ct);
+            var seniorMinAge = seniorConfig?.MinAge;
+            var seniorVisible = seniorMinAge is null // no age gate configured ⇒ unrestricted
+                || (user.BirthDate is { } dob && AgeAsOf(dob, monthEnd) >= seniorMinAge.Value);
+
+            // Build absence types list (filtered by agreement, org visibility, then
+            // per-employee eligibility).
             var agreementAbsenceTypes = GetAbsenceTypesForAgreement(agreementCode);
             var absenceTypes = agreementAbsenceTypes
                 .Where(t => !hiddenTypes.Contains(t))
+                .Where(t => childSickEligible
+                    || !string.Equals(GetEntitlementType(t), "CHILD_SICK", StringComparison.Ordinal))
+                .Where(t => seniorVisible || !string.Equals(t, "SENIOR_DAY", StringComparison.Ordinal))
                 .Select(t => new
                 {
                     type = t,
@@ -342,6 +402,9 @@ public static class SkemaEndpoints
             ApprovalPeriodRepository approvalRepo,
             EntitlementConfigRepository entitlementConfigRepo,
             EntitlementBalanceRepository entitlementBalanceRepo,
+            // S59 / TASK-5907 — per-employee CHILD_SICK eligibility (dated read) for the
+            // pre-transaction absence eligibility gate.
+            EmployeeEntitlementEligibilityRepository eligibilityRepo,
             IHttpClientFactory httpClientFactory,
             IConfiguration configuration,
             // S27 TASK-2706 atomic POST: state-change site moved off
@@ -527,6 +590,106 @@ public static class SkemaEndpoints
                         totalHours = overDay.Sum(a => a.Hours),
                         maxHours = StandardDayHours,
                     }, statusCode: 422);
+                }
+
+                // ── S59 / TASK-5907 per-employee eligibility gate (pre-transaction, atomic) ──
+                // Authoritative reject-before-write check, alongside the duplicate/day-norm
+                // guards above. Reads are dated as-of EACH absence's own date — NOT wall-clock
+                // save time — so past-period saves and replays are deterministic (P4, ADR-020).
+                // Anchor difference vs the GET filter is INTENTIONAL: GET (display) uses
+                // month-end; POST (authoritative) uses absence.Date per row. They are not
+                // required to agree mid-month (refinement line 19/20, SPRINT-59 TASK-5907).
+                {
+                    // SENIOR_DAY age gate is decided BY the rule engine (PAT-005 / ADR-002):
+                    // the Backend only derives the integer age and passes MinAge +
+                    // EmployeeAgeAsOfAbsenceDate; DOB never crosses the rule-engine boundary.
+                    var seniorRuleEngineUrl = configuration["ServiceUrls:RuleEngine"] ?? "http://rule-engine:8080";
+                    var seniorHttpClient = httpClientFactory.CreateClient();
+                    var seniorJsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+
+                    foreach (var absence in request.Absences)
+                    {
+                        var gateEntitlementType = GetEntitlementType(absence.AbsenceType);
+
+                        // (a) CHILD_SICK — Backend fact-gate (not rule-engine logic): reject if
+                        //     the employee is ineligible as-of THIS absence's date. Absent row ⇒
+                        //     ineligible (same opt-in default as the GET filter).
+                        if (string.Equals(gateEntitlementType, "CHILD_SICK", StringComparison.Ordinal))
+                        {
+                            var eligible = (await eligibilityRepo
+                                .GetEligibleAsOfAsync(employeeId, "CHILD_SICK", absence.Date, ct)).Eligible;
+                            if (!eligible)
+                                return Results.Json(new
+                                {
+                                    error = "absence_type_not_eligible",
+                                    absenceType = absence.AbsenceType,
+                                    entitlementType = "CHILD_SICK",
+                                    date = absence.Date,
+                                    message = $"Medarbejderen er ikke berettiget til {AbsenceTypeLabels.GetValueOrDefault(absence.AbsenceType, absence.AbsenceType)} på {absence.Date:dd-MM-yyyy}."
+                                }, statusCode: 422);
+                        }
+
+                        // (b) SENIOR_DAY — DOB-derived age gate, validated PER ROW (a 62nd
+                        //     birthday falling mid-month correctly allows later-dated rows and
+                        //     rejects earlier ones in the same save). Null DOB ⇒ fail-closed:
+                        //     pass a null age so the rule engine rejects (it already fail-closes
+                        //     on null age when MinAge is set, TASK-5904).
+                        else if (string.Equals(gateEntitlementType, "SENIOR_DAY", StringComparison.Ordinal))
+                        {
+                            // S59 / Step-7a BLOCKER 2 — resolve the SENIOR_DAY config AS-OF THIS
+                            // row's absence date (not the live/open row), so min_age is read at
+                            // the same anchor as the per-row age computation below (determinism,
+                            // P4 / ADR-020). Mirrors the dated quota read (GetByTypeAtAsync)
+                            // further down. agreementCode is the past-effective code already
+                            // resolved for this save (ADR-023 D2).
+                            var seniorConfig = await entitlementConfigRepo.GetByTypeAtAsync(
+                                "SENIOR_DAY", agreementCode, user.OkVersion, absence.Date, ct);
+                            int? seniorMinAge = seniorConfig?.MinAge;
+
+                            if (seniorMinAge is not null)
+                            {
+                                // Derived integer age as-of THIS row's date; null when DOB unknown.
+                                int? ageAsOf = user.BirthDate is { } dob ? AgeAsOf(dob, absence.Date) : null;
+
+                                var seniorRequest = new
+                                {
+                                    annualQuota = 0m,
+                                    used = 0m,
+                                    planned = 0m,
+                                    carryoverIn = 0m,
+                                    requestedDays = 0m,
+                                    partTimeFraction = 1.0m,
+                                    proRateByPartTime = false,
+                                    isPerEpisode = false,
+                                    perEpisodeLimit = (decimal?)null,
+                                    minAge = seniorMinAge,
+                                    employeeAgeAsOfAbsenceDate = ageAsOf
+                                };
+
+                                var seniorResponse = await seniorHttpClient.PostAsJsonAsync(
+                                    $"{seniorRuleEngineUrl}/api/rules/validate-entitlement", seniorRequest, seniorJsonOptions, ct);
+                                if (!seniorResponse.IsSuccessStatusCode)
+                                    return Results.Json(new { error = "Entitlement validation service unavailable" }, statusCode: 503);
+
+                                var seniorResult = await seniorResponse.Content
+                                    .ReadFromJsonAsync<EntitlementValidationResult>(seniorJsonOptions, ct);
+                                if (seniorResult is null)
+                                    return Results.Json(new { error = "Invalid entitlement validation response" }, statusCode: 502);
+
+                                if (!seniorResult.Allowed)
+                                    return Results.Json(new
+                                    {
+                                        error = "absence_type_not_eligible",
+                                        absenceType = absence.AbsenceType,
+                                        entitlementType = "SENIOR_DAY",
+                                        date = absence.Date,
+                                        message = ageAsOf is null
+                                            ? $"Seniordag kan ikke registreres på {absence.Date:dd-MM-yyyy}: fødselsdato er ikke registreret."
+                                            : $"Seniordag kan ikke registreres på {absence.Date:dd-MM-yyyy}: medarbejderen er under {seniorMinAge.Value} år."
+                                    }, statusCode: 422);
+                            }
+                        }
+                    }
                 }
             }
 

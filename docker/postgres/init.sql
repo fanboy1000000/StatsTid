@@ -2348,3 +2348,110 @@ ON CONFLICT DO NOTHING;
 INSERT INTO reporting_lines (employee_id, manager_id, tree_root_org_id, relationship, effective_from, source, created_by, scheduled_expiry)
 VALUES ('emp005', 'ladm01', 'STY02', 'ACTING', '2026-06-01', 'SELF_DELEGATION', 'mgr01', '2026-07-01')
 ON CONFLICT DO NOTHING;
+
+-- =========================================================================
+-- S59 / ADR-029 — Per-employee entitlement eligibility (child-sick) store.
+--   6th application of the established versioned-config/dating pattern (S29
+--   wage_type_mappings, S30 entitlement_configs, S31 employee_profiles,
+--   S34 user_agreement_codes, S40 role_config_overrides). Surrogate UUID PK
+--   + effective_from / effective_to / partial-unique "live" index / history-
+--   unique index / version — matching employee_profiles (L480-501) so dated
+--   reads are deterministic (ADR-019/ADR-020) and the non-overlap invariant
+--   is enforced by the DB, not the application.
+--
+-- Eligibility is keyed by (employee_id, entitlement_type). The STORAGE is
+-- generic (any entitlement_type string) per the refinement; the write API,
+-- admin UI, and enforcement are restricted to CHILD_SICK this sprint
+-- (SENIOR_DAY is fully age-derived via DOB and is NEVER stored here — see
+-- the users.birth_date block below and ADR-029). No entitlement_type CHECK
+-- constraint at the DB layer by design — the scope guard lives at the
+-- endpoint (TASK-5906), mirroring how role_config_overrides keeps category
+-- validation out of the schema.
+--
+-- Default = ineligible / absent-row = ineligible (opt-in, refinement R1):
+-- the repository resolves a missing row to ineligible, so NO production
+-- backfill / seed of CHILD_SICK rows is required (pre-prod reseed). The
+-- actor is captured in the audit row (actor_id/actor_role), matching the
+-- employee_profiles precedent which carries no created_by on the live row.
+-- =========================================================================
+CREATE TABLE IF NOT EXISTS employee_entitlement_eligibility (
+    id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    employee_id         TEXT        NOT NULL REFERENCES users(user_id),
+    entitlement_type    TEXT        NOT NULL,
+    eligible            BOOLEAN     NOT NULL,
+    effective_from      DATE        NOT NULL DEFAULT '0001-01-01',
+    effective_to        DATE        NULL,
+    version             BIGINT      NOT NULL DEFAULT 1,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Partial-unique "live" index: at most one open (effective_to IS NULL) row
+-- per (employee_id, entitlement_type) — the non-overlap invariant for dated
+-- reads (ADR-019/020). Mirrors idx_employee_profiles_live (L494-496).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_employee_entitlement_eligibility_live
+    ON employee_entitlement_eligibility (employee_id, entitlement_type)
+    WHERE effective_to IS NULL;
+
+-- History-unique index: at most one row per (employee_id, entitlement_type,
+-- effective_from) — supports supersession INSERTs at distinct effective_from
+-- values. Mirrors idx_employee_profiles_history (L500-501).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_employee_entitlement_eligibility_history
+    ON employee_entitlement_eligibility (employee_id, entitlement_type, effective_from);
+
+-- employee_entitlement_eligibility_audit — mirrors employee_profile_audit
+-- shape (L510-522): JSONB previous_data/new_data row snapshots,
+-- version_before/version_after, actor_id/actor_role, and the full 4-value
+-- action CHECK up-front (S59 emits CREATED/UPDATED; SUPERSEDED/DELETED
+-- reserved for the dated-history path without a future schema change). No FK
+-- on the eligibility id because supersession creates FK-invalidating
+-- histories (same rationale as employee_profile_audit).
+CREATE TABLE IF NOT EXISTS employee_entitlement_eligibility_audit (
+    audit_id        BIGSERIAL    PRIMARY KEY,
+    eligibility_id  UUID         NOT NULL,
+    employee_id     TEXT         NOT NULL,
+    action          TEXT         NOT NULL CHECK (action IN ('CREATED','UPDATED','DELETED','SUPERSEDED')),
+    previous_data   JSONB        NULL,
+    new_data        JSONB        NULL,
+    version_before  BIGINT       NULL,
+    version_after   BIGINT       NULL,
+    actor_id        TEXT         NOT NULL,
+    actor_role      TEXT         NOT NULL,
+    timestamp       TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_employee_entitlement_eligibility_audit_eligibility_id
+    ON employee_entitlement_eligibility_audit (eligibility_id);
+CREATE INDEX IF NOT EXISTS idx_employee_entitlement_eligibility_audit_employee_id
+    ON employee_entitlement_eligibility_audit (employee_id);
+
+-- =========================================================================
+-- S59 / ADR-029 (amends ADR-025 D3) — users.birth_date (DOB).
+--   Real (no longer placeholder) GDPR-sensitive PII column on the person
+--   record. Senior-day eligibility is derived = age-as-of(absence.Date) >=
+--   config.MinAge(62); the Backend computes the integer age and passes it to
+--   the rule engine — DOB itself never crosses the rule-engine boundary.
+--   birth_date is NULLABLE (unknown DOB ⇒ fail-closed for SENIOR_DAY,
+--   enforced in the Backend/rule-engine, not the schema). RBAC: never
+--   exposed to non-HR / Employee payloads / JWT / export (TASK-5909).
+--   Erasure (Article 17): DOB NULL-out ships WITH ADR-025 D3, NOT this
+--   sprint — explicitly deferred-with-D3 (named compliance gap, ADR-029).
+--
+-- Audit: users_audit (L612-623) stores full-row JSONB snapshots in
+-- previous_data/new_data — it does NOT use an explicit per-column list, so
+-- birth_date is captured automatically with no audit-table change required
+-- (the /api/admin/users write path serialises the whole row, incl.
+-- birth_date, into new_data). Confirmed: no users_audit extension needed.
+--
+-- ADD COLUMN IF NOT EXISTS at file scope (idempotent, mirrors the S49/S50/
+-- S51 ALTER precedent) carries the column onto legacy databases that the
+-- base `CREATE TABLE IF NOT EXISTS users` (L456) skips.
+-- =========================================================================
+ALTER TABLE users ADD COLUMN IF NOT EXISTS birth_date DATE NULL;
+
+DO $$
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s59-d1-entitlement-eligibility-and-dob', 'ADR-029: employee_entitlement_eligibility + _audit (per-employee CHILD_SICK eligibility, dated/versioned/ADR-026-audited) + users.birth_date DOB column (ADR-025 D3 amend; erasure deferred). No production seed (opt-in, absent-row=ineligible); no SENIOR_DAY eligibility row (age-derived).')
+    ON CONFLICT (migration_id) DO NOTHING;
+END
+$$;

@@ -11,6 +11,24 @@ public sealed class User
     public required string AgreementCode { get; init; }
     public required string OkVersion { get; init; }
     public string EmploymentCategory { get; init; } = "Standard";
+
+    /// <summary>
+    /// S59 / ADR-029 (amends ADR-025 D3) — GDPR-sensitive date of birth on the
+    /// person record. NULLABLE: an unknown DOB ⇒ fail-closed for SENIOR_DAY age
+    /// derivation (enforced in the Backend/rule engine, TASK-5907, not the schema).
+    ///
+    /// <para>
+    /// <b>RBAC — NEVER leak.</b> <c>birth_date</c> is read-gated to
+    /// <c>HROrAbove</c> + <c>OrgScopeValidator</c> and must NEVER be serialized into
+    /// any Employee-facing DTO, JWT, or export. Only the derived integer age crosses
+    /// the rule-engine boundary (TASK-5907); DOB itself stays Backend-local. The
+    /// admin user-list / user-GET projections in <c>AdminEndpoints</c> deliberately
+    /// do NOT include this field — only the dedicated HR-gated DOB endpoints
+    /// (TASK-5906) expose it.
+    /// </para>
+    /// </summary>
+    public DateOnly? BirthDate { get; init; }
+
     public bool IsActive { get; init; } = true;
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; init; } = DateTime.UtcNow;

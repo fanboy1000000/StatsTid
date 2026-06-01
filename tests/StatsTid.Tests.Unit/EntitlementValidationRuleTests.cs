@@ -19,7 +19,9 @@ public class EntitlementValidationRuleTests
         decimal partTimeFraction = 1.0m,
         bool proRateByPartTime = false,
         bool isPerEpisode = false,
-        decimal? perEpisodeLimit = null) => new()
+        decimal? perEpisodeLimit = null,
+        int? minAge = null,
+        int? employeeAgeAsOfAbsenceDate = null) => new()
     {
         AnnualQuota = annualQuota,
         Used = used,
@@ -30,6 +32,8 @@ public class EntitlementValidationRuleTests
         ProRateByPartTime = proRateByPartTime,
         IsPerEpisode = isPerEpisode,
         PerEpisodeLimit = perEpisodeLimit,
+        MinAge = minAge,
+        EmployeeAgeAsOfAbsenceDate = employeeAgeAsOfAbsenceDate,
     };
 
     [Fact]
@@ -299,5 +303,128 @@ public class EntitlementValidationRuleTests
         Assert.Equal("WARNING", result.Status);
         Assert.Equal(2.5m, result.RemainingAfter);
         Assert.Equal(12.5m, result.EffectiveQuota);
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // S59 / TASK-5904 / ADR-029 — age gate (e.g. SENIOR_DAY min_age=62).
+    //
+    // The age-gate branch is added to EntitlementValidationRule.Evaluate BEFORE the
+    // per-episode and quota branches. Contract:
+    //   • MinAge null            → no gate, behavior unchanged (covered by every test above,
+    //                               which leaves MinAge unset).
+    //   • MinAge set, age >= min → gate passes, falls through to per-episode/quota.
+    //   • MinAge set, age <  min → REJECTED ("below minimum age").
+    //   • MinAge set, age null   → REJECTED (fail-closed — unknown/missing DOB).
+    // The Backend passes the derived integer age; DOB never crosses the rule-engine
+    // boundary (ADR-002 pure/deterministic).
+    // ════════════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public void Evaluate_AgeBelowMinAge_ReturnsRejected_BelowMinimumAge()
+    {
+        // SENIOR_DAY shape (quota=2), age 61 < minAge 62 → rejected by the age gate.
+        var request = CreateRequest(
+            annualQuota: 2m, requestedDays: 1m, minAge: 62, employeeAgeAsOfAbsenceDate: 61);
+
+        var result = EntitlementValidationRule.Evaluate(request);
+
+        Assert.False(result.Allowed);
+        Assert.Equal("REJECTED", result.Status);
+        Assert.NotNull(result.Message);
+        Assert.Contains("minimum age", result.Message);
+        Assert.Contains("62", result.Message);
+    }
+
+    [Fact]
+    public void Evaluate_AgeExactlyMinAge_PassesGate_ReturnsAllowed()
+    {
+        // Boundary: age == minAge passes the gate (>=), then quota allows (2 quota, 1 requested).
+        var request = CreateRequest(
+            annualQuota: 2m, requestedDays: 1m, minAge: 62, employeeAgeAsOfAbsenceDate: 62);
+
+        var result = EntitlementValidationRule.Evaluate(request);
+
+        // Gate passed; quota: remaining 2-0-1=1 > threshold 2*0.2=0.4 → ALLOWED.
+        Assert.True(result.Allowed);
+        Assert.Equal("ALLOWED", result.Status);
+        Assert.Equal(1m, result.RemainingAfter);
+    }
+
+    [Fact]
+    public void Evaluate_AgeAboveMinAge_PassesGate_ReturnsAllowed()
+    {
+        // age 65 > minAge 62 → gate passes, quota allows.
+        var request = CreateRequest(
+            annualQuota: 2m, requestedDays: 1m, minAge: 62, employeeAgeAsOfAbsenceDate: 65);
+
+        var result = EntitlementValidationRule.Evaluate(request);
+
+        Assert.True(result.Allowed);
+        Assert.Equal(1m, result.RemainingAfter);
+    }
+
+    [Fact]
+    public void Evaluate_MinAgeSet_AgeNull_ReturnsRejected_FailClosed()
+    {
+        // Fail-closed: MinAge set but no derived age (employee has no recorded DOB) → rejected.
+        // Generous quota (10) so ONLY the age gate can reject — proves the null-age guard fires.
+        var request = CreateRequest(
+            annualQuota: 10m, requestedDays: 1m, minAge: 62, employeeAgeAsOfAbsenceDate: null);
+
+        var result = EntitlementValidationRule.Evaluate(request);
+
+        Assert.False(result.Allowed);
+        Assert.Equal("REJECTED", result.Status);
+        Assert.Contains("minimum age", result.Message);
+    }
+
+    [Fact]
+    public void Evaluate_MinAgeNull_NoGate_UnchangedBehavior()
+    {
+        // MinAge null ⇒ no age gate even with a null age — backward compatible. 25 quota,
+        // request 5 → remaining 20 > threshold 5 → ALLOWED, exactly as the no-age case.
+        var request = CreateRequest(
+            annualQuota: 25m, requestedDays: 5m, minAge: null, employeeAgeAsOfAbsenceDate: null);
+
+        var result = EntitlementValidationRule.Evaluate(request);
+
+        Assert.True(result.Allowed);
+        Assert.Equal("ALLOWED", result.Status);
+        Assert.Equal(20m, result.RemainingAfter);
+    }
+
+    [Fact]
+    public void Evaluate_AgeGate_FiresBeforeQuota_UnderAgeRejectedEvenIfQuotaWouldAllow()
+    {
+        // Ordering proof: the age gate must be evaluated BEFORE the quota branch (TASK-5904).
+        // Quota is wide open (10 quota, 0 used, request 1 → would be ALLOWED on quota alone),
+        // but age 60 < minAge 62, so the request is rejected for AGE, not quota.
+        var request = CreateRequest(
+            annualQuota: 10m, used: 0m, requestedDays: 1m, minAge: 62, employeeAgeAsOfAbsenceDate: 60);
+
+        var result = EntitlementValidationRule.Evaluate(request);
+
+        Assert.False(result.Allowed);
+        Assert.Equal("REJECTED", result.Status);
+        Assert.Contains("minimum age", result.Message); // age reason, NOT "exceeds remaining"
+        Assert.DoesNotContain("exceeds", result.Message);
+    }
+
+    [Fact]
+    public void Evaluate_AgeGate_FiresBeforePerEpisode_UnderAgeRejectedEvenIfWithinEpisodeLimit()
+    {
+        // Ordering proof against the per-episode branch: a per-episode request within its
+        // limit (would be ALLOWED) is still rejected when under-age, because the age gate
+        // runs before the per-episode branch.
+        var request = CreateRequest(
+            annualQuota: 100m, isPerEpisode: true, perEpisodeLimit: 3m, requestedDays: 1m,
+            minAge: 62, employeeAgeAsOfAbsenceDate: 50);
+
+        var result = EntitlementValidationRule.Evaluate(request);
+
+        Assert.False(result.Allowed);
+        Assert.Equal("REJECTED", result.Status);
+        Assert.Contains("minimum age", result.Message);
+        Assert.DoesNotContain("per-episode", result.Message);
     }
 }

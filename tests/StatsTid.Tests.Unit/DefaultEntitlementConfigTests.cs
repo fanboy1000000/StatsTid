@@ -136,13 +136,17 @@ public class DefaultEntitlementConfigTests
     [InlineData("AC", "OK24")]
     [InlineData("HK", "OK26")]
     [InlineData("PROSA", "OK24")]
-    public void SeniorDayConfigs_Have0Quota_MinAge60(string agreement, string okVersion)
+    public void SeniorDayConfigs_Have2Quota_MinAge62(string agreement, string okVersion)
     {
+        // S59 / TASK-5903 / ADR-029: reconciled to the S37-corrected DB seed (init.sql:1449
+        // = 2 days / age 62). Previously this test pinned the stale paired-bug values
+        // (quota 0 + min_age 60) that contradicted the seed and silently rejected every
+        // senior-day registration regardless of age. Now asserts the live 2/62 contract.
         var configs = DefaultEntitlementConfigs.GetConfigsForAgreement(agreement, okVersion);
         var seniorDay = configs.Single(c => c.EntitlementType == "SENIOR_DAY");
 
-        Assert.Equal(0m, seniorDay.AnnualQuota);
-        Assert.Equal(60, seniorDay.MinAge);
+        Assert.Equal(2m, seniorDay.AnnualQuota);
+        Assert.Equal(62, seniorDay.MinAge);
         Assert.Equal(1, seniorDay.ResetMonth);
         Assert.False(seniorDay.ProRateByPartTime);
         Assert.False(seniorDay.IsPerEpisode);

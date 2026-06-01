@@ -94,6 +94,19 @@ public sealed class ProjectionBackfillService
     // events joined to their outbox row (LEFT JOIN — pre-S22 events have no
     // outbox). Ordered by (stream_id, stream_version) so per-stream replay
     // determinism is preserved per ADR-016 D10.
+    //
+    // S59 / TASK-5905 — DELIBERATELY EXCLUDES EmployeeEntitlementEligibilitySet.
+    // This backfill replays only the event_id-keyed APPEND projections (time /
+    // absence) + the (employee,date) latest-wins worktime projection. The
+    // employee_entitlement_eligibility table is a DATED, version-guarded
+    // supersession lineage (mirrors employee_profiles / wage_type_mappings) that
+    // is the AUTHORITATIVE store written directly by the admin endpoint inside the
+    // event-emit transaction — it is NOT a derived read-model rebuilt here (none of
+    // the sibling dated tables are). Its audit-projection rows ARE rebuilt, but via
+    // the registry-driven AuditProjectionBackfillService (the
+    // EmployeeEntitlementEligibilitySet mapper is registered in DI), not here.
+    // Adding it to this replay would risk creating eligibility rows absent a source
+    // event, which the opt-in / no-migration contract (refinement R1) forbids.
     private const string SelectSql = @"
         SELECT
             events.event_id,

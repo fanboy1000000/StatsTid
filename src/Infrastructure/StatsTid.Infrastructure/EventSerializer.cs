@@ -118,6 +118,9 @@ public static class EventSerializer
         // Sprint 56: Self-recorded work-time state per (employee, date) — intervals + manual hours.
         // Latest-wins superseding event; projection resolves latest (TASK-5601).
         ["WorkTimeRegistered"] = typeof(WorkTimeRegistered),
+        // Sprint 59: Per-employee entitlement eligibility (CHILD_SICK) — ADR-029.
+        // Dated/version-guarded superseding event; projection resolves as-of-date latest (TASK-5902/5905).
+        ["EmployeeEntitlementEligibilitySet"] = typeof(EmployeeEntitlementEligibilitySet),
     };
 
     public static string Serialize(IDomainEvent @event)

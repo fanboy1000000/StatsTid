@@ -68,6 +68,7 @@ builder.Services.AddSingleton<OvertimePreApprovalRepository>();
 builder.Services.AddSingleton<AuditProjectionRepository>();
 builder.Services.AddSingleton<ReportingLineRepository>();
 builder.Services.AddSingleton<TreeSettingsRepository>();
+builder.Services.AddSingleton<EmployeeEntitlementEligibilityRepository>(); // S59
 builder.Services.AddSingleton<IAuditProjectionMapperRegistry, AuditProjectionMapperRegistry>();
 // S44 TASK-4407..4412 — 6 IAuditProjectionMapper<T> + 6 RegisteredAuditEventType marker pairs.
 // Mapper + marker registered together so the registry's RegisteredEventTypeNames filter
@@ -190,6 +191,9 @@ builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(ReportingLineS
 // S49 TASK-4908 — bulk import audit mapper
 builder.Services.AddSingleton<IAuditProjectionMapper<ReportingLineBulkImported>, ReportingLineBulkImportedAuditMapper>();
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(ReportingLineBulkImported), nameof(ReportingLineBulkImported)));
+// S59 ADR-029 — per-employee entitlement eligibility (mapper lives in Infrastructure, cross-process)
+builder.Services.AddSingleton<IAuditProjectionMapper<EmployeeEntitlementEligibilitySet>, StatsTid.Infrastructure.AuditMappers.EmployeeEntitlementEligibilitySetAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(EmployeeEntitlementEligibilitySet), nameof(EmployeeEntitlementEligibilitySet)));
 
 // ── Services ──
 builder.Services.AddSingleton<ConfigResolutionService>();
@@ -308,6 +312,7 @@ app.MapWageTypeMappingEndpoints();
 app.MapEntitlementConfigEndpoints();
 app.MapAgreementEntitlementEndpoints();
 app.MapEmployeeProfileEndpoints();
+app.MapEntitlementEligibilityEndpoints(); // S59 / TASK-5906 — CHILD_SICK eligibility + DOB (HR-only)
 app.MapBalanceEndpoints();
 app.MapComplianceEndpoints();
 app.MapOvertimeEndpoints();

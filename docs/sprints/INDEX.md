@@ -205,6 +205,8 @@
 | S55 | ~700 (not recorded) | not recorded | 4 | ~700 **** |
 | S56 | 552 + 128 FE | 44 plain + 15 new S56 Docker | 4 | 552 unit + 128 FE + 15 Docker (no consolidated headline recorded) *** |
 | S57 | 552 + 128 FE | 44 plain + Docker (unchanged) | 4 | unchanged from S56 — presentation-only re-skin, no new tests |
+| S58 | 552 + 133 FE | + 6 new S58 Docker (work-time day-bounds) | 4 | Skema per-day Diff/Ikke-fordelt on every norm day + per-day 24h work-time cap |
+| S59 | 559 + 142 FE | + 13 new S59 Docker (entitlement eligibility) | 4 | Per-employee child-sick eligibility (opt-in, HR-set) + DOB-derived senior-day age gate (ADR-029); Step-7a 3 cycles (2 BLOCKER + 1 race, all fixed) |
 
 **Footnotes**:
 - `*` **S29**: headline 807, but SPRINT-30.md records the reported "158 Docker-gated passing" over-counted 18 pre-existing failures (true delta ~789 at `41b6e89`). 807 is the figure in the S29 Index row.

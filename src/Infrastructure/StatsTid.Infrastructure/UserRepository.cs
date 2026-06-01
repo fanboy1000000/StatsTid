@@ -158,6 +158,66 @@ public sealed class UserRepository
         return (user, version);
     }
 
+    /// <summary>
+    /// S59 / TASK-5906 / ADR-029 — HR-only write of <c>users.birth_date</c> (GDPR PII).
+    /// In-tx <c>(conn, tx)</c> overload so the admin DOB endpoint can ride the UPDATE,
+    /// the <c>users_audit</c> row, and (no DOB event this sprint — erasure deferred with
+    /// ADR-025 D3) in one atomic unit per ADR-018 D3.
+    ///
+    /// <para>
+    /// <b>Admin-strict If-Match (ADR-019 D2).</b> Version-guarded: the UPDATE matches on
+    /// <c>version = @expectedVersion</c> and bumps <c>version + 1</c> (ADR-018 D7 row-version
+    /// contract — same column the AdminEndpoints user PUT bumps). The caller is expected to
+    /// have FOR-UPDATE'd + version-checked the row first (via
+    /// <see cref="GetByIdWithVersionAsync(NpgsqlConnection, NpgsqlTransaction, string, CancellationToken)"/>);
+    /// the <c>AND version = @expectedVersion</c> predicate here is defense-in-depth. Returns
+    /// the new version. Throws <see cref="OptimisticConcurrencyException"/> when no live row
+    /// matched the expected version (caller maps to 412); throws
+    /// <see cref="KeyNotFoundException"/> when no live row exists at all (caller maps to 404).
+    /// </para>
+    ///
+    /// <para>
+    /// <paramref name="birthDate"/> may be <c>null</c> (clearing an unknown DOB).
+    /// </para>
+    /// </summary>
+    public async Task<long> SetBirthDateAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string userId, DateOnly? birthDate, long expectedVersion, CancellationToken ct = default)
+    {
+        await using var cmd = new NpgsqlCommand(
+            """
+            UPDATE users
+               SET birth_date = @birthDate,
+                   version = version + 1,
+                   updated_at = NOW()
+             WHERE user_id = @userId
+               AND is_active = TRUE
+               AND version = @expectedVersion
+            RETURNING version
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("birthDate", (object?)birthDate ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("userId", userId);
+        cmd.Parameters.AddWithValue("expectedVersion", expectedVersion);
+        var result = await cmd.ExecuteScalarAsync(ct);
+        if (result is long newVersion)
+            return newVersion;
+
+        // No row updated — distinguish "row gone" from "version mismatch" so the
+        // endpoint can map 404 vs 412 (mirrors EmployeeProfileRepository.SoftDeleteAsync).
+        await using var probeCmd = new NpgsqlCommand(
+            "SELECT version FROM users WHERE user_id = @userId AND is_active = TRUE", conn, tx);
+        probeCmd.Parameters.AddWithValue("userId", userId);
+        var actual = await probeCmd.ExecuteScalarAsync(ct);
+        if (actual is long actualVersion)
+            throw new OptimisticConcurrencyException(
+                $"User '{userId}' version is {actualVersion}, but caller sent " +
+                $"If-Match: \"{expectedVersion}\"; refresh and retry.",
+                expectedVersion: expectedVersion,
+                actualVersion: actualVersion);
+
+        throw new KeyNotFoundException($"User '{userId}' not found or inactive.");
+    }
+
     private static async Task<IReadOnlyList<User>> ReadUsersAsync(NpgsqlCommand cmd, CancellationToken ct)
     {
         var users = new List<User>();
@@ -178,6 +238,12 @@ public sealed class UserRepository
         AgreementCode = reader.GetString(reader.GetOrdinal("agreement_code")),
         OkVersion = reader.GetString(reader.GetOrdinal("ok_version")),
         EmploymentCategory = reader.GetString(reader.GetOrdinal("employment_category")),
+        // S59 / ADR-029 — DOB read-model plumbing (GDPR PII). Read so the Skema save
+        // path (TASK-5907) can derive senior age. NULLABLE. Never surfaced to non-HR
+        // callers — the admin user projections in AdminEndpoints deliberately omit it.
+        BirthDate = reader.IsDBNull(reader.GetOrdinal("birth_date"))
+            ? null
+            : reader.GetFieldValue<DateOnly>(reader.GetOrdinal("birth_date")),
         IsActive = reader.GetBoolean(reader.GetOrdinal("is_active")),
         CreatedAt = reader.GetDateTime(reader.GetOrdinal("created_at")),
         UpdatedAt = reader.GetDateTime(reader.GetOrdinal("updated_at"))

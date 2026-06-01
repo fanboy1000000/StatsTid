@@ -105,12 +105,14 @@
 This roadmap uses a **rolling detail** pattern: only the next sprint has task-level planning. Future phases have milestone-level descriptions. After each sprint completes, the next sprint is promoted to detailed planning.
 
 <!-- anchor-sprint: 57 -->
-> **Current position (as of S57, 2026-05-31).** The phase sections below were authored far earlier; their phase→sprint numbers are **historical projections, retained as planning record, NOT current state**. What actually shipped:
+> **Current position (as of S59, 2026-06-01).** The phase sections below were authored far earlier; their phase→sprint numbers are **historical projections, retained as planning record, NOT current state**. What actually shipped:
 > - **Phase 4 (Production Hardening)** completed ~**S46** (not the projected S22–~29); Phase 4e alone ran S34–S46.
 > - **Phase 5 (UI/UX Refinements)** shipped at **S47** (not the projected ~S30).
 > - **ADR-027 reporting-line hierarchy**: S48–S52. **ADR-024/025 role-within-agreement + multi-tenant** design: S38–S41a (D1/D2 cutover SUSPENDED at the S42a discipline-rollback; S40 plumbing dormant). **ADR-026 audit-visibility**: S43–S45.
 > - **S53–S56**: two-level nav restructure (S53–S54), Skema approval flow (S55, log reconstructed), Arbejdstid work-time persistence + timer retirement (S56 / ADR-028).
-> - **S57** (done): UI re-skin to the oes.dk AA-safe palette (ADR-011 amended; default theme only). **Next sprint: S58** (detailed plan TBD; promoted when scoped).
+> - **S57** (done): UI re-skin to the oes.dk AA-safe palette (ADR-011 amended; default theme only).
+> - **S58** (done): Skema per-day "Diff. fra normtid"/"Ikke fordelt" on every norm day + per-day 24h work-time cap (Arbejdstid).
+> - **S59** (done): per-employee child-sick eligibility (opt-in, HR-set) + DOB-derived senior-day age gate, **ADR-029** (amends ADR-025 D3 `birth_date`; precedence over dormant ADR-024). **Next sprint: S60** (detailed plan TBD; promoted when scoped).
 > Per WORKFLOW.md § "Binding to Architectural Events, Not Sprint Numbers," the projections below are non-binding. The SYSTEM_TARGET coverage tracker further down is likewise frozen at the S18 column and is not current.
 
 > **Sprint numbering rule**: Sprint numbers are strictly sequential (see CLAUDE.md § Sprint Numbering & Re-prioritization). Phase-to-sprint mappings below are projections. When execution order changes, the Orchestrator replans affected sprints and updates these mappings — sprint numbers are never skipped or reordered.

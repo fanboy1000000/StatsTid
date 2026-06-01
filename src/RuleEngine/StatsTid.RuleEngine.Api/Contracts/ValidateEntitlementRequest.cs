@@ -11,6 +11,13 @@ public sealed class ValidateEntitlementRequest
     public required bool ProRateByPartTime { get; init; }
     public required bool IsPerEpisode { get; init; }
     public decimal? PerEpisodeLimit { get; init; }  // For CHILD_SICK: max days per episode
+
+    // Age gate (e.g. SENIOR_DAY). Nullable for backward compatibility: when MinAge is null
+    // there is no age gate and behavior is unchanged. EmployeeAgeAsOfAbsenceDate is the integer
+    // age the Backend computed as-of the absence date — DOB itself never crosses this boundary,
+    // preserving rule-engine purity/determinism (ADR-002). Null age with a set MinAge ⇒ fail-closed.
+    public int? MinAge { get; init; }
+    public int? EmployeeAgeAsOfAbsenceDate { get; init; }
 }
 
 public sealed class ValidateEntitlementResponse
