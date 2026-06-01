@@ -246,6 +246,15 @@
   padding-top: var(--space-2);
 }
 
+/* S58 TASK-5802 — work-time validation error inside the interval dialog */
+.intervalError {
+  color: var(--color-error);
+  background-color: var(--color-error-light);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  font-size: 14px;
+}
+
 /* Sum column */
 .sumCell {
   padding: var(--space-1) var(--space-2);

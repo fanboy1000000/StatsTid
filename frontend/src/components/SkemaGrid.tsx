@@ -76,6 +76,44 @@ function calcIntervalHours(intervals: WorkInterval[]): number {
   return Math.round((totalSec / 3600) * 100) / 100
 }
 
+// S58 TASK-5802 — parse "HH:mm"/"HH:mm:ss" to seconds-since-midnight (null if malformed).
+function parseTimeToSeconds(value: string): number | null {
+  if (!value) return null
+  const parts = value.split(':').map(Number)
+  if (parts.length < 2 || parts.some(isNaN)) return null
+  const [h, m, s = 0] = parts
+  if (h < 0 || h > 23 || m < 0 || m > 59 || s < 0 || s > 59) return null
+  return h * 3600 + m * 60 + s
+}
+
+// S58 TASK-5802 — true if any two positive-duration intervals overlap. Sort by start;
+// overlap iff an interval starts strictly before the previous one ends. Touching
+// boundaries (next.start === prev.end) are allowed. Mirrors the backend guard.
+function intervalsOverlap(intervals: WorkInterval[]): boolean {
+  const parsed: Array<[number, number]> = []
+  for (const iv of intervals) {
+    const s = parseTimeToSeconds(iv.start)
+    const e = parseTimeToSeconds(iv.end)
+    if (s !== null && e !== null && e > s) parsed.push([s, e])
+  }
+  parsed.sort((a, b) => a[0] - b[0])
+  for (let i = 1; i < parsed.length; i++) {
+    if (parsed[i][0] < parsed[i - 1][1]) return true
+  }
+  return false
+}
+
+// S58 TASK-5802 — validate one day's work time (Arbejdstid). Returns a Danish error
+// message or null. Same three checks as the authoritative backend guard so the UI
+// blocks before save: negative manual hours, overlapping intervals, total > 24h.
+function validateWorkDay(intervals: WorkInterval[], manualHours: number): string | null {
+  if (manualHours < 0) return 'Manuelt registrerede timer kan ikke være negative.'
+  if (intervalsOverlap(intervals)) return 'Arbejdsperioderne overlapper hinanden.'
+  const total = Math.round((calcIntervalHours(intervals) + manualHours) * 100) / 100
+  if (total > 24) return `Arbejdstid må ikke overstige 24 timer (i alt ${formatHours(total) || '0t'}).`
+  return null
+}
+
 function formatHours(h: number): string {
   if (h === 0) return ''
   const hours = Math.floor(h)
@@ -315,6 +353,7 @@ export function SkemaGrid({
       if (!onManualHoursChange) return
       const num = value === '' ? null : parseDanishNumber(value)
       if (num !== null && isNaN(num)) return
+      if (num !== null && num < 0) return // S58 TASK-5802 — reject negative manual hours
       onManualHoursChange(date, num === 0 ? null : num)
     },
     [onManualHoursChange]
@@ -339,24 +378,36 @@ export function SkemaGrid({
     setDialogIntervals(prev => prev.map((iv, i) => i === index ? { ...iv, [field]: value } : iv))
   }, [])
 
+  // S58 TASK-5802 — the day's manual hours combine with the dialog's intervals for the
+  // 24h/overlap check, so an invalid mix cannot be committed from the dialog.
+  const dialogManualHours = dialogDate ? (manualHours?.get(dialogDate) ?? 0) : 0
+  const dialogError = useMemo(
+    () => validateWorkDay(dialogIntervals.filter(iv => iv.start && iv.end), dialogManualHours),
+    [dialogIntervals, dialogManualHours]
+  )
+
   const handleDialogSave = useCallback(() => {
     if (dialogDate && onWorkIntervalsChange) {
       const validIntervals = dialogIntervals.filter(iv => iv.start && iv.end)
+      // Block save when invalid — keep the dialog open so the user can correct it.
+      if (validateWorkDay(validIntervals, manualHours?.get(dialogDate) ?? 0)) return
       onWorkIntervalsChange(dialogDate, validIntervals)
     }
     setDialogDate(null)
-  }, [dialogDate, dialogIntervals, onWorkIntervalsChange])
+  }, [dialogDate, dialogIntervals, onWorkIntervalsChange, manualHours])
 
   const handleDialogClose = useCallback((open: boolean) => {
     if (!open) {
-      // Save on close
+      // Save on close — but never persist an invalid (overlapping / >24h) day.
       if (dialogDate && onWorkIntervalsChange) {
         const validIntervals = dialogIntervals.filter(iv => iv.start && iv.end)
-        onWorkIntervalsChange(dialogDate, validIntervals)
+        if (!validateWorkDay(validIntervals, manualHours?.get(dialogDate) ?? 0)) {
+          onWorkIntervalsChange(dialogDate, validIntervals)
+        }
       }
       setDialogDate(null)
     }
-  }, [dialogDate, dialogIntervals, onWorkIntervalsChange])
+  }, [dialogDate, dialogIntervals, onWorkIntervalsChange, manualHours])
 
   const dialogTotalHours = useMemo(() => calcIntervalHours(dialogIntervals), [dialogIntervals])
 
@@ -409,8 +460,14 @@ export function SkemaGrid({
                 {days.map((day) => {
                   const dateKey = formatDateKey(day)
                   const val = manualHours.get(dateKey)
+                  // S58 TASK-5802 — flag a day whose combined worked time exceeds 24h.
+                  const over24 = (workedPerDay.get(dateKey) ?? 0) > 24
                   return (
-                    <td key={dateKey} className={`${styles.cell} ${getColumnClass(day)}`}>
+                    <td
+                      key={dateKey}
+                      className={`${styles.cell} ${over24 ? styles.allocOver : ''} ${getColumnClass(day)}`}
+                      title={over24 ? 'Arbejdstid må ikke overstige 24 timer på en dag' : undefined}
+                    >
                       {readOnly ? (
                         <span className={styles.cellDisplay}>
                           {val != null ? formatDanishNumber(val, 2) : ''}
@@ -620,8 +677,12 @@ export function SkemaGrid({
             <span>Total: <strong>{formatHours(dialogTotalHours)}</strong></span>
           </div>
 
+          {dialogError && (
+            <div className={styles.intervalError} role="alert">{dialogError}</div>
+          )}
+
           <div className={styles.intervalActions}>
-            <Button variant="primary" size="sm" onClick={handleDialogSave}>
+            <Button variant="primary" size="sm" onClick={handleDialogSave} disabled={!!dialogError}>
               Gem
             </Button>
           </div>

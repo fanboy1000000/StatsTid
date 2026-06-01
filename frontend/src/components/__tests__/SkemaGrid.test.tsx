@@ -1,4 +1,4 @@
-import { render, fireEvent } from '@testing-library/react'
+import { render, fireEvent, screen } from '@testing-library/react'
 import { SkemaGrid } from '../SkemaGrid'
 import type { SkemaRow } from '../../types'
 
@@ -237,5 +237,86 @@ describe('SkemaGrid', () => {
     expect(cell.className).toContain('allocBalanced')
     // A day with no norm and no activity stays blank (day 3).
     expect(dayCell(container, 'tr.unallocatedRow', 3).textContent?.trim()).toBe('')
+  })
+
+  // ── S58 TASK-5802 per-day work-time bounds (Arbejdstid) ──
+  // The frontend guards mirror the authoritative backend 422s: a negative
+  // "Tilføj timer" value is not propagated, and the interval dialog blocks
+  // (error + disabled Gem) when intervals overlap or the day total exceeds 24h.
+
+  it('does not propagate a negative "Tilføj timer" value, but does propagate a valid one', () => {
+    const onManualHoursChange = vi.fn()
+    const { container } = render(
+      <SkemaGrid
+        year={2026}
+        month={3}
+        rows={mockRows}
+        cellValues={new Map()}
+        readOnly={false}
+        onCellChange={vi.fn()}
+        manualHours={new Map()}
+        onManualHoursChange={onManualHoursChange}
+      />
+    )
+
+    const input = container.querySelector('tr.manualHoursRow input') as HTMLInputElement
+    fireEvent.change(input, { target: { value: '-5' } })
+    expect(onManualHoursChange).not.toHaveBeenCalled()
+
+    // A valid Danish-decimal value still flows through.
+    fireEvent.change(input, { target: { value: '7,5' } })
+    expect(onManualHoursChange).toHaveBeenCalledWith('2026-03-01', 7.5)
+  })
+
+  it('blocks the interval dialog (error + disabled Gem) when intervals overlap', () => {
+    const workIntervals = new Map([
+      ['2026-03-02', [{ start: '08:00', end: '16:00' }, { start: '12:00', end: '20:00' }]],
+    ])
+    const { container } = render(
+      <SkemaGrid
+        year={2026}
+        month={3}
+        rows={mockRows}
+        cellValues={new Map()}
+        readOnly={false}
+        onCellChange={vi.fn()}
+        workIntervals={workIntervals}
+        onWorkIntervalsChange={vi.fn()}
+        manualHours={new Map()}
+        onManualHoursChange={vi.fn()}
+      />
+    )
+
+    // Open the dialog for day 2 (period cells exclude the trailing sum cell).
+    const periodCells = container.querySelectorAll('tr.arbejdstidRow td.arbejdstidCell')
+    fireEvent.click(periodCells[1])
+
+    expect(screen.getByRole('alert').textContent).toContain('overlapper')
+    expect((screen.getByRole('button', { name: 'Gem' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('blocks the interval dialog when interval hours + manual hours exceed 24', () => {
+    const workIntervals = new Map([['2026-03-03', [{ start: '08:00', end: '16:00' }]]]) // 8h
+    const manualHours = new Map([['2026-03-03', 17]]) // 8 + 17 = 25h
+    const { container } = render(
+      <SkemaGrid
+        year={2026}
+        month={3}
+        rows={mockRows}
+        cellValues={new Map()}
+        readOnly={false}
+        onCellChange={vi.fn()}
+        workIntervals={workIntervals}
+        onWorkIntervalsChange={vi.fn()}
+        manualHours={manualHours}
+        onManualHoursChange={vi.fn()}
+      />
+    )
+
+    const periodCells = container.querySelectorAll('tr.arbejdstidRow td.arbejdstidCell')
+    fireEvent.click(periodCells[2]) // day 3
+
+    expect(screen.getByRole('alert').textContent).toContain('24 timer')
+    expect((screen.getByRole('button', { name: 'Gem' }) as HTMLButtonElement).disabled).toBe(true)
   })
 })

@@ -427,6 +427,70 @@ public static class SkemaEndpoints
                             error = "work_time_date_out_of_range",
                             message = $"Work-time date {day.Date:yyyy-MM-dd} is outside the requested period {request.Year}-{request.Month:D2}."
                         });
+
+                    // ── S58 TASK-5802 per-day work-time bounds (Arbejdstid only) ──
+                    // Authoritative guard mirroring the inline absence "exceed norm day"
+                    // cap below: a physical input invariant (24h/day), NOT an agreement/OK
+                    // rule, so it stays in the Backend endpoint — no rule-engine hop.
+                    // Three checks, in order: (1) manual hours cannot be negative — without
+                    // this, large interval hours could net under 24 via a negative manual
+                    // value while still persisting >24 worked hours; (2) intervals on a day
+                    // cannot overlap (each interval would otherwise double-count); (3) the
+                    // day's total worked time (interval hours + manual hours) cannot exceed
+                    // 24h. Exactly 24,0 t is allowed. Interval-hour computation mirrors the
+                    // frontend calcIntervalHours (positive end>start diffs, total seconds
+                    // rounded to 2 decimals) so UI and server agree.
+
+                    // (1) Negative manual hours.
+                    if (day.ManualHours < 0m)
+                        return Results.Json(new
+                        {
+                            error = "work_time_negative_manual_hours",
+                            date = day.Date,
+                            manualHours = day.ManualHours,
+                            message = $"Manuelt registrerede timer for {day.Date:dd-MM-yyyy} kan ikke være negative."
+                        }, statusCode: 422);
+
+                    // Parse to (startSec, endSec) keeping only positive-duration intervals,
+                    // matching the frontend's `if (diff > 0)` filter.
+                    var parsedIntervals = new List<(int Start, int End)>();
+                    foreach (var iv in day.Intervals ?? Array.Empty<SkemaWorkInterval>())
+                    {
+                        if (TryParseTimeToSeconds(iv.Start, out var startSec)
+                            && TryParseTimeToSeconds(iv.End, out var endSec)
+                            && endSec > startSec)
+                        {
+                            parsedIntervals.Add((startSec, endSec));
+                        }
+                    }
+
+                    // (2) Overlapping intervals: sort by start, reject if any interval starts
+                    // strictly before the previous one ends. Touching boundaries (==) are OK.
+                    parsedIntervals.Sort((a, b) => a.Start.CompareTo(b.Start));
+                    for (var i = 1; i < parsedIntervals.Count; i++)
+                    {
+                        if (parsedIntervals[i].Start < parsedIntervals[i - 1].End)
+                            return Results.Json(new
+                            {
+                                error = "work_time_intervals_overlap",
+                                date = day.Date,
+                                message = $"Arbejdsperioderne for {day.Date:dd-MM-yyyy} overlapper hinanden."
+                            }, statusCode: 422);
+                    }
+
+                    // (3) Total worked hours > 24.
+                    var intervalSeconds = parsedIntervals.Sum(p => p.End - p.Start);
+                    var periodHours = Math.Round(intervalSeconds / 3600m, 2);
+                    var totalHours = Math.Round(periodHours + day.ManualHours, 2);
+                    if (totalHours > 24m)
+                        return Results.Json(new
+                        {
+                            error = "work_time_exceeds_day",
+                            date = day.Date,
+                            totalHours,
+                            maxHours = 24,
+                            message = $"Arbejdstid for {day.Date:dd-MM-yyyy} må ikke overstige 24 timer (registreret: {FormatHoursMinutes(totalHours)})."
+                        }, statusCode: 422);
                 }
             }
 
@@ -774,6 +838,35 @@ public static class SkemaEndpoints
         }).RequireAuthorization("EmployeeOrAbove");
 
         return app;
+    }
+
+    // ── S58 TASK-5802 work-time validation helpers ──
+
+    // Parse an "HH:MM" / "HH:MM:SS" wall-clock string to seconds-since-midnight.
+    // Mirrors the frontend calcIntervalHours parsing (split on ':', seconds optional).
+    // Returns false for malformed or out-of-range values so they are simply skipped
+    // (consistent with the frontend ignoring intervals it cannot measure).
+    private static bool TryParseTimeToSeconds(string? value, out int seconds)
+    {
+        seconds = 0;
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        var parts = value.Split(':');
+        if (parts.Length < 2) return false;
+        if (!int.TryParse(parts[0], out var h) || !int.TryParse(parts[1], out var m)) return false;
+        var s = 0;
+        if (parts.Length >= 3 && !int.TryParse(parts[2], out s)) return false;
+        if (h < 0 || h > 23 || m < 0 || m > 59 || s < 0 || s > 59) return false;
+        seconds = h * 3600 + m * 60 + s;
+        return true;
+    }
+
+    // Danish "Xt Ym" formatting for validation messages (e.g. 25.5 -> "25t 30m").
+    private static string FormatHoursMinutes(decimal hours)
+    {
+        var totalMinutes = (int)Math.Round(hours * 60m, MidpointRounding.AwayFromZero);
+        var h = totalMinutes / 60;
+        var m = totalMinutes % 60;
+        return m == 0 ? $"{h}t" : $"{h}t {m}m";
     }
 
     // ── Request DTOs ──
