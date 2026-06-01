@@ -112,7 +112,8 @@ This roadmap uses a **rolling detail** pattern: only the next sprint has task-le
 > - **S53–S56**: two-level nav restructure (S53–S54), Skema approval flow (S55, log reconstructed), Arbejdstid work-time persistence + timer retirement (S56 / ADR-028).
 > - **S57** (done): UI re-skin to the oes.dk AA-safe palette (ADR-011 amended; default theme only).
 > - **S58** (done): Skema per-day "Diff. fra normtid"/"Ikke fordelt" on every norm day + per-day 24h work-time cap (Arbejdstid).
-> - **S59** (done): per-employee child-sick eligibility (opt-in, HR-set) + DOB-derived senior-day age gate, **ADR-029** (amends ADR-025 D3 `birth_date`; precedence over dormant ADR-024). **Next sprint: S60** (detailed plan TBD; promoted when scoped).
+> - **S59** (done): per-employee child-sick eligibility (opt-in, HR-set) + DOB-derived senior-day age gate, **ADR-029** (amends ADR-025 D3 `birth_date`; precedence over dormant ADR-024).
+> - **S60** (done): activate real Danish monthly vacation accrual (MONTHLY_ACCRUAL) for VACATION + SPECIAL_HOLIDAY — earned-to-date as a pure rule-engine fn; per-type forskud cap; new HR `employment_start_date`; **ADR-030** (supersedes ADR-021 D6, annotates D5). **Follow-ups:** consolidate `EarnedToDate` into SharedKernel; payroll §8/§7 (wage-deduction + termination modregning); the parked **Oversigt** (now shows real accrued values). **Next sprint: S61** (TBD).
 > Per WORKFLOW.md § "Binding to Architectural Events, Not Sprint Numbers," the projections below are non-binding. The SYSTEM_TARGET coverage tracker further down is likewise frozen at the S18 column and is not current.
 
 > **Sprint numbering rule**: Sprint numbers are strictly sequential (see CLAUDE.md § Sprint Numbering & Re-prioritization). Phase-to-sprint mappings below are projections. When execution order changes, the Orchestrator replans affected sprints and updates these mappings — sprint numbers are never skipped or reordered.

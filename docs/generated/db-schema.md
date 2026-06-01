@@ -244,6 +244,7 @@
 | created_at | TIMESTAMPTZ | No |  | NOW() |
 | updated_at | TIMESTAMPTZ | No |  | NOW() |
 | birth_date | DATE | Yes |  |  |
+| employment_start_date | DATE | Yes |  |  |
 
 **Indexes:**
 - `idx_users_org` on (primary_org_id)

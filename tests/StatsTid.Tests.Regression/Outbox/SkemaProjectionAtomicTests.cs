@@ -208,7 +208,7 @@ public sealed class SkemaProjectionAtomicTests : IAsyncLifetime
                 var totalDays = (absences[0].Hours + absences[1].Hours) / 7.4m;
                 var (success, _) = await balanceRepo.CheckAndAdjustAsync(
                     conn, tx, employeeId, "CARE_DAY", 2026,
-                    deltaDays: totalDays, effectiveQuota: effectiveQuota);
+                    deltaDays: totalDays, guardCap: effectiveQuota, seedQuota: effectiveQuota);
                 if (!success)
                 {
                     // The endpoint throws SkemaQuotaBreachException; tests just need any
@@ -293,7 +293,7 @@ public sealed class SkemaProjectionAtomicTests : IAsyncLifetime
                     await _absenceRepo.InsertAsync(conn, tx, abs, oid);
                     var (success, _) = await balanceRepo.CheckAndAdjustAsync(
                         conn, tx, employeeId, "CARE_DAY", 2026,
-                        deltaDays: 1m, effectiveQuota: 1m);
+                        deltaDays: 1m, guardCap: 1m, seedQuota: 1m);
                     if (!success)
                         throw new InvalidOperationException("quota-loser");
                     await tx.CommitAsync();
@@ -413,7 +413,7 @@ public sealed class SkemaProjectionAtomicTests : IAsyncLifetime
                 await _absenceRepo.InsertAsync(conn, tx, breachingAbsence, aoid);
                 var (success, _) = await balanceRepo.CheckAndAdjustAsync(
                     conn, tx, employeeId, "CARE_DAY", 2026,
-                    deltaDays: 1m, effectiveQuota: 0.5m);
+                    deltaDays: 1m, guardCap: 0.5m, seedQuota: 0.5m);
                 if (!success)
                     throw new InvalidOperationException("bundle-quota-breach");
                 await tx.CommitAsync();

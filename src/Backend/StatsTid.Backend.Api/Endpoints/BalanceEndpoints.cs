@@ -3,7 +3,9 @@ using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Config;
 using StatsTid.SharedKernel.Events;
+using StatsTid.SharedKernel.Exceptions;
 using StatsTid.SharedKernel.Interfaces;
+using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Security;
 
 namespace StatsTid.Backend.Api.Endpoints;
@@ -18,6 +20,41 @@ public static class BalanceEndpoints
         ["CHILD_SICK"] = "Barns sygedag",
         ["SENIOR_DAY"] = "Seniordage"
     };
+
+    /// <summary>The "MONTHLY_ACCRUAL" accrual_model string (ADR-030).</summary>
+    private const string MonthlyAccrualModel = "MONTHLY_ACCRUAL";
+
+    /// <summary>
+    /// S60 / TASK-6005 — Backend-local mirror of the rule engine's pure
+    /// <c>AccrualCalculator.EarnedToDate</c> (ADR-030). The authoritative math lives in the
+    /// Rule Engine, but PAT-005 forbids the Backend from referencing the RuleEngine assembly
+    /// directly (the boundary is HTTP); the Balance summary is a pure read with no
+    /// validate-entitlement call, so the earned-to-date figure is computed locally from the
+    /// SAME formula. MUST stay byte-identical to <c>AccrualCalculator.EarnedToDate</c>: exact
+    /// fractional days, accrual begins at <c>max(ferieaarStart, employmentStart)</c>, months
+    /// elapsed = inclusive whole month-boundaries crossed, clamped to [0, 12].
+    /// </summary>
+    private static decimal EarnedToDate(
+        decimal annualQuota,
+        decimal partTimeFraction,
+        DateOnly ferieaarStart,
+        DateOnly? employmentStart,
+        DateOnly asOf)
+    {
+        var accrualStart = ferieaarStart;
+        if (employmentStart.HasValue && employmentStart.Value > accrualStart)
+            accrualStart = employmentStart.Value;
+
+        var monthsElapsed = MonthIndex(asOf) - MonthIndex(accrualStart) + 1;
+        if (monthsElapsed <= 0)
+            return 0m;
+        if (monthsElapsed > 12)
+            monthsElapsed = 12;
+
+        return annualQuota * partTimeFraction * monthsElapsed / 12m;
+    }
+
+    private static int MonthIndex(DateOnly date) => date.Year * 12 + date.Month;
 
     public static WebApplication MapBalanceEndpoints(this WebApplication app)
     {
@@ -90,8 +127,29 @@ public static class BalanceEndpoints
             // Documented determinism gap on agreement_code: when admin soft-deletes a
             // profile, this endpoint returns sensible default data (graceful), unlike
             // the PCS-routed callers that fail-closed (ADR-023 D3 split).
-            var datedProfile = await profileResolver.GetByEmployeeIdAtAsync(
-                employeeId, monthStart, ct);
+            //
+            // S60 / TASK-6005 — the resolver can throw EmployeeProfileNotFoundException when an
+            // employee_profiles row exists but the dated user_agreement_codes row is missing
+            // (data-integrity fail-loud, EmploymentProfileResolver). The Balance summary MUST
+            // stay graceful (ADR-023 D3): a profile-less / inconsistent employee's summary still
+            // renders rather than 500ing. Tolerate both null AND the exception ⇒ no dated profile.
+            EmploymentProfile? datedProfile;
+            try
+            {
+                datedProfile = await profileResolver.GetByEmployeeIdAtAsync(
+                    employeeId, monthEnd, ct);
+            }
+            catch (EmployeeProfileNotFoundException)
+            {
+                datedProfile = null;
+            }
+
+            // S60 / TASK-6005 — dated part-time fraction at the requested MONTH-END (the Balance
+            // seam's as-of anchor, matching the earned-to-date computation below). Graceful
+            // fallback to 1.0m when there is no dated profile (or the resolver fail-loud above),
+            // so a profile-less employee's summary renders without a 500. Replaces the prior
+            // hard-coded 1.0m.
+            var partTimeFraction = datedProfile?.PartTimeFraction ?? 1.0m;
 
             // Get agreement config — try DB first (ACTIVE), fall back to central static config
             var dbConfig = await configRepo.GetActiveAsync(agreementCode, user.OkVersion, ct);
@@ -158,8 +216,8 @@ public static class BalanceEndpoints
                 agreementCode, user.OkVersion, ct))
                 .Where(c => c.EffectiveTo is null);
 
-            // Part-time fraction not available on User model — default to 1.0
-            const decimal partTimeFraction = 1.0m;
+            // S60 / TASK-6005 — partTimeFraction is now sourced from the dated employment profile
+            // at month-end (resolved above, graceful ?? 1.0m), replacing the prior hard-coded 1.0.
 
             var entitlements = new List<object>();
             decimal? vacationEntitlementFromConfig = null;
@@ -203,7 +261,34 @@ public static class BalanceEndpoints
                 var used = balance?.Used ?? 0m;
                 var planned = balance?.Planned ?? 0m;
                 var carryoverIn = balance?.CarryoverIn ?? 0m;
-                var remaining = totalQuota + carryoverIn - used - planned;
+
+                // ── S60 / TASK-6005 — earned-to-date for MONTHLY_ACCRUAL types ──
+                // VACATION + SPECIAL_HOLIDAY now accrue monthly (ADR-030): the AVAILABLE ("rest")
+                // figure must reflect what is EARNED-to-date (optjent), not the full annual quota
+                // the moment the ferieår starts. asOf = the requested MONTH-END (the Balance seam
+                // anchor — the same anchor the Skema validation uses at firstAbsenceDate so the two
+                // seams agree for the same as-of date). ferieaarStart = the entitlement-year start
+                // (reset_month). employmentStart = HR-managed User.EmploymentStartDate (null ⇒
+                // full-ferieår; never fail-closed, ADR-030). partTimeFraction = the dated month-end
+                // fraction resolved above. IMMEDIATE types keep their full quota as "earned".
+                var isMonthlyAccrual = string.Equals(
+                    ec.AccrualModel, MonthlyAccrualModel, StringComparison.Ordinal);
+
+                decimal earned;
+                if (isMonthlyAccrual)
+                {
+                    earned = EarnedToDate(
+                        ec.AnnualQuota, partTimeFraction, entitlementYearStart,
+                        user.EmploymentStartDate, monthEnd);
+                }
+                else
+                {
+                    earned = totalQuota; // IMMEDIATE: full quota is "earned" up-front (unchanged).
+                }
+
+                // remaining ("rest") nets the EARNED amount + carryover − used − planned. For
+                // IMMEDIATE types earned == totalQuota, so remaining is byte-for-byte unchanged.
+                var remaining = earned + carryoverIn - used - planned;
 
                 DanishLabels.TryGetValue(ec.EntitlementType, out var label);
 
@@ -211,11 +296,15 @@ public static class BalanceEndpoints
                 {
                     type = ec.EntitlementType,
                     label = label ?? ec.EntitlementType,
+                    // totalQuota stays the ANNUAL entitlement (its invariant display meaning, P3) so
+                    // the card can show "X af Y" (earned-of-annual). The accrual change surfaces via
+                    // the new `earned` field + the now-earned-based `remaining`.
                     totalQuota,
+                    earned = Math.Round(earned, 2),
                     used,
                     planned,
                     carryoverIn,
-                    remaining,
+                    remaining = Math.Round(remaining, 2),
                     entitlementYear
                 });
 
@@ -224,6 +313,13 @@ public static class BalanceEndpoints
                     vacationEntitlementFromConfig = totalQuota;
             }
 
+            // S60 / TASK-6005 — legacy top-level fields disposition (refinement AC):
+            // `vacationDaysEntitlement` stays the ANNUAL entitlement (back-compat — it has always
+            // meant the full annual quota, and the FE/Oversigt consume it as such). The
+            // earned/available change is surfaced ONLY through the entitlements[] array's new
+            // `earned` field + its now-earned-based `remaining`, so no existing top-level
+            // consumer drifts. `vacationDaysUsed` (computed above from absences) is likewise
+            // unchanged. Carryover semantics are otherwise untouched (ADR-030).
             var vacationDaysEntitlement = vacationEntitlementFromConfig ?? 25m;
 
             return Results.Ok(new

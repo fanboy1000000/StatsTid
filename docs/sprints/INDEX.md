@@ -207,6 +207,7 @@
 | S57 | 552 + 128 FE | 44 plain + Docker (unchanged) | 4 | unchanged from S56 — presentation-only re-skin, no new tests |
 | S58 | 552 + 133 FE | + 6 new S58 Docker (work-time day-bounds) | 4 | Skema per-day Diff/Ikke-fordelt on every norm day + per-day 24h work-time cap |
 | S59 | 559 + 142 FE | + 13 new S59 Docker (entitlement eligibility) | 4 | Per-employee child-sick eligibility (opt-in, HR-set) + DOB-derived senior-day age gate (ADR-029); Step-7a 3 cycles (2 BLOCKER + 1 race, all fixed) |
+| S60 | 596 + 144 FE | + 7 new S60 Docker (monthly accrual) | 4 | Activate MONTHLY_ACCRUAL — real Ferieloven monthly vacation accrual for VACATION + SPECIAL_HOLIDAY (compute earned-to-date pure fn); per-type forskud cap (VACATION dynamic ferieår cap + manager-approval-as-§7-agreement; SPECIAL_HOLIDAY none per §13 stk.4); new HR `employment_start_date` for mid-year pro-ration (ADR-030, supersedes ADR-021 D6). Step-0b 2 cycles (1 BLOCKER) + Step-7a 3 cycles (1 BLOCKER legacy-DB activation + 2 W, all fixed) |
 
 **Footnotes**:
 - `*` **S29**: headline 807, but SPRINT-30.md records the reported "158 Docker-gated passing" over-counted 18 pre-existing failures (true delta ~789 at `41b6e89`). 807 is the figure in the S29 Index row.

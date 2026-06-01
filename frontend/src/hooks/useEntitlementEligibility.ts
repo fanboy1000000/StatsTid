@@ -29,6 +29,11 @@ import { formatVersionAsIfMatch, resolveEtag } from '../lib/etag'
 //       HR-only read/write via GET/PUT /api/admin/employees/{id}/birth-date with
 //       admin-strict If-Match. DOB never appears in any Employee-facing DTO/JWT/
 //       export (TASK-5909) — this is the only read surface.
+//
+//   (C) employment-start date (S60 / TASK-6007 / ADR-030) — pro-rates monthly
+//       vacation accrual for mid-year hires. HR-only read/write via GET/PUT
+//       /api/admin/employees/{id}/employment-start-date with admin-strict
+//       If-Match, exactly mirroring the (A) DOB surface.
 
 const SETTABLE_ENTITLEMENT_TYPE = 'CHILD_SICK' as const
 
@@ -48,6 +53,16 @@ export interface ChildSickEligibilitySnapshot {
 export interface BirthDateSnapshot {
   employeeId: string
   birthDate: string | null
+  version: number
+}
+
+/**
+ * Snapshot of an employee's employment-start date + the `users.version`
+ * concurrency token (S60 / TASK-6007 / ADR-030 — mirrors the S59 DOB field).
+ */
+export interface EmploymentStartDateSnapshot {
+  employeeId: string
+  employmentStartDate: string | null
   version: number
 }
 
@@ -220,5 +235,66 @@ export function useEntitlementEligibility() {
     }
   }
 
-  return { fetchChildSickEligibility, setChildSick, fetchBirthDate, setBirthDate }
+  /**
+   * HR-only employment-start read (S60 / TASK-6007). ETag stamps `users.version`
+   * for the next If-Match PUT. Drives mid-year-hire vacation pro-rating.
+   */
+  const fetchEmploymentStartDate = async (
+    employeeId: string,
+  ): Promise<EmploymentStartDateSnapshot> => {
+    const result = await apiFetchWithEtag<{
+      employeeId: string
+      employmentStartDate: string | null
+      version: number
+    }>(`/api/admin/employees/${encodeURIComponent(employeeId)}/employment-start-date`)
+    if (!result.ok) {
+      throw makeError(result.status, result.error, result.body as EligibilityMutationError['body'])
+    }
+    const { data, etag } = result.data
+    const { version } = resolveEtag(etag, data)
+    return {
+      employeeId,
+      employmentStartDate: data.employmentStartDate,
+      version: version ?? data.version,
+    }
+  }
+
+  /**
+   * HR-only employment-start write, admin-strict If-Match (S60 / TASK-6007).
+   * `employmentStartDate` null clears an unknown start date.
+   */
+  const setEmploymentStartDate = async (
+    employeeId: string,
+    employmentStartDate: string | null,
+    currentVersion: number,
+  ): Promise<EmploymentStartDateSnapshot> => {
+    const result = await apiFetchWithEtag<{
+      employeeId: string
+      employmentStartDate: string | null
+      version: number
+    }>(`/api/admin/employees/${encodeURIComponent(employeeId)}/employment-start-date`, {
+      method: 'PUT',
+      headers: { 'If-Match': formatVersionAsIfMatch(currentVersion) },
+      body: JSON.stringify({ employmentStartDate }),
+    })
+    if (!result.ok) {
+      throw makeError(result.status, result.error, result.body as EligibilityMutationError['body'])
+    }
+    const { data, etag } = result.data
+    const { version } = resolveEtag(etag, data)
+    return {
+      employeeId,
+      employmentStartDate: data.employmentStartDate,
+      version: version ?? data.version,
+    }
+  }
+
+  return {
+    fetchChildSickEligibility,
+    setChildSick,
+    fetchBirthDate,
+    setBirthDate,
+    fetchEmploymentStartDate,
+    setEmploymentStartDate,
+  }
 }

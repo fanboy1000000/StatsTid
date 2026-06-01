@@ -45,7 +45,7 @@ public sealed class EntitlementBalanceRepository
     /// <see cref="GetByEmployeeAndTypeAsync(string, string, int, CancellationToken)"/>.
     /// Reuses the caller-supplied <paramref name="conn"/> + <paramref name="tx"/> so the read
     /// observes the same snapshot as the outer transaction (ADR-018 D3 transactional-outbox
-    /// contract; required by <see cref="CheckAndAdjustAsync(NpgsqlConnection, NpgsqlTransaction, string, string, int, decimal, decimal, CancellationToken)"/>
+    /// contract; required by <see cref="CheckAndAdjustAsync(NpgsqlConnection, NpgsqlTransaction, string, string, int, decimal, decimal, decimal, CancellationToken)"/>
     /// failure-path under RepeatableRead). The caller commits or rolls back; this method does NOT.
     /// </summary>
     public async Task<EntitlementBalance?> GetByEmployeeAndTypeAsync(
@@ -105,8 +105,31 @@ public sealed class EntitlementBalanceRepository
 
     /// <summary>
     /// Atomically checks quota and adjusts the used balance. Returns (success, newUsed). If
-    /// the adjustment would exceed totalQuota + carryoverIn, returns (false, currentUsed).
-    /// Eliminates TOCTOU race between validation and adjustment.
+    /// the adjustment would exceed <paramref name="guardCap"/> + carryoverIn, returns
+    /// (false, currentUsed). Eliminates TOCTOU race between validation and adjustment.
+    ///
+    /// <para>
+    /// <b>S60 / TASK-6004 — two distinct caps (no conflation):</b>
+    /// <list type="bullet">
+    /// <item>
+    /// <paramref name="guardCap"/> — the per-type bookable cap <b>EXCLUDING carryover</b>.
+    /// Used in the atomic WHERE-clause guard, which itself adds <c>carryover_in</c> exactly
+    /// once (<c>used + delta &lt;= guardCap + carryover_in</c>). The caller computes
+    /// <c>guardCap = businessBookableLimit − carryover</c> (the rule engine's
+    /// carryover-INCLUSIVE <c>bookableLimit</c> minus carryover) so carryover is never
+    /// double-counted.
+    /// </item>
+    /// <item>
+    /// <paramref name="seedQuota"/> — the <b>ANNUAL entitlement</b>. Seeds <c>total_quota</c>
+    /// on the first-INSERT of a missing row only; preserves <c>total_quota</c>'s invariant
+    /// meaning ("annual entitlement", ADR-021 D6 / P3) regardless of earned-to-date or
+    /// forskud caps. Never used in the guard.
+    /// </item>
+    /// </list>
+    /// (Pre-S60 a single <c>effectiveQuota</c> arg fed BOTH the seed and the guard, which
+    /// risked seeding <c>total_quota</c> with a forskud/earned-derived cap and double-counting
+    /// carryover once the business cap already included it.)
+    /// </para>
     ///
     /// <para>
     /// S26 Step 7a B3 fix: previously this was a UPDATE-only path that returned (false, 0m)
@@ -119,13 +142,13 @@ public sealed class EntitlementBalanceRepository
     /// TOCTOU-safe atomic UPDATE-WHERE-quota-guard against the now-guaranteed-present row.
     /// Net behavior: missing-row first absence within quota succeeds with (true, deltaDays);
     /// genuine breach (existing or freshly-created) returns (false, currentUsed). Same shape
-    /// applies to the <see cref="CheckAndAdjustAsync(NpgsqlConnection, NpgsqlTransaction, string, string, int, decimal, decimal, CancellationToken)"/>
+    /// applies to the <see cref="CheckAndAdjustAsync(NpgsqlConnection, NpgsqlTransaction, string, string, int, decimal, decimal, decimal, CancellationToken)"/>
     /// in-tx sibling.
     /// </para>
     /// </summary>
     public async Task<(bool Success, decimal NewUsed)> CheckAndAdjustAsync(
         string employeeId, string entitlementType, int entitlementYear,
-        decimal deltaDays, decimal effectiveQuota, CancellationToken ct = default)
+        decimal deltaDays, decimal guardCap, decimal seedQuota, CancellationToken ct = default)
     {
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
@@ -133,7 +156,7 @@ public sealed class EntitlementBalanceRepository
         try
         {
             var result = await CheckAndAdjustInternalAsync(
-                conn, tx, employeeId, entitlementType, entitlementYear, deltaDays, effectiveQuota, ct);
+                conn, tx, employeeId, entitlementType, entitlementYear, deltaDays, guardCap, seedQuota, ct);
             await tx.CommitAsync(ct);
             return result;
         }
@@ -146,7 +169,7 @@ public sealed class EntitlementBalanceRepository
 
     /// <summary>
     /// In-transaction sibling overload of
-    /// <see cref="CheckAndAdjustAsync(string, string, int, decimal, decimal, CancellationToken)"/>.
+    /// <see cref="CheckAndAdjustAsync(string, string, int, decimal, decimal, decimal, CancellationToken)"/>.
     /// Reuses the caller-supplied <paramref name="conn"/> + <paramref name="tx"/> so the
     /// atomic-quota-check single-UPDATE participates in the outer transaction (ADR-018 D3
     /// transactional-outbox contract). Preserves the v1 TOCTOU-safe shape: WITH-current-CTE +
@@ -154,14 +177,21 @@ public sealed class EntitlementBalanceRepository
     /// (conn, tx) overload of <see cref="GetByEmployeeAndTypeAsync(NpgsqlConnection, NpgsqlTransaction, string, string, int, CancellationToken)"/>
     /// so the current-Used read for the 422 response observes the same snapshot under
     /// RepeatableRead. The caller commits or rolls back; this method does NOT.
+    ///
+    /// <para>
+    /// S60 / TASK-6004 — <paramref name="guardCap"/> is carryover-EXCLUDED (the guard adds
+    /// <c>carryover_in</c> once); <paramref name="seedQuota"/> is the ANNUAL entitlement that
+    /// seeds <c>total_quota</c> on first-INSERT. See the self-managed-tx overload for the full
+    /// rationale.
+    /// </para>
     /// </summary>
     public async Task<(bool Success, decimal NewUsed)> CheckAndAdjustAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
         string employeeId, string entitlementType, int entitlementYear,
-        decimal deltaDays, decimal effectiveQuota, CancellationToken ct = default)
+        decimal deltaDays, decimal guardCap, decimal seedQuota, CancellationToken ct = default)
     {
         return await CheckAndAdjustInternalAsync(
-            conn, tx, employeeId, entitlementType, entitlementYear, deltaDays, effectiveQuota, ct);
+            conn, tx, employeeId, entitlementType, entitlementYear, deltaDays, guardCap, seedQuota, ct);
     }
 
     // Two-statement core for both v1 (self-managed tx) and v2 (caller-supplied tx). S26 Step 7a
@@ -173,32 +203,37 @@ public sealed class EntitlementBalanceRepository
     private static async Task<(bool Success, decimal NewUsed)> CheckAndAdjustInternalAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
         string employeeId, string entitlementType, int entitlementYear,
-        decimal deltaDays, decimal effectiveQuota, CancellationToken ct)
+        decimal deltaDays, decimal guardCap, decimal seedQuota, CancellationToken ct)
     {
         // Statement 1: ensure-row INSERT. used = 0 baseline so the row exists at zero-state
-        // before Statement 2's quota check evaluates `used + deltaDays <= quota + carryover_in`.
+        // before Statement 2's quota check evaluates `used + deltaDays <= guardCap + carryover_in`.
         // ON CONFLICT DO NOTHING — concurrent INSERTs from another session deduplicate cleanly.
-        // total_quota set to effectiveQuota for the freshly-created row; carryover_in defaults
-        // to 0 (first-creation has no prior-year carryover; reset_month logic handled elsewhere).
+        // total_quota seeded with seedQuota (the ANNUAL entitlement) for the freshly-created
+        // row — preserving total_quota's "annual entitlement" invariant (NOT the bookable/
+        // forskud-derived guardCap). carryover_in defaults to 0 (first-creation has no
+        // prior-year carryover; reset_month logic handled elsewhere).
         await using (var ensureCmd = new NpgsqlCommand(
             @"INSERT INTO entitlement_balances (
                   balance_id, employee_id, entitlement_type, entitlement_year,
                   total_quota, used, planned, carryover_in, updated_at)
               VALUES (
                   gen_random_uuid(), @employeeId, @entitlementType, @entitlementYear,
-                  @effectiveQuota, 0, 0, 0, NOW())
+                  @seedQuota, 0, 0, 0, NOW())
               ON CONFLICT (employee_id, entitlement_type, entitlement_year) DO NOTHING",
             conn, tx))
         {
             ensureCmd.Parameters.AddWithValue("employeeId", employeeId);
             ensureCmd.Parameters.AddWithValue("entitlementType", entitlementType);
             ensureCmd.Parameters.AddWithValue("entitlementYear", entitlementYear);
-            ensureCmd.Parameters.AddWithValue("effectiveQuota", effectiveQuota);
+            ensureCmd.Parameters.AddWithValue("seedQuota", seedQuota);
             await ensureCmd.ExecuteNonQueryAsync(ct);
         }
 
         // Statement 2: TOCTOU-safe atomic check-and-adjust on the now-guaranteed-present row.
         // Single-statement UPDATE-WHERE-quota-guard with WITH-CTE for the snapshot read.
+        // guardCap is carryover-EXCLUDED; this clause adds carryover_in exactly ONCE, so the
+        // effective cap is `guardCap + carryover_in` with no double-count (the caller's
+        // business bookableLimit already incl. carryover is passed here minus carryover).
         await using var cmd = new NpgsqlCommand(
             @"WITH current AS (
                 SELECT used, carryover_in
@@ -208,14 +243,14 @@ public sealed class EntitlementBalanceRepository
               UPDATE entitlement_balances
               SET used = entitlement_balances.used + @deltaDays, updated_at = NOW()
               WHERE employee_id = @employeeId AND entitlement_type = @entitlementType AND entitlement_year = @entitlementYear
-                AND (SELECT used FROM current) + @deltaDays <= @effectiveQuota + (SELECT carryover_in FROM current)
+                AND (SELECT used FROM current) + @deltaDays <= @guardCap + (SELECT carryover_in FROM current)
               RETURNING used",
             conn, tx);
         cmd.Parameters.AddWithValue("employeeId", employeeId);
         cmd.Parameters.AddWithValue("entitlementType", entitlementType);
         cmd.Parameters.AddWithValue("entitlementYear", entitlementYear);
         cmd.Parameters.AddWithValue("deltaDays", deltaDays);
-        cmd.Parameters.AddWithValue("effectiveQuota", effectiveQuota);
+        cmd.Parameters.AddWithValue("guardCap", guardCap);
         var result = await cmd.ExecuteScalarAsync(ct);
         if (result is decimal newUsed)
             return (true, newUsed);

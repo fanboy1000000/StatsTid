@@ -900,8 +900,10 @@ public sealed class TxContractTests : IAsyncLifetime
         await conn.OpenAsync();
         await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
 
+        // S60: CheckAndAdjustAsync split (guardCap, seedQuota). For this IMMEDIATE-behavior
+        // test the prior single effectiveQuota=25 is passed as BOTH args (preserves semantics).
         var (success, newUsed) = await repo.CheckAndAdjustAsync(
-            conn, tx, employeeId, entitlementType, year, deltaDays: 2m, effectiveQuota: 25m);
+            conn, tx, employeeId, entitlementType, year, deltaDays: 2m, guardCap: 25m, seedQuota: 25m);
         Assert.True(success);
         Assert.Equal(2m, newUsed);
 
@@ -950,8 +952,9 @@ public sealed class TxContractTests : IAsyncLifetime
         await conn.OpenAsync();
         await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
 
+        // S60: split signature; old effectiveQuota=25 passed as both guardCap and seedQuota.
         var (success, newUsed) = await repo.CheckAndAdjustAsync(
-            conn, tx, employeeId, entitlementType, year, deltaDays: 2m, effectiveQuota: 25m);
+            conn, tx, employeeId, entitlementType, year, deltaDays: 2m, guardCap: 25m, seedQuota: 25m);
 
         // Pre-S26 Step 7a: would have returned (false, 0m). Post-fix: row materializes,
         // Statement 2 UPDATE applies, returns (true, 2m).
@@ -985,8 +988,9 @@ public sealed class TxContractTests : IAsyncLifetime
         await conn.OpenAsync();
         await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
 
+        // S60: split signature; old effectiveQuota=25 passed as both guardCap and seedQuota.
         var (success, newUsed) = await repo.CheckAndAdjustAsync(
-            conn, tx, employeeId, entitlementType, year, deltaDays: 30m, effectiveQuota: 25m);
+            conn, tx, employeeId, entitlementType, year, deltaDays: 30m, guardCap: 25m, seedQuota: 25m);
 
         Assert.False(success);
         Assert.Equal(0m, newUsed);

@@ -1417,19 +1417,22 @@ CREATE TABLE IF NOT EXISTS entitlement_balances (
 -- "pre-launch" effective_from, NOT a real agreement-start date.
 INSERT INTO entitlement_configs (entitlement_type, agreement_code, ok_version, annual_quota, accrual_model, reset_month, carryover_max, pro_rate_by_part_time, is_per_episode, min_age, description, effective_from) VALUES
     -- VACATION: 25 days, reset September, carryover 5
-    ('VACATION', 'AC', 'OK24', 25, 'IMMEDIATE', 9, 5, true, false, NULL, 'Ferie – 25 dage', '0001-01-01'),
-    ('VACATION', 'AC', 'OK26', 25, 'IMMEDIATE', 9, 5, true, false, NULL, 'Ferie – 25 dage', '0001-01-01'),
-    ('VACATION', 'HK', 'OK24', 25, 'IMMEDIATE', 9, 5, true, false, NULL, 'Ferie – 25 dage', '0001-01-01'),
-    ('VACATION', 'HK', 'OK26', 25, 'IMMEDIATE', 9, 5, true, false, NULL, 'Ferie – 25 dage', '0001-01-01'),
-    ('VACATION', 'PROSA', 'OK24', 25, 'IMMEDIATE', 9, 5, true, false, NULL, 'Ferie – 25 dage', '0001-01-01'),
-    ('VACATION', 'PROSA', 'OK26', 25, 'IMMEDIATE', 9, 5, true, false, NULL, 'Ferie – 25 dage', '0001-01-01'),
+    -- S60 / ADR-030: accrual_model = MONTHLY_ACCRUAL (samtidighedsferie, ~2,08 d/md).
+    -- Sentinel reseed (NOT supersession) — preserves ADR-021 D5 invariant (no new effective_from row).
+    ('VACATION', 'AC', 'OK24', 25, 'MONTHLY_ACCRUAL', 9, 5, true, false, NULL, 'Ferie – 25 dage', '0001-01-01'),
+    ('VACATION', 'AC', 'OK26', 25, 'MONTHLY_ACCRUAL', 9, 5, true, false, NULL, 'Ferie – 25 dage', '0001-01-01'),
+    ('VACATION', 'HK', 'OK24', 25, 'MONTHLY_ACCRUAL', 9, 5, true, false, NULL, 'Ferie – 25 dage', '0001-01-01'),
+    ('VACATION', 'HK', 'OK26', 25, 'MONTHLY_ACCRUAL', 9, 5, true, false, NULL, 'Ferie – 25 dage', '0001-01-01'),
+    ('VACATION', 'PROSA', 'OK24', 25, 'MONTHLY_ACCRUAL', 9, 5, true, false, NULL, 'Ferie – 25 dage', '0001-01-01'),
+    ('VACATION', 'PROSA', 'OK26', 25, 'MONTHLY_ACCRUAL', 9, 5, true, false, NULL, 'Ferie – 25 dage', '0001-01-01'),
     -- SPECIAL_HOLIDAY: 5 days, reset September, no carryover
-    ('SPECIAL_HOLIDAY', 'AC', 'OK24', 5, 'IMMEDIATE', 9, 0, true, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01'),
-    ('SPECIAL_HOLIDAY', 'AC', 'OK26', 5, 'IMMEDIATE', 9, 0, true, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01'),
-    ('SPECIAL_HOLIDAY', 'HK', 'OK24', 5, 'IMMEDIATE', 9, 0, true, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01'),
-    ('SPECIAL_HOLIDAY', 'HK', 'OK26', 5, 'IMMEDIATE', 9, 0, true, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01'),
-    ('SPECIAL_HOLIDAY', 'PROSA', 'OK24', 5, 'IMMEDIATE', 9, 0, true, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01'),
-    ('SPECIAL_HOLIDAY', 'PROSA', 'OK26', 5, 'IMMEDIATE', 9, 0, true, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01'),
+    -- S60 / ADR-030: MONTHLY_ACCRUAL (~0,42 d/md); no forskud (ferieaftale §13 stk.4) enforced in rule engine.
+    ('SPECIAL_HOLIDAY', 'AC', 'OK24', 5, 'MONTHLY_ACCRUAL', 9, 0, true, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01'),
+    ('SPECIAL_HOLIDAY', 'AC', 'OK26', 5, 'MONTHLY_ACCRUAL', 9, 0, true, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01'),
+    ('SPECIAL_HOLIDAY', 'HK', 'OK24', 5, 'MONTHLY_ACCRUAL', 9, 0, true, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01'),
+    ('SPECIAL_HOLIDAY', 'HK', 'OK26', 5, 'MONTHLY_ACCRUAL', 9, 0, true, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01'),
+    ('SPECIAL_HOLIDAY', 'PROSA', 'OK24', 5, 'MONTHLY_ACCRUAL', 9, 0, true, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01'),
+    ('SPECIAL_HOLIDAY', 'PROSA', 'OK26', 5, 'MONTHLY_ACCRUAL', 9, 0, true, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01'),
     -- CARE_DAY: 2 days, reset January, no carryover, not pro-rated
     ('CARE_DAY', 'AC', 'OK24', 2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage', '0001-01-01'),
     ('CARE_DAY', 'AC', 'OK26', 2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage', '0001-01-01'),
@@ -1455,14 +1458,16 @@ INSERT INTO entitlement_configs (entitlement_type, agreement_code, ok_version, a
     -- S37 TASK-3701 Bug #1 absorption: AC variants (AC_RESEARCH + AC_TEACHING) mirror AC base values
     -- per interim-expert decision 2026-05-21. Bug-with-no-past-impact under pre-launch posture.
     -- VACATION inherits Ferieloven (universal); other 4 inherit AC overenskomst by structural inheritance.
-    ('VACATION',        'AC_RESEARCH', 'OK24', 25, 'IMMEDIATE', 9, 5, true,  false, NULL, 'Ferie – 25 dage',                  '0001-01-01'),
-    ('VACATION',        'AC_RESEARCH', 'OK26', 25, 'IMMEDIATE', 9, 5, true,  false, NULL, 'Ferie – 25 dage',                  '0001-01-01'),
-    ('VACATION',        'AC_TEACHING', 'OK24', 25, 'IMMEDIATE', 9, 5, true,  false, NULL, 'Ferie – 25 dage',                  '0001-01-01'),
-    ('VACATION',        'AC_TEACHING', 'OK26', 25, 'IMMEDIATE', 9, 5, true,  false, NULL, 'Ferie – 25 dage',                  '0001-01-01'),
-    ('SPECIAL_HOLIDAY', 'AC_RESEARCH', 'OK24',  5, 'IMMEDIATE', 9, 0, true,  false, NULL, 'Særlige feriedage – 5 dage',       '0001-01-01'),
-    ('SPECIAL_HOLIDAY', 'AC_RESEARCH', 'OK26',  5, 'IMMEDIATE', 9, 0, true,  false, NULL, 'Særlige feriedage – 5 dage',       '0001-01-01'),
-    ('SPECIAL_HOLIDAY', 'AC_TEACHING', 'OK24',  5, 'IMMEDIATE', 9, 0, true,  false, NULL, 'Særlige feriedage – 5 dage',       '0001-01-01'),
-    ('SPECIAL_HOLIDAY', 'AC_TEACHING', 'OK26',  5, 'IMMEDIATE', 9, 0, true,  false, NULL, 'Særlige feriedage – 5 dage',       '0001-01-01'),
+    -- S60 / ADR-030: MONTHLY_ACCRUAL reseed for the AC-variant codes that exist ONLY in init.sql
+    -- (DefaultEntitlementConfigs factory covers AC/HK/PROSA only — see TASK-6003). Sentinel reseed, NOT supersession.
+    ('VACATION',        'AC_RESEARCH', 'OK24', 25, 'MONTHLY_ACCRUAL', 9, 5, true,  false, NULL, 'Ferie – 25 dage',                  '0001-01-01'),
+    ('VACATION',        'AC_RESEARCH', 'OK26', 25, 'MONTHLY_ACCRUAL', 9, 5, true,  false, NULL, 'Ferie – 25 dage',                  '0001-01-01'),
+    ('VACATION',        'AC_TEACHING', 'OK24', 25, 'MONTHLY_ACCRUAL', 9, 5, true,  false, NULL, 'Ferie – 25 dage',                  '0001-01-01'),
+    ('VACATION',        'AC_TEACHING', 'OK26', 25, 'MONTHLY_ACCRUAL', 9, 5, true,  false, NULL, 'Ferie – 25 dage',                  '0001-01-01'),
+    ('SPECIAL_HOLIDAY', 'AC_RESEARCH', 'OK24',  5, 'MONTHLY_ACCRUAL', 9, 0, true,  false, NULL, 'Særlige feriedage – 5 dage',       '0001-01-01'),
+    ('SPECIAL_HOLIDAY', 'AC_RESEARCH', 'OK26',  5, 'MONTHLY_ACCRUAL', 9, 0, true,  false, NULL, 'Særlige feriedage – 5 dage',       '0001-01-01'),
+    ('SPECIAL_HOLIDAY', 'AC_TEACHING', 'OK24',  5, 'MONTHLY_ACCRUAL', 9, 0, true,  false, NULL, 'Særlige feriedage – 5 dage',       '0001-01-01'),
+    ('SPECIAL_HOLIDAY', 'AC_TEACHING', 'OK26',  5, 'MONTHLY_ACCRUAL', 9, 0, true,  false, NULL, 'Særlige feriedage – 5 dage',       '0001-01-01'),
     ('CARE_DAY',        'AC_RESEARCH', 'OK24',  2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage',             '0001-01-01'),
     ('CARE_DAY',        'AC_RESEARCH', 'OK26',  2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage',             '0001-01-01'),
     ('CARE_DAY',        'AC_TEACHING', 'OK24',  2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage',             '0001-01-01'),
@@ -2452,6 +2457,54 @@ DO $$
 BEGIN
     INSERT INTO schema_migrations (migration_id, notes)
     VALUES ('s59-d1-entitlement-eligibility-and-dob', 'ADR-029: employee_entitlement_eligibility + _audit (per-employee CHILD_SICK eligibility, dated/versioned/ADR-026-audited) + users.birth_date DOB column (ADR-025 D3 amend; erasure deferred). No production seed (opt-in, absent-row=ineligible); no SENIOR_DAY eligibility row (age-derived).')
+    ON CONFLICT (migration_id) DO NOTHING;
+END
+$$;
+
+-- =========================================================================
+-- S60 / ADR-030 — users.employment_start_date (HR-managed hire date).
+--   Pro-rates monthly vacation accrual (samtidighedsferie) for mid-ferieår
+--   hires: earned-to-date + still-accruable compute from
+--   max(ferieårStart, employmentStart). It is an explicit, NON-dated pure
+--   input to the rule engine's earnedToDate() (never read ambiently); an HR
+--   correction fixes a wrong fact and re-derives uniformly across all dates
+--   (NOT a versioned/bitemporal policy change — see ADR-030).
+--   employment_start_date is NULLABLE: unknown hire date ⇒ full-ferieår
+--   fallback (NOT fail-closed — a missing hire date must not wrongly DENY
+--   already-earned vacation; opposite polarity from birth_date, which gates
+--   eligibility). RBAC: never exposed to non-HR / Employee payloads / JWT /
+--   export (TASK-6006/6008).
+--
+-- Audit: users_audit (L612-623) stores full-row JSONB snapshots in
+-- previous_data/new_data — it uses NO explicit per-column list, so
+-- employment_start_date is captured automatically with no audit-table change
+-- required (the /api/admin/users write path serialises the whole row, incl.
+-- employment_start_date, into new_data). Confirmed: no users_audit extension
+-- needed (same as the S59 birth_date precedent).
+--
+-- ADD COLUMN IF NOT EXISTS at file scope (idempotent, mirrors the S59
+-- birth_date ALTER) carries the column onto legacy databases that the base
+-- `CREATE TABLE IF NOT EXISTS users` (L456) skips.
+-- =========================================================================
+ALTER TABLE users ADD COLUMN IF NOT EXISTS employment_start_date DATE NULL;
+
+-- S60 / ADR-030 — activate MONTHLY_ACCRUAL on EXISTING/legacy databases too.
+-- The entitlement_configs seed above uses ON CONFLICT (...) DO NOTHING, so on a
+-- non-fresh DB the pre-existing IMMEDIATE VACATION/SPECIAL_HOLIDAY rows would
+-- never flip and monthly accrual would activate only on fresh bootstrap (Step-7a
+-- Codex BLOCKER). This idempotent UPDATE flips every IMMEDIATE VACATION/
+-- SPECIAL_HOLIDAY row to MONTHLY_ACCRUAL — across all agreement codes and any
+-- history rows — so the whole (entitlement_type, agreement_code, ok_version)
+-- family agrees on accrual_model (preserves the ADR-021 D5 invariant; no new row).
+UPDATE entitlement_configs
+   SET accrual_model = 'MONTHLY_ACCRUAL'
+ WHERE entitlement_type IN ('VACATION', 'SPECIAL_HOLIDAY')
+   AND accrual_model = 'IMMEDIATE';
+
+DO $$
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s60-d1-monthly-accrual-and-employment-start', 'ADR-030: activate MONTHLY_ACCRUAL for VACATION + SPECIAL_HOLIDAY 0001-01-01 sentinels across all 5 agreement codes (AC/HK/PROSA/AC_RESEARCH/AC_TEACHING) via sentinel reseed (NOT supersession — preserves ADR-021 D5 invariant); CARE_DAY/CHILD_SICK/SENIOR_DAY stay IMMEDIATE. Adds users.employment_start_date (HR-managed hire date, nullable, full-ferieår fallback; pure non-dated input to earnedToDate; users_audit JSONB snapshot captures it, no audit change). Payroll consequences (§8/§7) out of scope.')
     ON CONFLICT (migration_id) DO NOTHING;
 END
 $$;

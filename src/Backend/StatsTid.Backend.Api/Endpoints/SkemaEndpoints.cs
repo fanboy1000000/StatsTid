@@ -4,6 +4,7 @@ using StatsTid.Auth;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
+using StatsTid.SharedKernel.Exceptions;
 using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Interfaces;
@@ -121,6 +122,44 @@ public static class SkemaEndpoints
             : relevantDate.Year - 1;
         return new DateOnly(year, resetMonth, 1);
     }
+
+    // ── S60 / TASK-6005 — monthly-accrual model constant + earned-to-date helper ──
+
+    /// <summary>The "MONTHLY_ACCRUAL" accrual_model string (ADR-030).</summary>
+    private const string MonthlyAccrualModel = "MONTHLY_ACCRUAL";
+
+    /// <summary>
+    /// S60 / TASK-6005 — Backend-local mirror of the rule engine's pure
+    /// <c>AccrualCalculator.EarnedToDate</c> (ADR-030, Ferieloven samtidighedsferie). The
+    /// authoritative math lives in the Rule Engine, but PAT-005 forbids the Backend from
+    /// referencing the RuleEngine assembly directly (the boundary is HTTP). Rather than add a
+    /// rule-engine round-trip purely to compute the carryover-INCLUSIVE <c>bookableLimit</c>
+    /// the Backend must supply, this replicates the tiny pure formula here. It MUST stay
+    /// byte-identical to <c>AccrualCalculator.EarnedToDate</c>: exact fractional days
+    /// (round only on display), accrual begins at <c>max(ferieaarStart, employmentStart)</c>,
+    /// months elapsed = inclusive whole month-boundaries crossed, clamped to [0, 12].
+    /// </summary>
+    private static decimal EarnedToDate(
+        decimal annualQuota,
+        decimal partTimeFraction,
+        DateOnly ferieaarStart,
+        DateOnly? employmentStart,
+        DateOnly asOf)
+    {
+        var accrualStart = ferieaarStart;
+        if (employmentStart.HasValue && employmentStart.Value > accrualStart)
+            accrualStart = employmentStart.Value;
+
+        var monthsElapsed = MonthIndex(asOf) - MonthIndex(accrualStart) + 1;
+        if (monthsElapsed <= 0)
+            return 0m;
+        if (monthsElapsed > 12)
+            monthsElapsed = 12;
+
+        return annualQuota * partTimeFraction * monthsElapsed / 12m;
+    }
+
+    private static int MonthIndex(DateOnly date) => date.Year * 12 + date.Month;
 
     public static WebApplication MapSkemaEndpoints(this WebApplication app)
     {
@@ -420,6 +459,9 @@ public static class SkemaEndpoints
             TimeEntryProjectionRepository timeEntryProjectionRepo,
             AbsenceProjectionRepository absenceProjectionRepo,
             WorkTimeProjectionRepository workTimeProjectionRepo,
+            // S60 / TASK-6005 — dated employment profile for the part_time_fraction used in
+            // the MONTHLY_ACCRUAL earned-to-date / bookableLimit computation.
+            IEmploymentProfileResolver profileResolver,
             OrgScopeValidator scopeValidator,
             HttpContext context,
             CancellationToken ct) =>
@@ -694,8 +736,13 @@ public static class SkemaEndpoints
             }
 
             // ── Pre-compute entitlement data for validation and post-save adjustment ──
-            // Aggregate requested hours per entitlement type
-            var entitlementData = new Dictionary<string, (decimal RequestedDays, int EntitlementYear, decimal EffectiveQuota)>(StringComparer.Ordinal);
+            // Aggregate requested hours per entitlement type.
+            // S60 / TASK-6005 — the atomic guard now takes a carryover-EXCLUDED GuardCap and a
+            // separate SeedQuota (= annual entitlement). GuardCap is the per-type business
+            // bookableLimit MINUS carryover (for IMMEDIATE types it equals the annual
+            // effectiveQuota, so behavior is unchanged); SeedQuota seeds total_quota on a
+            // first-INSERT with the annual entitlement (its invariant meaning, ADR-021 D6 / P3).
+            var entitlementData = new Dictionary<string, (decimal RequestedDays, int EntitlementYear, decimal GuardCap, decimal SeedQuota)>(StringComparer.Ordinal);
 
             if (request.Absences is not null && request.Absences.Length > 0)
             {
@@ -709,7 +756,6 @@ public static class SkemaEndpoints
                     requestedByEntitlementType[entitlementType] += absence.Hours;
                 }
 
-                const decimal partTimeFraction = 1.0m;
                 var ruleEngineUrl = configuration["ServiceUrls:RuleEngine"] ?? "http://rule-engine:8080";
                 var httpClient = httpClientFactory.CreateClient();
                 var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
@@ -748,22 +794,131 @@ public static class SkemaEndpoints
                     var balance = await entitlementBalanceRepo.GetByEmployeeAndTypeAsync(
                         employeeId, entitlementType, entitlementYear, ct);
 
+                    // ── S60 / TASK-6005 — dated part-time fraction at the per-type batch anchor ──
+                    // Source the part_time_fraction from the dated employment profile AS-OF
+                    // firstAbsenceDate (the per-type batch anchor, the MIN absence date for this
+                    // entitlement type), dropping the prior hard-coded 1.0m.
+                    //
+                    // S60 Step-7a fix (W2): the fraction is only load-bearing for MONTHLY_ACCRUAL
+                    // types (it scales EarnedToDate) or pro-rated types (ProRateByPartTime). For
+                    // IMMEDIATE, non-pro-rated types (e.g. CARE_DAY) the fraction is irrelevant to
+                    // the cap, so a missing profile must NOT newly block registration (it didn't
+                    // pre-S60) — fall back to 1.0 gracefully. Only hard-fail (422) when the fraction
+                    // actually matters, so part-time accrual is never silently mis-computed against a
+                    // fabricated full-time fraction (the Balance summary seam stays graceful in all
+                    // cases per ADR-023 D3; this is the per-seam asymmetry).
+                    var isMonthlyAccrual = string.Equals(
+                        config.AccrualModel, MonthlyAccrualModel, StringComparison.Ordinal);
+                    var fractionMatters = isMonthlyAccrual || config.ProRateByPartTime;
+                    // Only resolve the dated profile when the fraction is load-bearing. For IMMEDIATE
+                    // non-pro-rated types (e.g. CARE_DAY) the fraction is irrelevant, so SKIP the
+                    // resolver entirely (Step-7a cycle-2 fix) — it can THROW
+                    // EmployeeProfileNotFoundException (employee_profiles row but no dated
+                    // user_agreement_codes row), which would otherwise 500 those absences where
+                    // pre-S60 the hard-coded 1.0 let them through. When the fraction DOES matter, a
+                    // null OR a throw ⇒ a clean 422 (cannot validate the cap without the fraction).
+                    EmploymentProfile? datedProfile = null;
+                    if (fractionMatters)
+                    {
+                        try
+                        {
+                            datedProfile = await profileResolver.GetByEmployeeIdAtAsync(
+                                employeeId, firstAbsenceDate, ct);
+                        }
+                        catch (EmployeeProfileNotFoundException)
+                        {
+                            datedProfile = null;
+                        }
+                        if (datedProfile is null)
+                            return Results.Json(new
+                            {
+                                error = "employment_profile_missing",
+                                absenceType = entitlementType,
+                                date = firstAbsenceDate,
+                                message = $"Kan ikke validere ferie/feriefridage for {firstAbsenceDate:dd-MM-yyyy}: ansættelsesprofil mangler."
+                            }, statusCode: 422);
+                    }
+                    var partTimeFraction = datedProfile?.PartTimeFraction ?? 1.0m;
+
+                    var carryoverIn = balance?.CarryoverIn ?? 0m;
+
                     var effectiveQuota = config.ProRateByPartTime
                         ? config.AnnualQuota * partTimeFraction
                         : config.AnnualQuota;
 
-                    // Call Rule Engine via HTTP (PAT-005 compliance)
+                    // ── S60 / TASK-6005 — per-type business bookableLimit (carryover-INCLUSIVE) ──
+                    // For MONTHLY_ACCRUAL types the rejection cap is dynamic and per-type (ADR-030):
+                    //   VACATION        = earned + stillAccruableInFerieår + carryoverIn (forskud OK).
+                    //                     earned + stillAccruable == EarnedToDate evaluated at the
+                    //                     LAST day of the ferieår (clamps to the full accruable amount
+                    //                     for this employee — full annual×fraction for a whole-ferieår
+                    //                     hire; pro-rated for a mid-ferieår hire who can't borrow into
+                    //                     the next ferieår). Manager approval of the period IS the §7
+                    //                     forskudsferie agreement (ADR-030 / refinement New-Q-A).
+                    //   SPECIAL_HOLIDAY = earned-to-date AS-OF firstAbsenceDate + carryoverIn — NO
+                    //                     forskud (ferieaftale §13 stk.4). Booking beyond earned is
+                    //                     rejected (422) at both the pre-tx check and the atomic guard.
+                    //   IMMEDIATE types = effectiveQuota + carryoverIn (unchanged).
+                    // asOf = firstAbsenceDate (the existing per-type batch anchor). ferieaarStart =
+                    // entitlementYearStart (derived from reset_month). employmentStart = the HR-managed
+                    // User.EmploymentStartDate (null ⇒ full-ferieår, never fail-closed — ADR-030).
+                    // The repo guardCap is carryover-EXCLUDED (CheckAndAdjustAsync re-adds carryover
+                    // once); the rule-engine BookableLimit below is the carryover-INCLUSIVE business cap.
+                    // (isMonthlyAccrual computed above with the profile-missing guard.)
+
+                    decimal? bookableLimit;
+                    decimal guardCap;
+                    if (isMonthlyAccrual)
+                    {
+                        decimal accruableCap;
+                        if (string.Equals(entitlementType, "VACATION", StringComparison.Ordinal))
+                        {
+                            // earned + stillAccruable == accruable over the whole ferieår == EarnedToDate
+                            // at the ferieår's last day.
+                            var ferieaarEnd = entitlementYearStart.AddYears(1).AddDays(-1);
+                            accruableCap = EarnedToDate(
+                                config.AnnualQuota, partTimeFraction, entitlementYearStart,
+                                user.EmploymentStartDate, ferieaarEnd);
+                        }
+                        else
+                        {
+                            // SPECIAL_HOLIDAY (and any other MONTHLY_ACCRUAL type) — no forskud:
+                            // capped at earned-to-date as-of the absence date.
+                            accruableCap = EarnedToDate(
+                                config.AnnualQuota, partTimeFraction, entitlementYearStart,
+                                user.EmploymentStartDate, firstAbsenceDate);
+                        }
+
+                        guardCap = accruableCap;                       // carryover-EXCLUDED
+                        bookableLimit = accruableCap + carryoverIn;    // carryover-INCLUSIVE business cap
+                    }
+                    else
+                    {
+                        // IMMEDIATE types: cap unchanged (annual effectiveQuota). No BookableLimit
+                        // override — the rule keys off (effectiveQuota + carryover) as before.
+                        guardCap = effectiveQuota;
+                        bookableLimit = null;
+                    }
+
+                    // Call Rule Engine via HTTP (PAT-005 compliance). Accrual inputs are carried so
+                    // the rule applies the per-type cap; the warning-threshold + per-episode branches
+                    // stay on the ANNUAL quota (no spurious early-ferieår warnings).
                     var validationRequest = new
                     {
                         annualQuota = config.AnnualQuota,
                         used = balance?.Used ?? 0m,
                         planned = balance?.Planned ?? 0m,
-                        carryoverIn = balance?.CarryoverIn ?? 0m,
+                        carryoverIn,
                         requestedDays,
                         partTimeFraction,
                         proRateByPartTime = config.ProRateByPartTime,
                         isPerEpisode = config.IsPerEpisode,
-                        perEpisodeLimit = (decimal?)null
+                        perEpisodeLimit = (decimal?)null,
+                        accrualModel = config.AccrualModel,
+                        ferieaarStart = (DateOnly?)entitlementYearStart,
+                        employmentStart = user.EmploymentStartDate,
+                        asOfDate = (DateOnly?)firstAbsenceDate,
+                        bookableLimit
                     };
 
                     var response = await httpClient.PostAsJsonAsync(
@@ -788,7 +943,9 @@ public static class SkemaEndpoints
                         }, statusCode: 422);
                     }
 
-                    entitlementData[entitlementType] = (requestedDays, entitlementYear, effectiveQuota);
+                    // GuardCap is carryover-EXCLUDED (CheckAndAdjustAsync re-adds carryover once);
+                    // SeedQuota = annual effectiveQuota (seeds total_quota on a first-INSERT only).
+                    entitlementData[entitlementType] = (requestedDays, entitlementYear, guardCap, effectiveQuota);
                 }
             }
 
@@ -927,9 +1084,12 @@ public static class SkemaEndpoints
                                 continue;
 
                             var deltaDays = totalHours / StandardDayHours;
+                            // S60 / TASK-6005 — split guard: GuardCap (carryover-EXCLUDED per-type
+                            // bookable cap; the WHERE-clause re-adds carryover once) + SeedQuota
+                            // (= annual entitlement, seeds total_quota on a first-INSERT only).
                             var (success, newUsed) = await entitlementBalanceRepo.CheckAndAdjustAsync(
                                 conn, tx, employeeId, entitlementType, data.EntitlementYear,
-                                deltaDays, data.EffectiveQuota, ct);
+                                deltaDays, data.GuardCap, data.SeedQuota, ct);
 
                             if (!success)
                             {
@@ -939,12 +1099,15 @@ public static class SkemaEndpoints
                                 // here is the current used balance (the (conn, tx) overload routes the
                                 // failure-path read through the same snapshot — see EntitlementBalanceRepository
                                 // CheckAndAdjustInternalAsync). Caught at the outer try/catch below
-                                // and mapped to a 422 response.
+                                // and mapped to a 422 response. The 422 "remaining" uses the same
+                                // carryover-EXCLUDED GuardCap the guard enforced (the catch block
+                                // re-adds nothing — see note there) so the surfaced number matches
+                                // the per-type bookable cap, not the annual seed.
                                 throw new SkemaQuotaBreachException(
                                     entitlementType,
                                     requestedDays: deltaDays,
                                     currentUsed: newUsed,
-                                    effectiveQuota: data.EffectiveQuota);
+                                    effectiveQuota: data.GuardCap);
                             }
 
                             // Read the carryover via the (conn, tx) overload so it observes the same
@@ -952,7 +1115,10 @@ public static class SkemaEndpoints
                             var balance = await entitlementBalanceRepo.GetByEmployeeAndTypeAsync(
                                 conn, tx, employeeId, entitlementType, data.EntitlementYear, ct);
                             var carryoverIn = balance?.CarryoverIn ?? 0m;
-                            var newRemaining = data.EffectiveQuota + carryoverIn - newUsed;
+                            // Remaining for the audit event mirrors the enforced cap: the per-type
+                            // GuardCap (carryover-EXCLUDED) + carryover − newUsed. For IMMEDIATE types
+                            // GuardCap == annual effectiveQuota, so this is unchanged from pre-S60.
+                            var newRemaining = data.GuardCap + carryoverIn - newUsed;
 
                             var balanceEvent = new EntitlementBalanceAdjusted
                             {

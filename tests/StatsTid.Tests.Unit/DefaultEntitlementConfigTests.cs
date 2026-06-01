@@ -164,10 +164,26 @@ public class DefaultEntitlementConfigTests
         }
     }
 
+    /// <summary>
+    /// S60 / TASK-6003 / ADR-030 — activate monthly accrual. VACATION + SPECIAL_HOLIDAY now
+    /// use MONTHLY_ACCRUAL (Ferieloven samtidighedsferie); the calendar-year types
+    /// (CARE_DAY / CHILD_SICK / SENIOR_DAY) stay IMMEDIATE. Replaces the pre-S60 pin that
+    /// asserted ALL models were IMMEDIATE (the dead-enum ADR-021 D6 state).
+    /// </summary>
     [Fact]
-    public void GetAll_AllAccrualModelsAreImmediate()
+    public void GetAll_AccrualModels_VacationAndSpecialHolidayAreMonthlyAccrual_RestImmediate()
     {
         var configs = DefaultEntitlementConfigs.GetAll();
-        Assert.All(configs, c => Assert.Equal("IMMEDIATE", c.AccrualModel));
+
+        var monthlyTypes = new[] { "VACATION", "SPECIAL_HOLIDAY" };
+        Assert.All(configs, c =>
+        {
+            var expected = monthlyTypes.Contains(c.EntitlementType) ? "MONTHLY_ACCRUAL" : "IMMEDIATE";
+            Assert.Equal(expected, c.AccrualModel);
+        });
+
+        // Sanity: both monthly types are actually present across all agreements (6 each).
+        Assert.Equal(6, configs.Count(c => c.EntitlementType == "VACATION" && c.AccrualModel == "MONTHLY_ACCRUAL"));
+        Assert.Equal(6, configs.Count(c => c.EntitlementType == "SPECIAL_HOLIDAY" && c.AccrualModel == "MONTHLY_ACCRUAL"));
     }
 }

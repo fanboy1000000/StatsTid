@@ -218,6 +218,66 @@ public sealed class UserRepository
         throw new KeyNotFoundException($"User '{userId}' not found or inactive.");
     }
 
+    /// <summary>
+    /// S60 / TASK-6004 / ADR-030 — HR-only write of <c>users.employment_start_date</c>.
+    /// In-tx <c>(conn, tx)</c> overload so the admin employment-start endpoint can ride the
+    /// UPDATE and the <c>users_audit</c> row in one atomic unit per ADR-018 D3. Mirrors the
+    /// S59 <see cref="SetBirthDateAsync(NpgsqlConnection, NpgsqlTransaction, string, DateOnly?, long, CancellationToken)"/>
+    /// precedent exactly.
+    ///
+    /// <para>
+    /// <b>Admin-strict If-Match (ADR-019 D2).</b> Version-guarded: the UPDATE matches on
+    /// <c>version = @expectedVersion</c> and bumps <c>version + 1</c> (ADR-018 D7 row-version
+    /// contract). The caller is expected to have FOR-UPDATE'd + version-checked the row first
+    /// (via <see cref="GetByIdWithVersionAsync(NpgsqlConnection, NpgsqlTransaction, string, CancellationToken)"/>);
+    /// the <c>AND version = @expectedVersion</c> predicate here is defense-in-depth. Returns
+    /// the new version. Throws <see cref="OptimisticConcurrencyException"/> when no live row
+    /// matched the expected version (caller maps to 412); throws
+    /// <see cref="KeyNotFoundException"/> when no live row exists at all (caller maps to 404).
+    /// </para>
+    ///
+    /// <para>
+    /// <paramref name="employmentStartDate"/> may be <c>null</c> (clearing an unknown start date).
+    /// </para>
+    /// </summary>
+    public async Task<long> SetEmploymentStartDateAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string userId, DateOnly? employmentStartDate, long expectedVersion, CancellationToken ct = default)
+    {
+        await using var cmd = new NpgsqlCommand(
+            """
+            UPDATE users
+               SET employment_start_date = @employmentStartDate,
+                   version = version + 1,
+                   updated_at = NOW()
+             WHERE user_id = @userId
+               AND is_active = TRUE
+               AND version = @expectedVersion
+            RETURNING version
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("employmentStartDate", (object?)employmentStartDate ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("userId", userId);
+        cmd.Parameters.AddWithValue("expectedVersion", expectedVersion);
+        var result = await cmd.ExecuteScalarAsync(ct);
+        if (result is long newVersion)
+            return newVersion;
+
+        // No row updated — distinguish "row gone" from "version mismatch" so the
+        // endpoint can map 404 vs 412 (mirrors SetBirthDateAsync / SoftDeleteAsync).
+        await using var probeCmd = new NpgsqlCommand(
+            "SELECT version FROM users WHERE user_id = @userId AND is_active = TRUE", conn, tx);
+        probeCmd.Parameters.AddWithValue("userId", userId);
+        var actual = await probeCmd.ExecuteScalarAsync(ct);
+        if (actual is long actualVersion)
+            throw new OptimisticConcurrencyException(
+                $"User '{userId}' version is {actualVersion}, but caller sent " +
+                $"If-Match: \"{expectedVersion}\"; refresh and retry.",
+                expectedVersion: expectedVersion,
+                actualVersion: actualVersion);
+
+        throw new KeyNotFoundException($"User '{userId}' not found or inactive.");
+    }
+
     private static async Task<IReadOnlyList<User>> ReadUsersAsync(NpgsqlCommand cmd, CancellationToken ct)
     {
         var users = new List<User>();
@@ -244,6 +304,13 @@ public sealed class UserRepository
         BirthDate = reader.IsDBNull(reader.GetOrdinal("birth_date"))
             ? null
             : reader.GetFieldValue<DateOnly>(reader.GetOrdinal("birth_date")),
+        // S60 / ADR-030 — employment-start read-model plumbing (HR-scoped). Read so the
+        // Skema/Balance accrual seams (TASK-6005) can pro-rate earned-to-date for mid-year
+        // hires. NULLABLE. Never surfaced to non-HR callers — the admin user projections
+        // in AdminEndpoints deliberately omit it (same handling as birth_date).
+        EmploymentStartDate = reader.IsDBNull(reader.GetOrdinal("employment_start_date"))
+            ? null
+            : reader.GetFieldValue<DateOnly>(reader.GetOrdinal("employment_start_date")),
         IsActive = reader.GetBoolean(reader.GetOrdinal("is_active")),
         CreatedAt = reader.GetDateTime(reader.GetOrdinal("created_at")),
         UpdatedAt = reader.GetDateTime(reader.GetOrdinal("updated_at"))

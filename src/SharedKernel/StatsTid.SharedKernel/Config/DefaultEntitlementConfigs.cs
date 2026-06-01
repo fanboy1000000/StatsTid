@@ -69,7 +69,7 @@ public static class DefaultEntitlementConfigs
         AgreementCode = agreementCode,
         OkVersion = okVersion,
         AnnualQuota = 25m,
-        AccrualModel = "IMMEDIATE",
+        AccrualModel = "MONTHLY_ACCRUAL",
         ResetMonth = 9,  // Ferieår: September
         CarryoverMax = 5m,
         ProRateByPartTime = true,
@@ -84,7 +84,7 @@ public static class DefaultEntitlementConfigs
         AgreementCode = agreementCode,
         OkVersion = okVersion,
         AnnualQuota = 5m,
-        AccrualModel = "IMMEDIATE",
+        AccrualModel = "MONTHLY_ACCRUAL",
         ResetMonth = 9,  // Ferieår: September
         CarryoverMax = 0m,
         ProRateByPartTime = true,

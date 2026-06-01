@@ -29,6 +29,23 @@ public sealed class User
     /// </summary>
     public DateOnly? BirthDate { get; init; }
 
+    /// <summary>
+    /// S60 / ADR-030 (amends ADR-029 read-model precedent) — HR-managed first day of
+    /// employment, used to pro-rate the MONTHLY_ACCRUAL earned-to-date computation for
+    /// mid-year hires (passed as a pure input to the rule engine's <c>earnedToDate</c>
+    /// fn; null ⇒ accrue across the full ferieår). NULLABLE.
+    ///
+    /// <para>
+    /// <b>RBAC — HR-scoped.</b> <c>employment_start_date</c> is set/read-gated to
+    /// <c>HROrAbove</c> + <c>OrgScopeValidator</c> and must NEVER be serialized into
+    /// any Employee-facing DTO, JWT, or export — same handling class as
+    /// <see cref="BirthDate"/>. The admin user-list / user-GET projections in
+    /// <c>AdminEndpoints</c> deliberately omit it; only the dedicated HR-gated
+    /// employment-start endpoints (TASK-6006) expose it.
+    /// </para>
+    /// </summary>
+    public DateOnly? EmploymentStartDate { get; init; }
+
     public bool IsActive { get; init; } = true;
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; init; } = DateTime.UtcNow;

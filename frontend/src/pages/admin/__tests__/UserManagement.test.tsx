@@ -100,6 +100,15 @@ function setupFetchRouter(overrides: Record<string, () => Promise<Response>> = {
         json: async () => ({ employeeId: 'EMP001', birthDate: null, version: 1 }),
       }
     }
+    // S60 TASK-6007. HR-only employment-start GET defaults to no date, users.version 1.
+    // Checked before the eligibility branch so the more specific path wins.
+    if (url.includes('/employment-start-date')) {
+      return {
+        ok: true, status: 200,
+        headers: new Headers({ ETag: '"1"' }),
+        json: async () => ({ employeeId: 'EMP001', employmentStartDate: null, version: 1 }),
+      }
+    }
     // S59 follow-up. HR-only CHILD_SICK eligibility GET (read-then-If-Match).
     // Default: NO live row → rowExists:false, eligible:false, NO ETag. A toggle
     // therefore CREATES with If-None-Match: *. Tests that exercise the update
@@ -509,5 +518,100 @@ describe('UserManagement — S59 entitlement eligibility + DOB', () => {
     expect(dobPuts[0].headers['If-Match']).toBe('"7"')
     expect(dobPuts[0].headers['If-None-Match']).toBeUndefined()
     expect(dobPuts[0].body).toEqual({ birthDate: '1962-02-02' })
+  })
+})
+
+// S60 TASK-6007 (ADR-030). HR-only employment-start date inlined on the
+// user-edit dialog — mirrors the S59 DOB field (read-then-If-Match, admin-strict).
+// Pro-rates mid-year-hire vacation accrual.
+describe('UserManagement — S60 employment-start date', () => {
+  async function openEditDialog() {
+    render(<ToastProvider><UserManagement /></ToastProvider>)
+    await waitFor(() => {
+      expect(screen.getByText('Test Bruger')).toBeDefined()
+    })
+    fireEvent.click(screen.getByText('Test Bruger'))
+    await waitFor(() => {
+      expect(screen.getByText(/Rediger bruger/i)).toBeDefined()
+    })
+    // Wait for the trailing reporting-lines load to settle so no async state
+    // update dangles past a test that only opens the dialog (see S59 rationale).
+    await waitFor(() => {
+      expect(screen.getByText(/Ingen ledelseslinjer registreret/i)).toBeDefined()
+    })
+  }
+
+  it('pre-populates employment-start from the HR-only GET and shows the helper text', async () => {
+    setupFetchRouter({
+      '/employment-start-date': async () =>
+        ({
+          ok: true, status: 200,
+          headers: new Headers({ ETag: '"3"' }),
+          json: async () => ({ employeeId: 'EMP001', employmentStartDate: '2025-09-01', version: 3 }),
+        }) as unknown as Response,
+    })
+
+    await openEditDialog()
+
+    await waitFor(() => {
+      const start = screen.getByTestId('employment-start-input') as HTMLInputElement
+      expect(start.value).toBe('2025-09-01')
+    })
+
+    // Helper text explains the mid-year-hire accrual pro-rating.
+    expect(screen.getByText(/optjent ferie for medarbejdere ansat midt i ferieåret/i)).toBeDefined()
+  })
+
+  it('saves an edited employment-start with admin-strict If-Match composed from users.version', async () => {
+    const startPuts: Array<{ headers: Record<string, string>; body: unknown }> = []
+
+    setupFetchRouter({
+      '/employment-start-date': async () =>
+        ({
+          ok: true, status: 200,
+          headers: new Headers({ ETag: '"7"' }),
+          json: async () => ({ employeeId: 'EMP001', employmentStartDate: '2025-01-01', version: 7 }),
+        }) as unknown as Response,
+    })
+
+    const inner = mockFetch.getMockImplementation()!
+    mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.includes('/employment-start-date') && init?.method === 'PUT') {
+        const headers: Record<string, string> = {}
+        const h = init.headers as Record<string, string> | undefined
+        if (h) for (const [k, v] of Object.entries(h)) headers[k] = v
+        startPuts.push({ headers, body: init.body ? JSON.parse(init.body as string) : undefined })
+        return {
+          ok: true, status: 200,
+          headers: new Headers({ ETag: '"8"' }),
+          json: async () => ({ employeeId: 'EMP001', employmentStartDate: '2025-08-15', version: 8 }),
+        } as unknown as Response
+      }
+      return inner(url, init)
+    })
+
+    await openEditDialog()
+
+    await waitFor(() => {
+      const start = screen.getByTestId('employment-start-input') as HTMLInputElement
+      expect(start.value).toBe('2025-01-01')
+    })
+
+    // Edit the employment-start and save.
+    fireEvent.change(screen.getByTestId('employment-start-input'), { target: { value: '2025-08-15' } })
+    fireEvent.click(screen.getByText('Gem'))
+
+    // Wait for the full save flow to settle (dialog closes on success) rather
+    // than just for the PUT to be dispatched — asserting only on the count would
+    // let the trailing setState/toast/close updates dangle past the test
+    // (flaky act() warning). See the S59 DOB test for the rationale.
+    await waitFor(() => {
+      expect(screen.queryByText(/Rediger bruger/i)).toBeNull()
+    })
+    expect(startPuts.length).toBe(1)
+    // Admin-strict If-Match from the GET version (7); no If-None-Match.
+    expect(startPuts[0].headers['If-Match']).toBe('"7"')
+    expect(startPuts[0].headers['If-None-Match']).toBeUndefined()
+    expect(startPuts[0].body).toEqual({ employmentStartDate: '2025-08-15' })
   })
 })

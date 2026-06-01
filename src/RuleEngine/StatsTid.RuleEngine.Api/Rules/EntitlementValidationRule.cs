@@ -54,8 +54,18 @@ public static class EntitlementValidationRule
             };
         }
 
-        // 4. Calculate total available (quota + carryover)
-        var totalAvailable = effectiveQuota + request.CarryoverIn;
+        // 4. Calculate total available.
+        //    For MONTHLY_ACCRUAL (ADR-030) the rejection cap is the Backend-supplied, per-type,
+        //    carryover-INCLUSIVE BookableLimit (VACATION = earned+stillAccruable+carryover;
+        //    SPECIAL_HOLIDAY = earned+carryover, no forskud). It already folds in carryover, so it
+        //    is used as-is and NOT added to carryoverIn again. For all other (IMMEDIATE) types the
+        //    cap stays the legacy annual (effectiveQuota + carryoverIn) — byte-for-byte unchanged
+        //    when the new accrual fields are null.
+        var useBookableLimit =
+            request.BookableLimit.HasValue || request.AccrualModel == "MONTHLY_ACCRUAL";
+        var totalAvailable = useBookableLimit && request.BookableLimit.HasValue
+            ? request.BookableLimit.Value
+            : effectiveQuota + request.CarryoverIn;
         var currentUsed = request.Used + request.Planned;
         var remainingBefore = totalAvailable - currentUsed;
         var remainingAfter = remainingBefore - request.RequestedDays;

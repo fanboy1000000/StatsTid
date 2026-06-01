@@ -166,8 +166,14 @@ export function UserManagement() {
   // S59 TASK-5908 (ADR-029). HR-only per-employee entitlement controls surfaced
   // on the user-edit dialog: (B) CHILD_SICK eligibility opt-in toggle, and
   // (A) date of birth which drives the age-derived SENIOR_DAY gate automatically.
-  const { fetchChildSickEligibility, setChildSick, fetchBirthDate, setBirthDate } =
-    useEntitlementEligibility()
+  const {
+    fetchChildSickEligibility,
+    setChildSick,
+    fetchBirthDate,
+    setBirthDate,
+    fetchEmploymentStartDate,
+    setEmploymentStartDate,
+  } = useEntitlementEligibility()
   // S59 follow-up: eligibility now has an HR-only GET. On dialog open we read it
   // to pre-populate the toggle AND capture rowExists + version, so the save
   // composes the correct precondition (If-Match when a row exists, else
@@ -185,6 +191,13 @@ export function UserManagement() {
   const [birthDate, setBirthDateValue] = useState('')
   const [birthDateInitial, setBirthDateInitial] = useState('')
   const [birthDateVersion, setBirthDateVersion] = useState<number | null>(null)
+  // S60 TASK-6007 (ADR-030). HR-only employment-start date (mirrors DOB):
+  // readable yyyy-MM-dd ('' for none) with `employmentStartVersion` carrying
+  // users.version for the admin-strict If-Match PUT. Pro-rates mid-year-hire
+  // vacation accrual.
+  const [employmentStartDate, setEmploymentStartValue] = useState('')
+  const [employmentStartInitial, setEmploymentStartInitial] = useState('')
+  const [employmentStartVersion, setEmploymentStartVersion] = useState<number | null>(null)
   const [managerDialogOpen, setManagerDialogOpen] = useState(false)
   const [managerForm, setManagerForm] = useState<{
     managerId: string
@@ -318,6 +331,10 @@ export function UserManagement() {
     setBirthDateValue('')
     setBirthDateInitial('')
     setBirthDateVersion(null)
+    // S60 TASK-6007. Reset employment-start before the parallel fetch repopulates.
+    setEmploymentStartValue('')
+    setEmploymentStartInitial('')
+    setEmploymentStartVersion(null)
     setEditForm({
       displayName: user.displayName,
       email: user.email ?? '',
@@ -327,11 +344,13 @@ export function UserManagement() {
       position: '',
     })
     try {
-      // Fetch user + employee profile + DOB + CHILD_SICK eligibility in parallel.
-      const [fresh, profile, dob, elig] = await Promise.all([
+      // Fetch user + employee profile + DOB + employment-start + CHILD_SICK
+      // eligibility in parallel.
+      const [fresh, profile, dob, employmentStart, elig] = await Promise.all([
         fetchUser(user.userId),
         fetchEmployeeProfile(user.userId),
         fetchBirthDate(user.userId).catch(() => null),
+        fetchEmploymentStartDate(user.userId).catch(() => null),
         fetchChildSickEligibility(user.userId).catch(() => null),
       ])
       setEditingUser(fresh)
@@ -340,6 +359,13 @@ export function UserManagement() {
         setBirthDateValue(dob.birthDate ?? '')
         setBirthDateInitial(dob.birthDate ?? '')
         setBirthDateVersion(dob.version)
+      }
+      // S60 TASK-6007: pre-populate employment-start + capture users.version for
+      // the admin-strict If-Match write on save.
+      if (employmentStart) {
+        setEmploymentStartValue(employmentStart.employmentStartDate ?? '')
+        setEmploymentStartInitial(employmentStart.employmentStartDate ?? '')
+        setEmploymentStartVersion(employmentStart.version)
       }
       // S59 follow-up: pre-populate the toggle from the live row and capture
       // rowExists + version for the read-then-If-Match write on save.
@@ -528,6 +554,24 @@ export function UserManagement() {
         setBirthDateValue(savedDob.birthDate ?? '')
         setBirthDateInitial(savedDob.birthDate ?? '')
         setBirthDateVersion(savedDob.version)
+      }
+
+      // S60 TASK-6007 (ADR-030). Employment-start write — only when HR changed
+      // it. Admin-strict If-Match composed from users.version. Read-your-write:
+      // re-stamp local state from the PUT response so a follow-up save in the
+      // same session carries the bumped version. '' (no date) maps to null.
+      if (
+        employmentStartDate !== employmentStartInitial &&
+        employmentStartVersion !== null
+      ) {
+        const savedStart = await setEmploymentStartDate(
+          editingUser.userId,
+          employmentStartDate || null,
+          employmentStartVersion,
+        )
+        setEmploymentStartValue(savedStart.employmentStartDate ?? '')
+        setEmploymentStartInitial(savedStart.employmentStartDate ?? '')
+        setEmploymentStartVersion(savedStart.version)
       }
 
       // S59 TASK-5908 (B) + S59 follow-up. CHILD_SICK eligibility — only when HR
@@ -1009,6 +1053,28 @@ export function UserManagement() {
                 />
                 <div className={styles.helperText}>
                   Seniordage tildeles automatisk fra det fyldte 62. år ud fra fødselsdatoen.
+                </div>
+              </div>
+
+              {/* S60 TASK-6007 (ADR-030). Ansættelsesdato — HR-only; pro-rates
+                  optjent ferie for medarbejdere ansat midt i ferieåret. Mirrors
+                  the DOB field (read-then-If-Match, admin-strict). */}
+              <div className={styles.formField}>
+                <label className={styles.formLabel} htmlFor="editEmploymentStart">
+                  Ansættelsesdato
+                </label>
+                <input
+                  className={styles.input}
+                  id="editEmploymentStart"
+                  type="date"
+                  value={employmentStartDate}
+                  onChange={(e) => setEmploymentStartValue(e.target.value)}
+                  disabled={employmentStartVersion === null}
+                  title={employmentStartVersion === null ? 'Kunne ikke indlæse ansættelsesdato' : undefined}
+                  data-testid="employment-start-input"
+                />
+                <div className={styles.helperText}>
+                  Bruges til at beregne optjent ferie for medarbejdere ansat midt i ferieåret.
                 </div>
               </div>
 
