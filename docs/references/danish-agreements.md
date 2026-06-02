@@ -114,7 +114,7 @@ Source: `DefaultEntitlementConfigs.cs` and `entitlement_configs` seed data.
 | CHILD_SICK (PROSA) | 3 days | January (1) | Yes | No | 0 | -- | Barns sygedag | SR-PROSA-OK24-005 (divergent quota) |
 | SENIOR_DAY | 2 days | January (1) | No | No | 0 | 62 | Seniordage — RESOLVED S37 TASK-3703 (was 0 + 60, paired-bug; user-corrected to 2 + 62 uniform across all 5 agreements). | SR-AC-OK24-015 + SR-AC-OK24-035 + SR-HK-OK24-029 + SR-PROSA-OK24-006 |
 
-All entitlements use IMMEDIATE accrual model. VACATION and SPECIAL_HOLIDAY are pro-rated by part-time fraction. CHILD_SICK is the only per-episode entitlement and varies by agreement.
+VACATION and SPECIAL_HOLIDAY use the **MONTHLY_ACCRUAL** model (Ferieloven *samtidighedsferie* — earned-to-date, ~2,08 / ~0,42 days per month respectively; activated S60, **ADR-030**, superseding ADR-021 D6) and are pro-rated by part-time fraction. CARE_DAY, CHILD_SICK, and SENIOR_DAY use the IMMEDIATE accrual model. CHILD_SICK is the only per-episode entitlement and varies by agreement.
 
 > **AC_RESEARCH + AC_TEACHING gap (RESOLVED S37 TASK-3701)**: previously NO entitlement rows seeded for the 2 AC variants. Per interim-expert decision 2026-05-21, AC variants now have 20 rows mirroring AC base values (5 entitlements × 2 OK × 2 variants). See SR-AC_RESEARCH-OK24-005 + SR-AC_TEACHING-OK24-005 (canonical candidate bug **#1** in `agreement-ruleset-audit.md`). Bug-with-no-past-impact per ROADMAP rule correction policy.
 

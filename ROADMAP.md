@@ -104,8 +104,8 @@
 
 This roadmap uses a **rolling detail** pattern: only the next sprint has task-level planning. Future phases have milestone-level descriptions. After each sprint completes, the next sprint is promoted to detailed planning.
 
-<!-- anchor-sprint: 57 -->
-> **Current position (as of S59, 2026-06-01).** The phase sections below were authored far earlier; their phase→sprint numbers are **historical projections, retained as planning record, NOT current state**. What actually shipped:
+<!-- anchor-sprint: 61 -->
+> **Current position (as of S61, 2026-06-02).** The phase sections below were authored far earlier; their phase→sprint numbers are **historical projections, retained as planning record, NOT current state**. What actually shipped:
 > - **Phase 4 (Production Hardening)** completed ~**S46** (not the projected S22–~29); Phase 4e alone ran S34–S46.
 > - **Phase 5 (UI/UX Refinements)** shipped at **S47** (not the projected ~S30).
 > - **ADR-027 reporting-line hierarchy**: S48–S52. **ADR-024/025 role-within-agreement + multi-tenant** design: S38–S41a (D1/D2 cutover SUSPENDED at the S42a discipline-rollback; S40 plumbing dormant). **ADR-026 audit-visibility**: S43–S45.
@@ -113,7 +113,8 @@ This roadmap uses a **rolling detail** pattern: only the next sprint has task-le
 > - **S57** (done): UI re-skin to the oes.dk AA-safe palette (ADR-011 amended; default theme only).
 > - **S58** (done): Skema per-day "Diff. fra normtid"/"Ikke fordelt" on every norm day + per-day 24h work-time cap (Arbejdstid).
 > - **S59** (done): per-employee child-sick eligibility (opt-in, HR-set) + DOB-derived senior-day age gate, **ADR-029** (amends ADR-025 D3 `birth_date`; precedence over dormant ADR-024).
-> - **S60** (done): activate real Danish monthly vacation accrual (MONTHLY_ACCRUAL) for VACATION + SPECIAL_HOLIDAY — earned-to-date as a pure rule-engine fn; per-type forskud cap; new HR `employment_start_date`; **ADR-030** (supersedes ADR-021 D6, annotates D5). **Follow-ups:** consolidate `EarnedToDate` into SharedKernel; payroll §8/§7 (wage-deduction + termination modregning); the parked **Oversigt** (now shows real accrued values). **Next sprint: S61** (TBD).
+> - **S60** (done): activate real Danish monthly vacation accrual (MONTHLY_ACCRUAL) for VACATION + SPECIAL_HOLIDAY — earned-to-date as a pure rule-engine fn; per-type forskud cap; new HR `employment_start_date`; **ADR-030** (supersedes ADR-021 D6, annotates D5). **Follow-ups:** consolidate `EarnedToDate` into SharedKernel; payroll §8/§7 (wage-deduction + termination modregning); payroll §8/§7 (wage-deduction + termination modregning). The `EarnedToDate`→SharedKernel consolidation and the parked **Oversigt** both shipped in S61.
+> - **S61** (done): the parked **Oversigt** — read-only employee annual dashboard (optjent leave overview + balances incl. the never-shown overtime-saldo + compliance + selected-month approval status + an accrual-curve trend across the ferieår). New read-only `GET /api/balance/{id}/series` (server-derived ferieår; single-fraction model consistent with `/summary` + the Skema quota guard). `EarnedToDate` consolidated into `SharedKernel/Calendar/AccrualMath` (single source). No new ADR (read-only consumer of ADR-030). **Follow-up:** piecewise per-month accrual (legally precise, but would diverge from `/summary` + the quota guard — a future rule-engine change, not S61). **Next sprint: S62** (TBD).
 > Per WORKFLOW.md § "Binding to Architectural Events, Not Sprint Numbers," the projections below are non-binding. The SYSTEM_TARGET coverage tracker further down is likewise frozen at the S18 column and is not current.
 
 > **Sprint numbering rule**: Sprint numbers are strictly sequential (see CLAUDE.md § Sprint Numbering & Re-prioritization). Phase-to-sprint mappings below are projections. When execution order changes, the Orchestrator replans affected sprints and updates these mappings — sprint numbers are never skipped or reordered.

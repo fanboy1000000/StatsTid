@@ -123,43 +123,16 @@ public static class SkemaEndpoints
         return new DateOnly(year, resetMonth, 1);
     }
 
-    // ── S60 / TASK-6005 — monthly-accrual model constant + earned-to-date helper ──
+    // ── S60 / TASK-6005 — monthly-accrual model constant ──
 
     /// <summary>The "MONTHLY_ACCRUAL" accrual_model string (ADR-030).</summary>
     private const string MonthlyAccrualModel = "MONTHLY_ACCRUAL";
 
-    /// <summary>
-    /// S60 / TASK-6005 — Backend-local mirror of the rule engine's pure
-    /// <c>AccrualCalculator.EarnedToDate</c> (ADR-030, Ferieloven samtidighedsferie). The
-    /// authoritative math lives in the Rule Engine, but PAT-005 forbids the Backend from
-    /// referencing the RuleEngine assembly directly (the boundary is HTTP). Rather than add a
-    /// rule-engine round-trip purely to compute the carryover-INCLUSIVE <c>bookableLimit</c>
-    /// the Backend must supply, this replicates the tiny pure formula here. It MUST stay
-    /// byte-identical to <c>AccrualCalculator.EarnedToDate</c>: exact fractional days
-    /// (round only on display), accrual begins at <c>max(ferieaarStart, employmentStart)</c>,
-    /// months elapsed = inclusive whole month-boundaries crossed, clamped to [0, 12].
-    /// </summary>
-    private static decimal EarnedToDate(
-        decimal annualQuota,
-        decimal partTimeFraction,
-        DateOnly ferieaarStart,
-        DateOnly? employmentStart,
-        DateOnly asOf)
-    {
-        var accrualStart = ferieaarStart;
-        if (employmentStart.HasValue && employmentStart.Value > accrualStart)
-            accrualStart = employmentStart.Value;
-
-        var monthsElapsed = MonthIndex(asOf) - MonthIndex(accrualStart) + 1;
-        if (monthsElapsed <= 0)
-            return 0m;
-        if (monthsElapsed > 12)
-            monthsElapsed = 12;
-
-        return annualQuota * partTimeFraction * monthsElapsed / 12m;
-    }
-
-    private static int MonthIndex(DateOnly date) => date.Year * 12 + date.Month;
+    // S61 / TASK-6101 — the Backend-local EarnedToDate/MonthIndex mirror was removed. The pure
+    // earned-to-date math is now the single shared copy in StatsTid.SharedKernel.Calendar.AccrualMath
+    // (already imported via the `using StatsTid.SharedKernel.Calendar;` above). PAT-005 is unaffected:
+    // AccrualMath is a dependency-free SharedKernel leaf both the Backend and the Rule Engine already
+    // reference, NOT the RuleEngine assembly (the validate-entitlement boundary stays HTTP-only).
 
     public static WebApplication MapSkemaEndpoints(this WebApplication app)
     {
@@ -876,7 +849,7 @@ public static class SkemaEndpoints
                             // earned + stillAccruable == accruable over the whole ferieår == EarnedToDate
                             // at the ferieår's last day.
                             var ferieaarEnd = entitlementYearStart.AddYears(1).AddDays(-1);
-                            accruableCap = EarnedToDate(
+                            accruableCap = AccrualMath.EarnedToDate(
                                 config.AnnualQuota, partTimeFraction, entitlementYearStart,
                                 user.EmploymentStartDate, ferieaarEnd);
                         }
@@ -884,7 +857,7 @@ public static class SkemaEndpoints
                         {
                             // SPECIAL_HOLIDAY (and any other MONTHLY_ACCRUAL type) — no forskud:
                             // capped at earned-to-date as-of the absence date.
-                            accruableCap = EarnedToDate(
+                            accruableCap = AccrualMath.EarnedToDate(
                                 config.AnnualQuota, partTimeFraction, entitlementYearStart,
                                 user.EmploymentStartDate, firstAbsenceDate);
                         }

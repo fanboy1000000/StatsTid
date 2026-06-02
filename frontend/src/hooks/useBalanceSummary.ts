@@ -9,7 +9,18 @@ export interface EntitlementInfo {
   planned: number
   carryoverIn: number
   remaining: number
+  earned: number
   entitlementYear: number
+}
+
+// S61/ADR-030: overtime/afspadsering balance block returned verbatim by
+// `/api/balance/{id}/summary`. Display values only — never recomputed client-side.
+export interface OvertimeBalanceInfo {
+  accumulated: number
+  paidOut: number
+  afspadseringUsed: number
+  remaining: number
+  compensationModel: string
 }
 
 export interface BalanceSummary {
@@ -23,6 +34,7 @@ export interface BalanceSummary {
   agreementCode: string
   hasMerarbejde: boolean
   entitlements?: EntitlementInfo[]
+  overtimeBalance?: OvertimeBalanceInfo | null
 }
 
 export function useBalanceSummary(employeeId: string, year: number, month: number) {

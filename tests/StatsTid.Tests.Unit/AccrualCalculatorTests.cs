@@ -1,5 +1,5 @@
-using System.Reflection;
 using StatsTid.RuleEngine.Api.Rules;
+using StatsTid.SharedKernel.Calendar;
 
 namespace StatsTid.Tests.Unit;
 
@@ -10,7 +10,12 @@ namespace StatsTid.Tests.Unit;
 /// Pins the exact-fractional earning curve (no rounding in the calculator), part-time scaling,
 /// mid-ferieår-hire pro-ration (accrue from max(ferieårStart, employmentStart)), the
 /// null-employmentStart full-ferieår fallback, and the employment-start-after-asOf ⇒ 0 case.
-/// Also reconciles the Backend-local duplicate (PAT-005) byte-for-byte via reflection.
+///
+/// S61 / TASK-6101 — the formula was consolidated into the SharedKernel
+/// <see cref="AccrualMath.EarnedToDate"/>; <see cref="AccrualCalculator"/> now delegates to it,
+/// as do the (formerly duplicated) Backend Balance/Skema endpoints. The reconciliation test below
+/// now pins <see cref="AccrualMath"/> ↔ <see cref="AccrualCalculator"/> parity directly (no
+/// reflection into Backend types — those local mirrors no longer exist).
 /// </summary>
 public class AccrualCalculatorTests
 {
@@ -130,11 +135,12 @@ public class AccrualCalculatorTests
     }
 
     /// <summary>
-    /// PAT-005 duplication guard (S60): the Backend keeps a private byte-identical copy of
-    /// <see cref="AccrualCalculator.EarnedToDate"/> (it may not reference the RuleEngine assembly
-    /// — the boundary is HTTP). This reconciliation test invokes the Backend's private static
-    /// mirror via reflection and asserts it matches the canonical rule-engine fn across a range
-    /// of inputs, so the two copies cannot silently drift.
+    /// S61 / TASK-6101 consolidation guard: <see cref="AccrualCalculator.EarnedToDate"/> is now a
+    /// thin delegator to the single SharedKernel copy <see cref="AccrualMath.EarnedToDate"/>, and
+    /// the (formerly triplicated) Backend Balance/Skema endpoints delegate to the SAME SharedKernel
+    /// fn. This reconciliation pins the delegator ↔ shared-source parity across the same value
+    /// matrix that previously guarded the now-removed Backend mirrors, so the public rule-engine
+    /// surface can never diverge from the shared math.
     /// </summary>
     [Theory]
     [InlineData(25, 1.0, 2025, 9, 1, null, null, 2025, 9, 1)]      // 1 month
@@ -143,7 +149,7 @@ public class AccrualCalculatorTests
     [InlineData(25, 0.8, 2025, 9, 1, 2025, 11, 2026, 1, 10)]       // mid-year hire, part-time
     [InlineData(25, 1.0, 2025, 9, 1, 2026, 6, 2026, 2, 1)]         // hire after asOf ⇒ 0
     [InlineData(25, 1.0, 2025, 9, 1, null, null, 2025, 8, 31)]     // before ferieår ⇒ 0
-    public void BackendLocalEarnedToDate_MatchesRuleEngine(
+    public void RuleEngineEarnedToDate_DelegatesTo_SharedKernelAccrualMath(
         double annualQuota, double partTimeFraction,
         int faYear, int faMonth, int faDay,
         int? esYear, int? esMonth,
@@ -155,33 +161,11 @@ public class AccrualCalculatorTests
             : null;
         var asOf = new DateOnly(asOfYear, asOfMonth, asOfDay);
 
-        var canonical = AccrualCalculator.EarnedToDate(
+        var ruleEngine = AccrualCalculator.EarnedToDate(
+            (decimal)annualQuota, (decimal)partTimeFraction, ferieaarStart, employmentStart, asOf);
+        var sharedKernel = AccrualMath.EarnedToDate(
             (decimal)annualQuota, (decimal)partTimeFraction, ferieaarStart, employmentStart, asOf);
 
-        // S60 Step-7a W1: reconcile EVERY Backend-local copy (SkemaEndpoints AND BalanceEndpoints),
-        // not just one — both mirror AccrualCalculator under PAT-005 and either could silently drift.
-        var skemaCopy = InvokeBackendEarnedToDate(
-            typeof(StatsTid.Backend.Api.Endpoints.SkemaEndpoints),
-            (decimal)annualQuota, (decimal)partTimeFraction, ferieaarStart, employmentStart, asOf);
-        var balanceCopy = InvokeBackendEarnedToDate(
-            typeof(StatsTid.Backend.Api.Endpoints.BalanceEndpoints),
-            (decimal)annualQuota, (decimal)partTimeFraction, ferieaarStart, employmentStart, asOf);
-
-        Assert.Equal(canonical, skemaCopy);
-        Assert.Equal(canonical, balanceCopy);
-    }
-
-    private static decimal InvokeBackendEarnedToDate(
-        Type type, decimal annualQuota, decimal partTimeFraction,
-        DateOnly ferieaarStart, DateOnly? employmentStart, DateOnly asOf)
-    {
-        var method = type.GetMethod(
-            "EarnedToDate",
-            BindingFlags.NonPublic | BindingFlags.Static);
-        Assert.NotNull(method); // guards against a Backend mirror being renamed/removed
-        var result = method!.Invoke(
-            null,
-            new object?[] { annualQuota, partTimeFraction, ferieaarStart, employmentStart, asOf });
-        return (decimal)result!;
+        Assert.Equal(sharedKernel, ruleEngine);
     }
 }

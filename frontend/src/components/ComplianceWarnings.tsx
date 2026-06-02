@@ -4,6 +4,12 @@ import styles from './ComplianceWarnings.module.css'
 interface ComplianceWarningsProps {
   result: ComplianceCheckResult | null
   loading: boolean
+  /**
+   * Suppress the internal "Arbejdstidskontrol" <h3>. Set by callers (e.g.
+   * OversightPage) that already render their own section heading, so the title
+   * appears exactly once. Defaults to false → SkemaPage keeps the heading here.
+   */
+  hideTitle?: boolean
 }
 
 const VIOLATION_TYPE_LABELS: Record<string, string> = {
@@ -37,7 +43,7 @@ function ViolationItem({ item }: { item: ComplianceViolation }) {
   )
 }
 
-export function ComplianceWarnings({ result, loading }: ComplianceWarningsProps) {
+export function ComplianceWarnings({ result, loading, hideTitle = false }: ComplianceWarningsProps) {
   if (loading || !result) return null
 
   const hasIssues = result.violations.length > 0 || result.warnings.length > 0
@@ -45,7 +51,7 @@ export function ComplianceWarnings({ result, loading }: ComplianceWarningsProps)
 
   return (
     <div className={styles.container}>
-      <h3 className={styles.title}>Arbejdstidskontrol</h3>
+      {!hideTitle && <h3 className={styles.title}>Arbejdstidskontrol</h3>}
       {result.violations.length > 0 && (
         <div className={styles.section}>
           {result.violations.map((v, i) => (

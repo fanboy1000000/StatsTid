@@ -1,6 +1,7 @@
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Security;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Config;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Exceptions;
@@ -24,37 +25,11 @@ public static class BalanceEndpoints
     /// <summary>The "MONTHLY_ACCRUAL" accrual_model string (ADR-030).</summary>
     private const string MonthlyAccrualModel = "MONTHLY_ACCRUAL";
 
-    /// <summary>
-    /// S60 / TASK-6005 — Backend-local mirror of the rule engine's pure
-    /// <c>AccrualCalculator.EarnedToDate</c> (ADR-030). The authoritative math lives in the
-    /// Rule Engine, but PAT-005 forbids the Backend from referencing the RuleEngine assembly
-    /// directly (the boundary is HTTP); the Balance summary is a pure read with no
-    /// validate-entitlement call, so the earned-to-date figure is computed locally from the
-    /// SAME formula. MUST stay byte-identical to <c>AccrualCalculator.EarnedToDate</c>: exact
-    /// fractional days, accrual begins at <c>max(ferieaarStart, employmentStart)</c>, months
-    /// elapsed = inclusive whole month-boundaries crossed, clamped to [0, 12].
-    /// </summary>
-    private static decimal EarnedToDate(
-        decimal annualQuota,
-        decimal partTimeFraction,
-        DateOnly ferieaarStart,
-        DateOnly? employmentStart,
-        DateOnly asOf)
-    {
-        var accrualStart = ferieaarStart;
-        if (employmentStart.HasValue && employmentStart.Value > accrualStart)
-            accrualStart = employmentStart.Value;
-
-        var monthsElapsed = MonthIndex(asOf) - MonthIndex(accrualStart) + 1;
-        if (monthsElapsed <= 0)
-            return 0m;
-        if (monthsElapsed > 12)
-            monthsElapsed = 12;
-
-        return annualQuota * partTimeFraction * monthsElapsed / 12m;
-    }
-
-    private static int MonthIndex(DateOnly date) => date.Year * 12 + date.Month;
+    // S61 / TASK-6101 — the Backend-local EarnedToDate/MonthIndex mirror was removed. The pure
+    // earned-to-date math is now the single shared copy in StatsTid.SharedKernel.Calendar.AccrualMath
+    // (delegated to via the `using` above). PAT-005 is unaffected: AccrualMath is a dependency-free
+    // SharedKernel leaf both the Backend and the Rule Engine already reference, NOT the RuleEngine
+    // assembly (the validate-entitlement boundary stays HTTP-only).
 
     public static WebApplication MapBalanceEndpoints(this WebApplication app)
     {
@@ -277,7 +252,7 @@ public static class BalanceEndpoints
                 decimal earned;
                 if (isMonthlyAccrual)
                 {
-                    earned = EarnedToDate(
+                    earned = AccrualMath.EarnedToDate(
                         ec.AnnualQuota, partTimeFraction, entitlementYearStart,
                         user.EmploymentStartDate, monthEnd);
                 }
@@ -345,6 +320,206 @@ public static class BalanceEndpoints
                     remaining = overtimeBalance.Remaining,
                     compensationModel = overtimeBalance.CompensationModel
                 } : null
+            });
+        }).RequireAuthorization("EmployeeOrAbove");
+
+        // ── GET /api/balance/{employeeId}/series — per-month earned-to-date accrual curve ──
+        //
+        // S61 / TASK-6102 (ADR-030 compute-on-read). Returns the per-month optjent
+        // (earned-to-date) accrual curve for the MONTHLY_ACCRUAL entitlements ONLY
+        // (VACATION + SPECIAL_HOLIDAY) across the relevant ferieår, so the FE can plot the
+        // accrual ramp and highlight "now". Read-only, deterministic, emits NO events.
+        //
+        // Invariants pinned by Step-0b review + the S61 Step-7a fix (see CLAUDE.md priorities
+        // #2/#4 — determinism; #4 — version/curve correctness):
+        //   • MONTHLY_ACCRUAL-only: a type is included iff its resolved config
+        //     AccrualModel == "MONTHLY_ACCRUAL". No IMMEDIATE series.
+        //   • Server-derives the ferieår per type from the live config's ResetMonth, EXACTLY as
+        //     /summary does — no client-supplied ferieår is trusted.
+        //   • Full-ferieår curve: 12 points, month-END as-of for each, constructed from the
+        //     derived ferieår months via DateOnly.AddMonths — NEVER DateTime.Today/Now (no
+        //     wall-clock; pure/deterministic so the curve replays byte-stably).
+        //   • SINGLE-fraction (current-terms) projection — Step-7a fix: the part-time fraction is
+        //     resolved ONCE, at the REQUESTED month's month-end (the same anchor + graceful
+        //     try/catch ?? 1.0m as /summary), and that ONE fraction is applied to ALL 12 points.
+        //     AccrualMath.EarnedToDate is a SINGLE-fraction model
+        //     (annualQuota × fraction × monthsElapsed / 12); applying each point's OWN month-end
+        //     fraction to ALL its elapsed months made the curve NON-MONOTONIC when the fraction
+        //     changed mid-ferieår (e.g. full-time Sep–Dec then 0.5 from Jan: Dec=8.33 then
+        //     Jan=5.21 — a DROP). Accrued vacation must never decrease, so the series projects the
+        //     selected month's terms across the whole ferieår ⇒ a MONOTONIC non-decreasing curve.
+        //   • Consistency over precision (why NOT piecewise): a true month-by-month piecewise
+        //     curve (each month at its own fraction) would be more precise but would (a) DIVERGE
+        //     from /summary, which uses the ONE fraction resolved at the requested month-end, and
+        //     (b) contradict the Skema quota guard (SkemaEndpoints), which enforces bookable
+        //     vacation with the SAME single-fraction AccrualMath.EarnedToDate. Changing the accrual
+        //     model is a rule-engine/payroll change, OUT of this endpoint's read-only scope.
+        //     Per-month fraction history (piecewise accrual) is therefore intentionally out of
+        //     scope here.
+        //   • Profile-less / fail-loud graceful: a missing dated profile (or the resolver's
+        //     EmployeeProfileNotFoundException) ⇒ fraction 1.0m, so a profile-less employee still
+        //     renders (no 500, ADR-023 D3). Mid-ferieår hires still start the curve at 0 until the
+        //     accrual start (employmentStart handled by AccrualMath) — still monotonic.
+        //   • Reconciliation: the point whose (year, month) == the requested (year, month) is
+        //     byte-identical to /summary's `earned` for the same key (same as-of month-end +
+        //     same single dated fraction + same AccrualMath call + same Math.Round(.,2)).
+
+        app.MapGet("/api/balance/{employeeId}/series", async (
+            string employeeId,
+            int year,
+            int month,
+            UserRepository userRepo,
+            UserAgreementCodeRepository userAgreementCodeRepo,
+            EntitlementConfigRepository entitlementConfigRepo,
+            OrgScopeValidator scopeValidator,
+            IEmploymentProfileResolver profileResolver,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            var actor = context.GetActorContext();
+
+            // ── Auth — both branches copied from /summary ──
+            // Employee can only access own data (employee-self equality).
+            if (actor.ActorRole == StatsTidRoles.Employee && employeeId != actor.ActorId)
+                return Results.Json(new { error = "Access denied", reason = "Employee can only access own data" }, statusCode: 403);
+
+            // Non-employee actors go through OrgScope (SECURITY.md / OrgScopeValidator).
+            if (actor.ActorRole != StatsTidRoles.Employee)
+            {
+                var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, ct);
+                if (!allowed)
+                    return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+            }
+
+            // Validate month/year (identical shape to /summary).
+            if (month < 1 || month > 12 || year < 2000 || year > 2100)
+                return Results.BadRequest(new { error = "Invalid year or month" });
+
+            // Get employee profile.
+            var user = await userRepo.GetByIdAsync(employeeId, ct);
+            if (user is null)
+                return Results.NotFound(new { error = "Employee not found" });
+
+            // Dated agreement_code at the requested month-start, with the same ADR-023 D3
+            // graceful fallback to the live cache as /summary.
+            var pastEffectiveAgreementCode = await userAgreementCodeRepo.GetByUserIdAtAsync(
+                employeeId, new DateOnly(year, month, 1), ct);
+            var agreementCode = pastEffectiveAgreementCode ?? user.AgreementCode;
+
+            // Live (open) entitlement configs for this agreement/OK pair — EffectiveTo IS NULL
+            // filter is load-bearing (post-supersession the bulk read holds 2 rows per natural
+            // key; same rationale as /summary). ResetMonth is frozen per natural key, so each
+            // live row's ResetMonth safely drives year-start derivation.
+            var liveConfigs = (await entitlementConfigRepo.GetByAgreementAsync(
+                agreementCode, user.OkVersion, ct))
+                .Where(c => c.EffectiveTo is null);
+
+            // ── SINGLE-fraction resolution (S61 Step-7a fix) ──
+            // Resolve the dated part-time fraction ONCE, at the REQUESTED month's month-END — the
+            // EXACT same anchor + graceful try/catch ?? 1.0m that /summary uses (copied precisely
+            // so the selected point reconciles byte-for-byte). This ONE fraction is then applied to
+            // ALL 12 curve points below: AccrualMath.EarnedToDate is single-fraction, so resolving
+            // a per-point fraction would make the curve non-monotonic when the fraction changes
+            // mid-ferieår. The series therefore projects the selected month's terms across the
+            // whole ferieår — consistent with /summary + the Skema quota guard, and monotonic.
+            var daysInMonth = DateTime.DaysInMonth(year, month);
+            var requestedMonthEnd = new DateOnly(year, month, daysInMonth);
+
+            EmploymentProfile? datedProfile;
+            try
+            {
+                datedProfile = await profileResolver.GetByEmployeeIdAtAsync(
+                    employeeId, requestedMonthEnd, ct);
+            }
+            catch (EmployeeProfileNotFoundException)
+            {
+                datedProfile = null;
+            }
+            var partTimeFraction = datedProfile?.PartTimeFraction ?? 1.0m;
+
+            var series = new List<object>();
+
+            foreach (var live in liveConfigs)
+            {
+                // Derive the entitlement year EXACTLY as /summary does (from the requested
+                // (year, month) relative to the immutable ResetMonth). VACATION/SPECIAL_HOLIDAY
+                // reset in September, so e.g. a request for 2025-10 resolves to ferieår 2025.
+                int entitlementYear;
+                if (live.ResetMonth == 1)
+                {
+                    entitlementYear = year;
+                }
+                else
+                {
+                    entitlementYear = month >= live.ResetMonth ? year : year - 1;
+                }
+
+                var ferieaarStart = new DateOnly(entitlementYear, live.ResetMonth, 1);
+
+                // Dated config effective at the ferieår start defines this year's annual_quota.
+                // Fall back to the live row if no row was effective at year-start (e.g. this OK
+                // version came into existence mid-year) — same fallback as /summary.
+                var ec = await entitlementConfigRepo.GetByTypeAtAsync(
+                    live.EntitlementType, agreementCode, user.OkVersion, ferieaarStart, ct)
+                    ?? live;
+
+                // MONTHLY_ACCRUAL-only: skip IMMEDIATE types entirely — no series for them.
+                if (!string.Equals(ec.AccrualModel, MonthlyAccrualModel, StringComparison.Ordinal))
+                    continue;
+
+                // ── Full-ferieår curve: one point per month, month 0..11 from ferieaarStart ──
+                // The as-of for each point is THAT month's month-END, derived purely from the
+                // ferieår via DateOnly.AddMonths — NEVER wall-clock. The part-time fraction is the
+                // SINGLE fraction resolved once at the requested month-end (above), applied to
+                // every point — NOT a per-point fraction (that made the curve non-monotonic; see
+                // the endpoint header). annualQuota comes from the dated config effective at
+                // ferieaarStart (constant across the curve). employmentStart is still threaded
+                // through AccrualMath, so a mid-ferieår hire's curve starts at 0 until the accrual
+                // start and only ever rises — the curve is monotonic non-decreasing.
+                var points = new List<object>();
+                for (var i = 0; i < 12; i++)
+                {
+                    var monthFirst = ferieaarStart.AddMonths(i);
+                    var pointMonthEnd = new DateOnly(
+                        monthFirst.Year, monthFirst.Month,
+                        DateTime.DaysInMonth(monthFirst.Year, monthFirst.Month));
+
+                    var earned = AccrualMath.EarnedToDate(
+                        ec.AnnualQuota, partTimeFraction, ferieaarStart,
+                        user.EmploymentStartDate, pointMonthEnd);
+
+                    // The point matching the requested (year, month) is "now" — its earned value
+                    // is byte-identical to /summary's earned for the same key (same as-of, same
+                    // single dated fraction, same AccrualMath call, same Math.Round(.,2)).
+                    var isSelected = monthFirst.Year == year && monthFirst.Month == month;
+
+                    points.Add(new
+                    {
+                        monthEnd = pointMonthEnd.ToString("yyyy-MM-dd"),
+                        earned = Math.Round(earned, 2),
+                        isSelected
+                    });
+                }
+
+                DanishLabels.TryGetValue(ec.EntitlementType, out var label);
+
+                series.Add(new
+                {
+                    type = ec.EntitlementType,
+                    label = label ?? ec.EntitlementType,
+                    annualQuota = ec.AnnualQuota,
+                    entitlementYear,
+                    ferieaarStart = ferieaarStart.ToString("yyyy-MM-dd"),
+                    points
+                });
+            }
+
+            return Results.Ok(new
+            {
+                employeeId,
+                year,
+                month,
+                series
             });
         }).RequireAuthorization("EmployeeOrAbove");
 

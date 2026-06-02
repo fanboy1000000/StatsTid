@@ -1,23 +1,23 @@
-using StatsTid.SharedKernel.Calendar;
-
-namespace StatsTid.RuleEngine.Api.Rules;
+namespace StatsTid.SharedKernel.Calendar;
 
 /// <summary>
-/// Pure rule-engine math for Danish monthly vacation accrual (Ferieloven
-/// <em>samtidighedsferie</em>, ADR-030 — activates the ADR-021 D6 MONTHLY_ACCRUAL model).
+/// Pure calendar math for Danish monthly vacation accrual (Ferieloven
+/// <em>samtidighedsferie</em>, ADR-030 — the ADR-021 D6 MONTHLY_ACCRUAL model).
 ///
-/// Determinism (priority #2/#4): every input is passed explicitly — there is NO I/O,
+/// <para>Single source of truth (S61 / TASK-6101): the earned-to-date formula was previously
+/// triplicated — the authoritative copy in the Rule Engine's <c>AccrualCalculator</c> plus
+/// byte-identical Backend-local mirrors in the Balance and Skema endpoints (the Backend may not
+/// reference the RuleEngine assembly — PAT-005 makes that boundary HTTP-only). A pure calendar
+/// constant with no dependencies is the textbook SharedKernel citizen (same rationale as
+/// <see cref="OkVersionResolver"/>), so every caller now delegates here and the math exists in
+/// exactly one place.</para>
+///
+/// <para>Determinism (priority #2/#4): every input is passed explicitly — there is NO I/O,
 /// NO wall-clock (<c>DateTime.Now</c>/<c>DateOnly.FromDateTime(DateTime.Today)</c>), and
 /// NO mutable state. The result is a pure function of its arguments, so replay/re-derivation
-/// is stable by construction (ADR-002).
-///
-/// <para>S61 / TASK-6101: the formula body was consolidated into
-/// <see cref="AccrualMath"/> (SharedKernel) — the single shared home both the Rule Engine and
-/// the Backend (which may not reference the RuleEngine assembly — PAT-005) delegate to. This
-/// type preserves its public surface so existing rule-engine call-sites are untouched; it is now
-/// a thin forwarder.</para>
+/// is stable by construction (ADR-002).</para>
 /// </summary>
-public static class AccrualCalculator
+public static class AccrualMath
 {
     /// <summary>
     /// Gross vacation days earned-to-date (<em>optjent</em>) within the current ferieår.
@@ -54,6 +54,30 @@ public static class AccrualCalculator
         DateOnly ferieaarStart,
         DateOnly? employmentStart,
         DateOnly asOf)
-        => AccrualMath.EarnedToDate(
-            annualQuota, partTimeFraction, ferieaarStart, employmentStart, asOf);
+    {
+        // Accrual begins at the later of ferieår start and employment start.
+        var accrualStart = ferieaarStart;
+        if (employmentStart.HasValue && employmentStart.Value > accrualStart)
+        {
+            accrualStart = employmentStart.Value;
+        }
+
+        // Whole accrual months crossed, inclusive of the start month. Before the accrual
+        // start (asOf earlier than the start month) ⇒ 0; clamped to a full ferieår (12).
+        var monthsElapsed = MonthIndex(asOf) - MonthIndex(accrualStart) + 1;
+        if (monthsElapsed <= 0)
+        {
+            return 0m;
+        }
+        if (monthsElapsed > 12)
+        {
+            monthsElapsed = 12;
+        }
+
+        // Exact fractional — no rounding here (round only for display, elsewhere).
+        return annualQuota * partTimeFraction * monthsElapsed / 12m;
+    }
+
+    /// <summary>Absolute month ordinal so month arithmetic crosses year boundaries cleanly.</summary>
+    private static int MonthIndex(DateOnly date) => date.Year * 12 + date.Month;
 }
