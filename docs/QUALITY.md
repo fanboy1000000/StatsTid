@@ -1,13 +1,15 @@
 # StatsTid Quality Grading
 
-<!-- anchor-sprint: 57 -->
+<!-- anchor-sprint: 62 -->
 > **Governance**: Updated by the Orchestrator at sprint end or during entropy scan. See CLAUDE.md "Quality Grading" section for grade definitions.
 
 > **S57 (2026-05-31):** Frontend held at **B** but **pattern compliance improved materially** — the oes.dk re-skin completed the design-token system (defined ~14 previously-phantom tokens) and migrated all ~124 hardcoded hex colors to tokens, so ADR-011's "no hardcoded colors" mandate is now actually enforced (residual hardcoded-hex = 0). E2E/visual-regression remains the gap keeping it below A. New default palette is oes-derived + WCAG-AA (ADR-011 amended).
 
+> **S58–S62 refresh (2026-06-03):** No grade changes. S58–S61 (per-day norm surfacing; child-sick/senior eligibility, ADR-029; MONTHLY_ACCRUAL activation, ADR-030; the Oversigt read-only dashboard + `AccrualMath` consolidation) and **S62** (piecewise per-month accrual, ADR-030 **D8**) all landed within established domains. **Rule Engine** holds **A++** — `AccrualMath.EarnedToDatePiecewise` is a pure SharedKernel function (no I/O/wall-clock), single-source-guarded, with the windowed-clamp + monotonicity + replay-determinism unit-proven (653 unit, +24). **Infrastructure** holds **B+** (new `GetFractionHistoryAsync` single-table read). **Backend API** holds **A** (3-site cutover; fail-closed + contracts preserved). The S62 integration tests are Docker-gated and **CI-pending** (Docker unavailable at close) — the one open verification item.
+
 ## Domain Quality Matrix
 
-Last updated: **Sprint 56 (2026-05-31)**. The per-cell detail in the matrix below reflects the **S35** assessment (most domains were not materially changed by the S36–S56 work — Rule Engine, SharedKernel Models/Segmentation, Payroll all held grade). The **"S36–S56 Refresh"** section immediately after the matrix records every grade change, the new domains, and corrected counts since S35. Where a grade changed, the **Grade** column below shows the current value with a `→` note.
+Last updated: **Sprint 62 (2026-06-03)**. The per-cell detail in the matrix below reflects the **S35** assessment (most domains were not materially changed by the S36–S56 work — Rule Engine, SharedKernel Models/Segmentation, Payroll all held grade). The **"S36–S56 Refresh"** section immediately after the matrix records every grade change, the new domains, and corrected counts since S35. Where a grade changed, the **Grade** column below shows the current value with a `→` note.
 
 | Domain | Test Coverage | Pattern Compliance | Documentation | Tech Debt | Grade | Trend |
 |--------|-------------|-------------------|---------------|-----------|-------|-------|

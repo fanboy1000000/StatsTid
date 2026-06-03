@@ -843,23 +843,48 @@ public static class SkemaEndpoints
                     decimal guardCap;
                     if (isMonthlyAccrual)
                     {
+                        // ── S62 / TASK-6203 — ADR-030 D8 piecewise accrual cutover ──
+                        // Fetch the dated part-time-fraction history ONCE for the whole ferieår
+                        // (single query, no per-month N+1). EarnedToDatePiecewise sums each elapsed
+                        // accrual month at the fraction in effect THAT month — the legally precise
+                        // (and monotonic) accruable cap when an employee's fraction changes
+                        // mid-ferieår.
+                        var fractionHistory = await profileResolver.GetFractionHistoryAsync(
+                            employeeId, entitlementYearStart, entitlementYearStart.AddYears(1), ct);
+
+                        // Fail-closed if the ferieår window has NO fraction periods (belt-and-
+                        // suspenders on the anchor profile-missing guard above): the Skema seam
+                        // must never compute an accrual cap against a fabricated full-time fraction
+                        // (ADR-023 D3 — Skema fail-closes; the Balance/series seam stays graceful).
+                        // Same 422 shape as the missing-profile guard.
+                        if (fractionHistory.Count == 0)
+                            return Results.Json(new
+                            {
+                                error = "employment_profile_missing",
+                                absenceType = entitlementType,
+                                date = firstAbsenceDate,
+                                message = $"Kan ikke validere ferie/feriefridage for {firstAbsenceDate:dd-MM-yyyy}: ansættelsesprofil mangler."
+                            }, statusCode: 422);
+
                         decimal accruableCap;
                         if (string.Equals(entitlementType, "VACATION", StringComparison.Ordinal))
                         {
-                            // earned + stillAccruable == accruable over the whole ferieår == EarnedToDate
-                            // at the ferieår's last day.
+                            // earned + stillAccruable == accruable over the whole ferieår ==
+                            // EarnedToDatePiecewise at the ferieår's last day (forskud over the
+                            // whole ferieår; manager approval IS the §7 forskudsferie agreement).
                             var ferieaarEnd = entitlementYearStart.AddYears(1).AddDays(-1);
-                            accruableCap = AccrualMath.EarnedToDate(
-                                config.AnnualQuota, partTimeFraction, entitlementYearStart,
-                                user.EmploymentStartDate, ferieaarEnd);
+                            accruableCap = AccrualMath.EarnedToDatePiecewise(
+                                config.AnnualQuota, entitlementYearStart,
+                                user.EmploymentStartDate, ferieaarEnd, fractionHistory);
                         }
                         else
                         {
-                            // SPECIAL_HOLIDAY (and any other MONTHLY_ACCRUAL type) — no forskud:
-                            // capped at earned-to-date as-of the absence date.
-                            accruableCap = AccrualMath.EarnedToDate(
-                                config.AnnualQuota, partTimeFraction, entitlementYearStart,
-                                user.EmploymentStartDate, firstAbsenceDate);
+                            // SPECIAL_HOLIDAY (and any other MONTHLY_ACCRUAL type) — no forskud
+                            // (ferieaftale §13 stk.4): capped at earned-to-date AS-OF the absence
+                            // date (asOf stays firstAbsenceDate, NOT the ferieår end).
+                            accruableCap = AccrualMath.EarnedToDatePiecewise(
+                                config.AnnualQuota, entitlementYearStart,
+                                user.EmploymentStartDate, firstAbsenceDate, fractionHistory);
                         }
 
                         guardCap = accruableCap;                       // carryover-EXCLUDED

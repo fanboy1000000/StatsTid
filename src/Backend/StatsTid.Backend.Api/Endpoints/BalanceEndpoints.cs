@@ -193,6 +193,18 @@ public static class BalanceEndpoints
 
             // S60 / TASK-6005 — partTimeFraction is now sourced from the dated employment profile
             // at month-end (resolved above, graceful ?? 1.0m), replacing the prior hard-coded 1.0.
+            // It is retained for the ProRateByPartTime totalQuota below; the earned-to-date figure
+            // is now piecewise (see below) and no longer uses this single fraction.
+
+            // S62 / TASK-6203 — ADR-030 D8 piecewise accrual. Fetch the dated part-time-fraction
+            // history ONCE per request (employee-level, no N+1), windowing any ferieår that could
+            // contain the requested month-end. EarnedToDatePiecewise sums each elapsed accrual
+            // month at the fraction in effect that month. Balance is the graceful seam (ADR-023
+            // D3): an empty history is fine — EarnedToDatePiecewise falls back to a full-time 1.0
+            // across the window, matching the existing `?? 1.0m` Balance polarity. NEVER
+            // fail-closed here (that is the Skema seam's job).
+            var fractionHistory = await profileResolver.GetFractionHistoryAsync(
+                employeeId, monthEnd.AddYears(-1), monthEnd.AddDays(1), ct);
 
             var entitlements = new List<object>();
             decimal? vacationEntitlementFromConfig = null;
@@ -237,24 +249,27 @@ public static class BalanceEndpoints
                 var planned = balance?.Planned ?? 0m;
                 var carryoverIn = balance?.CarryoverIn ?? 0m;
 
-                // ── S60 / TASK-6005 — earned-to-date for MONTHLY_ACCRUAL types ──
-                // VACATION + SPECIAL_HOLIDAY now accrue monthly (ADR-030): the AVAILABLE ("rest")
-                // figure must reflect what is EARNED-to-date (optjent), not the full annual quota
-                // the moment the ferieår starts. asOf = the requested MONTH-END (the Balance seam
-                // anchor — the same anchor the Skema validation uses at firstAbsenceDate so the two
-                // seams agree for the same as-of date). ferieaarStart = the entitlement-year start
+                // ── S60 / TASK-6005 · S62 / TASK-6203 — earned-to-date for MONTHLY_ACCRUAL types ──
+                // VACATION + SPECIAL_HOLIDAY accrue monthly (ADR-030): the AVAILABLE ("rest") figure
+                // reflects what is EARNED-to-date (optjent), not the full annual quota the moment the
+                // ferieår starts. S62 / ADR-030 D8 cutover: earned is now the CUMULATIVE PIECEWISE
+                // sum — each elapsed accrual month accrues at the part-time fraction in effect that
+                // month (fractionHistory fetched once above), so a mid-ferieår fraction change is
+                // priced correctly and the figure is monotonic. asOf = the requested MONTH-END (the
+                // Balance seam anchor — the same anchor the Skema validation uses so the two seams
+                // agree for the same as-of date). ferieaarStart = the entitlement-year start
                 // (reset_month). employmentStart = HR-managed User.EmploymentStartDate (null ⇒
-                // full-ferieår; never fail-closed, ADR-030). partTimeFraction = the dated month-end
-                // fraction resolved above. IMMEDIATE types keep their full quota as "earned".
+                // full-ferieår; never fail-closed, ADR-030). IMMEDIATE types keep their full quota
+                // as "earned".
                 var isMonthlyAccrual = string.Equals(
                     ec.AccrualModel, MonthlyAccrualModel, StringComparison.Ordinal);
 
                 decimal earned;
                 if (isMonthlyAccrual)
                 {
-                    earned = AccrualMath.EarnedToDate(
-                        ec.AnnualQuota, partTimeFraction, entitlementYearStart,
-                        user.EmploymentStartDate, monthEnd);
+                    earned = AccrualMath.EarnedToDatePiecewise(
+                        ec.AnnualQuota, entitlementYearStart,
+                        user.EmploymentStartDate, monthEnd, fractionHistory);
                 }
                 else
                 {
@@ -325,10 +340,10 @@ public static class BalanceEndpoints
 
         // ── GET /api/balance/{employeeId}/series — per-month earned-to-date accrual curve ──
         //
-        // S61 / TASK-6102 (ADR-030 compute-on-read). Returns the per-month optjent
-        // (earned-to-date) accrual curve for the MONTHLY_ACCRUAL entitlements ONLY
-        // (VACATION + SPECIAL_HOLIDAY) across the relevant ferieår, so the FE can plot the
-        // accrual ramp and highlight "now". Read-only, deterministic, emits NO events.
+        // S61 / TASK-6102 (ADR-030 compute-on-read) · S62 / TASK-6203 (ADR-030 D8 piecewise).
+        // Returns the per-month optjent (earned-to-date) accrual curve for the MONTHLY_ACCRUAL
+        // entitlements ONLY (VACATION + SPECIAL_HOLIDAY) across the relevant ferieår, so the FE
+        // can plot the accrual ramp and highlight "now". Read-only, deterministic, emits NO events.
         //
         // Invariants pinned by Step-0b review + the S61 Step-7a fix (see CLAUDE.md priorities
         // #2/#4 — determinism; #4 — version/curve correctness):
@@ -339,30 +354,24 @@ public static class BalanceEndpoints
         //   • Full-ferieår curve: 12 points, month-END as-of for each, constructed from the
         //     derived ferieår months via DateOnly.AddMonths — NEVER DateTime.Today/Now (no
         //     wall-clock; pure/deterministic so the curve replays byte-stably).
-        //   • SINGLE-fraction (current-terms) projection — Step-7a fix: the part-time fraction is
-        //     resolved ONCE, at the REQUESTED month's month-end (the same anchor + graceful
-        //     try/catch ?? 1.0m as /summary), and that ONE fraction is applied to ALL 12 points.
-        //     AccrualMath.EarnedToDate is a SINGLE-fraction model
-        //     (annualQuota × fraction × monthsElapsed / 12); applying each point's OWN month-end
-        //     fraction to ALL its elapsed months made the curve NON-MONOTONIC when the fraction
-        //     changed mid-ferieår (e.g. full-time Sep–Dec then 0.5 from Jan: Dec=8.33 then
-        //     Jan=5.21 — a DROP). Accrued vacation must never decrease, so the series projects the
-        //     selected month's terms across the whole ferieår ⇒ a MONOTONIC non-decreasing curve.
-        //   • Consistency over precision (why NOT piecewise): a true month-by-month piecewise
-        //     curve (each month at its own fraction) would be more precise but would (a) DIVERGE
-        //     from /summary, which uses the ONE fraction resolved at the requested month-end, and
-        //     (b) contradict the Skema quota guard (SkemaEndpoints), which enforces bookable
-        //     vacation with the SAME single-fraction AccrualMath.EarnedToDate. Changing the accrual
-        //     model is a rule-engine/payroll change, OUT of this endpoint's read-only scope.
-        //     Per-month fraction history (piecewise accrual) is therefore intentionally out of
-        //     scope here.
-        //   • Profile-less / fail-loud graceful: a missing dated profile (or the resolver's
-        //     EmployeeProfileNotFoundException) ⇒ fraction 1.0m, so a profile-less employee still
-        //     renders (no 500, ADR-023 D3). Mid-ferieår hires still start the curve at 0 until the
-        //     accrual start (employmentStart handled by AccrualMath) — still monotonic.
+        //   • TRUE cumulative piecewise (S62 / ADR-030 D8): each point is
+        //     AccrualMath.EarnedToDatePiecewise over the fraction history fetched once per type
+        //     for the ferieår. Each successive month adds a NON-NEGATIVE increment (annualQuota ×
+        //     that month's fraction / 12), so the curve is MONOTONIC non-decreasing BY
+        //     CONSTRUCTION — no single-fraction "current-terms" projection is needed (the S61
+        //     workaround is retired). A mid-ferieår fraction change is now priced at each month's
+        //     own fraction, which is the legally precise accrual.
+        //   • Graceful empty-history (ADR-023 D3): a missing/empty fraction history ⇒ full-time
+        //     1.0 across the window (EarnedToDatePiecewise's empty-history fallback), so a
+        //     profile-less employee still renders (no 500). Mid-ferieår hires still start the curve
+        //     at 0 until the accrual start (employmentStart handled by AccrualMath) — still
+        //     monotonic.
         //   • Reconciliation: the point whose (year, month) == the requested (year, month) is
-        //     byte-identical to /summary's `earned` for the same key (same as-of month-end +
-        //     same single dated fraction + same AccrualMath call + same Math.Round(.,2)).
+        //     byte-identical to /summary's `earned` for the same key. Both call
+        //     EarnedToDatePiecewise with the same (annualQuota, ferieår-start, employmentStart,
+        //     asOf = that month-end); same-day-only profile edits mean no future periods exist, so
+        //     the periods covering [year-start, that month-end] are identical in both fetches, and
+        //     both apply the same Math.Round(.,2).
 
         app.MapGet("/api/balance/{employeeId}/series", async (
             string employeeId,
@@ -414,29 +423,6 @@ public static class BalanceEndpoints
                 agreementCode, user.OkVersion, ct))
                 .Where(c => c.EffectiveTo is null);
 
-            // ── SINGLE-fraction resolution (S61 Step-7a fix) ──
-            // Resolve the dated part-time fraction ONCE, at the REQUESTED month's month-END — the
-            // EXACT same anchor + graceful try/catch ?? 1.0m that /summary uses (copied precisely
-            // so the selected point reconciles byte-for-byte). This ONE fraction is then applied to
-            // ALL 12 curve points below: AccrualMath.EarnedToDate is single-fraction, so resolving
-            // a per-point fraction would make the curve non-monotonic when the fraction changes
-            // mid-ferieår. The series therefore projects the selected month's terms across the
-            // whole ferieår — consistent with /summary + the Skema quota guard, and monotonic.
-            var daysInMonth = DateTime.DaysInMonth(year, month);
-            var requestedMonthEnd = new DateOnly(year, month, daysInMonth);
-
-            EmploymentProfile? datedProfile;
-            try
-            {
-                datedProfile = await profileResolver.GetByEmployeeIdAtAsync(
-                    employeeId, requestedMonthEnd, ct);
-            }
-            catch (EmployeeProfileNotFoundException)
-            {
-                datedProfile = null;
-            }
-            var partTimeFraction = datedProfile?.PartTimeFraction ?? 1.0m;
-
             var series = new List<object>();
 
             foreach (var live in liveConfigs)
@@ -467,15 +453,23 @@ public static class BalanceEndpoints
                 if (!string.Equals(ec.AccrualModel, MonthlyAccrualModel, StringComparison.Ordinal))
                     continue;
 
+                // S62 / TASK-6203 — fetch the dated part-time-fraction history ONCE per
+                // MONTHLY_ACCRUAL type for this ferieår (no N+1 across the 12 points). Window =
+                // the whole ferieår [start, start+1y). Graceful empty-history (ADR-023 D3):
+                // EarnedToDatePiecewise treats an empty list as full-time 1.0 across the window.
+                var fractionHistory = await profileResolver.GetFractionHistoryAsync(
+                    employeeId, ferieaarStart, ferieaarStart.AddYears(1), ct);
+
                 // ── Full-ferieår curve: one point per month, month 0..11 from ferieaarStart ──
                 // The as-of for each point is THAT month's month-END, derived purely from the
-                // ferieår via DateOnly.AddMonths — NEVER wall-clock. The part-time fraction is the
-                // SINGLE fraction resolved once at the requested month-end (above), applied to
-                // every point — NOT a per-point fraction (that made the curve non-monotonic; see
-                // the endpoint header). annualQuota comes from the dated config effective at
-                // ferieaarStart (constant across the curve). employmentStart is still threaded
-                // through AccrualMath, so a mid-ferieår hire's curve starts at 0 until the accrual
-                // start and only ever rises — the curve is monotonic non-decreasing.
+                // ferieår via DateOnly.AddMonths — NEVER wall-clock. earned is the TRUE cumulative
+                // piecewise sum (S62 / ADR-030 D8): each elapsed accrual month accrues at the
+                // fraction in effect that month (from fractionHistory). Each successive month adds
+                // a non-negative increment, so the curve is monotonic non-decreasing BY
+                // CONSTRUCTION — no single-fraction projection. annualQuota comes from the dated
+                // config effective at ferieaarStart (constant across the curve). employmentStart is
+                // threaded through AccrualMath, so a mid-ferieår hire's curve starts at 0 until the
+                // accrual start and only ever rises.
                 var points = new List<object>();
                 for (var i = 0; i < 12; i++)
                 {
@@ -484,13 +478,13 @@ public static class BalanceEndpoints
                         monthFirst.Year, monthFirst.Month,
                         DateTime.DaysInMonth(monthFirst.Year, monthFirst.Month));
 
-                    var earned = AccrualMath.EarnedToDate(
-                        ec.AnnualQuota, partTimeFraction, ferieaarStart,
-                        user.EmploymentStartDate, pointMonthEnd);
+                    var earned = AccrualMath.EarnedToDatePiecewise(
+                        ec.AnnualQuota, ferieaarStart,
+                        user.EmploymentStartDate, pointMonthEnd, fractionHistory);
 
                     // The point matching the requested (year, month) is "now" — its earned value
-                    // is byte-identical to /summary's earned for the same key (same as-of, same
-                    // single dated fraction, same AccrualMath call, same Math.Round(.,2)).
+                    // is byte-identical to /summary's earned for the same key (both call
+                    // EarnedToDatePiecewise with the same args + Math.Round(.,2); see header).
                     var isSelected = monthFirst.Year == year && monthFirst.Month == month;
 
                     points.Add(new

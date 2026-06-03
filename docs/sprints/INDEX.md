@@ -134,9 +134,14 @@
 | S55 | 3 | Backend API, Frontend (log reconstructed) | — |
 | S56 | 8 | Backend API, Infrastructure, Data Model, Frontend | ADR-028 |
 | S57 | 3 | Frontend (tokens + 25 files), Docs (ADR-011 amendment) | — (ADR-011 amended, not a new entry) |
+| S58 | 2 | Backend API, Infrastructure | — |
+| S59 | 10 | Data Model, Infrastructure, Backend API, Rule Engine, Frontend, Tests | ADR-029 |
+| S60 | 9 | Rule Engine, Data Model, Infrastructure, Backend API, Frontend, Tests | ADR-030 |
+| S61 | 6 | Backend API, SharedKernel (AccrualMath consolidation), Frontend, Tests | — (read-only consumer of ADR-030) |
+| S62 | 5 | Rule Engine, Data Model (→Infrastructure), Backend API, Tests, Orchestrator (docs) | ADR-030 **D8** (amendment) |
 | **Total (S1–S24)** | **228** | — | 30 entries |
-| **Total (S25–S57)** | **~333** \* | — | 10 entries (ADR-019…ADR-028) |
-| **Grand Total (S1–S57)** | **~561** \* | — | **40 KB entries on disk** |
+| **Total (S25–S62)** | **~365** \* | — | 12 entries (ADR-019…ADR-030) |
+| **Grand Total (S1–S62)** | **~593** \* | — | **42 KB entries on disk** |
 
 > \* **Task-count methodology (verified 2026-05-31):** S25–S56 counts are **authoritative** (number of `## Task Log` TASK entries) for sprints that kept a Task Log — e.g. S25=8, S30=14, S33=14, S48=15. They are **approximate** (declared count from the sprint narrative) for design-only / compressed-format sprints (most of S34–S47, S50–S54) and for S40 (whose tasks are recorded as a Phase Decomposition, not a Task Log). The grand total is therefore approximate. (A first Codex pass caught the S25 over-count of 11→8 and a 332-vs-331 subtotal slip; both fixed here along with S26/S29/S30/S31/S33/S48.)
 
@@ -209,6 +214,7 @@
 | S59 | 559 + 142 FE | + 13 new S59 Docker (entitlement eligibility) | 4 | Per-employee child-sick eligibility (opt-in, HR-set) + DOB-derived senior-day age gate (ADR-029); Step-7a 3 cycles (2 BLOCKER + 1 race, all fixed) |
 | S60 | 596 + 144 FE | + 7 new S60 Docker (monthly accrual) | 4 | Activate MONTHLY_ACCRUAL — real Ferieloven monthly vacation accrual for VACATION + SPECIAL_HOLIDAY (compute earned-to-date pure fn); per-type forskud cap (VACATION dynamic ferieår cap + manager-approval-as-§7-agreement; SPECIAL_HOLIDAY none per §13 stk.4); new HR `employment_start_date` for mid-year pro-ration (ADR-030, supersedes ADR-021 D6). Step-0b 2 cycles (1 BLOCKER) + Step-7a 3 cycles (1 BLOCKER legacy-DB activation + 2 W, all fixed) |
 | S61 | 629 + 164 FE | + 8 new S61 Docker (`BalanceSeriesTests`, CI-pending — Docker unavailable at close) | 4 | **Oversigt** read-only employee annual dashboard: optjent leave overview + balance cards (incl. overtime-saldo) + compliance + selected-month approval + accrual-curve trend; new read-only `GET /api/balance/{id}/series`; `EarnedToDate` consolidated to `SharedKernel/Calendar/AccrualMath` (single source — closes S60 follow-up #1). Step-0a 2 DRIFT fixed; Step-0b 2 cycles (0 BLOCKER); Step-7a 2 cycles (1 BLOCKER non-monotonic curve + 1 W duplicate heading, both fixed). Unit+FE verified; Docker-gated CI-pending. |
+| S62 | 653 + 164 FE | + ~5 new S62 Docker (`BalanceSeriesTests` rewrite/+2 + `SkemaPiecewiseAccrualTests` +3, CI-pending — Docker unavailable at close) | 4 | **Piecewise per-month vacation accrual** (ADR-030 **D8**): `earnedToDate` generalized to cumulative piecewise (each elapsed month at its dated fraction, month-START anchor, `quota × Σf / 12`); new one-query `GetFractionHistoryAsync`; `/summary` + `/series` + Skema quota-guard cutover. Byte-identical for constant-fraction employees (short-circuit + `NUMERIC(4,3)`); monotonic-by-construction (removed the S61 `/series` single-fraction workaround); replay-deterministic. Refinement 2 dual-lens cycles; Step-0b plan-review 2 cycles (1 BLOCKER agent-scope labels); per-task Reviewer on 6201+6203 (0 findings); Step-7a pending. Unit 653 (+24) verified; Docker-gated CI-pending. Doc-debt closed (S58→S62 backfill). |
 
 **Footnotes**:
 - `*` **S29**: headline 807, but SPRINT-30.md records the reported "158 Docker-gated passing" over-counted 18 pre-existing failures (true delta ~789 at `41b6e89`). 807 is the figure in the S29 Index row.

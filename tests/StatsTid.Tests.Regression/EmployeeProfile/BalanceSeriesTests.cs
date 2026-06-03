@@ -32,14 +32,19 @@ namespace StatsTid.Tests.Regression.EmployeeProfile;
 ///   NOT on the wall clock. A request for a past month produces a past ferieår.</description></item>
 ///   <item><description><b>Reconciliation</b> — the point whose month == the requested month is
 ///   byte-identical to <c>/summary</c>'s <c>earned</c> for the same key.</description></item>
-///   <item><description><b>Single-fraction (current-terms) projection — monotonic</b> (S61
-///   Step-7a fix) — the curve is MONOTONIC non-decreasing, and a mid-ferieår part-time
-///   supersession is projected with the SELECTED month's fraction across ALL 12 points (NOT a
-///   per-point fraction). A per-point fraction made the curve DROP when the fraction fell
-///   mid-ferieår (<c>AccrualMath.EarnedToDate</c> is single-fraction:
-///   <c>quota × fraction × monthsElapsed / 12</c>); accrued vacation must never decrease, and the
-///   series stays consistent with <c>/summary</c> + the Skema quota guard, which both use ONE
-///   fraction. Piecewise month-by-month accrual is intentionally out of scope.</description></item>
+///   <item><description><b>Cumulative-piecewise accrual — monotonic by construction</b> (S62 /
+///   TASK-6203 / ADR-030 <b>D8</b>, supersedes the S61 single-fraction projection) — each point's
+///   <c>earned</c> is the cumulative sum of every elapsed accrual month at the part-time fraction
+///   IN EFFECT that month (month-START anchor), <c>annualQuota × Σfraction / 12</c> via
+///   <c>AccrualMath.EarnedToDatePiecewise</c>. Two consequences are pinned: the curve is
+///   <b>selection-independent</b> — it uses each month's ACTUAL historical fraction, NOT the
+///   selected month's fraction, so requesting Oct 2025 vs Mar 2026 yields IDENTICAL 12 earned
+///   values (only <c>isSelected</c> moves); and it is <b>monotonic non-decreasing by
+///   construction</b> — each added month contributes a non-negative increment, so a mid-ferieår
+///   fraction drop makes the curve "bend" (smaller per-month increments) but it can NEVER decrease.
+///   For a constant-fraction employee every value is byte-identical to the legacy single-fraction
+///   model (short-circuit). The selected point still reconciles byte-for-byte with
+///   <c>/summary</c>'s <c>earned</c>.</description></item>
 ///   <item><description><b>Auth</b> — an Employee reading ANOTHER employee's series ⇒ 403; a
 ///   leader out of org scope ⇒ 403; in-scope ⇒ 200.</description></item>
 ///   <item><description><b>Profile-less graceful</b> — an employee with no employee_profiles row
@@ -199,33 +204,100 @@ public sealed class BalanceSeriesTests : IAsyncLifetime
         Assert.Equal(summaryVacationEarned, selectedEarned);
     }
 
+    /// <summary>
+    /// S62 / ADR-030 D8 — reconciliation UNDER a mid-ferieår fraction change (the existing
+    /// reconciliation test covers only the constant-fraction emp001). For the superseded employee
+    /// (full-time [.., 2026-01-01) then 0.5 [2026-01-01, NULL)) the <c>/series</c> SELECTED point
+    /// for a month AFTER the change (Mar 2026) is byte-identical to <c>/summary</c>'s VACATION
+    /// <c>earned</c> for the SAME <c>(employee, 2026, 3)</c> — both seams call the one
+    /// <c>EarnedToDatePiecewise</c> with the same dated fraction history, the same month-end as-of,
+    /// and the same display rounding, so the two surfaces cannot diverge after the piecewise swap.
+    /// </summary>
+    [Fact]
+    public async Task Series_SelectedPoint_UnderMidFerieaarChange_ReconcilesWith_SummaryEarned()
+    {
+        var employeeId = await CreateUserAsync(orgId: Emp001OrgId, agreementCode: "AC");
+        await SeedAgreementCodeAsync(employeeId, "AC", effectiveFrom: new DateOnly(1, 1, 1), effectiveTo: null);
+        await SeedProfileRowAsync(employeeId, fraction: 1.000m,
+            effectiveFrom: new DateOnly(1, 1, 1), effectiveTo: new DateOnly(2026, 1, 1), version: 1);
+        await SeedProfileRowAsync(employeeId, fraction: 0.500m,
+            effectiveFrom: new DateOnly(2026, 1, 1), effectiveTo: null, version: 2);
+
+        var client = EmployeeClient(employeeId);
+
+        // Mar 2026 month-end (2026-03-31) sits AFTER the fraction drop — the half-time months are
+        // already summed into the cumulative earned at that point.
+        var seriesBody = await GetSeriesAsync(client, employeeId, 2026, 3);
+        var selectedEarned = VacationPoints(seriesBody)
+            .Single(p => p.GetProperty("isSelected").GetBoolean())
+            .GetProperty("earned").GetDecimal();
+
+        var summaryVacationEarned = await GetSummaryVacationEarnedAsync(client, employeeId, 2026, 3);
+
+        Assert.Equal(summaryVacationEarned, selectedEarned);
+    }
+
+    /// <summary>
+    /// S62 / ADR-030 D8 — piecewise DETERMINISM / replay: a later fraction change must NOT
+    /// retroactively alter <c>earned</c> for an EARLIER as-of. For the superseded employee
+    /// (full-time [.., 2026-01-01) then 0.5 [2026-01-01, NULL)) the selected point for Dec 2025
+    /// (month-end 2025-12-31, fully inside the full-time window) is the full-time cumulative value
+    /// — Sep..Dec at 1.0 = 4 accrual months — regardless of the later 0.5 supersession.
+    /// <c>earned(Dec 2025) == Math.Round(25 × 4/12, 2)</c>. (The Jan→Aug 0.5 months are AFTER this
+    /// as-of, so they are outside the windowed sum and cannot price the past down.)
+    /// </summary>
+    [Fact]
+    public async Task Series_PastAsOf_UnaffectedByLaterFractionChange_DeterministicReplay()
+    {
+        var employeeId = await CreateUserAsync(orgId: Emp001OrgId, agreementCode: "AC");
+        await SeedAgreementCodeAsync(employeeId, "AC", effectiveFrom: new DateOnly(1, 1, 1), effectiveTo: null);
+        await SeedProfileRowAsync(employeeId, fraction: 1.000m,
+            effectiveFrom: new DateOnly(1, 1, 1), effectiveTo: new DateOnly(2026, 1, 1), version: 1);
+        await SeedProfileRowAsync(employeeId, fraction: 0.500m,
+            effectiveFrom: new DateOnly(2026, 1, 1), effectiveTo: null, version: 2);
+
+        var client = EmployeeClient(employeeId);
+
+        // Dec 2025 → ferieår 2025; selected month-end 2025-12-31 is month 4 (Sep,Oct,Nov,Dec) at 1.0.
+        var seriesBody = await GetSeriesAsync(client, employeeId, 2025, 12);
+        var decEarned = VacationPoints(seriesBody)
+            .Single(p => p.GetProperty("isSelected").GetBoolean())
+            .GetProperty("earned").GetDecimal();
+
+        // Full-time cumulative through Dec (4 months) — the later 0.5 does NOT discount the past.
+        Assert.Equal(Math.Round(25m * 4 / 12m, 2), decEarned);
+    }
+
     // ════════════════════════════════════════════════════════════════════════
-    // Single-fraction (current-terms) projection — monotonic; selected month's
-    // fraction drives the WHOLE curve (S61 Step-7a fix; was the per-point "bend").
+    // Cumulative-piecewise accrual (S62 / ADR-030 D8) — per-month historical
+    // fractions, selection-INDEPENDENT, monotonic-by-construction with a boundary
+    // bend (supersedes the S61 single-fraction-of-the-selected-month projection).
     // ════════════════════════════════════════════════════════════════════════
 
     /// <summary>
     /// Seed a fresh employee with a DATED part-time supersession mid-ferieår: full-time
-    /// (fraction 1.0) for [ferieår start, 1 Jan 2026), then half-time (0.5) from 1 Jan 2026. The
-    /// endpoint resolves the part-time fraction ONCE — at the REQUESTED month's month-end — and
-    /// projects THAT single fraction across all 12 points (consistent with <c>/summary</c> + the
-    /// Skema quota guard, both single-fraction). This is the S61 Step-7a fix: a per-point fraction
-    /// made the curve NON-MONOTONIC (it DROPPED at the boundary where the fraction fell, since
-    /// <c>AccrualMath.EarnedToDate</c> is single-fraction and smears each point's month-end
-    /// fraction across all of that point's elapsed months). Accrued vacation must never decrease.
+    /// (fraction 1.0) for [ferieår start, 1 Jan 2026), then half-time (0.5) from 1 Jan 2026.
+    /// Under cumulative-piecewise accrual (S62 / ADR-030 <b>D8</b>, which SUPERSEDES the S61
+    /// single-fraction-of-the-selected-month projection) each point's <c>earned</c> is the
+    /// cumulative sum of every elapsed accrual month at the fraction IN EFFECT that month
+    /// (<c>AccrualMath.EarnedToDatePiecewise</c>: <c>annualQuota × Σfraction / 12</c>, month-START
+    /// anchor). Two properties replace the old single-fraction assertions:
     ///
-    /// <para>We assert BOTH regimes by selecting a month on each side of the supersession:</para>
     /// <list type="bullet">
-    ///   <item><description>Selecting <b>October 2025</b> (month-end 2025-10-31, in the full-time
-    ///   window) ⇒ the WHOLE curve uses fraction 1.0: earned[i] = 25 × 1.0 × (i+1)/12.</description></item>
-    ///   <item><description>Selecting <b>March 2026</b> (month-end 2026-03-31, in the half-time
-    ///   window) ⇒ the WHOLE curve uses fraction 0.5: earned[i] = 25 × 0.5 × (i+1)/12.</description></item>
+    ///   <item><description><b>Selection-independent</b> — the curve uses each month's ACTUAL
+    ///   historical fraction, NOT the selected month's fraction. Requesting Oct 2025 vs Mar 2026
+    ///   therefore yields IDENTICAL 12 <c>earned</c> values; only <c>isSelected</c> moves. (The old
+    ///   model said "Oct uses 1.0, Mar uses 0.5, Mar is half of Oct" — all now FALSE.)</description></item>
+    ///   <item><description><b>Monotonic-by-construction with a boundary BEND</b> — Sep…Dec anchor
+    ///   in the full-time period (increment ≈ 25/12 ≈ 2.08 each); Jan…Aug anchor in the half-time
+    ///   period (increment ≈ 0.5×25/12 ≈ 1.04 each). The curve's slope HALVES at the Dec→Jan
+    ///   boundary (the "bend") but it NEVER drops — each month adds a non-negative increment. This
+    ///   bend is the whole point: piecewise reflects the real per-month terms while staying
+    ///   monotonic, which the S61 per-point smear could not.</description></item>
     /// </list>
-    /// <para>Both curves are MONOTONIC non-decreasing; neither bends mid-ferieår. Per-month
-    /// fraction history (piecewise accrual) is intentionally out of scope.</para>
     /// </summary>
     [Fact]
-    public async Task Series_MidFerieaarPartTimeChange_UsesSelectedMonthFraction_Monotonic()
+    public async Task Series_MidFerieaarPartTimeChange_UsesPerMonthFractions_MonotonicAndSelectionIndependent()
     {
         // Fresh employee in emp001's org (STY01, AC, OK24) with NO seeded profile/agreement rows.
         var employeeId = await CreateUserAsync(orgId: Emp001OrgId, agreementCode: "AC");
@@ -244,33 +316,68 @@ public sealed class BalanceSeriesTests : IAsyncLifetime
 
         var client = EmployeeClient(employeeId);
 
-        // The single-fraction trajectory for a given fraction (rounded 2dp as the endpoint does).
-        static List<decimal> SingleFractionTrajectory(decimal fraction) =>
-            Enumerable.Range(0, 12)
-                .Select(i => Math.Round(25m * fraction * (i + 1) / 12m, 2))
-                .ToList();
-
-        // ── Selecting October 2025 (month-end in the full-time window) ⇒ whole curve fraction 1.0 ──
+        // ── Selection-independence: Oct 2025 (full-time side) and Mar 2026 (half-time side) yield
+        //    IDENTICAL earned curves (piecewise uses the historical fraction per month, not the
+        //    selected month's fraction). Only the isSelected flag differs. ──
         var octBody = await GetSeriesAsync(client, employeeId, 2025, 10);
-        var octEarned = VacationPoints(octBody)
-            .Select(p => p.GetProperty("earned").GetDecimal()).ToList();
-        Assert.Equal(12, octEarned.Count);
-        Assert.Equal(SingleFractionTrajectory(1.0m), octEarned);
-        AssertMonotonicNonDecreasing(octEarned);
-
-        // ── Selecting March 2026 (month-end in the half-time window) ⇒ whole curve fraction 0.5 ──
         var marBody = await GetSeriesAsync(client, employeeId, 2026, 3);
-        var marEarned = VacationPoints(marBody)
-            .Select(p => p.GetProperty("earned").GetDecimal()).ToList();
-        Assert.Equal(12, marEarned.Count);
-        Assert.Equal(SingleFractionTrajectory(0.5m), marEarned);
-        AssertMonotonicNonDecreasing(marEarned);
+        var octEarned = VacationPoints(octBody).Select(p => p.GetProperty("earned").GetDecimal()).ToList();
+        var marEarned = VacationPoints(marBody).Select(p => p.GetProperty("earned").GetDecimal()).ToList();
+        Assert.Equal(12, octEarned.Count);
+        Assert.Equal(octEarned, marEarned); // selection-independent (REPLACES old "Mar = ½ Oct")
 
-        // The whole curve scales with the SELECTED month's fraction — no mid-ferieår bend. The
-        // half-time selection is exactly half the full-time selection at every point (single
-        // fraction, not a per-point smear that would have made either curve drop).
-        for (var i = 0; i < 12; i++)
-            Assert.Equal(Math.Round(octEarned[i] / 2m, 2), marEarned[i]);
+        // Confirm the selected month differs even though the earned curve does not.
+        Assert.Equal("2025-10-31",
+            VacationPoints(octBody).Single(p => p.GetProperty("isSelected").GetBoolean()).GetProperty("monthEnd").GetString());
+        Assert.Equal("2026-03-31",
+            VacationPoints(marBody).Single(p => p.GetProperty("isSelected").GetBoolean()).GetProperty("monthEnd").GetString());
+
+        // ── Piecewise cumulative truth: each accrual month anchors on its 1st; Sep..Dec at 1.0,
+        //    Jan..Aug at 0.5 (the 0.5 begins at index 4 = January). Expected mirrors the endpoint's
+        //    arithmetic exactly (Σfraction then × quota / 12, rounded 2dp) — no hardcoded constants. ──
+        var monthlyFractions = new[] { 1m, 1m, 1m, 1m, 0.5m, 0.5m, 0.5m, 0.5m, 0.5m, 0.5m, 0.5m, 0.5m };
+        Assert.Equal(PiecewiseTrajectory(25m, monthlyFractions), octEarned);
+
+        // ── Monotonic non-decreasing AND the increment SHIFTS DOWN at the Dec→Jan boundary (the
+        //    "bend"): full-time months increment by ≈ 25/12 ≈ 2.08; half-time months by ≈ 0.5×25/12
+        //    ≈ 1.04 — strictly smaller, but never a drop. We compare the SHAPE of the increments
+        //    (each full-time step > each half-time step, each near its nominal value) rather than
+        //    exact per-step constants, because the endpoint rounds each CUMULATIVE point to 2dp so a
+        //    single difference-of-rounded-points can be ±0.01 off the nominal monthly increment. ──
+        AssertMonotonicNonDecreasing(octEarned);
+        var fullStep = 25m * 1.0m / 12m;   // ≈ 2.0833
+        var halfStep = 25m * 0.5m / 12m;   // ≈ 1.0417
+        for (var i = 1; i <= 3; i++)       // Oct..Dec increments (still full-time)
+        {
+            var inc = octEarned[i] - octEarned[i - 1];
+            Assert.True(inc > halfStep + 0.5m, $"full-time increment {inc} at i={i} should dominate the half-time step");
+            Assert.True(Math.Abs(inc - fullStep) <= 0.01m, $"full-time increment {inc} at i={i} should be ≈ {fullStep:0.##}");
+        }
+        for (var i = 4; i < 12; i++)       // Jan..Aug increments (half-time) — the bend
+        {
+            var inc = octEarned[i] - octEarned[i - 1];
+            Assert.True(inc >= 0m, $"increment {inc} at i={i} must be non-negative (monotonic)");
+            Assert.True(inc < fullStep - 0.5m, $"half-time increment {inc} at i={i} should be below the full-time step (the bend)");
+            Assert.True(Math.Abs(inc - halfStep) <= 0.01m, $"half-time increment {inc} at i={i} should be ≈ {halfStep:0.##}");
+        }
+    }
+
+    /// <summary>
+    /// Mirrors the endpoint's piecewise arithmetic exactly (ADR-030 D8): for each accrual month it
+    /// accumulates that month's <paramref name="monthlyFractions"/> entry, then the cumulative
+    /// <c>earned</c> is <c>quota × Σfraction / 12</c> rounded to 2dp (DISPLAY rounding, applied once
+    /// per point). Deliberately NOT hardcoded constants so the test tracks any future quota change.
+    /// </summary>
+    private static List<decimal> PiecewiseTrajectory(decimal quota, decimal[] monthlyFractions)
+    {
+        var outv = new List<decimal>(monthlyFractions.Length);
+        decimal sum = 0m;
+        for (var i = 0; i < monthlyFractions.Length; i++)
+        {
+            sum += monthlyFractions[i];
+            outv.Add(Math.Round(quota * sum / 12m, 2));
+        }
+        return outv;
     }
 
     /// <summary>
@@ -279,6 +386,13 @@ public sealed class BalanceSeriesTests : IAsyncLifetime
     /// change. The original per-point-fraction implementation produced a DROP (e.g. full-time
     /// Sep–Dec then 0.5 from Jan: Dec ≈ 8.33 then Jan ≈ 5.21). We seed exactly that supersession
     /// and assert no point is below its predecessor for every type in the series.
+    ///
+    /// <para>History note: S61 first restored monotonicity by projecting ONE (selected-month)
+    /// fraction across all 12 points. S62 / ADR-030 <b>D8</b> SUPERSEDED that with cumulative
+    /// piecewise accrual (<c>annualQuota × Σ(per-month fraction) / 12</c>), which is monotonic
+    /// <b>by construction</b> — each elapsed month contributes a non-negative increment — NOT by a
+    /// single-fraction projection. This invariant therefore still holds (now the curve also bends
+    /// at the fraction boundary instead of scaling uniformly), so this guard is unchanged.</para>
     /// </summary>
     [Fact]
     public async Task Series_PartTimeDropMidFerieaar_CurveIsMonotonicNonDecreasing()
@@ -400,6 +514,18 @@ public sealed class BalanceSeriesTests : IAsyncLifetime
         var rsp = await client.GetAsync($"/api/balance/{employeeId}/series?year={year}&month={month}");
         rsp.EnsureSuccessStatusCode();
         return await rsp.Content.ReadFromJsonAsync<JsonElement>();
+    }
+
+    /// <summary><c>/summary</c>'s VACATION <c>earned</c> for the given key (the reconciliation oracle).</summary>
+    private static async Task<decimal> GetSummaryVacationEarnedAsync(
+        HttpClient client, string employeeId, int year, int month)
+    {
+        var rsp = await client.GetAsync($"/api/balance/{employeeId}/summary?year={year}&month={month}");
+        rsp.EnsureSuccessStatusCode();
+        var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
+        return body.GetProperty("entitlements").EnumerateArray()
+            .Single(e => e.GetProperty("type").GetString() == "VACATION")
+            .GetProperty("earned").GetDecimal();
     }
 
     /// <summary>The VACATION entry's 12 points (the curve under most assertions).</summary>
