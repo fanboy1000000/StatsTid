@@ -83,6 +83,12 @@ jobs:
           --health-retries 12
     steps:
       - uses: actions/checkout@v4
+        with:
+          # S64 fix-forward: BugCorrectionHistorySchemaTests resolves commit SHAs from
+          # the bug-correction history against git (`<sha>^{commit}`); the default
+          # shallow clone cannot resolve them (passed locally, failed only in CI).
+          # Same full-history pattern as the docs-consistency + gitleaks jobs.
+          fetch-depth: 0
 
       - uses: actions/setup-dotnet@v4
         with:
