@@ -38,7 +38,22 @@ function Invoke-Hook {
 $codex    = Join-Path $reviewsDir "SPRINT-99-step7a-codex.md"
 $reviewer = Join-Path $reviewsDir "SPRINT-99-step7a-reviewer.md"
 $waiver   = Join-Path $reviewsDir "SPRINT-99-step7a-WAIVED.md"
+$ciHealthWaiver  = Join-Path $reviewsDir "SPRINT-99-ci-health-WAIVED.md"
+$ciPendingWaiver = Join-Path $reviewsDir "SPRINT-99-ci-pending-WAIVED.md"
 $mock = 'git commit -m "S99 TASK-9999: sprint close -- test"'
+
+# Deterministic seams (S63 post-close gates): default the CI-health mock to
+# 'success' and point the sprints dir at an empty temp dir so T1-T7 keep their
+# original semantics regardless of real CI state / real sprint logs. The child
+# hook process inherits these via Start-Process environment inheritance.
+$tmpSprints = Join-Path $env:TEMP "statstid-guard-test-sprints"
+Remove-Item $tmpSprints -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force -Path $tmpSprints | Out-Null
+$env:STATSTID_CI_HEALTH_MOCK = 'success'
+$env:STATSTID_SPRINTS_DIR = $tmpSprints
+
+$ciPendingLine = '| **Test Verified** | yes (unit) -- Docker-gated Regression/Smoke CI-pending (engine down) |'
+$cleanLine     = '| **Test Verified** | yes -- all suites green |'
 
 $results = @()
 
@@ -94,11 +109,58 @@ $r = Invoke-Hook $mock
 $ok = ($r.Exit -eq 0)
 $results += "T7 (full sha): exit=$($r.Exit) expect=0 $(if($ok){'PASS'}else{'FAIL'})"
 
+# ── S63 post-close gates ─────────────────────────────────────────────────────
+# Baseline for T8+: valid artifacts (so only the new gates are under test).
+$validContent = "verdict: APPROVED`nreviewed-against-commit: $headShort"
+Set-Content -Path $codex -Value $validContent -Encoding UTF8
+Set-Content -Path $reviewer -Value $validContent -Encoding UTF8
+
+# T8: CI red (mocked failure) blocks
+$env:STATSTID_CI_HEALTH_MOCK = 'failure'
+$r = Invoke-Hook $mock
+$ok = ($r.Exit -eq 2)
+$results += "T8 (ci red blocks): exit=$($r.Exit) expect=2 $(if($ok){'PASS'}else{'FAIL'})"
+
+# T9: CI red + ci-health waiver allows
+Set-Content -Path $ciHealthWaiver -Value "waiver rationale: tracked debt item X" -Encoding UTF8
+$r = Invoke-Hook $mock
+$ok = ($r.Exit -eq 0)
+$results += "T9 (ci red + waiver): exit=$($r.Exit) expect=0 $(if($ok){'PASS'}else{'FAIL'})"
+if (-not $ok) { $results += $r.Stderr }
+Remove-Item $ciHealthWaiver -ErrorAction SilentlyContinue
+$env:STATSTID_CI_HEALTH_MOCK = 'success'
+
+# T10: second consecutive CI-pending close blocks
+Set-Content -Path (Join-Path $tmpSprints "SPRINT-98.md") -Value $ciPendingLine -Encoding UTF8
+Set-Content -Path (Join-Path $tmpSprints "SPRINT-99.md") -Value $ciPendingLine -Encoding UTF8
+$r = Invoke-Hook $mock
+$ok = ($r.Exit -eq 2)
+$results += "T10 (2x ci-pending blocks): exit=$($r.Exit) expect=2 $(if($ok){'PASS'}else{'FAIL'})"
+
+# T11: second consecutive CI-pending + waiver allows
+Set-Content -Path $ciPendingWaiver -Value "waiver rationale: debt clears in S100" -Encoding UTF8
+$r = Invoke-Hook $mock
+$ok = ($r.Exit -eq 0)
+$results += "T11 (2x ci-pending + waiver): exit=$($r.Exit) expect=0 $(if($ok){'PASS'}else{'FAIL'})"
+if (-not $ok) { $results += $r.Stderr }
+Remove-Item $ciPendingWaiver -ErrorAction SilentlyContinue
+
+# T12: FIRST CI-pending close (previous sprint clean) allows without waiver;
+# narrative "CI-pending" text elsewhere in the previous log must NOT trigger.
+Set-Content -Path (Join-Path $tmpSprints "SPRINT-98.md") -Value @($cleanLine, "Narrative mention: the S97 Docker-gated tests were CI-pending back then.") -Encoding UTF8
+$r = Invoke-Hook $mock
+$ok = ($r.Exit -eq 0)
+$results += "T12 (1x ci-pending allows): exit=$($r.Exit) expect=0 $(if($ok){'PASS'}else{'FAIL'})"
+if (-not $ok) { $results += $r.Stderr }
+
 # Cleanup
-Remove-Item $codex,$reviewer,$waiver -ErrorAction SilentlyContinue
+Remove-Item $codex,$reviewer,$waiver,$ciHealthWaiver,$ciPendingWaiver -ErrorAction SilentlyContinue
+Remove-Item $tmpSprints -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item Env:\STATSTID_CI_HEALTH_MOCK -ErrorAction SilentlyContinue
+Remove-Item Env:\STATSTID_SPRINTS_DIR -ErrorAction SilentlyContinue
 
 Write-Output $results
 $failed = $results | Where-Object { $_ -match 'FAIL' }
 if ($failed) { Write-Output ""; Write-Output "FAILURES PRESENT"; exit 1 }
 Write-Output ""
-Write-Output "ALL 7 TESTS PASSED"
+Write-Output "ALL 12 TESTS PASSED"

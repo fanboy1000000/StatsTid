@@ -8,7 +8,7 @@
 | **End Date** | 2026-06-04 |
 | **Orchestrator Approved** | yes |
 | **Build Verified** | yes (solution 0 errors after every phase; final close build green) |
-| **Test Verified** | yes — Unit 629/629 + Regression-plain 44/44 + FE 164/164; Docker-gated Regression/Smoke CI-pending (engine down at close — S61/S62 precedent; compile-proven) |
+| **Test Verified** | yes — Unit 629/629 + Regression-plain 44/44 + FE 164/164; Docker-gated Regression/Smoke deferred at close (engine down — S61/S62 precedent; compile-proven) → **verified green locally post-close 2026-06-04** (S61+S62+S63 sets; see Post-Close Addendum) |
 
 ## Sprint Goal
 Correct the VACATION + SPECIAL_HOLIDAY **day-count** to be part-time-fraction-independent per Ferieloven (flat 25/5 for everyone; only consumption + value pro-rate) — **ADR-031**, classified bug-with-no-past-impact. This reverts ADR-030 D8 (the S62 piecewise-*fraction* accrual, built on a part-time misconception surfaced by the 2026-06-03 deep-research) to flat `annualQuota × monthsElapsed / 12`, removing the now-dead S62 piecewise surface. **No schema migration** (config-value + code). §6 stk.2 consumption + `work_days_per_week` is the separate, launch-blocking **S64** (ADR-032). Refinement: `.claude/refinements/REFINEMENT-vacation-parttime-daycount-fix.md` (2 dual-lens cycles). Dashboard (grid+transferable) resumes after.

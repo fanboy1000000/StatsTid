@@ -118,7 +118,12 @@ jobs:
   smoke-tests:
     name: Smoke tests (docker-compose harness)
     runs-on: ubuntu-latest
-    needs: build-and-test
+    # S63 post-close: `needs: build-and-test` REMOVED deliberately. The job is fully
+    # self-contained (own checkout + own compose build); the dependency was pure
+    # sequencing — and it cost us the smoke signal entirely: with the regression step
+    # red on every master push >= S57, this job was perpetually SKIPPED, so the stale
+    # smoke assertion (RegisterAndRetrieveTimeEntry 403-vs-201) went undetected for
+    # weeks. Independent jobs = one red cannot blind another.
     steps:
       - uses: actions/checkout@v4
 
