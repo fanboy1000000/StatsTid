@@ -59,7 +59,7 @@ public class DefaultEntitlementConfigTests
     [InlineData("AC", "OK24")]
     [InlineData("HK", "OK26")]
     [InlineData("PROSA", "OK24")]
-    public void VacationConfigs_Have25Quota_September_Carryover5_ProRate(string agreement, string okVersion)
+    public void VacationConfigs_Have25Quota_September_Carryover5_NoProRate(string agreement, string okVersion)
     {
         var configs = DefaultEntitlementConfigs.GetConfigsForAgreement(agreement, okVersion);
         var vacation = configs.Single(c => c.EntitlementType == "VACATION");
@@ -67,7 +67,10 @@ public class DefaultEntitlementConfigTests
         Assert.Equal(25m, vacation.AnnualQuota);
         Assert.Equal(9, vacation.ResetMonth);
         Assert.Equal(5m, vacation.CarryoverMax);
-        Assert.True(vacation.ProRateByPartTime);
+        // S63 / ADR-031: VACATION day-count is FLAT (fraction-independent) per Ferieloven §5 stk.1
+        // — a part-timer earns the SAME number of days as a full-timer; part-time pro-rates the
+        // value/consumption (§6 stk.2), never the earned day-count. Flipped True→False.
+        Assert.False(vacation.ProRateByPartTime);
         Assert.False(vacation.IsPerEpisode);
     }
 
@@ -82,7 +85,10 @@ public class DefaultEntitlementConfigTests
         Assert.Equal(5m, special.AnnualQuota);
         Assert.Equal(9, special.ResetMonth);
         Assert.Equal(0m, special.CarryoverMax);
-        Assert.True(special.ProRateByPartTime);
+        // S63 / ADR-031: SPECIAL_HOLIDAY day-count is FLAT (fraction-independent) per Ferieloven §5
+        // — same rationale as VACATION; the earned day-count never scales by the part-time fraction.
+        // Flipped True→False.
+        Assert.False(special.ProRateByPartTime);
         Assert.False(special.IsPerEpisode);
     }
 

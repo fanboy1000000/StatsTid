@@ -1419,20 +1419,22 @@ INSERT INTO entitlement_configs (entitlement_type, agreement_code, ok_version, a
     -- VACATION: 25 days, reset September, carryover 5
     -- S60 / ADR-030: accrual_model = MONTHLY_ACCRUAL (samtidighedsferie, ~2,08 d/md).
     -- Sentinel reseed (NOT supersession) — preserves ADR-021 D5 invariant (no new effective_from row).
-    ('VACATION', 'AC', 'OK24', 25, 'MONTHLY_ACCRUAL', 9, 5, true, false, NULL, 'Ferie – 25 dage', '0001-01-01'),
-    ('VACATION', 'AC', 'OK26', 25, 'MONTHLY_ACCRUAL', 9, 5, true, false, NULL, 'Ferie – 25 dage', '0001-01-01'),
-    ('VACATION', 'HK', 'OK24', 25, 'MONTHLY_ACCRUAL', 9, 5, true, false, NULL, 'Ferie – 25 dage', '0001-01-01'),
-    ('VACATION', 'HK', 'OK26', 25, 'MONTHLY_ACCRUAL', 9, 5, true, false, NULL, 'Ferie – 25 dage', '0001-01-01'),
-    ('VACATION', 'PROSA', 'OK24', 25, 'MONTHLY_ACCRUAL', 9, 5, true, false, NULL, 'Ferie – 25 dage', '0001-01-01'),
-    ('VACATION', 'PROSA', 'OK26', 25, 'MONTHLY_ACCRUAL', 9, 5, true, false, NULL, 'Ferie – 25 dage', '0001-01-01'),
+    -- S63 / ADR-031: pro_rate_by_part_time = false — flat day-count per Ferieloven §5 (sentinel reseed, NOT supersession — preserves ADR-021 D5 invariant)
+    ('VACATION', 'AC', 'OK24', 25, 'MONTHLY_ACCRUAL', 9, 5, false, false, NULL, 'Ferie – 25 dage', '0001-01-01'),
+    ('VACATION', 'AC', 'OK26', 25, 'MONTHLY_ACCRUAL', 9, 5, false, false, NULL, 'Ferie – 25 dage', '0001-01-01'),
+    ('VACATION', 'HK', 'OK24', 25, 'MONTHLY_ACCRUAL', 9, 5, false, false, NULL, 'Ferie – 25 dage', '0001-01-01'),
+    ('VACATION', 'HK', 'OK26', 25, 'MONTHLY_ACCRUAL', 9, 5, false, false, NULL, 'Ferie – 25 dage', '0001-01-01'),
+    ('VACATION', 'PROSA', 'OK24', 25, 'MONTHLY_ACCRUAL', 9, 5, false, false, NULL, 'Ferie – 25 dage', '0001-01-01'),
+    ('VACATION', 'PROSA', 'OK26', 25, 'MONTHLY_ACCRUAL', 9, 5, false, false, NULL, 'Ferie – 25 dage', '0001-01-01'),
     -- SPECIAL_HOLIDAY: 5 days, reset September, no carryover
     -- S60 / ADR-030: MONTHLY_ACCRUAL (~0,42 d/md); no forskud (ferieaftale §13 stk.4) enforced in rule engine.
-    ('SPECIAL_HOLIDAY', 'AC', 'OK24', 5, 'MONTHLY_ACCRUAL', 9, 0, true, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01'),
-    ('SPECIAL_HOLIDAY', 'AC', 'OK26', 5, 'MONTHLY_ACCRUAL', 9, 0, true, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01'),
-    ('SPECIAL_HOLIDAY', 'HK', 'OK24', 5, 'MONTHLY_ACCRUAL', 9, 0, true, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01'),
-    ('SPECIAL_HOLIDAY', 'HK', 'OK26', 5, 'MONTHLY_ACCRUAL', 9, 0, true, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01'),
-    ('SPECIAL_HOLIDAY', 'PROSA', 'OK24', 5, 'MONTHLY_ACCRUAL', 9, 0, true, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01'),
-    ('SPECIAL_HOLIDAY', 'PROSA', 'OK26', 5, 'MONTHLY_ACCRUAL', 9, 0, true, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01'),
+    -- S63 / ADR-031: pro_rate_by_part_time = false — flat day-count per Ferieloven §5 (sentinel reseed, NOT supersession — preserves ADR-021 D5 invariant)
+    ('SPECIAL_HOLIDAY', 'AC', 'OK24', 5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01'),
+    ('SPECIAL_HOLIDAY', 'AC', 'OK26', 5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01'),
+    ('SPECIAL_HOLIDAY', 'HK', 'OK24', 5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01'),
+    ('SPECIAL_HOLIDAY', 'HK', 'OK26', 5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01'),
+    ('SPECIAL_HOLIDAY', 'PROSA', 'OK24', 5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01'),
+    ('SPECIAL_HOLIDAY', 'PROSA', 'OK26', 5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01'),
     -- CARE_DAY: 2 days, reset January, no carryover, not pro-rated
     ('CARE_DAY', 'AC', 'OK24', 2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage', '0001-01-01'),
     ('CARE_DAY', 'AC', 'OK26', 2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage', '0001-01-01'),
@@ -1460,14 +1462,14 @@ INSERT INTO entitlement_configs (entitlement_type, agreement_code, ok_version, a
     -- VACATION inherits Ferieloven (universal); other 4 inherit AC overenskomst by structural inheritance.
     -- S60 / ADR-030: MONTHLY_ACCRUAL reseed for the AC-variant codes that exist ONLY in init.sql
     -- (DefaultEntitlementConfigs factory covers AC/HK/PROSA only — see TASK-6003). Sentinel reseed, NOT supersession.
-    ('VACATION',        'AC_RESEARCH', 'OK24', 25, 'MONTHLY_ACCRUAL', 9, 5, true,  false, NULL, 'Ferie – 25 dage',                  '0001-01-01'),
-    ('VACATION',        'AC_RESEARCH', 'OK26', 25, 'MONTHLY_ACCRUAL', 9, 5, true,  false, NULL, 'Ferie – 25 dage',                  '0001-01-01'),
-    ('VACATION',        'AC_TEACHING', 'OK24', 25, 'MONTHLY_ACCRUAL', 9, 5, true,  false, NULL, 'Ferie – 25 dage',                  '0001-01-01'),
-    ('VACATION',        'AC_TEACHING', 'OK26', 25, 'MONTHLY_ACCRUAL', 9, 5, true,  false, NULL, 'Ferie – 25 dage',                  '0001-01-01'),
-    ('SPECIAL_HOLIDAY', 'AC_RESEARCH', 'OK24',  5, 'MONTHLY_ACCRUAL', 9, 0, true,  false, NULL, 'Særlige feriedage – 5 dage',       '0001-01-01'),
-    ('SPECIAL_HOLIDAY', 'AC_RESEARCH', 'OK26',  5, 'MONTHLY_ACCRUAL', 9, 0, true,  false, NULL, 'Særlige feriedage – 5 dage',       '0001-01-01'),
-    ('SPECIAL_HOLIDAY', 'AC_TEACHING', 'OK24',  5, 'MONTHLY_ACCRUAL', 9, 0, true,  false, NULL, 'Særlige feriedage – 5 dage',       '0001-01-01'),
-    ('SPECIAL_HOLIDAY', 'AC_TEACHING', 'OK26',  5, 'MONTHLY_ACCRUAL', 9, 0, true,  false, NULL, 'Særlige feriedage – 5 dage',       '0001-01-01'),
+    ('VACATION',        'AC_RESEARCH', 'OK24', 25, 'MONTHLY_ACCRUAL', 9, 5, false, false, NULL, 'Ferie – 25 dage',                  '0001-01-01'),
+    ('VACATION',        'AC_RESEARCH', 'OK26', 25, 'MONTHLY_ACCRUAL', 9, 5, false, false, NULL, 'Ferie – 25 dage',                  '0001-01-01'),
+    ('VACATION',        'AC_TEACHING', 'OK24', 25, 'MONTHLY_ACCRUAL', 9, 5, false, false, NULL, 'Ferie – 25 dage',                  '0001-01-01'),
+    ('VACATION',        'AC_TEACHING', 'OK26', 25, 'MONTHLY_ACCRUAL', 9, 5, false, false, NULL, 'Ferie – 25 dage',                  '0001-01-01'),
+    ('SPECIAL_HOLIDAY', 'AC_RESEARCH', 'OK24',  5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage',       '0001-01-01'),
+    ('SPECIAL_HOLIDAY', 'AC_RESEARCH', 'OK26',  5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage',       '0001-01-01'),
+    ('SPECIAL_HOLIDAY', 'AC_TEACHING', 'OK24',  5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage',       '0001-01-01'),
+    ('SPECIAL_HOLIDAY', 'AC_TEACHING', 'OK26',  5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage',       '0001-01-01'),
     ('CARE_DAY',        'AC_RESEARCH', 'OK24',  2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage',             '0001-01-01'),
     ('CARE_DAY',        'AC_RESEARCH', 'OK26',  2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage',             '0001-01-01'),
     ('CARE_DAY',        'AC_TEACHING', 'OK24',  2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage',             '0001-01-01'),
@@ -2505,6 +2507,30 @@ DO $$
 BEGIN
     INSERT INTO schema_migrations (migration_id, notes)
     VALUES ('s60-d1-monthly-accrual-and-employment-start', 'ADR-030: activate MONTHLY_ACCRUAL for VACATION + SPECIAL_HOLIDAY 0001-01-01 sentinels across all 5 agreement codes (AC/HK/PROSA/AC_RESEARCH/AC_TEACHING) via sentinel reseed (NOT supersession — preserves ADR-021 D5 invariant); CARE_DAY/CHILD_SICK/SENIOR_DAY stay IMMEDIATE. Adds users.employment_start_date (HR-managed hire date, nullable, full-ferieår fallback; pure non-dated input to earnedToDate; users_audit JSONB snapshot captures it, no audit change). Payroll consequences (§8/§7) out of scope.')
+    ON CONFLICT (migration_id) DO NOTHING;
+END
+$$;
+
+-- S63 / ADR-031 — flat vacation day-count on EXISTING/legacy databases too.
+-- The entitlement_configs seed above uses ON CONFLICT (...) DO NOTHING, so on a
+-- non-fresh DB the pre-existing pro_rate_by_part_time=true VACATION/SPECIAL_HOLIDAY
+-- rows would never flip (S60 precedent). Type-keyed (NOT agreement-code-keyed) so it
+-- also covers the AC_RESEARCH/AC_TEACHING variant rows that exist ONLY in this seed
+-- (DefaultEntitlementConfigs emits AC/HK/PROSA only) — and any history rows, so the
+-- whole (entitlement_type, agreement_code, ok_version) family agrees (ADR-021 D5;
+-- no new row). Day-count is fraction-independent per Ferieloven §5 stk.1; part-time
+-- affects consumption (§6 stk.2 — deferred to S64, launch-blocking) and monetary
+-- value only. Classified bug-with-no-past-impact (ADR-024 D3): pre-launch, no past
+-- periods, no recompute.
+UPDATE entitlement_configs
+   SET pro_rate_by_part_time = false
+ WHERE entitlement_type IN ('VACATION', 'SPECIAL_HOLIDAY')
+   AND pro_rate_by_part_time = true;
+
+DO $$
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s63-adr031-flat-vacation-daycount', 'ADR-031: vacation day-count is part-time-fraction-independent (Ferieloven §5) — pro_rate_by_part_time=false for all VACATION + SPECIAL_HOLIDAY rows across all 5 agreement codes (AC/HK/PROSA/AC_RESEARCH/AC_TEACHING) + both OK versions, sentinel reseed + type-keyed idempotent UPDATE (S60 pattern). Supersedes ADR-030 D8 premise; §6 stk.2 consumption deferred to S64 (launch-blocking). IMMEDIATE types unchanged.')
     ON CONFLICT (migration_id) DO NOTHING;
 END
 $$;

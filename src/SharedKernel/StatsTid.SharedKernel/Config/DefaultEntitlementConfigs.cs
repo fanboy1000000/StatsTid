@@ -72,7 +72,8 @@ public static class DefaultEntitlementConfigs
         AccrualModel = "MONTHLY_ACCRUAL",
         ResetMonth = 9,  // Ferieår: September
         CarryoverMax = 5m,
-        ProRateByPartTime = true,
+        // ADR-031: day-count is flat per Ferieloven §5 — part-time pro-rates consumption (§6 stk.2, S64) + value only, never the day-count
+        ProRateByPartTime = false,
         IsPerEpisode = false,
         Description = "Ferie (25 dage pr. ferieår)"
     };
@@ -87,7 +88,8 @@ public static class DefaultEntitlementConfigs
         AccrualModel = "MONTHLY_ACCRUAL",
         ResetMonth = 9,  // Ferieår: September
         CarryoverMax = 0m,
-        ProRateByPartTime = true,
+        // ADR-031: day-count is flat per Ferieloven §5 — part-time pro-rates consumption (§6 stk.2, S64) + value only, never the day-count
+        ProRateByPartTime = false,
         IsPerEpisode = false,
         Description = "Særlige feriedage (5 dage pr. ferieår)"
     };

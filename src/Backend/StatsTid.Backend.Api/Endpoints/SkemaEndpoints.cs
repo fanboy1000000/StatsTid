@@ -843,48 +843,40 @@ public static class SkemaEndpoints
                     decimal guardCap;
                     if (isMonthlyAccrual)
                     {
-                        // ── S62 / TASK-6203 — ADR-030 D8 piecewise accrual cutover ──
-                        // Fetch the dated part-time-fraction history ONCE for the whole ferieår
-                        // (single query, no per-month N+1). EarnedToDatePiecewise sums each elapsed
-                        // accrual month at the fraction in effect THAT month — the legally precise
-                        // (and monotonic) accruable cap when an employee's fraction changes
-                        // mid-ferieår.
-                        var fractionHistory = await profileResolver.GetFractionHistoryAsync(
-                            employeeId, entitlementYearStart, entitlementYearStart.AddYears(1), ct);
-
-                        // Fail-closed if the ferieår window has NO fraction periods (belt-and-
-                        // suspenders on the anchor profile-missing guard above): the Skema seam
-                        // must never compute an accrual cap against a fabricated full-time fraction
-                        // (ADR-023 D3 — Skema fail-closes; the Balance/series seam stays graceful).
-                        // Same 422 shape as the missing-profile guard.
-                        if (fractionHistory.Count == 0)
-                            return Results.Json(new
-                            {
-                                error = "employment_profile_missing",
-                                absenceType = entitlementType,
-                                date = firstAbsenceDate,
-                                message = $"Kan ikke validere ferie/feriefridage for {firstAbsenceDate:dd-MM-yyyy}: ansættelsesprofil mangler."
-                            }, statusCode: 422);
-
+                        // ── S63 / TASK-6302 — ADR-031 flat (fraction-independent) accrual cutover ──
+                        // The accruable cap is a FLAT day-count — annualQuota × monthsElapsed / 12 —
+                        // INDEPENDENT of the part-time fraction (Ferieloven §5 stk.1: a part-timer
+                        // earns the same NUMBER of vacation days as a full-timer). ADR-031 supersedes
+                        // ADR-030 D8's per-month piecewise fraction weighting, so the S62
+                        // fraction-history fetch + its belt-and-suspenders empty-history 422 are gone.
+                        // The 1.0m literal below is the DELIBERATE identity fraction (the day-count
+                        // never scales by fraction). The surviving fail-closed guard is the ANCHOR
+                        // profile-missing 422 above (driven by GetByEmployeeIdAtAsync under
+                        // fractionMatters, which stays TRUE for these types via isMonthlyAccrual) —
+                        // an accrual-window guard, not a fraction guard (ADR-031 D4; ADR-023 D3 Skema
+                        // fail-closed polarity). The window/D6 logic is unchanged; only the fraction
+                        // drops out.
                         decimal accruableCap;
                         if (string.Equals(entitlementType, "VACATION", StringComparison.Ordinal))
                         {
                             // earned + stillAccruable == accruable over the whole ferieår ==
-                            // EarnedToDatePiecewise at the ferieår's last day (forskud over the
-                            // whole ferieår; manager approval IS the §7 forskudsferie agreement).
+                            // EarnedToDate at the ferieår's last day (forskud over the whole ferieår;
+                            // manager approval IS the §7 forskudsferie agreement). With the identity
+                            // 1.0 fraction this equals the FLAT annual quota for a whole-ferieår hire
+                            // and the months-elapsed pro-rated amount for a mid-ferieår hire (D6).
                             var ferieaarEnd = entitlementYearStart.AddYears(1).AddDays(-1);
-                            accruableCap = AccrualMath.EarnedToDatePiecewise(
-                                config.AnnualQuota, entitlementYearStart,
-                                user.EmploymentStartDate, ferieaarEnd, fractionHistory);
+                            accruableCap = AccrualMath.EarnedToDate(
+                                config.AnnualQuota, 1.0m, entitlementYearStart,
+                                user.EmploymentStartDate, ferieaarEnd);
                         }
                         else
                         {
                             // SPECIAL_HOLIDAY (and any other MONTHLY_ACCRUAL type) — no forskud
                             // (ferieaftale §13 stk.4): capped at earned-to-date AS-OF the absence
                             // date (asOf stays firstAbsenceDate, NOT the ferieår end).
-                            accruableCap = AccrualMath.EarnedToDatePiecewise(
-                                config.AnnualQuota, entitlementYearStart,
-                                user.EmploymentStartDate, firstAbsenceDate, fractionHistory);
+                            accruableCap = AccrualMath.EarnedToDate(
+                                config.AnnualQuota, 1.0m, entitlementYearStart,
+                                user.EmploymentStartDate, firstAbsenceDate);
                         }
 
                         guardCap = accruableCap;                       // carryover-EXCLUDED

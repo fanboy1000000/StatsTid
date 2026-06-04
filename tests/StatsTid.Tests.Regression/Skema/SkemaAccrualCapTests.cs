@@ -16,42 +16,47 @@ using StatsTid.Tests.Regression.Segmentation;
 namespace StatsTid.Tests.Regression.Skema;
 
 /// <summary>
-/// S62 / TASK-6203 / TASK-6204 / ADR-030 <b>D8</b> — HTTP-level regression for the Skema POST seam
-/// (<c>POST /api/skema/{id}/save</c>) AFTER the cumulative-piecewise accrual cutover. Sibling of
-/// <see cref="StatsTid.Tests.Regression.Outbox.SkemaMonthlyAccrualGuardTests"/> (S60, single-fraction
-/// cap); this file pins the two behaviours that the piecewise model ADDS / CHANGES:
+/// S63 / TASK-6304 / ADR-031 — HTTP-level regression for the Skema POST seam
+/// (<c>POST /api/skema/{id}/save</c>) Skema QUOTA-CAP behaviour under FLAT, fraction-independent
+/// accrual. (Originally the S62 fraction-weighted accrual tests — rewritten in S63 when ADR-031
+/// superseded ADR-030 D8: the earned day-count and the Skema caps are now INDEPENDENT of the
+/// part-time fraction per Ferieloven §5 stk.1 — a 50% part-timer earns/caps exactly like a full-timer.)
+/// Sibling of <see cref="StatsTid.Tests.Regression.Outbox.SkemaMonthlyAccrualGuardTests"/> (S60);
+/// this file pins the two behaviours the MONTHLY_ACCRUAL cap exhibits:
 ///
 /// <list type="bullet">
-///   <item><description><b>Fail-closed (retained + extended)</b> — a VACATION (MONTHLY_ACCRUAL)
-///   booking for an employee with NO dated employment profile at the absence anchor is rejected
-///   <c>422 employment_profile_missing</c> (NEVER a silent fraction-1.0). S62 retained the anchor
-///   profile-missing guard and added a belt-and-suspenders empty-fraction-window guard before the
-///   piecewise sum — both surface the same 422.</description></item>
-///   <item><description><b>Piecewise forskud cap moves with mid-ferieår terms</b> — the VACATION
-///   forskud cap = <c>EarnedToDatePiecewise</c> evaluated at the ferieår's LAST day (whole-ferieår
-///   accruable; manager approval IS the §7 forskudsferie agreement). For an employee FULL-TIME
-///   early in the ferieår then dropping to part-time, the full-time months are summed in and are
-///   NOT erased by the later part-time fraction — so the cap is HIGHER than a single-fraction
-///   (current-terms) cap would give. A booking that piecewise ALLOWS but single-fraction-at-current
-///   would REJECT is decided by the piecewise value; a booking beyond the piecewise cap still 422s.
-///   </description></item>
+///   <item><description><b>Fail-closed</b> — a VACATION (MONTHLY_ACCRUAL) booking for an employee
+///   with NO dated employment profile at the absence anchor is rejected
+///   <c>422 employment_profile_missing</c> (NEVER a silent fraction-1.0). The surviving guard is the
+///   ANCHOR profile-missing 422 (<c>GetByEmployeeIdAtAsync</c> under <c>fractionMatters</c>, which
+///   stays TRUE for MONTHLY_ACCRUAL via <c>isMonthlyAccrual</c>); ADR-031 D4 removed the S62
+///   empty-fraction-history fetch and its belt-and-suspenders 422 along with it — the anchor guard
+///   is the sole (and sufficient — strict superset) fail-closed path.</description></item>
+///   <item><description><b>Flat forskud cap is FRACTION-INDEPENDENT</b> — the VACATION forskud cap
+///   = <c>EarnedToDate(annualQuota, 1.0, …)</c> evaluated at the ferieår's LAST day (whole-ferieår
+///   accruable; manager approval IS the §7 forskudsferie agreement). For a whole-ferieår employee
+///   this is the FLAT annual 25 regardless of the part-time fraction, so a 50% part-timer may book
+///   the full 25 — a booking the old (pre-ADR-031) fraction-scaled cap (≈12,5 for a 0,5 part-timer,
+///   ≈16,67 for the full-then-half seed) would have REJECTED. A booking beyond the flat cap (26)
+///   still 422s — the cap is bounded (no infinite forskud).</description></item>
 /// </list>
 ///
 /// <para>Determinism (priority #2/#4): a fully-PAST ferieår (2024: 1 Sep 2024 – 31 Aug 2025) and
 /// fixed dated profile rows are seeded — never the wall clock. <c>employment_start_date</c> is left
-/// NULL (full-ferieår assumption), so accrual starts at the ferieår start.</para>
+/// NULL (full-ferieår assumption), so accrual starts at the ferieår start and the flat cap is the
+/// whole annual 25.</para>
 ///
 /// <para><b>Rule-engine stub.</b> The in-process WAF&lt;Program&gt; harness has no rule-engine
 /// container, so — exactly as <see cref="StatsTid.Tests.Regression.Outbox.SkemaMonthlyAccrualGuardTests"/>
 /// does — <see cref="IHttpClientFactory"/> is replaced by a stub that drives the REAL
 /// <see cref="EntitlementValidationRule.Evaluate"/> over the <c>/api/rules/validate-entitlement</c>
-/// seam. The per-type carryover-inclusive <c>BookableLimit</c> the Backend computes from
-/// <c>EarnedToDatePiecewise</c> is therefore exercised end-to-end (this is NOT a new harness — it
-/// mirrors the established Skema-Docker precedent). DB facts are seeded directly; assertions read
+/// seam. The per-type carryover-inclusive <c>BookableLimit</c> the Backend computes from the FLAT
+/// <c>EarnedToDate</c> is therefore exercised end-to-end (this is NOT a new harness — it mirrors the
+/// established Skema-Docker precedent). DB facts are seeded directly; assertions read
 /// <c>absences_projection</c> back from the DB.</para>
 /// </summary>
 [Trait("Category", "Docker")]
-public sealed class SkemaPiecewiseAccrualTests : IAsyncLifetime
+public sealed class SkemaAccrualCapTests : IAsyncLifetime
 {
     private const string DevFallbackSigningKey = "StatsTid_Sprint3_DevKey_MustBeAtLeast32BytesLong!";
 
@@ -86,10 +91,18 @@ public sealed class SkemaPiecewiseAccrualTests : IAsyncLifetime
     /// <summary>
     /// A VACATION (MONTHLY_ACCRUAL) booking for an employee with NO <c>employee_profiles</c> row at
     /// the absence anchor is rejected <c>422 employment_profile_missing</c> — the Skema seam
-    /// fail-CLOSES rather than silently assuming a full-time 1.0 fraction (which would over-grant
-    /// forskud). We seed a dated agreement code (so the resolver does not throw on a missing
-    /// agreement row) but DELIBERATELY no profile row, isolating the missing-profile path. Nothing
-    /// persists.
+    /// fail-CLOSES rather than silently assuming a full-time 1.0 fraction. We seed a dated agreement
+    /// code (so the resolver does not throw on a missing agreement row) but DELIBERATELY no profile
+    /// row, isolating the missing-profile path. Nothing persists.
+    ///
+    /// <para>The fail-closed guard is the ANCHOR profile-missing 422
+    /// (<c>GetByEmployeeIdAtAsync(employeeId, firstAbsenceDate)</c> under <c>fractionMatters</c>,
+    /// which stays TRUE for VACATION via <c>isMonthlyAccrual</c>). Note (ADR-031 D4): even though
+    /// the FLAT day-count no longer USES the fraction, the anchor profile is still required (the
+    /// accrual-window guard) — the S62 empty-fraction-history fetch + its belt-and-suspenders 422
+    /// were removed with the ADR-030 D8 fraction-history math, so this anchor guard is the SOLE
+    /// (strict-superset, sufficient) fail-closed path; same <c>employment_profile_missing</c> 422
+    /// shape.</para>
     /// </summary>
     [Fact]
     public async Task Vacation_NoDatedProfileAtAnchor_FailsClosed422_NothingPersisted()
@@ -111,54 +124,59 @@ public sealed class SkemaPiecewiseAccrualTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // Piecewise forskud cap — full-time-then-part-time cap > single-fraction cap.
+    // Flat forskud cap — FRACTION-INDEPENDENT (ADR-031): a part-timer caps at
+    // the SAME flat annual 25 as a full-timer (Ferieloven §5 stk.1).
     // ════════════════════════════════════════════════════════════════════════
     //
     // Scenario (deterministic, fully-past ferieår 2024 = 1 Sep 2024 … 31 Aug 2025):
     //   profile FULL-TIME [.., 2025-01-01) then 0.5 [2025-01-01, NULL); employment_start NULL.
-    // VACATION forskud cap = EarnedToDatePiecewise at the ferieår end (2025-08-31). Month anchors:
-    //   Sep,Oct,Nov,Dec 2024 → 1.0 (4 months) ; Jan..Aug 2025 → 0.5 (8 months).
-    //   Σfraction = 4×1.0 + 8×0.5 = 8  ⇒  cap = 25 × 8 / 12 = 16.666… days.
-    // A single-fraction-at-CURRENT-terms cap (fraction 0.5) would be 25 × 0.5 = 12.5 days. So:
-    //   • 15 days  → ALLOWED by piecewise (15 ≤ 16.67) but REJECTED by single-fraction (15 > 12.5).
-    //   • 17 days  → REJECTED (17 > 16.67) — the piecewise cap is still bounded (no infinite forskud).
+    //   (The mid-ferieår fraction change is deliberately KEPT — a part-time fraction MUST be present
+    //   at the anchor to PROVE the cap ignores it.)
+    // VACATION forskud cap = EarnedToDate(25, 1.0, ferieaarStart, NULL, ferieaarEnd) at 2025-08-31
+    //   = 25 × 12/12 = 25 — the FLAT annual quota, INDEPENDENT of the 0.5 anchor fraction. So:
+    //   • 25 days → ALLOWED (the full flat annual quota, 0 carryover). The old fraction-scaled cap
+    //     would have rejected this (0.5 → ≈12,5 single-fraction; ≈16,67 the old ADR-030 D8 sum).
+    //   • 26 days → REJECTED (26 > 25) — the flat cap is still bounded (no infinite forskud).
 
     /// <summary>
-    /// 15 VACATION days for the full-time-then-half-time employee is ALLOWED: the piecewise forskud
-    /// cap (≈ 16,67 d — full-time Sep–Dec summed in) exceeds 15, even though a single-fraction cap at
-    /// the current 0,5 terms (12,5 d) would REJECT it. This is the load-bearing piecewise behaviour:
-    /// earlier full-time months are NOT erased by the later part-time fraction. The booking persists.
+    /// 25 VACATION days for the full-time-then-half-time employee is ALLOWED: the FLAT forskud cap
+    /// (the whole annual 25, fraction-independent — Ferieloven §5) admits the full annual quota even
+    /// though a fraction-scaled cap at the 0,5 anchor terms (≈12,5 d) would REJECT it. The
+    /// part-time fraction is seeded specifically to PROVE the cap ignores it (ADR-031 D1/D3). The
+    /// booking persists (0 carryover, so 25 is exactly the cap — allowed at the boundary).
     /// </summary>
     [Fact]
-    public async Task Vacation_PiecewiseForskudCap_AllowsBookingASingleFractionCapWouldReject()
+    public async Task Vacation_FlatForskudCap_FractionIndependent_Allows25ForPartTimer()
     {
         var employeeId = await SeedFullThenHalfTimeEmployeeAsync();
 
         var client = CreateEmployeeClient(employeeId, CreateRuleStubbedClient());
-        // 15 distinct VACATION days in the 2024 ferieår (Nov 2024 ⇒ entitlement_year 2024).
-        var dates = DistinctDays(new DateOnly(2024, 11, 4), 15);
+        // 25 distinct VACATION days in the 2024 ferieår (Nov 2024 ⇒ entitlement_year 2024).
+        var dates = DistinctDays(new DateOnly(2024, 11, 4), 25);
         var absences = dates.Select(d => (d, "VACATION", 7.4m)).ToArray();
 
         var rsp = await PostAbsencesAsync(client, employeeId, 2024, 11, absences);
 
-        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);          // piecewise cap ≈16.67 ≥ 15
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);          // flat cap 25 ≥ 25 (boundary allow)
         Assert.Equal(1, await CountAbsenceRowsAsync(employeeId, dates[0]));
-        Assert.Equal(15, await CountAbsenceRowsAsync(employeeId, dates));
+        Assert.Equal(25, await CountAbsenceRowsAsync(employeeId, dates));
     }
 
     /// <summary>
-    /// 17 VACATION days for the same full-time-then-half-time employee is REJECTED <c>422</c>: 17
-    /// exceeds the piecewise forskud cap (≈ 16,67 d), proving the cap — though raised by the
-    /// full-time months — is still BOUNDED (no infinite borrowing). Nothing persists. Together with
-    /// the 15-day allow, this brackets the piecewise cap on BOTH sides.
+    /// 26 VACATION days for the same full-time-then-half-time employee is REJECTED <c>422</c>: 26
+    /// exceeds the FLAT forskud cap (the whole annual 25, 0 carryover), proving the cap — though
+    /// fraction-independent — is still BOUNDED (no infinite borrowing). The rejection is the
+    /// quota-exceeded shape (NOT the profile-missing 422 — the part-time profile IS present at the
+    /// anchor). Nothing persists. Together with the 25-day allow, this brackets the flat cap on BOTH
+    /// sides.
     /// </summary>
     [Fact]
-    public async Task Vacation_BeyondPiecewiseForskudCap_Rejected422_NothingPersisted()
+    public async Task Vacation_BeyondFlatForskudCap_Rejected422_NothingPersisted()
     {
         var employeeId = await SeedFullThenHalfTimeEmployeeAsync();
 
         var client = CreateEmployeeClient(employeeId, CreateRuleStubbedClient());
-        var dates = DistinctDays(new DateOnly(2024, 11, 4), 17); // 17 > 16.67 piecewise cap
+        var dates = DistinctDays(new DateOnly(2024, 11, 4), 26); // 26 > 25 flat cap
         var absences = dates.Select(d => (d, "VACATION", 7.4m)).ToArray();
 
         var rsp = await PostAbsencesAsync(client, employeeId, 2024, 11, absences);
@@ -174,7 +192,8 @@ public sealed class SkemaPiecewiseAccrualTests : IAsyncLifetime
     /// <summary>
     /// Fresh employee with the deterministic full-time-then-half-time history used by the forskud-cap
     /// tests: full-time <c>[0001-01-01, 2025-01-01)</c> then 0,5 <c>[2025-01-01, NULL)</c>, plus a
-    /// dated AC agreement code covering all of history. <c>employment_start_date</c> stays NULL.
+    /// dated AC agreement code covering all of history. <c>employment_start_date</c> stays NULL. The
+    /// 0,5 anchor fraction is intentional — the flat-cap tests assert the cap IGNORES it (ADR-031).
     /// </summary>
     private async Task<string> SeedFullThenHalfTimeEmployeeAsync()
     {
@@ -249,14 +268,14 @@ public sealed class SkemaPiecewiseAccrualTests : IAsyncLifetime
     /// </summary>
     private async Task<string> CreateUserAsync(string orgId, string agreementCode)
     {
-        var userId = "emp_s62_skema_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+        var userId = "emp_s63_skema_" + Guid.NewGuid().ToString("N").Substring(0, 8);
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
         await conn.OpenAsync();
         await using var cmd = new NpgsqlCommand(
             """
             INSERT INTO users (user_id, username, password_hash, display_name, email,
                                primary_org_id, agreement_code, ok_version, is_active)
-            VALUES (@u, @u, 'dev-only', 'S62 Skema Piecewise Test User', NULL, @org, @ac, 'OK24', TRUE)
+            VALUES (@u, @u, 'dev-only', 'S63 Skema Accrual Cap Test User', NULL, @org, @ac, 'OK24', TRUE)
             """, conn);
         cmd.Parameters.AddWithValue("u", userId);
         cmd.Parameters.AddWithValue("org", orgId);

@@ -1,5 +1,4 @@
 using Npgsql;
-using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Exceptions;
 using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Models;
@@ -182,56 +181,5 @@ public sealed class EmploymentProfileResolver : IEmploymentProfileResolver
             // S31 cycle 2 absorption: IsPartTime is computed, not stored.
             IsPartTime = partTimeFraction < 1.0m,
         };
-    }
-
-    /// <inheritdoc />
-    public async Task<IReadOnlyList<FractionPeriod>> GetFractionHistoryAsync(
-        string employeeId, DateOnly from, DateOnly to, CancellationToken ct = default)
-    {
-        // S62 / TASK-6202 — single-table employee_profiles scan returning EVERY period that
-        // overlaps the half-open window [from, to). This is the ROW-OVERLAP predicate
-        // (effective_from < @to, NOT the point-in-time <= asOfDate of GetByEmployeeIdAtAsync),
-        // so the full piecewise-accrual history is fetched in ONE query rather than an N+1
-        // per-month dated-lookup loop. NO users JOIN, NO agreement-code lookup, NO throw —
-        // fraction history needs only part_time_fraction + the temporal columns; the
-        // empty-history polarity (Skema fail-closes / Balance defaults to 1.0) is the caller's.
-        const string sql =
-            """
-            SELECT ep.effective_from, ep.effective_to, ep.part_time_fraction
-            FROM employee_profiles ep
-            WHERE ep.employee_id = @employeeId
-              AND ep.effective_from < @to
-              AND (ep.effective_to IS NULL OR ep.effective_to > @from)
-            ORDER BY ep.effective_from
-            """;
-
-        await using var conn = _dbFactory.Create();
-        await conn.OpenAsync(ct);
-        await using var cmd = new NpgsqlCommand(sql, conn);
-        cmd.Parameters.AddWithValue("employeeId", employeeId);
-        cmd.Parameters.AddWithValue("from", from);
-        cmd.Parameters.AddWithValue("to", to);
-
-        var periods = new List<FractionPeriod>();
-
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-
-        var fromOrd = reader.GetOrdinal("effective_from");
-        var toOrd = reader.GetOrdinal("effective_to");
-        var fractionOrd = reader.GetOrdinal("part_time_fraction");
-
-        while (await reader.ReadAsync(ct))
-        {
-            var effectiveFrom = reader.GetFieldValue<DateOnly>(fromOrd);
-            DateOnly? effectiveTo = reader.IsDBNull(toOrd)
-                ? null
-                : reader.GetFieldValue<DateOnly>(toOrd);
-            var fraction = reader.GetDecimal(fractionOrd);
-
-            periods.Add(new FractionPeriod(effectiveFrom, effectiveTo, fraction));
-        }
-
-        // ADR-023 D3: empty list (never null, never throw) when no row overlaps the window.
-        return periods;
     }
 }

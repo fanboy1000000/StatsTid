@@ -106,15 +106,15 @@ Source: `DefaultEntitlementConfigs.cs` and `entitlement_configs` seed data.
 
 | Entitlement Type | Annual Quota | Reset Month | Per-Episode | Pro-Rate Part-Time | Carryover Max | Min Age | Notes | SR rows |
 |-----------------|-------------|-------------|-------------|-------------------|---------------|---------|-------|---------|
-| VACATION | 25 days | September (9) | No | Yes | 5 days | -- | Ferie (ferieaar) | SR-AC-OK24-013 (quota, HIGH per Ferieloven) + SR-AC-OK24-032 (sub-fields) |
-| SPECIAL_HOLIDAY | 5 days | September (9) | No | Yes | 0 | -- | Saerlige feriedage | SR-AC-OK24-031 (quota) + SR-AC-OK24-036 (sub-fields) |
+| VACATION | 25 days | September (9) | No | No (day-count flat per Ferieloven §5; ADR-031) | 5 days | -- | Ferie (ferieaar) | SR-AC-OK24-013 (quota, HIGH per Ferieloven) + SR-AC-OK24-032 (sub-fields) |
+| SPECIAL_HOLIDAY | 5 days | September (9) | No | No (day-count flat per Ferieloven §5; ADR-031) | 0 | -- | Saerlige feriedage | SR-AC-OK24-031 (quota) + SR-AC-OK24-036 (sub-fields) |
 | CARE_DAY | 2 days | January (1) | No | No | 0 | -- | Omsorgsdage | SR-AC-OK24-014 (quota) + SR-AC-OK24-033 (sub-fields) |
 | CHILD_SICK (AC) | 1 day | January (1) | Yes | No | 0 | -- | Barns sygedag | SR-AC-OK24-016 + SR-AC-OK24-034 |
 | CHILD_SICK (HK) | 2 days | January (1) | Yes | No | 0 | -- | Barns sygedag | SR-HK-OK24-028 |
 | CHILD_SICK (PROSA) | 3 days | January (1) | Yes | No | 0 | -- | Barns sygedag | SR-PROSA-OK24-005 (divergent quota) |
 | SENIOR_DAY | 2 days | January (1) | No | No | 0 | 62 | Seniordage — RESOLVED S37 TASK-3703 (was 0 + 60, paired-bug; user-corrected to 2 + 62 uniform across all 5 agreements). | SR-AC-OK24-015 + SR-AC-OK24-035 + SR-HK-OK24-029 + SR-PROSA-OK24-006 |
 
-VACATION and SPECIAL_HOLIDAY use the **MONTHLY_ACCRUAL** model (Ferieloven *samtidighedsferie* — earned-to-date, ~2,08 / ~0,42 days per month respectively; activated S60, **ADR-030**, superseding ADR-021 D6) and are pro-rated by part-time fraction. CARE_DAY, CHILD_SICK, and SENIOR_DAY use the IMMEDIATE accrual model. CHILD_SICK is the only per-episode entitlement and varies by agreement.
+VACATION and SPECIAL_HOLIDAY use the **MONTHLY_ACCRUAL** model (Ferieloven *samtidighedsferie* — earned-to-date, ~2,08 / ~0,42 days per month respectively; activated S60, **ADR-030**, superseding ADR-021 D6). Their **day-count is NOT pro-rated by part-time fraction** (flat 25/5 for every employee per Ferieloven §5 stk.1 — "uanset om du arbejder på fuld tid, nedsat tid, eller arbejder få dage om ugen"; state circular Medst. 021-24 §3 follows; **ADR-031**, superseding ADR-030 D8's piecewise-fraction premise): part-time pro-rates **consumption only** (§6 stk.2 — a <5-day/week worker's day off consumes >1 feriedag; requires `work_days_per_week`, deferred to **S64, launch-blocking** per ADR-031 D6) and the monetary feriebetaling value (not computed by this system). CARE_DAY, CHILD_SICK, and SENIOR_DAY use the IMMEDIATE accrual model. CHILD_SICK is the only per-episode entitlement and varies by agreement.
 
 > **AC_RESEARCH + AC_TEACHING gap (RESOLVED S37 TASK-3701)**: previously NO entitlement rows seeded for the 2 AC variants. Per interim-expert decision 2026-05-21, AC variants now have 20 rows mirroring AC base values (5 entitlements × 2 OK × 2 variants). See SR-AC_RESEARCH-OK24-005 + SR-AC_TEACHING-OK24-005 (canonical candidate bug **#1** in `agreement-ruleset-audit.md`). Bug-with-no-past-impact per ROADMAP rule correction policy.
 
