@@ -107,12 +107,20 @@ public sealed class SkemaAccrualCapTests : IAsyncLifetime
     [Fact]
     public async Task Vacation_NoDatedProfileAtAnchor_FailsClosed422_NothingPersisted()
     {
+        // ORDER MATTERS (S63 Docker-backlog catch): build the stubbed client FIRST. Deriving a
+        // factory via WithWebHostBuilder boots a fresh Program.cs host, and boot re-runs the S31
+        // EmployeeProfileSeeder, which BACKFILLS an employee_profiles row (1.0 @ '0001-01-01') for
+        // every user lacking one — creating the user before that boot silently destroys this test's
+        // "no profile row" premise (the S62 original had this latent bug; it was never run —
+        // Docker was down at the S62 and S63 closes).
+        var httpClient = CreateRuleStubbedClient();
+
         var employeeId = await CreateUserAsync(OrgId, "AC");
         // Agreement code present (covers the anchor) but NO employee_profiles row at all.
         await SeedAgreementCodeAsync(employeeId, "AC",
             effectiveFrom: new DateOnly(1, 1, 1), effectiveTo: null);
 
-        var client = CreateEmployeeClient(employeeId, CreateRuleStubbedClient());
+        var client = CreateEmployeeClient(employeeId, httpClient);
         var date = new DateOnly(2024, 11, 4); // ferieår 2024
         var rsp = await PostAbsencesAsync(client, employeeId, 2024, 11,
             new[] { (date, "VACATION", 7.4m) });

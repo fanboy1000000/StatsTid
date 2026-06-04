@@ -192,4 +192,20 @@ All four implementation agents first-pass clean — zero re-dispatches. The Step
 - danish-agreements.md Pro-Rate cells corrected with §5/§6 split + S64 pointer.
 - Process datum: a mid-Step-0b session kill is fully recoverable from `~/.codex/sessions` rollout logs + the harness transcript (user prompts, agent results, and edit timestamps reconstruct the exact resume point).
 
-**Standing open items**: ADR-032/S64 §6 stk.2 consumption (LAUNCH-BLOCKING, next); ADR-030 D7 §8/§7 payroll settlement (deferred); Oversigt grid+transferable dashboard (parked, resumes atop the corrected model); Docker-gated CI backlog (S61+S62+S63 sets).
+**Standing open items**: ADR-032/S64 §6 stk.2 consumption (LAUNCH-BLOCKING, next); ADR-030 D7 §8/§7 payroll settlement (deferred); Oversigt grid+transferable dashboard (parked, resumes atop the corrected model); ~~Docker-gated CI backlog (S61+S62+S63 sets)~~ → CLEARED post-close, see Addendum.
+
+## Post-Close Addendum — Docker backlog cleared (2026-06-04, after `b85dc88`)
+
+User-directed follow-up: Docker engine brought up; the **S61+S62+S63 Docker-gated sprint-close backlog is now verified green locally**.
+
+- **S63 set: 3/3 green** — after fixing ONE latent test bug (this addendum's commit): `SkemaAccrualCapTests.Vacation_NoDatedProfileAtAnchor_FailsClosed422_NothingPersisted` built its `WithWebHostBuilder`-derived client AFTER creating its test user; deriving the factory boots a fresh Program.cs host whose **S31 `EmployeeProfileSeeder` backfills an `employee_profiles` row for every user lacking one**, silently destroying the "no profile row" premise → the booking legitimately passed (200). The S62 original carried the same bug; it was never executed (Docker down at both closes). **Production code verified correct** (resolver returns null on zero covering rows → anchor 422 fires — now proven by the passing test). Fix: build the stubbed client BEFORE creating the user. Scoped post-close Codex review run per the Step-7a post-close-coverage rule.
+- **S61/S62 sets** (`BalanceSeriesTests` + Testcontainers-era classes): green in the full runs — no fix needed.
+- The flat-cap bracket now has live proof: a half-time employee books **25 VACATION days → allowed**, 26 → 422 — fraction-independence verified end-to-end against a real DB.
+
+**Discovered while clearing (pre-existing, NOT this sprint's scope):**
+1. **A ~47-test deterministic-failure cluster in older Docker-gated Regression classes** (TxContract ×6, EmployeeProfileEndpoint ×4, Payroll EmployeeProfileMarquee ×4 [`EmployeeProfileNotFoundException` — seeds users but no `user_agreement_codes` row; relies on state the S34 fail-loud resolver no longer tolerates], PhaseE audit ×6, Outbox-atomic ×7, Segmentation ×5, …). **Bisect-proven pre-existing**: the marquee class fails identically at `c09acbf` (S62) AND `1e70874` (S60) in clean worktrees — broken since before S60.
+2. **CI `build-and-test` (regression step) has been RED on every master push since ≥ S57** (gh run list, 2026-05-31 onward), with the **Smoke CI job perpetually skipped** behind it — the cluster above was failing in CI all along, unsurfaced. Unit/docs/frontend/gitleaks/vuln-scan CI jobs are green throughout (incl. on `b85dc88`).
+3. **Smoke locally 3/4**: `Backend_RegisterAndRetrieveTimeEntry` expects 201, gets **403** — a GlobalAdmin registering time FOR another employee; almost certainly a stale assertion vs. the S5x employee-self/RBAC restructure (needs confirmation when the cluster is addressed).
+4. ReportingLine ×37 + siblings additionally require the **compose stack's postgres on :5432** (older test pattern) — they go green with `docker compose up` (fresh stack rebuilt + S63-seeded as part of this work).
+
+**Disposition**: items 1–3 are an accumulated debt seam that predates S61 — routed to a **candidate dedicated test-debt sprint** (per the route-to-a-sprint discipline; not ad-hoc fixed here). Candidate scope: re-green the ~47 cluster (mostly fixture seeding vs. the S34 agreement-code fail-loud contract + accumulated-state assumptions), reconcile the smoke RBAC expectation, and make CI-red surfacing part of sprint-close (e.g., a `gh run` check in the close protocol — the doc-gate equivalent for CI health).
