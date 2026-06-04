@@ -306,12 +306,25 @@ public sealed class UserAgreementCodeRepositoryTests : IAsyncLifetime
         const string userId = "emp001";
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
+        // S35/TASK-3506 (a5e3ce0): /api/admin/users PUT is admin-strict If-Match
+        // (ADR-019 D2) — 428 without the header. GET the live ETag, then PUT with
+        // If-Match (same idiom as AdminUserVersioningTests).
+        var getRsp = await client.GetAsync($"/api/admin/users/{userId}");
+        Assert.Equal(HttpStatusCode.OK, getRsp.StatusCode);
+        var etag = getRsp.Headers.ETag;
+        Assert.NotNull(etag);
+
         // emp001 seeded at agreement_code='AC'. Flip to 'HK' via PUT.
-        var rsp = await client.PutAsJsonAsync($"/api/admin/users/{userId}", new
+        var putReq = new HttpRequestMessage(HttpMethod.Put, $"/api/admin/users/{userId}")
         {
-            agreementCode = "HK",
-            effectiveFrom = today.ToString("yyyy-MM-dd"),
-        });
+            Content = JsonContent.Create(new
+            {
+                agreementCode = "HK",
+                effectiveFrom = today.ToString("yyyy-MM-dd"),
+            }),
+        };
+        putReq.Headers.IfMatch.Add(etag!);
+        var rsp = await client.SendAsync(putReq);
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
 
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);

@@ -103,11 +103,13 @@ public sealed class AdminUserCreateAtomicTests : IAsyncLifetime
             Assert.Equal(1L, Convert.ToInt64(await usersCmd.ExecuteScalarAsync()));
         }
 
-        // (2) employee_profiles row with S31 defaults (weekly_norm_hours=37,
-        //     part_time_fraction=1.000, position=NULL, version=1).
+        // (2) employee_profiles row with S31 defaults (part_time_fraction=1.000,
+        //     position=NULL, version=1).
+        // S53/TASK-5306 (a7aee58): employee_profiles.weekly_norm_hours removed
+        // (universal 37h norm); column dropped from SELECT, ordinals shift down by one.
         await using (var profileCmd = new NpgsqlCommand(
             """
-            SELECT weekly_norm_hours, part_time_fraction, position, version
+            SELECT part_time_fraction, position, version
             FROM employee_profiles
             WHERE employee_id = @employeeId AND effective_to IS NULL
             """, conn))
@@ -116,10 +118,9 @@ public sealed class AdminUserCreateAtomicTests : IAsyncLifetime
             await using var reader = await profileCmd.ExecuteReaderAsync();
             Assert.True(await reader.ReadAsync(),
                 $"Expected one live employee_profiles row for '{newUserId}'.");
-            Assert.Equal(37.0m, reader.GetDecimal(0));
-            Assert.Equal(1.000m, reader.GetDecimal(1));
-            Assert.True(reader.IsDBNull(2), "Position should default to NULL for new users.");
-            Assert.Equal(1L, reader.GetInt64(3));
+            Assert.Equal(1.000m, reader.GetDecimal(0));
+            Assert.True(reader.IsDBNull(1), "Position should default to NULL for new users.");
+            Assert.Equal(1L, reader.GetInt64(2));
             // Partial-unique-index guarantees exactly one live row.
             Assert.False(await reader.ReadAsync(),
                 $"Expected exactly one live row for '{newUserId}', found more than one.");

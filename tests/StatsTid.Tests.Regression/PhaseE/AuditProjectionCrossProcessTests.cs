@@ -22,6 +22,22 @@ public sealed class AuditProjectionCrossProcessTests : IAsyncLifetime
         _harness = await Segmentation.TestFixtures.DockerHarness.StartAsync();
         await OutboxTestSchema.ApplyAsync(_harness.ConnectionString);
         await AuditProjectionTestSchema.ApplyAsync(_harness.ConnectionString);
+
+        // Seed the org FK target for the TENANT_TARGETED audit row. The happy-path
+        // test writes audit_projection.target_org_id = TestOrgId (ResolvedTargetOrgId);
+        // without this row InsertAsync hit 23503 (audit_projection_target_org_id_fkey).
+        await using (var seedConn = new NpgsqlConnection(_harness.ConnectionString))
+        {
+            await seedConn.OpenAsync();
+            await using var seedCmd = new NpgsqlCommand(
+                @"INSERT INTO organizations (org_id, org_name, org_type, materialized_path)
+                  VALUES (@id, 'Cross-Process Test Org', 'STYRELSE', @path)
+                  ON CONFLICT DO NOTHING", seedConn);
+            seedCmd.Parameters.AddWithValue("id", TestOrgId);
+            seedCmd.Parameters.AddWithValue("path", $"/{TestOrgId}/");
+            await seedCmd.ExecuteNonQueryAsync();
+        }
+
         _auditRepo = new AuditProjectionRepository(_harness.Factory);
         _realOutbox = new PostgresEventStore(_harness.Factory, new OutboxServiceContext("payroll"));
         _mapper = new RetroactiveCorrectionRequestedAuditMapper();

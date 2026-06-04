@@ -91,6 +91,57 @@ internal static class TestFixtures
         new("FLEX_BALANCE",     Span.CrossPeriod, SplitBehavior.Mergeable,      Family.Calculation, MergeStrategy.Custom,                  SnapshotContract: null),
     };
 
+    /// <summary>
+    /// Straddle-safe variant of <see cref="RuleSet"/> for the PCS-round-trip tests that
+    /// plan across an interior OK boundary. Identical to <see cref="RuleSet"/> except
+    /// OVERTIME_CALC is SegmentSafe/Concatenate rather than AlignedWindow/RejectIfMultipleSegments.
+    ///
+    /// S20 (97881dd) + ADR-016 D4 — AlignedWindow + interior OK-boundary rejects by design;
+    /// these round-trip tests need a plannable straddle. The shared <see cref="RuleSet"/>'s
+    /// AlignedWindow OVERTIME_CALC causes PeriodPlanner.Plan to throw PlannerInvariantViolation
+    /// for any period containing an interior boundary (PlannerOptions.AllowUpstreamAlignment
+    /// false). The file-local SegmentSafeCalc pattern used by the planner-only _Valid_ tests in
+    /// BoundaryScenarioTests is mirrored here for the manifest/replay/export round-trips that
+    /// must actually segment the OkStraddleSources() boundary. The _Invalid_AlignedWindowRejects
+    /// twins keep asserting the throw on the AlignedWindow rule, so the rejection contract stays
+    /// pinned. NOTE: PeriodCalculationService still merges via its own IRuleClassificationProvider
+    /// (the full AlignedWindow RuleSet wired by BuildPcs), so per-rule merge behaviour is unchanged
+    /// — this set only governs the planner's rule-side invariants at Plan() time.
+    /// </summary>
+    public static readonly RuleClassification[] StraddleSafeRuleSet =
+    {
+        new("SUPPLEMENT_CALC",  Span.Entry,       SplitBehavior.SegmentSafe,    Family.Calculation, MergeStrategy.Concatenate, SnapshotContract: null),
+        new("ON_CALL_DUTY",     Span.Entry,       SplitBehavior.SegmentSafe,    Family.Calculation, MergeStrategy.Concatenate, SnapshotContract: null),
+        new("OVERTIME_CALC",    Span.Entry,       SplitBehavior.SegmentSafe,    Family.Calculation, MergeStrategy.Concatenate, SnapshotContract: null),
+        new("NORM_CHECK_37H",   Span.Period,      SplitBehavior.SegmentSafe,    Family.Calculation, MergeStrategy.Concatenate, SnapshotContract: null),
+        new("FLEX_BALANCE",     Span.CrossPeriod, SplitBehavior.Mergeable,      Family.Calculation, MergeStrategy.Custom,      SnapshotContract: null),
+    };
+
+    /// <summary>
+    /// Builds the planner enrollment the PCS export path requires — the WtmNaturalKey
+    /// snapshot hydrator (ADR-020 D1 / S29 TASK-2907). MIRRORS
+    /// <c>PeriodCalculationService.BuildPlanForLegacyCallersAsync</c> (PCS L626-630): the
+    /// obsolete CalculateAsync(profile, …) shim registers this seam so every segment's
+    /// snapshot carries the (OkVersion, AgreementCode, Position) triple that
+    /// <c>MapSegmentToExportLinesAsync</c> reads back to drive the dated wage-type-mapping
+    /// lookup. The straddle round-trip tests call <see cref="PeriodPlanner.Plan"/> DIRECTLY
+    /// (to assert the segment count) and then <c>CalculateAsync(plan, …)</c>, so they must
+    /// register the SAME enrollment + pass the profile here — otherwise the segment snapshot
+    /// lacks WtmNaturalKey and the PCS throws InvalidOperationException at export time. This
+    /// requirement was previously MASKED by the AlignedWindow PlannerInvariantViolation that
+    /// the StraddleSafeRuleSet removes (F4-1) — confirming the tests were never green on this
+    /// path (ADR-024 D3 F4-1 verdict (a)).
+    /// </summary>
+    public static IPlannerEnrollment StraddleEnrollment()
+    {
+        var enrollment = new PlannerEnrollment();
+        enrollment.RegisterSnapshotContract("WtmNaturalKey", p => new WtmNaturalKey(
+            OkVersion: p.OkVersion,
+            AgreementCode: p.AgreementCode,
+            Position: p.Position ?? ""));
+        return enrollment;
+    }
+
     public static async Task SeedWageTypeMappingsAsync(DbConnectionFactory factory)
     {
         var rows = new (string TimeType, string WageType, string Ok)[]

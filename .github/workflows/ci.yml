@@ -60,6 +60,27 @@ jobs:
 
   build-and-test:
     runs-on: ubuntu-latest
+    # S64 / TASK-6405: services-postgres for the regression step. The compose-coupled
+    # regression classes (ReportingLine et al.) connect to a fixed localhost:5432 —
+    # locally that's the docker-compose postgres; in CI this service container plays
+    # that role (image + env triple mirror docker/docker-compose.yml:9-14 exactly).
+    # Without it the regression step structurally could not pass (S64 Step-0b/refinement
+    # cycle-1 Codex BLOCKER). Testcontainers-based classes are unaffected (they
+    # self-provision postgres on random host ports via the runner's Docker daemon).
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: statstid
+          POSTGRES_USER: statstid
+          POSTGRES_PASSWORD: statstid_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U statstid -d statstid"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     steps:
       - uses: actions/checkout@v4
 
@@ -88,6 +109,15 @@ jobs:
 
       - name: Run unit tests
         run: dotnet test tests/StatsTid.Tests.Unit --no-build -c Release --logger "trx"
+
+      - name: Apply init.sql to the services-postgres (schema + seeds for the :5432-coupled classes)
+        # S64 / TASK-6405: the compose-coupled classes read init.sql-seeded state (orgs,
+        # reporting-line rows, entitlement configs). psql ships on the ubuntu-latest
+        # runner image. ON_ERROR_STOP makes schema drift fail loudly here, not as
+        # mysterious downstream test failures.
+        env:
+          PGPASSWORD: statstid_dev
+        run: psql "host=localhost port=5432 dbname=statstid user=statstid" -v ON_ERROR_STOP=1 -q -f docker/postgres/init.sql
 
       - name: Run regression tests
         run: dotnet test tests/StatsTid.Tests.Regression --no-build -c Release --logger "trx"

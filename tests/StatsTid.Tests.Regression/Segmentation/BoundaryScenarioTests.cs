@@ -283,9 +283,15 @@ public sealed class BoundaryScenarioTests
             periodStart: Mar25,
             periodEnd: Apr07,
             calculationKind: "forward-calc",
-            ruleSet: TestFixtures.RuleSet,
+            // S20 (97881dd) + ADR-016 D4 — AlignedWindow + interior OK-boundary rejects by design;
+            // these round-trip tests need a plannable straddle. (F4-1)
+            ruleSet: TestFixtures.StraddleSafeRuleSet,
             sources: TestFixtures.OkStraddleSources(),
-            options: PlannerOptions.Default);
+            options: PlannerOptions.Default,
+            // F4-1: register the WtmNaturalKey enrollment the PCS export path requires (mirrors
+            // BuildPlanForLegacyCallersAsync); without it MapSegmentToExportLinesAsync throws.
+            enrollment: TestFixtures.StraddleEnrollment(),
+            profile: profile);
 
         Assert.Equal(2, plan.Segments.Count);
 

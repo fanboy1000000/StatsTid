@@ -169,8 +169,26 @@ public sealed class AuditProjectionSyncInTxTests : IAsyncLifetime
             OkVersion = "OK24",
         };
 
-        // Note: we do NOT seed the org FK target here — the whole tx
-        // will be rolled back so the FK is never checked at commit.
+        // Seed the org FK target on a committed connection first. PostgreSQL
+        // checks audit_projection.target_org_id → organizations(org_id) as an
+        // IMMEDIATE constraint at INSERT-statement time, not at COMMIT, so the
+        // in-tx InsertAsync below would raise 23503 before this test's explicit
+        // rollback ever runs. The org row persists (separate committed conn) but
+        // the assertions only count outbox_events + audit_projection, both of
+        // which the rollback must remove. Mirrors the committed-path test's seed.
+        await using (var seedConn = new NpgsqlConnection(_harness.ConnectionString))
+        {
+            await seedConn.OpenAsync();
+            await using var seedCmd = new NpgsqlCommand(
+                @"INSERT INTO organizations (org_id, org_name, org_type, materialized_path)
+                  VALUES (@orgId, @orgName, @orgType, @path)
+                  ON CONFLICT DO NOTHING", seedConn);
+            seedCmd.Parameters.AddWithValue("orgId", orgId);
+            seedCmd.Parameters.AddWithValue("orgName", ev.OrgName);
+            seedCmd.Parameters.AddWithValue("orgType", ev.OrgType);
+            seedCmd.Parameters.AddWithValue("path", ev.MaterializedPath);
+            await seedCmd.ExecuteNonQueryAsync();
+        }
 
         // Atomic tx: enqueue + map + audit insert + ROLLBACK
         await using var conn = _harness.Factory.Create();

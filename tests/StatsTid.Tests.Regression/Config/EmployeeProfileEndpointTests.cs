@@ -26,8 +26,9 @@ namespace StatsTid.Tests.Regression.Config;
 ///   <item><b>Validation</b>: negative <c>weekly_norm_hours</c> + out-of-range
 ///   <c>part_time_fraction</c> → 4xx.</item>
 ///   <item><b>Backfill bootstrap</b>: <see cref="StatsTid.Infrastructure.EmployeeProfileSeeder"/>
-///   runs at host startup; assert all 7 seed users have live profiles + 7
-///   <c>EmployeeProfileCreated</c> outbox events with <c>actor_id='SYSTEM_SEED'</c>.</item>
+///   runs at host startup; assert the 7 named seed users have live profiles, and that the
+///   seeder emits one <c>EmployeeProfileCreated</c> outbox event (<c>actor_id='SYSTEM_SEED'</c>)
+///   per active init.sql user — 19 total post seed-set growth S51–S63 (init.sql users seed = 19).</item>
 /// </list>
 ///
 /// <para>
@@ -83,7 +84,8 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
 
         var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal(Emp001, body.GetProperty("employeeId").GetString());
-        Assert.Equal(37.0m, body.GetProperty("weeklyNormHours").GetDecimal());
+        // S53/TASK-5306 (a7aee58) removed employee_profiles.weekly_norm_hours; the GET
+        // response DTO is now {employeeId, partTimeFraction, position, isPartTime, version}.
         Assert.Equal(1.000m, body.GetProperty("partTimeFraction").GetDecimal());
         Assert.False(body.GetProperty("isPartTime").GetBoolean());
         Assert.Equal(1L, body.GetProperty("version").GetInt64());
@@ -127,7 +129,8 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
 
         var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal(2L, body.GetProperty("version").GetInt64());
-        Assert.Equal(32.0m, body.GetProperty("weeklyNormHours").GetDecimal());
+        // S53/TASK-5306 (a7aee58): PUT DTO is now {EffectiveFrom, PartTimeFraction, Position};
+        // the response carries no weeklyNormHours.
         Assert.Equal(0.8m, body.GetProperty("partTimeFraction").GetDecimal());
         Assert.Equal("Specialist", body.GetProperty("position").GetString());
         Assert.True(body.GetProperty("isPartTime").GetBoolean());
@@ -219,9 +222,11 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
         // Defense in depth — the live row was not touched by the rejected request.
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
         await conn.OpenAsync();
+        // S53/TASK-5306 (a7aee58) removed employee_profiles.weekly_norm_hours; the live row
+        // now carries {version, part_time_fraction, position} for the defense-in-depth check.
         await using var cmd = new NpgsqlCommand(
             """
-            SELECT version, weekly_norm_hours, part_time_fraction, position
+            SELECT version, part_time_fraction, position
             FROM employee_profiles
             WHERE employee_id = @id AND effective_to IS NULL
             """, conn);
@@ -229,9 +234,8 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
         await using var reader = await cmd.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         Assert.Equal(1L, reader.GetInt64(0));
-        Assert.Equal(37.0m, reader.GetDecimal(1));
-        Assert.Equal(1.000m, reader.GetDecimal(2));
-        Assert.True(reader.IsDBNull(3));
+        Assert.Equal(1.000m, reader.GetDecimal(1));
+        Assert.True(reader.IsDBNull(2));
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -373,7 +377,10 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
             Assert.Equal(7L, Convert.ToInt64(await cnt.ExecuteScalarAsync()));
         }
 
-        // 7 EmployeeProfileCreated outbox events with actor_id='SYSTEM_SEED'.
+        // EmployeeProfileCreated outbox events with actor_id='SYSTEM_SEED'. The seeder
+        // backfills EVERY active user lacking a live profile (EmployeeProfileSeeder.SeedAsync
+        // — no name filter), so this UNFILTERED count tracks the full init.sql users seed.
+        // seed-set growth S51–S63 (init.sql users seed = 19): 19 events, not the original 7.
         await using (var evCmd = new NpgsqlCommand(
             """
             SELECT COUNT(*) FROM outbox_events
@@ -381,7 +388,7 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
               AND actor_id = 'SYSTEM_SEED'
             """, conn))
         {
-            Assert.Equal(7L, Convert.ToInt64(await evCmd.ExecuteScalarAsync()));
+            Assert.Equal(19L, Convert.ToInt64(await evCmd.ExecuteScalarAsync()));
         }
 
         // Each seed user has its event on the correct per-employee stream.

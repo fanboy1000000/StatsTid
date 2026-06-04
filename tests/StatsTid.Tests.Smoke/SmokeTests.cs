@@ -122,6 +122,47 @@ public class SmokeTests
     [Fact]
     public async Task Backend_RegisterAndRetrieveTimeEntry()
     {
+        // OrgScopeValidator deny-before-GLOBAL (S64 census): ValidateEmployeeAccessAsync
+        // resolves the target employee BEFORE the GLOBAL scope short-circuit, so a GlobalAdmin
+        // POSTing for a NEVER-SEEDED target gets 403 ("Target employee not found"), not 201.
+        // Target an init.sql-seeded employee (emp001, org STY01, agreement_code AC) so the
+        // GlobalAdmin end-to-end 201 write path is exercised.
+        const string seededEmployeeId = "emp001";
+        var registerRequest = new
+        {
+            employeeId = seededEmployeeId,
+            date = "2024-04-01",
+            hours = 7.4m,
+            agreementCode = "AC",
+            okVersion = "OK24"
+        };
+
+        var postRequest = new HttpRequestMessage(HttpMethod.Post, $"{BackendUrl}/api/time-entries")
+        {
+            Content = JsonContent.Create(registerRequest)
+        };
+        WithAuth(postRequest);
+
+        var registerResponse = await _client.SendAsync(postRequest);
+        Assert.Equal(HttpStatusCode.Created, registerResponse.StatusCode);
+
+        var getRequest = new HttpRequestMessage(HttpMethod.Get, $"{BackendUrl}/api/time-entries/{seededEmployeeId}");
+        WithAuth(getRequest);
+
+        var getResponse = await _client.SendAsync(getRequest);
+        Assert.Equal(HttpStatusCode.OK, getResponse.StatusCode);
+
+        var entries = await getResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(entries.GetArrayLength() > 0);
+    }
+
+    [Fact]
+    public async Task Backend_RegisterTimeEntry_UnknownTarget_Forbidden()
+    {
+        // OrgScopeValidator deny-before-GLOBAL (S64 census): even a GlobalAdmin is denied a
+        // POST against a target employee that does not exist — ValidateEmployeeAccessAsync
+        // resolves the target user and returns "Target employee not found" (403) BEFORE the
+        // GLOBAL scope short-circuit. SMOKE002 is never seeded, so this pins the 403 contract.
         var registerRequest = new
         {
             employeeId = "SMOKE002",
@@ -138,16 +179,7 @@ public class SmokeTests
         WithAuth(postRequest);
 
         var registerResponse = await _client.SendAsync(postRequest);
-        Assert.Equal(HttpStatusCode.Created, registerResponse.StatusCode);
-
-        var getRequest = new HttpRequestMessage(HttpMethod.Get, $"{BackendUrl}/api/time-entries/SMOKE002");
-        WithAuth(getRequest);
-
-        var getResponse = await _client.SendAsync(getRequest);
-        Assert.Equal(HttpStatusCode.OK, getResponse.StatusCode);
-
-        var entries = await getResponse.Content.ReadFromJsonAsync<JsonElement>();
-        Assert.True(entries.GetArrayLength() > 0);
+        Assert.Equal(HttpStatusCode.Forbidden, registerResponse.StatusCode);
     }
 
     [Fact]

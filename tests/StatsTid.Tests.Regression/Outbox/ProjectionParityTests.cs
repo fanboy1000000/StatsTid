@@ -222,11 +222,12 @@ public sealed class ProjectionParityTests : IAsyncLifetime
         var dates = new List<DateOnly>();
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
         await conn.OpenAsync();
-        // Pull the date out of the JSONB payload. Same OK-version-agnostic shape used by
-        // OutboxPublisherTests when it reads payloads directly.
+        // Pull the date out of the JSONB payload. EventSerializer camelCase since S3 (0cb4ced);
+        // S64 replay-parity sweep: all production readers camelCase/typed — so the JSONB key is
+        // 'date' (PascalCase 'Date' returns NULL under Postgres' case-sensitive ->> lookup).
         await using var cmd = new NpgsqlCommand(
             """
-            SELECT (data ->> 'Date') FROM events
+            SELECT (data ->> 'date') FROM events
             WHERE stream_id = @s AND event_type = 'TimeEntryRegistered'
             ORDER BY stream_version ASC
             """, conn);
@@ -245,9 +246,11 @@ public sealed class ProjectionParityTests : IAsyncLifetime
         var dates = new List<DateOnly>();
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
         await conn.OpenAsync();
+        // EventSerializer camelCase since S3 (0cb4ced); S64 replay-parity sweep: the JSONB key
+        // is 'date' (case-sensitive ->> lookup — PascalCase 'Date' returns NULL).
         await using var cmd = new NpgsqlCommand(
             """
-            SELECT (data ->> 'Date') FROM events
+            SELECT (data ->> 'date') FROM events
             WHERE stream_id = @s AND event_type = 'AbsenceRegistered'
             ORDER BY stream_version ASC
             """, conn);

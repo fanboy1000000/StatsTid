@@ -73,9 +73,10 @@ public sealed class EntitlementConfigEndpointTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
 
         var arr = await rsp.Content.ReadFromJsonAsync<JsonElement>();
-        // 5 entitlement_types × 3 agreements × 2 ok_versions = 30 live seed rows.
+        // S37/TASK-3701 (3eea4f5): AC_RESEARCH + AC_TEACHING variants added (+20 rows).
+        // 5 entitlement_types × 5 agreement_codes × 2 ok_versions = 50 live seed rows.
         var count = arr.EnumerateArray().Count();
-        Assert.Equal(30, count);
+        Assert.Equal(50, count);
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -392,12 +393,20 @@ public sealed class EntitlementConfigEndpointTests : IAsyncLifetime
         Assert.Equal(1L, version);
         var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
 
+        // ADR-030/S60 + S62 accrual guard; S64 F4-5 ruling. The seeded VACATION/AC/OK24 row
+        // flipped to accrual_model='MONTHLY_ACCRUAL' in S60 (ADR-030 samtidighedsferie). The PUT
+        // immutability guard (EntitlementConfigEndpoints reset_month/accrual_model freeze, Q1
+        // sub-fork (i)) returns 422 if the body's accrual_model differs from the predecessor's.
+        // The original 'IMMEDIATE' now diverges from the MONTHLY_ACCRUAL seed → 422. Match the
+        // predecessor's accrual_model (and the unchanged reset_month=9) so the supersession is
+        // valid; the test's INTENT (exactly one live VACATION after Case-B supersession) is
+        // preserved — the annual_quota edit (25→27) still forces a new live row.
         var putRsp = await PutAsync(client, configId,
             entitlementType: "VACATION",
             agreementCode: "AC",
             okVersion: "OK24",
-            annualQuota: 27m, // change from 25
-            accrualModel: "IMMEDIATE",
+            annualQuota: 27m, // change from 25 — still forces a Case-B supersession
+            accrualModel: "MONTHLY_ACCRUAL", // must match the S60 seed (immutable field)
             resetMonth: 9,
             carryoverMax: 5m,
             proRateByPartTime: true,

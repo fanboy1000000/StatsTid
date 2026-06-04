@@ -36,7 +36,9 @@ public sealed class UserAgreementCodeBackfillSeederTests : IAsyncLifetime
         _harness = await TestFixtures.DockerHarness.StartAsync();
         await StatsTidWebApplicationFactory.ApplyFullSchemaAsync(_harness.ConnectionString);
         _factory = new StatsTidWebApplicationFactory(_harness.ConnectionString);
-        // First CreateClient triggers Program.cs host build → first SeedAsync run.
+        // First CreateClient triggers Program.cs host build → first SeedAsync run. The seeder
+        // is awaited synchronously in Program.cs startup (BEFORE app.Run), so the backfilled
+        // rows are committed by the time CreateClient returns — no drain-await needed.
         _ = _factory.CreateClient();
     }
 
@@ -68,8 +70,13 @@ public sealed class UserAgreementCodeBackfillSeederTests : IAsyncLifetime
         await using (var conn = new NpgsqlConnection(_harness.ConnectionString))
         {
             await conn.OpenAsync();
+            // S64 F4-6 — the seeder writes effective_from = new DateOnly(1, 1, 1) (UNCHANGED
+            // since S34 65d4889 — verified per the ruling). Npgsql's infinity-conversion maps
+            // DateOnly.MinValue (0001-01-01) to Postgres DATE '-infinity', so the stored value
+            // is '-infinity', NOT the literal '0001-01-01'. The original query used the finite
+            // literal and matched 0 rows (defect — never the seeder). Match the stored anchor.
             firstBootRows = await CountAsync(conn,
-                "SELECT COUNT(*) FROM user_agreement_codes WHERE effective_from = DATE '0001-01-01' AND effective_to IS NULL");
+                "SELECT COUNT(*) FROM user_agreement_codes WHERE effective_from = DATE '-infinity' AND effective_to IS NULL");
             firstBootAuditRows = await CountAsync(conn,
                 "SELECT COUNT(*) FROM user_agreement_codes_audit WHERE action = 'CREATED' AND actor_id = 'SYSTEM_SEED'");
             firstBootSeededEvents = await CountAsync(conn,
@@ -91,8 +98,10 @@ public sealed class UserAgreementCodeBackfillSeederTests : IAsyncLifetime
         await using (var conn = new NpgsqlConnection(_harness.ConnectionString))
         {
             await conn.OpenAsync();
+            // S64 F4-6 — stored anchor is DATE '-infinity' (Npgsql DateOnly.MinValue mapping);
+            // see the firstBootRows query above.
             var secondBootRows = await CountAsync(conn,
-                "SELECT COUNT(*) FROM user_agreement_codes WHERE effective_from = DATE '0001-01-01' AND effective_to IS NULL");
+                "SELECT COUNT(*) FROM user_agreement_codes WHERE effective_from = DATE '-infinity' AND effective_to IS NULL");
             var secondBootAuditRows = await CountAsync(conn,
                 "SELECT COUNT(*) FROM user_agreement_codes_audit WHERE action = 'CREATED' AND actor_id = 'SYSTEM_SEED'");
             var secondBootSeededEvents = await CountAsync(conn,

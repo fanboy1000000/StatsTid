@@ -116,8 +116,9 @@ public sealed class EmployeeProfileAtomicTests : IAsyncLifetime
         {
             Content = JsonContent.Create(new
             {
+                // S53/TASK-5306 (a7aee58): weeklyNormHours removed from the PUT DTO
+                // (UpdateEmployeeProfileRequest) — only part_time_fraction varies.
                 effectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow),
-                weeklyNormHours = 30.0m,
                 partTimeFraction = 0.75m,
                 position = "Department Head",
             }),
@@ -131,7 +132,7 @@ public sealed class EmployeeProfileAtomicTests : IAsyncLifetime
 
         var putBody = await putRsp.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal(2L, putBody.GetProperty("version").GetInt64());
-        Assert.Equal(30.0m, putBody.GetProperty("weeklyNormHours").GetDecimal());
+        // S53/TASK-5306 (a7aee58): weeklyNormHours no longer in the response body.
         Assert.Equal(0.75m, putBody.GetProperty("partTimeFraction").GetDecimal());
         Assert.Equal("Department Head", putBody.GetProperty("position").GetString());
         Assert.True(putBody.GetProperty("isPartTime").GetBoolean());
@@ -141,9 +142,11 @@ public sealed class EmployeeProfileAtomicTests : IAsyncLifetime
         await conn.OpenAsync();
 
         // (a) Row update — live row reflects new values + version=2.
+        // S53/TASK-5306 (a7aee58): employee_profiles.weekly_norm_hours removed;
+        // column dropped from SELECT and downstream ordinals shift down by one.
         await using (var rowCmd = new NpgsqlCommand(
             """
-            SELECT version, weekly_norm_hours, part_time_fraction, position
+            SELECT version, part_time_fraction, position
             FROM employee_profiles
             WHERE employee_id = @employeeId AND effective_to IS NULL
             """, conn))
@@ -153,9 +156,8 @@ public sealed class EmployeeProfileAtomicTests : IAsyncLifetime
             Assert.True(await reader.ReadAsync(),
                 "Expected exactly one live row for emp001 after the PUT.");
             Assert.Equal(2L, reader.GetInt64(0));
-            Assert.Equal(30.0m, reader.GetDecimal(1));
-            Assert.Equal(0.75m, reader.GetDecimal(2));
-            Assert.Equal("Department Head", reader.GetString(3));
+            Assert.Equal(0.75m, reader.GetDecimal(1));
+            Assert.Equal("Department Head", reader.GetString(2));
         }
 
         // (b) Audit row — UPDATED action with version_before=1, version_after=2.
@@ -179,7 +181,7 @@ public sealed class EmployeeProfileAtomicTests : IAsyncLifetime
             // previous_data JSONB shows pre-PUT values (seeded defaults).
             var previousJson = reader.GetString(2);
             using var previousDoc = JsonDocument.Parse(previousJson);
-            Assert.Equal(37.0m, previousDoc.RootElement.GetProperty("weeklyNormHours").GetDecimal());
+            // S53/TASK-5306 (a7aee58): weeklyNormHours removed from the audit payload.
             Assert.Equal(1.000m, previousDoc.RootElement.GetProperty("partTimeFraction").GetDecimal());
             // Position was NULL pre-update; the endpoint serializes the source EmploymentProfile's
             // null Position as JSON null.
@@ -189,7 +191,7 @@ public sealed class EmployeeProfileAtomicTests : IAsyncLifetime
             // new_data JSONB shows the PUT payload.
             var newJson = reader.GetString(3);
             using var newDoc = JsonDocument.Parse(newJson);
-            Assert.Equal(30.0m, newDoc.RootElement.GetProperty("weeklyNormHours").GetDecimal());
+            // S53/TASK-5306 (a7aee58): weeklyNormHours removed from the audit payload.
             Assert.Equal(0.75m, newDoc.RootElement.GetProperty("partTimeFraction").GetDecimal());
             Assert.Equal("Department Head",
                 newDoc.RootElement.GetProperty("position").GetString());
@@ -236,8 +238,8 @@ public sealed class EmployeeProfileAtomicTests : IAsyncLifetime
             // are camelCase, not PascalCase.
             Assert.Equal(employeeId,
                 payloadDoc.RootElement.GetProperty("employeeId").GetString());
-            Assert.Equal(30.0m,
-                payloadDoc.RootElement.GetProperty("weeklyNormHours").GetDecimal());
+            // S53/TASK-5306 (a7aee58): weeklyNormHours removed from the
+            // EmployeeProfileUpdated event payload (PartTimeFraction + Position only).
             Assert.Equal(0.75m,
                 payloadDoc.RootElement.GetProperty("partTimeFraction").GetDecimal());
             Assert.Equal("Department Head",

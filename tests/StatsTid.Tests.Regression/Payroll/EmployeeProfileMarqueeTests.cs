@@ -346,68 +346,28 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Inserts a <c>users</c> row + an <c>employee_profiles</c> row for the
-    /// marquee employee. Uses the schema default <c>effective_from='0001-01-01'</c>
-    /// so the predecessor's window is unbounded-below — guaranteeing that a
-    /// today-effective Case C supersession closes a row that covered the
-    /// entire test period.
+    /// Seeds the marquee employee via the shared
+    /// <see cref="TestSupport.RegressionSeed.SeedEmployeeAsync(NpgsqlConnection, string, string, string, string, decimal, DateOnly?, string?, bool, CancellationToken)"/>
+    /// helper, which atomically writes <c>users</c> + <c>user_agreement_codes</c>
+    /// + <c>employee_profiles</c>. The agreement-code row is the piece the prior
+    /// local seeder omitted — without it the dated resolver throws
+    /// <c>EmployeeProfileNotFoundException</c> at L169 (S34 fail-loud). All three
+    /// rows anchor at the schema-default <c>effective_from='0001-01-01'</c> so the
+    /// predecessor's window is unbounded-below, guaranteeing a today-effective
+    /// Case C supersession closes a profile row that covered the entire test period
+    /// while the agreement-code row stays open across April 2026.
     /// </summary>
     private async Task SeedUserAndProfileAsync(decimal partTimeFraction)
     {
         await using var conn = _harness.Factory.Create();
         await conn.OpenAsync();
-
-        // organizations FK target — minimal row for the user's primary_org_id.
-        // Column names match docker/postgres/init.sql:439-450:
-        // org_name (not name), materialized_path (not hierarchy_path),
-        // agreement_code/ok_version (no default_ prefix).
-        await using (var orgCmd = new NpgsqlCommand(
-            """
-            INSERT INTO organizations (org_id, org_name, org_type, parent_org_id, materialized_path,
-                                       agreement_code, ok_version)
-            VALUES (@orgId, 'Marquee Org', 'STYRELSE', NULL, '/MARQ/',
-                    @agreementCode, @okVersion)
-            ON CONFLICT (org_id) DO NOTHING
-            """, conn))
-        {
-            orgCmd.Parameters.AddWithValue("orgId", OrgId);
-            orgCmd.Parameters.AddWithValue("agreementCode", AgreementCode);
-            orgCmd.Parameters.AddWithValue("okVersion", OkVersion);
-            await orgCmd.ExecuteNonQueryAsync();
-        }
-
-        await using (var userCmd = new NpgsqlCommand(
-            """
-            INSERT INTO users (user_id, username, password_hash, display_name, email,
-                               primary_org_id, agreement_code, ok_version)
-            VALUES (@userId, @userId, 'dev-only', 'Marquee Employee', NULL,
-                    @orgId, @agreementCode, @okVersion)
-            ON CONFLICT (user_id) DO NOTHING
-            """, conn))
-        {
-            userCmd.Parameters.AddWithValue("userId", EmployeeId);
-            userCmd.Parameters.AddWithValue("orgId", OrgId);
-            userCmd.Parameters.AddWithValue("agreementCode", AgreementCode);
-            userCmd.Parameters.AddWithValue("okVersion", OkVersion);
-            await userCmd.ExecuteNonQueryAsync();
-        }
-
-        // employee_profiles row — schema default effective_from='0001-01-01'.
-        await using (var epCmd = new NpgsqlCommand(
-            """
-            INSERT INTO employee_profiles (
-                profile_id, employee_id, part_time_fraction, position,
-                effective_from, effective_to, version)
-            VALUES (
-                gen_random_uuid(), @employeeId, @partTimeFraction, NULL,
-                DEFAULT, NULL, 1)
-            ON CONFLICT DO NOTHING
-            """, conn))
-        {
-            epCmd.Parameters.AddWithValue("employeeId", EmployeeId);
-            epCmd.Parameters.AddWithValue("partTimeFraction", partTimeFraction);
-            await epCmd.ExecuteNonQueryAsync();
-        }
+        await TestSupport.RegressionSeed.SeedEmployeeAsync(
+            conn,
+            employeeId: EmployeeId,
+            orgId: OrgId,
+            agreementCode: AgreementCode,
+            okVersion: OkVersion,
+            partTimeFraction: partTimeFraction);
     }
 
     /// <summary>

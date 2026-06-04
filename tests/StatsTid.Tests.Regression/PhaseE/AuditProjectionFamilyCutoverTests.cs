@@ -36,6 +36,22 @@ public sealed class AuditProjectionFamilyCutoverTests : IAsyncLifetime
         await AuditProjectionTestSchema.ApplyAsync(_harness.ConnectionString);
         await ForcedRollbackHarness.ApplySchemaAsync(_harness.ConnectionString);
 
+        // Seed the org FK target for the TENANT_TARGETED audit rows. The happy-path
+        // tests write audit_projection.target_org_id = TestOrgId; without this row
+        // InsertAsync hit 23503 (audit_projection_target_org_id_fkey). Mirrors the
+        // per-class seed pattern in AuditProjectionSyncInTxTests/CatalogCloseTests.
+        await using (var seedConn = new NpgsqlConnection(_harness.ConnectionString))
+        {
+            await seedConn.OpenAsync();
+            await using var seedCmd = new NpgsqlCommand(
+                @"INSERT INTO organizations (org_id, org_name, org_type, materialized_path)
+                  VALUES (@id, 'S44B Test Org', 'STYRELSE', @path)
+                  ON CONFLICT DO NOTHING", seedConn);
+            seedCmd.Parameters.AddWithValue("id", TestOrgId);
+            seedCmd.Parameters.AddWithValue("path", $"/{TestOrgId}/");
+            await seedCmd.ExecuteNonQueryAsync();
+        }
+
         var services = new ServiceCollection();
         services.AddSingleton(_harness.Factory);
         services.AddSingleton<AuditProjectionRepository>();

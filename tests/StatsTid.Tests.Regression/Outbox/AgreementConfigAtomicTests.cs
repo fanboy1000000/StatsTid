@@ -267,8 +267,11 @@ public sealed class AgreementConfigAtomicTests : IAsyncLifetime
             var saveResult = await _repo.ArchiveAsync(conn, tx, configId, expectedVersion, "tester");
             Assert.False(saveResult.IsCreated);
             Assert.Equal(expectedVersion + 1, saveResult.Version);
+            // previous_data / new_data are JSONB (::jsonb cast in AppendAuditAsync) — bare
+            // strings "DRAFT"/"ARCHIVED" are not valid JSON (22P02); product correctly rejects
+            // them. Use JSON objects matching the valid shape at the CREATED/UPDATED sites above.
             await _repo.AppendAuditAsync(
-                conn, tx, configId, "ARCHIVED", "DRAFT", "ARCHIVED", "tester", "GLOBAL_ADMIN");
+                conn, tx, configId, "ARCHIVED", "{\"status\":\"DRAFT\"}", "{\"status\":\"ARCHIVED\"}", "tester", "GLOBAL_ADMIN");
 
             var @event = new AgreementConfigArchived
             {

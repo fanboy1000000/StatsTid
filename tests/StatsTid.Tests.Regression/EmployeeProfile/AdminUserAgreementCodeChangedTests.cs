@@ -74,11 +74,26 @@ public sealed class AdminUserAgreementCodeChangedTests : IAsyncLifetime
 
         // emp001 in the seeded init.sql is agreement_code='AC'. PUT to "HK".
         const string userId = "emp001";
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
-        var rsp = await client.PutAsJsonAsync($"/api/admin/users/{userId}", new
+        // S35/TASK-3506 (a5e3ce0): /api/admin/users PUT is admin-strict If-Match
+        // (ADR-019 D2) — 428 without the header. Capture the live ETag via GET, then
+        // PUT with If-Match (same idiom as AdminUserVersioningTests).
+        var getRsp = await client.GetAsync($"/api/admin/users/{userId}");
+        Assert.Equal(HttpStatusCode.OK, getRsp.StatusCode);
+        var etag = getRsp.Headers.ETag;
+        Assert.NotNull(etag);
+
+        var putReq = new HttpRequestMessage(HttpMethod.Put, $"/api/admin/users/{userId}")
         {
-            agreementCode = "HK",
-        });
+            Content = JsonContent.Create(new
+            {
+                agreementCode = "HK",
+                effectiveFrom = today.ToString("yyyy-MM-dd"),
+            }),
+        };
+        putReq.Headers.IfMatch.Add(etag!);
+        var rsp = await client.SendAsync(putReq);
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
 
         var streamId = $"user-{userId}";
@@ -133,8 +148,7 @@ public sealed class AdminUserAgreementCodeChangedTests : IAsyncLifetime
             Assert.Equal("HK",
                 payloadDoc.RootElement.GetProperty("newAgreementCode").GetString());
             // EffectiveFrom is DateOnly per TASK-3304; serialized as
-            // ISO-8601 yyyy-MM-dd. Today's UTC date.
-            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+            // ISO-8601 yyyy-MM-dd. Today's UTC date (declared at method scope above).
             var effectiveFromStr = payloadDoc.RootElement
                 .GetProperty("effectiveFrom").GetString();
             Assert.NotNull(effectiveFromStr);
@@ -157,12 +171,27 @@ public sealed class AdminUserAgreementCodeChangedTests : IAsyncLifetime
     {
         var client = AuthorizedClient();
         const string userId = "emp001";
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+
+        // S35/TASK-3506 (a5e3ce0): /api/admin/users PUT is admin-strict If-Match
+        // (ADR-019 D2) — 428 without the header. GET the live ETag, then PUT with
+        // If-Match (same idiom as AdminUserVersioningTests).
+        var getRsp = await client.GetAsync($"/api/admin/users/{userId}");
+        Assert.Equal(HttpStatusCode.OK, getRsp.StatusCode);
+        var etag = getRsp.Headers.ETag;
+        Assert.NotNull(etag);
 
         // PUT body omits agreementCode (only display_name change).
-        var rsp = await client.PutAsJsonAsync($"/api/admin/users/{userId}", new
+        var putReq = new HttpRequestMessage(HttpMethod.Put, $"/api/admin/users/{userId}")
         {
-            displayName = "Updated Display Name S33",
-        });
+            Content = JsonContent.Create(new
+            {
+                displayName = "Updated Display Name S33",
+                effectiveFrom = today.ToString("yyyy-MM-dd"),
+            }),
+        };
+        putReq.Headers.IfMatch.Add(etag!);
+        var rsp = await client.SendAsync(putReq);
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
 
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);

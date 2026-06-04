@@ -34,6 +34,30 @@ internal static class AuditProjectionTestSchema
             updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
 
+        -- users table: the AuditProjectionBackfillService batch-loads a user→org map
+        -- (LoadUserOrgLookupAsync src:282 SELECTs user_id, primary_org_id) before mapping
+        -- employee-scoped events — absence raised 42P01 in AuditProjectionBackfillIdempotency-
+        -- Tests. S64 second pass: this block originally created a 2-column MINIMAL table,
+        -- which SHADOWED the fuller per-class DDL in AuditProjectionCutoverTests (its
+        -- CREATE TABLE IF NOT EXISTS no-ops when this shared block runs first) and broke its
+        -- INSERTs with 42703 "column username does not exist". Shared schema must carry the
+        -- SUPERSET shape (mirrors AuditProjectionCutoverTests.AdminSchemaDdl / init.sql).
+        CREATE TABLE IF NOT EXISTS users (
+            user_id             TEXT        PRIMARY KEY,
+            username            TEXT        NOT NULL UNIQUE,
+            password_hash       TEXT        NOT NULL,
+            display_name        TEXT        NOT NULL,
+            email               TEXT,
+            primary_org_id      TEXT        NOT NULL REFERENCES organizations(org_id),
+            agreement_code      TEXT        NOT NULL DEFAULT 'AC',
+            ok_version          TEXT        NOT NULL DEFAULT 'OK24',
+            employment_category TEXT        NOT NULL DEFAULT 'Standard',
+            is_active           BOOLEAN     NOT NULL DEFAULT TRUE,
+            version             BIGINT      NOT NULL DEFAULT 1,
+            created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
         CREATE TABLE IF NOT EXISTS event_streams (
             stream_id        TEXT         PRIMARY KEY,
             created_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW(),

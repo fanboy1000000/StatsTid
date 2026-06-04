@@ -160,7 +160,12 @@ public sealed class TxContractTests : IAsyncLifetime
             published_at            TIMESTAMPTZ,
             archived_at             TIMESTAMPTZ,
             cloned_from_id          UUID        REFERENCES agreement_configs(config_id),
-            description             TEXT
+            description             TEXT,
+            -- S25 / TASK-2503 row-version (ADR-018 D7 optimistic concurrency).
+            -- AgreementConfigRepository.ReadEntity (src:876) reads this column;
+            -- absence raised "Field not found in row: version". Mirrors init.sql
+            -- + ForcedRollbackHarness (which already carries it).
+            version                 BIGINT      NOT NULL DEFAULT 1
         );
 
         CREATE TABLE IF NOT EXISTS agreement_config_audit (
@@ -187,7 +192,11 @@ public sealed class TxContractTests : IAsyncLifetime
             created_by          TEXT        NOT NULL DEFAULT 'SYSTEM_SEED',
             created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            description         TEXT
+            description         TEXT,
+            -- S25 / TASK-2504 row-version (ADR-018 D7). PositionOverrideRepository.ReadEntity
+            -- (src:644) reads this column; absence raised "Field not found in row: version".
+            -- Mirrors init.sql + ForcedRollbackHarness (which already carries it).
+            version             BIGINT      NOT NULL DEFAULT 1
         );
 
         CREATE UNIQUE INDEX IF NOT EXISTS idx_position_override_active_unique

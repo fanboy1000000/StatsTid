@@ -251,9 +251,12 @@ public sealed class AgreementConfigConcurrencyTests : IAsyncLifetime
             // ADR-019 D1: second emission for the archived prior-ACTIVE config.
             var archivedId = saveResult.ArchivedId!.Value;
             var archivedVersion = saveResult.ArchivedVersion!.Value;
+            // previous_data / new_data are JSONB (::jsonb cast in AppendAuditAsync) — bare
+            // strings "ACTIVE"/"ARCHIVED" are not valid JSON (22P02); product correctly rejects
+            // them. Use JSON objects matching the correct shape at the PUBLISHED call above (~:245).
             await _repo.AppendAuditAsync(
                 conn, tx, archivedId, "ARCHIVED",
-                "ACTIVE", "ARCHIVED", "tester", "GLOBAL_ADMIN",
+                "{\"status\":\"ACTIVE\"}", "{\"status\":\"ARCHIVED\"}", "tester", "GLOBAL_ADMIN",
                 versionBefore: archivedVersion - 1, versionAfter: archivedVersion);
             await InsertOutboxEventAsync(
                 conn, tx, $"agreement-config-{archivedId}", "AgreementConfigArchived");

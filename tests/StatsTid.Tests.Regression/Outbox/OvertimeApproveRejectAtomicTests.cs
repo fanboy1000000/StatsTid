@@ -84,6 +84,17 @@ public sealed class OvertimeApproveRejectAtomicTests : IAsyncLifetime
                 await _repo.UpdateStatusAsync(conn, tx, approval.Id, "APPROVED", "manager", "Approved");
                 // Real outbox INSERT (raw SQL — mirrors AgreementConfigConcurrencyTests'
                 // InsertOutboxEventAsync precedent). Stamps event_type so we can verify it.
+                // EventSerializer camelCase since S3 (0cb4ced); S64 replay-parity sweep: all
+                // production readers camelCase/typed — so the payload is built via the production
+                // EventSerializer rather than a hand-typed PascalCase literal, exercising the
+                // exact on-the-wire shape (preApprovalId/employeeId/approvedBy).
+                var approvedEvent = new OvertimePreApprovalApproved
+                {
+                    PreApprovalId = approval.Id,
+                    EmployeeId = employeeId,
+                    ApprovedBy = "manager",
+                    Reason = "Approved",
+                };
                 await using (var cmd = new NpgsqlCommand(
                     """
                     INSERT INTO outbox_events (service_id, stream_id, event_id, event_type, event_payload, actor_id, actor_role)
@@ -92,8 +103,7 @@ public sealed class OvertimeApproveRejectAtomicTests : IAsyncLifetime
                 {
                     cmd.Parameters.AddWithValue("stream", streamId);
                     cmd.Parameters.AddWithValue("eventId", Guid.NewGuid());
-                    cmd.Parameters.AddWithValue("payload",
-                        $"{{\"PreApprovalId\":\"{approval.Id}\",\"EmployeeId\":\"{employeeId}\",\"ApprovedBy\":\"manager\"}}");
+                    cmd.Parameters.AddWithValue("payload", EventSerializer.Serialize(approvedEvent));
                     await cmd.ExecuteNonQueryAsync();
                 }
                 await tx.CommitAsync();
@@ -120,9 +130,15 @@ public sealed class OvertimeApproveRejectAtomicTests : IAsyncLifetime
         var outboxRows = await ReadOutboxRowsAsync(streamId);
         Assert.Single(outboxRows);
         Assert.Equal("OvertimePreApprovalApproved", outboxRows[0].EventType);
-        Assert.Contains(approval.Id.ToString(), outboxRows[0].Payload);
-        Assert.Contains(employeeId, outboxRows[0].Payload);
-        Assert.Contains("\"ApprovedBy\":\"manager\"", outboxRows[0].Payload);
+        // EventSerializer camelCase since S3 (0cb4ced); S64 replay-parity sweep: production
+        // emits the camelCase keys preApprovalId/employeeId/approvedBy. Parse the payload
+        // (rather than substring-match) so the assertion is robust to the camelCase encoding
+        // AND to Postgres' jsonb::text canonical spacing ("approvedBy": "manager").
+        using var payloadDoc = System.Text.Json.JsonDocument.Parse(outboxRows[0].Payload);
+        var payloadRoot = payloadDoc.RootElement;
+        Assert.Equal(approval.Id, payloadRoot.GetProperty("preApprovalId").GetGuid());
+        Assert.Equal(employeeId, payloadRoot.GetProperty("employeeId").GetString());
+        Assert.Equal("manager", payloadRoot.GetProperty("approvedBy").GetString());
     }
 
     /// <summary>

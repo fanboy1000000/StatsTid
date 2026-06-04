@@ -1,0 +1,5 @@
+{
+  "$schema": "https://xunit.net/schema/current/xunit.runner.schema.json",
+  "parallelizeTestCollections": false,
+  "_comment": "S64 census-documented override (see docs/operations/s64-regression-debt-census.md, Overrides register): the Docker-gated suite is isolated-green but ~13 WAF-booting classes fail nondeterministically under cross-class parallel execution (concurrent WebApplicationFactory hosts + Testcontainers provisioning + the shared compose postgres exhaust Docker/host resources — full-run failure counts varied 88/57/47/83 across identical runs). Serializing collections removes the flaky margin; runtime cost accepted. Revisit if the suite is ever partitioned into resource-isolated collections."
+}

@@ -1,6 +1,6 @@
 # StatsTid Quality Grading
 
-<!-- anchor-sprint: 63 -->
+<!-- anchor-sprint: 64 -->
 > **Governance**: Updated by the Orchestrator at sprint end or during entropy scan. See CLAUDE.md "Quality Grading" section for grade definitions.
 
 > **S57 (2026-05-31):** Frontend held at **B** but **pattern compliance improved materially** — the oes.dk re-skin completed the design-token system (defined ~14 previously-phantom tokens) and migrated all ~124 hardcoded hex colors to tokens, so ADR-011's "no hardcoded colors" mandate is now actually enforced (residual hardcoded-hex = 0). E2E/visual-regression remains the gap keeping it below A. New default palette is oes-derived + WCAG-AA (ADR-011 amended).
@@ -11,7 +11,9 @@
 
 ## Domain Quality Matrix
 
-Last updated: **Sprint 63 (2026-06-04)**. The per-cell detail in the matrix below reflects the **S35** assessment (most domains were not materially changed by the S36–S56 work — Rule Engine, SharedKernel Models/Segmentation, Payroll all held grade). The **"S36–S56 Refresh"** section immediately after the matrix records every grade change, the new domains, and corrected counts since S35. Where a grade changed, the **Grade** column below shows the current value with a `→` note.
+Last updated: **Sprint 64 (2026-06-05)**.
+
+> **S64 (2026-06-05):** **CI/Tooling B+ → A−** — the standing debt that capped the grade is cleared: the Docker-gated Regression suite is **424/424 green twice-consecutively** (pristine + consecutive; the pre-S60 deterministic cluster + flaky margin both resolved via the census at `docs/operations/s64-regression-debt-census.md`), Smoke is 5/5 (+1 deny-pin), and **master CI is whole-workflow green** for the first time since ≥ S57 (regression step now backed by a services-postgres; smoke job independent; the S63 mechanical close gates now operate against a green baseline). All fixes test-side with citation-gated assertions (zero laundering — 3 attempts caught); 2 product findings deferred with owner sign-off (OK-straddle export gap; segments_jsonb enum asymmetry — tracked in ROADMAP). Remaining gap to A: the ~19-min sequential suite runtime (accepted trade) and the deferred product follow-ups. All other grades hold. The per-cell detail in the matrix below reflects the **S35** assessment (most domains were not materially changed by the S36–S56 work — Rule Engine, SharedKernel Models/Segmentation, Payroll all held grade). The **"S36–S56 Refresh"** section immediately after the matrix records every grade change, the new domains, and corrected counts since S35. Where a grade changed, the **Grade** column below shows the current value with a `→` note.
 
 | Domain | Test Coverage | Pattern Compliance | Documentation | Tech Debt | Grade | Trend |
 |--------|-------------|-------------------|---------------|-----------|-------|-------|

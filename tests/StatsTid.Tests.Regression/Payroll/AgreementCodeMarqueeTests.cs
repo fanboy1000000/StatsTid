@@ -323,13 +323,15 @@ public sealed class AgreementCodeMarqueeTests : IAsyncLifetime
         }
 
         // employee_profiles row at the schema default effective_from='0001-01-01'.
+        // S53/TASK-5306 (a7aee58): employee_profiles.weekly_norm_hours removed
+        // (universal 37h norm); column + its seed value dropped from this INSERT.
         await using (var epCmd = new NpgsqlCommand(
             """
             INSERT INTO employee_profiles (
-                profile_id, employee_id, weekly_norm_hours, part_time_fraction, position,
+                profile_id, employee_id, part_time_fraction, position,
                 effective_from, effective_to, version)
             VALUES (
-                gen_random_uuid(), @employeeId, 37.0, 1.000, NULL,
+                gen_random_uuid(), @employeeId, 1.000, NULL,
                 DEFAULT, NULL, 1)
             ON CONFLICT DO NOTHING
             """, conn))

@@ -51,9 +51,15 @@ public sealed class ReplayDeterminismTests : IAsyncLifetime
             periodStart: new DateOnly(2026, 3, 25),
             periodEnd: new DateOnly(2026, 4, 7),
             calculationKind: "forward-calc",
-            ruleSet: TestFixtures.RuleSet,
+            // S20 (97881dd) + ADR-016 D4 — AlignedWindow + interior OK-boundary rejects by design;
+            // these round-trip tests need a plannable straddle. (F4-1)
+            ruleSet: TestFixtures.StraddleSafeRuleSet,
             sources: TestFixtures.OkStraddleSources(),
-            options: PlannerOptions.Default);
+            options: PlannerOptions.Default,
+            // F4-1: register the WtmNaturalKey enrollment the PCS export path requires (mirrors
+            // BuildPlanForLegacyCallersAsync); without it MapSegmentToExportLinesAsync throws.
+            enrollment: TestFixtures.StraddleEnrollment(),
+            profile: profile);
 
         var forward1 = await pcs.CalculateAsync(plan1, profile, entries, absences, 0m);
         Assert.True(forward1.Success);
@@ -95,9 +101,15 @@ public sealed class ReplayDeterminismTests : IAsyncLifetime
             periodStart: new DateOnly(2026, 3, 25),
             periodEnd: new DateOnly(2026, 4, 7),
             calculationKind: "forward-calc",
-            ruleSet: TestFixtures.RuleSet,
+            // S20 (97881dd) + ADR-016 D4 — AlignedWindow + interior OK-boundary rejects by design;
+            // these round-trip tests need a plannable straddle. (F4-1)
+            ruleSet: TestFixtures.StraddleSafeRuleSet,
             sources: TestFixtures.OkStraddleSources(),
-            options: PlannerOptions.Default);
+            options: PlannerOptions.Default,
+            // F4-1: register the WtmNaturalKey enrollment the PCS export path requires (mirrors
+            // BuildPlanForLegacyCallersAsync); without it MapSegmentToExportLinesAsync throws.
+            enrollment: TestFixtures.StraddleEnrollment(),
+            profile: profile);
 
         var forward2 = await pcs.CalculateAsync(plan2, profile, entries, absences, 0m);
         Assert.NotEqual(plan1.ManifestId, plan2.ManifestId);

@@ -218,18 +218,19 @@ public sealed class EntitlementConfigSupersessionTests : IAsyncLifetime
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    // D-test #4 — Seed idempotency #1: re-running init.sql produces 30 rows exactly.
+    // D-test #4 — Seed idempotency #1: re-running init.sql produces 50 rows exactly.
     // ═════════════════════════════════════════════════════════════════════════
     [Fact]
-    public async Task SeedIdempotency_ReApplyInitSql_ProducesExactlyThirtyRowsAcrossReRuns()
+    public async Task SeedIdempotency_ReApplyInitSql_ProducesExactlyFiftyRowsAcrossReRuns()
     {
-        // After the first ApplyFullSchemaAsync in InitializeAsync, count must be 30
-        // (5 entitlement_types × 3 agreements × 2 ok_versions).
+        // S37/TASK-3701 (3eea4f5): AC_RESEARCH + AC_TEACHING variants added (+20 rows).
+        // After the first ApplyFullSchemaAsync in InitializeAsync, count must be 50
+        // (5 entitlement_types × 5 agreement_codes × 2 ok_versions).
         var rowsAfterFirst = await CountAllRowsAsync();
-        Assert.Equal(30L, rowsAfterFirst);
+        Assert.Equal(50L, rowsAfterFirst);
 
         var configIdsAfterFirst = await ReadAllConfigIdsAsync();
-        Assert.Equal(30, configIdsAfterFirst.Count);
+        Assert.Equal(50, configIdsAfterFirst.Count);
 
         // Re-apply init.sql against the same container. ON CONFLICT
         // (entitlement_type, agreement_code, ok_version, effective_from) DO NOTHING
@@ -237,7 +238,7 @@ public sealed class EntitlementConfigSupersessionTests : IAsyncLifetime
         await StatsTidWebApplicationFactory.ApplyFullSchemaAsync(_harness.ConnectionString);
 
         var rowsAfterSecond = await CountAllRowsAsync();
-        Assert.Equal(30L, rowsAfterSecond);
+        Assert.Equal(50L, rowsAfterSecond);
 
         var configIdsAfterSecond = await ReadAllConfigIdsAsync();
         Assert.Equal(configIdsAfterFirst.OrderBy(g => g).ToArray(),

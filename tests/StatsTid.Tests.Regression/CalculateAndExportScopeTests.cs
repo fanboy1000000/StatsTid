@@ -77,7 +77,12 @@ public sealed class CalculateAndExportScopeTests : IAsyncLifetime
             employment_category TEXT        NOT NULL DEFAULT 'Standard',
             is_active           BOOLEAN     NOT NULL DEFAULT TRUE,
             created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            -- S59/ADR-029 birth_date + S60/ADR-030 employment_start_date. Both are
+            -- read by UserRepository.ReadUser (src:304/311); absence raised
+            -- "Field not found in row: birth_date". NULLABLE, mirrors init.sql:2456/2491.
+            birth_date              DATE,
+            employment_start_date   DATE
         );
         """;
 

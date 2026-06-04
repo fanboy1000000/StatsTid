@@ -131,9 +131,12 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
         // Verify the row is the one the repo claims (and only one live row).
         await using var verifyConn = _harness.Factory.Create();
         await verifyConn.OpenAsync();
+        // S53/TASK-5306 (a7aee58): employee_profiles.weekly_norm_hours removed
+        // (universal 37h norm; only part_time_fraction varies per employee).
+        // Column dropped from SELECT; downstream ordinals shift down by one.
         await using var checkCmd = new NpgsqlCommand(
             """
-            SELECT version, weekly_norm_hours, part_time_fraction, position, effective_from, effective_to
+            SELECT version, part_time_fraction, position, effective_from, effective_to
             FROM employee_profiles
             WHERE employee_id = @employeeId AND effective_to IS NULL
             """, verifyConn);
@@ -141,11 +144,10 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
         await using var reader = await checkCmd.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync(), "Case A should have inserted a live row.");
         Assert.Equal(1L, reader.GetInt64(0));
-        Assert.Equal(30.0m, reader.GetDecimal(1));
-        Assert.Equal(0.800m, reader.GetDecimal(2));
-        Assert.Equal("Specialist", reader.GetString(3));
-        Assert.Equal(today, reader.GetFieldValue<DateOnly>(4));
-        Assert.True(reader.IsDBNull(5));
+        Assert.Equal(0.800m, reader.GetDecimal(1));
+        Assert.Equal("Specialist", reader.GetString(2));
+        Assert.Equal(today, reader.GetFieldValue<DateOnly>(3));
+        Assert.True(reader.IsDBNull(4));
         Assert.False(await reader.ReadAsync(), "Exactly one live row expected.");
     }
 
@@ -313,9 +315,11 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
         await using (var verifyConn = _harness.Factory.Create())
         {
             await verifyConn.OpenAsync();
+            // S53/TASK-5306 (a7aee58): employee_profiles.weekly_norm_hours
+            // removed (universal 37h norm); trailing column + its assert dropped.
             await using var liveCmd = new NpgsqlCommand(
                 """
-                SELECT version, effective_from, effective_to, weekly_norm_hours
+                SELECT version, effective_from, effective_to
                 FROM employee_profiles
                 WHERE employee_id = @employeeId AND effective_to IS NULL
                 """, verifyConn);
@@ -326,7 +330,6 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
             Assert.Equal(predecessorVersion + 1, reader.GetInt64(0));
             Assert.Equal(today, reader.GetFieldValue<DateOnly>(1));
             Assert.True(reader.IsDBNull(2));
-            Assert.Equal(30.0m, reader.GetDecimal(3));
         }
     }
 

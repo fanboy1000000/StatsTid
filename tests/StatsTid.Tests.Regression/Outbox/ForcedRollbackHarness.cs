@@ -144,6 +144,15 @@ internal static class ForcedRollbackHarness
             employee_approved_by TEXT,
             employee_deadline   DATE,
             manager_deadline    DATE,
+            -- S49 / ADR-027 Phase 3 + S50 Phase 4 approval-routing columns.
+            -- ApprovalPeriodRepository.UpdateStatusAsync (src:412-413) writes all
+            -- three on the APPROVED/REJECTED paths; absence raised
+            -- 42703 "column designated_approver_id / explicit_fallback_confirmation
+            -- does not exist" on Reopen/Reject/ManagerApprove. Mirrors init.sql:2286-2314.
+            designated_approver_id TEXT,
+            approval_method     TEXT        DEFAULT 'PRE_REPORTING_LINE'
+                                            CHECK (approval_method IN ('DESIGNATED_MANAGER', 'ORG_SCOPE_FALLBACK', 'ACTING_MANAGER', 'PRE_REPORTING_LINE')),
+            explicit_fallback_confirmation BOOLEAN DEFAULT FALSE,
             agreement_code      TEXT        NOT NULL,
             ok_version          TEXT        NOT NULL,
             created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
