@@ -500,6 +500,434 @@ public static class BalanceEndpoints
             });
         }).RequireAuthorization("EmployeeOrAbove");
 
+        // ── GET /api/balance/{employeeId}/year-overview?year=YYYY — S65 / TASK-6502 ──
+        //
+        // Read-only year-at-a-glance for the Direction E Årsoversigt: 6 current-balance tiles +
+        // a months × categories matrix. Pure read; no events; no schema change. Every quantity
+        // derives from existing primitives (ADR-028 per-day norm via DailyNormCalculator,
+        // ADR-030/031 flat earned-to-date via AccrualMath, hours-based day-equivalents via the
+        // shared StandardDayHours divisor). Deterministic: a pure function of (employeeId, year,
+        // today, projections) — two identical requests byte-equal (the server `today` is the
+        // ONLY non-projection input and it comes from the injected TimeProvider seam, NOT the
+        // wall clock directly).
+        MapYearOverview(app);
+
         return app;
+    }
+
+    // VACATION/SPECIAL_HOLIDAY reset in September; CARE_DAY/SENIOR_DAY are calendar-year. The
+    // matrix renders these four categories (in this order) plus the Arbejdstid group (FE-side).
+    private static readonly string[] YearOverviewCategoryTypes =
+        { "VACATION", "SPECIAL_HOLIDAY", "CARE_DAY", "SENIOR_DAY" };
+
+    private static void MapYearOverview(WebApplication app)
+    {
+        app.MapGet("/api/balance/{employeeId}/year-overview", async (
+            string employeeId,
+            int year,
+            UserRepository userRepo,
+            UserAgreementCodeRepository userAgreementCodeRepo,
+            EntitlementConfigRepository entitlementConfigRepo,
+            EntitlementBalanceRepository entitlementBalanceRepo,
+            EmployeeEntitlementEligibilityRepository eligibilityRepo,
+            AbsenceProjectionRepository absenceProjectionRepo,
+            WorkTimeProjectionRepository workTimeProjectionRepo,
+            IEventStore eventStore,
+            IEmploymentProfileResolver profileResolver,
+            ConfigResolutionService configResolver,
+            StatsTid.Backend.Api.Services.DailyNormCalculator dailyNormCalculator,
+            OrgScopeValidator scopeValidator,
+            TimeProvider timeProvider,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            var actor = context.GetActorContext();
+
+            // ── Auth — mirror /summary exactly (Step-0b Codex W3) ──
+            // The gate runs the SAME OrgScopeValidator check on the SAME route employeeId every
+            // downstream read below uses (no second id source): employee-self 403 for a foreign
+            // id; out-of-scope leader / local-admin 403 via the negative org-scope branch.
+            if (actor.ActorRole == StatsTidRoles.Employee && employeeId != actor.ActorId)
+                return Results.Json(new { error = "Access denied", reason = "Employee can only access own data" }, statusCode: 403);
+
+            if (actor.ActorRole != StatsTidRoles.Employee)
+            {
+                var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, ct);
+                if (!allowed)
+                    return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+            }
+
+            if (year < 2000 || year > 2100)
+                return Results.BadRequest(new { error = "Invalid year" });
+
+            var user = await userRepo.GetByIdAsync(employeeId, ct);
+            if (user is null)
+                return Results.NotFound(new { error = "Employee not found" });
+
+            // Server date — sole past/current/future + "Nu" authority. Derived ONCE per request
+            // from the injected TimeProvider (no DateTime.Now/Today/UtcNow anywhere in this
+            // handler). Tests override the provider in the WebApplicationFactory host.
+            var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
+
+            // ── Header ──
+            // agreementCode dated at today (user_agreement_codes, ADR-023 D3 graceful fallback to
+            // the live cache); okVersion = OkVersionResolver at today (DISPLAY context only — the
+            // matrix resolves OK per day / per entitlement-year-start below).
+            var todayAgreementCode =
+                await userAgreementCodeRepo.GetByUserIdAtAsync(employeeId, today, ct)
+                ?? user.AgreementCode;
+            var headerOkVersion = OkVersionResolver.ResolveVersion(today);
+
+            // weeklyNormHours = merged-config WeeklyNorm × current PartTimeFraction; null if no
+            // dated profile/config (graceful per ADR-023 D3 — a profile-less employee renders).
+            decimal? weeklyNormHours = null;
+            EmploymentProfile? todayProfile;
+            try
+            {
+                todayProfile = await profileResolver.GetByEmployeeIdAtAsync(employeeId, today, ct);
+            }
+            catch (EmployeeProfileNotFoundException)
+            {
+                todayProfile = null;
+            }
+            if (todayProfile is not null)
+            {
+                var orgId = todayProfile.OrgId ?? user.PrimaryOrgId;
+                var mergedConfig = await configResolver.ResolveAsync(
+                    orgId, todayProfile.AgreementCode, OkVersionResolver.ResolveVersion(today),
+                    todayProfile.Position, ct);
+                weeklyNormHours = Math.Round(
+                    mergedConfig.WeeklyNormHours * todayProfile.PartTimeFraction, 2);
+            }
+
+            // ── All absences for the employee (one read), mapped to entitlement type +
+            // day-equivalents. The mapping is MANDATORY via the shared map (Step-0b Codex W1):
+            // projection rows carry the ABSENCE type (e.g. SPECIAL_HOLIDAY_ALLOWANCE), not the
+            // entitlement type. day-equivalent = Hours ÷ StandardDayHours (same as the Skema
+            // quota guard). We need the full stream because the entitlement-year straddle reaches
+            // into September of the prior calendar year. ──
+            var allAbsences = await absenceProjectionRepo.GetByEmployeeAsync(employeeId, ct);
+            var mappedAbsences = allAbsences
+                .Select(a => (
+                    EntitlementType: StatsTid.Backend.Api.Services.EntitlementMapping.GetEntitlementType(a.AbsenceType),
+                    a.Date,
+                    DayEquivalents: a.Hours / StatsTid.Backend.Api.Services.EntitlementMapping.StandardDayHours))
+                .Where(a => a.EntitlementType is not null)
+                .Select(a => (EntitlementType: a.EntitlementType!, a.Date, a.DayEquivalents))
+                .ToList();
+
+            // Local helper: day-equivalents consumed for an entitlement type within [from, to]
+            // (inclusive), summed from the mapped projection rows.
+            decimal AfholdtWithin(string entitlementType, DateOnly from, DateOnly to)
+                => mappedAbsences
+                    .Where(a => a.EntitlementType == entitlementType && a.Date >= from && a.Date <= to)
+                    .Sum(a => a.DayEquivalents);
+
+            // ── Months: workedHours + normHours + diff ──
+            // workedHours = Σ work_time_projection (intervals + manual) in the calendar month
+            // (ADR-028). normHours = Σ DailyNormCalculator per-day norms; null if ANY norm-bearing
+            // day resolves null. diff = worked − norm for months ≤ today's month; null for future.
+            var months = new List<object>(12);
+            for (var m = 1; m <= 12; m++)
+            {
+                var daysInMonth = DateTime.DaysInMonth(year, m);
+                var monthStart = new DateOnly(year, m, 1);
+                var monthEnd = new DateOnly(year, m, daysInMonth);
+
+                var workTimeRows = await workTimeProjectionRepo.GetByEmployeeAndDateRangeAsync(
+                    employeeId, monthStart, monthEnd, ct);
+                var workedHours = Math.Round(
+                    workTimeRows.Sum(w => SumIntervalHours(w.Intervals) + w.ManualHours), 2);
+
+                var normEntries = await dailyNormCalculator.ComputeRangeAsync(
+                    employeeId, monthStart, monthEnd, user.PrimaryOrgId, ct);
+                // null if ANY norm-bearing day (weekday) resolves null — ANNUAL_ACTIVITY or no
+                // dated profile (e.g. months before employment_start_date). Weekends contribute 0.
+                decimal? normHours = normEntries.Any(n => n.Hours is null)
+                    ? null
+                    : Math.Round(normEntries.Sum(n => n.Hours ?? 0m), 2);
+
+                // diff only for months at/earlier than today's month of the selected year; future
+                // months (and future years) → null (no fabricated performance). normHours null ⇒
+                // diff null mechanically.
+                bool isPastOrCurrent = year < today.Year || (year == today.Year && m <= today.Month);
+                decimal? diff = (isPastOrCurrent && normHours is not null)
+                    ? Math.Round(workedHours - normHours.Value, 2)
+                    : null;
+
+                months.Add(new
+                {
+                    month = m,
+                    workedHours,
+                    normHours,
+                    diff
+                });
+            }
+
+            // ── Categories: saldo[12] + afholdt[12] + transferable + boundaryMonth ──
+            var categories = new List<object>(YearOverviewCategoryTypes.Length);
+            foreach (var type in YearOverviewCategoryTypes)
+            {
+                // Resolve the live (open) config to discover ResetMonth (immutable per natural key,
+                // ADR-021 Q1) — the year-start anchors all dated entitlement-config reads below.
+                var liveConfig = await entitlementConfigRepo.GetCurrentOpenAsync(
+                    type, todayAgreementCode, user.OkVersion, ct);
+                if (liveConfig is null)
+                {
+                    // No config for this type under the employee's agreement/OK — graceful empty
+                    // row (nulls/zeros, never a 500; ADR-023 D3).
+                    categories.Add(new
+                    {
+                        type,
+                        label = DanishLabels.TryGetValue(type, out var lbl0) ? lbl0 : type,
+                        saldo = new decimal?[12],
+                        afholdt = new decimal[12],
+                        transferable = 0m,
+                        boundaryMonth = 12
+                    });
+                    continue;
+                }
+                var resetMonth = liveConfig.ResetMonth;
+
+                // saldo[m]: end-of-month remaining within the entitlement year CONTAINING month m.
+                // saldo = EarnedToDate(quota, 1.0, ferieaarStart, employmentStart, monthEnd)
+                //         + carryoverIn − cumulative afholdt(this type) within the ferieår up to
+                //         monthEnd. Sep shows the reset sawtooth for ResetMonth-9 types.
+                var saldo = new decimal?[12];
+                var afholdt = new decimal[12];
+                for (var m = 1; m <= 12; m++)
+                {
+                    var daysInMonth = DateTime.DaysInMonth(year, m);
+                    var monthStart = new DateOnly(year, m, 1);
+                    var monthEnd = new DateOnly(year, m, daysInMonth);
+
+                    // afholdt[m] = day-equivalents mapped to this type within calendar month m.
+                    afholdt[m - 1] = Math.Round(AfholdtWithin(type, monthStart, monthEnd), 2);
+
+                    // Entitlement year + its start for the ferieår containing month m.
+                    var entYear = ResolveEntitlementYear(monthStart, resetMonth);
+                    var ferieaarStart = new DateOnly(entYear, resetMonth, 1);
+
+                    // Config dated at the entitlement-year START (ADR-021 D2, same as /summary):
+                    // OK resolved at the year-start, then the dated config read, falling back to
+                    // the live row if none was effective then.
+                    var entOkVersion = OkVersionResolver.ResolveVersion(ferieaarStart);
+                    var ec = await entitlementConfigRepo.GetByTypeAtAsync(
+                        type, todayAgreementCode, entOkVersion, ferieaarStart, ct) ?? liveConfig;
+
+                    var balance = await entitlementBalanceRepo.GetByEmployeeAndTypeAsync(
+                        employeeId, type, entYear, ct);
+                    var carryoverIn = balance?.CarryoverIn ?? 0m;
+
+                    var earned = string.Equals(ec.AccrualModel, MonthlyAccrualModel, StringComparison.Ordinal)
+                        ? AccrualMath.EarnedToDate(
+                            ec.AnnualQuota, 1.0m, ferieaarStart, user.EmploymentStartDate, monthEnd)
+                        : ec.AnnualQuota; // IMMEDIATE: full quota earned up-front.
+
+                    var cumulativeAfholdt = AfholdtWithin(type, ferieaarStart, monthEnd);
+                    saldo[m - 1] = Math.Round(earned + carryoverIn - cumulativeAfholdt, 2);
+                }
+
+                // transferable: COMPUTED at the type's model boundary, EMITTED at boundaryMonth=12.
+                // ResetMonth-9 → 31 Aug of the selected year (closes ferieår year-1, spanning
+                // Sep year-1 .. Aug year). Calendar types → 31 Dec of the selected year (ferieår
+                // year). carryoverIn/used/planned are the CLOSED-boundary-ferieår balances (the
+                // SAME ferieår as earnedAtBoundary — NOT the live current-ferieår row; the
+                // ferieRemaining tile uses the live balances, a different quantity). carryoverMax
+                // is year-start dated.
+                DateOnly closedFerieaarStart;
+                DateOnly boundaryDate;
+                if (resetMonth == 1)
+                {
+                    closedFerieaarStart = new DateOnly(year, 1, 1);
+                    boundaryDate = new DateOnly(year, 12, 31);
+                }
+                else
+                {
+                    closedFerieaarStart = new DateOnly(year - 1, resetMonth, 1);
+                    boundaryDate = closedFerieaarStart.AddYears(1).AddDays(-1); // 31 Aug of selected year
+                }
+                var closedEntYear = closedFerieaarStart.Year;
+                var closedOkVersion = OkVersionResolver.ResolveVersion(closedFerieaarStart);
+                var closedConfig = await entitlementConfigRepo.GetByTypeAtAsync(
+                    type, todayAgreementCode, closedOkVersion, closedFerieaarStart, ct) ?? liveConfig;
+                var closedBalance = await entitlementBalanceRepo.GetByEmployeeAndTypeAsync(
+                    employeeId, type, closedEntYear, ct);
+                var closedCarryoverIn = closedBalance?.CarryoverIn ?? 0m;
+                var closedUsed = closedBalance?.Used ?? 0m;
+                var closedPlanned = closedBalance?.Planned ?? 0m;
+
+                var earnedAtBoundary =
+                    string.Equals(closedConfig.AccrualModel, MonthlyAccrualModel, StringComparison.Ordinal)
+                        ? AccrualMath.EarnedToDate(
+                            closedConfig.AnnualQuota, 1.0m, closedFerieaarStart,
+                            user.EmploymentStartDate, boundaryDate)
+                        : closedConfig.AnnualQuota;
+
+                var transferableRaw = earnedAtBoundary + closedCarryoverIn - closedUsed - closedPlanned;
+                var transferable = Math.Round(
+                    Math.Min(Math.Max(0m, transferableRaw), closedConfig.CarryoverMax), 2);
+
+                categories.Add(new
+                {
+                    type,
+                    label = DanishLabels.TryGetValue(type, out var lbl) ? lbl : type,
+                    saldo,
+                    afholdt,
+                    transferable,
+                    boundaryMonth = 12
+                });
+            }
+
+            // ── Tiles (the designed 6 — NO 7th tile for Feriefridage; matrix-only) ──
+            // Live "current" balances anchored at TODAY (the entitlement year containing today).
+            // flexBalance = latest FlexBalanceUpdated (same read as /summary).
+            var streamId = $"employee-{employeeId}";
+            var allEvents = await eventStore.ReadStreamAsync(streamId, ct);
+            var flexBalance = allEvents.OfType<FlexBalanceUpdated>().LastOrDefault()?.NewBalance ?? 0m;
+
+            // Eligibility (display affordances). childSick = S59 opt-in eligibility as of today;
+            // senior = birth_date + config min_age as of today.
+            var childSickEligible = (await eligibilityRepo
+                .GetEligibleAsOfAsync(employeeId, "CHILD_SICK", today, ct)).Eligible;
+
+            var seniorLiveConfig = await entitlementConfigRepo.GetCurrentOpenAsync(
+                "SENIOR_DAY", todayAgreementCode, user.OkVersion, ct);
+            int? seniorMinAge = seniorLiveConfig is not null
+                ? (await entitlementConfigRepo.GetByTypeAtAsync(
+                        "SENIOR_DAY", todayAgreementCode,
+                        OkVersionResolver.ResolveVersion(new DateOnly(
+                            ResolveEntitlementYear(today, seniorLiveConfig.ResetMonth),
+                            seniorLiveConfig.ResetMonth, 1)),
+                        new DateOnly(
+                            ResolveEntitlementYear(today, seniorLiveConfig.ResetMonth),
+                            seniorLiveConfig.ResetMonth, 1), ct))?.MinAge ?? seniorLiveConfig.MinAge
+                : null;
+            // Eligible when no age gate is configured, OR the employee meets it as of today.
+            var seniorDayEligible = seniorMinAge is null
+                || (user.BirthDate is { } dob && AgeAsOf(dob, today) >= seniorMinAge.Value);
+
+            // Live "remaining" for the four entitlement tiles. Local helper computes
+            // earned(asOf today) + carryoverIn − used − planned for the current ferieår of a type.
+            async Task<decimal?> CurrentRemainingAsync(string type)
+            {
+                var live = await entitlementConfigRepo.GetCurrentOpenAsync(
+                    type, todayAgreementCode, user.OkVersion, ct);
+                if (live is null) return null;
+                var entYear = ResolveEntitlementYear(today, live.ResetMonth);
+                var ferieaarStart = new DateOnly(entYear, live.ResetMonth, 1);
+                var ec = await entitlementConfigRepo.GetByTypeAtAsync(
+                    type, todayAgreementCode, OkVersionResolver.ResolveVersion(ferieaarStart),
+                    ferieaarStart, ct) ?? live;
+                var balance = await entitlementBalanceRepo.GetByEmployeeAndTypeAsync(
+                    employeeId, type, entYear, ct);
+                var carryoverIn = balance?.CarryoverIn ?? 0m;
+                var used = balance?.Used ?? 0m;
+                var planned = balance?.Planned ?? 0m;
+                var earned = string.Equals(ec.AccrualModel, MonthlyAccrualModel, StringComparison.Ordinal)
+                    ? AccrualMath.EarnedToDate(
+                        ec.AnnualQuota, 1.0m, ferieaarStart, user.EmploymentStartDate, today)
+                    : ec.AnnualQuota;
+                return Math.Round(earned + carryoverIn - used - planned, 2);
+            }
+
+            var ferieRemaining = await CurrentRemainingAsync("VACATION");
+            var careDayRemaining = await CurrentRemainingAsync("CARE_DAY");
+            var seniorDayRemaining = seniorDayEligible ? await CurrentRemainingAsync("SENIOR_DAY") : null;
+            var childSickRemaining = childSickEligible ? await CurrentRemainingAsync("CHILD_SICK") : null;
+
+            // sickDaysYtd: distinct SICK_DAY dates in the current calendar year (not quota-gated →
+            // distinct-date is the right primitive). Uses the raw absence_type (SICK_DAY maps to a
+            // null entitlement type, so it is intentionally NOT in mappedAbsences).
+            var sickDaysYtd = allAbsences
+                .Where(a => string.Equals(a.AbsenceType, "SICK_DAY", StringComparison.Ordinal)
+                            && a.Date.Year == today.Year)
+                .Select(a => a.Date)
+                .Distinct()
+                .Count();
+
+            return Results.Ok(new
+            {
+                employeeId,
+                year,
+                today = today.ToString("yyyy-MM-dd"),
+                header = new
+                {
+                    employeeName = user.DisplayName,
+                    agreementCode = todayAgreementCode,
+                    okVersion = headerOkVersion,
+                    weeklyNormHours
+                },
+                tiles = new
+                {
+                    flexBalance,
+                    ferieRemaining,
+                    careDayRemaining,
+                    seniorDayRemaining,
+                    sickDaysYtd,
+                    childSickRemaining,
+                    childSickEligible,
+                    seniorDayEligible
+                },
+                months,
+                categories
+            });
+        }).RequireAuthorization("EmployeeOrAbove");
+    }
+
+    // ── S65 / TASK-6502 helpers (BalanceEndpoints-local) ──
+
+    /// <summary>
+    /// Resolve the entitlement year for a date given a reset month: month ≥ resetMonth ⇒
+    /// date.Year, else date.Year − 1 (mirrors the SkemaEndpoints two-step pattern).
+    /// </summary>
+    private static int ResolveEntitlementYear(DateOnly date, int resetMonth)
+        => date.Month >= resetMonth ? date.Year : date.Year - 1;
+
+    /// <summary>
+    /// Pure integer-age computation as-of a date (mirrors the SkemaEndpoints senior-gate
+    /// helper). Completed years lived as-of <paramref name="asOf"/> (this year's birthday must
+    /// have occurred on/before <paramref name="asOf"/>). Deterministic; no wall clock.
+    /// </summary>
+    private static int AgeAsOf(DateOnly birthDate, DateOnly asOf)
+    {
+        var age = asOf.Year - birthDate.Year;
+        if (asOf < birthDate.AddYears(age))
+            age--;
+        return age;
+    }
+
+    /// <summary>
+    /// Sum the hours represented by a day's work intervals. Mirrors the frontend
+    /// <c>calcIntervalHours</c> + the Skema work-time validation: only positive-duration
+    /// intervals count; total seconds rounded to 2 decimals. "HH:MM"/"HH:MM:SS" wall-clock.
+    /// </summary>
+    private static decimal SumIntervalHours(IReadOnlyList<WorkInterval> intervals)
+    {
+        var totalSeconds = 0;
+        foreach (var iv in intervals)
+        {
+            if (TryParseTimeToSeconds(iv.Start, out var startSec)
+                && TryParseTimeToSeconds(iv.End, out var endSec)
+                && endSec > startSec)
+            {
+                totalSeconds += endSec - startSec;
+            }
+        }
+        return Math.Round(totalSeconds / 3600m, 2);
+    }
+
+    private static bool TryParseTimeToSeconds(string? value, out int seconds)
+    {
+        seconds = 0;
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        var parts = value.Split(':');
+        if (parts.Length < 2) return false;
+        if (!int.TryParse(parts[0], out var h) || !int.TryParse(parts[1], out var m)) return false;
+        var s = 0;
+        if (parts.Length >= 3 && !int.TryParse(parts[2], out s)) return false;
+        if (h < 0 || h > 23 || m < 0 || m > 59 || s < 0 || s > 59) return false;
+        seconds = h * 3600 + m * 60 + s;
+        return true;
     }
 }
