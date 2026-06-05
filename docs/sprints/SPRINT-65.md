@@ -131,11 +131,11 @@ Notes: camelCase per existing endpoints; decimals as numbers (`Math.Round(., 2)`
 | Field | Value |
 |-------|-------|
 | **ID** | TASK-6501 |
-| **Status** | in-progress |
+| **Status** | complete |
 | **Agent** | Orchestrator |
 | **Components** | docs/sprints, ROADMAP.md, design_handoff_oversigt/ |
 | **KB Refs** | — |
-| **Orchestrator Approved** | — |
+| **Orchestrator Approved** | yes (scaffold+ROADMAP+handoff `13d6cc8`; entropy fix `2755b4c`; OQ-1 `75875a5`; Step-0b `50c9b95`) |
 
 **Description**: SPRINT-65.md scaffold (this file); ROADMAP "Current position" block: S65 = Årsoversigt (this sprint, owner-ratified swap), S66 = ADR-032 §6 stk.2 + `work_days_per_week` (LAUNCH-BLOCKING, event-bound per ADR-031 D6); Tier-1 re-prioritization (1 planned sprint affected). Commit `design_handoff_oversigt/` as design source of record. Record the `/series` FE-orphaning follow-up + the `/summary` norm-fields retire-or-align follow-up in ROADMAP.
 
@@ -241,11 +241,11 @@ NOTE (Step-0b Reviewer W4): `saldo` (Sep–Dec includes `carryoverIn`) and `tran
 | Field | Value |
 |-------|-------|
 | **ID** | TASK-6505 |
-| **Status** | planned |
+| **Status** | complete (done early, during Phase-1 agent runtime — docs-only, no file overlap) |
 | **Agent** | Orchestrator (docs/ is Orchestrator-only) |
-| **Components** | docs/knowledge-base/decisions/ADR-030 |
+| **Components** | docs/knowledge-base/decisions/ADR-030, docs/knowledge-base/INDEX.md |
 | **KB Refs** | ADR-030, ADR-031 |
-| **Orchestrator Approved** | — |
+| **Orchestrator Approved** | yes — **D9** added (definition/formula/as-of/display-anchor/non-equivalence/model-vs-law gap, research-cited); courtesy ⚠-SUPERSEDED marker on D8 (read as live before); INDEX rows updated (ADR-030 +D9; ADR-031 stale S64 refs → event-bound/S66) |
 
 **Description**: Carried-over obligation from the parked 2026-06-03 refinement: annotate ADR-030 with the transferable figure's definition, formula, as-of policy (boundary projection, "max if you book nothing more"), and explicit **non-equivalence** to the deferred §21/§26 settlement. Include the OQ-1 research verdict (RESOLVED 2026-06-06): legal transfer point = 31 Dec per Ferielov §21 stk.2 (display anchor `boundaryMonth = 12`); the model's Sep-rollover carryover is an accrual-side approximation of the legal transfer event; absent a §21 agreement by 31 Dec the untaken 5th week is auto-paid by 31 March (out of scope, settlement). Also record the særlige-feriedage model-vs-law gap (calendar-year accrual, 1 May–30 Apr taking, 2½% godtgørelse payout per Cirkulære 021-24 §12 stk.2 — vs the system's ResetMonth-9/carryover-0 simplification). Cite `docs/references/ferie-transfer-timing-research.md` (committed this sprint).
 
