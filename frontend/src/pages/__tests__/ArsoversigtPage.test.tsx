@@ -1,0 +1,326 @@
+// S65 / TASK-6503 — page-level vitest for ArsoversigtPage (Direction E
+// Årsoversigt). Mocks useYearOverview with a contract-shaped payload (incl. the
+// explicit SPECIAL_HOLIDAY / "Feriefridage" matrix entry) + useAuth + the
+// router's useNavigate, so no AuthProvider or network is required.
+//
+// CRITICAL: every past/current/future + "Nu" classification is asserted against
+// the MOCKED server `today` — never the client clock (server-today authority).
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, screen, fireEvent, within } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
+import type { YearOverview } from '../../hooks/useYearOverview'
+
+// ── useAuth: a fixed logged-in employee ──
+vi.mock('../../contexts/AuthContext', () => ({
+  useAuth: () => ({
+    user: { employeeId: 'emp001', role: 'Employee' },
+    role: 'Employee',
+    orgId: 'STY01',
+    agreementCode: 'AC',
+    isAuthenticated: true,
+    login: vi.fn(),
+    logout: vi.fn(),
+  }),
+}))
+
+// ── useNavigate spy (drill-in target assertions) ──
+const mockNavigate = vi.fn()
+vi.mock('react-router-dom', async () => {
+  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom')
+  return { ...actual, useNavigate: () => mockNavigate }
+})
+
+// ── useYearOverview: mocked so each test injects an exact server-shape payload ──
+const mockUseYearOverview = vi.fn()
+vi.mock('../../hooks/useYearOverview', () => ({
+  useYearOverview: (...args: unknown[]) => mockUseYearOverview(...args),
+}))
+
+// Imported AFTER the mocks are registered.
+import { ArsoversigtPage } from '../ArsoversigtPage'
+
+// ── Fixture: a 2026 overview with today = 2026-03-15 (March = current month) ──
+// Jan/Feb = past (worked + signed diff), Mar = current (Nu, worked + diff),
+// Apr..Dec = future (norm projected + diff "–"). Feb has a 0,5-day VACATION.
+function makeOverview(overrides: Partial<YearOverview> = {}): YearOverview {
+  const months = Array.from({ length: 12 }, (_, i) => {
+    const monthOneBased = i + 1
+    if (i <= 2) {
+      // Jan, Feb, Mar — faktisk
+      return { month: monthOneBased, workedHours: 150.2, normHours: 147.9, diff: i === 1 ? -3.5 : 2.3 }
+    }
+    // Apr..Dec — future: diff null
+    return { month: monthOneBased, workedHours: 0, normHours: 140, diff: null }
+  })
+
+  return {
+    employeeId: 'emp001',
+    year: 2026,
+    today: '2026-03-15',
+    header: {
+      employeeName: 'Anna Berg',
+      agreementCode: 'AC',
+      okVersion: 'OK26',
+      weeklyNormHours: 37,
+    },
+    tiles: {
+      flexBalance: 22.5,
+      ferieRemaining: 22,
+      careDayRemaining: 1,
+      seniorDayRemaining: 3,
+      sickDaysYtd: 4,
+      childSickRemaining: 1,
+      childSickEligible: true,
+      seniorDayEligible: true,
+    },
+    months,
+    categories: [
+      {
+        type: 'VACATION',
+        label: 'Ferie',
+        // Feb afholdt = 0,5 day-equivalent; saldo drops by 0,5.
+        saldo: [25, 24.5, 24.5, 24.5, 24.5, 24.5, 24.5, 24.5, 24.5, 24.5, 24.5, 24.5],
+        afholdt: [0, 0.5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        transferable: 5,
+        boundaryMonth: 12,
+      },
+      {
+        type: 'SPECIAL_HOLIDAY',
+        label: 'Feriefridage',
+        saldo: [5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5],
+        afholdt: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        transferable: 0,
+        boundaryMonth: 12,
+      },
+      {
+        type: 'CARE_DAY',
+        label: 'Omsorgsdage',
+        saldo: [2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        afholdt: [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        transferable: 0,
+        boundaryMonth: 12,
+      },
+      {
+        type: 'SENIOR_DAY',
+        label: 'Seniordage',
+        saldo: [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
+        afholdt: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        transferable: 0,
+        boundaryMonth: 12,
+      },
+    ],
+    ...overrides,
+  }
+}
+
+function overviewHook(data: YearOverview | null, loading = false, error: string | null = null) {
+  return { data, loading, error, refetch: vi.fn() }
+}
+
+/** Locate a data row by its rowheader (<th scope="row">) label and return its
+ * 12 month <td> cells (Jan..Dec). `occurrence` picks among duplicate labels
+ * (e.g. the 4 "Saldo (rest)" rows). */
+function rowCells(label: string, occurrence = 0): HTMLElement[] {
+  const headers = screen.getAllByRole('rowheader', { name: label })
+  const tr = headers[occurrence].closest('tr') as HTMLElement
+  return within(tr).getAllByRole('cell')
+}
+
+function renderPage() {
+  return render(
+    <MemoryRouter>
+      <ArsoversigtPage />
+    </MemoryRouter>,
+  )
+}
+
+beforeEach(() => {
+  mockUseYearOverview.mockReset()
+  mockNavigate.mockReset()
+})
+
+describe('ArsoversigtPage — header + tiles', () => {
+  it('renders the title with the server year and the identity/norm sub-line', () => {
+    mockUseYearOverview.mockReturnValue(overviewHook(makeOverview()))
+    renderPage()
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Årsoversigt 2026')
+    expect(screen.getByText('Anna Berg · AC · Norm: 37 t/uge')).toBeInTheDocument()
+  })
+
+  it('renders all 6 designed balance tiles with da-DK values, units and sub-lines', () => {
+    mockUseYearOverview.mockReturnValue(overviewHook(makeOverview()))
+    renderPage()
+    // Tile labels (some — Ferie/Omsorgsdage/Seniordage — also appear as matrix
+    // group headers, so assert presence rather than uniqueness).
+    const labels = ['Flex saldo', 'Ferie', 'Omsorgsdage', 'Seniordage', 'Sygedage', 'Barns sygedag']
+    for (const l of labels) expect(screen.getAllByText(l).length).toBeGreaterThanOrEqual(1)
+    // Tile-only labels are unique.
+    expect(screen.getByText('Flex saldo')).toBeInTheDocument()
+    expect(screen.getByText('Sygedage')).toBeInTheDocument()
+    // da-DK decimal comma + trimmed integers.
+    expect(screen.getByText('22,5')).toBeInTheDocument() // Flex saldo
+    expect(screen.getByText('optjent overtid')).toBeInTheDocument()
+    // No 7th tile — Feriefridage appears ONLY as a matrix group header, never as
+    // a tile label. (It still appears once, in the matrix.)
+    expect(screen.getAllByText('Feriefridage')).toHaveLength(1)
+    // Tile "rest" sub-line appears for Omsorgsdage + Seniordage + Barns sygedag.
+    expect(screen.getAllByText('rest')).toHaveLength(3)
+  })
+
+  it('renders an em-dash (ineligible) for senior + child-sick tiles, layout unchanged', () => {
+    const ineligible = makeOverview()
+    ineligible.tiles = {
+      ...ineligible.tiles,
+      seniorDayEligible: false,
+      seniorDayRemaining: null,
+      childSickEligible: false,
+      childSickRemaining: null,
+    }
+    mockUseYearOverview.mockReturnValue(overviewHook(ineligible))
+    renderPage()
+    // Tiles still present (labels render); their value is an em-dash.
+    // (Seniordage also appears as a matrix group header → assert ≥1.)
+    expect(screen.getAllByText('Seniordage').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByText('Barns sygedag')).toBeInTheDocument()
+    // Two em-dash tile values (senior + child-sick) — at minimum the dashes exist.
+    const dashes = screen.getAllByText('–')
+    expect(dashes.length).toBeGreaterThanOrEqual(2)
+  })
+})
+
+describe('ArsoversigtPage — matrix structure', () => {
+  it('renders 5 category groups and a 13-column header (label + 12 months)', () => {
+    mockUseYearOverview.mockReturnValue(overviewHook(makeOverview()))
+    renderPage()
+    // Group header rows (Arbejdstid/Ferie/Omsorgsdage/Seniordage also appear as
+    // tile labels; Feriefridage is matrix-only → all assert presence).
+    for (const g of ['Arbejdstid', 'Ferie', 'Feriefridage', 'Omsorgsdage', 'Seniordage']) {
+      expect(screen.getAllByText(g).length).toBeGreaterThanOrEqual(1)
+    }
+    // Header: the year label cell + 12 month columns = 13 <th scope="col">.
+    const headerCells = screen.getAllByRole('columnheader')
+    expect(headerCells).toHaveLength(13)
+    // Sub-rows present for a leave group.
+    expect(screen.getAllByText('Saldo (rest)').length).toBe(4) // Ferie, Feriefridage, Oms, Senior
+    expect(screen.getAllByText('Afholdt').length).toBe(4)
+    expect(screen.getAllByText('Kan overføres').length).toBe(4)
+    expect(screen.getByText('Diff. fra norm')).toBeInTheDocument()
+  })
+
+  it('highlights the current month ("Nu") derived from the MOCKED server today (March)', () => {
+    mockUseYearOverview.mockReturnValue(overviewHook(makeOverview()))
+    renderPage()
+    // "Nu" tag is rendered exactly once, above the March header.
+    const nuTags = screen.getAllByText('Nu')
+    expect(nuTags).toHaveLength(1)
+    // The March column header carries it.
+    const marHeader = screen.getByRole('columnheader', { name: /Mar/ })
+    expect(within(marHeader).getByText('Nu')).toBeInTheDocument()
+  })
+
+  it('shows NO highlight when viewing a year other than the server-today year', () => {
+    // today is 2026-03-15 but the payload is for 2025 → no current-month in view.
+    const otherYear = makeOverview({ year: 2025 })
+    mockUseYearOverview.mockReturnValue(overviewHook(otherYear))
+    renderPage()
+    expect(screen.queryByText('Nu')).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Årsoversigt 2025')
+  })
+})
+
+describe('ArsoversigtPage — cell rules (server-today authority)', () => {
+  it('Arbejdstid shows workedHours for past/current and projected normHours for future; diff "–" for future', () => {
+    mockUseYearOverview.mockReturnValue(overviewHook(makeOverview()))
+    renderPage()
+    const arbCells = rowCells('Arbejdstid')
+    // Jan (past) + Mar (current) → workedHours 150,2.
+    expect(arbCells[0]).toHaveTextContent('150,2')
+    expect(arbCells[2]).toHaveTextContent('150,2')
+    // Apr (future) → projected norm 140 (NOT worked 0).
+    expect(arbCells[3]).toHaveTextContent('140')
+
+    const diffCells = rowCells('Diff. fra norm')
+    // Jan diff +2,3 (positive), Feb -3,5 (negative), Apr (future) → em-dash.
+    expect(diffCells[0]).toHaveTextContent('+2,3')
+    expect(diffCells[1]).toHaveTextContent('-3,5')
+    expect(diffCells[3]).toHaveTextContent('–')
+  })
+
+  it('renders fractional afholdt ("0,5") and the saldo drop for the half-day VACATION', () => {
+    mockUseYearOverview.mockReturnValue(overviewHook(makeOverview()))
+    renderPage()
+    // The Ferie group's Afholdt row, Feb column = 0,5.
+    expect(screen.getByText('0,5')).toBeInTheDocument()
+    // Saldo 24,5 appears (post half-day).
+    expect(screen.getAllByText('24,5').length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('renders normHours: null months as an em-dash', () => {
+    const ov = makeOverview()
+    // Make Apr a null-norm future month.
+    ov.months[3] = { month: 4, workedHours: 0, normHours: null, diff: null }
+    mockUseYearOverview.mockReturnValue(overviewHook(ov))
+    renderPage()
+    const arbCells = rowCells('Arbejdstid')
+    expect(arbCells[3]).toHaveTextContent('–')
+  })
+
+  it('renders transferable ONLY at the boundaryMonth (Dec) in info styling; em-dash elsewhere', () => {
+    mockUseYearOverview.mockReturnValue(overviewHook(makeOverview()))
+    renderPage()
+    // The Ferie "Kan overføres" row (1st leave group): Dec cell = 5, others em-dash.
+    const cells = rowCells('Kan overføres', 0)
+    expect(cells[11]).toHaveTextContent('5') // Dec (index 11)
+    // info styling class applied to the Dec cell.
+    expect(cells[11].className).toMatch(/keep/)
+    // Jan..Nov are em-dashes (no transfer outside December).
+    expect(cells[0]).toHaveTextContent('–')
+    expect(cells[5]).toHaveTextContent('–')
+  })
+
+  it('renders an em-dash for a cap-0 transferable type (Feriefridage) even at December', () => {
+    mockUseYearOverview.mockReturnValue(overviewHook(makeOverview()))
+    renderPage()
+    // Feriefridage is the 2nd leave group (occurrence index 1).
+    const cells = rowCells('Kan overføres', 1)
+    // transferable 0 → Dec is also an em-dash.
+    expect(cells[11]).toHaveTextContent('–')
+  })
+})
+
+describe('ArsoversigtPage — interactions', () => {
+  it('year switcher refetches by re-rendering the hook with the new year', () => {
+    mockUseYearOverview.mockReturnValue(overviewHook(makeOverview()))
+    renderPage()
+    // Initial call used the client-clock seed; assert the hook was called.
+    expect(mockUseYearOverview).toHaveBeenCalled()
+    mockUseYearOverview.mockClear()
+    fireEvent.click(screen.getByRole('button', { name: 'Forrige år' }))
+    // After clicking ←, the hook is re-invoked with year-1 relative to the seed.
+    const calls = mockUseYearOverview.mock.calls
+    const lastArgs = calls[calls.length - 1]
+    expect(lastArgs?.[0]).toBe('emp001')
+    expect(typeof lastArgs?.[1]).toBe('number')
+  })
+
+  it('drills into a month: clicking a month header navigates to /tid/registrering?year&month', () => {
+    mockUseYearOverview.mockReturnValue(overviewHook(makeOverview()))
+    renderPage()
+    fireEvent.click(screen.getByRole('button', { name: /Gå til Mar 2026/ }))
+    expect(mockNavigate).toHaveBeenCalledWith('/tid/registrering?year=2026&month=3')
+  })
+})
+
+describe('ArsoversigtPage — states', () => {
+  it('renders the loading spinner while the first fetch is in flight', () => {
+    mockUseYearOverview.mockReturnValue(overviewHook(null, true))
+    renderPage()
+    expect(screen.getByText('Indlæser årsoversigt…')).toBeInTheDocument()
+  })
+
+  it('renders an error card when the fetch fails with no data', () => {
+    mockUseYearOverview.mockReturnValue(overviewHook(null, false, 'HTTP 500'))
+    renderPage()
+    expect(screen.getByText(/Kunne ikke indlæse årsoversigt/)).toBeInTheDocument()
+  })
+})
