@@ -6,7 +6,7 @@ import { RequireAuth } from './components/guards/RequireAuth'
 import { RequireRole } from './components/guards/RequireRole'
 import { LoginPage } from './pages/LoginPage'
 import { SkemaPage } from './pages/SkemaPage'
-import { OversightPage } from './pages/OversightPage'
+import { ArsoversigtPage } from './pages/ArsoversigtPage'
 import { HealthDashboard } from './pages/HealthDashboard'
 import { NotFoundPage } from './pages/NotFoundPage'
 import { MyPeriods } from './pages/approval/MyPeriods'
@@ -57,7 +57,7 @@ function AppRoutes() {
 
           {/* === Min tid (Employee — all authenticated) === */}
           <Route path="tid/registrering" element={<SkemaPage />} />
-          <Route path="tid/oversigt" element={<OversightPage />} />
+          <Route path="tid/oversigt" element={<ArsoversigtPage />} />
           <Route path="tid/mine-perioder" element={<MyPeriods />} />
 
           {/* === Godkend tid (LocalLeader+) === */}

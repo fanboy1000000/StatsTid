@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { useSkema } from '../hooks/useSkema'
 import { SkemaGrid, type WorkInterval, type WorkIntervalsMap, type ManualHoursMap, type DailyNormMap } from '../components/SkemaGrid'
@@ -79,9 +80,20 @@ export function SkemaPage() {
   const { user } = useAuth()
   const employeeId = user?.employeeId ?? ''
 
+  // Initial period: ?year=&month= from the Årsoversigt drill-in (clamped 1..12),
+  // else today. Only seeds the initial state — subsequent nav uses local setters.
+  const [searchParams] = useSearchParams()
   const now = new Date()
-  const [year, setYear] = useState(now.getFullYear())
-  const [month, setMonth] = useState(now.getMonth() + 1)
+  const paramYear = Number(searchParams.get('year'))
+  const paramMonth = Number(searchParams.get('month'))
+  const [year, setYear] = useState(
+    Number.isInteger(paramYear) && paramYear > 0 ? paramYear : now.getFullYear(),
+  )
+  const [month, setMonth] = useState(
+    Number.isInteger(paramMonth) && paramMonth >= 1 && paramMonth <= 12
+      ? paramMonth
+      : now.getMonth() + 1,
+  )
 
   const { data, loading, error, quotaError, approvalValidationError, clearQuotaError, clearApprovalValidationError, refetch, saveMonth, employeeApprove, submitAndApprove, reopenPeriod } = useSkema(employeeId, year, month)
   const { orgId, agreementCode } = useAuth()
