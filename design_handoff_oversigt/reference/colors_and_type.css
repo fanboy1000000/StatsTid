@@ -1,0 +1,188 @@
+/* ============================================================
+   StatsTid — Colors & Type foundations
+   ------------------------------------------------------------
+   Source of truth: frontend/src/styles/tokens.css (StatsTid repo,
+   ADR-011, palette amended S57). Palette = oes.dk (Økonomistyrelsen)
+   hues, WCAG 2.1 AA adjusted: text-role tokens darkened to ≥4.5:1
+   on white. Inspired by designsystem.dk (Danish government DS).
+
+   This file = the canonical token set PLUS a documented type scale
+   and semantic element styles. Drop it into any StatsTid artifact:
+
+       <link rel="stylesheet" href="colors_and_type.css">
+
+   Font: IBM Plex Sans (loaded from Google Fonts CDN below — exact
+   match to the product's @fontsource/ibm-plex-sans).
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+:root {
+  /* ---- Brand / primary (oes green) ---- */
+  --color-primary: #066b43;          /* 6.58:1 on white */
+  --color-primary-hover: #055638;
+  --color-primary-dark: #055638;     /* alias of hover */
+  --color-primary-darker: #04412b;   /* pressed / active */
+
+  /* ---- Text ---- */
+  --color-text: #343536;             /* 12.3:1 — body */
+  --color-text-secondary: #6b6b6e;   /* 5.31:1 — AA-safe secondary */
+  --color-text-muted: #6b6b6e;       /* alias */
+
+  /* ---- Neutrals / grays (oes warm-neutral scale) ---- */
+  --color-white: #ffffff;
+  --color-bg: #ffffff;
+  --color-surface: #ffffff;
+  --color-bg-hover: #f3f2f2;
+  --color-bg-muted: #f3f2f2;
+  --color-gray-50: #f7f6f6;          /* lightest neutral (stripes/bg) */
+  --color-bg-subtle: #f3f2f2;
+  --color-gray-100: #f3f2f2;
+  --color-gray-200: #e8e6e6;
+  --color-gray-300: #cac8c8;
+  --color-gray-400: #a7a6a8;         /* UI / disabled / borders — NOT text (2.42:1) */
+  --color-gray-500: #6b6b6e;         /* secondary text, AA-safe (5.31:1) */
+  --color-gray-600: #55565a;         /* focus / strong (7.3:1) */
+  --color-neutral-200: var(--color-gray-100);
+  --color-neutral-600: var(--color-gray-500);
+
+  /* ---- Borders ---- */
+  --color-border: #e8e6e6;           /* gray-200 */
+  --color-border-strong: #55565a;    /* gray-600 */
+
+  /* ---- Status: success (teal-green) ---- */
+  --color-success: #0f766e;          /* 5.47:1 */
+  --color-success-light: #ccfbf1;
+
+  /* ---- Status: error / danger ---- */
+  --color-error: #cc0000;            /* 5.89:1 */
+  --color-error-light: #fee2e2;
+  --color-danger: var(--color-error);
+  --color-danger-bg: var(--color-error-light);
+
+  /* ---- Status: warning (amber) ---- */
+  --color-warning: #8a6a00;          /* 5.07:1 */
+  --color-warning-light: #fef9c3;
+
+  /* ---- Status: info (blue) ---- */
+  --color-info: #1a6a86;             /* 6.1:1 on white */
+  --color-info-light: #ddeaf3;
+
+  /* ---- Links ---- */
+  --color-link: #3e72a6;             /* 5.05:1 */
+  --color-link-visited: #6b4d8a;     /* 6.88:1 */
+
+  /* ---- Spacing (8px baseline grid) ---- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* ---- Font families ---- */
+  --font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  --font-family-mono: 'IBM Plex Mono', ui-monospace, monospace;
+
+  /* ---- Font weights ---- */
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  /* ---- Font-size scale ----
+     Components reference --font-size-xs / -sm / -xl etc. The repo's
+     tokens.css omitted these; this is the documented, baseline-aligned
+     scale they imply. 16px base body. */
+  --font-size-xs: 12px;
+  --font-size-sm: 14px;
+  --font-size-base: 16px;
+  --font-size-md: 16px;
+  --font-size-lg: 18px;
+  --font-size-xl: 20px;
+  --font-size-2xl: 24px;
+  --font-size-3xl: 30px;
+  --font-size-4xl: 36px;
+
+  /* ---- Line heights ---- */
+  --line-height-tight: 1.25;
+  --line-height-normal: 1.5;
+
+  /* ---- Border ---- */
+  --border-radius: 0px;              /* sharp corners — Danish gov style. Do not override. */
+  --border-color: var(--color-gray-200);
+  --border-focus: var(--color-gray-600);
+  --border-width: 1px;
+
+  /* ---- Shadows (minimal) ---- */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+
+  /* ---- Focus ---- */
+  --focus-outline: 2px solid var(--color-gray-600);
+  --focus-outline-offset: 2px;
+}
+
+/* ============================================================
+   Semantic element styles — opt in with class .statstid-prose,
+   or apply tokens directly. These mirror how the product renders
+   headings, body, links, code.
+   ============================================================ */
+
+.statstid-base,
+body.statstid {
+  font-family: var(--font-family);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-normal);
+  color: var(--color-text);
+  background: var(--color-white);
+  -webkit-font-smoothing: antialiased;
+}
+
+.statstid-prose h1 {
+  font-size: var(--font-size-3xl);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-tight);
+  color: var(--color-text);
+  margin: 0 0 var(--space-4);
+}
+.statstid-prose h2 {
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-tight);
+  color: var(--color-text);
+  margin: 0 0 var(--space-3);
+}
+.statstid-prose h3 {
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text);
+  margin: 0 0 var(--space-2);
+}
+.statstid-prose p {
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-normal);
+  color: var(--color-text);
+  margin: 0 0 var(--space-4);
+  text-wrap: pretty;
+}
+.statstid-prose a {
+  color: var(--color-link);
+  text-decoration: underline;
+}
+.statstid-prose a:visited {
+  color: var(--color-link-visited);
+}
+.statstid-prose code,
+.statstid-prose kbd {
+  font-family: var(--font-family-mono);
+  font-size: 0.92em;
+  background: var(--color-gray-100);
+  padding: 0.1em 0.35em;
+  border: var(--border-width) solid var(--color-border);
+}
+.statstid-prose small {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
