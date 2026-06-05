@@ -13,7 +13,7 @@
 ## Sprint Goal
 Replace the S61 `tid/oversigt` dashboard with the design-handoff **Direction E Årsoversigt** (year-at-a-glance: 6 current-balance tiles + a months × categories matrix), backed by a new read-only `GET /api/balance/{employeeId}/year-overview?year=Y` endpoint whose every quantity derives from the existing rule-engine/projection primitives (ADR-028 work-time + per-day dated norm, ADR-030/031 flat accrual, hours-based day-equivalent consumption). Design source: `design_handoff_oversigt/` (committed this sprint as design source of record). Refinement: `.claude/refinements/REFINEMENT-s65-aarsoversigt-direction-e.md` (Step-4 dual-lens reviewed: Codex 2 cycles → "Clean — absorptions verified"; Reviewer 0 BLOCKERs).
 
-**Owner ratifications (2026-06-05):** S65/S66 swap ratified (ADR-032 §6 stk.2 + `work_days_per_week` becomes S66 — still LAUNCH-BLOCKING, event-bound per ADR-031 D6); Feriefridage added as 5th matrix group (tiles stay the designed 6); Arbejdstid semantics = worked-to-date + running diff for the current month, norm-as-projection + diff "–" for future months. **OQ-1 (ferie "Kan overføres" placement)** — under deep research (December-carryover hypothesis); resolution recorded below before Step 0b.
+**Owner ratifications (2026-06-05):** S65/S66 swap ratified (ADR-032 §6 stk.2 + `work_days_per_week` becomes S66 — still LAUNCH-BLOCKING, event-bound per ADR-031 D6); Feriefridage added as 5th matrix group (tiles stay the designed 6); Arbejdstid semantics = worked-to-date + running diff for the current month, norm-as-projection + diff "–" for future months. **OQ-1 RESOLVED (owner 2026-06-06, deep-research-backed): December placement, as drawn.** The December-carryover hypothesis CONFIRMED: Ferielov §21 stk.2 fixes the transfer-agreement deadline at "senest den 31. december i ferieafholdelsesperioden" — 31 Aug is only the accrual-year end, not a legal transfer point (verdict: 23/25 claims confirmed 3-0; full citations in `docs/references/ferie-transfer-timing-research.md`). `boundaryMonth = 12` for ALL categories (display anchor); the VALUE stays computed at the type's model boundary (31 Aug for ResetMonth-9 types, 31 Dec for calendar types). Accepted tradeoff (owner-acknowledged via preview): the Sep–Dec saldo cells already include the carried-over days the Dec figure displays. Research bonus finding ratified into ROADMAP follow-up: real state-sector særlige feriedage accrue by CALENDAR year, taken 1 May–30 Apr (Cirkulære 021-24 §12 stk.2) — the system's ResetMonth-9 SPECIAL_HOLIDAY model is a documented simplification (invisible in S65: carryover 0 → "–").
 
 ## Entropy Scan Findings
 
@@ -79,8 +79,8 @@ _pending_
       "label": "Ferie",
       "saldo": [10.4, 12.5, ...],    // end-of-month remaining: EarnedToDate(annualQuota, 1.0m, entitlementYearStart, employmentStart, monthEnd) + carryoverIn − cumulative afholdt within the entitlement year containing that month (Jan–Aug = ferieår Y−1, Sep–Dec = ferieår Y for ResetMonth-9 types; calendar types = calendar year). Sep shows the reset sawtooth — correct domain shape.
       "afholdt": [0, 1.5, ...],      // Σ absences_projection Hours of the type in the month ÷ StandardDayHours (day-equivalents — same math as the quota guard SkemaEndpoints.cs:738/:1076; future-dated rows = planlagt)
-      "transferable": 5.0,           // min(max(0, earnedAtBoundary + carryoverIn − used − planned), carryoverMax); carryoverMax year-start dated (ADR-021 D2); deterministic derived boundary date
-      "boundaryMonth": 8             // ← OQ-1 RESOLUTION PENDING (deep research in flight): recommended (a) = boundary-month placement (8 for ResetMonth-9 types, 12 for calendar types)
+      "transferable": 5.0,           // min(max(0, earnedAtBoundary + carryoverIn − used − planned), carryoverMax); earnedAtBoundary COMPUTED at the type's model boundary (31 Aug of the selected year for ResetMonth-9 types — the ferieår spanning Sep Y−1–Aug Y; 31 Dec for calendar types); carryoverMax year-start dated (ADR-021 D2); deterministic derived boundary date
+      "boundaryMonth": 12            // OQ-1 RESOLVED (owner 2026-06-06): 12 for ALL categories — DISPLAY anchor only. For ferie this is the legal §21 stk.2 transfer-agreement deadline (31 Dec of the calendar year whose ferieår ended 31 Aug); computation stays at the model boundary per `transferable` above
     }
   ]
 }
@@ -206,7 +206,7 @@ NOTE: today-dependent assertions use the seeded/controlled clock seam pinned in 
 | **KB Refs** | ADR-030, ADR-031 |
 | **Orchestrator Approved** | — |
 
-**Description**: Carried-over obligation from the parked 2026-06-03 refinement: annotate ADR-030 with the transferable figure's definition, formula, as-of policy (boundary projection, "max if you book nothing more"), and explicit **non-equivalence** to the deferred §21/§26 settlement. Include the OQ-1 research verdict (transfer-timing legal basis) once resolved.
+**Description**: Carried-over obligation from the parked 2026-06-03 refinement: annotate ADR-030 with the transferable figure's definition, formula, as-of policy (boundary projection, "max if you book nothing more"), and explicit **non-equivalence** to the deferred §21/§26 settlement. Include the OQ-1 research verdict (RESOLVED 2026-06-06): legal transfer point = 31 Dec per Ferielov §21 stk.2 (display anchor `boundaryMonth = 12`); the model's Sep-rollover carryover is an accrual-side approximation of the legal transfer event; absent a §21 agreement by 31 Dec the untaken 5th week is auto-paid by 31 March (out of scope, settlement). Also record the særlige-feriedage model-vs-law gap (calendar-year accrual, 1 May–30 Apr taking, 2½% godtgørelse payout per Cirkulære 021-24 §12 stk.2 — vs the system's ResetMonth-9/carryover-0 simplification). Cite `docs/references/ferie-transfer-timing-research.md` (committed this sprint).
 
 ---
 
@@ -232,7 +232,7 @@ NOTE: today-dependent assertions use the seeded/controlled clock seam pinned in 
 
 | Check | Status | Notes |
 |-------|--------|-------|
-| Agreement rules match legal requirements | pending | OQ-1 transfer-timing research verdict to be recorded here; flat accrual per ADR-031 reused unchanged |
+| Agreement rules match legal requirements | verified (display) | OQ-1 verdict recorded: legal ferie transfer point = 31 Dec (Ferielov §21 stk.2; state sector via Cirkulære 021-24 §3) → `boundaryMonth = 12`; the displayed figure is the model's Sep-rollover projection, NOT the legal residual-5th-week quantity (non-equivalence annotated in ADR-030 per TASK-6505; §21/§26 settlement stays deferred). Særlige-feriedage calendar-year/1 May–30 Apr gap (Cirkulære 021-24 §12 stk.2) recorded as ROADMAP follow-up. Flat accrual per ADR-031 reused unchanged. Full citations: `docs/references/ferie-transfer-timing-research.md` |
 | Wage type mappings produce correct SLS codes | N/A | read-only sprint; no payroll path touched |
 | Overtime/supplement calculations are deterministic | pending | year-overview must be a pure function of (employeeId, year, today, projections) — replay test TASK-6504.6 |
 | Absence effects on norm/flex/pension are correct | pending | day-equivalent afholdt reconciliation TASK-6504.3/4 |

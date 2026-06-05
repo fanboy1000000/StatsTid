@@ -49,6 +49,7 @@ This file is the hub. It defines the priority order and points to deeper sources
 | [docs/operations/audit-projection-catalog.md](docs/operations/audit-projection-catalog.md) | `IAuditProjectionMapper` family catalog (ADR-026) |
 | [docs/operations/audit-projection-caller-census.md](docs/operations/audit-projection-caller-census.md) | Cross-process caller census for the audit-projection cutover |
 | [docs/references/agreement-source-register.md](docs/references/agreement-source-register.md) | DRAFT S36 agreement source-cell register (Phase A) |
+| [docs/references/ferie-transfer-timing-research.md](docs/references/ferie-transfer-timing-research.md) | S65 OQ-1 deep-research verdict: ferie transfer timing (§21 stk.2, 31 Dec) + særlige-feriedage timeline |
 | [docs/references/agreement-ruleset-audit.md](docs/references/agreement-ruleset-audit.md) | DRAFT S36 ruleset coverage audit |
 | [docs/references/role-dimension-audit.md](docs/references/role-dimension-audit.md) | DRAFT S36 role-within-agreement gap audit |
 | [docs/references/phase-b-handoff-package.md](docs/references/phase-b-handoff-package.md) | Phase B expert-engagement handoff package |
