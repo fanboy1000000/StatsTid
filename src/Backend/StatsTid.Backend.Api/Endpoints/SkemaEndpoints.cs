@@ -55,31 +55,22 @@ public static class SkemaEndpoints
         return types;
     }
 
-    // ── Absence type → entitlement type mapping (null = skip validation) ──
-    private static readonly Dictionary<string, string?> AbsenceToEntitlementType = new(StringComparer.Ordinal)
-    {
-        ["VACATION"] = "VACATION",
-        ["CARE_DAY"] = "CARE_DAY",
-        ["CHILD_SICK_DAY"] = "CHILD_SICK",
-        ["CHILD_SICK_DAY_2"] = "CHILD_SICK",
-        ["CHILD_SICK_DAY_3"] = "CHILD_SICK",
-        ["PARENTAL_LEAVE"] = null,
-        ["SENIOR_DAY"] = "SENIOR_DAY",
-        ["SPECIAL_HOLIDAY_ALLOWANCE"] = "SPECIAL_HOLIDAY",
-        ["LEAVE_WITH_PAY"] = null,
-        ["LEAVE_WITHOUT_PAY"] = null,
-        ["SICK_DAY"] = null
-    };
+    // ── Absence type → entitlement type mapping + StandardDayHours ──
+    // S65 / TASK-6502 — promoted to the shared Backend.Api EntitlementMapping so the new
+    // Balance year-overview read consumes the SAME map / divisor (no second copy, no second
+    // 7.4 literal; Step-0b Codex W1). Local aliases keep the existing call sites below
+    // unchanged.
+    private static readonly IReadOnlyDictionary<string, string?> AbsenceToEntitlementType =
+        StatsTid.Backend.Api.Services.EntitlementMapping.AbsenceToEntitlementType;
 
-    // ── Standard work day hours (37h/week ÷ 5 days) ──
-    private const decimal StandardDayHours = 7.4m;
+    private const decimal StandardDayHours = StatsTid.Backend.Api.Services.EntitlementMapping.StandardDayHours;
 
     /// <summary>
     /// Resolve an absence type to its entitlement type (null = no entitlement gating),
-    /// reusing the <see cref="AbsenceToEntitlementType"/> map. Unknown types ⇒ null.
+    /// delegating to the shared <see cref="StatsTid.Backend.Api.Services.EntitlementMapping"/>.
     /// </summary>
     private static string? GetEntitlementType(string absenceType)
-        => AbsenceToEntitlementType.TryGetValue(absenceType, out var et) ? et : null;
+        => StatsTid.Backend.Api.Services.EntitlementMapping.GetEntitlementType(absenceType);
 
     /// <summary>
     /// S59 / TASK-5907 — pure integer-age computation as-of a date from a birth date.
