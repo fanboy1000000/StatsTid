@@ -8,33 +8,37 @@
 - CSS Modules + CSS custom properties (`tokens.css`)
 - vitest + @testing-library/react (jsdom environment)
 
-## Design System (ADR-011)
-- Inspired by designsystem.dk (Danish government design system)
+## Design System (ADR-011, palette amended S57)
+- Inspired by designsystem.dk; palette re-skinned S57 to the oes.dk (Økonomistyrelsen) AA-safe scheme
 - Font: IBM Plex Sans
-- Primary color: `#0059B3`, dark variants `#004993` / `#003972`
+- Primary color: `#066b43` (oes-green), hover `#055638`, pressed `#04412b`
 - Border radius: `0px` (sharp corners -- Danish gov style)
-- Borders: `1px solid`
+- Borders: `1px solid` hairlines; no shadows/gradients beyond `--shadow-sm`
 - Spacing: 8px baseline grid (`--space-1` through `--space-12`)
 - Shadows: minimal (`--shadow-sm: 0 1px 2px rgba(0,0,0,0.05)`)
 - Focus ring: `2px solid` gray-600 with `2px` offset (accessibility)
 
 ## Design Tokens (`src/styles/tokens.css`)
 
+> **`tokens.css` is canonical** — the values below mirror it as of S57/ADR-011-amended; if they ever disagree, the CSS file wins.
+
 ### Colors
 | Token | Value | Usage |
 |-------|-------|-------|
-| `--color-primary` | `#0059B3` | Primary actions, links |
-| `--color-primary-dark` | `#004993` | Hover states |
-| `--color-primary-darker` | `#003972` | Active states |
-| `--color-text` | `#1A1A1A` | Body text |
-| `--color-gray-100` to `--color-gray-600` | Gray scale | Backgrounds, borders, muted text |
+| `--color-primary` | `#066b43` | Primary actions (6.58:1 on white) |
+| `--color-primary-hover` / `--color-primary-dark` | `#055638` | Hover states |
+| `--color-primary-darker` | `#04412b` | Pressed/active states |
+| `--color-text` | `#343536` | Body text (12.3:1) |
+| `--color-text-secondary` | `#6b6b6e` | Secondary text, AA-safe (5.31:1) |
+| `--color-gray-50` to `--color-gray-600` | Warm-neutral scale `#f7f6f6`…`#55565a` | Backgrounds, borders, muted text (gray-400 is UI-only, NOT text) |
 | `--color-white` | `#FFFFFF` | Card backgrounds |
-| `--color-success` / `--color-success-light` | `#358000` / `#DDF7CE` | Success states |
-| `--color-error` / `--color-error-light` | `#CC0000` / `#FFE0E0` | Error states |
-| `--color-warning` / `--color-warning-light` | `#FEBB30` / `#FFEECC` | Warning states |
-| `--color-info` / `--color-info-light` | `#1B86C3` / `#E2F2FB` | Informational states |
-| `--color-link` | `#004D99` | Hyperlinks |
-| `--color-link-visited` | `#800080` | Visited links |
+| `--color-border` / `--color-border-strong` | `#e8e6e6` / `#55565a` | Hairlines / strong rules |
+| `--color-success` / `--color-success-light` | `#0f766e` / `#ccfbf1` | Success states |
+| `--color-error` / `--color-error-light` | `#cc0000` / `#fee2e2` | Error states |
+| `--color-warning` / `--color-warning-light` | `#8a6a00` / `#fef9c3` | Warning states |
+| `--color-info` / `--color-info-light` | `#1a6a86` / `#ddeaf3` | Informational states (info-light = current-period highlight) |
+| `--color-link` | `#3e72a6` | Hyperlinks |
+| `--color-link-visited` | `#6b4d8a` | Visited links |
 
 ### Spacing (8px baseline)
 | Token | Value |
@@ -156,7 +160,7 @@ Routes are defined in `frontend/src/App.tsx`. Unauthenticated → `/login`; auth
 | `/login` | `LoginPage` | Public | Redirects to `/tid/registrering` if already authenticated |
 | `/` (index) | → redirect | — | → `/tid/registrering` |
 | `/tid/registrering` | `SkemaPage` | any auth | Monthly time registration (three-row work-time, S56) |
-| `/tid/oversigt` | `OversightPlaceholder` | any auth | Overview placeholder |
+| `/tid/oversigt` | `OversightPage` | any auth | S61 annual dashboard — being replaced by `ArsoversigtPage` (Direction E year grid) in S65 |
 | `/tid/mine-perioder` | `MyPeriods` | any auth | Own submitted periods (no nav item) |
 | `/godkend/godkendelser` | `ApprovalDashboard` | LocalLeader | Manager approval; expandable `ApprovalDetailPanel` (S55) |
 | `/godkend/vikariering` | `DelegationPage` | LocalLeader | Delegation / vikariering (ADR-027) |

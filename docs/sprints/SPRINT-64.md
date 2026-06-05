@@ -164,7 +164,7 @@ Validated via the `sprint-test-validation` skill (all suites run 2026-06-05):
 | Frontend | 164 | **164** | 0 (green) |
 | **Master CI** | red on every push since ≥ S57; Smoke job perpetually skipped | **whole-workflow green = the binding AC** (run URL recorded below after the close push) | — |
 
-**CI run URL:** _backfilled post-push (close-polish exemption)._
+**CI run URL:** https://github.com/fanboy1000000/StatsTid/actions/runs/27009829974 — whole-workflow GREEN (all six jobs), on fix-forward #2 `0fcf998`. Bootstrap chain: close push `5719a03` run red on build-and-test (CI shallow-clone SHA resolution) → fix-forward `4b3be29` (fetch-depth 0) run `26985210958` turned build-and-test GREEN but hit an unrelated FE spinner-race flake (`ReportingLineTree.test.tsx:208`) → fix-forward #2 `0fcf998` (waitFor on the spinner assertion) → green.
 
 ## Agent Effectiveness
 
