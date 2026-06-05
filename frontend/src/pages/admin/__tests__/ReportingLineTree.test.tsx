@@ -204,9 +204,12 @@ describe('ReportingLineTree', () => {
     })
 
     // The tree loading spinner should be visible (Spinner uses role="status"
-    // with aria-label="Indlaeser")
-    const spinners = screen.getAllByRole('status')
-    expect(spinners.length).toBeGreaterThanOrEqual(1)
+    // with aria-label="Indlaeser"). waitFor: the tree fetch fires in an effect
+    // AFTER the auto-select state update, so the spinner may not exist on the
+    // exact tick the combobox appears (CI-timing flake, run 26985210958).
+    await waitFor(() => {
+      expect(screen.getAllByRole('status').length).toBeGreaterThanOrEqual(1)
+    })
   })
 
   it('shows empty state message when tree has no entries', async () => {
