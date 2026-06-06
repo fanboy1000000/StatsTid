@@ -49,6 +49,7 @@
 | [PAT-005](patterns/PAT-005-period-calculation-service-http-rule-evaluation.md) | PeriodCalculationService HTTP rule evaluation pattern | approved | S4 | Payroll, Rule Engine | service-boundary, HTTP, traceability, payroll-chain |
 | [PAT-006](patterns/PAT-006-unified-rule-endpoint-response-format.md) | Unified rule endpoint response format | approved | S5 | Rule Engine, Payroll | rule-engine, endpoint-response, deserialization, flex, payroll-chain |
 | [PAT-007](patterns/PAT-007-referentially-stable-hook-mocks.md) | Referentially-stable hook mocks for components with data-identity effects | approved | S65 | Frontend, Test | vitest, react-testing, mocking, useeffect, referential-stability, worker-oom |
+| [PAT-008](patterns/PAT-008-fixed-timeprovider-waf-regression-tests.md) | FixedTimeProvider pattern for WAF-hosted today-dependent regression tests | approved | S65 | Test, Backend | timeprovider, regression-tests, webapplicationfactory, determinism, wall-clock, boot-order |
 
 ## Cross-Domain Dependencies (DEP)
 
