@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using StatsTid.Auth;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Security;
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Segmentation;
@@ -178,10 +179,17 @@ public sealed class YearOverviewTests : IAsyncLifetime
     // ════════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Seed a single work_time_projection row for emp001 in a PAST month (Feb 2025) and
-    /// assert that the year-overview <c>months[1].diff</c> (February, index 1) equals what
-    /// GET /api/skema/{id}/month would compute for the same month.
-    /// This is the shared-helper drift-proof: both seams now use DailyNormCalculator.
+    /// <b>Cross-seam drift-proof (marquee).</b> Seed a single work_time_projection row for emp001
+    /// in a PAST month (Feb 2025) and assert that the year-overview <c>months[1].diff</c>
+    /// (February) equals the diff RECONSTRUCTED from the SEPARATE Skema endpoint
+    /// (GET /api/skema/{id}/month?year=2025&amp;month=2). The Skema <c>/month</c> response does not
+    /// emit a per-day <c>diff</c> directly (the FE computes it) — it exposes the raw
+    /// <c>workTime</c> rows (intervals + manualHours) and the <c>dailyNorm</c> array, both produced
+    /// by the SAME shared <see cref="StatsTid.Backend.Api.Services.DailyNormCalculator"/> +
+    /// interval-sum the year-overview uses. We sum the Skema seam's own worked hours and per-day
+    /// norms and assert the year-overview's month diff matches. This is a genuine cross-seam
+    /// equality (NOT a tautology against the year-overview's own fields): if either seam's date
+    /// range, norm rounding, or aggregation drifted, the two would disagree.
     /// </summary>
     [Fact]
     public async Task SkemaReconciliation_WorkedHours_DiffMatchesSkemaGet()
@@ -197,21 +205,44 @@ public sealed class YearOverviewTests : IAsyncLifetime
         var months = yearBody.GetProperty("months").EnumerateArray().ToList();
         Assert.Equal(12, months.Count);
 
-        // February (index 1): diff = workedHours − normHours (both from DailyNormCalculator).
+        // February (index 1) from the YEAR-OVERVIEW seam.
         var febMonth = months[1]; // index 1 = February
         Assert.Equal(2, febMonth.GetProperty("month").GetInt32());
+        Assert.Equal(JsonValueKind.Number, febMonth.GetProperty("diff").ValueKind); // past month → non-null
+        var yearOverviewDiff = febMonth.GetProperty("diff").GetDecimal();
 
-        var diff = febMonth.GetProperty("diff").GetDecimal();
-        var worked = febMonth.GetProperty("workedHours").GetDecimal();
-        var norm = febMonth.GetProperty("normHours").GetDecimal();
+        // ── Reconstruct the SAME month's diff from the SKEMA seam (route per SkemaEndpoints.cs:132,
+        //    int year + int month query params, EmployeeOrAbove). ──
+        var skemaMonth = await GetSkemaMonthAsync(client, Emp001, 2025, 2);
 
-        // diff = worked − norm by contract.
-        Assert.Equal(Math.Round(worked - norm, 2), diff);
+        // Skema worked = Σ over workTime rows of (Σ positive-duration interval hours + manualHours),
+        // then rounded to 2dp — byte-identical to BalanceEndpoints.cs:639-640
+        // (SumIntervalHours + ManualHours). Our seed has no intervals, so this is the 150 manual.
+        var skemaWorked = Math.Round(
+            skemaMonth.GetProperty("workTime").EnumerateArray()
+                .Sum(w => SumSkemaIntervalHours(w.GetProperty("intervals"))
+                          + w.GetProperty("manualHours").GetDecimal()),
+            2);
 
-        // The seeded 150 h manual should be reflected in workedHours (may have other rows from
-        // the init.sql seed, so just assert diff is non-null and equals worked − norm).
-        Assert.True(diff == Math.Round(worked - norm, 2),
-            $"diff {diff} must equal worked({worked}) − norm({norm})");
+        // Skema norm = Σ over the dailyNorm array of each day's hours (weekends 0; any null day would
+        // make the year-overview month null too — not the case for a full past weekday month). Same
+        // aggregation as BalanceEndpoints.cs:646-648.
+        var skemaNorm = Math.Round(
+            skemaMonth.GetProperty("dailyNorm").EnumerateArray()
+                .Sum(n => n.GetProperty("hours").ValueKind == JsonValueKind.Null
+                    ? 0m
+                    : n.GetProperty("hours").GetDecimal()),
+            2);
+
+        var skemaDiff = Math.Round(skemaWorked - skemaNorm, 2);
+
+        // The cross-seam assertion: the two independently-served seams agree on the month diff.
+        Assert.Equal(skemaDiff, yearOverviewDiff);
+
+        // Belt-and-braces: the year-overview's own worked/norm also equal the Skema seam's
+        // (proves it is the SAME underlying data, not merely a coincidentally-equal diff).
+        Assert.Equal(skemaWorked, febMonth.GetProperty("workedHours").GetDecimal());
+        Assert.Equal(skemaNorm, febMonth.GetProperty("normHours").GetDecimal());
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -259,10 +290,10 @@ public sealed class YearOverviewTests : IAsyncLifetime
         // We verify the drop by checking afholdt = 0.5 implies saldo < unconstrained baseline.
         // Direct formula: saldo = earned + carryover - cumulativeAfholdt for the ferieår.
         // cumulativeAfholdt through March = 0.5 (only absence is March 3.7h).
-        // So saldo = Round(earned + 0 - 0.5, 2).
-        var expectedEarned = AccrualMathHelper.EarnedToDate(25m, 1.0m,
-            new DateOnly(2024, 9, 1), null, new DateOnly(2025, 3, 31));
-        var expectedSaldo = Math.Round(expectedEarned - 0.5m, 2);
+        // Computed via the REAL AccrualMath at the closed-over month-end (no test-local replica).
+        var expectedSaldo = ExpectedMonthlyAccrualSaldo(
+            annualQuota: 25m, ferieaarStart: new DateOnly(2024, 9, 1), employmentStart: null,
+            monthEnd: new DateOnly(2025, 3, 31), carryoverIn: 0m, cumulativeAfholdt: 0.5m);
         Assert.Equal(expectedSaldo, marchSaldo);
     }
 
@@ -271,15 +302,27 @@ public sealed class YearOverviewTests : IAsyncLifetime
     // ════════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Seeds VACATION absences in PAST months and FUTURE months of 2026 (no future absences
-    /// in the current month, per the seed constraint). Asserts:
-    ///   (a) Σ afholdt for past + current months == the entitlement_balances.used row (after
-    ///       we compute expected used = sum of day-equivalents with date ≤ today).
-    ///   (b) Σ afholdt for future months == the planned portion (date > today).
-    ///   (c) whole-year Σ afholdt == used + planned.
-    /// Fixed today = 2026-06-15. Current month = June 2026.
-    /// Seed constraint (Step-0b cycle-2 Codex W): no future-dated absences inside the
-    /// current month (June 2026) — we seed Jan/Feb (past) and Aug (future only).
+    /// Seeds VACATION absences in PAST months and a FUTURE month of 2026 (no future absences in the
+    /// current month, per the Step-0b cycle-2 seed constraint) AND seeds the matching
+    /// <c>entitlement_balances</c> row with the <c>used</c>/<c>planned</c> a correctly-maintained
+    /// balance WOULD hold for this exact date-split. Asserts the spec's three equalities
+    /// (TASK-6504.4):
+    ///   (a) Σ afholdt for past + current months == <c>used</c>;
+    ///   (b) Σ afholdt for future months == <c>planned</c>;
+    ///   (c) whole-year Σ afholdt == <c>used + planned</c>.
+    /// <para>
+    /// <b>Route taken (Step-5a WARNING 2): seeded-balance proxy, NOT the real save flow.</b> The
+    /// year-overview endpoint exposes only the per-month <c>afholdt</c> day-equivalent TOTALS — it
+    /// does not surface a per-category <c>used</c>/<c>planned</c> field, and the real
+    /// consumption-maintenance path is the Skema <c>/save</c> POST behind quota + approval-state
+    /// machinery (disproportionate for this read-only assertion). So we seed the
+    /// <c>entitlement_balances</c> row's <c>used</c>/<c>planned</c> ourselves, chosen CONSISTENT
+    /// with the date split (past+current day-equivalents → <c>used</c>; future → <c>planned</c>),
+    /// and assert the response's afholdt monthly totals reconcile to those quantities. This is a
+    /// totals-consistency proxy for the underlying date-based split, not a system-maintained
+    /// round-trip.
+    /// </para>
+    /// Fixed today = 2026-06-15 (current month = June 2026).
     /// </summary>
     [Fact]
     public async Task ConsumptionReconciliation_UsedPlannnedSplit_ByAbsenceDate()
@@ -301,6 +344,17 @@ public sealed class YearOverviewTests : IAsyncLifetime
         await SeedAbsenceProjectionRowAsync(
             employeeId, new DateOnly(2026, 8, 5), "VACATION", hours: 7.4m); // 1 day, future
 
+        // Seed the entitlement_balances row for the ferieår containing all three absences
+        // (ferieår 2025 = Sep 2025 – Aug 2026 → entitlement_year 2025). used/planned are chosen to
+        // EQUAL the date-split day-equivalents above: 2 past-dated days → used = 2; 1 future-dated
+        // day → planned = 1. (This is the quantity a correct system-maintained balance holds for
+        // this absence pattern; see the route note in the summary.)
+        const decimal expectedUsed = 2m;     // Jan + Feb (dates ≤ today)
+        const decimal expectedPlanned = 1m;  // Aug (date > today)
+        await SeedEntitlementBalanceAsync(
+            employeeId, "VACATION", entitlementYear: 2025,
+            used: expectedUsed, planned: expectedPlanned, carryoverIn: 0m);
+
         var client = MakeFixedTodayClient(EmployeeBearerToken(employeeId, Emp001OrgId));
         var body = await GetYearOverviewAsync(client, employeeId, 2026);
 
@@ -308,18 +362,18 @@ public sealed class YearOverviewTests : IAsyncLifetime
         var afholdtArray = vacation.GetProperty("afholdt").EnumerateArray()
             .Select(e => e.GetDecimal()).ToList();
 
-        // Σ afholdt for months whose dates ≤ today (months 1–6 for year 2026).
-        // Only Jan (index 0) and Feb (index 1) have seeded absences.
-        var usedFromAfholdt = afholdtArray.Take(6).Sum(); // Jan–Jun (today's month inclusive)
-        Assert.Equal(2m, usedFromAfholdt); // 1 + 1 = 2 day-equivalents from past months
+        // (a) Σ afholdt for months whose dates ≤ today (Jan–Jun, today's month inclusive) == used.
+        // Only Jan (index 0) and Feb (index 1) carry day-equivalents.
+        var usedFromAfholdt = afholdtArray.Take(6).Sum();
+        Assert.Equal(expectedUsed, usedFromAfholdt);
 
-        // Σ afholdt for months whose dates > today (months 7–12 for year 2026).
-        // Only Aug (index 7) has a seeded absence.
-        var plannedFromAfholdt = afholdtArray.Skip(6).Sum(); // Jul–Dec
-        Assert.Equal(1m, plannedFromAfholdt); // 1 day-equivalent from future month
+        // (b) Σ afholdt for months whose dates > today (Jul–Dec) == planned.
+        // Only Aug (index 7) carries a day-equivalent.
+        var plannedFromAfholdt = afholdtArray.Skip(6).Sum();
+        Assert.Equal(expectedPlanned, plannedFromAfholdt);
 
-        // Whole-year Σ = used + planned.
-        Assert.Equal(usedFromAfholdt + plannedFromAfholdt, afholdtArray.Sum());
+        // (c) whole-year Σ afholdt == used + planned.
+        Assert.Equal(expectedUsed + expectedPlanned, afholdtArray.Sum());
         Assert.Equal(3m, afholdtArray.Sum()); // 2 + 1 = 3 total
     }
 
@@ -420,16 +474,16 @@ public sealed class YearOverviewTests : IAsyncLifetime
         // earnedToDate at 2025-03-31 for ferieår 2024 (start 2024-09-01, quota 25, null employment) =
         //   25 × 7/12 ≈ 14.58.
         var marSaldo = saldoArray[2]; // March = index 2
-        var earnedFerieaar2024March = AccrualMathHelper.EarnedToDate(
-            25m, 1.0m, new DateOnly(2024, 9, 1), null, new DateOnly(2025, 3, 31));
-        var expectedMarSaldo = Math.Round(earnedFerieaar2024March - 1.0m, 2);
+        var expectedMarSaldo = ExpectedMonthlyAccrualSaldo(
+            annualQuota: 25m, ferieaarStart: new DateOnly(2024, 9, 1), employmentStart: null,
+            monthEnd: new DateOnly(2025, 3, 31), carryoverIn: 0m, cumulativeAfholdt: 1.0m);
         Assert.Equal(expectedMarSaldo, marSaldo);
 
         // August (index 7): same ferieår 2024; 12 months → earned = 25; afholdt = 1 (Mar).
         var augSaldo = saldoArray[7]; // August = index 7
-        var earnedFerieaar2024Aug = AccrualMathHelper.EarnedToDate(
-            25m, 1.0m, new DateOnly(2024, 9, 1), null, new DateOnly(2025, 8, 31));
-        var expectedAugSaldo = Math.Round(earnedFerieaar2024Aug - 1.0m, 2);
+        var expectedAugSaldo = ExpectedMonthlyAccrualSaldo(
+            annualQuota: 25m, ferieaarStart: new DateOnly(2024, 9, 1), employmentStart: null,
+            monthEnd: new DateOnly(2025, 8, 31), carryoverIn: 0m, cumulativeAfholdt: 1.0m);
         Assert.Equal(expectedAugSaldo, augSaldo);
 
         // September (index 8): ferieår 2025 RESETS. The sawtooth: saldo restarts from Sep 2025.
@@ -437,16 +491,16 @@ public sealed class YearOverviewTests : IAsyncLifetime
         // Oct absence date is 2025-10-01 which is AFTER Sep 2025 end (2025-09-30). So cumAfholdt
         // through Sep-end = 0.
         var sepSaldo = saldoArray[8]; // September = index 8
-        var earnedFerieaar2025Sep = AccrualMathHelper.EarnedToDate(
-            25m, 1.0m, new DateOnly(2025, 9, 1), null, new DateOnly(2025, 9, 30));
-        var expectedSepSaldo = Math.Round(earnedFerieaar2025Sep + 3m - 0m, 2);
+        var expectedSepSaldo = ExpectedMonthlyAccrualSaldo(
+            annualQuota: 25m, ferieaarStart: new DateOnly(2025, 9, 1), employmentStart: null,
+            monthEnd: new DateOnly(2025, 9, 30), carryoverIn: 3m, cumulativeAfholdt: 0m);
         Assert.Equal(expectedSepSaldo, sepSaldo);
 
         // October (index 9): ferieår 2025; 2 months earned + carryoverIn(3) − cumAfholdt(1).
         var octSaldo = saldoArray[9]; // October = index 9
-        var earnedFerieaar2025Oct = AccrualMathHelper.EarnedToDate(
-            25m, 1.0m, new DateOnly(2025, 9, 1), null, new DateOnly(2025, 10, 31));
-        var expectedOctSaldo = Math.Round(earnedFerieaar2025Oct + 3m - 1.0m, 2);
+        var expectedOctSaldo = ExpectedMonthlyAccrualSaldo(
+            annualQuota: 25m, ferieaarStart: new DateOnly(2025, 9, 1), employmentStart: null,
+            monthEnd: new DateOnly(2025, 10, 31), carryoverIn: 3m, cumulativeAfholdt: 1.0m);
         Assert.Equal(expectedOctSaldo, octSaldo);
 
         // Straddle assertion: the Oct absence did NOT affect Mar saldo (separate ferieår).
@@ -460,18 +514,38 @@ public sealed class YearOverviewTests : IAsyncLifetime
     // ════════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Two identical requests for the year-overview return byte-equal responses for the
-    /// <c>transferable</c> field (determinism property, priority #2).
+    /// Two identical requests for the year-overview return BYTE-EQUAL responses (determinism
+    /// property, priority #2). The endpoint is a pure function of (employeeId, year, today,
+    /// projections); the only non-projection input — server <c>today</c> — is pinned by the
+    /// fixed <see cref="TimeProvider"/>, so the entire serialized body must be character-for-
+    /// character identical across two requests. This asserts on the FULL raw response strings
+    /// (Step-5a BLOCKER 1: deserializing + comparing one decimal field is not a byte-equality
+    /// proof — JSON property ordering, number formatting, and every other field must also be
+    /// stable).
     /// </summary>
     [Fact]
     public async Task Transferable_TwoIdenticalRequests_ByteEqual()
     {
         var client = MakeFixedTodayClient(EmployeeBearerToken(Emp001, Emp001OrgId));
-        var body1 = await GetYearOverviewAsync(client, Emp001, 2025);
-        var body2 = await GetYearOverviewAsync(client, Emp001, 2025);
 
-        var vac1 = GetCategory(body1, "VACATION").GetProperty("transferable").GetDecimal();
-        var vac2 = GetCategory(body2, "VACATION").GetProperty("transferable").GetDecimal();
+        var url = $"/api/balance/{Emp001}/year-overview?year=2025";
+        var rsp1 = await client.GetAsync(url);
+        var rsp2 = await client.GetAsync(url);
+        rsp1.EnsureSuccessStatusCode();
+        rsp2.EnsureSuccessStatusCode();
+
+        var rawBody1 = await rsp1.Content.ReadAsStringAsync();
+        var rawBody2 = await rsp2.Content.ReadAsStringAsync();
+
+        // The PRIMARY requirement: the two FULL raw bodies are exactly equal (byte/char identical).
+        Assert.Equal(rawBody1, rawBody2);
+
+        // Retained field-level cross-check (the determinism property the test was named for):
+        // VACATION transferable is identical across the two responses.
+        using var doc1 = JsonDocument.Parse(rawBody1);
+        using var doc2 = JsonDocument.Parse(rawBody2);
+        var vac1 = GetCategory(doc1.RootElement, "VACATION").GetProperty("transferable").GetDecimal();
+        var vac2 = GetCategory(doc2.RootElement, "VACATION").GetProperty("transferable").GetDecimal();
         Assert.Equal(vac1, vac2);
     }
 
@@ -501,6 +575,86 @@ public sealed class YearOverviewTests : IAsyncLifetime
         var careDayTransferable = GetCategory(body, "CARE_DAY")
             .GetProperty("transferable").GetDecimal();
         Assert.Equal(0m, careDayTransferable);
+    }
+
+    /// <summary>
+    /// <b>Transferable formula — BELOW-cap branch pinned with an EXACT non-trivial value.</b>
+    /// VACATION is the only type with a non-zero <c>carryoverMax</c> (5m,
+    /// DefaultEntitlementConfigs.cs:74), so it is the only type whose <c>min()</c> can take EITHER
+    /// branch. Here we drive the <c>raw</c> operand BELOW the cap by seeding the CLOSED boundary
+    /// ferieår's <c>entitlement_balances</c> row with a large <c>used</c>:
+    /// <list type="bullet">
+    ///   <item><description>Selected year = 2025 ⇒ closed boundary ferieår = 2024
+    ///   (Sep 2024 – Aug 2025); the handler reads the <c>entitlement_year = 2024</c> balance row
+    ///   (BalanceEndpoints.cs:747-755 — <c>closedEntYear = year-1</c> for ResetMonth-9 types).</description></item>
+    ///   <item><description><c>earnedAtBoundary</c> at 2025-08-31 = full 12 months = 25 (real
+    ///   AccrualMath).</description></item>
+    ///   <item><description>seed used = 22, planned = 0, carryoverIn = 0 ⇒
+    ///   raw = 25 + 0 − 22 − 0 = 3 &lt; 5 ⇒ transferable = min(max(0,3),5) = <b>3</b>.</description></item>
+    /// </list>
+    /// Asserts the exact below-cap value (NOT just &gt;= 0). The closed-ferieår year-key is the
+    /// highest-risk wiring in the endpoint — seeding the SAME (employee, type, year-1) row the
+    /// handler reads pins it.
+    /// </summary>
+    [Fact]
+    public async Task Transferable_BelowCap_EqualsExactRawValue()
+    {
+        var employeeId = await CreateEmployeeAsync(Emp001OrgId, "AC", "OK24");
+        await RegressionSeed.SeedEmployeeAsync(
+            _harness.ConnectionString, employeeId, Emp001OrgId, "AC", "OK24");
+
+        // Closed boundary ferieår for selected year 2025 = ferieår 2024 → entitlement_year 2024.
+        // used = 22 drives raw (25 − 22 = 3) below the carryoverMax of 5.
+        await SeedEntitlementBalanceAsync(
+            employeeId, "VACATION", entitlementYear: 2024, used: 22m, planned: 0m, carryoverIn: 0m);
+
+        var client = MakeFixedTodayClient(EmployeeBearerToken(employeeId, Emp001OrgId));
+        var body = await GetYearOverviewAsync(client, employeeId, 2025);
+
+        var transferable = GetCategory(body, "VACATION").GetProperty("transferable").GetDecimal();
+
+        // earnedAtBoundary via the REAL AccrualMath at the closed ferieår 2024 boundary (2025-08-31);
+        // carryoverMax = 5 (DefaultEntitlementConfigs.cs:74). raw = 25 + 0 − 22 − 0 = 3 < 5 ⇒ 3.
+        var expected = ExpectedTransferable(
+            annualQuota: 25m, closedFerieaarStart: new DateOnly(2024, 9, 1), employmentStart: null,
+            boundaryDate: new DateOnly(2025, 8, 31),
+            carryoverIn: 0m, used: 22m, planned: 0m, carryoverMax: 5m);
+        Assert.Equal(3m, expected);             // sanity: the derivation lands on the below-cap branch
+        Assert.Equal(expected, transferable);   // endpoint matches the real-AccrualMath formula exactly
+    }
+
+    /// <summary>
+    /// <b>Transferable formula — AT-cap branch pinned with the EXACT cap value.</b>
+    /// Same closed-ferieår wiring as the below-cap test, but operands push <c>raw</c> ABOVE the cap
+    /// so the <c>min()</c> clamps to <c>carryoverMax</c>: seed used = planned = carryoverIn = 0 ⇒
+    /// raw = earnedAtBoundary(25) &gt; 5 ⇒ transferable = min(max(0,25),5) = <b>5</b>. Asserts the
+    /// exact at-cap value (NOT just &gt;= 0). Together with the below-cap test, BOTH branches of
+    /// the <c>min()</c> are now pinned to exact expected values (Step-5a BLOCKER 2).
+    /// </summary>
+    [Fact]
+    public async Task Transferable_AtCap_EqualsCarryoverMax()
+    {
+        var employeeId = await CreateEmployeeAsync(Emp001OrgId, "AC", "OK24");
+        await RegressionSeed.SeedEmployeeAsync(
+            _harness.ConnectionString, employeeId, Emp001OrgId, "AC", "OK24");
+
+        // Seed the closed ferieår 2024 row with all-zero operands so raw = earnedAtBoundary (25),
+        // which exceeds the carryoverMax of 5. (A seed is written so the at-cap case is explicit
+        // and does not depend on the no-row default also yielding zeros.)
+        await SeedEntitlementBalanceAsync(
+            employeeId, "VACATION", entitlementYear: 2024, used: 0m, planned: 0m, carryoverIn: 0m);
+
+        var client = MakeFixedTodayClient(EmployeeBearerToken(employeeId, Emp001OrgId));
+        var body = await GetYearOverviewAsync(client, employeeId, 2025);
+
+        var transferable = GetCategory(body, "VACATION").GetProperty("transferable").GetDecimal();
+
+        var expected = ExpectedTransferable(
+            annualQuota: 25m, closedFerieaarStart: new DateOnly(2024, 9, 1), employmentStart: null,
+            boundaryDate: new DateOnly(2025, 8, 31),
+            carryoverIn: 0m, used: 0m, planned: 0m, carryoverMax: 5m);
+        Assert.Equal(5m, expected);             // sanity: the derivation clamps to the cap (5)
+        Assert.Equal(expected, transferable);   // endpoint clamps to carryoverMax exactly
     }
 
     /// <summary>
@@ -563,18 +717,29 @@ public sealed class YearOverviewTests : IAsyncLifetime
         // saldo[11] at Dec-end = earned(12 months of ferieår 2025) + carryoverIn(0) −
         //   cumulativeAfholdt(type in ferieår 2025 through Dec) = earned − 1.
         var decSaldo = vacation.GetProperty("saldo").EnumerateArray().ToList()[11].GetDecimal();
-        var earnedFerieaar2025Dec = AccrualMathHelper.EarnedToDate(
+        var earnedFerieaar2025Dec = AccrualMath.EarnedToDate(
             25m, 1.0m, new DateOnly(2025, 9, 1), null, new DateOnly(2025, 12, 31));
         // cumAfholdt through Dec-end for ferieår 2025 = 1 (Sep absence).
-        var expectedDecSaldo = Math.Round(earnedFerieaar2025Dec - 1.0m, 2);
+        var expectedDecSaldo = ExpectedMonthlyAccrualSaldo(
+            annualQuota: 25m, ferieaarStart: new DateOnly(2025, 9, 1), employmentStart: null,
+            monthEnd: new DateOnly(2025, 12, 31), carryoverIn: 0m, cumulativeAfholdt: 1.0m);
         Assert.Equal(expectedDecSaldo, decSaldo);
 
-        // The Sep 2025 absence does NOT change the transferable (which uses ferieår 2024).
-        // We verify transferable == value with NO post-Aug absence (same formula, no closedUsed).
-        // earnedAtBoundary(2025-08-31, ferieår 2024) = 25 exactly.
-        // transferable is capped to carryoverMax — just assert it is non-negative and decSaldo
-        // differs from transferable by a meaningful amount (decSaldo < earnedFerieaar2025Dec).
-        Assert.True(transferable >= 0m, "transferable must be non-negative");
+        // The Sep 2025 absence does NOT change the transferable (which uses the CLOSED ferieår
+        // 2024 balances). No closed-ferieår-2024 balance row is seeded here ⇒ closedUsed =
+        // closedPlanned = closedCarryoverIn = 0, and earnedAtBoundary(2025-08-31, ferieår 2024) =
+        // 25 (full 12 months). raw = 25 > carryoverMax 5 ⇒ transferable = 5 EXACTLY. Asserting the
+        // exact value (not >= 0) is what proves compute-at-model-boundary: a Sep-2025 (ferieår
+        // 2025) absence cannot perturb a value sourced entirely from ferieår 2024.
+        var expectedTransferable = ExpectedTransferable(
+            annualQuota: 25m, closedFerieaarStart: new DateOnly(2024, 9, 1), employmentStart: null,
+            boundaryDate: new DateOnly(2025, 8, 31),
+            carryoverIn: 0m, used: 0m, planned: 0m, carryoverMax: 5m);
+        Assert.Equal(5m, expectedTransferable); // sanity: clamps to the cap
+        Assert.Equal(expectedTransferable, transferable);
+
+        // And the Dec saldo (ferieår 2025) DID drop because of the same Sep absence — the two
+        // ferieår are independent (straddle), confirming the discrimination.
         Assert.True(decSaldo < earnedFerieaar2025Dec,
             $"decSaldo {decSaldo} should be less than earnedFerieaar2025Dec {earnedFerieaar2025Dec} because of the Sep 2025 absence");
     }
@@ -584,77 +749,111 @@ public sealed class YearOverviewTests : IAsyncLifetime
     // ════════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// A request for year 2026 spans the 2026-04-01 OK24→OK26 cutover. The endpoint resolves
-    /// per-day norms via DailyNormCalculator which calls OkVersionResolver.ResolveVersion(day)
-    /// per day — months before April use OK24 configs, months from April use OK26. The test
-    /// verifies:
-    /// <list type="bullet">
-    ///   <item><description>normHours for January 2026 (OK24 side) matches the OK24
-    ///   norm-hours computation.</description></item>
-    ///   <item><description>normHours for May 2026 (OK26 side) matches the OK26
-    ///   norm-hours computation.</description></item>
-    ///   <item><description>Both are non-null (a profile IS present).</description></item>
-    ///   <item><description>The VACATION entitlement config reads anchor at the entitlement-year
-    ///   start (NOT today's OK version) — for year 2026, the ferieår 2025 (Sep 2025–Aug 2026)
-    ///   starts 2025-09-01, which resolves to OK24 (before 2026-04-01). The entitlement config
-    ///   for that ferieår therefore uses the OK24-era seeded config.</description></item>
-    ///   <item><description>transferable carryoverMax is also anchored at the closed ferieår 2024
-    ///   start (2024-09-01) which resolves to OK24 — NOT today's OK version
-    ///   (Step-0b cycle-2 Reviewer NOTE).</description></item>
-    /// </list>
+    /// A request for year 2026 spans the 2026-04-01 OK24→OK26 cutover. DailyNormCalculator calls
+    /// <c>OkVersionResolver.ResolveVersion(day)</c> PER DAY (DailyNormCalculator.cs:103), so days
+    /// before April resolve OK24 and days from April resolve OK26.
+    ///
+    /// <para><b>Discrimination route (Step-5a BLOCKER 3): LOCAL org-scoped config override
+    /// (ADR-017), NOT a global DB seed.</b> CentralAgreementConfigs defines AC/OK24 and AC/OK26 as
+    /// value-IDENTICAL (WeeklyNormHours 37.0 both sides), and the global <c>entitlement_configs</c>
+    /// / <c>agreement_configs</c> rows are keyed by (agreement_code, ok_version) ONLY — seeding a
+    /// different AC/OK26 row there would contaminate every other test (the S64 shared-DB-row
+    /// lesson). Instead we attach TWO <c>local_agreement_profiles</c> rows to a DEDICATED org node
+    /// (<c>STY_OKDISC</c>, used by no other test) that this test's employee alone belongs to — one
+    /// for OK24 (weekly_norm 30) and one for OK26 (weekly_norm 35). <c>ConfigResolutionService</c>
+    /// overlays the org+agreement+ok-keyed profile (LocalAgreementProfileRepository.cs:68-86), so
+    /// the per-weekday norm DIFFERS across the cutover and we can assert DIFFERENT EXACT values on
+    /// each side. If the endpoint resolved OK once for the whole year (instead of per day), both
+    /// months would pick the same profile and the per-weekday rate would be identical — the
+    /// distinct-rate assertion below would fail.</para>
+    ///
+    /// <para>Also asserts that the VACATION entitlement-config reads anchor at the entitlement-year
+    /// START, not today's OK (the saldo/transferable values below).</para>
     /// </summary>
     [Fact]
     public async Task OkVersionStraddle_2026Cutover_NormHoursPerSideCorrect_EntitlementConfigAnchorsAtYearStart()
     {
-        // Seed a fresh employee with a full-time, whole-history profile so norms resolve on
-        // every day.  today = 2026-06-15 (after the cutover). Year under test = 2026.
-        var employeeId = await CreateEmployeeAsync(Emp001OrgId, "AC", "OK24");
-        await RegressionSeed.SeedEmployeeAsync(
-            _harness.ConnectionString, employeeId, Emp001OrgId, "AC", "OK24");
+        // Dedicated org node — referenced by NO other test, so the local profiles below cannot
+        // contaminate any other employee's config resolution.
+        const string okDiscOrgId = "STY_OKDISC";
+        const decimal ok24WeeklyNorm = 30.00m; // OK24-side local override
+        const decimal ok26WeeklyNorm = 35.00m; // OK26-side local override (distinct from OK24)
 
-        var client = MakeFixedTodayClient(EmployeeBearerToken(employeeId, Emp001OrgId));
+        // Fresh full-time employee whose primary_org_id is the dedicated org (DailyNormCalculator
+        // resolves config for profile.OrgId == users.primary_org_id, EmploymentProfileResolver.cs:151/180).
+        var employeeId = await CreateEmployeeAsync(okDiscOrgId, "AC", "OK24");
+        await RegressionSeed.SeedEmployeeAsync(
+            _harness.ConnectionString, employeeId, okDiscOrgId, "AC", "OK24");
+
+        // Two org-scoped local agreement profiles, one per OK version, with DISTINCT weekly norms.
+        // Partial-unique index is (org_id, agreement_code, ok_version) WHERE effective_to IS NULL
+        // (init.sql:741-743) → OK24 + OK26 are distinct open rows, both allowed.
+        await SeedLocalAgreementProfileAsync(okDiscOrgId, "AC", "OK24", ok24WeeklyNorm);
+        await SeedLocalAgreementProfileAsync(okDiscOrgId, "AC", "OK26", ok26WeeklyNorm);
+
+        var client = MakeFixedTodayClient(EmployeeBearerToken(employeeId, okDiscOrgId));
         var body = await GetYearOverviewAsync(client, employeeId, 2026);
 
         var months = body.GetProperty("months").EnumerateArray().ToList();
 
-        // January 2026 (index 0): all days resolved with OK24 (before 2026-04-01).
+        // Per-weekday norm = Round(weeklyNorm × fraction(1.0) / 5, 2) (DailyNormCalculator.cs:121).
+        var ok24DailyNorm = Math.Round(ok24WeeklyNorm * 1.0m / 5m, 2); // 30/5 = 6.00
+        var ok26DailyNorm = Math.Round(ok26WeeklyNorm * 1.0m / 5m, 2); // 35/5 = 7.00
+        Assert.NotEqual(ok24DailyNorm, ok26DailyNorm); // sanity: the two sides are genuinely distinct
+
+        // January 2026 (index 0): every day < 2026-04-01 → OK24 → 6.00/weekday.
         var janMonth = months[0];
         Assert.Equal(1, janMonth.GetProperty("month").GetInt32());
         var janNorm = janMonth.GetProperty("normHours").GetDecimal();
-        Assert.True(janNorm > 0m, $"Jan normHours {janNorm} should be positive (OK24 profile)");
+        var expectedJanNorm = ok24DailyNorm * CountWeekdays(2026, 1);
+        Assert.Equal(expectedJanNorm, janNorm); // OK24-side EXACT value
 
-        // May 2026 (index 4): all days resolved with OK26 (on/after 2026-04-01).
+        // May 2026 (index 4): every day ≥ 2026-04-01 → OK26 → 7.00/weekday.
         var mayMonth = months[4];
         Assert.Equal(5, mayMonth.GetProperty("month").GetInt32());
         var mayNorm = mayMonth.GetProperty("normHours").GetDecimal();
-        Assert.True(mayNorm > 0m, $"May normHours {mayNorm} should be positive (OK26 profile)");
+        var expectedMayNorm = ok26DailyNorm * CountWeekdays(2026, 5);
+        Assert.Equal(expectedMayNorm, mayNorm); // OK26-side EXACT value
 
-        // For a full-time AC employee at 37 h/week, Jan and May should have the same
-        // weekday-count-based norm (37 × weekdays/5). Both are non-null (profile present).
-        // We just verify they are both positive — the exact per-day resolution is the
-        // DailyNormCalculator's concern. The key contract is that both sides are served.
-        Assert.True(janNorm > 0m, "Jan normHours must be positive");
-        Assert.True(mayNorm > 0m, "May normHours must be positive");
+        // The discriminating cross-check: the two sides resolved DIFFERENT per-weekday rates
+        // (6.00 vs 7.00). Normalize out the differing weekday counts to compare the rates directly.
+        var janPerWeekday = janNorm / CountWeekdays(2026, 1);
+        var mayPerWeekday = mayNorm / CountWeekdays(2026, 5);
+        Assert.Equal(ok24DailyNorm, janPerWeekday);
+        Assert.Equal(ok26DailyNorm, mayPerWeekday);
+        Assert.NotEqual(janPerWeekday, mayPerWeekday); // per-day OK resolution genuinely discriminated
 
-        // VACATION entitlement config for year 2026:
-        // ferieår 2025 = Sep 2025 – Aug 2026 (months Jan–Aug 2026 → ferieaarStart = 2025-09-01).
-        // OkVersionResolver.ResolveVersion(2025-09-01) = "OK24" (before 2026-04-01).
-        // The config for this ferieår should therefore use OK24 quota (25 days for AC/OK24).
+        // ── Entitlement-config anchoring (unchanged behavior, now asserted on exact values) ──
+        // VACATION ferieår for Jan–Aug 2026 = ferieår 2025 (start 2025-09-01 → OkVersion OK24).
+        // No absences, no carryover, full-time. Jan saldo = EarnedToDate at 2026-01-31 for ferieår
+        // 2025 (5 months: Sep,Oct,Nov,Dec,Jan) = 25 × 5/12, via the REAL AccrualMath.
         var vacation = GetCategory(body, "VACATION");
-        var janSaldo = vacation.GetProperty("saldo").EnumerateArray().ToList()[0]; // Jan 2026
-        // Jan saldo is non-null (the employee has a profile covering Jan).
-        Assert.Equal(JsonValueKind.Number, janSaldo.ValueKind);
+        var janSaldo = vacation.GetProperty("saldo").EnumerateArray().ToList()[0].GetDecimal();
+        var expectedJanSaldo = ExpectedMonthlyAccrualSaldo(
+            annualQuota: 25m, ferieaarStart: new DateOnly(2025, 9, 1), employmentStart: null,
+            monthEnd: new DateOnly(2026, 1, 31), carryoverIn: 0m, cumulativeAfholdt: 0m);
+        Assert.Equal(expectedJanSaldo, janSaldo);
 
-        // transferable for VACATION in year 2026:
-        // Closed boundary ferieår = ferieår 2024 (Sep 2024 – Aug 2025, closedFerieaarStart = 2024-09-01).
-        // OkVersionResolver.ResolveVersion(2024-09-01) = "OK24" (before 2026-04-01).
-        // So carryoverMax is read from the OK24-era entitlement config, NOT today's OK26.
-        // This is the Step-0b cycle-2 Reviewer NOTE assertion.
+        // transferable: closed boundary ferieår = 2024 (start 2024-09-01 → OK24), boundary 2025-08-31.
+        // No closed-ferieår-2024 balance row seeded ⇒ all-zero operands ⇒ raw = 25 > carryoverMax 5
+        // ⇒ transferable = 5 EXACTLY. carryoverMax is read from the OK24-era config (Step-0b cycle-2
+        // Reviewer NOTE: anchored at the closed ferieår start, NOT today's OK26).
         var vacTransferable = vacation.GetProperty("transferable").GetDecimal();
-        // Just assert it is non-negative and equals the formula's expected value
-        // (carryoverMax sourced from OK24-era config, earnedAtBoundary = 25 for a whole-ferieår
-        // full-time employee with no absences).
-        Assert.True(vacTransferable >= 0m, "transferable must be non-negative even for the straddled year");
+        var expectedTransferable = ExpectedTransferable(
+            annualQuota: 25m, closedFerieaarStart: new DateOnly(2024, 9, 1), employmentStart: null,
+            boundaryDate: new DateOnly(2025, 8, 31),
+            carryoverIn: 0m, used: 0m, planned: 0m, carryoverMax: 5m);
+        Assert.Equal(5m, expectedTransferable);
+        Assert.Equal(expectedTransferable, vacTransferable);
+
+        // HONEST GAP (Step-5a BLOCKER 3): the transferable carryoverMax is sourced from the GLOBAL
+        // entitlement_configs row (keyed by agreement_code + ok_version only — NOT org-scoped), and
+        // AC/OK24 vs AC/OK26 are value-identical placeholders (both carryoverMax = 5,
+        // DefaultEntitlementConfigs.cs:74). The local-profile override above only steers
+        // weekly_norm_hours, NOT entitlement quotas/carryoverMax. So this test pins the
+        // year-start-anchored carryoverMax VALUE (5) but cannot make it OK24-vs-OK26-DISCRIMINATING
+        // without contaminating the global config — that sub-claim is a documented limitation,
+        // reported to the Orchestrator. The per-day NORM discrimination above IS exact and real.
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -837,10 +1036,97 @@ public sealed class YearOverviewTests : IAsyncLifetime
         return await rsp.Content.ReadFromJsonAsync<JsonElement>();
     }
 
+    /// <summary>
+    /// GET the Skema monthly spreadsheet for cross-seam reconciliation. Route + query shape per
+    /// SkemaEndpoints.cs:132 (<c>/api/skema/{employeeId}/month</c>, <c>int year</c> + <c>int month</c>,
+    /// auth <c>EmployeeOrAbove</c>).
+    /// </summary>
+    private static async Task<JsonElement> GetSkemaMonthAsync(
+        HttpClient client, string employeeId, int year, int month)
+    {
+        var rsp = await client.GetAsync(
+            $"/api/skema/{employeeId}/month?year={year}&month={month}");
+        rsp.EnsureSuccessStatusCode();
+        return await rsp.Content.ReadFromJsonAsync<JsonElement>();
+    }
+
+    /// <summary>
+    /// Reproduces <c>BalanceEndpoints.SumIntervalHours</c> over a Skema <c>workTime</c> row's
+    /// <c>intervals</c> JSON array (each element <c>{ start, end }</c> "HH:MM"/"HH:MM:SS"): only
+    /// positive-duration intervals count; total seconds rounded to 2 decimals. Used to reconstruct
+    /// the Skema seam's worked-hours total identically to the year-overview's aggregation.
+    /// </summary>
+    private static decimal SumSkemaIntervalHours(JsonElement intervals)
+    {
+        var totalSeconds = 0;
+        foreach (var iv in intervals.EnumerateArray())
+        {
+            if (TryParseTimeToSeconds(iv.GetProperty("start").GetString(), out var s)
+                && TryParseTimeToSeconds(iv.GetProperty("end").GetString(), out var e)
+                && e > s)
+            {
+                totalSeconds += e - s;
+            }
+        }
+        return Math.Round(totalSeconds / 3600m, 2);
+    }
+
+    private static bool TryParseTimeToSeconds(string? value, out int seconds)
+    {
+        seconds = 0;
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        var parts = value.Split(':');
+        if (parts.Length < 2) return false;
+        if (!int.TryParse(parts[0], out var h) || !int.TryParse(parts[1], out var m)) return false;
+        var s = 0;
+        if (parts.Length >= 3 && !int.TryParse(parts[2], out s)) return false;
+        if (h < 0 || h > 23 || m < 0 || m > 59 || s < 0 || s > 59) return false;
+        seconds = h * 3600 + m * 60 + s;
+        return true;
+    }
+
     private static JsonElement GetCategory(JsonElement body, string type)
     {
         return body.GetProperty("categories").EnumerateArray()
             .Single(c => c.GetProperty("type").GetString() == type);
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // Helpers — expected-value math via the REAL production AccrualMath.
+    // ════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Expected end-of-month <c>saldo[m]</c> for a MONTHLY_ACCRUAL type, computed the EXACT way
+    /// the endpoint does (BalanceEndpoints.cs:722-728):
+    /// <c>Math.Round(AccrualMath.EarnedToDate(quota, 1.0m, ferieaarStart, employmentStart, monthEnd)
+    ///   + carryoverIn − cumulativeAfholdt, 2)</c>.
+    /// The earned term is the UNROUNDED real <see cref="AccrualMath.EarnedToDate"/> (the rounding is
+    /// applied ONCE, to the whole sum — matching the handler; a test-local replica that rounded the
+    /// earned term first could diverge by a cent on fractional quotas). VACATION quota = 25
+    /// (DefaultEntitlementConfigs.cs:71); fraction is the ADR-031 identity 1.0m.
+    /// </summary>
+    private static decimal ExpectedMonthlyAccrualSaldo(
+        decimal annualQuota, DateOnly ferieaarStart, DateOnly? employmentStart,
+        DateOnly monthEnd, decimal carryoverIn, decimal cumulativeAfholdt)
+        => Math.Round(
+            AccrualMath.EarnedToDate(annualQuota, 1.0m, ferieaarStart, employmentStart, monthEnd)
+            + carryoverIn - cumulativeAfholdt, 2);
+
+    /// <summary>
+    /// Expected <c>transferable</c> for a MONTHLY_ACCRUAL type, computed the EXACT way the endpoint
+    /// does (BalanceEndpoints.cs:760-769):
+    /// <c>Math.Round(Math.Min(Math.Max(0, earnedAtBoundary + carryoverIn − used − planned),
+    ///   carryoverMax), 2)</c>, where <c>earnedAtBoundary</c> is the UNROUNDED real
+    /// <see cref="AccrualMath.EarnedToDate"/> at the closed-ferieår model boundary.
+    /// </summary>
+    private static decimal ExpectedTransferable(
+        decimal annualQuota, DateOnly closedFerieaarStart, DateOnly? employmentStart,
+        DateOnly boundaryDate, decimal carryoverIn, decimal used, decimal planned, decimal carryoverMax)
+    {
+        var earnedAtBoundary = AccrualMath.EarnedToDate(
+            annualQuota, 1.0m, closedFerieaarStart, employmentStart, boundaryDate);
+        var raw = earnedAtBoundary + carryoverIn - used - planned;
+        return Math.Round(Math.Min(Math.Max(0m, raw), carryoverMax), 2);
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -1078,6 +1364,76 @@ public sealed class YearOverviewTests : IAsyncLifetime
         cmd.Parameters.AddWithValue("carryover", carryoverIn);
         await cmd.ExecuteNonQueryAsync();
     }
+
+    /// <summary>
+    /// Inserts one OPEN (effective_to NULL) <c>local_agreement_profiles</c> row overriding
+    /// <c>weekly_norm_hours</c> for the (org, agreement, ok_version) scope (ADR-017 local profile;
+    /// ConfigResolutionService overlays it on the central config). <c>effective_from</c> is the
+    /// history-covering <c>'0001-01-01'</c> anchor so every date in any year-under-test is covered.
+    /// Used by the OK-version-straddle test to make per-day OK resolution produce DIFFERENT
+    /// per-side norms WITHOUT touching any global config row (no cross-test contamination).
+    /// Citation: local_agreement_profiles schema at init.sql:723-743 (partial-unique index keyed
+    /// (org_id, agreement_code, ok_version) WHERE effective_to IS NULL → one open row per OK version).
+    /// </summary>
+    private async Task SeedLocalAgreementProfileAsync(
+        string orgId, string agreementCode, string okVersion, decimal weeklyNormHours)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+
+        // The org row must exist first (org_id FK). Upsert it (idempotent).
+        await using (var orgCmd = new NpgsqlCommand(
+            """
+            INSERT INTO organizations (org_id, org_name, org_type, parent_org_id,
+                                       materialized_path, agreement_code, ok_version)
+            VALUES (@orgId, @orgName, 'STYRELSE', NULL, @path, @ac, @ok)
+            ON CONFLICT (org_id) DO NOTHING
+            """, conn))
+        {
+            orgCmd.Parameters.AddWithValue("orgId", orgId);
+            orgCmd.Parameters.AddWithValue("orgName", $"{orgId} Test Org");
+            orgCmd.Parameters.AddWithValue("path", $"/{orgId}/");
+            orgCmd.Parameters.AddWithValue("ac", agreementCode);
+            orgCmd.Parameters.AddWithValue("ok", okVersion);
+            await orgCmd.ExecuteNonQueryAsync();
+        }
+
+        // Citation comments OUTSIDE the raw SQL string (S64 lesson). created_by is NOT NULL.
+        // effective_from is the '0001-01-01' history-covering anchor. ON CONFLICT on the active
+        // partial-unique index keeps the seed idempotent per OK version.
+        await using var cmd = new NpgsqlCommand(
+            """
+            INSERT INTO local_agreement_profiles
+                (profile_id, org_id, agreement_code, ok_version,
+                 effective_from, effective_to, weekly_norm_hours, created_by, created_at)
+            VALUES
+                (gen_random_uuid(), @orgId, @ac, @ok,
+                 DATE '0001-01-01', NULL, @weekly, 'test-seed', NOW())
+            ON CONFLICT (org_id, agreement_code, ok_version) WHERE effective_to IS NULL
+                DO UPDATE SET weekly_norm_hours = EXCLUDED.weekly_norm_hours
+            """, conn);
+        cmd.Parameters.AddWithValue("orgId", orgId);
+        cmd.Parameters.AddWithValue("ac", agreementCode);
+        cmd.Parameters.AddWithValue("ok", okVersion);
+        cmd.Parameters.AddWithValue("weekly", weeklyNormHours);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    /// <summary>
+    /// Counts Mon–Fri weekdays in the given calendar month (mirrors the endpoint's weekend-=0
+    /// per-day norm rule). Returned as a decimal for direct use in exact norm-hours arithmetic.
+    /// </summary>
+    private static decimal CountWeekdays(int year, int month)
+    {
+        var days = DateTime.DaysInMonth(year, month);
+        var count = 0;
+        for (var d = new DateOnly(year, month, 1); d <= new DateOnly(year, month, days); d = d.AddDays(1))
+        {
+            if (d.DayOfWeek is not (DayOfWeek.Saturday or DayOfWeek.Sunday))
+                count++;
+        }
+        return count;
+    }
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -1104,59 +1460,4 @@ internal sealed class FixedTimeProvider : TimeProvider
     }
 
     public override DateTimeOffset GetUtcNow() => _fixedUtcNow;
-}
-
-// ════════════════════════════════════════════════════════════════════════
-// AccrualMathHelper — test-local replica of AccrualMath.EarnedToDate.
-// ════════════════════════════════════════════════════════════════════════
-
-/// <summary>
-/// Test-local replica of <c>StatsTid.SharedKernel.Calendar.AccrualMath.EarnedToDate</c> for
-/// computing expected saldo values in assertions. Keeps tests self-contained and does NOT
-/// re-implement the rule logic — it re-derives the same formula for assertion purposes only.
-/// Formula: annualQuota × clampedElapsedMonths / 12 (flat, fraction-independent per ADR-031).
-/// Employment-start pro-ration (ADR-030 D6): months start accumulating from the later of
-/// ferieaarStart and employmentStart.
-/// </summary>
-internal static class AccrualMathHelper
-{
-    /// <summary>
-    /// Mirrors <c>AccrualMath.EarnedToDate(quota, 1.0m, ferieaarStart, employmentStart, asOf)</c>:
-    /// flat day-count, fraction-independent, month-based (fraction = 1.0 per ADR-031).
-    /// </summary>
-    public static decimal EarnedToDate(
-        decimal annualQuota,
-        decimal fraction,  // must be 1.0m per ADR-031
-        DateOnly ferieaarStart,
-        DateOnly? employmentStart,
-        DateOnly asOf)
-    {
-        // Accrual starts at the later of ferieaarStart and employmentStart.
-        var accrualStart = employmentStart is { } es && es > ferieaarStart ? es : ferieaarStart;
-
-        // Clamp asOf to the ferieaarStart boundary (asOf before start → 0).
-        if (asOf < accrualStart) return 0m;
-
-        // Month-based elapsed: same AccrualMath formula.
-        var monthsInYear = 12;
-        var startYear = ferieaarStart.Year;
-        var startMonth = ferieaarStart.Month;
-        var asOfYear = asOf.Year;
-        var asOfMonth = asOf.Month;
-
-        // Compute months elapsed since ferieaarStart (not accrualStart; consistent with AccrualMath).
-        var totalMonthsElapsed = (asOfYear - startYear) * 12 + (asOfMonth - startMonth) + 1;
-        totalMonthsElapsed = Math.Clamp(totalMonthsElapsed, 0, monthsInYear);
-
-        // If accrual started after ferieaarStart, deduct the months before accrual.
-        if (employmentStart is { } es2 && es2 > ferieaarStart)
-        {
-            var accrualStartYear = es2.Year;
-            var accrualStartMonth = es2.Month;
-            var monthsBeforeAccrual = (accrualStartYear - startYear) * 12 + (accrualStartMonth - startMonth);
-            totalMonthsElapsed = Math.Max(0, totalMonthsElapsed - monthsBeforeAccrual);
-        }
-
-        return Math.Round(annualQuota * fraction * totalMonthsElapsed / monthsInYear, 2);
-    }
 }
