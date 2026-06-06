@@ -8,7 +8,7 @@
 | **End Date** | 2026-06-06 |
 | **Orchestrator Approved** | yes |
 | **Build Verified** | yes — `dotnet build` 0 errors at the close tree (38 solution warnings all pre-existing, none in S65 files); tsc clean |
-| **Test Verified** | yes — unit 629 + regression **447/447 pristine + consecutive** (fresh-session exclusive run per FAIL-002) + smoke 5 + FE 173, all green locally; CI follows the held push (green S64 baseline 27009829974) |
+| **Test Verified** | yes — unit 629 + regression **447/447 pristine + consecutive** (fresh-session exclusive run per FAIL-002) + smoke 5 + FE 173, all green locally; **CI whole-workflow green on the close push: run 27064530267 (all six jobs)** |
 
 ## Sprint Goal
 Replace the S61 `tid/oversigt` dashboard with the design-handoff **Direction E Årsoversigt** (year-at-a-glance: 6 current-balance tiles + a months × categories matrix), backed by a new read-only `GET /api/balance/{employeeId}/year-overview?year=Y` endpoint whose every quantity derives from the existing rule-engine/projection primitives (ADR-028 work-time + per-day dated norm, ADR-030/031 flat accrual, hours-based day-equivalent consumption). Design source: `design_handoff_oversigt/` (committed this sprint as design source of record). Refinement: `.claude/refinements/REFINEMENT-s65-aarsoversigt-direction-e.md` (Step-4 dual-lens reviewed: Codex 2 cycles → "Clean — absorptions verified"; Reviewer 0 BLOCKERs).
@@ -296,7 +296,7 @@ NOTE (Step-0b Reviewer W4): `saldo` (Sep–Dec includes `carryoverIn`) and `tran
 
 ## Test Summary
 
-**Test Verified**: yes — full pyramid green LOCALLY at the close tree (`aad71dd` + tests built `aad71dd`-tree): unit 629/629; **regression 447/447 PRISTINE + 447/447 CONSECUTIVE** (twice back-to-back, S64 discipline, on a FRESH Docker Desktop session with an exclusive run per FAIL-002); smoke 5/5; FE vitest 173/173 (25 files). CI verification follows the push (held for owner go; baseline = green S64 run 27009829974).
+**Test Verified**: yes — full pyramid green LOCALLY at the close tree (`aad71dd` + tests built `aad71dd`-tree): unit 629/629; **regression 447/447 PRISTINE + 447/447 CONSECUTIVE** (twice back-to-back, S64 discipline, on a FRESH Docker Desktop session with an exclusive run per FAIL-002); smoke 5/5; FE vitest 173/173 (25 files). **CI whole-workflow GREEN on the close push (`7579635`): run [27064530267](https://github.com/fanboy1000000/StatsTid/actions/runs/27064530267) — all six jobs success (gitleaks, build-and-test incl. the 447-test regression step, frontend-build, lizard, check_docs, smoke harness). 2nd consecutive whole-workflow-green close (S64 → S65).**
 
 ## Test Validation Report
 | Suite | Previous | Current | Delta |
