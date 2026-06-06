@@ -246,3 +246,17 @@
 .errorText {
   color: var(--color-error);
 }
+
+/* stale-data banner: a year switch failed but a previously-loaded year is still
+   shown. Soft warning (not a hard error) — the matrix below is still valid for
+   data.year; tokens only, zero new hex. */
+.staleBanner {
+  background: var(--color-warning-light);
+  color: var(--color-warning);
+  border: 1px solid var(--color-warning);
+  border-radius: 0;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  font-size: 13px;
+  font-weight: var(--font-weight-medium);
+}
