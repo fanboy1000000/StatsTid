@@ -5,9 +5,11 @@ interface ComplianceWarningsProps {
   result: ComplianceCheckResult | null
   loading: boolean
   /**
-   * Suppress the internal "Arbejdstidskontrol" <h3>. Set by callers (e.g.
-   * OversightPage) that already render their own section heading, so the title
-   * appears exactly once. Defaults to false → SkemaPage keeps the heading here.
+   * Suppress the internal "Arbejdstidskontrol" <h3> for callers that render
+   * their own section heading, so the title appears exactly once. Defaults to
+   * false → SkemaPage keeps the heading here. (Original consumer was the S61
+   * OversightPage, deleted in S65 — currently no caller sets this; kept as the
+   * documented opt-out.)
    */
   hideTitle?: boolean
 }
