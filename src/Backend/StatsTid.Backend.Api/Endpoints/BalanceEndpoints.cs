@@ -664,6 +664,62 @@ public static class BalanceEndpoints
                 });
             }
 
+            // ── S65 Step-7a fix: per-ferieår dated agreement-code anchoring ──
+            // The OK version is already anchored at each entitlement-year start below, but the
+            // AGREEMENT CODE operand of the dated entitlement-config reads must ALSO be the one in
+            // effect at that ferieår start — NOT today's. When an employee changes agreement (e.g.
+            // AC→HK) the earlier AC ferieår must be valued with AC quotas/carryover rules, not HK's.
+            // Mirrors the existing header dated read (user_agreement_codes, ADR-023 D3 graceful
+            // fallback to the live cache). For a single-agreement employee every date resolves to
+            // the SAME code today resolves to, so this path is byte-identical to the prior
+            // todayAgreementCode reads (ALL current tests). Cached per request: a 12-month loop over
+            // ≤3 distinct ferieår starts must not issue 12 repo calls per category.
+            var agreementByDate = new Dictionary<DateOnly, string>();
+            async Task<string> ResolveAgreementAtAsync(DateOnly asOf)
+            {
+                if (agreementByDate.TryGetValue(asOf, out var cached))
+                    return cached;
+                var resolved = await userAgreementCodeRepo.GetByUserIdAtAsync(employeeId, asOf, ct)
+                    ?? user.AgreementCode;
+                agreementByDate[asOf] = resolved;
+                return resolved;
+            }
+
+            // Fallback live (open) config for a (type, agreement) pair OTHER than today's. Only
+            // consulted when the dated read misses AND the per-ferieår agreement differs from
+            // today's — falling back to today's-agreement liveConfig in that case would re-introduce
+            // the cross-agreement bug. Cached per (type, agreement) to bound reads. Null result is
+            // cached too (so a missing per-agreement live row is not re-queried per month).
+            var liveByTypeAgreement = new Dictionary<(string Type, string Agreement), EntitlementConfig?>();
+            async Task<EntitlementConfig?> ResolveFallbackLiveAsync(string type, string agreement)
+            {
+                var key = (type, agreement);
+                if (liveByTypeAgreement.TryGetValue(key, out var cached))
+                    return cached;
+                var resolved = await entitlementConfigRepo.GetCurrentOpenAsync(
+                    type, agreement, user.OkVersion, ct);
+                liveByTypeAgreement[key] = resolved;
+                return resolved;
+            }
+
+            // Dated entitlement-config read anchored at the per-ferieår agreement code. OK version
+            // stays the year-start-anchored value passed in (already correct). Graceful fallback
+            // chain (ADR-023 D3, never 500): dated row → if the per-ferieår agreement == today's,
+            // the already-fetched live row for this type (liveConfig) → otherwise the live open row
+            // of the per-ferieår agreement → and only if THAT is null, liveConfig.
+            async Task<EntitlementConfig> ResolveDatedConfigAsync(
+                string type, DateOnly ferieaarStart, string okVersion, EntitlementConfig liveConfig)
+            {
+                var agreement = await ResolveAgreementAtAsync(ferieaarStart);
+                var dated = await entitlementConfigRepo.GetByTypeAtAsync(
+                    type, agreement, okVersion, ferieaarStart, ct);
+                if (dated is not null)
+                    return dated;
+                if (string.Equals(agreement, todayAgreementCode, StringComparison.Ordinal))
+                    return liveConfig;
+                return await ResolveFallbackLiveAsync(type, agreement) ?? liveConfig;
+            }
+
             // ── Categories: saldo[12] + afholdt[12] + transferable + boundaryMonth ──
             var categories = new List<object>(YearOverviewCategoryTypes.Length);
             foreach (var type in YearOverviewCategoryTypes)
@@ -709,11 +765,11 @@ public static class BalanceEndpoints
                     var ferieaarStart = new DateOnly(entYear, resetMonth, 1);
 
                     // Config dated at the entitlement-year START (ADR-021 D2, same as /summary):
-                    // OK resolved at the year-start, then the dated config read, falling back to
-                    // the live row if none was effective then.
+                    // OK resolved at the year-start, AND the agreement code resolved at the
+                    // year-start (Step-7a fix — historical ferieår must not be valued with today's
+                    // agreement), then the dated config read with the graceful fallback chain.
                     var entOkVersion = OkVersionResolver.ResolveVersion(ferieaarStart);
-                    var ec = await entitlementConfigRepo.GetByTypeAtAsync(
-                        type, todayAgreementCode, entOkVersion, ferieaarStart, ct) ?? liveConfig;
+                    var ec = await ResolveDatedConfigAsync(type, ferieaarStart, entOkVersion, liveConfig);
 
                     var balance = await entitlementBalanceRepo.GetByEmployeeAndTypeAsync(
                         employeeId, type, entYear, ct);
@@ -749,8 +805,10 @@ public static class BalanceEndpoints
                 }
                 var closedEntYear = closedFerieaarStart.Year;
                 var closedOkVersion = OkVersionResolver.ResolveVersion(closedFerieaarStart);
-                var closedConfig = await entitlementConfigRepo.GetByTypeAtAsync(
-                    type, todayAgreementCode, closedOkVersion, closedFerieaarStart, ct) ?? liveConfig;
+                // Step-7a fix: agreement code resolved at the CLOSED ferieår start (same dated
+                // anchoring + graceful fallback as the monthly saldo read above).
+                var closedConfig = await ResolveDatedConfigAsync(
+                    type, closedFerieaarStart, closedOkVersion, liveConfig);
                 var closedBalance = await entitlementBalanceRepo.GetByEmployeeAndTypeAsync(
                     employeeId, type, closedEntYear, ct);
                 var closedCarryoverIn = closedBalance?.CarryoverIn ?? 0m;
