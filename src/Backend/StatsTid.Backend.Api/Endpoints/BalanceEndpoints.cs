@@ -728,10 +728,36 @@ public static class BalanceEndpoints
                 // ADR-021 Q1) — the year-start anchors all dated entitlement-config reads below.
                 var liveConfig = await entitlementConfigRepo.GetCurrentOpenAsync(
                     type, todayAgreementCode, user.OkVersion, ct);
+
+                // S65 Step-7a cycle-2 fix C2-1 — historical-agreement resolution BEFORE the graceful
+                // empty branch. When TODAY's agreement has no config for this type, the prior code
+                // took the empty branch for EVERY selected year — even years lived under a PRIOR
+                // agreement that HAS configs (e.g. AC→unconfigured: the AC history vanished). Before
+                // giving up, attempt the SELECTED YEAR's own agreement (the per-ferieår dated reads
+                // inside the loop already resolve each ferieår's agreement, so months under the
+                // configured historical agreement value correctly). Months that fall under the
+                // configless TODAY agreement fall through ResolveDatedConfigAsync's chain to this
+                // altLive terminal — ACCEPTED best-effort graceful behavior (better than empty;
+                // never 500). Only activates when liveConfig is null AND the year-start agreement
+                // DIFFERS from today's, so an employee whose today-agreement HAS configs is
+                // byte-identical; the profile-less no-config PIN (same code at every date ⇒
+                // yearStartAgreement == todayAgreementCode) still hits the empty branch unchanged.
                 if (liveConfig is null)
                 {
-                    // No config for this type under the employee's agreement/OK — graceful empty
-                    // row (nulls/zeros, never a 500; ADR-023 D3).
+                    var yearStartAgreement = await ResolveAgreementAtAsync(new DateOnly(year, 1, 1));
+                    if (!string.Equals(yearStartAgreement, todayAgreementCode, StringComparison.Ordinal))
+                    {
+                        var altLive = await ResolveFallbackLiveAsync(type, yearStartAgreement);
+                        if (altLive is not null)
+                            liveConfig = altLive; // resetMonth discovery + ResolveDatedConfigAsync fallback terminal
+                    }
+                }
+
+                if (liveConfig is null)
+                {
+                    // No config for this type under the employee's agreement/OK (and none under the
+                    // selected year's agreement either) — graceful empty row (nulls/zeros, never a
+                    // 500; ADR-023 D3).
                     categories.Add(new
                     {
                         type,
