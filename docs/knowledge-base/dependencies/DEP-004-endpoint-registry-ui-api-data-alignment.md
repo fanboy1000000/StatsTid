@@ -34,6 +34,16 @@ Lightweight structural contract mapping every API endpoint to its UI consumer(s)
 
 > GET now returns `workTime` (intervals + manualHours) + `dailyNorm` (per-day norm) instead of `timerSession`; POST `/save` accepts an optional `workTime` block (S56, ADR-028). The allocation gate lives in the existing `/api/approval/{periodId}/employee-approve` endpoint (discriminated 422).
 
+### Balance & Årsoversigt (section added S65)
+
+| Endpoint | Method | UI Consumer | Hook | Data Model | Event | Auth |
+|----------|--------|-------------|------|------------|-------|------|
+| `/api/balance/{employeeId}/summary` | GET | SkemaPage, ApprovalDetailPanel | useBalanceSummary | EntitlementBalance, FlexBalance | — | Employee+ |
+| `/api/balance/{employeeId}/series` | GET | **None (FE-orphaned S65)** | — (useAccrualSeries deleted S65) | EntitlementBalance | — | Employee+ |
+| `/api/balance/{employeeId}/year-overview` | GET | ArsoversigtPage (`tid/oversigt`) | useYearOverview | WorkTimeProjection, AbsenceEntry (projection), EntitlementBalance, EmployeeProfile | — (pure read) | Employee+ |
+
+> `/series` was consumed by the S61 OversightPage accrual trend; S65 deleted that surface (OversightPage/LeaveOverview/AccrualTrend ×{tsx,css,test} + useAccrualSeries) and replaced the route with ArsoversigtPage on the new year-overview endpoint. `/series` is RETAINED (regression-covered, BalanceSeriesTests) with a ROADMAP follow-up: consolidate into year-overview or retire. The year-overview server `today` derives from the injected `TimeProvider` seam (S65, new-endpoint-only).
+
 ### Timer (RETIRED — Sprint 56, ADR-028 D5)
 
 The three `/api/timer/*` endpoints (check-in / check-out / GET), the `useTimer` hook, `TimerControl`,
@@ -157,6 +167,10 @@ No direct UI consumers. Called by PeriodCalculationService (PAT-005) and Backend
 ### Legacy Endpoints — Deprecation Candidates
 
 The 7 legacy time-entry/absence/flex/calculate endpoints are fully superseded by the Skema composite endpoints. Candidate for deprecation in Phase 4 after confirming no external consumers depend on them.
+
+### Registry Drift (noted S65)
+
+This registry's coverage is current for the sections it contains, but whole endpoint families added since ~S13 were never registered (compliance, overtime, audit-visibility, reporting-line, employee-profile admin, eligibility). The S65 close added only the Balance section its sprint touched. Full backfill is an entropy-scan candidate for a docs-debt pass — when touching an unregistered family, add its section per Maintenance Rule 1 rather than extending the gap.
 
 ### UI Pages — All Mapped
 
