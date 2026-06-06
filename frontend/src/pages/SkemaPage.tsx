@@ -80,14 +80,19 @@ export function SkemaPage() {
   const { user } = useAuth()
   const employeeId = user?.employeeId ?? ''
 
-  // Initial period: ?year=&month= from the Årsoversigt drill-in (clamped 1..12),
-  // else today. Only seeds the initial state — subsequent nav uses local setters.
+  // Initial period: ?year=&month= from the Årsoversigt drill-in (year clamped to the
+  // backend's supported 2000–2100 range — mirrors the year-overview endpoint's own
+  // validation; an unclamped year ≥ 10000 throws in DateTime.DaysInMonth server-side
+  // (Step-7a cycle-4 Codex) — month clamped 1..12), else today. Only seeds the initial
+  // state — subsequent nav uses local setters.
   const [searchParams] = useSearchParams()
   const now = new Date()
   const paramYear = Number(searchParams.get('year'))
   const paramMonth = Number(searchParams.get('month'))
   const [year, setYear] = useState(
-    Number.isInteger(paramYear) && paramYear > 0 ? paramYear : now.getFullYear(),
+    Number.isInteger(paramYear) && paramYear >= 2000 && paramYear <= 2100
+      ? paramYear
+      : now.getFullYear(),
   )
   const [month, setMonth] = useState(
     Number.isInteger(paramMonth) && paramMonth >= 1 && paramMonth <= 12

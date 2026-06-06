@@ -105,4 +105,15 @@ describe('SkemaPage drill-in param init', () => {
     expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('Februar 2026')
     vi.useRealTimers()
   })
+
+  it('ignores an out-of-range year (backend supports 2000–2100) and falls back to today', () => {
+    // Step-7a cycle-4 Codex: an unclamped ?year=10000 propagates to the Skema APIs where
+    // DateTime.DaysInMonth(10000, m) throws server-side — the seed must clamp like the
+    // year-overview endpoint (2000–2100), not just require > 0.
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-02-10T09:00:00Z'))
+    renderAt('/tid/registrering?year=10000&month=1')
+    expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('Februar 2026')
+    vi.useRealTimers()
+  })
 })
