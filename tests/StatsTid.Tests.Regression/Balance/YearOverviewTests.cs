@@ -1259,6 +1259,168 @@ public sealed class YearOverviewTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════════════
+    // 14. Step-7a cycle-2 C2-1 pin — historical-agreement VALUATION survives a
+    //     configless TODAY agreement.
+    //     An employee who moved FROM a CONFIGURED agreement TO a CONFIGLESS one keeps
+    //     their valid historical year values instead of an all-empty matrix — but ONLY
+    //     for the per-type categories whose historical agreement HAS a config (per-type,
+    //     not blanket). Pins BalanceEndpoints.cs:732-754 ("S65 Step-7a cycle-2 fix C2-1
+    //     — historical-agreement resolution BEFORE the graceful empty branch").
+    // ════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// <b>Step-7a cycle-2 C2-1 regression pin — the historical-agreement resolution that runs
+    /// BEFORE the graceful empty-config branch.</b> When TODAY's agreement has NO entitlement
+    /// config for a type, the handler — before giving up to the empty branch — resolves the
+    /// agreement in effect at the SELECTED YEAR's Jan-1; if it DIFFERS from today's AND that
+    /// historical agreement HAS an open config for the type, it uses that as the category's
+    /// <c>liveConfig</c> (ResetMonth discovery + the <c>ResolveDatedConfigAsync</c> fallback
+    /// terminal). Result: an employee who moved FROM a configured agreement TO a configless one
+    /// keeps the valid historical-ferieår values instead of an all-empty matrix.
+    ///
+    /// <para><b>Scenario.</b> Selected year = 2026, fixed today = 2026-06-15. Agreement history:
+    /// the FICTITIOUS CONFIGURED code <c>PIN_DATED_AC</c> (quota 40, carryoverMax 10 — the SAME
+    /// additive open <c>(VACATION, PIN_DATED_AC, OK24)</c> row the C1 pin seeds; reused here, not a
+    /// new code) for <c>[0001-01-01, 2026-06-01)</c>, then a NEW FICTITIOUS CONFIGLESS code
+    /// <c>PIN_C21_NOCONF</c> (present NOWHERE else — no entitlement_configs, no
+    /// CentralAgreementConfigs, no other test) for <c>[2026-06-01, ∞)</c> covering today. So
+    /// <c>todayAgreementCode = PIN_C21_NOCONF</c> ⇒ <c>liveConfig</c> from
+    /// <c>GetCurrentOpenAsync(type, PIN_C21_NOCONF, OK24)</c> is NULL for ALL four categories.</para>
+    ///
+    /// <para><b>Profile-less by design (norm-path 500-avoidance).</b> The employee has NO
+    /// <c>employee_profiles</c> row at all (boot-order pattern: boot the fixed-today derived host
+    /// FIRST so EmployeeProfileSeeder + UserAgreementCodeBackfillSeeder run only for pre-existing
+    /// users, THEN insert the bare user). With no profile, the per-day norm path
+    /// (<c>DailyNormCalculator</c> → <c>ConfigResolutionService.ResolveAsync</c>) returns null per
+    /// day WITHOUT calling ResolveAsync (DailyNormCalculator.cs:93-101), and the header skips
+    /// ResolveAsync (gated on a non-null today-profile, BalanceEndpoints.cs:593). So neither
+    /// fictitious code (both absent from agreement_configs + CentralAgreementConfigs) ever reaches
+    /// a config lookup that would throw → clean 200. saldo/transferable are norm-INDEPENDENT.
+    /// Because the bare user is inserted AFTER the last host boot, no backfilled
+    /// <c>[0001-01-01, ∞)</c> user_agreement_codes row shadows the explicit dated history below.</para>
+    ///
+    /// <para><b>Why this discriminates (pre-fix-fails argument).</b> For VACATION (resetMonth 9)
+    /// year 2026 spans TWO ferieår: Jan–Aug 2026 → ferieår 2025 (start 2025-09-01, OK24);
+    /// Sep–Dec 2026 → ferieår 2026.
+    /// <list type="bullet">
+    ///   <item><description><b>Post-fix:</b> liveConfig is null (PIN_C21_NOCONF has no VACATION
+    ///   config), so the C2-1 block resolves the agreement at 2026-01-01 = PIN_DATED_AC (≠ today's
+    ///   PIN_C21_NOCONF) and adopts the open PIN_DATED_AC VACATION config (quota 40). The Jan-2026
+    ///   slot (ferieår 2025, ferieaarStart 2025-09-01) then resolves its dated config under
+    ///   PIN_DATED_AC and the saldo is EarnedToDate(40, 1.0, 2025-09-01, null, 2026-01-31) =
+    ///   40 × 5/12 = <b>16.67</b> (NOT null).</description></item>
+    ///   <item><description><b>Pre-fix:</b> liveConfig null ⇒ the handler took the graceful empty
+    ///   branch IMMEDIATELY for VACATION ⇒ <c>saldo</c> = 12 JSON nulls ⇒ <c>saldo[0]</c> would be
+    ///   NULL. The <c>Assert.NotNull</c> below (saldo[0] is a JSON number, not null) is ITSELF the
+    ///   pre-fix-fails discriminator: under the pre-fix behavior it would be JSON null and both the
+    ///   NotNull guard and the exact-16.67 equality fail.</description></item>
+    /// </list>
+    /// </para>
+    ///
+    /// <para><b>Per-type, NOT blanket (point (c)).</b> The other three categories (SPECIAL_HOLIDAY,
+    /// CARE_DAY, SENIOR_DAY) have NO PIN_DATED_AC config seeded, so their <c>altLive</c> lookup
+    /// (<c>GetCurrentOpenAsync(type, PIN_DATED_AC, OK24)</c>) returns null and they STILL take the
+    /// graceful empty branch (all-null saldo). This proves the fix is gated per-type on whether the
+    /// historical agreement has a config for THAT type — it does not blanket-switch every category
+    /// to the historical agreement.</para>
+    /// </summary>
+    [Fact]
+    public async Task HistoricalAgreementValuationSurvivesConfiglessTodayAgreement_PerType_Not500()
+    {
+        // The CONFIGURED historical code — reuse the SAME fictitious code + values the C1 pin seeds
+        // (additive open (VACATION, PIN_DATED_AC, OK24) row, idempotent). quota 40 / carryoverMax 10.
+        const string configuredAgreement = "PIN_DATED_AC";
+        const decimal pinQuota = 40m;
+        const decimal pinCarryoverMax = 10m;
+        // The CONFIGLESS today code — a NEW fictitious code present NOWHERE else (verified by grep:
+        // not in entitlement_configs / CentralAgreementConfigs / any other test). No config for ANY
+        // type ⇒ liveConfig null for all four categories ⇒ exercises the C2-1 fix block.
+        const string configlessAgreement = "PIN_C21_NOCONF";
+        var switchDate = new DateOnly(2026, 6, 1); // mid-selected-year; today (2026-06-15) is AFTER it
+
+        // ── Boot-order (S63): boot the fixed-today derived host FIRST so EmployeeProfileSeeder AND
+        // UserAgreementCodeBackfillSeeder run only for pre-existing users; the bare user inserted
+        // afterwards is therefore profile-less AND carries ONLY the explicit dated agreement-code
+        // history seeded below (no backfilled [0001-01-01, ∞) row to shadow it). ──
+        var derivedFactory = _factory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureTestServices(services =>
+            {
+                services.AddSingleton<TimeProvider>(new FixedTimeProvider(FixedToday));
+            });
+        });
+        _ = derivedFactory.CreateClient();
+
+        // Bare, profile-less user inserted AFTER the boot. ok_version OK24 (liveConfig + the
+        // historical-agreement fallback both read at OK24, matching the seeded PIN_DATED_AC config).
+        // agreement_code cache = the configless code (today resolves to it via the dated row below).
+        var employeeId = "emp_s65_t14_" + Guid.NewGuid().ToString("N")[..8];
+        await InsertBareUserAsync(employeeId, Emp001OrgId, configlessAgreement, "OK24");
+
+        // Dated agreement-code HISTORY (end-exclusive [from, to)):
+        //   GetByUserIdAtAsync(2026-01-01) → PIN_DATED_AC    (selected-year Jan-1 ⇒ yearStartAgreement)
+        //   GetByUserIdAtAsync(2025-09-01) → PIN_DATED_AC    (Jan-2026 slot's ferieår 2025 start)
+        //   GetByUserIdAtAsync(2026-06-15) → PIN_C21_NOCONF  (today ⇒ todayAgreementCode, CONFIGLESS)
+        await SeedAgreementCodeRowAsync(employeeId, configuredAgreement,
+            effectiveFrom: new DateOnly(1, 1, 1), effectiveTo: switchDate);
+        await SeedAgreementCodeRowAsync(employeeId, configlessAgreement,
+            effectiveFrom: switchDate, effectiveTo: null);
+
+        // The discriminating PIN_DATED_AC VACATION config at OK24 (resolved at the 2025-09-01
+        // ferieår start: OkVersionResolver < 2026-04-01 ⇒ OK24). Seeded ONLY for VACATION → the
+        // other three categories have no PIN_DATED_AC config and stay on the empty branch (point c).
+        await SeedDatedEntitlementConfigAsync(
+            entitlementType: "VACATION", agreementCode: configuredAgreement, okVersion: "OK24",
+            annualQuota: pinQuota, accrualModel: "MONTHLY_ACCRUAL", resetMonth: 9,
+            carryoverMax: pinCarryoverMax, effectiveFrom: new DateOnly(1, 1, 1));
+
+        var client = derivedFactory.CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", EmployeeBearerToken(employeeId, Emp001OrgId));
+
+        // (c) status 200 — never 500 (assert on the raw status before parsing).
+        var rsp = await client.GetAsync($"/api/balance/{employeeId}/year-overview?year=2026");
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+        var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
+
+        // ── (a)+(b) VACATION does NOT take the empty branch: a month inside the PIN_DATED_AC-
+        // configured historical ferieår has a NON-null saldo equal to the exact quota-40 figure. ──
+        var vacation = GetCategory(body, "VACATION");
+        var vacSaldo = vacation.GetProperty("saldo").EnumerateArray().ToList();
+
+        // (b) PRE-FIX-FAILS DISCRIMINATOR. Pre-fix, liveConfig(today=PIN_C21_NOCONF)=null ⇒ the
+        // graceful empty branch fires for VACATION ⇒ saldo = 12 JSON nulls ⇒ saldo[0] would be JSON
+        // null. Asserting saldo[0] is a JSON NUMBER (not null) is the pre-fix-fails check itself.
+        var janSaldoElement = vacSaldo[0]; // January 2026 (ferieår 2025, ferieaarStart 2025-09-01)
+        Assert.Equal(JsonValueKind.Number, janSaldoElement.ValueKind); // pre-fix: would be Null
+
+        // (a) EXACT value via the REAL AccrualMath under the PIN_DATED_AC quota (40):
+        // earned = EarnedToDate(40, 1.0, 2025-09-01, null, 2026-01-31) = 40 × 5/12 = 16.6667 → 16.67.
+        var janSaldo = janSaldoElement.GetDecimal();
+        var expectedJanSaldo = ExpectedMonthlyAccrualSaldo(
+            annualQuota: pinQuota, ferieaarStart: new DateOnly(2025, 9, 1),
+            employmentStart: null, monthEnd: new DateOnly(2026, 1, 31),
+            carryoverIn: 0m, cumulativeAfholdt: 0m);
+        Assert.Equal(16.67m, expectedJanSaldo);    // sanity: PIN_DATED_AC quota → 16.67
+        Assert.Equal(expectedJanSaldo, janSaldo);   // VACATION valued against the historical agreement
+
+        // ── (c) The OTHER three categories — NO PIN_DATED_AC config seeded for them — STILL take the
+        // graceful empty branch (all-null saldo). Proves the fix is per-type, not blanket. ──
+        foreach (var emptyType in new[] { "SPECIAL_HOLIDAY", "CARE_DAY", "SENIOR_DAY" })
+        {
+            var cat = GetCategory(body, emptyType);
+            var saldo = cat.GetProperty("saldo").EnumerateArray().ToList();
+            Assert.Equal(12, saldo.Count);
+            Assert.All(saldo, e => Assert.Equal(JsonValueKind.Null, e.ValueKind)); // empty branch
+            // afholdt all zero + transferable 0 (the graceful empty shape) reinforce per-type gating.
+            Assert.All(
+                cat.GetProperty("afholdt").EnumerateArray(),
+                e => Assert.Equal(0m, e.GetDecimal()));
+            Assert.Equal(0m, cat.GetProperty("transferable").GetDecimal());
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
     // Helpers — HTTP clients with fixed TimeProvider.
     // ════════════════════════════════════════════════════════════════════════
 
