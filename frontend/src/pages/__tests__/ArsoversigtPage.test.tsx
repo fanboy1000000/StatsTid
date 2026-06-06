@@ -348,6 +348,28 @@ describe('ArsoversigtPage — interactions', () => {
     fireEvent.click(screen.getByRole('button', { name: /Gå til Mar 2026/ }))
     expect(mockNavigate).toHaveBeenCalledWith('/tid/registrering?year=2026&month=3')
   })
+
+  it('drill-in anchors to the DISPLAYED year (data.year), not the switched `year` state, after a failed year switch', () => {
+    // Stale-guard semantics: a year switch that FAILS keeps the last good `data`
+    // (still 2026) while the `year` state advances. The referentially-stable mock
+    // models exactly that — it returns the SAME 2026 payload regardless of the
+    // year argument, now WITH an error set (the failed fetch). The displayed
+    // matrix is therefore 2026's; clicking a month must drill into 2026, NOT the
+    // newly-selected 2025, so the row the user sees matches the row they land on.
+    mockUseYearOverview.mockReturnValue(overviewHook(makeOverview(), false, 'HTTP 500'))
+    renderPage()
+    // Switch the year backwards (the `year` state becomes seed − 1); the mock
+    // keeps serving the 2026 payload, so data.year stays 2026.
+    fireEvent.click(screen.getByRole('button', { name: 'Forrige år' }))
+    // The displayed year is still 2026 (heading + label both read data.year).
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Årsoversigt 2026')
+    // Click March → must navigate to year=2026 (data.year), NOT the switched state.
+    fireEvent.click(screen.getByRole('button', { name: /Gå til Mar 2026/ }))
+    expect(mockNavigate).toHaveBeenCalledWith('/tid/registrering?year=2026&month=3')
+    expect(mockNavigate).not.toHaveBeenCalledWith(
+      expect.stringContaining('year=2025'),
+    )
+  })
 })
 
 describe('ArsoversigtPage — states', () => {
@@ -361,5 +383,32 @@ describe('ArsoversigtPage — states', () => {
     mockUseYearOverview.mockReturnValue(overviewHook(null, false, 'HTTP 500'))
     renderPage()
     expect(screen.getByText(/Kunne ikke indlæse årsoversigt/)).toBeInTheDocument()
+  })
+
+  it('shows a stale-data banner naming BOTH years when a switch fails but data is present', () => {
+    // error set AND data present → the page keeps the last good matrix (2026) and
+    // surfaces a soft warning instead of swallowing the failure. The message must
+    // name the FAILED year (the `year` state) and the DISPLAYED year (data.year).
+    mockUseYearOverview.mockReturnValue(overviewHook(makeOverview(), false, 'HTTP 500'))
+    renderPage()
+    // Capture the client-seeded `year` from the hook's last call, then switch
+    // backwards so the failed year (seed − 1) is deterministic and ≠ data.year.
+    const calls = mockUseYearOverview.mock.calls
+    const seedYear = calls[calls.length - 1]?.[1] as number
+    fireEvent.click(screen.getByRole('button', { name: 'Forrige år' }))
+    const failedYear = seedYear - 1
+    // Banner present (role=alert) and names both years.
+    const banner = screen.getByRole('alert')
+    expect(banner).toHaveTextContent(`Kunne ikke indlæse ${failedYear}`)
+    expect(banner).toHaveTextContent('viser 2026') // data.year, still displayed
+    // The matrix below is intact (Arbejdstid worked-hours still rendered).
+    expect(rowCells('Arbejdstid')[0]).toHaveTextContent('150,2')
+  })
+
+  it('shows NO stale-data banner when there is no error', () => {
+    mockUseYearOverview.mockReturnValue(overviewHook(makeOverview(), false, null))
+    renderPage()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.queryByText(/Kunne ikke indlæse 20/)).not.toBeInTheDocument()
   })
 })

@@ -68,11 +68,16 @@ export function ArsoversigtPage() {
   const goPrevYear = useCallback(() => setYear((y) => y - 1), [])
   const goNextYear = useCallback(() => setYear((y) => y + 1), [])
 
+  // Drill-in must target the year actually DISPLAYED (data.year), not the `year`
+  // state: a failed year switch keeps the old `data` while `year` advances, so
+  // anchoring to `year` would land the user in a month of the wrong year. The
+  // displayed year is passed in from the call site (data.year), so the label
+  // ("Gå til Mar {data.year}") and the navigation target always agree.
   const goToMonth = useCallback(
-    (monthOneBased: number) => {
-      navigate(`/tid/registrering?year=${year}&month=${monthOneBased}`)
+    (displayedYear: number, monthOneBased: number) => {
+      navigate(`/tid/registrering?year=${displayedYear}&month=${monthOneBased}`)
     },
-    [navigate, year],
+    [navigate],
   )
 
   // Server-today authority: which calendar position are we at, and is the
@@ -162,6 +167,15 @@ export function ArsoversigtPage() {
         ))}
       </div>
 
+      {/* Stale-data banner: a year switch failed; we keep showing the last good
+          year. Names BOTH the failed year (the `year` state) and the year still
+          on screen (data.year) so the user understands the mismatch. */}
+      {error && (
+        <div className={styles.staleBanner} role="alert">
+          Kunne ikke indlæse {year}: viser {data.year}
+        </div>
+      )}
+
       {/* Year matrix */}
       <Card>
         <div className={styles.tableWrap}>
@@ -187,7 +201,7 @@ export function ArsoversigtPage() {
                     <button
                       type="button"
                       className={styles.monthButton}
-                      onClick={() => goToMonth(i + 1)}
+                      onClick={() => goToMonth(data.year, i + 1)}
                       aria-label={`Gå til ${MONTH_ABBR[i]} ${data.year}`}
                     >
                       {m}
