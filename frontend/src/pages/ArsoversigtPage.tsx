@@ -277,7 +277,8 @@ function CategoryGroup({ category, cellClass }: CategoryGroupProps) {
         </th>
         {category.saldo.map((v, i) => (
           <td key={i} className={cellClass(i)}>
-            {v !== 0 ? (
+            {/* null (no-config graceful row) and 0 both render the em-dash. */}
+            {v != null && v !== 0 ? (
               formatDanishNumber(v)
             ) : (
               <span className={styles.dash}>{EM_DASH}</span>

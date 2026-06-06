@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { apiClient } from '../lib/api'
 
 // S65 / TASK-6503 — read-only year-overview contract consumed by ArsoversigtPage
@@ -44,8 +44,14 @@ export interface YearOverviewMonth {
 export interface YearOverviewCategory {
   type: string
   label: string
-  /** end-of-month remaining per month (index 0..11). */
-  saldo: number[]
+  /**
+   * end-of-month remaining per month (index 0..11). A cell is null when the
+   * server cannot compute a saldo — the graceful empty-config branch emits an
+   * ALL-null array (`new decimal?[12]`) for any category with no entitlement
+   * config under the employee's agreement/OK (e.g. AC_RESEARCH/AC_TEACHING),
+   * so this is reachable in production. The UI renders null as an em-dash.
+   */
+  saldo: (number | null)[]
   /** day-equivalents consumed per month (index 0..11; future-dated = planlagt). */
   afholdt: number[]
   /** transferable amount — render ONLY in the boundaryMonth column when > 0. */
@@ -70,13 +76,22 @@ export function useYearOverview(employeeId: string, year: number) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Stale-response guard: rapid ←/→ year switches fire overlapping requests that
+  // can resolve out of order. Each invocation claims a monotonically increasing
+  // id; only the latest in-flight request is allowed to commit state, so an older
+  // year's response can never overwrite a newer one.
+  const latestRequestId = useRef(0)
+
   const fetchOverview = useCallback(async () => {
     if (!employeeId) return
+    const requestId = ++latestRequestId.current
     setLoading(true)
     setError(null)
     const result = await apiClient.get<YearOverview>(
       `/api/balance/${employeeId}/year-overview?year=${year}`
     )
+    // A newer request superseded this one while it was in flight — drop the result.
+    if (requestId !== latestRequestId.current) return
     if (result.ok) {
       setData(result.data)
     } else {
