@@ -744,12 +744,40 @@ public static class BalanceEndpoints
                 // yearStartAgreement == todayAgreementCode) still hits the empty branch unchanged.
                 if (liveConfig is null)
                 {
-                    var yearStartAgreement = await ResolveAgreementAtAsync(new DateOnly(year, 1, 1));
-                    if (!string.Equals(yearStartAgreement, todayAgreementCode, StringComparison.Ordinal))
+                    // S65 Step-7a cycle-3 fix C3-1 — probe a candidate anchor SET, not just Jan-1.
+                    // The cycle-2 C2-1 fix probed ONLY new DateOnly(year, 1, 1). That missed the case
+                    // where today's (and Jan-1's) agreement is configless, yet the September-reset
+                    // ferieår covering Jan–Aug of the selected year BEGAN (Sep 1 of year−1) under a
+                    // CONFIGURED agreement (e.g. an Oct-2025 switch to a configless code, viewing 2026):
+                    // the single Jan-1 probe resolved the configless code → empty branch → Jan–Aug
+                    // saldo/afholdt wrongly null/zero. The candidate set covers EVERY ferieår start that
+                    // can intersect the selected calendar year under the system's two reset geometries
+                    // (the only ResetMonth values seeded are 1 and 9): the calendar ferieår (year-01-01),
+                    // the Sep ferieår whose Jan–Aug tail falls in the selected year (year−1-09-01), and
+                    // the Sep ferieår whose Sep–Dec head falls in the selected year (year-09-01). All
+                    // reads go through the EXISTING cached helpers, so this adds ≤2 extra cached lookups
+                    // (Jan-1 is shared with the per-ferieår loop; the two Sep anchors are the only new
+                    // keys). RESIDUAL (documented, accepted): this bootstraps resetMonth + the
+                    // ResolveDatedConfigAsync fallback terminal from ANY configured intersecting ferieår;
+                    // an exotic history with MULTIPLE distinct configured agreements across the candidates
+                    // uses the FIRST hit (best-effort graceful, never 500).
+                    var probeAnchors = new[]
                     {
-                        var altLive = await ResolveFallbackLiveAsync(type, yearStartAgreement);
+                        new DateOnly(year, 1, 1),
+                        new DateOnly(year - 1, 9, 1),
+                        new DateOnly(year, 9, 1)
+                    };
+                    foreach (var anchor in probeAnchors)
+                    {
+                        var anchorAgreement = await ResolveAgreementAtAsync(anchor);
+                        if (string.Equals(anchorAgreement, todayAgreementCode, StringComparison.Ordinal))
+                            continue;
+                        var altLive = await ResolveFallbackLiveAsync(type, anchorAgreement);
                         if (altLive is not null)
+                        {
                             liveConfig = altLive; // resetMonth discovery + ResolveDatedConfigAsync fallback terminal
+                            break;
+                        }
                     }
                 }
 
