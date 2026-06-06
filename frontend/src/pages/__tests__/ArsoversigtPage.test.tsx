@@ -286,6 +286,40 @@ describe('ArsoversigtPage — cell rules (server-today authority)', () => {
     // transferable 0 → Dec is also an em-dash.
     expect(cells[11]).toHaveTextContent('–')
   })
+
+  it('renders an all-null saldo (no-config graceful row) as em-dashes without crashing, rest intact', () => {
+    // The endpoint's graceful empty-config branch (no entitlement config under the
+    // employee's agreement/OK — e.g. AC_RESEARCH/AC_TEACHING) emits saldo as an
+    // ALL-null 12-element array (C# `new decimal?[12]`), afholdt all-zero,
+    // transferable 0. A null saldo cell must render the em-dash (NOT crash on
+    // formatDanishNumber(null)).
+    const ov = makeOverview()
+    // Make the FIRST leave group (Ferie / VACATION, occurrence 0) the graceful shape.
+    ov.categories[0] = {
+      type: 'VACATION',
+      label: 'Ferie',
+      saldo: Array.from({ length: 12 }, () => null),
+      afholdt: Array.from({ length: 12 }, () => 0),
+      transferable: 0,
+      boundaryMonth: 12,
+    }
+    mockUseYearOverview.mockReturnValue(overviewHook(ov))
+    // Must not throw while rendering.
+    expect(() => renderPage()).not.toThrow()
+    // The page rendered (heading present).
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Årsoversigt 2026')
+    // The graceful group's Saldo (rest) row (occurrence 0): all 12 cells are em-dashes.
+    const nullSaldoCells = rowCells('Saldo (rest)', 0)
+    expect(nullSaldoCells).toHaveLength(12)
+    for (const cell of nullSaldoCells) expect(cell).toHaveTextContent('–')
+    // Rest of the matrix intact: the CARE_DAY group (occurrence 2) still shows a
+    // real saldo value (2 in Jan/Feb per the fixture).
+    const careSaldoCells = rowCells('Saldo (rest)', 2)
+    expect(careSaldoCells[0]).toHaveTextContent('2')
+    // Arbejdstid row still renders its worked hours (matrix structure preserved).
+    const arbCells = rowCells('Arbejdstid')
+    expect(arbCells[0]).toHaveTextContent('150,2')
+  })
 })
 
 describe('ArsoversigtPage — interactions', () => {
