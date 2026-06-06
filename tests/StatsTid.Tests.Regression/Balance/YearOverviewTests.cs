@@ -999,6 +999,266 @@ public sealed class YearOverviewTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════════════
+    // 12. Step-7a C1 pin — per-ferieår DATED agreement-code valuation.
+    //     A historical ferieår must be valued with the agreement the employee held
+    //     AT THAT FERIEÅR'S START, not today's agreement (BalanceEndpoints.cs:667-721,
+    //     "S65 Step-7a fix: per-ferieår dated agreement-code anchoring").
+    // ════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// <b>Step-7a C1 (Codex P1) regression pin — the dated agreement-code operand of the
+    /// entitlement-config reads.</b> An employee who changes agreement BETWEEN the two ferieår a
+    /// single year-overview spans must value each ferieår against the agreement in effect at THAT
+    /// ferieår's start — never against today's agreement.
+    ///
+    /// <para><b>Route taken: (c) — pin the MECHANISM with a SAFELY-SCOPED dated config row, using a
+    /// FICTITIOUS agreement code.</b> Routes (a) and (b) and the (c)-with-AC_TEACHING variant were
+    /// all checked AGAINST THE LIVE SEEDED DB and ruled out:
+    /// <list type="bullet">
+    ///   <item><description>(a) is non-discriminating: ALL VACATION configs in the DB are quota 25 +
+    ///   carryoverMax 5 across EVERY seeded agreement code — AC/HK/PROSA AND the AC variants
+    ///   AC_RESEARCH/AC_TEACHING (init.sql:1423-1428 + 1465-1468). Switching between any two SEEDED
+    ///   codes changes no observable VACATION saldo/transferable. (CHILD_SICK is the only quota that
+    ///   varies by agreement, and it is NOT a year-overview category — YearOverviewCategoryTypes,
+    ///   BalanceEndpoints.cs:520-521.) OK24 vs OK26 are value-identical too.</description></item>
+    ///   <item><description>(b) is non-discriminating: AC_RESEARCH/AC_TEACHING DO have seeded
+    ///   entitlement_configs in this DB (init.sql:1460-1484 — the S37 "AC variants mirror AC base
+    ///   values" absorption), all quota 25, so an academic ferieår values identically to AC — the
+    ///   fallback chain never even fires, and there is nothing to discriminate.</description></item>
+    ///   <item><description>(c)-via-AC_TEACHING is UNSAFE: AC_TEACHING's live (open) VACATION row
+    ///   already exists (quota 25) and other tests read it; giving it a distinct historical value
+    ///   would require closing/superseding that shared open row — the S64 shared-state
+    ///   contamination this constraint forbids.</description></item>
+    /// </list>
+    /// So we seed a dated <c>entitlement_configs</c> row for a FICTITIOUS agreement code
+    /// (<c>PIN_DATED_AC</c>) present NOWHERE else — not in entitlement_configs, not in
+    /// <c>CentralAgreementConfigs</c>, not in any other test. A NEW
+    /// <c>(VACATION, PIN_DATED_AC, OK24)</c> row is purely ADDITIVE (cannot collide on any
+    /// natural-key index, init.sql:1368-1374) and idempotent (ON CONFLICT on the open partial index
+    /// → DO UPDATE to the same values), NOT contamination.</para>
+    ///
+    /// <para><b>Norm-path safety (why the fictitious code does not 500).</b> The entitlement-config
+    /// read path (<c>ResolveDatedConfigAsync</c>, BalanceEndpoints.cs:710-721) reads the
+    /// <c>entitlement_configs</c> table DIRECTLY and tolerates ANY agreement code. But the per-month
+    /// <c>normHours</c> path (<c>DailyNormCalculator</c> → <c>ConfigResolutionService.ResolveAsync</c>)
+    /// would THROW <c>InvalidOperationException</c> for an agreement code absent from both
+    /// <c>agreement_configs</c> and <c>CentralAgreementConfigs</c> (ConfigResolutionService.cs:132-134)
+    /// — but ONLY when a dated employee_profiles row covers the day (DailyNormCalculator.cs:93-101:
+    /// no profile ⇒ null norm, no ResolveAsync call). So this employee's <c>employee_profiles</c> row
+    /// covers ONLY <c>[2026-06-01, ∞)</c> (today + the later ferieår under AC); the earlier months
+    /// (Jan–May 2026, under the fictitious code) have NO profile ⇒ null norms ⇒ ResolveAsync is never
+    /// invoked for the fictitious code ⇒ no 500. The header likewise skips ResolveAsync when today's
+    /// profile resolves (it does — AC from 2026-06-01). saldo/transferable are independent of norms.</para>
+    ///
+    /// <para><b>Why this discriminates (pre-fix-fails argument).</b> Selected year = 2026.
+    /// For VACATION (resetMonth 9) the year spans TWO ferieår:
+    /// <list type="bullet">
+    ///   <item><description>Jan–Aug 2026 → ferieår 2025 (start 2025-09-01, OK24).</description></item>
+    ///   <item><description>Sep–Dec 2026 → ferieår 2026 (start 2026-09-01, OK26).</description></item>
+    /// </list>
+    /// The employee held <c>PIN_DATED_AC</c> for <c>[0001-01-01, 2026-06-01)</c> and <c>AC</c> from
+    /// <c>2026-06-01</c> (the live row covering today 2026-06-15 ⇒ <c>todayAgreementCode = AC</c>).
+    /// The EARLIER ferieår (2025) starts under PIN_DATED_AC; the LATER ferieår (2026) starts under AC.
+    /// <list type="bullet">
+    ///   <item><description><b>Post-fix:</b> the Jan-2026 saldo (ferieår 2025) resolves the agreement
+    ///   at 2025-09-01 = PIN_DATED_AC, the dated read HITS the seeded PIN_DATED_AC row (quota 40), and
+    ///   the saldo is EarnedToDate(40, …) = 40 × 5/12 = <b>16.67</b>.</description></item>
+    ///   <item><description><b>Pre-fix (todayAgreementCode = AC for every ferieår):</b> the same slot
+    ///   would read <c>(VACATION, AC, OK24)</c> (quota 25) ⇒ 25 × 5/12 = 10.42 — a DIFFERENT value.
+    ///   The exact-equality assertion on 16.67 fails under the pre-fix behavior.</description></item>
+    ///   <item><description>The LATER ferieår (Dec-2026 saldo) resolves the agreement at 2026-09-01 = AC
+    ///   (quota 25) ⇒ EarnedToDate(25, …) = 25 × 4/12 = <b>8.33</b> — confirming the current ferieår
+    ///   still reflects the NEW agreement.</description></item>
+    /// </list>
+    /// Transferable for 2026 (closed boundary ferieår = 2025, start 2025-09-01, boundary 2026-08-31)
+    /// likewise anchors at PIN_DATED_AC (BalanceEndpoints.cs:806-811): earnedAtBoundary = full 12 months
+    /// = 40, raw = 40 > PIN_DATED_AC carryoverMax (10) ⇒ transferable = <b>10</b> EXACTLY. Pre-fix would
+    /// clamp to AC's carryoverMax (5) — so transferable independently discriminates too.</para>
+    /// </summary>
+    [Fact]
+    public async Task DatedAgreement_HistoricalFerieaarValuesAgainstThatYearsAgreement_NotTodaysAgreement()
+    {
+        // Fictitious agreement code present NOWHERE else (entitlement_configs / CentralAgreementConfigs
+        // / any other test) — a NEW (VACATION, <code>, OK24) row is purely additive, never contamination.
+        const string pinAgreement = "PIN_DATED_AC";
+        // Distinct VACATION config — quota + carryoverMax both differ from AC's (25 / 5).
+        const decimal pinQuota = 40m;        // vs AC's 25 (init.sql:1423)
+        const decimal pinCarryoverMax = 10m; // vs AC's 5  (init.sql:1423)
+        var switchDate = new DateOnly(2026, 6, 1);
+
+        // Bare user (ok_version OK24 → liveConfig reads (type, AC, OK24); agreement_code cache = AC).
+        var employeeId = await CreateEmployeeAsync(Emp001OrgId, "AC", "OK24");
+
+        // employee_profiles covers ONLY [switchDate, ∞): today + the later (AC) ferieår resolve norms
+        // under AC; the earlier (fictitious-code) months have NO profile ⇒ null norms ⇒ the
+        // ConfigResolutionService path is never invoked for the fictitious code (no 500). See the
+        // norm-path-safety note in the summary.
+        await SeedEmployeeProfileRowAsync(employeeId, fraction: 1.000m,
+            effectiveFrom: switchDate, effectiveTo: null, version: 1);
+
+        // Dated agreement-code HISTORY: PIN_DATED_AC up to switchDate (end-exclusive), AC from then.
+        //   GetByUserIdAtAsync(2025-09-01) → PIN_DATED_AC  (earlier ferieår start)
+        //   GetByUserIdAtAsync(2026-09-01) → AC            (later ferieår start)
+        //   GetByUserIdAtAsync(2026-06-15) → AC            (today ⇒ todayAgreementCode = AC)
+        await SeedAgreementCodeRowAsync(employeeId, pinAgreement,
+            effectiveFrom: new DateOnly(1, 1, 1), effectiveTo: switchDate);
+        await SeedAgreementCodeRowAsync(employeeId, "AC",
+            effectiveFrom: switchDate, effectiveTo: null);
+
+        // Seed the discriminating PIN_DATED_AC VACATION config at OK24 (the OK version the endpoint
+        // resolves at the 2025-09-01 ferieår start: OkVersionResolver < 2026-04-01 ⇒ OK24).
+        await SeedDatedEntitlementConfigAsync(
+            entitlementType: "VACATION", agreementCode: pinAgreement, okVersion: "OK24",
+            annualQuota: pinQuota, accrualModel: "MONTHLY_ACCRUAL", resetMonth: 9,
+            carryoverMax: pinCarryoverMax, effectiveFrom: new DateOnly(1, 1, 1));
+
+        var client = MakeFixedTodayClient(EmployeeBearerToken(employeeId, Emp001OrgId));
+        var body = await GetYearOverviewAsync(client, employeeId, 2026);
+
+        var vacation = GetCategory(body, "VACATION");
+        var saldo = vacation.GetProperty("saldo").EnumerateArray().ToList();
+
+        // ── EARLIER ferieår 2025 (Jan 2026, index 0): valued against PIN_DATED_AC (quota 40). ──
+        // earned = EarnedToDate(40, 1.0, 2025-09-01, null, 2026-01-31) = 40 × 5/12 = 16.6667 → 16.67.
+        var janSaldo = saldo[0].GetDecimal();
+        var expectedJanSaldo = ExpectedMonthlyAccrualSaldo(
+            annualQuota: pinQuota, ferieaarStart: new DateOnly(2025, 9, 1),
+            employmentStart: null, monthEnd: new DateOnly(2026, 1, 31),
+            carryoverIn: 0m, cumulativeAfholdt: 0m);
+        Assert.Equal(16.67m, expectedJanSaldo);   // sanity: PIN_DATED_AC quota → 16.67
+        Assert.Equal(expectedJanSaldo, janSaldo);  // endpoint valued the earlier ferieår at PIN_DATED_AC
+
+        // Pre-fix-fails guard: today's-agreement (AC, quota 25) would have produced a DIFFERENT
+        // value (10.42). Asserting they differ proves the assertion above is genuinely
+        // discriminating (not a value both code paths happen to agree on).
+        var preFixWouldBe = ExpectedMonthlyAccrualSaldo(
+            annualQuota: 25m, ferieaarStart: new DateOnly(2025, 9, 1),
+            employmentStart: null, monthEnd: new DateOnly(2026, 1, 31),
+            carryoverIn: 0m, cumulativeAfholdt: 0m);
+        Assert.Equal(10.42m, preFixWouldBe);
+        Assert.NotEqual(preFixWouldBe, janSaldo);
+
+        // ── LATER ferieår 2026 (Dec 2026, index 11): valued against AC (quota 25, the NEW agreement). ──
+        // earned = EarnedToDate(25, 1.0, 2026-09-01, null, 2026-12-31) = 25 × 4/12 = 8.3333 → 8.33.
+        var decSaldo = saldo[11].GetDecimal();
+        var expectedDecSaldo = ExpectedMonthlyAccrualSaldo(
+            annualQuota: 25m, ferieaarStart: new DateOnly(2026, 9, 1),
+            employmentStart: null, monthEnd: new DateOnly(2026, 12, 31),
+            carryoverIn: 0m, cumulativeAfholdt: 0m);
+        Assert.Equal(8.33m, expectedDecSaldo);    // sanity: AC quota → 8.33
+        Assert.Equal(expectedDecSaldo, decSaldo);  // current ferieår reflects the NEW agreement
+
+        // ── Transferable for 2026: closed boundary ferieår 2025 anchors at PIN_DATED_AC. ──
+        // earnedAtBoundary = EarnedToDate(40, 1.0, 2025-09-01, null, 2026-08-31) = 40 (full 12 months);
+        // raw = 40 > carryoverMax 10 ⇒ transferable = 10 (PIN_DATED_AC's cap, NOT AC's 5).
+        var transferable = vacation.GetProperty("transferable").GetDecimal();
+        var expectedTransferable = ExpectedTransferable(
+            annualQuota: pinQuota, closedFerieaarStart: new DateOnly(2025, 9, 1),
+            employmentStart: null, boundaryDate: new DateOnly(2026, 8, 31),
+            carryoverIn: 0m, used: 0m, planned: 0m, carryoverMax: pinCarryoverMax);
+        Assert.Equal(10m, expectedTransferable);    // sanity: clamps to PIN_DATED_AC cap (10)
+        Assert.Equal(expectedTransferable, transferable);
+        Assert.NotEqual(5m, transferable);          // pre-fix would clamp to AC's cap (5)
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // 13. Step-7a R-W1 pin — GRACEFUL categories contract (no entitlement config).
+    //     An employee whose agreement/OK has NO entitlement config for the four
+    //     categories gets all-null saldo + zero afholdt + transferable 0 + boundaryMonth 12,
+    //     and 200 (never 500) — the contract the FE's dash-guard renders
+    //     (BalanceEndpoints.cs:731-744 graceful empty branch; contract saldo = (number|null)[]).
+    // ════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// <b>Step-7a R-W1 (convergent Codex + Reviewer) regression pin — the graceful empty-config
+    /// contract.</b> For EVERY one of the four year-overview categories whose
+    /// <c>(type, agreement, ok)</c> has NO open <c>entitlement_configs</c> row, the handler takes the
+    /// graceful empty branch (BalanceEndpoints.cs:731-744): the response is 200 (never 500) and each
+    /// category carries <c>saldo</c> = 12 JSON nulls, <c>afholdt</c> = 12 zeros, <c>transferable</c> = 0,
+    /// and <c>boundaryMonth</c> = 12. This pins the exact shape the FE's new null-saldo dash-guard
+    /// renders (the contract now documents <c>saldo</c> as <c>(number|null)[]</c>).
+    ///
+    /// <para><b>Why a FICTITIOUS, PROFILE-LESS employee — and NOT AC_RESEARCH.</b> The task's
+    /// motivating example (academic AC_RESEARCH) does NOT reach this branch in the live seeded DB:
+    /// AC_RESEARCH (and AC_TEACHING) HAVE seeded entitlement_configs (init.sql:1460-1484 — the S37
+    /// "AC variants mirror AC base values" absorption, all quota 25), so <c>liveConfig</c> is NON-null
+    /// for them and they compute real saldo (verified empirically — AC_RESEARCH VACATION saldo comes
+    /// back as the quota-25 accrual curve, not nulls). The ONLY way to reach the graceful branch is an
+    /// agreement code with no entitlement_configs row at all. Such a code is necessarily also absent
+    /// from <c>CentralAgreementConfigs</c>, so the employee MUST be profile-less: otherwise the per-day
+    /// norm path (<c>DailyNormCalculator</c> → <c>ConfigResolutionService.ResolveAsync</c>) would THROW
+    /// <c>InvalidOperationException</c> on the unknown code (ConfigResolutionService.cs:132-134) and the
+    /// endpoint would 500. With NO <c>employee_profiles</c> row, the norm path returns null per day
+    /// without ever calling ResolveAsync (DailyNormCalculator.cs:93-101) and the header skips
+    /// ResolveAsync (it is gated on a non-null today-profile, BalanceEndpoints.cs:593) — so the unknown
+    /// agreement never reaches a config lookup that could throw, and the response is a clean 200. This
+    /// is the EXACT graceful contract (no-config → empty categories + 200) the R-W1 dash-guard renders;
+    /// the profile-less + unknown-agreement employee is its faithful, reachable representative.</para>
+    ///
+    /// <para><b>Boot-order (S63).</b> Same pattern as the profile-less Graceful test: build + boot the
+    /// fixed-today derived host FIRST (runs EmployeeProfileSeeder), THEN insert the bare user (no
+    /// employee_profiles, no user_agreement_codes) so the seeder cannot backfill it. <c>todayAgreementCode</c>
+    /// falls back to <c>users.agreement_code</c> (the fictitious code) since no user_agreement_codes
+    /// row covers today (BalanceEndpoints.cs:576-578).</para>
+    /// </summary>
+    [Fact]
+    public async Task Graceful_NoEntitlementConfigForAgreement_AllCategoriesNullSaldoZeroAfholdtTransferable0_Never500()
+    {
+        // Fictitious agreement code with NO entitlement_configs (and no CentralAgreementConfigs) →
+        // every category hits the graceful empty branch.
+        const string noConfigAgreement = "PIN_NOCONFIG_AC";
+
+        // Boot the fixed-today derived host FIRST (EmployeeProfileSeeder runs for existing users).
+        var derivedFactory = _factory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureTestServices(services =>
+            {
+                services.AddSingleton<TimeProvider>(new FixedTimeProvider(FixedToday));
+            });
+        });
+        _ = derivedFactory.CreateClient();
+
+        // Insert the bare, profile-less user AFTER the boot (no employee_profiles, no
+        // user_agreement_codes rows). agreement_code cache = the fictitious code ⇒ todayAgreementCode
+        // falls back to it ⇒ liveConfig null for every category.
+        var employeeId = "emp_s65_t13_" + Guid.NewGuid().ToString("N")[..8];
+        await InsertBareUserAsync(employeeId, Emp001OrgId, noConfigAgreement, "OK24");
+
+        var client = derivedFactory.CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", EmployeeBearerToken(employeeId, Emp001OrgId));
+
+        // 200, never 500 — assert on the raw status before parsing.
+        var rsp = await client.GetAsync($"/api/balance/{employeeId}/year-overview?year=2026");
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+        var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
+
+        // All FOUR categories must be present and each must carry the graceful empty shape.
+        var categories = body.GetProperty("categories").EnumerateArray().ToList();
+        var seenTypes = categories.Select(c => c.GetProperty("type").GetString()).ToList();
+        foreach (var expectedType in new[] { "VACATION", "SPECIAL_HOLIDAY", "CARE_DAY", "SENIOR_DAY" })
+            Assert.Contains(expectedType, seenTypes);
+        Assert.Equal(4, categories.Count);
+
+        foreach (var cat in categories)
+        {
+            // saldo = 12 JSON nulls (the (number|null)[] contract under no config).
+            var saldo = cat.GetProperty("saldo").EnumerateArray().ToList();
+            Assert.Equal(12, saldo.Count);
+            Assert.All(saldo, e => Assert.Equal(JsonValueKind.Null, e.ValueKind));
+
+            // afholdt = 12 zeros.
+            var afholdt = cat.GetProperty("afholdt").EnumerateArray().ToList();
+            Assert.Equal(12, afholdt.Count);
+            Assert.All(afholdt, e => Assert.Equal(0m, e.GetDecimal()));
+
+            // transferable = 0; boundaryMonth = 12 (OQ-1 resolved, even on the empty branch).
+            Assert.Equal(0m, cat.GetProperty("transferable").GetDecimal());
+            Assert.Equal(12, cat.GetProperty("boundaryMonth").GetInt32());
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
     // Helpers — HTTP clients with fixed TimeProvider.
     // ════════════════════════════════════════════════════════════════════════
 
@@ -1416,6 +1676,113 @@ public sealed class YearOverviewTests : IAsyncLifetime
         cmd.Parameters.AddWithValue("ac", agreementCode);
         cmd.Parameters.AddWithValue("ok", okVersion);
         cmd.Parameters.AddWithValue("weekly", weeklyNormHours);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    /// <summary>
+    /// Inserts (idempotently) one dated <c>employee_profiles</c> row. Mirrors
+    /// <c>BalanceSeriesTests.SeedProfileRowAsync</c> shape; used by the Step-7a C1 dated-agreement
+    /// pin to give its employee a full-history full-time profile (so the response is fully
+    /// populated + 200). Citation: employee_profiles schema at init.sql (Phase 4d). The
+    /// <c>(employee_id, effective_from)</c> history is the natural key the resolver reads; ON
+    /// CONFLICT DO NOTHING keeps the run-twice seed idempotent.
+    /// </summary>
+    private async Task SeedEmployeeProfileRowAsync(
+        string employeeId, decimal fraction, DateOnly effectiveFrom, DateOnly? effectiveTo, long version)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            INSERT INTO employee_profiles
+                (profile_id, employee_id, part_time_fraction, effective_from, effective_to, version)
+            VALUES (gen_random_uuid(), @e, @f, @from, @to, @v)
+            ON CONFLICT (employee_id, effective_from) DO NOTHING
+            """, conn);
+        cmd.Parameters.AddWithValue("e", employeeId);
+        cmd.Parameters.AddWithValue("f", fraction);
+        cmd.Parameters.AddWithValue("from", effectiveFrom);
+        cmd.Parameters.AddWithValue("to", (object?)effectiveTo ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("v", version);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    /// <summary>
+    /// Inserts (idempotently) one dated <c>user_agreement_codes</c> row. Mirrors the established
+    /// <c>BalanceSeriesTests.SeedAgreementCodeAsync</c> / <c>SkemaAccrualCapTests</c> helper exactly,
+    /// including its <c>ON CONFLICT (user_id, effective_from) DO UPDATE</c> upsert (the history
+    /// unique index, init.sql:563-564) so the run-twice suite stays green. Used by the Step-7a C1
+    /// pin to build an agreement-code history that CHANGES between two ferieår: the dated read
+    /// <see cref="UserAgreementCodeRepository.GetByUserIdAtAsync"/> applies the end-exclusive
+    /// <c>[effective_from, effective_to)</c> predicate (UserAgreementCodeRepository.cs:84-90).
+    /// </summary>
+    private async Task SeedAgreementCodeRowAsync(
+        string employeeId, string agreementCode, DateOnly effectiveFrom, DateOnly? effectiveTo)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            INSERT INTO user_agreement_codes
+                (assignment_id, user_id, agreement_code, effective_from, effective_to, version)
+            VALUES (gen_random_uuid(), @u, @a, @from, @to, 1)
+            ON CONFLICT (user_id, effective_from) DO UPDATE
+                SET agreement_code = EXCLUDED.agreement_code, effective_to = EXCLUDED.effective_to
+            """, conn);
+        cmd.Parameters.AddWithValue("u", employeeId);
+        cmd.Parameters.AddWithValue("a", agreementCode);
+        cmd.Parameters.AddWithValue("from", effectiveFrom);
+        cmd.Parameters.AddWithValue("to", (object?)effectiveTo ?? DBNull.Value);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    /// <summary>
+    /// Inserts (idempotently) one dated, OPEN <c>entitlement_configs</c> row for the Step-7a C1 pin.
+    /// SAFELY SCOPED to a FICTITIOUS agreement code present nowhere else (entitlement_configs /
+    /// CentralAgreementConfigs / any other test), so a NEW natural-key row CANNOT collide with any
+    /// row another test reads (the S64 shared-state lesson). The seeded row is always OPEN
+    /// (<c>effective_to NULL</c>), so the ON CONFLICT target is the OPEN partial-unique index
+    /// (entitlement_type, agreement_code, ok_version) WHERE effective_to IS NULL (init.sql:1368-1370)
+    /// — mirrors <see cref="SeedLocalAgreementProfileAsync"/>. On re-run that index matches the prior
+    /// open row → DO UPDATE to the same values keeps the seed additive + idempotent. (Targeting the
+    /// history index (…, effective_from) instead would mis-fire on the SECOND run: an identical open
+    /// row violates BOTH indexes and Postgres reports the open partial index first.) version defaults
+    /// to 1. Citation comments are OUTSIDE the raw SQL string (S64 42601 lesson).
+    /// </summary>
+    private async Task SeedDatedEntitlementConfigAsync(
+        string entitlementType, string agreementCode, string okVersion,
+        decimal annualQuota, string accrualModel, int resetMonth, decimal carryoverMax,
+        DateOnly effectiveFrom)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            INSERT INTO entitlement_configs
+                (config_id, entitlement_type, agreement_code, ok_version,
+                 annual_quota, accrual_model, reset_month, carryover_max,
+                 pro_rate_by_part_time, is_per_episode, min_age, description,
+                 effective_from, effective_to, version)
+            VALUES
+                (gen_random_uuid(), @type, @ac, @ok,
+                 @quota, @accrual, @reset, @carryover,
+                 FALSE, FALSE, NULL, @description,
+                 @from, NULL, 1)
+            ON CONFLICT (entitlement_type, agreement_code, ok_version) WHERE effective_to IS NULL
+                DO UPDATE SET annual_quota = EXCLUDED.annual_quota,
+                    accrual_model = EXCLUDED.accrual_model,
+                    reset_month = EXCLUDED.reset_month,
+                    carryover_max = EXCLUDED.carryover_max
+            """, conn);
+        cmd.Parameters.AddWithValue("type", entitlementType);
+        cmd.Parameters.AddWithValue("ac", agreementCode);
+        cmd.Parameters.AddWithValue("ok", okVersion);
+        cmd.Parameters.AddWithValue("quota", annualQuota);
+        cmd.Parameters.AddWithValue("accrual", accrualModel);
+        cmd.Parameters.AddWithValue("reset", resetMonth);
+        cmd.Parameters.AddWithValue("carryover", carryoverMax);
+        cmd.Parameters.AddWithValue("description", $"Step-7a C1 pin — {agreementCode} {entitlementType}");
+        cmd.Parameters.AddWithValue("from", effectiveFrom);
         await cmd.ExecuteNonQueryAsync();
     }
 
