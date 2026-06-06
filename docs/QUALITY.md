@@ -1,7 +1,9 @@
 # StatsTid Quality Grading
 
-<!-- anchor-sprint: 64 -->
+<!-- anchor-sprint: 65 -->
 > **Governance**: Updated by the Orchestrator at sprint end or during entropy scan. See CLAUDE.md "Quality Grading" section for grade definitions.
+
+> **S65 (2026-06-06):** No grade changes. **Backend API holds A** — the year-overview endpoint reuses every primitive (AccrualMath flat, ADR-028 work-time, per-day DailyNormCalculator extracted behavior-preservingly from the Skema seam — now ONE shared implementation, drift-proof) with a 4-cycle Step-7a hardening pass (per-ferieår dated agreement anchoring for historical reads incl. probe anchors; graceful never-500 paths pinned). **Frontend holds B** (the A-gap — no E2E/visual regression — is unchanged) but gains its strongest page-level suite yet: ArsoversigtPage 19 tests + hook race tests + 2 PATs (PAT-007 referentially-stable hook mocks; the server-today authority pattern test-pinned end-to-end); FE 173 vitest. **CI/Tooling holds A−** — the consecutive-run discipline caught a NEW environmental flake class, now KB-documented (FAIL-002: Docker Desktop sheds testcontainer starts under churn; close-protocol = fresh session + exclusive runs + full-log capture). Test & QA note: the S65 regression suite (+23) went through a Reviewer-driven fix-forward that strengthened under-asserting tests (raw-body determinism, non-trivial transferable operands, OK-discriminating local-profile straddle) — the "green suite that under-asserts" failure mode was caught at Step 5a, evidence the citation-gated discipline holds.
 
 > **S57 (2026-05-31):** Frontend held at **B** but **pattern compliance improved materially** — the oes.dk re-skin completed the design-token system (defined ~14 previously-phantom tokens) and migrated all ~124 hardcoded hex colors to tokens, so ADR-011's "no hardcoded colors" mandate is now actually enforced (residual hardcoded-hex = 0). E2E/visual-regression remains the gap keeping it below A. New default palette is oes-derived + WCAG-AA (ADR-011 amended).
 

@@ -3,12 +3,12 @@
 | Field | Value |
 |-------|-------|
 | **Sprint** | 65 |
-| **Status** | planned |
+| **Status** | complete |
 | **Start Date** | 2026-06-05 |
-| **End Date** | — |
-| **Orchestrator Approved** | no |
-| **Build Verified** | no |
-| **Test Verified** | no |
+| **End Date** | 2026-06-06 |
+| **Orchestrator Approved** | yes |
+| **Build Verified** | yes — `dotnet build` 0 errors at the close tree (38 solution warnings all pre-existing, none in S65 files); tsc clean |
+| **Test Verified** | yes — unit 629 + regression **447/447 pristine + consecutive** (fresh-session exclusive run per FAIL-002) + smoke 5 + FE 173, all green locally; CI follows the held push (green S64 baseline 27009829974) |
 
 ## Sprint Goal
 Replace the S61 `tid/oversigt` dashboard with the design-handoff **Direction E Årsoversigt** (year-at-a-glance: 6 current-balance tiles + a months × categories matrix), backed by a new read-only `GET /api/balance/{employeeId}/year-overview?year=Y` endpoint whose every quantity derives from the existing rule-engine/projection primitives (ADR-028 work-time + per-day dated norm, ADR-030/031 flat accrual, hours-based day-equivalent consumption). Design source: `design_handoff_oversigt/` (committed this sprint as design source of record). Refinement: `.claude/refinements/REFINEMENT-s65-aarsoversigt-direction-e.md` (Step-4 dual-lens reviewed: Codex 2 cycles → "Clean — absorptions verified"; Reviewer 0 BLOCKERs).
@@ -256,10 +256,10 @@ NOTE (Step-0b Reviewer W4): `saldo` (Sep–Dec includes `carryoverIn`) and `tran
 | Field | Value |
 |-------|-------|
 | **ID** | TASK-6506 |
-| **Status** | planned |
+| **Status** | complete |
 | **Agent** | Orchestrator |
 | **Components** | — |
-| **Orchestrator Approved** | — |
+| **Orchestrator Approved** | yes — sprint-test-validation delta table (+32 → 1254 total); Step 7a dual-lens ×4 cycles (artifacts `.claude/reviews/SPRINT-65-step7a-{codex,reviewer}.md`); DEP-004 Balance section + /series FE-orphaned + registry-drift note (`c08530e`); KB: PAT-007 + PAT-008 + FAIL-002 + ADR-030 D9 (46 entries); INDEX/QUALITY anchors → 65; ROADMAP follow-ups (iv)+(v) recorded; close gates: CI-health green baseline 27009829974 (nothing pushed since), Step-7a artifacts with verdict + reviewed-against-commit lines, close commit from repo root |
 
 **Description**: `dotnet build` + full pyramid (sprint-test-validation skill: unit + regression pristine/consecutive + smoke + FE with delta arithmetic vs S64's 629/424/5/164); Constraint Validator per task; Step 5a Reviewer audits; Step 7a dual-lens sprint-end review; **DEP-004 endpoint-registry update (Step-0b Codex N2)**: register `GET /api/balance/{employeeId}/year-overview` + `useYearOverview` + `ArsoversigtPage`, remove the deleted OversightPage/LeaveOverview/AccrualTrend/useAccrualSeries rows, mark `GET /api/balance/{id}/series` FE-orphaned/retained; close gates (Step-7a artifacts + CI-health — gate operates against the GREEN S64 baseline, run `27009829974`; any red this sprint introduces is S65's to fix forward + Test-Verified line + repo-root CWD); ROADMAP Completed-Sprints row + INDEX update (INDEX freshness warning already >3 behind — refresh anchors); commit + push.
 
@@ -273,10 +273,10 @@ NOTE (Step-0b Reviewer W4): `saldo` (Sep–Dec includes `carryoverIn`) and `tran
 
 | Check | Status | Notes |
 |-------|--------|-------|
-| Agreement rules match legal requirements | verified (display) | OQ-1 verdict recorded: legal ferie transfer point = 31 Dec (Ferielov §21 stk.2; state sector via Cirkulære 021-24 §3) → `boundaryMonth = 12`; the displayed figure is the model's Sep-rollover projection, NOT the legal residual-5th-week quantity (non-equivalence annotated in ADR-030 per TASK-6505; §21/§26 settlement stays deferred). Særlige-feriedage calendar-year/1 May–30 Apr gap (Cirkulære 021-24 §12 stk.2) recorded as ROADMAP follow-up. Flat accrual per ADR-031 reused unchanged. Full citations: `docs/references/ferie-transfer-timing-research.md` |
+| Agreement rules match legal requirements | verified (display) | OQ-1 verdict recorded: legal ferie transfer point = 31 Dec (Ferielov §21 stk.2; state sector via Cirkulære 021-24 §3) → `boundaryMonth = 12`; the displayed figure is the model's Sep-rollover projection, NOT the legal residual-5th-week quantity (non-equivalence annotated in ADR-030 per TASK-6505; §21/§26 settlement stays deferred). Særlige-feriedage calendar-year/1 May–30 Apr gap (Cirkulære 021-24 §12 stk.2) recorded as ROADMAP follow-up. Flat accrual per ADR-031 reused unchanged. **Step-7a hardening: historical ferieår now valued under the agreement in force at each ferieår start** (C1/C2-1/C3-1 chain — was today's agreement). Full citations: `docs/references/ferie-transfer-timing-research.md` |
 | Wage type mappings produce correct SLS codes | N/A | read-only sprint; no payroll path touched |
-| Overtime/supplement calculations are deterministic | pending | year-overview must be a pure function of (employeeId, year, today, projections) — replay test TASK-6504.6 |
-| Absence effects on norm/flex/pension are correct | pending | day-equivalent afholdt reconciliation TASK-6504.3/4 |
+| Overtime/supplement calculations are deterministic | verified | byte-equal raw-body determinism test (two identical requests) + fixed-TimeProvider seam — the response is a pure function of (employeeId, year, today, projections, configs); transferable computed at the model boundary, proven insensitive to post-August absences (regression 7) |
+| Absence effects on norm/flex/pension are correct | verified | day-equivalent afholdt (3.7 t → 0.5) + date-based used/planned split + SPECIAL_HOLIDAY_ALLOWANCE mapping pin + ferieår straddle/sawtooth/carryoverIn (regression 3–6); norm path byte-preserved vs the Skema seam (cross-seam reconciliation, regression 2) |
 | Retroactive recalculation produces stable results | N/A | no recalculation surface |
 
 ## External Review (Step 7a)
@@ -287,13 +287,45 @@ NOTE (Step-0b Reviewer W4): `saldo` (Sep–Dec includes `carryoverIn`) and `tran
 | **Cycle 1 — Codex** | 2 P1 + 1 P2 (2026-06-06): **C1 (P1→BLOCKER)** historical entitlement years valued with TODAY's agreement code (BalanceEndpoints.cs:716/:753 — OK version year-start-anchored, agreement operand not; employee switching AC→HK sees old AC ferieår under HK quotas); **C2 (P1→BLOCKER)** null-saldo render crash (graceful branch emits saldo all-null; FE `v !== 0` branch calls `formatDanishNumber(null)` → `null.toFixed` TypeError → page down); **C3 (P2→WARNING)** useYearOverview stale year-switch response overwrites newer data |
 | **Cycle 1 — Internal Reviewer** | 1 WARNING + 2 NOTE (2026-06-06): **R-W1 ≡ C2 (CONVERGENT)** — adds the reachability proof: AC_RESEARCH/AC_TEACHING have no seeded entitlement configs and `users.ok_version` is unconstrained TEXT, so an academic employee (a persona the regression suite itself seeds at YearOverviewTests.cs:923) returns all-null saldo for ALL FOUR categories → guaranteed crash; invisible to every per-task lens (backend review verified the null-emit as intentionally graceful, FE tests mocked numeric saldo only, the academic regression test reads only months[].normHours). **R-N1** formatDanishNumber 1-dp matrix display of 2-dp values (14.08→"14,1") — ACCEPTED as intended matrix precision (consistent with tiles; "0,5" exact). **R-N2** TASK-6506 close items pending in the reviewed diff — expected state; everything else cross-checks (contract field-for-field FE↔endpoint↔tests; read-only surface confirmed — no events/outbox/audit writes; deletions fully unwired; D9↔implementation consistent; TimeProvider new-endpoint-only; SharedKernel/RuleEngine untouched) |
 | **Absorption (cycle 1)** | C1 → Backend fix agent (per-ferieår dated agreement resolve, cached, fallback chain agreement-aware); C2/R-W1 + C3 → UX fix agent (saldo `(number\|null)[]` + dash guard + crash test; stale-response guard + race test); contract nullability made explicit (this commit). Lens complementarity held again: the agreement-anchoring P1 was Codex-only, the reachability depth was Reviewer-only |
-| **Cycle 2** | pending — verifies the two fix-forward merges per the cap discipline |
+| **Cycle 2 — Codex** | cycle-1 fixes verified silently (no re-raise); **2 NEW P1 (2026-06-06)**, same agreement-anchoring family, deeper: **C2-1 (P1→BLOCKER)** the categories graceful-empty branch keys off TODAY's agreement having a config — a today-configless employee loses ALL historical years (the early `continue` precedes the C1 per-ferieår resolution); **C2-2 (P1)** tiles read the current entitlement-year config with today's agreement (an AC→HK mid-year switch revalues the same balance row under HK rules) |
+| **Cycle 2 — Internal Reviewer** | **"All cycle-1 absorptions verified. No new findings."** Verification depth: C1 byte-identity induction for single-agreement employees + never-null fallback chain + no-residual-leak sweep (explicitly judged the remaining todayAgreementCode reads — SENIOR_DAY min-age, tiles CurrentRemainingAsync — "anchored at today's entitlement year — correct, not historical"); C2/C3 no-stuck-loading proof (latest request always clears its own loading; stale responses touch nothing) + null-guard single-consumption-site proof + genuine pre-fix-fails pins; pins arithmetic re-derived against real AccrualMath + dated-predicate + OK cutoffs; PIN codes contamination-free (single-file, additive, idempotent) |
+| **Cycle-2 adjudication** | **C2-1 → FIX in-sprint** (same family as C1, new-handler-only, no cross-endpoint coupling) — Backend fix agent dispatched (year-start-agreement attempt before the empty branch; PIN-2 path provably unchanged). **C2-2 → ACCEPTED-BY-DESIGN, no fix**: the tiles MIRROR /summary per the pinned contract ("current entitlement-loop remaining"), and /summary's live-agreement read is the system-wide convention (ADR-023 D2 — the documented Phase-4e LAUNCH-BLOCKING determinism item); forking the year-overview tile from /summary would show one employee two different Ferie-remaining figures on two pages. The two lenses split exactly on priors here (Codex w/o priors flags it; the internal Reviewer w/ priors independently judged the same reads correct) — Orchestrator rules with the internal lens + the contract. Recorded against the Phase-4e item |
+| **Cycle 3 — Codex** | C2-1 fix VERIFIED (no P1 re-raise); **3 NEW P2→WARNING (0 BLOCKERs — the cap-discipline halt does NOT fire;** severity declining per cycle: 2P1+1P2 → 2P1 → 3P2): **C3-1** the C2-1 Jan-1 probe misses a Sep-reset ferieår begun under a configured agreement (Oct-switch edge — Jan–Aug wrongly empty); **C3-2** `today` is the UTC date — Copenhagen is the next calendar date between local and UTC midnight (the "Nu"/future boundary + dated reads misclassify in that 1–2h window); **C3-3** failed year-switch keeps the old matrix silently (page suppresses error when data exists) while drill-ins navigate with the NEW year-state → mismatched drill-down |
+| **Cycle-3 adjudication (Orchestrator discretion — WARNINGs)** | **C3-1 → FIX** (mechanical completion of the C2-1 family: ordered candidate-anchor probe {Jan-1 Y, Sep-1 Y−1, Sep-1 Y} through the existing cached helpers; pin personas provably unaffected). **C3-2 → ACCEPTED + ROADMAP follow-up (v)**: every endpoint shares the system-wide UTC-date idiom (`DateTime.UtcNow`-derived dates) — fixing one endpoint forks date semantics; needs a system-wide business-timezone ADR decision. **C3-3 → FIX** (FE: drill-in anchored to `data.year` — the year actually displayed — + visible stale-data error banner naming both years). Both fixes get a scoped cycle-4 verification per the post-Step-7a coverage rule |
+| **Cycle 4 (scoped: C3-1 + C3-3 fixes)** | pending |
 
 ## Test Summary
-_pending — S64 baseline: 629 unit + 424 regression + 5(+1) smoke + 164 FE_
+
+**Test Verified**: yes — full pyramid green LOCALLY at the close tree (`aad71dd` + tests built `aad71dd`-tree): unit 629/629; **regression 447/447 PRISTINE + 447/447 CONSECUTIVE** (twice back-to-back, S64 discipline, on a FRESH Docker Desktop session with an exclusive run per FAIL-002); smoke 5/5; FE vitest 173/173 (25 files). CI verification follows the push (held for owner go; baseline = green S64 run 27009829974).
+
+## Test Validation Report
+| Suite | Previous | Current | Delta |
+|-------|----------|---------|-------|
+| Unit | 629 | 629 | +0 |
+| Regression | 424 | 447 | +23 |
+| Smoke | 5 | 5 | +0 |
+| Frontend | 164 | 173 | +9 |
+| **Total** | **1222** | **1254** | **+32** |
+
+Delta arithmetic: regression +23 = +20 TASK-6504 suite (incl. the Step-5a fix-forward's +2 transferable cases) +2 Step-7a pins (dated-agreement valuation; academic graceful categories) +1 cycle-2 pin (configless-today historical valuation). FE +9 = −17 (deleted with the Oversigt surface) +19 (ArsoversigtPage 15 + SkemaPageParamInit 4) +3 (Step-7a C2/C3: all-null saldo render + hook race ×2) +3 (C3-3: drill-in/banner) +1 (C4-1 out-of-range-year). Smoke unchanged (5 incl. the S64 deny-pin).
+
+**Environmental-flake dossier (FAIL-002, discovered this close)**: three non-final runs on a long-lived Docker session showed `DockerApiException`-at-container-start failures (23 → 1 → 1, always `[1 ms]` class-init, different classes each time — incl. one run contended by a parallel agent's class executions); the same trees ran 444/444 and the final 447/447×2 green on quiet fresh sessions. All failures matched the FAIL-002 signature (infrastructure, zero assertion failures); no test was modified in response. Full per-run logs captured via Out-File (close-protocol rule).
 
 ## Agent Effectiveness
-_pending_
+
+| Agent (wave) | Outcome |
+|---|---|
+| TASK-6502 Backend (overnight, Opus) | first-pass clean — all sharp edges (closed-ferieår operands, mapping, behavior preservation) verified held by CV + MANDATORY Reviewer (0B/0W) |
+| TASK-6503 UX (overnight, Opus) | first-pass clean — 1 W + 1 N absorbed (year-switcher test pin, dead prop); proposed PAT-007 (approved) |
+| TASK-6504 Test & QA (Sonnet, during the Opus 529 outage) | green-but-under-asserting — Step-5a Opus Reviewer found 3 BLOCKERs of under-assertion (byte-equality on one field; trivial-operand transferable; non-discriminating OK straddle) → Opus fix-forward `f2b2ef6` strengthened all; proposed PAT-008 (approved). Lesson: verification work degraded gracefully on the smaller model, generative test-authoring did not — see [[opus-unavailable-notify-owner]] handling rule |
+| Step-7a fix agents ×4 (Opus) + pins ×2 | all first-pass clean with explicit byte-identity arguments; 1 salvage (the C2-1 pin agent ended mid-wait misattributing a foreign testhost as its own second pass — work salvaged from its worktree per the S22 lesson, committed by the Orchestrator) |
+| Constraint Validators ×3 (Sonnet) | PASS 12/12, 8/8, 9/9 — mechanical checklist work fully Sonnet-viable |
+| Reviewers (Step-5a ×2 Sonnet-during-outage + 6504 Opus; Step-7a internal ×3 Opus) | the Opus 6504 review caught what two Sonnet-lens passes structurally could not (under-assertion); the Step-7a internal cycle-2/4 verification proofs (byte-identity induction, no-stuck-loading) were load-bearing for the fix approvals |
 
 ## Sprint Retrospective
-_pending_
+
+- **The dual-lens cap discipline earned its cost**: 4 Codex cycles at monotonically declining severity (2P1+1P2 → 2P1 → 3P2 → 1P2), every fix verified, two principled acceptances recorded with both-lens reasoning (C2-2 tiles-mirror-/summary; C3-2 UTC-date convention → ROADMAP (v)). The agreement-anchoring P1 family (C1→C2-1→C3-1) was invisible to every project-priors lens — external Codex caught all three iterations; the internal Reviewer supplied the proofs that made the fixes safely mergeable. `review-lens-complementarity` confirmed again.
+- **Opus 529 outage (~70 min)**: all subagent spawns died server-side; Sonnet carried the audit layer (flawlessly) and one generative task (TASK-6504 — which the Opus reviewer then had to strengthen). New standing rule [[opus-unavailable-notify-owner]]: notify + hold generative work by default.
+- **FAIL-002 discovered + KB'd**: Docker Desktop sheds testcontainer starts under sustained churn (3 observations: 23/1/1 failures, always DockerApiException at [1 ms] init, never on a quiet fresh session). Close protocol now: fresh Docker session + exclusive runs + full-log capture.
+- **Process learnings**: tail-only log capture cost a 20-min re-run (always Out-File close runs); a background agent that backgrounds its own validation can end mid-wait — salvage from the worktree, don't re-dispatch; CWD drifts between PowerShell tool calls (always `Set-Location` before git); PS 5.1 mangles embedded double quotes in here-string args to native commands.
+- **Scope honesty**: the pinned contract gained explicit `saldo` nullability only at Step 7a — the graceful branch had emitted nulls from day one while the FE typed `number[]`; cross-layer nullability is now a standing thing to pin in contracts up-front.
