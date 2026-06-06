@@ -247,7 +247,6 @@ export function ArsoversigtPage() {
                   key={cat.type}
                   category={cat}
                   cellClass={cellClass}
-                  nowIndex={nowIndex}
                 />
               ))}
             </tbody>
@@ -261,7 +260,6 @@ export function ArsoversigtPage() {
 interface CategoryGroupProps {
   category: YearOverviewCategory
   cellClass: (i: number) => string
-  nowIndex: number
 }
 
 /** One leave group: header + Saldo (rest) / Afholdt / Kan overføres rows. */

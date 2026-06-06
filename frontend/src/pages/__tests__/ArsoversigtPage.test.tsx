@@ -292,15 +292,20 @@ describe('ArsoversigtPage — interactions', () => {
   it('year switcher refetches by re-rendering the hook with the new year', () => {
     mockUseYearOverview.mockReturnValue(overviewHook(makeOverview()))
     renderPage()
-    // Initial call used the client-clock seed; assert the hook was called.
-    expect(mockUseYearOverview).toHaveBeenCalled()
+    // Capture the seed year from the initial hook invocation (client-clock seed).
+    const initialCalls = mockUseYearOverview.mock.calls
+    const seedYear = initialCalls[initialCalls.length - 1]?.[1] as number
     mockUseYearOverview.mockClear()
     fireEvent.click(screen.getByRole('button', { name: 'Forrige år' }))
-    // After clicking ←, the hook is re-invoked with year-1 relative to the seed.
+    // After clicking ←, the hook is re-invoked with exactly seedYear − 1.
     const calls = mockUseYearOverview.mock.calls
     const lastArgs = calls[calls.length - 1]
     expect(lastArgs?.[0]).toBe('emp001')
-    expect(typeof lastArgs?.[1]).toBe('number')
+    expect(lastArgs?.[1]).toBe(seedYear - 1)
+    // And → moves forward again: back to the seed year.
+    fireEvent.click(screen.getByRole('button', { name: 'Næste år' }))
+    const callsAfterNext = mockUseYearOverview.mock.calls
+    expect(callsAfterNext[callsAfterNext.length - 1]?.[1]).toBe(seedYear)
   })
 
   it('drills into a month: clicking a month header navigates to /tid/registrering?year&month', () => {

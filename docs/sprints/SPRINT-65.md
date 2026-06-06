@@ -151,12 +151,12 @@ Notes: camelCase per existing endpoints; decimals as numbers (`Math.Round(., 2)`
 | Field | Value |
 |-------|-------|
 | **ID** | TASK-6502 |
-| **Status** | planned |
+| **Status** | implemented — worktree branch merged `6be6d35` (3 batch commits `be25260`/`99ec53f`/`3903def`); post-merge validation green (build 0 errors, unit 629/629 unmodified) |
 | **Agent** | Backend API (cross-domain authorized — S22/S24 convention; src/Backend/** only) |
 | **Components** | Backend.Api (BalanceEndpoints, SkemaEndpoints, new Services/DailyNormCalculator.cs) |
 | **KB Refs** | ADR-021 (D2 year-start dated config, D4 consumption-time lookup), ADR-023 D3 (graceful HTTP-read fallback), ADR-028 D3 (per-day norm semantics), ADR-030 D1–D6 (flat earned-to-date, employment_start_date), ADR-031 (fraction-independent day-count), ADR-003 (OK by entry date), ADR-007/ADR-009 (auth), DEP-004 (endpoint registry) |
-| **Constraint Validator** | pending |
-| **Reviewer Audit** | MANDATORY (P2-adjacent + new shared abstraction) |
+| **Constraint Validator** | PASS (2026-06-06, 12/12 — std checks 1–8 + sprint-specific: single `7.4m` literal in EntitlementMapping.cs only; single AbsenceToEntitlementType definition w/ read-only alias in SkemaEndpoints; handler today solely via TimeProvider, DateTime.* only in comments; no SharedKernel/RuleEngine file touched) |
+| **Reviewer Audit** | MANDATORY (P2-adjacent + new shared abstraction) — in flight |
 | **Orchestrator Approved** | — |
 
 **Description**:
@@ -179,13 +179,13 @@ Notes: camelCase per existing endpoints; decimals as numbers (`Math.Round(., 2)`
 | Field | Value |
 |-------|-------|
 | **ID** | TASK-6503 |
-| **Status** | planned |
+| **Status** | implemented — worktree branch merged `058d796` (4 batch commits `fc4b2b3`/`f1c299b`/`08ba9b5`/`5d054de`); post-merge validation green (tsc clean, FE vitest 166/166 = 164 − 17 removed + 19 added) |
 | **Agent** | UX Agent (frontend/**) |
 | **Components** | frontend pages/hooks/routing |
 | **KB Refs** | ADR-011 (design system: tokens, CSS Modules, AA), DEP-004; docs/FRONTEND.md; design_handoff_oversigt/README.md + reference/oversigt.{jsx,css} (Direction E only) |
-| **Constraint Validator** | pending |
-| **Reviewer Audit** | per trigger table |
-| **Orchestrator Approved** | — |
+| **Constraint Validator** | PASS (2026-06-06, 8/8 — scope frontend/** only; zero new hex in added lines; no kit.css/colors_and_type.css import; ComplianceWarnings/useBalanceSummary/useCompliance intact; deleted modules have zero remaining importers; exactly 6 tiles in buildTiles(), no 7th; month classification exclusively via server `today` (parseToday) — the one `new Date().getFullYear()` is the year-switcher useState seed only, NOTE not violation) |
+| **Reviewer Audit** | DONE (2026-06-06, focused): **0 BLOCKER / 1 WARNING / 2 NOTE.** All P1/P2 items confirmed clean in code — server-today authority airtight incl. loading/error/stale-data paths (no client-clock fallback anywhere; year-switch renders OLD data against OLD server-today until new data arrives); contract fidelity (4 categories via map + Arbejdstid = 5 groups; transferable only at boundaryMonth >0; 6 tiles; da-DK); hook = useBalanceSummary shape; deletions verified zero live importers (only a comment mention in ComplianceWarnings.tsx:9); a11y (th scope col/row, focus-visible tokens, aria-labels). W (test quality): year-switcher test asserted only `typeof === number`, not the decrement — would pass on `year+1`. N1: dead `nowIndex` prop on CategoryGroupProps. N2 = W restated. **W+N1 ABSORBED in this commit** (Small Tasks Exception, Orchestrator self-checked vs CV list): test now captures seed year from the initial hook call and asserts ←=seedYear−1 then →=seedYear; dead prop dropped from interface+call site. Post-fix: tsc clean, FE 166/166 |
+| **Orchestrator Approved** | yes (2026-06-06 — CV PASS + Reviewer findings absorbed; validation criteria all met) |
 
 **Description**:
 1. `useYearOverview(employeeId, year)` hook (the `useBalanceSummary` shape) typed to the pinned contract.
