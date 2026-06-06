@@ -197,6 +197,14 @@ builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(EmployeeEntitl
 
 // ── Services ──
 builder.Services.AddSingleton<ConfigResolutionService>();
+// S65 / TASK-6502 — shared per-day "Arbejdstid"-norm resolver (extracted from the Skema
+// month read; also consumed by the Balance year-overview read). Stateless: the per-request
+// config cache is local to each ComputeRangeAsync call, so singleton is safe.
+builder.Services.AddSingleton<StatsTid.Backend.Api.Services.DailyNormCalculator>();
+// S65 / TASK-6502 — server "today" seam for the new year-overview endpoint ONLY (Step-0b
+// Reviewer NOTE). TimeProvider.System is the production default; TASK-6504's test host
+// overrides it with a fixed provider. No other endpoint is refactored onto this seam.
+builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<ProfileAlignmentValidator>();
 builder.Services.AddSingleton<ProjectionBackfillService>();
 builder.Services.AddSingleton<AuditProjectionBackfillService>();

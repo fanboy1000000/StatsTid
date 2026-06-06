@@ -55,31 +55,22 @@ public static class SkemaEndpoints
         return types;
     }
 
-    // ── Absence type → entitlement type mapping (null = skip validation) ──
-    private static readonly Dictionary<string, string?> AbsenceToEntitlementType = new(StringComparer.Ordinal)
-    {
-        ["VACATION"] = "VACATION",
-        ["CARE_DAY"] = "CARE_DAY",
-        ["CHILD_SICK_DAY"] = "CHILD_SICK",
-        ["CHILD_SICK_DAY_2"] = "CHILD_SICK",
-        ["CHILD_SICK_DAY_3"] = "CHILD_SICK",
-        ["PARENTAL_LEAVE"] = null,
-        ["SENIOR_DAY"] = "SENIOR_DAY",
-        ["SPECIAL_HOLIDAY_ALLOWANCE"] = "SPECIAL_HOLIDAY",
-        ["LEAVE_WITH_PAY"] = null,
-        ["LEAVE_WITHOUT_PAY"] = null,
-        ["SICK_DAY"] = null
-    };
+    // ── Absence type → entitlement type mapping + StandardDayHours ──
+    // S65 / TASK-6502 — promoted to the shared Backend.Api EntitlementMapping so the new
+    // Balance year-overview read consumes the SAME map / divisor (no second copy, no second
+    // 7.4 literal; Step-0b Codex W1). Local aliases keep the existing call sites below
+    // unchanged.
+    private static readonly IReadOnlyDictionary<string, string?> AbsenceToEntitlementType =
+        StatsTid.Backend.Api.Services.EntitlementMapping.AbsenceToEntitlementType;
 
-    // ── Standard work day hours (37h/week ÷ 5 days) ──
-    private const decimal StandardDayHours = 7.4m;
+    private const decimal StandardDayHours = StatsTid.Backend.Api.Services.EntitlementMapping.StandardDayHours;
 
     /// <summary>
     /// Resolve an absence type to its entitlement type (null = no entitlement gating),
-    /// reusing the <see cref="AbsenceToEntitlementType"/> map. Unknown types ⇒ null.
+    /// delegating to the shared <see cref="StatsTid.Backend.Api.Services.EntitlementMapping"/>.
     /// </summary>
     private static string? GetEntitlementType(string absenceType)
-        => AbsenceToEntitlementType.TryGetValue(absenceType, out var et) ? et : null;
+        => StatsTid.Backend.Api.Services.EntitlementMapping.GetEntitlementType(absenceType);
 
     /// <summary>
     /// S59 / TASK-5907 — pure integer-age computation as-of a date from a birth date.
@@ -163,8 +154,11 @@ public static class SkemaEndpoints
             AbsenceProjectionRepository absenceProjectionRepo,
             // TASK-5603 — self-recorded work time read-model + per-day norm resolution.
             WorkTimeProjectionRepository workTimeProjectionRepo,
-            IEmploymentProfileResolver profileResolver,
-            ConfigResolutionService configResolver,
+            // S65 / TASK-6502 — per-day norm resolution extracted into the shared
+            // DailyNormCalculator (consumed here + by the Balance year-overview read). The
+            // prior inline IEmploymentProfileResolver + ConfigResolutionService loop now lives
+            // in that service; the behavior is preserved byte-for-byte.
+            StatsTid.Backend.Api.Services.DailyNormCalculator dailyNormCalculator,
             OrgScopeValidator scopeValidator,
             HttpContext context,
             CancellationToken ct) =>
@@ -307,61 +301,18 @@ public static class SkemaEndpoints
                 })
                 .ToList();
 
-            // ── TASK-5603 per-day norm (dailyNorm) ──
-            // PURE READ — no rule-engine HTTP call, no rule logic (P2). Resolve the
-            // employee's REAL per-day norm via the dated employment profile (per day,
-            // so a mid-month part_time_fraction change is reflected) + the merged
-            // agreement config (ConfigResolutionService → WeeklyNormHours / NormModel).
-            // OK version is resolved per day via OkVersionResolver (NOT year>=2026 — the
-            // OK24→OK26 switch is 2026-04-01). Daily norm = WeeklyNorm × fraction / 5,
-            // rounded to 2 decimals; weekends → 0. ANNUAL_ACTIVITY (academic) → null
-            // (a weekday split would be wrong — do NOT approximate).
-            //
-            // Config resolution is cached per (okVersion, agreementCode, position,
-            // fraction) within this request so we don't re-resolve the merged config for
-            // every weekday in the month.
-            var dailyNorm = new List<object>(daysInMonth);
-            var normCache = new Dictionary<string, (decimal WeeklyNormHours, NormModel NormModel)>(StringComparer.Ordinal);
-            for (var day = monthStart; day <= monthEnd; day = day.AddDays(1))
-            {
-                if (day.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
-                {
-                    dailyNorm.Add(new { date = day, hours = (decimal?)0m });
-                    continue;
-                }
-
-                // Dated profile for THIS day (part_time_fraction, position, agreement, org).
-                var profile = await profileResolver.GetByEmployeeIdAtAsync(employeeId, day, ct);
-                if (profile is null)
-                {
-                    // No dated profile covering this day — graceful: blank norm rather
-                    // than fabricating one (mirrors the ADR-023 D3 graceful-fallback split
-                    // for HTTP read consumers).
-                    dailyNorm.Add(new { date = day, hours = (decimal?)null });
-                    continue;
-                }
-
-                var okVersion = OkVersionResolver.ResolveVersion(day);
-                var orgId = profile.OrgId ?? user.PrimaryOrgId;
-                var cacheKey = $"{okVersion}|{profile.AgreementCode}|{profile.Position}|{profile.PartTimeFraction}|{orgId}";
-                if (!normCache.TryGetValue(cacheKey, out var resolved))
-                {
-                    var config = await configResolver.ResolveAsync(
-                        orgId, profile.AgreementCode, okVersion, profile.Position, ct);
-                    resolved = (config.WeeklyNormHours, config.NormModel);
-                    normCache[cacheKey] = resolved;
-                }
-
-                if (resolved.NormModel == NormModel.ANNUAL_ACTIVITY)
-                {
-                    // Academic annual-activity norm: a per-weekday split is not meaningful.
-                    dailyNorm.Add(new { date = day, hours = (decimal?)null });
-                    continue;
-                }
-
-                var hours = Math.Round(resolved.WeeklyNormHours * profile.PartTimeFraction / 5m, 2);
-                dailyNorm.Add(new { date = day, hours = (decimal?)hours });
-            }
+            // ── TASK-5603 per-day norm (dailyNorm) — S65 / TASK-6502 extraction ──
+            // PURE READ — no rule-engine HTTP call, no rule logic (P2). The per-day norm
+            // resolution (dated profile per day + merged config + per-day OkVersion +
+            // weekends 0 + ANNUAL_ACTIVITY/no-profile → null + WeeklyNorm × fraction / 5
+            // rounded to 2dp) now lives in the shared DailyNormCalculator so the Skema month
+            // read and the Balance year-overview read agree by construction. Behavior is
+            // byte-for-byte preserved; the response projection shape ({ date, hours }) is kept.
+            var dailyNormEntries = await dailyNormCalculator.ComputeRangeAsync(
+                employeeId, monthStart, monthEnd, user.PrimaryOrgId, ct);
+            var dailyNorm = dailyNormEntries
+                .Select(n => (object)new { date = n.Date, hours = n.Hours })
+                .ToList();
 
             // Get approval period for this month
             var period = await approvalRepo.GetByEmployeeAndPeriodAsync(employeeId, monthStart, monthEnd, ct);
