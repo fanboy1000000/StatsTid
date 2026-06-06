@@ -207,13 +207,13 @@ Notes: camelCase per existing endpoints; decimals as numbers (`Math.Round(., 2)`
 | Field | Value |
 |-------|-------|
 | **ID** | TASK-6504 |
-| **Status** | planned |
+| **Status** | in re-dispatch — cycle-1 implementation complete on worktree branch (`6571156`, 18 tests green pristine+consecutive, all-Sonnet during the 2026-06-06 Opus 529 outage); Step-5a found 3 BLOCKERs → fix-forward agent dispatched (Opus) on the same branch |
 | **Agent** | Test & QA Agent (tests/**) |
 | **Components** | tests/StatsTid.Tests.Regression (Docker-gated; services-postgres in CI per S64) |
 | **KB Refs** | ADR-021 D2, ADR-028, ADR-030, ADR-031; S64 census conventions (`RegressionSeed.SeedEmployeeAsync`, sequential runner, citation-gated assertions) |
-| **Constraint Validator** | pending |
-| **Reviewer Audit** | per trigger table |
-| **Orchestrator Approved** | — |
+| **Constraint Validator** | PASS (2026-06-06, 9/9 — tests/** only, single new file; xunit.runner.json untouched; no shared-fixture edits; zero wall-clock reads (FixedTimeProvider, today=2026-06-15); citation comments outside all 7 SQL raw strings; no assertion-weakening patterns; conventions match BalanceSeriesTests) |
+| **Reviewer Audit** | cycle 1 DONE (2026-06-06, Opus): **3 BLOCKER / 3 WARNING / 4 NOTE** with full 11-area coverage matrix — areas 1/3/6/9/10/11 solidly pinned (straddle test called "strongest in the suite"); areas 2/4/7/8 under-assert. **B1** byte-equality test compares ONE decimal, not raw bodies; **B2** transferable formula never asserted with non-trivial operands (VACATION cap=5 available; suite would pass if `carryoverIn−used−planned` were dropped); **B3** OK-straddle discriminates nothing (CentralAgreementConfigs AC/OK26 is a value-identical placeholder; test asserts only >0 — the pre-flagged failure mode). **W1** marquee Skema reconciliation asserts the endpoint-internal tautology `diff==worked−norm`, never calls GET /month; **W2** consumption split asserts monthly-totals proxy, not used/planned; **W3** test-local AccrualMath replica structurally diverges from production for the employment-start branch (latent — all current seeds have null employment_start). N: mapping literal accepted (internal-class accommodation); seam/seed-hygiene/cap-0 confirmations. → ALL B + W re-dispatched 2026-06-06 (same worktree branch, Opus); NOTE A accepted as-is. Per AGENTS.md self-review constraint the fix pass is Orchestrator-verified, not re-Reviewed on the same concerns |
+| **Orchestrator Approved** | — (pending fix-forward verification) |
 
 **Description**: New Docker-gated regression class(es) for the year-overview endpoint:
 1. **Auth**: employee self 200; employee→foreign 403; leader-with-scope 200; **leader/local-admin OUT-of-scope → 403** (the negative org-scope branch, Step-0b Codex W3; mirror BalanceSeriesTests auth shape).
