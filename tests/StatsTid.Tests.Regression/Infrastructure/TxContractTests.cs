@@ -311,8 +311,11 @@ public sealed class TxContractTests : IAsyncLifetime
             actor_id                    TEXT,
             actor_role                  TEXT,
             correlation_id              UUID,
-            outbox_id                   BIGINT          NOT NULL
+            outbox_id                   BIGINT          NOT NULL,
+            feriedage                   NUMERIC(8,4)
         );
+
+        ALTER TABLE absences_projection ADD COLUMN IF NOT EXISTS feriedage NUMERIC(8,4);
         """;
 
     private static async Task ApplySchemaAsync(string connectionString, CancellationToken ct = default)

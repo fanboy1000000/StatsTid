@@ -162,9 +162,18 @@ public sealed class SkemaEntitlementEligibilityGuardTests : IAsyncLifetime
         // Current month (month-end ≥ today) so the grant's effective_from=today covers the
         // GET month-end anchor and the save date.
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
-        var year = today.Year;
-        var month = today.Month;
-        var saveDate = today; // as-of absence.Date == effective_from (today) → covered
+        // ADR-032 D3 (S66): entitlement-consuming absences on zero-norm days (weekends) are
+        // now rejected 422 — book the next weekday ON OR AFTER today. Coverage is preserved
+        // (eligibility row is effective_from=today, open-ended ⇒ any date ≥ today is covered);
+        // on weekdays this stays the exact as-of == effective_from boundary the test pins.
+        var saveDate = today.DayOfWeek switch
+        {
+            DayOfWeek.Saturday => today.AddDays(2),
+            DayOfWeek.Sunday => today.AddDays(1),
+            _ => today,
+        };
+        var year = saveDate.Year;
+        var month = saveDate.Month;
 
         // Rule-stubbed client: once the eligibility gate passes, the CHILD_SICK POST still
         // runs quota validation through the rule engine (HTTP), so the stub is required for
@@ -253,7 +262,9 @@ public sealed class SkemaEntitlementEligibilityGuardTests : IAsyncLifetime
         await SetBirthDateAsync(Emp001, new DateOnly(1960, 1, 1)); // 66 in 2026
 
         var client = CreateEmployeeClient(CreateRuleStubbedClient());
-        var date = new DateOnly(2026, 3, 14);
+        // 2026-03-16 is a Monday — 2026-03-14 (Saturday) now 422s per ADR-032 D3 (S66):
+        // entitlement-consuming absences on zero-norm days are rejected.
+        var date = new DateOnly(2026, 3, 16);
 
         var rsp = await PostAbsencesAsync(client, 2026, 3, new[] { (date, "SENIOR_DAY") });
 
