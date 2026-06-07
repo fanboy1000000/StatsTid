@@ -118,8 +118,9 @@ The future Test #1 (catalog ↔ DI registrations ↔ EventSerializer parity) par
 | `EmployeeProfileSuperseded` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{predecessorProfileId, newProfileId, employeeId, predecessorEffectiveFrom, newEffectiveFrom, ...}` | interface | S44c |
 | `EmployeeProfileSoftDeleted` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{profileId, employeeId, effectiveTo}` | interface | S44c |
 | `EmployeeEntitlementEligibilitySet` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{employeeId, entitlementType, eligible, effectiveFrom}` | interface (cross-process — mapper in Infrastructure, not Backend.Api) | S59 |
+| `EntitlementBalanceRevalued` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{employeeId, entitlementType, entitlementYear, usedDelta, affectedAbsenceCount, replacements, triggeringProfileEventId}` | interface | S66 |
 
-**Total**: 53 rows (11 new + 42 retrofit). Matches ADR-026 D3 inventory count.
+**Total**: 54 rows (53 through S59 + 1 S66 `EntitlementBalanceRevalued` per ADR-032 D4).
 
 ## Catalog closure status (S44c)
 

@@ -308,7 +308,7 @@ The system must track annual entitlements (budgets) for absence types that have 
 #### Vacation Entitlement
 - Annual vacation entitlement: 25 days (5 weeks) per the Danish Holiday Act (Ferieloven)
 - Entitlement year: 1 September – 31 August (simultaneous earning/accrual model since 2020)
-- Part-time employees: pro-rated by PartTimeFraction
+- Part-time employees: day-count is FLAT (25/5 regardless of fraction — Ferieloven §5 stk.1, ADR-031); consumption is norm-based (`hours ÷ that day's scheduled norm`, the state Ferievejledning mechanism per ADR-032 — one scheduled workday off = 1 day at any fraction; no 5÷N conversion exists in the state-sector authority)
 - Carryover: maximum 5 days transferred to next entitlement year (configurable per agreement: `VacationCarryoverMaxDays`)
 - Remaining vacation must be planned before carryover deadline or is forfeited (with exceptions)
 - Vacation reduces norm fulfillment for the period (hours = days × daily norm)

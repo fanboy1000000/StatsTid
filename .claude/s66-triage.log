@@ -1,0 +1,57 @@
+﻿  Determining projects to restore...
+  All projects are up-to-date for restore.
+  StatsTid.SharedKernel -> C:\StatsTid\src\SharedKernel\StatsTid.SharedKernel\bin\Debug\net8.0\StatsTid.SharedKernel.dll
+  StatsTid.Auth -> C:\StatsTid\src\Auth\StatsTid.Auth\bin\Debug\net8.0\StatsTid.Auth.dll
+  StatsTid.Infrastructure -> C:\StatsTid\src\Infrastructure\StatsTid.Infrastructure\bin\Debug\net8.0\StatsTid.Infrastructure.dll
+  StatsTid.RuleEngine.Api -> C:\StatsTid\src\RuleEngine\StatsTid.RuleEngine.Api\bin\Debug\net8.0\StatsTid.RuleEngine.Api.dll
+  StatsTid.Backend.Api -> C:\StatsTid\src\Backend\StatsTid.Backend.Api\bin\Debug\net8.0\StatsTid.Backend.Api.dll
+  StatsTid.Integrations.Payroll -> C:\StatsTid\src\Integrations\StatsTid.Integrations.Payroll\bin\Debug\net8.0\StatsTid.Integrations.Payroll.dll
+  StatsTid.Tests.Regression -> C:\StatsTid\tests\StatsTid.Tests.Regression\bin\Debug\net8.0\StatsTid.Tests.Regression.dll
+Test run for C:\StatsTid\tests\StatsTid.Tests.Regression\bin\Debug\net8.0\StatsTid.Tests.Regression.dll (.NETCoreApp,Version=v8.0)
+A total of 1 test files matched the specified pattern.
+dotnet : [xUnit.net 00:02:21.73]     StatsTid.Tests.Regression.Outbox.SkemaEntitlementEligibilityGuardTests.ChildSick_AfterHrGrantsEligibility_PostSave_Succeeds_AndPersists [FAIL]
+At line:1 char:17
++ ... :\StatsTid; dotnet test tests\StatsTid.Tests.Regression --filter "Ful ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([xUnit.net 00:0...Persists [FAIL]:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  Failed StatsTid.Tests.Regression.Outbox.SkemaEntitlementEligibilityGuardTests.ChildSick_AfterHrGrantsEligibility_PostSave_Succeeds_AndPersists [672 ms]
+  Error Message:
+   Assert.Equal() Failure: Values differ
+Expected: OK
+Actual:   UnprocessableEntity
+  Stack Trace:
+     at StatsTid.Tests.Regression.Outbox.SkemaEntitlementEligibilityGuardTests.ChildSick_AfterHrGrantsEligibility_PostSave_Succeeds_AndPersists() in C:\StatsTid\tests\StatsTid.Tests.Regression\Outbox\SkemaEntitlementEligibilityGuardTests.cs:line 186
+--- End of stack trace from previous location ---
+[xUnit.net 00:02:45.61]     StatsTid.Tests.Regression.Outbox.SkemaEntitlementEligibilityGuardTests.Senior_EmployeeOver62Throughout_PostSave_Succeeds_AndPersists [FAIL]
+  Failed StatsTid.Tests.Regression.Outbox.SkemaEntitlementEligibilityGuardTests.Senior_EmployeeOver62Throughout_PostSave_Succeeds_AndPersists [326 ms]
+  Error Message:
+   Assert.Equal() Failure: Values differ
+Expected: OK
+Actual:   UnprocessableEntity
+  Stack Trace:
+     at StatsTid.Tests.Regression.Outbox.SkemaEntitlementEligibilityGuardTests.Senior_EmployeeOver62Throughout_PostSave_Succeeds_AndPersists() in C:\StatsTid\tests\StatsTid.Tests.Regression\Outbox\SkemaEntitlementEligibilityGuardTests.cs:line 260
+--- End of stack trace from previous location ---
+[xUnit.net 00:05:00.78]     StatsTid.Tests.Regression.Infrastructure.TxContractTests.AbsenceProjectionRepo_InsertAsync_ParticipatesInCallerTx [FAIL]
+  Failed StatsTid.Tests.Regression.Infrastructure.TxContractTests.AbsenceProjectionRepo_InsertAsync_ParticipatesInCallerTx [1 ms]
+  Error Message:
+   Docker.DotNet.DockerApiException : Docker API responded with status code=Conflict, response={"message":"container d194b29be72d752ac595e049267d455209d4c1945dc8c94e17b0f1b34ec0f78f is not running"}
+
+  Stack Trace:
+     at Docker.DotNet.DockerClient.HandleIfErrorResponseAsync(HttpStatusCode statusCode, HttpResponseMessage response, IEnumerable`1 handlers)
+   at Docker.DotNet.DockerClient.MakeRequestAsync(IEnumerable`1 errorHandlers, HttpMethod method, String path, IQueryString queryString, IRequestContent body, IDictionary`2 headers, TimeSpan timeout, CancellationToken token)
+   at Docker.DotNet.ExecOperations.ExecCreateContainerAsync(String id, ContainerExecCreateParameters parameters, CancellationToken cancellationToken)
+   at DotNet.Testcontainers.Clients.DockerContainerOperations.ExecAsync(String id, IList`1 command, CancellationToken ct) in /_/src/Testcontainers/Clients/DockerContainerOperations.cs:line 150
+   at Testcontainers.PostgreSql.PostgreSqlBuilder.WaitUntil.UntilAsync(IContainer container) in /_/src/Testcontainers.PostgreSql/PostgreSqlBuilder.cs:line 152
+   at DotNet.Testcontainers.Containers.DockerContainer.CheckReadinessAsync(WaitStrategy waitStrategy, CancellationToken ct) in /_/src/Testcontainers/Containers/DockerContainer.cs:line 532
+   at DotNet.Testcontainers.Configurations.WaitStrategy.<>c__DisplayClass24_0.<<WaitUntilAsync>g__UntilAsync|0>d.MoveNext() in /_/src/Testcontainers/Configurations/WaitStrategies/WaitStrategy.cs:line 184
+--- End of stack trace from previous location ---
+   at DotNet.Testcontainers.Configurations.WaitStrategy.WaitUntilAsync(Func`1 wait, TimeSpan interval, TimeSpan timeout, Int32 retries, CancellationToken ct) in /_/src/Testcontainers/Configurations/WaitStrategies/WaitStrategy.cs:line 213
+   at DotNet.Testcontainers.Containers.DockerContainer.CheckReadinessAsync(IEnumerable`1 waitStrategies, CancellationToken ct) in /_/src/Testcontainers/Containers/DockerContainer.cs:line 550
+   at DotNet.Testcontainers.Containers.DockerContainer.UnsafeStartAsync(CancellationToken ct) in /_/src/Testcontainers/Containers/DockerContainer.cs:line 477
+   at DotNet.Testcontainers.Containers.DockerContainer.StartAsync(CancellationToken ct) in /_/src/Testcontainers/Containers/DockerContainer.cs:line 280
+   at StatsTid.Tests.Regression.Segmentation.TestFixtures.DockerHarness.StartAsync() in C:\StatsTid\tests\StatsTid.Tests.Regression\Segmentation\TestFixtures.cs:line 435
+   at StatsTid.Tests.Regression.Infrastructure.TxContractTests.InitializeAsync() in C:\StatsTid\tests\StatsTid.Tests.Regression\Infrastructure\TxContractTests.cs:line 46
+
+Failed!  - Failed:     3, Passed:    75, Skipped:     0, Total:    78, Duration: 5 m 6 s - StatsTid.Tests.Regression.dll (net8.0)
