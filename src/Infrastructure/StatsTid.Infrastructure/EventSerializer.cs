@@ -59,6 +59,8 @@ public static class EventSerializer
         ["WageTypeMappingSuperseded"] = typeof(WageTypeMappingSuperseded),
         // Sprint 15: Entitlement management events
         ["EntitlementBalanceAdjusted"] = typeof(EntitlementBalanceAdjusted),
+        // Sprint 66: future-dated absence revaluation on profile change (ADR-032 D4).
+        ["EntitlementBalanceRevalued"] = typeof(EntitlementBalanceRevalued),
         ["EntitlementConfigSeeded"] = typeof(EntitlementConfigSeeded),
         // Sprint 30: Entitlement config lifecycle events (ADR-020 D2 + Phase 4d-2)
         ["EntitlementConfigCreated"] = typeof(EntitlementConfigCreated),
