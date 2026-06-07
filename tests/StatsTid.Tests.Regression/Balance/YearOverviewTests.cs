@@ -297,6 +297,34 @@ public sealed class YearOverviewTests : IAsyncLifetime
         Assert.Equal(expectedSaldo, marchSaldo);
     }
 
+    /// <summary>
+    /// S66 / TASK-6607 / ADR-032 D1+D2 — the year-overview <c>afholdt</c> sums the RECORDED
+    /// <c>feriedage</c>, NOT a re-derived <c>hours/7.4</c>. A half-timer's natural full day is
+    /// 3.7h, whose RECORDED feriedage under D1 is 1.0 (3.7 ÷ fullDayHours(3.7)). Seeding that row
+    /// with an explicit feriedage = 1.0 must surface <c>afholdt = 1.0</c> in March — NOT the 0.5
+    /// that the pre-S66 <c>3.7/7.4</c> re-derivation would have produced. This discriminates
+    /// "sums recorded feriedage" from "re-derives from hours" (TASK-6605).
+    /// </summary>
+    [Fact]
+    public async Task DayEquivalents_RecordedFeriedage_IsSummed_NotRederivedFromHours()
+    {
+        var employeeId = await CreateEmployeeAsync(Emp001OrgId, "AC", "OK24");
+        await RegressionSeed.SeedEmployeeAsync(
+            _harness.ConnectionString, employeeId, Emp001OrgId, "AC", "OK24");
+
+        // A 3.7h VACATION row whose RECORDED feriedage is the ADR-032 D1 value 1.0 (half-timer's
+        // full day), explicitly passed (overriding the hours/7.4 default of 0.5).
+        await SeedAbsenceProjectionRowAsync(
+            employeeId, new DateOnly(2025, 3, 10), "VACATION", hours: 3.7m, feriedage: 1.0m);
+
+        var client = MakeFixedTodayClient(EmployeeBearerToken(employeeId, Emp001OrgId));
+        var body = await GetYearOverviewAsync(client, employeeId, 2025);
+
+        var vacation = GetCategory(body, "VACATION");
+        var marchAfholdt = vacation.GetProperty("afholdt").EnumerateArray().ToList()[2].GetDecimal();
+        Assert.Equal(1.0m, marchAfholdt); // recorded 1.0, NOT the re-derived 3.7/7.4 = 0.5
+    }
+
     // ════════════════════════════════════════════════════════════════════════
     // 4. Consumption reconciliation — used/planned split by ABSENCE DATE.
     // ════════════════════════════════════════════════════════════════════════
@@ -1694,25 +1722,40 @@ public sealed class YearOverviewTests : IAsyncLifetime
     /// <summary>
     /// Inserts a single row into <c>absences_projection</c> for the given employee / date /
     /// absence_type / hours. Citation: absences_projection schema at
-    /// tests/StatsTid.Tests.Regression/Outbox/ProjectionSchemaTestFixture.cs:49-66.
+    /// tests/StatsTid.Tests.Regression/Outbox/ProjectionSchemaTestFixture.cs (now incl. feriedage).
+    ///
+    /// <para>
+    /// <b>S66 / TASK-6607 / ADR-032 D2 — feriedage population.</b> The year-overview
+    /// <c>afholdt</c>/<c>saldo</c> reads now SUM the recorded <c>absences_projection.feriedage</c>
+    /// column (BalanceEndpoints, TASK-6605) instead of re-deriving <c>hours/7.4</c>. So the seed
+    /// MUST populate <c>feriedage</c>. The <paramref name="feriedage"/> parameter DEFAULTS to
+    /// <c>null</c> ⇒ <c>ROUND(hours/7.4, 4)</c> (the backfill convention the endpoint falls back to
+    /// for null rows), which is byte-identical to the pre-S66 re-derivation — so EVERY existing
+    /// full-timer call site (7.4h ⇒ 1.0, 3.7h ⇒ 0.5) is preserved unchanged. New call sites pass an
+    /// explicit ADR-032 D1 norm-based value (e.g. a half-timer's 7.4h day ⇒ 2.0).
+    /// </para>
     /// </summary>
     private async Task SeedAbsenceProjectionRowAsync(
-        string employeeId, DateOnly date, string absenceType, decimal hours)
+        string employeeId, DateOnly date, string absenceType, decimal hours, decimal? feriedage = null)
     {
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
         await conn.OpenAsync();
 
+        // ADR-032 D2: default feriedage = the backfill convention ROUND(hours/7.4, 4) (preserves
+        // every pre-S66 call site byte-for-byte). Computed test-side so the SQL stays parameterized.
+        var resolvedFeriedage = feriedage ?? Math.Round(hours / 7.4m, 4, MidpointRounding.AwayFromZero);
+
         // Citation comments outside the raw SQL string (S64 lesson: comments inside raw strings
         // are sent to Postgres and cause 42601 syntax errors).
-        // absences_projection schema: ProjectionSchemaTestFixture.cs:49-66.
-        // employee_id, date, absence_type, hours, agreement_code, ok_version are required.
+        // absences_projection schema: ProjectionSchemaTestFixture.cs (event_id, employee_id, date,
+        // absence_type, hours, feriedage, agreement_code, ok_version are required/written here).
         await using var cmd = new NpgsqlCommand(
             """
             INSERT INTO absences_projection
-                (event_id, employee_id, date, absence_type, hours,
+                (event_id, employee_id, date, absence_type, hours, feriedage,
                  agreement_code, ok_version, occurred_at, actor_id, actor_role, outbox_id)
             VALUES
-                (gen_random_uuid(), @emp, @date, @type, @hours,
+                (gen_random_uuid(), @emp, @date, @type, @hours, @feriedage,
                  'AC', 'OK24', NOW(), 'test-seed', 'Employee', -1)
             ON CONFLICT (event_id) DO NOTHING
             """, conn);
@@ -1720,6 +1763,7 @@ public sealed class YearOverviewTests : IAsyncLifetime
         cmd.Parameters.AddWithValue("date", date);
         cmd.Parameters.AddWithValue("type", absenceType);
         cmd.Parameters.AddWithValue("hours", hours);
+        cmd.Parameters.AddWithValue("feriedage", resolvedFeriedage);
         await cmd.ExecuteNonQueryAsync();
     }
 

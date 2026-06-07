@@ -215,4 +215,47 @@ public class AbsenceRuleTests
     {
         Assert.True(AbsenceRule.GrantsNormCredit(absenceType));
     }
+
+    // --- S66 / TASK-6607 / ADR-032 P6 — payroll/norm-credit byte-identical pin ---
+
+    /// <summary>
+    /// ADR-032 P6 / Census C: the AbsenceRule norm-credit path is UNTOUCHED by the consumption
+    /// (feriedage) cutover — the part-timer's omitted-hours default stays the flat
+    /// <c>7.4 × partTimeFraction</c> fallback (hours-only payroll flow; NO day-count surface). A
+    /// 0.5 part-timer's defaulted VACATION day credits exactly 3.7h. (Sibling of
+    /// <see cref="PartTime_ProRatedAbsenceHours"/> — pinned on the GetNormCreditHours aggregate so a
+    /// future consumption-side change cannot silently alter the norm-credit hours.)
+    /// </summary>
+    [Fact]
+    public void PartTime_NormCreditHours_StillSevenPointFourTimesFraction_Unchanged()
+    {
+        var profile = CreateProfile(partTime: 0.5m);
+        var absences = new List<AbsenceEntry>
+        {
+            CreateAbsence(Monday, AbsenceTypes.Vacation, 0m), // 0 = use the 7.4×fraction default
+        };
+
+        var credits = AbsenceRule.GetNormCreditHours(profile, absences, Monday, Monday.AddDays(6));
+
+        Assert.Equal(3.7m, credits); // 7.4 × 0.5 — byte-identical to pre-ADR-032
+    }
+
+    /// <summary>
+    /// ADR-032 P6: a FULL-TIME employee's norm credit is byte-identical too — an explicit 7.4h
+    /// VACATION day credits exactly 7.4h (full-timers are unaffected by the part-time-fraction
+    /// consumption fix; the norm-credit side never changed).
+    /// </summary>
+    [Fact]
+    public void FullTime_NormCreditHours_Unchanged()
+    {
+        var profile = CreateProfile(partTime: 1.0m);
+        var absences = new List<AbsenceEntry>
+        {
+            CreateAbsence(Monday, AbsenceTypes.Vacation, 7.4m),
+        };
+
+        var credits = AbsenceRule.GetNormCreditHours(profile, absences, Monday, Monday.AddDays(6));
+
+        Assert.Equal(7.4m, credits);
+    }
 }

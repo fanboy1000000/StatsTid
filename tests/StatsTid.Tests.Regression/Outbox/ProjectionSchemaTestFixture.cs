@@ -52,6 +52,13 @@ internal static class ProjectionSchemaTestFixture
             date                        DATE            NOT NULL,
             absence_type                TEXT            NOT NULL,
             hours                       NUMERIC(6,2)    NOT NULL,
+            -- S66 / TASK-6602 / ADR-032 D2 — the authoritative per-absence consumption
+            -- record (feriedage). NULLABLE: pre-S66 rows carry NULL until backfilled to
+            -- hours/7.4. Mirrors docker/postgres/init.sql:1543. This shared test-fixture
+            -- DDL is a cross-process contract (S64 lesson) — AbsenceProjectionRepository
+            -- and ProjectionBackfillService both read/write this column, so the column
+            -- MUST be present here or every AbsenceRegistered projection path 42703-errors.
+            feriedage                   NUMERIC(8,4)    NULL,
             agreement_code              TEXT            NOT NULL,
             ok_version                  TEXT            NOT NULL,
             occurred_at                 TIMESTAMPTZ     NOT NULL,

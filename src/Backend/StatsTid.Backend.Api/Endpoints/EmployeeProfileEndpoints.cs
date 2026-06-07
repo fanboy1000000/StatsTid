@@ -480,12 +480,15 @@ public static class EmployeeProfileEndpoints
                 var positionChanged = !string.Equals(preUpdate.Position, body.Position, StringComparison.Ordinal);
                 if (fractionChanged || positionChanged)
                 {
+                    // ADR-032 D4: the revaluation event rides the CONSOLIDATED employee stream
+                    // (balance-event lineage, ADR-018 D6) — NOT this PUT's employee-profile-{id}
+                    // stream. Caught by the Adr032RevaluationTests stream pin (TASK-6607).
                     await RevalueFutureAbsencesAsync(
                         conn, tx, employeeId, body, auditUser!.PrimaryOrgId,
                         triggeringProfileEventId, actor, auditCtx,
                         consumptionCalculator, profileResolver, absenceProjectionRepo,
                         entitlementBalanceRepo, entitlementConfigRepo, outbox, revaluedAuditMapper,
-                        auditRepo, streamId, ct);
+                        auditRepo, $"employee-{employeeId}", ct);
                 }
 
                 await tx.CommitAsync(ct);

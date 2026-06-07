@@ -237,15 +237,32 @@ public sealed class SkemaAccrualCapTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// N consecutive distinct calendar dates starting at <paramref name="start"/>. Each absence row
-    /// must sit on its own date (the per-day norm cap rejects &gt;7,4h on one date), so "book K
-    /// vacation days" is K rows on K distinct dates — 1 row of 7,4h = 1 day.
+    /// N distinct WEEKDAY dates starting at <paramref name="start"/> (weekends skipped). Each
+    /// absence row must sit on its own date (the per-day norm cap rejects &gt;7,4h on one date), so
+    /// "book K vacation days" is K rows on K distinct dates — 1 row of 7,4h = 1 day.
+    ///
+    /// <para>
+    /// <b>S66 / TASK-6607 / ADR-032 D3 — weekends excluded.</b> Pre-ADR-032 this stepped through
+    /// CONSECUTIVE calendar days (incl. Sat/Sun), which the old flat-7,4 cap accepted. ADR-032 D3
+    /// now rejects an entitlement-consuming VACATION row on a zero-norm (weekend) day with
+    /// <c>422 "Entitlement absence on a non-working day"</c>. The forskud-cap tests are about the
+    /// QUOTA cap (25 allowed / 26 rejected), NOT the weekend guard, so they must book WEEKDAYS only
+    /// — otherwise a weekend row 422s for the wrong reason. Skipping weekends preserves these
+    /// tests' INTENT (fraction-independent flat forskud cap) under the new D3 guard; the full-timer
+    /// invariant they pin is unchanged. (Citation-gated rewrite per the S64 discipline.)
+    /// </para>
     /// </summary>
     private static DateOnly[] DistinctDays(DateOnly start, int count)
     {
         var days = new DateOnly[count];
+        var d = start;
         for (var i = 0; i < count; i++)
-            days[i] = start.AddDays(i);
+        {
+            while (d.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
+                d = d.AddDays(1);
+            days[i] = d;
+            d = d.AddDays(1);
+        }
         return days;
     }
 

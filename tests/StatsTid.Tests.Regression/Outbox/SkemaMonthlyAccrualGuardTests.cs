@@ -290,17 +290,32 @@ public sealed class SkemaMonthlyAccrualGuardTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// N consecutive distinct calendar dates starting at <paramref name="start"/>. Each absence
-    /// row must sit on its own date (the per-day norm cap rejects &gt;7,4h on a single date), so
-    /// "book K vacation days" is modelled as K rows on K distinct dates. Weekend filtering is
-    /// unnecessary — the quota/accrual gate keys off entitlement type + day-count, not the
-    /// weekday.
+    /// N distinct WEEKDAY dates starting at <paramref name="start"/> (weekends skipped). Each
+    /// absence row must sit on its own date (the per-day norm cap rejects &gt;7,4h on a single
+    /// date), so "book K vacation days" is modelled as K rows on K distinct dates.
+    ///
+    /// <para>
+    /// <b>S66 / TASK-6607 / ADR-032 D3 — weekends now excluded.</b> The original comment ("weekend
+    /// filtering is unnecessary") held under the pre-ADR-032 flat-7,4 cap, which accepted weekend
+    /// entitlement rows. ADR-032 D3 now rejects an entitlement-consuming row on a zero-norm
+    /// (weekend) day with <c>422 "Entitlement absence on a non-working day"</c> — so a multi-day
+    /// VACATION/SPECIAL_HOLIDAY batch that strode through Sat/Sun would 422 on the weekend row
+    /// before the quota/accrual gate these tests target is ever reached. Skipping weekends keeps
+    /// these tests pinned to the FORSKUD/EARNED cap they assert (full-timer behaviour unchanged).
+    /// Citation-gated rewrite per the S64 discipline.
+    /// </para>
     /// </summary>
     private static DateOnly[] DistinctDays(DateOnly start, int count)
     {
         var days = new DateOnly[count];
+        var d = start;
         for (var i = 0; i < count; i++)
-            days[i] = start.AddDays(i);
+        {
+            while (d.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
+                d = d.AddDays(1);
+            days[i] = d;
+            d = d.AddDays(1);
+        }
         return days;
     }
 
