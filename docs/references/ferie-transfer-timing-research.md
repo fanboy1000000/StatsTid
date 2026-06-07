@@ -29,9 +29,11 @@ PAV verbatim: *"Ferieaftalen er et supplement til ferieloven. Aftalen erstatter 
 Sources: pav.medst.dk/pav/kapitel-23-ferie; cirkulaere.medst.dk/media/1372/021-24.pdf (§3, §4, §7); danskelove.dk (§26 stk.3).
 
 ### 5. Særlige feriedage live on a wholly different timeline (model-vs-law gap)
-NOT regulated by the Ferielov. Accrued by **calendar year** (1 Jan–31 Dec, 0.42 days/month ≈ 5/year); taken **1 May (year after accrual)–30 April**; untaken days without a written carryover agreement are paid as a 2½% godtgørelse at period end (30 April). Cirkulære 021-24 §12 stk.2 verbatim: *"Særlige feriedage afvikles i det år, der går fra 1. maj til 30. april (afholdelsesperioden for særlige feriedage), og som følger efter optjeningsåret (kalenderåret)."*
+> **§-citation correction (S67, adversarially re-verified 9/9 — `vacation-settlement-law-research.md`):** the 2½% godtgørelse below is **Cirkulære 021-24 §15 stk.2 (default cash payout if no transfer agreement) + §17 (the 2½% calculation)** — **NOT** §12 stk.2. §12 stk.2 is ONLY the taking window. The S65 verdict conflated the two; the window quote below is correct, the godtgørelse §-attribution was wrong.
+
+NOT regulated by the Ferielov. Accrued by **calendar year** (1 Jan–31 Dec, 0.42 days/month ≈ 5/year); taken **1 May (year after accrual)–30 April** (the *afvikles* window = Cirkulære 021-24 §12 stk.2); untaken days without a written transfer agreement are paid as a **2½% cash godtgørelse** of the ferieberettigende løn at period end (Cirkulære 021-24 **§15 stk.2 + §17**). §12 stk.2 verbatim (the window): *"Særlige feriedage afvikles i det år, der går fra 1. maj til 30. april (afholdelsesperioden for særlige feriedage), og som følger efter optjeningsåret (kalenderåret)."*
 **System impact:** the modeled ResetMonth-9/carryover-0 SPECIAL_HOLIDAY (danish-agreements.md:110) is a deliberate simplification — recorded as a ROADMAP follow-up (owner-ruled 2026-06-06); invisible in S65 (carryover 0 → "–").
-Sources: cirkulaere.medst.dk 021-24 (§12 stk.2); statens-adm.dk (særlige feriedage lønsupport, worked example: accrual 2022 → taken 1 May 2023–30 Apr 2024); dm.dk; pav.medst.dk.
+Sources: cirkulaere.medst.dk 021-24 (§12 stk.2 window / §15 stk.2 + §17 godtgørelse); statens-adm.dk (særlige feriedage lønsupport, worked example: accrual 2022 → taken 1 May 2023–30 Apr 2024); dm.dk; pav.medst.dk.
 
 ## Killed claims (2/25)
 - "Transferred vacation may be used until 31 December of the following year" — refuted 1-2 (over-generalized; the usage boundary of transferred days follows the next afholdelsesperiode).

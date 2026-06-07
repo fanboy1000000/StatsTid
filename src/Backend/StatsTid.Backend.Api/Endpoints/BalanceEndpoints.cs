@@ -856,7 +856,7 @@ public static class BalanceEndpoints
                 //   VACATION identity: max(0, raw − cap) ≡ max(0, 20 − used) = the Feriefonden-lost
                 //     figure (cap 5, quota 25 ⇒ raw 25 − used; 25 − used − 5 = 20 − used).
                 //   SPECIAL_HOLIDAY expiring = godtgørelse-bound days (the untaken særlige feriedage
-                //     convert to the 2½% godtgørelse — Cirkulære 021-24 §12 stk.2): money, not loss.
+                //     convert to the 2½% cash godtgørelse — Cirkulære 021-24 §15 stk.2 + §17): money, not loss.
                 // This is STILL a projection, not settlement (D7 deferred).
                 // ResetMonth-9 → 31 Aug of the selected year (closes ferieår year-1, spanning
                 // Sep year-1 .. Aug year). Calendar types → 31 Dec of the selected year (ferieår
