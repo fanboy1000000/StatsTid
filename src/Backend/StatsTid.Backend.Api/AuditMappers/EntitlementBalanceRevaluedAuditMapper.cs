@@ -19,14 +19,18 @@ public sealed class EntitlementBalanceRevaluedAuditMapper : IAuditProjectionMapp
 {
     public AuditProjectionRowData Map(EntitlementBalanceRevalued @event, AuditProjectionContext context)
     {
+        // Null-tolerant per the mapper-family convention: the catalog visibility test
+        // instantiates events via Activator.CreateInstance, which bypasses `required`
+        // init — Replacements arrives null there (never in production emission).
+        var replacements = @event.Replacements ?? Array.Empty<AbsenceFeriedageReplacement>();
         var details = new
         {
             employeeId = @event.EmployeeId,
             entitlementType = @event.EntitlementType,
             entitlementYear = @event.EntitlementYear,
             usedDelta = @event.UsedDelta,
-            affectedAbsenceCount = @event.Replacements.Count,
-            replacements = @event.Replacements,
+            affectedAbsenceCount = replacements.Count,
+            replacements,
             triggeringProfileEventId = @event.TriggeringProfileEventId,
         };
         return new AuditProjectionRowData(
