@@ -392,6 +392,8 @@ The pristine leg ran THREE times on fresh Docker sessions (FAIL-002 protocol: en
 | Frontend (vitest) | 176 (+3) | all passing |
 | **Total** | **1278 (+24)** | — |
 
+**CI verification (backfilled post-close):** the close `081cc74` went red on ONE test — `AuditProjectionVisibilityTests` NRE'd on the new mapper because the close commit's **catalog row pulled the S66 mapper into the catalog-driven test's scope for the first time** (the catalog doc is part of the test contract — the S64 shared-fixture lesson, doc edition; locally green because the last full run predated the row). Scoped post-7a fix-forward `e0d1dc3` (null-tolerant `Map` per the 53-mapper family convention; scoped Codex review Clean) → **whole-workflow GREEN run [`27099789679`](https://github.com/fanboy1000000/StatsTid/actions/runs/27099789679), all six jobs**. Post-close label rename `f2052fc` (Feriefridage → Særlige feriedage, user-directed) also whole-workflow green ([`27100001961`](https://github.com/fanboy1000000/StatsTid/actions/runs/27100001961)).
+
 ## Agent Effectiveness
 
 | Metric | Value |
