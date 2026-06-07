@@ -1,8 +1,16 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text;
+using System.Text.Json;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Npgsql;
 using StatsTid.Auth;
+using StatsTid.Infrastructure.Outbox;
+using StatsTid.RuleEngine.Api.Contracts;
+using StatsTid.RuleEngine.Api.Rules;
 using StatsTid.SharedKernel.Security;
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Segmentation;
@@ -140,29 +148,65 @@ public sealed class ProjectionParityTests : IAsyncLifetime
 
     /// <summary>
     /// Absences parity: same shape as the time-entries test for absences_projection.
+    ///
+    /// <para>
+    /// S66 / TASK-6607a (ADR-032 D5): the N writes were MIGRATED off the retired
+    /// <c>POST /api/absences</c> (which bypassed all consumption validation) onto
+    /// <c>POST /api/skema/{employeeId}/save</c> — one save per day, mirroring the original
+    /// per-day POST loop. The coverage class is unchanged: N unpublished outbox rows before
+    /// drain, then live projection rows vs <c>OfType&lt;AbsenceRegistered&gt;</c> on
+    /// <c>events</c> must agree (same count, same date sequence). The Skema save validates
+    /// everything the old POST skipped, so a FULLY-SEEDED full-time employee is stood up
+    /// (user + open dated 1.0 <c>employee_profiles</c> + open <c>user_agreement_codes</c> AC)
+    /// and bookings are full-time WEEKDAY 7.4h VACATION days (byte-identical valuation
+    /// before/after the parallel ADR-032 D1 cutover). The <see cref="IHttpClientFactory"/>
+    /// is stubbed to drive the REAL <see cref="EntitlementValidationRule.Evaluate"/> over
+    /// the validate-entitlement seam. Publisher stop/start AND the writes all ride ONE host
+    /// derived via <c>WithWebHostBuilder</c> so the stall + drain govern that host's writes.
+    /// </para>
     /// </summary>
     [Fact]
     public async Task Absences_ProjectionAndEventsAgree_AfterPublisherDrain()
     {
-        var client = _factory.CreateClient();
-        await _factory.StopPublisherAsync();
+        var stubbedFactory = _factory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureTestServices(services =>
+            {
+                services.AddSingleton<IHttpClientFactory>(new RuleEngineStubFactory());
+            });
+        });
+        var client = stubbedFactory.CreateClient();
+        await StopPublisherAsync(stubbedFactory.Services);
 
         var employeeId = "EMP_PARITY_A_" + Guid.NewGuid().ToString("N").Substring(0, 8);
         var streamId = $"employee-{employeeId}";
+        await SeedFullTimeEmployeeAsync(employeeId, "AC");
         var token = MintEmployeeToken(employeeId);
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
+        // N VACATION days on consecutive WEEKDAYS (Mon 2026-05-04 … Fri 2026-05-08) — all
+        // weekdays, in the 2025 ferieår (reset month 9), N ≪ the full annual 25 forskud cap
+        // for a whole-ferieår full-timer ⇒ each save succeeds. One Skema save per day mirrors
+        // the original per-day POST loop and keeps the per-day-norm cap (7.4h/day) satisfied.
+        var weekdayStart = new DateOnly(2026, 5, 4); // Monday
         for (int i = 0; i < N; i++)
         {
-            var rsp = await client.PostAsJsonAsync("/api/absences", new
+            var date = weekdayStart.AddDays(i); // Mon..Fri, all weekdays
+            var rsp = await client.PostAsJsonAsync($"/api/skema/{employeeId}/save", new
             {
-                employeeId,
-                date = new DateOnly(2026, 5, 1).AddDays(i).ToString("yyyy-MM-dd"),
-                absenceType = "VACATION",
-                hours = 7.4m,
-                agreementCode = "HK",
+                year = date.Year,
+                month = date.Month,
+                absences = new[]
+                {
+                    new
+                    {
+                        date = date.ToString("yyyy-MM-dd"),
+                        absenceType = "VACATION",
+                        hours = 7.4m,
+                    },
+                },
             });
-            Assert.Equal(HttpStatusCode.Created, rsp.StatusCode);
+            Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
         }
 
         await using var verifyConn = new NpgsqlConnection(_harness.ConnectionString);
@@ -180,7 +224,7 @@ public sealed class ProjectionParityTests : IAsyncLifetime
         }
 
         // (2) Drain.
-        await _factory.StartPublisherAsync();
+        await StartPublisherAsync(stubbedFactory.Services);
         await WaitForOutboxDrainedAsync(streamId, "AbsenceRegistered", expected: N, timeoutMs: 15_000);
 
         // (3) Events count.
@@ -302,5 +346,107 @@ public sealed class ProjectionParityTests : IAsyncLifetime
             name: employeeId,
             role: StatsTidRoles.Employee,
             agreementCode: "HK");
+    }
+
+    // ── S66 TASK-6607a: Skema-save seeding scaffold (mirrors SkemaMonthlyAccrualGuardTests) ──
+
+    /// <summary>
+    /// Stands up a fully-seeded full-time employee so the migrated VACATION Skema saves pass
+    /// every consumption-validation gate the retired POST skipped: a user row, an OPEN
+    /// full-time <c>employee_profiles</c> row (1.0, '0001-01-01' — covers the MONTHLY_ACCRUAL
+    /// anchor), and an OPEN <c>user_agreement_codes</c> row. Verbatim seeder shape from
+    /// <see cref="SkemaMonthlyAccrualGuardTests"/>.
+    /// </summary>
+    private async Task SeedFullTimeEmployeeAsync(string employeeId, string agreementCode)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+
+        await using (var userCmd = new NpgsqlCommand(
+            """
+            INSERT INTO users (user_id, username, password_hash, display_name, email,
+                               primary_org_id, agreement_code, ok_version, is_active)
+            VALUES (@u, @u, 'dev-only', 'S66 Parity Migration Test User', NULL, 'STY01', @ac, 'OK24', TRUE)
+            ON CONFLICT (user_id) DO NOTHING
+            """, conn))
+        {
+            userCmd.Parameters.AddWithValue("u", employeeId);
+            userCmd.Parameters.AddWithValue("ac", agreementCode);
+            await userCmd.ExecuteNonQueryAsync();
+        }
+
+        await using (var profileCmd = new NpgsqlCommand(
+            """
+            INSERT INTO employee_profiles (profile_id, employee_id, part_time_fraction, effective_from, effective_to, version)
+            VALUES (gen_random_uuid(), @e, 1.0, '0001-01-01', NULL, 1)
+            ON CONFLICT (employee_id, effective_from) DO UPDATE SET part_time_fraction = EXCLUDED.part_time_fraction
+            """, conn))
+        {
+            profileCmd.Parameters.AddWithValue("e", employeeId);
+            await profileCmd.ExecuteNonQueryAsync();
+        }
+
+        await using (var agreementCmd = new NpgsqlCommand(
+            """
+            INSERT INTO user_agreement_codes (assignment_id, user_id, agreement_code, effective_from, effective_to, version)
+            VALUES (gen_random_uuid(), @u, @a, '0001-01-01', NULL, 1)
+            ON CONFLICT (user_id, effective_from) DO UPDATE SET agreement_code = EXCLUDED.agreement_code
+            """, conn))
+        {
+            agreementCmd.Parameters.AddWithValue("u", employeeId);
+            agreementCmd.Parameters.AddWithValue("a", agreementCode);
+            await agreementCmd.ExecuteNonQueryAsync();
+        }
+    }
+
+    /// <summary>
+    /// Stops the <see cref="OutboxPublisher"/> on the SUPPLIED host's provider — the
+    /// rule-stubbed write path rides a host derived via <c>WithWebHostBuilder</c>, so the
+    /// stall must apply to that host (not the base <c>_factory</c>). Same resolution path as
+    /// <see cref="StatsTidWebApplicationFactory.StopPublisherAsync"/>.
+    /// </summary>
+    private static async Task StopPublisherAsync(IServiceProvider services)
+    {
+        var publisher = services.GetServices<IHostedService>().OfType<OutboxPublisher>().Single();
+        await publisher.StopAsync(CancellationToken.None);
+    }
+
+    /// <summary>Companion to <see cref="StopPublisherAsync"/> on the same supplied host.</summary>
+    private static async Task StartPublisherAsync(IServiceProvider services)
+    {
+        var publisher = services.GetServices<IHostedService>().OfType<OutboxPublisher>().Single();
+        await publisher.StartAsync(CancellationToken.None);
+    }
+
+    /// <summary>
+    /// Rule-engine stub: drives the REAL <see cref="EntitlementValidationRule.Evaluate"/>
+    /// over the <c>/api/rules/validate-entitlement</c> seam (the in-process WAF has no
+    /// rule-engine container). Identical to the sibling Skema-Docker suites.
+    /// </summary>
+    private sealed class RuleEngineStubFactory : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => new(new RuleEngineStubHandler(), disposeHandler: false);
+    }
+
+    private sealed class RuleEngineStubHandler : HttpMessageHandler
+    {
+        private static readonly JsonSerializerOptions Camel = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+            if (!path.EndsWith("/api/rules/validate-entitlement", StringComparison.Ordinal))
+                return new HttpResponseMessage(HttpStatusCode.NotFound);
+
+            var json = await request.Content!.ReadAsStringAsync(cancellationToken);
+            var req = JsonSerializer.Deserialize<ValidateEntitlementRequest>(json, Camel)!;
+            var result = EntitlementValidationRule.Evaluate(req);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    JsonSerializer.Serialize(result, Camel), Encoding.UTF8, "application/json"),
+            };
+        }
     }
 }

@@ -348,6 +348,22 @@ export function SkemaGrid({
     [onCellChange]
   )
 
+  // ADR-032 D3 — norm prefill for absence-type cells. Absence types are permanent
+  // grid rows, so the prefill trigger is the FIRST FOCUS of an EMPTY absence cell:
+  // seed the input with that day's norm (the same per-day value the "Diff. fra
+  // normtid" row reads). Never overwrites an existing value; skipped entirely on
+  // zero/null-norm days (weekends, academic ANNUAL_ACTIVITY, missing norm). The
+  // seeded value stays fully editable — partial days remain legal.
+  const handleAbsenceFocus = useCallback(
+    (rowKey: string, date: string, currentValue: number | undefined) => {
+      if (currentValue != null) return // existing value — never overwrite
+      const norm = dailyNorm?.get(date)
+      if (norm === null || norm === undefined || norm <= 0) return // zero/null-norm — no prefill
+      onCellChange(rowKey, date, norm)
+    },
+    [dailyNorm, onCellChange]
+  )
+
   const handleManualHoursChange = useCallback(
     (date: string, value: string) => {
       if (!onManualHoursChange) return
@@ -605,6 +621,7 @@ export function SkemaGrid({
                           max="24"
                           className={styles.cellInput}
                           value={val ?? ''}
+                          onFocus={() => handleAbsenceFocus(row.key, dateKey, val)}
                           onChange={(e) => handleCellChange(row.key, dateKey, e.target.value)}
                         />
                       )}

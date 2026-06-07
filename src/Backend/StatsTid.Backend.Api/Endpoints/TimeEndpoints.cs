@@ -159,92 +159,13 @@ public static class TimeEndpoints
         }).RequireAuthorization("EmployeeOrAbove");
 
         // ── Absences ──
-
-        app.MapPost("/api/absences", async (
-            RegisterAbsenceRequest request,
-            DbConnectionFactory connectionFactory,
-            IOutboxEnqueue outbox,
-            AbsenceProjectionRepository absenceProjectionRepo,
-            OrgScopeValidator scopeValidator,
-            HttpContext context,
-            CancellationToken ct) =>
-        {
-            var actor = context.GetActorContext();
-
-            if (actor.ActorRole == StatsTidRoles.Employee && request.EmployeeId != actor.ActorId)
-                return Results.Forbid();
-
-            if (actor.ActorRole != StatsTidRoles.Employee)
-            {
-                var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, request.EmployeeId, ct);
-                if (!allowed)
-                    return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
-            }
-
-            // Absence registration design decision (TASK-1801):
-            // The RegisterAbsenceRequest carries a single `Date` (not a range), so OK-version
-            // resolution is naturally per-day. If future callers introduce multi-day absence
-            // registration that straddles an OK transition, the caller must split the request
-            // (one per OK version) — this mirrors the retroactive-correction split pattern
-            // (ADR-013) and keeps every persisted AbsenceRegistered event unambiguous.
-            var resolvedOkVersion = OkVersionResolver.ResolveVersion(request.Date);
-#pragma warning disable CS0618 // RegisterAbsenceRequest.OkVersion is intentionally obsolete/advisory
-            var suppliedOkVersion = request.OkVersion;
-#pragma warning restore CS0618
-            if (!string.Equals(suppliedOkVersion, resolvedOkVersion, StringComparison.Ordinal))
-            {
-                logger.LogWarning(
-                    "Caller-supplied OkVersion '{Supplied}' differs from server-resolved '{Resolved}' for absence on {Date} (employee {EmployeeId}). Using resolved value.",
-                    suppliedOkVersion, resolvedOkVersion, request.Date, request.EmployeeId);
-            }
-
-            var (isValid, error) = RequestValidator.ValidateAbsence(request.EmployeeId, request.Hours, request.AbsenceType, request.AgreementCode, resolvedOkVersion);
-            if (!isValid)
-                return Results.BadRequest(new { error });
-
-            var @event = new AbsenceRegistered
-            {
-                EmployeeId = request.EmployeeId,
-                Date = request.Date,
-                AbsenceType = request.AbsenceType,
-                Hours = request.Hours,
-                AgreementCode = request.AgreementCode,
-                OkVersion = resolvedOkVersion,
-                ActorId = actor.ActorId,
-                ActorRole = actor.ActorRole,
-                CorrelationId = actor.CorrelationId
-            };
-
-            // Atomic in-tx write per ADR-018 D3 + S27 Phase 4c.6 projection design
-            // (TASK-2707). Per-event ordering inside the tx:
-            //   1. outbox enqueue FIRST → returns the freshly-allocated outbox_id.
-            //   2. projection INSERT SECOND → consumes the outbox_id.
-            // Both rows commit or roll back together; the migrated GET below
-            // (which reads from absences_projection) satisfies read-your-write.
-            //
-            // Stream id literal `employee-{EmployeeId}` unchanged per ADR-018 D6
-            // retabulate (TASK-2601) — consolidated employee stream.
-            var streamId = $"employee-{request.EmployeeId}";
-
-            await using (var conn = connectionFactory.Create())
-            {
-                await conn.OpenAsync(ct);
-                await using var tx = await conn.BeginTransactionAsync(ct);
-                try
-                {
-                    var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, @event, ct);
-                    await absenceProjectionRepo.InsertAsync(conn, tx, @event, outboxId, ct);
-                    await tx.CommitAsync(ct);
-                }
-                catch
-                {
-                    await tx.RollbackAsync(ct);
-                    throw;
-                }
-            }
-
-            return Results.Created($"/api/absences/{request.EmployeeId}", new { eventId = @event.EventId, streamId });
-        }).RequireAuthorization("EmployeeOrAbove");
+        //
+        // Absence WRITES are owned by the Skema save endpoint (SkemaEndpoints) per
+        // ADR-032 D5 (TASK-6606a): the legacy POST /api/absences bypass — which
+        // defaulted Hours to a flat 7.4 and carried an advisory OkVersion — was
+        // retired so all absence registration flows through Skema consumption
+        // valuation. The GET below remains the read surface
+        // (WeeklyCalculationPipeline consumes it).
 
         app.MapGet("/api/absences/{employeeId}", async (
             string employeeId,
