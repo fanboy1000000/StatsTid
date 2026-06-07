@@ -3,7 +3,7 @@
 | Field | Value |
 |-------|-------|
 | **Sprint** | 67 |
-| **Status** | in-progress (Step-0 research in flight) |
+| **Status** | in-progress (ADR-033 ACCEPTED 2026-06-07; remaining design-sprint close items teed up — see Task Log) |
 | **Start Date** | 2026-06-07 |
 | **End Date** | — |
 | **Orchestrator Approved** | no |
@@ -32,7 +32,14 @@
 
 ## Plan Review (Step 0b)
 
-_pending — runs on ADR-033 + this plan after the Step-0 research lands and the ADR is drafted. MANDATORY trigger: new architectural domain (P1) + payroll (P6) + events (P3)._
+| Field | Value |
+|-------|-------|
+| **Trigger** | MANDATORY (new architectural domain P1 + payroll P6 + events P3) — run on ADR-033 (the design artifact) |
+| **External Codex** | invoked 2026-06-07 — 3 cycles: 5B/5W/1N → 3B/1W → 4B |
+| **Internal Reviewer** | invoked 2026-06-07 — 3 cycles: 0B/3W/6N → 0B/2W/1N → 0B/1W/1N ("smoke-alarm CLEAR") |
+| **BLOCKERs resolved before accept** | yes — ALL absorbed across 3 cycles; owner-accepted at the post-cycle-3 halt-and-prompt |
+
+Cycle-1 caught real design errors (the §24-as-carryover legal error; the §21/§22 carryover race; undesigned Payroll exactly-once; the over-generalized SLS day-count; the §34-auto-forfeiture legal violation) → the one-atomic-partition + fail-closed restructure. Cycle-2 → the settlement state machine (PENDING_REVIEW/SETTLED/REVERSED + sequence + trigger). Cycle-3 → the state-machine boundary conditions (composite key, reversal's own sequence, termination-into-settled-year symmetry, the manual-completion CAS guard); lenses converged on the findings, split on severity (Reviewer convergent-complete / Codex 4B-but-one-line); owner accepted. Full trail in ADR-033 § Review Findings.
 
 ## Architectural Constraints Verified
 
@@ -64,7 +71,29 @@ _(design sprint — verified at ADR-033 acceptance + at each implementation slic
 
 ---
 
-_TASK-6701+ (ADR-033 authoring; the SYSTEM_TARGET settlement section; the roadmap) added after the research verdict lands — the ADR's § labels and the OQ-3/4/5/6/7 + §24 + §8-line decisions depend on it._
+### TASK-6701 — ADR-033 authoring (the settlement architecture)
+
+| Field | Value |
+|-------|-------|
+| **ID** | TASK-6701 |
+| **Status** | COMPLETE — ADR-033 ACCEPTED 2026-06-07 (Step-0b 3 cycles, all findings absorbed) |
+| **Agent** | Orchestrator |
+| **Components** | docs/knowledge-base/decisions/ADR-033 (new); KB INDEX row |
+| **KB Refs** | ADR-030 D7/D9, ADR-032 D2, ADR-018 D3/D6/D8/D13, ADR-026, ADR-013, ADR-021 D4, ADR-025 D3/D6 |
+
+**Description**: D1–D13 settling the money-free boundary, the verified §-spine, the deterministic period-close, the Backend↔Payroll exactly-once ownership, the settlement state machine, the provenance-keyed carryover writer, the wage-type-line scheme, the §21-agreement record, termination awareness, the fail-closed forfeiture/feriehindring, the särlige model-correction timing, the GLOBAL fence, and the phased roadmap. Owner-accepted at the post-cycle-3 halt-and-prompt.
+
+---
+
+### TASK-6702 — Design-sprint close-out (REMAINING — next session)
+
+| Field | Value |
+|-------|-------|
+| **ID** | TASK-6702 |
+| **Status** | planned (teed up — owner stopped for the day after accepting ADR-033) |
+| **Agent** | Orchestrator |
+
+**Description (the remaining S67 design-sprint items):** (a) a **SYSTEM_TARGET settlement-execution section** (the target extension — §K/§M scope the rules, this adds the execution layer); (b) `danish-agreements.md` settlement wage-type rows (the day-count SLS løndele); (c) the **ROADMAP phased roadmap** entry (slices 1–4 with launch-relevance marks; §21-carryover-write as the launch-neutral first infrastructure unit); (d) cross-annotate ADR-030 D7 → ADR-033; (e) ADR-031 D6-style "no launch-blocker created" note; (f) the **design-sprint close** (`sprint-test-validation` SKIP per S38; the Step-7a-equivalent dual-lens on the final ADR+plan IS the gate + the close-guard artifacts; commit + push). NOTE: ADR-033 + today's edits are committed locally; not yet pushed (owner stopped for the day).
 
 ## External Review (Step 7a)
 
