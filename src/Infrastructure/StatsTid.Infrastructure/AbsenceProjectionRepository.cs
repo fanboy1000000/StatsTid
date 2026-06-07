@@ -79,7 +79,7 @@ public sealed class AbsenceProjectionRepository
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
         await using var cmd = new NpgsqlCommand(
-            @"SELECT event_id, employee_id, date, absence_type, hours,
+            @"SELECT event_id, employee_id, date, absence_type, hours, feriedage,
                      agreement_code, ok_version, occurred_at, actor_id, actor_role,
                      correlation_id, outbox_id
               FROM absences_projection
@@ -104,7 +104,7 @@ public sealed class AbsenceProjectionRepository
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
         await using var cmd = new NpgsqlCommand(
-            @"SELECT event_id, employee_id, date, absence_type, hours,
+            @"SELECT event_id, employee_id, date, absence_type, hours, feriedage,
                      agreement_code, ok_version, occurred_at, actor_id, actor_role,
                      correlation_id, outbox_id
               FROM absences_projection
@@ -132,6 +132,10 @@ public sealed class AbsenceProjectionRepository
         Date = DateOnly.FromDateTime(reader.GetDateTime(reader.GetOrdinal("date"))),
         AbsenceType = reader.GetString(reader.GetOrdinal("absence_type")),
         Hours = reader.GetDecimal(reader.GetOrdinal("hours")),
+        // ADR-032 D2: nullable feriedage passthrough (pre-S66 rows read NULL until backfilled).
+        Feriedage = reader.IsDBNull(reader.GetOrdinal("feriedage"))
+            ? null
+            : reader.GetDecimal(reader.GetOrdinal("feriedage")),
         AgreementCode = reader.GetString(reader.GetOrdinal("agreement_code")),
         OkVersion = reader.GetString(reader.GetOrdinal("ok_version")),
         OccurredAt = reader.GetDateTime(reader.GetOrdinal("occurred_at")),

@@ -603,15 +603,25 @@ public static class BalanceEndpoints
             // ── All absences for the employee (one read), mapped to entitlement type +
             // day-equivalents. The mapping is MANDATORY via the shared map (Step-0b Codex W1):
             // projection rows carry the ABSENCE type (e.g. SPECIAL_HOLIDAY_ALLOWANCE), not the
-            // entitlement type. day-equivalent = Hours ÷ StandardDayHours (same as the Skema
-            // quota guard). We need the full stream because the entitlement-year straddle reaches
-            // into September of the prior calendar year. ──
+            // entitlement type. We need the full stream because the entitlement-year straddle
+            // reaches into September of the prior calendar year. ──
+            //
+            // S66 / TASK-6605 (ADR-032 D2): day-equivalents are the AUTHORITATIVE recorded
+            // per-absence feriedage computed at booking — NO re-derivation here. The booking path
+            // (D1) values each row once and persists it to absences_projection.feriedage; this
+            // read sums those recorded values so afholdt/saldo never recompute (replay-deterministic,
+            // no drift, and post-revaluation (D4) reads reflect the replaced values automatically).
+            // Null-coalesce to ROUND(Hours/7.4, 4, AwayFromZero) for pre-S66 / not-yet-backfilled
+            // rows — byte-identical to the init.sql + ProjectionBackfillService backfill convention
+            // in force when those rows were written (ADR-032 D2). Full-time 7.4/7.4=1.0 == old Hours/7.4.
             var allAbsences = await absenceProjectionRepo.GetByEmployeeAsync(employeeId, ct);
             var mappedAbsences = allAbsences
                 .Select(a => (
                     EntitlementType: StatsTid.Backend.Api.Services.EntitlementMapping.GetEntitlementType(a.AbsenceType),
                     a.Date,
-                    DayEquivalents: a.Hours / StatsTid.Backend.Api.Services.EntitlementMapping.StandardDayHours))
+                    DayEquivalents: a.Feriedage ?? Math.Round(
+                        a.Hours / StatsTid.Backend.Api.Services.EntitlementMapping.StandardDayHours,
+                        4, MidpointRounding.AwayFromZero)))
                 .Where(a => a.EntitlementType is not null)
                 .Select(a => (EntitlementType: a.EntitlementType!, a.Date, a.DayEquivalents))
                 .ToList();
