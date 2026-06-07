@@ -1,9 +1,16 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Npgsql;
 using StatsTid.Auth;
+using StatsTid.Infrastructure.Outbox;
+using StatsTid.RuleEngine.Api.Contracts;
+using StatsTid.RuleEngine.Api.Rules;
 using StatsTid.SharedKernel.Security;
 using StatsTid.Tests.Regression.Segmentation;
 
@@ -168,31 +175,76 @@ public sealed class PublisherStallReadYourWriteTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Absence RYW under publisher stall. Same shape as the time-entry test but for
-    /// POST /api/absences → GET /api/absences/{employeeId}. Pins the projection-backed
+    /// Absence RYW under publisher stall. Same shape as the time-entry test but for the
+    /// absence write path → GET /api/absences/{employeeId}. Pins the projection-backed
     /// read for the absences_projection table.
+    ///
+    /// <para>
+    /// S66 / TASK-6607a (ADR-032 D5): the write was MIGRATED off the retired
+    /// <c>POST /api/absences</c> (which bypassed all consumption validation) onto
+    /// <c>POST /api/skema/{employeeId}/save</c> — the surviving, fully-validated absence
+    /// write seam. The GET <c>/api/absences/{employeeId}</c> read endpoint SURVIVES; only
+    /// the POST died. The coverage class is unchanged: a single VACATION day is saved with
+    /// the publisher stalled, then the four cycle-3 RYW invariants are asserted (GET sees
+    /// the write; <c>events</c> empty; unpublished outbox row present;
+    /// projection.outbox_id == outbox row.outbox_id).
+    /// </para>
+    ///
+    /// <para>
+    /// The Skema save path validates everything the old POST skipped: an unseeded employee
+    /// 404s, and VACATION (MONTHLY_ACCRUAL) needs a dated profile (anchor) + agreement code
+    /// or it 422s. So a FULLY-SEEDED full-time employee is stood up (user + open dated
+    /// employee_profiles 1.0 + open user_agreement_codes AC) mirroring
+    /// <see cref="StatsTid.Tests.Regression.Outbox.SkemaMonthlyAccrualGuardTests"/>. The
+    /// booking is a single full-time WEEKDAY 7.4h VACATION day — byte-identical valuation
+    /// before and after the parallel ADR-032 D1 cutover. The in-process WAF has no
+    /// rule-engine container, so <see cref="IHttpClientFactory"/> is stubbed to drive the
+    /// REAL <see cref="EntitlementValidationRule.Evaluate"/> over the validate-entitlement
+    /// seam (same precedent as the sibling Skema-Docker suites). Because the stubbed client
+    /// rides a host derived via <c>WithWebHostBuilder</c>, the publisher stop/start is
+    /// resolved from that SAME derived host (not the base <c>_factory</c>) so the stall
+    /// actually governs the write.
+    /// </para>
     /// </summary>
     [Fact]
     public async Task Absence_PostThenGet_PublisherStopped_ProjectionServesReadYourWrite()
     {
-        var client = _factory.CreateClient();
-        await _factory.StopPublisherAsync();
+        // Single rule-stubbed derived host: the write, the GET, and the publisher
+        // stop/start MUST all share one host or the stall would not govern the save.
+        var stubbedFactory = _factory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureTestServices(services =>
+            {
+                services.AddSingleton<IHttpClientFactory>(new RuleEngineStubFactory());
+            });
+        });
+        var client = stubbedFactory.CreateClient();
+        await StopPublisherAsync(stubbedFactory.Services);
 
         var employeeId = "EMP_RYW_A_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+        await SeedFullTimeEmployeeAsync(employeeId, "AC");
         var token = MintEmployeeToken(employeeId);
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
-        var absenceDate = new DateOnly(2026, 5, 7);
+        // Mon-Fri weekday in the 2025 ferieår (reset month 9). 1 VACATION day ≪ the full
+        // annual 25 forskud cap for a whole-ferieår full-timer ⇒ saved.
+        var absenceDate = new DateOnly(2026, 5, 7); // Thursday
         var postBody = new
         {
-            employeeId,
-            date = absenceDate.ToString("yyyy-MM-dd"),
-            absenceType = "VACATION",
-            hours = 7.4m,
-            agreementCode = "HK",
+            year = 2026,
+            month = 5,
+            absences = new[]
+            {
+                new
+                {
+                    date = absenceDate.ToString("yyyy-MM-dd"),
+                    absenceType = "VACATION",
+                    hours = 7.4m,
+                },
+            },
         };
-        var postRsp = await client.PostAsJsonAsync("/api/absences", postBody);
-        Assert.Equal(HttpStatusCode.Created, postRsp.StatusCode);
+        var postRsp = await client.PostAsJsonAsync($"/api/skema/{employeeId}/save", postBody);
+        Assert.Equal(HttpStatusCode.OK, postRsp.StatusCode);
 
         // (1) GET response contains the just-written absence.
         var getRsp = await client.GetAsync($"/api/absences/{employeeId}");
@@ -277,5 +329,102 @@ public sealed class PublisherStallReadYourWriteTests : IAsyncLifetime
             name: employeeId,
             role: StatsTidRoles.Employee,
             agreementCode: "HK");
+    }
+
+    // ── S66 TASK-6607a: Skema-save seeding scaffold (mirrors SkemaMonthlyAccrualGuardTests) ──
+
+    /// <summary>
+    /// Stands up a fully-seeded full-time employee so the migrated VACATION Skema save
+    /// passes every consumption-validation gate the retired POST skipped: a user row, an
+    /// OPEN full-time <c>employee_profiles</c> row (1.0, effective_from sentinel
+    /// '0001-01-01' — covers the MONTHLY_ACCRUAL anchor), and an OPEN
+    /// <c>user_agreement_codes</c> row. Verbatim shape from
+    /// <see cref="StatsTid.Tests.Regression.Outbox.SkemaMonthlyAccrualGuardTests"/> seeders.
+    /// </summary>
+    private async Task SeedFullTimeEmployeeAsync(string employeeId, string agreementCode)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+
+        await using (var userCmd = new NpgsqlCommand(
+            """
+            INSERT INTO users (user_id, username, password_hash, display_name, email,
+                               primary_org_id, agreement_code, ok_version, is_active)
+            VALUES (@u, @u, 'dev-only', 'S66 RYW Migration Test User', NULL, 'STY01', @ac, 'OK24', TRUE)
+            ON CONFLICT (user_id) DO NOTHING
+            """, conn))
+        {
+            userCmd.Parameters.AddWithValue("u", employeeId);
+            userCmd.Parameters.AddWithValue("ac", agreementCode);
+            await userCmd.ExecuteNonQueryAsync();
+        }
+
+        await using (var profileCmd = new NpgsqlCommand(
+            """
+            INSERT INTO employee_profiles (profile_id, employee_id, part_time_fraction, effective_from, effective_to, version)
+            VALUES (gen_random_uuid(), @e, 1.0, '0001-01-01', NULL, 1)
+            ON CONFLICT (employee_id, effective_from) DO UPDATE SET part_time_fraction = EXCLUDED.part_time_fraction
+            """, conn))
+        {
+            profileCmd.Parameters.AddWithValue("e", employeeId);
+            await profileCmd.ExecuteNonQueryAsync();
+        }
+
+        await using (var agreementCmd = new NpgsqlCommand(
+            """
+            INSERT INTO user_agreement_codes (assignment_id, user_id, agreement_code, effective_from, effective_to, version)
+            VALUES (gen_random_uuid(), @u, @a, '0001-01-01', NULL, 1)
+            ON CONFLICT (user_id, effective_from) DO UPDATE SET agreement_code = EXCLUDED.agreement_code
+            """, conn))
+        {
+            agreementCmd.Parameters.AddWithValue("u", employeeId);
+            agreementCmd.Parameters.AddWithValue("a", agreementCode);
+            await agreementCmd.ExecuteNonQueryAsync();
+        }
+    }
+
+    /// <summary>
+    /// Stops the <see cref="OutboxPublisher"/> resolved from the SUPPLIED host's service
+    /// provider — the rule-stubbed write path rides a host derived via
+    /// <c>WithWebHostBuilder</c>, so the stall must be applied to that host (not the base
+    /// <c>_factory</c>). Same resolution path as
+    /// <see cref="StatsTidWebApplicationFactory.StopPublisherAsync"/>.
+    /// </summary>
+    private static async Task StopPublisherAsync(IServiceProvider services)
+    {
+        var publisher = services.GetServices<IHostedService>().OfType<OutboxPublisher>().Single();
+        await publisher.StopAsync(CancellationToken.None);
+    }
+
+    /// <summary>
+    /// Rule-engine stub: drives the REAL <see cref="EntitlementValidationRule.Evaluate"/>
+    /// over the <c>/api/rules/validate-entitlement</c> seam (the in-process WAF has no
+    /// rule-engine container). Identical to the sibling Skema-Docker suites.
+    /// </summary>
+    private sealed class RuleEngineStubFactory : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => new(new RuleEngineStubHandler(), disposeHandler: false);
+    }
+
+    private sealed class RuleEngineStubHandler : HttpMessageHandler
+    {
+        private static readonly JsonSerializerOptions Camel = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+            if (!path.EndsWith("/api/rules/validate-entitlement", StringComparison.Ordinal))
+                return new HttpResponseMessage(HttpStatusCode.NotFound);
+
+            var json = await request.Content!.ReadAsStringAsync(cancellationToken);
+            var req = JsonSerializer.Deserialize<ValidateEntitlementRequest>(json, Camel)!;
+            var result = EntitlementValidationRule.Evaluate(req);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    JsonSerializer.Serialize(result, Camel), Encoding.UTF8, "application/json"),
+            };
+        }
     }
 }
