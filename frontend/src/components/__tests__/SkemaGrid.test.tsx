@@ -295,6 +295,93 @@ describe('SkemaGrid', () => {
     expect((screen.getByRole('button', { name: 'Gem' }) as HTMLButtonElement).disabled).toBe(true)
   })
 
+  // ── ADR-032 D3: norm prefill on absence cells ──
+  // Absence-type rows are permanent grid rows; the prefill trigger is the first
+  // FOCUS of an EMPTY absence cell. The seeded value is that day's norm (the same
+  // source the "Diff. fra normtid" row reads). Never overwrites an existing value;
+  // no prefill on zero/null-norm days; the value stays editable (partial days legal).
+
+  // Locate the absence-row input for a given day. Absence rows render after the
+  // project rows; the VACATION row is the only absence row in mockRows.
+  const absenceInput = (container: HTMLElement, dayOfMonth: number): HTMLInputElement => {
+    // Each grid row's cells are [label][...days][sum]; the input sits in the day cell.
+    // Find the absence (VACATION) row by its label, then the day's input.
+    const rows = Array.from(container.querySelectorAll('tbody tr'))
+    const absenceRow = rows.find((r) => r.querySelector('td')?.textContent === 'Ferie')
+    expect(absenceRow).toBeTruthy()
+    const cells = absenceRow!.querySelectorAll('td')
+    return cells[dayOfMonth].querySelector('input') as HTMLInputElement
+  }
+
+  it('prefills an empty absence cell with the day norm on first focus', () => {
+    const onCellChange = vi.fn()
+    // March 2 2026 is a Monday with norm 7,4 t.
+    const dailyNorm = new Map<string, number | null>([['2026-03-02', 7.4]])
+
+    const { container } = render(
+      <SkemaGrid
+        year={2026}
+        month={3}
+        rows={mockRows}
+        cellValues={new Map()}
+        readOnly={false}
+        onCellChange={onCellChange}
+        dailyNorm={dailyNorm}
+      />
+    )
+
+    fireEvent.focus(absenceInput(container, 2))
+    expect(onCellChange).toHaveBeenCalledWith('VACATION', '2026-03-02', 7.4)
+  })
+
+  it('does NOT overwrite an existing absence value on focus', () => {
+    const onCellChange = vi.fn()
+    const dailyNorm = new Map<string, number | null>([['2026-03-02', 7.4]])
+    // Day already has 3.7 entered.
+    const cellValues = new Map<string, number>([['VACATION:2026-03-02', 3.7]])
+
+    const { container } = render(
+      <SkemaGrid
+        year={2026}
+        month={3}
+        rows={mockRows}
+        cellValues={cellValues}
+        readOnly={false}
+        onCellChange={onCellChange}
+        dailyNorm={dailyNorm}
+      />
+    )
+
+    fireEvent.focus(absenceInput(container, 2))
+    expect(onCellChange).not.toHaveBeenCalled()
+  })
+
+  it('does NOT prefill on a zero/null-norm day (weekend / academic ANNUAL_ACTIVITY / missing)', () => {
+    const onCellChange = vi.fn()
+    // Day 1 (Sun, weekend) norm 0; day 7 (Sat) norm null; day 2 has no norm entry.
+    const dailyNorm = new Map<string, number | null>([
+      ['2026-03-01', 0],
+      ['2026-03-07', null],
+    ])
+
+    const { container } = render(
+      <SkemaGrid
+        year={2026}
+        month={3}
+        rows={mockRows}
+        cellValues={new Map()}
+        readOnly={false}
+        onCellChange={onCellChange}
+        dailyNorm={dailyNorm}
+      />
+    )
+
+    fireEvent.focus(absenceInput(container, 1)) // zero norm
+    fireEvent.focus(absenceInput(container, 7)) // null norm
+    fireEvent.focus(absenceInput(container, 2)) // no norm entry
+    expect(onCellChange).not.toHaveBeenCalled()
+  })
+
   it('blocks the interval dialog when interval hours + manual hours exceed 24', () => {
     const workIntervals = new Map([['2026-03-03', [{ start: '08:00', end: '16:00' }]]]) // 8h
     const manualHours = new Map([['2026-03-03', 17]]) // 8 + 17 = 25h
