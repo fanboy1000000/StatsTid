@@ -7,6 +7,8 @@ using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Audit;
 using StatsTid.SharedKernel.Events;
+using StatsTid.SharedKernel.Interfaces;
+using StatsTid.SharedKernel.Models;
 
 namespace StatsTid.Backend.Api.Endpoints;
 
@@ -176,6 +178,13 @@ public static class EmployeeProfileEndpoints
             IOutboxEnqueue outbox,
             IAuditProjectionMapper<EmployeeProfileUpdated> updatedAuditMapper,
             IAuditProjectionMapper<EmployeeProfileSuperseded> supersededAuditMapper,
+            // S66 / TASK-6604 (ADR-032 D4) — profile-change revaluation collaborators.
+            IAuditProjectionMapper<EntitlementBalanceRevalued> revaluedAuditMapper,
+            StatsTid.Backend.Api.Services.ConsumptionCalculator consumptionCalculator,
+            IEmploymentProfileResolver profileResolver,
+            AbsenceProjectionRepository absenceProjectionRepo,
+            EntitlementBalanceRepository entitlementBalanceRepo,
+            EntitlementConfigRepository entitlementConfigRepo,
             AuditProjectionRepository auditRepo,
             UserRepository userRepo,
             OrgScopeValidator scopeValidator,
@@ -220,6 +229,18 @@ public static class EmployeeProfileEndpoints
             await using var tx = await conn.BeginTransactionAsync(ct);
             try
             {
+                // ── S66 / TASK-6604 (ADR-032 D4) — employee-scoped advisory lock FIRST ──
+                // Acquire the shared per-employee consumption lock as the FIRST statement in the
+                // tx, BEFORE the predecessor SELECT ... FOR UPDATE below (the advisory lock strictly
+                // precedes any row lock per ADR-032 D4) and held to commit. This serializes the
+                // profile-change revaluation against a concurrent Skema-save consumption tx (which
+                // takes the SAME lock first) so a save's stale-fraction Feriedage cannot be recorded
+                // across this PUT's revaluation window. Taken unconditionally — the lock is cheap and
+                // keeping it before the FOR UPDATE preserves the single global lock-ordering
+                // (advisory → row), so a future trigger-independent change cannot reorder it.
+                await StatsTid.Backend.Api.Services.EmployeeConsumptionLock.AcquireAsync(
+                    conn, tx, employeeId, ct);
+
                 // Step 0b Reviewer BLOCKER-3 absorption — Case A 404 pre-check.
                 // PUT is an admin EDIT surface; it must NOT create a net-new row. We
                 // also need the predecessor's profile_id + effective_from + version
@@ -384,6 +405,9 @@ public static class EmployeeProfileEndpoints
                         ?? throw new InvalidOperationException(
                             $"Audit projection: employee {employeeId} not found or inactive."));
 
+                // S66 / TASK-6604 — the profile-change event's EventId is the revaluation's
+                // TriggeringProfileEventId (captured from whichever case branch fires below).
+                Guid triggeringProfileEventId;
                 if (result.Outcome == SaveEmployeeProfileOutcome.Updated)
                 {
                     // Case B — same-day in-place edit. EmployeeProfileUpdated carries
@@ -408,6 +432,7 @@ public static class EmployeeProfileEndpoints
                     var updatedAuditCtx = auditCtx with { OccurredAt = new DateTimeOffset(updatedEvent.OccurredAt) };
                     var auditRow = updatedAuditMapper.Map(updatedEvent, updatedAuditCtx);
                     await auditRepo.InsertAsync(conn, tx, updatedEvent.EventId, outboxId, updatedEvent.EventType, auditRow, updatedAuditCtx, ct);
+                    triggeringProfileEventId = updatedEvent.EventId;
                 }
                 else
                 {
@@ -439,6 +464,28 @@ public static class EmployeeProfileEndpoints
                     var supersededAuditCtx = auditCtx with { OccurredAt = new DateTimeOffset(supersededEvent.OccurredAt) };
                     var auditRow = supersededAuditMapper.Map(supersededEvent, supersededAuditCtx);
                     await auditRepo.InsertAsync(conn, tx, supersededEvent.EventId, outboxId, supersededEvent.EventType, auditRow, supersededAuditCtx, ct);
+                    triggeringProfileEventId = supersededEvent.EventId;
+                }
+
+                // ── S66 / TASK-6604 (ADR-032 D4) — profile-change revaluation ──
+                // Trigger: ANY fullDayHours-affecting field changed — part_time_fraction OR position
+                // (position drives the ADR-017 D3 override chain → WeeklyNormHours; a fraction-only
+                // trigger would silently skip position-driven revaluations). No change ⇒ zero new
+                // behavior (the PUT's existing If-Match/ETag flow is byte-identical). Same tx as the
+                // profile mutation + event + audit (ADR-018 D3): any failure here — including
+                // ApplyRevaluationAsync's all-or-nothing row-count throw — rolls EVERYTHING back and
+                // surfaces 500 via the outer catch. The advisory lock taken at tx-open serializes us
+                // against a racing Skema-save consumption tx (ADR-032 D4).
+                var fractionChanged = preUpdate.PartTimeFraction != body.PartTimeFraction;
+                var positionChanged = !string.Equals(preUpdate.Position, body.Position, StringComparison.Ordinal);
+                if (fractionChanged || positionChanged)
+                {
+                    await RevalueFutureAbsencesAsync(
+                        conn, tx, employeeId, body, auditUser!.PrimaryOrgId,
+                        triggeringProfileEventId, actor, auditCtx,
+                        consumptionCalculator, profileResolver, absenceProjectionRepo,
+                        entitlementBalanceRepo, entitlementConfigRepo, outbox, revaluedAuditMapper,
+                        auditRepo, streamId, ct);
                 }
 
                 await tx.CommitAsync(ct);
@@ -650,6 +697,173 @@ public static class EmployeeProfileEndpoints
 
         return app;
     }
+
+    // ── S66 / TASK-6604 (ADR-032 D4) — profile-change revaluation ──
+
+    /// <summary>
+    /// Recompute and re-record the feriedage of this employee's entitlement-consuming absences
+    /// dated ≥ <c>effectiveFrom</c> (= today, ADR-023 D8) under the NEW profile values, all inside
+    /// the profile-PUT transaction. Called only when a fullDayHours-affecting field changed
+    /// (part_time_fraction OR position — ADR-032 D4).
+    ///
+    /// <para>
+    /// <b>In-hand norm (ADR-032 D4 — the resolver cannot see the uncommitted row).</b> For each
+    /// affected absence date we resolve the CURRENTLY-committed dated profile (for the UNCHANGED
+    /// agreement_code / org / ok_version — none of which this PUT touches), substitute the NEW
+    /// part-time-fraction / position from <paramref name="body"/>, and compute <c>fullDayHours</c>
+    /// via <see cref="StatsTid.Backend.Api.Services.ConsumptionCalculator.FullDayHoursForProfileAsync"/>
+    /// (the in-hand sibling of the resolver-driven path — it delegates the
+    /// <c>WeeklyNorm × fraction / 5</c> + ADR-032 D3 semantics to the SHARED
+    /// <c>DailyNormCalculator</c>, so there is NO second copy of the norm formula). The new per-row
+    /// feriedage is <see cref="StatsTid.Backend.Api.Services.ConsumptionCalculator.ToFeriedage"/>
+    /// (the exposed 4dp primitive). The OLD per-row value is the recorded
+    /// <c>absences_projection.feriedage</c> (null pre-S66 rows fall back to the
+    /// <c>hours/7.4</c> backfill convention — <c>EntitlementMapping.StandardDayHours</c>).
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Grouping + write (ADR-032 D4).</b> Affected rows are grouped by (entitlementType,
+    /// entitlementYear) — the entitlement year derived the SAME ferieår-anchoring way the Skema /
+    /// Balance paths use (<see cref="ResolveEntitlementYear"/> against the live entitlement config's
+    /// reset_month). For each group where any per-row value changed: <c>usedDelta = Σ(new − old)</c>
+    /// is applied — together with the per-absence replacement set — via the UNGATED
+    /// <see cref="EntitlementBalanceRepository.ApplyRevaluationAsync"/> (revaluation may push
+    /// <c>used</c> past the cap — this is NOT the booking path; all-or-nothing on the projection
+    /// row-count). One <see cref="EntitlementBalanceRevalued"/> event per group is emitted on the
+    /// consolidated <c>employee-{id}</c> stream (ADR-018 D6) with an ADR-026 audit row, all in the
+    /// caller's tx (ADR-018 D3). Negative remaining is NOT clamped/warned/500'd here — that is a
+    /// read-side concern (ADR-032 D4).
+    /// </para>
+    /// </summary>
+    private static async Task RevalueFutureAbsencesAsync(
+        NpgsqlConnection conn,
+        NpgsqlTransaction tx,
+        string employeeId,
+        UpdateEmployeeProfileRequest body,
+        string fallbackOrgId,
+        Guid triggeringProfileEventId,
+        ActorContext actor,
+        AuditProjectionContext auditCtx,
+        StatsTid.Backend.Api.Services.ConsumptionCalculator consumptionCalculator,
+        IEmploymentProfileResolver profileResolver,
+        AbsenceProjectionRepository absenceProjectionRepo,
+        EntitlementBalanceRepository entitlementBalanceRepo,
+        EntitlementConfigRepository entitlementConfigRepo,
+        IOutboxEnqueue outbox,
+        IAuditProjectionMapper<EntitlementBalanceRevalued> revaluedAuditMapper,
+        AuditProjectionRepository auditRepo,
+        string streamId,
+        CancellationToken ct)
+    {
+        var effectiveFrom = body.EffectiveFrom; // = today (validator-narrowed, ADR-023 D8).
+
+        // Enumerate the employee's absences dated ≥ effectiveFrom. These are already-committed
+        // bookings (NOT in this tx), so the repo's own-connection date-range read is correct.
+        var rows = await absenceProjectionRepo.GetByEmployeeAndDateRangeAsync(
+            employeeId, effectiveFrom, DateOnly.MaxValue, ct);
+
+        // Accumulator per (entitlementType, entitlementYear): the replacement set + Σ(new − old).
+        var groups = new Dictionary<(string Type, int Year), (List<AbsenceFeriedageReplacement> Repl, decimal UsedDelta, bool AnyChanged)>();
+
+        // Cache the live reset_month per (entitlementType, agreementCode, okVersion) so the
+        // entitlement-year derivation doesn't re-read the config for every absence row.
+        var resetMonthCache = new Dictionary<string, int?>(StringComparer.Ordinal);
+
+        foreach (var row in rows)
+        {
+            var entitlementType = Services.EntitlementMapping.GetEntitlementType(row.AbsenceType);
+            if (entitlementType is null)
+                continue; // non-entitlement absence — consumes nothing; never revalued.
+
+            // The dated profile committed for THIS absence date gives the UNCHANGED agreement_code /
+            // org / ok_version (this PUT touches only fraction + position). Build the in-hand NEW
+            // profile by substituting the new fraction/position. Fail-loud propagates (rolls back)
+            // if the resolver can't cover a date that carries a consuming booking — an integrity
+            // violation that should never occur post-backfill (resolver's own contract).
+            var datedProfile = await profileResolver.GetByEmployeeIdAtAsync(employeeId, row.Date, ct);
+            if (datedProfile is null)
+                continue; // no covering profile (e.g. row predates employment) — leave as recorded.
+
+            var newProfile = datedProfile with
+            {
+                PartTimeFraction = body.PartTimeFraction,
+                Position = body.Position,
+                IsPartTime = body.PartTimeFraction < 1.0m,
+            };
+            var orgId = datedProfile.OrgId ?? fallbackOrgId;
+
+            var newFullDayHours = await consumptionCalculator.FullDayHoursForProfileAsync(
+                newProfile, row.Date, orgId, ct);
+            var newFeriedage = Services.ConsumptionCalculator.ToFeriedage(row.Hours, newFullDayHours);
+            if (newFeriedage is not { } newVal)
+                continue; // no meaningful divisor (zero-norm/no-profile) — recorded value untouched.
+
+            // OLD recorded per-row feriedage (null pre-S66 rows → hours/7.4 backfill convention).
+            var oldVal = row.Feriedage
+                ?? Math.Round(row.Hours / Services.EntitlementMapping.StandardDayHours, 4, MidpointRounding.AwayFromZero);
+
+            // Entitlement year via ferieår anchoring on the live config's reset_month (same
+            // derivation as the Skema/Balance paths). reset_month is frozen per natural key
+            // (ADR-021 Q1), so the live read is safe for any historical date of this key.
+            var resetKey = $"{entitlementType}|{datedProfile.AgreementCode}|{datedProfile.OkVersion}";
+            if (!resetMonthCache.TryGetValue(resetKey, out var resetMonth))
+            {
+                var liveConfig = await entitlementConfigRepo.GetCurrentOpenAsync(
+                    entitlementType, datedProfile.AgreementCode, datedProfile.OkVersion, ct);
+                resetMonth = liveConfig?.ResetMonth;
+                resetMonthCache[resetKey] = resetMonth;
+            }
+            if (resetMonth is null)
+                continue; // no config for this type/agreement/ok — cannot anchor the year; skip.
+
+            var entitlementYear = ResolveEntitlementYear(row.Date, resetMonth.Value);
+
+            var key = (entitlementType, entitlementYear);
+            if (!groups.TryGetValue(key, out var acc))
+                acc = (new List<AbsenceFeriedageReplacement>(), 0m, false);
+            acc.Repl.Add(new AbsenceFeriedageReplacement(row.EventId, newVal));
+            acc.UsedDelta += newVal - oldVal;
+            acc.AnyChanged = acc.AnyChanged || newVal != oldVal;
+            groups[key] = acc;
+        }
+
+        // Apply each group that actually changed (per-row replacement + ungated used delta), emit
+        // EntitlementBalanceRevalued on the employee-{id} stream + the ADR-026 audit row, all in tx.
+        foreach (var ((entitlementType, entitlementYear), acc) in groups)
+        {
+            if (!acc.AnyChanged)
+                continue; // every per-row value identical (e.g. full-time→full-time) — no-op.
+
+            await entitlementBalanceRepo.ApplyRevaluationAsync(
+                conn, tx, employeeId, entitlementType, entitlementYear, acc.UsedDelta, acc.Repl, ct);
+
+            var revaluedEvent = new EntitlementBalanceRevalued
+            {
+                EmployeeId = employeeId,
+                EntitlementType = entitlementType,
+                EntitlementYear = entitlementYear,
+                Replacements = acc.Repl,
+                UsedDelta = acc.UsedDelta,
+                TriggeringProfileEventId = triggeringProfileEventId,
+                ActorId = actor.ActorId,
+                ActorRole = actor.ActorRole,
+                CorrelationId = actor.CorrelationId,
+            };
+            var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, revaluedEvent, ct);
+            var revaluedAuditCtx = auditCtx with { OccurredAt = new DateTimeOffset(revaluedEvent.OccurredAt) };
+            var auditRow = revaluedAuditMapper.Map(revaluedEvent, revaluedAuditCtx);
+            await auditRepo.InsertAsync(
+                conn, tx, revaluedEvent.EventId, outboxId, revaluedEvent.EventType, auditRow, revaluedAuditCtx, ct);
+        }
+    }
+
+    /// <summary>
+    /// S66 / TASK-6604 — ferieår-anchored entitlement-year derivation, mirroring
+    /// <c>SkemaEndpoints.ResolveEntitlementYear</c> (the canonical Skema/Balance rule): when the
+    /// date's month is ≥ reset_month the year is the date's calendar year, else the prior year.
+    /// </summary>
+    private static int ResolveEntitlementYear(DateOnly date, int resetMonth)
+        => date.Month >= resetMonth ? date.Year : date.Year - 1;
 
     // ── Request DTO ──
 
