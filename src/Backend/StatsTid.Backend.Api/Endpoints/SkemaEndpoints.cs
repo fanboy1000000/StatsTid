@@ -386,6 +386,11 @@ public static class SkemaEndpoints
             // S60 / TASK-6005 — dated employment profile for the part_time_fraction used in
             // the MONTHLY_ACCRUAL earned-to-date / bookableLimit computation.
             IEmploymentProfileResolver profileResolver,
+            // S66 / TASK-6603 — ADR-032 consumption (feriedage) calculator. Used in TWO places:
+            // (1) the D3 per-day norm cap + the provisional pre-lock requestedDays (advisory),
+            // (2) the AUTHORITATIVE in-lock re-derivation that stamps AbsenceRegistered.Feriedage
+            // and drives the guard delta. Composes DailyNormCalculator (shared norm seam).
+            StatsTid.Backend.Api.Services.ConsumptionCalculator consumptionCalculator,
             OrgScopeValidator scopeValidator,
             HttpContext context,
             CancellationToken ct) =>
@@ -544,18 +549,80 @@ public static class SkemaEndpoints
                     }
                 }
 
-                var absenceHoursByDate = request.Absences
-                    .GroupBy(a => a.Date)
-                    .Where(g => g.Sum(a => a.Hours) > StandardDayHours);
-                foreach (var overDay in absenceHoursByDate)
+                // ── S66 / TASK-6603 — ADR-032 D3 per-day norm cap (replaces the flat 7.4 cap) ──
+                // The day's total absence hours (all types — today's grouping) is capped at the
+                // employee's REAL per-day norm (fullDayHours), not the flat 7.4h. A half-time
+                // employee's day caps at 3.7h; a full-time 5-day employee still caps at 7.4h
+                // (byte-identical). fullDayHours resolution (ADR-032 D3):
+                //   • weekday WEEKLY_HOURS norm > 0 ⇒ that norm is the cap;
+                //   • ANNUAL_ACTIVITY (academic) ⇒ 7.4 × fraction (calculator fallback) — vacation
+                //     stays bookable;
+                //   • weekend (norm == 0) ⇒ entitlement-consuming rows are rejected (you cannot
+                //     consume a feriedag on a non-working day); NON-entitlement rows keep today's
+                //     legacy flat-7.4 behavior (a sick/leave hour on a Saturday is not gated by an
+                //     entitlement);
+                //   • no dated profile covering the day (null) ⇒ NOT enforced here — the existing
+                //     anchor-422 family below (employment_profile_missing) owns that rejection;
+                //     do NOT relax it.
+                // This guard runs PRE-TX as fast advisory UX (a clean 422 before opening the tx);
+                // the AUTHORITATIVE enforcement is the in-lock re-derivation + CheckAndAdjustAsync
+                // (a stale norm here is benign — the in-lock guard re-enforces). Kept pre-tx (not
+                // folded into the lock) so the common reject path stays a cheap pre-tx 422,
+                // coherent with the sibling duplicate-type / day-norm / eligibility guards already
+                // here; no coherence is lost because the in-lock path is the source of truth.
                 {
-                    return Results.Json(new
+                    var absencesByDate = request.Absences.GroupBy(a => a.Date);
+                    foreach (var dayGroup in absencesByDate)
                     {
-                        error = "Total absence hours exceed norm day",
-                        date = overDay.Key,
-                        totalHours = overDay.Sum(a => a.Hours),
-                        maxHours = StandardDayHours,
-                    }, statusCode: 422);
+                        var date = dayGroup.Key;
+                        var fullDayHours = await consumptionCalculator.FullDayHoursAsync(
+                            employeeId, date, user.PrimaryOrgId, ct);
+
+                        // No-profile day: defer to the anchor-422 family (do not enforce here).
+                        if (fullDayHours is null)
+                            continue;
+
+                        if (fullDayHours.Value > 0m)
+                        {
+                            // Working day: total hours (all types) capped at the day's real norm.
+                            var totalHours = dayGroup.Sum(a => a.Hours);
+                            if (totalHours > fullDayHours.Value)
+                                return Results.Json(new
+                                {
+                                    error = "Total absence hours exceed norm day",
+                                    date,
+                                    totalHours,
+                                    maxHours = fullDayHours.Value,
+                                }, statusCode: 422);
+                        }
+                        else
+                        {
+                            // Zero-norm (weekend) day: entitlement-consuming rows cannot be booked
+                            // (no feriedag is consumable on a non-working day). Non-entitlement
+                            // rows keep today's behavior under the legacy flat-7.4 cap.
+                            var offendingRows = dayGroup
+                                .Where(a => GetEntitlementType(a.AbsenceType) is not null)
+                                .ToList();
+                            if (offendingRows.Count > 0)
+                                return Results.Json(new
+                                {
+                                    error = "Entitlement absence on a non-working day",
+                                    date,
+                                    absenceTypes = offendingRows.Select(a => a.AbsenceType).ToArray(),
+                                    message = $"Ferie/feriefridage kan ikke registreres på en arbejdsfri dag ({date:dd-MM-yyyy}).",
+                                }, statusCode: 422);
+
+                            var nonEntitlementHours = dayGroup.Sum(a => a.Hours);
+                            if (nonEntitlementHours > StandardDayHours)
+                                return Results.Json(new
+                                {
+                                    error = "Total absence hours exceed norm day",
+                                    date,
+                                    totalHours = nonEntitlementHours,
+                                    maxHours = StandardDayHours,
+                                }, statusCode: 422);
+                        }
+                    }
                 }
 
                 // ── S59 / TASK-5907 per-employee eligibility gate (pre-transaction, atomic) ──
@@ -670,23 +737,41 @@ public static class SkemaEndpoints
 
             if (request.Absences is not null && request.Absences.Length > 0)
             {
+                // ── S66 / TASK-6603 — ADR-032 D2 PROVISIONAL per-row feriedage (pre-lock) ──
+                // requestedDays for the rule-engine advisory validation is now the Σ of PER-ROW
+                // feriedage (hours ÷ that day's real fullDayHours), NOT totalHours ÷ 7.4. The
+                // provisional values are computed OUTSIDE the lock (the rule-engine HTTP call must
+                // never sit inside the lock — ADR-032 D2). A stale provisional advisory result is
+                // benign: the in-lock guard re-derives the AUTHORITATIVE values and re-enforces
+                // (the :910-area TOCTOU comment, extended below for the D2 two-phase contract).
+                var provisional = await consumptionCalculator.ComputeAsync(
+                    employeeId,
+                    request.Absences.Select(a => (a.Date, a.Hours)).ToList(),
+                    user.PrimaryOrgId, ct);
+
                 var requestedByEntitlementType = new Dictionary<string, decimal>(StringComparer.Ordinal);
-                foreach (var absence in request.Absences)
+                for (var i = 0; i < request.Absences.Length; i++)
                 {
+                    var absence = request.Absences[i];
                     if (!AbsenceToEntitlementType.TryGetValue(absence.AbsenceType, out var entitlementType) || entitlementType is null)
                         continue;
+                    // Null feriedage (no-profile day) contributes 0 to the provisional sum; the
+                    // anchor-422 family below rejects such rows authoritatively when the fraction
+                    // is load-bearing. (A null here cannot slip through: a consuming row on a
+                    // no-profile day fails the employment_profile_missing 422.)
+                    var rowFeriedage = provisional[i].Feriedage ?? 0m;
                     if (!requestedByEntitlementType.ContainsKey(entitlementType))
                         requestedByEntitlementType[entitlementType] = 0m;
-                    requestedByEntitlementType[entitlementType] += absence.Hours;
+                    requestedByEntitlementType[entitlementType] += rowFeriedage;
                 }
 
                 var ruleEngineUrl = configuration["ServiceUrls:RuleEngine"] ?? "http://rule-engine:8080";
                 var httpClient = httpClientFactory.CreateClient();
                 var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
-                foreach (var (entitlementType, totalRequestedHours) in requestedByEntitlementType)
+                foreach (var (entitlementType, totalRequestedDays) in requestedByEntitlementType)
                 {
-                    var requestedDays = totalRequestedHours / StandardDayHours;
+                    var requestedDays = totalRequestedDays;
 
                     // ── S30 TASK-3008 two-step pattern (ADR-021 D2 + ADR-016 D5b "fifth pattern") ──
                     // Step 1: read the LIVE (open) row to derive ResetMonth. ResetMonth is frozen
@@ -918,6 +1003,16 @@ public static class SkemaEndpoints
             // prior TimeEntryRegistered events from the same handler call
             // are rolled back too (whole save is atomic), even quota-unrelated
             // time entries the user typed alongside the breaching absence.
+            //
+            // S66 / TASK-6603 — ADR-032 D2 TWO-PHASE consumption contract extends this TOCTOU
+            // story: the provisional per-row feriedage + rule-engine advisory validation above run
+            // PRE-LOCK (the HTTP call must never sit inside the lock). Inside the tx we FIRST take
+            // the per-employee advisory lock (D4), THEN re-derive the AUTHORITATIVE per-row
+            // feriedage from the dated profile/norm read NOW (so a racing profile-PUT that
+            // committed before our lock is visible). The authoritative values stamp
+            // AbsenceRegistered.Feriedage AND drive the CheckAndAdjustAsync delta (one valuation,
+            // reused — Σ event Feriedage == guard delta). A stale PROVISIONAL advisory result is
+            // benign: the in-lock guard re-enforces against the fresh values.
             try
             {
                 await using var conn = connectionFactory.Create();
@@ -925,6 +1020,31 @@ public static class SkemaEndpoints
                 await using var tx = await conn.BeginTransactionAsync(ct);
                 try
                 {
+                    // ── S66 / TASK-6603 — ADR-032 D2/D4 two-phase consumption cutover ──
+                    // PHASE 2 (in-lock authoritative). FIRST acquire the per-employee advisory
+                    // lock — before ANY read/write in this tx, so it precedes any FOR UPDATE and is
+                    // held to commit (D4). This serializes against a racing profile-PUT revaluation
+                    // (TASK-6604, which reuses this same helper).
+                    await StatsTid.Backend.Api.Services.EmployeeConsumptionLock.AcquireAsync(
+                        conn, tx, employeeId, ct);
+
+                    // THEN re-derive the AUTHORITATIVE per-row feriedage INSIDE the lock. This
+                    // re-read is the whole point of D2's two phases: a profile PUT that committed
+                    // before we acquired the lock MUST now be visible. The profile resolver opens
+                    // its OWN connection (not enrolled in this tx) — that is fine: the advisory
+                    // lock serializes the WRITERS, so the resolver observes whatever committed
+                    // before the lock, never a half-written racing PUT (D4 separate-connection
+                    // rationale). These authoritative values feed BOTH AbsenceRegistered.Feriedage
+                    // and the guard delta (the single-valuation identity: Σ event Feriedage ==
+                    // guard delta, computed once here and reused).
+                    var authoritativeConsumption = request.Absences is { Length: > 0 }
+                        ? await consumptionCalculator.ComputeAsync(
+                            employeeId,
+                            request.Absences.Select(a => (a.Date, a.Hours)).ToList(),
+                            user.PrimaryOrgId, ct)
+                        : (IReadOnlyList<StatsTid.Backend.Api.Services.ConsumptionCalculator.Consumption>)
+                            Array.Empty<StatsTid.Backend.Api.Services.ConsumptionCalculator.Consumption>();
+
                     // Save time entries (outbox enqueue + projection INSERT inside outer tx).
                     if (request.Entries is not null)
                     {
@@ -938,6 +1058,10 @@ public static class SkemaEndpoints
                                 TaskId = entry.ProjectCode,
                                 ActivityType = "NORMAL",
                                 AgreementCode = agreementCode,
+                                // S66 / TASK-6603 ASYMMETRY (DELIBERATE): TimeEntryRegistered.OkVersion
+                                // stays live user.OkVersion — entry-date OK stamping is out of ADR-032
+                                // D2 scope (D2 covers absence consumption only). Only
+                                // AbsenceRegistered.OkVersion was moved to OkVersionResolver(entry-date).
                                 OkVersion = user.OkVersion,
                                 ActorId = actor.ActorId,
                                 ActorRole = actor.ActorRole,
@@ -988,8 +1112,22 @@ public static class SkemaEndpoints
                     {
                         var savedByEntitlementType = new Dictionary<string, decimal>(StringComparer.Ordinal);
 
-                        foreach (var absence in request.Absences)
+                        for (var i = 0; i < request.Absences.Length; i++)
                         {
+                            var absence = request.Absences[i];
+                            var hasEntitlement = AbsenceToEntitlementType.TryGetValue(
+                                absence.AbsenceType, out var entitlementType) && entitlementType is not null;
+
+                            // ── S66 / TASK-6603 — ADR-032 D2 authoritative per-row feriedage ──
+                            // Entitlement-consuming rows carry the AUTHORITATIVE in-lock feriedage;
+                            // non-entitlement absence types (null entitlement mapping, e.g.
+                            // SICK_DAY / PARENTAL_LEAVE / LEAVE_*) carry null Feriedage (they consume
+                            // no entitlement). The same authoritative value drives the guard delta
+                            // below (single-valuation identity).
+                            decimal? rowFeriedage = hasEntitlement
+                                ? authoritativeConsumption[i].Feriedage
+                                : null;
+
                             var @event = new AbsenceRegistered
                             {
                                 EmployeeId = employeeId,
@@ -997,7 +1135,12 @@ public static class SkemaEndpoints
                                 AbsenceType = absence.AbsenceType,
                                 Hours = absence.Hours,
                                 AgreementCode = agreementCode,
-                                OkVersion = user.OkVersion,
+                                // S66 / TASK-6603 — ADR-032 D2 + TASK-1801 precedent: OK version is
+                                // stamped from the ABSENCE ENTRY DATE (when the absence occurs), not
+                                // the live user.OkVersion, so replays/retroactive saves resolve the
+                                // version that was in force on that day deterministically.
+                                OkVersion = OkVersionResolver.ResolveVersion(absence.Date),
+                                Feriedage = rowFeriedage,
                                 ActorId = actor.ActorId,
                                 ActorRole = actor.ActorRole,
                                 CorrelationId = actor.CorrelationId
@@ -1007,11 +1150,14 @@ public static class SkemaEndpoints
                             await absenceProjectionRepo.InsertAsync(conn, tx, @event, outboxId, ct);
                             savedCount++;
 
-                            if (AbsenceToEntitlementType.TryGetValue(absence.AbsenceType, out var entitlementType) && entitlementType is not null)
+                            if (hasEntitlement)
                             {
-                                if (!savedByEntitlementType.ContainsKey(entitlementType))
-                                    savedByEntitlementType[entitlementType] = 0m;
-                                savedByEntitlementType[entitlementType] += absence.Hours;
+                                if (!savedByEntitlementType.ContainsKey(entitlementType!))
+                                    savedByEntitlementType[entitlementType!] = 0m;
+                                // Σ the AUTHORITATIVE per-row feriedage (replaces sum-hours-then-÷7.4).
+                                // No re-division: the per-row valuation already divided by the day's
+                                // real fullDayHours (ADR-032 D2 — single valuation, no NO re-division).
+                                savedByEntitlementType[entitlementType!] += rowFeriedage ?? 0m;
                             }
                         }
 
@@ -1019,12 +1165,16 @@ public static class SkemaEndpoints
                         // (conn, tx) overload from S26 TASK-2603(a) so the UPDATE participates in the
                         // outer tx. A breach (concurrent modification raced past the pre-validation
                         // HTTP check) throws to roll back the entire save (S27 TASK-2706 (c)+(d)).
-                        foreach (var (entitlementType, totalHours) in savedByEntitlementType)
+                        foreach (var (entitlementType, totalFeriedage) in savedByEntitlementType)
                         {
                             if (!entitlementData.TryGetValue(entitlementType, out var data))
                                 continue;
 
-                            var deltaDays = totalHours / StandardDayHours;
+                            // S66 / TASK-6603 — the guard delta IS the Σ authoritative per-row
+                            // feriedage (already day-equivalents from the in-lock valuation). NO
+                            // re-division by StandardDayHours (ADR-032 D2 single valuation): this is
+                            // the same value Σ'd into the emitted AbsenceRegistered.Feriedage above.
+                            var deltaDays = totalFeriedage;
                             // S60 / TASK-6005 — split guard: GuardCap (carryover-EXCLUDED per-type
                             // bookable cap; the WHERE-clause re-adds carryover once) + SeedQuota
                             // (= annual entitlement, seeds total_quota on a first-INSERT only).
