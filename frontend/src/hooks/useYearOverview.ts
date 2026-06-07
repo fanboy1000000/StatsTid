@@ -54,9 +54,9 @@ export interface YearOverviewCategory {
   saldo: (number | null)[]
   /** day-equivalents consumed per month (index 0..11; future-dated = planlagt). */
   afholdt: number[]
-  /** transferable amount — render ONLY in the boundaryMonth column when > 0. */
-  transferable: number
-  /** display anchor month (1..12) where transferable is emitted — 12 for all categories. */
+  /** the amount expiring beyond the carryover cap at the boundary — render ONLY in the boundaryMonth column when > 0. */
+  expiring: number
+  /** display anchor month (1..12) where the disposition (expiring) is emitted — 12 for all categories. */
   boundaryMonth: number
 }
 

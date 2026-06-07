@@ -276,9 +276,15 @@ interface CategoryGroupProps {
   cellClass: (i: number) => string
 }
 
-/** One leave group: header + Saldo (rest) / Afholdt / Kan overføres rows. */
+/** One leave group: header + Saldo (rest) / Afholdt / disposition (Til udløb /
+ * Til udbetaling) rows. */
 function CategoryGroup({ category, cellClass }: CategoryGroupProps) {
   const boundaryIndex = category.boundaryMonth - 1
+  // Period-end disposition label keys off the category type: untaken særlige
+  // feriedage convert to the 2½% godtgørelse (money → "Til udbetaling"); every
+  // other type genuinely lapses ("Til udløb").
+  const dispositionLabel =
+    category.type === 'SPECIAL_HOLIDAY' ? 'Til udbetaling' : 'Til udløb'
   return (
     <>
       <tr className={styles.group}>
@@ -318,16 +324,17 @@ function CategoryGroup({ category, cellClass }: CategoryGroupProps) {
 
       <tr className={`${styles.row} ${styles.rowSub}`}>
         <th scope="row" className={styles.labelCell}>
-          Kan overføres
+          {dispositionLabel}
         </th>
         {MONTH_ABBR.map((_, i) => {
-          // Transferable renders ONLY in the boundaryMonth column when > 0.
-          const show = i === boundaryIndex && category.transferable > 0
+          // The period-end disposition (expiring-beyond-cap) renders ONLY in the
+          // boundaryMonth column when > 0.
+          const show = i === boundaryIndex && category.expiring > 0
           const cls = show ? `${cellClass(i)} ${styles.keep}` : cellClass(i)
           return (
             <td key={i} className={cls}>
               {show ? (
-                formatDanishNumber(category.transferable)
+                formatDanishNumber(category.expiring)
               ) : (
                 <span className={styles.dash}>{EM_DASH}</span>
               )}

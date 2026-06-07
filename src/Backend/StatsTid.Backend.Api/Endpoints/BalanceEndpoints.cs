@@ -730,7 +730,7 @@ public static class BalanceEndpoints
                 return await ResolveFallbackLiveAsync(type, agreement) ?? liveConfig;
             }
 
-            // ── Categories: saldo[12] + afholdt[12] + transferable + boundaryMonth ──
+            // ── Categories: saldo[12] + afholdt[12] + expiring + boundaryMonth ──
             var categories = new List<object>(YearOverviewCategoryTypes.Length);
             foreach (var type in YearOverviewCategoryTypes)
             {
@@ -802,7 +802,7 @@ public static class BalanceEndpoints
                         label = DanishLabels.TryGetValue(type, out var lbl0) ? lbl0 : type,
                         saldo = new decimal?[12],
                         afholdt = new decimal[12],
-                        transferable = 0m,
+                        expiring = 0m,
                         boundaryMonth = 12
                     });
                     continue;
@@ -848,7 +848,16 @@ public static class BalanceEndpoints
                     saldo[m - 1] = Math.Round(earned + carryoverIn - cumulativeAfholdt, 2);
                 }
 
-                // transferable: COMPUTED at the type's model boundary, EMITTED at boundaryMonth=12.
+                // expiring: period-end DISPOSITION projection, COMPUTED at the type's model boundary,
+                // EMITTED at boundaryMonth=12 (ADR-030 D9 as amended — S66 post-close). The projected
+                // VALUE is the COMPLEMENT of the old "transferable": what remains BEYOND the carryover
+                // cap at the boundary (what will leave the balance), not what fits under it. The
+                // per-category LABEL ("Til udløb" vs "Til udbetaling") is FE-side, keyed off type.
+                //   VACATION identity: max(0, raw − cap) ≡ max(0, 20 − used) = the Feriefonden-lost
+                //     figure (cap 5, quota 25 ⇒ raw 25 − used; 25 − used − 5 = 20 − used).
+                //   SPECIAL_HOLIDAY expiring = godtgørelse-bound days (the untaken særlige feriedage
+                //     convert to the 2½% godtgørelse — Cirkulære 021-24 §12 stk.2): money, not loss.
+                // This is STILL a projection, not settlement (D7 deferred).
                 // ResetMonth-9 → 31 Aug of the selected year (closes ferieår year-1, spanning
                 // Sep year-1 .. Aug year). Calendar types → 31 Dec of the selected year (ferieår
                 // year). carryoverIn/used/planned are the CLOSED-boundary-ferieår balances (the
@@ -887,8 +896,11 @@ public static class BalanceEndpoints
                         : closedConfig.AnnualQuota;
 
                 var transferableRaw = earnedAtBoundary + closedCarryoverIn - closedUsed - closedPlanned;
-                var transferable = Math.Round(
-                    Math.Min(Math.Max(0m, transferableRaw), closedConfig.CarryoverMax), 2);
+                // Disposition projection: the amount BEYOND the carryover cap at the boundary
+                // (what expires as days / converts to godtgørelse), i.e. the complement of the
+                // old capped-transferable. raw ≤ cap ⇒ 0 (nothing leaves the balance).
+                var expiring = Math.Round(
+                    Math.Max(0m, transferableRaw - closedConfig.CarryoverMax), 2);
 
                 categories.Add(new
                 {
@@ -896,7 +908,7 @@ public static class BalanceEndpoints
                     label = DanishLabels.TryGetValue(type, out var lbl) ? lbl : type,
                     saldo,
                     afholdt,
-                    transferable,
+                    expiring,
                     boundaryMonth = 12
                 });
             }

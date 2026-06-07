@@ -36,12 +36,13 @@ namespace StatsTid.Tests.Regression.Balance;
 ///   <c>EntitlementMapping.AbsenceToEntitlementType</c> map.</description></item>
 ///   <item><description><b>Straddle</b> — absences in March (ferieår Y−1) and October (ferieår Y)
 ///   count against their own ferieår; Sep saldo shows the reset sawtooth.</description></item>
-///   <item><description><b>Transferable determinism</b> — two identical requests byte-equal;
-///   formula verified; cap-0 type → 0; value only at boundaryMonth=12; computed at model
+///   <item><description><b>Disposition (expiring-beyond-cap) determinism (ADR-030 D9 as
+///   amended)</b> — two identical requests byte-equal; formula verified (expiring = max(0, raw −
+///   cap)); cap-0 type → full remainder expires; value only at boundaryMonth=12; computed at model
 ///   boundary (not December).</description></item>
 ///   <item><description><b>OK-version straddle</b> — year spanning the 2026-04-01 cutover
 ///   resolves per-day norms per-side; entitlement config anchors at entitlement-year start;
-///   transferable carryoverMax anchored at closed-ferieår start.</description></item>
+///   expiring carryoverMax anchored at closed-ferieår start.</description></item>
 ///   <item><description><b>Future months</b> — diff null after today; planned absence appears in
 ///   afholdt.</description></item>
 ///   <item><description><b>ANNUAL_ACTIVITY</b> — academic profile → normHours null every
@@ -59,8 +60,9 @@ namespace StatsTid.Tests.Regression.Balance;
 ///
 /// <para>
 /// <b>NOTE (Step-0b Reviewer W4 / OQ-1).</b> <c>saldo</c> (Sep–Dec includes <c>carryoverIn</c>)
-/// and <c>transferable</c> (displayed Dec) overlap BY DESIGN (owner-accepted non-additivity). No
-/// saldo−transferable reconciliation assertion is written — it would fail by design.
+/// and the disposition <c>expiring</c> (displayed Dec, ADR-030 D9 as amended) are independent
+/// projections of the same closed ferieår at its boundary — NOT additive. No saldo−expiring
+/// reconciliation assertion is written — it would not hold by design.
 /// </para>
 ///
 /// <para>
@@ -538,7 +540,7 @@ public sealed class YearOverviewTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // 7. Transferable determinism.
+    // 7. Disposition (expiring-beyond-cap) determinism — ADR-030 D9 as amended.
     // ════════════════════════════════════════════════════════════════════════
 
     /// <summary>
@@ -552,7 +554,7 @@ public sealed class YearOverviewTests : IAsyncLifetime
     /// stable).
     /// </summary>
     [Fact]
-    public async Task Transferable_TwoIdenticalRequests_ByteEqual()
+    public async Task Expiring_TwoIdenticalRequests_ByteEqual()
     {
         var client = MakeFixedTodayClient(EmployeeBearerToken(Emp001, Emp001OrgId));
 
@@ -569,23 +571,33 @@ public sealed class YearOverviewTests : IAsyncLifetime
         Assert.Equal(rawBody1, rawBody2);
 
         // Retained field-level cross-check (the determinism property the test was named for):
-        // VACATION transferable is identical across the two responses.
+        // VACATION expiring is identical across the two responses.
         using var doc1 = JsonDocument.Parse(rawBody1);
         using var doc2 = JsonDocument.Parse(rawBody2);
-        var vac1 = GetCategory(doc1.RootElement, "VACATION").GetProperty("transferable").GetDecimal();
-        var vac2 = GetCategory(doc2.RootElement, "VACATION").GetProperty("transferable").GetDecimal();
+        var vac1 = GetCategory(doc1.RootElement, "VACATION").GetProperty("expiring").GetDecimal();
+        var vac2 = GetCategory(doc2.RootElement, "VACATION").GetProperty("expiring").GetDecimal();
         Assert.Equal(vac1, vac2);
     }
 
     /// <summary>
-    /// <b>Transferable formula verification + cap-0 type = 0.</b>
-    /// Formula: <c>min(max(0, earnedAtBoundary + carryoverIn − used − planned), carryoverMax)</c>.
-    /// For SPECIAL_HOLIDAY (carryoverMax = 0) → always 0 regardless of any balance.
-    /// For VACATION: with no absences and no carryover, transferable = 0 (earnedAtBoundary
-    /// minus nothing = positive, but capped at carryoverMax from config).
+    /// <b>Disposition formula verification — cap-0 type now emits a REAL expiring value
+    /// (ADR-030 D9 as amended).</b>
+    /// Formula: <c>max(0, (earnedAtBoundary + carryoverIn − used − planned) − carryoverMax)</c> —
+    /// the amount BEYOND the cap. The pre-amendment test pinned "cap-0 ⇒ transferable always 0";
+    /// the amendment INVERTS this (citation-gated: ADR-030 D9 as amended): a cap-0 category whose
+    /// boundary remainder is positive now reports that FULL remainder as expiring (SPECIAL_HOLIDAY
+    /// → godtgørelse-bound; CARE_DAY → lapsing).
+    /// <list type="bullet">
+    ///   <item><description><b>SPECIAL_HOLIDAY</b> (quota 5, MONTHLY_ACCRUAL, resetMonth 9,
+    ///   carryoverMax 0): closed boundary ferieår = 2024, boundary 2025-08-31, earnedAtBoundary =
+    ///   full 12 months = 5; raw = 5 − 0 = 5; expiring = max(0, 5 − 0) = <b>5</b>.</description></item>
+    ///   <item><description><b>CARE_DAY</b> (quota 2, IMMEDIATE, resetMonth 1, carryoverMax 0):
+    ///   closed boundary ferieår = 2025 (calendar), IMMEDIATE ⇒ earnedAtBoundary = full quota = 2;
+    ///   raw = 2 − 0 = 2; expiring = max(0, 2 − 0) = <b>2</b>.</description></item>
+    /// </list>
     /// </summary>
     [Fact]
-    public async Task Transferable_Cap0Type_AlwaysZero_Formula_VerifiedForVacation()
+    public async Task Expiring_Cap0Type_EmitsBeyondCapRemainder_PerD9Amended()
     {
         var employeeId = await CreateEmployeeAsync(Emp001OrgId, "AC", "OK24");
         await RegressionSeed.SeedEmployeeAsync(
@@ -594,105 +606,123 @@ public sealed class YearOverviewTests : IAsyncLifetime
         var client = MakeFixedTodayClient(EmployeeBearerToken(employeeId, Emp001OrgId));
         var body = await GetYearOverviewAsync(client, employeeId, 2025);
 
-        // SPECIAL_HOLIDAY has carryoverMax = 0 (danish-agreements.md:110) → transferable = 0.
-        var shTransferable = GetCategory(body, "SPECIAL_HOLIDAY")
-            .GetProperty("transferable").GetDecimal();
-        Assert.Equal(0m, shTransferable);
+        // SPECIAL_HOLIDAY (carryoverMax = 0, MONTHLY_ACCRUAL): the full boundary remainder expires
+        // (converts to the 2½% godtgørelse). raw = 5 > cap 0 ⇒ expiring = 5 EXACTLY.
+        var shExpiring = GetCategory(body, "SPECIAL_HOLIDAY")
+            .GetProperty("expiring").GetDecimal();
+        var expectedSh = ExpectedExpiring(
+            annualQuota: 5m, closedFerieaarStart: new DateOnly(2024, 9, 1), employmentStart: null,
+            boundaryDate: new DateOnly(2025, 8, 31),
+            carryoverIn: 0m, used: 0m, planned: 0m, carryoverMax: 0m);
+        Assert.Equal(5m, expectedSh);            // sanity: full quota expires past the 0 cap
+        Assert.Equal(expectedSh, shExpiring);    // endpoint reports the full beyond-cap remainder
 
-        // CARE_DAY has carryoverMax = 0 (calendar-year IMMEDIATE) → transferable = 0.
-        var careDayTransferable = GetCategory(body, "CARE_DAY")
-            .GetProperty("transferable").GetDecimal();
-        Assert.Equal(0m, careDayTransferable);
+        // CARE_DAY (carryoverMax = 0, IMMEDIATE, calendar year): full quota earned up-front;
+        // raw = 2 > cap 0 ⇒ expiring = 2 EXACTLY. (IMMEDIATE earns the full quota at the boundary,
+        // identical to EarnedToDate over a full calendar ferieår, so the helper is exact here too.)
+        var careDayExpiring = GetCategory(body, "CARE_DAY")
+            .GetProperty("expiring").GetDecimal();
+        var expectedCare = ExpectedExpiring(
+            annualQuota: 2m, closedFerieaarStart: new DateOnly(2025, 1, 1), employmentStart: null,
+            boundaryDate: new DateOnly(2025, 12, 31),
+            carryoverIn: 0m, used: 0m, planned: 0m, carryoverMax: 0m);
+        Assert.Equal(2m, expectedCare);          // sanity: full quota expires past the 0 cap
+        Assert.Equal(expectedCare, careDayExpiring);
     }
 
     /// <summary>
-    /// <b>Transferable formula — BELOW-cap branch pinned with an EXACT non-trivial value.</b>
+    /// <b>Disposition formula — BELOW-cap branch ⇒ expiring = 0 (boundary-zero pin).</b>
     /// VACATION is the only type with a non-zero <c>carryoverMax</c> (5m,
-    /// DefaultEntitlementConfigs.cs:74), so it is the only type whose <c>min()</c> can take EITHER
-    /// branch. Here we drive the <c>raw</c> operand BELOW the cap by seeding the CLOSED boundary
-    /// ferieår's <c>entitlement_balances</c> row with a large <c>used</c>:
+    /// DefaultEntitlementConfigs.cs:74), so it is the only type whose disposition can take EITHER
+    /// branch (raw ≤ cap ⇒ 0; raw &gt; cap ⇒ positive). Here we drive the <c>raw</c> operand BELOW
+    /// the cap by seeding the CLOSED boundary ferieår's <c>entitlement_balances</c> row with a large
+    /// <c>used</c>: nothing leaves the balance, so NOTHING expires.
     /// <list type="bullet">
     ///   <item><description>Selected year = 2025 ⇒ closed boundary ferieår = 2024
     ///   (Sep 2024 – Aug 2025); the handler reads the <c>entitlement_year = 2024</c> balance row
-    ///   (BalanceEndpoints.cs:747-755 — <c>closedEntYear = year-1</c> for ResetMonth-9 types).</description></item>
+    ///   (<c>closedEntYear = year-1</c> for ResetMonth-9 types).</description></item>
     ///   <item><description><c>earnedAtBoundary</c> at 2025-08-31 = full 12 months = 25 (real
     ///   AccrualMath).</description></item>
-    ///   <item><description>seed used = 22, planned = 0, carryoverIn = 0 ⇒
-    ///   raw = 25 + 0 − 22 − 0 = 3 &lt; 5 ⇒ transferable = min(max(0,3),5) = <b>3</b>.</description></item>
+    ///   <item><description>seed used = 22, planned = 0, carryoverIn = 0 ⇒ raw = 25 − 22 = 3 ≤ 5 ⇒
+    ///   expiring = max(0, 3 − 5) = <b>0</b> (the old capped-transferable was 3; the complement is
+    ///   0).</description></item>
     /// </list>
-    /// Asserts the exact below-cap value (NOT just &gt;= 0). The closed-ferieår year-key is the
-    /// highest-risk wiring in the endpoint — seeding the SAME (employee, type, year-1) row the
-    /// handler reads pins it.
+    /// Asserts the exact below-cap disposition (0) — the boundary-zero half of the two-branch pin.
+    /// The closed-ferieår year-key is the highest-risk wiring in the endpoint — seeding the SAME
+    /// (employee, type, year-1) row the handler reads pins it.
     /// </summary>
     [Fact]
-    public async Task Transferable_BelowCap_EqualsExactRawValue()
+    public async Task Expiring_BelowCap_IsZero()
     {
         var employeeId = await CreateEmployeeAsync(Emp001OrgId, "AC", "OK24");
         await RegressionSeed.SeedEmployeeAsync(
             _harness.ConnectionString, employeeId, Emp001OrgId, "AC", "OK24");
 
         // Closed boundary ferieår for selected year 2025 = ferieår 2024 → entitlement_year 2024.
-        // used = 22 drives raw (25 − 22 = 3) below the carryoverMax of 5.
+        // used = 22 drives raw (25 − 22 = 3) below the carryoverMax of 5 ⇒ nothing expires.
         await SeedEntitlementBalanceAsync(
             employeeId, "VACATION", entitlementYear: 2024, used: 22m, planned: 0m, carryoverIn: 0m);
 
         var client = MakeFixedTodayClient(EmployeeBearerToken(employeeId, Emp001OrgId));
         var body = await GetYearOverviewAsync(client, employeeId, 2025);
 
-        var transferable = GetCategory(body, "VACATION").GetProperty("transferable").GetDecimal();
+        var expiring = GetCategory(body, "VACATION").GetProperty("expiring").GetDecimal();
 
         // earnedAtBoundary via the REAL AccrualMath at the closed ferieår 2024 boundary (2025-08-31);
-        // carryoverMax = 5 (DefaultEntitlementConfigs.cs:74). raw = 25 + 0 − 22 − 0 = 3 < 5 ⇒ 3.
-        var expected = ExpectedTransferable(
+        // carryoverMax = 5. raw = 25 − 22 = 3 ≤ 5 ⇒ expiring = max(0, 3 − 5) = 0.
+        var expected = ExpectedExpiring(
             annualQuota: 25m, closedFerieaarStart: new DateOnly(2024, 9, 1), employmentStart: null,
             boundaryDate: new DateOnly(2025, 8, 31),
             carryoverIn: 0m, used: 22m, planned: 0m, carryoverMax: 5m);
-        Assert.Equal(3m, expected);             // sanity: the derivation lands on the below-cap branch
-        Assert.Equal(expected, transferable);   // endpoint matches the real-AccrualMath formula exactly
+        Assert.Equal(0m, expected);          // sanity: raw under the cap ⇒ nothing expires
+        Assert.Equal(expected, expiring);    // endpoint reports 0 for the below-cap case
     }
 
     /// <summary>
-    /// <b>Transferable formula — AT-cap branch pinned with the EXACT cap value.</b>
+    /// <b>Disposition formula — ABOVE-cap branch pinned with the EXACT non-trivial expiring value.</b>
     /// Same closed-ferieår wiring as the below-cap test, but operands push <c>raw</c> ABOVE the cap
-    /// so the <c>min()</c> clamps to <c>carryoverMax</c>: seed used = planned = carryoverIn = 0 ⇒
-    /// raw = earnedAtBoundary(25) &gt; 5 ⇒ transferable = min(max(0,25),5) = <b>5</b>. Asserts the
-    /// exact at-cap value (NOT just &gt;= 0). Together with the below-cap test, BOTH branches of
-    /// the <c>min()</c> are now pinned to exact expected values (Step-5a BLOCKER 2).
+    /// so a positive remainder expires: seed used = planned = carryoverIn = 0 ⇒
+    /// raw = earnedAtBoundary(25) &gt; 5 ⇒ expiring = max(0, 25 − 5) = <b>20</b>. This is the
+    /// VACATION identity max(0, raw − cap) ≡ max(0, 20 − used) = the Feriefonden-lost figure
+    /// (25 − used − 5 = 20 − used = 20 here). Asserts the exact above-cap value (NOT just &gt;= 0).
+    /// Together with the below-cap test, BOTH branches of the disposition are pinned to exact
+    /// expected values (Step-5a BLOCKER 2; the positive-expiring discriminating pin).
     /// </summary>
     [Fact]
-    public async Task Transferable_AtCap_EqualsCarryoverMax()
+    public async Task Expiring_AboveCap_EqualsRemainderBeyondCap()
     {
         var employeeId = await CreateEmployeeAsync(Emp001OrgId, "AC", "OK24");
         await RegressionSeed.SeedEmployeeAsync(
             _harness.ConnectionString, employeeId, Emp001OrgId, "AC", "OK24");
 
         // Seed the closed ferieår 2024 row with all-zero operands so raw = earnedAtBoundary (25),
-        // which exceeds the carryoverMax of 5. (A seed is written so the at-cap case is explicit
-        // and does not depend on the no-row default also yielding zeros.)
+        // which exceeds the carryoverMax of 5 by 20. (A seed is written so the above-cap case is
+        // explicit and does not depend on the no-row default also yielding zeros.)
         await SeedEntitlementBalanceAsync(
             employeeId, "VACATION", entitlementYear: 2024, used: 0m, planned: 0m, carryoverIn: 0m);
 
         var client = MakeFixedTodayClient(EmployeeBearerToken(employeeId, Emp001OrgId));
         var body = await GetYearOverviewAsync(client, employeeId, 2025);
 
-        var transferable = GetCategory(body, "VACATION").GetProperty("transferable").GetDecimal();
+        var expiring = GetCategory(body, "VACATION").GetProperty("expiring").GetDecimal();
 
-        var expected = ExpectedTransferable(
+        // raw = 25 > cap 5 ⇒ expiring = max(0, 25 − 5) = 20 (the Feriefonden-lost figure).
+        var expected = ExpectedExpiring(
             annualQuota: 25m, closedFerieaarStart: new DateOnly(2024, 9, 1), employmentStart: null,
             boundaryDate: new DateOnly(2025, 8, 31),
             carryoverIn: 0m, used: 0m, planned: 0m, carryoverMax: 5m);
-        Assert.Equal(5m, expected);             // sanity: the derivation clamps to the cap (5)
-        Assert.Equal(expected, transferable);   // endpoint clamps to carryoverMax exactly
+        Assert.Equal(20m, expected);         // sanity: 25 − 5 = 20 expires beyond the cap
+        Assert.Equal(expected, expiring);    // endpoint reports the exact beyond-cap remainder
     }
 
     /// <summary>
     /// <b>boundaryMonth = 12 for ALL categories (OQ-1 RESOLVED).</b>
-    /// The transferable display anchor is December for every category per the owner-ratified
-    /// resolution of OQ-1 (31 Dec per Ferielov §21 stk.2; display only, computation still
-    /// at the type's model boundary).
+    /// The disposition (expiring-beyond-cap) display anchor is December for every category per the
+    /// owner-ratified resolution of OQ-1 (31 Dec per Ferielov §21 stk.2; display only, computation
+    /// still at the type's model boundary).
     /// </summary>
     [Fact]
-    public async Task Transferable_BoundaryMonthIsTwelveForAllCategories()
+    public async Task Expiring_BoundaryMonthIsTwelveForAllCategories()
     {
         var client = MakeFixedTodayClient(EmployeeBearerToken(Emp001, Emp001OrgId));
         var body = await GetYearOverviewAsync(client, Emp001, 2025);
@@ -706,17 +736,17 @@ public sealed class YearOverviewTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// <b>Transferable computed at the MODEL BOUNDARY (not December) — assertion via a
+    /// <b>Disposition computed at the MODEL BOUNDARY (not December) — assertion via a
     /// post-August absence.</b>
     /// Seeds a VACATION absence in September 2025 (ferieår Y = 2025, which starts Sep 2025).
     /// The CLOSED boundary ferieår for year 2025 is ferieår Y−1 = 2024 (Sep 2024 – Aug 2025).
     /// The Sep 2025 absence belongs to ferieår 2025 (NOT ferieår 2024), so it does NOT change
-    /// the transferable for year 2025 (which uses the closed ferieår 2024 balances). However,
+    /// the expiring value for year 2025 (which uses the closed ferieår 2024 balances). However,
     /// it DOES appear in the Dec 2025 saldo (ferieår 2025, Sep–Dec portion). This discriminates
     /// compute-at-model-boundary from compute-at-December (Step-0b cycle-2 Reviewer confirmation).
     /// </summary>
     [Fact]
-    public async Task Transferable_ComputedAtModelBoundary_NotDecember_PostAugustAbsenceDoesNotChangeTransferable()
+    public async Task Expiring_ComputedAtModelBoundary_NotDecember_PostAugustAbsenceDoesNotChangeExpiring()
     {
         var employeeId = await CreateEmployeeAsync(Emp001OrgId, "AC", "OK24");
         await RegressionSeed.SeedEmployeeAsync(
@@ -732,14 +762,14 @@ public sealed class YearOverviewTests : IAsyncLifetime
 
         var vacation = GetCategory(body, "VACATION");
 
-        // Transferable uses the CLOSED ferieår 2024 balances (Sep 2024 – Aug 2025).
+        // Expiring uses the CLOSED ferieår 2024 balances (Sep 2024 – Aug 2025).
         // The Sep 2025 absence is in ferieår 2025, so closedUsed/closedPlanned = 0.
-        // transferable = min(max(0, earnedAtBoundary + 0 − 0 − 0), carryoverMax).
+        // expiring = max(0, (earnedAtBoundary + 0 − 0 − 0) − carryoverMax).
         // earnedAtBoundary at 2025-08-31 (31 Aug of selected year for resetMonth-9):
         //   = EarnedToDate(25, 1.0, 2024-09-01, null, 2025-08-31) = 25 (full 12 months).
-        // transferable = min(max(0, 25), carryoverMax). Exact value depends on carryoverMax
-        // from config; the key assertion is that it is NOT affected by the Sep 2025 absence.
-        var transferable = vacation.GetProperty("transferable").GetDecimal();
+        // expiring = max(0, 25 − carryoverMax). Exact value depends on carryoverMax from config;
+        // the key assertion is that it is NOT affected by the Sep 2025 absence.
+        var expiring = vacation.GetProperty("expiring").GetDecimal();
 
         // Dec saldo (index 11): ferieår 2025 (Sep 2025–Aug 2026). Sep absence IS counted.
         // saldo[11] at Dec-end = earned(12 months of ferieår 2025) + carryoverIn(0) −
@@ -753,18 +783,18 @@ public sealed class YearOverviewTests : IAsyncLifetime
             monthEnd: new DateOnly(2025, 12, 31), carryoverIn: 0m, cumulativeAfholdt: 1.0m);
         Assert.Equal(expectedDecSaldo, decSaldo);
 
-        // The Sep 2025 absence does NOT change the transferable (which uses the CLOSED ferieår
+        // The Sep 2025 absence does NOT change the expiring value (which uses the CLOSED ferieår
         // 2024 balances). No closed-ferieår-2024 balance row is seeded here ⇒ closedUsed =
         // closedPlanned = closedCarryoverIn = 0, and earnedAtBoundary(2025-08-31, ferieår 2024) =
-        // 25 (full 12 months). raw = 25 > carryoverMax 5 ⇒ transferable = 5 EXACTLY. Asserting the
-        // exact value (not >= 0) is what proves compute-at-model-boundary: a Sep-2025 (ferieår
-        // 2025) absence cannot perturb a value sourced entirely from ferieår 2024.
-        var expectedTransferable = ExpectedTransferable(
+        // 25 (full 12 months). raw = 25 > carryoverMax 5 ⇒ expiring = max(0, 25 − 5) = 20 EXACTLY.
+        // Asserting the exact value (not >= 0) is what proves compute-at-model-boundary: a Sep-2025
+        // (ferieår 2025) absence cannot perturb a value sourced entirely from ferieår 2024.
+        var expectedExpiring = ExpectedExpiring(
             annualQuota: 25m, closedFerieaarStart: new DateOnly(2024, 9, 1), employmentStart: null,
             boundaryDate: new DateOnly(2025, 8, 31),
             carryoverIn: 0m, used: 0m, planned: 0m, carryoverMax: 5m);
-        Assert.Equal(5m, expectedTransferable); // sanity: clamps to the cap
-        Assert.Equal(expectedTransferable, transferable);
+        Assert.Equal(20m, expectedExpiring); // sanity: 25 − 5 = 20 expires beyond the cap
+        Assert.Equal(expectedExpiring, expiring);
 
         // And the Dec saldo (ferieår 2025) DID drop because of the same Sep absence — the two
         // ferieår are independent (straddle), confirming the discrimination.
@@ -796,7 +826,7 @@ public sealed class YearOverviewTests : IAsyncLifetime
     /// distinct-rate assertion below would fail.</para>
     ///
     /// <para>Also asserts that the VACATION entitlement-config reads anchor at the entitlement-year
-    /// START, not today's OK (the saldo/transferable values below).</para>
+    /// START, not today's OK (the saldo/expiring values below).</para>
     /// </summary>
     [Fact]
     public async Task OkVersionStraddle_2026Cutover_NormHoursPerSideCorrect_EntitlementConfigAnchorsAtYearStart()
@@ -862,19 +892,19 @@ public sealed class YearOverviewTests : IAsyncLifetime
             monthEnd: new DateOnly(2026, 1, 31), carryoverIn: 0m, cumulativeAfholdt: 0m);
         Assert.Equal(expectedJanSaldo, janSaldo);
 
-        // transferable: closed boundary ferieår = 2024 (start 2024-09-01 → OK24), boundary 2025-08-31.
+        // expiring: closed boundary ferieår = 2024 (start 2024-09-01 → OK24), boundary 2025-08-31.
         // No closed-ferieår-2024 balance row seeded ⇒ all-zero operands ⇒ raw = 25 > carryoverMax 5
-        // ⇒ transferable = 5 EXACTLY. carryoverMax is read from the OK24-era config (Step-0b cycle-2
-        // Reviewer NOTE: anchored at the closed ferieår start, NOT today's OK26).
-        var vacTransferable = vacation.GetProperty("transferable").GetDecimal();
-        var expectedTransferable = ExpectedTransferable(
+        // ⇒ expiring = max(0, 25 − 5) = 20 EXACTLY. carryoverMax is read from the OK24-era config
+        // (Step-0b cycle-2 Reviewer NOTE: anchored at the closed ferieår start, NOT today's OK26).
+        var vacExpiring = vacation.GetProperty("expiring").GetDecimal();
+        var expectedExpiring = ExpectedExpiring(
             annualQuota: 25m, closedFerieaarStart: new DateOnly(2024, 9, 1), employmentStart: null,
             boundaryDate: new DateOnly(2025, 8, 31),
             carryoverIn: 0m, used: 0m, planned: 0m, carryoverMax: 5m);
-        Assert.Equal(5m, expectedTransferable);
-        Assert.Equal(expectedTransferable, vacTransferable);
+        Assert.Equal(20m, expectedExpiring);
+        Assert.Equal(expectedExpiring, vacExpiring);
 
-        // HONEST GAP (Step-5a BLOCKER 3): the transferable carryoverMax is sourced from the GLOBAL
+        // HONEST GAP (Step-5a BLOCKER 3): the expiring carryoverMax is sourced from the GLOBAL
         // entitlement_configs row (keyed by agreement_code + ok_version only — NOT org-scoped), and
         // AC/OK24 vs AC/OK26 are value-identical placeholders (both carryoverMax = 5,
         // DefaultEntitlementConfigs.cs:74). The local-profile override above only steers
@@ -1046,7 +1076,7 @@ public sealed class YearOverviewTests : IAsyncLifetime
     ///   <item><description>(a) is non-discriminating: ALL VACATION configs in the DB are quota 25 +
     ///   carryoverMax 5 across EVERY seeded agreement code — AC/HK/PROSA AND the AC variants
     ///   AC_RESEARCH/AC_TEACHING (init.sql:1423-1428 + 1465-1468). Switching between any two SEEDED
-    ///   codes changes no observable VACATION saldo/transferable. (CHILD_SICK is the only quota that
+    ///   codes changes no observable VACATION saldo/expiring. (CHILD_SICK is the only quota that
     ///   varies by agreement, and it is NOT a year-overview category — YearOverviewCategoryTypes,
     ///   BalanceEndpoints.cs:520-521.) OK24 vs OK26 are value-identical too.</description></item>
     ///   <item><description>(b) is non-discriminating: AC_RESEARCH/AC_TEACHING DO have seeded
@@ -1076,7 +1106,7 @@ public sealed class YearOverviewTests : IAsyncLifetime
     /// covers ONLY <c>[2026-06-01, ∞)</c> (today + the later ferieår under AC); the earlier months
     /// (Jan–May 2026, under the fictitious code) have NO profile ⇒ null norms ⇒ ResolveAsync is never
     /// invoked for the fictitious code ⇒ no 500. The header likewise skips ResolveAsync when today's
-    /// profile resolves (it does — AC from 2026-06-01). saldo/transferable are independent of norms.</para>
+    /// profile resolves (it does — AC from 2026-06-01). saldo/expiring are independent of norms.</para>
     ///
     /// <para><b>Why this discriminates (pre-fix-fails argument).</b> Selected year = 2026.
     /// For VACATION (resetMonth 9) the year spans TWO ferieår:
@@ -1098,10 +1128,10 @@ public sealed class YearOverviewTests : IAsyncLifetime
     ///   (quota 25) ⇒ EarnedToDate(25, …) = 25 × 4/12 = <b>8.33</b> — confirming the current ferieår
     ///   still reflects the NEW agreement.</description></item>
     /// </list>
-    /// Transferable for 2026 (closed boundary ferieår = 2025, start 2025-09-01, boundary 2026-08-31)
-    /// likewise anchors at PIN_DATED_AC (BalanceEndpoints.cs:806-811): earnedAtBoundary = full 12 months
-    /// = 40, raw = 40 > PIN_DATED_AC carryoverMax (10) ⇒ transferable = <b>10</b> EXACTLY. Pre-fix would
-    /// clamp to AC's carryoverMax (5) — so transferable independently discriminates too.</para>
+    /// Expiring for 2026 (closed boundary ferieår = 2025, start 2025-09-01, boundary 2026-08-31)
+    /// likewise anchors at PIN_DATED_AC: earnedAtBoundary = full 12 months = 40, raw = 40 >
+    /// PIN_DATED_AC carryoverMax (10) ⇒ expiring = max(0, 40 − 10) = <b>30</b> EXACTLY. Pre-fix would
+    /// use AC's carryoverMax (5) ⇒ max(0, 40 − 5) = 35 — so expiring independently discriminates too.</para>
     /// </summary>
     [Fact]
     public async Task DatedAgreement_HistoricalFerieaarValuesAgainstThatYearsAgreement_NotTodaysAgreement()
@@ -1176,33 +1206,34 @@ public sealed class YearOverviewTests : IAsyncLifetime
         Assert.Equal(8.33m, expectedDecSaldo);    // sanity: AC quota → 8.33
         Assert.Equal(expectedDecSaldo, decSaldo);  // current ferieår reflects the NEW agreement
 
-        // ── Transferable for 2026: closed boundary ferieår 2025 anchors at PIN_DATED_AC. ──
+        // ── Expiring for 2026: closed boundary ferieår 2025 anchors at PIN_DATED_AC. ──
         // earnedAtBoundary = EarnedToDate(40, 1.0, 2025-09-01, null, 2026-08-31) = 40 (full 12 months);
-        // raw = 40 > carryoverMax 10 ⇒ transferable = 10 (PIN_DATED_AC's cap, NOT AC's 5).
-        var transferable = vacation.GetProperty("transferable").GetDecimal();
-        var expectedTransferable = ExpectedTransferable(
+        // raw = 40 > carryoverMax 10 ⇒ expiring = max(0, 40 − 10) = 30 (using PIN_DATED_AC's cap 10,
+        // NOT AC's 5).
+        var expiring = vacation.GetProperty("expiring").GetDecimal();
+        var expectedExpiring = ExpectedExpiring(
             annualQuota: pinQuota, closedFerieaarStart: new DateOnly(2025, 9, 1),
             employmentStart: null, boundaryDate: new DateOnly(2026, 8, 31),
             carryoverIn: 0m, used: 0m, planned: 0m, carryoverMax: pinCarryoverMax);
-        Assert.Equal(10m, expectedTransferable);    // sanity: clamps to PIN_DATED_AC cap (10)
-        Assert.Equal(expectedTransferable, transferable);
-        Assert.NotEqual(5m, transferable);          // pre-fix would clamp to AC's cap (5)
+        Assert.Equal(30m, expectedExpiring);        // sanity: 40 − PIN_DATED_AC cap 10 = 30
+        Assert.Equal(expectedExpiring, expiring);
+        Assert.NotEqual(35m, expiring);             // pre-fix would use AC's cap 5 ⇒ 40 − 5 = 35
     }
 
     // ════════════════════════════════════════════════════════════════════════
     // 13. Step-7a R-W1 pin — GRACEFUL categories contract (no entitlement config).
     //     An employee whose agreement/OK has NO entitlement config for the four
-    //     categories gets all-null saldo + zero afholdt + transferable 0 + boundaryMonth 12,
+    //     categories gets all-null saldo + zero afholdt + expiring 0 + boundaryMonth 12,
     //     and 200 (never 500) — the contract the FE's dash-guard renders
-    //     (BalanceEndpoints.cs:731-744 graceful empty branch; contract saldo = (number|null)[]).
+    //     (graceful empty branch; contract saldo = (number|null)[]).
     // ════════════════════════════════════════════════════════════════════════
 
     /// <summary>
     /// <b>Step-7a R-W1 (convergent Codex + Reviewer) regression pin — the graceful empty-config
     /// contract.</b> For EVERY one of the four year-overview categories whose
     /// <c>(type, agreement, ok)</c> has NO open <c>entitlement_configs</c> row, the handler takes the
-    /// graceful empty branch (BalanceEndpoints.cs:731-744): the response is 200 (never 500) and each
-    /// category carries <c>saldo</c> = 12 JSON nulls, <c>afholdt</c> = 12 zeros, <c>transferable</c> = 0,
+    /// graceful empty branch: the response is 200 (never 500) and each
+    /// category carries <c>saldo</c> = 12 JSON nulls, <c>afholdt</c> = 12 zeros, <c>expiring</c> = 0,
     /// and <c>boundaryMonth</c> = 12. This pins the exact shape the FE's new null-saldo dash-guard
     /// renders (the contract now documents <c>saldo</c> as <c>(number|null)[]</c>).
     ///
@@ -1230,7 +1261,7 @@ public sealed class YearOverviewTests : IAsyncLifetime
     /// row covers today (BalanceEndpoints.cs:576-578).</para>
     /// </summary>
     [Fact]
-    public async Task Graceful_NoEntitlementConfigForAgreement_AllCategoriesNullSaldoZeroAfholdtTransferable0_Never500()
+    public async Task Graceful_NoEntitlementConfigForAgreement_AllCategoriesNullSaldoZeroAfholdtExpiring0_Never500()
     {
         // Fictitious agreement code with NO entitlement_configs (and no CentralAgreementConfigs) →
         // every category hits the graceful empty branch.
@@ -1280,8 +1311,8 @@ public sealed class YearOverviewTests : IAsyncLifetime
             Assert.Equal(12, afholdt.Count);
             Assert.All(afholdt, e => Assert.Equal(0m, e.GetDecimal()));
 
-            // transferable = 0; boundaryMonth = 12 (OQ-1 resolved, even on the empty branch).
-            Assert.Equal(0m, cat.GetProperty("transferable").GetDecimal());
+            // expiring = 0; boundaryMonth = 12 (OQ-1 resolved, even on the empty branch).
+            Assert.Equal(0m, cat.GetProperty("expiring").GetDecimal());
             Assert.Equal(12, cat.GetProperty("boundaryMonth").GetInt32());
         }
     }
@@ -1323,7 +1354,7 @@ public sealed class YearOverviewTests : IAsyncLifetime
     /// day WITHOUT calling ResolveAsync (DailyNormCalculator.cs:93-101), and the header skips
     /// ResolveAsync (gated on a non-null today-profile, BalanceEndpoints.cs:593). So neither
     /// fictitious code (both absent from agreement_configs + CentralAgreementConfigs) ever reaches
-    /// a config lookup that would throw → clean 200. saldo/transferable are norm-INDEPENDENT.
+    /// a config lookup that would throw → clean 200. saldo/expiring are norm-INDEPENDENT.
     /// Because the bare user is inserted AFTER the last host boot, no backfilled
     /// <c>[0001-01-01, ∞)</c> user_agreement_codes row shadows the explicit dated history below.</para>
     ///
@@ -1440,11 +1471,11 @@ public sealed class YearOverviewTests : IAsyncLifetime
             var saldo = cat.GetProperty("saldo").EnumerateArray().ToList();
             Assert.Equal(12, saldo.Count);
             Assert.All(saldo, e => Assert.Equal(JsonValueKind.Null, e.ValueKind)); // empty branch
-            // afholdt all zero + transferable 0 (the graceful empty shape) reinforce per-type gating.
+            // afholdt all zero + expiring 0 (the graceful empty shape) reinforce per-type gating.
             Assert.All(
                 cat.GetProperty("afholdt").EnumerateArray(),
                 e => Assert.Equal(0m, e.GetDecimal()));
-            Assert.Equal(0m, cat.GetProperty("transferable").GetDecimal());
+            Assert.Equal(0m, cat.GetProperty("expiring").GetDecimal());
         }
     }
 
@@ -1563,20 +1594,21 @@ public sealed class YearOverviewTests : IAsyncLifetime
             + carryoverIn - cumulativeAfholdt, 2);
 
     /// <summary>
-    /// Expected <c>transferable</c> for a MONTHLY_ACCRUAL type, computed the EXACT way the endpoint
-    /// does (BalanceEndpoints.cs:760-769):
-    /// <c>Math.Round(Math.Min(Math.Max(0, earnedAtBoundary + carryoverIn − used − planned),
-    ///   carryoverMax), 2)</c>, where <c>earnedAtBoundary</c> is the UNROUNDED real
-    /// <see cref="AccrualMath.EarnedToDate"/> at the closed-ferieår model boundary.
+    /// Expected <c>expiring</c> (ADR-030 D9 as amended — period-end disposition projection) for a
+    /// MONTHLY_ACCRUAL type, computed the EXACT way the endpoint does (BalanceEndpoints.cs):
+    /// <c>Math.Round(Math.Max(0, (earnedAtBoundary + carryoverIn − used − planned) − carryoverMax),
+    ///   2)</c> — the amount BEYOND the carryover cap (the complement of the old capped-transferable),
+    /// where <c>earnedAtBoundary</c> is the UNROUNDED real <see cref="AccrualMath.EarnedToDate"/> at
+    /// the closed-ferieår model boundary.
     /// </summary>
-    private static decimal ExpectedTransferable(
+    private static decimal ExpectedExpiring(
         decimal annualQuota, DateOnly closedFerieaarStart, DateOnly? employmentStart,
         DateOnly boundaryDate, decimal carryoverIn, decimal used, decimal planned, decimal carryoverMax)
     {
         var earnedAtBoundary = AccrualMath.EarnedToDate(
             annualQuota, 1.0m, closedFerieaarStart, employmentStart, boundaryDate);
         var raw = earnedAtBoundary + carryoverIn - used - planned;
-        return Math.Round(Math.Min(Math.Max(0m, raw), carryoverMax), 2);
+        return Math.Round(Math.Max(0m, raw - carryoverMax), 2);
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -1797,7 +1829,7 @@ public sealed class YearOverviewTests : IAsyncLifetime
 
     /// <summary>
     /// Upserts a row in <c>entitlement_balances</c> for the given employee / type / year.
-    /// Used to seed carryoverIn, used, planned values for straddle and transferable tests.
+    /// Used to seed carryoverIn, used, planned values for straddle and disposition (expiring) tests.
     /// Citation: entitlement_balances schema at ProjectionSchemaTestFixture.cs:85-99.
     /// </summary>
     private async Task SeedEntitlementBalanceAsync(

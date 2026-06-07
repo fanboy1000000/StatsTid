@@ -81,7 +81,8 @@ function makeOverview(overrides: Partial<YearOverview> = {}): YearOverview {
         // Feb afholdt = 0,5 day-equivalent; saldo drops by 0,5.
         saldo: [25, 24.5, 24.5, 24.5, 24.5, 24.5, 24.5, 24.5, 24.5, 24.5, 24.5, 24.5],
         afholdt: [0, 0.5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-        transferable: 5,
+        // Disposition (ADR-030 D9 as amended): amount expiring beyond the cap at Dec. > 0 → "Til udløb".
+        expiring: 5,
         boundaryMonth: 12,
       },
       {
@@ -89,7 +90,9 @@ function makeOverview(overrides: Partial<YearOverview> = {}): YearOverview {
         label: 'Særlige feriedage',
         saldo: [5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5],
         afholdt: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-        transferable: 0,
+        // cap-0 type: untaken særlige feriedage convert to godtgørelse → a POSITIVE expiring that
+        // SHOWS at Dec under the "Til udbetaling" label (inverts the pre-amendment cap-0 ⇒ em-dash).
+        expiring: 3,
         boundaryMonth: 12,
       },
       {
@@ -97,7 +100,7 @@ function makeOverview(overrides: Partial<YearOverview> = {}): YearOverview {
         label: 'Omsorgsdage',
         saldo: [2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
         afholdt: [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-        transferable: 0,
+        expiring: 0,
         boundaryMonth: 12,
       },
       {
@@ -105,7 +108,7 @@ function makeOverview(overrides: Partial<YearOverview> = {}): YearOverview {
         label: 'Seniordage',
         saldo: [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
         afholdt: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-        transferable: 0,
+        expiring: 0,
         boundaryMonth: 12,
       },
     ],
@@ -203,7 +206,11 @@ describe('ArsoversigtPage — matrix structure', () => {
     // Sub-rows present for a leave group.
     expect(screen.getAllByText('Saldo (rest)').length).toBe(4) // Ferie, Særlige feriedage, Oms, Senior
     expect(screen.getAllByText('Afholdt').length).toBe(4)
-    expect(screen.getAllByText('Kan overføres').length).toBe(4)
+    // Disposition row label keys off type: SPECIAL_HOLIDAY → "Til udbetaling" (godtgørelse),
+    // every other leave type → "Til udløb" (lapses). The old "Kan overføres" is gone.
+    expect(screen.getAllByText('Til udløb').length).toBe(3) // Ferie, Oms, Senior
+    expect(screen.getAllByText('Til udbetaling').length).toBe(1) // Særlige feriedage
+    expect(screen.queryByText('Kan overføres')).not.toBeInTheDocument()
     expect(screen.getByText('Diff. fra norm')).toBeInTheDocument()
   })
 
@@ -265,33 +272,38 @@ describe('ArsoversigtPage — cell rules (server-today authority)', () => {
     expect(arbCells[3]).toHaveTextContent('–')
   })
 
-  it('renders transferable ONLY at the boundaryMonth (Dec) in info styling; em-dash elsewhere', () => {
+  it('renders the disposition ("Til udløb") ONLY at the boundaryMonth (Dec) in info styling; em-dash elsewhere', () => {
     mockUseYearOverview.mockReturnValue(overviewHook(makeOverview()))
     renderPage()
-    // The Ferie "Kan overføres" row (1st leave group): Dec cell = 5, others em-dash.
-    const cells = rowCells('Kan overføres', 0)
+    // The Ferie disposition row is labelled "Til udløb" (VACATION lapses); 1st such row
+    // (occurrence 0): Dec cell = 5, others em-dash.
+    const cells = rowCells('Til udløb', 0)
     expect(cells[11]).toHaveTextContent('5') // Dec (index 11)
     // info styling class applied to the Dec cell.
     expect(cells[11].className).toMatch(/keep/)
-    // Jan..Nov are em-dashes (no transfer outside December).
+    // Jan..Nov are em-dashes (disposition shown only in December).
     expect(cells[0]).toHaveTextContent('–')
     expect(cells[5]).toHaveTextContent('–')
   })
 
-  it('renders an em-dash for a cap-0 transferable type (Særlige feriedage) even at December', () => {
+  it('SHOWS a cap-0 godtgørelse type (Særlige feriedage) at December under "Til udbetaling" (D9 amended inversion)', () => {
     mockUseYearOverview.mockReturnValue(overviewHook(makeOverview()))
     renderPage()
-    // Særlige feriedage is the 2nd leave group (occurrence index 1).
-    const cells = rowCells('Kan overføres', 1)
-    // transferable 0 → Dec is also an em-dash.
-    expect(cells[11]).toHaveTextContent('–')
+    // Særlige feriedage's disposition row is labelled "Til udbetaling" (untaken særlige
+    // feriedage convert to the 2½% godtgørelse — money, not loss). Pre-amendment a cap-0
+    // type rendered an em-dash even at December; now a positive expiring (3) SHOWS.
+    const cells = rowCells('Til udbetaling', 0)
+    expect(cells[11]).toHaveTextContent('3') // Dec shows the godtgørelse-bound days
+    expect(cells[11].className).toMatch(/keep/)
+    // Other months remain em-dashes (disposition shown only in December).
+    expect(cells[0]).toHaveTextContent('–')
   })
 
   it('renders an all-null saldo (no-config graceful row) as em-dashes without crashing, rest intact', () => {
     // The endpoint's graceful empty-config branch (no entitlement config under the
     // employee's agreement/OK — e.g. AC_RESEARCH/AC_TEACHING) emits saldo as an
     // ALL-null 12-element array (C# `new decimal?[12]`), afholdt all-zero,
-    // transferable 0. A null saldo cell must render the em-dash (NOT crash on
+    // expiring 0. A null saldo cell must render the em-dash (NOT crash on
     // formatDanishNumber(null)).
     const ov = makeOverview()
     // Make the FIRST leave group (Ferie / VACATION, occurrence 0) the graceful shape.
@@ -300,7 +312,7 @@ describe('ArsoversigtPage — cell rules (server-today authority)', () => {
       label: 'Ferie',
       saldo: Array.from({ length: 12 }, () => null),
       afholdt: Array.from({ length: 12 }, () => 0),
-      transferable: 0,
+      expiring: 0,
       boundaryMonth: 12,
     }
     mockUseYearOverview.mockReturnValue(overviewHook(ov))
