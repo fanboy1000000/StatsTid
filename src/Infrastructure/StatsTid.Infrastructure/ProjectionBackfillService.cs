@@ -117,7 +117,7 @@ public sealed class ProjectionBackfillService
             events.stored_at
         FROM events
         LEFT JOIN outbox_events ON events.event_id = outbox_events.event_id
-        WHERE events.event_type IN ('TimeEntryRegistered', 'AbsenceRegistered', 'WorkTimeRegistered')
+        WHERE events.event_type IN ('TimeEntryRegistered', 'AbsenceRegistered', 'WorkTimeRegistered', 'EntitlementBalanceRevalued')
         ORDER BY events.stream_id, events.stream_version
     ";
 
@@ -145,15 +145,28 @@ public sealed class ProjectionBackfillService
 
     private const string InsertAbsSql = @"
         INSERT INTO absences_projection (
-            event_id, employee_id, date, absence_type, hours,
+            event_id, employee_id, date, absence_type, hours, feriedage,
             agreement_code, ok_version, occurred_at,
             actor_id, actor_role, correlation_id, outbox_id
         ) VALUES (
-            @eventId, @employeeId, @date, @absenceType, @hours,
+            @eventId, @employeeId, @date, @absenceType, @hours, @feriedage,
             @agreementCode, @okVersion, @occurredAt,
             @actorId, @actorRole, @correlationId, @outboxId
         )
         ON CONFLICT (event_id) DO NOTHING
+    ";
+
+    // ADR-032 D2 replay contract: apply EntitlementBalanceRevalued replacement sets so a
+    // from-events rebuild equals live state byte-identically, INCLUDING post-revaluation.
+    // Keyed on the ABSENCE event_id (NOT the revaluation event); idempotent on re-run
+    // (overwrites with the same recorded value). Replays are applied AFTER all absence
+    // INSERTs so the target row is guaranteed present regardless of cross-stream ordering
+    // (AbsenceRegistered rides time/skema streams; EntitlementBalanceRevalued rides
+    // employee-{id} streams — a single (stream_id, stream_version) sort interleaves them).
+    private const string ApplyRevaluationSql = @"
+        UPDATE absences_projection
+           SET feriedage = @feriedage
+         WHERE event_id = @absenceEventId
     ";
 
     // S56 TASK-5603: LATEST-WINS upsert — IDENTICAL to WorkTimeProjectionRepository.UpsertAsync.
@@ -231,6 +244,7 @@ public sealed class ProjectionBackfillService
         insertAbsCmd.Parameters.Add("date", NpgsqlDbType.Date);
         insertAbsCmd.Parameters.Add("absenceType", NpgsqlDbType.Text);
         insertAbsCmd.Parameters.Add("hours", NpgsqlDbType.Numeric);
+        insertAbsCmd.Parameters.Add("feriedage", NpgsqlDbType.Numeric);
         insertAbsCmd.Parameters.Add("agreementCode", NpgsqlDbType.Text);
         insertAbsCmd.Parameters.Add("okVersion", NpgsqlDbType.Text);
         insertAbsCmd.Parameters.Add("occurredAt", NpgsqlDbType.TimestampTz);
@@ -238,6 +252,11 @@ public sealed class ProjectionBackfillService
         insertAbsCmd.Parameters.Add("actorRole", NpgsqlDbType.Text);
         insertAbsCmd.Parameters.Add("correlationId", NpgsqlDbType.Uuid);
         insertAbsCmd.Parameters.Add("outboxId", NpgsqlDbType.Bigint);
+
+        // ADR-032 D2 — replacement-set applicator (absence-event-keyed feriedage overwrite).
+        await using var applyRevalCmd = new NpgsqlCommand(ApplyRevaluationSql, conn, tx);
+        applyRevalCmd.Parameters.Add("feriedage", NpgsqlDbType.Numeric);
+        applyRevalCmd.Parameters.Add("absenceEventId", NpgsqlDbType.Uuid);
 
         await using var upsertWorkTimeCmd = new NpgsqlCommand(UpsertWorkTimeSql, conn, tx);
         upsertWorkTimeCmd.Parameters.Add("employeeId", NpgsqlDbType.Text);
@@ -279,6 +298,13 @@ public sealed class ProjectionBackfillService
         int unknownEventTypes = 0;
         int appliedWorkTime = 0;
         int skippedWorkTime = 0;
+
+        // ADR-032 D2 — buffer EntitlementBalanceRevalued replacement sets in event order
+        // (rows already sorted by stream_id, stream_version). Applied AFTER the absence
+        // INSERTs so every targeted absence row exists regardless of cross-stream interleave;
+        // last-wins within event order replays the live state (later revaluations supersede
+        // earlier ones for the same absence — the live profile-PUT path overwrites in place).
+        var revaluations = new List<AbsenceFeriedageReplacement>();
 
         foreach (var row in rows)
         {
@@ -359,6 +385,14 @@ public sealed class ProjectionBackfillService
                 insertAbsCmd.Parameters["date"].Value = ab.Date;
                 insertAbsCmd.Parameters["absenceType"].Value = ab.AbsenceType;
                 insertAbsCmd.Parameters["hours"].Value = ab.Hours;
+                // ADR-032 D2 — materialize the authoritative per-absence feriedage.
+                // Post-S66 events carry it in the payload; pre-S66 null-payload events
+                // fall back to the convention in force when written: hours / 7.4 rounded
+                // 4dp — byte-identical to the init.sql legacy backfill (ROUND(hours/7.4,4))
+                // so a from-events rebuild equals the upgraded table.
+                insertAbsCmd.Parameters["feriedage"].Value = ab.Feriedage.HasValue
+                    ? ab.Feriedage.Value
+                    : Math.Round(ab.Hours / 7.4m, 4, MidpointRounding.AwayFromZero);
                 insertAbsCmd.Parameters["agreementCode"].Value = ab.AgreementCode;
                 insertAbsCmd.Parameters["okVersion"].Value = ab.OkVersion;
                 insertAbsCmd.Parameters["occurredAt"].Value = ab.OccurredAt.Kind == DateTimeKind.Utc
@@ -394,9 +428,32 @@ public sealed class ProjectionBackfillService
                 if (affected == 1) appliedWorkTime++;
                 else skippedWorkTime++;
             }
+            else if (domainEvent is EntitlementBalanceRevalued rev)
+            {
+                // ADR-032 D2 — defer the per-absence feriedage overwrites; they ride
+                // employee-{id} streams and must land AFTER all absence INSERTs. Preserve
+                // event order (rows are stream_id/stream_version-sorted) so later
+                // revaluations win for the same absence. NOTE: the entitlement_balances
+                // `used` counter is NOT rebuilt here (see method-level observation) — this
+                // service rebuilds only the event_id-keyed absence projection; the counter
+                // is the authoritative store written by the live path, never replayed.
+                revaluations.AddRange(rev.Replacements);
+            }
             // Any other type is impossible given the SELECT WHERE clause;
             // the unknown-type branch above already handles deserialization
             // mismatches.
+        }
+
+        // ADR-032 D2 — apply the buffered replacement sets in event order. Each UPDATE is
+        // keyed on the absence event_id; a missing target row (revaluation for an absence
+        // outside this projection — should not happen) is a silent 0-row no-op here (the
+        // live D4 path enforces row-count==set-size and rolls back on mismatch; the rebuild
+        // is best-effort idempotent, mirroring the ON CONFLICT DO NOTHING insert posture).
+        foreach (var repl in revaluations)
+        {
+            applyRevalCmd.Parameters["feriedage"].Value = repl.NewFeriedage;
+            applyRevalCmd.Parameters["absenceEventId"].Value = repl.AbsenceEventId;
+            await applyRevalCmd.ExecuteNonQueryAsync(ct);
         }
 
         await tx.CommitAsync(ct);
