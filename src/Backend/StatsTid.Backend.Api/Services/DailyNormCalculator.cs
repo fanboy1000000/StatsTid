@@ -100,28 +100,77 @@ public sealed class DailyNormCalculator
                 continue;
             }
 
-            var okVersion = OkVersionResolver.ResolveVersion(day);
-            var orgId = profile.OrgId ?? fallbackOrgId;
-            var cacheKey = $"{okVersion}|{profile.AgreementCode}|{profile.Position}|{profile.PartTimeFraction}|{orgId}";
-            if (!normCache.TryGetValue(cacheKey, out var resolved))
-            {
-                var config = await _configResolver.ResolveAsync(
-                    orgId, profile.AgreementCode, okVersion, profile.Position, ct);
-                resolved = (config.WeeklyNormHours, config.NormModel);
-                normCache[cacheKey] = resolved;
-            }
-
-            if (resolved.NormModel == NormModel.ANNUAL_ACTIVITY)
-            {
-                // Academic annual-activity norm: a per-weekday split is not meaningful.
-                result.Add(new DailyNorm(day, null));
-                continue;
-            }
-
-            var hours = Math.Round(resolved.WeeklyNormHours * profile.PartTimeFraction / 5m, 2);
+            var hours = await ComputeForProfileAsync(profile, day, fallbackOrgId, normCache, ct);
             result.Add(new DailyNorm(day, hours));
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// S66 / TASK-6604 (ADR-032 D4) — the per-day weekday-norm core, factored OUT of the
+    /// <see cref="ComputeRangeAsync"/> loop VERBATIM so it can be driven by a caller-supplied
+    /// (in-hand) <see cref="EmploymentProfile"/> rather than only a resolver-resolved one. The
+    /// profile-change revaluation needs the norm computed from the NEW (uncommitted) part-time
+    /// fraction / position, which the dated resolver cannot observe mid-tx (it owns a separate
+    /// connection — ADR-032 D4); this overload lets the PUT pass the in-hand profile WITHOUT
+    /// any second copy of the <c>WeeklyNorm × fraction / 5</c> formula (the S65 "one shared norm
+    /// impl" invariant is preserved — both the range loop and the revaluation path now route the
+    /// SAME math through here).
+    ///
+    /// <para>
+    /// Behavior preserved byte-for-byte vs the prior inline loop: weekend ⇒ 0 (handled by the
+    /// caller before calling, kept here too for the standalone overload below), ANNUAL_ACTIVITY ⇒
+    /// null, otherwise <c>Math.Round(WeeklyNorm × fraction / 5, 2)</c>. OK version is resolved per
+    /// day; org falls back to <paramref name="fallbackOrgId"/> when the profile carries none.
+    /// </para>
+    /// </summary>
+    private async Task<decimal?> ComputeForProfileAsync(
+        EmploymentProfile profile,
+        DateOnly day,
+        string fallbackOrgId,
+        Dictionary<string, (decimal WeeklyNormHours, NormModel NormModel)> normCache,
+        CancellationToken ct)
+    {
+        var okVersion = OkVersionResolver.ResolveVersion(day);
+        var orgId = profile.OrgId ?? fallbackOrgId;
+        var cacheKey = $"{okVersion}|{profile.AgreementCode}|{profile.Position}|{profile.PartTimeFraction}|{orgId}";
+        if (!normCache.TryGetValue(cacheKey, out var resolved))
+        {
+            var config = await _configResolver.ResolveAsync(
+                orgId, profile.AgreementCode, okVersion, profile.Position, ct);
+            resolved = (config.WeeklyNormHours, config.NormModel);
+            normCache[cacheKey] = resolved;
+        }
+
+        if (resolved.NormModel == NormModel.ANNUAL_ACTIVITY)
+        {
+            // Academic annual-activity norm: a per-weekday split is not meaningful.
+            return null;
+        }
+
+        return Math.Round(resolved.WeeklyNormHours * profile.PartTimeFraction / 5m, 2);
+    }
+
+    /// <summary>
+    /// S66 / TASK-6604 (ADR-032 D4) — single-day in-hand norm: resolves the weekday norm for
+    /// <paramref name="day"/> from the caller-supplied <paramref name="profile"/> (its
+    /// part-time-fraction / position / agreement / org), applying the SAME weekend-0 /
+    /// ANNUAL_ACTIVITY-null / <c>WeeklyNorm × fraction / 5</c> rules as the range loop. Used by the
+    /// profile-PUT revaluation so the post-change norm is computed from the in-hand values the dated
+    /// resolver cannot yet see (uncommitted row, separate connection — ADR-032 D4). No second copy
+    /// of the norm formula: this delegates to the shared <see cref="ComputeForProfileAsync"/> core.
+    /// </summary>
+    public async Task<decimal?> ComputeNormForProfileAsync(
+        EmploymentProfile profile,
+        DateOnly day,
+        string fallbackOrgId,
+        CancellationToken ct = default)
+    {
+        if (day.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
+            return 0m;
+
+        var normCache = new Dictionary<string, (decimal WeeklyNormHours, NormModel NormModel)>(StringComparer.Ordinal);
+        return await ComputeForProfileAsync(profile, day, fallbackOrgId, normCache, ct);
     }
 }

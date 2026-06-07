@@ -109,6 +109,39 @@ public sealed class ConsumptionCalculator
     }
 
     /// <summary>
+    /// S66 / TASK-6604 (ADR-032 D4) — the IN-HAND sibling of <see cref="FullDayHoursAsync"/>:
+    /// resolves <c>fullDayHours</c> for a single day from a CALLER-SUPPLIED
+    /// <paramref name="profile"/> (its part-time-fraction / position / agreement / org) instead of
+    /// the dated resolver. The profile-change revaluation needs the norm under the NEW (uncommitted)
+    /// profile values, which the resolver cannot observe mid-tx (separate connection — ADR-032 D4),
+    /// so the PUT passes the in-hand profile here.
+    ///
+    /// <para>
+    /// Same ADR-032 D3 semantics as the resolver path, WITHOUT a second copy of the norm formula:
+    /// the weekday norm is delegated to <see cref="DailyNormCalculator.ComputeNormForProfileAsync"/>
+    /// (weekend ⇒ 0, ANNUAL_ACTIVITY ⇒ null, else <c>WeeklyNorm × fraction / 5</c>). A null norm here
+    /// means ANNUAL_ACTIVITY (the caller already HOLDS the covering profile, so the "no dated profile"
+    /// branch of the resolver path is N/A) ⇒ academic fallback <c>7.4 × fraction</c>.
+    /// </para>
+    /// </summary>
+    public async Task<decimal?> FullDayHoursForProfileAsync(
+        EmploymentProfile profile,
+        DateOnly date,
+        string fallbackOrgId,
+        CancellationToken ct = default)
+    {
+        var norm = await _dailyNormCalculator.ComputeNormForProfileAsync(profile, date, fallbackOrgId, ct);
+
+        // Concrete value (weekend 0 or a real weekday norm) ⇒ that IS fullDayHours.
+        if (norm is not null)
+            return norm;
+
+        // norm == null: ANNUAL_ACTIVITY (academic) — the caller HOLDS the profile, so this is never
+        // the no-profile case here. Apply the AbsenceRule academic fallback: 7.4 × dated fraction.
+        return StandardDayHours * profile.PartTimeFraction;
+    }
+
+    /// <summary>
     /// Computes the per-row consumed feriedage for a batch of (date, hours) absence rows.
     /// Resolves <c>fullDayHours</c> per distinct date (cached) and applies the ADR-032 D1
     /// rounding. A row on a no-profile day yields a null <see cref="Consumption.Feriedage"/>.

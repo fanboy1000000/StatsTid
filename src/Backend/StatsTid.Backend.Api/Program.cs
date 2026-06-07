@@ -160,6 +160,10 @@ builder.Services.AddSingleton<IAuditProjectionMapper<EmployeeProfileSuperseded>,
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(EmployeeProfileSuperseded), nameof(EmployeeProfileSuperseded)));
 builder.Services.AddSingleton<IAuditProjectionMapper<EmployeeProfileSoftDeleted>, EmployeeProfileSoftDeletedAuditMapper>();
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(EmployeeProfileSoftDeleted), nameof(EmployeeProfileSoftDeleted)));
+// S66 / TASK-6604 (ADR-032 D4) — profile-change revaluation balance event (emitted from the
+// EmployeeProfile PUT tx onto the employee-{id} stream). TENANT_TARGETED; target = employee_id.
+builder.Services.AddSingleton<IAuditProjectionMapper<EntitlementBalanceRevalued>, EntitlementBalanceRevaluedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(EntitlementBalanceRevalued), nameof(EntitlementBalanceRevalued)));
 // Local config family (2 — LocalConfigurationChanged is mapper-only)
 builder.Services.AddSingleton<IAuditProjectionMapper<LocalAgreementProfileChanged>, LocalAgreementProfileChangedAuditMapper>();
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(LocalAgreementProfileChanged), nameof(LocalAgreementProfileChanged)));
