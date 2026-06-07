@@ -1,4 +1,5 @@
 using Npgsql;
+using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Models;
 
 namespace StatsTid.Infrastructure;
@@ -101,6 +102,69 @@ public sealed class EntitlementBalanceRepository
         cmd.Parameters.AddWithValue("deltaDays", deltaDays);
         var result = await cmd.ExecuteScalarAsync(ct);
         return (decimal)result!;
+    }
+
+    /// <summary>
+    /// ADR-032 D4 — apply a profile-change revaluation in the caller's transaction:
+    /// (1) adjust <c>entitlement_balances.used</c> by <paramref name="usedDelta"/> via the
+    /// SAME <b>ungated</b> upsert shape as <see cref="AdjustUsedAsync"/> (used += delta, NO
+    /// quota-WHERE — revaluation MAY push <c>used</c> past the cap; this is NOT the booking
+    /// path and MUST NOT route through <see cref="CheckAndAdjustAsync(string, string, int, decimal, decimal, decimal, CancellationToken)"/>'s
+    /// guarded form); and (2) overwrite each affected absence's authoritative per-row
+    /// <c>absences_projection.feriedage</c> from the replacement set.
+    ///
+    /// <para>
+    /// <b>All-or-nothing (ADR-032 D4):</b> each projection UPDATE must affect exactly one row;
+    /// if the total affected-row count != <paramref name="replacements"/> count, this THROWS
+    /// <see cref="InvalidOperationException"/> so the caller's transaction rolls back — never
+    /// a partial success (a replacement targeting a missing/duplicate absence row is a
+    /// correctness fault, not a tolerable no-op). Both writes participate in the caller's tx
+    /// (ADR-018 D3); the caller commits or rolls back — this method does NOT.
+    /// </para>
+    /// </summary>
+    public async Task ApplyRevaluationAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string employeeId, string entitlementType, int entitlementYear,
+        decimal usedDelta, IReadOnlyList<AbsenceFeriedageReplacement> replacements,
+        CancellationToken ct = default)
+    {
+        // (1) Ungated used adjustment — mirrors AdjustUsedAsync's INSERT ... ON CONFLICT
+        // DO UPDATE SET used = used + delta (no quota-WHERE). Idempotent-row seed at used=0
+        // on first INSERT preserves the "row materializes at zero-state" contract.
+        await using (var usedCmd = new NpgsqlCommand(
+            @"INSERT INTO entitlement_balances (employee_id, entitlement_type, entitlement_year, total_quota, used, updated_at)
+              VALUES (@employeeId, @entitlementType, @entitlementYear, 0, @usedDelta, NOW())
+              ON CONFLICT (employee_id, entitlement_type, entitlement_year)
+              DO UPDATE SET used = entitlement_balances.used + @usedDelta, updated_at = NOW()",
+            conn, tx))
+        {
+            usedCmd.Parameters.AddWithValue("employeeId", employeeId);
+            usedCmd.Parameters.AddWithValue("entitlementType", entitlementType);
+            usedCmd.Parameters.AddWithValue("entitlementYear", entitlementYear);
+            usedCmd.Parameters.AddWithValue("usedDelta", usedDelta);
+            await usedCmd.ExecuteNonQueryAsync(ct);
+        }
+
+        // (2) Per-absence projection feriedage overwrite — all-or-nothing. Each UPDATE must
+        // hit exactly one row (event_id is the absences_projection PK); a mismatch ⇒ THROW ⇒
+        // caller-tx rollback (ADR-032 D4: never partial success).
+        await using var replCmd = new NpgsqlCommand(
+            @"UPDATE absences_projection SET feriedage = @feriedage WHERE event_id = @absenceEventId",
+            conn, tx);
+        var feriedageParam = replCmd.Parameters.Add("feriedage", NpgsqlTypes.NpgsqlDbType.Numeric);
+        var eventIdParam = replCmd.Parameters.Add("absenceEventId", NpgsqlTypes.NpgsqlDbType.Uuid);
+
+        foreach (var repl in replacements)
+        {
+            feriedageParam.Value = repl.NewFeriedage;
+            eventIdParam.Value = repl.AbsenceEventId;
+            var affected = await replCmd.ExecuteNonQueryAsync(ct);
+            if (affected != 1)
+                throw new InvalidOperationException(
+                    $"ADR-032 D4 revaluation: absences_projection feriedage UPDATE for event_id={repl.AbsenceEventId} " +
+                    $"affected {affected} rows (expected 1). Replacement set is inconsistent with the projection — " +
+                    "rolling back to avoid partial revaluation.");
+        }
     }
 
     /// <summary>

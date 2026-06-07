@@ -1534,6 +1534,13 @@ CREATE TABLE IF NOT EXISTS absences_projection (
     date                        DATE            NOT NULL,
     absence_type                TEXT            NOT NULL,
     hours                       NUMERIC(8,4)    NOT NULL,  -- S27 Step 7a P2 fix: see time_entries_projection.hours comment
+    -- S66 / ADR-032 D2: the AUTHORITATIVE per-absence consumption record (feriedage),
+    -- computed at booking via the dated per-day system norm (D1) and recorded verbatim —
+    -- all read surfaces sum this column; no re-derivation, replay-deterministic. NULLABLE:
+    -- pre-S66 rows carry NULL until backfilled to the convention in force when written
+    -- (hours / 7.4, rounded 4dp — recorded once, never revalued). Revaluation on a
+    -- fullDayHours-affecting profile change (D4) overwrites this value in-tx.
+    feriedage                   NUMERIC(8,4)    NULL,
     agreement_code              TEXT            NOT NULL,
     ok_version                  TEXT            NOT NULL,
     occurred_at                 TIMESTAMPTZ     NOT NULL,
@@ -2531,6 +2538,36 @@ DO $$
 BEGIN
     INSERT INTO schema_migrations (migration_id, notes)
     VALUES ('s63-adr031-flat-vacation-daycount', 'ADR-031: vacation day-count is part-time-fraction-independent (Ferieloven §5) — pro_rate_by_part_time=false for all VACATION + SPECIAL_HOLIDAY rows across all 5 agreement codes (AC/HK/PROSA/AC_RESEARCH/AC_TEACHING) + both OK versions, sentinel reseed + type-keyed idempotent UPDATE (S60 pattern). Supersedes ADR-030 D8 premise; §6 stk.2 consumption deferred to S64 (launch-blocking). IMMEDIATE types unchanged.')
+    ON CONFLICT (migration_id) DO NOTHING;
+END
+$$;
+
+-- =========================================================================
+-- S66 / ADR-032 D2 — absences_projection.feriedage on EXISTING/legacy DBs.
+--   The base `CREATE TABLE IF NOT EXISTS absences_projection` (L1531) is a
+--   no-op on a non-fresh DB, so the new column must be added post-hoc with
+--   ADD COLUMN IF NOT EXISTS (idempotent; mirrors the S59/S60 users-column
+--   ALTER precedent). feriedage is the authoritative per-absence consumption
+--   record (the dated per-day-norm day-equivalent computed at booking, D1).
+--   Legacy rows predate the payload field, so they are backfilled ONCE to the
+--   convention in force when they were written — hours / 7.4 (flat StandardDay
+--   hours), rounded 4dp — matching ProjectionBackfillService's null-payload
+--   materialization so a from-events rebuild is byte-identical to the upgraded
+--   table. Recorded once, never silently revalued (revaluation is D4-event-
+--   driven only). The UPDATE is idempotent via `WHERE feriedage IS NULL`:
+--   re-running touches no already-valued row (live post-S66 writes always
+--   supply feriedage, so they are never NULL and never overwritten here).
+-- =========================================================================
+ALTER TABLE absences_projection ADD COLUMN IF NOT EXISTS feriedage NUMERIC(8,4);
+
+UPDATE absences_projection
+   SET feriedage = ROUND(hours / 7.4, 4)
+ WHERE feriedage IS NULL;
+
+DO $$
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s66-adr032-absences-feriedage', 'ADR-032 D2: absences_projection.feriedage NUMERIC(8,4) NULL — authoritative per-absence consumption record (dated per-day-norm day-equivalent computed at booking, D1). ADD COLUMN IF NOT EXISTS for legacy DBs + idempotent backfill of NULL rows to hours/7.4 rounded 4dp (the pre-S66 convention; matches ProjectionBackfillService null-payload materialization for replay parity). Recorded once; revaluation is D4-event-driven (EntitlementBalanceRevalued).')
     ON CONFLICT (migration_id) DO NOTHING;
 END
 $$;

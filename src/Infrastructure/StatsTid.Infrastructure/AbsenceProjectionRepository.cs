@@ -37,11 +37,11 @@ public sealed class AbsenceProjectionRepository
     {
         await using var cmd = new NpgsqlCommand(
             @"INSERT INTO absences_projection (
-                  event_id, employee_id, date, absence_type, hours,
+                  event_id, employee_id, date, absence_type, hours, feriedage,
                   agreement_code, ok_version, occurred_at, actor_id, actor_role,
                   correlation_id, outbox_id
               ) VALUES (
-                  @eventId, @employeeId, @date, @absenceType, @hours,
+                  @eventId, @employeeId, @date, @absenceType, @hours, @feriedage,
                   @agreementCode, @okVersion, @occurredAt, @actorId, @actorRole,
                   @correlationId, @outboxId
               )",
@@ -51,6 +51,12 @@ public sealed class AbsenceProjectionRepository
         cmd.Parameters.AddWithValue("date", @event.Date);
         cmd.Parameters.AddWithValue("absenceType", @event.AbsenceType);
         cmd.Parameters.AddWithValue("hours", @event.Hours);
+        // ADR-032 D2: write the authoritative per-absence feriedage verbatim from the
+        // event payload. Nullable passthrough — NO fallback computed here: the live
+        // write path always supplies it (post-TASK-6603); a null payload (legacy emitter)
+        // stays NULL until the legacy backfill (init.sql) / ProjectionBackfillService
+        // materializes it. One valuation site, no drift.
+        cmd.Parameters.AddWithValue("feriedage", (object?)@event.Feriedage ?? DBNull.Value);
         cmd.Parameters.AddWithValue("agreementCode", @event.AgreementCode);
         cmd.Parameters.AddWithValue("okVersion", @event.OkVersion);
         cmd.Parameters.AddWithValue("occurredAt", @event.OccurredAt);

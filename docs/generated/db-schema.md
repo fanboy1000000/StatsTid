@@ -831,6 +831,7 @@
 | date | DATE | No |  |  |
 | absence_type | TEXT | No |  |  |
 | hours | NUMERIC(8,4) | No |  |  |
+| feriedage | NUMERIC(8,4) | Yes |  |  |
 | agreement_code | TEXT | No |  |  |
 | ok_version | TEXT | No |  |  |
 | occurred_at | TIMESTAMPTZ | No |  |  |
