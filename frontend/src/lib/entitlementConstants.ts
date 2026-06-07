@@ -12,7 +12,7 @@ export type AccrualModel = 'IMMEDIATE' | 'MONTHLY_ACCRUAL'
 
 export const TYPE_LABELS: Record<EntitlementType, string> = {
   VACATION: 'Ferie',
-  SPECIAL_HOLIDAY: 'Saerlig feriedag',
+  SPECIAL_HOLIDAY: 'Særlig feriedag',
   CARE_DAY: 'Omsorgsdag',
   CHILD_SICK: 'Barnets sygedag',
   SENIOR_DAY: 'Seniordag',

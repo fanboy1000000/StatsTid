@@ -16,7 +16,7 @@ public static class BalanceEndpoints
     private static readonly Dictionary<string, string> DanishLabels = new()
     {
         ["VACATION"] = "Ferie",
-        ["SPECIAL_HOLIDAY"] = "Feriefridage",
+        ["SPECIAL_HOLIDAY"] = "Særlige feriedage",
         ["CARE_DAY"] = "Omsorgsdage",
         ["CHILD_SICK"] = "Barns sygedag",
         ["SENIOR_DAY"] = "Seniordage"

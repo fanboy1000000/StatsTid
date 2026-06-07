@@ -609,7 +609,7 @@ public static class SkemaEndpoints
                                     error = "Entitlement absence on a non-working day",
                                     date,
                                     absenceTypes = offendingRows.Select(a => a.AbsenceType).ToArray(),
-                                    message = $"Ferie/feriefridage kan ikke registreres på en arbejdsfri dag ({date:dd-MM-yyyy}).",
+                                    message = $"Ferie/særlige feriedage kan ikke registreres på en arbejdsfri dag ({date:dd-MM-yyyy}).",
                                 }, statusCode: 422);
 
                             var nonEntitlementHours = dayGroup.Sum(a => a.Hours);
@@ -768,7 +768,7 @@ public static class SkemaEndpoints
                             error = "employment_profile_missing",
                             absenceType = entitlementType,
                             date = absence.Date,
-                            message = $"Kan ikke validere ferie/feriefridage for {absence.Date:dd-MM-yyyy}: ansættelsesprofil mangler."
+                            message = $"Kan ikke validere Ferie/særlige feriedage for {absence.Date:dd-MM-yyyy}: ansættelsesprofil mangler."
                         }, statusCode: 422);
                     var rowFeriedage = provisional[i].Feriedage ?? 0m;
                     if (!requestedByEntitlementType.ContainsKey(entitlementType))
@@ -855,7 +855,7 @@ public static class SkemaEndpoints
                                 error = "employment_profile_missing",
                                 absenceType = entitlementType,
                                 date = firstAbsenceDate,
-                                message = $"Kan ikke validere ferie/feriefridage for {firstAbsenceDate:dd-MM-yyyy}: ansættelsesprofil mangler."
+                                message = $"Kan ikke validere Ferie/særlige feriedage for {firstAbsenceDate:dd-MM-yyyy}: ansættelsesprofil mangler."
                             }, statusCode: 422);
                     }
                     var partTimeFraction = datedProfile?.PartTimeFraction ?? 1.0m;
@@ -1085,7 +1085,7 @@ public static class SkemaEndpoints
                                     error = "employment_profile_missing",
                                     absenceType = GetEntitlementType(absence.AbsenceType),
                                     date = absence.Date,
-                                    message = $"Kan ikke validere ferie/feriefridage for {absence.Date:dd-MM-yyyy}: ansættelsesprofil mangler."
+                                    message = $"Kan ikke validere Ferie/særlige feriedage for {absence.Date:dd-MM-yyyy}: ansættelsesprofil mangler."
                                 });
                         }
 
@@ -1133,7 +1133,7 @@ public static class SkemaEndpoints
                                         error = "Entitlement absence on a non-working day",
                                         date,
                                         absenceTypes = offendingRows.Select(r => r.AbsenceType).ToArray(),
-                                        message = $"Ferie/feriefridage kan ikke registreres på en arbejdsfri dag ({date:dd-MM-yyyy}).",
+                                        message = $"Ferie/særlige feriedage kan ikke registreres på en arbejdsfri dag ({date:dd-MM-yyyy}).",
                                     });
 
                                 var nonEntitlementHours = dayGroup.Sum(r => r.Hours);

@@ -15,7 +15,7 @@ export interface YearOverviewHeader {
   weeklyNormHours: number | null
 }
 
-/** The designed 6 balance tiles (Feriefridage is matrix-only — no 7th tile). */
+/** The designed 6 balance tiles (Særlige feriedage is matrix-only — no 7th tile). */
 export interface YearOverviewTiles {
   flexBalance: number
   ferieRemaining: number

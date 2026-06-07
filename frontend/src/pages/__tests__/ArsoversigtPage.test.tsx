@@ -1,6 +1,6 @@
 // S65 / TASK-6503 — page-level vitest for ArsoversigtPage (Direction E
 // Årsoversigt). Mocks useYearOverview with a contract-shaped payload (incl. the
-// explicit SPECIAL_HOLIDAY / "Feriefridage" matrix entry) + useAuth + the
+// explicit SPECIAL_HOLIDAY / "Særlige feriedage" matrix entry) + useAuth + the
 // router's useNavigate, so no AuthProvider or network is required.
 //
 // CRITICAL: every past/current/future + "Nu" classification is asserted against
@@ -86,7 +86,7 @@ function makeOverview(overrides: Partial<YearOverview> = {}): YearOverview {
       },
       {
         type: 'SPECIAL_HOLIDAY',
-        label: 'Feriefridage',
+        label: 'Særlige feriedage',
         saldo: [5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5],
         afholdt: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         transferable: 0,
@@ -160,9 +160,9 @@ describe('ArsoversigtPage — header + tiles', () => {
     // da-DK decimal comma + trimmed integers.
     expect(screen.getByText('22,5')).toBeInTheDocument() // Flex saldo
     expect(screen.getByText('optjent overtid')).toBeInTheDocument()
-    // No 7th tile — Feriefridage appears ONLY as a matrix group header, never as
+    // No 7th tile — Særlige feriedage appears ONLY as a matrix group header, never as
     // a tile label. (It still appears once, in the matrix.)
-    expect(screen.getAllByText('Feriefridage')).toHaveLength(1)
+    expect(screen.getAllByText('Særlige feriedage')).toHaveLength(1)
     // Tile "rest" sub-line appears for Omsorgsdage + Seniordage + Barns sygedag.
     expect(screen.getAllByText('rest')).toHaveLength(3)
   })
@@ -193,15 +193,15 @@ describe('ArsoversigtPage — matrix structure', () => {
     mockUseYearOverview.mockReturnValue(overviewHook(makeOverview()))
     renderPage()
     // Group header rows (Arbejdstid/Ferie/Omsorgsdage/Seniordage also appear as
-    // tile labels; Feriefridage is matrix-only → all assert presence).
-    for (const g of ['Arbejdstid', 'Ferie', 'Feriefridage', 'Omsorgsdage', 'Seniordage']) {
+    // tile labels; Særlige feriedage is matrix-only → all assert presence).
+    for (const g of ['Arbejdstid', 'Ferie', 'Særlige feriedage', 'Omsorgsdage', 'Seniordage']) {
       expect(screen.getAllByText(g).length).toBeGreaterThanOrEqual(1)
     }
     // Header: the year label cell + 12 month columns = 13 <th scope="col">.
     const headerCells = screen.getAllByRole('columnheader')
     expect(headerCells).toHaveLength(13)
     // Sub-rows present for a leave group.
-    expect(screen.getAllByText('Saldo (rest)').length).toBe(4) // Ferie, Feriefridage, Oms, Senior
+    expect(screen.getAllByText('Saldo (rest)').length).toBe(4) // Ferie, Særlige feriedage, Oms, Senior
     expect(screen.getAllByText('Afholdt').length).toBe(4)
     expect(screen.getAllByText('Kan overføres').length).toBe(4)
     expect(screen.getByText('Diff. fra norm')).toBeInTheDocument()
@@ -278,10 +278,10 @@ describe('ArsoversigtPage — cell rules (server-today authority)', () => {
     expect(cells[5]).toHaveTextContent('–')
   })
 
-  it('renders an em-dash for a cap-0 transferable type (Feriefridage) even at December', () => {
+  it('renders an em-dash for a cap-0 transferable type (Særlige feriedage) even at December', () => {
     mockUseYearOverview.mockReturnValue(overviewHook(makeOverview()))
     renderPage()
-    // Feriefridage is the 2nd leave group (occurrence index 1).
+    // Særlige feriedage is the 2nd leave group (occurrence index 1).
     const cells = rowCells('Kan overføres', 1)
     // transferable 0 → Dec is also an em-dash.
     expect(cells[11]).toHaveTextContent('–')
