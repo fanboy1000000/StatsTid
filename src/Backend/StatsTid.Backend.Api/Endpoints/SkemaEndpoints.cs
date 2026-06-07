@@ -755,10 +755,21 @@ public static class SkemaEndpoints
                     var absence = request.Absences[i];
                     if (!AbsenceToEntitlementType.TryGetValue(absence.AbsenceType, out var entitlementType) || entitlementType is null)
                         continue;
-                    // Null feriedage (no-profile day) contributes 0 to the provisional sum; the
-                    // anchor-422 family below rejects such rows authoritatively when the fraction
-                    // is load-bearing. (A null here cannot slip through: a consuming row on a
-                    // no-profile day fails the employment_profile_missing 422.)
+                    // S66 / TASK-6603 FIX-FORWARD (B1 pre-tx mirror) — fail-CLOSED for entitlement
+                    // rows on a no-profile day: a null fullDayHours (⇒ null Feriedage) means this
+                    // consuming row cannot be valued, so reject NOW with the employment_profile_missing
+                    // 422 family (cheap UX — a clean pre-tx reject) instead of letting it contribute a
+                    // silent 0 to the provisional sum. The in-lock B1 check remains the authoritative
+                    // enforcement point (a profile may still race away between here and the lock); this
+                    // pre-tx mirror just fast-fails the common no-profile case.
+                    if (provisional[i].FullDayHours is null)
+                        return Results.Json(new
+                        {
+                            error = "employment_profile_missing",
+                            absenceType = entitlementType,
+                            date = absence.Date,
+                            message = $"Kan ikke validere ferie/feriefridage for {absence.Date:dd-MM-yyyy}: ansættelsesprofil mangler."
+                        }, statusCode: 422);
                     var rowFeriedage = provisional[i].Feriedage ?? 0m;
                     if (!requestedByEntitlementType.ContainsKey(entitlementType))
                         requestedByEntitlementType[entitlementType] = 0m;
@@ -1045,6 +1056,99 @@ public static class SkemaEndpoints
                         : (IReadOnlyList<StatsTid.Backend.Api.Services.ConsumptionCalculator.Consumption>)
                             Array.Empty<StatsTid.Backend.Api.Services.ConsumptionCalculator.Consumption>();
 
+                    // ── S66 / TASK-6603 FIX-FORWARD — in-lock authoritative re-checks (ADR-032 D2/D3) ──
+                    // The pre-tx guards (the D3 norm cap at :552 and the anchor profile-missing 422 at
+                    // :829) ran BEFORE the advisory lock against a possibly-stale norm. A profile PUT
+                    // (TASK-6604) that committed between those checks and THIS recompute lowered or
+                    // removed fullDayHours — so the authoritative values just re-derived inside the lock
+                    // are the source of truth and MUST be re-validated here (the racing-save loser gets a
+                    // clean 422, never a 500 or an unvalued persist). On any violation we throw
+                    // SkemaConsumptionValidationException → outer tx.RollbackAsync → the SAME 422 body the
+                    // matching pre-tx guard returns. The pre-tx guards stay the cheap common fast path
+                    // (unchanged semantics); this is the enforcement point.
+                    if (request.Absences is { Length: > 0 })
+                    {
+                        // B1 — fail-closed per row: an entitlement-consuming row with a null
+                        // authoritative fullDayHours (no dated profile covers the date under the in-lock
+                        // read) must abort the save with the employment_profile_missing 422 family — never
+                        // persist a null-valued (Feriedage=null) consuming row that contributes a ZERO
+                        // guard delta (the old `?? 0m` fail-open hole). Non-entitlement rows are unaffected
+                        // (they legitimately carry null Feriedage by design).
+                        for (var i = 0; i < request.Absences.Length; i++)
+                        {
+                            var absence = request.Absences[i];
+                            if (GetEntitlementType(absence.AbsenceType) is null)
+                                continue; // non-entitlement row — null fullDayHours is fine.
+                            if (authoritativeConsumption[i].FullDayHours is null)
+                                throw new SkemaConsumptionValidationException(new
+                                {
+                                    error = "employment_profile_missing",
+                                    absenceType = GetEntitlementType(absence.AbsenceType),
+                                    date = absence.Date,
+                                    message = $"Kan ikke validere ferie/feriefridage for {absence.Date:dd-MM-yyyy}: ansættelsesprofil mangler."
+                                });
+                        }
+
+                        // B2 — re-check the D3 all-types daily-hours cap against the AUTHORITATIVE
+                        // fullDayHours (a racing PUT may have lowered the norm since the pre-tx check, which
+                        // would persist a per-row dayEquivalent > 1.0). Per date, mirroring the pre-tx D3
+                        // guard's branches: positive-norm ⇒ Σ all-types hours ≤ fullDayHours; zero-norm
+                        // (weekend) ⇒ entitlement rows already rejected by B1's sibling pre-tx weekend guard
+                        // path, but a racing norm→0 is re-caught here (entitlement rows ⇒ 422; non-entitlement
+                        // rows keep the legacy flat-7.4 cap); null fullDayHours for entitlement rows is owned
+                        // by B1 above, and a null on a purely non-entitlement date defers to the pre-tx
+                        // anchor family (no in-lock cap to apply). fullDayHours is constant per date (cached
+                        // in ComputeAsync), so the first row's value represents the date.
+                        var authByDate = request.Absences
+                            .Select((a, i) => (a.Date, a.AbsenceType, a.Hours, authoritativeConsumption[i].FullDayHours))
+                            .GroupBy(r => r.Date);
+                        foreach (var dayGroup in authByDate)
+                        {
+                            var date = dayGroup.Key;
+                            var fullDayHours = dayGroup.First().FullDayHours;
+                            if (fullDayHours is null)
+                                continue; // entitlement rows handled by B1; non-entitlement defers to anchor family.
+
+                            if (fullDayHours.Value > 0m)
+                            {
+                                var totalHours = dayGroup.Sum(r => r.Hours);
+                                if (totalHours > fullDayHours.Value)
+                                    throw new SkemaConsumptionValidationException(new
+                                    {
+                                        error = "Total absence hours exceed norm day",
+                                        date,
+                                        totalHours,
+                                        maxHours = fullDayHours.Value,
+                                    });
+                            }
+                            else
+                            {
+                                // Zero-norm day (racing norm→0): entitlement rows cannot be booked.
+                                var offendingRows = dayGroup
+                                    .Where(r => GetEntitlementType(r.AbsenceType) is not null)
+                                    .ToList();
+                                if (offendingRows.Count > 0)
+                                    throw new SkemaConsumptionValidationException(new
+                                    {
+                                        error = "Entitlement absence on a non-working day",
+                                        date,
+                                        absenceTypes = offendingRows.Select(r => r.AbsenceType).ToArray(),
+                                        message = $"Ferie/feriefridage kan ikke registreres på en arbejdsfri dag ({date:dd-MM-yyyy}).",
+                                    });
+
+                                var nonEntitlementHours = dayGroup.Sum(r => r.Hours);
+                                if (nonEntitlementHours > StandardDayHours)
+                                    throw new SkemaConsumptionValidationException(new
+                                    {
+                                        error = "Total absence hours exceed norm day",
+                                        date,
+                                        totalHours = nonEntitlementHours,
+                                        maxHours = StandardDayHours,
+                                    });
+                            }
+                        }
+                    }
+
                     // Save time entries (outbox enqueue + projection INSERT inside outer tx).
                     if (request.Entries is not null)
                     {
@@ -1252,6 +1356,14 @@ public static class SkemaEndpoints
                     requested = Math.Round(ex.RequestedDays, 2),
                     message = ex.Message
                 }, statusCode: 422);
+            }
+            catch (SkemaConsumptionValidationException ex)
+            {
+                // S66 / TASK-6603 FIX-FORWARD — in-lock D2/D3 re-check failure (B1 profile-missing /
+                // B2 norm cap) after a racing profile-PUT. The throw site already shaped the body to
+                // match its pre-tx sibling guard byte-for-byte; surface it unchanged so the racing-save
+                // loser gets a clean validation 422 (never a 500) and the frontend contract holds.
+                return Results.Json(ex.Body, statusCode: 422);
             }
 
             return Results.Ok(new { saved = savedCount });
