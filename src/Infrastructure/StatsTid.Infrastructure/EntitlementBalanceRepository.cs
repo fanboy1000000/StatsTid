@@ -168,6 +168,68 @@ public sealed class EntitlementBalanceRepository
     }
 
     /// <summary>
+    /// S68 / TASK-6804 (ADR-033 D6) — the provenance-keyed <c>carryover_in</c> writer: the FIRST
+    /// non-zero <c>carryover_in</c> producer in the system. Writes next entitlement-year's
+    /// <c>carryover_in</c> DERIVED from the settling year's §21 <c>transfer_days</c> (the written-
+    /// agreement transfer; ADR-033 D5/D8). Participates in the caller's settlement transaction
+    /// (ADR-018 D3) under the advisory lock; the caller commits or rolls back — this method does NOT.
+    ///
+    /// <para>
+    /// <b>Ungated upsert (mirrors <see cref="ApplyRevaluationAsync"/> shape, NOT the booking
+    /// guard).</b> This is NOT a consumption write — it must NOT route through
+    /// <see cref="CheckAndAdjustAsync(string, string, int, decimal, decimal, decimal, CancellationToken)"/>'s
+    /// quota-WHERE form. The target row is the NEXT year's balance, which may not exist yet (the
+    /// employee may have no next-year row), so the INSERT seeds it at zero-state with the carryover
+    /// applied; an existing row has only its <c>carryover_in</c> overwritten.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Idempotent by construction (Codex W).</b> <c>carryover_in</c> is OVERWRITTEN to the
+    /// DERIVED value (<c>SET carryover_in = @carryoverDays</c>), NEVER incrementally added. A
+    /// retried/re-run settlement recomputes the SAME §21 <c>transfer_days</c> from the immutable
+    /// snapshot and writes the same total — so a second pass is a no-op, not a double-add. In
+    /// slice 1 the carryover total IS the §21 term alone (the §22 feriehindring composition term
+    /// is 0 — not modeled until slice 4); the value is source-keyed on <c>transfer_days</c> so the
+    /// later §22 composition stays deterministic. <c>used</c>/<c>planned</c> are NOT touched here
+    /// (ADR-032 D2 pins <c>used</c> to recorded absences; the §24/§34 disposition lives on the
+    /// settlement row, NOT the balance — ADR-033 D6 clarification). <c>total_quota</c> is seeded to
+    /// the supplied <paramref name="seedQuota"/> (the next year's annual entitlement) on first-INSERT
+    /// only, preserving its "annual entitlement" invariant; an existing row keeps its quota.
+    /// </para>
+    /// </summary>
+    /// <param name="employeeId">The employee whose NEXT-year balance receives the carryover.</param>
+    /// <param name="entitlementType">The entitlement type (VACATION in slice 1).</param>
+    /// <param name="nextEntitlementYear">The year the carryover lands in (settling year + 1).</param>
+    /// <param name="carryoverDays">The DERIVED carryover total — in slice 1, the §21 <c>transfer_days</c>.</param>
+    /// <param name="seedQuota">The next year's ANNUAL entitlement; seeds <c>total_quota</c> on
+    /// first-INSERT only (an existing row's quota is preserved).</param>
+    public async Task WriteCarryoverInAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string employeeId, string entitlementType, int nextEntitlementYear,
+        decimal carryoverDays, decimal seedQuota, CancellationToken ct = default)
+    {
+        // Ungated upsert — INSERT seeds the row at zero-state (used/planned = 0) with the
+        // carryover applied; ON CONFLICT OVERWRITES carryover_in only (SET, not +=) so a
+        // re-run is idempotent. total_quota seeded on first-INSERT, preserved thereafter.
+        await using var cmd = new NpgsqlCommand(
+            @"INSERT INTO entitlement_balances (
+                  balance_id, employee_id, entitlement_type, entitlement_year,
+                  total_quota, used, planned, carryover_in, updated_at)
+              VALUES (
+                  gen_random_uuid(), @employeeId, @entitlementType, @entitlementYear,
+                  @seedQuota, 0, 0, @carryoverDays, NOW())
+              ON CONFLICT (employee_id, entitlement_type, entitlement_year)
+              DO UPDATE SET carryover_in = @carryoverDays, updated_at = NOW()",
+            conn, tx);
+        cmd.Parameters.AddWithValue("employeeId", employeeId);
+        cmd.Parameters.AddWithValue("entitlementType", entitlementType);
+        cmd.Parameters.AddWithValue("entitlementYear", nextEntitlementYear);
+        cmd.Parameters.AddWithValue("seedQuota", seedQuota);
+        cmd.Parameters.AddWithValue("carryoverDays", carryoverDays);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>
     /// Atomically checks quota and adjusts the used balance. Returns (success, newUsed). If
     /// the adjustment would exceed <paramref name="guardCap"/> + carryoverIn, returns
     /// (false, currentUsed). Eliminates TOCTOU race between validation and adjustment.

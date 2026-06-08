@@ -119,8 +119,12 @@ The future Test #1 (catalog ↔ DI registrations ↔ EventSerializer parity) par
 | `EmployeeProfileSoftDeleted` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{profileId, employeeId, effectiveTo}` | interface | S44c |
 | `EmployeeEntitlementEligibilitySet` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{employeeId, entitlementType, eligible, effectiveFrom}` | interface (cross-process — mapper in Infrastructure, not Backend.Api) | S59 |
 | `EntitlementBalanceRevalued` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{employeeId, entitlementType, entitlementYear, usedDelta, affectedAbsenceCount, replacements, triggeringProfileEventId}` | interface | S66 |
+| `VacationCarryoverExecuted` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{employeeId, entitlementType, entitlementYear, sequence, transferDays, kind, paragraph}` | interface (cross-process — mapper in Infrastructure, not Backend.Api) | S68 |
+| `VacationAutoPaidOut` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{employeeId, entitlementType, entitlementYear, sequence, payoutDays, kind, paragraph}` | interface (cross-process — mapper in Infrastructure, not Backend.Api) | S68 |
+| `VacationForfeitedToFeriefond` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{employeeId, entitlementType, entitlementYear, sequence, forfeitDays, kind, paragraph}` | interface (cross-process — mapper in Infrastructure, not Backend.Api) | S68 |
+| `SettlementManualReviewFlagged` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{employeeId, entitlementType, entitlementYear, sequence, flaggedDays, disposition}` | interface (cross-process — mapper in Infrastructure, not Backend.Api) | S68 |
 
-**Total**: 54 rows (53 through S59 + 1 S66 `EntitlementBalanceRevalued` per ADR-032 D4).
+**Total**: 58 rows (54 through S66 + 4 S68 vacation-settlement mappers per ADR-033 slice 1a; the 5 DEFINE-ONLY settlement events — `SettlementReversed`/`FeriehindringTransferred`/`FeriehindringPaidOut`/`SaerligeFeriedagePaidOut`/`TerminationSettled` — are EventSerializer-registered for replay but have NO mapper/catalog row until their automation slice).
 
 ## Catalog closure status (S44c)
 

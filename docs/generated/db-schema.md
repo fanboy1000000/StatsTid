@@ -1124,7 +1124,7 @@
 | payout_reconciled_at | TIMESTAMPTZ | Yes |  |  |
 | payout_reconciled_by | TEXT | Yes |  |  |
 | review_disposition | TEXT | Yes |  |  |
-| version | INT | No |  | 1 |
+| version | BIGINT | No |  | 1 |
 | created_at | TIMESTAMPTZ | No |  | NOW() |
 | updated_at | TIMESTAMPTZ | No |  | NOW() |
 
@@ -1146,7 +1146,7 @@
 | transfer_days | NUMERIC(6,2) | No |  |  |
 | agreement_date | DATE | No |  |  |
 | recorded_by | TEXT | No |  |  |
-| version | INT | No |  | 1 |
+| version | BIGINT | No |  | 1 |
 | created_at | TIMESTAMPTZ | No |  | NOW() |
 | updated_at | TIMESTAMPTZ | No |  | NOW() |
 

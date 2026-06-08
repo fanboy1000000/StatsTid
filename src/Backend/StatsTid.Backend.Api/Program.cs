@@ -69,6 +69,8 @@ builder.Services.AddSingleton<AuditProjectionRepository>();
 builder.Services.AddSingleton<ReportingLineRepository>();
 builder.Services.AddSingleton<TreeSettingsRepository>();
 builder.Services.AddSingleton<EmployeeEntitlementEligibilityRepository>(); // S59
+builder.Services.AddSingleton<VacationTransferAgreementRepository>(); // S68 ADR-033 slice 1a
+builder.Services.AddSingleton<VacationSettlementRepository>(); // S68 ADR-033 slice 1a
 builder.Services.AddSingleton<IAuditProjectionMapperRegistry, AuditProjectionMapperRegistry>();
 // S44 TASK-4407..4412 — 6 IAuditProjectionMapper<T> + 6 RegisteredAuditEventType marker pairs.
 // Mapper + marker registered together so the registry's RegisteredEventTypeNames filter
@@ -198,9 +200,19 @@ builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(ReportingLineB
 // S59 ADR-029 — per-employee entitlement eligibility (mapper lives in Infrastructure, cross-process)
 builder.Services.AddSingleton<IAuditProjectionMapper<EmployeeEntitlementEligibilitySet>, StatsTid.Infrastructure.AuditMappers.EmployeeEntitlementEligibilitySetAuditMapper>();
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(EmployeeEntitlementEligibilitySet), nameof(EmployeeEntitlementEligibilitySet)));
+// S68 ADR-033 slice 1a — vacation-settlement audit mappers (Infrastructure-located, cross-process; dispatched from the SettlementCloseService BackgroundService)
+builder.Services.AddSingleton<IAuditProjectionMapper<VacationCarryoverExecuted>, StatsTid.Infrastructure.AuditMappers.VacationCarryoverExecutedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(VacationCarryoverExecuted), nameof(VacationCarryoverExecuted)));
+builder.Services.AddSingleton<IAuditProjectionMapper<VacationAutoPaidOut>, StatsTid.Infrastructure.AuditMappers.VacationAutoPaidOutAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(VacationAutoPaidOut), nameof(VacationAutoPaidOut)));
+builder.Services.AddSingleton<IAuditProjectionMapper<VacationForfeitedToFeriefond>, StatsTid.Infrastructure.AuditMappers.VacationForfeitedToFeriefondAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(VacationForfeitedToFeriefond), nameof(VacationForfeitedToFeriefond)));
+builder.Services.AddSingleton<IAuditProjectionMapper<SettlementManualReviewFlagged>, StatsTid.Infrastructure.AuditMappers.SettlementManualReviewFlaggedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(SettlementManualReviewFlagged), nameof(SettlementManualReviewFlagged)));
 
 // ── Services ──
 builder.Services.AddSingleton<ConfigResolutionService>();
+builder.Services.AddSingleton<StatsTid.Infrastructure.VacationSettlementService>(); // S68 ADR-033 slice 1a — the atomic settlement pass
 // S65 / TASK-6502 — shared per-day "Arbejdstid"-norm resolver (extracted from the Skema
 // month read; also consumed by the Balance year-overview read). Stateless: the per-request
 // config cache is local to each ComputeRangeAsync call, so singleton is safe.

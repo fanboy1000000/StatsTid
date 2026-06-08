@@ -140,7 +140,7 @@ _(to verify at each task + sprint close)_
 | Field | Value |
 |-------|-------|
 | **ID** | TASK-6803 |
-| **Status** | planned |
+| **Status** | complete 2026-06-08 — 4 audit mappers in `Infrastructure/AuditMappers/` (TENANT_TARGETED, `ResolvedTargetOrgId`, null-tolerant per the `e0d1dc3` lesson); Orchestrator wired the DI (Program.cs) + the 4 catalog rows (58 total). build 0E. |
 | **Agent** | Data Model (extended into `src/Infrastructure/StatsTid.Infrastructure/AuditMappers/**`, cross-domain authorized; the catalog doc row is Orchestrator-written) |
 | **Components** | the mapper impls in `Infrastructure/AuditMappers/` (the cross-process precedent) · `docs/operations/audit-projection-catalog.md` (Orchestrator) |
 | **KB Refs** | ADR-026, ADR-025 D3 (GDPR), the S59 `EmployeeEntitlementEligibilitySet` Infrastructure-mapper precedent, the `e0d1dc3` null-tolerance lesson |
@@ -158,7 +158,7 @@ _(to verify at each task + sprint close)_
 | Field | Value |
 |-------|-------|
 | **ID** | TASK-6804 |
-| **Status** | planned |
+| **Status** | complete 2026-06-08 — 2 repos + derived `carryover_in` writer + `VacationSettlementService.SettleAsync` (atomic pass under the ADR-032 D4 advisory lock; partition matches the S66 D9 `expiring`; in-lock re-check idempotent). **Step-5a dual-lens, 5 cycles** (Codex cycle-1 3B/3W + Reviewer 1B → all fixed; the config-resolution seam took 3 further cycles): fixed = config-resolution→D9 chain, YEAR_END-only guard, 23505→SAVEPOINT+constraint-discrimination, carryover skip-when-zero, negative-days clamp+DB-CHECK, rounding ToEven, version INT→BIGINT, the resetMonth bootstrap→D9 year-start anchor probe. **Principled acceptance (owner-ratified 2026-06-08):** the residual cycle-5 finding (probe anchors `{Jan-1 E, Sep-1 E}` not byte-identical to D9's `{Jan-1 Y, Sep-1 Y−1, Sep-1 Y}`) is ACCEPTED — the 2-anchor subset is *correct* for a known `entitlementYear` (D9's extra `Sep-1 Y−1` is for its calendar-view-year ambiguity and would resolve the *prior* ferieår's config; the dated-primary read stays authoritative; the branch is unreachable without a configless-VACATION agreement, which does not exist). build 0E. |
 | **Agent** | Infrastructure (cross-domain authorized: new repos + `EntitlementBalanceRepository` extension + the atomic pass) |
 | **Components** | `VacationSettlementRepository`, `VacationTransferAgreementRepository`, `EntitlementBalanceRepository` (extension), the settlement-pass orchestration |
 | **KB Refs** | ADR-033 D5/D6, ADR-018 D3 (atomic outbox), ADR-032 D2/D4 (recorded feriedage + advisory lock), ADR-026 D13 (sync-in-tx projection), ADR-013 (no auto-cascade) |
