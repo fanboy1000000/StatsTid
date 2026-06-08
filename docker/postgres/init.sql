@@ -2571,3 +2571,137 @@ BEGIN
     ON CONFLICT (migration_id) DO NOTHING;
 END
 $$;
+
+-- =========================================================================
+-- SPRINT 68 / ADR-033 — Vacation Settlement (slice 1a)
+--   Greenfield schema for the year-end / termination vacation-settlement
+--   identity + state machine (D5), the §21 written transfer-agreement record
+--   (D8), and their two append-only audit tables (ADR-019 D8 version-transition
+--   shape). No production data exists; these tables are brand-new in S68 so the
+--   version-transition + paired-nullability columns are baked directly into the
+--   base CREATE (no S25-style follow-up ALTER). The snapshot jsonb is opaque to
+--   the DB (TASK-6802 owns its shape). FK employee_id → users(user_id) (TEXT)
+--   matches every existing employee-keyed table (employee_profiles L482,
+--   user_agreement_codes L547). version is the ADR-019 If-Match row-version.
+-- =========================================================================
+
+-- vacation_settlements — settlement identity + state machine (ADR-033 D5).
+-- Composite PK (employee_id, entitlement_type, entitlement_year, sequence) so
+-- reversal histories coexist (REVERSED predecessors stay alongside the new
+-- ACTIVE sequence). The partial-unique index below enforces exactly-one
+-- non-REVERSED row per (employee, type, year) — the ADR-018 D8 live-row pattern
+-- (mirrors idx_employee_profiles_live / idx_user_agreement_codes_live, here
+-- discriminated on settlement_state rather than effective_to IS NULL).
+CREATE TABLE IF NOT EXISTS vacation_settlements (
+    employee_id             TEXT          NOT NULL REFERENCES users(user_id),
+    entitlement_type        TEXT          NOT NULL,
+    entitlement_year        INT           NOT NULL,
+    sequence                INT           NOT NULL,
+    settlement_state        TEXT          NOT NULL CHECK (settlement_state IN ('PENDING_REVIEW', 'SETTLED', 'REVERSED')),
+    trigger                 TEXT          NOT NULL CHECK (trigger IN ('YEAR_END', 'TERMINATION')),
+    snapshot                JSONB         NOT NULL,
+    transfer_days           NUMERIC(6,2)  NOT NULL DEFAULT 0,
+    payout_days             NUMERIC(6,2)  NOT NULL DEFAULT 0,
+    forfeit_days            NUMERIC(6,2)  NOT NULL DEFAULT 0,
+    payout_reconciled_at    TIMESTAMPTZ   NULL,
+    payout_reconciled_by    TEXT          NULL,
+    review_disposition      TEXT          NULL CHECK (review_disposition IS NULL OR review_disposition IN ('FORFEIT', 'DEFER')),
+    version                 INT           NOT NULL DEFAULT 1,
+    created_at              TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    updated_at              TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (employee_id, entitlement_type, entitlement_year, sequence),
+    CONSTRAINT vacation_settlements_payout_reconciled_paired CHECK (
+        (payout_reconciled_at IS NULL AND payout_reconciled_by IS NULL)
+        OR (payout_reconciled_at IS NOT NULL AND payout_reconciled_by IS NOT NULL)
+    )
+);
+
+-- Partial-unique-index: at most one ACTIVE (non-REVERSED) settlement per
+-- (employee, type, year). ADR-018 D8 single-active live-row pattern; REVERSED
+-- rows are excluded so a reversal can be superseded by a fresh sequence.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_vacation_settlements_active
+    ON vacation_settlements (employee_id, entitlement_type, entitlement_year)
+    WHERE settlement_state <> 'REVERSED';
+
+CREATE INDEX IF NOT EXISTS idx_vacation_settlements_employee
+    ON vacation_settlements (employee_id);
+
+-- vacation_transfer_agreements — the §21 stk.2 written transfer-agreement
+-- record (ADR-033 D8). One agreement per (employee, year, type). The §21 stk.2
+-- 31-Dec deadline is enforced in the ENDPOINT via a business-clock comparison,
+-- NOT a DB CHECK (agreement_date is recorded as-stated). recorded_by is the HR
+-- actor (TEXT = users.user_id, not a declared FK — parallels the actor_id audit columns).
+CREATE TABLE IF NOT EXISTS vacation_transfer_agreements (
+    employee_id         TEXT          NOT NULL REFERENCES users(user_id),
+    entitlement_year    INT           NOT NULL,
+    entitlement_type    TEXT          NOT NULL,
+    transfer_days       NUMERIC(6,2)  NOT NULL,
+    agreement_date      DATE          NOT NULL,
+    recorded_by         TEXT          NOT NULL,
+    version             INT           NOT NULL DEFAULT 1,
+    created_at          TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (employee_id, entitlement_year, entitlement_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_vacation_transfer_agreements_employee
+    ON vacation_transfer_agreements (employee_id);
+
+-- vacation_settlement_audit — append-only audit for vacation_settlements.
+-- Mirrors entitlement_config_audit (L1382) / user_agreement_codes_audit (L573):
+-- BIGSERIAL audit_id PK, action CHECK enum (all 4 values up-front for forward-
+-- compat — S68 emits CREATED/UPDATED; REVERSED maps to UPDATED, DELETED reserved),
+-- previous_data/new_data JSONB, version_before/version_after (ADR-019 D8 version-
+-- transition columns), actor_id/actor_role, audit_at (S34-era column name). No FK
+-- on the settlement key because reversal histories are FK-stable but the audit
+-- stream must survive any future row deletion (precedent: audit tables carry no FK).
+CREATE TABLE IF NOT EXISTS vacation_settlement_audit (
+    audit_id            BIGSERIAL     PRIMARY KEY,
+    employee_id         TEXT          NOT NULL,
+    entitlement_type    TEXT          NOT NULL,
+    entitlement_year    INT           NOT NULL,
+    sequence            INT           NOT NULL,
+    action              TEXT          NOT NULL CHECK (action IN ('CREATED', 'UPDATED', 'DELETED', 'SUPERSEDED')),
+    previous_data       JSONB         NULL,
+    new_data            JSONB         NULL,
+    version_before      BIGINT        NULL,
+    version_after       BIGINT        NULL,
+    actor_id            TEXT          NOT NULL,
+    actor_role          TEXT          NOT NULL,
+    audit_at            TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_vacation_settlement_audit_employee
+    ON vacation_settlement_audit (employee_id);
+CREATE INDEX IF NOT EXISTS idx_vacation_settlement_audit_at
+    ON vacation_settlement_audit (audit_at);
+
+-- vacation_transfer_agreement_audit — append-only audit for
+-- vacation_transfer_agreements. Same convention as vacation_settlement_audit.
+CREATE TABLE IF NOT EXISTS vacation_transfer_agreement_audit (
+    audit_id            BIGSERIAL     PRIMARY KEY,
+    employee_id         TEXT          NOT NULL,
+    entitlement_year    INT           NOT NULL,
+    entitlement_type    TEXT          NOT NULL,
+    action              TEXT          NOT NULL CHECK (action IN ('CREATED', 'UPDATED', 'DELETED', 'SUPERSEDED')),
+    previous_data       JSONB         NULL,
+    new_data            JSONB         NULL,
+    version_before      BIGINT        NULL,
+    version_after       BIGINT        NULL,
+    actor_id            TEXT          NOT NULL,
+    actor_role          TEXT          NOT NULL,
+    audit_at            TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_vacation_transfer_agreement_audit_employee
+    ON vacation_transfer_agreement_audit (employee_id);
+CREATE INDEX IF NOT EXISTS idx_vacation_transfer_agreement_audit_at
+    ON vacation_transfer_agreement_audit (audit_at);
+
+-- schema_migrations ledger entry — documentary for S68 greenfield-only, forward-
+-- compat marker if init.sql ever runs against an older database.
+DO $$
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s68-adr033-vacation-settlement', 'ADR-033 D5/D8: vacation_settlements (composite PK (employee_id, entitlement_type, entitlement_year, sequence) + partial-unique-active index WHERE settlement_state <> REVERSED — ADR-018 D8 single-active live-row pattern; settlement_state/trigger/review_disposition CHECK enums; per-bucket transfer/payout/forfeit_days; paired-nullable payout_reconciled_at/by CHECK; ADR-019 If-Match version) + vacation_transfer_agreements (§21 written record, PK (employee_id, entitlement_year, entitlement_type); 31-Dec deadline enforced in endpoint not DB) + two append-only audit tables (ADR-019 D8 version-transition columns, mirror entitlement_config_audit/user_agreement_codes_audit). Greenfield only — no production data.')
+    ON CONFLICT (migration_id) DO NOTHING;
+END
+$$;

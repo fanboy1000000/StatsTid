@@ -5,7 +5,7 @@
 > Update the schema in `init.sql`, then run `python tools/generate_db_schema.py`.
 > CI fails (`tools/check_docs.py`) if this file drifts from init.sql.
 
-**Total: 55 tables** (40 primary, 15 audit).
+**Total: 59 tables** (42 primary, 17 audit).
 
 ---
 
@@ -1107,6 +1107,98 @@
 - `idx_employee_entitlement_eligibility_audit_eligibility_id` on (eligibility_id)
 - `idx_employee_entitlement_eligibility_audit_employee_id` on (employee_id)
 
+## vacation_settlements
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| employee_id | TEXT | No | FK→users |  |
+| entitlement_type | TEXT | No |  |  |
+| entitlement_year | INT | No |  |  |
+| sequence | INT | No |  |  |
+| settlement_state | TEXT | No |  |  |
+| trigger | TEXT | No |  |  |
+| snapshot | JSONB | No |  |  |
+| transfer_days | NUMERIC(6,2) | No |  | 0 |
+| payout_days | NUMERIC(6,2) | No |  | 0 |
+| forfeit_days | NUMERIC(6,2) | No |  | 0 |
+| payout_reconciled_at | TIMESTAMPTZ | Yes |  |  |
+| payout_reconciled_by | TEXT | Yes |  |  |
+| review_disposition | TEXT | Yes |  |  |
+| version | INT | No |  | 1 |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+| updated_at | TIMESTAMPTZ | No |  | NOW() |
+
+**Table constraints:**
+- PRIMARY KEY (employee_id, entitlement_type, entitlement_year, sequence)
+- CONSTRAINT vacation_settlements_payout_reconciled_paired CHECK ( (payout_reconciled_at IS NULL AND payout_reconciled_by IS NULL) OR (payout_reconciled_at IS NOT NULL AND payout_reconciled_by IS NOT NULL) )
+
+**Indexes:**
+- `idx_vacation_settlements_active` (UNIQUE) on (employee_id, entitlement_type, entitlement_year) WHERE settlement_state <> 'REVERSED'
+- `idx_vacation_settlements_employee` on (employee_id)
+
+## vacation_transfer_agreements
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| employee_id | TEXT | No | FK→users |  |
+| entitlement_year | INT | No |  |  |
+| entitlement_type | TEXT | No |  |  |
+| transfer_days | NUMERIC(6,2) | No |  |  |
+| agreement_date | DATE | No |  |  |
+| recorded_by | TEXT | No |  |  |
+| version | INT | No |  | 1 |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+| updated_at | TIMESTAMPTZ | No |  | NOW() |
+
+**Table constraints:**
+- PRIMARY KEY (employee_id, entitlement_year, entitlement_type)
+
+**Indexes:**
+- `idx_vacation_transfer_agreements_employee` on (employee_id)
+
+## vacation_settlement_audit
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| audit_id | BIGSERIAL | No | PK |  |
+| employee_id | TEXT | No |  |  |
+| entitlement_type | TEXT | No |  |  |
+| entitlement_year | INT | No |  |  |
+| sequence | INT | No |  |  |
+| action | TEXT | No |  |  |
+| previous_data | JSONB | Yes |  |  |
+| new_data | JSONB | Yes |  |  |
+| version_before | BIGINT | Yes |  |  |
+| version_after | BIGINT | Yes |  |  |
+| actor_id | TEXT | No |  |  |
+| actor_role | TEXT | No |  |  |
+| audit_at | TIMESTAMPTZ | No |  | NOW() |
+
+**Indexes:**
+- `idx_vacation_settlement_audit_employee` on (employee_id)
+- `idx_vacation_settlement_audit_at` on (audit_at)
+
+## vacation_transfer_agreement_audit
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| audit_id | BIGSERIAL | No | PK |  |
+| employee_id | TEXT | No |  |  |
+| entitlement_year | INT | No |  |  |
+| entitlement_type | TEXT | No |  |  |
+| action | TEXT | No |  |  |
+| previous_data | JSONB | Yes |  |  |
+| new_data | JSONB | Yes |  |  |
+| version_before | BIGINT | Yes |  |  |
+| version_after | BIGINT | Yes |  |  |
+| actor_id | TEXT | No |  |  |
+| actor_role | TEXT | No |  |  |
+| audit_at | TIMESTAMPTZ | No |  | NOW() |
+
+**Indexes:**
+- `idx_vacation_transfer_agreement_audit_employee` on (employee_id)
+- `idx_vacation_transfer_agreement_audit_at` on (audit_at)
+
 ---
 
 ## Table Summary
@@ -1168,4 +1260,8 @@
 | 53 | reporting_line_tree_settings | -- |
 | 54 | employee_entitlement_eligibility | -- |
 | 55 | employee_entitlement_eligibility_audit | audit |
+| 56 | vacation_settlements | -- |
+| 57 | vacation_transfer_agreements | -- |
+| 58 | vacation_settlement_audit | audit |
+| 59 | vacation_transfer_agreement_audit | audit |
 

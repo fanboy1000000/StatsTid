@@ -123,6 +123,22 @@ public static class EventSerializer
         // Sprint 59: Per-employee entitlement eligibility (CHILD_SICK) — ADR-029.
         // Dated/version-guarded superseding event; projection resolves as-of-date latest (TASK-5902/5905).
         ["EmployeeEntitlementEligibilitySet"] = typeof(EmployeeEntitlementEligibilitySet),
+        // Sprint 68: Vacation-settlement event family (ADR-033 D5). Each rides employee-{id} and
+        // carries the immutable settle-time snapshot + a bucket day-count + the settlement identity
+        // (employee_id, entitlement_type, entitlement_year, sequence). EMITTED in slice 1a:
+        // VacationCarryoverExecuted (§21), VacationAutoPaidOut (§24), VacationForfeitedToFeriefond
+        // (§34), SettlementManualReviewFlagged (D10 PENDING_REVIEW). DEFINE-ONLY (contract fixed now,
+        // emission automates in later slices): SettlementReversed (D4), FeriehindringTransferred (§22),
+        // FeriehindringPaidOut (§25), SaerligeFeriedagePaidOut (§15 stk.2/§17), TerminationSettled (§26+§7).
+        ["VacationCarryoverExecuted"] = typeof(VacationCarryoverExecuted),
+        ["VacationAutoPaidOut"] = typeof(VacationAutoPaidOut),
+        ["VacationForfeitedToFeriefond"] = typeof(VacationForfeitedToFeriefond),
+        ["SettlementManualReviewFlagged"] = typeof(SettlementManualReviewFlagged),
+        ["SettlementReversed"] = typeof(SettlementReversed),
+        ["FeriehindringTransferred"] = typeof(FeriehindringTransferred),
+        ["FeriehindringPaidOut"] = typeof(FeriehindringPaidOut),
+        ["SaerligeFeriedagePaidOut"] = typeof(SaerligeFeriedagePaidOut),
+        ["TerminationSettled"] = typeof(TerminationSettled),
     };
 
     public static string Serialize(IDomainEvent @event)
