@@ -126,6 +126,8 @@ Design-sprint **Step-7a-equivalent dual-lens** on the final ADR-033 + the close-
 
 _n/a (design sprint) — baseline carried from S66: 631 unit + 466 regression + 5 smoke + 176 FE = 1278._
 
+**Close CI: whole-workflow GREEN** — run [`27121201014`](https://github.com/fanboy1000000/StatsTid/actions/runs/27121201014) on the close commit `03f51e6`, all 6 jobs success (build-and-test · smoke · docs/`check_docs.py` · gitleaks · frontend-build · lizard). 4th consecutive CI-verified close.
+
 ## Sprint Retrospective
 
 **What shipped.** A DESIGN sprint: **ADR-033 (vacation-settlement architecture)** — the period-end *execution* layer completing the long-deferred ADR-030 D7 — plus a phased S68+ implementation roadmap. The headline positions: **money stays out of StatsTid** (settlement emits day/hour-count wage-type lines; SLS owns all kroner, including the 2½%/2,02% rates — code-verified: there is no salary/rate in-system); the **verified §-spine** (transfer §21 / auto-payout §24 / feriehindring §22+§25 / termination §26+§7 stk.1-capped / forfeiture §34 / særlige godtgørelse Cirk. §15 stk.2+§17; LBK 152/2024); a deterministic idempotent period-close BackgroundService; Backend-closes-&-events / Payroll-consumes-via-a-new-emitter with an exactly-once consumer checkpoint; a settlement **state machine** (PENDING_REVIEW/SETTLED/REVERSED + sequence + trigger); the first non-zero `carryover_in` writer; and **fail-closed §34/§22** (no wrongful forfeiture). **No launch-blocking item was created** — pre-launch settlement is a manual operator-recorded fallback; each slice automates a boundary.
