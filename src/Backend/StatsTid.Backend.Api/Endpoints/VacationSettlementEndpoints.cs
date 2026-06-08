@@ -1,0 +1,974 @@
+using System.Globalization;
+using System.Text.Json;
+using Npgsql;
+using StatsTid.Auth;
+using StatsTid.Backend.Api.Endpoints.Helpers;
+using StatsTid.Backend.Api.Services;
+using StatsTid.Infrastructure;
+using StatsTid.Infrastructure.Outbox;
+using StatsTid.Infrastructure.Security;
+using StatsTid.SharedKernel.Audit;
+using StatsTid.SharedKernel.Calendar;
+using StatsTid.SharedKernel.Events;
+using StatsTid.SharedKernel.Models;
+
+namespace StatsTid.Backend.Api.Endpoints;
+
+/// <summary>
+/// S68 / TASK-6806 (ADR-033 D8/D10). The vacation-settlement HR/operator surface — three
+/// concerns, all <c>HROrAbove</c> + <see cref="OrgScopeValidator"/> (cross-org binding is
+/// load-bearing per the <c>EmployeeProfileEndpoints</c> / <c>EntitlementEligibilityEndpoints</c>
+/// precedent: the policy proves role + scope SHAPE but does NOT bind the actor to the target
+/// employee's organisation; FAIL-001 — the validator uses <c>FindAll</c>, not <c>FindFirst</c>,
+/// on the scope claim):
+///
+/// <list type="number">
+///   <item><description>
+///     <b>POST / PUT /api/vacation-transfer-agreements/{employeeId}</b> — the §21 stk.2 written
+///     transfer-agreement record. Admin-strict If-Match (ADR-019 D2): POST creates (no If-*),
+///     PUT edits-in-place (<c>If-Match: "&lt;version&gt;"</c>). Legal/state guards (Codex Step-0b):
+///     VACATION-only; <c>agreement_date</c> ≤ the 31-Dec <b>Copenhagen</b> deadline of the
+///     ferieafholdelsesperiode; <c>0 ≤ transfer_days ≤ carryover_max</c> (the statutory transfer
+///     ceiling); REJECT (409) when an ACTIVE settlement already exists for the year (cannot agree a
+///     transfer for an already-settled year). All writes ride ONE tx (the agreement row + its audit
+///     row via <see cref="VacationTransferAgreementRepository"/>).
+///   </description></item>
+///   <item><description>
+///     <b>POST /api/vacation-settlements/{employeeId}/{entitlementType}/{entitlementYear}/resolve</b>
+///     — the D10 manual completion of a <c>PENDING_REVIEW</c> settlement. TWO outcomes, EACH ONE
+///     atomic tx under an ADR-019 If-Match CAS winner guard (a concurrent loser gets 409 with NO
+///     double-emit):
+///       <list type="bullet">
+///         <item><description><b>FORFEIT (§34):</b> CAS <c>PENDING_REVIEW → SETTLED</c> + set
+///         <c>forfeit_days</c> + <c>review_disposition=FORFEIT</c>, emit
+///         <see cref="VacationForfeitedToFeriefond"/> (outbox) + the ADR-026 audit_projection row,
+///         all in the tx.</description></item>
+///         <item><description><b>DEFER (suspected §22 feriehindring):</b> CAS sets
+///         <c>review_disposition=DEFER</c> + bumps <c>version</c> + audit; the row STAYS
+///         <c>PENDING_REVIEW</c> (impediment modeling is slice 4). NOT a full resolution.</description></item>
+///       </list>
+///   </description></item>
+///   <item><description>
+///     <b>GET /api/vacation-settlements/payout-pending</b> (§24 — SETTLED rows with
+///     <c>payout_days &gt; 0</c> still awaiting the S69 payroll line, not yet manually reconciled)
+///     + <b>POST /api/vacation-settlements/{employeeId}/{entitlementType}/{entitlementYear}/reconcile-payout</b>
+///     — an audited CAS write of <c>payout_reconciled_at/by</c> so the S69 emitter can skip a
+///     manually-handled bucket. The GET is org-scope-filtered (GlobalAdmin sees all;
+///     LocalAdmin/HR see only their subtree per <see cref="OrgScopeValidator.GetAccessibleOrgsAsync"/>).
+///   </description></item>
+/// </list>
+///
+/// <para>
+/// Settlement is GLOBAL (ADR-025 D6 — no per-institution override). The §34 forfeit event carries
+/// no actor on its payload (it is <c>DomainEventBase</c>); the actor + correlation are threaded into
+/// the <see cref="AuditProjectionContext"/> directly, mirroring the
+/// <c>VacationSettlementService.EmitAsync</c> dispatch shape (ADR-026 D2 — the endpoint resolves the
+/// employee→org lookup BEFORE the pure mapper runs).
+/// </para>
+/// </summary>
+public static class VacationSettlementEndpoints
+{
+    /// <summary>The only entitlement_type a §21 transfer agreement may be recorded for. CARE_DAY /
+    /// SENIOR_DAY / SPECIAL_HOLIDAY are NOT §21-transferable here (the &gt;4-week-tranche §21 stk.2
+    /// rule is VACATION-specific). Case-sensitive Ordinal — entitlement_type is an identifier.</summary>
+    private const string VacationType = "VACATION";
+
+    /// <summary>The state-sector §21 stk.2 statutory transfer ceiling, used ONLY as a fail-closed
+    /// fallback when no dated VACATION <c>carryover_max</c> resolves for the employee's agreement
+    /// (so the cap guard always enforces). The authoritative cap is re-pinned at settle time from
+    /// the immutable snapshot's <c>CarryoverMax</c> (ADR-033 D3) — this endpoint guard is a ceiling,
+    /// not the settlement valuation.</summary>
+    private const decimal StatutoryTransferCapFallback = 5m;
+
+    public static WebApplication MapVacationSettlementEndpoints(this WebApplication app)
+    {
+        MapTransferAgreementWrite(app, isCreate: true);   // POST  (create)
+        MapTransferAgreementWrite(app, isCreate: false);  // PUT   (edit-in-place)
+        MapResolve(app);                                  // POST  /resolve (D10 FORFEIT / DEFER)
+        MapPayoutPendingList(app);                        // GET   /payout-pending (§24)
+        MapReconcilePayout(app);                          // POST  /reconcile-payout (§24 marker)
+        return app;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // 1. POST / PUT /api/vacation-transfer-agreements/{employeeId}  — §21 stk.2 record (ADR-033 D8)
+    // ═══════════════════════════════════════════════════════════════════════
+    private static void MapTransferAgreementWrite(WebApplication app, bool isCreate)
+    {
+        // POST = first-create (no If-*; sets ETag on 201). PUT = edit-in-place (admin-strict
+        // If-Match, ADR-019 D2). Shared body + guards; the create/update fork rides `isCreate`.
+        Func<
+            string, SetTransferAgreementRequest,
+            VacationTransferAgreementRepository, VacationSettlementRepository,
+            EntitlementConfigRepository, UserAgreementCodeRepository, UserRepository,
+            DbConnectionFactory, OrgScopeValidator, HttpContext, CancellationToken,
+            Task<IResult>> handler = async (
+            employeeId, body,
+            transferRepo, settlementRepo,
+            configRepo, agreementCodeRepo, userRepo,
+            connectionFactory, scopeValidator, context, ct) =>
+        {
+            var actor = context.GetActorContext();
+
+            // Cross-org binding (HROrAbove proves role + scope shape only; bind to the target's org).
+            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, ct);
+            if (!allowed)
+                return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+
+            // Guard 1 (legal scope) — VACATION-only.
+            if (!string.Equals(body.EntitlementType, VacationType, StringComparison.Ordinal))
+            {
+                return Results.UnprocessableEntity(new
+                {
+                    error = $"entitlementType '{body.EntitlementType}' is not §21-transferable.",
+                    settable = new[] { VacationType },
+                    hint = "The §21 stk.2 written-transfer agreement applies to the >4-week VACATION tranche only.",
+                });
+            }
+
+            // Guard 2 (statutory floor) — transfer_days >= 0 (the DB CHECK also enforces this; we
+            // reject early with a clear 422 rather than surfacing a raw 23514).
+            if (body.TransferDays < 0m)
+                return Results.UnprocessableEntity(new { error = "transferDays must be >= 0." });
+
+            // Admin-strict If-Match — PUT requires it (412/428); POST must NOT carry one.
+            long expectedVersion = 0;
+            if (!isCreate)
+            {
+                if (!EtagHeaderHelper.TryParseIfMatch(context.Request, out expectedVersion, out var headerError))
+                    return Results.Json(new { error = headerError }, statusCode: 428);
+            }
+
+            var actorId = actor.ActorId ?? "unknown";
+            var actorRole = actor.ActorRole ?? "unknown";
+
+            // Guard 3 (§21 stk.2 deadline) — agreement_date must be ON OR BEFORE the 31-Dec
+            // COPENHAGEN deadline of the ferieafholdelsesperiode.
+            //
+            // BLOCKER 1 (Codex Step-5a) — VACATION entitlement-years are keyed by the ferieår START
+            // year E: ferieår E = [Sep 1 E .. Aug 31 E+1] (reset_month 9) or [Jan 1 E .. Dec 31 E]
+            // (reset_month 1). The §21 stk.2 deadline is 31 Dec of the ferieår-END year — 31 Dec E+1
+            // for reset-9, 31 Dec E for reset-1 — NOT 31 Dec E. The prior `new DateOnly(EntitlementYear,
+            // 12, 31)` rejected valid reset-9 agreements a full year early AND resolved the dated cap at
+            // the wrong date. The deadline is now derived from the SAME reset_month geometry the close
+            // service uses (SettlementCloseService.IsBoundaryPassed / VacationSettlementService.
+            // CaptureSnapshotAsync): reset_month 1 → ferieår-end Dec 31 E; else → (ferieaarStart).AddYears(1)
+            // .AddDays(-1). The dated VACATION cap is resolved on the SAME chain the settle-time snapshot
+            // uses (agreement-at + ok_version-at the ferieår START — WARNING fix below), so the guard cap
+            // equals the snapshot's CarryoverMax. Compared against the Copenhagen business clock (NOT UTC)
+            // so an agreement at 23:30 on 31 Dec Copenhagen-time is in-deadline even if UTC has rolled.
+            var copenhagenToday = DateOnly.FromDateTime(NowCopenhagen());
+            var (deadline, cap) = await ResolveDeadlineAndCapAsync(
+                configRepo, agreementCodeRepo, userRepo, employeeId, body.EntitlementYear, ct);
+
+            // The agreement_date is recorded as-stated, but it may never be claimed AFTER the
+            // Copenhagen business clock has passed the deadline (no retroactive in-period claim once
+            // the deadline is wall-clock-past), and the stated date itself may not exceed the deadline.
+            if (body.AgreementDate > deadline)
+            {
+                return Results.UnprocessableEntity(new
+                {
+                    error = "agreementDate is after the §21 stk.2 transfer deadline.",
+                    agreementDate = body.AgreementDate,
+                    deadline,
+                    hint = $"The written §21 transfer for ferieår {body.EntitlementYear} must be dated on or before {deadline:yyyy-MM-dd} (Copenhagen).",
+                });
+            }
+            // WARNING (Codex Step-5a) — no future-date guard. A future-dated agreement (still ≤ deadline)
+            // was accepted; you cannot record an agreement dated after the Copenhagen business clock.
+            if (body.AgreementDate > copenhagenToday)
+            {
+                return Results.UnprocessableEntity(new
+                {
+                    error = "agreementDate is in the future (after the Copenhagen business clock).",
+                    agreementDate = body.AgreementDate,
+                    copenhagenToday,
+                    hint = "A §21 transfer agreement cannot be recorded with a future date.",
+                });
+            }
+            if (copenhagenToday > deadline)
+            {
+                return Results.UnprocessableEntity(new
+                {
+                    error = "The §21 stk.2 transfer deadline has passed (Copenhagen business clock).",
+                    deadline,
+                    copenhagenToday,
+                    hint = "A §21 transfer cannot be recorded after 31 Dec of the ferieafholdelsesperiode.",
+                });
+            }
+
+            // Guard 4 (statutory cap) — transfer_days <= carryover_max. The dated VACATION carryover_max
+            // was resolved above on the settle-time chain (ferieår-start agreement + ok_version), fail-
+            // closed to the statutory 5 when no dated config resolves (the guard always enforces).
+            if (body.TransferDays > cap)
+            {
+                return Results.UnprocessableEntity(new
+                {
+                    error = "transferDays exceeds the statutory transfer cap (carryover_max).",
+                    transferDays = body.TransferDays,
+                    cap,
+                });
+            }
+
+            await using var conn = connectionFactory.Create();
+            await conn.OpenAsync(ct);
+            await using var tx = await conn.BeginTransactionAsync(ct);
+            try
+            {
+                // BLOCKER 2 (Codex Step-5a) — serialize the §21 write against the SettlementCloseService
+                // poller. Acquire the SAME per-employee advisory lock the settlement pass holds
+                // (pg_advisory_xact_lock(hashtext('employee-' || id)); VacationSettlementService.SettleAsync
+                // / EmployeeConsumptionLock) FIRST, before the active-settlement check and the agreement
+                // write. Without it, the poller could settle the year BETWEEN the GetActiveAsync check and
+                // the agreement commit → a post-settlement agreement omitted from the snapshot. Held to
+                // commit (transaction-scoped, auto-released), so the poller cannot settle mid-write.
+                await EmployeeConsumptionLock.AcquireAsync(conn, tx, employeeId, ct);
+
+                // Guard 5 (reject-post-settlement) — read the ACTIVE settlement INSIDE the tx so the
+                // check observes the same snapshot as the write. If a non-REVERSED settlement already
+                // exists for (emp, VACATION, year), a §21 transfer is moot (the year is closed) → 409.
+                var activeSettlement = await settlementRepo.GetActiveAsync(
+                    conn, tx, employeeId, VacationType, body.EntitlementYear, ct);
+                if (activeSettlement is not null)
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.Json(new
+                    {
+                        error = "An active vacation settlement already exists for this year.",
+                        employeeId,
+                        entitlementType = VacationType,
+                        entitlementYear = body.EntitlementYear,
+                        settlementState = activeSettlement.SettlementState,
+                        hint = "A §21 transfer cannot be agreed for an already-settled ferieår.",
+                    }, statusCode: 409);
+                }
+
+                var record = new VacationTransferAgreement
+                {
+                    EmployeeId = employeeId,
+                    EntitlementYear = body.EntitlementYear,
+                    EntitlementType = VacationType,
+                    TransferDays = body.TransferDays,
+                    AgreementDate = body.AgreementDate,
+                    RecordedBy = actorId,
+                };
+
+                VacationTransferAgreement persisted;
+                if (isCreate)
+                {
+                    try
+                    {
+                        // Repo Insert appends the CREATED audit row in this same (conn, tx).
+                        persisted = await transferRepo.InsertAsync(conn, tx, record, actorId, actorRole, ct);
+                    }
+                    catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation)
+                    {
+                        // The PK (employee, year, type) already has an agreement — POST is create-only.
+                        await tx.RollbackAsync(ct);
+                        return Results.Json(new
+                        {
+                            error = "A §21 transfer agreement already exists for this (employee, year).",
+                            hint = "Use PUT with If-Match: \"<version>\" to edit it.",
+                        }, statusCode: 409);
+                    }
+                }
+                else
+                {
+                    try
+                    {
+                        // Repo Update does the If-Match version check + bump + UPDATED audit, in-tx.
+                        persisted = await transferRepo.UpdateAsync(
+                            conn, tx, record, expectedVersion, actorId, actorRole, ct);
+                    }
+                    catch (OptimisticConcurrencyException ex)
+                    {
+                        await tx.RollbackAsync(ct);
+                        // actualVersion == null when the row does not exist at all → 404 is clearer
+                        // than 412 (nothing to edit); a real version mismatch → 412.
+                        if (ex.ActualVersion is null)
+                            return Results.NotFound(new { error = "No §21 transfer agreement exists to edit. Use POST to create." });
+                        return Results.Json(new
+                        {
+                            error = "Concurrency precondition failed",
+                            expectedVersion = ex.ExpectedVersion,
+                            actualVersion = ex.ActualVersion,
+                        }, statusCode: 412);
+                    }
+                }
+
+                await tx.CommitAsync(ct);
+
+                context.Response.Headers.ETag = $"\"{persisted.Version}\"";
+                var payload = new
+                {
+                    employeeId = persisted.EmployeeId,
+                    entitlementYear = persisted.EntitlementYear,
+                    entitlementType = persisted.EntitlementType,
+                    transferDays = persisted.TransferDays,
+                    agreementDate = persisted.AgreementDate,
+                    recordedBy = persisted.RecordedBy,
+                    version = persisted.Version,
+                };
+                return isCreate ? Results.Created($"/api/vacation-transfer-agreements/{employeeId}", payload) : Results.Ok(payload);
+            }
+            catch
+            {
+                if (tx.Connection is not null)
+                    await tx.RollbackAsync(ct);
+                throw;
+            }
+        };
+
+        if (isCreate)
+            app.MapPost("/api/vacation-transfer-agreements/{employeeId}", handler).RequireAuthorization("HROrAbove");
+        else
+            app.MapPut("/api/vacation-transfer-agreements/{employeeId}", handler).RequireAuthorization("HROrAbove");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // 2. POST .../resolve  — D10 manual completion (FORFEIT / DEFER), ADR-019 CAS (ADR-033 D10)
+    // ═══════════════════════════════════════════════════════════════════════
+    private static void MapResolve(WebApplication app)
+    {
+        app.MapPost("/api/vacation-settlements/{employeeId}/{entitlementType}/{entitlementYear:int}/resolve", async (
+            string employeeId,
+            string entitlementType,
+            int entitlementYear,
+            ResolveSettlementRequest body,
+            VacationSettlementRepository settlementRepo,
+            DbConnectionFactory connectionFactory,
+            IOutboxEnqueue outbox,
+            IAuditProjectionMapper<VacationForfeitedToFeriefond> forfeitAuditMapper,
+            AuditProjectionRepository auditRepo,
+            UserRepository userRepo,
+            OrgScopeValidator scopeValidator,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            var actor = context.GetActorContext();
+
+            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, ct);
+            if (!allowed)
+                return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+
+            // Disposition must be exactly FORFEIT or DEFER.
+            var disposition = (body.Disposition ?? string.Empty).Trim().ToUpperInvariant();
+            if (disposition is not ("FORFEIT" or "DEFER"))
+                return Results.UnprocessableEntity(new { error = "disposition must be 'FORFEIT' or 'DEFER'." });
+
+            // Admin-strict If-Match — the ADR-019 CAS token; a concurrent loser gets 412/409, never
+            // a double-emit.
+            if (!EtagHeaderHelper.TryParseIfMatch(context.Request, out var expectedVersion, out var headerError))
+                return Results.Json(new { error = headerError }, statusCode: 428);
+
+            var actorId = actor.ActorId ?? "unknown";
+            var actorRole = actor.ActorRole ?? "unknown";
+
+            await using var conn = connectionFactory.Create();
+            await conn.OpenAsync(ct);
+            await using var tx = await conn.BeginTransactionAsync(ct);
+            try
+            {
+                // Read the ACTIVE settlement in-tx (the CAS subject).
+                var current = await settlementRepo.GetActiveAsync(
+                    conn, tx, employeeId, entitlementType, entitlementYear, ct);
+                if (current is null)
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.NotFound(new { error = "No active settlement found for this (employee, type, year)." });
+                }
+
+                // Only a PENDING_REVIEW row is resolvable (a SETTLED row is already complete).
+                if (!string.Equals(current.SettlementState, "PENDING_REVIEW", StringComparison.Ordinal))
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.Json(new
+                    {
+                        error = "Settlement is not in PENDING_REVIEW; nothing to resolve.",
+                        settlementState = current.SettlementState,
+                    }, statusCode: 409);
+                }
+
+                // If-Match precondition on the row version (ADR-019).
+                if (current.Version != expectedVersion)
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.Json(new
+                    {
+                        error = "Concurrency precondition failed",
+                        expectedVersion,
+                        actualVersion = current.Version,
+                    }, statusCode: 412);
+                }
+
+                var previousData = SerializeSettlementForAudit(current);
+
+                if (disposition == "DEFER")
+                {
+                    // DEFER (suspected §22) — CAS sets review_disposition=DEFER + bumps version; the
+                    // row STAYS PENDING_REVIEW (impediment modeling is slice 4). The CAS WHERE-clause
+                    // re-asserts version so a concurrent winner makes this a 0-row no-op → 409.
+                    var deferred = await CasUpdateSettlementAsync(conn, tx,
+                        current,
+                        newState: "PENDING_REVIEW",
+                        reviewDisposition: "DEFER",
+                        forfeitDays: current.ForfeitDays,
+                        expectedVersion, ct);
+                    if (deferred is null)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.Json(new { error = "Concurrent update — refresh and retry.", actualVersion = (long?)null }, statusCode: 409);
+                    }
+
+                    await settlementRepo.AppendAuditAsync(conn, tx, deferred, "UPDATED",
+                        previousData, SerializeSettlementForAudit(deferred),
+                        versionBefore: current.Version, versionAfter: deferred.Version,
+                        actorId, actorRole, ct);
+
+                    await tx.CommitAsync(ct);
+
+                    context.Response.Headers.ETag = $"\"{deferred.Version}\"";
+                    return Results.Ok(new
+                    {
+                        employeeId,
+                        entitlementType,
+                        entitlementYear,
+                        sequence = deferred.Sequence,
+                        settlementState = deferred.SettlementState,
+                        reviewDisposition = deferred.ReviewDisposition,
+                        resolved = false,
+                        version = deferred.Version,
+                        hint = "Deferred as suspected §22 feriehindring; remains PENDING_REVIEW until slice 4.",
+                    });
+                }
+
+                // FORFEIT (§34) — CAS PENDING_REVIEW → SETTLED, set forfeit_days +
+                // review_disposition=FORFEIT, emit VacationForfeitedToFeriefond, write the audit
+                // rows. forfeit_days := the flagged §34-candidate remainder already on the row (we do
+                // NOT re-derive; the snapshot is authoritative — ADR-033 D2). The flagged remainder was
+                // stamped on forfeit_days == the snapshot over_cap at the PENDING_REVIEW close.
+                //
+                // WARNING (Codex + Reviewer Step-5a) — FORFEIT forfeits the WHOLE flagged remainder.
+                // An unbounded operator override (the prior `body.ForfeitDays ?? current.ForfeitDays`,
+                // guarded only by >= 0) could (a) EXCEED current.ForfeitDays → over-forfeiture / a wrong
+                // §34 Feriefonden amount, or (b) be BELOW it while the CAS still marks the whole row
+                // SETTLED → silently losing the §22 remainder. Partial §34-vs-§22 splitting is slice 4;
+                // a suspected §22 remainder is handled by DEFER, not a partial FORFEIT. If an override is
+                // supplied it must therefore equal the flagged remainder EXACTLY; reject 422 otherwise.
+                var forfeitDays = current.ForfeitDays;
+                if (body.ForfeitDays is { } requested && requested != forfeitDays)
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.UnprocessableEntity(new
+                    {
+                        error = "forfeitDays must equal the flagged §34 remainder (FORFEIT forfeits the whole remainder).",
+                        requested,
+                        flaggedRemainder = forfeitDays,
+                        hint = "A partial forfeit (suspected §22 remainder) is not supported in slice 1a — use DEFER. Omit forfeitDays to forfeit the flagged remainder, or send the exact flagged value.",
+                    });
+                }
+
+                var settled = await CasUpdateSettlementAsync(conn, tx,
+                    current,
+                    newState: "SETTLED",
+                    reviewDisposition: "FORFEIT",
+                    forfeitDays: forfeitDays,
+                    expectedVersion, ct);
+                if (settled is null)
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.Json(new { error = "Concurrent update — refresh and retry.", actualVersion = (long?)null }, statusCode: 409);
+                }
+
+                // Resolve the employee's org for the ADR-026 TENANT_TARGETED audit_projection row
+                // (the mapper is pure; the endpoint resolves the lookup — ADR-026 D2).
+                //
+                // WARNING (Reviewer Step-5a) — do NOT use userRepo.GetByIdAsync here: it filters
+                // is_active = TRUE and throws InvalidOperationException → 500 for a SINCE-DEACTIVATED
+                // employee. A YEAR_END PENDING_REVIEW row created while the employee was active, then the
+                // employee deactivated before an operator resolves it, is realistic — forfeiting it must
+                // still succeed. Read primary_org_id directly (no is_active filter) on the tx connection.
+                // The §21/§24 paths' own GetByIdAsync degradations are noted in the report (the §21 cap
+                // path already falls back to the statutory cap on a null user — acceptable).
+                var primaryOrgId = await ResolvePrimaryOrgIdInTxAsync(conn, tx, employeeId, ct);
+                if (primaryOrgId is null)
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.NotFound(new { error = $"Employee '{employeeId}' not found." });
+                }
+
+                // The §34 event carries the immutable settle-time snapshot verbatim (ADR-033 D3) —
+                // deserialized from the row, NOT re-derived.
+                var snapshot = DeserializeSnapshot(settled.SnapshotJson);
+                var forfeitEvent = new VacationForfeitedToFeriefond
+                {
+                    EmployeeId = employeeId,
+                    EntitlementType = entitlementType,
+                    EntitlementYear = entitlementYear,
+                    Sequence = settled.Sequence,
+                    Snapshot = snapshot,
+                    ForfeitDays = forfeitDays,
+                    CorrelationId = actor.CorrelationId,
+                };
+
+                // Atomic-outbox emit + audit_projection (same tx; mirrors VacationSettlementService.EmitAsync).
+                var streamId = $"employee-{employeeId}";
+                var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, forfeitEvent, ct);
+                var auditCtx = new AuditProjectionContext(
+                    ActorId: actorId,
+                    ActorPrimaryOrgId: primaryOrgId,
+                    CorrelationId: forfeitEvent.CorrelationId,
+                    OccurredAt: new DateTimeOffset(DateTime.SpecifyKind(forfeitEvent.OccurredAt, DateTimeKind.Utc)),
+                    ResolvedTargetOrgId: primaryOrgId);
+                var rowData = forfeitAuditMapper.Map(forfeitEvent, auditCtx);
+                await auditRepo.InsertAsync(conn, tx, forfeitEvent.EventId, outboxId, forfeitEvent.EventType, rowData, auditCtx, ct);
+
+                // The settlement-table audit row (version transition; mirrors the Phase-2 shape).
+                await settlementRepo.AppendAuditAsync(conn, tx, settled, "UPDATED",
+                    previousData, SerializeSettlementForAudit(settled),
+                    versionBefore: current.Version, versionAfter: settled.Version,
+                    actorId, actorRole, ct);
+
+                await tx.CommitAsync(ct);
+
+                context.Response.Headers.ETag = $"\"{settled.Version}\"";
+                return Results.Ok(new
+                {
+                    employeeId,
+                    entitlementType,
+                    entitlementYear,
+                    sequence = settled.Sequence,
+                    settlementState = settled.SettlementState,
+                    reviewDisposition = settled.ReviewDisposition,
+                    forfeitDays = settled.ForfeitDays,
+                    resolved = true,
+                    version = settled.Version,
+                });
+            }
+            catch
+            {
+                if (tx.Connection is not null)
+                    await tx.RollbackAsync(ct);
+                throw;
+            }
+        }).RequireAuthorization("HROrAbove");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // 3a. GET /api/vacation-settlements/payout-pending  — §24 awaiting-the-S69-line set
+    // ═══════════════════════════════════════════════════════════════════════
+    private static void MapPayoutPendingList(WebApplication app)
+    {
+        app.MapGet("/api/vacation-settlements/payout-pending", async (
+            DbConnectionFactory connectionFactory,
+            OrgScopeValidator scopeValidator,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            var actor = context.GetActorContext();
+
+            // Org-scope filter — GlobalAdmin (null sentinel) sees all; LocalAdmin/HR see only their
+            // subtree; Employee/unscoped → empty (the GetAccessibleOrgsAsync contract). The settled
+            // rows are joined to users.primary_org_id and filtered on it.
+            var accessibleOrgs = await scopeValidator.GetAccessibleOrgsAsync(actor, ct);
+            if (accessibleOrgs is { Count: 0 })
+                return Results.Ok(new { items = Array.Empty<object>(), count = 0 });
+
+            await using var conn = connectionFactory.Create();
+            await conn.OpenAsync(ct);
+
+            // SETTLED + payout_days > 0 + not-yet-reconciled. accessibleOrgs == null ⇒ GlobalAdmin,
+            // no org filter; else filter to the subtree. Parameterised array (no string interpolation
+            // of identifiers); the @orgFilterOff flag short-circuits the org predicate for GlobalAdmin.
+            await using var cmd = new NpgsqlCommand(
+                """
+                SELECT s.employee_id, s.entitlement_type, s.entitlement_year, s.sequence,
+                       s.payout_days, s.version, s.created_at, u.primary_org_id
+                FROM vacation_settlements s
+                JOIN users u ON u.user_id = s.employee_id
+                WHERE s.settlement_state = 'SETTLED'
+                  AND s.payout_days > 0
+                  AND s.payout_reconciled_at IS NULL
+                  AND (@orgFilterOff OR u.primary_org_id = ANY(@accessibleOrgs))
+                ORDER BY s.created_at ASC, s.employee_id ASC
+                """, conn);
+            var globalAdmin = accessibleOrgs is null;
+            cmd.Parameters.AddWithValue("orgFilterOff", globalAdmin);
+            cmd.Parameters.Add(new NpgsqlParameter("accessibleOrgs", NpgsqlTypes.NpgsqlDbType.Array | NpgsqlTypes.NpgsqlDbType.Text)
+            {
+                Value = (object?)(accessibleOrgs?.ToArray()) ?? Array.Empty<string>(),
+            });
+
+            var items = new List<object>();
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                items.Add(new
+                {
+                    employeeId = reader.GetString(0),
+                    entitlementType = reader.GetString(1),
+                    entitlementYear = reader.GetInt32(2),
+                    sequence = reader.GetInt32(3),
+                    payoutDays = reader.GetDecimal(4),
+                    version = reader.GetInt64(5),
+                    settledAt = reader.GetDateTime(6),
+                    primaryOrgId = reader.GetString(7),
+                });
+            }
+
+            return Results.Ok(new { items, count = items.Count });
+        }).RequireAuthorization("HROrAbove");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // 3b. POST .../reconcile-payout  — §24 manual-reconciliation marker (audited CAS)
+    // ═══════════════════════════════════════════════════════════════════════
+    private static void MapReconcilePayout(WebApplication app)
+    {
+        app.MapPost("/api/vacation-settlements/{employeeId}/{entitlementType}/{entitlementYear:int}/reconcile-payout", async (
+            string employeeId,
+            string entitlementType,
+            int entitlementYear,
+            VacationSettlementRepository settlementRepo,
+            DbConnectionFactory connectionFactory,
+            OrgScopeValidator scopeValidator,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            var actor = context.GetActorContext();
+
+            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, ct);
+            if (!allowed)
+                return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+
+            // Admin-strict If-Match — the CAS token (ADR-019 D2).
+            if (!EtagHeaderHelper.TryParseIfMatch(context.Request, out var expectedVersion, out var headerError))
+                return Results.Json(new { error = headerError }, statusCode: 428);
+
+            var actorId = actor.ActorId ?? "unknown";
+            var actorRole = actor.ActorRole ?? "unknown";
+
+            await using var conn = connectionFactory.Create();
+            await conn.OpenAsync(ct);
+            await using var tx = await conn.BeginTransactionAsync(ct);
+            try
+            {
+                var current = await settlementRepo.GetActiveAsync(
+                    conn, tx, employeeId, entitlementType, entitlementYear, ct);
+                if (current is null)
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.NotFound(new { error = "No active settlement found for this (employee, type, year)." });
+                }
+
+                // Only a SETTLED row with an un-reconciled payout bucket is markable.
+                if (!string.Equals(current.SettlementState, "SETTLED", StringComparison.Ordinal))
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.Json(new { error = "Settlement is not SETTLED.", settlementState = current.SettlementState }, statusCode: 409);
+                }
+                if (current.PayoutDays <= 0m)
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.Json(new { error = "Settlement has no §24 payout bucket to reconcile." }, statusCode: 409);
+                }
+                if (current.PayoutReconciledAt is not null)
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.Json(new
+                    {
+                        error = "Payout already reconciled.",
+                        reconciledAt = current.PayoutReconciledAt,
+                        reconciledBy = current.PayoutReconciledBy,
+                    }, statusCode: 409);
+                }
+
+                if (current.Version != expectedVersion)
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.Json(new
+                    {
+                        error = "Concurrency precondition failed",
+                        expectedVersion,
+                        actualVersion = current.Version,
+                    }, statusCode: 412);
+                }
+
+                var previousData = SerializeSettlementForAudit(current);
+
+                // CAS marker write — set payout_reconciled_at/by (paired-nullable; satisfies the
+                // vacation_settlements_payout_reconciled_paired CHECK) + bump version, re-asserting
+                // version in the WHERE so a concurrent winner makes this a 0-row no-op → 409.
+                long newVersion;
+                DateTime reconciledAt;
+                await using (var cmd = new NpgsqlCommand(
+                    """
+                    UPDATE vacation_settlements SET
+                        payout_reconciled_at = NOW(),
+                        payout_reconciled_by = @actorId,
+                        version = version + 1,
+                        updated_at = NOW()
+                    WHERE employee_id = @employeeId
+                      AND entitlement_type = @entitlementType
+                      AND entitlement_year = @entitlementYear
+                      AND sequence = @sequence
+                      AND version = @expectedVersion
+                    RETURNING version, payout_reconciled_at
+                    """, conn, tx))
+                {
+                    cmd.Parameters.AddWithValue("actorId", actorId);
+                    cmd.Parameters.AddWithValue("employeeId", employeeId);
+                    cmd.Parameters.AddWithValue("entitlementType", entitlementType);
+                    cmd.Parameters.AddWithValue("entitlementYear", entitlementYear);
+                    cmd.Parameters.AddWithValue("sequence", current.Sequence);
+                    cmd.Parameters.AddWithValue("expectedVersion", expectedVersion);
+                    await using var reader = await cmd.ExecuteReaderAsync(ct);
+                    if (!await reader.ReadAsync(ct))
+                    {
+                        await reader.DisposeAsync();
+                        await tx.RollbackAsync(ct);
+                        return Results.Json(new { error = "Concurrent update — refresh and retry." }, statusCode: 409);
+                    }
+                    newVersion = reader.GetInt64(0);
+                    reconciledAt = reader.GetDateTime(1);
+                }
+
+                var reconciledRow = current with
+                {
+                    PayoutReconciledAt = reconciledAt,
+                    PayoutReconciledBy = actorId,
+                    Version = newVersion,
+                };
+                await settlementRepo.AppendAuditAsync(conn, tx, reconciledRow, "UPDATED",
+                    previousData, SerializeSettlementForAudit(reconciledRow),
+                    versionBefore: current.Version, versionAfter: newVersion,
+                    actorId, actorRole, ct);
+
+                await tx.CommitAsync(ct);
+
+                context.Response.Headers.ETag = $"\"{newVersion}\"";
+                return Results.Ok(new
+                {
+                    employeeId,
+                    entitlementType,
+                    entitlementYear,
+                    sequence = current.Sequence,
+                    payoutReconciledAt = reconciledAt,
+                    payoutReconciledBy = actorId,
+                    version = newVersion,
+                });
+            }
+            catch
+            {
+                if (tx.Connection is not null)
+                    await tx.RollbackAsync(ct);
+                throw;
+            }
+        }).RequireAuthorization("HROrAbove");
+    }
+
+    // ───────────────────────────── helpers ─────────────────────────────
+
+    /// <summary>
+    /// CAS UPDATE of the settlement state-machine row (re-asserting <paramref name="expectedVersion"/>
+    /// in the WHERE so a concurrent winner yields a 0-row no-op → caller returns 409, no double-emit).
+    /// Returns the persisted row, or <c>null</c> on the 0-row CAS loss. Used by both D10 outcomes
+    /// (FORFEIT sets SETTLED, DEFER keeps PENDING_REVIEW) — the §24 reconcile path has its own inline
+    /// UPDATE (different column set).
+    /// </summary>
+    private static async Task<VacationSettlementRow?> CasUpdateSettlementAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        VacationSettlementRow current, string newState, string reviewDisposition, decimal forfeitDays,
+        long expectedVersion, CancellationToken ct)
+    {
+        await using var cmd = new NpgsqlCommand(
+            """
+            UPDATE vacation_settlements SET
+                settlement_state = @newState,
+                review_disposition = @reviewDisposition,
+                forfeit_days = @forfeitDays,
+                version = version + 1,
+                updated_at = NOW()
+            WHERE employee_id = @employeeId
+              AND entitlement_type = @entitlementType
+              AND entitlement_year = @entitlementYear
+              AND sequence = @sequence
+              AND version = @expectedVersion
+            RETURNING version
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("newState", newState);
+        cmd.Parameters.AddWithValue("reviewDisposition", reviewDisposition);
+        cmd.Parameters.AddWithValue("forfeitDays", forfeitDays);
+        cmd.Parameters.AddWithValue("employeeId", current.EmployeeId);
+        cmd.Parameters.AddWithValue("entitlementType", current.EntitlementType);
+        cmd.Parameters.AddWithValue("entitlementYear", current.EntitlementYear);
+        cmd.Parameters.AddWithValue("sequence", current.Sequence);
+        cmd.Parameters.AddWithValue("expectedVersion", expectedVersion);
+        var scalar = await cmd.ExecuteScalarAsync(ct);
+        if (scalar is null)
+            return null;
+        var newVersion = Convert.ToInt64(scalar);
+        return current with
+        {
+            SettlementState = newState,
+            ReviewDisposition = reviewDisposition,
+            ForfeitDays = forfeitDays,
+            Version = newVersion,
+        };
+    }
+
+    /// <summary>The seeded VACATION <c>reset_month</c> geometry — the ferieår starts 1 Sep (reset_month
+    /// 9; ADR-030/S65 verified). Used ONLY as the fail-closed fallback when no config resolves for the
+    /// employee (a null/inactive user, or a configless agreement) so the §21 deadline still derives
+    /// from the correct ferieår-end geometry rather than the wrong 31-Dec-E.</summary>
+    private const int VacationResetMonthFallback = 9;
+
+    /// <summary>
+    /// BLOCKER 1 + the cap/ok-version WARNINGs (Codex Step-5a) — derive the §21 stk.2 deadline from the
+    /// ferieår-END year (NOT the START year <paramref name="entitlementYear"/>) and resolve the dated
+    /// VACATION <c>carryover_max</c> on the SAME settle-time chain
+    /// <see cref="VacationSettlementService"/> uses, so the cap guard equals the snapshot's
+    /// <c>CarryoverMax</c> byte-for-byte.
+    ///
+    /// <para>
+    /// Geometry (mirrors <c>SettlementCloseService.IsBoundaryPassed</c> /
+    /// <c>VacationSettlementService.CaptureSnapshotAsync</c>): for ferieår E,
+    /// reset_month 1 → ferieår [Jan 1 E .. Dec 31 E], deadline 31 Dec E; else (e.g. VACATION
+    /// reset_month 9) → ferieår [Sep 1 E .. Aug 31 E+1], deadline 31 Dec (E+1). The OK version is
+    /// resolved at the ferieår START via <see cref="OkVersionResolver.ResolveVersion(DateOnly)"/>
+    /// (the dated config key — NOT the user's CURRENT ok_version), and the dated config is read at
+    /// the ferieår-start agreement + that OK version. Fail-closed to the statutory ceiling when no
+    /// dated config resolves (the cap guard always enforces). Pure read; no I/O on the write tx.
+    /// </para>
+    /// </summary>
+    /// <returns>(<c>deadline</c> = 31 Dec of the ferieår-end year; <c>cap</c> = the dated VACATION
+    /// carryover_max, or the statutory fallback).</returns>
+    private static async Task<(DateOnly Deadline, decimal Cap)> ResolveDeadlineAndCapAsync(
+        EntitlementConfigRepository configRepo,
+        UserAgreementCodeRepository agreementCodeRepo,
+        UserRepository userRepo,
+        string employeeId, int entitlementYear, CancellationToken ct)
+    {
+        var user = await userRepo.GetByIdAsync(employeeId, ct);
+
+        // Discover reset_month from the live config (keyed on the user's live agreement + ok_version) so
+        // the ferieår geometry is correct for reset_month 1 vs 9. On a null/inactive/configless user,
+        // fall back to the seeded VACATION geometry (reset_month 9) — the deadline still derives from the
+        // ferieår-END year (the BLOCKER-1 correction) rather than the wrong 31-Dec-E.
+        int resetMonth = VacationResetMonthFallback;
+        if (user is not null)
+        {
+            var liveConfig = await configRepo.GetCurrentOpenAsync(
+                VacationType, user.AgreementCode, user.OkVersion, ct);
+            if (liveConfig is not null)
+                resetMonth = liveConfig.ResetMonth;
+        }
+
+        // Ferieår [start, end] for E, then the §21 31-Dec deadline of the ferieår-END year.
+        DateOnly ferieaarStart;
+        DateOnly ferieaarEnd;
+        if (resetMonth == 1)
+        {
+            ferieaarStart = new DateOnly(entitlementYear, 1, 1);
+            ferieaarEnd = new DateOnly(entitlementYear, 12, 31);
+        }
+        else
+        {
+            ferieaarStart = new DateOnly(entitlementYear, resetMonth, 1);
+            ferieaarEnd = ferieaarStart.AddYears(1).AddDays(-1);
+        }
+        var deadline = new DateOnly(ferieaarEnd.Year, 12, 31);
+
+        if (user is null)
+            return (deadline, StatutoryTransferCapFallback);
+
+        // Dated cap on the settle-time chain: agreement-at + ok_version-at the ferieår START.
+        var okVersion = OkVersionResolver.ResolveVersion(ferieaarStart);
+        var agreementCode = await agreementCodeRepo.GetByUserIdAtAsync(employeeId, ferieaarStart, ct)
+            ?? user.AgreementCode;
+        var config = await configRepo.GetByTypeAtAsync(
+            VacationType, agreementCode, okVersion, ferieaarStart, ct);
+        return (deadline, config?.CarryoverMax ?? StatutoryTransferCapFallback);
+    }
+
+    /// <summary>
+    /// WARNING (Reviewer Step-5a) — in-tx read of <c>users.primary_org_id</c> WITHOUT the
+    /// <c>is_active</c> filter, so the FORFEIT audit-context resolution succeeds for a since-deactivated
+    /// employee (a PENDING_REVIEW row created while active, resolved after deactivation). Returns
+    /// <c>null</c> only when the user row genuinely does not exist (caller maps 404 — never a 500).
+    /// </summary>
+    private static async Task<string?> ResolvePrimaryOrgIdInTxAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, string employeeId, CancellationToken ct)
+    {
+        await using var cmd = new NpgsqlCommand(
+            "SELECT primary_org_id FROM users WHERE user_id = @employeeId", conn, tx);
+        cmd.Parameters.AddWithValue("employeeId", employeeId);
+        var result = await cmd.ExecuteScalarAsync(ct);
+        return result is null or DBNull ? null : (string)result;
+    }
+
+    /// <summary>Copenhagen wall-clock now — the §21 stk.2 deadline is a Copenhagen business date,
+    /// not UTC. Tries the IANA id first (works cross-platform on .NET 8 ICU), then the Windows id,
+    /// then a fixed +01:00 fallback so the resolution never throws on an exotic host.</summary>
+    private static DateTime NowCopenhagen()
+    {
+        TimeZoneInfo tz;
+        try { tz = TimeZoneInfo.FindSystemTimeZoneById("Europe/Copenhagen"); }
+        catch (TimeZoneNotFoundException)
+        {
+            try { tz = TimeZoneInfo.FindSystemTimeZoneById("Romance Standard Time"); }
+            catch (TimeZoneNotFoundException) { return DateTime.UtcNow.AddHours(1); }
+        }
+        return TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, tz);
+    }
+
+    private static readonly JsonSerializerOptions SnapshotJsonOptions = new(JsonSerializerDefaults.Web);
+
+    private static VacationSettlementSnapshot? DeserializeSnapshot(string snapshotJson)
+    {
+        if (string.IsNullOrWhiteSpace(snapshotJson))
+            return null;
+        try { return JsonSerializer.Deserialize<VacationSettlementSnapshot>(snapshotJson, SnapshotJsonOptions); }
+        catch (JsonException) { return null; }
+    }
+
+    /// <summary>Audit payload for a settlement row (the version-transition previous/new data). Mirrors
+    /// the per-row field set; the immutable snapshot is carried as raw JSON.</summary>
+    private static string SerializeSettlementForAudit(VacationSettlementRow row) =>
+        JsonSerializer.Serialize(new
+        {
+            row.EmployeeId,
+            row.EntitlementType,
+            row.EntitlementYear,
+            row.Sequence,
+            row.SettlementState,
+            row.Trigger,
+            row.TransferDays,
+            row.PayoutDays,
+            row.ForfeitDays,
+            row.ReviewDisposition,
+            PayoutReconciledAt = row.PayoutReconciledAt,
+            row.PayoutReconciledBy,
+            row.Version,
+        }, SnapshotJsonOptions);
+
+    // ───────────────────────────── request DTOs ─────────────────────────────
+
+    /// <summary>POST/PUT §21 transfer-agreement body. employeeId is a route param; recorded_by is
+    /// server-stamped from the JWT actor.</summary>
+    private sealed record SetTransferAgreementRequest
+    {
+        public required int EntitlementYear { get; init; }
+        public required string EntitlementType { get; init; }
+        public required decimal TransferDays { get; init; }
+        public required DateOnly AgreementDate { get; init; }
+    }
+
+    /// <summary>POST /resolve body — the D10 disposition (FORFEIT / DEFER) + an optional explicit
+    /// forfeit_days (FORFEIT only; defaults to the flagged remainder already on the row).</summary>
+    private sealed record ResolveSettlementRequest
+    {
+        public required string Disposition { get; init; }
+        public decimal? ForfeitDays { get; init; }
+    }
+}

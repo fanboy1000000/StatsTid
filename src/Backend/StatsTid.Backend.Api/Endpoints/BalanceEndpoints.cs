@@ -47,6 +47,7 @@ public static class BalanceEndpoints
             OvertimeBalanceRepository overtimeBalanceRepo,
             TimeEntryProjectionRepository timeEntryProjectionRepo,
             AbsenceProjectionRepository absenceProjectionRepo,
+            VacationSettlementRepository settlementRepo,
             IEventStore eventStore,
             OrgScopeValidator scopeValidator,
             IEmploymentProfileResolver profileResolver,
@@ -276,6 +277,59 @@ public static class BalanceEndpoints
                 // IMMEDIATE types earned == totalQuota, so remaining is byte-for-byte unchanged.
                 var remaining = earned + carryoverIn - used - planned;
 
+                // ── S68 / TASK-6807 (ADR-033 D6 clarification) — settled-year reader special-case ──
+                // A SETTLED / PENDING_REVIEW entitlement-year reads the RECORDED disposition off the
+                // ACTIVE (non-REVERSED) vacation_settlements row, NOT a live recompute (determinism;
+                // ADR-033 D3/D6). The per-bucket day-counts (transfer_days §21 / payout_days §24 /
+                // forfeit_days §34) on the row are pure functions of the immutable settle-time
+                // snapshot, so reading them IS reading the snapshot disposition. `used` is NEVER
+                // mutated by settlement (ADR-032 D2); only the displayed `remaining` changes. The
+                // lookup keys on (employee, type, entitlementYear) — for any type with no settlement
+                // (every non-VACATION type pre-slice-2, and any unsettled VACATION year) GetActiveAsync
+                // returns null ⇒ the unsettled path below, byte-identical to prior behavior.
+                var settlement = await settlementRepo.GetActiveAsync(
+                    employeeId, ec.EntitlementType, entitlementYear, ct);
+
+                decimal displayedRemaining;
+                object? settlementInfo;
+                if (settlement is null)
+                {
+                    // Unsettled — unchanged.
+                    displayedRemaining = Math.Round(remaining, 2);
+                    settlementInfo = null;
+                }
+                else if (string.Equals(settlement.SettlementState, "SETTLED", StringComparison.Ordinal))
+                {
+                    // SETTLED — the year is fully disposed: remaining reads 0, the disposition is the
+                    // recorded §21/§24/§34 partition (the FULL partition; a SUPERSET of the D9 expiring
+                    // figure, which is the §34 forfeit bucket alone — ADR-033 D6 clarification).
+                    displayedRemaining = 0m;
+                    settlementInfo = new
+                    {
+                        state = settlement.SettlementState,
+                        transferDays = settlement.TransferDays,   // §21 — to next-year carryover_in
+                        payoutDays = settlement.PayoutDays,       // §24 — auto-payout (day-count line, S69)
+                        forfeitDays = settlement.ForfeitDays,     // §34 — == the D9 expiring bucket
+                        forfeitPending = false
+                    };
+                }
+                else
+                {
+                    // PENDING_REVIEW — the auto-resolved §21/§24 buckets are disposed, but the §34
+                    // forfeit_days remainder is UNRESOLVED (a human must adjudicate §34-vs-§22, ADR-033
+                    // D10). It is shown as STILL PENDING (flagged), NOT counted as 0 (Codex W): the
+                    // displayed remaining is exactly that unresolved §34 remainder.
+                    displayedRemaining = Math.Round(settlement.ForfeitDays, 2);
+                    settlementInfo = new
+                    {
+                        state = settlement.SettlementState,
+                        transferDays = settlement.TransferDays,
+                        payoutDays = settlement.PayoutDays,
+                        forfeitDays = settlement.ForfeitDays,
+                        forfeitPending = true
+                    };
+                }
+
                 DanishLabels.TryGetValue(ec.EntitlementType, out var label);
 
                 entitlements.Add(new
@@ -290,8 +344,11 @@ public static class BalanceEndpoints
                     used,
                     planned,
                     carryoverIn,
-                    remaining = Math.Round(remaining, 2),
-                    entitlementYear
+                    remaining = displayedRemaining,
+                    entitlementYear,
+                    // null for unsettled years (every current consumer sees the same shape + a new
+                    // optional field); the recorded disposition for a SETTLED/PENDING_REVIEW year.
+                    settlement = settlementInfo
                 });
 
                 // Derive vacationDaysEntitlement from config instead of hardcoded 25
@@ -532,6 +589,7 @@ public static class BalanceEndpoints
             EmployeeEntitlementEligibilityRepository eligibilityRepo,
             AbsenceProjectionRepository absenceProjectionRepo,
             WorkTimeProjectionRepository workTimeProjectionRepo,
+            VacationSettlementRepository settlementRepo,
             IEventStore eventStore,
             IEmploymentProfileResolver profileResolver,
             ConfigResolutionService configResolver,
@@ -902,14 +960,53 @@ public static class BalanceEndpoints
                 var expiring = Math.Round(
                     Math.Max(0m, transferableRaw - closedConfig.CarryoverMax), 2);
 
+                // ── S68 / TASK-6807 (ADR-033 D6 clarification) — settled-CLOSED-ferieår special-case ──
+                // When the CLOSED entitlement-year (closedEntYear — the one the D9 boundary projects)
+                // has an ACTIVE settlement, the D9 `expiring` figure is the RECORDED §34 forfeit_days
+                // off the row, NOT the live recompute (determinism; post-settlement readers never
+                // recompute — ADR-033 D3/D6). By construction these COINCIDE: SettlementService.Partition
+                // computes forfeit_days as round(max(0, earned + carryoverIn − used − planned − carryover_max), 2)
+                // with MidpointRounding.ToEven — byte-identical to the `expiring` formula above — so this
+                // swap is value-preserving on a healthy row while pinning the deterministic source.
+                // `expiring` (== recorded forfeit_days) stays ONLY the over-cap §34-candidate bucket; the
+                // settlement `disposition` exposes the FULL §21+§24+§34 partition (a SUPERSET of expiring).
+                // The per-month `saldo` array is left UNTOUCHED — settlement does not retroactively zero
+                // the ferieår's monthly history (ADR-033 D6 clarification). Lookup keys on
+                // (employee, type, closedEntYear); null ⇒ unchanged (every non-VACATION type, any
+                // unsettled VACATION year).
+                var closedSettlement = await settlementRepo.GetActiveAsync(
+                    employeeId, type, closedEntYear, ct);
+
+                decimal displayedExpiring = expiring;
+                object? disposition = null;
+                if (closedSettlement is not null)
+                {
+                    var pending = !string.Equals(
+                        closedSettlement.SettlementState, "SETTLED", StringComparison.Ordinal);
+                    // Pin the D9 figure to the recorded §34 bucket (deterministic source).
+                    displayedExpiring = Math.Round(closedSettlement.ForfeitDays, 2);
+                    disposition = new
+                    {
+                        state = closedSettlement.SettlementState,
+                        transferDays = closedSettlement.TransferDays,   // §21
+                        payoutDays = closedSettlement.PayoutDays,       // §24
+                        forfeitDays = closedSettlement.ForfeitDays,     // §34 — == displayedExpiring
+                        // PENDING_REVIEW: the §34 remainder is still unresolved (flagged, NOT 0; Codex W).
+                        forfeitPending = pending
+                    };
+                }
+
                 categories.Add(new
                 {
                     type,
                     label = DanishLabels.TryGetValue(type, out var lbl) ? lbl : type,
                     saldo,
                     afholdt,
-                    expiring,
-                    boundaryMonth = 12
+                    expiring = displayedExpiring,
+                    boundaryMonth = 12,
+                    // null for unsettled closed-ferieår; the recorded FULL disposition for a
+                    // SETTLED/PENDING_REVIEW closed year (a SUPERSET of `expiring`).
+                    settlement = disposition
                 });
             }
 
@@ -962,6 +1059,21 @@ public static class BalanceEndpoints
                     ? AccrualMath.EarnedToDate(
                         ec.AnnualQuota, 1.0m, ferieaarStart, user.EmploymentStartDate, today)
                     : ec.AnnualQuota;
+
+                // ── S68 / TASK-6807 (ADR-033 D6 clarification) — settled CURRENT-ferieår tile ──
+                // If the CURRENT entitlement-year (entYear — the ferieår containing today, the one this
+                // tile reports) has an ACTIVE settlement, the tile reads the RECORDED disposition, not
+                // the live earned-based remaining (determinism; post-settlement no recompute). SETTLED
+                // ⇒ 0; PENDING_REVIEW ⇒ the unresolved §34 forfeit_days remainder (flagged-pending, NOT
+                // 0; Codex W). Unsettled (null) ⇒ the live remaining, unchanged. Keys on
+                // (employee, type, entYear) — non-VACATION + unsettled VACATION ⇒ null ⇒ unchanged.
+                var settlement = await settlementRepo.GetActiveAsync(employeeId, type, entYear, ct);
+                if (settlement is not null)
+                {
+                    return string.Equals(settlement.SettlementState, "SETTLED", StringComparison.Ordinal)
+                        ? 0m
+                        : Math.Round(settlement.ForfeitDays, 2);
+                }
                 return Math.Round(earned + carryoverIn - used - planned, 2);
             }
 

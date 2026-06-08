@@ -178,7 +178,7 @@ _(to verify at each task + sprint close)_
 | Field | Value |
 |-------|-------|
 | **ID** | TASK-6805 |
-| **Status** | planned |
+| **Status** | complete 2026-06-08 — `SettlementCloseService` (DelegationExpiryService poll shape; employee×config-driven enumeration incl. missing-`entitlement_balances`-row; year-band floor `GREATEST(2020, hireYear)` — Orchestrator fix, no pre-hire zero-settlements; Copenhagen business-clock boundary `31 Dec E+1`; `ReadCommitted` for the advisory-lock-then-recheck; concurrent-poller-safe). DI wired (`AddHostedService`). **Step-5a: the configless-*current*-agreement enumeration edge (Codex W4) ACCEPTED** — same unreachable edge as the TASK-6804 acceptance (no configless-VACATION agreement exists; `SettleAsync` is more robust than the enumeration). build 0E. |
 | **Agent** | Infrastructure (cross-domain authorized: the BackgroundService + DI) |
 | **Components** | `SettlementCloseService`, `Backend.Api/Program.cs` (DI) |
 | **KB Refs** | ADR-033 D3, the `DelegationExpiryService` shape |
@@ -197,7 +197,7 @@ _(to verify at each task + sprint close)_
 | Field | Value |
 |-------|-------|
 | **ID** | TASK-6806 |
-| **Status** | planned |
+| **Status** | complete 2026-06-08 (cycle-2: the 4 substantive fixes RESOLVED — advisory lock, future-date, forfeitDays bound, terminated-employee org-resolution; the residual deadline/cap reset-month fallback when the *current* agreement is configless is the SAME unreachable configless-VACATION-agreement edge ACCEPTED for 6804/6805 — for all reachable cases the endpoint's dated config == the snapshot's) — `VacationSettlementEndpoints` (§21 POST/PUT + D10 resolve FORFEIT/DEFER + §24 payout-pending GET + reconcile-payout POST; all `RequireAuthorization("HROrAbove")` + `OrgScopeValidator` + admin-strict If-Match + ADR-026 audit; FindAll/FAIL-001-safe). **Step-5a: Codex 2B/4W + Reviewer 2W → all fixed** (§21 deadline year `31 Dec E`→`E+1` geometry; the §21 write takes the `EmployeeConsumptionLock` before its check+write closing the poller race; future-date 422; dated cap OK-version via `ResolveVersion(ferieaarStart)`; FORFEIT `forfeitDays == flagged remainder`; terminated-employee org-resolution no longer 500s). CAS state-transition in the endpoint = design-sanctioned (ADR-033 D10), repo-hoist deferred to slice 4. build 0E. |
 | **Agent** | Backend API (cross-domain authorized: `Backend.Api/Endpoints` + Infrastructure repo + Security audit) |
 | **Components** | new `VacationSettlementEndpoints` / `VacationTransferAgreementEndpoints` |
 | **KB Refs** | ADR-033 D8/D10, ADR-019 D2 (admin-strict If-Match), ADR-026 (audit), ADR-025 D6 (settlement GLOBAL — no per-institution override) |
@@ -218,7 +218,7 @@ _(to verify at each task + sprint close)_
 | Field | Value |
 |-------|-------|
 | **ID** | TASK-6807 |
-| **Status** | planned |
+| **Status** | complete 2026-06-08 — `BalanceEndpoints` settled-year reader semantics: SETTLED → `remaining = 0` + recorded disposition from the active-sequence snapshot (not re-derived); PENDING_REVIEW → §34 remainder shown pending (NOT 0); unsettled unchanged; earlier monthly `saldo` preserved; D9 `expiring` ≡ recorded `forfeit_days` by construction (ToEven). Carryover read+write-path (`CheckAndAdjustAsync` ceiling) confirmed correct as-is. Step-5a: clean (NOTE: per-type N+1 settlement read mirrors existing pattern). build 0E. |
 | **Agent** | Backend API (cross-domain authorized: `BalanceEndpoints` + the year-overview reader) |
 | **Components** | `BalanceEndpoints` (`/summary`, `/year-overview`, the D9 row), `CheckAndAdjustAsync` quota guard |
 | **KB Refs** | ADR-033 D6 (clarified), ADR-030 D9, ADR-032 D2 |

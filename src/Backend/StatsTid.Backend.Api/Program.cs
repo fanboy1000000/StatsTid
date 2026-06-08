@@ -32,6 +32,7 @@ builder.Services.AddSingleton<IEventStore>(sp => sp.GetRequiredService<PostgresE
 builder.Services.AddSingleton<IOutboxEnqueue>(sp => sp.GetRequiredService<PostgresEventStore>());
 builder.Services.AddHostedService<OutboxPublisher>();
 builder.Services.AddHostedService<DelegationExpiryService>();
+builder.Services.AddHostedService<SettlementCloseService>(); // S68 ADR-033 slice 1a — period-close poller
 
 builder.Services.AddHttpClient();
 
@@ -347,6 +348,7 @@ app.MapComplianceEndpoints();
 app.MapOvertimeEndpoints();
 app.MapAuditEndpoints();
 app.MapReportingLineEndpoints();
+app.MapVacationSettlementEndpoints(); // S68 ADR-033 slice 1a — §21 agreement + D10 resolve + §24 payout-pending
 
 app.Run();
 
