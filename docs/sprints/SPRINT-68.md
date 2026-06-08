@@ -3,12 +3,12 @@
 | Field | Value |
 |-------|-------|
 | **Sprint** | 68 |
-| **Status** | planned |
+| **Status** | complete — 2026-06-08 |
 | **Start Date** | 2026-06-08 |
-| **End Date** | — |
-| **Orchestrator Approved** | no |
-| **Build Verified** | no |
-| **Test Verified** | no |
+| **End Date** | 2026-06-08 |
+| **Orchestrator Approved** | yes (2026-06-08) |
+| **Build Verified** | yes (0E) |
+| **Test Verified** | local full-pyramid GREEN (Docker-gated suites run against live Postgres) — 645 unit + 511 regression (509+2 FAIL-002 isolation-cleared 8/8) + 5 smoke + 176 FE = 1337; GitHub CI runs on push (CI-health gate green at close: S67 run 27121201014) |
 
 ## Sprint Goal
 
@@ -64,17 +64,17 @@ Cycle 1: all 4 Codex BLOCKERs + 7 WARNINGs absorbed (TASK-6801/6802/6803/6804/68
 
 ## Architectural Constraints Verified
 
-_(to verify at each task + sprint close)_
+_(verified at sprint close; dual-lens Step-7a APPROVED)_
 
-- [ ] P1 — Architectural integrity (the Backend close bounded context; the Payroll emitter stays S69; outbox-only cross-context coupling per ADR-018 D3)
-- [ ] P2 — Deterministic settlement quantities (pure of the immutable snapshot; `AccrualMath.EarnedToDate` + recorded feriedage; replay-stable marquee)
-- [ ] P3 — Event sourcing/auditability (the settlement event family on `employee-{id}`; ADR-026 sync-in-tx audit from the BackgroundService dispatch site)
-- [ ] P4 — OK-version correctness (entry-date-stamped recorded feriedage, ADR-032 D2; the §21/§24 boundary on the Europe/Copenhagen business clock, NOT raw `CURRENT_DATE`)
-- [ ] P5 — Integration isolation (money-free; no Payroll line in 1a; SLS owns the rate)
-- [ ] P6 — Payroll correctness (the §24 disposition recorded; the line + SLS contract are S69)
-- [ ] P7 — Security/access control (the §21 HR-agreement + the D10 manual-completion endpoints: HROrAbove + OrgScope + If-Match + audit; cross-org rejected)
-- [ ] P8 — CI/CD (schema regen + check_docs green; the test pyramid)
-- [ ] P9 — UX (the thin HR §21-agreement admin surface, if in scope)
+- [x] P1 — Architectural integrity (Backend close bounded context; Payroll emitter stays S69; outbox-only cross-context coupling per ADR-018 D3) — Reviewer-confirmed
+- [x] P2 — Deterministic settlement quantities (pure fn of the immutable snapshot; replay-stable marquee green) — both lenses
+- [x] P3 — Event sourcing/auditability (settlement event family on `employee-{id}`; ADR-026 sync-in-tx audit from the BackgroundService dispatch site; all 9 events registered)
+- [x] P4 — OK-version correctness (entry-date-stamped recorded feriedage, ADR-032 D2; §21/§24 boundary on the Europe/Copenhagen business clock; **VACATION `reset_month` pinned 9 — Step-7a B1 fix** closes the live-vs-dated boundary divergence)
+- [x] P5 — Integration isolation (money-free; no Payroll line in 1a; SLS owns the rate) — Reviewer-confirmed no kroner/rate field anywhere
+- [x] P6 — Payroll correctness (§24 disposition recorded; line + SLS contract are S69; §24 manual-reconciliation marker S69's emitter must honor)
+- [x] P7 — Security/access control (§21 + D10 endpoints: HROrAbove + OrgScope + If-Match + audit; cross-org 403; FAIL-001-safe). **Known limitation:** terminated-employee resolution on §21/reconcile deferred to slice 3 (B2)
+- [x] P8 — CI/CD (schema regen + check_docs green, 59 tables; full pyramid; CI-health gate at push)
+- [N/A] P9 — UX (TASK-6809 thin HR §21 admin surface deferred — explicitly outside the 1a gate; the API is the 1a deliverable)
 
 ## Task Log
 
@@ -83,7 +83,7 @@ _(to verify at each task + sprint close)_
 | Field | Value |
 |-------|-------|
 | **ID** | TASK-6800 |
-| **Status** | planned |
+| **Status** | complete 2026-06-08 — ADR-033 D3 clarification (the go-live gate) + D6 clarification (OQ-3 disposition-on-the-row) added; the business-timezone interim recorded (Copenhagen boundary via TimeProvider, ahead of the (v) ADR). **Step-7a addendum:** the D3 boundary note now records the VACATION `reset_month=9` enforcement (B1). |
 | **Agent** | Orchestrator (docs/KB) |
 | **Components** | ADR-033 (D6 clarification + D3 timezone interim) · KB INDEX · ROADMAP (S68 promotion) · this log |
 | **KB Refs** | ADR-033 D3/D6, ADR-032 D2, ROADMAP follow-up (v) |
@@ -237,7 +237,7 @@ _(to verify at each task + sprint close)_
 | Field | Value |
 |-------|-------|
 | **ID** | TASK-6808 |
-| **Status** | planned |
+| **Status** | complete 2026-06-08 — the slice-1a test bar green: `VacationSettlementServiceTests` (atomic/forced-rollback, replay-determinism, half-timer flat-day parity, idempotent single-settle, carryover-raises-ceiling, no-balance-row), `VacationSettlementEndpointTests` (§21 RBAC/If-Match/cross-org/deadline/cap/post-settlement-409, D10 FORFEIT/DEFER CAS, §24 reconcile), `SettlementCloseServiceBoundaryTests` (Copenhagen 31-Dec boundary + D13 go-live gate), `SettledYearReaderTests`. **+ Step-7a fix-forward D-tests:** `SettlementSchemaConstraintTests` (8: the 3 new W4 CHECKs) + `Post_VacationConfig_NonNineResetMonth_Returns422` (B1). |
 | **Agent** | Test & QA |
 | **Components** | `tests/**` |
 | **KB Refs** | PAT-008 (FixedTimeProvider WAF), FAIL-002 (Docker testcontainer churn), the marquee replay precedent |
@@ -255,7 +255,7 @@ _(to verify at each task + sprint close)_
 | Field | Value |
 |-------|-------|
 | **ID** | TASK-6809 |
-| **Status** | planned — **explicitly OUTSIDE the 1a completion gate** (Codex NOTE); the §21 API (TASK-6806) is the deliverable. Ship only if the sprint has room; otherwise a thin polish follow-up. |
+| **Status** | **DEFERRED** (2026-06-08) — outside the 1a completion gate (Codex NOTE); the §21 API (TASK-6806) is the slice-1a deliverable and ships complete. The thin HR admin form is a polish follow-up (ROADMAP); FE count unchanged at 176. |
 | **Agent** | UX |
 | **Components** | `frontend/**` — a thin HR form to record a §21 transfer agreement (consumes TASK-6806's API as-is) |
 | **KB Refs** | docs/FRONTEND.md, ADR-011 (tokens) |
@@ -269,20 +269,66 @@ _(to verify at each task + sprint close)_
 
 | Check | Status | Notes |
 |-------|--------|-------|
-| Agreement rules match legal requirements | pending | §21 transfer (Ferielov §21, 31 Dec deadline) / §24 auto-payout / §34 forfeiture — the verified S67 spine (`vacation-settlement-law-research.md`) |
+| Agreement rules match legal requirements | verified | §21 transfer (Ferielov §21, 31-Dec Copenhagen deadline) / §24 auto-payout / §34 forfeiture — the verified S67 spine (`vacation-settlement-law-research.md`). **Step-7a B1 added the statutory 1-Sep ferieår (`reset_month=9`) enforcement** (LBK 230/2021) |
 | Wage type mappings produce correct SLS codes | N/A (1a) | The §24 day-count LINE + SLS contract are S69 = slice 1b |
 | Overtime/supplement calculations are deterministic | N/A | — |
-| Absence effects on norm/flex/pension are correct | pending | The settled quantities reuse recorded feriedage (ADR-032 D2) — no re-valuation |
-| Retroactive recalculation produces stable results | pending | Replay-determinism marquee (settled = pure fn of the snapshot) |
+| Absence effects on norm/flex/pension are correct | verified | The settled quantities reuse recorded feriedage (ADR-032 D2) — no re-valuation; Reviewer-confirmed no `used` mutation / balance zeroing |
+| Retroactive recalculation produces stable results | verified | Replay-determinism marquee green (settled = pure fn of the immutable snapshot, `ToEven`-matched to D9 `expiring`) |
 
 ## External Review (Step 7a)
 
-_pending — sprint-end dual-lens after implementation._
+Dual-lens, post-implementation (against commit `1fd77ed` + the working-tree fix-forward below).
+
+### Cycle 1
+
+**External Codex — BLOCKED (2B/3W/1N)** (`.claude/reviews/SPRINT-68-step7a-codex-raw.log`):
+
+- **BLOCKER 1** — poller boundary (`SettlementCloseService.IsBoundaryPassed`) resolves `reset_month` from the employee's *current* agreement, while settlement valuation uses the *dated* closed-year config; flagged the `reset_month==1`→`31 Dec E` geometry. → **Cycle-1 owner-ratified as a principled acceptance** (reset_month uniform 9 in the seed). → **Cycle-2 Codex escalated to ACCEPTANCE-UNSOUND** with a sharper, CORRECT point: the seed is uniform-9, but a GlobalAdmin `POST /api/admin/entitlement-configs` can create a *new* VACATION config (new `ok_version` natural key) with an arbitrary `reset_month` — the ADR-021 immutability guard only blocks *changing* it on an existing key. That makes the poller-vs-dated divergence reachable. A genuine missed fact, not thrash. → **FIXED BY ENFORCEMENT (owner-ratified 2026-06-08).** The Danish vacation year is statutorily fixed at 1 Sep–31 Aug (samtidighedsferie, LBK 230/2021), so VACATION `reset_month` is *always* 9 and a non-9 VACATION config is legally malformed. Pinned it true-by-construction: (a) DB CHECK `entitlement_configs_vacation_reset_month` (`entitlement_type <> 'VACATION' OR reset_month = 9`) on every fresh-DB write path + a `schema_migrations`-guarded idempotent ALTER (`s68-vacation-reset-month-check`, remediate-then-DROP-then-ADD) for the legacy-DB upgrade path (Reviewer follow-up); (b) a friendly 422 endpoint guard in the POST handler (PUT already covered by the reset_month-immutability guard); (c) test `Post_VacationConfig_NonNineResetMonth_Returns422`. CARE_DAY/SENIOR_DAY (calendar-year `reset_month` 1) and SPECIAL_HOLIDAY are unconstrained. With `reset_month` provably uniform-9 for VACATION, the poller's live-config read can no longer diverge from the dated snapshot and the `reset_month==1` geometry is unreachable.
+- **BLOCKER 2** — terminated/inactive employees are unreachable through the settlement endpoints: `OrgScopeValidator.ValidateEmployeeAccessAsync` → `UserRepository.GetByIdAsync` filters `is_active = TRUE`, so an authorized HR/GlobalAdmin gets **403** on §21 write / D10 resolve / §24 reconcile for an employee who has since left. → **DEFERRED to slice 3 (owner-ratified 2026-06-08).** The 403 is the surface symptom of an unmodeled domain: the leaver/TERMINATION settlement (Ferielov §26 payout-at-termination, §7 stk.1 cap, the SLS payout handoff, AND the HR access path for a departed employee). Slice 1a auto-creates settlements for ACTIVE employees only (the poller enumerates `is_active = TRUE`); the active→terminate→manual-complete window is the gap. Band-aiding the 403 alone would pre-empt the slice-3 design. **Known limitation recorded** (the manual operator fallback covers the gap until slice 3); **"deep-dive: what happens when an employee leaves" elevated to the named next-sprint candidate = ADR-033 slice 3 / TERMINATION** (ROADMAP).
+- **WARNING 5** — `Settlement:GoLiveDate` documented strict-ISO but parsed with permissive `DateOnly.TryParse` (locale/ambiguous forms could ACTIVATE automation on a misread date). → **FIXED**: `TryParseExact("yyyy-MM-dd")`; a non-ISO value fails closed to dormant (`SettlementCloseService.cs`).
+- **WARNING 4** — schema lacked non-negative-bucket / positive-counter / state-disposition-coupling integrity checks (`SETTLED+DEFER`, negative days were DB-valid). → **FIXED**: 3 new CHECK constraints on `vacation_settlements` (`_nonneg_buckets`, `_positive_counters`, `_disposition_state` — DEFER⇒PENDING_REVIEW, FORFEIT⇒¬PENDING_REVIEW) + 8 negative/positive D-tests (`SettlementSchemaConstraintTests`); db-schema regenerated (59 tables, check_docs green).
+- **WARNING 3** — a zero-transfer settlement skips the derived §21 carryover write, leaving any existing next-year `carryover_in`. → **PRINCIPLED ACCEPTANCE.** This directly conflicts with the Step-5a TASK-6804 W1 decision (skip-when-zero, to avoid CLOBBERING the future §22 producer and mass-materializing next-year rows). In slice 1a §21 is the SOLE carryover producer and `carryover_in` starts at 0; settling year E writes to E+1 (a legitimate inflow, never stale), so no zero-transfer settlement can leave a stale nonzero value. The provenance concern is fully resolved when slice 4 makes carryover source-keyed. A genuine missed-facts-vs-thrash divergence between the two lenses (Step-7a Codex lacked the Step-5a rationale).
+- **NOTE** — clean: atomic settlement/outbox/audit tx, advisory locking, partial-unique active row, D10 CAS / no double-§34-emit, settled-year readers, no `used` mutation, money isolation, RBAC/OrgScope shape, FAIL-001 scan.
+
+**Internal Reviewer — APPROVED (0B/0W/3N), cycle 1** against the post-fix-forward tree. Independently verified all three cycle-1 fix-forward items (W5 strict parse `:132`; W4 the 3 CHECK constraints `:2620-2632` — confirmed NO valid D10 state wrongly rejected, incl. that a future REVERSED+FORFEIT row is admitted so slice-4 reversal isn't pre-broken; the 8 D-tests), and all ADR-033 invariants in code (money isolation, determinism, ADR-032 D2 no-`used`-mutation, atomicity, single-active, go-live gate, D10 CAS/no-double-emit, §21 guards, FAIL-001/RBAC). NOTES: a pre-existing `AuditProjectionParityTests` doc/assert drift (unrelated to S68); B1/B2/W3 correctly recorded as owner-ratified acceptances/deferrals; FORFEIT already resolves a since-deactivated employee via the in-tx org read.
+
+### Cycle 2
+
+**External Codex — verify (`SPRINT-68-step7a-codex-c2-raw.log`):** findings 2 (B2 deferral), 3 (W5), 4 (W4), 5 (W3) all **RESOLVED**; no new findings; **B1 escalated to ACCEPTANCE-UNSOUND** (the admin-can-POST-non-9 reachability above) → addressed by the B1 enforcement fix.
+
+**Internal Reviewer — B1 fix confirmation (continued agent):** **B1-RESOLVED, verdict APPROVED.** Verified the DB CHECK + endpoint guard make a non-9 VACATION `reset_month` impossible to persist on every CI-validated path (so "uniform 9" is true by construction and the divergence cannot occur), reject nothing legitimate (SPECIAL_HOLIDAY is a distinct enum value and unaffected; all 14 seeded VACATION rows are 9), and introduce no new defect. Its one advisory — the inline CHECK needed a legacy-DB ALTER backstop + the overclaiming comment tightened — was **absorbed** (the `s68-vacation-reset-month-check` guarded ALTER + corrected comment).
+
+### Resolution
+
+Fix-forward (working tree atop `1fd77ed`): **W5** strict `TryParseExact` parse; **W4** 3 `vacation_settlements` integrity CHECKs + 8 `SettlementSchemaConstraintTests` D-tests; **B1** VACATION-`reset_month`-9 enforcement (DB CHECK + legacy ALTER + endpoint 422 guard + 1 D-test); db-schema regen (59 tables, check_docs green). **W3** principled acceptance (Step-5a/Step-7a lens divergence; skip-when-zero correct for slice 1a — no stale source possible); **B2** deferred to slice 3 (the leaver/TERMINATION sprint) with a recorded known-limitation + next-sprint candidate. Both lenses 0-BLOCKER at the final state (Codex's sole cycle-2 blocker B1 fixed by enforcement; Reviewer APPROVED both rounds). Build 0E; full pyramid re-verified at close.
 
 ## Test Summary
 
-_pending — baseline carried from S67: 631 unit + 466 regression + 5 smoke + 176 FE = 1278._
+Local full-pyramid GREEN 2026-06-08 (compose Postgres up on `:5432` for the ReportingLine-era classes; the post-fix-forward authoritative run):
+
+| Suite | S67 baseline | S68 | Δ |
+|-------|--------------|-----|---|
+| Unit | 631 | **645** | +14 |
+| Regression | 466 | **511** | +45 |
+| Smoke | 5 | **5** | 0 |
+| Frontend | 176 | **176** | 0 |
+| **Total** | **1278** | **1337** | **+59** |
+
+`1278 + 59 = 1337`. Regression +45 = the settlement suites (+36) + `SettlementSchemaConstraintTests` (+8, W4) + `Post_VacationConfig_NonNineResetMonth_Returns422` (+1, B1). All new settlement suites green: `VacationSettlementServiceTests` (atomic/forced-rollback, replay-determinism, half-timer flat-day parity, idempotent single-settle, carryover-raises-ceiling, no-balance-row), `VacationSettlementEndpointTests` (§21 RBAC/If-Match/cross-org/deadline/cap/post-settlement-409, D10 FORFEIT/DEFER CAS, §24 reconcile), `SettlementCloseServiceBoundaryTests` (Copenhagen 31-Dec boundary + D13 go-live gate), `SettledYearReaderTests`.
+
+**Run record:** the final full run (`.claude/s68-regression-final.log`, 24m46s) was `509/511` with **2 FAIL-002 flakes** (`ProfileMigrationTests.TypoKey_…`, `AuditProjectionSchemaConstraintTests.Insert_GlobalScopeWithoutTargetOrg_Succeeds` — both pre-existing, non-S68 classes failing at `DockerHarness.StartAsync():441` with the verbatim "connection aborted by the software in your host machine" container-shed signature, NOT test-logic). **Isolation-cleared 8/8** (the S66 FAIL-002 adjudication precedent — never modify tests for it) ⇒ regression effectively **511/511**. The earlier run2 37 "failures" were all `ReportingLine` `:5432` connection-refused (compose Postgres was down). Unit 645, smoke 5, FE 176.
 
 ## Sprint Retrospective
 
-_pending_
+**Shipped:** ADR-033 slice 1a — the Backend vacation-settlement close machinery. At each closed VACATION ferieår boundary a deterministic idempotent `SettlementCloseService` partitions the remainder into §21 transfer (the first non-zero `carryover_in` writer in project history), §24 auto-payout (recorded disposition, money-free), and §34 forfeiture-candidate → fail-closed PENDING_REVIEW (D10) with a CAS-guarded manual FORFEIT/DEFER path — writing the `vacation_settlements` state-machine identity row + the 9-event family (4 emitted, 5 define-only) + the ADR-026 audit, all in ONE atomic tx under the ADR-032 D4 advisory lock. Money stays OUT (day/hour-counts only; SLS owns kroner). The §24 export line + Payroll exactly-once emitter remain S69 = slice 1b (gated on the still-unverified §24 SLS contract). +4 tables (59 total). The D13 go-live gate keeps it launch-neutral (dormant until `Settlement:GoLiveDate`; pre-launch boundaries = manual operator fallback).
+
+**Reviews:** Step-0b dual-lens 2 cycles (Codex 4B→0B; Reviewer 0B). Per-task Step-5a (TASK-6804 5 cycles incl. the config-resolution seam; 6806 2 cycles). Step-7a dual-lens: Reviewer APPROVED (0B/0W/3N) both rounds; **Codex cycle-1 BLOCKED (2B/3W) → cycle-2 4-of-5 RESOLVED, B1 escalated to ACCEPTANCE-UNSOUND → fixed by enforcement → both lenses 0-BLOCKER.**
+
+**Lessons:**
+- **The recurring "configless/current-vs-dated config" edge was NOT actually unreachable.** It was accepted 3× across TASK-6804/6805/6806 and again at Step-7a cycle-1 on the premise "VACATION `reset_month` is uniform-9 and immutable." Codex cycle-2 falsified it: the admin config-creation endpoint lets a GlobalAdmin POST a *new* VACATION config with any `reset_month` (immutability only blocks *changes*). **A "uniform by seed" invariant is not "uniform by construction" until something ENFORCES it.** The fix made it real (DB CHECK + endpoint guard + legacy ALTER) rather than re-accepting — and that enforcement is independently correct (the statutory 1-Sep ferieår). Carries the [[missed-facts-vs-thrash]] precedent: a sharper restatement of a prior-accepted finding is a missed fact, not thrash.
+- **The two lenses diverged on W3 (zero-transfer carryover).** Step-5a said skip-when-zero (avoid clobbering the future §22 producer); Step-7a said don't-skip (D6 provenance). Both correct under their context; the resolution (accept skip-when-zero for slice 1a — §21 is the sole producer, no stale source) needed the Step-5a rationale Codex lacked. [[review-lens-complementarity]] held: Codex caught the B1 reachability the Reviewer marked only NOTE; the Reviewer caught the legacy-DB ALTER-backstop gap + the overclaiming comment Codex didn't.
+- **B2 (terminated-employee 403) was a symptom of an unmodeled domain, not a bug.** Owner correctly reframed it: the leaver flow (Ferielov §26 payout-at-termination, §7 cap, SLS handoff, the departed-employee HR access path) is its own design+build sprint = ADR-033 slice 3 / TERMINATION (the launch-relevant slice). Band-aiding the 403 alone would pre-empt that design. Recorded as a known limitation (manual fallback covers it) + elevated to the named next-sprint candidate.
+
+**Entropy discovered (recorded, not masked):** the pre-existing `AuditProjectionParityTests` doc/assert drift ("6 TBD rows" vs `Equal(5)`) — Reviewer NOTE, S45-era, unrelated to S68; docs-debt candidate. The S68 `vacation_settlements` audit-catalog rows (58 total) are wired (the `e0d1dc3` null-tolerant-mapper lesson held — no catalog-parity NRE).
+
+**Follow-ups (ROADMAP):** ADR-033 **slice 3 = TERMINATION / leaver deep-dive** (now the headline next-sprint candidate; the only launch-relevant remaining slice, and the B2 home); slice 1b = the §24 Payroll emitter + export line (gated on the §24 SLS contract); slice 2 = SPECIAL_HOLIDAY §15 stk.2/§17 godtgørelse; slice 4 = §22 feriehindring + source-keyed carryover (resolves W3's provenance shape); TASK-6809 thin HR §21 admin form; the standing business-timezone ADR (ADR-033 D3's boundary-clock surface); the `AuditProjectionParityTests` drift.

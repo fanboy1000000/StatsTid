@@ -169,6 +169,20 @@ public static class EntitlementConfigEndpoints
                 });
             }
 
+            // 1b. VACATION reset_month is STATUTORILY 9 (1 Sep ferieår; LBK 230/2021). The §21/§24
+            //     settlement boundary depends on it; a non-9 VACATION config would let the close
+            //     poller diverge from the dated-snapshot valuation (S68 Step-7a Codex c2 B1). Reject
+            //     with a friendly 422 here; the DB CHECK entitlement_configs_vacation_reset_month is
+            //     the data-layer backstop for any other write path.
+            if (string.Equals(body.EntitlementType, "VACATION", StringComparison.Ordinal) && body.ResetMonth != 9)
+            {
+                return Results.UnprocessableEntity(new
+                {
+                    error = "VACATION reset_month must be 9 (the statutory 1 Sep – 31 Aug ferieår).",
+                    suppliedResetMonth = body.ResetMonth,
+                });
+            }
+
             var streamId = $"entitlement-config-{body.EntitlementType}-{body.AgreementCode}-{body.OkVersion}";
 
             await using var conn = connectionFactory.Create();

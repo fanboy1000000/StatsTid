@@ -179,6 +179,49 @@ public sealed class EntitlementConfigEndpointTests : IAsyncLifetime
     }
 
     // ═════════════════════════════════════════════════════════════════════════
+    // D-test #3b — POST a VACATION config with a non-9 reset_month → 422 (S68 Step-7a
+    // Codex c2 B1): the statutory 1-Sep ferieår pins VACATION reset_month to 9, on which
+    // the §21/§24 settlement boundary depends. The endpoint rejects with a friendly 422
+    // (the DB CHECK is the data-layer backstop), so the close poller can never read a
+    // VACATION reset_month that diverges from the dated-snapshot valuation.
+    // ═════════════════════════════════════════════════════════════════════════
+    [Fact]
+    public async Task Post_VacationConfig_NonNineResetMonth_Returns422()
+    {
+        var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", MintAdminToken());
+
+        var fakeOk = "OK_S68RESET_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+        var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+
+        var body = new
+        {
+            entitlementType = "VACATION",
+            agreementCode = "AC",
+            okVersion = fakeOk,
+            annualQuota = 25m,
+            accrualModel = "MONTHLY_ACCRUAL",
+            resetMonth = 1, // illegal for VACATION (the calendar-year reset belongs to CARE_DAY/SENIOR_DAY).
+            carryoverMax = 5m,
+            proRateByPartTime = false,
+            isPerEpisode = false,
+            minAge = (int?)null,
+            description = "illegal-reset-month",
+            effectiveFrom = today.ToString("yyyy-MM-dd"),
+        };
+        var rsp = await client.PostAsJsonAsync("/api/admin/entitlement-configs", body);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, rsp.StatusCode);
+
+        // No row persisted (neither the endpoint guard nor the DB CHECK let it through).
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var dbCmd = new NpgsqlCommand(
+            "SELECT COUNT(*) FROM entitlement_configs WHERE ok_version = @ok", conn);
+        dbCmd.Parameters.AddWithValue("ok", fakeOk);
+        Assert.Equal(0L, Convert.ToInt64(await dbCmd.ExecuteScalarAsync()));
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
     // D-test #4 — PUT with stale If-Match → 412.
     // ═════════════════════════════════════════════════════════════════════════
     [Fact]

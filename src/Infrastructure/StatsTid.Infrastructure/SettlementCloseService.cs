@@ -129,8 +129,12 @@ public sealed class SettlementCloseService : BackgroundService
         {
             _goLiveDate = null; // unconfigured ⇒ dormant (the launch-neutral default; ADR-033 D13).
         }
-        else if (DateOnly.TryParse(rawGoLive, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed))
+        else if (DateOnly.TryParseExact(rawGoLive, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed))
         {
+            // STRICT ISO only (Step-7a Codex W5): TryParseExact("yyyy-MM-dd") — never the permissive
+            // TryParse, which would accept locale/ambiguous forms (e.g. "06/08/2026") and silently ACTIVATE
+            // automation on a misinterpreted go-live date. A non-ISO value must fail closed to dormant, not
+            // settle against a date we guessed.
             _goLiveDate = parsed;
         }
         else

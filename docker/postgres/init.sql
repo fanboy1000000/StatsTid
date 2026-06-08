@@ -1361,7 +1361,19 @@ CREATE TABLE IF NOT EXISTS entitlement_configs (
     description             TEXT,
     created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     effective_from          DATE        NOT NULL DEFAULT '0001-01-01',
-    effective_to            DATE
+    effective_to            DATE,
+    -- S68 Step-7a Codex c2 (B1 soundness) — the Danish vacation year is STATUTORILY fixed at
+    -- 1 Sep – 31 Aug (samtidighedsferie, LBK 230/2021); the entire §21/§24 settlement boundary
+    -- (31 Dec of the ferieår-end year) is built on reset_month = 9 for VACATION. A VACATION config
+    -- with any other reset_month is legally malformed and would let the settlement poller (which
+    -- reads the live config) diverge from the dated-snapshot valuation. Pin it at the data layer so
+    -- the "uniform 9" invariant holds for every fresh-DB write path (endpoint, seeder, direct SQL);
+    -- the legacy-DB upgrade path lands the same CHECK via the schema_migrations-guarded ALTER block
+    -- 's68-vacation-reset-month-check' below (CREATE TABLE IF NOT EXISTS is a no-op on a legacy DB).
+    -- Other types (CARE_DAY/SENIOR_DAY = calendar-year reset_month 1) are unconstrained.
+    CONSTRAINT entitlement_configs_vacation_reset_month CHECK (
+        entitlement_type <> 'VACATION' OR reset_month = 9
+    )
 );
 
 -- ADR-021 D2: at most one open row per natural key (S21 D2.1 partial-unique pattern).
@@ -1905,6 +1917,43 @@ BEGIN
     -- natural key + effective_from tuple, including across closed predecessors.
     CREATE UNIQUE INDEX IF NOT EXISTS idx_ec_natural_key_history
         ON entitlement_configs (entitlement_type, agreement_code, ok_version, effective_from);
+END
+$$;
+
+-- =========================================================================
+-- S68 / ADR-033 slice 1a (Step-7a Codex c2 B1) — VACATION reset_month must be 9.
+--   The Danish vacation year is statutorily fixed at 1 Sep – 31 Aug (samtidighedsferie,
+--   LBK 230/2021); the §21/§24 settlement boundary (31 Dec of the ferieår-end year) is
+--   built on reset_month = 9 for VACATION, and the close poller reads the LIVE config's
+--   reset_month while settlement valuation reads the DATED closed-year config — a non-9
+--   VACATION reset_month would let the two diverge. The base CREATE TABLE bakes the CHECK
+--   for greenfield DBs; `CREATE TABLE IF NOT EXISTS` is a no-op on a legacy DB, so this
+--   schema_migrations-guarded ALTER lands the SAME CHECK there (the legacy backstop the
+--   inline CHECK alone cannot reach). Any pre-existing non-9 VACATION row is a
+--   legally-malformed config that should never have been accepted — remediated to 9 (the
+--   only lawful value) BEFORE the ADD so the constraint validates. Idempotent (ledger-guarded
+--   + DROP-then-ADD covers both greenfield, where the CREATE already baked it, and legacy).
+-- =========================================================================
+DO $$
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s68-vacation-reset-month-check', 'ADR-033: VACATION reset_month pinned to 9 (statutory ferieår); §21/§24 boundary soundness')
+    ON CONFLICT (migration_id) DO NOTHING;
+
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+
+    UPDATE entitlement_configs
+    SET reset_month = 9
+    WHERE entitlement_type = 'VACATION' AND reset_month <> 9;
+
+    ALTER TABLE entitlement_configs
+    DROP CONSTRAINT IF EXISTS entitlement_configs_vacation_reset_month;
+
+    ALTER TABLE entitlement_configs
+    ADD CONSTRAINT entitlement_configs_vacation_reset_month
+    CHECK (entitlement_type <> 'VACATION' OR reset_month = 9);
 END
 $$;
 
@@ -2613,6 +2662,22 @@ CREATE TABLE IF NOT EXISTS vacation_settlements (
     CONSTRAINT vacation_settlements_payout_reconciled_paired CHECK (
         (payout_reconciled_at IS NULL AND payout_reconciled_by IS NULL)
         OR (payout_reconciled_at IS NOT NULL AND payout_reconciled_by IS NOT NULL)
+    ),
+    -- Step-7a Codex W4 — DB-level integrity floors (defence-in-depth; the service/endpoint
+    -- already clamp, but a malformed direct write must not produce a legally-impossible row).
+    -- Bucket day-counts are never negative (a settlement disposes a non-negative remainder).
+    CONSTRAINT vacation_settlements_nonneg_buckets CHECK (
+        transfer_days >= 0 AND payout_days >= 0 AND forfeit_days >= 0
+    ),
+    -- sequence/version are 1-based counters (first settlement = sequence 1, version 1).
+    CONSTRAINT vacation_settlements_positive_counters CHECK (sequence >= 1 AND version >= 1),
+    -- State/disposition coupling: a DEFER outcome (suspected §22-feriehindring) leaves the row
+    -- PENDING_REVIEW until slice 4 models the impediment — DEFER+SETTLED/REVERSED is impossible;
+    -- a FORFEIT outcome resolved the review, so it can never coexist with PENDING_REVIEW.
+    CONSTRAINT vacation_settlements_disposition_state CHECK (
+        review_disposition IS NULL
+        OR (review_disposition = 'DEFER'   AND settlement_state =  'PENDING_REVIEW')
+        OR (review_disposition = 'FORFEIT' AND settlement_state <> 'PENDING_REVIEW')
     )
 );
 

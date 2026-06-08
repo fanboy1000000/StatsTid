@@ -756,6 +756,9 @@
 | effective_to | DATE | Yes |  |  |
 | version | BIGINT | No |  | 1 |
 
+**Table constraints:**
+- CONSTRAINT entitlement_configs_vacation_reset_month CHECK ( entitlement_type <> 'VACATION' OR reset_month = 9 )
+
 **Indexes:**
 - `idx_ec_natural_key_open` (UNIQUE) on (entitlement_type, agreement_code, ok_version) WHERE effective_to IS NULL
 - `idx_ec_natural_key_history` (UNIQUE) on (entitlement_type, agreement_code, ok_version, effective_from)
@@ -1131,6 +1134,9 @@
 **Table constraints:**
 - PRIMARY KEY (employee_id, entitlement_type, entitlement_year, sequence)
 - CONSTRAINT vacation_settlements_payout_reconciled_paired CHECK ( (payout_reconciled_at IS NULL AND payout_reconciled_by IS NULL) OR (payout_reconciled_at IS NOT NULL AND payout_reconciled_by IS NOT NULL) )
+- CONSTRAINT vacation_settlements_nonneg_buckets CHECK ( transfer_days >= 0 AND payout_days >= 0 AND forfeit_days >= 0 )
+- CONSTRAINT vacation_settlements_positive_counters CHECK (sequence >= 1 AND version >= 1)
+- CONSTRAINT vacation_settlements_disposition_state CHECK ( review_disposition IS NULL OR (review_disposition = 'DEFER' AND settlement_state = 'PENDING_REVIEW') OR (review_disposition = 'FORFEIT' AND settlement_state <> 'PENDING_REVIEW') )
 
 **Indexes:**
 - `idx_vacation_settlements_active` (UNIQUE) on (employee_id, entitlement_type, entitlement_year) WHERE settlement_state <> 'REVERSED'
