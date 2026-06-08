@@ -8,7 +8,7 @@
 | **End Date** | 2026-06-08 |
 | **Orchestrator Approved** | yes (2026-06-08) |
 | **Build Verified** | yes (0E) |
-| **Test Verified** | local full-pyramid GREEN (Docker-gated suites run against live Postgres) — 645 unit + 511 regression (509+2 FAIL-002 isolation-cleared 8/8) + 5 smoke + 176 FE = 1337; GitHub CI runs on push (CI-health gate green at close: S67 run 27121201014) |
+| **Test Verified** | local full-pyramid GREEN (Docker-gated suites run against live Postgres) — 645 unit + 511 regression (509+2 FAIL-002 isolation-cleared 8/8) + 5 smoke + 176 FE = 1337. **CI whole-workflow GREEN — all 6 jobs — run [27161443317](https://github.com/fanboy1000000/StatsTid/actions/runs/27161443317)** (5th consecutive CI-verified close) |
 
 ## Sprint Goal
 
