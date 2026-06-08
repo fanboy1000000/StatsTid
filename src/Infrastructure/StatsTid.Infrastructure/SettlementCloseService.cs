@@ -1,4 +1,6 @@
 using System.Data;
+using System.Globalization;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Npgsql;
@@ -36,6 +38,19 @@ namespace StatsTid.Infrastructure;
 /// (<c>SETTLED</c>/<c>PENDING_REVIEW</c>) pre-skips already-settled tuples; the in-lock re-check
 /// inside <see cref="VacationSettlementService.SettleAsync"/> + the D5 partial-unique key are the
 /// correctness backstop (a concurrent poller / missed-then-late poll still settles EXACTLY once).
+/// </para>
+///
+/// <para>
+/// <b>Launch-neutral go-live gate (ADR-033 D13; S68 fix-forward).</b> The automated year-end close is
+/// bound to <b>"first boundary: 31 Dec AFTER launch; manual fallback until then"</b> — it settles ONLY
+/// entitlement-years whose §21/§24 boundary (31 Dec E+1) falls STRICTLY AFTER the configured settlement
+/// go-live date (<c>Settlement:GoLiveDate</c>; see <see cref="_goLiveDate"/>). Every boundary that closed
+/// before the system was live is the manual operator fallback — NOT auto-settled — because the system
+/// has no lawful quantity source for a ferieår it never tracked (the §21 written agreements were never
+/// recorded, the absences were never captured; an auto-"forfeit" there is a data artifact, not an
+/// entitlement). <b>Unconfigured ⇒ DORMANT</b> (settles nothing): the genuinely launch-neutral posture
+/// for this slice-1a infrastructure unit (D13 "infrastructure groundwork, NOT a standalone shippable
+/// feature"). Ops sets the real go-live date at launch — no code change.
 /// </para>
 ///
 /// <para>
@@ -82,11 +97,25 @@ public sealed class SettlementCloseService : BackgroundService
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<SettlementCloseService> _logger;
 
+    /// <summary>
+    /// The settlement go-live date — the ADR-033 D13 launch-neutral gate. The automated year-end close
+    /// settles ONLY entitlement-years whose §21/§24 boundary (31 Dec E+1) falls STRICTLY AFTER this date;
+    /// every earlier boundary is the manual operator fallback (D13 "first boundary: 31 Dec after launch;
+    /// manual fallback until then"). Sourced from the <c>Settlement:GoLiveDate</c> configuration key
+    /// (ISO <c>yyyy-MM-dd</c>). <b>Null = unconfigured (or present-but-unparseable) = DORMANT</b>: the
+    /// service runs but settles nothing — the launch-neutral posture for the slice-1a infrastructure
+    /// (D13 "infrastructure groundwork, NOT a standalone shippable feature"). Deterministic — a configured
+    /// date, never wall-clock — so replay/idempotency are unaffected (the date use is a TRIGGER bound, the
+    /// ADR-033 D3 settled quantity is still a pure function of the captured snapshot).
+    /// </summary>
+    private readonly DateOnly? _goLiveDate;
+
     public SettlementCloseService(
         DbConnectionFactory connectionFactory,
         VacationSettlementService settlementService,
         EntitlementConfigRepository configRepo,
         TimeProvider timeProvider,
+        IConfiguration configuration,
         ILogger<SettlementCloseService> logger)
     {
         _connectionFactory = connectionFactory;
@@ -94,10 +123,43 @@ public sealed class SettlementCloseService : BackgroundService
         _configRepo = configRepo;
         _timeProvider = timeProvider;
         _logger = logger;
+
+        var rawGoLive = configuration["Settlement:GoLiveDate"];
+        if (string.IsNullOrWhiteSpace(rawGoLive))
+        {
+            _goLiveDate = null; // unconfigured ⇒ dormant (the launch-neutral default; ADR-033 D13).
+        }
+        else if (DateOnly.TryParse(rawGoLive, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed))
+        {
+            _goLiveDate = parsed;
+        }
+        else
+        {
+            // A present-but-unparseable value FAILS CLOSED to dormant (never auto-settle on a garbage
+            // date), logged louder than the unconfigured case so a typo is noticed rather than silently
+            // settling nothing forever.
+            _goLiveDate = null;
+            _logger.LogWarning(
+                "SettlementCloseService: Settlement:GoLiveDate='{Raw}' is not a valid ISO date (yyyy-MM-dd) — " +
+                "treating as unconfigured (DORMANT); no automated settlement runs until corrected.", rawGoLive);
+        }
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        // One-time posture log (ADR-033 D13). DORMANT until ops configures the go-live date — the
+        // launch-neutral default that keeps the slice-1a infrastructure from auto-settling any
+        // pre-launch boundary (where there is no lawful quantity source).
+        if (_goLiveDate is null)
+            _logger.LogInformation(
+                "SettlementCloseService: DORMANT — no Settlement:GoLiveDate configured; automated VACATION " +
+                "year-end close settles nothing (pre-launch manual fallback per ADR-033 D13).");
+        else
+            _logger.LogInformation(
+                "SettlementCloseService: ACTIVE — auto-closing VACATION year-end boundaries strictly after " +
+                "go-live {GoLiveDate} (ADR-033 D13); earlier boundaries remain the manual fallback.",
+                _goLiveDate.Value);
+
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -117,6 +179,11 @@ public sealed class SettlementCloseService : BackgroundService
 
     private async Task CloseDueSettlementsAsync(CancellationToken ct)
     {
+        // DORMANT gate (ADR-033 D13). With no configured go-live date the automated close is silent —
+        // the launch-neutral default. No DB work, no clock read; the manual operator fallback owns every
+        // boundary until ops sets Settlement:GoLiveDate. (Posture logged once in ExecuteAsync.)
+        if (_goLiveDate is null) return;
+
         // The Copenhagen BUSINESS date — the §21/§24 boundary comparison authority (ADR-033 D3 /
         // follow-up (v)). Derived from the injected TimeProvider's UTC instant converted to the
         // Europe/Copenhagen zone, NEVER raw CURRENT_DATE: near a 31-Dec boundary the UTC date and the
@@ -125,7 +192,7 @@ public sealed class SettlementCloseService : BackgroundService
         // trigger, not the boundary; the boundary uses this controlled business date.)
         var copenhagenToday = CopenhagenToday();
 
-        var dueTuples = await EnumerateDueTuplesAsync(copenhagenToday, ct);
+        var dueTuples = await EnumerateDueTuplesAsync(copenhagenToday, _goLiveDate.Value, ct);
         if (dueTuples.Count == 0) return;
 
         _logger.LogInformation(
@@ -202,7 +269,7 @@ public sealed class SettlementCloseService : BackgroundService
     /// SQL date arithmetic across reset geometries).
     /// </summary>
     private async Task<IReadOnlyList<(string EmployeeId, int EntitlementYear)>> EnumerateDueTuplesAsync(
-        DateOnly copenhagenToday, CancellationToken ct)
+        DateOnly copenhagenToday, DateOnly goLiveDate, CancellationToken ct)
     {
         // Upper bound of the candidate band: the latest entitlement-year whose boundary could already
         // have passed is bounded above by copenhagenToday.Year (for reset_month==1 the boundary is
@@ -276,7 +343,10 @@ public sealed class SettlementCloseService : BackgroundService
             }
             if (resetMonth is null) continue; // VACATION unconfigured for this agreement — no boundary.
 
-            if (IsBoundaryPassed(entitlementYear, resetMonth.Value, copenhagenToday))
+            // Due iff the §21/§24 boundary has PASSED on the Copenhagen date AND that boundary falls
+            // strictly after the configured go-live date (ADR-033 D13 launch-neutral gate — a pre-launch
+            // boundary is the manual operator fallback, never auto-settled).
+            if (IsBoundaryPassed(entitlementYear, resetMonth.Value, copenhagenToday, goLiveDate))
                 due.Add((employeeId, entitlementYear));
         }
 
@@ -298,13 +368,22 @@ public sealed class SettlementCloseService : BackgroundService
     /// 31 Dec E+1), exactly "≈ 31 Dec of the year AFTER the ferieår closes". The tuple is due strictly
     /// AFTER that date (on/after 1 Jan of the following year).
     /// </para>
+    ///
+    /// <para>
+    /// <b>Launch-neutral gate (ADR-033 D13):</b> the tuple is due only if that boundary ALSO falls
+    /// strictly after <paramref name="goLiveDate"/> — the automated close owns "the first boundary 31 Dec
+    /// AFTER launch" onward; every boundary that fell before go-live is the manual operator fallback (the
+    /// system has no lawful quantity source for a ferieår it never tracked). The D13-literal reading: a
+    /// ferieår whose taking-window straddles go-live but whose DEADLINE is after go-live IS auto-settled.
+    /// </para>
     /// </summary>
-    private static bool IsBoundaryPassed(int entitlementYear, int resetMonth, DateOnly copenhagenToday)
+    private static bool IsBoundaryPassed(int entitlementYear, int resetMonth, DateOnly copenhagenToday, DateOnly goLiveDate)
     {
         var ferieaarStart = new DateOnly(entitlementYear, resetMonth, 1);
         var ferieaarEnd = ferieaarStart.AddYears(1).AddDays(-1);
         var boundary = new DateOnly(ferieaarEnd.Year, 12, 31); // §21 31-Dec deadline of the ferieår-end year.
-        return copenhagenToday > boundary;
+        return boundary > goLiveDate          // ADR-033 D13: only boundaries strictly after go-live auto-settle.
+            && copenhagenToday > boundary;     // …and the deadline has actually passed on the Copenhagen date.
     }
 
     private static async Task SafeRollbackAsync(NpgsqlTransaction tx, CancellationToken ct)
