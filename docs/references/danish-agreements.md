@@ -201,6 +201,30 @@ Per-agreement bundle SR row references: SR-AC-OK24-037 (AC bundle, 18 mappings) 
 
 All AC variant mappings now equal AC base. The `CHILD_SICK_DAY` rename also fixes a pre-existing pre-launch production-broken state where rule engine emitted `CHILD_SICK_DAY` per `AbsenceRule.cs:112-114` but AC variants seed only had `CHILD_SICK_1` (phantom row never consulted). See SR-AC_RESEARCH-OK24-006 + SR-AC_TEACHING-OK24-006 bug_correction_history.
 
+### Vacation Settlement Wage Types (period-end disposition — ADR-033)
+
+The vacation-**settlement** layer (period-end transfer / payout / forfeiture / termination — ADR-033, design S67, implementation S68+ slices) emits **day/hour-count** lines via a *new period-close emitter* (NOT the rule-engine path, NOT the `FLEX_PAYOUT` seam). StatsTid emits quantities only; **SLS owns all kroner** (`Amount = Hours × multiplier` is the only in-app amount). New settlement rows inherit the ADR-020 versioned natural key `(time_type, ok_version, agreement_code, position)` + `effective_from/effective_to`. Source: `docs/references/vacation-settlement-law-research.md` (9/9 adversarially verified; Ferielov LBK 152/2024, Cirkulære 021-24) + Statens Administration SLS brugervejledninger.
+
+**Verified today** — the særlige-feriedage godtgørelse is the *only* SLS day-count input the S67 research confirmed (ADR-033 D1 — the finding does **not** generalize to the other mechanisms):
+
+| Mechanism | SLS løndel | Input | Notes |
+|-----------|-----------|-------|-------|
+| Særlige feriedage — cash godtgørelse (2½%) | 5017 / 5027 / 5037 | antal dage (felt 3 to-pay / felt 4 accrued) | SLS auto-applies *"2½ % af den feriegivende løn"* (Cirkulære 021-24 §15 stk.2 default-payout + §17 calc). The 2½% rate lives in SLS, not StatsTid. |
+| Ferielønregulering | 5062 | hours | Hour-count input. |
+| (Kroner manual correction) | 5007 | kroner | Manual-correction only — **StatsTid never emits this** (no in-app kroner). |
+
+**Pending per-slice Step-0 verification** (ADR-033 D1 — each mechanism's SLS contract is verified at its implementation slice, not assumed):
+
+| Mechanism | § | Line type | SLS contract |
+|-----------|---|-----------|--------------|
+| Transfer by written agreement | Ferieloven §21 | **none** (balance-only carryover) | n/a — no payroll line |
+| Automatic post-period payout (>4-wk) | §24 | day-count payout | **unverified — slice-1 Step-0** |
+| Termination payout (earned-untaken) | §26 | day-count payout | **unverified — slice-3 Step-0** |
+| Termination *modregning* (over-taken/forskud, capped at final pay) | §7 stk.1 | **deduction** | **unverified — slice-3 Step-0**; a bare day-count cannot prove the monetary cap, which likely lives SLS-side (highest-risk contract) |
+| First-4-week forfeiture to Arbejdsmarkedets Feriefond | §34 | (no employee line — lapse) | fail-closed to manual review pre-modeling (ADR-033 D10) |
+
+(§17's 2½% ≠ §10's 2,02% general særlig feriegodtgørelse — distinct mechanisms; do not conflate.)
+
 ## Position Overrides
 
 Source: `PositionOverrideConfigs.cs` and `position_override_configs` seed data.

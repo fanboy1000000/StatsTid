@@ -315,7 +315,7 @@ The system must track annual entitlements (budgets) for absence types that have 
 - The balance summary endpoint must show: total entitlement, used, planned, remaining, carryover from previous year
 
 #### Special Holiday Allowance (Særlig feriegodtgørelse)
-- Typically 1.5% of annual salary — handled by payroll system
+- 2,02% of annual salary (Cirkulære 021-24 §10, OK-2024 — superseded the older 1,5% rate) — handled by the payroll system. **Distinct** from the §17 **2½%** cash *godtgørelse* paid for unused *særlige feriedage* (the settlement mechanism — see *Vacation Settlement* above); do not conflate the two figures.
 - The system must track the associated special holiday days (feriefridage): typically 5 days/year
 - Entitlement and balance tracking required (same model as vacation)
 
@@ -347,6 +347,21 @@ Each entitlement type requires:
 - `AgreementCode` + `OkVersion`: scoped to agreement
 
 Entitlements are read by the rule engine (as parameters) but managed by the service layer. The rule engine remains pure.
+
+#### Vacation Settlement (Period-End Disposition & Execution)
+
+Entitlement tracking (above) records what is *earned, used, and remaining*. **Settlement** is the period-end *execution* that disposes of the remaining balance at each entitlement boundary — the execution layer behind the year-overview disposition row (ADR-030 D9). Designed in **ADR-033** (S67); implemented in phased slices (S68+).
+
+- **Money stays out of StatsTid.** The system holds no salary or base rate (`Amount = Hours × multiplier`); SLS owns all kroner. Settlement detects boundaries, executes the balance/state mutations, and emits **day/hour-count wage-type lines** for SLS to monetize — it never computes money.
+- At each boundary the remaining balance partitions into legal buckets (verified §-spine, Ferieloven **LBK 152/2024** + state **Cirkulære 021-24**; `docs/references/vacation-settlement-law-research.md`):
+  - **Transfer by written agreement** (Ferieloven §21, deadline 31 Dec) — the >4-week tranche carries to next year's balance. **Balance-only, no payroll line.**
+  - **Automatic post-period payout** (§24) — an untaken, un-transferred 5th week is auto-paid after the ferieafholdelsesperiode. **Day-count payout line.**
+  - **Feriehindring** (§22 auto-transfer ≤4 weeks; §25 payout if the impediment persists) — sickness/barsel spanning the period.
+  - **Termination** (§26 payout of earned-untaken + §7 *modregning* of over-taken/forskud, capped at final pay — no clawback). **Day-count payout + deduction lines.**
+  - **First-4-week forfeiture** (§34) — untaken, not-transferred, not-paid days lapse to Arbejdsmarkedets Feriefond.
+  - **Særlige feriedage godtgørelse** (state-specific: Cirkulære 021-24 §15 stk.2 + §17, **2½%** cash on untaken days; **NOT** §12 stk.2, which is only the 1 May–30 Apr taking window). **Day-count line; SLS owns the 2½% rate.** (§17's 2½% ≠ §10's 2,02% general ferietillæg — distinct.)
+- **Launch posture:** pre-launch, any un-automated settlement mechanism falls back to a **manual operator-recorded process** — nothing is missing at launch; the slices *replace manual with automated* per boundary (ADR-033 D13). No launch-blocking item is created.
+- Settlement is **GLOBAL** (one national cirkulære — no per-institution override). Forfeiture (§34) and feriehindring (§22) are **never auto-executed pre-modeling**: the close fails closed to manual review rather than risk a wrongful forfeiture.
 
 ### L. Overtime Governance
 
@@ -389,6 +404,7 @@ The system must explicitly model the choice between time-off compensation (afspa
 - MERARBEJDE_PAYOUT → SLS code
 - MERARBEJDE_AFSPADSERING → SLS code
 - These must be added to the wage_type_mappings table
+- **Vacation-settlement wage types** (§24/§26 payouts, §7 deduction, §15 stk.2/§17 særlige-feriedage godtgørelse) are day-count lines emitted by a *separate period-close emitter*, not the rule-engine path — specified in ADR-033 D7 + `docs/references/danish-agreements.md`. Only the særlige-feriedage godtgørelse løndele are SLS-verified today; the §24/§26/§7 contracts are per-slice Step-0 gates (ADR-033 D1).
 
 ## AC-Specific Requirements
 
