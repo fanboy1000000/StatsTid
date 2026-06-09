@@ -5,6 +5,7 @@ using StatsTid.Infrastructure.Outbox;
 using StatsTid.SharedKernel.Audit;
 using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Events;
+using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Models;
 
 namespace StatsTid.Infrastructure;
@@ -56,6 +57,7 @@ public sealed class VacationSettlementService
     private readonly UserAgreementCodeRepository _agreementCodeRepo;
     private readonly VacationTransferAgreementRepository _transferRepo;
     private readonly VacationSettlementRepository _settlementRepo;
+    private readonly IEmploymentProfileResolver _profileResolver;
     private readonly IOutboxEnqueue _outbox;
     private readonly IAuditProjectionMapperRegistry _auditRegistry;
     private readonly AuditProjectionRepository _auditRepo;
@@ -76,6 +78,7 @@ public sealed class VacationSettlementService
         UserAgreementCodeRepository agreementCodeRepo,
         VacationTransferAgreementRepository transferRepo,
         VacationSettlementRepository settlementRepo,
+        IEmploymentProfileResolver profileResolver,
         IOutboxEnqueue outbox,
         IAuditProjectionMapperRegistry auditRegistry,
         AuditProjectionRepository auditRepo,
@@ -87,6 +90,7 @@ public sealed class VacationSettlementService
         _agreementCodeRepo = agreementCodeRepo;
         _transferRepo = transferRepo;
         _settlementRepo = settlementRepo;
+        _profileResolver = profileResolver;
         _outbox = outbox;
         _auditRegistry = auditRegistry;
         _auditRepo = auditRepo;
@@ -318,6 +322,12 @@ public sealed class VacationSettlementService
         //       else if agreement == todayAgreementCode → liveConfig
         //       else → GetCurrentOpen(type, agreement, user.OkVersion) ?? liveConfig
         //
+        // NOTE (Step-5a P1/P4): the §24 wage-mapping KEY captured into the snapshot below uses the SAME
+        // dated agreement but WITHOUT the `?? user.AgreementCode` fallback — it fails closed on a null
+        // dated read (a missing dated row must not key a replay-sensitive payout off today's live code).
+        // The VALUATION config-resolution above is unaffected (it only runs when the dated read is
+        // non-null, so the fallback was already unreachable on that path).
+        //
         // DECLARED `today` substitution: this service has no TimeProvider (the D9 reader takes one;
         // the not-yet-built TASK-6805 BackgroundService does not pass a settlement clock to this
         // pass). `todayAgreementCode` is a FALLBACK-branch / liveConfig operand ONLY — the dated
@@ -432,9 +442,31 @@ public sealed class VacationSettlementService
 
         var okVersion = OkVersionResolver.ResolveVersion(closedFerieaarStart);
 
+        // The STRICTLY-DATED historical agreement in force at the closed ferieår start. This serves TWO
+        // distinct roles with DIFFERENT null semantics:
+        //
+        //  (a) the snapshot's §24 wage-mapping KEY (ADR-033 D7) — must be the strict dated value, NEVER a
+        //      live fallback. A WARNING (Step-5a P1/P4) — the prior code put `?? user.AgreementCode` into
+        //      the snapshot, so a missing dated row silently keyed the §24 payout off the employee's
+        //      CURRENT live code, breaking replay determinism and risking a wrong-agreement lønart. Fail
+        //      CLOSED here (symmetric with the Position fail-closed throw below): a settlement that cannot
+        //      pin the dated agreement at the ferieår start must NOT stage a live/empty-keyed payout.
+        //  (b) the D9-parity VALUATION's config-resolution agreement — which DELIBERATELY falls back to
+        //      user.AgreementCode (the verbatim ResolveDatedConfigAsync chain). Computed below from the
+        //      same strict value with the fallback re-applied, so the valuation path is byte-for-byte
+        //      identical to today.
+        var datedAgreementForSnapshot = await _agreementCodeRepo.GetByUserIdAtAsync(employeeId, closedFerieaarStart, ct)
+            ?? throw new InvalidOperationException(
+                $"Vacation settlement: no dated user_agreement_codes row covers {closedFerieaarStart:yyyy-MM-dd} " +
+                $"(ferieår start) for employee {employeeId}; cannot capture the §24 wage-type-mapping " +
+                "agreement_code (ADR-033 D7) — settlement capture fails closed rather than keying the payout " +
+                "off the employee's current live agreement.");
+
         // ResolveDatedConfigAsync (verbatim D9): dated → today-code? liveConfig → fallback-live ?? liveConfig.
-        var agreementCode = await _agreementCodeRepo.GetByUserIdAtAsync(employeeId, closedFerieaarStart, ct)
-            ?? user.AgreementCode;
+        // Byte-identical to the prior `GetByUserIdAtAsync(...) ?? user.AgreementCode`: the fail-closed throw
+        // above means control only reaches here when the dated read was non-null, so the `?? user.AgreementCode`
+        // fallback was already an unreachable branch — `agreementCode` takes the same value it took before.
+        var agreementCode = datedAgreementForSnapshot;
         var dated = await _configRepo.GetByTypeAtAsync(
             entitlementType, agreementCode, okVersion, closedFerieaarStart, ct);
         EntitlementConfig datedConfig;
@@ -478,6 +510,24 @@ public sealed class VacationSettlementService
         var transferAgreement = await _transferRepo.GetByKeyAsync(conn, tx, employeeId, entitlementYear, entitlementType, ct);
         var transferAgreementDays = transferAgreement?.TransferDays ?? 0m;
 
+        // §24 wage-type-mapping natural key (ADR-033 D7 / ADR-020 (time_type, ok_version, agreement_code,
+        // position)) captured into the immutable snapshot so the S69 §24 Payroll emitter resolves the
+        // lønart off THIS snapshot (replay-deterministic, no live lookup). The `position` component is
+        // read from the dated employee_profiles row (ADR-023) AS-OF closedFerieaarStart — the SAME
+        // instant as agreementCode (line ~436) and okVersion (line ~433), so the four key components are
+        // snapshot-internally consistent.
+        //
+        // FAIL-CLOSED (B3/B5): if no dated profile covers closedFerieaarStart, THROW — capture must fail
+        // loudly rather than silently fall back to live/empty profile data and stage a wrong-keyed payout.
+        // (A resolved profile whose Position is itself null/empty IS fine — pass it through; the emitter
+        // canonicalizes null→"" for the wage_type_mappings.position '' default.)
+        var settlementProfile = await _profileResolver.GetByEmployeeIdAtAsync(employeeId, closedFerieaarStart, ct)
+            ?? throw new InvalidOperationException(
+                $"Vacation settlement: no dated employee_profiles row covers {closedFerieaarStart:yyyy-MM-dd} " +
+                $"(ferieår start) for employee {employeeId}; cannot capture the §24 wage-type-mapping " +
+                "position (ADR-033 D7) — settlement capture fails closed rather than using live/empty data.");
+        var settlementPosition = settlementProfile.Position;
+
         var snapshot = new VacationSettlementSnapshot
         {
             RecordedAbsences = recordedAbsences,
@@ -489,6 +539,16 @@ public sealed class VacationSettlementService
             CarryoverMax = datedConfig.CarryoverMax,
             ResetMonth = resetMonth,
             OkVersion = okVersion,
+            // §24 wage-type natural key (ADR-033 D7 / ADR-020) — all pinned at closedFerieaarStart.
+            AgreementCode = datedAgreementForSnapshot, // STRICTLY-dated ferieår-start agreement (fail-closed, no live fallback — Step-5a P1/P4)
+            Position = settlementPosition,             // dated employee_profiles position (ADR-023)
+            // FERIEÅR-END accrual boundary (Aug 31 for VACATION reset_month 9; Dec 31 only when reset_month==1) —
+            // the inherited S68 valuation boundary computed above (~L427-441), reused as the §24 wage-mapping asOf.
+            // FOLLOW-UP (S69 Step-7a W1): the LEGAL §24/§21 anchor is 31 Dec (Ferielov §21 stk.2; S65 research
+            // docs/references/ferie-transfer-timing-research.md). Inert today (every §24 mapping is open-from-2020,
+            // so Aug-31 vs 31-Dec asOf resolve identically); the owner must rule the asOf when the real §24 SLS
+            // lønart lands and a dated supersession could fall between Aug 31 and 31 Dec. Value unchanged this sprint.
+            SettlementBoundaryDate = boundaryDate,
             TransferAgreementDays = transferAgreementDays,
             IsFeriehindret = false, // slice 1 — §22 not modeled (ADR-033 D10)
         };

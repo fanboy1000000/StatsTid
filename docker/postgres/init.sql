@@ -2770,3 +2770,178 @@ BEGIN
     ON CONFLICT (migration_id) DO NOTHING;
 END
 $$;
+
+-- =========================================================================
+-- SPRINT 69 / ADR-033 — Vacation Settlement §24 Payroll staging (slice 1b)
+--   Greenfield schema for the durable §24 year-end auto-payout staging
+--   pipeline. The S69 Payroll emitter CONSUMES the slice-1a VacationAutoPaidOut
+--   event and, in ONE transaction, writes (1) a consumer inbox/checkpoint row —
+--   the authoritative exactly-once dedup keyed by the source event_id (ADR-033
+--   D4 consumer-checkpoint) — and (2) one immutable, money-free staged export
+--   line (ADR-033 D5 sequence/bucket; D7 the line carries the wage-type natural-
+--   key components ok_version/agreement_code/position). The line is MONEY-FREE:
+--   hours holds the §24 day-count (PayoutDays) and amount is pinned to 0 at the
+--   schema level (ADR-033 D1 — SLS owns ALL kroner incl. the rate). These tables
+--   are brand-new in S69 so CREATE TABLE IF NOT EXISTS is legacy-safe (the table
+--   does not exist on a pre-existing DB → it is created on re-apply); no S25-style
+--   follow-up ALTER guard is needed (that case applies only to columns/CHECKs on
+--   an EXISTING table). FK employee_id → users(user_id) (TEXT) matches every
+--   existing employee-keyed table. source_event_id references events.event_id
+--   (L23 event_id UUID NOT NULL UNIQUE) CONCEPTUALLY — the consumed
+--   VacationAutoPaidOut — but carries no declared FK (the event store is a
+--   separate bounded context / cross-process boundary; parallels the audit
+--   actor_id columns). Delivery is staged-only this sprint: NO mutable
+--   delivery_status column (Step-0b W2 — outbound delivery state is a future
+--   slice's separate concern; the row's existence == "staged").
+-- =========================================================================
+
+-- settlement_payroll_inbox — consumer inbox/checkpoint (ADR-033 D4). The
+-- AUTHORITATIVE exactly-once dedup: PK = source_event_id (events.event_id of the
+-- consumed VacationAutoPaidOut), so a redelivered event collides on INSERT and
+-- the emitter is a no-op. processing_status drives a retry lifecycle:
+-- RETRY_PENDING is the ONLY non-terminal status; the lifecycle is
+-- RETRY_PENDING -> {PROCESSED | SKIPPED_RECONCILED | DEAD_LETTER} and writes move
+-- MONOTONICALLY toward a terminal status (a terminal row is never reopened —
+-- ADR-033 D4 / Sprint-69 Step-0b C2-B1/C3-B1/C4-B1). SKIPPED_RECONCILED is the
+-- reconcile XOR claim outcome (the operator marked payout_reconciled_at before
+-- the emitter claimed the bucket → no line is staged). DEAD_LETTER parks an
+-- exhausted-retry row for operator inspection (last_error carries the cause).
+--
+-- The settlement-identity columns (employee_id, entitlement_type, entitlement_year,
+-- sequence, bucket) are NULLABLE — ONLY to permit a poison/parse-failure DEAD_LETTER
+-- row. When EventSerializer.Deserialize of a VacationAutoPaidOut payload throws, the
+-- event has NO recoverable identity, so the emitter dead-letters it keyed solely by
+-- source_event_id (status DEAD_LETTER + last_error) to mark it terminal and stop the
+-- poll from re-selecting it forever (S69 Step-7a FIX 1). EVERY normal (claim/skip/
+-- retry) inbox write still populates all five identity columns; the nullable employee_id
+-- FK is enforced on non-null values only.
+CREATE TABLE IF NOT EXISTS settlement_payroll_inbox (
+    source_event_id     UUID          PRIMARY KEY,   -- events.event_id of the consumed VacationAutoPaidOut; authoritative consumer dedup
+    employee_id         TEXT          NULL REFERENCES users(user_id),   -- NULL only on a poison/parse-failure DEAD_LETTER row (no recoverable identity)
+    entitlement_type    TEXT          NULL,          -- NULL only on a poison DEAD_LETTER row
+    entitlement_year    INT           NULL,          -- NULL only on a poison DEAD_LETTER row
+    sequence            INT           NULL,          -- NULL only on a poison DEAD_LETTER row
+    bucket              TEXT          NULL,           -- 'AUTO_PAYOUT_24' for normal rows; NULL only on a poison DEAD_LETTER row
+    processing_status   TEXT          NOT NULL CHECK (processing_status IN ('RETRY_PENDING', 'PROCESSED', 'SKIPPED_RECONCILED', 'DEAD_LETTER')),
+    attempts            INT           NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    last_error          TEXT          NULL,
+    processed_at        TIMESTAMPTZ   NULL,
+    created_at          TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+);
+
+-- Retry-selection driver: the poll scans only RETRY_PENDING rows (the single
+-- non-terminal status), so a partial index keeps the working set hot and small.
+CREATE INDEX IF NOT EXISTS idx_settlement_payroll_inbox_retry_pending
+    ON settlement_payroll_inbox (processing_status)
+    WHERE processing_status = 'RETRY_PENDING';
+
+-- Settlement-bucket lookup (correlate an inbox row back to its settlement key).
+CREATE INDEX IF NOT EXISTS idx_settlement_payroll_inbox_settlement
+    ON settlement_payroll_inbox (employee_id, entitlement_type, entitlement_year, sequence, bucket);
+
+-- settlement_export_lines — the durable, IMMUTABLE, money-free staged §24 payout
+-- line (ADR-033 D5/D7; B5). One line per settlement bucket: the UNIQUE business
+-- key (employee_id, entitlement_type, entitlement_year, sequence, bucket) is the
+-- authoritative LINE dedup (the inbox PK dedups the consumed EVENT; this UNIQUE
+-- dedups the staged LINE — both guards are load-bearing). wage_type is the
+-- resolved sentinel lønart (SLS_TBD_S24 this sprint — dated ADR-020 config data,
+-- swappable later). hours holds the §24 day-count (PayoutDays); amount is pinned
+-- to 0 by CHECK — the MONEY-FREE invariant (ADR-033 D1; SLS owns the rate). The
+-- line carries the full wage-type natural-key components ok_version/agreement_code/
+-- position (ADR-033 D7) captured in the slice-1a snapshot so replay is
+-- deterministic (no live mapping lookup). source_event_id is the originating
+-- VacationAutoPaidOut event_id (collision verification, C2-B2). The row is
+-- IMMUTABLE and staged-only this sprint — its existence == "staged"; there is
+-- deliberately NO mutable delivery_status column (Step-0b W2).
+CREATE TABLE IF NOT EXISTS settlement_export_lines (
+    line_id             BIGSERIAL     PRIMARY KEY,
+    employee_id         TEXT          NOT NULL REFERENCES users(user_id),
+    entitlement_type    TEXT          NOT NULL,
+    entitlement_year    INT           NOT NULL,
+    sequence            INT           NOT NULL,
+    bucket              TEXT          NOT NULL,       -- 'AUTO_PAYOUT_24'
+    wage_type           TEXT          NOT NULL,       -- the resolved sentinel lønart (SLS_TBD_S24 this sprint)
+    hours               NUMERIC(8,2)  NOT NULL CHECK (hours >= 0),                    -- the §24 day-count (PayoutDays); the line is money-free
+    amount              NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (amount = 0),          -- money-free pinned at schema level (ADR-033 D1; SLS owns kroner)
+    ok_version          TEXT          NOT NULL,
+    agreement_code      TEXT          NOT NULL,
+    position            TEXT          NOT NULL DEFAULT '',
+    period_start        DATE          NOT NULL,
+    period_end          DATE          NOT NULL,
+    source_event_id     UUID          NOT NULL,       -- the originating VacationAutoPaidOut event_id (collision verification, C2-B2)
+    created_at          TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    created_by          TEXT          NOT NULL        -- the emitter identity
+);
+
+-- Authoritative LINE dedup: at most one §24 line per settlement bucket.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_settlement_export_lines_bucket
+    ON settlement_export_lines (employee_id, entitlement_type, entitlement_year, sequence, bucket);
+
+CREATE INDEX IF NOT EXISTS idx_settlement_export_lines_employee
+    ON settlement_export_lines (employee_id);
+
+-- schema_migrations ledger entry — documentary for S69 greenfield-only, forward-
+-- compat marker if init.sql ever runs against an older database.
+DO $$
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s69-adr033-slice1b-payroll-staging', 'ADR-033 D4/D5/D7: settlement_payroll_inbox (consumer inbox/checkpoint, PK source_event_id = events.event_id of the consumed VacationAutoPaidOut — authoritative exactly-once dedup; processing_status CHECK {RETRY_PENDING, PROCESSED, SKIPPED_RECONCILED, DEAD_LETTER} with RETRY_PENDING the sole non-terminal status and writes monotonic toward terminal; the settlement-identity columns employee_id/entitlement_type/entitlement_year/sequence/bucket are NULLABLE ONLY to permit a poison/parse-failure DEAD_LETTER row keyed solely by source_event_id, S69 Step-7a FIX 1 — normal rows populate all five; attempts>=0; partial index on processing_status WHERE RETRY_PENDING) + settlement_export_lines (immutable money-free staged §24 payout line; UNIQUE business key (employee_id, entitlement_type, entitlement_year, sequence, bucket) = authoritative line dedup; hours holds the day-count (PayoutDays); amount pinned to 0 by CHECK = money-free invariant (ADR-033 D1, SLS owns the rate); carries wage_type + the wage-type natural-key components ok_version/agreement_code/position (D7); NO mutable delivery_status column — staged-only, Step-0b W2). Greenfield only — no production data.')
+    ON CONFLICT (migration_id) DO NOTHING;
+END
+$$;
+
+-- =========================================================================
+-- S69 / TASK-6903 — §24 vacation-settlement auto-payout wage-type mapping
+--   (ADR-033 slice 1b). The settlement_export_lines.wage_type for an §24
+--   AUTO_PAYOUT_24 bucket resolves through wage_type_mappings on the new
+--   time_type VACATION_SETTLEMENT_PAYOUT. This sprint the resolved lønart is a
+--   PLACEHOLDER sentinel (SLS_TBD_S24) — the real SLS code AND the line format
+--   are UNVERIFIED, deferred to a future SLS-dialogue task. The outbound
+--   delivery guard (sibling task) fail-closed REFUSES to deliver any line whose
+--   wage_type is the sentinel, so a wrong real payout cannot escape (one of the
+--   triple-locks; the others are the D13 go-live gate + delivery disabled this
+--   sprint). Swapping the real code in later is a one-row ADR-020 effective-dated
+--   change (a new open row supersedes this one) — NOT a rebuild (owner insight).
+--
+-- ADR-020 versioned natural key (time_type, ok_version, agreement_code, position):
+--   position = '' (national; ADR-033 D12 — §24 settlement is GLOBAL, does not
+--   vary by institution; the natural key still records the position axis).
+--   effective_from = '2020-01-01' + effective_to NULL (open row) mirrors every
+--   existing wage_type_mappings seed (the partial-unique-open-row form).
+--
+-- Coverage MUST mirror the existing VACATION → SLS_0510 (agreement_code,
+--   ok_version) set EXACTLY so §24 auto-payout resolves for every agreement/OK a
+--   vacation employee can be under — that set is 10 pairs: {AC, HK, PROSA,
+--   AC_RESEARCH, AC_TEACHING} × {OK24, OK26} (AC_RESEARCH/AC_TEACHING are the
+--   AC sub-position agreement_codes seeded for academic variants, L1031-1097).
+--
+-- schema_migrations-guarded + idempotent (NOT a bare INSERT — a bare INSERT
+--   would dupe/error on a legacy DB re-apply; Step-0b W3). The guard short-
+--   circuits on re-apply; the inner ON CONFLICT DO NOTHING is the belt-and-
+--   suspenders the other seeds use. Greenfield + legacy converge identically.
+-- =========================================================================
+DO $$
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s69-s24-settlement-wage-type', 'ADR-033 slice 1b — §24 VACATION_SETTLEMENT_PAYOUT -> placeholder SLS_TBD_S24, ADR-020 versioned (effective-dated open row), position '''' national (D12 settlement GLOBAL), covering the full existing-VACATION agreement/OK matrix {AC,HK,PROSA,AC_RESEARCH,AC_TEACHING}x{OK24,OK26}; sentinel refused by the outbound delivery guard; real SLS code+line format deferred to SLS dialogue (D1 money-free, the line carries a day-count).')
+    ON CONFLICT (migration_id) DO NOTHING;
+
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+
+    INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, position, description, effective_from) VALUES
+        ('VACATION_SETTLEMENT_PAYOUT', 'SLS_TBD_S24', 'OK24', 'AC',          '', 'PLACEHOLDER - §24 vacation auto-payout (Ferielov §24); real SLS code TBD via SLS dialogue', '2020-01-01'),
+        ('VACATION_SETTLEMENT_PAYOUT', 'SLS_TBD_S24', 'OK24', 'HK',          '', 'PLACEHOLDER - §24 vacation auto-payout (Ferielov §24); real SLS code TBD via SLS dialogue', '2020-01-01'),
+        ('VACATION_SETTLEMENT_PAYOUT', 'SLS_TBD_S24', 'OK24', 'PROSA',       '', 'PLACEHOLDER - §24 vacation auto-payout (Ferielov §24); real SLS code TBD via SLS dialogue', '2020-01-01'),
+        ('VACATION_SETTLEMENT_PAYOUT', 'SLS_TBD_S24', 'OK24', 'AC_RESEARCH', '', 'PLACEHOLDER - §24 vacation auto-payout (Ferielov §24); real SLS code TBD via SLS dialogue', '2020-01-01'),
+        ('VACATION_SETTLEMENT_PAYOUT', 'SLS_TBD_S24', 'OK24', 'AC_TEACHING', '', 'PLACEHOLDER - §24 vacation auto-payout (Ferielov §24); real SLS code TBD via SLS dialogue', '2020-01-01'),
+        ('VACATION_SETTLEMENT_PAYOUT', 'SLS_TBD_S24', 'OK26', 'AC',          '', 'PLACEHOLDER - §24 vacation auto-payout (Ferielov §24); real SLS code TBD via SLS dialogue', '2020-01-01'),
+        ('VACATION_SETTLEMENT_PAYOUT', 'SLS_TBD_S24', 'OK26', 'HK',          '', 'PLACEHOLDER - §24 vacation auto-payout (Ferielov §24); real SLS code TBD via SLS dialogue', '2020-01-01'),
+        ('VACATION_SETTLEMENT_PAYOUT', 'SLS_TBD_S24', 'OK26', 'PROSA',       '', 'PLACEHOLDER - §24 vacation auto-payout (Ferielov §24); real SLS code TBD via SLS dialogue', '2020-01-01'),
+        ('VACATION_SETTLEMENT_PAYOUT', 'SLS_TBD_S24', 'OK26', 'AC_RESEARCH', '', 'PLACEHOLDER - §24 vacation auto-payout (Ferielov §24); real SLS code TBD via SLS dialogue', '2020-01-01'),
+        ('VACATION_SETTLEMENT_PAYOUT', 'SLS_TBD_S24', 'OK26', 'AC_TEACHING', '', 'PLACEHOLDER - §24 vacation auto-payout (Ferielov §24); real SLS code TBD via SLS dialogue', '2020-01-01')
+    ON CONFLICT (time_type, ok_version, agreement_code, position, effective_from) DO NOTHING;
+END
+$$;

@@ -71,6 +71,54 @@ public sealed record VacationSettlementSnapshot
     /// </summary>
     public string? OkVersion { get; init; }
 
+    // --- §24 wage-type-mapping natural key (ADR-033 D7 / ADR-020) ---
+    // Captured here so the S69 §24 Payroll emitter (slice 1b) can resolve the lønart off THIS
+    // immutable snapshot — a replay-deterministic dated lookup with NO live re-read (ADR-033 D3).
+    // The ADR-020 wage-type natural key is (time_type, ok_version, agreement_code, position); OkVersion
+    // above + the two fields below + SettlementBoundaryDate (the asOf) complete that lookup tuple.
+
+    /// <summary>
+    /// The dated agreement code (e.g. "AC", "HK", "PROSA") in force at the settled ferieår start —
+    /// the <c>agreement_code</c> component of the ADR-020 wage-type natural key
+    /// <c>(time_type, ok_version, agreement_code, position)</c> the §24 emitter resolves the lønart
+    /// against (ADR-033 D7). Reference type, NON-required (mirrors <see cref="OkVersion"/>): left null
+    /// only on an uninitialized coverage-test instance — production always binds the dated value
+    /// resolved at the same instant as <see cref="OkVersion"/>. Required-ness is enforced fail-closed
+    /// at CAPTURE, not by the type system (round-trippability, S66 e0d1dc3 lesson).
+    /// </summary>
+    public string? AgreementCode { get; init; }
+
+    /// <summary>
+    /// The dated position (e.g. "DEPARTMENT_HEAD", "RESEARCHER") in force at the settled ferieår start —
+    /// the <c>position</c> component of the ADR-020 wage-type natural key
+    /// <c>(time_type, ok_version, agreement_code, position)</c> (ADR-033 D7). Nullable: null means no
+    /// position override; the §24 emitter canonicalizes null→"" for the <c>wage_type_mappings.position</c>
+    /// column whose DB default is the empty string. Resolved from the dated <c>employee_profiles</c> row
+    /// (ADR-023) at the same instant as <see cref="AgreementCode"/>/<see cref="OkVersion"/>.
+    /// </summary>
+    public string? Position { get; init; }
+
+    /// <summary>
+    /// The settlement boundary date, currently holding the FERIEÅR-END accrual boundary (Aug 31 for a
+    /// VACATION reset_month-9 ferieår — the inherited S68 valuation boundary, <c>closedFerieaarStart
+    /// .AddYears(1).AddDays(-1)</c>; Dec 31 only when reset_month==1). The §24 emitter uses this as the
+    /// <c>asOf</c> for the dated <c>wage_type_mappings</c> lookup (ADR-020), so the lønart is resolved
+    /// against the mapping in force at this boundary (replay-stable). Value type (DateOnly) — defaults
+    /// cleanly (<c>default(DateOnly)</c>) on an uninitialized coverage-test instance, so it does NOT break
+    /// round-trippability.
+    ///
+    /// <para>
+    /// FOLLOW-UP (S69 Step-7a W1): the LEGAL §21/§24 settlement/transfer anchor is 31 December (Ferielov
+    /// §21 stk.2; S65 research <c>docs/references/ferie-transfer-timing-research.md</c>), NOT the ferieår
+    /// end. Today this divergence is FUNCTIONALLY INERT: every §24 <c>wage_type_mappings</c> row is
+    /// open-from-2020, so an Aug-31 vs 31-Dec <c>asOf</c> resolves to the SAME mapping. When the REAL §24
+    /// SLS lønart lands (and a dated supersession could fall between Aug 31 and 31 Dec, making this
+    /// <c>asOf</c> load-bearing), the OWNER must rule whether the §24 mapping <c>asOf</c> should be 31 Dec
+    /// rather than the ferieår end. Not changed this sprint (the value is the inherited valuation boundary).
+    /// </para>
+    /// </summary>
+    public DateOnly SettlementBoundaryDate { get; init; }
+
     // --- §21 transfer agreement (ADR-033 D8) ---
 
     /// <summary>

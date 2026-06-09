@@ -653,6 +653,21 @@ public static class VacationSettlementEndpoints
             await using var tx = await conn.BeginTransactionAsync(ct);
             try
             {
+                // S69 TASK-6905 (ADR-033 D4 / ADR-032 D4) — claim/reconcile MUTUAL EXCLUSION.
+                // Acquire the employee advisory lock FIRST (held to commit; the SAME key the Payroll
+                // SettlementExportEmitter + the Backend close service take). Without it, the operator's
+                // reconcile and the emitter's §24 claim could both succeed (double-pay): the emitter
+                // skips when payout_reconciled_at is set, this endpoint refuses (409) when the emitter
+                // already staged the bucket — but only the shared lock makes "set marker" and "stage
+                // line" mutually exclusive. Across {close, reconcile, emitter} exactly one disposition
+                // per (identity, sequence, bucket).
+                await using (var lockCmd = new NpgsqlCommand(
+                    "SELECT pg_advisory_xact_lock(hashtext('employee-' || @employeeId))", conn, tx))
+                {
+                    lockCmd.Parameters.AddWithValue("employeeId", employeeId);
+                    await lockCmd.ExecuteScalarAsync(ct);
+                }
+
                 var current = await settlementRepo.GetActiveAsync(
                     conn, tx, employeeId, entitlementType, entitlementYear, ct);
                 if (current is null)
@@ -681,6 +696,47 @@ public static class VacationSettlementEndpoints
                         reconciledAt = current.PayoutReconciledAt,
                         reconciledBy = current.PayoutReconciledBy,
                     }, statusCode: 409);
+                }
+
+                // S69 TASK-6905 — line/checkpoint-absence pre-check (the other half of the XOR). Under
+                // the held lock, refuse (409) if the Payroll emitter has ALREADY staged the §24 bucket:
+                // a settlement_export_lines row for this active sequence's AUTO_PAYOUT_24 bucket, OR a
+                // settlement_payroll_inbox row PROCESSED for the same identity/bucket. The machine
+                // claimed it; the operator must NOT also reconcile it (that is the double-pay the lock
+                // prevents from racing and this check prevents from completing).
+                await using (var stagedCmd = new NpgsqlCommand(
+                    """
+                    SELECT
+                        EXISTS (
+                            SELECT 1 FROM settlement_export_lines
+                            WHERE employee_id = @employeeId AND entitlement_type = @entitlementType
+                              AND entitlement_year = @entitlementYear AND sequence = @sequence
+                              AND bucket = 'AUTO_PAYOUT_24')
+                        OR EXISTS (
+                            SELECT 1 FROM settlement_payroll_inbox
+                            WHERE employee_id = @employeeId AND entitlement_type = @entitlementType
+                              AND entitlement_year = @entitlementYear AND sequence = @sequence
+                              AND bucket = 'AUTO_PAYOUT_24' AND processing_status = 'PROCESSED')
+                    """, conn, tx))
+                {
+                    stagedCmd.Parameters.AddWithValue("employeeId", employeeId);
+                    stagedCmd.Parameters.AddWithValue("entitlementType", entitlementType);
+                    stagedCmd.Parameters.AddWithValue("entitlementYear", entitlementYear);
+                    stagedCmd.Parameters.AddWithValue("sequence", current.Sequence);
+                    var alreadyStaged = await stagedCmd.ExecuteScalarAsync(ct) is true;
+                    if (alreadyStaged)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.Json(new
+                        {
+                            error = "The §24 payout line was already staged by the settlement-export emitter; " +
+                                    "manual reconciliation is not permitted (reconcile XOR machine-claim).",
+                            employeeId,
+                            entitlementType,
+                            entitlementYear,
+                            sequence = current.Sequence,
+                        }, statusCode: 409);
+                    }
                 }
 
                 if (current.Version != expectedVersion)

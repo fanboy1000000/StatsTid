@@ -5,7 +5,7 @@
 > Update the schema in `init.sql`, then run `python tools/generate_db_schema.py`.
 > CI fails (`tools/check_docs.py`) if this file drifts from init.sql.
 
-**Total: 59 tables** (42 primary, 17 audit).
+**Total: 61 tables** (44 primary, 17 audit).
 
 ---
 
@@ -1205,6 +1205,53 @@
 - `idx_vacation_transfer_agreement_audit_employee` on (employee_id)
 - `idx_vacation_transfer_agreement_audit_at` on (audit_at)
 
+## settlement_payroll_inbox
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| source_event_id | UUID | No | PK |  |
+| employee_id | TEXT | Yes | FK→users |  |
+| entitlement_type | TEXT | Yes |  |  |
+| entitlement_year | INT | Yes |  |  |
+| sequence | INT | Yes |  |  |
+| bucket | TEXT | Yes |  |  |
+| processing_status | TEXT | No |  |  |
+| attempts | INT | No |  | 0 |
+| last_error | TEXT | Yes |  |  |
+| processed_at | TIMESTAMPTZ | Yes |  |  |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+| updated_at | TIMESTAMPTZ | No |  | NOW() |
+
+**Indexes:**
+- `idx_settlement_payroll_inbox_retry_pending` on (processing_status) WHERE processing_status = 'RETRY_PENDING'
+- `idx_settlement_payroll_inbox_settlement` on (employee_id, entitlement_type, entitlement_year, sequence, bucket)
+
+## settlement_export_lines
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| line_id | BIGSERIAL | No | PK |  |
+| employee_id | TEXT | No | FK→users |  |
+| entitlement_type | TEXT | No |  |  |
+| entitlement_year | INT | No |  |  |
+| sequence | INT | No |  |  |
+| bucket | TEXT | No |  |  |
+| wage_type | TEXT | No |  |  |
+| hours | NUMERIC(8,2) | No |  |  |
+| amount | NUMERIC(12,2) | No |  | 0 |
+| ok_version | TEXT | No |  |  |
+| agreement_code | TEXT | No |  |  |
+| position | TEXT | No |  | '' |
+| period_start | DATE | No |  |  |
+| period_end | DATE | No |  |  |
+| source_event_id | UUID | No |  |  |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+| created_by | TEXT | No |  |  |
+
+**Indexes:**
+- `idx_settlement_export_lines_bucket` (UNIQUE) on (employee_id, entitlement_type, entitlement_year, sequence, bucket)
+- `idx_settlement_export_lines_employee` on (employee_id)
+
 ---
 
 ## Table Summary
@@ -1270,4 +1317,6 @@
 | 57 | vacation_transfer_agreements | -- |
 | 58 | vacation_settlement_audit | audit |
 | 59 | vacation_transfer_agreement_audit | audit |
+| 60 | settlement_payroll_inbox | -- |
+| 61 | settlement_export_lines | -- |
 
