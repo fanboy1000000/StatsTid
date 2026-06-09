@@ -8,7 +8,7 @@
 | **End Date** | — |
 | **Orchestrator Approved** | no |
 | **Build Verified** | yes — `dotnet build StatsTid.sln` 0 warnings 0 errors |
-| **Test Verified** | yes (S69 surface local-green; full regression **CI-pending**) — 652 unit + the 24 settlement D-tests (the S69 surface) locally green; the full Docker-gated regression is deferred to CI (the exclusive local run hit the FAIL-002 Docker-churn host-crash — **366/366 passing, 0 failures**, before the abort; S69 is additive / low-regression-risk). Computed pyramid: 652 unit + 527 regression + 5 smoke + 176 FE = **1360** (+23). |
+| **Test Verified** | **local full-pyramid GREEN + CI whole-workflow GREEN** — 652 unit + **527 regression** (exclusive run, 0 failures, 25m19s — the FAIL-002 Docker-churn host-crash on the first non-exclusive run cleared on the exclusive re-run, FAIL-002 precedent) + 5 smoke + 176 FE = **1360** (+23). **CI GREEN — all 6 jobs — run [27226277321](https://github.com/fanboy1000000/StatsTid/actions/runs/27226277321)** (6th consecutive CI-verified close). |
 
 ## Sprint Goal
 
@@ -392,12 +392,12 @@ Artifacts: `.claude/reviews/SPRINT-69-step7a-{codex,reviewer}.md`.
 | Suite | Count | Status |
 |-------|-------|--------|
 | Unit tests | 652 | all passing (+7 — the delivery guard) |
-| Regression tests | 527 (computed, +16) | S69 settlement surface 24/24 local-green; full suite **CI-pending** (FAIL-002 host-crash on the exclusive local run — 366/366 passing, 0 failures, before abort) |
-| Smoke tests | 5 | unchanged (Docker) |
+| Regression tests | 527 | exclusive local run GREEN (0 failures, 25m19s) + CI green (+16) |
+| Smoke tests | 5 | CI green (docker-compose harness) |
 | Frontend | 176 | unchanged (no FE this slice) |
-| **Total** | 1360 (computed) | +23 vs S68 |
+| **Total** | 1360 | +23 vs S68 |
 
-Baseline (S68): 645 unit + 511 regression + 5 smoke + 176 FE = 1337. CI verifies the full Docker-gated pyramid on push (run URL backfilled at close-polish).
+Baseline (S68): 645 unit + 511 regression + 5 smoke + 176 FE = 1337. **CI whole-workflow GREEN — all 6 jobs — run [27226277321](https://github.com/fanboy1000000/StatsTid/actions/runs/27226277321)** (6th consecutive CI-verified close).
 
 ## Agent Effectiveness
 
