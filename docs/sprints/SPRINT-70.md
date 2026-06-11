@@ -7,7 +7,7 @@
 | Field | Value |
 |-------|-------|
 | **Build Verified** | yes — `dotnet build` 0 warnings 0 errors (agent + Orchestrator independent runs) |
-| **Test Verified** | **local full-pyramid GREEN** — 722 unit + **604 regression** (fresh EXCLUSIVE run, 0 failures, 29m00s — run-3, the post-Step-7a-fix-forward counting run) + 5 smoke (fresh-volume compose stack, locally-built S70 images) + 176 FE (carried, no FE changes) = **1507** (+147 vs S69). CI-pending (push follows the close commit; run URL backfilled post-push per the S68/S69 close-polish pattern). |
+| **Test Verified** | **local full-pyramid GREEN + CI whole-workflow GREEN** — 722 unit + **604 regression** (fresh EXCLUSIVE run, 0 failures, 29m00s — run-3, the post-Step-7a-fix-forward counting run) + 5 smoke (fresh-volume compose stack, locally-built S70 images) + 176 FE (carried, no FE changes) = **1507** (+147 vs S69). **CI GREEN — all 6 jobs — run [27339162204](https://github.com/fanboy1000000/StatsTid/actions/runs/27339162204)** (7th consecutive CI-verified close). |
 - **Refinement:** `.claude/refinements/REFINEMENT-s70-slice3-termination.md` (READY; **SUPERSEDED in detail by the pinned rules below** — see the supersession notice in the refinement; agents implement from THIS file)
 
 ## Sprint Goal
