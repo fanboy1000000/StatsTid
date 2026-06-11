@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace StatsTid.SharedKernel.Models;
 
 /// <summary>
@@ -138,6 +140,56 @@ public sealed record VacationSettlementSnapshot
     /// for forward contract stability.
     /// </summary>
     public bool IsFeriehindret { get; init; }
+
+    // --- S70 / TASK-7004 (SPRINT-70 R4/R5; ADR-033 slice 3a) — termination crystallization ---
+    // All four fields are nullable/defaulted AND omitted from the serialized snapshot when unset
+    // (WhenWritingNull / WhenWritingDefault), so (a) an uninitialized coverage-test instance still
+    // round-trips (S66 e0d1dc3 lesson) and (b) the ACTIVE-employee YEAR_END snapshot JSON stays
+    // byte-identical to its pre-S70 shape (no behavior change on the auto-partition path).
+
+    /// <summary>
+    /// The employment end date this settlement crystallized against (SPRINT-70 R5) — the
+    /// in-lock re-read <c>users.employment_end_date</c> (leak-proofing pin R4(b); never
+    /// caller-supplied). Set on <c>trigger=TERMINATION</c> snapshots AND on the R4 leaver
+    /// other-ferieår deferred-disposition <c>YEAR_END</c> snapshots (where it documents WHY the
+    /// auto-partition was withheld). Null on ordinary active-employee YEAR_END snapshots.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateOnly? TerminationDate { get; init; }
+
+    /// <summary>
+    /// The crystallization basis marker (SPRINT-70 R5 / owner decision D-B): the §26 whole-month
+    /// basis, <c>"S26_WHOLE_MONTH"</c> — <c>crystallized = max(0, EarnedToDate(asOf=endDate) +
+    /// carryoverIn − consumedToEndDate)</c>, EarnedToDate whole-month flat per ADR-031 from
+    /// <c>max(ferieårStart, employment_start_date)</c>. Set ONLY on <c>trigger=TERMINATION</c>
+    /// snapshots; null elsewhere. Replay applies the recorded basis to THIS snapshot's own
+    /// operands (Earned / CarryoverIn / Used) — never re-derives from live data (ADR-033 D3).
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? CrystallizationBasis { get; init; }
+
+    /// <summary>
+    /// The crystallized §26 day-count (SPRINT-70 R5): <c>max(0, pre-clamp)</c> rounded to the
+    /// 2dp storage precision (ToEven — the D9 reader convention). THE deterministic source the
+    /// slice-3b §26 payout line reads (the S69 snapshot-keyed precedent) — the settlement ROW's
+    /// bucket columns are all zero on a SETTLED TERMINATION (R5 row shape). Set ONLY on
+    /// <c>trigger=TERMINATION</c> snapshots; null elsewhere. Money-free: a day-count, never an
+    /// amount (ADR-033 D1).
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public decimal? CrystallizedDays { get; init; }
+
+    /// <summary>
+    /// SPRINT-70 R4 — the deferred-disposition marker. TRUE on a leaver's other-ferieår
+    /// <c>YEAR_END</c> settlement written fail-closed PENDING_REVIEW with NO §21/§24
+    /// auto-partition (<c>forfeit_days</c> = the FULL disposable, a FLAG per the S68 convention —
+    /// not a computed §34 bucket). Distinguishes no-partition from a computed partition for D3
+    /// replay determinism + the deferred owner ruling, and keeps the
+    /// <c>VacationForfeitedToFeriefond</c>-on-FORFEIT overload discriminable in the audit trail.
+    /// Defaults to false (computed partition).
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool DeferredDisposition { get; init; }
 }
 
 /// <summary>

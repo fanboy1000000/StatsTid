@@ -46,6 +46,31 @@ public sealed class User
     /// </summary>
     public DateOnly? EmploymentStartDate { get; init; }
 
+    /// <summary>
+    /// S70 / ADR-033 slice 3a (SPRINT-70 R1) — HR-managed LAST day of employment.
+    /// NULLABLE: null = no termination recorded. The deactivation lifecycle keys on this
+    /// date (Copenhagen business date &gt; <c>EmploymentEndDate</c> ⇒ deactivate — same-tx
+    /// in the admin end-date endpoint for an already-passed date, else the Step-A poller).
+    ///
+    /// <para>
+    /// <b>RBAC — HR-scoped.</b> Set/read-gated to <c>HROrAbove</c> + the terminated-inclusive
+    /// <c>OrgScopeValidator</c> path (SPRINT-70 R9); never serialized into any Employee-facing
+    /// DTO, JWT, or export — same handling class as <see cref="EmploymentStartDate"/>. Only the
+    /// dedicated HR-gated employment-end endpoints (TASK-7002) expose it.
+    /// GDPR: erasure deferred WITH ADR-025 D3 (R11 — the field joins the D3 erasure column
+    /// set; Part B must not strip an unsettled leaver's termination-due marker).
+    /// </para>
+    /// </summary>
+    public DateOnly? EmploymentEndDate { get; init; }
+
+    /// <summary>
+    /// S70 / ADR-033 slice 3a (SPRINT-70 R1) — deactivation PROVENANCE. TRUE iff the current
+    /// <c>IsActive = false</c> state was written by the end-date lifecycle (same-tx flip or the
+    /// Step-A poller), NOT by a manual admin PUT. R1(c): a clear reactivates ONLY when this is
+    /// true (then resets it); a manually-deactivated user is never blindly flipped back.
+    /// </summary>
+    public bool EndDateDeactivated { get; init; }
+
     public bool IsActive { get; init; } = true;
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; init; } = DateTime.UtcNow;

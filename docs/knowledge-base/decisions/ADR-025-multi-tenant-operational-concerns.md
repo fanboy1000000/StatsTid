@@ -96,6 +96,11 @@ CREATE TABLE tenant_sls_configurations (
 
 **Per-tenant scoping**: both Part A export + Part B erasure scope to the requesting admin's institution via OrgScopeValidator. Cross-tenant data leakage prevented.
 
+**S70 amendment (SPRINT-70 R11, 2026-06-11) — `employment_end_date` joins the D3 erasure set; Part B must not strip an unsettled leaver's termination-due marker.** Part B was never built (there is NO erasure endpoint/service as of S70); two constraints bind its eventual implementation:
+
+- (a) `users.employment_end_date` (S70/TASK-7000, ADR-033 slice 3a leaver model) is PII-adjacent personal data and **joins the D3 Part B erasure column set** (NULL-out alongside the existing PII columns). The column carries the S59/S60-precedent annotation "erasure deferred WITH ADR-025 D3" in init.sql.
+- (b) **Erasure must not orphan an unsettled termination obligation**: `employment_end_date` is the leaver-selection key for the ADR-033 termination settlement (SPRINT-70 R3 — Step B and the due-enumeration key on it, never on bare `is_active = FALSE`). NULLing it on a leaver whose end-date ferieår has NO active `vacation_settlements` row would silently remove the employee from the due set — a wrongful-forfeiture-by-erasure hazard (ADR-033 D10 fail-closed violated). Part B must therefore either (i) require the termination settlement/disposition to exist first (refuse erasure of an unsettled leaver), or (ii) retain a non-PII due marker (e.g. the end-date ferieår + a settled/unsettled flag) sufficient for the settlement pipeline before NULLing the date itself.
+
 ### D4 — Noisy-neighbor / per-tenant fairness
 
 **Problem**: `OutboxPublisher` (ADR-018) currently has 4-way cross-stream parallelism but no per-tenant fairness. One institution's burst load could degrade outbox-delivery latency for others.

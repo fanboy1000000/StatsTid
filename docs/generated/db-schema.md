@@ -240,6 +240,8 @@
 | ok_version | TEXT | No |  | 'OK24' |
 | employment_category | TEXT | No |  | 'Standard' |
 | is_active | BOOLEAN | No |  | TRUE |
+| employment_end_date | DATE | Yes |  |  |
+| end_date_deactivated | BOOLEAN | No |  | FALSE |
 | version | BIGINT | No |  | 1 |
 | created_at | TIMESTAMPTZ | No |  | NOW() |
 | updated_at | TIMESTAMPTZ | No |  | NOW() |

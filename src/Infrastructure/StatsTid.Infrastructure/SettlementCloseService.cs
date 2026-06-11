@@ -1,9 +1,13 @@
 using System.Data;
 using System.Globalization;
+using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Npgsql;
+using StatsTid.Infrastructure.Outbox;
+using StatsTid.SharedKernel.Audit;
+using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Models;
 
 namespace StatsTid.Infrastructure;
@@ -54,16 +58,49 @@ namespace StatsTid.Infrastructure;
 /// </para>
 ///
 /// <para>
+/// <b>S70 / TASK-7005 (ADR-033 slice 3a — TERMINATION foundation).</b> The poll is restructured
+/// into two steps per the SPRINT-70 pinned contract:
+/// <list type="bullet">
+///   <item><description><b>Step A (UNGATED leaver deactivation flip, R2/R12):</b> runs BEFORE the
+///   D13 gate check. Per leaver whose <c>employment_end_date</c> has PASSED on the Copenhagen
+///   business date (<c>end date &lt; today</c>; the end date is the LAST day employed, R1) and who
+///   is still <c>is_active = TRUE</c>: under the employee advisory lock, ONE predicate-guarded
+///   UPDATE flips <c>is_active=false</c> + <c>end_date_deactivated=true</c> (provenance) AND bumps
+///   <c>users.version</c> (ADR-018 D7), with the R1(e) <c>ReportingLineManagerDeactivated</c> side
+///   effects, the <see cref="EmployeeEndDateDeactivationApplied"/> emission, the ADR-026
+///   audit-projection row and the <c>users_audit</c> UPDATED row in the SAME tx. The flip is a
+///   lifecycle fact, NOT a settlement — the dormant gate must never skip it.</description></item>
+///   <item><description><b>Step B (D13-gated settlement, now leaver-inclusive, R3/R4):</b> the due
+///   enumeration's ACTIVE branch EXCLUDES passed-end-date leavers (a flip-failed leaver must NEVER
+///   traverse the normal §21/§24 auto-partition — R4 pin (a)); a LEAVER branch
+///   (<c>is_active=FALSE AND employment_end_date &lt; today</c>, keyed on the end date — NEVER bare
+///   <c>is_active=FALSE</c>, R3) generates candidate ferieår capped at the END-DATE ferieår (R6;
+///   no post-termination years are ever generated). The end-date ferieår settles with trigger
+///   <c>TERMINATION</c> (due when the end date has passed — termination crystallizes AT the end
+///   date, not the 31-Dec boundary); every OTHER due ferieår settles with trigger <c>YEAR_END</c>
+///   (the service's in-lock leaver re-read produces the fail-closed deferred-disposition
+///   PENDING_REVIEW row — no pre-discrimination here beyond trigger selection). The R2 leaver-level
+///   gate applies to the WHOLE leaver branch: only leavers whose end date falls STRICTLY AFTER
+///   <c>Settlement:GoLiveDate</c> are auto-settled; earlier leavers are pre-launch boundaries the
+///   system never tracked and remain the manual fallback (D13).</description></item>
+/// </list>
+/// Step A and Step B are separate transactions (a Step-A flip must survive a Step-B failure);
+/// per-leaver/per-tuple failures stay isolated (rollback, log, continue).
+/// </para>
+///
+/// <para>
 /// <b>DI (DECLARED for the Orchestrator to wire in <c>Program.cs</c>):</b>
 /// <code>
 /// builder.Services.AddHostedService&lt;SettlementCloseService&gt;();
 /// </code>
 /// All of <see cref="SettlementCloseService"/>'s constructor dependencies —
 /// <see cref="DbConnectionFactory"/>, <see cref="VacationSettlementService"/>,
-/// <see cref="EntitlementConfigRepository"/>, <see cref="TimeProvider"/> (already registered as
-/// <c>TimeProvider.System</c> at Program.cs:227) and the logger — are already in the container
-/// (TASK-6804 registered <see cref="VacationSettlementService"/> + its repos). No new helper or
-/// <see cref="TimeProvider"/> registration is required; only the <c>AddHostedService</c> line above.
+/// <see cref="EntitlementConfigRepository"/>, <see cref="UserRepository"/>,
+/// <see cref="ReportingLineRepository"/>, <see cref="IOutboxEnqueue"/>,
+/// <see cref="IAuditProjectionMapper{TEvent}"/> for <see cref="EmployeeEndDateDeactivationApplied"/>
+/// (Program.cs:218), <see cref="AuditProjectionRepository"/>, <see cref="TimeProvider"/> (already
+/// registered as <c>TimeProvider.System</c>) and the logger — are already in the container as
+/// singletons. No new registration is required; only the <c>AddHostedService</c> line above.
 /// </para>
 /// </summary>
 public sealed class SettlementCloseService : BackgroundService
@@ -71,8 +108,22 @@ public sealed class SettlementCloseService : BackgroundService
     /// <summary>The entitlement type this slice settles (slice 1 = VACATION only; ADR-033 D13).</summary>
     private const string VacationType = "VACATION";
 
-    /// <summary>YEAR_END trigger — the only trigger the slice-1a pass accepts (ADR-033 D5/D9).</summary>
+    /// <summary>YEAR_END trigger — the S68 auto-partition / the R4 leaver deferred-disposition row.</summary>
     private const string YearEndTrigger = "YEAR_END";
+
+    /// <summary>TERMINATION trigger — the leaver's end-date-ferieår crystallization (S70 R4/R5).</summary>
+    private const string TerminationTrigger = "TERMINATION";
+
+    /// <summary>
+    /// System actor for the Step-A deactivation flip — the settlement actor convention
+    /// (<c>system:settlement-close:&lt;discriminator&gt;</c>, the S68
+    /// <see cref="VacationSettlementService"/> precedent) with the DEACTIVATION discriminator
+    /// (the flip is a lifecycle fact, not a settlement; DECLARED in the TASK-7005 report).
+    /// </summary>
+    private const string StepAActorId = "system:settlement-close:DEACTIVATION";
+
+    /// <summary>System actor role — matches the settlement events' <c>"System"</c> convention.</summary>
+    private const string SystemActorRole = "System";
 
     /// <summary>
     /// Poll cadence — mirrors <see cref="DelegationExpiryService"/> (ADR-033 D3 "the
@@ -94,6 +145,11 @@ public sealed class SettlementCloseService : BackgroundService
     private readonly DbConnectionFactory _connectionFactory;
     private readonly VacationSettlementService _settlementService;
     private readonly EntitlementConfigRepository _configRepo;
+    private readonly UserRepository _userRepo;
+    private readonly ReportingLineRepository _reportingLineRepo;
+    private readonly IOutboxEnqueue _outbox;
+    private readonly IAuditProjectionMapper<EmployeeEndDateDeactivationApplied> _flipAuditMapper;
+    private readonly AuditProjectionRepository _auditRepo;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<SettlementCloseService> _logger;
 
@@ -114,6 +170,11 @@ public sealed class SettlementCloseService : BackgroundService
         DbConnectionFactory connectionFactory,
         VacationSettlementService settlementService,
         EntitlementConfigRepository configRepo,
+        UserRepository userRepo,
+        ReportingLineRepository reportingLineRepo,
+        IOutboxEnqueue outbox,
+        IAuditProjectionMapper<EmployeeEndDateDeactivationApplied> flipAuditMapper,
+        AuditProjectionRepository auditRepo,
         TimeProvider timeProvider,
         IConfiguration configuration,
         ILogger<SettlementCloseService> logger)
@@ -121,6 +182,11 @@ public sealed class SettlementCloseService : BackgroundService
         _connectionFactory = connectionFactory;
         _settlementService = settlementService;
         _configRepo = configRepo;
+        _userRepo = userRepo;
+        _reportingLineRepo = reportingLineRepo;
+        _outbox = outbox;
+        _flipAuditMapper = flipAuditMapper;
+        _auditRepo = auditRepo;
         _timeProvider = timeProvider;
         _logger = logger;
 
@@ -157,7 +223,8 @@ public sealed class SettlementCloseService : BackgroundService
         if (_goLiveDate is null)
             _logger.LogInformation(
                 "SettlementCloseService: DORMANT — no Settlement:GoLiveDate configured; automated VACATION " +
-                "year-end close settles nothing (pre-launch manual fallback per ADR-033 D13).");
+                "year-end close settles nothing (pre-launch manual fallback per ADR-033 D13). The Step-A " +
+                "leaver deactivation flip is UNGATED and still runs every poll (SPRINT-70 R2).");
         else
             _logger.LogInformation(
                 "SettlementCloseService: ACTIVE — auto-closing VACATION year-end boundaries strictly after " +
@@ -183,18 +250,24 @@ public sealed class SettlementCloseService : BackgroundService
 
     private async Task CloseDueSettlementsAsync(CancellationToken ct)
     {
-        // DORMANT gate (ADR-033 D13). With no configured go-live date the automated close is silent —
-        // the launch-neutral default. No DB work, no clock read; the manual operator fallback owns every
-        // boundary until ops sets Settlement:GoLiveDate. (Posture logged once in ExecuteAsync.)
-        if (_goLiveDate is null) return;
-
-        // The Copenhagen BUSINESS date — the §21/§24 boundary comparison authority (ADR-033 D3 /
-        // follow-up (v)). Derived from the injected TimeProvider's UTC instant converted to the
-        // Europe/Copenhagen zone, NEVER raw CURRENT_DATE: near a 31-Dec boundary the UTC date and the
-        // Danish date differ for ~1h each night, and a UTC-midnight comparison would settle a tuple a
-        // day early/late. (The poll being DUE-to-run at all may read the wall clock — that is a
-        // trigger, not the boundary; the boundary uses this controlled business date.)
+        // The Copenhagen BUSINESS date — the §21/§24 boundary AND the Step-A flip-predicate
+        // comparison authority (ADR-033 D3 / follow-up (v)). Derived from the injected TimeProvider's
+        // UTC instant converted to the Europe/Copenhagen zone, NEVER raw CURRENT_DATE: near a 31-Dec
+        // boundary the UTC date and the Danish date differ for ~1h each night, and a UTC-midnight
+        // comparison would settle a tuple (or flip a leaver) a day early/late. (The poll being
+        // DUE-to-run at all may read the wall clock — that is a trigger, not the boundary; the
+        // boundary uses this controlled business date.)
         var copenhagenToday = CopenhagenToday();
+
+        // ── Step A (UNGATED, SPRINT-70 R2) — the leaver deactivation flip runs BEFORE the D13 gate
+        // check: the flip is a lifecycle fact, not a settlement, and the dormant gate must not skip
+        // it. Its own per-leaver transactions — a Step-A flip survives any Step-B failure.
+        await ApplyDueDeactivationFlipsAsync(copenhagenToday, ct);
+
+        // ── Step B gate — DORMANT (ADR-033 D13). With no configured go-live date the automated
+        // close SETTLES nothing — the launch-neutral default; the manual operator fallback owns
+        // every boundary until ops sets Settlement:GoLiveDate. (Posture logged once in ExecuteAsync.)
+        if (_goLiveDate is null) return;
 
         var dueTuples = await EnumerateDueTuplesAsync(copenhagenToday, _goLiveDate.Value, ct);
         if (dueTuples.Count == 0) return;
@@ -203,7 +276,7 @@ public sealed class SettlementCloseService : BackgroundService
             "SettlementCloseService: {Count} due VACATION settlement tuple(s) at Copenhagen date {Date}",
             dueTuples.Count, copenhagenToday);
 
-        foreach (var (employeeId, entitlementYear) in dueTuples)
+        foreach (var (employeeId, entitlementYear, trigger) in dueTuples)
         {
             // One transaction per tuple (ADR-018 D3 atomic settlement). SettleAsync takes the
             // ADR-032 D4 employee advisory lock FIRST + does its in-lock single-settle re-check, so
@@ -219,14 +292,36 @@ public sealed class SettlementCloseService : BackgroundService
             await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
             try
             {
+                // S70 Step-7a B1 — the close service ALWAYS supplies the leaver go-live floor
+                // (_goLiveDate is non-null here: the dormant gate returned above), so SettleAsync
+                // re-evaluates the R2/D13 leaver gate IN-LOCK on the re-read user (R12) — the
+                // enumeration-time ResolveLeaverTupleTrigger decision alone is pre-lock and stale-able.
                 var outcome = await _settlementService.SettleAsync(
-                    employeeId, VacationType, entitlementYear, YearEndTrigger, conn, tx, ct);
+                    employeeId, VacationType, entitlementYear, trigger, conn, tx,
+                    leaverGoLiveFloor: _goLiveDate.Value, ct: ct);
                 await tx.CommitAsync(ct);
 
                 if (outcome.DidSettle)
                     _logger.LogInformation(
-                        "SettlementCloseService: settled VACATION {Year} for {EmployeeId} ({State})",
-                        entitlementYear, employeeId, outcome.Row.SettlementState);
+                        "SettlementCloseService: settled VACATION {Year} for {EmployeeId} ({Trigger} → {State})",
+                        entitlementYear, employeeId, trigger, outcome.Row!.SettlementState); // Row non-null when DidSettle
+                else if (outcome.NotDue)
+                    // S70 Step-7a B1 — the in-lock due re-evaluation found the tuple no longer
+                    // due under the lock (a competing end-date correction won the race);
+                    // corrected state wins. Nothing written; the next poll re-enumerates fresh.
+                    _logger.LogDebug(
+                        "SettlementCloseService: VACATION {Year} for {EmployeeId} ({Trigger}) no longer " +
+                        "due under lock; corrected state wins (benign NotDue no-op)",
+                        entitlementYear, employeeId, trigger);
+                else if (outcome.RefusedConflict)
+                    // R7b — a TERMINATION colliding with an active row of a different trigger was
+                    // REFUSED inside SettleAsync (durable SettlementManualReviewFlagged + audit, no
+                    // row written, no throw). The R3 any-trigger anti-join keeps the tuple out of
+                    // later due sets, so the refusal signal does not re-fire every poll.
+                    _logger.LogWarning(
+                        "SettlementCloseService: {Trigger} for {EmployeeId}/{Year} REFUSED on an active " +
+                        "conflicting settlement (R7b manual-review flagged); continuing",
+                        trigger, employeeId, entitlementYear);
                 else
                     // The in-lock re-check / 23505 backstop found an active settlement (a concurrent
                     // poller won, or a TERMINATION already settled this year — ADR-033 D5). Benign.
@@ -251,8 +346,221 @@ public sealed class SettlementCloseService : BackgroundService
                 // settles exactly once then (ADR-033 D3).
                 await SafeRollbackAsync(tx, ct);
                 _logger.LogWarning(ex,
-                    "SettlementCloseService: failed to settle VACATION {Year} for {EmployeeId}; continuing",
-                    entitlementYear, employeeId);
+                    "SettlementCloseService: failed to settle VACATION {Year} for {EmployeeId} ({Trigger}); continuing",
+                    entitlementYear, employeeId, trigger);
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Step A — the UNGATED leaver deactivation flip (S70 / TASK-7005; SPRINT-70 R2/R12 + R1(e)).
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Per leaver whose <c>employment_end_date</c> has PASSED on the Copenhagen business date and who
+    /// is still <c>is_active = TRUE</c>: under that leaver's R12 employee advisory lock, ONE
+    /// predicate-guarded UPDATE (the FULL predicate re-evaluated in the UPDATE's WHERE) flips
+    /// <c>is_active=false</c>, <c>end_date_deactivated=true</c> (lifecycle provenance) AND increments
+    /// <c>users.version</c> (ADR-018 D7 — a held ETag must not survive the transition), with the
+    /// R1(e) side effects + the <see cref="EmployeeEndDateDeactivationApplied"/> emission + the
+    /// ADR-026 audit projection + the <c>users_audit</c> UPDATED row in the SAME tx.
+    ///
+    /// <para>
+    /// The candidate enumeration is a plain SELECT outside any tx — correctness comes from the
+    /// per-leaver in-tx lock + the re-evaluated predicate (R2 composition note): 0 rows updated is a
+    /// benign no-op (a concurrent clear/correct/manual change won under the lock — rollback, no
+    /// event). Per-leaver failures are isolated: rollback, log, continue — a failed flip is retried
+    /// on the next poll, and until it lands the Step-B enumeration's ACTIVE branch EXCLUDES the
+    /// still-active leaver (R4 pin (a): a flip-failed leaver never traverses the §21/§24
+    /// auto-partition).
+    /// </para>
+    /// </summary>
+    private async Task ApplyDueDeactivationFlipsAsync(DateOnly copenhagenToday, CancellationToken ct)
+    {
+        // Candidate list — a simple snapshot read; NOT a set-based bulk UPDATE (the per-employee
+        // advisory lock + per-employee event payload force the per-leaver loop, R2).
+        var dueLeavers = new List<string>();
+        await using (var enumConn = _connectionFactory.Create())
+        {
+            await enumConn.OpenAsync(ct);
+            await using var cmd = new NpgsqlCommand(
+                """
+                SELECT user_id FROM users
+                WHERE employment_end_date IS NOT NULL
+                  AND employment_end_date < @today
+                  AND is_active = TRUE
+                ORDER BY user_id
+                """, enumConn);
+            cmd.Parameters.AddWithValue("today", copenhagenToday);
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+                dueLeavers.Add(reader.GetString(0));
+        }
+
+        if (dueLeavers.Count == 0) return;
+
+        _logger.LogInformation(
+            "SettlementCloseService: {Count} leaver(s) due for the Step-A deactivation flip at Copenhagen date {Date}",
+            dueLeavers.Count, copenhagenToday);
+
+        foreach (var employeeId in dueLeavers)
+        {
+            await using var conn = _connectionFactory.Create();
+            await conn.OpenAsync(ct);
+            // ReadCommitted for the same post-lock-fresh-snapshot reasoning as the Step-B settle tx.
+            await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
+            try
+            {
+                // (1) R12 — the employee advisory lock FIRST (the SAME key the end-date endpoint,
+                // SettleAsync and the reconcile retrofit acquire), held to commit.
+                await using (var lockCmd = new NpgsqlCommand(
+                    "SELECT pg_advisory_xact_lock(hashtext('employee-' || @employeeId))", conn, tx))
+                {
+                    lockCmd.Parameters.AddWithValue("employeeId", employeeId);
+                    await lockCmd.ExecuteScalarAsync(ct);
+                }
+
+                // (2) In-lock FOR-UPDATE re-read — the event payload operands (end date, version
+                // before) + the audit-context org. Terminated-inclusive read shape (R9a family); a
+                // vanished row or a no-longer-due state (a concurrent clear/correct/manual
+                // deactivation won the lock race) is a benign no-op.
+                var hit = await _userRepo.GetByIdWithVersionIncludingTerminatedAsync(conn, tx, employeeId, ct);
+                if (hit is null || !IsDeactivationDue(hit.Value.User.EmploymentEndDate, hit.Value.User.IsActive, copenhagenToday))
+                {
+                    await SafeRollbackAsync(tx, ct);
+                    continue;
+                }
+                var (user, versionBefore) = hit.Value;
+
+                // (3) The ONE predicate-guarded UPDATE — the FULL Step-A predicate re-evaluated in
+                // the WHERE (R2; defense-in-depth behind the in-lock re-read above). 0 rows ⇒ a
+                // concurrent writer won — rollback-empty, no event.
+                long versionAfter;
+                await using (var updateCmd = new NpgsqlCommand(
+                    """
+                    UPDATE users
+                       SET is_active = FALSE,
+                           end_date_deactivated = TRUE,
+                           version = version + 1,
+                           updated_at = NOW()
+                     WHERE user_id = @id
+                       AND employment_end_date IS NOT NULL
+                       AND employment_end_date < @today
+                       AND is_active = TRUE
+                    RETURNING version
+                    """, conn, tx))
+                {
+                    updateCmd.Parameters.AddWithValue("id", employeeId);
+                    updateCmd.Parameters.AddWithValue("today", copenhagenToday);
+                    var result = await updateCmd.ExecuteScalarAsync(ct);
+                    if (result is not long updatedVersion)
+                    {
+                        await SafeRollbackAsync(tx, ct);
+                        continue;
+                    }
+                    versionAfter = updatedVersion;
+                }
+
+                var endDate = user.EmploymentEndDate!.Value; // non-null: the in-lock re-read + the UPDATE predicate both proved it.
+
+                // (4) R1(e) — the existing user-deactivation side-effect path, SAME tx: emit
+                // ReportingLineManagerDeactivated for each active line MANAGED by the leaver
+                // (mirrors the TASK-7002 endpoint / the S52 AdminEndpoints precedent).
+                var managedLines = await _reportingLineRepo.GetDirectReportsAsync(conn, tx, employeeId, ct);
+                foreach (var line in managedLines)
+                {
+                    var deactivatedEvent = new ReportingLineManagerDeactivated
+                    {
+                        ReportingLineId = line.ReportingLineId,
+                        EmployeeId = line.EmployeeId,
+                        ManagerId = line.ManagerId,
+                        TreeRootOrgId = line.TreeRootOrgId,
+                        ActorId = StepAActorId,
+                        ActorRole = SystemActorRole,
+                    };
+                    await _outbox.EnqueueAsync(conn, tx, $"reporting-line-{line.EmployeeId}", deactivatedEvent, ct);
+                }
+
+                // (5) The flip event on employee-{id} (version-before/after; system actor) + the
+                // ADR-026 audit-projection row, SAME tx (mirrors the TASK-7002 endpoint pattern;
+                // the BackgroundService dispatch site resolves employee → primary_org_id itself).
+                var flipEvent = new EmployeeEndDateDeactivationApplied
+                {
+                    EmployeeId = employeeId,
+                    EndDate = endDate,
+                    OldIsActive = true,
+                    NewIsActive = false,
+                    VersionBefore = versionBefore,
+                    VersionAfter = versionAfter,
+                    ActorId = StepAActorId,
+                    ActorRole = SystemActorRole,
+                };
+                var outboxId = await _outbox.EnqueueAndReturnIdAsync(
+                    conn, tx, $"employee-{employeeId}", flipEvent, ct);
+                var auditCtx = new AuditProjectionContext(
+                    ActorId: StepAActorId,
+                    ActorPrimaryOrgId: user.PrimaryOrgId,
+                    CorrelationId: flipEvent.CorrelationId,
+                    OccurredAt: new DateTimeOffset(DateTime.SpecifyKind(flipEvent.OccurredAt, DateTimeKind.Utc)),
+                    ResolvedTargetOrgId: user.PrimaryOrgId);
+                var rowData = _flipAuditMapper.Map(flipEvent, auditCtx);
+                await _auditRepo.InsertAsync(
+                    conn, tx, flipEvent.EventId, outboxId, flipEvent.EventType, rowData, auditCtx, ct);
+
+                // (6) users_audit UPDATED row — the before/after lifecycle tuple (the SAME JSON
+                // field shape as the TASK-7002 endpoint's audit row).
+                var previousData = JsonSerializer.Serialize(new
+                {
+                    employmentEndDate = user.EmploymentEndDate,
+                    endDateDeactivated = user.EndDateDeactivated,
+                    isActive = user.IsActive,
+                });
+                var newData = JsonSerializer.Serialize(new
+                {
+                    employmentEndDate = user.EmploymentEndDate,
+                    endDateDeactivated = true,
+                    isActive = false,
+                });
+                await using (var auditCmd = new NpgsqlCommand(
+                    """
+                    INSERT INTO users_audit (
+                        user_id, action,
+                        previous_data, new_data,
+                        version_before, version_after,
+                        actor_id, actor_role)
+                    VALUES (
+                        @userId, 'UPDATED',
+                        @previousData::jsonb, @newData::jsonb,
+                        @versionBefore, @versionAfter,
+                        @actorId, @actorRole)
+                    """, conn, tx))
+                {
+                    auditCmd.Parameters.AddWithValue("userId", employeeId);
+                    auditCmd.Parameters.AddWithValue("previousData", previousData);
+                    auditCmd.Parameters.AddWithValue("newData", newData);
+                    auditCmd.Parameters.AddWithValue("versionBefore", versionBefore);
+                    auditCmd.Parameters.AddWithValue("versionAfter", versionAfter);
+                    auditCmd.Parameters.AddWithValue("actorId", StepAActorId);
+                    auditCmd.Parameters.AddWithValue("actorRole", SystemActorRole);
+                    await auditCmd.ExecuteNonQueryAsync(ct);
+                }
+
+                await tx.CommitAsync(ct);
+
+                _logger.LogInformation(
+                    "SettlementCloseService: Step-A deactivation flip applied for {EmployeeId} " +
+                    "(end date {EndDate} passed; version {Before} → {After})",
+                    employeeId, endDate, versionBefore, versionAfter);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Per-leaver failure is isolated: rollback, log, continue (R2). The flip is retried
+                // on the next poll; until then the Step-B ACTIVE branch excludes this leaver (R4 pin
+                // (a)) so nothing auto-partitions in the failure window.
+                await SafeRollbackAsync(tx, ct);
+                _logger.LogWarning(ex,
+                    "SettlementCloseService: Step-A deactivation flip FAILED for {EmployeeId}; continuing",
+                    employeeId);
             }
         }
     }
@@ -263,29 +571,51 @@ public sealed class SettlementCloseService : BackgroundService
     // ------------------------------------------------------------------
 
     /// <summary>
-    /// Build the due <c>(employeeId, entitlementYear)</c> set: for every ACTIVE employee, generate the
-    /// candidate closed VACATION entitlement-years from their <c>employment_start_date</c> year
-    /// (floor <see cref="CandidateYearFloor"/> when null) up to <paramref name="copenhagenToday"/>'s
-    /// year, anti-join the active (<c>SETTLED</c>/<c>PENDING_REVIEW</c>) settlement rows in SQL, then
-    /// apply the EXACT Copenhagen §21/§24 boundary filter per row in C# using the employee's resolved
-    /// VACATION <c>reset_month</c>. The SQL produces a finite candidate band; the C# filter is the
-    /// authoritative due predicate (so the boundary math lives in one auditable place, not split into
-    /// SQL date arithmetic across reset geometries).
+    /// Build the due <c>(employeeId, entitlementYear, trigger)</c> set (S70 / TASK-7005 — now
+    /// leaver-INCLUSIVE per SPRINT-70 R3/R4):
+    /// <list type="bullet">
+    ///   <item><description><b>ACTIVE branch:</b> every active employee EXCLUDING passed-end-date
+    ///   leavers (R4 pin (a) — a leaver whose Step-A flip FAILED, still <c>is_active=TRUE</c>, must
+    ///   NEVER traverse the normal §21/§24 auto-partition; those rows belong exclusively to the
+    ///   Step-A retry + the leaver branch). Candidate years from <c>employment_start_date</c> (floor
+    ///   <see cref="CandidateYearFloor"/>) up to today's year; trigger <c>YEAR_END</c>; due per the
+    ///   unchanged <see cref="IsBoundaryPassed"/> geometry.</description></item>
+    ///   <item><description><b>LEAVER branch (R3):</b> keyed on <c>employment_end_date</c> — never
+    ///   bare <c>is_active=FALSE</c>: <c>is_active = FALSE AND employment_end_date IS NOT NULL AND
+    ///   employment_end_date &lt; today</c> (a manually-deactivated user with no end date is NEVER
+    ///   settled as a leaver; future-dated end dates are excluded). Candidate years are CAPPED at the
+    ///   end-date ferieår in the SQL itself (R4 — no post-termination years are ever generated). Per
+    ///   row, <see cref="ResolveLeaverTupleTrigger"/> applies the R2 leaver-level go-live gate (end
+    ///   date STRICTLY after go-live, else the whole branch yields nothing), selects
+    ///   <c>TERMINATION</c> for the end-date ferieår (due when the end date has passed — already
+    ///   guaranteed by the SQL predicate) and <c>YEAR_END</c> for every other due ferieår (the
+    ///   unchanged boundary geometry; the settlement service's in-lock leaver re-read produces the
+    ///   deferred-disposition row — no pre-discrimination here beyond trigger selection).</description></item>
+    /// </list>
+    /// The any-trigger anti-join against active (non-REVERSED) settlement rows is unchanged and
+    /// shared by both branches (R3: a TERMINATION-only anti-join would leave an R7b-conflicted
+    /// leaver in the due set forever; R8: SETTLED and PENDING_REVIEW TERMINATION rows suppress a
+    /// later YEAR_END for the same tuple).
     /// </summary>
-    private async Task<IReadOnlyList<(string EmployeeId, int EntitlementYear)>> EnumerateDueTuplesAsync(
+    private async Task<IReadOnlyList<(string EmployeeId, int EntitlementYear, string Trigger)>> EnumerateDueTuplesAsync(
         DateOnly copenhagenToday, DateOnly goLiveDate, CancellationToken ct)
     {
         // Upper bound of the candidate band: the latest entitlement-year whose boundary could already
         // have passed is bounded above by copenhagenToday.Year (for reset_month==1 the boundary is
         // 31 Dec of the SAME year as E; for reset_month>1 it is a year later — both ≤ today's year as
         // an over-approximation). The precise per-row filter below discards the not-yet-due tail.
+        // For leavers the band is additionally capped at the END-DATE ferieår (R4) in the SQL.
         var candidateUpperYear = copenhagenToday.Year;
 
-        // Active employees paired with their candidate closed years, MINUS any year that already has an
+        // Employees paired with their candidate closed years, MINUS any year that already has an
         // active settlement (the pre-skip optimization; SettleAsync's in-lock re-check is the
         // correctness backstop). generate_series yields one row per (employee, candidate year). The
-        // anti-join excludes (employee, VACATION, year) tuples with a non-REVERSED settlement.
-        var rows = new List<(string EmployeeId, int EntitlementYear, string AgreementCode, string OkVersion)>();
+        // anti-join excludes (employee, VACATION, year) tuples with a non-REVERSED settlement of ANY
+        // trigger. The leaver year-cap lives in the generate_series upper bound (the R6 ferieår of
+        // the end date, mirrored by ResolveLeaverFerieaar — VACATION reset_month = 9 uniform by DB
+        // CHECK) so post-termination years are never generated, not merely filtered.
+        var rows = new List<(string EmployeeId, int EntitlementYear, string AgreementCode, string OkVersion,
+            DateOnly? EndDate, bool IsActive)>();
         await using (var conn = _connectionFactory.Create())
         {
             await conn.OpenAsync(ct);
@@ -294,13 +624,35 @@ public sealed class SettlementCloseService : BackgroundService
                 SELECT u.user_id,
                        gs.yr AS entitlement_year,
                        u.agreement_code,
-                       u.ok_version
+                       u.ok_version,
+                       u.employment_end_date,
+                       u.is_active
                 FROM users u
                 CROSS JOIN LATERAL generate_series(
                     GREATEST(@floor, COALESCE(EXTRACT(YEAR FROM u.employment_start_date)::int, @floor)),
-                    @upper
+                    CASE
+                        WHEN u.is_active = FALSE AND u.employment_end_date IS NOT NULL
+                        THEN LEAST(@upper,
+                                   CASE WHEN EXTRACT(MONTH FROM u.employment_end_date)::int >= 9
+                                        THEN EXTRACT(YEAR FROM u.employment_end_date)::int
+                                        ELSE EXTRACT(YEAR FROM u.employment_end_date)::int - 1
+                                   END)
+                        ELSE @upper
+                    END
                 ) AS gs(yr)
-                WHERE u.is_active = TRUE
+                WHERE (
+                        -- ACTIVE branch (R4 pin (a): a passed-end-date leaver — e.g. a flip-failed
+                        -- one still is_active=TRUE — is EXCLUDED; it belongs to Step-A retry + the
+                        -- leaver branch exclusively).
+                        (u.is_active = TRUE
+                         AND NOT (u.employment_end_date IS NOT NULL AND u.employment_end_date < @today))
+                        OR
+                        -- LEAVER branch (R3: keyed on the end date, never bare is_active=FALSE;
+                        -- future-dated and manually-inactive-without-end-date users excluded).
+                        (u.is_active = FALSE
+                         AND u.employment_end_date IS NOT NULL
+                         AND u.employment_end_date < @today)
+                      )
                   AND NOT EXISTS (
                         SELECT 1 FROM vacation_settlements vs
                         WHERE vs.employee_id = u.user_id
@@ -313,6 +665,7 @@ public sealed class SettlementCloseService : BackgroundService
             cmd.Parameters.AddWithValue("floor", CandidateYearFloor);
             cmd.Parameters.AddWithValue("upper", candidateUpperYear);
             cmd.Parameters.AddWithValue("type", VacationType);
+            cmd.Parameters.AddWithValue("today", copenhagenToday);
 
             await using var reader = await cmd.ExecuteReaderAsync(ct);
             while (await reader.ReadAsync(ct))
@@ -321,7 +674,9 @@ public sealed class SettlementCloseService : BackgroundService
                     reader.GetString(0),
                     reader.GetInt32(1),
                     reader.GetString(2),
-                    reader.GetString(3)));
+                    reader.GetString(3),
+                    reader.IsDBNull(4) ? null : reader.GetFieldValue<DateOnly>(4),
+                    reader.GetBoolean(5)));
             }
         }
 
@@ -331,12 +686,13 @@ public sealed class SettlementCloseService : BackgroundService
         // reset_month. reset_month is IMMUTABLE per (entitlement_type, ok_version) natural key
         // (ADR-021 Q1) and uniform (9) across the seeded VACATION configs, so resolution is cached on
         // (agreement_code, ok_version). A row whose VACATION type is genuinely unconfigured under the
-        // employee's live agreement is skipped (no geometry to settle against — SettleAsync would be
-        // the one to fail loud if such a tuple were ever forced; here it is simply not yet due/known).
+        // employee's live agreement is skipped — for BOTH branches (no geometry to settle against —
+        // SettleAsync would be the one to fail loud if such a tuple were ever forced; here it is
+        // simply not yet due/known; DECLARED in the TASK-7005 report).
         var resetMonthCache = new Dictionary<(string Agreement, string Ok), int?>();
-        var due = new List<(string EmployeeId, int EntitlementYear)>();
+        var due = new List<(string EmployeeId, int EntitlementYear, string Trigger)>();
 
-        foreach (var (employeeId, entitlementYear, agreementCode, okVersion) in rows)
+        foreach (var (employeeId, entitlementYear, agreementCode, okVersion, endDate, isActive) in rows)
         {
             var key = (agreementCode, okVersion);
             if (!resetMonthCache.TryGetValue(key, out var resetMonth))
@@ -347,11 +703,22 @@ public sealed class SettlementCloseService : BackgroundService
             }
             if (resetMonth is null) continue; // VACATION unconfigured for this agreement — no boundary.
 
-            // Due iff the §21/§24 boundary has PASSED on the Copenhagen date AND that boundary falls
-            // strictly after the configured go-live date (ADR-033 D13 launch-neutral gate — a pre-launch
-            // boundary is the manual operator fallback, never auto-settled).
+            if (!isActive)
+            {
+                // LEAVER branch — the SQL guaranteed employment_end_date non-null and passed.
+                var trigger = ResolveLeaverTupleTrigger(
+                    entitlementYear, endDate!.Value, resetMonth.Value, copenhagenToday, goLiveDate);
+                if (trigger is not null)
+                    due.Add((employeeId, entitlementYear, trigger));
+                continue;
+            }
+
+            // ACTIVE branch — unchanged S68 geometry: due iff the §21/§24 boundary has PASSED on the
+            // Copenhagen date AND that boundary falls strictly after the configured go-live date
+            // (ADR-033 D13 launch-neutral gate — a pre-launch boundary is the manual operator
+            // fallback, never auto-settled).
             if (IsBoundaryPassed(entitlementYear, resetMonth.Value, copenhagenToday, goLiveDate))
-                due.Add((employeeId, entitlementYear));
+                due.Add((employeeId, entitlementYear, YearEndTrigger));
         }
 
         return due;
@@ -388,6 +755,70 @@ public sealed class SettlementCloseService : BackgroundService
         var boundary = new DateOnly(ferieaarEnd.Year, 12, 31); // §21 31-Dec deadline of the ferieår-end year.
         return boundary > goLiveDate          // ADR-033 D13: only boundaries strictly after go-live auto-settle.
             && copenhagenToday > boundary;     // …and the deadline has actually passed on the Copenhagen date.
+    }
+
+    // ------------------------------------------------------------------
+    // S70 / TASK-7005 — pure leaver decision helpers (unit-pinned; no I/O). Public statics per the
+    // ComputeEndDateLifecycle precedent (EmploymentDateEndpoints).
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// The Step-A flip due-predicate (SPRINT-70 R2; R1 semantics): a deactivation flip is due iff the
+    /// user is still active AND <paramref name="employmentEndDate"/> (the LAST day employed) has
+    /// PASSED on the Copenhagen business date — <c>employment_end_date &lt; today</c>, so
+    /// end date == today ⇒ still employed (no flip), end date == today − 1 ⇒ due. A null end date is
+    /// never due (a manually-deactivated user with no end date is never lifecycle-flipped).
+    /// </summary>
+    public static bool IsDeactivationDue(DateOnly? employmentEndDate, bool isActive, DateOnly copenhagenToday) =>
+        isActive && employmentEndDate is { } endDate && endDate < copenhagenToday;
+
+    /// <summary>
+    /// R6 ferieår resolution — the VACATION entitlement year containing <paramref name="endDate"/>
+    /// (<c>reset_month = 9</c>, uniform by the S68 B1 DB CHECK): <c>endDate.Month &gt;= 9 ?
+    /// endDate.Year : endDate.Year - 1</c>. Mirrors <c>EmploymentDateEndpoints.FerieaarOf</c> and the
+    /// SQL year-cap in the due enumeration.
+    /// </summary>
+    public static int ResolveLeaverFerieaar(DateOnly endDate) =>
+        endDate.Month >= 9 ? endDate.Year : endDate.Year - 1;
+
+    /// <summary>
+    /// The leaver tuple-trigger decision (SPRINT-70 R2/R4/R6 composition), for a leaver whose end
+    /// date has PASSED on the Copenhagen business date (the enumeration's leaver branch guarantees
+    /// that). Returns the trigger to settle with, or null when the tuple is not (yet) due:
+    /// <list type="bullet">
+    ///   <item><description><b>R2 leaver-level go-live gate:</b> the WHOLE leaver branch settles
+    ///   ONLY when <paramref name="endDate"/> falls STRICTLY AFTER <paramref name="goLiveDate"/> —
+    ///   an earlier leaver is a pre-launch boundary the system never tracked (manual fallback per
+    ///   D13); a pre-go-live leaver gets NOTHING auto-settled (not even prior-year deferred
+    ///   rows).</description></item>
+    ///   <item><description><b>R4 year-cap:</b> ferieår after the end-date ferieår are never due
+    ///   (defense-in-depth behind the SQL generation cap).</description></item>
+    ///   <item><description><b>End-date ferieår ⇒ TERMINATION:</b> due when the end date has PASSED
+    ///   (<paramref name="copenhagenToday"/> &gt; end date) — termination crystallizes AT the end
+    ///   date, NOT at the 31-Dec boundary.</description></item>
+    ///   <item><description><b>Every OTHER due ferieår ⇒ YEAR_END:</b> the EXISTING
+    ///   <see cref="IsBoundaryPassed"/> geometry unchanged (31-Dec deadline passed AND boundary
+    ///   strictly after go-live); the settlement service detects the leaver in-lock and writes the
+    ///   fail-closed deferred-disposition PENDING_REVIEW row — callers do NOT pre-discriminate
+    ///   beyond this trigger selection.</description></item>
+    /// </list>
+    /// </summary>
+    public static string? ResolveLeaverTupleTrigger(
+        int entitlementYear, DateOnly endDate, int resetMonth, DateOnly copenhagenToday, DateOnly goLiveDate)
+    {
+        // R2 — the TERMINATION go-live anchor is the END DATE, strictly after go-live; the gate
+        // applies to the WHOLE leaver branch.
+        if (endDate <= goLiveDate) return null;
+
+        var endDateFerieaar = ResolveLeaverFerieaar(endDate);
+        if (entitlementYear > endDateFerieaar) return null; // R4 — no post-termination years.
+
+        if (entitlementYear == endDateFerieaar)
+            return copenhagenToday > endDate ? TerminationTrigger : null;
+
+        return IsBoundaryPassed(entitlementYear, resetMonth, copenhagenToday, goLiveDate)
+            ? YearEndTrigger
+            : null;
     }
 
     private static async Task SafeRollbackAsync(NpgsqlTransaction tx, CancellationToken ct)

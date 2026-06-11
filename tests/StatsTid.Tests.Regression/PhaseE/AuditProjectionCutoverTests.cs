@@ -495,7 +495,12 @@ public sealed class AuditProjectionCutoverTests : IAsyncLifetime
             is_active           BOOLEAN     NOT NULL DEFAULT TRUE,
             version             BIGINT      NOT NULL DEFAULT 1,
             created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            -- S70/ADR-033 slice 3a lifecycle pair. Mirrors init.sql:470-471; additive
+            -- (nullable/defaulted). Lockstep with AuditProjectionTestSchema (the shared
+            -- block runs first and IF-NOT-EXISTS no-ops this per-class DDL).
+            employment_end_date  DATE,
+            end_date_deactivated BOOLEAN    NOT NULL DEFAULT FALSE
         );
     """;
 

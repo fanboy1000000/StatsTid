@@ -610,7 +610,12 @@ public static class BalanceEndpoints
 
             if (actor.ActorRole != StatsTidRoles.Employee)
             {
-                var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, ct);
+                // S70 / TASK-7003 (SPRINT-70 R9c allowlist) — terminated-INCLUSIVE validator:
+                // HR reviewing a deactivated leaver's PENDING_REVIEW settlement needs this
+                // read-only overview (the S68 B2 fix). For an ACTIVE target the new validator is
+                // behavior-identical to ValidateEmployeeAccessAsync's non-Employee path (in-scope
+                // leader access preserved); a TERMINATED target additionally requires HROrAbove.
+                var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(actor, employeeId, ct);
                 if (!allowed)
                     return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
             }
@@ -618,7 +623,41 @@ public static class BalanceEndpoints
             if (year < 2000 || year > 2100)
                 return Results.BadRequest(new { error = "Invalid year" });
 
-            var user = await userRepo.GetByIdAsync(employeeId, ct);
+            // S70 / TASK-7003 (R9c; re-hardened per Step-5a cycle-3, Codex cycle-2 B2) —
+            // read-first-REVALIDATE body read, extracted to ReadYearOverviewTargetAsync (below)
+            // so the regression suite can pin the exact production selection deterministically.
+            //
+            //   SELF (employeeId == actor.ActorId): unconditional terminated-INCLUSIVE read —
+            //   a terminated employee's OWN still-valid JWT still renders their own
+            //   year-overview (explicitly pinned, owner-accepted R9e consequence; read-only,
+            //   bounded by the JWT lifetime — login is is_active-filtered).
+            //
+            //   NON-SELF: the is_active-filtered GetByIdAsync runs FIRST. Only when it returns
+            //   null (target terminated — or nonexistent) is
+            //   ValidateEmployeeAccessIncludingTerminatedAsync RE-RUN against the now-CURRENT
+            //   target state; only an actor clearing the R9f1 per-scope HROrAbove floor at
+            //   that moment gets the terminated-inclusive read.
+            //
+            // WHY not key the inclusive read on actor privilege (the previous R9f2 shape,
+            // `ActorRole >= LocalHR`)? The primary ActorRole is NOT org-bound (Codex cycle-2
+            // B2): a mixed-role JWT — LocalHR in a DISJOINT org plus a LocalLeader scope
+            // COVERING the target — carries primary role LocalHR, so after a
+            // validate-while-active → read-after-deactivation flip the role check admitted the
+            // terminated-inclusive read even though the actor's only covering scope is below
+            // the HR floor: the same TOCTOU leak, mixed-role variant. Re-running the validator
+            // (whose R9f1 floor binds privilege to the ADMITTING scope) closes it. The
+            // validator gate above STAYS (fail-fast; its 403 reasons are matrix-pinned) — the
+            // re-validation is ADDITIVE, on the null-active-read path only, so an HR-floor
+            // actor reading a terminated target costs two validator calls (accepted) while an
+            // ACTIVE target costs exactly one filtered read, byte-identical to before (pinned
+            // by YearOverviewTests.Auth_LeaderInScope_Returns200).
+            //
+            // A DENIED re-validation falls through to the SAME 404 the filtered-null path
+            // returns (NOT 403): a below-floor actor must not get an oracle distinguishing
+            // "terminated but you lack the HR floor" from "does not exist" — and the
+            // genuinely-nonexistent target (re-validation denies "Target employee not found")
+            // lands on the identical shape.
+            var user = await ReadYearOverviewTargetAsync(userRepo, scopeValidator, actor, employeeId, ct);
             if (user is null)
                 return Results.NotFound(new { error = "Employee not found" });
 
@@ -1119,6 +1158,53 @@ public static class BalanceEndpoints
                 categories
             });
         }).RequireAuthorization("EmployeeOrAbove");
+    }
+
+    /// <summary>
+    /// The year-overview body-read selection (S70 / TASK-7003, Step-5a cycle-3 shape — Codex
+    /// cycle-2 B2). SELF → unconditional terminated-INCLUSIVE read (the pinned, owner-accepted
+    /// R9e consequence: a terminated employee's own still-valid JWT renders their own
+    /// year-overview). NON-SELF → the is_active-filtered <c>GetByIdAsync</c> FIRST; on null,
+    /// RE-RUN <see cref="OrgScopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync"/>
+    /// against the now-CURRENT target state (its R9f1 per-scope HROrAbove floor binds privilege
+    /// to the ADMITTING scope — primary-role keying was spoofable by a mixed-role JWT carrying
+    /// LocalHR in a disjoint org plus a covering LocalLeader scope) and only on Allow perform
+    /// the terminated-inclusive read.
+    ///
+    /// Null ⇒ the caller's 404. A DENIED re-validation deliberately returns the SAME null the
+    /// filtered-read miss returns: no terminated-vs-nonexistent oracle for below-floor actors
+    /// (the genuinely-nonexistent target also denies, with "Target employee not found").
+    ///
+    /// PUBLIC (not private like this file's other helpers) so the regression suite can pin the
+    /// EXACT production read path deterministically: HTTP requests cannot interleave a
+    /// deactivation between the handler's auth gate and this read, and the sealed
+    /// repository/validator types preclude interception doubles — see
+    /// <c>TerminatedEmployeeAccessTests.YearOverview_BodyRead_*</c>.
+    /// </summary>
+    public static async Task<User?> ReadYearOverviewTargetAsync(
+        UserRepository userRepo,
+        OrgScopeValidator scopeValidator,
+        ActorContext actor,
+        string employeeId,
+        CancellationToken ct)
+    {
+        if (employeeId == actor.ActorId)
+            return await userRepo.GetByIdIncludingTerminatedAsync(employeeId, ct);
+
+        // Non-self: active-only read first — the overwhelmingly common case, and the read that
+        // makes a validate-while-active → read-after-deactivation race fail CLOSED.
+        var activeUser = await userRepo.GetByIdAsync(employeeId, ct);
+        if (activeUser is not null)
+            return activeUser;
+
+        // Target not active (terminated or nonexistent): re-validate against CURRENT state —
+        // the R9f1 per-scope HROrAbove floor decides, not the un-org-bound primary role.
+        var (allowed, _) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(
+            actor, employeeId, ct);
+        if (!allowed)
+            return null; // fail closed: same null/404 as a filtered-read miss (no oracle)
+
+        return await userRepo.GetByIdIncludingTerminatedAsync(employeeId, ct);
     }
 
     // ── S65 / TASK-6502 helpers (BalanceEndpoints-local) ──

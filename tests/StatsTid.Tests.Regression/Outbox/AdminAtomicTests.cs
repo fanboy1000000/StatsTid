@@ -223,7 +223,12 @@ public sealed class AdminAtomicTests : IAsyncLifetime
             is_active           BOOLEAN     NOT NULL DEFAULT TRUE,
             version             BIGINT      NOT NULL DEFAULT 1,
             created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            -- S70/ADR-033 slice 3a lifecycle pair (read by UserRepository.ReadUser;
+            -- absence raises "Field not found in row: employment_end_date").
+            -- Mirrors init.sql:470-471; additive (nullable/defaulted).
+            employment_end_date  DATE,
+            end_date_deactivated BOOLEAN    NOT NULL DEFAULT FALSE
         );
 
         CREATE TABLE IF NOT EXISTS roles (

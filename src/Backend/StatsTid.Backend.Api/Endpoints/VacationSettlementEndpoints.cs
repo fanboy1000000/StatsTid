@@ -347,7 +347,11 @@ public static class VacationSettlementEndpoints
         {
             var actor = context.GetActorContext();
 
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, ct);
+            // S70 / TASK-7003 (SPRINT-70 R9c allowlist) — terminated-INCLUSIVE validator: an HR
+            // operator must be able to resolve a deactivated leaver's PENDING_REVIEW settlement
+            // (the S68 B2 fix). HROrAbove policy + subtree binding unchanged; only the target
+            // resolution stops filtering is_active.
+            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(actor, employeeId, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -376,6 +380,26 @@ public static class VacationSettlementEndpoints
                 {
                     await tx.RollbackAsync(ct);
                     return Results.NotFound(new { error = "No active settlement found for this (employee, type, year)." });
+                }
+
+                // S70 / TASK-7004 (SPRINT-70 R5, Step-0b cycle-4) — trigger=TERMINATION rows are NOT
+                // manually resolvable in 3a: the existing FORFEIT would emit VacationForfeitedToFeriefond,
+                // a materially FALSE event for an over-taken-claim waiver (the negative-pre-clamp
+                // PENDING_REVIEW row parks until 3b's §7/waiver channel — a distinct waiver
+                // disposition/event is 3b scope). Guard placed AFTER row resolution, BEFORE any
+                // disposition logic.
+                if (string.Equals(current.Trigger, "TERMINATION", StringComparison.Ordinal))
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.UnprocessableEntity(new
+                    {
+                        error = "A TERMINATION settlement cannot be manually resolved in slice 3a.",
+                        trigger = current.Trigger,
+                        settlementState = current.SettlementState,
+                        hint = "FORFEIT would emit a materially false VacationForfeitedToFeriefond for an " +
+                               "over-taken-claim waiver; the §7/waiver disposition channel is slice 3b. " +
+                               "The row remains parked in its current state.",
+                    });
                 }
 
                 // Only a PENDING_REVIEW row is resolvable (a SETTLED row is already complete).
@@ -637,7 +661,10 @@ public static class VacationSettlementEndpoints
         {
             var actor = context.GetActorContext();
 
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, ct);
+            // S70 / TASK-7003 (SPRINT-70 R9c allowlist) — terminated-INCLUSIVE validator: the
+            // manual §24 reconcile marker must remain operable for a deactivated leaver's
+            // settled row (the S68 B2 fix). HROrAbove policy + subtree binding unchanged.
+            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(actor, employeeId, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -674,6 +701,25 @@ public static class VacationSettlementEndpoints
                 {
                     await tx.RollbackAsync(ct);
                     return Results.NotFound(new { error = "No active settlement found for this (employee, type, year)." });
+                }
+
+                // S70 / TASK-7004 (SPRINT-70 R5) — the §24 reconcile-payout marker does NOT apply to
+                // trigger=TERMINATION rows in 3a: a TERMINATION row carries NO §24 bucket (all bucket
+                // columns are zero on SETTLED; the crystallized §26 quantity lives in the snapshot, and
+                // the launch-time payout is recorded OUTSIDE the system). The payout_days <= 0 check
+                // below would already 409 these zero-bucket rows — this explicit 422 makes the contract
+                // explicit (pinned).
+                if (string.Equals(current.Trigger, "TERMINATION", StringComparison.Ordinal))
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.UnprocessableEntity(new
+                    {
+                        error = "The §24 reconcile-payout marker does not apply to TERMINATION settlements in slice 3a.",
+                        trigger = current.Trigger,
+                        hint = "A TERMINATION settlement has no §24 payout bucket; the crystallized §26 day-count " +
+                               "lives in the immutable snapshot and the launch-time payout is the manual fallback " +
+                               "recorded outside the system (the in-system disposition channel is slice 3b).",
+                    });
                 }
 
                 // Only a SETTLED row with an un-reconciled payout bucket is markable.

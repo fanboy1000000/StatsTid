@@ -82,7 +82,12 @@ public sealed class CalculateAndExportScopeTests : IAsyncLifetime
             -- read by UserRepository.ReadUser (src:304/311); absence raised
             -- "Field not found in row: birth_date". NULLABLE, mirrors init.sql:2456/2491.
             birth_date              DATE,
-            employment_start_date   DATE
+            employment_start_date   DATE,
+            -- S70/ADR-033 slice 3a lifecycle pair — read by UserRepository.ReadUser;
+            -- absence raised "Field not found in row: employment_end_date" (the same
+            -- failure class as birth_date above). Mirrors init.sql:470-471.
+            employment_end_date     DATE,
+            end_date_deactivated    BOOLEAN NOT NULL DEFAULT FALSE
         );
         """;
 

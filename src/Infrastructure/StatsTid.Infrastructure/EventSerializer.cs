@@ -129,7 +129,9 @@ public static class EventSerializer
         // VacationCarryoverExecuted (§21), VacationAutoPaidOut (§24), VacationForfeitedToFeriefond
         // (§34), SettlementManualReviewFlagged (D10 PENDING_REVIEW). DEFINE-ONLY (contract fixed now,
         // emission automates in later slices): SettlementReversed (D4), FeriehindringTransferred (§22),
-        // FeriehindringPaidOut (§25), SaerligeFeriedagePaidOut (§15 stk.2/§17), TerminationSettled (§26+§7).
+        // FeriehindringPaidOut (§25), SaerligeFeriedagePaidOut (§15 stk.2/§17). TerminationSettled
+        // (§26+§7) is EMITTED from S70 (ADR-033 slice 3a) — emitted-no-consumer (the Payroll
+        // consumer/lines are slice 3b).
         ["VacationCarryoverExecuted"] = typeof(VacationCarryoverExecuted),
         ["VacationAutoPaidOut"] = typeof(VacationAutoPaidOut),
         ["VacationForfeitedToFeriefond"] = typeof(VacationForfeitedToFeriefond),
@@ -139,6 +141,13 @@ public static class EventSerializer
         ["FeriehindringPaidOut"] = typeof(FeriehindringPaidOut),
         ["SaerligeFeriedagePaidOut"] = typeof(SaerligeFeriedagePaidOut),
         ["TerminationSettled"] = typeof(TerminationSettled),
+        // Sprint 70: ADR-033 slice 3a — leaver lifecycle events (SPRINT-70 R10). Both ride
+        // employee-{id}. EmployeeEmploymentEndDateSet = the admin set/clear/correction of
+        // users.employment_end_date (+ the same-tx is_active transition, R1).
+        // EmployeeEndDateDeactivationApplied = the SettlementCloseService Step-A deferred flip
+        // when a future-dated end date passes (UNGATED by D13; system actor, R2).
+        ["EmployeeEmploymentEndDateSet"] = typeof(EmployeeEmploymentEndDateSet),
+        ["EmployeeEndDateDeactivationApplied"] = typeof(EmployeeEndDateDeactivationApplied),
     };
 
     public static string Serialize(IDomainEvent @event)

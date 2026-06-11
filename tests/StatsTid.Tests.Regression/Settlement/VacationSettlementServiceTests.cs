@@ -90,7 +90,7 @@ public sealed class VacationSettlementServiceTests : IAsyncLifetime
         Assert.Equal(0m, outcome.Partition!.TransferDays);
         Assert.Equal(5m, outcome.Partition.PayoutDays);     // §24 default
         Assert.Equal(20m, outcome.Partition.ForfeitDays);   // §34-candidate (== D9 expiring)
-        Assert.Equal("PENDING_REVIEW", outcome.Row.SettlementState);
+        Assert.Equal("PENDING_REVIEW", outcome.Row!.SettlementState);
 
         // The persisted row reflects the same buckets.
         var row = await ReadActiveSettlementAsync(employeeId, ClosedYear);
@@ -143,7 +143,7 @@ public sealed class VacationSettlementServiceTests : IAsyncLifetime
         Assert.Equal(0m, outcome.Partition!.TransferDays);
         Assert.Equal(0m, outcome.Partition.PayoutDays);
         Assert.Equal(0m, outcome.Partition.ForfeitDays);
-        Assert.Equal("SETTLED", outcome.Row.SettlementState);
+        Assert.Equal("SETTLED", outcome.Row!.SettlementState);
 
         // No next-year carryover row materialized (transfer 0 ⇒ skipped, not a 0-clobber).
         var nextYear = await ReadBalanceAsync(employeeId, VacationType, ClosedYear + 1);
@@ -166,7 +166,7 @@ public sealed class VacationSettlementServiceTests : IAsyncLifetime
         // ADR-031 flat: the half-timer's earned-at-boundary is still 25 (fraction 1.0 in the day basis).
         Assert.Equal(5m, outcome.Partition!.PayoutDays);
         Assert.Equal(20m, outcome.Partition.ForfeitDays);
-        Assert.Equal("PENDING_REVIEW", outcome.Row.SettlementState);
+        Assert.Equal("PENDING_REVIEW", outcome.Row!.SettlementState);
     }
 
     // ════════════════════════════════════════════════════════════════════════

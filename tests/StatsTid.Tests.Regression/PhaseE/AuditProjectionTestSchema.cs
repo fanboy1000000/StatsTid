@@ -55,7 +55,13 @@ internal static class AuditProjectionTestSchema
             is_active           BOOLEAN     NOT NULL DEFAULT TRUE,
             version             BIGINT      NOT NULL DEFAULT 1,
             created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            -- S70/ADR-033 slice 3a lifecycle pair. Mirrors init.sql:470-471; additive
+            -- (nullable/defaulted). MUST stay lockstep with AuditProjectionCutoverTests.
+            -- AdminSchemaDdl (this shared block runs first and IF-NOT-EXISTS no-ops the
+            -- per-class DDL — the S64 shadowing lesson above).
+            employment_end_date  DATE,
+            end_date_deactivated BOOLEAN    NOT NULL DEFAULT FALSE
         );
 
         CREATE TABLE IF NOT EXISTS event_streams (

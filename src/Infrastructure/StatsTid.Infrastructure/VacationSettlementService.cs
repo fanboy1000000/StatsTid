@@ -61,9 +61,22 @@ public sealed class VacationSettlementService
     private readonly IOutboxEnqueue _outbox;
     private readonly IAuditProjectionMapperRegistry _auditRegistry;
     private readonly AuditProjectionRepository _auditRepo;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<VacationSettlementService> _logger;
 
     private const string MonthlyAccrualModel = "MONTHLY_ACCRUAL";
+
+    /// <summary>YEAR_END trigger (ADR-033 D5) — the poll-driven boundary close.</summary>
+    private const string YearEndTrigger = "YEAR_END";
+
+    /// <summary>TERMINATION trigger (ADR-033 D5/D9; SPRINT-70 R5) — the crystallized leaver settlement.</summary>
+    private const string TerminationTrigger = "TERMINATION";
+
+    private const string StateSettled = "SETTLED";
+    private const string StatePendingReview = "PENDING_REVIEW";
+
+    /// <summary>The SPRINT-70 R5 / owner D-B crystallization-basis marker recorded on TERMINATION snapshots.</summary>
+    private const string CrystallizationBasisS26WholeMonth = "S26_WHOLE_MONTH";
 
     /// <summary>Snapshot JSON options — settle-time inputs persisted verbatim (camelCase, enum-as-string off).</summary>
     private static readonly JsonSerializerOptions SnapshotJson = new()
@@ -82,6 +95,7 @@ public sealed class VacationSettlementService
         IOutboxEnqueue outbox,
         IAuditProjectionMapperRegistry auditRegistry,
         AuditProjectionRepository auditRepo,
+        TimeProvider timeProvider,
         ILogger<VacationSettlementService> logger)
     {
         _balanceRepo = balanceRepo;
@@ -94,6 +108,7 @@ public sealed class VacationSettlementService
         _outbox = outbox;
         _auditRegistry = auditRegistry;
         _auditRepo = auditRepo;
+        _timeProvider = timeProvider;
         _logger = logger;
     }
 
@@ -110,8 +125,15 @@ public sealed class VacationSettlementService
     /// <param name="trigger">YEAR_END (poll) or TERMINATION.</param>
     /// <param name="conn">The caller's open connection (the advisory lock is taken on THIS connection).</param>
     /// <param name="tx">The caller's active transaction (all writes participate in it; ADR-018 D3).</param>
+    /// <param name="leaverGoLiveFloor">S70 Step-7a B1 (SPRINT-70 R2/D13) — the leaver-level
+    /// settlement go-live floor (<c>Settlement:GoLiveDate</c>), re-checked IN-LOCK on the re-read
+    /// user: a leaver whose <c>employment_end_date</c> is ≤ this floor is a pre-launch boundary the
+    /// system never tracked (manual fallback per D13) and yields the benign
+    /// <see cref="SettlementOutcome.NotDueUnderLock"/> no-op. Null = the caller supplied no floor
+    /// (direct/test drives); <b>the close service ALWAYS supplies it</b> for Step-B calls.</param>
     /// <param name="ct">Cancellation token.</param>
-    /// <returns>The settlement outcome (its settled row, or <see cref="SettlementOutcome.AlreadySettled"/>).</returns>
+    /// <returns>The settlement outcome (its settled row, <see cref="SettlementOutcome.AlreadySettled"/>,
+    /// or the S70 Step-7a benign <see cref="SettlementOutcome.NotDueUnderLock"/> no-op).</returns>
     public async Task<SettlementOutcome> SettleAsync(
         string employeeId,
         string entitlementType,
@@ -119,19 +141,17 @@ public sealed class VacationSettlementService
         string trigger,
         NpgsqlConnection conn,
         NpgsqlTransaction tx,
+        DateOnly? leaverGoLiveFloor = null,
         CancellationToken ct = default)
     {
-        // (0) BLOCKER 2 (Codex Step-5a) — slice 1a crystallizes YEAR_END ONLY. The whole pass below
-        // (earned-to-BOUNDARY accrual, the §21/§24/§34 year-end partition, the §21 carryover to
-        // entitlementYear+1) is year-end geometry. A TERMINATION (slice 3) settles to the
-        // TERMINATION DATE, not the ferieår end — accepting it here would mis-credit accrual between
-        // the termination date and the year boundary AND apply year-end partitioning. Fail loudly
-        // until slice 3 adds the termination-date crystallization + partition.
-        if (!string.Equals(trigger, "YEAR_END", StringComparison.Ordinal))
+        // (0) S70 / TASK-7004 (SPRINT-70 R5; ADR-033 slice 3a) — the pass now accepts YEAR_END
+        // (the S68 auto-partition / the R4 leaver deferred-disposition row) and TERMINATION (the
+        // crystallized termination settlement record). Any OTHER trigger still fails loudly.
+        if (!string.Equals(trigger, YearEndTrigger, StringComparison.Ordinal)
+            && !string.Equals(trigger, TerminationTrigger, StringComparison.Ordinal))
         {
             throw new NotSupportedException(
-                $"Vacation settlement trigger '{trigger}' is not supported in slice 1a (YEAR_END only). " +
-                "TERMINATION settlement is slice 3 — not implemented (termination-date crystallization + partition).");
+                $"Vacation settlement trigger '{trigger}' is not supported (YEAR_END / TERMINATION).");
         }
 
         // (1) Advisory lock FIRST, on the caller's tx connection, held to commit (ADR-032 D4). Same
@@ -151,20 +171,104 @@ public sealed class VacationSettlementService
         var existing = await _settlementRepo.GetActiveAsync(conn, tx, employeeId, entitlementType, entitlementYear, ct);
         if (existing is not null)
         {
+            // S70 R7b (SPRINT-70) — a TERMINATION whose target ferieår already holds an active row
+            // of a DIFFERENT trigger (the YEAR_END close won) is a genuine conflict the 3a reversal
+            // gap cannot resolve (reverse-then-re-settle is 3b): REFUSE with a durable loud signal
+            // (SettlementManualReviewFlagged + ADR-026 audit + log), write NO vacation_settlements
+            // row (the partial-unique single-active index forbids a second active row; the YEAR_END
+            // row is left untouched), and return WITHOUT throwing — the close service treats it as
+            // handled. Flagged-ONCE idempotency is the R3 any-trigger due-enumeration anti-join
+            // (TASK-7005); THIS in-tx guard is the race backstop only. A duplicate TERMINATION
+            // (existing.Trigger == TERMINATION) stays the benign AlreadySettled no-op below — the
+            // same single-settle race the YEAR_END path swallows.
+            if (string.Equals(trigger, TerminationTrigger, StringComparison.Ordinal)
+                && !string.Equals(existing.Trigger, TerminationTrigger, StringComparison.Ordinal))
+            {
+                return await RefuseTerminationConflictAsync(
+                    conn, tx, employeeId, entitlementType, entitlementYear, existing, ct);
+            }
+
             _logger.LogInformation(
                 "Vacation settlement no-op: active {State} settlement already exists for {EmployeeId}/{Type}/{Year} (in-lock re-check).",
                 existing.SettlementState, employeeId, entitlementType, entitlementYear);
             return SettlementOutcome.AlreadySettled(existing);
         }
 
-        // (3) Capture the immutable snapshot (ADR-033 D3). All inputs are pinned as-of the boundary;
-        // quantities below are a pure function of this object (no live re-derivation after capture).
-        var user = await _userRepo.GetByIdAsync(conn, tx, employeeId, ct)
+        // (3) The in-lock employee re-read — UNCONDITIONALLY terminated-inclusive (SPRINT-70 R9d):
+        // Step B always runs AFTER Step A's deactivation flip, and the R4 leaver other-ferieår rows
+        // settle with trigger=YEAR_END on an inactive employee — an is_active-filtered read would
+        // throw on EVERY post-flip settlement. NOT keyed on the trigger (the active-employee case is
+        // a strict subset; the pass is system-internal — access control does not ride this filter).
+        var user = await _userRepo.GetByIdIncludingTerminatedAsync(conn, tx, employeeId, ct)
             ?? throw new InvalidOperationException(
-                $"Vacation settlement: employee {employeeId} not found or inactive.");
+                $"Vacation settlement: employee {employeeId} not found.");
 
+        // (3a) S70 TERMINATION fork (SPRINT-70 R5/R6) — the crystallized termination settlement
+        // record. Settles to the END DATE (whole-month §26 basis), never the ferieår end; writes
+        // NO carryover and emits NO §21/§24 events.
+        if (string.Equals(trigger, TerminationTrigger, StringComparison.Ordinal))
+        {
+            // S70 Step-7a BLOCKER B1 (Codex, fix-forward) — re-evaluate the FULL termination-due
+            // predicate IN-LOCK on the re-read user BEFORE any write (the R12 contract). The
+            // enumeration's due decision (SettlementCloseService.ResolveLeaverTupleTrigger) is
+            // taken OUTSIDE this lock; an admin end-date correction can win the lock race and
+            // commit state under which this tuple is no longer due — R1 REACTIVATES the user on a
+            // correct-to-future date (a reactivated user is NOT a leaver), and a correct-to-passed
+            // PRE-GO-LIVE date makes the boundary the D13 manual fallback. ANY clause failure ⇒ the
+            // benign NotDue no-op: NO row, NO event, NO throw — the tuple is simply no longer due;
+            // the next poll re-enumerates against fresh state (no refire loop) — and NEVER a
+            // fall-through to any other settlement path. The predicate is the pure unit-pinned
+            // IsTerminationDueUnderLock below.
+            if (!IsTerminationDueUnderLock(
+                    user.IsActive, user.EmploymentEndDate, entitlementYear, leaverGoLiveFloor, CopenhagenToday()))
+            {
+                _logger.LogDebug(
+                    "Vacation settlement NotDue (TERMINATION) for {EmployeeId}/{Type}/{Year}: the in-lock " +
+                    "due re-evaluation failed (isActive={IsActive}, endDate={EndDate}, goLiveFloor={Floor}) — " +
+                    "no longer due under lock; corrected state wins (SPRINT-70 Step-7a B1).",
+                    employeeId, entitlementType, entitlementYear,
+                    user.IsActive, user.EmploymentEndDate, leaverGoLiveFloor);
+                return SettlementOutcome.NotDueUnderLock();
+            }
+
+            return await SettleTerminationAsync(
+                conn, tx, employeeId, entitlementType, entitlementYear, user, ct);
+        }
+
+        // (3b) S70 R4 leaver fork + leak-proofing pin R4(b) — the leaver/no-partition decision keys
+        // on the IN-LOCK RE-READ employment_end_date vs the Copenhagen business date, NEVER on
+        // caller-supplied state (a Step-A flip race can never yield a partitioned settlement for a
+        // terminated employee). A leaver's OTHER due ferieår (trigger=YEAR_END on an employee whose
+        // end date has passed) gets the fail-closed deferred-disposition PENDING_REVIEW row — NO
+        // §21/§24 auto-partition arithmetic is invented for leavers, NO carryover write, NO
+        // VacationAutoPaidOut into the S69 §24 staging.
+        if (user.EmploymentEndDate is { } leaverEndDate && leaverEndDate < CopenhagenToday())
+        {
+            // S70 Step-7a BLOCKER B1 (Codex, fix-forward) — the SAME R2/D13 go-live floor,
+            // re-checked IN-LOCK on the re-read end date. A pre-go-live leaver is the manual
+            // fallback (the system never tracked that boundary): it must NEITHER get the
+            // deferred-disposition row NOR fall through to the ACTIVE §21/§24 auto-partition
+            // below — the benign NotDue no-op is the ONLY exit (pinned no-fall-through).
+            if (leaverGoLiveFloor is { } goLiveFloor && leaverEndDate <= goLiveFloor)
+            {
+                _logger.LogDebug(
+                    "Vacation settlement NotDue (leaver-deferred) for {EmployeeId}/{Type}/{Year}: in-lock " +
+                    "end date {EndDate} is on/before the go-live floor {Floor} — pre-go-live leaver is the " +
+                    "D13 manual fallback; no deferred row, no auto-partition (SPRINT-70 Step-7a B1).",
+                    employeeId, entitlementType, entitlementYear, leaverEndDate, goLiveFloor);
+                return SettlementOutcome.NotDueUnderLock();
+            }
+
+            return await SettleLeaverDeferredDispositionAsync(
+                conn, tx, employeeId, entitlementType, entitlementYear, user, leaverEndDate, ct);
+        }
+
+        // ACTIVE-employee YEAR_END auto-partition — the S68 pass, unchanged below this line.
+        // Capture the immutable snapshot (ADR-033 D3). All inputs are pinned as-of the boundary;
+        // quantities below are a pure function of this object (no live re-derivation after capture).
         var (snapshot, snapshotJson) = await CaptureSnapshotAsync(
-            conn, tx, employeeId, entitlementType, entitlementYear, user, ct);
+            conn, tx, employeeId, entitlementType, entitlementYear, user,
+            terminationCutoff: null, terminationDate: null, deferredDisposition: false, ct);
 
         // (4) Partition the disposition — pure fn of the snapshot (the legal core; matches S66 D9).
         var partition = Partition(snapshot);
@@ -294,14 +398,411 @@ public sealed class VacationSettlementService
     }
 
     // ------------------------------------------------------------------
+    // S70 / TASK-7004 — the TERMINATION crystallization pass (SPRINT-70 R5/R6/R10/R12).
+    // Runs inside SettleAsync's advisory-locked caller tx (the same ADR-032 D4 lock + ADR-018 D3
+    // atomicity contract); invoked ONLY from SettleAsync after the in-lock re-check + user re-read.
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// The crystallized TERMINATION settlement record (SPRINT-70 R5). Crystallizes the end-date
+    /// ferieår at the employment end date — <c>crystallized = max(0, EarnedToDate(asOf=endDate) +
+    /// carryoverIn − consumedToEndDate)</c>, whole-month (owner D-B), flat per ADR-031 — and writes
+    /// the row per the PINNED state rule: pre-clamp ≥ 0 ⇒ <c>SETTLED</c> with ALL bucket columns
+    /// zero (<c>CrystallizedDays</c> lives in the snapshot ONLY — the source 3b's §26 line reads);
+    /// pre-clamp NEGATIVE ⇒ <c>PENDING_REVIEW</c> with <c>forfeit_days = |pre-clamp|</c> (the S68
+    /// flag convention; the over-taken §7 modregning question is 3b — the row PARKS, and the manual
+    /// resolve endpoint 422-rejects TERMINATION rows). Emits <see cref="TerminationSettled"/> for
+    /// BOTH outcomes (emitted-no-consumer, R10) + <see cref="SettlementManualReviewFlagged"/> on
+    /// the PENDING_REVIEW outcome (the S68 D10 signal convention) — outbox + row + ADR-026 audit
+    /// projection in the ONE caller tx. NO carryover write, NO §21/§24 events, NO payroll line
+    /// (money-free, ADR-033 D1; the payout is the manual fallback until 3b).
+    /// </summary>
+    private async Task<SettlementOutcome> SettleTerminationAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string employeeId, string entitlementType, int entitlementYear, User user, CancellationToken ct)
+    {
+        // R5/R4(b) — the crystallization boundary is the IN-LOCK re-read employment_end_date.
+        var endDate = user.EmploymentEndDate
+            ?? throw new InvalidOperationException(
+                $"Vacation settlement: TERMINATION settlement requested for employee {employeeId} " +
+                "with no employment_end_date — fail closed (the leaver model is the quantity source).");
+
+        // R6 — the TERMINATION settles the ferieår CONTAINING the end date. A caller-supplied year
+        // that disagrees is a caller defect — fail loud (deterministic; never settle the wrong year).
+        var targetYear = ResolveTerminationFerieaar(endDate);
+        if (targetYear != entitlementYear)
+        {
+            throw new InvalidOperationException(
+                $"Vacation settlement: TERMINATION for employee {employeeId} targets ferieår {targetYear} " +
+                $"(end date {endDate:yyyy-MM-dd}, R6), but entitlementYear {entitlementYear} was requested.");
+        }
+
+        // R5 — snapshot at the SAME strictly-dated ferieår-start anchors as YEAR_END (fail-closed,
+        // no live fallback), valued at the END DATE: Earned asOf=endDate (whole-month, flat),
+        // Used = recorded absences with date ≤ endDate (NOT balance.Used — a post-end-date booking
+        // cannot be taken and must not consume; the declared slice-1a divergence).
+        var (snapshot, _) = await CaptureSnapshotAsync(
+            conn, tx, employeeId, entitlementType, entitlementYear, user,
+            terminationCutoff: endDate, terminationDate: endDate, deferredDisposition: false, ct);
+
+        // The crystallization — a PURE function of the captured snapshot (ADR-033 D3); the result is
+        // stamped INTO the snapshot (CrystallizedDays) so replay re-derives byte-identically from the
+        // stored snapshot alone.
+        var crystallization = CrystallizeTermination(snapshot);
+        snapshot = snapshot with { CrystallizedDays = crystallization.CrystallizedDays };
+        var snapshotJson = JsonSerializer.Serialize(snapshot, SnapshotJson);
+
+        const int sequence = 1; // first settlement; reversal histories (3b) bump this.
+        var row = new VacationSettlementRow
+        {
+            EmployeeId = employeeId,
+            EntitlementType = entitlementType,
+            EntitlementYear = entitlementYear,
+            Sequence = sequence,
+            SettlementState = crystallization.SettlementState,
+            Trigger = TerminationTrigger,
+            SnapshotJson = snapshotJson,
+            TransferDays = 0m,                                    // R5 row shape: buckets zero;
+            PayoutDays = 0m,                                      // CrystallizedDays is snapshot-only.
+            ForfeitDays = crystallization.ForfeitFlagDays,        // |pre-clamp| FLAG iff negative (S68 convention).
+            Version = 1,
+        };
+
+        var actorId = $"system:settlement-close:{TerminationTrigger}";
+        const string actorRole = "System";
+
+        VacationSettlementRow persisted;
+        try
+        {
+            persisted = await _settlementRepo.InsertAsync(conn, tx, row, snapshotJson, actorId, actorRole, ct);
+        }
+        catch (DuplicateActiveSettlementException)
+        {
+            // BLOCKER B3 (Codex Step-5a, TASK-7004 fix-forward) — SPRINT-70 R7b in the 23505
+            // RECOVERY branch. Tx mechanics (verified): InsertAsync SAVEPOINT-wraps its INSERT and
+            // ROLLBACK-TO-SAVEPOINTs before surfacing this exception (VacationSettlementRepository
+            // ~L102-176), so the caller tx is USABLE here — the winner re-read and the refusal
+            // emissions below ride the SAME tx. Reachability note: a SAME-sequence competing
+            // insert violates BOTH the composite PK and the partial-unique ACTIVE index — Postgres
+            // guarantees no particular constraint-check order (Codex c2 NOTE), and safety needs
+            // none: a PK 23505 is rethrown raw by InsertAsync's discriminating catch (fails loudly
+            // to the close service's per-tuple isolation; the NEXT poll's in-lock pre-check
+            // refuses it), while an ACTIVE-index 23505 surfaces here and examines the winner.
+            // Either path is D10-safe.
+            var winner = await _settlementRepo.GetActiveAsync(conn, tx, employeeId, entitlementType, entitlementYear, ct);
+            if (winner is null)
+            {
+                // The 23505 proved an active row existed at insert time; a null re-read means it
+                // vanished mid-race. NEVER report the UNPERSISTED candidate row as settled (a
+                // fabricated outcome) — fail loud (D10).
+                throw new InvalidOperationException(
+                    $"Vacation settlement: 23505 single-active collision for {employeeId}/{entitlementType}/" +
+                    $"{entitlementYear} (TERMINATION), but no active settlement row is visible on re-read — " +
+                    "refusing to fabricate an AlreadySettled outcome from the unpersisted candidate row.");
+            }
+            if (string.Equals(winner.Trigger, TerminationTrigger, StringComparison.Ordinal))
+            {
+                // A concurrent TERMINATION won — the benign single-settle race (the same no-op the
+                // YEAR_END path swallows); exactly one settlement stands.
+                _logger.LogInformation(
+                    "Vacation settlement no-op: 23505 single-settle backstop for {EmployeeId}/{Type}/{Year} (TERMINATION).",
+                    employeeId, entitlementType, entitlementYear);
+                return SettlementOutcome.AlreadySettled(winner);
+            }
+            // The concurrent winner is ANOTHER trigger (YEAR_END) — the EXACT race R7b's backstop
+            // exists for. A benign swallow here would suppress the conflict signal FOREVER: the R3
+            // any-trigger due-enumeration anti-join (TASK-7005) excludes this tuple from every
+            // future TERMINATION pass, so no later poll would re-raise it (a silent conflict — a
+            // D10 violation). Refuse LOUDLY exactly like the in-lock pre-check path.
+            return await RefuseTerminationConflictAsync(
+                conn, tx, employeeId, entitlementType, entitlementYear, winner, ct);
+        }
+
+        // NO carryover write — a TERMINATION crystallizes the final balance; nothing transfers
+        // (the no-carryover-writes invariant, SPRINT-70 R4).
+
+        var streamId = $"employee-{employeeId}";
+        var auditTargetOrgId = user.PrimaryOrgId;
+
+        // R10 — TerminationSettled for BOTH outcomes (emitted-no-consumer in 3a; mapper + DI from
+        // TASK-7001). The §26/§7 bucket day-counts stay 0 — they are 3b payroll-emission scope; the
+        // crystallized quantity rides the snapshot (R5).
+        var terminationEvent = new TerminationSettled
+        {
+            EmployeeId = employeeId,
+            EntitlementType = entitlementType,
+            EntitlementYear = entitlementYear,
+            Sequence = sequence,
+            Snapshot = snapshot,
+            PayoutDays = 0m,
+            ModregningDays = 0m,
+            UnearnedAdvanceDays = 0m,
+            ActorId = actorId,
+            ActorRole = actorRole,
+        };
+        await EmitAsync(conn, tx, streamId, terminationEvent, actorId, auditTargetOrgId, ct);
+
+        if (string.Equals(crystallization.SettlementState, StatePendingReview, StringComparison.Ordinal))
+        {
+            // The S68 D10 signal convention — a PENDING_REVIEW close emits the flagged event with
+            // the flagged remainder (here the over-taken |pre-clamp|, parked until 3b's §7/waiver).
+            var flaggedEvent = new SettlementManualReviewFlagged
+            {
+                EmployeeId = employeeId,
+                EntitlementType = entitlementType,
+                EntitlementYear = entitlementYear,
+                Sequence = sequence,
+                Snapshot = snapshot,
+                FlaggedDays = crystallization.ForfeitFlagDays,
+                ActorId = actorId,
+                ActorRole = actorRole,
+            };
+            await EmitAsync(conn, tx, streamId, flaggedEvent, actorId, auditTargetOrgId, ct);
+        }
+
+        _logger.LogInformation(
+            "Vacation settlement {State} (TERMINATION) for {EmployeeId}/{Type}/{Year}: end date {EndDate}, " +
+            "crystallized={Crystallized} (pre-clamp {PreClamp}), forfeitFlag={ForfeitFlag}.",
+            crystallization.SettlementState, employeeId, entitlementType, entitlementYear, endDate,
+            crystallization.CrystallizedDays, crystallization.PreClamp, crystallization.ForfeitFlagDays);
+
+        return SettlementOutcome.Settled(persisted, partition: null);
+    }
+
+    /// <summary>
+    /// SPRINT-70 R4 — a leaver's OTHER due ferieår (trigger=YEAR_END, employment end date passed on
+    /// the in-lock re-read): the fail-closed deferred-disposition row. NO §21/§24 auto-partition
+    /// arithmetic is invented for leavers — the row is written PENDING_REVIEW with
+    /// <c>forfeit_days = the FULL disposable</c> (the S68 flag convention — a FLAG, not a §34
+    /// disposition), <c>transfer_days = payout_days = 0</c>, snapshot at the SAME strictly-dated
+    /// ferieår-start anchors WITH the <c>DeferredDisposition</c> marker. NO carryover write, NO
+    /// <see cref="VacationCarryoverExecuted"/>, NO <see cref="VacationAutoPaidOut"/> (nothing may
+    /// leak into the S69 §24 staging). Resolved via the EXISTING CAS manual FORFEIT/DEFER workflow
+    /// UNCHANGED (DEFER is marker-only in 3a — no resolve disposition writes carryover_in).
+    /// </summary>
+    private async Task<SettlementOutcome> SettleLeaverDeferredDispositionAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string employeeId, string entitlementType, int entitlementYear, User user, DateOnly leaverEndDate,
+        CancellationToken ct)
+    {
+        // Normal YEAR_END boundary valuation (the same operands the D9 reader renders), with the
+        // DeferredDisposition marker + the leaver's end date documenting WHY no partition ran.
+        var (snapshot, snapshotJson) = await CaptureSnapshotAsync(
+            conn, tx, employeeId, entitlementType, entitlementYear, user,
+            terminationCutoff: null, terminationDate: leaverEndDate, deferredDisposition: true, ct);
+
+        // The pure partition is computed ONLY for its Disposable figure (the full unpartitioned
+        // remainder) — its §21/§24/§34 buckets are deliberately NOT applied (R4 no-partition).
+        var disposable = Partition(snapshot).Disposable;
+
+        const int sequence = 1;
+        var row = new VacationSettlementRow
+        {
+            EmployeeId = employeeId,
+            EntitlementType = entitlementType,
+            EntitlementYear = entitlementYear,
+            Sequence = sequence,
+            SettlementState = StatePendingReview,    // fail-closed (ADR-033 D10)
+            Trigger = YearEndTrigger,
+            SnapshotJson = snapshotJson,
+            TransferDays = 0m,
+            PayoutDays = 0m,
+            ForfeitDays = disposable,                // the FULL disposable as a FLAG (S68 convention)
+            Version = 1,
+        };
+
+        var actorId = $"system:settlement-close:{YearEndTrigger}";
+        const string actorRole = "System";
+
+        VacationSettlementRow persisted;
+        try
+        {
+            persisted = await _settlementRepo.InsertAsync(conn, tx, row, snapshotJson, actorId, actorRole, ct);
+        }
+        catch (DuplicateActiveSettlementException)
+        {
+            _logger.LogInformation(
+                "Vacation settlement no-op: 23505 single-settle backstop for {EmployeeId}/{Type}/{Year} (leaver deferred-disposition).",
+                employeeId, entitlementType, entitlementYear);
+            // B3 consistency (DECLARED, TASK-7004 fix-forward): the winner re-read must never
+            // fabricate an outcome from the UNPERSISTED candidate row. No trigger discrimination
+            // here — R7b is TERMINATION-specific; ANY active winner for the tuple is the benign
+            // single-settle no-op for this YEAR_END-trigger pass. The savepoint in InsertAsync
+            // keeps this tx usable (same mechanics as the TERMINATION catch).
+            var winner = await _settlementRepo.GetActiveAsync(conn, tx, employeeId, entitlementType, entitlementYear, ct);
+            return winner is not null
+                ? SettlementOutcome.AlreadySettled(winner)
+                : throw new InvalidOperationException(
+                    $"Vacation settlement: 23505 single-active collision for {employeeId}/{entitlementType}/" +
+                    $"{entitlementYear} (leaver deferred-disposition), but no active settlement row is visible " +
+                    "on re-read — refusing to fabricate an AlreadySettled outcome from the unpersisted candidate row.");
+        }
+
+        // NO carryover write; NO VacationCarryoverExecuted / VacationAutoPaidOut emissions (R4).
+        var streamId = $"employee-{employeeId}";
+        var flaggedEvent = new SettlementManualReviewFlagged
+        {
+            EmployeeId = employeeId,
+            EntitlementType = entitlementType,
+            EntitlementYear = entitlementYear,
+            Sequence = sequence,
+            Snapshot = snapshot,
+            FlaggedDays = disposable,
+            ActorId = actorId,
+            ActorRole = actorRole,
+        };
+        await EmitAsync(conn, tx, streamId, flaggedEvent, actorId, user.PrimaryOrgId, ct);
+
+        _logger.LogInformation(
+            "Vacation settlement PENDING_REVIEW (leaver deferred-disposition) for {EmployeeId}/{Type}/{Year}: " +
+            "end date {EndDate} passed — full disposable {Disposable} flagged, NO auto-partition (SPRINT-70 R4).",
+            employeeId, entitlementType, entitlementYear, leaverEndDate, disposable);
+
+        return SettlementOutcome.Settled(persisted, partition: null);
+    }
+
+    /// <summary>
+    /// SPRINT-70 R7b — the TERMINATION-vs-active-YEAR_END conflict refusal (the in-tx race
+    /// backstop behind the R3 any-trigger due-enumeration anti-join). Emits the durable loud
+    /// signal (<see cref="SettlementManualReviewFlagged"/> on the conflicting row's identity, no
+    /// snapshot — nothing was settled) + its ADR-026 audit row + a warning log, writes NO
+    /// <c>vacation_settlements</c> row (the partial-unique single-active index forbids a second
+    /// active row; the YEAR_END row is left untouched), and returns WITHOUT throwing. The
+    /// documented 3a interim deviation from ADR-033's reverse-then-re-settle (R7c) — the reversal
+    /// infrastructure is 3b.
+    /// </summary>
+    private async Task<SettlementOutcome> RefuseTerminationConflictAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string employeeId, string entitlementType, int entitlementYear,
+        VacationSettlementRow conflicting, CancellationToken ct)
+    {
+        // Terminated-inclusive read (R9d) — the refusal fires precisely for leavers; the org lookup
+        // for the ADR-026 audit context must not dead-end on the is_active filter.
+        var user = await _userRepo.GetByIdIncludingTerminatedAsync(conn, tx, employeeId, ct)
+            ?? throw new InvalidOperationException(
+                $"Vacation settlement: employee {employeeId} not found.");
+
+        var actorId = $"system:settlement-close:{TerminationTrigger}";
+        const string actorRole = "System";
+
+        var flaggedEvent = new SettlementManualReviewFlagged
+        {
+            EmployeeId = employeeId,
+            EntitlementType = entitlementType,
+            EntitlementYear = entitlementYear,
+            Sequence = conflicting.Sequence, // the CONFLICTING row's identity — no new row exists
+            Snapshot = null,                 // nothing settled, nothing captured (the row keeps its own)
+            FlaggedDays = 0m,                // a conflict signal, not a quantity disposition
+            ActorId = actorId,
+            ActorRole = actorRole,
+        };
+        await EmitAsync(conn, tx, $"employee-{employeeId}", flaggedEvent, actorId, user.PrimaryOrgId, ct);
+
+        _logger.LogWarning(
+            "Vacation settlement REFUSED (SPRINT-70 R7b): TERMINATION for {EmployeeId}/{Type}/{Year} conflicts " +
+            "with an active {Trigger}/{State} settlement (sequence {Sequence}). SettlementManualReviewFlagged " +
+            "emitted; NO row written; reverse-then-re-settle requires the 3b reversal infrastructure.",
+            employeeId, entitlementType, entitlementYear,
+            conflicting.Trigger, conflicting.SettlementState, conflicting.Sequence);
+
+        return SettlementOutcome.Refused(conflicting);
+    }
+
+    /// <summary>
+    /// SPRINT-70 R6 — the ferieår CONTAINING a termination end date, executable VERBATIM:
+    /// <c>entitlementYear = endDate.Month >= 9 ? endDate.Year : endDate.Year - 1</c> (VACATION
+    /// <c>reset_month</c> = 9, uniform by DB CHECK per S68 B1). 31 Jan / 31 Aug → the PRIOR
+    /// calendar year's ferieår; 1 Sep → the SAME calendar year's ferieår.
+    /// </summary>
+    internal static int ResolveTerminationFerieaar(DateOnly endDate) =>
+        endDate.Month >= 9 ? endDate.Year : endDate.Year - 1;
+
+    /// <summary>
+    /// S70 Step-7a BLOCKER B1 (Codex, fix-forward) — the IN-LOCK termination-due predicate,
+    /// re-evaluated by <see cref="SettleAsync"/>'s TERMINATION fork against the re-read user
+    /// AFTER the R12 advisory lock is held (the enumeration-time decision in
+    /// <c>SettlementCloseService.ResolveLeaverTupleTrigger</c> is pre-lock and may be stale).
+    /// PURE; unit-pinned per clause:
+    /// <list type="number">
+    ///   <item><description><paramref name="isActive"/> is FALSE — a reactivated user is NOT a
+    ///   leaver (Step B only ever enumerates flipped leavers; the R1 correct-to-future
+    ///   re-evaluation REACTIVATES);</description></item>
+    ///   <item><description><paramref name="employmentEndDate"/> is non-null AND has PASSED on the
+    ///   Copenhagen business date (<c>endDate &lt; copenhagenToday</c> — the end date is the LAST
+    ///   day employed);</description></item>
+    ///   <item><description>the D13 go-live floor: <paramref name="leaverGoLiveFloor"/> is null
+    ///   (caller supplied no floor — the close service ALWAYS supplies it) OR the end date falls
+    ///   STRICTLY AFTER it (a pre-go-live leaver is the manual fallback);</description></item>
+    ///   <item><description>R6 — <paramref name="entitlementYear"/> IS the end-date ferieår
+    ///   (<see cref="ResolveTerminationFerieaar"/>).</description></item>
+    /// </list>
+    /// ANY clause failure ⇒ the caller returns the benign
+    /// <see cref="SettlementOutcome.NotDueUnderLock"/> no-op (no row, no event, no throw — the
+    /// tuple is simply no longer due; the next poll re-enumerates against fresh state).
+    /// </summary>
+    public static bool IsTerminationDueUnderLock(
+        bool isActive, DateOnly? employmentEndDate, int entitlementYear,
+        DateOnly? leaverGoLiveFloor, DateOnly copenhagenToday)
+    {
+        if (isActive) return false;                                              // (1) reactivated ⇒ not a leaver
+        if (employmentEndDate is not { } endDate) return false;                  // (2a) no leaver fact
+        if (endDate >= copenhagenToday) return false;                            // (2b) not passed
+        if (leaverGoLiveFloor is { } floor && endDate <= floor) return false;    // (3) D13 pre-go-live ⇒ manual fallback
+        return ResolveTerminationFerieaar(endDate) == entitlementYear;           // (4) R6 tuple match
+    }
+
+    /// <summary>
+    /// SPRINT-70 R5 — the TERMINATION crystallization. PURE function of the captured snapshot
+    /// (ADR-033 D3 quantity-determinism; replay-stable): <c>pre-clamp = Earned + CarryoverIn −
+    /// Used</c> (Earned = whole-month EarnedToDate asOf the end date; Used = recorded absences
+    /// ≤ the end date; carryover_in INCLUDED — a previously transferred balance must not vanish),
+    /// rounded to the 2dp storage precision (ToEven, the D9 reader convention) BEFORE the sign
+    /// decision so the recorded row/state are mutually derivable from stored 2dp quantities.
+    /// PINNED state rule (the agent invents NO legal logic): pre-clamp ≥ 0 ⇒ SETTLED
+    /// (<see cref="TerminationCrystallization.CrystallizedDays"/> = pre-clamp; all row buckets
+    /// zero); pre-clamp NEGATIVE ⇒ PENDING_REVIEW with the |pre-clamp| forfeit-FLAG (S68
+    /// convention) and CrystallizedDays = 0 — parked until 3b's §7/waiver channel.
+    /// </summary>
+    internal static TerminationCrystallization CrystallizeTermination(VacationSettlementSnapshot s)
+    {
+        var preClamp = Round2(s.Earned + s.CarryoverIn - s.Used);
+        var negative = preClamp < 0m;
+        return new TerminationCrystallization(
+            PreClamp: preClamp,
+            CrystallizedDays: Math.Max(0m, preClamp),
+            SettlementState: negative ? StatePendingReview : StateSettled,
+            ForfeitFlagDays: negative ? -preClamp : 0m);
+    }
+
+    // ------------------------------------------------------------------
     // Snapshot capture (ADR-033 D3). Reuses the EXACT D9 operands (BalanceEndpoints): the dated
     // config + earned-at-boundary via AccrualMath.EarnedToDate; the closed-year balance; the
     // recorded per-absence feriedage (ADR-032 D2). No re-valuation (ADR-033 D2).
     // ------------------------------------------------------------------
 
+    /// <param name="conn">The caller's open connection.</param>
+    /// <param name="tx">The caller's active transaction.</param>
+    /// <param name="employeeId">The employee being settled.</param>
+    /// <param name="entitlementType">The entitlement type.</param>
+    /// <param name="entitlementYear">The entitlement year being settled.</param>
+    /// <param name="user">The in-lock employee re-read (terminated-inclusive, R9d).</param>
+    /// <param name="terminationCutoff">S70 / TASK-7004 (SPRINT-70 R5): when non-null, the
+    /// TERMINATION valuation boundary — the employment end date. Earned crystallizes asOf THIS
+    /// date (whole-month, flat) and <c>Used</c> becomes the SUM of recorded absences with date ≤
+    /// it (NOT <c>balance.Used</c> — the declared divergence from the slice-1a scalar: a booking
+    /// after the end date cannot be taken and must not consume). Null = the unchanged YEAR_END
+    /// boundary valuation (byte-identical to the S68/S69 capture).</param>
+    /// <param name="terminationDate">The employment end date stamped on the snapshot
+    /// (TERMINATION crystallization AND the R4 leaver deferred-disposition rows); null on
+    /// ordinary active-employee YEAR_END captures.</param>
+    /// <param name="deferredDisposition">SPRINT-70 R4 — the no-partition marker on a leaver's
+    /// other-ferieår fail-closed PENDING_REVIEW snapshot.</param>
+    /// <param name="ct">Cancellation token.</param>
     private async Task<(VacationSettlementSnapshot Snapshot, string Json)> CaptureSnapshotAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
-        string employeeId, string entitlementType, int entitlementYear, User user, CancellationToken ct)
+        string employeeId, string entitlementType, int entitlementYear, User user,
+        DateOnly? terminationCutoff, DateOnly? terminationDate, bool deferredDisposition,
+        CancellationToken ct)
     {
         // BLOCKER 1 (Codex Step-5a) — the dated entitlement-config resolution MUST reproduce the
         // EXACT chain the S66 D9 `expiring` figure uses (BalanceEndpoints.ResolveDatedConfigAsync),
@@ -440,6 +941,13 @@ public sealed class VacationSettlementService
             boundaryDate = closedFerieaarStart.AddYears(1).AddDays(-1);
         }
 
+        // S70 / TASK-7004 (SPRINT-70 R5) — the VALUATION boundary. YEAR_END values at the ferieår
+        // end (unchanged); a TERMINATION values at the employment END DATE (whole-month §26 basis,
+        // owner D-B): earned crystallizes asOf the end date, and the recorded-absence window is
+        // capped at it. The ANCHOR dates (agreement/position/quota/okVersion below) stay the
+        // strictly-dated ferieår START in BOTH cases — only the valuation cutoff moves.
+        var valuationBoundary = terminationCutoff ?? boundaryDate;
+
         var okVersion = OkVersionResolver.ResolveVersion(closedFerieaarStart);
 
         // The STRICTLY-DATED historical agreement in force at the closed ferieår start. This serves TWO
@@ -474,6 +982,25 @@ public sealed class VacationSettlementService
         {
             datedConfig = dated;
         }
+        // BLOCKER B2 (Codex Step-5a, TASK-7004 fix-forward) — SPRINT-70 R5/R4 + ADR-033 D10: a
+        // TERMINATION crystallization AND an R4 leaver-deferred capture resolve their quota at the
+        // strictly-dated ferieår-start anchor, FAIL-CLOSED — the D9 live-fallback chain below must
+        // never let the CURRENT live quota determine what a leaver crystallized (a later quota
+        // amendment must not change a recorded leaver quantity). Same posture as the dated
+        // agreement-code throw above. Operational consequence (the D10 posture): a leaver with
+        // missing dated config history fails LOUDLY on every settlement poll (per-tuple isolation,
+        // retried) until an operator repairs the dated history — never silently valued against
+        // today's config. The ACTIVE-employee YEAR_END path below keeps the D9 fallback chain
+        // BYTE-IDENTICAL (its established S68 behavior must not change).
+        else if (terminationCutoff is not null || deferredDisposition)
+        {
+            throw new InvalidOperationException(
+                $"Vacation settlement: no dated entitlement_configs row covers {closedFerieaarStart:yyyy-MM-dd} " +
+                $"(ferieår start) for {entitlementType} under agreement '{agreementCode}' (ok_version {okVersion}) " +
+                $"for employee {employeeId}; cannot resolve the dated quota for a TERMINATION/leaver-deferred " +
+                "settlement capture — settlement capture fails closed rather than valuing against the " +
+                "employee's current live entitlement config.");
+        }
         else if (string.Equals(agreementCode, todayAgreementCode, StringComparison.Ordinal))
         {
             datedConfig = liveConfig; // dated miss under today's agreement → the live (open) row
@@ -494,17 +1021,37 @@ public sealed class VacationSettlementService
         var closedCarryoverIn = closedBalance?.CarryoverIn ?? 0m;
         var closedPlanned = closedBalance?.Planned ?? 0m;
 
-        // earned-at-boundary (the D9 operand): MONTHLY accrues to the boundary; IMMEDIATE is the full
-        // quota up-front. Fraction-independent day-count per S63/ADR-031 (1.0m).
-        var earnedAtBoundary = string.Equals(datedConfig.AccrualModel, MonthlyAccrualModel, StringComparison.Ordinal)
-            ? AccrualMath.EarnedToDate(datedConfig.AnnualQuota, 1.0m, closedFerieaarStart, user.EmploymentStartDate, boundaryDate)
-            : datedConfig.AnnualQuota;
+        // earned-at-boundary (the D9 operand). Fraction-independent day-count per S63/ADR-031 (1.0m).
+        //
+        // BLOCKER B1 (Codex Step-5a, TASK-7004 fix-forward) — SPRINT-70 R5 + owner D-B: a
+        // TERMINATION capture (terminationCutoff != null) crystallizes Earned via the whole-month
+        // EarnedToDate(asOf=endDate) UNCONDITIONALLY — NEVER the accrual-model branch. An IMMEDIATE
+        // config grants the full annual quota up-front for CONSUMPTION purposes, but the §26
+        // crystallization basis is whole-month earned-to-end-date (D-B): a September leaver on an
+        // IMMEDIATE config must crystallize ~2.08 days, not 25. Nothing enforces MONTHLY for
+        // VACATION configs (the S68 B1 lesson: uniform by seed ≠ enforced), so the model branch is
+        // kept ONLY for terminationCutoff == null — the active-employee YEAR_END close AND the R4
+        // leaver-deferred capture, both valued at the ferieår END where MONTHLY's 12/12 accrual and
+        // IMMEDIATE's full quota legitimately coincide on the completed-year quantity (MONTHLY
+        // accrues to the boundary per AccrualMath, from max(ferieårStart, employment_start_date);
+        // IMMEDIATE is the full quota up-front — the unchanged S68 behavior).
+        var earnedAtBoundary = terminationCutoff is not null
+            ? AccrualMath.EarnedToDate(datedConfig.AnnualQuota, 1.0m, closedFerieaarStart, user.EmploymentStartDate, valuationBoundary)
+            : string.Equals(datedConfig.AccrualModel, MonthlyAccrualModel, StringComparison.Ordinal)
+                ? AccrualMath.EarnedToDate(datedConfig.AnnualQuota, 1.0m, closedFerieaarStart, user.EmploymentStartDate, valuationBoundary)
+                : datedConfig.AnnualQuota;
 
-        // The recorded per-absence feriedage components (ADR-032 D2) within the closed ferieår — the
-        // auditable breakdown carried in the snapshot. For VACATION the absence_type IS 'VACATION'
-        // (EntitlementMapping). Authoritative "used" scalar stays closedBalance.Used (the D9 operand).
+        // The recorded per-absence feriedage components (ADR-032 D2) within the closed ferieår, capped
+        // at the valuation boundary — the auditable breakdown carried in the snapshot. For VACATION the
+        // absence_type IS 'VACATION' (EntitlementMapping). The authoritative "used" scalar stays
+        // closedBalance.Used (the D9 operand) for YEAR_END; a TERMINATION uses the recorded SUM ≤ the
+        // end date instead (SPRINT-70 R5 — the declared divergence: a post-end-date booking cannot be
+        // taken and must not consume).
         var recordedAbsences = await ReadRecordedFeriedageAsync(
-            conn, tx, employeeId, entitlementType, closedFerieaarStart, boundaryDate, ct);
+            conn, tx, employeeId, entitlementType, closedFerieaarStart, valuationBoundary, ct);
+        var usedForSnapshot = terminationCutoff is null
+            ? closedUsed
+            : recordedAbsences.Sum(a => a.Feriedage);
 
         // §21 written transfer-agreement days (ADR-033 D8; 0 when no agreement — the law's §24 default).
         var transferAgreement = await _transferRepo.GetByKeyAsync(conn, tx, employeeId, entitlementYear, entitlementType, ct);
@@ -532,7 +1079,9 @@ public sealed class VacationSettlementService
         {
             RecordedAbsences = recordedAbsences,
             Earned = earnedAtBoundary,
-            Used = closedUsed,
+            // YEAR_END: the balance.Used scalar (the D9 operand — unchanged). TERMINATION: the
+            // recorded-absence sum ≤ the end date (SPRINT-70 R5 declared divergence).
+            Used = usedForSnapshot,
             Planned = closedPlanned,
             CarryoverIn = closedCarryoverIn,
             AnnualQuota = datedConfig.AnnualQuota,
@@ -542,15 +1091,25 @@ public sealed class VacationSettlementService
             // §24 wage-type natural key (ADR-033 D7 / ADR-020) — all pinned at closedFerieaarStart.
             AgreementCode = datedAgreementForSnapshot, // STRICTLY-dated ferieår-start agreement (fail-closed, no live fallback — Step-5a P1/P4)
             Position = settlementPosition,             // dated employee_profiles position (ADR-023)
-            // FERIEÅR-END accrual boundary (Aug 31 for VACATION reset_month 9; Dec 31 only when reset_month==1) —
-            // the inherited S68 valuation boundary computed above (~L427-441), reused as the §24 wage-mapping asOf.
+            // The VALUATION boundary. YEAR_END: the FERIEÅR-END accrual boundary (Aug 31 for VACATION
+            // reset_month 9; Dec 31 only when reset_month==1) — the inherited S68 valuation boundary,
+            // reused as the §24 wage-mapping asOf, UNCHANGED.
             // FOLLOW-UP (S69 Step-7a W1): the LEGAL §24/§21 anchor is 31 Dec (Ferielov §21 stk.2; S65 research
             // docs/references/ferie-transfer-timing-research.md). Inert today (every §24 mapping is open-from-2020,
             // so Aug-31 vs 31-Dec asOf resolve identically); the owner must rule the asOf when the real §24 SLS
-            // lønart lands and a dated supersession could fall between Aug 31 and 31 Dec. Value unchanged this sprint.
-            SettlementBoundaryDate = boundaryDate,
+            // lønart lands and a dated supersession could fall between Aug 31 and 31 Dec.
+            // TERMINATION (S70 R5): the employment END DATE — the crystallization boundary of THIS
+            // settlement (no §24 staging ever reads a TERMINATION snapshot; the 3b §26 asOf is 3b scope).
+            SettlementBoundaryDate = valuationBoundary,
             TransferAgreementDays = transferAgreementDays,
             IsFeriehindret = false, // slice 1 — §22 not modeled (ADR-033 D10)
+            // S70 / TASK-7004 (SPRINT-70 R4/R5) — termination crystallization extensions. All
+            // omitted from the serialized JSON when unset, so the ACTIVE-employee YEAR_END snapshot
+            // stays byte-identical to its pre-S70 shape. CrystallizedDays is stamped AFTER capture
+            // by SettleTerminationAsync (the pure CrystallizeTermination of THIS snapshot).
+            TerminationDate = terminationDate,
+            CrystallizationBasis = terminationCutoff is null ? null : CrystallizationBasisS26WholeMonth,
+            DeferredDisposition = deferredDisposition,
         };
 
         var json = JsonSerializer.Serialize(snapshot, SnapshotJson);
@@ -649,6 +1208,41 @@ public sealed class VacationSettlementService
     private static decimal Round2(decimal value) => Math.Round(value, 2, MidpointRounding.ToEven);
 
     // ------------------------------------------------------------------
+    // S70 / TASK-7004 — Europe/Copenhagen business-date helper (SPRINT-70 R4 leak-proofing pin (b)).
+    // The leaver/no-partition decision compares the in-lock re-read employment_end_date against the
+    // COPENHAGEN business date (never raw UTC/CURRENT_DATE — the boundary-timezone rule the close
+    // service documents). Mirrors SettlementCloseService.CopenhagenToday verbatim, sourced from the
+    // injected TimeProvider (the trigger MAY read the clock; the settled QUANTITY stays a pure
+    // function of the captured snapshot — ADR-033 D3). Scoped to this file like the close service's
+    // copy (the Orchestrator may later hoist both into the follow-up (v) business-timezone helper).
+    // ------------------------------------------------------------------
+
+    private static readonly TimeZoneInfo CopenhagenZone = ResolveCopenhagenZone();
+
+    private DateOnly CopenhagenToday()
+    {
+        var utcNow = _timeProvider.GetUtcNow(); // the injected seam — overridable in tests/hosts.
+        var copenhagenNow = TimeZoneInfo.ConvertTime(utcNow, CopenhagenZone);
+        return DateOnly.FromDateTime(copenhagenNow.DateTime);
+    }
+
+    private static TimeZoneInfo ResolveCopenhagenZone()
+    {
+        // IANA id first (Linux CI + ICU-backed Windows), Windows registry id as fallback, UTC as the
+        // never-crash terminal (degraded but deterministic) — the SettlementCloseService shape.
+        foreach (var id in new[] { "Europe/Copenhagen", "Romance Standard Time" })
+        {
+            try
+            {
+                return TimeZoneInfo.FindSystemTimeZoneById(id);
+            }
+            catch (TimeZoneNotFoundException) { }
+            catch (InvalidTimeZoneException) { }
+        }
+        return TimeZoneInfo.Utc;
+    }
+
+    // ------------------------------------------------------------------
     // Event-emit + audit_projection sync-in-tx (ADR-018 D3 + ADR-026 D13). The audit row is
     // dispatched FROM this BackgroundService-invoked site via the registry (NOT an endpoint).
     // ------------------------------------------------------------------
@@ -700,24 +1294,74 @@ public sealed record SettlementPartition(
     decimal ForfeitDays);
 
 /// <summary>
+/// S70 / TASK-7004 (SPRINT-70 R5; ADR-033 D9 slice 3a) — the TERMINATION crystallization result.
+/// PURE result of <see cref="VacationSettlementService.CrystallizeTermination"/>:
+/// <see cref="PreClamp"/> = <c>round2(Earned + CarryoverIn − Used)</c> of the captured snapshot;
+/// <see cref="CrystallizedDays"/> = <c>max(0, PreClamp)</c> (snapshot-only — the row's bucket
+/// columns are all zero on SETTLED); <see cref="SettlementState"/> per the PINNED rule (SETTLED
+/// unless the pre-clamp is negative); <see cref="ForfeitFlagDays"/> = <c>|PreClamp|</c> iff
+/// negative (the S68 forfeit-FLAG convention — parked PENDING_REVIEW until 3b's §7/waiver
+/// channel), else 0. Day-counts only, NUMERIC(6,2) precision (money-free, ADR-033 D1).
+/// </summary>
+public sealed record TerminationCrystallization(
+    decimal PreClamp,
+    decimal CrystallizedDays,
+    string SettlementState,
+    decimal ForfeitFlagDays);
+
+/// <summary>
 /// S68 / TASK-6804 — the outcome of <see cref="VacationSettlementService.SettleAsync"/>. Either a
-/// fresh settlement (with its persisted row + partition) or an idempotent no-op (an active
-/// settlement already existed — the in-lock re-check or the 23505 single-settle backstop).
+/// fresh settlement (with its persisted row + partition), an idempotent no-op (an active
+/// settlement already existed — the in-lock re-check or the 23505 single-settle backstop), or the
+/// S70 Step-7a benign <see cref="NotDue"/> no-op (the in-lock due re-evaluation failed — nothing
+/// exists and nothing was written).
 /// </summary>
 public sealed record SettlementOutcome
 {
     /// <summary><c>true</c> when this call produced a new settlement; <c>false</c> on the idempotent no-op.</summary>
     public required bool DidSettle { get; init; }
 
-    /// <summary>The active settlement row (freshly inserted, or the pre-existing one on a no-op).</summary>
-    public required VacationSettlementRow Row { get; init; }
+    /// <summary>The active settlement row (freshly inserted, the pre-existing one on a no-op, or
+    /// the CONFLICTING row on an R7b refusal). Null ONLY on the <see cref="NotDue"/> outcome —
+    /// no row exists for the tuple and none was written.</summary>
+    public required VacationSettlementRow? Row { get; init; }
 
-    /// <summary>The computed partition — present only when <see cref="DidSettle"/> is <c>true</c>.</summary>
+    /// <summary>The computed §21/§24/§34 partition — present only on a PARTITIONED YEAR_END
+    /// settlement (<see cref="DidSettle"/> true). Null on the no-op, on a TERMINATION
+    /// crystallization, and on an S70 R4 leaver deferred-disposition row (no partition is
+    /// computed for leavers — SPRINT-70 R4).</summary>
     public SettlementPartition? Partition { get; init; }
 
-    public static SettlementOutcome Settled(VacationSettlementRow row, SettlementPartition partition) =>
+    /// <summary>
+    /// S70 / TASK-7004 (SPRINT-70 R7b) — <c>true</c> when a TERMINATION pass was REFUSED because
+    /// the target ferieår already held an active settlement of another trigger (the loud
+    /// <c>SettlementManualReviewFlagged</c> signal + audit were emitted; NO row was written;
+    /// <see cref="Row"/> carries the untouched conflicting row). The close service treats this as
+    /// handled (<see cref="DidSettle"/> is <c>false</c>).
+    /// </summary>
+    public bool RefusedConflict { get; init; }
+
+    /// <summary>
+    /// S70 Step-7a B1 — <c>true</c> when the in-lock due re-evaluation
+    /// (<see cref="VacationSettlementService.IsTerminationDueUnderLock"/> on the TERMINATION fork,
+    /// or the leaver-deferred go-live floor re-check) found the tuple NO LONGER due: a competing
+    /// mutation (an admin end-date correction per R1, typically) won the lock race and the
+    /// corrected state wins. NOTHING was written and NO event was emitted; <see cref="Row"/> is
+    /// null. The next poll re-enumerates against fresh state.
+    /// </summary>
+    public bool NotDue { get; init; }
+
+    public static SettlementOutcome Settled(VacationSettlementRow row, SettlementPartition? partition) =>
         new() { DidSettle = true, Row = row, Partition = partition };
 
     public static SettlementOutcome AlreadySettled(VacationSettlementRow existing) =>
         new() { DidSettle = false, Row = existing, Partition = null };
+
+    public static SettlementOutcome Refused(VacationSettlementRow conflicting) =>
+        new() { DidSettle = false, Row = conflicting, Partition = null, RefusedConflict = true };
+
+    /// <summary>The S70 Step-7a B1 benign no-op — the tuple is no longer due under the lock
+    /// (no row, no event, no throw; see <see cref="NotDue"/>).</summary>
+    public static SettlementOutcome NotDueUnderLock() =>
+        new() { DidSettle = false, Row = null, Partition = null, NotDue = true };
 }

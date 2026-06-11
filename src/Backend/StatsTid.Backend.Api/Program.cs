@@ -210,6 +210,15 @@ builder.Services.AddSingleton<IAuditProjectionMapper<VacationForfeitedToFeriefon
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(VacationForfeitedToFeriefond), nameof(VacationForfeitedToFeriefond)));
 builder.Services.AddSingleton<IAuditProjectionMapper<SettlementManualReviewFlagged>, StatsTid.Infrastructure.AuditMappers.SettlementManualReviewFlaggedAuditMapper>();
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(SettlementManualReviewFlagged), nameof(SettlementManualReviewFlagged)));
+// S70 ADR-033 slice 3a — termination-foundation audit mappers (Infrastructure-located, cross-process;
+// EmployeeEmploymentEndDateSet from the admin end-date endpoint, EmployeeEndDateDeactivationApplied from
+// the SettlementCloseService Step-A flip, TerminationSettled from the settlement pass — SPRINT-70 R10)
+builder.Services.AddSingleton<IAuditProjectionMapper<EmployeeEmploymentEndDateSet>, StatsTid.Infrastructure.AuditMappers.EmployeeEmploymentEndDateSetAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(EmployeeEmploymentEndDateSet), nameof(EmployeeEmploymentEndDateSet)));
+builder.Services.AddSingleton<IAuditProjectionMapper<EmployeeEndDateDeactivationApplied>, StatsTid.Infrastructure.AuditMappers.EmployeeEndDateDeactivationAppliedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(EmployeeEndDateDeactivationApplied), nameof(EmployeeEndDateDeactivationApplied)));
+builder.Services.AddSingleton<IAuditProjectionMapper<TerminationSettled>, StatsTid.Infrastructure.AuditMappers.TerminationSettledAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(TerminationSettled), nameof(TerminationSettled)));
 
 // ── Services ──
 builder.Services.AddSingleton<ConfigResolutionService>();

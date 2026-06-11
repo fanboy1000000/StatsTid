@@ -464,6 +464,11 @@ CREATE TABLE IF NOT EXISTS users (
     ok_version          TEXT        NOT NULL DEFAULT 'OK24',
     employment_category TEXT        NOT NULL DEFAULT 'Standard',
     is_active           BOOLEAN     NOT NULL DEFAULT TRUE,
+    -- S70 / ADR-033 slice 3a leaver columns — full semantics in the
+    -- 's70-employment-end-date' annotation + legacy-ALTER block near EOF
+    -- (the inline columns serve greenfield; the guarded ALTER serves legacy DBs).
+    employment_end_date  DATE       NULL,
+    end_date_deactivated BOOLEAN    NOT NULL DEFAULT FALSE,
     version             BIGINT      NOT NULL DEFAULT 1,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -2943,5 +2948,60 @@ BEGIN
         ('VACATION_SETTLEMENT_PAYOUT', 'SLS_TBD_S24', 'OK26', 'AC_RESEARCH', '', 'PLACEHOLDER - §24 vacation auto-payout (Ferielov §24); real SLS code TBD via SLS dialogue', '2020-01-01'),
         ('VACATION_SETTLEMENT_PAYOUT', 'SLS_TBD_S24', 'OK26', 'AC_TEACHING', '', 'PLACEHOLDER - §24 vacation auto-payout (Ferielov §24); real SLS code TBD via SLS dialogue', '2020-01-01')
     ON CONFLICT (time_type, ok_version, agreement_code, position, effective_from) DO NOTHING;
+END
+$$;
+
+-- =========================================================================
+-- S70 / ADR-033 slice 3a — users.employment_end_date + users.end_date_deactivated
+--   (the leaver model; SPRINT-70 TASK-7000, pinned rules R1 + R11).
+--
+-- employment_end_date (DATE NULL) — HR-managed end-of-employment date.
+--   NULL = employed / no end date set. Semantics: the LAST day employed — the
+--   deactivation lifecycle flips is_active=false when the Copenhagen business
+--   date > employment_end_date (R1/R2; enforced in the Backend lifecycle +
+--   SettlementCloseService Step A, never in the schema). Like
+--   employment_start_date (S60/ADR-030) it is an explicit, NON-dated pure
+--   input (never read ambiently); an HR correction fixes a wrong fact (NOT a
+--   versioned/bitemporal policy change). RBAC: never exposed in JWT /
+--   Employee payloads / export. GDPR (Article 17): erasure deferred WITH
+--   ADR-025 D3 (the S59 birth_date / S60 employment_start_date precedent
+--   annotation; D3 Part B not yet built — field joins the D3 erasure column
+--   set, recorded at sprint close).
+--
+-- end_date_deactivated (BOOLEAN NOT NULL DEFAULT FALSE) — deactivation
+--   PROVENANCE flag (SPRINT-70 R1). This column exists because is_active has
+--   TWO writers: the end-date lifecycle AND the pre-existing admin soft-delete
+--   (AdminEndpoints user PUT). Set TRUE only by the end-date lifecycle when IT
+--   flips is_active=false (same-tx past-dated set, or the Step-A poller flip);
+--   the admin soft-delete second writer NEVER touches it. Clearing the end
+--   date reactivates ONLY when this flag is TRUE (then resets it to FALSE) —
+--   clearing an end date on a manually-deactivated user clears the date but
+--   does NOT reactivate (R1c/R1d).
+--
+-- Audit: users_audit (L617-628) stores full-row JSONB snapshots in
+-- previous_data/new_data — it uses NO explicit per-column list, so both new
+-- columns are captured automatically with no audit-table change required
+-- (same as the S59 birth_date / S60 employment_start_date precedent).
+--
+-- The base `CREATE TABLE IF NOT EXISTS users` (L456) bakes both columns for
+-- greenfield databases but is a no-op on a legacy DB (the S68 lesson) — this
+-- schema_migrations-guarded ALTER block (s68-vacation-reset-month-check guard
+-- pattern) is what upgrades pre-existing databases. ADD COLUMN IF NOT EXISTS
+-- keeps the ALTERs themselves idempotent (belt-and-suspenders on top of the
+-- ledger guard). No CHECK constraints, no indexes (none pinned by the plan).
+-- =========================================================================
+DO $$
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s70-employment-end-date', 'ADR-033 slice 3a (SPRINT-70 R1/R11): users.employment_end_date DATE NULL (HR-managed; LAST day employed; lifecycle deactivates when Copenhagen business date > end date; non-dated pure input; never in JWT/Employee payloads/export; erasure deferred WITH ADR-025 D3) + users.end_date_deactivated BOOLEAN NOT NULL DEFAULT FALSE (deactivation provenance — is_active has two writers; set only by the end-date lifecycle; clear-end-date reactivates only when TRUE). users_audit full-row JSONB captures both, no audit change.')
+    ON CONFLICT (migration_id) DO NOTHING;
+
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS employment_end_date DATE NULL;
+
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS end_date_deactivated BOOLEAN NOT NULL DEFAULT FALSE;
 END
 $$;
