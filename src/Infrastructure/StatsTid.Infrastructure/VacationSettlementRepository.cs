@@ -71,6 +71,7 @@ public sealed class VacationSettlementRepository
                    settlement_state, trigger, snapshot::text AS snapshot_text,
                    transfer_days, payout_days, forfeit_days,
                    payout_reconciled_at, payout_reconciled_by, review_disposition,
+                   claim_disposition_days, bare_reversal_not_due,
                    version, created_at, updated_at
             FROM vacation_settlements
             WHERE employee_id = @employeeId
@@ -125,6 +126,7 @@ public sealed class VacationSettlementRepository
                           settlement_state, trigger, snapshot::text AS snapshot_text,
                           transfer_days, payout_days, forfeit_days,
                           payout_reconciled_at, payout_reconciled_by, review_disposition,
+                          claim_disposition_days, bare_reversal_not_due,
                           version, created_at, updated_at
                 """, conn, tx);
             cmd.Parameters.AddWithValue("employeeId", row.EmployeeId);
@@ -186,6 +188,65 @@ public sealed class VacationSettlementRepository
     }
 
     /// <summary>
+    /// S71 / TASK-7104 (SPRINT-71 R1) — in-tx read of ALL recorded settlement-row sequences for a
+    /// <c>(employee, type, year)</c> tuple, any state (REVERSED included). The reversal service
+    /// derives the next-generation row sequence from THIS history
+    /// (<c>SettlementReversalService.NextGenerationRowSequence</c>: <c>g = max((s+1)/2) + 1</c> →
+    /// row sequence <c>2g−1</c>) — a new settlement of a tuple NEVER restarts at 1. Runs on the
+    /// caller's advisory-locked tx so it observes the row the same tx just REVERSED.
+    /// </summary>
+    public async Task<IReadOnlyList<int>> GetSequencesForTupleAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string employeeId, string entitlementType, int entitlementYear, CancellationToken ct = default)
+    {
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT sequence FROM vacation_settlements
+            WHERE employee_id = @employeeId
+              AND entitlement_type = @entitlementType
+              AND entitlement_year = @entitlementYear
+            ORDER BY sequence
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("employeeId", employeeId);
+        cmd.Parameters.AddWithValue("entitlementType", entitlementType);
+        cmd.Parameters.AddWithValue("entitlementYear", entitlementYear);
+        var sequences = new List<int>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            sequences.Add(reader.GetInt32(0));
+        return sequences;
+    }
+
+    /// <summary>
+    /// S71 / TASK-7104 (SPRINT-71 R3) — in-tx probe: does the tuple carry the durable
+    /// bare-reversal not-due marker (<c>bare_reversal_not_due = TRUE</c> on a REVERSED row)?
+    /// <c>SettleAsync</c> rejects (benign NotDue no-op) when TRUE — a bare-reversed tuple is
+    /// unrevivable by construction in 3b (the marker-clearing + g+1 revival belong to the
+    /// REHIRE/recovery follow-up). The Step-B enumeration's shared anti-join is the poll-side
+    /// twin of this in-lock check (the S70 B1 lesson: every enumeration predicate re-evaluated
+    /// under the lock).
+    /// </summary>
+    public async Task<bool> HasBareReversalMarkerAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string employeeId, string entitlementType, int entitlementYear, CancellationToken ct = default)
+    {
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM vacation_settlements
+                WHERE employee_id = @employeeId
+                  AND entitlement_type = @entitlementType
+                  AND entitlement_year = @entitlementYear
+                  AND settlement_state = 'REVERSED'
+                  AND bare_reversal_not_due = TRUE)
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("employeeId", employeeId);
+        cmd.Parameters.AddWithValue("entitlementType", entitlementType);
+        cmd.Parameters.AddWithValue("entitlementYear", entitlementYear);
+        return await cmd.ExecuteScalarAsync(ct) is true;
+    }
+
+    /// <summary>
     /// In-transaction audit insert (ADR-018 D5 + ADR-019 D8 version-transition columns). Mirrors
     /// <see cref="EntitlementConfigRepository.AppendAuditAsync"/>; writes the
     /// <c>vacation_settlement_audit</c> row (action CHECK ∈ CREATED/UPDATED/DELETED/SUPERSEDED —
@@ -244,6 +305,13 @@ public sealed class VacationSettlementRepository
         ReviewDisposition = reader.IsDBNull(reader.GetOrdinal("review_disposition"))
             ? null
             : reader.GetString(reader.GetOrdinal("review_disposition")),
+        // S71 / TASK-7104 (SPRINT-71 R5/R10) — the §7/waiver resolved claim quantity + the R3
+        // bare-reversal marker, read so the reversal service can stamp ClaimDispositionDays onto
+        // SettlementReversed and so callers can observe the marker without raw SQL.
+        ClaimDispositionDays = reader.IsDBNull(reader.GetOrdinal("claim_disposition_days"))
+            ? null
+            : reader.GetDecimal(reader.GetOrdinal("claim_disposition_days")),
+        BareReversalNotDue = reader.GetBoolean(reader.GetOrdinal("bare_reversal_not_due")),
         // internal-Reviewer BLOCKER (Step-5a) — `version` is BIGINT (Orchestrator schema fix);
         // read it as Int64. GetInt32 would throw InvalidCastException on the BIGINT column. Matches
         // VacationTransferAgreementRepository.ReadAgreement + the system-wide `version BIGINT`.
@@ -294,8 +362,17 @@ public sealed record VacationSettlementRow
     /// <summary>§24 manual-reconciliation actor (paired-nullable with <see cref="PayoutReconciledAt"/>).</summary>
     public string? PayoutReconciledBy { get; init; }
 
-    /// <summary>PENDING_REVIEW operator outcome: FORFEIT / DEFER (CHECK; null until resolved).</summary>
+    /// <summary>PENDING_REVIEW operator outcome: FORFEIT / DEFER / MODREGNING / WAIVED
+    /// (CHECK, S71 R5 widened; null until resolved).</summary>
     public string? ReviewDisposition { get; init; }
+
+    /// <summary>S71 R5 — the §7/waiver resolved claim day-count (<c>claim_disposition_days</c>;
+    /// non-null exactly when <see cref="ReviewDisposition"/> is MODREGNING/WAIVED, DB-paired).</summary>
+    public decimal? ClaimDispositionDays { get; init; }
+
+    /// <summary>S71 R3 — the durable bare-reversal not-due marker (TRUE only on a REVERSED row;
+    /// TERMINAL in 3b — no operation clears it).</summary>
+    public bool BareReversalNotDue { get; init; }
 
     /// <summary>ADR-019 If-Match row version (sequence=1 first settlement starts at version 1).
     /// <c>long</c> to match the <c>version BIGINT</c> column (internal-Reviewer Step-5a) + the

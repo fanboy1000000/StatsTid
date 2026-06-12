@@ -194,6 +194,22 @@ public sealed class VacationSettlementService
             return SettlementOutcome.AlreadySettled(existing);
         }
 
+        // (2b) S71 / TASK-7104 (SPRINT-71 R3) — bare-reversal marker rejection, IN-LOCK. A tuple
+        // whose latest reversed row carries `bare_reversal_not_due` is TERMINAL in 3b: the Step-B
+        // enumeration's shared anti-join already excludes it, but THIS check is the in-lock twin
+        // (the S70 B1 lesson — every enumeration predicate re-evaluated under the lock). Without
+        // it, a direct/stale drive would re-settle the tuple at sequence 1 and collide with the
+        // REVERSED row's composite PK (a raw 23505 every poll). Benign NotDue: no row, no event,
+        // no throw — marker-clearing + the R1 g+1 revival are the REHIRE follow-up's obligation.
+        if (await _settlementRepo.HasBareReversalMarkerAsync(conn, tx, employeeId, entitlementType, entitlementYear, ct))
+        {
+            _logger.LogDebug(
+                "Vacation settlement NotDue for {EmployeeId}/{Type}/{Year}: the tuple carries the " +
+                "bare-reversal not-due marker (SPRINT-71 R3) — bare reversal is terminal in 3b.",
+                employeeId, entitlementType, entitlementYear);
+            return SettlementOutcome.NotDueUnderLock();
+        }
+
         // (3) The in-lock employee re-read — UNCONDITIONALLY terminated-inclusive (SPRINT-70 R9d):
         // Step B always runs AFTER Step A's deactivation flip, and the R4 leaver other-ferieår rows
         // settle with trigger=YEAR_END on an inactive employee — an is_active-filtered read would
@@ -232,7 +248,8 @@ public sealed class VacationSettlementService
             }
 
             return await SettleTerminationAsync(
-                conn, tx, employeeId, entitlementType, entitlementYear, user, ct);
+                conn, tx, employeeId, entitlementType, entitlementYear, user,
+                sequence: 1, superseding: false, ct);
         }
 
         // (3b) S70 R4 leaver fork + leak-proofing pin R4(b) — the leaver/no-partition decision keys
@@ -263,7 +280,31 @@ public sealed class VacationSettlementService
                 conn, tx, employeeId, entitlementType, entitlementYear, user, leaverEndDate, ct);
         }
 
-        // ACTIVE-employee YEAR_END auto-partition — the S68 pass, unchanged below this line.
+        // ACTIVE-employee YEAR_END auto-partition — the S68 pass, extracted VERBATIM into
+        // SettleActiveYearEndAsync for S71 supersession reuse (TASK-7104). sequence 1 +
+        // superseding:false keep this path byte-identical to the pre-S71 behavior.
+        return await SettleActiveYearEndAsync(
+            conn, tx, employeeId, entitlementType, entitlementYear, user,
+            sequence: 1, superseding: false, ct);
+    }
+
+    /// <summary>
+    /// The ACTIVE-employee YEAR_END auto-partition (the S68 pass, ADR-033 D5/D6/D10 — moved
+    /// method-bodily out of <see cref="SettleAsync"/> by S71 / TASK-7104 so
+    /// <see cref="ResettleSupersedingAsync"/> can reuse it at the R1 next-generation sequence).
+    /// <paramref name="sequence"/> is 1 on the normal first-settlement path;
+    /// <paramref name="superseding"/> hardens the supersession context: a 23505 single-settle
+    /// collision is RETHROWN (the reversal tx holds the advisory lock and just REVERSED the only
+    /// active row — a collision there is a defect, and the whole reversal must roll back), and
+    /// the SPRINT-71 R4 supersede-side fail-closed guard refuses a §21 <c>carryover_in</c> write
+    /// into a year that itself holds an active settlement row
+    /// (<see cref="SupersedingCarryoverConflictException"/> ⇒ FULL rollback by the caller).
+    /// </summary>
+    private async Task<SettlementOutcome> SettleActiveYearEndAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string employeeId, string entitlementType, int entitlementYear, User user,
+        int sequence, bool superseding, CancellationToken ct)
+    {
         // Capture the immutable snapshot (ADR-033 D3). All inputs are pinned as-of the boundary;
         // quantities below are a pure function of this object (no live re-derivation after capture).
         var (snapshot, snapshotJson) = await CaptureSnapshotAsync(
@@ -280,7 +321,8 @@ public sealed class VacationSettlementService
         var settlementState = hasForfeitCandidate ? "PENDING_REVIEW" : "SETTLED";
 
         // (6) Atomic writes — settlement row + audit, §21 carryover, events (outbox), audit_projection.
-        const int sequence = 1; // first settlement; reversal histories (slice 4) bump this.
+        // sequence: 1 on the first settlement; the S71 supersession path allocates the R1
+        // next-generation sequence (2g−1) and passes it in.
         var row = new VacationSettlementRow
         {
             EmployeeId = employeeId,
@@ -288,7 +330,7 @@ public sealed class VacationSettlementService
             EntitlementYear = entitlementYear,
             Sequence = sequence,
             SettlementState = settlementState,
-            Trigger = trigger,
+            Trigger = YearEndTrigger,
             SnapshotJson = snapshotJson,
             TransferDays = partition.TransferDays,
             PayoutDays = partition.PayoutDays,
@@ -296,7 +338,7 @@ public sealed class VacationSettlementService
             Version = 1,
         };
 
-        var actorId = $"system:settlement-close:{trigger}";
+        var actorId = $"system:settlement-close:{YearEndTrigger}";
         const string actorRole = "System";
 
         VacationSettlementRow persisted;
@@ -306,6 +348,12 @@ public sealed class VacationSettlementService
         }
         catch (DuplicateActiveSettlementException)
         {
+            // S71 / TASK-7104 — in the SUPERSEDING context this cannot be a benign race: the
+            // reversal tx holds the advisory lock and just REVERSED the tuple's only active row,
+            // so an active-index collision means a writer bypassed the R12 lock. Rethrow — the
+            // reversal service rolls back the WHOLE tx (R4 full-rollback-on-failed-leg).
+            if (superseding) throw;
+
             // The single-settle backstop fired between the in-lock re-check and the INSERT (a
             // concurrent poller committed first). Swallow benignly — exactly one settlement stands.
             _logger.LogInformation(
@@ -330,6 +378,23 @@ public sealed class VacationSettlementService
         // next-year row untouched. (The >0 case keeps its derived-overwrite shape — re-run idempotent.)
         if (partition.TransferDays > 0m)
         {
+            // S71 / TASK-7104 (SPRINT-71 R4) — the supersede-side fail-closed guard: a
+            // SUPERSEDING settlement must never write `carryover_in` into a year that itself
+            // holds an active settlement row (that year's recorded disposition is final; a
+            // retroactive carryover mutation would corrupt it). Throw ⇒ the reversal service
+            // rolls back the WHOLE reversal tx (no partial states — the original row stands).
+            if (superseding)
+            {
+                var nextYearActive = await _settlementRepo.GetActiveAsync(
+                    conn, tx, employeeId, entitlementType, entitlementYear + 1, ct);
+                if (nextYearActive is not null)
+                {
+                    throw new SupersedingCarryoverConflictException(
+                        employeeId, entitlementType, entitlementYear + 1,
+                        nextYearActive.SettlementState, nextYearActive.Trigger);
+                }
+            }
+
             await _balanceRepo.WriteCarryoverInAsync(
                 conn, tx, employeeId, entitlementType, entitlementYear + 1,
                 carryoverDays: partition.TransferDays, seedQuota: snapshot.AnnualQuota, ct);
@@ -354,7 +419,7 @@ public sealed class VacationSettlementService
                 ActorId = actorId,
                 ActorRole = actorRole,
             };
-            await EmitAsync(conn, tx, streamId, carryoverEvent, actorId, auditTargetOrgId, ct);
+            await EmitAsync(conn, tx, streamId, carryoverEvent, actorId, auditTargetOrgId, auditTargetOrgId, ct);
         }
 
         if (partition.PayoutDays > 0m)
@@ -370,7 +435,7 @@ public sealed class VacationSettlementService
                 ActorId = actorId,
                 ActorRole = actorRole,
             };
-            await EmitAsync(conn, tx, streamId, payoutEvent, actorId, auditTargetOrgId, ct);
+            await EmitAsync(conn, tx, streamId, payoutEvent, actorId, auditTargetOrgId, auditTargetOrgId, ct);
         }
 
         if (hasForfeitCandidate)
@@ -386,7 +451,7 @@ public sealed class VacationSettlementService
                 ActorId = actorId,
                 ActorRole = actorRole,
             };
-            await EmitAsync(conn, tx, streamId, flaggedEvent, actorId, auditTargetOrgId, ct);
+            await EmitAsync(conn, tx, streamId, flaggedEvent, actorId, auditTargetOrgId, auditTargetOrgId, ct);
         }
 
         _logger.LogInformation(
@@ -419,7 +484,8 @@ public sealed class VacationSettlementService
     /// </summary>
     private async Task<SettlementOutcome> SettleTerminationAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
-        string employeeId, string entitlementType, int entitlementYear, User user, CancellationToken ct)
+        string employeeId, string entitlementType, int entitlementYear, User user,
+        int sequence, bool superseding, CancellationToken ct)
     {
         // R5/R4(b) — the crystallization boundary is the IN-LOCK re-read employment_end_date.
         var endDate = user.EmploymentEndDate
@@ -452,7 +518,8 @@ public sealed class VacationSettlementService
         snapshot = snapshot with { CrystallizedDays = crystallization.CrystallizedDays };
         var snapshotJson = JsonSerializer.Serialize(snapshot, SnapshotJson);
 
-        const int sequence = 1; // first settlement; reversal histories (3b) bump this.
+        // sequence: 1 on the first settlement; the S71 supersession path (ResettleSupersedingAsync)
+        // allocates the R1 next-generation sequence (2g−1) and passes it in.
         var row = new VacationSettlementRow
         {
             EmployeeId = employeeId,
@@ -478,6 +545,13 @@ public sealed class VacationSettlementService
         }
         catch (DuplicateActiveSettlementException)
         {
+            // S71 / TASK-7104 — in the SUPERSEDING context this cannot be a benign race nor an
+            // R7b conflict to flag: the reversal tx holds the advisory lock and just REVERSED
+            // the tuple's only active row, so an active-index collision means a writer bypassed
+            // the R12 lock. Rethrow — the reversal service rolls back the WHOLE reversal tx
+            // (SPRINT-71 R4 full-rollback-on-failed-leg; the original row stands).
+            if (superseding) throw;
+
             // BLOCKER B3 (Codex Step-5a, TASK-7004 fix-forward) — SPRINT-70 R7b in the 23505
             // RECOVERY branch. Tx mechanics (verified): InsertAsync SAVEPOINT-wraps its INSERT and
             // ROLLBACK-TO-SAVEPOINTs before surfacing this exception (VacationSettlementRepository
@@ -540,7 +614,7 @@ public sealed class VacationSettlementService
             ActorId = actorId,
             ActorRole = actorRole,
         };
-        await EmitAsync(conn, tx, streamId, terminationEvent, actorId, auditTargetOrgId, ct);
+        await EmitAsync(conn, tx, streamId, terminationEvent, actorId, auditTargetOrgId, auditTargetOrgId, ct);
 
         if (string.Equals(crystallization.SettlementState, StatePendingReview, StringComparison.Ordinal))
         {
@@ -557,7 +631,7 @@ public sealed class VacationSettlementService
                 ActorId = actorId,
                 ActorRole = actorRole,
             };
-            await EmitAsync(conn, tx, streamId, flaggedEvent, actorId, auditTargetOrgId, ct);
+            await EmitAsync(conn, tx, streamId, flaggedEvent, actorId, auditTargetOrgId, auditTargetOrgId, ct);
         }
 
         _logger.LogInformation(
@@ -651,7 +725,7 @@ public sealed class VacationSettlementService
             ActorId = actorId,
             ActorRole = actorRole,
         };
-        await EmitAsync(conn, tx, streamId, flaggedEvent, actorId, user.PrimaryOrgId, ct);
+        await EmitAsync(conn, tx, streamId, flaggedEvent, actorId, user.PrimaryOrgId, user.PrimaryOrgId, ct);
 
         _logger.LogInformation(
             "Vacation settlement PENDING_REVIEW (leaver deferred-disposition) for {EmployeeId}/{Type}/{Year}: " +
@@ -696,7 +770,7 @@ public sealed class VacationSettlementService
             ActorId = actorId,
             ActorRole = actorRole,
         };
-        await EmitAsync(conn, tx, $"employee-{employeeId}", flaggedEvent, actorId, user.PrimaryOrgId, ct);
+        await EmitAsync(conn, tx, $"employee-{employeeId}", flaggedEvent, actorId, user.PrimaryOrgId, user.PrimaryOrgId, ct);
 
         _logger.LogWarning(
             "Vacation settlement REFUSED (SPRINT-70 R7b): TERMINATION for {EmployeeId}/{Type}/{Year} conflicts " +
@@ -749,6 +823,116 @@ public sealed class VacationSettlementService
         if (endDate >= copenhagenToday) return false;                            // (2b) not passed
         if (leaverGoLiveFloor is { } floor && endDate <= floor) return false;    // (3) D13 pre-go-live ⇒ manual fallback
         return ResolveTerminationFerieaar(endDate) == entitlementYear;           // (4) R6 tuple match
+    }
+
+    /// <summary>
+    /// S71 / TASK-7104 (SPRINT-71 R4) — the supersede-as-YEAR_END in-lock eligibility predicate:
+    /// the superseding settlement may run the ACTIVE §21/§24 auto-partition for the tuple year iff
+    /// (1) the in-tx CORRECTED user is ACTIVE (the S70 R4 ACTIVE-branch leak-proofing: a
+    /// manually-inactive user is never auto-partitioned), (2) the user is NOT a passed-end-date
+    /// leaver (the second leak-proofing pin — a leaver must never traverse the §21/§24
+    /// auto-partition; a future-dated end date is fine, mirroring the enumeration's ACTIVE
+    /// branch), (3) the tuple's §21/§24 boundary (31 Dec of the ferieår-end year — the
+    /// <c>SettlementCloseService.IsBoundaryPassed</c> geometry verbatim) falls STRICTLY AFTER the
+    /// D13 go-live floor (null floor = clause waived, the direct/test-drive shape), and (4) that
+    /// boundary has PASSED on the Copenhagen business date. PURE; unit-pinned.
+    /// NOTE (declared): a passed-end-date leaver's OTHER-ferieår deferred-disposition row is NOT
+    /// supersede-eligible in 3b — re-creating an identical fail-closed row is pointless and the
+    /// pinned R4 eligibility list names only TERMINATION and the ACTIVE-branch YEAR_END; such a
+    /// state yields NotDue ⇒ the reversal service full-rolls-back (bare reversal or the existing
+    /// FORFEIT/DEFER resolve are the operator's channels there).
+    /// </summary>
+    public static bool IsYearEndSupersedeDueUnderLock(
+        bool isActive, DateOnly? employmentEndDate, int entitlementYear, int resetMonth,
+        DateOnly? supersedeGoLiveFloor, DateOnly copenhagenToday)
+    {
+        if (!isActive) return false;                                             // (1) ACTIVE branch only
+        if (employmentEndDate is { } endDate && endDate < copenhagenToday)
+            return false;                                                        // (2) leak-proofing: passed-end-date leaver
+        var ferieaarEnd = new DateOnly(entitlementYear, resetMonth, 1).AddYears(1).AddDays(-1);
+        var boundary = new DateOnly(ferieaarEnd.Year, 12, 31);                   // §21 31-Dec deadline (IsBoundaryPassed geometry)
+        if (supersedeGoLiveFloor is { } floor && boundary <= floor)
+            return false;                                                        // (3) D13 pre-go-live boundary ⇒ manual fallback
+        return copenhagenToday > boundary;                                       // (4) boundary passed
+    }
+
+    /// <summary>
+    /// S71 / TASK-7104 (SPRINT-71 R1/R4) — the SUPERSEDING settlement entry point, callable ONLY
+    /// from <see cref="SettlementReversalService"/> inside the reversal tx (under the R12 advisory
+    /// lock, AFTER the active row was CAS-reversed and any end-date correction applied). NOT
+    /// top-level <see cref="SettleAsync"/>: its active-row no-op check would mis-handle the
+    /// just-REVERSED tuple, its sequence-1 allocation collides with history, and its own due
+    /// dispatch (incl. the leaver-deferred fork) is not the pinned supersession eligibility.
+    ///
+    /// <para>
+    /// Re-reads the employee from the CURRENT in-tx state (the corrected facts win — R4) and
+    /// dispatches TRIGGER-SPECIFICALLY: supersede-as-TERMINATION via ALL
+    /// <see cref="IsTerminationDueUnderLock"/> clauses (incl. the caller-supplied D13 go-live
+    /// floor), else supersede-as-YEAR_END via <see cref="IsYearEndSupersedeDueUnderLock"/>
+    /// (boundary-passed + post-go-live + the S70 ACTIVE-branch leak-proofing predicates; the
+    /// reset_month geometry resolves via the close-service live-config chain — unresolvable
+    /// geometry ⇒ ineligible). NEITHER predicate holding ⇒ the benign
+    /// <see cref="SettlementOutcome.NotDueUnderLock"/> — the caller treats the supersession leg
+    /// as FAILED and rolls back the WHOLE reversal tx (no partial states). The reused internals
+    /// run with <c>superseding: true</c>: 23505 rethrown raw, and the R4 supersede-side
+    /// fail-closed carryover guard armed (<see cref="SupersedingCarryoverConflictException"/>).
+    /// </para>
+    /// </summary>
+    /// <param name="conn">The reversal service's open connection (holds the R12 advisory lock).</param>
+    /// <param name="tx">The reversal tx (the CAS-reverse + request-VOID + any end-date correction already ride it).</param>
+    /// <param name="employeeId">The employee.</param>
+    /// <param name="entitlementType">The entitlement type (the reversed row's).</param>
+    /// <param name="entitlementYear">The reversed row's tuple year — the supersession re-settles the SAME tuple.</param>
+    /// <param name="supersedingSequence">The R1 next-generation row sequence (2g−1), derived from the tuple's recorded history.</param>
+    /// <param name="supersedeGoLiveFloor">The D13 go-live floor (caller-supplied; null = clause waived, the direct/test-drive shape).</param>
+    /// <param name="ct">Cancellation token.</param>
+    internal async Task<SettlementOutcome> ResettleSupersedingAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string employeeId, string entitlementType, int entitlementYear,
+        int supersedingSequence, DateOnly? supersedeGoLiveFloor, CancellationToken ct)
+    {
+        // The CURRENT in-tx user state (R9d terminated-inclusive; sees the lifecycle write the
+        // reversal tx just applied — the corrected facts decide eligibility, never stale input).
+        var user = await _userRepo.GetByIdIncludingTerminatedAsync(conn, tx, employeeId, ct)
+            ?? throw new InvalidOperationException(
+                $"Vacation settlement supersession: employee {employeeId} not found.");
+        var today = CopenhagenToday();
+
+        // (a) supersede-as-TERMINATION — ALL clauses incl. the go-live floor (SPRINT-71 R4).
+        if (IsTerminationDueUnderLock(
+                user.IsActive, user.EmploymentEndDate, entitlementYear, supersedeGoLiveFloor, today))
+        {
+            return await SettleTerminationAsync(
+                conn, tx, employeeId, entitlementType, entitlementYear, user,
+                supersedingSequence, superseding: true, ct);
+        }
+
+        // (b) supersede-as-YEAR_END — the ACTIVE auto-partition geometry. reset_month resolves on
+        // the close-service live-config chain (users.agreement_code + ok_version); no resolvable
+        // config ⇒ no geometry ⇒ ineligible (mirrors the enumeration's unconfigured-skip).
+        var liveConfig = await _configRepo.GetCurrentOpenAsync(
+            entitlementType, user.AgreementCode, user.OkVersion, ct);
+        if (liveConfig is not null
+            && IsYearEndSupersedeDueUnderLock(
+                user.IsActive, user.EmploymentEndDate, entitlementYear,
+                liveConfig.ResetMonth, supersedeGoLiveFloor, today))
+        {
+            return await SettleActiveYearEndAsync(
+                conn, tx, employeeId, entitlementType, entitlementYear, user,
+                supersedingSequence, superseding: true, ct);
+        }
+
+        // Neither trigger-specific predicate holds against the CORRECTED in-tx state ⇒ the
+        // supersession leg fails: the reversal service rolls back EVERYTHING (R4 — no reversal
+        // either; the original row stands; the operator's alternative is the explicit bare verb).
+        _logger.LogDebug(
+            "Vacation settlement supersession NotDue for {EmployeeId}/{Type}/{Year}: neither the " +
+            "TERMINATION nor the ACTIVE YEAR_END eligibility predicate holds against the corrected " +
+            "in-tx state (isActive={IsActive}, endDate={EndDate}, floor={Floor}) — the reversal " +
+            "service performs the R4 full rollback.",
+            employeeId, entitlementType, entitlementYear,
+            user.IsActive, user.EmploymentEndDate, supersedeGoLiveFloor);
+        return SettlementOutcome.NotDueUnderLock();
     }
 
     /// <summary>
@@ -1247,9 +1431,15 @@ public sealed class VacationSettlementService
     // dispatched FROM this BackgroundService-invoked site via the registry (NOT an endpoint).
     // ------------------------------------------------------------------
 
-    private async Task EmitAsync(
+    // internal (S71 / TASK-7104): SettlementReversalService reuses this exact outbox +
+    // audit_projection dispatch shape for the SettlementReversed emission (same assembly).
+    // actorOrgId: the OPERATOR's org for operator-driven events (the request-endpoint /
+    // lifecycle-writer convention); the close-service (system-actor) sites pass the employee
+    // org for BOTH — the S68 recorded convention, a system actor has no org of its own.
+    internal async Task EmitAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
-        string streamId, IDomainEvent @event, string actorId, string targetOrgId, CancellationToken ct)
+        string streamId, IDomainEvent @event, string actorId, string? actorOrgId, string targetOrgId,
+        CancellationToken ct)
     {
         // Enqueue first to capture the outbox_id (aligns audit_projection.outbox_id with the global
         // outbox sequence; ADR-026 D13 ordering), then write the projection row in the SAME tx.
@@ -1257,7 +1447,7 @@ public sealed class VacationSettlementService
 
         var auditCtx = new AuditProjectionContext(
             ActorId: actorId,
-            ActorPrimaryOrgId: targetOrgId,
+            ActorPrimaryOrgId: actorOrgId,
             CorrelationId: @event.CorrelationId,
             OccurredAt: new DateTimeOffset(DateTime.SpecifyKind(@event.OccurredAt, DateTimeKind.Utc)),
             ResolvedTargetOrgId: targetOrgId);
@@ -1364,4 +1554,39 @@ public sealed record SettlementOutcome
     /// (no row, no event, no throw; see <see cref="NotDue"/>).</summary>
     public static SettlementOutcome NotDueUnderLock() =>
         new() { DidSettle = false, Row = null, Partition = null, NotDue = true };
+}
+
+/// <summary>
+/// S71 / TASK-7104 (SPRINT-71 R4) — raised by the SUPERSEDING settlement path when its §21
+/// partition would write <c>carryover_in</c> into a year that itself holds an active
+/// (non-REVERSED) settlement row: that year's recorded disposition is final, and a retroactive
+/// carryover mutation would corrupt it. The reversal service catches this and performs the R4
+/// FULL rollback (no reversal either — the original row stands; the operator is told why).
+/// </summary>
+public sealed class SupersedingCarryoverConflictException : Exception
+{
+    public string EmployeeId { get; }
+    public string EntitlementType { get; }
+
+    /// <summary>The year the §21 carryover would have been written INTO (reversed-year + 1).</summary>
+    public int ConflictingYear { get; }
+
+    public string ConflictingState { get; }
+    public string ConflictingTrigger { get; }
+
+    public SupersedingCarryoverConflictException(
+        string employeeId, string entitlementType, int conflictingYear,
+        string conflictingState, string conflictingTrigger)
+        : base(
+            $"Superseding settlement for (employee_id='{employeeId}', type='{entitlementType}') would " +
+            $"write §21 carryover_in into year {conflictingYear}, which holds an active " +
+            $"{conflictingTrigger}/{conflictingState} settlement row — fail closed (SPRINT-71 R4 " +
+            "supersede-side guard); the whole reversal rolls back.")
+    {
+        EmployeeId = employeeId;
+        EntitlementType = entitlementType;
+        ConflictingYear = conflictingYear;
+        ConflictingState = conflictingState;
+        ConflictingTrigger = conflictingTrigger;
+    }
 }

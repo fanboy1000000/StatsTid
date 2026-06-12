@@ -303,6 +303,14 @@ public static class BalanceEndpoints
                     // SETTLED — the year is fully disposed: remaining reads 0, the disposition is the
                     // recorded §21/§24/§34 partition (the FULL partition; a SUPERSET of the D9 expiring
                     // figure, which is the §34 forfeit bucket alone — ADR-033 D6 clarification).
+                    //
+                    // S71 / TASK-7103 (SPRINT-71 R5) — the termination CLAIM disposition renders
+                    // DISTINCTLY: a WAIVED (slice-3b waive-in-full of the §7-shaped over-taken claim)
+                    // TERMINATION row carries reviewDisposition = "WAIVED" +
+                    // claimDispositionDays = the waived quantity, with forfeitDays CLEARED to 0 by
+                    // the resolve verb — the claim never reads as §34 forfeiture and never as a
+                    // positive pending remainder (remaining stays 0; the SETTLED zero-bucket
+                    // rendering for unwaived rows is unchanged: both new fields are null there).
                     displayedRemaining = 0m;
                     settlementInfo = new
                     {
@@ -310,7 +318,9 @@ public static class BalanceEndpoints
                         transferDays = settlement.TransferDays,   // §21 — to next-year carryover_in
                         payoutDays = settlement.PayoutDays,       // §24 — auto-payout (day-count line, S69)
                         forfeitDays = settlement.ForfeitDays,     // §34 — == the D9 expiring bucket
-                        forfeitPending = false
+                        forfeitPending = false,
+                        reviewDisposition = settlement.ReviewDisposition,           // FORFEIT / WAIVED / null
+                        claimDispositionDays = settlement.ClaimDispositionDays      // non-null iff MODREGNING/WAIVED
                     };
                 }
                 else
@@ -318,7 +328,10 @@ public static class BalanceEndpoints
                     // PENDING_REVIEW — the auto-resolved §21/§24 buckets are disposed, but the §34
                     // forfeit_days remainder is UNRESOLVED (a human must adjudicate §34-vs-§22, ADR-033
                     // D10). It is shown as STILL PENDING (flagged), NOT counted as 0 (Codex W): the
-                    // displayed remaining is exactly that unresolved §34 remainder.
+                    // displayed remaining is exactly that unresolved §34 remainder. (S71: the two
+                    // claim fields are surfaced for shape-uniformity with the SETTLED branch — a
+                    // PENDING_REVIEW row can carry reviewDisposition only as the DEFER marker, and
+                    // claimDispositionDays is always null here by the 7100 pairing CHECK.)
                     displayedRemaining = Math.Round(settlement.ForfeitDays, 2);
                     settlementInfo = new
                     {
@@ -326,7 +339,9 @@ public static class BalanceEndpoints
                         transferDays = settlement.TransferDays,
                         payoutDays = settlement.PayoutDays,
                         forfeitDays = settlement.ForfeitDays,
-                        forfeitPending = true
+                        forfeitPending = true,
+                        reviewDisposition = settlement.ReviewDisposition,           // DEFER / null
+                        claimDispositionDays = settlement.ClaimDispositionDays      // always null (CHECK)
                     };
                 }
 
@@ -1031,7 +1046,14 @@ public static class BalanceEndpoints
                         payoutDays = closedSettlement.PayoutDays,       // §24
                         forfeitDays = closedSettlement.ForfeitDays,     // §34 — == displayedExpiring
                         // PENDING_REVIEW: the §34 remainder is still unresolved (flagged, NOT 0; Codex W).
-                        forfeitPending = pending
+                        forfeitPending = pending,
+                        // S71 / TASK-7103 (SPRINT-71 R5) — the termination claim disposition renders
+                        // DISTINCTLY (same shape as the /summary settled-year reader): a WAIVED row
+                        // shows "WAIVED" + the waived quantity with forfeit_days already cleared to 0
+                        // by the resolve verb, so `expiring` reads 0 — never §34 forfeiture. Null for
+                        // every unwaived row.
+                        reviewDisposition = closedSettlement.ReviewDisposition,
+                        claimDispositionDays = closedSettlement.ClaimDispositionDays
                     };
                 }
 

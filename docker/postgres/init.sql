@@ -2659,7 +2659,23 @@ CREATE TABLE IF NOT EXISTS vacation_settlements (
     forfeit_days            NUMERIC(6,2)  NOT NULL DEFAULT 0,
     payout_reconciled_at    TIMESTAMPTZ   NULL,
     payout_reconciled_by    TEXT          NULL,
-    review_disposition      TEXT          NULL CHECK (review_disposition IS NULL OR review_disposition IN ('FORFEIT', 'DEFER')),
+    -- review_disposition value set + state coupling live in the NAMED table
+    -- constraints below (S71 slice 3b widened them; the named form is shared by
+    -- the greenfield CREATE and the 's71-slice3b-termination-emission-schema'
+    -- legacy block near EOF so both paths converge on identical constraint names).
+    review_disposition      TEXT          NULL,
+    -- S71 slice 3b (SPRINT-71 R5): the §7 modregning / waiver resolved claim
+    -- quantity, recorded in its OWN column so a §7-deducted or waived termination
+    -- claim never reads as §34 forfeiture (forfeit_days). Non-null exactly when
+    -- review_disposition is MODREGNING/WAIVED (paired CHECK below).
+    claim_disposition_days  NUMERIC(6,2)  NULL,
+    -- S71 slice 3b (SPRINT-71 R3): durable bare-reversal not-due marker. TRUE only
+    -- on a REVERSED row (CHECK below). The SettlementCloseService Step-B anti-join
+    -- treats a tuple holding a marker row as not-due, so a bare-reversed tuple is
+    -- never re-enumerated. NO 3b operation clears the marker (bare reversal is
+    -- TERMINAL in 3b; marker-clearing + the g+1 revival are the REHIRE/recovery
+    -- follow-up's first obligation).
+    bare_reversal_not_due   BOOLEAN       NOT NULL DEFAULT FALSE,
     version                 BIGINT        NOT NULL DEFAULT 1,
     created_at              TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
     updated_at              TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
@@ -2676,13 +2692,39 @@ CREATE TABLE IF NOT EXISTS vacation_settlements (
     ),
     -- sequence/version are 1-based counters (first settlement = sequence 1, version 1).
     CONSTRAINT vacation_settlements_positive_counters CHECK (sequence >= 1 AND version >= 1),
+    -- Disposition value set (S71 slice 3b R5 widened the S68 FORFEIT/DEFER pair with
+    -- MODREGNING — §7 stk.1 deduct-in-full — and WAIVED — waive-in-full). NAMED (not an
+    -- inline column CHECK) so the legacy DROP/re-ADD path converges on the same name.
+    CONSTRAINT vacation_settlements_review_disposition CHECK (
+        review_disposition IS NULL
+        OR review_disposition IN ('FORFEIT', 'DEFER', 'MODREGNING', 'WAIVED')
+    ),
     -- State/disposition coupling: a DEFER outcome (suspected §22-feriehindring) leaves the row
-    -- PENDING_REVIEW until slice 4 models the impediment — DEFER+SETTLED/REVERSED is impossible;
-    -- a FORFEIT outcome resolved the review, so it can never coexist with PENDING_REVIEW.
+    -- PENDING_REVIEW until slice 4 models the impediment — BUT a DEFER-marked row may be
+    -- REVERSED with its DEFER history PRESERVED (S71 slice 3b R5: reversal never destroys the
+    -- marker), so DEFER admits PENDING_REVIEW or REVERSED while DEFER+SETTLED stays impossible.
+    -- FORFEIT/MODREGNING/WAIVED each RESOLVED the review, so none can coexist with
+    -- PENDING_REVIEW (they ride SETTLED, and survive on REVERSED rows for history).
     CONSTRAINT vacation_settlements_disposition_state CHECK (
         review_disposition IS NULL
-        OR (review_disposition = 'DEFER'   AND settlement_state =  'PENDING_REVIEW')
-        OR (review_disposition = 'FORFEIT' AND settlement_state <> 'PENDING_REVIEW')
+        OR (review_disposition = 'DEFER' AND settlement_state IN ('PENDING_REVIEW', 'REVERSED'))
+        OR (review_disposition IN ('FORFEIT', 'MODREGNING', 'WAIVED') AND settlement_state <> 'PENDING_REVIEW')
+    ),
+    -- S71 slice 3b (R3): the bare-reversal marker is meaningful only on a REVERSED row.
+    CONSTRAINT vacation_settlements_bare_reversal_reversed_only CHECK (
+        bare_reversal_not_due = FALSE OR settlement_state = 'REVERSED'
+    ),
+    -- S71 slice 3b (R5): the resolved claim quantity is a non-negative day-count …
+    CONSTRAINT vacation_settlements_claim_disposition_nonneg CHECK (
+        claim_disposition_days IS NULL OR claim_disposition_days >= 0
+    ),
+    -- … and is recorded EXACTLY when the disposition is MODREGNING/WAIVED (bidirectional:
+    -- a §7/waived claim without its quantity would lose the legal record — the quantity
+    -- must live HERE, never in forfeit_days; and a quantity without a claim disposition
+    -- is meaningless). The IS NOT NULL guard keeps the comparison NULL-safe.
+    CONSTRAINT vacation_settlements_claim_disposition_paired CHECK (
+        (claim_disposition_days IS NOT NULL)
+        = (review_disposition IS NOT NULL AND review_disposition IN ('MODREGNING', 'WAIVED'))
     )
 );
 
@@ -2801,38 +2843,65 @@ $$;
 -- =========================================================================
 
 -- settlement_payroll_inbox — consumer inbox/checkpoint (ADR-033 D4). The
--- AUTHORITATIVE exactly-once dedup: PK = source_event_id (events.event_id of the
--- consumed VacationAutoPaidOut), so a redelivered event collides on INSERT and
--- the emitter is a no-op. processing_status drives a retry lifecycle:
--- RETRY_PENDING is the ONLY non-terminal status; the lifecycle is
--- RETRY_PENDING -> {PROCESSED | SKIPPED_RECONCILED | DEAD_LETTER} and writes move
--- MONOTONICALLY toward a terminal status (a terminal row is never reopened —
--- ADR-033 D4 / Sprint-69 Step-0b C2-B1/C3-B1/C4-B1). SKIPPED_RECONCILED is the
--- reconcile XOR claim outcome (the operator marked payout_reconciled_at before
--- the emitter claimed the bucket → no line is staged). DEAD_LETTER parks an
--- exhausted-retry row for operator inspection (last_error carries the cause).
+-- AUTHORITATIVE exactly-once dedup: PK = (source_event_id, bucket) — S71 slice 3b
+-- (SPRINT-71 R7) widened the S69 single-column source_event_id PK so ONE consumed
+-- event may legally checkpoint MULTIPLE buckets (the SettlementReversed consumer
+-- compensates every staged bucket of the reversed settlement row, one checkpoint
+-- per (event, bucket), all written atomically in ONE tx — no partial subset can
+-- commit). A redelivered event collides per bucket and the consumer is a no-op.
+-- processing_status drives a retry lifecycle: RETRY_PENDING is the ONLY
+-- non-terminal status; the lifecycle is RETRY_PENDING -> {PROCESSED |
+-- SKIPPED_RECONCILED | SKIPPED_VOIDED | DEAD_LETTER} and writes move MONOTONICALLY
+-- toward a terminal status (a terminal row is never reopened — ADR-033 D4 /
+-- Sprint-69 Step-0b C2-B1/C3-B1/C4-B1; SPRINT-71 R7 extends the monotonic rule
+-- per bucket AND at event level). SKIPPED_RECONCILED is the reconcile XOR claim
+-- outcome (the operator marked payout_reconciled_at before the emitter claimed
+-- the bucket → no line is staged). SKIPPED_VOIDED (S71/R6/R9) records the
+-- under-lock active-settlement re-check outcome: the settlement row was REVERSED
+-- (or the §26 request VOIDED) before this consumer staged → no line, terminal.
+-- DEAD_LETTER parks an exhausted-retry/poison/collision row for operator
+-- inspection (last_error carries the cause).
+--
+-- The '_EVENT' sentinel bucket (SPRINT-71 R7): EVENT-level rows that are not
+-- bucket-scoped key at bucket = '_EVENT'. A TERMINAL '_EVENT' row (DEAD_LETTER —
+-- poison/collision/retry-budget) is mutually exclusive with real-bucket
+-- checkpoints and suppresses ALL subsequent processing of that source event
+-- (bucket-keyed status reads MUST treat it as covering every bucket); transient
+-- failure diagnostics (RETRY_PENDING attempts/last_error) ALSO key at '_EVENT'
+-- (non-terminal) and are PROMOTED to the terminal status when the event later
+-- completes (the event-level monotonic completion). A SettlementReversed event
+-- with nothing to compensate writes a terminal '_EVENT' PROCESSED no-op
+-- checkpoint.
 --
 -- The settlement-identity columns (employee_id, entitlement_type, entitlement_year,
--- sequence, bucket) are NULLABLE — ONLY to permit a poison/parse-failure DEAD_LETTER
--- row. When EventSerializer.Deserialize of a VacationAutoPaidOut payload throws, the
--- event has NO recoverable identity, so the emitter dead-letters it keyed solely by
--- source_event_id (status DEAD_LETTER + last_error) to mark it terminal and stop the
--- poll from re-selecting it forever (S69 Step-7a FIX 1). EVERY normal (claim/skip/
--- retry) inbox write still populates all five identity columns; the nullable employee_id
--- FK is enforced on non-null values only.
+-- sequence) are NULLABLE — ONLY to permit a poison/parse-failure DEAD_LETTER
+-- row. When EventSerializer.Deserialize of a settlement event payload throws, the
+-- event has NO recoverable identity, so the emitter dead-letters it at
+-- (source_event_id, '_EVENT') (status DEAD_LETTER + last_error; identity columns
+-- NULL) to mark it terminal and stop the poll from re-selecting it forever (S69
+-- Step-7a FIX 1; bucket is NOT NULL since S71 — the poison row carries the
+-- '_EVENT' sentinel instead of NULL). EVERY normal (claim/skip/retry) inbox write
+-- still populates all four identity columns; the nullable employee_id FK is
+-- enforced on non-null values only. The `sequence` column carries the line's
+-- EXPORT sequence (SPRINT-71 R1/R2: original lines = the odd settlement-row
+-- sequence 2g−1; compensating reversal lines = the even export sequence 2g).
 CREATE TABLE IF NOT EXISTS settlement_payroll_inbox (
-    source_event_id     UUID          PRIMARY KEY,   -- events.event_id of the consumed VacationAutoPaidOut; authoritative consumer dedup
+    source_event_id     UUID          NOT NULL,      -- events.event_id of the consumed settlement event; (source_event_id, bucket) is the authoritative consumer dedup
     employee_id         TEXT          NULL REFERENCES users(user_id),   -- NULL only on a poison/parse-failure DEAD_LETTER row (no recoverable identity)
     entitlement_type    TEXT          NULL,          -- NULL only on a poison DEAD_LETTER row
     entitlement_year    INT           NULL,          -- NULL only on a poison DEAD_LETTER row
-    sequence            INT           NULL,          -- NULL only on a poison DEAD_LETTER row
-    bucket              TEXT          NULL,           -- 'AUTO_PAYOUT_24' for normal rows; NULL only on a poison DEAD_LETTER row
-    processing_status   TEXT          NOT NULL CHECK (processing_status IN ('RETRY_PENDING', 'PROCESSED', 'SKIPPED_RECONCILED', 'DEAD_LETTER')),
+    sequence            INT           NULL,          -- the EXPORT sequence (R1/R2); NULL only on a poison DEAD_LETTER row
+    bucket              TEXT          NOT NULL,      -- 'AUTO_PAYOUT_24' / 'TERMINATION_PAYOUT_26' for bucket checkpoints; '_EVENT' for event-level rows (poison, diagnostics, no-op)
+    processing_status   TEXT          NOT NULL,
     attempts            INT           NOT NULL DEFAULT 0 CHECK (attempts >= 0),
     last_error          TEXT          NULL,
     processed_at        TIMESTAMPTZ   NULL,
     created_at          TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
-    updated_at          TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+    updated_at          TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    CONSTRAINT settlement_payroll_inbox_pkey PRIMARY KEY (source_event_id, bucket),
+    CONSTRAINT settlement_payroll_inbox_processing_status CHECK (
+        processing_status IN ('RETRY_PENDING', 'PROCESSED', 'SKIPPED_RECONCILED', 'SKIPPED_VOIDED', 'DEAD_LETTER')
+    )
 );
 
 -- Retry-selection driver: the poll scans only RETRY_PENDING rows (the single
@@ -2874,9 +2943,30 @@ CREATE TABLE IF NOT EXISTS settlement_export_lines (
     position            TEXT          NOT NULL DEFAULT '',
     period_start        DATE          NOT NULL,
     period_end          DATE          NOT NULL,
-    source_event_id     UUID          NOT NULL,       -- the originating VacationAutoPaidOut event_id (collision verification, C2-B2)
+    source_event_id     UUID          NOT NULL,       -- the originating settlement event_id (collision verification, C2-B2)
+    -- S71 slice 3b (SPRINT-71 R8): reversal-line discrimination. A REVERSAL line is the
+    -- compensating entry for exactly one earlier line — it copies the compensated line's
+    -- mapping/period/quantity, points at it via reverses_line_id (the source event id
+    -- identifies the reversal EVENT, not the original LINE — the FK is the unambiguous
+    -- reference) and uses the R1 even export sequence. hours stays >= 0: direction is
+    -- line_kind + SLS-side semantics, NEVER a negative quantity. Pre-S71 rows backfill
+    -- line_kind='ORIGINAL' via the DEFAULT (legacy path: the
+    -- 's71-slice3b-termination-emission-schema' block near EOF). Originals are never
+    -- mutated or deleted (R9/P3) — reversal is purely additive.
+    line_kind           TEXT          NOT NULL DEFAULT 'ORIGINAL',
+    reverses_line_id    BIGINT        NULL,
     created_at          TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
-    created_by          TEXT          NOT NULL        -- the emitter identity
+    created_by          TEXT          NOT NULL,       -- the emitter identity
+    CONSTRAINT settlement_export_lines_line_kind CHECK (
+        line_kind IN ('ORIGINAL', 'REVERSAL')
+    ),
+    -- A line carries a reverses pointer IFF it is a REVERSAL line (line_kind is NOT NULL,
+    -- so the equality is never NULL-ambiguous on the right side).
+    CONSTRAINT settlement_export_lines_reversal_pairing CHECK (
+        (reverses_line_id IS NOT NULL) = (line_kind = 'REVERSAL')
+    ),
+    CONSTRAINT settlement_export_lines_reverses_line_fk
+        FOREIGN KEY (reverses_line_id) REFERENCES settlement_export_lines (line_id)
 );
 
 -- Authoritative LINE dedup: at most one §24 line per settlement bucket.
@@ -3003,5 +3093,408 @@ BEGIN
     ALTER TABLE users ADD COLUMN IF NOT EXISTS employment_end_date DATE NULL;
 
     ALTER TABLE users ADD COLUMN IF NOT EXISTS end_date_deactivated BOOLEAN NOT NULL DEFAULT FALSE;
+END
+$$;
+
+-- =========================================================================
+-- SPRINT 71 / ADR-033 slice 3b — TERMINATION payroll emission + reversal
+--   infrastructure schema (SPRINT-71 TASK-7100; pinned rules R3/R5/R6/R8).
+--
+-- Four schema units:
+--   (1) termination_payout_requests — the §26 anmodning record (R6). Ferieloven
+--       §26 stk.1 pays "efter anmodning": the REQUEST, not the settlement,
+--       drives the staged SLS_TBD_S26 line. Keyed to the EXACT settlement row
+--       via a composite FK onto vacation_settlements' PK (employee_id,
+--       entitlement_type, entitlement_year, sequence) — never the bare year
+--       tuple (R2: requests/CAS key on the SETTLEMENT sequence; consumers
+--       derive the EXPORT sequence per R1). Lifecycle OPEN -> LINE_STAGED ->
+--       VOIDED_BY_REVERSAL (D-D: no external-payment variant in 3b; D-E:
+--       reversal VOIDs the open request in the same tx and HR re-records
+--       against the new settlement row). The partial-unique index pins ONE
+--       non-voided request per settlement row. Brand-new table, so the
+--       top-level CREATE TABLE IF NOT EXISTS is legacy-safe by construction
+--       (the S69 settlement_payroll_inbox precedent) — only the EXISTING-table
+--       changes ride the guarded DO block below.
+--   (2) vacation_settlements.bare_reversal_not_due (R3) — durable not-due
+--       marker for a bare reversal (reverse WITHOUT a superseding settlement).
+--       CHECK: TRUE only on REVERSED rows. The Step-B enumeration anti-join
+--       treats a marker-holding tuple as not-due, so a bare-reversed tuple is
+--       never re-enumerated; nothing in 3b clears the marker (terminal — the
+--       REHIRE/recovery follow-up owns marker-clearing + the R1 g+1 revival).
+--   (3) vacation_settlements review-disposition widening (R5) — MODREGNING
+--       (§7 stk.1 deduct-in-full) and WAIVED (waive-in-full) join FORFEIT/DEFER;
+--       the disposition/state coupling now lets a DEFER-marked row be REVERSED
+--       with its DEFER history preserved; claim_disposition_days records the
+--       §7/waiver resolved quantity in its own column (never in forfeit_days —
+--       a §7/waived claim must never read as §34 forfeiture).
+--   (4) settlement_export_lines reversal shape (R8) — immutable
+--       line_kind ORIGINAL/REVERSAL (existing rows legacy-backfill to ORIGINAL
+--       via the DEFAULT) + reverses_line_id self-FK, paired by CHECK
+--       (reverses_line_id IS NOT NULL ⟺ line_kind = 'REVERSAL').
+--
+-- All four are baked into the base CREATEs above for greenfield databases; the
+-- schema_migrations-guarded DO block below is what upgrades a pre-S71 database
+-- (the S68 reset-month-check / S70 employment-end-date pattern, 3-path
+-- idempotent: fresh inline DDL authoritative; guarded ALTERs cover legacy;
+-- re-run is a ledger-guarded no-op). CHECK changes use DROP-IF-EXISTS +
+-- re-ADD with PINNED constraint names so greenfield and legacy converge on
+-- identical names; every widened CHECK is a strict superset of its
+-- predecessor, so the re-ADD validates legacy rows without remediation.
+--
+-- The S71-SLICE3B-SEGMENT markers below are extracted VERBATIM by
+-- Slice3bLegacyMigrationTests (the migration-idempotence harness runs this
+-- exact segment against a reconstructed pre-S71 schema, twice) — keep the
+-- marker lines intact and keep all S71 DDL between them.
+-- =========================================================================
+-- S71-SLICE3B-SEGMENT-BEGIN
+
+-- termination_payout_requests — the §26 payout-request record (R6/R2).
+-- request_id is a surrogate PK (BIGSERIAL, the settlement_export_lines.line_id
+-- convention) because VOIDED history rows coexist with a later non-voided
+-- request for the same settlement row — uniqueness of the LIVE request is the
+-- partial-unique index below, not the PK. employee_id additionally FKs
+-- users(user_id) directly (every employee-keyed table's convention) on top of
+-- the composite settlement FK. request_date is the as-stated HR-recorded
+-- anmodning date (DATE, the vacation_transfer_agreements.agreement_date
+-- evidence convention — created_at records insertion time); recorded_by is the
+-- HR actor (TEXT = users.user_id, not a declared FK — parallels the audit
+-- actor_id columns); evidence_note is free-text request evidence. version is
+-- the ADR-019 If-Match/CAS row-version. state has NO default — every writer
+-- states the lifecycle state explicitly.
+CREATE TABLE IF NOT EXISTS termination_payout_requests (
+    request_id              BIGSERIAL     PRIMARY KEY,
+    employee_id             TEXT          NOT NULL REFERENCES users(user_id),
+    entitlement_type        TEXT          NOT NULL,
+    entitlement_year        INT           NOT NULL,
+    settlement_sequence     INT           NOT NULL,
+    state                   TEXT          NOT NULL,
+    request_date            DATE          NOT NULL,
+    recorded_by             TEXT          NOT NULL,
+    evidence_note           TEXT          NULL,
+    version                 BIGINT        NOT NULL DEFAULT 1,
+    created_at              TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    updated_at              TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    CONSTRAINT termination_payout_requests_state CHECK (
+        state IN ('OPEN', 'LINE_STAGED', 'VOIDED_BY_REVERSAL')
+    ),
+    CONSTRAINT termination_payout_requests_positive_version CHECK (version >= 1),
+    CONSTRAINT termination_payout_requests_settlement_fk
+        FOREIGN KEY (employee_id, entitlement_type, entitlement_year, settlement_sequence)
+        REFERENCES vacation_settlements (employee_id, entitlement_type, entitlement_year, sequence)
+);
+
+-- ONE non-voided request per settlement row (R6). VOIDED_BY_REVERSAL rows are
+-- excluded so HR can re-record after a reversal (D-E) while the voided history
+-- stays on the table.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_termination_payout_requests_nonvoided
+    ON termination_payout_requests (employee_id, entitlement_type, entitlement_year, settlement_sequence)
+    WHERE state <> 'VOIDED_BY_REVERSAL';
+
+CREATE INDEX IF NOT EXISTS idx_termination_payout_requests_employee
+    ON termination_payout_requests (employee_id);
+
+-- schema_migrations-guarded legacy upgrade block (the s68-vacation-reset-month-check
+-- / s70-employment-end-date guard pattern). Ordering discipline (SPRINT-71 W1):
+-- additive defaulted/nullable COLUMNS land first (existing rows stay valid), CHECKs
+-- land after their columns, and every widened CHECK admits every row its predecessor
+-- admitted — no intermediate state violates a constraint and no remediation UPDATE
+-- is needed. On a greenfield DB this block still runs once (first apply inserts the
+-- ledger row): the ADD COLUMN IF NOT EXISTS calls no-op and the DROP/re-ADD
+-- constraint pairs recreate the identical baked-in constraints — convergent.
+DO $$
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s71-slice3b-termination-emission-schema', 'ADR-033 slice 3b (SPRINT-71 TASK-7100, R3/R5/R6/R8): termination_payout_requests (§26 anmodning record; composite FK onto vacation_settlements PK; state OPEN/LINE_STAGED/VOIDED_BY_REVERSAL; partial-unique ONE non-voided request per settlement row; ADR-019 version) + vacation_settlements.bare_reversal_not_due BOOLEAN NOT NULL DEFAULT FALSE (R3 durable bare-reversal not-due marker, CHECK TRUE only on REVERSED rows) + review_disposition CHECK widened with MODREGNING/WAIVED + disposition-state CHECK widened so a DEFER-marked row can be REVERSED with DEFER history preserved + claim_disposition_days NUMERIC(6,2) NULL (the §7/waiver resolved day-count — never left in forfeit_days; CHECK non-negative + non-null IFF review_disposition MODREGNING/WAIVED) + settlement_export_lines.line_kind ORIGINAL/REVERSAL (existing rows backfill ORIGINAL via DEFAULT) + reverses_line_id BIGINT NULL self-FK to line_id with pairing CHECK (non-null IFF REVERSAL). The request table itself is created by the top-level CREATE TABLE IF NOT EXISTS (brand-new, legacy-safe by construction); this block carries the EXISTING-table ALTERs for pre-S71 databases.')
+    ON CONFLICT (migration_id) DO NOTHING;
+
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+
+    -- ── vacation_settlements (R3 + R5) ─────────────────────────────────────
+    -- Columns first. Both are additive (nullable / defaulted): legacy rows
+    -- backfill claim_disposition_days=NULL + bare_reversal_not_due=FALSE,
+    -- which every CHECK added below admits.
+    ALTER TABLE vacation_settlements
+    ADD COLUMN IF NOT EXISTS claim_disposition_days NUMERIC(6,2) NULL;
+
+    ALTER TABLE vacation_settlements
+    ADD COLUMN IF NOT EXISTS bare_reversal_not_due BOOLEAN NOT NULL DEFAULT FALSE;
+
+    -- The S68 base CREATE carried review_disposition's value set as an INLINE
+    -- column CHECK, which PostgreSQL auto-named vacation_settlements_review_disposition_check
+    -- on a legacy DB; the S71 greenfield CREATE bakes the widened NAMED form.
+    -- DROP both forms, re-ADD the named widened form — both paths converge on
+    -- the pinned name. Widened set is a superset (FORFEIT/DEFER still valid).
+    ALTER TABLE vacation_settlements
+    DROP CONSTRAINT IF EXISTS vacation_settlements_review_disposition_check;
+
+    ALTER TABLE vacation_settlements
+    DROP CONSTRAINT IF EXISTS vacation_settlements_review_disposition;
+
+    ALTER TABLE vacation_settlements
+    ADD CONSTRAINT vacation_settlements_review_disposition
+    CHECK (
+        review_disposition IS NULL
+        OR review_disposition IN ('FORFEIT', 'DEFER', 'MODREGNING', 'WAIVED')
+    );
+
+    -- Widened coupling: DEFER now admits REVERSED (history preserved on
+    -- reversal); MODREGNING/WAIVED behave like FORFEIT (resolved — never
+    -- PENDING_REVIEW). Superset of the S68 form: DEFER∧PENDING_REVIEW and
+    -- FORFEIT∧¬PENDING_REVIEW both still pass, so legacy rows validate.
+    ALTER TABLE vacation_settlements
+    DROP CONSTRAINT IF EXISTS vacation_settlements_disposition_state;
+
+    ALTER TABLE vacation_settlements
+    ADD CONSTRAINT vacation_settlements_disposition_state
+    CHECK (
+        review_disposition IS NULL
+        OR (review_disposition = 'DEFER' AND settlement_state IN ('PENDING_REVIEW', 'REVERSED'))
+        OR (review_disposition IN ('FORFEIT', 'MODREGNING', 'WAIVED') AND settlement_state <> 'PENDING_REVIEW')
+    );
+
+    ALTER TABLE vacation_settlements
+    DROP CONSTRAINT IF EXISTS vacation_settlements_bare_reversal_reversed_only;
+
+    ALTER TABLE vacation_settlements
+    ADD CONSTRAINT vacation_settlements_bare_reversal_reversed_only
+    CHECK (bare_reversal_not_due = FALSE OR settlement_state = 'REVERSED');
+
+    ALTER TABLE vacation_settlements
+    DROP CONSTRAINT IF EXISTS vacation_settlements_claim_disposition_nonneg;
+
+    ALTER TABLE vacation_settlements
+    ADD CONSTRAINT vacation_settlements_claim_disposition_nonneg
+    CHECK (claim_disposition_days IS NULL OR claim_disposition_days >= 0);
+
+    ALTER TABLE vacation_settlements
+    DROP CONSTRAINT IF EXISTS vacation_settlements_claim_disposition_paired;
+
+    ALTER TABLE vacation_settlements
+    ADD CONSTRAINT vacation_settlements_claim_disposition_paired
+    CHECK (
+        (claim_disposition_days IS NOT NULL)
+        = (review_disposition IS NOT NULL AND review_disposition IN ('MODREGNING', 'WAIVED'))
+    );
+
+    -- ── settlement_export_lines (R8) ───────────────────────────────────────
+    -- line_kind's DEFAULT 'ORIGINAL' is the legacy backfill: every pre-S71 row
+    -- (all of them §24 originals) becomes ORIGINAL with reverses_line_id NULL,
+    -- which the pairing CHECK admits.
+    ALTER TABLE settlement_export_lines
+    ADD COLUMN IF NOT EXISTS line_kind TEXT NOT NULL DEFAULT 'ORIGINAL';
+
+    ALTER TABLE settlement_export_lines
+    ADD COLUMN IF NOT EXISTS reverses_line_id BIGINT NULL;
+
+    ALTER TABLE settlement_export_lines
+    DROP CONSTRAINT IF EXISTS settlement_export_lines_line_kind;
+
+    ALTER TABLE settlement_export_lines
+    ADD CONSTRAINT settlement_export_lines_line_kind
+    CHECK (line_kind IN ('ORIGINAL', 'REVERSAL'));
+
+    ALTER TABLE settlement_export_lines
+    DROP CONSTRAINT IF EXISTS settlement_export_lines_reverses_line_fk;
+
+    ALTER TABLE settlement_export_lines
+    ADD CONSTRAINT settlement_export_lines_reverses_line_fk
+    FOREIGN KEY (reverses_line_id) REFERENCES settlement_export_lines (line_id);
+
+    ALTER TABLE settlement_export_lines
+    DROP CONSTRAINT IF EXISTS settlement_export_lines_reversal_pairing;
+
+    ALTER TABLE settlement_export_lines
+    ADD CONSTRAINT settlement_export_lines_reversal_pairing
+    CHECK ((reverses_line_id IS NOT NULL) = (line_kind = 'REVERSAL'));
+END
+$$;
+
+-- W3 (SPRINT-71 Step-5a cycle-1) — one-marker-per-tuple backstop for the R3
+-- bare-reversal marker: at most ONE bare_reversal_not_due = TRUE row per
+-- (employee, type, year) tuple. R3's "EXACTLY ONE latest reversed row carries
+-- the marker" splits in two: the AT-MOST-ONE half is DB-enforced here; the
+-- CROSS-ROW half ("a marker never coexists with a later active row" — the
+-- Step-B anti-join would wrongly suppress a live tuple) stays FLOW-enforced in
+-- 3b (the marker is terminal: no 3b operation clears it and no settle path can
+-- insert past it; Slice3bSchemaConstraintTests pins the boundary) — the
+-- REHIRE/recovery follow-up owns the stronger backstop. Deliberately placed
+-- AFTER the guarded DO block: on a legacy DB the column exists by the time
+-- this runs; on a greenfield DB it is baked into the base CREATE; on an
+-- already-upgraded DB (ledger row present, the DO block short-circuits)
+-- IF NOT EXISTS still lands the index — idempotent on all three paths.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_vacation_settlements_bare_reversal_marker
+    ON vacation_settlements (employee_id, entitlement_type, entitlement_year)
+    WHERE bare_reversal_not_due;
+-- S71-SLICE3B-SEGMENT-END
+
+-- =========================================================================
+-- SPRINT 71 / TASK-7105 — settlement_payroll_inbox composite-key migration
+--   (SPRINT-71 R7) + the §26 termination-payout wage-type seed (R11).
+--
+-- (1) Inbox PK (source_event_id) → (source_event_id, bucket). The S71
+--     SettlementReversed consumer compensates EVERY staged bucket of a reversed
+--     settlement row — one checkpoint per (event, bucket), all in ONE tx — so
+--     the S69 single-column PK can no longer hold. R7 migration order, VERBATIM:
+--       0. PRE-FLIGHT validate-or-abort (SPRINT-71 Step-5a cycle-1 W1): the
+--          poison discriminator below relies on a writer CONVENTION the S69
+--          schema never ENFORCED (every identity column independently nullable,
+--          no poison-shape CHECK) — so FIRST every NULL-bucket row is validated
+--          to be EITHER all-identity-NULL (the canonical poison shape) OR
+--          fully-identity-populated (the canonical normal shape); ANY hybrid
+--          row RAISEs EXCEPTION naming the offending source_event_id(s) and the
+--          whole block (ledger row included) rolls back for manual remediation
+--          — fail-closed beats silent misclassification;
+--       1. backfill poison NULL buckets → the '_EVENT' sentinel (poison rows are
+--          the ONLY rows whose identity columns are NULL — S69 Step-7a FIX 1);
+--       2. backfill any remaining NULL-bucket row → 'AUTO_PAYOUT_24' (defensive:
+--          every S69-era normal row already carries the §24 bucket — the §24
+--          emitter was the sole writer — but the rule is pinned, not assumed);
+--       3. bucket SET NOT NULL;
+--       4. drop the old single-column PK;
+--       5. add the composite PK (source_event_id, bucket) under the SAME pinned
+--          name, so greenfield and legacy converge;
+--     plus the processing_status CHECK widened with SKIPPED_VOIDED (the R6/R9
+--     under-lock voided-skip terminal; drop the S69 inline auto-name AND the
+--     pinned name, re-ADD the pinned name — the 7100 convention; the widened
+--     set is a strict superset, so legacy rows validate with no remediation).
+--
+-- (2) R11 seed: ONE new time_type VACATION_TERMINATION_PAYOUT → the placeholder
+--     sentinel SLS_TBD_S26 (Ferielov §26 stk.1 payout efter anmodning), exactly
+--     the s69-s24-settlement-wage-type 10-pair shape. NO §7 seeds — the
+--     SLS_TBD_S7 / VACATION_TERMINATION_DEDUCTION rows are PARKED with the
+--     gate-(i) waiver-only branch (the SLS-dialogue task owns them).
+--
+-- The S71-INBOX-SEGMENT markers fence the migration DO-block for
+-- SettlementInboxMigrationTests (the Slice3bLegacyMigrationTests verbatim-
+-- extraction harness pattern): the test runs THIS exact segment against a
+-- reconstructed pre-S71 (S69-shape) inbox, twice. Keep the marker lines intact
+-- and keep the inbox-migration DDL between them. (The seed block lives OUTSIDE
+-- the markers — the migration harness's reconstructed schema has no
+-- wage_type_mappings table.)
+-- =========================================================================
+-- S71-INBOX-SEGMENT-BEGIN
+DO $$
+DECLARE
+    s71_hybrid_inbox_ids TEXT;
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s71-inbox-composite-bucket-key', 'ADR-033 slice 3b (SPRINT-71 TASK-7105, R7): settlement_payroll_inbox PK (source_event_id) -> (source_event_id, bucket) so one consumed event may checkpoint multiple buckets (the SettlementReversed consumer, atomic per-event multi-bucket completion). R7 order: PRE-FLIGHT validate-or-abort on every NULL-bucket row (Step-5a cycle-1 W1 — all-identity-NULL poison XOR fully-identity-populated normal; any hybrid shape aborts the whole block naming the offending source_event_ids, fail-closed); poison NULL buckets backfilled to the ''_EVENT'' sentinel (identity-NULL rows, S69 Step-7a FIX 1); remaining NULL buckets backfilled to AUTO_PAYOUT_24 (all S69-era normal rows are §24); bucket NOT NULL; old PK dropped; composite PK added under the same pinned name. processing_status CHECK widened with SKIPPED_VOIDED (R6/R9 under-lock voided-skip terminal; strict superset, no remediation). ''_EVENT'' semantics: terminal ''_EVENT'' DEAD_LETTER is event-level and covers every bucket; transient diagnostics (RETRY_PENDING) also key at ''_EVENT'' and are promoted on completion (monotonic per bucket AND event level).')
+    ON CONFLICT (migration_id) DO NOTHING;
+
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+
+    -- R7 step 0 — PRE-FLIGHT validate-or-abort (SPRINT-71 Step-5a cycle-1 W1).
+    -- The step-1/step-2 discriminator (employee_id IS NULL ⇒ poison) encodes a
+    -- writer CONVENTION the S69 schema never enforced. Validate it BEFORE
+    -- classifying: every NULL-bucket row must be EITHER all-identity-NULL (the
+    -- canonical poison shape) OR fully-identity-populated (the canonical normal
+    -- shape). Any hybrid row aborts the migration loudly (the exception rolls
+    -- back the ENTIRE block, ledger row included — nothing is mutated) for
+    -- manual remediation; fail-closed beats silent misclassification.
+    SELECT string_agg(source_event_id::text, ', ' ORDER BY source_event_id)
+      INTO s71_hybrid_inbox_ids
+      FROM settlement_payroll_inbox
+     WHERE bucket IS NULL
+       AND NOT (
+                (employee_id IS NULL AND entitlement_type IS NULL
+                 AND entitlement_year IS NULL AND sequence IS NULL)
+             OR (employee_id IS NOT NULL AND entitlement_type IS NOT NULL
+                 AND entitlement_year IS NOT NULL AND sequence IS NOT NULL)
+           );
+    IF s71_hybrid_inbox_ids IS NOT NULL THEN
+        RAISE EXCEPTION 's71-inbox-composite-bucket-key pre-flight: settlement_payroll_inbox holds NULL-bucket row(s) in a HYBRID identity shape (neither the all-identity-NULL poison shape nor the fully-identity-populated normal shape) - refusing to classify them; manually remediate source_event_id(s): %', s71_hybrid_inbox_ids;
+    END IF;
+
+    -- R7 step 1: poison/parse-failure rows (the ONLY rows with NULL identity
+    -- columns) move from bucket NULL to the '_EVENT' sentinel.
+    UPDATE settlement_payroll_inbox
+       SET bucket = '_EVENT', updated_at = NOW()
+     WHERE bucket IS NULL AND employee_id IS NULL;
+
+    -- R7 step 2: any remaining NULL-bucket row is an S69-era normal row — the
+    -- §24 emitter was the sole S69 writer, so the §24 bucket is the backfill.
+    UPDATE settlement_payroll_inbox
+       SET bucket = 'AUTO_PAYOUT_24', updated_at = NOW()
+     WHERE bucket IS NULL;
+
+    -- R7 step 3 (no-op on greenfield where the base CREATE already pins it).
+    ALTER TABLE settlement_payroll_inbox
+    ALTER COLUMN bucket SET NOT NULL;
+
+    -- R7 steps 4+5: the PK swap. Same pinned constraint name on both paths
+    -- (greenfield re-creates the identical composite PK — convergent; no FK
+    -- references this PK, so the drop is dependency-free). Uniqueness of the
+    -- new key is guaranteed (the old key was source_event_id alone).
+    ALTER TABLE settlement_payroll_inbox
+    DROP CONSTRAINT IF EXISTS settlement_payroll_inbox_pkey;
+
+    ALTER TABLE settlement_payroll_inbox
+    ADD CONSTRAINT settlement_payroll_inbox_pkey PRIMARY KEY (source_event_id, bucket);
+
+    -- processing_status CHECK widened with SKIPPED_VOIDED. The S69 base CREATE
+    -- carried it as an INLINE column CHECK (auto-named
+    -- settlement_payroll_inbox_processing_status_check on a legacy DB); the S71
+    -- greenfield CREATE bakes the widened NAMED form. DROP both forms, re-ADD
+    -- the named widened form — both paths converge on the pinned name.
+    ALTER TABLE settlement_payroll_inbox
+    DROP CONSTRAINT IF EXISTS settlement_payroll_inbox_processing_status_check;
+
+    ALTER TABLE settlement_payroll_inbox
+    DROP CONSTRAINT IF EXISTS settlement_payroll_inbox_processing_status;
+
+    ALTER TABLE settlement_payroll_inbox
+    ADD CONSTRAINT settlement_payroll_inbox_processing_status
+    CHECK (processing_status IN ('RETRY_PENDING', 'PROCESSED', 'SKIPPED_RECONCILED', 'SKIPPED_VOIDED', 'DEAD_LETTER'));
+END
+$$;
+-- S71-INBOX-SEGMENT-END
+
+-- =========================================================================
+-- S71 / TASK-7105 — §26 termination vacation-payout wage-type mapping
+--   (SPRINT-71 R11; ADR-033 slice 3b). The settlement_export_lines.wage_type
+--   for a TERMINATION_PAYOUT_26 bucket resolves through wage_type_mappings on
+--   the new time_type VACATION_TERMINATION_PAYOUT. The resolved lønart is a
+--   PLACEHOLDER sentinel (SLS_TBD_S26) — the real SLS code AND the line format
+--   are UNVERIFIED, deferred to the SLS-dialogue task. The existing outbound
+--   delivery guard (PayrollExportService, the SLS_TBD_ prefix refusal) already
+--   rejects it unconditionally — the 3b deliverable is coverage TESTS, not new
+--   guard code (R11). Swapping the real code in later is a one-row ADR-020
+--   effective-dated change (the S69 owner-insight precedent).
+--
+-- ADR-020 versioned natural key + coverage: position = '' (national; the §26
+--   payout is statutory, not institution-varying), effective_from 2020-01-01
+--   open row, the EXACT s69-s24-settlement-wage-type 10-pair matrix
+--   {AC, HK, PROSA, AC_RESEARCH, AC_TEACHING} × {OK24, OK26}.
+--
+-- NO §7 rows: SLS_TBD_S7 / VACATION_TERMINATION_DEDUCTION are PARKED with the
+--   gate-(i) waiver-only branch (the SLS answer determines the payload/lønart
+--   shape) — seeding them now would bake an unverified contract.
+-- =========================================================================
+DO $$
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s71-s26-termination-wage-type', 'ADR-033 slice 3b (SPRINT-71 R11) — §26 VACATION_TERMINATION_PAYOUT -> placeholder SLS_TBD_S26, ADR-020 versioned (effective-dated open row), position '''' national, covering the s69-s24 10-pair agreement/OK matrix {AC,HK,PROSA,AC_RESEARCH,AC_TEACHING}x{OK24,OK26}; sentinel refused by the existing SLS_TBD_ outbound delivery guard (coverage tests, no new guard code); real SLS code+line format deferred to SLS dialogue (D1 money-free, the line carries a day-count). NO SLS_TBD_S7 seeds — the §7 verb is PARKED per the gate-(i) waiver-only branch.')
+    ON CONFLICT (migration_id) DO NOTHING;
+
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+
+    INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, position, description, effective_from) VALUES
+        ('VACATION_TERMINATION_PAYOUT', 'SLS_TBD_S26', 'OK24', 'AC',          '', 'PLACEHOLDER - §26 termination vacation payout efter anmodning (Ferielov §26 stk.1); real SLS code TBD via SLS dialogue', '2020-01-01'),
+        ('VACATION_TERMINATION_PAYOUT', 'SLS_TBD_S26', 'OK24', 'HK',          '', 'PLACEHOLDER - §26 termination vacation payout efter anmodning (Ferielov §26 stk.1); real SLS code TBD via SLS dialogue', '2020-01-01'),
+        ('VACATION_TERMINATION_PAYOUT', 'SLS_TBD_S26', 'OK24', 'PROSA',       '', 'PLACEHOLDER - §26 termination vacation payout efter anmodning (Ferielov §26 stk.1); real SLS code TBD via SLS dialogue', '2020-01-01'),
+        ('VACATION_TERMINATION_PAYOUT', 'SLS_TBD_S26', 'OK24', 'AC_RESEARCH', '', 'PLACEHOLDER - §26 termination vacation payout efter anmodning (Ferielov §26 stk.1); real SLS code TBD via SLS dialogue', '2020-01-01'),
+        ('VACATION_TERMINATION_PAYOUT', 'SLS_TBD_S26', 'OK24', 'AC_TEACHING', '', 'PLACEHOLDER - §26 termination vacation payout efter anmodning (Ferielov §26 stk.1); real SLS code TBD via SLS dialogue', '2020-01-01'),
+        ('VACATION_TERMINATION_PAYOUT', 'SLS_TBD_S26', 'OK26', 'AC',          '', 'PLACEHOLDER - §26 termination vacation payout efter anmodning (Ferielov §26 stk.1); real SLS code TBD via SLS dialogue', '2020-01-01'),
+        ('VACATION_TERMINATION_PAYOUT', 'SLS_TBD_S26', 'OK26', 'HK',          '', 'PLACEHOLDER - §26 termination vacation payout efter anmodning (Ferielov §26 stk.1); real SLS code TBD via SLS dialogue', '2020-01-01'),
+        ('VACATION_TERMINATION_PAYOUT', 'SLS_TBD_S26', 'OK26', 'PROSA',       '', 'PLACEHOLDER - §26 termination vacation payout efter anmodning (Ferielov §26 stk.1); real SLS code TBD via SLS dialogue', '2020-01-01'),
+        ('VACATION_TERMINATION_PAYOUT', 'SLS_TBD_S26', 'OK26', 'AC_RESEARCH', '', 'PLACEHOLDER - §26 termination vacation payout efter anmodning (Ferielov §26 stk.1); real SLS code TBD via SLS dialogue', '2020-01-01'),
+        ('VACATION_TERMINATION_PAYOUT', 'SLS_TBD_S26', 'OK26', 'AC_TEACHING', '', 'PLACEHOLDER - §26 termination vacation payout efter anmodning (Ferielov §26 stk.1); real SLS code TBD via SLS dialogue', '2020-01-01')
+    ON CONFLICT (time_type, ok_version, agreement_code, position, effective_from) DO NOTHING;
 END
 $$;

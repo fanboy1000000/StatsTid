@@ -219,10 +219,28 @@ builder.Services.AddSingleton<IAuditProjectionMapper<EmployeeEndDateDeactivation
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(EmployeeEndDateDeactivationApplied), nameof(EmployeeEndDateDeactivationApplied)));
 builder.Services.AddSingleton<IAuditProjectionMapper<TerminationSettled>, StatsTid.Infrastructure.AuditMappers.TerminationSettledAuditMapper>();
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(TerminationSettled), nameof(TerminationSettled)));
+// S71 ADR-033 slice 3b — termination-emission audit mappers (Infrastructure-located, cross-process;
+// TerminationPayoutRequested from the §26 request endpoint, TerminationClaimWaived from the waiver
+// CAS resolve verb, SettlementReversed from the slice-3b reversal service — SPRINT-71 R5/R6/R10).
+// The §7 TerminationModregningApplied event + mapper are PARKED behind the SLS-dialogue task (gate (i)).
+builder.Services.AddSingleton<IAuditProjectionMapper<TerminationPayoutRequested>, StatsTid.Infrastructure.AuditMappers.TerminationPayoutRequestedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(TerminationPayoutRequested), nameof(TerminationPayoutRequested)));
+builder.Services.AddSingleton<IAuditProjectionMapper<TerminationClaimWaived>, StatsTid.Infrastructure.AuditMappers.TerminationClaimWaivedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(TerminationClaimWaived), nameof(TerminationClaimWaived)));
+builder.Services.AddSingleton<IAuditProjectionMapper<SettlementReversed>, StatsTid.Infrastructure.AuditMappers.SettlementReversedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(SettlementReversed), nameof(SettlementReversed)));
 
 // ── Services ──
 builder.Services.AddSingleton<ConfigResolutionService>();
 builder.Services.AddSingleton<StatsTid.Infrastructure.VacationSettlementService>(); // S68 ADR-033 slice 1a — the atomic settlement pass
+// S71 / TASK-7104 (ADR-033 slice 3b) — the reversal surface: the §26 payout-request repository
+// (created by 7104, consumed by the 7102 request endpoint + the reversal's R6 VOID), the ONE
+// shared employment-end-date lifecycle writer (SPRINT-71 R4 — consumed by the reversal service
+// now, by the 7102-refactored end-date PUT later), and the operator-authorized reversal service
+// (driven by the 7102 reversal endpoint). All stateless over DI'd repos ⇒ singleton-safe.
+builder.Services.AddSingleton<StatsTid.Infrastructure.TerminationPayoutRequestRepository>();
+builder.Services.AddSingleton<StatsTid.Infrastructure.EmploymentEndDateLifecycleWriter>();
+builder.Services.AddSingleton<StatsTid.Infrastructure.SettlementReversalService>();
 // S65 / TASK-6502 — shared per-day "Arbejdstid"-norm resolver (extracted from the Skema
 // month read; also consumed by the Balance year-overview read). Stateless: the per-request
 // config cache is local to each ComputeRangeAsync call, so singleton is safe.
@@ -358,6 +376,8 @@ app.MapOvertimeEndpoints();
 app.MapAuditEndpoints();
 app.MapReportingLineEndpoints();
 app.MapVacationSettlementEndpoints(); // S68 ADR-033 slice 1a — §21 agreement + D10 resolve + §24 payout-pending
+app.MapTerminationPayoutRequestEndpoints(); // S71 / TASK-7102 — the §26 anmodning record + event (ADR-033 slice 3b, SPRINT-71 R6)
+app.MapSettlementReversalEndpoints();       // S71 / TASK-7102 — operator-authorized settlement reversal (ADR-033 D4/D5, SPRINT-71 R4)
 
 app.Run();
 

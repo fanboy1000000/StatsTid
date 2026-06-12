@@ -31,14 +31,19 @@ builder.Services.AddHttpClient();
 // MapCalculationResultAsync stays current-row (no asOfDate); only the planner-driven
 // per-segment export in PCS.MapSegmentToExportLinesAsync passes asOfDate = segmentStart.
 builder.Services.AddSingleton<WageTypeMappingRepository>();
-// S69 TASK-6904 (ADR-033 D4): the §24 settlement-export emitter + its data-access seam.
-// SettlementExportEmitter is a BackgroundService that consumes the canonical events table's
-// VacationAutoPaidOut events and stages a durable, money-free §24 line + an inbox checkpoint
-// EXACTLY ONCE under the ADR-032 D4 employee advisory lock (the SAME lock the Backend close
-// service + the reconcile endpoint take — mutual exclusion). Naturally dormant pre-launch (the
-// D13-gated close emits no events yet). It depends on SettlementInboxLineRepository (the inbox/
-// line/events-poll repository) + WageTypeMappingRepository (the snapshot-keyed dated §24 lønart
-// lookup, registered above) + a logger — all in this container.
+// S69 TASK-6904 + S71 TASK-7105 (ADR-033 D4; SPRINT-71 R6/R7/R9): the settlement-export
+// consumer + its data-access seam. SettlementExportEmitter is ONE BackgroundService with a
+// type-discriminated poll over the canonical events table consuming VacationAutoPaidOut (§24,
+// reversal-aware since S71), TerminationPayoutRequested (§26 line + the consumer-authoritative
+// request OPEN→LINE_STAGED promotion) and SettlementReversed (compensating REVERSAL lines per
+// staged bucket, atomic multi-bucket completion at the (source_event_id, bucket) composite inbox
+// key). Durable, money-free lines + inbox checkpoints EXACTLY ONCE under the ADR-032 D4 employee
+// advisory lock (the SAME lock the Backend close/reversal services + the reconcile endpoint take
+// — mutual exclusion, R12). Naturally dormant pre-launch (the D13-gated close emits no events
+// yet; §26/reversal events exist only via the HROrAbove operator endpoints). It depends on
+// SettlementInboxLineRepository (the inbox/line/events-poll repository) + WageTypeMappingRepository
+// (the snapshot-keyed dated lønart lookups, registered above) + a logger — all in this container.
+// S71 adds NO new registration (the three consumers ride this one hosted service).
 builder.Services.AddSingleton<SettlementInboxLineRepository>();
 builder.Services.AddHostedService<SettlementExportEmitter>();
 // S33 TASK-3301 (ADR-023): IEmploymentProfileResolver provides the dated lookup

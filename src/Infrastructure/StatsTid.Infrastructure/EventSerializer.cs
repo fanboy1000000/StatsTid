@@ -128,7 +128,9 @@ public static class EventSerializer
         // (employee_id, entitlement_type, entitlement_year, sequence). EMITTED in slice 1a:
         // VacationCarryoverExecuted (§21), VacationAutoPaidOut (§24), VacationForfeitedToFeriefond
         // (§34), SettlementManualReviewFlagged (D10 PENDING_REVIEW). DEFINE-ONLY (contract fixed now,
-        // emission automates in later slices): SettlementReversed (D4), FeriehindringTransferred (§22),
+        // emission automates in later slices): SettlementReversed (D4 — R10 payload extended +
+        // first mapper in S71 before first emission; the slice-3b reversal service emits it),
+        // FeriehindringTransferred (§22),
         // FeriehindringPaidOut (§25), SaerligeFeriedagePaidOut (§15 stk.2/§17). TerminationSettled
         // (§26+§7) is EMITTED from S70 (ADR-033 slice 3a) — emitted-no-consumer (the Payroll
         // consumer/lines are slice 3b).
@@ -148,6 +150,14 @@ public static class EventSerializer
         // when a future-dated end date passes (UNGATED by D13; system actor, R2).
         ["EmployeeEmploymentEndDateSet"] = typeof(EmployeeEmploymentEndDateSet),
         ["EmployeeEndDateDeactivationApplied"] = typeof(EmployeeEndDateDeactivationApplied),
+        // Sprint 71: ADR-033 slice 3b — termination-emission events (SPRINT-71 R6/R10). Both ride
+        // employee-{id}. TerminationPayoutRequested = the §26 anmodning fact that drives the staged
+        // SLS_TBD_S26 line (Payroll consumer = TASK-7105). TerminationClaimWaived = the
+        // waive-in-full resolution of a §7-shaped claim (NO line ever stages from it). The §7
+        // deduct-in-full TerminationModregningApplied event is PARKED behind the SLS-dialogue task
+        // (slice Step-0 gate (i) — its payload shape depends on the SLS cap answer).
+        ["TerminationPayoutRequested"] = typeof(TerminationPayoutRequested),
+        ["TerminationClaimWaived"] = typeof(TerminationClaimWaived),
     };
 
     public static string Serialize(IDomainEvent @event)

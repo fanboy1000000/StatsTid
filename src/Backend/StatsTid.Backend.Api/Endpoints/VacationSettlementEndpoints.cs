@@ -35,17 +35,29 @@ namespace StatsTid.Backend.Api.Endpoints;
 ///   </description></item>
 ///   <item><description>
 ///     <b>POST /api/vacation-settlements/{employeeId}/{entitlementType}/{entitlementYear}/resolve</b>
-///     — the D10 manual completion of a <c>PENDING_REVIEW</c> settlement. TWO outcomes, EACH ONE
-///     atomic tx under an ADR-019 If-Match CAS winner guard (a concurrent loser gets 409 with NO
+///     — the D10 manual completion of a <c>PENDING_REVIEW</c> settlement. THREE outcomes, EACH ONE
+///     atomic tx under the ADR-032 D4 employee advisory lock (SPRINT-71 R12, lock FIRST → in-lock
+///     re-read) + an ADR-019 If-Match CAS winner guard (a concurrent loser gets 409 with NO
 ///     double-emit):
 ///       <list type="bullet">
 ///         <item><description><b>FORFEIT (§34):</b> CAS <c>PENDING_REVIEW → SETTLED</c> + set
 ///         <c>forfeit_days</c> + <c>review_disposition=FORFEIT</c>, emit
 ///         <see cref="VacationForfeitedToFeriefond"/> (outbox) + the ADR-026 audit_projection row,
-///         all in the tx.</description></item>
+///         all in the tx. 422-blocked on <c>trigger=TERMINATION</c> rows (SPRINT-70 R5).</description></item>
 ///         <item><description><b>DEFER (suspected §22 feriehindring):</b> CAS sets
 ///         <c>review_disposition=DEFER</c> + bumps <c>version</c> + audit; the row STAYS
-///         <c>PENDING_REVIEW</c> (impediment modeling is slice 4). NOT a full resolution.</description></item>
+///         <c>PENDING_REVIEW</c> (impediment modeling is slice 4). NOT a full resolution.
+///         422-blocked on <c>trigger=TERMINATION</c> rows (SPRINT-70 R5).</description></item>
+///         <item><description><b>WAIVED (S71 slice 3b, SPRINT-71 R5 / owner D-C):</b> waive-in-full
+///         of the §7-shaped over-taken claim on a negative-pre-clamp <c>trigger=TERMINATION</c>
+///         <c>PENDING_REVIEW</c> row (the S70 shape: the claim = the forfeit-FLAG on
+///         <c>forfeit_days</c>). CAS <c>PENDING_REVIEW → SETTLED</c> + <c>review_disposition=WAIVED</c>
+///         + <c>claim_disposition_days = the flagged quantity</c> (from the ROW, never recomputed)
+///         + CLEARS the transient forfeit flag (<c>forfeit_days → 0</c> — a waived claim must never
+///         read as §34 forfeiture), emit <see cref="TerminationClaimWaived"/> + the ADR-026 row, all
+///         in the tx. NO <c>carryover_in</c> write; NO payroll line (R9 — waiver has no consumer).
+///         The §7 <b>MODREGNING</b> (deduct-in-full) verb is PARKED behind the SLS-dialogue task
+///         (slice Step-0 gate (i)) — a MODREGNING-shaped attempt gets a dedicated 422.</description></item>
 ///       </list>
 ///   </description></item>
 ///   <item><description>
@@ -326,7 +338,8 @@ public static class VacationSettlementEndpoints
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // 2. POST .../resolve  — D10 manual completion (FORFEIT / DEFER), ADR-019 CAS (ADR-033 D10)
+    // 2. POST .../resolve  — D10 manual completion (FORFEIT / DEFER / WAIVED), ADR-019 CAS
+    //    (ADR-033 D10; SPRINT-71 R5 added the slice-3b WAIVED verb; §7 MODREGNING is PARKED)
     // ═══════════════════════════════════════════════════════════════════════
     private static void MapResolve(WebApplication app)
     {
@@ -339,6 +352,7 @@ public static class VacationSettlementEndpoints
             DbConnectionFactory connectionFactory,
             IOutboxEnqueue outbox,
             IAuditProjectionMapper<VacationForfeitedToFeriefond> forfeitAuditMapper,
+            IAuditProjectionMapper<TerminationClaimWaived> waiverAuditMapper,
             AuditProjectionRepository auditRepo,
             UserRepository userRepo,
             OrgScopeValidator scopeValidator,
@@ -350,15 +364,37 @@ public static class VacationSettlementEndpoints
             // S70 / TASK-7003 (SPRINT-70 R9c allowlist) — terminated-INCLUSIVE validator: an HR
             // operator must be able to resolve a deactivated leaver's PENDING_REVIEW settlement
             // (the S68 B2 fix). HROrAbove policy + subtree binding unchanged; only the target
-            // resolution stops filtering is_active.
+            // resolution stops filtering is_active. The S71 WAIVED verb rides the SAME surface,
+            // so it inherits this authorization shape verbatim (SPRINT-71 owner D-B).
             var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(actor, employeeId, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
-            // Disposition must be exactly FORFEIT or DEFER.
             var disposition = (body.Disposition ?? string.Empty).Trim().ToUpperInvariant();
-            if (disposition is not ("FORFEIT" or "DEFER"))
-                return Results.UnprocessableEntity(new { error = "disposition must be 'FORFEIT' or 'DEFER'." });
+
+            // S71 / TASK-7103 (SPRINT-71 gate (i)) — the §7 MODREGNING (deduct-in-full) verb is
+            // PARKED behind the SLS-dialogue task: the §7 stk.1 outstanding-pay cap is not
+            // confirmably SLS-enforceable on a day-count input, so the deduction verb, its event
+            // (TerminationModregningApplied) and its SLS_TBD_S7 line are all undefined in 3b. A
+            // §7-shaped attempt gets THIS dedicated 422 (before any row state is consulted — the
+            // verb does not exist regardless of the row).
+            if (disposition == "MODREGNING")
+            {
+                return Results.UnprocessableEntity(new
+                {
+                    error = "The §7 MODREGNING (deduct-in-full) disposition is PARKED pending the SLS dialogue.",
+                    disposition,
+                    hint = "Slice 3b ships the waiver branch only (SPRINT-71 slice Step-0 gate (i)): " +
+                           "whether SLS nets/caps a §7 termination set-off against final pay — or needs " +
+                           "a pre-capped quantity — is unverified, so the deduction verb and its event " +
+                           "are parked behind the SLS-dialogue task. Use WAIVED to waive the claim in " +
+                           "full, or leave the row parked PENDING_REVIEW.",
+                });
+            }
+
+            // Disposition must be exactly FORFEIT, DEFER or WAIVED (S71 R5).
+            if (disposition is not ("FORFEIT" or "DEFER" or "WAIVED"))
+                return Results.UnprocessableEntity(new { error = "disposition must be 'FORFEIT', 'DEFER' or 'WAIVED'." });
 
             // Admin-strict If-Match — the ADR-019 CAS token; a concurrent loser gets 412/409, never
             // a double-emit.
@@ -373,7 +409,16 @@ public static class VacationSettlementEndpoints
             await using var tx = await conn.BeginTransactionAsync(ct);
             try
             {
-                // Read the ACTIVE settlement in-tx (the CAS subject).
+                // S71 / TASK-7103 (SPRINT-71 R12) — ONE employee advisory lock across ALL settlement
+                // mutation paths: acquire the SAME ADR-032 D4 lock the close service, the reversal
+                // service and the reconcile endpoint take, FIRST, so the row read below is an IN-LOCK
+                // re-read that observes any state a concurrent reversal/settlement committed (the S70
+                // B1 lesson: every pre-check predicate re-evaluated under the lock). Applied to the
+                // WHOLE resolve surface — FORFEIT/DEFER included — which serializes resolve-vs-reversal
+                // for every verb (the R12 race list). Held to commit (transaction-scoped).
+                await EmployeeConsumptionLock.AcquireAsync(conn, tx, employeeId, ct);
+
+                // Read the ACTIVE settlement in-tx, under the lock (the CAS subject).
                 var current = await settlementRepo.GetActiveAsync(
                     conn, tx, employeeId, entitlementType, entitlementYear, ct);
                 if (current is null)
@@ -382,24 +427,48 @@ public static class VacationSettlementEndpoints
                     return Results.NotFound(new { error = "No active settlement found for this (employee, type, year)." });
                 }
 
-                // S70 / TASK-7004 (SPRINT-70 R5, Step-0b cycle-4) — trigger=TERMINATION rows are NOT
-                // manually resolvable in 3a: the existing FORFEIT would emit VacationForfeitedToFeriefond,
-                // a materially FALSE event for an over-taken-claim waiver (the negative-pre-clamp
-                // PENDING_REVIEW row parks until 3b's §7/waiver channel — a distinct waiver
-                // disposition/event is 3b scope). Guard placed AFTER row resolution, BEFORE any
-                // disposition logic.
-                if (string.Equals(current.Trigger, "TERMINATION", StringComparison.Ordinal))
+                if (disposition is "FORFEIT" or "DEFER")
                 {
-                    await tx.RollbackAsync(ct);
-                    return Results.UnprocessableEntity(new
+                    // S70 / TASK-7004 (SPRINT-70 R5, Step-0b cycle-4; SPRINT-71 R5 KEEPS this) —
+                    // trigger=TERMINATION rows are NOT FORFEIT/DEFER-resolvable: FORFEIT would emit
+                    // VacationForfeitedToFeriefond, a materially FALSE event for an over-taken-claim
+                    // (the negative-pre-clamp PENDING_REVIEW row holds a §7-shaped CLAIM, not §34
+                    // forfeiture). Slice 3b's resolution for these rows is the WAIVED verb below
+                    // (§7 MODREGNING stays parked). Guard placed AFTER row resolution, BEFORE any
+                    // disposition logic.
+                    if (string.Equals(current.Trigger, "TERMINATION", StringComparison.Ordinal))
                     {
-                        error = "A TERMINATION settlement cannot be manually resolved in slice 3a.",
-                        trigger = current.Trigger,
-                        settlementState = current.SettlementState,
-                        hint = "FORFEIT would emit a materially false VacationForfeitedToFeriefond for an " +
-                               "over-taken-claim waiver; the §7/waiver disposition channel is slice 3b. " +
-                               "The row remains parked in its current state.",
-                    });
+                        await tx.RollbackAsync(ct);
+                        return Results.UnprocessableEntity(new
+                        {
+                            error = "A TERMINATION settlement cannot be resolved with FORFEIT or DEFER.",
+                            trigger = current.Trigger,
+                            settlementState = current.SettlementState,
+                            hint = "FORFEIT would emit a materially false VacationForfeitedToFeriefond for an " +
+                                   "over-taken-claim; a negative-pre-clamp TERMINATION row holds a §7-shaped " +
+                                   "claim, not §34 forfeiture. Use WAIVED to waive the claim in full " +
+                                   "(the §7 MODREGNING deduction is parked pending the SLS dialogue).",
+                        });
+                    }
+                }
+                else // WAIVED (S71 / TASK-7103, SPRINT-71 R5)
+                {
+                    // The waiver applies ONLY to the parked §7-shaped TERMINATION claim — a YEAR_END
+                    // row's PENDING_REVIEW remainder is a §34-vs-§22 adjudication (FORFEIT/DEFER),
+                    // never a waivable claim.
+                    if (!string.Equals(current.Trigger, "TERMINATION", StringComparison.Ordinal))
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.UnprocessableEntity(new
+                        {
+                            error = "WAIVED applies only to TERMINATION settlements.",
+                            trigger = current.Trigger,
+                            settlementState = current.SettlementState,
+                            hint = "The waive-in-full disposition resolves the §7-shaped over-taken claim on a " +
+                                   "negative-pre-clamp TERMINATION row. A YEAR_END PENDING_REVIEW remainder is " +
+                                   "adjudicated via FORFEIT (§34) or DEFER (suspected §22).",
+                        });
+                    }
                 }
 
                 // Only a PENDING_REVIEW row is resolvable (a SETTLED row is already complete).
@@ -411,6 +480,39 @@ public static class VacationSettlementEndpoints
                         error = "Settlement is not in PENDING_REVIEW; nothing to resolve.",
                         settlementState = current.SettlementState,
                     }, statusCode: 409);
+                }
+
+                if (disposition == "WAIVED")
+                {
+                    // S71 R5 — the claim IS the S70 forfeit-FLAG (|pre-clamp| stamped on forfeit_days
+                    // at the PENDING_REVIEW close). No flag ⇒ no §7-shaped claim ⇒ nothing to waive
+                    // (defense-in-depth: R5 pins PENDING_REVIEW iff negative pre-clamp, so a flagless
+                    // TERMINATION PENDING_REVIEW row should not exist — fail closed, never invent a
+                    // zero-quantity waiver record).
+                    if (current.ForfeitDays <= 0m)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.UnprocessableEntity(new
+                        {
+                            error = "No §7-shaped claim flag on this TERMINATION row; nothing to waive.",
+                            forfeitDays = current.ForfeitDays,
+                            settlementState = current.SettlementState,
+                            hint = "A waivable claim is the |pre-clamp| forfeit-FLAG a negative-pre-clamp " +
+                                   "TERMINATION close stamped on forfeit_days (SPRINT-70 R5).",
+                        });
+                    }
+
+                    // The waived quantity comes from the ROW, never from the caller (R5: never
+                    // recomputed, never operator-supplied) — reject any body quantity outright.
+                    if (body.ForfeitDays is not null)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.UnprocessableEntity(new
+                        {
+                            error = "WAIVED takes no forfeitDays — the waived quantity is the row's flagged claim.",
+                            flaggedClaim = current.ForfeitDays,
+                        });
+                    }
                 }
 
                 // If-Match precondition on the row version (ADR-019).
@@ -463,6 +565,91 @@ public static class VacationSettlementEndpoints
                         resolved = false,
                         version = deferred.Version,
                         hint = "Deferred as suspected §22 feriehindring; remains PENDING_REVIEW until slice 4.",
+                    });
+                }
+
+                if (disposition == "WAIVED")
+                {
+                    // ── WAIVED (S71 / TASK-7103; SPRINT-71 R5, owner D-C waive-in-full) ──
+                    // ONE atomic tx, already under the R12 advisory lock: CAS PENDING_REVIEW →
+                    // SETTLED with review_disposition=WAIVED + claim_disposition_days = the flagged
+                    // quantity (from the ROW — never recomputed) + forfeit_days → 0 (CLEAR the
+                    // transient flag: the claim must never read as §34 forfeiture; the 7100
+                    // bidirectional CHECK enforces the disposition⟺quantity pairing), then emit
+                    // TerminationClaimWaived (outbox) + the ADR-026 audit_projection row + the
+                    // settlement-table audit row. NO carryover_in write (the restated 3a invariant —
+                    // no resolve disposition writes carryover); NO payroll line / staging (R9 —
+                    // waiver has no consumer).
+                    var waivedDays = current.ForfeitDays;
+                    var waived = await CasUpdateSettlementAsync(conn, tx,
+                        current,
+                        newState: "SETTLED",
+                        reviewDisposition: "WAIVED",
+                        forfeitDays: 0m,
+                        expectedVersion, ct,
+                        claimDispositionDays: waivedDays);
+                    if (waived is null)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.Json(new { error = "Concurrent update — refresh and retry.", actualVersion = (long?)null }, statusCode: 409);
+                    }
+
+                    // Employee → org resolution for the TENANT_TARGETED audit row (ADR-026 D2; the
+                    // is_active-unfiltered in-tx read — a deactivated leaver is the NORMAL case here).
+                    var waiverOrgId = await ResolvePrimaryOrgIdInTxAsync(conn, tx, employeeId, ct);
+                    if (waiverOrgId is null)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.NotFound(new { error = $"Employee '{employeeId}' not found." });
+                    }
+
+                    // The 7101 payload shape: settlement-ROW identity + SettlementSequence (R2 —
+                    // settlement sequence, not export sequence) + WaivedDays mirroring
+                    // claim_disposition_days.
+                    var waivedEvent = new TerminationClaimWaived
+                    {
+                        EmployeeId = employeeId,
+                        EntitlementType = entitlementType,
+                        EntitlementYear = entitlementYear,
+                        SettlementSequence = waived.Sequence,
+                        WaivedDays = waivedDays,
+                        CorrelationId = actor.CorrelationId,
+                    };
+
+                    var waiverStreamId = $"employee-{employeeId}";
+                    var waiverOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, waiverStreamId, waivedEvent, ct);
+                    // ActorPrimaryOrgId = the OPERATOR's org; ResolvedTargetOrgId = the employee's
+                    // (the request-endpoint / lifecycle-writer convention — a parent-org HR actor
+                    // must not be attributed the target's organizational provenance).
+                    var waiverAuditCtx = new AuditProjectionContext(
+                        ActorId: actorId,
+                        ActorPrimaryOrgId: actor.OrgId,
+                        CorrelationId: waivedEvent.CorrelationId,
+                        OccurredAt: new DateTimeOffset(DateTime.SpecifyKind(waivedEvent.OccurredAt, DateTimeKind.Utc)),
+                        ResolvedTargetOrgId: waiverOrgId);
+                    var waiverRowData = waiverAuditMapper.Map(waivedEvent, waiverAuditCtx);
+                    await auditRepo.InsertAsync(conn, tx, waivedEvent.EventId, waiverOutboxId, waivedEvent.EventType, waiverRowData, waiverAuditCtx, ct);
+
+                    await settlementRepo.AppendAuditAsync(conn, tx, waived, "UPDATED",
+                        previousData, SerializeSettlementForAudit(waived),
+                        versionBefore: current.Version, versionAfter: waived.Version,
+                        actorId, actorRole, ct);
+
+                    await tx.CommitAsync(ct);
+
+                    context.Response.Headers.ETag = $"\"{waived.Version}\"";
+                    return Results.Ok(new
+                    {
+                        employeeId,
+                        entitlementType,
+                        entitlementYear,
+                        sequence = waived.Sequence,
+                        settlementState = waived.SettlementState,
+                        reviewDisposition = waived.ReviewDisposition,
+                        claimDispositionDays = waived.ClaimDispositionDays,
+                        forfeitDays = waived.ForfeitDays, // 0 — the cleared transient flag
+                        resolved = true,
+                        version = waived.Version,
                     });
                 }
 
@@ -874,14 +1061,17 @@ public static class VacationSettlementEndpoints
     /// <summary>
     /// CAS UPDATE of the settlement state-machine row (re-asserting <paramref name="expectedVersion"/>
     /// in the WHERE so a concurrent winner yields a 0-row no-op → caller returns 409, no double-emit).
-    /// Returns the persisted row, or <c>null</c> on the 0-row CAS loss. Used by both D10 outcomes
-    /// (FORFEIT sets SETTLED, DEFER keeps PENDING_REVIEW) — the §24 reconcile path has its own inline
-    /// UPDATE (different column set).
+    /// Returns the persisted row, or <c>null</c> on the 0-row CAS loss. Used by all three D10/R5
+    /// outcomes (FORFEIT sets SETTLED, DEFER keeps PENDING_REVIEW, WAIVED sets SETTLED + clears the
+    /// flag + records <paramref name="claimDispositionDays"/>) — the §24 reconcile path has its own
+    /// inline UPDATE (different column set). <paramref name="claimDispositionDays"/> is non-null ONLY
+    /// for WAIVED (the 7100 bidirectional CHECK pairs it with MODREGNING/WAIVED); FORFEIT/DEFER write
+    /// NULL, which is a no-op on a PENDING_REVIEW row (the pairing CHECK forbids a quantity there).
     /// </summary>
     private static async Task<VacationSettlementRow?> CasUpdateSettlementAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
         VacationSettlementRow current, string newState, string reviewDisposition, decimal forfeitDays,
-        long expectedVersion, CancellationToken ct)
+        long expectedVersion, CancellationToken ct, decimal? claimDispositionDays = null)
     {
         await using var cmd = new NpgsqlCommand(
             """
@@ -889,6 +1079,7 @@ public static class VacationSettlementEndpoints
                 settlement_state = @newState,
                 review_disposition = @reviewDisposition,
                 forfeit_days = @forfeitDays,
+                claim_disposition_days = @claimDispositionDays,
                 version = version + 1,
                 updated_at = NOW()
             WHERE employee_id = @employeeId
@@ -901,6 +1092,10 @@ public static class VacationSettlementEndpoints
         cmd.Parameters.AddWithValue("newState", newState);
         cmd.Parameters.AddWithValue("reviewDisposition", reviewDisposition);
         cmd.Parameters.AddWithValue("forfeitDays", forfeitDays);
+        cmd.Parameters.Add(new NpgsqlParameter("claimDispositionDays", NpgsqlTypes.NpgsqlDbType.Numeric)
+        {
+            Value = (object?)claimDispositionDays ?? DBNull.Value,
+        });
         cmd.Parameters.AddWithValue("employeeId", current.EmployeeId);
         cmd.Parameters.AddWithValue("entitlementType", current.EntitlementType);
         cmd.Parameters.AddWithValue("entitlementYear", current.EntitlementYear);
@@ -915,6 +1110,7 @@ public static class VacationSettlementEndpoints
             SettlementState = newState,
             ReviewDisposition = reviewDisposition,
             ForfeitDays = forfeitDays,
+            ClaimDispositionDays = claimDispositionDays,
             Version = newVersion,
         };
     }
@@ -1049,6 +1245,9 @@ public static class VacationSettlementEndpoints
             row.PayoutDays,
             row.ForfeitDays,
             row.ReviewDisposition,
+            // S71 / TASK-7103 (R5) — the §7/waiver resolved claim quantity (null for every
+            // FORFEIT/DEFER/reconcile transition; the WAIVED audit record must carry it).
+            row.ClaimDispositionDays,
             PayoutReconciledAt = row.PayoutReconciledAt,
             row.PayoutReconciledBy,
             row.Version,
@@ -1066,8 +1265,10 @@ public static class VacationSettlementEndpoints
         public required DateOnly AgreementDate { get; init; }
     }
 
-    /// <summary>POST /resolve body — the D10 disposition (FORFEIT / DEFER) + an optional explicit
-    /// forfeit_days (FORFEIT only; defaults to the flagged remainder already on the row).</summary>
+    /// <summary>POST /resolve body — the D10/R5 disposition (FORFEIT / DEFER / WAIVED; MODREGNING is
+    /// 422-parked pending the SLS dialogue) + an optional explicit forfeit_days (FORFEIT only — must
+    /// equal the flagged remainder exactly; WAIVED rejects it, the waived quantity always comes from
+    /// the row).</summary>
     private sealed record ResolveSettlementRequest
     {
         public required string Disposition { get; init; }

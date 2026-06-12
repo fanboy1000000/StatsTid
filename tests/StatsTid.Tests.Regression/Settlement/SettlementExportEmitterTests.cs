@@ -342,9 +342,11 @@ public sealed class SettlementExportEmitterTests : IAsyncLifetime
     // ════════════════════════════════════════════════════════════════════════
 
     /// <summary>A <c>VacationAutoPaidOut</c> row whose payload cannot be deserialized (poison) must be
-    /// terminally <c>DEAD_LETTER</c>ed keyed by <c>source_event_id</c> ONLY (no recoverable identity ⇒ no
-    /// advisory lock, identity columns NULL), so the poll stops re-selecting it every interval forever and
-    /// the consumer is unstalled. No line is staged, and a SECOND drain does NOT re-select it (terminal).
+    /// terminally <c>DEAD_LETTER</c>ed at <c>(source_event_id, '_EVENT')</c> — no recoverable identity ⇒
+    /// no advisory lock, identity columns NULL; since the S71 R7 composite-key migration the row carries
+    /// the event-level <c>'_EVENT'</c> sentinel bucket instead of the pre-S71 NULL (<c>bucket</c> is now
+    /// NOT NULL) — so the poll stops re-selecting it every interval forever and the consumer is
+    /// unstalled. No line is staged, and a SECOND drain does NOT re-select it (terminal).
     /// Regression for the Step-7a BLOCKER: the prior log-and-return wrote NO checkpoint.</summary>
     [Fact]
     public async Task PoisonEvent_CannotDeserialize_DeadLetters_KeyedBySourceEventId_NoLine_NotReselected()
@@ -357,8 +359,11 @@ public sealed class SettlementExportEmitterTests : IAsyncLifetime
         await SettlementEmitterFixture.ProcessOnceAsync(emitter,
             until: async () => await SettlementEmitterFixture.InboxStatusAsync(Cs, eventId) == "DEAD_LETTER");
 
-        // Dead-lettered, no line, identity columns are NULL (only permitted on the poison path).
+        // Dead-lettered at the '_EVENT' sentinel, no line, identity columns are NULL (only permitted
+        // on the poison path).
         Assert.Equal("DEAD_LETTER", await SettlementEmitterFixture.InboxStatusAsync(Cs, eventId));
+        Assert.Equal("DEAD_LETTER", await SettlementEmitterFixture.InboxStatusForBucketAsync(
+            Cs, eventId, SettlementEmitterFixture.EventLevelBucket)); // keyed at (event, '_EVENT')
         Assert.Equal(0L, await SettlementEmitterFixture.LineCountAsync(Cs, emp));
         Assert.Null(await InboxEmployeeIdAsync(eventId)); // identity NULL (no recoverable identity)
         Assert.NotNull(await InboxLastErrorAsync(eventId)); // the deserialize error is recorded
@@ -370,6 +375,46 @@ public sealed class SettlementExportEmitterTests : IAsyncLifetime
             settleWait: TimeSpan.FromSeconds(2));
         Assert.Equal("DEAD_LETTER", await SettlementEmitterFixture.InboxStatusAsync(Cs, eventId));
         Assert.Equal(0L, await SettlementEmitterFixture.LineCountAsync(Cs, emp));
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // Scenario 11 (S71 TASK-7105) — R9 reversal-awareness retrofit / the R12 emitter-vs-reversal race.
+    // ════════════════════════════════════════════════════════════════════════
+
+    /// <summary>SPRINT-71 R9/R12 — reversal-commits-BEFORE-§24-consumption must NOT stage an orphan
+    /// line: the settlement row at the event's exact sequence is already REVERSED when the emitter
+    /// consumes the <c>VacationAutoPaidOut</c>, so the under-lock re-read stages NOTHING and writes a
+    /// terminal <c>SKIPPED_VOIDED</c> checkpoint at the §24 bucket. Without the retrofit the emitter
+    /// would stage a live line the <c>SettlementReversed</c> consumer can never compensate (its
+    /// targets derive from lines staged BEFORE the reversal) — the orphan the R12 race names. A
+    /// second drain does not re-select (terminal).</summary>
+    [Fact]
+    public async Task ReversedSettlement_AutoPaidOutEvent_SkippedVoided_NoOrphanLine()
+    {
+        var emp = await SettlementEmitterFixture.SeedEmployeeAsync(Cs);
+        // A zero-transfer auto-partition row that EMITTED VacationAutoPaidOut (payout > 0) and was
+        // then reversed by the operator (D-A makes exactly these rows reversible).
+        await SettlementEmitterFixture.SeedSettlementRowAsync(
+            Cs, emp, trigger: "YEAR_END", state: "SETTLED", crystallizedDays: null, payoutDays: 5m);
+        var eventId = await SettlementEmitterFixture.WriteAutoPaidOutEventAsync(Factory, emp, payoutDays: 5m);
+        await SettlementEmitterFixture.MarkSettlementReversedAsync(Cs, emp); // the reversal wins the race
+
+        var emitter = SettlementEmitterFixture.BuildEmitter(Factory);
+        await SettlementEmitterFixture.ProcessOnceAsync(emitter,
+            until: async () => await SettlementEmitterFixture.InboxStatusForBucketAsync(
+                Cs, eventId, SettlementEmitterFixture.AutoPayoutBucket) == "SKIPPED_VOIDED");
+
+        Assert.Equal("SKIPPED_VOIDED", await SettlementEmitterFixture.InboxStatusForBucketAsync(
+            Cs, eventId, SettlementEmitterFixture.AutoPayoutBucket));
+        Assert.Equal(0L, await SettlementEmitterFixture.TotalLineCountAsync(Cs, emp)); // orphan PREVENTED
+
+        // Terminal: a second drain leaves everything untouched.
+        var emitter2 = SettlementEmitterFixture.BuildEmitter(Factory);
+        await SettlementEmitterFixture.ProcessOnceAsync(emitter2,
+            until: async () => false, settleWait: TimeSpan.FromSeconds(2));
+        Assert.Equal("SKIPPED_VOIDED", await SettlementEmitterFixture.InboxStatusForBucketAsync(
+            Cs, eventId, SettlementEmitterFixture.AutoPayoutBucket));
+        Assert.Equal(0L, await SettlementEmitterFixture.TotalLineCountAsync(Cs, emp));
     }
 
     // ════════════════════════════════════════════════════════════════════════

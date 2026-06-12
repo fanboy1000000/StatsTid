@@ -55,6 +55,12 @@ internal static class SettlementEmitterFixture
     public const string SettlementTimeType = "VACATION_SETTLEMENT_PAYOUT";
     public const string SentinelWageType = "SLS_TBD_S24";
 
+    // S71 / TASK-7105 — §26 + reversal consumer axes (SPRINT-71 R6/R7/R8/R11).
+    public const string TerminationBucket = "TERMINATION_PAYOUT_26";
+    public const string TerminationTimeType = "VACATION_TERMINATION_PAYOUT";
+    public const string TerminationSentinelWageType = "SLS_TBD_S26";
+    public const string EventLevelBucket = "_EVENT";
+
     /// <summary>The synthetic settlement-boundary date written into the D-tests' snapshots and used as
     /// the emitter's dated-mapping <c>asOf</c>. A fixed, freely-chosen value — NOT the production
     /// reset-9 ferieår-end (a real VACATION reset_month-9 ferieår 2024 ends Aug 31 2025, per
@@ -240,6 +246,221 @@ internal static class SettlementEmitterFixture
         }
     }
 
+    // ─────────────────────────────── S71 seeding / events (TASK-7105) ───────────────────────────────
+
+    /// <summary>
+    /// Seeds a settlement row DIRECTLY (the TerminationPayoutRequestEndpointTests camelCase-snapshot
+    /// shape) — used by the §26/reversal consumer tests where the row state, not the close pipeline,
+    /// is the test input. TERMINATION rows carry all-zero buckets + a snapshot
+    /// <c>crystallizedDays</c> (SPRINT-70 R5); the snapshot's agreement/OK/boundary are the
+    /// wage-mapping key the §26 consumer resolves off.
+    /// </summary>
+    public static async Task SeedSettlementRowAsync(
+        string connectionString, string employeeId,
+        string trigger = "TERMINATION", string state = "SETTLED",
+        decimal? crystallizedDays = 12.5m,
+        string agreementCode = "AC", string okVersion = "OK24", string? position = null,
+        DateOnly? boundaryDate = null, int year = 2024, int sequence = 1,
+        decimal payoutDays = 0m)
+    {
+        var boundary = boundaryDate ?? BoundaryDate;
+        var snapshot = new Dictionary<string, object?>
+        {
+            ["recordedAbsences"] = Array.Empty<object>(),
+            ["earned"] = 25m,
+            ["used"] = 0m,
+            ["planned"] = 0m,
+            ["carryoverIn"] = 0m,
+            ["annualQuota"] = 25m,
+            ["carryoverMax"] = 5m,
+            ["resetMonth"] = 9,
+            ["okVersion"] = okVersion,
+            ["agreementCode"] = agreementCode,
+            ["transferAgreementDays"] = 0m,
+            ["isFeriehindret"] = false,
+            ["settlementBoundaryDate"] = boundary.ToString("yyyy-MM-dd"),
+        };
+        if (position is not null)
+            snapshot["position"] = position;
+        if (crystallizedDays is not null)
+        {
+            snapshot["crystallizedDays"] = crystallizedDays.Value;
+            snapshot["terminationDate"] = boundary.ToString("yyyy-MM-dd");
+            snapshot["crystallizationBasis"] = "S26_WHOLE_MONTH";
+        }
+
+        await using var conn = new NpgsqlConnection(connectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            INSERT INTO vacation_settlements
+                (employee_id, entitlement_type, entitlement_year, sequence,
+                 settlement_state, trigger, snapshot, transfer_days, payout_days, forfeit_days, version)
+            VALUES (@e, @t, @y, @seq, @state, @trigger, @snapshot::jsonb, 0, @payout, 0, 1)
+            """, conn);
+        cmd.Parameters.AddWithValue("e", employeeId);
+        cmd.Parameters.AddWithValue("t", VacationType);
+        cmd.Parameters.AddWithValue("y", year);
+        cmd.Parameters.AddWithValue("seq", sequence);
+        cmd.Parameters.AddWithValue("state", state);
+        cmd.Parameters.AddWithValue("trigger", trigger);
+        cmd.Parameters.AddWithValue("snapshot", System.Text.Json.JsonSerializer.Serialize(snapshot));
+        cmd.Parameters.AddWithValue("payout", payoutDays);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    /// <summary>Flips a settlement row to REVERSED directly (the reversal-service end state the
+    /// consumers re-read under the lock — the R12 emitter-vs-reversal race input).</summary>
+    public static async Task MarkSettlementReversedAsync(
+        string connectionString, string employeeId, int year = 2024, int sequence = 1)
+    {
+        await using var conn = new NpgsqlConnection(connectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            UPDATE vacation_settlements
+               SET settlement_state = 'REVERSED', version = version + 1, updated_at = NOW()
+             WHERE employee_id = @e AND entitlement_type = @t
+               AND entitlement_year = @y AND sequence = @seq
+            """, conn);
+        cmd.Parameters.AddWithValue("e", employeeId);
+        cmd.Parameters.AddWithValue("t", VacationType);
+        cmd.Parameters.AddWithValue("y", year);
+        cmd.Parameters.AddWithValue("seq", sequence);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    /// <summary>Seeds a <c>termination_payout_requests</c> row directly (state stated explicitly —
+    /// the 7100 no-default contract).</summary>
+    public static async Task SeedRequestRowAsync(
+        string connectionString, string employeeId, string state = "OPEN",
+        int year = 2024, int settlementSequence = 1)
+    {
+        await using var conn = new NpgsqlConnection(connectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            INSERT INTO termination_payout_requests
+                (employee_id, entitlement_type, entitlement_year, settlement_sequence,
+                 state, request_date, recorded_by, version)
+            VALUES (@e, @t, @y, @seq, @state, '2026-01-15', 'hr_qa', 1)
+            """, conn);
+        cmd.Parameters.AddWithValue("e", employeeId);
+        cmd.Parameters.AddWithValue("t", VacationType);
+        cmd.Parameters.AddWithValue("y", year);
+        cmd.Parameters.AddWithValue("seq", settlementSequence);
+        cmd.Parameters.AddWithValue("state", state);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    public static async Task<string?> RequestStateAsync(
+        string connectionString, string employeeId, int year = 2024, int settlementSequence = 1)
+    {
+        await using var conn = new NpgsqlConnection(connectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT state FROM termination_payout_requests
+            WHERE employee_id = @e AND entitlement_type = @t
+              AND entitlement_year = @y AND settlement_sequence = @seq
+            ORDER BY request_id DESC LIMIT 1
+            """, conn);
+        cmd.Parameters.AddWithValue("e", employeeId);
+        cmd.Parameters.AddWithValue("t", VacationType);
+        cmd.Parameters.AddWithValue("y", year);
+        cmd.Parameters.AddWithValue("seq", settlementSequence);
+        var v = await cmd.ExecuteScalarAsync();
+        return v as string;
+    }
+
+    /// <summary>Writes a <c>TerminationPayoutRequested</c> to the canonical <c>events</c> table via
+    /// the production <see cref="PostgresEventStore.AppendAsync"/> (the §26 consumer's source).</summary>
+    public static async Task<Guid> WriteTerminationPayoutRequestedEventAsync(
+        DbConnectionFactory factory, string employeeId, decimal crystallizedDays,
+        DateOnly? boundaryDate = null, int year = 2024, int settlementSequence = 1)
+    {
+        var eventId = Guid.NewGuid();
+        var @event = new TerminationPayoutRequested
+        {
+            EventId = eventId,
+            EmployeeId = employeeId,
+            EntitlementType = VacationType,
+            EntitlementYear = year,
+            SettlementSequence = settlementSequence,
+            RequestDate = new DateOnly(2026, 1, 15),
+            CrystallizedDays = crystallizedDays,
+            SettlementBoundaryDate = boundaryDate ?? BoundaryDate,
+        };
+        var store = new PostgresEventStore(factory);
+        await store.AppendAsync($"employee-{employeeId}", @event);
+        return eventId;
+    }
+
+    /// <summary>Writes a <c>SettlementReversed</c> (R10 shape) to the canonical <c>events</c> table
+    /// via the production <see cref="PostgresEventStore.AppendAsync"/> (the reversal consumer's source).</summary>
+    public static async Task<Guid> WriteSettlementReversedEventAsync(
+        DbConnectionFactory factory, string employeeId, int year = 2024, int settlementSequence = 1,
+        string reversalKind = "BARE", string trigger = "TERMINATION",
+        decimal payoutDays = 0m, decimal? crystallizedDays = 12.5m)
+    {
+        var eventId = Guid.NewGuid();
+        var @event = new SettlementReversed
+        {
+            EventId = eventId,
+            EmployeeId = employeeId,
+            EntitlementType = VacationType,
+            EntitlementYear = year,
+            SettlementSequence = settlementSequence,
+            ReversalKind = reversalKind,
+            Trigger = trigger,
+            TransferDays = 0m,
+            PayoutDays = payoutDays,
+            ForfeitDays = 0m,
+            CrystallizedDays = crystallizedDays,
+        };
+        var store = new PostgresEventStore(factory);
+        await store.AppendAsync($"employee-{employeeId}", @event);
+        return eventId;
+    }
+
+    /// <summary>Pre-inserts a staged export line directly (a reversal-consumer compensation target,
+    /// or a foreign-source collision input). <paramref name="lineKind"/>/<paramref name="reversesLineId"/>
+    /// default to the ORIGINAL shape. Returns <c>line_id</c>.</summary>
+    public static async Task<long> InsertLineRowAsync(
+        string connectionString, string employeeId, Guid sourceEventId,
+        string bucket, string wageType, decimal hours,
+        int year = 2024, int sequence = 1,
+        string lineKind = "ORIGINAL", long? reversesLineId = null,
+        string createdBy = "pre-existing-test-line")
+    {
+        await using var conn = new NpgsqlConnection(connectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            INSERT INTO settlement_export_lines
+                (employee_id, entitlement_type, entitlement_year, sequence, bucket,
+                 wage_type, hours, amount, ok_version, agreement_code, position,
+                 period_start, period_end, source_event_id, created_by, line_kind, reverses_line_id)
+            VALUES
+                (@e, @t, @y, @seq, @b, @wt, @hours, 0, 'OK24', 'AC', '',
+                 @d, @d, @src, @createdBy, @kind, @rev)
+            RETURNING line_id
+            """, conn);
+        cmd.Parameters.AddWithValue("createdBy", createdBy);
+        cmd.Parameters.AddWithValue("e", employeeId);
+        cmd.Parameters.AddWithValue("t", VacationType);
+        cmd.Parameters.AddWithValue("y", year);
+        cmd.Parameters.AddWithValue("seq", sequence);
+        cmd.Parameters.AddWithValue("b", bucket);
+        cmd.Parameters.AddWithValue("wt", wageType);
+        cmd.Parameters.AddWithValue("hours", hours);
+        cmd.Parameters.AddWithValue("d", BoundaryDate);
+        cmd.Parameters.AddWithValue("src", sourceEventId);
+        cmd.Parameters.AddWithValue("kind", lineKind);
+        cmd.Parameters.AddWithValue("rev", (object?)reversesLineId ?? DBNull.Value);
+        return Convert.ToInt64((await cmd.ExecuteScalarAsync())!);
+    }
+
     // ─────────────────────────────── inbox / line reads ───────────────────────────────
 
     public static async Task<string?> InboxStatusAsync(string connectionString, Guid eventId)
@@ -251,6 +472,36 @@ internal static class SettlementEmitterFixture
         cmd.Parameters.AddWithValue("id", eventId);
         var v = await cmd.ExecuteScalarAsync();
         return v as string;
+    }
+
+    /// <summary>The inbox status at ONE composite key (S71 — bucket-keyed reads are exact where
+    /// multiple rows per event can exist; '_EVENT' reads the event-level sentinel row).</summary>
+    public static async Task<string?> InboxStatusForBucketAsync(
+        string connectionString, Guid eventId, string bucket)
+    {
+        await using var conn = new NpgsqlConnection(connectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "SELECT processing_status FROM settlement_payroll_inbox WHERE source_event_id = @id AND bucket = @b", conn);
+        cmd.Parameters.AddWithValue("id", eventId);
+        cmd.Parameters.AddWithValue("b", bucket);
+        var v = await cmd.ExecuteScalarAsync();
+        return v as string;
+    }
+
+    /// <summary>All inbox rows for an event as (bucket → status) — the multi-bucket assertions.</summary>
+    public static async Task<Dictionary<string, string>> InboxRowsAsync(string connectionString, Guid eventId)
+    {
+        await using var conn = new NpgsqlConnection(connectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "SELECT bucket, processing_status FROM settlement_payroll_inbox WHERE source_event_id = @id", conn);
+        cmd.Parameters.AddWithValue("id", eventId);
+        var rows = new Dictionary<string, string>(StringComparer.Ordinal);
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+            rows[reader.GetString(0)] = reader.GetString(1);
+        return rows;
     }
 
     /// <summary>Deletes the inbox checkpoint row for <paramref name="eventId"/> (leaving any staged
@@ -304,9 +555,11 @@ internal static class SettlementEmitterFixture
         return v is int i ? i : (v is null ? (int?)null : Convert.ToInt32(v));
     }
 
-    /// <summary>Counts the staged §24 lines for the employee's settlement bucket.</summary>
+    /// <summary>Counts the staged lines for the employee's settlement bucket (default the §24
+    /// bucket at sequence 1 — the S69 call shape; S71 callers pass other buckets/sequences).</summary>
     public static async Task<long> LineCountAsync(
-        string connectionString, string employeeId, int year = 2024, int sequence = 1)
+        string connectionString, string employeeId, int year = 2024, int sequence = 1,
+        string bucket = AutoPayoutBucket)
     {
         await using var conn = new NpgsqlConnection(connectionString);
         await conn.OpenAsync();
@@ -320,20 +573,34 @@ internal static class SettlementEmitterFixture
         cmd.Parameters.AddWithValue("t", VacationType);
         cmd.Parameters.AddWithValue("y", year);
         cmd.Parameters.AddWithValue("seq", sequence);
-        cmd.Parameters.AddWithValue("b", AutoPayoutBucket);
+        cmd.Parameters.AddWithValue("b", bucket);
         return Convert.ToInt64(await cmd.ExecuteScalarAsync());
     }
 
-    /// <summary>Reads the single staged §24 line for the bucket (or null). Surfaces the money-free +
-    /// wage-key columns the assertions check.</summary>
+    /// <summary>Counts ALL staged lines for the employee (any bucket/sequence) — the no-orphan
+    /// assertions.</summary>
+    public static async Task<long> TotalLineCountAsync(string connectionString, string employeeId)
+    {
+        await using var conn = new NpgsqlConnection(connectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "SELECT COUNT(*) FROM settlement_export_lines WHERE employee_id = @e", conn);
+        cmd.Parameters.AddWithValue("e", employeeId);
+        return Convert.ToInt64(await cmd.ExecuteScalarAsync());
+    }
+
+    /// <summary>Reads the single staged line for the bucket (or null). Surfaces the money-free +
+    /// wage-key columns + the S71 R8 reversal-shape columns the assertions check.</summary>
     public static async Task<StagedLine?> ReadLineAsync(
-        string connectionString, string employeeId, int year = 2024, int sequence = 1)
+        string connectionString, string employeeId, int year = 2024, int sequence = 1,
+        string bucket = AutoPayoutBucket)
     {
         await using var conn = new NpgsqlConnection(connectionString);
         await conn.OpenAsync();
         await using var cmd = new NpgsqlCommand(
             """
-            SELECT wage_type, hours, amount, ok_version, agreement_code, position, source_event_id, created_by
+            SELECT wage_type, hours, amount, ok_version, agreement_code, position, source_event_id, created_by,
+                   line_kind, reverses_line_id, line_id, period_start, period_end
             FROM settlement_export_lines
             WHERE employee_id = @e AND entitlement_type = @t AND entitlement_year = @y
               AND sequence = @seq AND bucket = @b
@@ -342,16 +609,20 @@ internal static class SettlementEmitterFixture
         cmd.Parameters.AddWithValue("t", VacationType);
         cmd.Parameters.AddWithValue("y", year);
         cmd.Parameters.AddWithValue("seq", sequence);
-        cmd.Parameters.AddWithValue("b", AutoPayoutBucket);
+        cmd.Parameters.AddWithValue("b", bucket);
         await using var reader = await cmd.ExecuteReaderAsync();
         if (!await reader.ReadAsync()) return null;
         return new StagedLine(
             reader.GetString(0), reader.GetDecimal(1), reader.GetDecimal(2),
             reader.GetString(3), reader.GetString(4), reader.GetString(5),
-            reader.GetGuid(6), reader.GetString(7));
+            reader.GetGuid(6), reader.GetString(7),
+            reader.GetString(8), reader.IsDBNull(9) ? null : reader.GetInt64(9),
+            reader.GetInt64(10),
+            reader.GetFieldValue<DateOnly>(11), reader.GetFieldValue<DateOnly>(12));
     }
 
     public readonly record struct StagedLine(
         string WageType, decimal Hours, decimal Amount,
-        string OkVersion, string AgreementCode, string Position, Guid SourceEventId, string CreatedBy);
+        string OkVersion, string AgreementCode, string Position, Guid SourceEventId, string CreatedBy,
+        string LineKind, long? ReversesLineId, long LineId, DateOnly PeriodStart, DateOnly PeriodEnd);
 }

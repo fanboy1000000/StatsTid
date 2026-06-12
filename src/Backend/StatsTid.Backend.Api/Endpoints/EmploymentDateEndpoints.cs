@@ -4,10 +4,7 @@ using StatsTid.Auth;
 using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Backend.Api.Services;
 using StatsTid.Infrastructure;
-using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
-using StatsTid.SharedKernel.Audit;
-using StatsTid.SharedKernel.Events;
 
 namespace StatsTid.Backend.Api.Endpoints;
 
@@ -36,12 +33,16 @@ namespace StatsTid.Backend.Api.Endpoints;
 ///       <c>users.version</c>.
 ///     </description></item>
 ///     <item><description>
-///       <b>PUT /api/admin/employees/{employeeId}/employment-end-date</b> (S70) —
-///       terminated-INCLUSIVE write via
+///       <b>PUT /api/admin/employees/{employeeId}/employment-end-date</b> (S70; S71 / TASK-7102
+///       refactor) — terminated-INCLUSIVE write via
 ///       <see cref="OrgScopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync"/>, with the
-///       R1 deactivation lifecycle, the R7a active-settlement 409 guard and the R12 employee
-///       advisory lock in ONE atomic tx; self-target writes are 403-rejected for ALL actors
-///       (S70 Step-7a W1 — a second administrator performs self-departures).
+///       R1 deactivation lifecycle (delegated to the SHARED
+///       <see cref="EmploymentEndDateLifecycleWriter"/> — SPRINT-71 R4 one-implementation; the
+///       S70 transitional inline choreography is deleted), the SPRINT-71 R13 range-widened
+///       active-settlement 409 guard (full <c>[min..max]</c> ferieår span, with a
+///       machine-readable reversal pointer on the 409) and the R12 employee advisory lock in ONE
+///       atomic tx; self-target writes are 403-rejected for ALL actors (S70 Step-7a W1 — a
+///       second administrator performs self-departures).
 ///     </description></item>
 ///   </list>
 /// </summary>
@@ -260,46 +261,39 @@ public static class EmploymentDateEndpoints
         // ═══════════════════════════════════════════
         // 4. PUT /api/admin/employees/{employeeId}/employment-end-date
         //
-        // S70 / TASK-7002 / ADR-033 slice 3a — set / clear / correct users.employment_end_date
-        // with the R1 deactivation lifecycle, ALL in ONE atomic tx (ADR-018 D3), in the R12
-        // order: ADR-032 D4 employee advisory lock FIRST → FOR-UPDATE terminated-inclusive
-        // re-read → every guard re-evaluated in-lock (If-Match + the R7a no-active-settlement
-        // check) → guarded write → R1(e) side effects → R10 event + ADR-026 audit → commit.
+        // S70 / TASK-7002 / ADR-033 slice 3a (S71 / TASK-7102 refactor) — set / clear / correct
+        // users.employment_end_date with the R1 deactivation lifecycle, ALL in ONE atomic tx
+        // (ADR-018 D3), in the R12 order: ADR-032 D4 employee advisory lock FIRST → FOR-UPDATE
+        // terminated-inclusive re-read → every guard re-evaluated in-lock (If-Match + the
+        // R7a/R13 no-active-settlement span check) → the SHARED EmploymentEndDateLifecycleWriter
+        // (SPRINT-71 R4 ONE-implementation: guarded versioned write → R1(e) side effects → R10
+        // event + ADR-026 audit + users_audit) → commit. The S70 inline lifecycle-write
+        // choreography was DELETED here — the writer is the single implementation, consumed by
+        // both this PUT and the slice-3b reversal service's subsumed correction.
         // The advisory lock (pg_advisory_xact_lock(hashtext('employee-' || id)) — the SAME key
-        // VacationSettlementService.SettleAsync / the reconcile retrofit / Step A hold) is what
-        // serializes this endpoint against the settlement path; `users FOR UPDATE` alone would
-        // not (the settlement pass does not row-lock users).
+        // VacationSettlementService.SettleAsync / the reconcile retrofit / Step A / the reversal
+        // service hold) is what serializes this endpoint against the settlement path;
+        // `users FOR UPDATE` alone would not (the settlement pass does not row-lock users).
         //
-        // R1 decision table (computed by ComputeEndDateLifecycle, persisted by the repo):
-        //   (a) set, date already passed (Copenhagen business date > endDate), active row
-        //       → same-tx is_active=false + end_date_deactivated=true + R1(e) side effects;
-        //   (b) set, future-dated (today <= endDate; the end date is the LAST employed day)
-        //       → store the date only, NO flip (the Step-A poller flips it — TASK-7005);
-        //   (c) clear → reactivate ONLY when end_date_deactivated=true (then reset it);
-        //       clearing on a manually-deactivated user clears the date, does NOT reactivate;
-        //   (d) set on an already-manually-inactive user (is_active=false, provenance false)
-        //       → records the date but claims NO provenance and does not change is_active;
-        //   correction on a lifecycle-deactivated row (provenance=true) re-evaluates the SAME
-        //       rule: still-passed date → stays deactivated (provenance kept); corrected to an
-        //       unpassed date → the lifecycle basis is gone → reactivate + reset provenance
-        //       (the poller re-flips when the new date passes) — the only coherent tuple: an
-        //       inactive/provenance=true/future-date row would be unreachable by every other
-        //       writer (see R1(f) below).
+        // R1 decision table: see EmploymentEndDateLifecycleWriter.ComputeEndDateLifecycle (the
+        // CANONICAL host of the pure decision; this class's same-named member delegates to it
+        // for the S70 unit suites). R1(f) DELIBERATE coherence point: the admin general user PUT
+        // filters is_active=TRUE (AdminEndpoints ~L1020; UserRepository.cs:94-97 soft-delete
+        // semantic), so it can neither edit nor reactivate a deactivated user — R1(c) on THIS
+        // endpoint is the ONLY reactivation path for lifecycle-deactivated leavers. By design.
         //
-        // R1(f) DELIBERATE coherence point: the admin general user PUT filters is_active=TRUE
-        // (AdminEndpoints ~L1020; UserRepository.cs:94-97 soft-delete semantic), so it can
-        // neither edit nor reactivate a deactivated user — R1(c) on THIS endpoint is the ONLY
-        // reactivation path for lifecycle-deactivated leavers. That is by design.
-        //
-        // R7a correction guard (fail-closed until 3b's reversal infra): the change is REJECTED
-        // 409 when an active (non-REVERSED) vacation_settlements row of ANY type/trigger exists
-        // for any ferieår the change affects — affected = ferieår(old end date) and
-        // ferieår(new end date), each when non-null, per R6. Reverse-then-re-settle is 3b.
+        // R7a correction guard, R13 RANGE-WIDENED (SPRINT-71): the change is REJECTED 409 when
+        // an active (non-REVERSED) vacation_settlements row of ANY type/trigger exists for ANY
+        // ferieår in the FULL span [min(ferieår(old), ferieår(new)) .. max(...)] — a backward or
+        // forward correction crossing an INTERMEDIATE settled ferieår no longer bypasses the
+        // guard. The 409 carries a machine-readable reversal pointer (the slice-3b reversal
+        // endpoint + every blocking row's identity/sequence/version) so an operator/UI can
+        // route the correction through reverse-then-re-settle. This PUT NEVER silently reverses.
         //
         // Error mapping:
         //   • 428 — missing / malformed If-Match (EtagHeaderHelper admin-strict)
         //   • 412 — version mismatch (stale If-Match), on ACTIVE and DEACTIVATED rows alike
-        //   • 409 — R7a active-settlement conflict
+        //   • 409 — R7a/R13 active-settlement conflict (with the reversal pointer)
         //   • 404 — user_id does not exist at all (a deactivated leaver is NOT a 404 here)
         //   • 403 — terminated-inclusive OrgScopeValidator denial
         // ═══════════════════════════════════════════
@@ -307,12 +301,9 @@ public static class EmploymentDateEndpoints
             string employeeId,
             SetEmploymentEndDateRequest body,
             UserRepository userRepo,
-            ReportingLineRepository reportingLineRepo,
             DbConnectionFactory connectionFactory,
             OrgScopeValidator scopeValidator,
-            IOutboxEnqueue outbox,
-            IAuditProjectionMapper<EmployeeEmploymentEndDateSet> endDateAuditMapper,
-            AuditProjectionRepository auditRepo,
+            EmploymentEndDateLifecycleWriter lifecycleWriter,
             TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
@@ -357,9 +348,10 @@ public static class EmploymentDateEndpoints
                 // (settle), the manual resolve and the reconcile-payout writers on the SAME key.
                 await EmployeeConsumptionLock.AcquireAsync(conn, tx, employeeId, ct);
 
-                // (2) FOR-UPDATE terminated-inclusive re-read — the canonical snapshot for the
-                // If-Match precondition, the R1 lifecycle decision, the event's old_* payload
-                // AND the users_audit previous_data (closes the stale-snapshot race).
+                // (2) FOR-UPDATE terminated-inclusive re-read — the 404/412 pre-checks and the
+                // R7a/R13 guard's old-end-date input (closes the stale-snapshot race). The shared
+                // writer re-reads the SAME row in the same tx for its own canonical snapshot —
+                // idempotent under the row lock this read already took.
                 var lockedHit = await userRepo.GetByIdWithVersionIncludingTerminatedAsync(conn, tx, employeeId, ct);
                 if (lockedHit is null)
                 {
@@ -379,30 +371,37 @@ public static class EmploymentDateEndpoints
                     }, statusCode: 412);
                 }
 
-                // (3) R7a guard, re-evaluated IN-LOCK (R12): any active (non-REVERSED)
-                // settlement row — ANY entitlement type, ANY trigger (fail-closed; mirrors the
-                // R3/R8 any-trigger principle) — for an affected ferieår rejects the change.
-                var affectedYears = AffectedFerieaar(lockedUser.EmploymentEndDate, body.EmploymentEndDate);
+                // (3) R7a guard, R13 RANGE-WIDENED (SPRINT-71), re-evaluated IN-LOCK (R12): any
+                // active (non-REVERSED) settlement row — ANY entitlement type, ANY trigger
+                // (fail-closed) — for ANY ferieår in the FULL [min..max] span rejects the change.
+                // ALL blockers are fetched (not just the first) so the 409 can carry the complete
+                // machine-readable reversal pointer (R7a-409 contract, SPRINT-71).
+                var affectedYears = AffectedFerieaarSpan(lockedUser.EmploymentEndDate, body.EmploymentEndDate);
                 if (affectedYears.Length > 0)
                 {
-                    await using var guardCmd = new NpgsqlCommand(
+                    var blockers = new List<(string Type, int Year, int Sequence, string State, long Version)>();
+                    await using (var guardCmd = new NpgsqlCommand(
                         """
-                        SELECT entitlement_type, entitlement_year, settlement_state
+                        SELECT entitlement_type, entitlement_year, sequence, settlement_state, version
                         FROM vacation_settlements
                         WHERE employee_id = @employeeId
                           AND entitlement_year = ANY(@years)
                           AND settlement_state <> 'REVERSED'
-                        LIMIT 1
-                        """, conn, tx);
-                    guardCmd.Parameters.AddWithValue("employeeId", employeeId);
-                    guardCmd.Parameters.AddWithValue("years", affectedYears);
-                    await using var guardReader = await guardCmd.ExecuteReaderAsync(ct);
-                    if (await guardReader.ReadAsync(ct))
+                        ORDER BY entitlement_year, entitlement_type, sequence
+                        """, conn, tx))
                     {
-                        var conflictType = guardReader.GetString(0);
-                        var conflictYear = guardReader.GetInt32(1);
-                        var conflictState = guardReader.GetString(2);
-                        await guardReader.DisposeAsync();
+                        guardCmd.Parameters.AddWithValue("employeeId", employeeId);
+                        guardCmd.Parameters.AddWithValue("years", affectedYears);
+                        await using var guardReader = await guardCmd.ExecuteReaderAsync(ct);
+                        while (await guardReader.ReadAsync(ct))
+                        {
+                            blockers.Add((guardReader.GetString(0), guardReader.GetInt32(1),
+                                guardReader.GetInt32(2), guardReader.GetString(3), guardReader.GetInt64(4)));
+                        }
+                    }
+                    if (blockers.Count > 0)
+                    {
+                        var first = blockers[0];
                         await tx.RollbackAsync(ct);
                         return Results.Json(new
                         {
@@ -410,33 +409,44 @@ public static class EmploymentDateEndpoints
                                     "the change is rejected fail-closed (SPRINT-70 R7a).",
                             conflictingSettlement = new
                             {
-                                entitlementType = conflictType,
-                                entitlementYear = conflictYear,
-                                settlementState = conflictState,
+                                entitlementType = first.Type,
+                                entitlementYear = first.Year,
+                                settlementState = first.State,
                             },
+                            // SPRINT-71 R7a-409 reversal pointer: EVERY blocking row's identity +
+                            // settlement-row sequence + version — exactly what the reversal
+                            // endpoint's body (expectedSettlementSequence) and If-Match need.
+                            blockingSettlements = blockers.Select(b => new
+                            {
+                                entitlementType = b.Type,
+                                entitlementYear = b.Year,
+                                sequence = b.Sequence,
+                                settlementState = b.State,
+                                version = b.Version,
+                            }).ToArray(),
                             affectedEntitlementYears = affectedYears,
-                            hint = "Reverse-then-re-settle requires the slice-3b reversal infrastructure; " +
-                                   "until then an end-date set/clear/correction touching a settled ferieår is not supported.",
+                            reversalEndpoint = $"/api/admin/employees/{employeeId}/settlement-reversal",
+                            hint = "Route the correction through the slice-3b reversal endpoint: POST reversalEndpoint " +
+                                   "with a blocking row's entitlementType/entitlementYear/expectedSettlementSequence " +
+                                   "(If-Match: its version) — reverse-then-re-settle subsumes this end-date " +
+                                   "correction; the explicit bare-reversal mode parks the tuple instead.",
                         }, statusCode: 409);
                     }
                 }
 
-                // (4) The R1 lifecycle decision — a pure function of the LOCKED row + the
-                // Copenhagen business date (the boundary-comparison authority; mirrors the
-                // SettlementCloseService convention — NEVER raw UTC/CURRENT_DATE).
-                var today = CopenhagenToday(timeProvider);
-                var (newIsActive, newEndDateDeactivated) = ComputeEndDateLifecycle(
-                    body.EmploymentEndDate, lockedUser.IsActive, lockedUser.EndDateDeactivated, today);
-                var isDeactivating = lockedUser.IsActive && !newIsActive;
-
-                // (5) Guarded write — the endpoint computed the tuple; the repo persists it
-                // (version-bumped per ADR-018 D7 so a held ETag never survives the transition).
-                long newVersion;
+                // (4)–(8) — the SHARED lifecycle writer (SPRINT-71 R4 one-implementation): the
+                // R1 decision off the Copenhagen business date, the guarded versioned write, the
+                // R1(e) ReportingLineManagerDeactivated side effects, the R10 event + ADR-026
+                // audit-projection row and the users_audit UPDATED row — byte-identical to the
+                // S70 inline choreography this delegation replaced (pinned by the S70 lifecycle
+                // suite + EndDateLifecycleWriterEffectTests).
+                EmploymentEndDateLifecycleResult lifecycle;
                 try
                 {
-                    newVersion = await userRepo.SetEmploymentEndDateIncludingTerminatedAsync(
-                        conn, tx, employeeId, body.EmploymentEndDate,
-                        newEndDateDeactivated, newIsActive, expectedVersion, ct);
+                    lifecycle = await lifecycleWriter.ApplyAsync(
+                        conn, tx, employeeId, body.EmploymentEndDate, expectedVersion,
+                        actorId, actorRole, actor.OrgId, actor.CorrelationId,
+                        CopenhagenToday(timeProvider), ct);
                 }
                 catch (OptimisticConcurrencyException ex)
                 {
@@ -454,105 +464,16 @@ public static class EmploymentDateEndpoints
                     return Results.NotFound(new { error = "Employee not found" });
                 }
 
-                // (6) R1(e) — every lifecycle deactivation reuses the EXISTING user-deactivation
-                // side-effect path (AdminEndpoints manual-PUT precedent, S52/ADR-027): emit
-                // ReportingLineManagerDeactivated for each active line managed by the leaver,
-                // inside the SAME tx as the is_active flip.
-                if (isDeactivating)
-                {
-                    var managedLines = await reportingLineRepo.GetDirectReportsAsync(conn, tx, employeeId, ct);
-                    foreach (var line in managedLines)
-                    {
-                        var deactivatedEvent = new ReportingLineManagerDeactivated
-                        {
-                            ReportingLineId = line.ReportingLineId,
-                            EmployeeId = line.EmployeeId,
-                            ManagerId = line.ManagerId,
-                            TreeRootOrgId = line.TreeRootOrgId,
-                            ActorId = actor.ActorId,
-                            ActorRole = actor.ActorRole,
-                            CorrelationId = actor.CorrelationId,
-                        };
-                        await outbox.EnqueueAsync(conn, tx, $"reporting-line-{line.EmployeeId}", deactivatedEvent, ct);
-                    }
-                }
-
-                // (7) R10 — EmployeeEmploymentEndDateSet (set/clear/correction discriminated by
-                // the old/new pair) on employee-{id} via the outbox + the ADR-026 audit
-                // projection row, SAME tx. Admin actor from the JWT.
-                var endDateEvent = new EmployeeEmploymentEndDateSet
-                {
-                    EmployeeId = employeeId,
-                    OldEndDate = lockedUser.EmploymentEndDate,
-                    NewEndDate = body.EmploymentEndDate,
-                    OldIsActive = lockedUser.IsActive,
-                    NewIsActive = newIsActive,
-                    VersionBefore = lockedVersion,
-                    VersionAfter = newVersion,
-                    ActorId = actor.ActorId,
-                    ActorRole = actor.ActorRole,
-                    CorrelationId = actor.CorrelationId,
-                };
-                var outboxId = await outbox.EnqueueAndReturnIdAsync(
-                    conn, tx, $"employee-{employeeId}", endDateEvent, ct);
-                var auditCtx = new AuditProjectionContext(
-                    ActorId: actor.ActorId,
-                    ActorPrimaryOrgId: actor.OrgId,
-                    CorrelationId: actor.CorrelationId,
-                    OccurredAt: new DateTimeOffset(DateTime.SpecifyKind(endDateEvent.OccurredAt, DateTimeKind.Utc)),
-                    ResolvedTargetOrgId: lockedUser.PrimaryOrgId);
-                var rowData = endDateAuditMapper.Map(endDateEvent, auditCtx);
-                await auditRepo.InsertAsync(
-                    conn, tx, endDateEvent.EventId, outboxId, endDateEvent.EventType, rowData, auditCtx, ct);
-
-                // (8) users_audit UPDATED row — full lifecycle-tuple before/after snapshot
-                // (mirrors the S60 employment-start PUT audit row exactly).
-                var previousData = JsonSerializer.Serialize(new
-                {
-                    employmentEndDate = lockedUser.EmploymentEndDate,
-                    endDateDeactivated = lockedUser.EndDateDeactivated,
-                    isActive = lockedUser.IsActive,
-                });
-                var newData = JsonSerializer.Serialize(new
-                {
-                    employmentEndDate = body.EmploymentEndDate,
-                    endDateDeactivated = newEndDateDeactivated,
-                    isActive = newIsActive,
-                });
-                await using (var auditCmd = new NpgsqlCommand(
-                    """
-                    INSERT INTO users_audit (
-                        user_id, action,
-                        previous_data, new_data,
-                        version_before, version_after,
-                        actor_id, actor_role)
-                    VALUES (
-                        @userId, 'UPDATED',
-                        @previousData::jsonb, @newData::jsonb,
-                        @versionBefore, @versionAfter,
-                        @actorId, @actorRole)
-                    """, conn, tx))
-                {
-                    auditCmd.Parameters.AddWithValue("userId", employeeId);
-                    auditCmd.Parameters.AddWithValue("previousData", previousData);
-                    auditCmd.Parameters.AddWithValue("newData", newData);
-                    auditCmd.Parameters.AddWithValue("versionBefore", lockedVersion);
-                    auditCmd.Parameters.AddWithValue("versionAfter", newVersion);
-                    auditCmd.Parameters.AddWithValue("actorId", actorId);
-                    auditCmd.Parameters.AddWithValue("actorRole", actorRole);
-                    await auditCmd.ExecuteNonQueryAsync(ct);
-                }
-
                 await tx.CommitAsync(ct);
 
-                context.Response.Headers.ETag = $"\"{newVersion}\"";
+                context.Response.Headers.ETag = $"\"{lifecycle.VersionAfter}\"";
                 return Results.Ok(new
                 {
                     employeeId,
                     employmentEndDate = body.EmploymentEndDate,
-                    endDateDeactivated = newEndDateDeactivated,
-                    isActive = newIsActive,
-                    version = newVersion,
+                    endDateDeactivated = lifecycle.NewEndDateDeactivated,
+                    isActive = lifecycle.NewIsActive,
+                    version = lifecycle.VersionAfter,
                 });
             }
             catch
@@ -569,43 +490,18 @@ public static class EmploymentDateEndpoints
     // ── S70 / TASK-7002 — pure lifecycle helpers (unit-tested; no I/O) ──
 
     /// <summary>
-    /// The R1 deactivation-lifecycle decision — a PURE function of the FOR-UPDATE'd row state,
-    /// the requested end date and the Copenhagen business date. Returns the
-    /// (<c>is_active</c>, <c>end_date_deactivated</c>) tuple to persist. See the PUT handler's
-    /// decision-table comment for the R1(a)–(d) mapping; <c>employment_end_date</c> is the LAST
-    /// day employed, so "passed" means <paramref name="copenhagenToday"/> is STRICTLY after it.
+    /// The R1 deactivation-lifecycle decision — since the S71 / TASK-7102 refactor a THIN
+    /// DELEGATION to the CANONICAL implementation,
+    /// <see cref="EmploymentEndDateLifecycleWriter.ComputeEndDateLifecycle"/> (SPRINT-71 R4
+    /// one-implementation — the S70 transitional duplicate died here). The public symbol is
+    /// retained because the S70 unit suite (<c>EmploymentEndDateLifecycleLogicTests</c>) and the
+    /// 7104 parity suite (<c>EndDateLifecycleWriterParityTests</c>) reference it; parity is now
+    /// by-construction. See the writer's doc for the R1(a)–(d) decision table.
     /// </summary>
     public static (bool IsActive, bool EndDateDeactivated) ComputeEndDateLifecycle(
         DateOnly? newEndDate, bool oldIsActive, bool oldEndDateDeactivated, DateOnly copenhagenToday)
-    {
-        if (newEndDate is null)
-        {
-            // R1(c) clear: reactivate ONLY on lifecycle provenance (then reset it); a
-            // manually-deactivated user keeps is_active=false. Provenance always resets —
-            // with no end date there is nothing for it to claim.
-            return oldEndDateDeactivated ? (true, false) : (oldIsActive, false);
-        }
-
-        var passed = copenhagenToday > newEndDate.Value;
-
-        if (oldIsActive)
-        {
-            // R1(a) already-passed → same-tx deactivate with provenance;
-            // R1(b) future-dated (incl. endDate == today: still the last EMPLOYED day) → no flip.
-            return passed ? (false, true) : (true, false);
-        }
-
-        if (oldEndDateDeactivated)
-        {
-            // Correction on a lifecycle-deactivated row: deterministic re-evaluation of the
-            // SAME rule. Still-passed → stays deactivated (provenance kept); unpassed → the
-            // lifecycle basis is gone → reactivate + reset (the Step-A poller re-flips later).
-            return passed ? (false, true) : (true, false);
-        }
-
-        // R1(d) manually-inactive: record the date, claim NO provenance, leave is_active alone.
-        return (false, false);
-    }
+        => EmploymentEndDateLifecycleWriter.ComputeEndDateLifecycle(
+            newEndDate, oldIsActive, oldEndDateDeactivated, copenhagenToday);
 
     /// <summary>
     /// R6 ferieår resolution, executable: the entitlement year containing <paramref name="date"/>
@@ -615,8 +511,11 @@ public static class EmploymentDateEndpoints
     public static int FerieaarOf(DateOnly date) => date.Month >= 9 ? date.Year : date.Year - 1;
 
     /// <summary>
-    /// The R7a affected-ferieår set: ferieår(old end date) and ferieår(new end date), each when
-    /// non-null, de-duplicated. Empty when both dates are null (clearing a never-set date).
+    /// The S70 R7a affected-ferieår PAIR: ferieår(old end date) and ferieår(new end date), each
+    /// when non-null, de-duplicated. Empty when both dates are null (clearing a never-set date).
+    /// SUPERSEDED for the PUT's guard by <see cref="AffectedFerieaarSpan"/> (SPRINT-71 R13 — the
+    /// pair misses INTERMEDIATE ferieårs a multi-year correction crosses); retained because the
+    /// S70 unit suite pins it and it documents the pre-R13 semantics.
     /// </summary>
     public static int[] AffectedFerieaar(DateOnly? oldEndDate, DateOnly? newEndDate)
     {
@@ -624,6 +523,26 @@ public static class EmploymentDateEndpoints
         if (oldEndDate is { } o) years.Add(FerieaarOf(o));
         if (newEndDate is { } n) years.Add(FerieaarOf(n));
         return years.ToArray();
+    }
+
+    /// <summary>
+    /// SPRINT-71 R13 — the RANGE-WIDENED affected-ferieår set: the FULL inclusive span
+    /// <c>[min(ferieår(old), ferieår(new)) .. max(...)]</c>, so a forward OR backward end-date
+    /// correction crossing an INTERMEDIATE ferieår holding an active settlement row 409s instead
+    /// of silently bypassing the guard. A null date contributes no pivot (single-pivot span = a
+    /// single year — identical to the S70 pair semantics for set/clear); both null ⇒ empty.
+    /// Ascending order. PURE; the in-tx twin lives in
+    /// <c>SettlementReversalService.GetOtherActiveRowsInCorrectionSpanAsync</c> (the B2 guard).
+    /// </summary>
+    public static int[] AffectedFerieaarSpan(DateOnly? oldEndDate, DateOnly? newEndDate)
+    {
+        var pivots = new List<int>(2);
+        if (oldEndDate is { } o) pivots.Add(FerieaarOf(o));
+        if (newEndDate is { } n) pivots.Add(FerieaarOf(n));
+        if (pivots.Count == 0) return [];
+        var low = pivots.Min();
+        var high = pivots.Max();
+        return Enumerable.Range(low, high - low + 1).ToArray();
     }
 
     // ── Europe/Copenhagen business-date helper ──

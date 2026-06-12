@@ -5,7 +5,7 @@
 > Update the schema in `init.sql`, then run `python tools/generate_db_schema.py`.
 > CI fails (`tools/check_docs.py`) if this file drifts from init.sql.
 
-**Total: 61 tables** (44 primary, 17 audit).
+**Total: 62 tables** (45 primary, 17 audit).
 
 ---
 
@@ -1129,6 +1129,8 @@
 | payout_reconciled_at | TIMESTAMPTZ | Yes |  |  |
 | payout_reconciled_by | TEXT | Yes |  |  |
 | review_disposition | TEXT | Yes |  |  |
+| claim_disposition_days | NUMERIC(6,2) | Yes |  |  |
+| bare_reversal_not_due | BOOLEAN | No |  | FALSE |
 | version | BIGINT | No |  | 1 |
 | created_at | TIMESTAMPTZ | No |  | NOW() |
 | updated_at | TIMESTAMPTZ | No |  | NOW() |
@@ -1138,11 +1140,16 @@
 - CONSTRAINT vacation_settlements_payout_reconciled_paired CHECK ( (payout_reconciled_at IS NULL AND payout_reconciled_by IS NULL) OR (payout_reconciled_at IS NOT NULL AND payout_reconciled_by IS NOT NULL) )
 - CONSTRAINT vacation_settlements_nonneg_buckets CHECK ( transfer_days >= 0 AND payout_days >= 0 AND forfeit_days >= 0 )
 - CONSTRAINT vacation_settlements_positive_counters CHECK (sequence >= 1 AND version >= 1)
-- CONSTRAINT vacation_settlements_disposition_state CHECK ( review_disposition IS NULL OR (review_disposition = 'DEFER' AND settlement_state = 'PENDING_REVIEW') OR (review_disposition = 'FORFEIT' AND settlement_state <> 'PENDING_REVIEW') )
+- CONSTRAINT vacation_settlements_review_disposition CHECK ( review_disposition IS NULL OR review_disposition IN ('FORFEIT', 'DEFER', 'MODREGNING', 'WAIVED') )
+- CONSTRAINT vacation_settlements_disposition_state CHECK ( review_disposition IS NULL OR (review_disposition = 'DEFER' AND settlement_state IN ('PENDING_REVIEW', 'REVERSED')) OR (review_disposition IN ('FORFEIT', 'MODREGNING', 'WAIVED') AND settlement_state <> 'PENDING_REVIEW') )
+- CONSTRAINT vacation_settlements_bare_reversal_reversed_only CHECK ( bare_reversal_not_due = FALSE OR settlement_state = 'REVERSED' )
+- CONSTRAINT vacation_settlements_claim_disposition_nonneg CHECK ( claim_disposition_days IS NULL OR claim_disposition_days >= 0 )
+- CONSTRAINT vacation_settlements_claim_disposition_paired CHECK ( (claim_disposition_days IS NOT NULL) = (review_disposition IS NOT NULL AND review_disposition IN ('MODREGNING', 'WAIVED')) )
 
 **Indexes:**
 - `idx_vacation_settlements_active` (UNIQUE) on (employee_id, entitlement_type, entitlement_year) WHERE settlement_state <> 'REVERSED'
 - `idx_vacation_settlements_employee` on (employee_id)
+- `idx_vacation_settlements_bare_reversal_marker` (UNIQUE) on (employee_id, entitlement_type, entitlement_year) WHERE bare_reversal_not_due
 
 ## vacation_transfer_agreements
 
@@ -1211,18 +1218,22 @@
 
 | Column | Type | Null | Key | Default |
 |--------|------|------|-----|---------|
-| source_event_id | UUID | No | PK |  |
+| source_event_id | UUID | No |  |  |
 | employee_id | TEXT | Yes | FK→users |  |
 | entitlement_type | TEXT | Yes |  |  |
 | entitlement_year | INT | Yes |  |  |
 | sequence | INT | Yes |  |  |
-| bucket | TEXT | Yes |  |  |
+| bucket | TEXT | No |  |  |
 | processing_status | TEXT | No |  |  |
 | attempts | INT | No |  | 0 |
 | last_error | TEXT | Yes |  |  |
 | processed_at | TIMESTAMPTZ | Yes |  |  |
 | created_at | TIMESTAMPTZ | No |  | NOW() |
 | updated_at | TIMESTAMPTZ | No |  | NOW() |
+
+**Table constraints:**
+- CONSTRAINT settlement_payroll_inbox_pkey PRIMARY KEY (source_event_id, bucket)
+- CONSTRAINT settlement_payroll_inbox_processing_status CHECK ( processing_status IN ('RETRY_PENDING', 'PROCESSED', 'SKIPPED_RECONCILED', 'SKIPPED_VOIDED', 'DEAD_LETTER') )
 
 **Indexes:**
 - `idx_settlement_payroll_inbox_retry_pending` on (processing_status) WHERE processing_status = 'RETRY_PENDING'
@@ -1247,12 +1258,45 @@
 | period_start | DATE | No |  |  |
 | period_end | DATE | No |  |  |
 | source_event_id | UUID | No |  |  |
+| line_kind | TEXT | No |  | 'ORIGINAL' |
+| reverses_line_id | BIGINT | Yes |  |  |
 | created_at | TIMESTAMPTZ | No |  | NOW() |
 | created_by | TEXT | No |  |  |
+
+**Table constraints:**
+- CONSTRAINT settlement_export_lines_line_kind CHECK ( line_kind IN ('ORIGINAL', 'REVERSAL') )
+- CONSTRAINT settlement_export_lines_reversal_pairing CHECK ( (reverses_line_id IS NOT NULL) = (line_kind = 'REVERSAL') )
+- CONSTRAINT settlement_export_lines_reverses_line_fk FOREIGN KEY (reverses_line_id) REFERENCES settlement_export_lines (line_id)
 
 **Indexes:**
 - `idx_settlement_export_lines_bucket` (UNIQUE) on (employee_id, entitlement_type, entitlement_year, sequence, bucket)
 - `idx_settlement_export_lines_employee` on (employee_id)
+
+## termination_payout_requests
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| request_id | BIGSERIAL | No | PK |  |
+| employee_id | TEXT | No | FK→users |  |
+| entitlement_type | TEXT | No |  |  |
+| entitlement_year | INT | No |  |  |
+| settlement_sequence | INT | No |  |  |
+| state | TEXT | No |  |  |
+| request_date | DATE | No |  |  |
+| recorded_by | TEXT | No |  |  |
+| evidence_note | TEXT | Yes |  |  |
+| version | BIGINT | No |  | 1 |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+| updated_at | TIMESTAMPTZ | No |  | NOW() |
+
+**Table constraints:**
+- CONSTRAINT termination_payout_requests_state CHECK ( state IN ('OPEN', 'LINE_STAGED', 'VOIDED_BY_REVERSAL') )
+- CONSTRAINT termination_payout_requests_positive_version CHECK (version >= 1)
+- CONSTRAINT termination_payout_requests_settlement_fk FOREIGN KEY (employee_id, entitlement_type, entitlement_year, settlement_sequence) REFERENCES vacation_settlements (employee_id, entitlement_type, entitlement_year, sequence)
+
+**Indexes:**
+- `idx_termination_payout_requests_nonvoided` (UNIQUE) on (employee_id, entitlement_type, entitlement_year, settlement_sequence) WHERE state <> 'VOIDED_BY_REVERSAL'
+- `idx_termination_payout_requests_employee` on (employee_id)
 
 ---
 
@@ -1321,4 +1365,5 @@
 | 59 | vacation_transfer_agreement_audit | audit |
 | 60 | settlement_payroll_inbox | -- |
 | 61 | settlement_export_lines | -- |
+| 62 | termination_payout_requests | -- |
 

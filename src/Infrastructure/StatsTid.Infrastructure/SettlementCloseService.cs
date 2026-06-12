@@ -592,10 +592,12 @@ public sealed class SettlementCloseService : BackgroundService
     ///   unchanged boundary geometry; the settlement service's in-lock leaver re-read produces the
     ///   deferred-disposition row — no pre-discrimination here beyond trigger selection).</description></item>
     /// </list>
-    /// The any-trigger anti-join against active (non-REVERSED) settlement rows is unchanged and
-    /// shared by both branches (R3: a TERMINATION-only anti-join would leave an R7b-conflicted
-    /// leaver in the due set forever; R8: SETTLED and PENDING_REVIEW TERMINATION rows suppress a
-    /// later YEAR_END for the same tuple).
+    /// The any-trigger anti-join against active (non-REVERSED) settlement rows is shared by both
+    /// branches (R3: a TERMINATION-only anti-join would leave an R7b-conflicted leaver in the due
+    /// set forever; R8: SETTLED and PENDING_REVIEW TERMINATION rows suppress a later YEAR_END for
+    /// the same tuple) — S71 / TASK-7104 extended that ONE predicate site with the SPRINT-71 R3
+    /// bare-reversal marker: a tuple holding a <c>bare_reversal_not_due</c> row is likewise
+    /// not-due (a bare-reversed tuple is never re-enumerated by EITHER branch; terminal in 3b).
     /// </summary>
     private async Task<IReadOnlyList<(string EmployeeId, int EntitlementYear, string Trigger)>> EnumerateDueTuplesAsync(
         DateOnly copenhagenToday, DateOnly goLiveDate, CancellationToken ct)
@@ -653,12 +655,18 @@ public sealed class SettlementCloseService : BackgroundService
                          AND u.employment_end_date IS NOT NULL
                          AND u.employment_end_date < @today)
                       )
+                  -- S71 / TASK-7104 (SPRINT-71 R3) — the SHARED not-due anti-join, ONE predicate
+                  -- site covering BOTH the ACTIVE and LEAVER branches above: a tuple is not-due
+                  -- when it has a non-REVERSED row (the S70 any-trigger anti-join, unchanged) OR
+                  -- a bare-reversal not-due marker row (bare reversal is TERMINAL in 3b — a
+                  -- bare-reversed tuple is NEVER re-enumerated; marker-clearing + the R1 g+1
+                  -- revival are the REHIRE follow-up's first obligation).
                   AND NOT EXISTS (
                         SELECT 1 FROM vacation_settlements vs
                         WHERE vs.employee_id = u.user_id
                           AND vs.entitlement_type = @type
                           AND vs.entitlement_year = gs.yr
-                          AND vs.settlement_state <> 'REVERSED'
+                          AND (vs.settlement_state <> 'REVERSED' OR vs.bare_reversal_not_due)
                   )
                 ORDER BY u.user_id, gs.yr
                 """, conn);
