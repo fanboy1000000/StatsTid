@@ -1,6 +1,12 @@
+/* S72 / TASK-7202 — Skema grid restructured to the design_handoff_skema visuals
+   (README §3 + shared/redesign.css, weekend variant 3 "band", breaker variant 1,
+   group style 2 "minimal disclosure band"). Tokens only (R8/R15); 0px corners;
+   grey = read-only, --color-weekend blue = weekend, white = editable. */
+
 .gridWrapper {
   border: var(--border-width) solid var(--border-color);
-  border-radius: var(--border-radius);
+  background: var(--color-white);
+  overflow-x: auto;
 }
 
 .grid {
@@ -9,6 +15,7 @@
   width: 100%;
   font-family: var(--font-family);
   font-size: 13px;
+  font-variant-numeric: tabular-nums;
 }
 
 .grid th,
@@ -17,17 +24,18 @@
   text-align: center;
 }
 
-/* Header */
+/* ── Header ── */
 .labelHeader {
-  background-color: var(--color-gray-100);
-  width: 100px;
-  padding: var(--space-1) var(--space-2);
+  background: var(--color-gray-100);
+  width: 168px;
+  padding: var(--space-1) 10px;
   text-align: left;
+  font-weight: var(--font-weight-semibold);
 }
 
 .dayHeader {
-  padding: var(--space-1) 0;
-  background-color: var(--color-gray-100);
+  padding: 5px 0;
+  background: var(--color-gray-100);
   font-weight: var(--font-weight-medium);
 }
 
@@ -41,266 +49,343 @@
   font-size: 13px;
   color: var(--color-text);
   line-height: 1.2;
-}
-
-.sumHeader {
-  padding: var(--space-1) var(--space-2);
-  width: 50px;
-  background-color: var(--color-gray-100);
   font-weight: var(--font-weight-semibold);
 }
 
-/* Row label (sticky first column) */
+/* Weekend headers stay grey; only the abbrev shifts tone (wk3) */
+th.weekend .dayAbbrev {
+  color: var(--color-text-secondary);
+}
+
+/* Today: the day NUMBER goes green — no column fill (handoff) */
+.today .dayNumber {
+  color: var(--color-primary);
+}
+
+.sumHeader {
+  padding: 5px var(--space-2);
+  width: 56px;
+  background: var(--color-gray-100);
+  font-weight: var(--font-weight-semibold);
+}
+
+/* ── Row label column ── */
 .rowLabel {
-  background-color: var(--color-white);
+  background: var(--color-white);
   text-align: left;
-  padding: var(--space-1) var(--space-2);
+  padding: var(--space-1) 10px;
   white-space: nowrap;
   font-weight: var(--font-weight-medium);
-  width: 100px;
+  width: 168px;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-/* Cells */
+/* Informational row note (e.g. "hele dage") — text only, R1 */
+.rowNote {
+  margin-left: 6px;
+  padding: 1px 5px;
+  font-size: 10px;
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--color-text-secondary);
+  background: var(--color-gray-100);
+  border: var(--border-width) solid var(--color-border);
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+/* ── 1. Diff. fra normtid (read-only summary — grey on ALL days, incl. weekends) ── */
+.diffRow td {
+  background: var(--color-gray-100);
+  font-weight: var(--font-weight-semibold);
+  height: 30px;
+}
+
+.diffRow .rowLabel {
+  background: var(--color-gray-100);
+  color: var(--color-text-secondary);
+}
+
+.diffPos {
+  color: var(--color-success);
+}
+
+.diffNeg {
+  color: var(--color-error);
+}
+
+.diffGrand {
+  font-weight: var(--font-weight-bold);
+  background: var(--color-gray-200);
+}
+
+/* ── 2. Registrér arbejdstid (the interactive summary row) ── */
+.workRow td {
+  background: var(--color-gray-100);
+  font-weight: var(--font-weight-semibold);
+  font-size: 14px;
+  height: 30px;
+}
+
+.workRow .rowLabel {
+  background: var(--color-gray-100);
+  color: var(--color-text);
+}
+
+.workCell {
+  padding: 0;
+}
+
+/* Clickable day cells are WHITE (clearly actionable; handoff workcell) */
+td.workClickable {
+  background: var(--color-white);
+}
+
+/* The weekend band tint spans the interactive row… */
+.workRow td.weekend {
+  background: var(--color-weekend);
+}
+
+.workButton {
+  width: 100%;
+  height: 30px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-family: var(--font-family);
+  font-size: 14px;
+  font-weight: var(--font-weight-bold);
+  color: var(--color-primary);
+  font-variant-numeric: tabular-nums;
+  transition: background 0.1s, box-shadow 0.1s;
+}
+
+.workButton:hover {
+  background: var(--color-info-light);
+  box-shadow: inset 0 0 0 2px var(--color-primary);
+}
+
+/* In-grid focus treatment: inset ring (an offset outline would collide with
+   neighbouring 30px cells); same affordance as the cell-input focus. */
+.workButton:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
+
+.workDisplay {
+  display: block;
+  height: 30px;
+  line-height: 30px;
+}
+
+.workBalanced {
+  color: var(--color-success);
+  font-weight: var(--font-weight-bold);
+}
+
+.workUnder {
+  color: var(--color-warning);
+}
+
+.workOver {
+  color: var(--color-error);
+}
+
+/* ── 3. Divider — a true 2px rule, no label, no whitespace gap (breaker b1) ── */
+.dividerRow td {
+  padding: 0;
+  height: 0;
+  line-height: 0;
+  font-size: 0;
+  background: var(--color-white);
+  border-left: none;
+  border-right: none;
+  border-top: none;
+  border-bottom: 2px solid var(--color-gray-400);
+}
+
+/* ── 4/5. Disclosure bands (▾ Projekter / ▾ Ferie og fravær) ── */
+.bandRow td {
+  background: var(--color-white);
+  padding: 0;
+  text-align: left;
+  border-left: none;
+  border-right: none;
+  border-top: none;
+  border-bottom: 2px solid var(--color-gray-400);
+}
+
+.bandCell {
+  white-space: nowrap;
+}
+
+.bandButton {
+  appearance: none;
+  border: none;
+  background: none;
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  font-family: var(--font-family);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.bandButton:hover {
+  color: var(--color-primary);
+}
+
+.bandButton:focus-visible {
+  outline: var(--focus-outline);
+  outline-offset: -2px; /* inset: a 2px offset ring would be clipped by the band row */
+}
+
+.chevron {
+  display: inline-block;
+  width: 14px;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+}
+
+.bandCount {
+  color: var(--color-gray-500);
+  font-weight: var(--font-weight-regular);
+  margin-left: 4px;
+}
+
+.bandFill {
+  background: var(--color-white);
+}
+
+/* ── Editable data cells (project + absence rows) ── */
 .cell {
   padding: 0;
+  height: 30px;
+}
+
+/* …and the editable rows (the weekend band's lower span) */
+.cell.weekend {
+  background: var(--color-weekend);
 }
 
 .cellInput {
   width: 100%;
+  height: 30px;
   border: none;
   outline: none;
   text-align: center;
-  padding: var(--space-1) 2px;
+  padding: 2px;
   font-family: var(--font-family);
   font-size: 13px;
   background: transparent;
-  -moz-appearance: textfield;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
 }
 
-.cellInput::-webkit-inner-spin-button,
-.cellInput::-webkit-outer-spin-button {
-  -webkit-appearance: none;
-  margin: 0;
+.cellInput:hover {
+  background: var(--color-info-light);
 }
 
 .cellInput:focus {
-  background-color: var(--color-info-light);
+  background: var(--color-white);
   outline: 2px solid var(--color-primary);
   outline-offset: -2px;
 }
 
 .cellDisplay {
   display: block;
-  padding: var(--space-1) 2px;
-  min-height: 28px;
-  line-height: 28px;
+  height: 30px;
+  line-height: 30px;
 }
 
-/* Arbejdstid row */
-.arbejdstidRow td {
-  font-size: 12px;
+/* Absence rows render in secondary text color (handoff absrow) */
+.absenceRow td {
+  color: var(--color-text-secondary);
 }
 
-.arbejdstidCell.clickable {
-  cursor: pointer;
+.absenceRow .cellInput {
+  color: var(--color-text-secondary);
 }
 
-.arbejdstidCell.clickable:hover {
-  background-color: var(--color-info-light);
+/* Recently-changed flash: success-light → transparent over 1.2s */
+td.recent {
+  animation: cellFlash 1.2s ease;
 }
 
-.arbejdstidDisplay {
-  display: block;
-  padding: 2px 0;
-  font-size: 12px;
-  color: var(--color-gray-600, var(--color-gray-500));
-  min-height: 24px;
-  line-height: 24px;
+@keyframes cellFlash {
+  0% {
+    background-color: var(--color-success-light);
+  }
+  100% {
+    background-color: transparent;
+  }
 }
 
-/* Difference row */
-.diffRow td {
-  font-size: 11px;
+@media (prefers-reduced-motion: reduce) {
+  td.recent {
+    animation: none;
+  }
 }
 
-.diffDisplay {
-  display: block;
-  padding: 2px 0;
-  min-height: 22px;
-  line-height: 22px;
-  font-weight: var(--font-weight-medium);
-}
-
-.diffCell {
-  color: var(--color-gray-500);
-}
-
-/* Tilføj timer (manual hours) row */
-.manualHoursRow td {
-  font-size: 12px;
-}
-
-/* Ikke fordelt (unallocated) row */
-.unallocatedRow td {
-  font-size: 11px;
-}
-
-.unallocatedDisplay {
-  display: block;
-  padding: 2px 0;
-  min-height: 22px;
-  line-height: 22px;
-  font-weight: var(--font-weight-semibold);
-}
-
-.allocBalanced {
-  color: var(--color-success);
-}
-
-.allocUnder {
-  color: var(--color-warning);
-  background-color: var(--color-warning-light);
-}
-
-.allocOver {
-  color: var(--color-error);
-  background-color: var(--color-error-light);
-}
-
-/* Month-total "Ikke fordelt" when at least one day is unbalanced (S56 Step 7a fix).
-   Not green — the per-day gate will block approval until every day balances. */
-.allocUnbalanced {
-  color: var(--color-warning);
-  background-color: var(--color-warning-light);
-}
-
-/* Work intervals dialog */
-.intervalsContainer {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.intervalRow {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.intervalLabel {
-  font-size: 14px;
-  font-weight: var(--font-weight-medium);
-  color: var(--color-gray-500);
-  min-width: 24px;
-}
-
-.intervalTimeInput {
-  padding: var(--space-1) var(--space-2);
-  border: var(--border-width) solid var(--border-color);
-  border-radius: var(--border-radius);
-  font-family: var(--font-family);
-  font-size: 14px;
-  width: 120px;
-}
-
-.intervalTimeInput:focus {
-  outline: 2px solid var(--color-primary);
-  outline-offset: -1px;
-  border-color: var(--color-primary);
-}
-
-.removeIntervalBtn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  background: transparent;
-  border: var(--border-width) solid transparent;
-  border-radius: var(--border-radius);
-  color: var(--color-gray-500);
-  font-size: 14px;
-  cursor: pointer;
-  line-height: 1;
-}
-
-.removeIntervalBtn:hover {
-  background-color: var(--color-error-light);
-  color: var(--color-error);
-}
-
-.intervalSummary {
-  padding-top: var(--space-2);
-  border-top: var(--border-width) solid var(--border-color);
-  font-size: 14px;
-  color: var(--color-text);
-}
-
-.intervalActions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--space-2);
-  padding-top: var(--space-2);
-}
-
-/* S58 TASK-5802 — work-time validation error inside the interval dialog */
-.intervalError {
-  color: var(--color-error);
-  background-color: var(--color-error-light);
-  border-radius: var(--radius-sm);
-  padding: var(--space-2);
-  font-size: 14px;
-}
-
-/* Sum column */
+/* ── Sum column ── */
 .sumCell {
   padding: var(--space-1) var(--space-2);
-  font-weight: var(--font-weight-medium);
-  background-color: var(--color-gray-50, var(--color-gray-100));
-  width: 50px;
+  font-weight: var(--font-weight-semibold);
+  background: var(--color-gray-50);
+  width: 56px;
 }
 
-/* Separator */
-.separatorRow {
-  height: 4px;
-}
-
-.separator {
-  border-top: 2px solid var(--color-gray-300);
-  padding: 0;
-}
-
-/* Total row */
+/* ── 6. I alt (read-only bottom total — grey on ALL days) ── */
 .totalRow td {
   font-weight: var(--font-weight-semibold);
-  background-color: var(--color-gray-100);
+  background: var(--color-gray-100);
+  height: 30px;
 }
 
-.totalCell {
-  padding: var(--space-1) 2px;
+.totalRow .rowLabel {
+  background: var(--color-gray-100);
+  font-weight: var(--font-weight-bold);
 }
 
 .grandTotal {
-  padding: var(--space-1) var(--space-2);
   font-weight: var(--font-weight-bold);
-  background-color: var(--color-gray-100);
+  background: var(--color-gray-200);
 }
 
-/* Weekend columns */
-.weekend {
-  background-color: var(--color-gray-100);
+/* ── Hidden-rows affordance (R3) ── */
+.hiddenNote {
+  padding: var(--space-1) 10px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  border-top: var(--border-width) solid var(--color-border);
+  background: var(--color-gray-50);
 }
 
-/* Today column */
-.today {
-  background-color: var(--color-info-light);
+.hiddenNoteButton {
+  appearance: none;
+  border: none;
+  background: none;
+  padding: 0;
+  font-family: var(--font-family);
+  font-size: 13px;
+  color: var(--color-link);
+  cursor: pointer;
+  text-decoration: underline;
 }
 
-.gridReadOnly {
-  opacity: 0.6;
-  pointer-events: none;
-  user-select: none;
+.hiddenNoteButton:hover {
+  color: var(--color-primary);
+}
+
+.hiddenNoteButton:focus-visible {
+  outline: var(--focus-outline);
+  outline-offset: var(--focus-outline-offset);
 }

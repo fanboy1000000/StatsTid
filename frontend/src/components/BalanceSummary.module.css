@@ -1,76 +1,145 @@
+/* S72 / TASK-7205 — the 4-card balance strip (design_handoff_skema README §2 +
+   redesign.css .rb-balcard / .rb-balance): ONE bordered white flex row of four
+   equal-width cards separated by 1px dividers, 0px corners (R8), tabular-nums.
+   Colors/typography via tokens; the px values below are prototype-verbatim
+   layout literals (redesign.css:22-36 — the 7203/7204 accepted-precedent). */
+
 .container {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: var(--space-4);
-  margin-bottom: var(--space-4);
+  display: flex;
+  border: var(--border-width) solid var(--color-border);
+  background: var(--color-white);
 }
 
-@media (max-width: 768px) {
+.card {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px; /* prototype-verbatim (redesign.css:22) */
+  padding: 14px 16px; /* prototype-verbatim (redesign.css:22) */
+  border-right: var(--border-width) solid var(--color-border);
+}
+
+.card:last-child {
+  border-right: none;
+}
+
+.label {
+  font-size: 11px;
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--color-gray-500);
+  margin: 0;
+}
+
+.value {
+  display: flex;
+  align-items: baseline;
+  gap: 6px; /* prototype-verbatim (redesign.css:24) */
+  margin: 0;
+}
+
+.num {
+  font-size: 30px; /* prototype-verbatim (redesign.css:25) */
+  font-weight: var(--font-weight-bold);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+}
+
+.unit {
+  font-size: 14px;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.sub {
+  font-size: 12px;
+  color: var(--color-gray-500);
+  margin: 0;
+}
+
+.pos {
+  color: var(--color-success);
+}
+
+.neg {
+  color: var(--color-error);
+}
+
+/* "Afholdt i <måned>" / "Denne måned · Norm" line — bottom-anchored with a
+   hairline divider (prototype rb-balcard__month). */
+.month {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  margin: auto 0 0;
+  padding-top: 9px; /* prototype-verbatim (redesign.css:30) */
+  border-top: var(--border-width) solid var(--color-border);
+  font-variant-numeric: tabular-nums;
+}
+
+.month b {
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text);
+}
+
+.monthRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 12px;
+}
+
+.norm {
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.norm b {
+  color: var(--color-text);
+}
+
+/* Narrow screens: 2×2, then stacked. */
+@media (max-width: 900px) {
   .container {
-    grid-template-columns: repeat(2, 1fr);
+    flex-wrap: wrap;
+  }
+  .card {
+    flex: 1 1 45%;
+    border-top: var(--border-width) solid var(--color-border);
   }
 }
 
 @media (max-width: 480px) {
-  .container {
-    grid-template-columns: 1fr;
+  .card {
+    flex: 1 1 100%;
+    border-right: none;
   }
-}
-
-.card {
-  border: var(--border-width) solid var(--border-color);
-  border-radius: var(--border-radius);
-  padding: var(--space-4);
-  background: var(--color-white);
-}
-
-.label {
-  font-size: 0.75rem;
-  font-weight: var(--font-weight-medium);
-  color: var(--color-gray-500);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin: 0 0 var(--space-1) 0;
-}
-
-.value {
-  font-size: 1.5rem;
-  font-weight: var(--font-weight-bold);
-  color: var(--color-text);
-  margin: 0;
-  line-height: 1.2;
-}
-
-.delta {
-  font-size: 0.8125rem;
-  font-weight: var(--font-weight-medium);
-  margin-top: var(--space-1);
-}
-
-.deltaPositive {
-  color: var(--color-success);
-}
-
-.deltaNegative {
-  color: var(--color-error);
-}
-
-.deltaNeutral {
-  color: var(--color-gray-500);
 }
 
 /* Skeleton loading */
 .skeleton {
-  border: var(--border-width) solid var(--border-color);
-  border-radius: var(--border-radius);
-  padding: var(--space-4);
+  flex: 1 1 0;
+  padding: 14px 16px;
+  border-right: var(--border-width) solid var(--color-border);
   background: var(--color-white);
+}
+
+.skeleton:last-child {
+  border-right: none;
 }
 
 .skeletonLine {
   background: var(--color-gray-100);
-  border-radius: 2px;
   animation: pulse 1.5s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeletonLine {
+    animation: none;
+  }
 }
 
 .skeletonLabel {
@@ -87,31 +156,11 @@
 }
 
 @keyframes pulse {
-  0%, 100% {
+  0%,
+  100% {
     opacity: 1;
   }
   50% {
     opacity: 0.4;
   }
-}
-
-/* Entitlement progress bar */
-.progressBar {
-  height: 6px;
-  background: var(--color-neutral-200, var(--color-gray-100));
-  border-radius: 3px;
-  margin-top: var(--space-2);
-}
-
-.progressFill {
-  height: 100%;
-  background: var(--color-primary);
-  border-radius: 3px;
-  transition: width 0.3s;
-}
-
-.entitlementDetail {
-  font-size: 0.8rem;
-  color: var(--color-neutral-600, var(--color-gray-500));
-  margin: var(--space-1) 0 0 0;
 }

@@ -1,0 +1,252 @@
+/* S72 / TASK-7204 — "Administrer rækker" manager modal (design_handoff_skema
+   README §5 + prototype shared/redesign.css .pm-* block), tokens-only, 0px
+   corners (kit default), focus-visible on every interactive element (R15).
+   The prototype's off-grid 10px paddings/gaps are normalized to the 8px token
+   grid (handoff "Spacing: 8px baseline grid") — recorded deviation. */
+
+/* README §5: centered 720px modal. Width literal = a handoff layout dimension
+   (codebase precedent: the Drawer's 440px); the kit Dialog default is 500px. */
+.dialog {
+  max-width: 720px;
+}
+
+.note {
+  margin-bottom: var(--space-4);
+}
+
+.errLine {
+  margin: 0 0 var(--space-1);
+}
+
+.errLine:last-child {
+  margin-bottom: 0;
+}
+
+/* ── Dual pane (prototype .pm-dual / .pm-pane--cat) ── */
+.dual {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-6);
+}
+
+.pane {
+  min-width: 0;
+}
+
+.paneCat {
+  border-left: var(--border-width) solid var(--color-border);
+  padding-left: var(--space-6);
+}
+
+.paneTitle {
+  font-size: 12px;
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--color-text);
+  margin: 0 0 var(--space-2);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.paneHint {
+  font-size: 12px;
+  color: var(--color-gray-500);
+  margin: 0 0 var(--space-2);
+}
+
+/* Count badge (prototype .pm-count) — on the tab triggers AND the Valgt title. */
+.count {
+  display: inline-block;
+  min-width: 20px;
+  padding: 0 6px;
+  background: var(--color-gray-200);
+  font-size: 12px;
+  font-weight: var(--font-weight-semibold);
+  text-align: center;
+  color: var(--color-text-secondary);
+}
+
+.empty {
+  font-size: 14px;
+  color: var(--color-gray-500);
+  padding: var(--space-3) 0;
+  list-style: none;
+}
+
+/* ── Left pane "Valgt" rows (prototype .pm-mine / .pm-row) ── */
+.mine {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: var(--border-width) solid var(--color-border);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-bottom: var(--border-width) solid var(--color-border);
+  background: var(--color-white);
+}
+
+.row:last-child {
+  border-bottom: none;
+}
+
+.rowMain {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.rowName {
+  font-size: 14px;
+  font-weight: var(--font-weight-medium);
+}
+
+.rowCode {
+  font-size: 12px;
+  color: var(--color-gray-500);
+  /* Codes render mono per the handoff type spec (codebase precedent:
+     SkemaDayPanel/AuditLogView/OrgManagement module CSS use the same literal stack). */
+  font-family: 'IBM Plex Mono', monospace;
+}
+
+.ord {
+  display: inline-flex;
+}
+
+.iconBtn {
+  appearance: none;
+  border: var(--border-width) solid var(--color-border);
+  background: var(--color-white);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  padding: 3px;
+  display: inline-flex;
+  margin-left: -1px; /* collapse the shared hairline between ▲ and ▼ */
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.iconBtn:first-child {
+  margin-left: 0;
+}
+
+.iconBtn:hover:not(:disabled) {
+  background: var(--color-gray-100);
+  color: var(--color-text);
+}
+
+.iconBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.iconBtn:focus-visible {
+  outline: var(--focus-outline);
+  outline-offset: var(--focus-outline-offset);
+}
+
+.remove {
+  appearance: none;
+  border: none;
+  background: none;
+  color: var(--color-link);
+  font-family: var(--font-family);
+  font-size: 13px;
+  cursor: pointer;
+  padding: var(--space-1) 2px;
+  transition: color 0.15s ease;
+}
+
+.remove:hover {
+  color: var(--color-error);
+  text-decoration: underline;
+}
+
+.remove:focus-visible {
+  outline: var(--focus-outline);
+  outline-offset: var(--focus-outline-offset);
+}
+
+/* ── Right pane "Tilføj fra katalog" (prototype .pm-cat / .pm-catrow / .pm-add) ── */
+.search {
+  width: 100%;
+}
+
+.cat {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  /* Scroll cap per the prototype (.pm-cat max-height: 280px) — layout dimension. */
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.catRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-1);
+  border-bottom: var(--border-width) solid var(--color-border);
+}
+
+.add {
+  appearance: none;
+  border: var(--border-width) solid var(--color-primary);
+  background: var(--color-white);
+  color: var(--color-primary);
+  font-family: var(--font-family);
+  font-size: 13px;
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  padding: var(--space-1) var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.add:hover {
+  background: var(--color-primary);
+  color: var(--color-white);
+}
+
+.add:focus-visible {
+  outline: var(--focus-outline);
+  outline-offset: var(--focus-outline-offset);
+}
+
+/* ── Footer (prototype .pm-modal__foot) — full-bleed inside the kit Dialog's
+   space-6 content padding via negative margins. ── */
+.foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin: var(--space-6) calc(-1 * var(--space-6)) calc(-1 * var(--space-6));
+  padding: var(--space-4) var(--space-6);
+  border-top: var(--border-width) solid var(--color-border);
+  background: var(--color-gray-50);
+}
+
+.footNote {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+/* Handoff: no decorative motion; color transitions only — and none at all under
+   reduced motion (R8/R15). */
+@media (prefers-reduced-motion: reduce) {
+  .iconBtn,
+  .remove,
+  .add {
+    transition: none;
+  }
+}

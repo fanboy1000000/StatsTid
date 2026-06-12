@@ -1,4 +1,10 @@
-import { apiClient, apiFetchWithEtag } from '../api'
+import {
+  apiClient,
+  apiFetchWithEtag,
+  putSkemaRowPreferences,
+  toRowPreferencesPutBody,
+} from '../api'
+import type { SkemaRowPreferences } from '../../types'
 
 // Mock fetch globally
 const mockFetch = vi.fn()
@@ -251,5 +257,156 @@ describe('apiFetchWithEtag', () => {
         headers: expect.objectContaining({ Authorization: 'Bearer mytoken' }),
       }),
     )
+  })
+})
+
+// S72 / TASK-7204 — typed row-preferences PUT wrapper (SPRINT-72 R4/R13/R16).
+describe('putSkemaRowPreferences', () => {
+  const BODY = {
+    projects: [
+      { projectId: 'p-sag', sortOrder: 0 },
+      { projectId: 'p-borger', sortOrder: 1 },
+    ],
+    absenceTypes: [{ absenceType: 'VACATION', sortOrder: 0 }],
+  }
+
+  const EFFECTIVE: SkemaRowPreferences = {
+    configured: true,
+    projects: [
+      { projectId: 'p-sag', projectCode: 'ØS-1042', projectName: 'Sagsbehandling', sortOrder: 0 },
+      { projectId: 'p-borger', projectCode: 'DIG-2207', projectName: 'Borger.dk', sortOrder: 1 },
+    ],
+    absenceTypes: [{ type: 'VACATION', label: 'Ferie', sortOrder: 0 }],
+  }
+
+  it('PUTs the exact body to /api/skema/{employeeId}/row-preferences with the auth header', async () => {
+    mockStorage['statstid_token'] = 'mytoken'
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => EFFECTIVE,
+    })
+    await putSkemaRowPreferences('emp-1', BODY)
+    expect(mockFetch).toHaveBeenCalledWith(
+      '/api/skema/emp-1/row-preferences',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify(BODY),
+        headers: expect.objectContaining({
+          Authorization: 'Bearer mytoken',
+          'Content-Type': 'application/json',
+        }),
+      }),
+    )
+  })
+
+  it('returns the new EFFECTIVE rowPreferences shape on 200 (the refetch-free apply for the modal)', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => EFFECTIVE,
+    })
+    const result = await putSkemaRowPreferences('emp-1', BODY)
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.data).toEqual(EFFECTIVE)
+  })
+
+  it('preserves the 422 row_preferences_invalid payload TYPED via `invalid` (offender rendering)', async () => {
+    const payload = {
+      error: 'row_preferences_invalid',
+      invalidProjectIds: ['p-ukendt'],
+      invalidAbsenceTypes: ['UNKNOWN_TYPE'],
+      duplicateProjectIds: ['p-sag'],
+      duplicateAbsenceTypes: ['VACATION'],
+      message: 'Row preferences validation failed.',
+    }
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 422,
+      text: async () => JSON.stringify(payload),
+    })
+    const result = await putSkemaRowPreferences('emp-1', BODY)
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.status).toBe(422)
+      expect(result.invalid).toEqual(payload)
+    }
+  })
+
+  it('a non-JSON 422 body yields no `invalid` but keeps the raw error text', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 422,
+      text: async () => 'not json',
+    })
+    const result = await putSkemaRowPreferences('emp-1', BODY)
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.status).toBe(422)
+      expect(result.invalid).toBeUndefined()
+      expect(result.error).toBe('not json')
+    }
+  })
+
+  it('a 422-status body of a DIFFERENT error shape is not surfaced as `invalid`', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 422,
+      text: async () => JSON.stringify({ error: 'something_else', message: 'nope' }),
+    })
+    const result = await putSkemaRowPreferences('emp-1', BODY)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.invalid).toBeUndefined()
+  })
+
+  it('a 403 self-only refusal returns status 403 without `invalid`', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 403,
+      text: async () => 'Forbidden',
+    })
+    const result = await putSkemaRowPreferences('emp-2', BODY)
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.status).toBe(403)
+      expect(result.invalid).toBeUndefined()
+    }
+  })
+})
+
+// S72 / TASK-7204 — the dense-renumbering owner for the PUT body derivation.
+describe('toRowPreferencesPutBody', () => {
+  it('derives sortOrder from the submitted ORDER, dense 0..n-1, ignoring stale sparse input values', () => {
+    const body = toRowPreferencesPutBody(
+      [
+        { projectId: 'p-b', projectCode: 'B', projectName: 'Beta', sortOrder: 7 },
+        { projectId: 'p-a', projectCode: 'A', projectName: 'Alfa', sortOrder: 2 },
+        { projectId: 'p-c', projectCode: 'C', projectName: 'Gamma', sortOrder: 11 },
+      ],
+      [],
+    )
+    expect(body.projects).toEqual([
+      { projectId: 'p-b', sortOrder: 0 },
+      { projectId: 'p-a', sortOrder: 1 },
+      { projectId: 'p-c', sortOrder: 2 },
+    ])
+  })
+
+  it('maps the absence `type` field to the wire field `absenceType`', () => {
+    const body = toRowPreferencesPutBody(
+      [],
+      [
+        { type: 'CARE_DAY', label: 'Omsorgsdag', sortOrder: 4 },
+        { type: 'VACATION', label: 'Ferie', sortOrder: 0 },
+      ],
+    )
+    expect(body.absenceTypes).toEqual([
+      { absenceType: 'CARE_DAY', sortOrder: 0 },
+      { absenceType: 'VACATION', sortOrder: 1 },
+    ])
+  })
+
+  it('empty selections produce empty arrays (R4: configured-empty is a legal full replacement)', () => {
+    expect(toRowPreferencesPutBody([], [])).toEqual({ projects: [], absenceTypes: [] })
   })
 })

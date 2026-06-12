@@ -1,0 +1,50 @@
+/* S72 / TASK-7203 — kit Drawer visuals (SPRINT-72 R8 / handoff README §4):
+   440px right panel, white, 1px left border, --shadow-sm, square corners,
+   0.16s slide-in over the scrim. Reduced motion respected (CSS belt — the
+   component also drops the animation class via matchMedia). */
+
+.scrim {
+  position: fixed;
+  inset: 0;
+  /* R8-PINNED literal (handoff README §4 / solution-a.html .rb-scrim): the spec
+     names this exact rgba; no scrim token exists and tokens.css is 7202-owned
+     (R13). Precedent: Dialog.module.css's overlay is likewise a literal. */
+  background: rgba(40, 40, 42, 0.32);
+  z-index: 100;
+}
+
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 440px;
+  max-width: 92vw;
+  background: var(--color-white);
+  border-left: var(--border-width) solid var(--color-border);
+  border-radius: var(--border-radius); /* 0px — kit corners */
+  box-shadow: var(--shadow-sm);
+  z-index: 101;
+  display: flex;
+  flex-direction: column;
+  outline: none; /* container focus (tabIndex -1) is programmatic, not a tab stop */
+}
+
+.slideIn {
+  animation: drawerSlideIn 0.16s ease;
+}
+
+@keyframes drawerSlideIn {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .slideIn {
+    animation: none;
+  }
+}

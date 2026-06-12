@@ -1,5 +1,6 @@
 using StatsTid.Infrastructure;
 using StatsTid.SharedKernel.Calendar;
+using StatsTid.SharedKernel.Exceptions;
 using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Models;
 
@@ -171,6 +172,54 @@ public sealed class DailyNormCalculator
             return 0m;
 
         var normCache = new Dictionary<string, (decimal WeeklyNormHours, NormModel NormModel)>(StringComparer.Ordinal);
+        return await ComputeForProfileAsync(profile, day, fallbackOrgId, normCache, ct);
+    }
+
+    /// <summary>
+    /// S72 / TASK-7201 (SPRINT-72 R10) — the employee's WEEKDAY full-day norm as-of
+    /// <paramref name="day"/>, INDEPENDENT of that day's weekend placement: the dated profile
+    /// + merged config are resolved AT <paramref name="day"/> (the month GET passes the viewed
+    /// month's LAST day) and the weekday formula <c>WeeklyNorm × fraction / 5</c> (rounded to
+    /// 2 decimals) is applied with NO weekend-0 short-circuit — a month ending on a Sunday
+    /// yields the same scalar as one ending on a Wednesday, by construction. This backs the
+    /// month GET's <c>fullDayNormAtMonthEnd</c> scalar (the D-A hours-first balance-card
+    /// conversion source — the FE never does client-side norm math).
+    ///
+    /// <para>
+    /// Fail-soft (R10): returns <c>null</c> when no dated profile covers the day, when the
+    /// resolved config is <c>ANNUAL_ACTIVITY</c> (a per-weekday split is not meaningful), or
+    /// when the resolver fail-louds on the S34 data-integrity contract
+    /// (<see cref="EmployeeProfileNotFoundException"/> — profile row without a covering
+    /// agreement-code row). The FE renders the hours headline em-dashed on <c>null</c>; a
+    /// read-only display scalar must never 500 the whole month GET. No second copy of the
+    /// norm formula: this delegates to the same <see cref="ComputeForProfileAsync"/> core as
+    /// the range loop and the revaluation path (the S65 one-shared-norm-impl invariant).
+    /// </para>
+    /// </summary>
+    public async Task<decimal?> ComputeWeekdayNormAtAsync(
+        string employeeId,
+        DateOnly day,
+        string fallbackOrgId,
+        CancellationToken ct = default)
+    {
+        EmploymentProfile? profile;
+        try
+        {
+            profile = await _profileResolver.GetByEmployeeIdAtAsync(employeeId, day, ct);
+        }
+        catch (EmployeeProfileNotFoundException)
+        {
+            // Data-integrity edge (profile row, no covering agreement-code row): fail-soft
+            // for this display scalar — the authoritative write paths keep fail-louding.
+            profile = null;
+        }
+
+        if (profile is null)
+            return null;
+
+        var normCache = new Dictionary<string, (decimal WeeklyNormHours, NormModel NormModel)>(StringComparer.Ordinal);
+        // Deliberately NO weekend short-circuit: the weekday formula applies regardless of
+        // where the anchor day falls in the week (R10 "weekend placement irrelevant").
         return await ComputeForProfileAsync(profile, day, fallbackOrgId, normCache, ct);
     }
 }

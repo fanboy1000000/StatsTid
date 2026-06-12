@@ -62,6 +62,11 @@
   --color-link: #3e72a6;             /* 5.05:1 */
   --color-link-visited: #6b4d8a;     /* 6.88:1 (darkened for AA) */
 
+  /* Weekend band (S72 Skema redesign — design_handoff_skema README "Weekend-skinner").
+     Very light blue column tint across the grid's data-entry zone only; introduced by
+     the handoff as a NEW token so grey stays reserved for read-only surfaces. */
+  --color-weekend: oklch(0.969 0.018 245);
+
   /* Spacing (8px baseline grid) */
   --space-1: 4px;
   --space-2: 8px;

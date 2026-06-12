@@ -1,87 +1,852 @@
-import { render, screen, fireEvent } from '@testing-library/react'
+// S72 / TASK-7205 — INTEGRATION tests for the rewritten SkemaPage (SPRINT-72
+// R13 layering: the end-to-end pins live HERE, over the REAL SkemaGrid (7202),
+// SkemaDayPanel (7203), SkemaProjectManager (7204) and BalanceSummary, with the
+// network mocked at the fetch level (the ApprovalDashboard.test pattern).
+//
+// Named pins (each its own test):
+//   R2  — the Flex card's "Denne måned" equals the grid's Diff trailing total,
+//         and BOTH surfaces consume the ONE useSkema computation (W1 — no copy).
+//   R3  — hiding a populated project via the modal flow leaves the Diff / I alt /
+//         ✓ arithmetic unchanged, shows the hidden-rows affordance, and the
+//         approval-gate 422 surface still renders. S72 Step-7a B1: the basis is
+//         the UNION of catalogs ∪ served entry keys — incl. a DEACTIVATED
+//         project absent from the catalogs (labeled by code).
+//   R5  — locked month: readOnly grid, unreachable panel, REACHABLE modal.
+//   R6  — S72 Step-7a W2: the §J analysis sees locally-edited NEIGHBOR days
+//         (edit day N locally, open day N+1 → the warning reflects N's state).
+//   R7  — a panel period edit round-trips through the hook's
+//         buildWorkTimePayload, preserving the day's existing manualHours.
+//   R10 — the D-A card pins (hours-first arithmetic; the null-scalar em-dash
+//         fail-soft; the null-feriedage skip in the Afholdt sub-line).
+//   R11 — the modal opens from BOTH entry points; a modal action live-updates
+//         the grid with the R16 FLUSH → PUT → refetch sequence in order.
+//   R16 — the page owns no private buildWorkTimePayload (source assertion);
+//         S72 Step-7a B2: the flush is in-flight-safe (an unresolved save POST
+//         blocks the PUT) and failure-safe (a failed flush save ABORTS the
+//         preference write — no PUT, no refetch, the error surfaces).
+//
+// FIXTURE CONTRACT (S72 Step-7a Codex N — the pre-fix fixture concealed B1):
+// per the 7201 month-GET, a CONFIGURED user's legacy `projects`/`absenceTypes`
+// fields serve ONLY the VISIBLE selection (catalog ∩ selections); the full
+// active catalog lives in `catalogs`; served `entries` may carry keys outside
+// both (deactivated projects with historical hours).
+//
+// March 2026 reference: Mar 1 = Sunday, Mar 2 = Monday. Fixture arithmetic:
+// Mar 2 worked = 8h interval + 1,5 manual = 9,5; allocated 7,4 + 2,1 = 9,5 (✓);
+// Diff +2,1. Mar 3 full VACATION 7,4 → Diff 0,0. Mar 4 VACATION 3,7 (feriedage
+// NULL) → Diff −3,7. Diff total = −1,6. I alt total = 20,6.
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import { useState } from 'react'
+// The R16/W1 source assertions read modules as text via Vite's ?raw suffix
+// (typed by vite/client; keeps the FE tsconfig free of node types).
+import skemaPageSource from '../SkemaPage.tsx?raw'
+import skemaGridSource from '../../components/SkemaGrid.tsx?raw'
+import useBalanceSummarySource from '../../hooks/useBalanceSummary.ts?raw'
+import { SkemaPage } from '../SkemaPage'
+import {
+  computeDayDiffs,
+  computeMonthDiffTotal,
+  deriveSkemaRowBasis,
+} from '../../hooks/useSkema'
+import type { SkemaMonthData } from '../../types'
+import type { BalanceSummary as BalanceSummaryData } from '../../hooks/useBalanceSummary'
 
-// Test month navigation logic extracted from SkemaPage
-const DANISH_MONTHS = [
-  'Januar', 'Februar', 'Marts', 'April', 'Maj', 'Juni',
-  'Juli', 'August', 'September', 'Oktober', 'November', 'December',
-]
+vi.mock('../../contexts/AuthContext', () => ({
+  useAuth: () => ({
+    user: { employeeId: 'emp001', role: 'Employee' },
+    role: 'Employee',
+    orgId: 'STY01',
+    agreementCode: 'AC',
+    isAuthenticated: true,
+    login: vi.fn(),
+    logout: vi.fn(),
+  }),
+}))
 
-function formatMonthLabel(year: number, month: number): string {
-  return `${DANISH_MONTHS[month - 1]} ${year}`
+const mockFetch = vi.fn()
+vi.stubGlobal('fetch', mockFetch)
+
+// ── Fixtures ──
+
+function buildDailyNorm(): { date: string; hours: number | null }[] {
+  const out: { date: string; hours: number | null }[] = []
+  for (let d = 1; d <= 31; d++) {
+    const date = `2026-03-${String(d).padStart(2, '0')}`
+    const dow = new Date(date + 'T00:00:00').getDay()
+    out.push({ date, hours: dow === 0 || dow === 6 ? 0 : 7.4 })
+  }
+  return out
 }
 
-// A minimal test component exercising the same navigation logic as SkemaPage
-function MonthNavigator() {
-  const [year, setYear] = useState(2026)
-  const [month, setMonth] = useState(3)
-
-  const goToPrevMonth = () => {
-    setMonth((prev) => {
-      if (prev === 1) {
-        setYear((y) => y - 1)
-        return 12
-      }
-      return prev - 1
-    })
+function makeMonthData(overrides: Partial<SkemaMonthData> = {}): SkemaMonthData {
+  return {
+    year: 2026,
+    month: 3,
+    daysInMonth: 31,
+    // The 7201 contract: this user is CONFIGURED, so `projects` is the VISIBLE
+    // selection ONLY (= rowPreferences.projects here); the full catalog (incl.
+    // the un-selected EXTRA) lives in `catalogs.projects` below. Tests that
+    // override rowPreferences MUST override `projects` to match the selection.
+    projects: [
+      { projectId: 'p-drift', projectCode: 'DRIFT', projectName: 'Drift & support', isActive: true, sortOrder: 0 },
+      { projectId: 'p-udv', projectCode: 'UDV', projectName: 'Udvikling', isActive: true, sortOrder: 1 },
+    ],
+    absenceTypes: [
+      { type: 'VACATION', label: 'Ferie' },
+      { type: 'CARE_DAY', label: 'Omsorgsdage' },
+      { type: 'SPECIAL_HOLIDAY', label: 'Særlige feriedage' },
+    ],
+    entries: [
+      { date: '2026-03-02', projectCode: 'DRIFT', hours: 7.4 },
+      { date: '2026-03-02', projectCode: 'UDV', hours: 2.1 },
+    ],
+    absences: [
+      { date: '2026-03-03', absenceType: 'VACATION', hours: 7.4, feriedage: 1 },
+      // ADR-032 zero-norm-style row: hours count, the NULL feriedage is skipped (R10)
+      { date: '2026-03-04', absenceType: 'VACATION', hours: 3.7, feriedage: null },
+    ],
+    approval: null,
+    workTime: [
+      { date: '2026-03-02', intervals: [{ start: '08:00', end: '16:00' }], manualHours: 1.5 },
+    ],
+    dailyNorm: buildDailyNorm(),
+    rowPreferences: {
+      configured: true,
+      projects: [
+        { projectId: 'p-drift', projectCode: 'DRIFT', projectName: 'Drift & support', sortOrder: 0 },
+        { projectId: 'p-udv', projectCode: 'UDV', projectName: 'Udvikling', sortOrder: 1 },
+      ],
+      absenceTypes: [
+        { type: 'VACATION', label: 'Ferie', sortOrder: 0 },
+        { type: 'CARE_DAY', label: 'Omsorgsdage', sortOrder: 1 },
+        { type: 'SPECIAL_HOLIDAY', label: 'Særlige feriedage', sortOrder: 2 },
+      ],
+    },
+    catalogs: {
+      projects: [
+        { projectId: 'p-drift', projectCode: 'DRIFT', projectName: 'Drift & support', isActive: true, sortOrder: 0 },
+        { projectId: 'p-udv', projectCode: 'UDV', projectName: 'Udvikling', isActive: true, sortOrder: 1 },
+        { projectId: 'p-extra', projectCode: 'EXTRA', projectName: 'Ekstra projekt', isActive: true, sortOrder: 2 },
+      ],
+      absenceTypes: [
+        { type: 'VACATION', label: 'Ferie' },
+        { type: 'CARE_DAY', label: 'Omsorgsdage' },
+        { type: 'SPECIAL_HOLIDAY', label: 'Særlige feriedage' },
+      ],
+    },
+    boundaryWorkTime: [],
+    fullDayNormAtMonthEnd: 7.4,
+    ...overrides,
   }
+}
 
-  const goToNextMonth = () => {
-    setMonth((prev) => {
-      if (prev === 12) {
-        setYear((y) => y + 1)
-        return 1
-      }
-      return prev + 1
-    })
+function makeSummaryData(): BalanceSummaryData {
+  return {
+    flexBalance: 4.2,
+    flexDelta: 99.9, // the LAST-event delta — must never reach the strip (R10)
+    vacationDaysUsed: 8,
+    vacationDaysEntitlement: 25,
+    normHoursExpected: 162.8,
+    normHoursActual: 155.0,
+    overtimeHours: 0,
+    agreementCode: 'AC',
+    hasMerarbejde: true,
+    entitlements: [
+      { type: 'VACATION', label: 'Ferie', totalQuota: 25, used: 8, planned: 0, carryoverIn: 3, remaining: 17, earned: 20.8, entitlementYear: 2025 },
+      { type: 'SPECIAL_HOLIDAY', label: 'Særlige feriedage', totalQuota: 5, used: 1, planned: 0, carryoverIn: 0, remaining: 4, earned: 5, entitlementYear: 2025 },
+      { type: 'CARE_DAY', label: 'Omsorgsdage', totalQuota: 2, used: 0, planned: 0, carryoverIn: 0, remaining: 2, earned: 2, entitlementYear: 2026 },
+    ],
   }
+}
 
-  const approvalStatus = 'DRAFT'
+const COMPLIANCE_WITH_WARNING = {
+  ruleId: 'EU_WTD',
+  employeeId: 'emp001',
+  success: true,
+  violations: [],
+  warnings: [
+    {
+      violationType: 'DAILY_REST',
+      date: '2026-03-02',
+      actualValue: 10,
+      thresholdValue: 11,
+      severity: 'WARNING',
+      isVoluntaryExempt: false,
+      message: 'Hviletid under 11 timer',
+    },
+  ],
+}
 
-  return (
-    <div>
-      <button onClick={goToPrevMonth}>Forrige</button>
-      <h2>{formatMonthLabel(year, month)}</h2>
-      <button onClick={goToNextMonth}>Naeste</button>
-      {approvalStatus === 'DRAFT' && (
-        <button>Godkend maaned</button>
-      )}
-    </div>
+// ── Mutable per-test routing state ──
+let monthData: SkemaMonthData
+let summaryData: BalanceSummaryData
+let fetchLog: string[]
+let saveBodies: Array<{
+  year: number
+  month: number
+  entries: { date: string; projectCode: string; hours: number }[] | null
+  absences: { date: string; absenceType: string; hours: number }[] | null
+  workTime: { date: string; intervals: { start: string; end: string }[]; manualHours: number }[] | null
+}>
+let putBodies: Array<{
+  projects: { projectId: string; sortOrder: number }[]
+  absenceTypes: { absenceType: string; sortOrder: number }[]
+}>
+let approveResponder: (() => unknown) | null
+/** B2 hook: when set, the save POST resolves through this (deferred/failing
+    responses for the in-flight and flush-failure pins). */
+let saveResponder: (() => unknown | Promise<unknown>) | null
+
+function jsonResponse(body: unknown, status = 200) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    headers: new Headers(),
+    json: async () => body,
+    text: async () => JSON.stringify(body),
+  }
+}
+
+/** Apply a row-preferences PUT to the served fixture (the 7201 server's
+    full-replacement semantics) so the post-PUT refetch returns the new state.
+    S72 Step-7a Codex N (the fixture-contract correction): the refetched month
+    serves the legacy `projects`/`absenceTypes` fields as the new VISIBLE
+    selection — NOT the full set — exactly like the real container-aware
+    backend; `entries`/`absences` keep serving the historical hours verbatim. */
+function applyPrefsPut(body: (typeof putBodies)[number]) {
+  const byId = new Map(monthData.catalogs!.projects.map((p) => [p.projectId, p]))
+  const byType = new Map(monthData.catalogs!.absenceTypes.map((a) => [a.type, a]))
+  const visibleProjects = body.projects.map((e) => byId.get(e.projectId)!)
+  const visibleAbsenceTypes = body.absenceTypes.map((e) => byType.get(e.absenceType)!)
+  monthData = {
+    ...monthData,
+    projects: visibleProjects,
+    absenceTypes: visibleAbsenceTypes,
+    rowPreferences: {
+      configured: true,
+      projects: visibleProjects.map((p, i) => ({
+        projectId: p.projectId,
+        projectCode: p.projectCode,
+        projectName: p.projectName,
+        sortOrder: i,
+      })),
+      absenceTypes: visibleAbsenceTypes.map((a, i) => ({ type: a.type, label: a.label, sortOrder: i })),
+    },
+  }
+  return monthData.rowPreferences
+}
+
+function installFetchMock() {
+  mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+    const method = init?.method ?? 'GET'
+    fetchLog.push(`${method} ${url}`)
+    if (url.includes('/api/skema/emp001/month')) {
+      return jsonResponse(monthData)
+    }
+    if (url.includes('/api/balance/emp001/summary')) {
+      return jsonResponse(summaryData)
+    }
+    if (url.includes('/api/compliance/')) {
+      return jsonResponse(COMPLIANCE_WITH_WARNING)
+    }
+    if (url.includes('/api/skema/emp001/save') && method === 'POST') {
+      saveBodies.push(JSON.parse(String(init?.body)))
+      return saveResponder ? saveResponder() : jsonResponse({})
+    }
+    if (url.includes('/api/skema/emp001/row-preferences') && method === 'PUT') {
+      const body = JSON.parse(String(init?.body))
+      putBodies.push(body)
+      return jsonResponse(applyPrefsPut(body))
+    }
+    if (url.includes('/api/approval/submit') && method === 'POST') {
+      return jsonResponse({ periodId: 'per-1' })
+    }
+    if (url.includes('/employee-approve') && method === 'POST') {
+      return approveResponder ? approveResponder() : jsonResponse({})
+    }
+    return jsonResponse({})
+  })
+}
+
+beforeEach(() => {
+  monthData = makeMonthData()
+  summaryData = makeSummaryData()
+  fetchLog = []
+  saveBodies = []
+  putBodies = []
+  approveResponder = null
+  saveResponder = null
+  mockFetch.mockReset()
+  installFetchMock()
+})
+
+afterEach(() => {
+  vi.useRealTimers()
+  document.body.style.pointerEvents = ''
+  document.body.style.overflow = ''
+})
+
+function renderPage(url = '/tid/registrering?year=2026&month=3') {
+  return render(
+    <MemoryRouter initialEntries={[url]}>
+      <SkemaPage />
+    </MemoryRouter>,
   )
 }
 
-describe('SkemaPage month navigation', () => {
-  it('navigates to next/previous month', () => {
-    render(
-      <MemoryRouter>
-        <MonthNavigator />
-      </MemoryRouter>
-    )
+async function renderLoaded(url?: string) {
+  const result = renderPage(url)
+  await screen.findByText('Drift & support')
+  return result
+}
 
-    // Initial: Marts 2026
+/** Find a grid tbody row by the exact start of its label cell (the modal/drawer
+    are body portals — `container` only holds the page tree, so these helpers
+    never collide with overlay content). */
+function gridRow(container: HTMLElement, label: string): HTMLElement {
+  const row = gridRowOrNull(container, label)
+  if (!row) throw new Error(`grid row "${label}" not found`)
+  return row
+}
+
+function gridRowOrNull(container: HTMLElement, label: string): HTMLElement | null {
+  const rows = Array.from(container.querySelectorAll('tbody tr'))
+  return (rows.find((r) => r.querySelector('td')?.textContent?.startsWith(label)) as HTMLElement) ?? null
+}
+
+/** Row tds: [0] = label, [day] = day-of-month, [last] = trailing Sum/total. */
+function dayCell(row: HTMLElement, day: number): HTMLElement {
+  return row.querySelectorAll('td')[day] as HTMLElement
+}
+
+function lastCell(row: HTMLElement): HTMLElement {
+  const cells = row.querySelectorAll('td')
+  return cells[cells.length - 1] as HTMLElement
+}
+
+// "Ferie"/"Omsorgsdage"/… also appear as grid row labels — scope card queries to
+// the strip's label elements (non-scoped CSS-module class names per vite.config).
+function balanceCard(label: string): HTMLElement {
+  const cardLabels = screen
+    .getAllByText(label)
+    .filter((el) => el.classList.contains('label'))
+  expect(cardLabels).toHaveLength(1)
+  return cardLabels[0].closest('[class*="card"]') as HTMLElement
+}
+
+describe('SkemaPage — page chrome (handoff §1)', () => {
+  it('renders month nav, Administrer projekter, EXACTLY 4 balance cards, the kept ComplianceWarnings, the grid and the footer — with the legacy surfaces gone (R9)', async () => {
+    const { container } = await renderLoaded()
+    // Header row
     expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('Marts 2026')
-
-    // Click next
-    fireEvent.click(screen.getByText('Naeste'))
-    expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('April 2026')
-
-    // Click prev twice
-    fireEvent.click(screen.getByText('Forrige'))
-    expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('Marts 2026')
-
-    fireEvent.click(screen.getByText('Forrige'))
-    expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('Februar 2026')
+    expect(screen.getByRole('button', { name: /Forrige/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Næste/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Administrer projekter' })).toBeInTheDocument()
+    // The 4-card strip — EXACTLY these four, in the strip (the grid also renders
+    // absence-type labels, so card assertions go through the scoped helper)
+    expect(balanceCard('Flex saldo')).toBeInTheDocument()
+    expect(balanceCard('Ferie')).toBeInTheDocument()
+    expect(balanceCard('Særlige feriedage')).toBeInTheDocument()
+    expect(balanceCard('Omsorgsdage')).toBeInTheDocument()
+    expect(container.querySelectorAll('[class*="card"] > [class*="label"]')).toHaveLength(4)
+    expect(screen.queryByText('Normtimer')).toBeNull()
+    expect(screen.queryByText('Merarbejde')).toBeNull()
+    // ComplianceWarnings KEPT (R9)
+    expect(screen.getByText('Arbejdstidskontrol')).toBeInTheDocument()
+    // R9: the retired AllocationSummary heading is gone
+    expect(screen.queryByText('Fordeling af arbejdstid')).toBeNull()
+    // Grid + footer
+    expect(gridRow(container, 'Diff. fra normtid')).toBeInTheDocument()
+    expect(gridRow(container, 'Registrér arbejdstid')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Godkend måned' })).toBeInTheDocument()
   })
 
-  it('shows approval button when status is DRAFT', () => {
-    render(
-      <MemoryRouter>
-        <MonthNavigator />
-      </MemoryRouter>
-    )
+  it('navigates months and refetches (Næste → April 2026)', async () => {
+    await renderLoaded()
+    fireEvent.click(screen.getByRole('button', { name: /Næste/ }))
+    expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('April 2026')
+    await waitFor(() => {
+      expect(fetchLog.some((e) => e.includes('/api/skema/emp001/month?year=2026&month=4'))).toBe(true)
+    })
+  })
+})
 
-    // When status is DRAFT, the "Godkend maaned" button should be visible
-    expect(screen.getByText('Godkend maaned')).toBeInTheDocument()
+describe('SkemaPage — R2 reconciliation', () => {
+  it('R2/W1: the Flex card "Denne måned" equals the grid Diff trailing total, and BOTH render the ONE useSkema computation (no copy to drift)', async () => {
+    const { container } = await renderLoaded()
+    const diffTotal = lastCell(gridRow(container, 'Diff. fra normtid')).textContent
+    expect(diffTotal).toBe('-1,6') // +2,1 (Mar 2) + 0,0 (Mar 3 full absence) − 3,7 (Mar 4)
+    expect(balanceCard('Flex saldo').textContent).toContain(`Denne måned ${diffTotal} t`)
+    // and never /summary's flexDelta (99,9 — the last-event delta)
+    expect(balanceCard('Flex saldo').textContent).not.toContain('99,9')
+
+    // W1 — the single source: the helper output over THIS fixture is what both
+    // surfaces rendered (there is no second implementation to disagree with).
+    const basis = deriveSkemaRowBasis(monthData)
+    const cells = new Map<string, number>()
+    for (const e of monthData.entries) cells.set(`${e.projectCode}:${e.date}`, e.hours)
+    for (const a of monthData.absences) cells.set(`${a.absenceType}:${a.date}`, a.hours)
+    const helperTotal = computeMonthDiffTotal(
+      computeDayDiffs({
+        year: 2026,
+        month: 3,
+        cellValues: cells,
+        projectKeys: basis.projectKeys,
+        absenceKeys: basis.absenceKeys,
+        workIntervals: new Map(monthData.workTime.map((wt) => [wt.date, wt.intervals])),
+        manualHours: new Map(monthData.workTime.map((wt) => [wt.date, wt.manualHours])),
+        dailyNorm: new Map(monthData.dailyNorm.map((dn) => [dn.date, dn.hours])),
+      }),
+    )
+    expect(helperTotal).toBe(-1.6)
+
+    // W1 — the source pins: the grid consumes the useSkema diff owner, and the
+    // card path (computeMonthFlexDelta) DELEGATES to the same helpers — neither
+    // file carries its own copy of the arithmetic.
+    expect(skemaGridSource).toMatch(/computeDayDiffs\(/)
+    expect(skemaGridSource).toMatch(/computeMonthDiffTotal\(/)
+    expect(useBalanceSummarySource).toMatch(/computeMonthDiffTotal\(computeDayDiffs\(inputs\)\)/)
+  })
+})
+
+describe('SkemaPage — R10 / D-A balance cards', () => {
+  it('R10: hours-first headlines = served days × fullDayNormAtMonthEnd; the Afholdt sub-line skips null-feriedage rows', async () => {
+    await renderLoaded()
+    const ferie = balanceCard('Ferie')
+    expect(ferie.textContent).toContain('125,8') // 17 × 7,4
+    expect(ferie.textContent).toContain('t tilbage')
+    expect(ferie.textContent).toContain('17 dage')
+    // hours sum BOTH served rows (7,4 + 3,7 = 11,1); days skip the null row → 1
+    expect(ferie.textContent).toContain('Afholdt i marts 11,1 t · 1 dage')
+    expect(balanceCard('Omsorgsdage').textContent).toContain('14,8') // 2 × 7,4
+    expect(balanceCard('Flex saldo').textContent).toContain('Norm 7,4 t')
+  })
+
+  it('R10 fail-soft: a null fullDayNormAtMonthEnd em-dashes the hours headline while the days value still shows', async () => {
+    monthData = makeMonthData({ fullDayNormAtMonthEnd: null })
+    await renderLoaded()
+    const ferie = balanceCard('Ferie')
+    const headline = ferie.querySelector('[class*="num"]') as HTMLElement
+    expect(headline.textContent).toBe('—')
+    expect(ferie.textContent).toContain('17 dage')
+    expect(ferie.textContent).not.toContain('125,8')
+  })
+})
+
+describe('SkemaPage — R11/R16 manager modal wiring', () => {
+  it('R11: the modal opens from the page header button', async () => {
+    await renderLoaded()
+    fireEvent.click(screen.getByRole('button', { name: 'Administrer projekter' }))
+    expect(await screen.findByText('Administrer rækker')).toBeInTheDocument()
+  })
+
+  it('R11: the modal opens from the day panel step-2 link', async () => {
+    await renderLoaded()
+    fireEvent.click(screen.getByRole('button', { name: 'Registrér arbejdstid 2026-03-02' }))
+    const drawer = await screen.findByRole('dialog')
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Administrer projekter' }))
+    expect(await screen.findByText('Administrer rækker')).toBeInTheDocument()
+  })
+
+  it('R11/R16: a modal action FLUSHES the pending debounced save, PUTs, then refetches — in that order — and the grid updates live', async () => {
+    const { container } = await renderLoaded()
+    // A pending debounced cell edit (the 1s timer must NOT have fired)
+    fireEvent.change(screen.getByLabelText('Udvikling dag 3'), { target: { value: '2' } })
+    // Modal action: remove the populated Drift row
+    fireEvent.click(screen.getByRole('button', { name: 'Administrer projekter' }))
+    await screen.findByText('Administrer rækker')
+    fireEvent.click(screen.getByRole('button', { name: 'Fjern Drift & support' }))
+    await waitFor(() => expect(putBodies.length).toBe(1))
+
+    // Order: POST save (the FLUSH) → PUT row-preferences → GET month (refetch)
+    const saveIdx = fetchLog.findIndex((e) => e.startsWith('POST') && e.includes('/save'))
+    const putIdx = fetchLog.findIndex((e) => e.startsWith('PUT') && e.includes('/row-preferences'))
+    expect(saveIdx).toBeGreaterThan(-1)
+    expect(putIdx).toBeGreaterThan(saveIdx)
+    await waitFor(() => {
+      const refetchAfterPut = fetchLog.some(
+        (e, i) => i > putIdx && e.startsWith('GET') && e.includes('/api/skema/emp001/month'),
+      )
+      expect(refetchAfterPut).toBe(true)
+    })
+    // The flush carried the pending cell — nothing was lost to the refetch
+    expect(saveBodies[0].entries).toEqual([{ date: '2026-03-03', projectCode: 'UDV', hours: 2 }])
+    // The PUT body is the dense full replacement minus Drift
+    expect(putBodies[0].projects).toEqual([{ projectId: 'p-udv', sortOrder: 0 }])
+    // Live grid update: the Drift row is gone, the hidden-rows affordance shows
+    await waitFor(() => expect(gridRowOrNull(container, 'Drift & support')).toBeNull())
+    expect(screen.getByText('1 skjulte rækker har timer i denne måned')).toBeInTheDocument()
+  })
+
+  it('R16/B2 in-flight: a FIRED debounce save whose POST is unresolved blocks the PUT until it resolves', async () => {
+    await renderLoaded()
+    // Hold the save POST open: the debounce will fire, the POST will leave, and
+    // its promise stays unresolved until we release it.
+    let releaseSave!: () => void
+    saveResponder = () =>
+      new Promise((resolve) => {
+        releaseSave = () => resolve(jsonResponse({}))
+      })
+
+    vi.useFakeTimers()
+    fireEvent.change(screen.getByLabelText('Udvikling dag 3'), { target: { value: '2' } })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1100) // the debounce FIRES — the POST leaves
+    })
+    vi.useRealTimers()
+    expect(fetchLog.filter((e) => e.startsWith('POST') && e.includes('/save'))).toHaveLength(1)
+
+    // Modal action while the POST is still in flight
+    fireEvent.click(screen.getByRole('button', { name: 'Administrer projekter' }))
+    await screen.findByText('Administrer rækker')
+    fireEvent.click(screen.getByRole('button', { name: 'Fjern Drift & support' }))
+
+    // The PUT must NOT start while the save POST is unresolved
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50))
+    })
+    expect(fetchLog.some((e) => e.startsWith('PUT'))).toBe(false)
+    expect(putBodies).toHaveLength(0)
+
+    // Release the POST → the PUT (and then the refetch) proceed, in order
+    releaseSave()
+    await waitFor(() => expect(putBodies).toHaveLength(1))
+    const saveIdx = fetchLog.findIndex((e) => e.startsWith('POST') && e.includes('/save'))
+    const putIdx = fetchLog.findIndex((e) => e.startsWith('PUT') && e.includes('/row-preferences'))
+    expect(putIdx).toBeGreaterThan(saveIdx)
+    await waitFor(() => {
+      expect(
+        fetchLog.some((e, i) => i > putIdx && e.startsWith('GET') && e.includes('/month')),
+      ).toBe(true)
+    })
+  })
+
+  it('R16/B2 flush-failure: a FAILED flush save ABORTS the preference write — NO PUT, NO refetch, the error surfaces, local edits intact', async () => {
+    const { container } = await renderLoaded()
+    const monthGets = () =>
+      fetchLog.filter((e) => e.startsWith('GET') && e.includes('/month')).length
+    const getsBefore = monthGets()
+    saveResponder = () => jsonResponse({ error: 'boom' }, 500)
+
+    // A pending debounced cell edit (the flush will fire — and fail)
+    fireEvent.change(screen.getByLabelText('Udvikling dag 3'), { target: { value: '2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Administrer projekter' }))
+    await screen.findByText('Administrer rækker')
+    fireEvent.click(screen.getByRole('button', { name: 'Fjern Drift & support' }))
+
+    // The error surfaces (the page's prefs-save alert) — no silent loss
+    expect(
+      await screen.findByText(/Kunne ikke gemme rækkeindstillingerne/),
+    ).toBeInTheDocument()
+    // NO PUT, NO refetch (a refetch would clobber the unsaved local edit)
+    expect(fetchLog.some((e) => e.startsWith('PUT'))).toBe(false)
+    expect(putBodies).toHaveLength(0)
+    expect(monthGets()).toBe(getsBefore)
+    // The local edit is intact, and the optimistic row change reverted
+    expect(screen.getByLabelText('Udvikling dag 3')).toHaveValue('2')
+    expect(gridRowOrNull(container, 'Drift & support')).not.toBeNull()
+  })
+
+  it('R16/B2 settled-failure (Step-7a c2): a save that FAILED and SETTLED before any flush is RETRIED by the flush — still-failing means NO PUT; recovered means the PUT proceeds', async () => {
+    await renderLoaded()
+    const savePosts = () =>
+      fetchLog.filter((e) => e.startsWith('POST') && e.includes('/save')).length
+
+    // 1) A debounced save fires, FAILS, and fully SETTLES before any flush —
+    //    pre-fix this outcome was forgotten (no in-flight promise, no latch) and
+    //    a later flush reported success over the never-persisted edit.
+    saveResponder = () => jsonResponse({ error: 'boom' }, 500)
+    vi.useFakeTimers()
+    fireEvent.change(screen.getByLabelText('Udvikling dag 3'), { target: { value: '2' } })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1100)
+    })
+    vi.useRealTimers()
+    await waitFor(() => expect(savePosts()).toBe(1))
+
+    // 2a) Modal action while the backend STILL fails: the flush retries the
+    //     re-queued delta (a 2nd POST), fails again → NO PUT, the error surfaces.
+    fireEvent.click(screen.getByRole('button', { name: 'Administrer projekter' }))
+    await screen.findByText('Administrer rækker')
+    fireEvent.click(screen.getByRole('button', { name: 'Fjern Drift & support' }))
+    expect(
+      await screen.findByText(/Kunne ikke gemme rækkeindstillingerne/),
+    ).toBeInTheDocument()
+    expect(savePosts()).toBeGreaterThanOrEqual(2)
+    expect(fetchLog.some((e) => e.startsWith('PUT'))).toBe(false)
+    expect(putBodies).toHaveLength(0)
+
+    // 2b) The backend recovers: the next action's flush retry SUCCEEDS → the
+    //     PUT proceeds AFTER the successful save (order pinned).
+    saveResponder = null
+    fireEvent.click(screen.getByRole('button', { name: 'Fjern Udvikling' }))
+    await waitFor(() => expect(putBodies).toHaveLength(1))
+    const lastSaveIdx = fetchLog.reduce(
+      (acc, e, i) => (e.startsWith('POST') && e.includes('/save') ? i : acc),
+      -1,
+    )
+    const putIdx = fetchLog.findIndex((e) => e.startsWith('PUT') && e.includes('/row-preferences'))
+    expect(putIdx).toBeGreaterThan(lastSaveIdx)
+  })
+
+  it('R16/B2 overlapping-saves (Step-7a c3): an OLDER save failing AFTER a newer one succeeded retries from LIVE state — the stale value never resurrects', async () => {
+    await renderLoaded()
+    const saveBodies = (): { hours: number }[][] =>
+      mockFetch.mock.calls
+        .filter(([url]) => String(url).includes('/save'))
+        .map(([, init]) => JSON.parse(String((init as RequestInit).body)).entries ?? [])
+
+    // 1) Save A leaves with the OLD value (2) and is HELD unresolved.
+    let releaseAAsFailure!: () => void
+    saveResponder = () =>
+      new Promise((resolve) => {
+        releaseAAsFailure = () => resolve(jsonResponse({ error: 'boom' }, 500))
+      })
+    vi.useFakeTimers()
+    fireEvent.change(screen.getByLabelText('Udvikling dag 3'), { target: { value: '2' } })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1100)
+    })
+
+    // 2) Save B leaves with the NEW value (3) and SUCCEEDS first.
+    saveResponder = null
+    fireEvent.change(screen.getByLabelText('Udvikling dag 3'), { target: { value: '3' } })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1100)
+    })
+    vi.useRealTimers()
+
+    // 3) A settles as FAILURE — its retry must rebuild from LIVE state (3),
+    //    never re-queue the stale captured 2 (pre-fix it did).
+    releaseAAsFailure()
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20))
+    })
+
+    // 4) A modal action flushes: the retry (if fired) carries the LIVE value.
+    fireEvent.click(screen.getByRole('button', { name: 'Administrer projekter' }))
+    await screen.findByText('Administrer rækker')
+    fireEvent.click(screen.getByRole('button', { name: 'Fjern Drift & support' }))
+    await waitFor(() => expect(putBodies).toHaveLength(1))
+
+    // No save fired AFTER the second edit may carry the stale 2 for that cell.
+    const bodiesAfterB = saveBodies().slice(2)
+    for (const entries of bodiesAfterB) {
+      for (const e of entries as { projectCode?: string; date?: string; hours: number }[]) {
+        if (e.projectCode === 'UDV' && e.date === '2026-03-03') {
+          expect(e.hours).toBe(3)
+        }
+      }
+    }
+  })
+})
+
+describe('SkemaPage — R3 visibility-independence end-to-end', () => {
+  it('R3: hiding a populated project leaves Diff / I alt / the ✓ state unchanged, shows the affordance, and the approval-gate 422 surface still renders', async () => {
+    const { container } = await renderLoaded()
+    const diffBefore = lastCell(gridRow(container, 'Diff. fra normtid')).textContent
+    const totalBefore = lastCell(gridRow(container, 'I alt')).textContent
+    expect(totalBefore).toBe('20,6')
+    expect(dayCell(gridRow(container, 'Registrér arbejdstid'), 2).textContent).toBe('✓')
+
+    // Hide Drift (it carries 7,4 h on Mar 2) via the modal flow
+    fireEvent.click(screen.getByRole('button', { name: 'Administrer projekter' }))
+    await screen.findByText('Administrer rækker')
+    fireEvent.click(screen.getByRole('button', { name: 'Fjern Drift & support' }))
+
+    // Wait past the OPTIMISTIC frame: the PUT must have landed AND the refetch
+    // must have served the post-PUT month (where the legacy `projects` field is
+    // the shrunken VISIBLE selection — the 7201 contract; the Step-7a B1 pin
+    // breaks pre-fix exactly here), then settle the state into React.
+    await waitFor(() => expect(putBodies.length).toBe(1))
+    const putIdx = fetchLog.findIndex((e) => e.startsWith('PUT'))
+    await waitFor(() =>
+      expect(
+        fetchLog.some((e, i) => i > putIdx && e.startsWith('GET') && e.includes('/month')),
+      ).toBe(true),
+    )
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    expect(gridRowOrNull(container, 'Drift & support')).toBeNull()
+
+    // ALL computed values are visibility-independent (rendering filter only) —
+    // asserted against the SETTLED server-truth state, not the optimistic frame
+    expect(lastCell(gridRow(container, 'Diff. fra normtid')).textContent).toBe(diffBefore)
+    expect(lastCell(gridRow(container, 'I alt')).textContent).toBe(totalBefore)
+    expect(dayCell(gridRow(container, 'Registrér arbejdstid'), 2).textContent).toBe('✓')
+    expect(screen.getByText('1 skjulte rækker har timer i denne måned')).toBeInTheDocument()
+
+    // Close the modal, then the employee-approve gate's 422 surface still renders
+    fireEvent.click(screen.getByRole('button', { name: 'Færdig' }))
+    approveResponder = () =>
+      jsonResponse(
+        {
+          kind: 'allocation',
+          unbalancedDays: [{ date: '2026-03-05', worked: 5, allocated: 3, direction: 'under' }],
+        },
+        422,
+      )
+    fireEvent.click(screen.getByRole('button', { name: 'Godkend måned' }))
+    expect(
+      await screen.findByText(/Fordel de resterende 2 t på projekter/),
+    ).toBeInTheDocument()
+  })
+
+  it('R3/B1: a DEACTIVATED project with historical hours (in entries, absent from catalogs AND the visible selection) still feeds Diff / I alt / the work row, and counts as a hidden row', async () => {
+    const base = makeMonthData()
+    monthData = makeMonthData({
+      // GAMMEL: 4 h on Mar 5 — served history for a project no catalog knows
+      entries: [...base.entries, { date: '2026-03-05', projectCode: 'GAMMEL', hours: 4 }],
+    })
+    const { container } = await renderLoaded()
+
+    // Not rendered (not in the visible selection)…
+    expect(gridRowOrNull(container, 'GAMMEL')).toBeNull()
+    // …but the hidden-rows affordance counts it (it carries hours this month)
+    expect(screen.getByText('1 skjulte rækker har timer i denne måned')).toBeInTheDocument()
+    // I alt spans it: 20,6 + 4 = 24,6
+    expect(lastCell(gridRow(container, 'I alt')).textContent).toBe('24,6')
+    // The work row sees its allocation on Mar 5 (worked 0, allocated 4 → over)
+    expect(dayCell(gridRow(container, 'Registrér arbejdstid'), 5).textContent).toBe('+4,0')
+    // Diff: Mar 5 now has a registration → 0 + 0 − 7,4 = −7,4; total −1,6 − 7,4 = −9,0
+    expect(lastCell(gridRow(container, 'Diff. fra normtid')).textContent).toBe('-9,0')
+    // …and the Flex card reconciles (R2 — the same single computation)
+    expect(balanceCard('Flex saldo').textContent).toContain('Denne måned -9,0 t')
+  })
+})
+
+describe('SkemaPage — R7/R16 day-panel save paths', () => {
+  it('R7: a panel period edit round-trips through the hook buildWorkTimePayload, preserving the day\'s existing manualHours', async () => {
+    await renderLoaded()
+    fireEvent.click(screen.getByRole('button', { name: 'Registrér arbejdstid 2026-03-02' }))
+    const drawer = await screen.findByRole('dialog')
+    // D-B: the existing manual hours render read-only in the panel
+    expect(within(drawer).getByText('Manuelt registreret: 1,5 t')).toBeInTheDocument()
+
+    vi.useFakeTimers()
+    fireEvent.change(within(drawer).getByLabelText('Til'), { target: { value: '17:00' } })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1100) // the 1s debounce
+    })
+    vi.useRealTimers()
+
+    expect(saveBodies.length).toBe(1)
+    expect(saveBodies[0].entries).toBeNull()
+    expect(saveBodies[0].absences).toBeNull()
+    // The R7 pin: the edited interval AND the day's EXISTING manualHours (1,5)
+    expect(saveBodies[0].workTime).toEqual([
+      { date: '2026-03-02', intervals: [{ start: '08:00', end: '17:00' }], manualHours: 1.5 },
+    ])
+  })
+
+  it('a panel allocation edit rides the existing debounced cell-save path', async () => {
+    await renderLoaded()
+    fireEvent.click(screen.getByRole('button', { name: 'Registrér arbejdstid 2026-03-02' }))
+    const drawer = await screen.findByRole('dialog')
+
+    vi.useFakeTimers()
+    fireEvent.change(within(drawer).getByLabelText('Drift & support'), { target: { value: '5' } })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1100)
+    })
+    vi.useRealTimers()
+
+    expect(saveBodies.length).toBe(1)
+    expect(saveBodies[0].entries).toEqual([{ date: '2026-03-02', projectCode: 'DRIFT', hours: 5 }])
+    expect(saveBodies[0].workTime).toBeNull()
+  })
+
+  it('the panel\'s allocations span ALL SERVED projects — a hidden populated row still counts toward Resterende (the recorded 7203 pin)', async () => {
+    // Drift is HIDDEN by preferences from the start but carries 7,4 h on Mar 2.
+    // Per the 7201 contract the legacy `projects` field serves ONLY the visible
+    // selection — Drift reaches the page through `catalogs` ∪ entries (B1).
+    monthData = makeMonthData({
+      projects: [
+        { projectId: 'p-udv', projectCode: 'UDV', projectName: 'Udvikling', isActive: true, sortOrder: 1 },
+      ],
+      rowPreferences: {
+        configured: true,
+        projects: [{ projectId: 'p-udv', projectCode: 'UDV', projectName: 'Udvikling', sortOrder: 0 }],
+        absenceTypes: [
+          { type: 'VACATION', label: 'Ferie', sortOrder: 0 },
+          { type: 'CARE_DAY', label: 'Omsorgsdage', sortOrder: 1 },
+          { type: 'SPECIAL_HOLIDAY', label: 'Særlige feriedage', sortOrder: 2 },
+        ],
+      },
+    })
+    const { container } = renderPage()
+    await screen.findByText('Udvikling')
+    expect(gridRowOrNull(container, 'Drift & support')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Registrér arbejdstid 2026-03-02' }))
+    const drawer = await screen.findByRole('dialog')
+    // Step 2 renders only the VISIBLE rows…
+    expect(within(drawer).queryByLabelText('Drift & support')).toBeNull()
+    expect(within(drawer).getByLabelText('Udvikling')).toBeInTheDocument()
+    // …but Resterende computes over ALL served allocations: 9,5 worked −
+    // (7,4 hidden Drift + 2,1 visible Udvikling) = balanced.
+    expect(within(drawer).getByText('Alt fordelt ✓')).toBeInTheDocument()
+  })
+})
+
+describe('SkemaPage — W2 §J rest analysis over LOCAL edits', () => {
+  it('W2/R6: editing day N\'s periods locally (no save round-trip) and opening day N+1 warns from N\'s LOCAL state', async () => {
+    await renderLoaded()
+
+    // Day N (Mar 2): extend the served 08:00–16:00 to end 23:00 — LOCAL only
+    // (no refetch happens; the served data still says 16:00).
+    fireEvent.click(screen.getByRole('button', { name: 'Registrér arbejdstid 2026-03-02' }))
+    let drawer = await screen.findByRole('dialog')
+    fireEvent.change(within(drawer).getByLabelText('Til'), { target: { value: '23:00' } })
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Færdig' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+
+    // Day N+1 (Mar 3): 06:00 start → 7 h rest against Mar 2's LOCAL 23:00 end
+    // (the served 16:00 end would give 14 h — no warning — so this pin fails
+    // when the panel is fed raw data.workTime instead of the local overlay).
+    fireEvent.click(screen.getByRole('button', { name: 'Registrér arbejdstid 2026-03-03' }))
+    drawer = await screen.findByRole('dialog')
+    fireEvent.change(within(drawer).getByLabelText('Fra'), { target: { value: '06:00' } })
+    fireEvent.change(within(drawer).getByLabelText('Til'), { target: { value: '12:00' } })
+    expect(within(drawer).getByText(/giver kun 7 timers hvile/)).toBeInTheDocument()
+    expect(within(drawer).getByText(/mandag 2\. marts og tirsdag 3\. marts/)).toBeInTheDocument()
+  })
+})
+
+describe('SkemaPage — R5 locked months', () => {
+  it('R5: EMPLOYEE_APPROVED = readOnly grid, unreachable panel, disabled saves — but the manager modal STAYS reachable', async () => {
+    monthData = makeMonthData({
+      approval: {
+        periodId: 'per-1',
+        status: 'EMPLOYEE_APPROVED',
+        employeeDeadline: null,
+        managerDeadline: null,
+        employeeApprovedAt: '2026-04-01T08:00:00Z',
+        rejectionReason: null,
+      },
+    })
+    const { container } = await renderLoaded()
+    // readOnly grid: no editable inputs anywhere on the page
+    expect(container.querySelectorAll('input').length).toBe(0)
+    // the interactive row renders as DATA — no panel triggers
+    expect(gridRowOrNull(container, 'Registrér arbejdstid')).toBeNull()
+    const workRow = gridRow(container, 'Arbejdstid')
+    expect(workRow.querySelectorAll('button').length).toBe(0)
+    expect(screen.queryByRole('dialog')).toBeNull()
+    // the existing footer logic is preserved (status badge + Genåbn)
+    expect(screen.getByText('Indsendt')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Genåbn' })).toBeInTheDocument()
+    // …and the modal stays reachable (view preferences are month-independent)
+    fireEvent.click(screen.getByRole('button', { name: 'Administrer projekter' }))
+    expect(await screen.findByText('Administrer rækker')).toBeInTheDocument()
+  })
+})
+
+describe('SkemaPage — R16 ownership', () => {
+  it('R16: the page owns NO private buildWorkTimePayload — it imports the hook\'s single owner', () => {
+    expect(skemaPageSource).not.toMatch(/const buildWorkTimePayload|function buildWorkTimePayload/)
+    expect(skemaPageSource).toMatch(/import \{[^}]*buildWorkTimePayload[^}]*\} from '\.\.\/hooks\/useSkema'/)
   })
 })

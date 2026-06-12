@@ -5,7 +5,7 @@
 > Update the schema in `init.sql`, then run `python tools/generate_db_schema.py`.
 > CI fails (`tools/check_docs.py`) if this file drifts from init.sql.
 
-**Total: 62 tables** (45 primary, 17 audit).
+**Total: 64 tables** (47 primary, 17 audit).
 
 ---
 
@@ -552,6 +552,7 @@
 | employee_id | TEXT | No |  |  |
 | project_id | UUID | No | FK→projects |  |
 | created_at | TIMESTAMPTZ | No |  | NOW() |
+| sort_order | INT | No |  | 0 |
 
 **Table constraints:**
 - PRIMARY KEY (employee_id, project_id)
@@ -1298,6 +1299,24 @@
 - `idx_termination_payout_requests_nonvoided` (UNIQUE) on (employee_id, entitlement_type, entitlement_year, settlement_sequence) WHERE state <> 'VOIDED_BY_REVERSAL'
 - `idx_termination_payout_requests_employee` on (employee_id)
 
+## user_skema_preferences
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| employee_id | TEXT | No | PK, FK→users |  |
+| initialized_at | TIMESTAMPTZ | No |  | NOW() |
+
+## user_absence_selections
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| employee_id | TEXT | No | FK→users |  |
+| absence_type | TEXT | No |  |  |
+| sort_order | INT | No |  | 0 |
+
+**Table constraints:**
+- PRIMARY KEY (employee_id, absence_type)
+
 ---
 
 ## Table Summary
@@ -1366,4 +1385,6 @@
 | 60 | settlement_payroll_inbox | -- |
 | 61 | settlement_export_lines | -- |
 | 62 | termination_payout_requests | -- |
+| 63 | user_skema_preferences | -- |
+| 64 | user_absence_selections | -- |
 

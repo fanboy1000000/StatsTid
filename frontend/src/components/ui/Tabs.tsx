@@ -4,7 +4,10 @@ import styles from './Tabs.module.css'
 
 interface Tab {
   value: string
-  label: string
+  /** S72 / TASK-7204 — widened from `string` (additive: string ⊂ ReactNode) so
+      triggers can carry inline count badges (the manager modal's "Projekter 3").
+      The badge text participates in the tab's accessible name. */
+  label: ReactNode
   content: ReactNode
 }
 

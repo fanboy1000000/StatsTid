@@ -53,17 +53,28 @@ const stable = vi.hoisted(() => {
   }
 })
 
-vi.mock('../../hooks/useSkema', () => ({ useSkema: () => stable.skema }))
-vi.mock('../../hooks/useBalanceSummary', () => ({ useBalanceSummary: () => stable.balance }))
+// S72/TASK-7205: the page imports the PURE helpers (buildWorkTimePayload /
+// periodHours from useSkema; computeMonthFlexDelta / deriveMonthAbsenceUsage
+// from useBalanceSummary) alongside the hooks — keep the real module and stub
+// ONLY the hook so those exports stay callable.
+vi.mock('../../hooks/useSkema', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../hooks/useSkema')>()),
+  useSkema: () => stable.skema,
+}))
+vi.mock('../../hooks/useBalanceSummary', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../hooks/useBalanceSummary')>()),
+  useBalanceSummary: () => stable.balance,
+}))
 vi.mock('../../hooks/useCompliance', () => ({ useCompliance: () => stable.compliance }))
 
 // Stub the heavy presentational children so the param-init render stays light
 // and deterministic (we only assert the month-title <h2> the page itself owns).
+// (AllocationSummary + ProjectPicker stubs removed — retired in S72/R9.)
 vi.mock('../../components/SkemaGrid', () => ({ SkemaGrid: () => null }))
 vi.mock('../../components/BalanceSummary', () => ({ BalanceSummary: () => null }))
-vi.mock('../../components/AllocationSummary', () => ({ AllocationSummary: () => null }))
 vi.mock('../../components/ComplianceWarnings', () => ({ ComplianceWarnings: () => null }))
-vi.mock('../../components/ProjectPicker', () => ({ ProjectPicker: () => null }))
+vi.mock('../../components/SkemaDayPanel', () => ({ SkemaDayPanel: () => null }))
+vi.mock('../../components/SkemaProjectManager', () => ({ SkemaProjectManager: () => null }))
 
 import { SkemaPage } from '../SkemaPage'
 

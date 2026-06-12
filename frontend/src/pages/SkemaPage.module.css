@@ -2,6 +2,20 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+  /* S72 owner ruling D-C — the Skema page's content cap is 1480px, page-LOCAL.
+     AppLayout's .mainInner stays 1200px globally (untouched); this page widens
+     itself with symmetric negative margins, clamped to the main column's real
+     width so it never overflows: column ≈ 100vw − 240px sidebar − 2×--space-8
+     main padding − 17px classic-scrollbar allowance (layout literals match
+     Sidebar.module.css/AppLayout.module.css; an overlay-scrollbar OS just
+     under-expands by 17px — fail-safe direction). clamp(): the full −140px
+     ((1480−1200)/2) breakout when the column ≥ 1480px, proportional in
+     between, none when the column ≤ 1200px. */
+  margin-inline: clamp(
+    -140px,
+    calc((1200px - (100vw - 240px - 2 * var(--space-8) - 17px)) / 2),
+    0px
+  );
 }
 
 .validationList {

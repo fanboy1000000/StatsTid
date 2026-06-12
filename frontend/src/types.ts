@@ -101,6 +101,43 @@ export interface SkemaRow {
   type: 'project' | 'absence'
   key: string
   label: string
+  /** S72 / TASK-7202 — optional informational note rendered after the row label
+      (e.g. "hele dage"). Informational text ONLY (SPRINT-72 R1 — no full-day snap). */
+  note?: string
+}
+
+// ── S72 / TASK-7201 month-GET additive shapes (consumed by the redesigned grid/page) ──
+
+/** One VISIBLE project row per the user's row preferences (R4). sortOrder is the
+    server-computed DENSE effective position (0..n-1), not the raw stored value. */
+export interface SkemaRowPreferenceProject {
+  projectId: string
+  projectCode: string
+  projectName: string
+  sortOrder: number
+}
+
+/** One VISIBLE absence-type row per the user's row preferences (R4). */
+export interface SkemaRowPreferenceAbsenceType {
+  type: string
+  label: string
+  sortOrder: number
+}
+
+/** The month GET's `rowPreferences` field — the VISIBLE row sets (catalog ∩ selections
+    when configured; today's fallback when not). Rendering filter ONLY (R3) — all grid
+    arithmetic stays over the full served data. */
+export interface SkemaRowPreferences {
+  configured: boolean
+  projects: SkemaRowPreferenceProject[]
+  absenceTypes: SkemaRowPreferenceAbsenceType[]
+}
+
+/** The month GET's `catalogs` field — the ADDABLE sets, selection-INDEPENDENT (R4):
+    removed rows stay re-addable; stale selections never resurrect org-hidden types. */
+export interface SkemaCatalogs {
+  projects: Project[]
+  absenceTypes: { type: string; label: string }[]
 }
 
 export interface WorkTimeInterval {
@@ -126,7 +163,10 @@ export interface SkemaMonthData {
   projects: Project[]
   absenceTypes: { type: string; label: string }[]
   entries: { date: string; projectCode: string; hours: number }[]
-  absences: { date: string; absenceType: string; hours: number }[]
+  // S72 / TASK-7201 — `feriedage` is the ADR-032 recorded per-absence day-equivalent,
+  // served verbatim (nullable passthrough: null on zero-norm days / non-entitlement
+  // rows; consumers SKIP null-valued rows when summing — SPRINT-72 R10 / Reviewer N4).
+  absences: { date: string; absenceType: string; hours: number; feriedage?: number | null }[]
   approval: {
     periodId: string
     status: string
@@ -137,4 +177,16 @@ export interface SkemaMonthData {
   } | null
   workTime: WorkTimeDay[]
   dailyNorm: DailyNormDay[]
+  // ── S72 / TASK-7201 additive month-GET fields (optional: pre-S72 fixtures/mocks
+  // omit them; the grid falls back to rendering all served rows — SPRINT-72 R12) ──
+  /** VISIBLE row sets + order (R4). Rendering filter ONLY (R3). */
+  rowPreferences?: SkemaRowPreferences
+  /** ADDABLE catalogs, selection-independent (R4) — the manager modal's right pane. */
+  catalogs?: SkemaCatalogs
+  /** 0..2 boundary-day workTime rows (prev-month last day / next-month first day)
+      for the client-side §J 11-hour rest analysis (SPRINT-72 R6). */
+  boundaryWorkTime?: WorkTimeDay[]
+  /** The employee's weekday full-day norm at the viewed month's LAST day (R10, D-A
+      hours-first cards). Null = fail-soft (no dated profile / ANNUAL_ACTIVITY). */
+  fullDayNormAtMonthEnd?: number | null
 }

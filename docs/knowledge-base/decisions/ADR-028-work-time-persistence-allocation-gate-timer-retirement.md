@@ -31,10 +31,19 @@ row. The Skema save enqueues the event via `IOutboxEnqueue` and upserts the proj
 transaction (ADR-018 D3/D13 — read-your-write without waiting for the publisher). `ProjectionBackfillService`
 replays `WorkTimeRegistered` so a deploy against an existing event log rebuilds the projection.
 
-### D2 — Two entry methods, additive
+### D2 — Two entry methods, additive — **SUPERSEDED in the UI (S72, owner ruling D-B 2026-06-12)**
 "Arbejdstid" is restructured into two entry rows: **Tilføj periode** (intervals) and **Tilføj timer**
 (direct daily hours, Danish comma `7,4`). A day's worked hours = interval hours + manual hours
 (additive). Project rows and absence rows are unchanged.
+
+> **S72 supersession (SPRINT-72 D-B):** the Skema redesign's premise was that three competing "add"
+> models confused registration. The owner consciously ruled the **manual lump-hours ENTRY UI dropped**:
+> the day panel registers clock periods only. The PERSISTENCE model is unchanged — `manual_hours`
+> stays on `work_time_projection` and in `WorkTimeRegistered`, existing values keep counting in every
+> worked total, render read-only in the panel ("Manuelt registreret: X t"), and every write PRESERVES
+> the day's existing value through the latest-wins write (the S72 R7 pin, tested in `useSkema`'s
+> `buildWorkTimePayload`). D2's additive ARITHMETIC therefore still holds; only the entry affordance
+> is gone.
 
 ### D3 — "Diff. fra normtid" uses the real per-employee norm
 The renamed difference row = `(worked) − normtid`. Norm is resolved **server-side** in the Skema GET

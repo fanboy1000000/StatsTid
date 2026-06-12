@@ -136,6 +136,9 @@ public static class SkemaEndpoints
             UserRepository userRepo,
             UserAgreementCodeRepository userAgreementCodeRepo,
             ProjectRepository projectRepo,
+            // S72 / TASK-7201 — R4 row-preference container + absence selections (read side
+            // for the new `rowPreferences` / `catalogs` fields below).
+            SkemaRowPreferenceRepository rowPreferenceRepo,
             AbsenceTypeVisibilityRepository visibilityRepo,
             ApprovalPeriodRepository approvalRepo,
             // S59 / TASK-5907 — per-employee CHILD_SICK eligibility (dated read) and the
@@ -200,61 +203,44 @@ public static class SkemaEndpoints
                 employeeId, monthStart, ct);
             var agreementCode = pastEffectiveAgreementCode ?? user.AgreementCode;
 
-            // Fetch selected projects for the employee, falling back to all org
-            // projects when no selections exist (backwards compatible for first-time users).
-            var selectedProjects = await projectRepo.GetSelectedByEmployeeAsync(employeeId, user.PrimaryOrgId, ct);
-            var projects = selectedProjects.Count > 0
+            // ── The employee's project rows (S72 / Step-5a B1+B2 rework) ──
+            // The R4 container state is read FIRST because BOTH the legacy `projects`
+            // field's condition and the selection read's ORDER BY depend on it.
+            var preferencesConfigured = await rowPreferenceRepo.ContainerExistsAsync(employeeId, ct);
+
+            // B2: container present ⇒ the PER-USER order (ups.sort_order, project_code —
+            // the user's chosen order, frozen against later org reorders); container-less ⇒
+            // the LIVE org order (p.sort_order, project_code) — pre-S72-identical even
+            // after an admin reorders org sort_order post-migration (the TASK-7200
+            // backfilled ups.sort_order is a one-shot snapshot, deliberately NOT consulted
+            // for container-less users). The named R4 zero-behavior-change regression class
+            // pins both behaviors.
+            var selectedProjects = await projectRepo.GetSelectedByEmployeeAsync(
+                employeeId, user.PrimaryOrgId, orderByUserPreference: preferencesConfigured, ct);
+
+            // B1: when the container EXISTS the selections are authoritative EVEN WHEN
+            // EMPTY (R4) — the legacy `projects` field serves the SAME visible set as
+            // `rowPreferences.projects` below (catalog ∩ selections, possibly EMPTY; no
+            // fallback). The all-org fallback applies ONLY when the container does not
+            // exist (the pre-S72 population, whose behavior is unchanged). Pre-B1 the
+            // fallback keyed off selectedProjects.Count alone, so a configured-empty (or
+            // configured-with-only-stale-selections) user was served ALL org projects on
+            // this row-serving read path — violating container-authoritative-even-empty.
+            var projects = preferencesConfigured || selectedProjects.Count > 0
                 ? selectedProjects
                 : await projectRepo.GetByOrgAsync(user.PrimaryOrgId, ct);
 
-            // Fetch absence type visibility for this org
-            var visibilityEntries = await visibilityRepo.GetByOrgAsync(user.PrimaryOrgId, ct);
-            var hiddenTypes = new HashSet<string>(
-                visibilityEntries.Where(v => v.IsHidden).Select(v => v.AbsenceType),
-                StringComparer.Ordinal);
-
-            // ── S59 / TASK-5907 per-employee eligibility display filter ──
-            // After the org-level absence_type_visibility filter, additionally hide
-            // absence types the employee is personally ineligible for. This is a DISPLAY
-            // affordance only (what can be added to this month); the POST gate per
-            // absence.Date is authoritative. Anchor = MONTH-END (single, well-defined UI
-            // anchor). The POST gate intentionally uses a different anchor (per-row
-            // absence.Date) — see the note on the POST gate below; the two are NOT
-            // required to agree mid-month (refinement line 19, SPRINT-59 TASK-5907).
-            //
-            // (a) CHILD_SICK: drop all child-sick variants (those mapping to entitlement
-            //     CHILD_SICK) when the employee is ineligible as-of month-end. Absent
-            //     eligibility row ⇒ ineligible (opt-in default).
-            var childSickEligible = (await eligibilityRepo
-                .GetEligibleAsOfAsync(employeeId, "CHILD_SICK", monthEnd, ct)).Eligible;
-
-            // (b) SENIOR_DAY: DOB-derived age gate. Hide when the employee is under the
-            //     resolved SENIOR_DAY MinAge as-of month-end, OR has no BirthDate
-            //     (fail-closed). The age decision itself mirrors the rule-engine gate
-            //     (TASK-5904) but here it is only a display affordance; the POST gate
-            //     re-validates per row via the rule engine.
-            // S59 / Step-7a BLOCKER 2 — resolve the SENIOR_DAY config AS-OF the display anchor
-            // (month-end), not the live/open row, so min_age and the age computation share the
-            // same anchor (determinism, P4 / ADR-020). Mirrors the dated quota read on POST.
-            var seniorConfig = await entitlementConfigRepo.GetByTypeAtAsync(
-                "SENIOR_DAY", agreementCode, user.OkVersion, monthEnd, ct);
-            var seniorMinAge = seniorConfig?.MinAge;
-            var seniorVisible = seniorMinAge is null // no age gate configured ⇒ unrestricted
-                || (user.BirthDate is { } dob && AgeAsOf(dob, monthEnd) >= seniorMinAge.Value);
-
             // Build absence types list (filtered by agreement, org visibility, then
-            // per-employee eligibility).
-            var agreementAbsenceTypes = GetAbsenceTypesForAgreement(agreementCode);
-            var absenceTypes = agreementAbsenceTypes
-                .Where(t => !hiddenTypes.Contains(t))
-                .Where(t => childSickEligible
-                    || !string.Equals(GetEntitlementType(t), "CHILD_SICK", StringComparison.Ordinal))
-                .Where(t => seniorVisible || !string.Equals(t, "SENIOR_DAY", StringComparison.Ordinal))
-                .Select(t => new
-                {
-                    type = t,
-                    label = AbsenceTypeLabels.TryGetValue(t, out var l) ? l : t
-                })
+            // per-employee eligibility). S72 / TASK-7201: the chain itself moved VERBATIM
+            // into ComputeAbsenceCatalogAsync (one copy, also consumed by the new
+            // row-preferences PUT validation + the `catalogs` field below); the served shape
+            // and order are byte-identical to the pre-S72 inline block. Anchor = MONTH-END
+            // (the established S59 display anchor).
+            var absenceCatalog = await ComputeAbsenceCatalogAsync(
+                employeeId, agreementCode, user, monthEnd,
+                visibilityRepo, eligibilityRepo, entitlementConfigRepo, ct);
+            var absenceTypes = absenceCatalog
+                .Select(c => new { type = c.Type, label = c.Label })
                 .ToList();
 
             // S27 TASK-2706 GET migration: read time entries + absences from the
@@ -282,7 +268,12 @@ public static class SkemaEndpoints
                 {
                     date = e.Date,
                     absenceType = e.AbsenceType,
-                    hours = e.Hours
+                    hours = e.Hours,
+                    // S72 / TASK-7201 (R10) — the ADR-032 recorded per-absence feriedage,
+                    // served verbatim from absences_projection (nullable passthrough: ADR-032
+                    // persists null on zero-norm days / non-entitlement rows; the FE skips
+                    // null-valued rows when summing — SPRINT-72 R10 / Reviewer N4).
+                    feriedage = e.Feriedage
                 })
                 .ToList();
 
@@ -313,6 +304,116 @@ public static class SkemaEndpoints
             var dailyNorm = dailyNormEntries
                 .Select(n => (object)new { date = n.Date, hours = n.Hours })
                 .ToList();
+
+            // ── S72 / TASK-7201 — R4 catalog-vs-visible row preferences ──
+            // TWO server-computed sets (SPRINT-72 R4):
+            //   • CATALOG (addable) — selection-INDEPENDENT: the org's active projects (the
+            //     existing org read) + the existing filtered absence-type chain exactly as
+            //     served in `absenceTypes` above. Removed rows stay re-addable.
+            //   • VISIBLE — container present ⇒ catalog ∩ selections (authoritative EVEN WHEN
+            //     EMPTY; stale selections never resurrect org-hidden/inactive/ineligible
+            //     rows); container absent ⇒ today's fallback (selections if any, else the
+            //     full catalog — exactly what the legacy `projects` field serves).
+            // Served sortOrder = the DENSE effective position (0..n-1) in the R4 read order,
+            // not the raw stored value (raw legacy-backfilled values may carry duplicates).
+            // (preferencesConfigured was read ABOVE, before the selection read — B1+B2.)
+
+            // Catalog projects: always the full org read. `projects` can be reused ONLY in
+            // the container-less-no-selections case, where it already IS the org read (no
+            // second query); for configured users `projects` is the visible set (possibly
+            // empty) and must never masquerade as the catalog.
+            var catalogProjects = preferencesConfigured || selectedProjects.Count > 0
+                ? await projectRepo.GetByOrgAsync(user.PrimaryOrgId, ct)
+                : projects;
+
+            // Visible projects: identical to the legacy `projects` field BY CONSTRUCTION
+            // post-B1 (configured ⇒ selections authoritative even when empty — the
+            // GetSelectedByEmployeeAsync JOIN is catalog ∩ selections; container-less ⇒
+            // today's fallback). One set, two projections.
+            var visibleProjects = projects;
+
+            // Visible absence rows: container present ⇒ selections ∩ catalog in selection
+            // order; container absent ⇒ the full filtered catalog in its served order.
+            var catalogTypeSet = new HashSet<string>(
+                absenceCatalog.Select(c => c.Type), StringComparer.Ordinal);
+            var visibleAbsenceTypes = preferencesConfigured
+                ? (await rowPreferenceRepo.GetAbsenceSelectionsAsync(employeeId, ct))
+                    .Where(s => catalogTypeSet.Contains(s.AbsenceType))
+                    .Select(s => s.AbsenceType)
+                    .ToList()
+                : absenceCatalog.Select(c => c.Type).ToList();
+
+            var rowPreferences = new
+            {
+                configured = preferencesConfigured,
+                projects = visibleProjects
+                    .Select((p, i) => new
+                    {
+                        projectId = p.ProjectId,
+                        projectCode = p.ProjectCode,
+                        projectName = p.ProjectName,
+                        sortOrder = i
+                    })
+                    .ToList(),
+                absenceTypes = visibleAbsenceTypes
+                    .Select((t, i) => new
+                    {
+                        type = t,
+                        label = AbsenceTypeLabels.TryGetValue(t, out var l) ? l : t,
+                        sortOrder = i
+                    })
+                    .ToList()
+            };
+
+            var catalogs = new
+            {
+                // Addable projects in the org read's order; sortOrder here is the ORG-level
+                // sort (mirrors the existing `projects` field's meaning for this value).
+                projects = catalogProjects
+                    .Select(p => new
+                    {
+                        projectId = p.ProjectId,
+                        projectCode = p.ProjectCode,
+                        projectName = p.ProjectName,
+                        sortOrder = p.SortOrder
+                    })
+                    .ToList(),
+                // The SAME filtered chain (and order) the existing `absenceTypes` field
+                // serves — one computation, two projections.
+                absenceTypes = absenceCatalog
+                    .Select(c => new { type = c.Type, label = c.Label })
+                    .ToList()
+            };
+
+            // ── S72 / TASK-7201 — boundary-day workTime (SPRINT-72 R6 input) ──
+            // EXACTLY two extra days — the last day of the previous month and the first day
+            // of the next month — so the client-side §J 11-hour rest analysis has the
+            // adjacent registrations at month edges. Same row shape as `workTime`; days
+            // without a registration serve no row (consistent with the month array).
+            var prevBoundaryDay = monthStart.AddDays(-1);
+            var nextBoundaryDay = monthEnd.AddDays(1);
+            var prevBoundaryRows = await workTimeProjectionRepo.GetByEmployeeAndDateRangeAsync(
+                employeeId, prevBoundaryDay, prevBoundaryDay, ct);
+            var nextBoundaryRows = await workTimeProjectionRepo.GetByEmployeeAndDateRangeAsync(
+                employeeId, nextBoundaryDay, nextBoundaryDay, ct);
+            var boundaryWorkTime = prevBoundaryRows.Concat(nextBoundaryRows)
+                .Select(w => new
+                {
+                    date = w.Date,
+                    intervals = w.Intervals.Select(i => new { start = i.Start, end = i.End }).ToList(),
+                    manualHours = w.ManualHours
+                })
+                .ToList();
+
+            // ── S72 / TASK-7201 — R10 fullDayNormAtMonthEnd scalar ──
+            // The employee's WEEKDAY full-day norm (WeeklyNorm × fraction / 5, 2 decimals)
+            // resolved via the dated profile + config at the viewed month's LAST day,
+            // INDEPENDENT of that day's weekend placement (the calculator applies no
+            // weekend-0 short-circuit here). Null when no dated profile/config covers the
+            // day or for ANNUAL_ACTIVITY — fail-soft, the FE em-dashes the hours headline.
+            // PURE READ (P2): dated stores only, no rule-engine call.
+            var fullDayNormAtMonthEnd = await dailyNormCalculator.ComputeWeekdayNormAtAsync(
+                employeeId, monthEnd, user.PrimaryOrgId, ct);
 
             // Get approval period for this month
             var period = await approvalRepo.GetByEmployeeAndPeriodAsync(employeeId, monthStart, monthEnd, ct);
@@ -351,7 +452,13 @@ public static class SkemaEndpoints
                 dailyNorm,
                 approval,
                 employeeDeadline,
-                managerDeadline
+                managerDeadline,
+                // ── S72 / TASK-7201 additive fields (ALL existing fields above are
+                // byte-unchanged; the redesigned FE consumes these four) ──
+                rowPreferences,
+                catalogs,
+                boundaryWorkTime,
+                fullDayNormAtMonthEnd
             });
         }).RequireAuthorization("EmployeeOrAbove");
 
@@ -1369,6 +1476,162 @@ public static class SkemaEndpoints
             return Results.Ok(new { saved = savedCount });
         }).RequireAuthorization("EmployeeOrAbove");
 
+        // ── PUT /api/skema/{employeeId}/row-preferences — R4 full-replacement write ──
+        // S72 / TASK-7201. The manager-modal's save: the body is the FULL replacement set of
+        // visible project + absence rows. SELF-ONLY authorization (Step-5a B3, below).
+        // Write-side validation against the CURRENT catalog (R4: additions validated;
+        // org-hidden/inactive/ineligible rows are rejected 422 listing offenders). ONE
+        // transaction: container upsert (initialized_at on first write) + DELETE-and-INSERT
+        // selections with DENSE sort_order 0..n-1 in submitted order. Plain UN-EVENTED rows
+        // (R4 — view preference, not domain state: NO outbox event, NO audit projection; the
+        // ProjectRepository selection precedent). Month-independent: ADR-012 locks
+        // registrations, not preferences (R5) — no approval-period check here, by design.
+        app.MapPut("/api/skema/{employeeId}/row-preferences", async (
+            string employeeId,
+            RowPreferencesRequest request,
+            UserRepository userRepo,
+            UserAgreementCodeRepository userAgreementCodeRepo,
+            ProjectRepository projectRepo,
+            SkemaRowPreferenceRepository rowPreferenceRepo,
+            AbsenceTypeVisibilityRepository visibilityRepo,
+            EmployeeEntitlementEligibilityRepository eligibilityRepo,
+            EntitlementConfigRepository entitlementConfigRepo,
+            TimeProvider timeProvider,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            var actor = context.GetActorContext();
+
+            // ── S72 / Step-5a B3 (owner-adjudicated): this PUT is SELF-ONLY ──
+            // Row preferences are PERSONAL VIEW STATE (which rows the employee sees on
+            // their own Skema), so least privilege says ONLY the employee themself writes
+            // them — a DELIBERATE deviation from the save endpoint's authorization family:
+            // the covering-scope branch is removed for this WRITE only (the month GET's
+            // read auth is untouched; leaders still review the full record per R12, and
+            // preference filtering never applies to the approval surface anyway). This also
+            // closes the S70-R9f1-shaped mixed-role hole: a JWT carrying an elevated
+            // primary role in a DISJOINT org plus an Employee-level scope covering the
+            // victim would have passed the old covering-scope branch
+            // (ValidateEmployeeAccessAsync admits ANY covering scope without requiring the
+            // admitting scope to be elevated) and written another employee's preferences.
+            // Ordinal comparison; a null ActorId never equals a route id (fail-closed).
+            if (!string.Equals(actor.ActorId, employeeId, StringComparison.Ordinal))
+                return Results.Json(new { error = "Access denied", reason = "Row preferences are self-service only" }, statusCode: 403);
+
+            var user = await userRepo.GetByIdAsync(employeeId, ct);
+            if (user is null)
+                return Results.NotFound(new { error = "Employee not found" });
+
+            // Catalog anchor = server today (TimeProvider seam, never the wall clock
+            // directly — the PAT-008 convention). Preferences are month-independent view
+            // state (un-evented, no replay), so a today-anchored catalog validation is the
+            // honest "current catalog" check; the month GET keeps its month-end display
+            // anchor and re-intersects on every read, so a type that later leaves the
+            // catalog is filtered there regardless of what was accepted here.
+            var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
+            var prefAgreementCode = await userAgreementCodeRepo.GetByUserIdAtAsync(employeeId, today, ct)
+                ?? user.AgreementCode;
+
+            var submittedProjects = request.Projects ?? Array.Empty<RowPreferenceProjectItem>();
+            var submittedAbsenceTypes = request.AbsenceTypes ?? Array.Empty<RowPreferenceAbsenceItem>();
+
+            // ── Write-side validation (R4) against the CURRENT catalogs ──
+            // Projects: the org's ACTIVE catalog (GetByOrgAsync filters is_active).
+            // Absence types: the SAME filtered chain the month GET serves (one shared
+            // implementation — ComputeAbsenceCatalogAsync), anchored at today.
+            var orgProjects = await projectRepo.GetByOrgAsync(user.PrimaryOrgId, ct);
+            var projectsById = orgProjects.ToDictionary(p => p.ProjectId);
+            var absenceCatalog = await ComputeAbsenceCatalogAsync(
+                employeeId, prefAgreementCode, user, today,
+                visibilityRepo, eligibilityRepo, entitlementConfigRepo, ct);
+            var catalogTypeSet = new HashSet<string>(
+                absenceCatalog.Select(c => c.Type), StringComparer.Ordinal);
+
+            var invalidProjectIds = submittedProjects
+                .Select(p => p.ProjectId)
+                .Where(id => !projectsById.ContainsKey(id))
+                .Distinct()
+                .ToArray();
+            var invalidAbsenceTypes = submittedAbsenceTypes
+                .Select(a => a.AbsenceType)
+                .Where(t => !catalogTypeSet.Contains(t))
+                .Distinct()
+                .ToArray();
+            // Duplicates are rejected too (defensive: a duplicate would otherwise surface as
+            // a PK violation 500 from the replacement INSERT — never an acceptable failure
+            // mode for a validation problem).
+            var duplicateProjectIds = submittedProjects
+                .GroupBy(p => p.ProjectId)
+                .Where(g => g.Count() > 1)
+                .Select(g => g.Key)
+                .ToArray();
+            var duplicateAbsenceTypes = submittedAbsenceTypes
+                .GroupBy(a => a.AbsenceType, StringComparer.Ordinal)
+                .Where(g => g.Count() > 1)
+                .Select(g => g.Key)
+                .ToArray();
+
+            if (invalidProjectIds.Length > 0 || invalidAbsenceTypes.Length > 0
+                || duplicateProjectIds.Length > 0 || duplicateAbsenceTypes.Length > 0)
+            {
+                return Results.Json(new
+                {
+                    error = "row_preferences_invalid",
+                    invalidProjectIds,
+                    invalidAbsenceTypes,
+                    duplicateProjectIds,
+                    duplicateAbsenceTypes,
+                    message = "Mindst én række er ikke i det aktuelle katalog eller er angivet flere gange."
+                }, statusCode: 422);
+            }
+
+            // Dense 0..n-1 in submitted order: stable sort by the submitted sortOrder
+            // (ties broken by array position — a well-formed dense submission is preserved
+            // verbatim), then re-number densely.
+            var orderedProjects = submittedProjects
+                .Select((p, i) => (p.ProjectId, p.SortOrder, Index: i))
+                .OrderBy(p => p.SortOrder).ThenBy(p => p.Index)
+                .Select((p, dense) => (p.ProjectId, SortOrder: dense))
+                .ToList();
+            var orderedAbsenceTypes = submittedAbsenceTypes
+                .Select((a, i) => (a.AbsenceType, a.SortOrder, Index: i))
+                .OrderBy(a => a.SortOrder).ThenBy(a => a.Index)
+                .Select((a, dense) => (a.AbsenceType, SortOrder: dense))
+                .ToList();
+
+            // ONE tx: container upsert + DELETE-and-INSERT both selection tables. Un-evented.
+            await rowPreferenceRepo.ReplaceAsync(employeeId, orderedProjects, orderedAbsenceTypes, ct);
+
+            // The new effective rowPreferences (same shape as the month GET's field). Every
+            // submitted row was validated against the catalog above, so visible == the
+            // submitted set in dense order — no re-read needed.
+            return Results.Ok(new
+            {
+                configured = true,
+                projects = orderedProjects
+                    .Select(p =>
+                    {
+                        var project = projectsById[p.ProjectId];
+                        return new
+                        {
+                            projectId = project.ProjectId,
+                            projectCode = project.ProjectCode,
+                            projectName = project.ProjectName,
+                            sortOrder = p.SortOrder
+                        };
+                    })
+                    .ToList(),
+                absenceTypes = orderedAbsenceTypes
+                    .Select(a => new
+                    {
+                        type = a.AbsenceType,
+                        label = AbsenceTypeLabels.TryGetValue(a.AbsenceType, out var l) ? l : a.AbsenceType,
+                        sortOrder = a.SortOrder
+                    })
+                    .ToList()
+            });
+        }).RequireAuthorization("EmployeeOrAbove");
+
         return app;
     }
 
@@ -1401,7 +1664,98 @@ public static class SkemaEndpoints
         return m == 0 ? $"{h}t" : $"{h}t {m}m";
     }
 
+    // ── S72 / TASK-7201 — the addable absence-type CATALOG (one shared chain) ──
+
+    /// <summary>One addable absence type: the type code + its Danish display label.</summary>
+    private sealed record AbsenceCatalogEntry(string Type, string Label);
+
+    /// <summary>
+    /// The ADDABLE absence-type catalog — the EXISTING filter chain extracted VERBATIM from
+    /// the month GET's inline block (S72 / TASK-7201; SPRINT-72 R4 "reuse the existing chain,
+    /// do not reimplement"): agreement (<see cref="GetAbsenceTypesForAgreement"/>) → org
+    /// <c>absence_type_visibility</c> → per-employee eligibility. SELECTION-INDEPENDENT: the
+    /// user's row preferences never feed this — removed rows stay re-addable. Consumed by the
+    /// month GET (anchor = MONTH-END, the established S59 display anchor) and the
+    /// row-preferences PUT validation (anchor = server today).
+    ///
+    /// <para>The pre-S72 semantics are preserved byte-for-byte (the eligibility notes below
+    /// moved with the code):</para>
+    /// <list type="bullet">
+    ///   <item><b>S59 / TASK-5907 display filter:</b> a DISPLAY affordance only; the POST
+    ///     gate per absence.Date is authoritative. The POST gate intentionally uses a
+    ///     different anchor (per-row absence.Date); the two are NOT required to agree
+    ///     mid-month (refinement line 19, SPRINT-59 TASK-5907).</item>
+    ///   <item><b>(a) CHILD_SICK:</b> drop all child-sick variants (those mapping to
+    ///     entitlement CHILD_SICK) when the employee is ineligible as-of the anchor. Absent
+    ///     eligibility row ⇒ ineligible (opt-in default).</item>
+    ///   <item><b>(b) SENIOR_DAY:</b> DOB-derived age gate — hide when under the resolved
+    ///     SENIOR_DAY MinAge as-of the anchor, OR when BirthDate is missing (fail-closed).
+    ///     S59 / Step-7a BLOCKER 2: the SENIOR_DAY config is resolved AS-OF the anchor (not
+    ///     the live/open row) so min_age and the age computation share the same anchor
+    ///     (determinism, P4 / ADR-020).</item>
+    /// </list>
+    /// </summary>
+    private static async Task<List<AbsenceCatalogEntry>> ComputeAbsenceCatalogAsync(
+        string employeeId,
+        string agreementCode,
+        User user,
+        DateOnly anchor,
+        AbsenceTypeVisibilityRepository visibilityRepo,
+        EmployeeEntitlementEligibilityRepository eligibilityRepo,
+        EntitlementConfigRepository entitlementConfigRepo,
+        CancellationToken ct)
+    {
+        // Org-level absence type visibility.
+        var visibilityEntries = await visibilityRepo.GetByOrgAsync(user.PrimaryOrgId, ct);
+        var hiddenTypes = new HashSet<string>(
+            visibilityEntries.Where(v => v.IsHidden).Select(v => v.AbsenceType),
+            StringComparer.Ordinal);
+
+        // (a) CHILD_SICK eligibility as-of the anchor.
+        var childSickEligible = (await eligibilityRepo
+            .GetEligibleAsOfAsync(employeeId, "CHILD_SICK", anchor, ct)).Eligible;
+
+        // (b) SENIOR_DAY DOB-derived age gate, config resolved as-of the same anchor.
+        var seniorConfig = await entitlementConfigRepo.GetByTypeAtAsync(
+            "SENIOR_DAY", agreementCode, user.OkVersion, anchor, ct);
+        var seniorMinAge = seniorConfig?.MinAge;
+        var seniorVisible = seniorMinAge is null // no age gate configured ⇒ unrestricted
+            || (user.BirthDate is { } dob && AgeAsOf(dob, anchor) >= seniorMinAge.Value);
+
+        // Agreement → visibility → eligibility, in the established order.
+        var agreementAbsenceTypes = GetAbsenceTypesForAgreement(agreementCode);
+        return agreementAbsenceTypes
+            .Where(t => !hiddenTypes.Contains(t))
+            .Where(t => childSickEligible
+                || !string.Equals(GetEntitlementType(t), "CHILD_SICK", StringComparison.Ordinal))
+            .Where(t => seniorVisible || !string.Equals(t, "SENIOR_DAY", StringComparison.Ordinal))
+            .Select(t => new AbsenceCatalogEntry(
+                t, AbsenceTypeLabels.TryGetValue(t, out var l) ? l : t))
+            .ToList();
+    }
+
     // ── Request DTOs ──
+
+    // S72 / TASK-7201 — PUT /api/skema/{employeeId}/row-preferences body: the FULL
+    // replacement set. A null array is treated as the EMPTY set (full replacement
+    // semantics); submitting both empty is the legal "configured, zero visible rows" state.
+    private sealed class RowPreferencesRequest
+    {
+        public RowPreferenceProjectItem[]? Projects { get; init; }
+        public RowPreferenceAbsenceItem[]? AbsenceTypes { get; init; }
+    }
+
+    private sealed class RowPreferenceProjectItem
+    {
+        public required Guid ProjectId { get; init; }
+        public int SortOrder { get; init; }
+    }
+
+    private sealed class RowPreferenceAbsenceItem
+    {
+        public required string AbsenceType { get; init; }
+        public int SortOrder { get; init; }
+    }
 
     private sealed class SaveSkemaRequest
     {

@@ -7,6 +7,10 @@ interface DialogProps {
   onOpenChange: (open: boolean) => void
   title: string
   description?: string
+  /** S72 / TASK-7204 — optional class merged onto the content panel (additive,
+      mirrors the Button/Input `className` passthrough convention) so callers can
+      widen the default 500px panel (the manager modal's 720px per the handoff). */
+  contentClassName?: string
   children: ReactNode
 }
 
@@ -15,13 +19,17 @@ export function Dialog({
   onOpenChange,
   title,
   description,
+  contentClassName,
   children,
 }: DialogProps) {
+  const contentClass = contentClassName
+    ? `${styles.content} ${contentClassName}`
+    : styles.content
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className={styles.overlay} />
-        <DialogPrimitive.Content className={styles.content}>
+        <DialogPrimitive.Content className={contentClass}>
           <DialogPrimitive.Title className={styles.title}>
             {title}
           </DialogPrimitive.Title>

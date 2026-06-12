@@ -1,3 +1,9 @@
+import type {
+  SkemaRowPreferenceAbsenceType,
+  SkemaRowPreferenceProject,
+  SkemaRowPreferences,
+} from '../types'
+
 const TOKEN_KEY = 'statstid_token'
 const USER_KEY = 'statstid_user'
 
@@ -187,4 +193,90 @@ export async function apiFetchWithEtag<T>(
   } catch (e) {
     return { ok: false, error: String(e), status: 0 }
   }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// S72 / TASK-7204 — typed Skema row-preferences PUT (SPRINT-72 R4/R13).
+// The wire contract is TASK-7201's: FULL replacement, sortOrder dense 0..n-1 in
+// submitted order; 200 returns the new effective `rowPreferences` shape; 422
+// returns the `row_preferences_invalid` offender payload; 403 = self-only.
+// ════════════════════════════════════════════════════════════════════════════
+
+/** PUT /api/skema/{employeeId}/row-preferences body (7201 contract, verbatim
+    field names — note the absence entries use `absenceType`, not `type`). */
+export interface SkemaRowPreferencesPutBody {
+  projects: { projectId: string; sortOrder: number }[]
+  absenceTypes: { absenceType: string; sortOrder: number }[]
+}
+
+/** The 7201 422 payload — preserved typed so the manager modal can render the
+    offenders (SPRINT-72 TASK-7204 acceptance). */
+export interface SkemaRowPreferencesInvalidPayload {
+  error: 'row_preferences_invalid'
+  invalidProjectIds: string[]
+  invalidAbsenceTypes: string[]
+  duplicateProjectIds: string[]
+  duplicateAbsenceTypes: string[]
+  message: string
+}
+
+/** Result of `putSkemaRowPreferences` — the `ApiResult` convention (non-throwing)
+    extended with the parsed 422 payload when the server rejected the replacement. */
+export type PutSkemaRowPreferencesResult =
+  | { ok: true; data: SkemaRowPreferences }
+  | { ok: false; status: number; error: string; invalid?: SkemaRowPreferencesInvalidPayload }
+
+/** Derives the exact PUT body from ordered selections: sortOrder = the ARRAY
+    INDEX (dense 0..n-1 by construction — any stale/sparse `sortOrder` carried on
+    the entries is deliberately ignored; the submitted ORDER is authoritative).
+    This is the single owner of the modal's "dense renumbering on save" rule. */
+export function toRowPreferencesPutBody(
+  projects: readonly SkemaRowPreferenceProject[],
+  absenceTypes: readonly SkemaRowPreferenceAbsenceType[],
+): SkemaRowPreferencesPutBody {
+  return {
+    projects: projects.map((p, i) => ({ projectId: p.projectId, sortOrder: i })),
+    absenceTypes: absenceTypes.map((a, i) => ({ absenceType: a.type, sortOrder: i })),
+  }
+}
+
+/**
+ * Typed row-preferences replacement (SPRINT-72 R4) via the standard `apiClient`
+ * (token injection + 401 handling inherited).
+ *
+ * R16 sequencing contract (for the 7205 page wiring): this function performs
+ * EXACTLY ONE PUT and resolves only after the server has applied the full
+ * replacement — it never refetches and has no side effects on caches. The page
+ * must therefore sequence: (1) flush pending debounced cell/workTime saves,
+ * (2) `await putSkemaRowPreferences(...)`, (3) refetch the month — so the
+ * refetch can never clobber in-flight local state.
+ *
+ * On 422 the raw error text is parsed and, when it is the 7201
+ * `row_preferences_invalid` shape, exposed typed via `invalid` so the modal can
+ * list the offenders. Other failures (403 self-only, 5xx, network) return the
+ * plain `ApiResult`-style error variant without `invalid`.
+ */
+export async function putSkemaRowPreferences(
+  employeeId: string,
+  body: SkemaRowPreferencesPutBody,
+): Promise<PutSkemaRowPreferencesResult> {
+  const result = await apiClient.put<SkemaRowPreferences>(
+    `/api/skema/${employeeId}/row-preferences`,
+    body,
+  )
+  if (result.ok) {
+    return { ok: true, data: result.data }
+  }
+  let invalid: SkemaRowPreferencesInvalidPayload | undefined
+  if (result.status === 422) {
+    try {
+      const parsed = JSON.parse(result.error) as SkemaRowPreferencesInvalidPayload
+      if (parsed && parsed.error === 'row_preferences_invalid') {
+        invalid = parsed
+      }
+    } catch {
+      // Non-JSON 422 body — fall through with the raw error text only.
+    }
+  }
+  return { ok: false, status: result.status, error: result.error, invalid }
 }

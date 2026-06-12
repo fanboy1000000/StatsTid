@@ -1,0 +1,364 @@
+/* S72 / TASK-7203 — day-panel visuals (handoff solution-a.html .rb-drawer family,
+   tokenized; SPRINT-72 R8/R15: tokens only, 0px corners, focus-visible on every
+   interactive element). The drawer chrome itself lives in ui/Drawer.module.css. */
+
+/* ── Header ── */
+.head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 20px var(--space-6) var(--space-4);
+  border-bottom: var(--border-width) solid var(--color-border);
+}
+
+.eyebrow {
+  font-size: 11px;
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--color-gray-500);
+  margin: 0 0 2px;
+}
+
+.title {
+  font-size: 22px;
+  font-weight: var(--font-weight-semibold);
+  margin: 0;
+  text-transform: capitalize;
+}
+
+.close {
+  appearance: none;
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 6px;
+  color: var(--color-text);
+  display: inline-flex;
+}
+
+.close:hover {
+  background: var(--color-gray-100);
+}
+
+.close:focus-visible {
+  outline: var(--focus-outline);
+  outline-offset: var(--focus-outline-offset);
+}
+
+/* ── Meta bar ── */
+.meta {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-6);
+  background: var(--color-gray-50);
+  border-bottom: var(--border-width) solid var(--color-border);
+  font-size: 14px;
+  color: var(--color-text-secondary);
+}
+
+.metaValue {
+  font-size: 16px;
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.diffPos {
+  color: var(--color-success);
+}
+
+.diffNeg {
+  color: var(--color-error);
+}
+
+.metaHint {
+  margin-left: auto;
+  font-size: 13px;
+}
+
+/* ── Body ── */
+.body {
+  padding: 20px var(--space-6) var(--space-6);
+  overflow-y: auto;
+  flex: 1;
+}
+
+.warnings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+
+.divider {
+  height: 1px;
+  background: var(--color-border);
+  margin: 22px 0;
+}
+
+/* ── Sections (steps 1 + 2) ── */
+.sectionHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.sectionTitle {
+  font-size: 12px;
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--color-text);
+  margin: 0 0 6px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.sectionHead .sectionTitle {
+  margin: 0;
+}
+
+.sectionDim {
+  opacity: 0.55;
+  transition: opacity 0.15s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sectionDim {
+    transition: none;
+  }
+}
+
+.step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  background: var(--color-primary);
+  color: var(--color-white);
+  font-size: 12px;
+  font-weight: var(--font-weight-bold);
+}
+
+/* ── Step-1 form ── */
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: var(--space-4);
+}
+
+.formLead {
+  font-size: 14px;
+  color: var(--color-text-secondary);
+  margin: 6px 0 0;
+}
+
+.periodRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.dash {
+  color: var(--color-gray-400);
+}
+
+.timeField {
+  width: 84px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  /* Clock times render mono per the handoff type spec (codebase precedent:
+     AuditLogView/OrgManagement module CSS use the same literal stack). */
+  font-family: 'IBM Plex Mono', monospace;
+  letter-spacing: 0.02em;
+}
+
+.periodResult {
+  min-width: 64px;
+  font-size: 14px;
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.periodResultBad {
+  color: var(--color-error);
+}
+
+.iconButton {
+  appearance: none;
+  border: var(--border-width) solid var(--color-border);
+  background: var(--color-white);
+  color: var(--color-gray-500);
+  cursor: pointer;
+  padding: var(--space-2);
+  display: inline-flex;
+}
+
+.iconButton:hover {
+  color: var(--color-error);
+  background: var(--color-gray-100);
+}
+
+.iconButton:focus-visible {
+  outline: var(--focus-outline);
+  outline-offset: var(--focus-outline-offset);
+}
+
+.addRow {
+  appearance: none;
+  background: none;
+  border: 1px dashed var(--color-gray-300);
+  color: var(--color-primary);
+  font-family: var(--font-family);
+  font-size: 14px;
+  font-weight: var(--font-weight-medium);
+  padding: var(--space-2);
+  cursor: pointer;
+  text-align: center;
+}
+
+.addRow:hover {
+  background: var(--color-gray-50);
+}
+
+.addRow:focus-visible {
+  outline: var(--focus-outline);
+  outline-offset: var(--focus-outline-offset);
+}
+
+/* D-B — read-only legacy manual-hours line (no entry UI) */
+.manualLine {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+
+.workTotal {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 14px;
+  padding: 10px var(--space-3);
+  background: var(--color-gray-50);
+  border: var(--border-width) solid var(--color-border);
+}
+
+.workTotal .strong {
+  font-size: 16px;
+}
+
+/* S58 advisory mirror text (backend 422 authoritative) */
+.advisory {
+  font-size: 13px;
+  color: var(--color-error);
+  margin: 0;
+}
+
+/* ── Step-2 allocation rows ── */
+.formTight {
+  display: flex;
+  flex-direction: column;
+  margin-top: var(--space-4);
+}
+
+.allocRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: var(--space-2) 0;
+  border-bottom: var(--border-width) solid var(--color-border);
+}
+
+.allocRow:first-child {
+  border-top: var(--border-width) solid var(--color-border);
+}
+
+.allocName {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  font-size: 14px;
+  font-weight: var(--font-weight-medium);
+}
+
+.allocField {
+  width: 76px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.unit {
+  color: var(--color-text-secondary);
+  font-size: 14px;
+}
+
+.textLink {
+  appearance: none;
+  background: none;
+  border: none;
+  color: var(--color-link);
+  font-family: var(--font-family);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+  text-align: left;
+}
+
+.textLink:hover {
+  color: var(--color-primary);
+}
+
+.textLink:focus-visible {
+  outline: var(--focus-outline);
+  outline-offset: var(--focus-outline-offset);
+}
+
+/* ── Resterende at fordele indicator ── */
+.remaining {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 14px;
+  padding: 10px var(--space-3);
+  border: var(--border-width) solid var(--color-border);
+  margin-top: var(--space-3);
+}
+
+/* Status tints: token bg + token border (the handoff's mid-tint border literals
+   are substituted with the status tokens — R15 token-only discipline). */
+.remainingOk {
+  background: var(--color-success-light);
+  border-color: var(--color-success);
+}
+
+.remainingLeft {
+  background: var(--color-warning-light);
+  border-color: var(--color-warning);
+}
+
+.remainingOver {
+  background: var(--color-error-light);
+  border-color: var(--color-error);
+}
+
+.strong {
+  color: var(--color-text);
+  font-weight: var(--font-weight-semibold);
+}
+
+/* ── Footer ── */
+.foot {
+  padding: 14px var(--space-6);
+  border-top: var(--border-width) solid var(--color-border);
+  display: flex;
+  justify-content: flex-end;
+  background: var(--color-white);
+}

@@ -934,6 +934,13 @@ CREATE TABLE IF NOT EXISTS user_project_selections (
     employee_id     TEXT        NOT NULL,
     project_id      UUID        NOT NULL REFERENCES projects(project_id),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- S72 (TASK-7200, R4): per-user Skema row order. Inline here for greenfield;
+    -- legacy DBs gain the column via the guarded 's72-skema-row-preferences-schema'
+    -- block near EOF, which also backfills existing rows from the matching
+    -- projects.sort_order (duplicates expected — readers tiebreak
+    -- ORDER BY sort_order, project_code per SPRINT-72 R4). Placed last so the
+    -- greenfield column order matches what the legacy ALTER produces.
+    sort_order      INT         NOT NULL DEFAULT 0,
     PRIMARY KEY (employee_id, project_id)
 );
 CREATE INDEX IF NOT EXISTS idx_user_project_sel_employee ON user_project_selections(employee_id);
@@ -3498,3 +3505,102 @@ BEGIN
     ON CONFLICT (time_type, ok_version, agreement_code, position, effective_from) DO NOTHING;
 END
 $$;
+
+-- =========================================================================
+-- SPRINT 72 / TASK-7200 — Skema-redesign per-user row preferences (R4).
+--
+-- Three schema units:
+--   (1) user_skema_preferences — the R4 configured-state CONTAINER. A row here
+--       means the employee has explicitly configured their Skema rows; from
+--       then on user_project_selections / user_absence_selections are
+--       AUTHORITATIVE EVEN WHEN EMPTY. No container row → today's fallback
+--       (all org projects / all filtered absence types) stays in effect.
+--       Brand-new table, so the top-level CREATE TABLE IF NOT EXISTS is
+--       legacy-safe by construction (the S69 settlement_payroll_inbox / S71
+--       termination_payout_requests precedent).
+--   (2) user_project_selections.sort_order — per-user row order for the
+--       project rows. Baked inline into the base CREATE above (SPRINT 9
+--       section) for greenfield; the guarded DO block below upgrades a
+--       pre-S72 database and one-shot-backfills legacy rows from the matching
+--       projects.sort_order so a pre-S72 employee's rows keep their familiar
+--       org order on first render. Duplicate values are EXPECTED and fine —
+--       readers order deterministically with ORDER BY sort_order,
+--       project_code (R4); the modal's reorder writes a dense reindex.
+--   (3) user_absence_selections — the per-user absence-row analog (visible
+--       type + order). Same brand-new-table reasoning as (1). absence_type is
+--       the TEXT code used across the system (the absence_type_visibility
+--       convention) — deliberately NOT FK-bound: the absence-type catalog is
+--       config/eligibility-derived, not a table. Stale selections never
+--       resurrect org-hidden/ineligible types — VISIBLE = catalog ∩
+--       selections is computed server-side (R4).
+--
+-- These are VIEW preferences, not domain state (R4): plain un-evented rows
+-- per the ProjectRepository selection precedent — no event family, no audit
+-- projection, no ADR-019 version column.
+--
+-- No supporting indexes beyond the PKs: every read path is keyed by
+-- employee_id, which is user_skema_preferences' whole PK and leads
+-- user_absence_selections' composite PK; user_project_selections already
+-- carries idx_user_project_sel_employee.
+--
+-- The S72-ROW-PREFERENCES-SEGMENT markers below are extracted VERBATIM by
+-- SkemaRowPreferencesLegacyMigrationTests (the S71 Slice3bLegacyMigrationTests
+-- harness pattern: the test runs this exact segment against a reconstructed
+-- pre-S72 schema, twice) — keep the marker lines intact and keep all S72 DDL
+-- between them.
+-- =========================================================================
+-- S72-ROW-PREFERENCES-SEGMENT-BEGIN
+
+-- user_skema_preferences — the R4 configured-state container. One row per
+-- employee, created the first time the employee saves row preferences;
+-- initialized_at records when the configured state began.
+CREATE TABLE IF NOT EXISTS user_skema_preferences (
+    employee_id     TEXT        PRIMARY KEY REFERENCES users(user_id),
+    initialized_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- user_absence_selections — per-user visible absence rows + order. The
+-- composite PK (employee_id, absence_type) is also the read path (the GET
+-- reads by employee_id, the leading PK column) — no further index.
+CREATE TABLE IF NOT EXISTS user_absence_selections (
+    employee_id     TEXT        NOT NULL REFERENCES users(user_id),
+    absence_type    TEXT        NOT NULL,
+    sort_order      INT         NOT NULL DEFAULT 0,
+    PRIMARY KEY (employee_id, absence_type)
+);
+
+-- schema_migrations-guarded legacy upgrade block (the s71-slice3b /
+-- s70-employment-end-date guard pattern, 3-path idempotent): on a greenfield
+-- DB this block runs once — the ADD COLUMN no-ops against the inline column
+-- and the backfill touches zero rows (user_project_selections has no seed
+-- rows); on a legacy DB it lands the column + the one-shot backfill; a re-run
+-- is a ledger-guarded no-op, so the backfill can never clobber orderings the
+-- employee has since chosen in the modal.
+DO $$
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s72-skema-row-preferences-schema', 'Skema redesign (SPRINT-72 TASK-7200, R4): user_skema_preferences configured-state container (employee_id PK -> users(user_id), initialized_at) + user_project_selections.sort_order INT NOT NULL DEFAULT 0 (per-user row order; legacy rows one-shot-backfilled from the matching projects.sort_order — duplicates expected, readers tiebreak ORDER BY sort_order, project_code) + user_absence_selections (employee_id -> users(user_id), absence_type, sort_order; PK (employee_id, absence_type)). View preferences, not domain state: plain un-evented rows per the ProjectRepository selection precedent (no event family, no audit projection, no ADR-019 version). The two new tables are created by the top-level CREATE TABLE IF NOT EXISTS (legacy-safe by construction); this block carries the EXISTING-table ALTER + the one-shot backfill for pre-S72 databases.')
+    ON CONFLICT (migration_id) DO NOTHING;
+
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+
+    -- Additive defaulted column — every existing reader/writer is unaffected
+    -- (the TASK-7200 caller census: the explicit-column INSERT in
+    -- ProjectRepository.AddSelectionAsync takes the DEFAULT; the SELECT/JOIN/
+    -- DELETE sites never reference the new column).
+    ALTER TABLE user_project_selections
+    ADD COLUMN IF NOT EXISTS sort_order INT NOT NULL DEFAULT 0;
+
+    -- One-shot legacy backfill: seed each selection's per-user order from the
+    -- org-level projects.sort_order. Duplicates are expected (selected
+    -- projects may share an org sort_order) — reads tiebreak deterministically
+    -- per R4. Ledger-guarded: runs exactly once, never on re-apply.
+    UPDATE user_project_selections ups
+       SET sort_order = p.sort_order
+      FROM projects p
+     WHERE p.project_id = ups.project_id;
+END
+$$;
+-- S72-ROW-PREFERENCES-SEGMENT-END
