@@ -8,6 +8,31 @@ export interface QuotaError {
   requested: number
 }
 
+/**
+ * S73 R4 — the save-month outcome, discriminated so the page's `fireCellSave`
+ * can split the rejected-save policy: a `rejected` (HTTP 422) delta REVERTS the
+ * affected cells to server truth (with the overlap guard) and counts RESOLVED
+ * for the flush; every `failed` (400/401/403/404/409/5xx/network) keeps the
+ * local edits + the B2 re-queue/retry posture (401/403 are credential-shaped —
+ * a mid-edit session expiry never discards typed cells).
+ */
+export type SaveMonthResult =
+  | { status: 'ok' }
+  | { status: 'rejected'; httpStatus: number }
+  | { status: 'failed'; httpStatus: number; error: string }
+
+/**
+ * S73 R4 — the typed body of an `absence_full_day_only` 422 (TASK-7301's served
+ * shape) and the `absence_type_not_eligible` family. Surfaced as a Danish alert.
+ */
+export interface AbsenceRuleError {
+  error: 'absence_full_day_only' | 'absence_type_not_eligible'
+  absenceType: string
+  date?: string
+  requiredHours?: number
+  message?: string
+}
+
 /** 422 from employee-approve / submit-and-approve — discriminated union. */
 export interface CoverageValidationError {
   kind: 'coverage'
@@ -45,14 +70,20 @@ interface UseSkemaResult {
   loading: boolean
   error: string | null
   quotaError: QuotaError | null
+  /** S73 R4 — the typed `absence_full_day_only` / `absence_type_not_eligible`
+      422 body, surfaced as a Danish alert; null when none. */
+  absenceRuleError: AbsenceRuleError | null
   approvalValidationError: ApprovalValidationError | null
   clearQuotaError: () => void
+  clearAbsenceRuleError: () => void
   clearApprovalValidationError: () => void
   refetch: () => void
+  /** S73 R4 — returns the discriminated outcome so the page can split revert (422)
+      vs retry (other non-2xx) inside `fireCellSave`. */
   saveMonth: (
     cells: { rowKey: string; date: string; hours: number | null }[],
     workTime?: WorkTimeDay[],
-  ) => Promise<boolean>
+  ) => Promise<SaveMonthResult>
   employeeApprove: (periodId: string) => Promise<void>
   submitAndApprove: (orgId: string, agreementCode: string) => Promise<void>
   reopenPeriod: (periodId: string, reason?: string) => Promise<void>
@@ -84,6 +115,7 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [quotaError, setQuotaError] = useState<QuotaError | null>(null)
+  const [absenceRuleError, setAbsenceRuleError] = useState<AbsenceRuleError | null>(null)
   const [approvalValidationError, setApprovalValidationError] = useState<ApprovalValidationError | null>(null)
 
   const fetchData = useCallback(async () => {
@@ -105,6 +137,7 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
   }, [fetchData])
 
   const clearQuotaError = useCallback(() => setQuotaError(null), [])
+  const clearAbsenceRuleError = useCallback(() => setAbsenceRuleError(null), [])
   const clearApprovalValidationError = useCallback(() => setApprovalValidationError(null), [])
 
   const absenceTypesRef = useRef<Set<string>>(new Set())
@@ -116,8 +149,9 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
     async (
       cells: { rowKey: string; date: string; hours: number | null }[],
       workTime?: WorkTimeDay[],
-    ): Promise<boolean> => {
+    ): Promise<SaveMonthResult> => {
       setQuotaError(null)
+      setAbsenceRuleError(null)
       const absenceTypeSet = absenceTypesRef.current
 
       const entries = cells
@@ -135,26 +169,42 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
         absences: absences.length > 0 ? absences : null,
         workTime: workTime && workTime.length > 0 ? workTime : null,
       })
-      if (!result.ok) {
-        if (result.status === 422) {
-          try {
-            const body = JSON.parse(result.error)
-            if (body.absenceType && body.remaining !== undefined && body.requested !== undefined) {
-              setQuotaError({
-                absenceType: body.absenceType,
-                remaining: body.remaining,
-                requested: body.requested,
-              })
-              return false
-            }
-          } catch {
-            // Not valid JSON, fall through to generic error
-          }
-        }
-        setError(result.error)
-        return false
+      if (result.ok) {
+        return { status: 'ok' }
       }
-      return true
+      // S73 R4 — a 422 is a server REJECTION (revert-and-resolve), discriminated
+      // from every other non-2xx (retry). The 422 body carries one of three
+      // shapes; parse each into its alert state. A non-JSON / unrecognised 422
+      // still counts as a rejection (the cell reverts) but surfaces the raw text.
+      if (result.status === 422) {
+        try {
+          const body = JSON.parse(result.error)
+          if (body.absenceType && body.remaining !== undefined && body.requested !== undefined) {
+            setQuotaError({
+              absenceType: body.absenceType,
+              remaining: body.remaining,
+              requested: body.requested,
+            })
+          } else if (body.error === 'absence_full_day_only' || body.error === 'absence_type_not_eligible') {
+            setAbsenceRuleError({
+              error: body.error,
+              absenceType: body.absenceType,
+              date: body.date,
+              requiredHours: body.requiredHours,
+              message: body.message,
+            })
+          } else {
+            setError(result.error)
+          }
+        } catch {
+          // Non-JSON 422 — still a rejection; surface the raw text.
+          setError(result.error)
+        }
+        return { status: 'rejected', httpStatus: 422 }
+      }
+      // Everything else (400/401/403/404/409/5xx/network) — keep local edits, retry.
+      setError(result.error)
+      return { status: 'failed', httpStatus: result.status, error: result.error }
     },
     [employeeId, year, month]
   )
@@ -238,7 +288,7 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
     [fetchData]
   )
 
-  return { data, loading, error, quotaError, approvalValidationError, clearQuotaError, clearApprovalValidationError, refetch: fetchData, saveMonth, employeeApprove, submitAndApprove, reopenPeriod }
+  return { data, loading, error, quotaError, absenceRuleError, approvalValidationError, clearQuotaError, clearAbsenceRuleError, clearApprovalValidationError, refetch: fetchData, saveMonth, employeeApprove, submitAndApprove, reopenPeriod }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -511,13 +561,23 @@ export function deriveSkemaRowBasis(
 
   const absenceRows: SkemaRow[] = []
   const absenceKeys = new Set<string>()
-  const addAbsence = (key: string, label: string) => {
+  // S73 / TASK-7302 — the served full-day-only flag threads onto the absence row
+  // (R3/R5): true → an entry SNAPS to the day's consumption basis + the "hele
+  // dage" note renders. Sourced from the served absence-type DTOs (catalogs first,
+  // then the visible-selection field). dedup keeps the FIRST-seen flag.
+  const addAbsence = (key: string, label: string, fullDayOnly?: boolean) => {
     if (absenceKeys.has(key)) return
     absenceKeys.add(key)
-    absenceRows.push({ type: 'absence', key, label })
+    // Only attach the flag when TRUE — the emitted row shape stays byte-identical
+    // to the pre-S73 contract for ordinary types (the S72 deriveSkemaRowBasis
+    // pins toEqual exact objects). `undefined` reads falsy at the snap/note sites.
+    absenceRows.push(
+      fullDayOnly ? { type: 'absence', key, label, fullDayOnly: true } : { type: 'absence', key, label },
+    )
   }
-  for (const a of data.catalogs?.absenceTypes ?? []) addAbsence(a.type, a.label)
-  for (const a of data.absenceTypes ?? []) addAbsence(a.type, a.label)
+  for (const a of data.catalogs?.absenceTypes ?? []) addAbsence(a.type, a.label, a.fullDayOnly)
+  for (const a of data.absenceTypes ?? []) addAbsence(a.type, a.label, a.fullDayOnly)
+  // Served-history rows absent from every catalog: no DTO carries the flag → false.
   for (const a of data.absences ?? []) addAbsence(a.absenceType, a.absenceType)
 
   return { rows: [...projectRows, ...absenceRows], projectKeys, absenceKeys }

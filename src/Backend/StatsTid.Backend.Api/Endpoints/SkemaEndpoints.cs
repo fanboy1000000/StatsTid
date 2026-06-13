@@ -1,5 +1,6 @@
 using System.Net.Http.Json;
 using System.Text.Json;
+using Npgsql;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
@@ -119,6 +120,27 @@ public static class SkemaEndpoints
     /// <summary>The "MONTHLY_ACCRUAL" accrual_model string (ADR-030).</summary>
     private const string MonthlyAccrualModel = "MONTHLY_ACCRUAL";
 
+    // ── S73 / TASK-7301 — the full-day-only basis projection (R2 + R3) ──
+
+    /// <summary>
+    /// S73 / TASK-7301 — the ONE 2-decimal projection of the ADR-032 consumption basis
+    /// (<see cref="StatsTid.Backend.Api.Services.ConsumptionCalculator"/> <c>fullDayHours</c>),
+    /// shared by BOTH the full-day-only guard's <c>requiredHours</c> (pre-tx + in-lock sites)
+    /// and the month GET's served <c>consumptionBasis</c> array — the SPRINT-73 R3
+    /// served==guard IDENTITY holds by construction because both surfaces route the same
+    /// calculator value through this single rounding site. 2-dec AwayFromZero matches the
+    /// ADR-032 D1 rounding convention (<c>ConsumptionCalculator.ToFeriedage</c>); the weekday
+    /// norm path is already 2-dec (DailyNormCalculator), so rounding only materially touches
+    /// the academic 7.4 × fraction fallback. Null (no dated profile) passes through — the
+    /// guard skips it (the anchor-422 family owns it) and the GET serves null per R3.
+    /// </summary>
+    private static decimal? RoundBasis(decimal? fullDayHours)
+        // S73 Step-7a B1 — ONE rounding convention shared with the consumption divisor: delegate
+        // to the calculator's RoundBasisTwoDp so the guard's requiredHours, the served
+        // consumptionBasis, and the full-day-only consumption divisor are mutually consistent.
+        // (Null / non-positive pass through; positive ⇒ 2-dec AwayFromZero, ADR-032 D1.)
+        => StatsTid.Backend.Api.Services.ConsumptionCalculator.RoundBasisTwoDp(fullDayHours);
+
     // S61 / TASK-6101 — the Backend-local EarnedToDate/MonthIndex mirror was removed. The pure
     // earned-to-date math is now the single shared copy in StatsTid.SharedKernel.Calendar.AccrualMath
     // (already imported via the `using StatsTid.SharedKernel.Calendar;` above). PAT-005 is unaffected:
@@ -162,6 +184,10 @@ public static class SkemaEndpoints
             // prior inline IEmploymentProfileResolver + ConfigResolutionService loop now lives
             // in that service; the behavior is preserved byte-for-byte.
             StatsTid.Backend.Api.Services.DailyNormCalculator dailyNormCalculator,
+            // S73 / TASK-7301 (R3) — the served per-day consumptionBasis array is derived from
+            // THE SAME ConsumptionCalculator path the full-day-only save guard uses (the
+            // served==guard identity; never a second copy of the ADR-032 formula).
+            StatsTid.Backend.Api.Services.ConsumptionCalculator consumptionCalculator,
             OrgScopeValidator scopeValidator,
             HttpContext context,
             CancellationToken ct) =>
@@ -239,8 +265,12 @@ public static class SkemaEndpoints
             var absenceCatalog = await ComputeAbsenceCatalogAsync(
                 employeeId, agreementCode, user, monthEnd,
                 visibilityRepo, eligibilityRepo, entitlementConfigRepo, ct);
+            // S73 / TASK-7301 (R3): every absence-type DTO surface carries fullDayOnly — this
+            // legacy field is the same projection as catalogs.absenceTypes below (one
+            // computation, two projections; keeping them identical prevents the S72-B1
+            // cross-surface-drift class).
             var absenceTypes = absenceCatalog
-                .Select(c => new { type = c.Type, label = c.Label })
+                .Select(c => new { type = c.Type, label = c.Label, fullDayOnly = c.FullDayOnly })
                 .ToList();
 
             // S27 TASK-2706 GET migration: read time entries + absences from the
@@ -343,6 +373,13 @@ public static class SkemaEndpoints
                     .ToList()
                 : absenceCatalog.Select(c => c.Type).ToList();
 
+            // S73 / TASK-7301 (R3): the visible rows carry the SAME fullDayOnly the catalog
+            // serves — one resolution (inside ComputeAbsenceCatalogAsync), N projections.
+            // Every visible type is in the catalog by construction (the ∩ above), so the
+            // lookup always hits; the false fallback is defensive only.
+            var fullDayOnlyByType = absenceCatalog.ToDictionary(
+                c => c.Type, c => c.FullDayOnly, StringComparer.Ordinal);
+
             var rowPreferences = new
             {
                 configured = preferencesConfigured,
@@ -360,6 +397,7 @@ public static class SkemaEndpoints
                     {
                         type = t,
                         label = AbsenceTypeLabels.TryGetValue(t, out var l) ? l : t,
+                        fullDayOnly = fullDayOnlyByType.TryGetValue(t, out var fdo) && fdo,
                         sortOrder = i
                     })
                     .ToList()
@@ -379,9 +417,10 @@ public static class SkemaEndpoints
                     })
                     .ToList(),
                 // The SAME filtered chain (and order) the existing `absenceTypes` field
-                // serves — one computation, two projections.
+                // serves — one computation, two projections. S73 / TASK-7301 (R3): the
+                // catalog surface carries fullDayOnly.
                 absenceTypes = absenceCatalog
-                    .Select(c => new { type = c.Type, label = c.Label })
+                    .Select(c => new { type = c.Type, label = c.Label, fullDayOnly = c.FullDayOnly })
                     .ToList()
             };
 
@@ -414,6 +453,34 @@ public static class SkemaEndpoints
             // PURE READ (P2): dated stores only, no rule-engine call.
             var fullDayNormAtMonthEnd = await dailyNormCalculator.ComputeWeekdayNormAtAsync(
                 employeeId, monthEnd, user.PrimaryOrgId, ct);
+
+            // ── S73 / TASK-7301 — the R3 per-day dated consumptionBasis array ──
+            // One entry per day of the viewed month: { date, hours|null } where hours is the
+            // ADR-032 consumption basis from THE SAME ConsumptionCalculator path the full-day
+            // save guard demands (weekday norm / weekend 0 / academic 7.4 × fraction fallback /
+            // null where no dated profile covers the day), rounded through the SHARED
+            // RoundBasis site — the served value IS the guard's requiredHours (the R3
+            // served==guard identity). The FE snap reads consumptionBasis[date]; it never does
+            // client norm math. Neither dailyNorm (display basis, null for academics) nor the
+            // fullDayNormAtMonthEnd scalar is overloaded for this (R3). Fail-soft like the R10
+            // scalar above: the S34 data-integrity fail-loud (profile row without a covering
+            // agreement row) must never 500 a read — that day serves null and the save-path
+            // guards keep fail-louding.
+            var consumptionBasis = new List<object>(daysInMonth);
+            for (var basisDay = monthStart; basisDay <= monthEnd; basisDay = basisDay.AddDays(1))
+            {
+                decimal? basis;
+                try
+                {
+                    basis = await consumptionCalculator.FullDayHoursAsync(
+                        employeeId, basisDay, user.PrimaryOrgId, ct);
+                }
+                catch (EmployeeProfileNotFoundException)
+                {
+                    basis = null;
+                }
+                consumptionBasis.Add(new { date = basisDay, hours = RoundBasis(basis) });
+            }
 
             // Get approval period for this month
             var period = await approvalRepo.GetByEmployeeAndPeriodAsync(employeeId, monthStart, monthEnd, ct);
@@ -458,7 +525,9 @@ public static class SkemaEndpoints
                 rowPreferences,
                 catalogs,
                 boundaryWorkTime,
-                fullDayNormAtMonthEnd
+                fullDayNormAtMonthEnd,
+                // ── S73 / TASK-7301 additive field (SPRINT-73 R3) ──
+                consumptionBasis
             });
         }).RequireAuthorization("EmployeeOrAbove");
 
@@ -476,7 +545,6 @@ public static class SkemaEndpoints
             // pre-transaction absence eligibility gate.
             EmployeeEntitlementEligibilityRepository eligibilityRepo,
             IHttpClientFactory httpClientFactory,
-            IConfiguration configuration,
             // S27 TASK-2706 atomic POST: state-change site moved off
             // IEventStore.AppendAsync and onto IOutboxEnqueue.EnqueueAndReturnIdAsync
             // (ADR-018 D3). The outer transaction wraps every event emit + the
@@ -692,14 +760,22 @@ public static class SkemaEndpoints
                         if (fullDayHours.Value > 0m)
                         {
                             // Working day: total hours (all types) capped at the day's real norm.
+                            // S73 / TASK-7301 (H1) — cap against the SAME RoundBasis-rounded basis
+                            // (ADR-032 D1 AwayFromZero 2-dec) the full-day rule + served
+                            // consumptionBasis use. The raw norm (e.g. academic 7.4 × 0.335 =
+                            // 2.4790) under-rounds the bookable full day (RoundBasis ⇒ 2.48),
+                            // making the exact full omsorgsdag unbookable. The cap was the
+                            // D1-inconsistent side; reuse the existing RoundBasis helper (one
+                            // rounding site, no second convention).
+                            var cappedHours = RoundBasis(fullDayHours)!.Value;
                             var totalHours = dayGroup.Sum(a => a.Hours);
-                            if (totalHours > fullDayHours.Value)
+                            if (totalHours > cappedHours)
                                 return Results.Json(new
                                 {
                                     error = "Total absence hours exceed norm day",
                                     date,
                                     totalHours,
-                                    maxHours = fullDayHours.Value,
+                                    maxHours = cappedHours,
                                 }, statusCode: 422);
                         }
                         else
@@ -732,6 +808,73 @@ public static class SkemaEndpoints
                     }
                 }
 
+                // ── S73 / TASK-7301 — the R2 FULL-DAY-ONLY guard (pre-tx advisory mirror) ──
+                // Owner ruling D-A (2026-06-13): CARE_DAY + SENIOR_DAY are whole days. For an
+                // absence row whose entitlement type carries entitlement_configs.full_day_only
+                // (read DATED per ROW at the absence date via the SENIOR_DAY GetByTypeAtAsync
+                // anchor precedent — NOT the quota read's year-start anchor), the row's hours
+                // must equal the day's ADR-032 consumption basis EXACTLY (2-dec via the shared
+                // RoundBasis site; the SAME ConsumptionCalculator path as the D3 cap above,
+                // academic 7.4 × fraction fallback included). Otherwise: typed 422
+                // `absence_full_day_only` carrying requiredHours (== the month GET's served
+                // consumptionBasis value for the day — the R3 identity).
+                //
+                // Placement (deliberate): AFTER the D3 norm cap, so a full day PLUS any other
+                // same-day absence keeps surfacing the total-cap 422 (the D-A ratified
+                // arithmetic consequence: a full omsorgsdag/seniordag is the day's ONLY
+                // absence; same-day WORK hours remain legal — work entries are not absences
+                // and never enter this guard). Skips what the sibling guards own: a null basis
+                // (no dated profile) → the anchor-422 employment_profile_missing family below;
+                // a zero-norm (weekend) basis → the D3 non-working-day 422 above already
+                // rejected every entitlement row. Like its D3 sibling this pre-tx site is the
+                // cheap advisory mirror; the in-lock B3 re-check inside the save tx is the
+                // AUTHORITATIVE enforcement point (the S70 B1 in-lock re-evaluation lesson).
+                {
+                    var fullDayFlagCache = new Dictionary<(string EntitlementType, DateOnly Date), bool>();
+                    var fullDayBasisCache = new Dictionary<DateOnly, decimal?>();
+                    foreach (var absence in request.Absences)
+                    {
+                        if (GetEntitlementType(absence.AbsenceType) is not { } fdEntitlementType)
+                            continue; // non-entitlement rows are never full-day gated.
+
+                        if (!fullDayFlagCache.TryGetValue((fdEntitlementType, absence.Date), out var isFullDayOnly))
+                        {
+                            // S73 / TASK-7301 (H2) — resolve the OK version FROM the absence date
+                            // (OkVersionResolver), NOT the live user.OkVersion: an OK26-current
+                            // employee editing an OK24-dated absence must read the OK24 config row
+                            // (the same temporal anchor as the AbsenceRegistered.OkVersion stamp at
+                            // the emission site). The asOf date stays absence.Date.
+                            var fdConfig = await entitlementConfigRepo.GetByTypeAtAsync(
+                                fdEntitlementType, agreementCode,
+                                OkVersionResolver.ResolveVersion(absence.Date), absence.Date, ct);
+                            isFullDayOnly = fdConfig?.FullDayOnly ?? false;
+                            fullDayFlagCache[(fdEntitlementType, absence.Date)] = isFullDayOnly;
+                        }
+                        if (!isFullDayOnly)
+                            continue;
+
+                        if (!fullDayBasisCache.TryGetValue(absence.Date, out var basis))
+                        {
+                            basis = await consumptionCalculator.FullDayHoursAsync(
+                                employeeId, absence.Date, user.PrimaryOrgId, ct);
+                            fullDayBasisCache[absence.Date] = basis;
+                        }
+                        if (basis is null || basis.Value <= 0m)
+                            continue; // null → anchor-422 family; zero-norm → D3 weekend 422 above.
+
+                        var requiredHours = RoundBasis(basis)!.Value;
+                        if (absence.Hours != requiredHours)
+                            return Results.Json(new
+                            {
+                                error = "absence_full_day_only",
+                                absenceType = absence.AbsenceType,
+                                date = absence.Date,
+                                requiredHours,
+                                message = $"{AbsenceTypeLabels.GetValueOrDefault(absence.AbsenceType, absence.AbsenceType)} kan kun registreres som hel dag ({requiredHours} timer) den {absence.Date:dd-MM-yyyy}.",
+                            }, statusCode: 422);
+                    }
+                }
+
                 // ── S59 / TASK-5907 per-employee eligibility gate (pre-transaction, atomic) ──
                 // Authoritative reject-before-write check, alongside the duplicate/day-norm
                 // guards above. Reads are dated as-of EACH absence's own date — NOT wall-clock
@@ -743,8 +886,10 @@ public static class SkemaEndpoints
                     // SENIOR_DAY age gate is decided BY the rule engine (PAT-005 / ADR-002):
                     // the Backend only derives the integer age and passes MinAge +
                     // EmployeeAgeAsOfAbsenceDate; DOB never crosses the rule-engine boundary.
-                    var seniorRuleEngineUrl = configuration["ServiceUrls:RuleEngine"] ?? "http://rule-engine:8080";
-                    var seniorHttpClient = httpClientFactory.CreateClient();
+                    // S73 / TASK-7300 (R1): the NAMED rule-engine client — BaseAddress +
+                    // Authorization/X-Correlation-Id forwarding are wired centrally in
+                    // Program.cs (RuleEngineClient / RuleEngineHeaderForwardingHandler).
+                    var seniorHttpClient = httpClientFactory.CreateClient(Http.RuleEngineClient.Name);
                     var seniorJsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
                     foreach (var absence in request.Absences)
@@ -807,7 +952,7 @@ public static class SkemaEndpoints
                                 };
 
                                 var seniorResponse = await seniorHttpClient.PostAsJsonAsync(
-                                    $"{seniorRuleEngineUrl}/api/rules/validate-entitlement", seniorRequest, seniorJsonOptions, ct);
+                                    "/api/rules/validate-entitlement", seniorRequest, seniorJsonOptions, ct);
                                 if (!seniorResponse.IsSuccessStatusCode)
                                     return Results.Json(new { error = "Entitlement validation service unavailable" }, statusCode: 503);
 
@@ -842,6 +987,44 @@ public static class SkemaEndpoints
             // first-INSERT with the annual entitlement (its invariant meaning, ADR-021 D6 / P3).
             var entitlementData = new Dictionary<string, (decimal RequestedDays, int EntitlementYear, decimal GuardCap, decimal SeedQuota)>(StringComparer.Ordinal);
 
+            // S73 / TASK-7301 Step-7a B1 — resolve which absence rows are FULL-DAY-ONLY
+            // (CARE_DAY / SENIOR_DAY under SPRINT-73 R2), so their consumption divides by the
+            // SAME 2-dec rounded basis the full-day guard requires (an exact full day → 1.0
+            // feriedage, never 1.0004). Reads the dated entitlement config per (type, date),
+            // OK version resolved FROM the absence date (the H2 anchor) — the SAME predicate the
+            // full-day guard evaluates. The (conn, tx) overload reads under the in-lock tx so a
+            // config supersession that committed before the lock is visible to the authoritative
+            // valuation; the pre-lock provisional call passes null,null (advisory only). A null
+            // dated config (or false flag) ⇒ NOT full-day-only ⇒ raw-norm division (unchanged).
+            async Task<IReadOnlySet<int>> ResolveFullDayOnlyIndicesAsync(
+                NpgsqlConnection? conn, NpgsqlTransaction? tx)
+            {
+                var indices = new HashSet<int>();
+                if (request.Absences is null)
+                    return indices;
+                var flagCache = new Dictionary<(string EntitlementType, DateOnly Date), bool>();
+                for (var i = 0; i < request.Absences.Length; i++)
+                {
+                    var absence = request.Absences[i];
+                    if (GetEntitlementType(absence.AbsenceType) is not { } entitlementType)
+                        continue; // non-entitlement rows are never full-day gated.
+                    if (!flagCache.TryGetValue((entitlementType, absence.Date), out var isFullDayOnly))
+                    {
+                        var version = OkVersionResolver.ResolveVersion(absence.Date);
+                        var cfg = conn is not null
+                            ? await entitlementConfigRepo.GetByTypeAtAsync(
+                                conn, tx!, entitlementType, agreementCode, version, absence.Date, ct)
+                            : await entitlementConfigRepo.GetByTypeAtAsync(
+                                entitlementType, agreementCode, version, absence.Date, ct);
+                        isFullDayOnly = cfg?.FullDayOnly ?? false;
+                        flagCache[(entitlementType, absence.Date)] = isFullDayOnly;
+                    }
+                    if (isFullDayOnly)
+                        indices.Add(i);
+                }
+                return indices;
+            }
+
             if (request.Absences is not null && request.Absences.Length > 0)
             {
                 // ── S66 / TASK-6603 — ADR-032 D2 PROVISIONAL per-row feriedage (pre-lock) ──
@@ -851,10 +1034,13 @@ public static class SkemaEndpoints
                 // never sit inside the lock — ADR-032 D2). A stale provisional advisory result is
                 // benign: the in-lock guard re-derives the AUTHORITATIVE values and re-enforces
                 // (the :910-area TOCTOU comment, extended below for the D2 two-phase contract).
+                // The full-day-only divisor consistency (B1) applies here too so the advisory
+                // requestedDays sees the same 1.0-per-full-day total the authoritative path will.
+                var provisionalFullDayOnly = await ResolveFullDayOnlyIndicesAsync(null, null);
                 var provisional = await consumptionCalculator.ComputeAsync(
                     employeeId,
                     request.Absences.Select(a => (a.Date, a.Hours)).ToList(),
-                    user.PrimaryOrgId, ct);
+                    user.PrimaryOrgId, ct, provisionalFullDayOnly);
 
                 var requestedByEntitlementType = new Dictionary<string, decimal>(StringComparer.Ordinal);
                 for (var i = 0; i < request.Absences.Length; i++)
@@ -883,8 +1069,9 @@ public static class SkemaEndpoints
                     requestedByEntitlementType[entitlementType] += rowFeriedage;
                 }
 
-                var ruleEngineUrl = configuration["ServiceUrls:RuleEngine"] ?? "http://rule-engine:8080";
-                var httpClient = httpClientFactory.CreateClient();
+                // S73 / TASK-7300 (R1): the NAMED rule-engine client (see the senior-gate site
+                // above) — bearer + correlation forwarding live in the central handler.
+                var httpClient = httpClientFactory.CreateClient(Http.RuleEngineClient.Name);
                 var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
                 foreach (var (entitlementType, totalRequestedDays) in requestedByEntitlementType)
@@ -1066,7 +1253,7 @@ public static class SkemaEndpoints
                     };
 
                     var response = await httpClient.PostAsJsonAsync(
-                        $"{ruleEngineUrl}/api/rules/validate-entitlement", validationRequest, jsonOptions, ct);
+                        "/api/rules/validate-entitlement", validationRequest, jsonOptions, ct);
 
                     if (!response.IsSuccessStatusCode)
                         return Results.Json(new { error = "Entitlement validation service unavailable" }, statusCode: 503);
@@ -1155,11 +1342,19 @@ public static class SkemaEndpoints
                     // rationale). These authoritative values feed BOTH AbsenceRegistered.Feriedage
                     // and the guard delta (the single-valuation identity: Σ event Feriedage ==
                     // guard delta, computed once here and reused).
+                    // S73 / TASK-7301 Step-7a B1 — resolve the full-day-only rows UNDER the lock
+                    // (in-tx dated config read) so the authoritative consumption divisor for those
+                    // rows is the SAME rounded basis the in-lock full-day guard requires: an exact
+                    // full day records EXACTLY 1.0 feriedage (Σ over two full days = 2.0, never
+                    // 2.0008 that would spuriously breach the 2-day CARE_DAY quota).
+                    var authoritativeFullDayOnly = request.Absences is { Length: > 0 }
+                        ? await ResolveFullDayOnlyIndicesAsync(conn, tx)
+                        : (IReadOnlySet<int>)new HashSet<int>();
                     var authoritativeConsumption = request.Absences is { Length: > 0 }
                         ? await consumptionCalculator.ComputeAsync(
                             employeeId,
                             request.Absences.Select(a => (a.Date, a.Hours)).ToList(),
-                            user.PrimaryOrgId, ct)
+                            user.PrimaryOrgId, ct, authoritativeFullDayOnly)
                         : (IReadOnlyList<StatsTid.Backend.Api.Services.ConsumptionCalculator.Consumption>)
                             Array.Empty<StatsTid.Backend.Api.Services.ConsumptionCalculator.Consumption>();
 
@@ -1218,14 +1413,18 @@ public static class SkemaEndpoints
 
                             if (fullDayHours.Value > 0m)
                             {
+                                // S73 / TASK-7301 (H1) — in-lock mirror of the pre-tx D3 cap:
+                                // compare against the SAME RoundBasis-rounded basis (ADR-032 D1)
+                                // the full-day rule uses, so the exact rounded full day is bookable.
+                                var cappedHours = RoundBasis(fullDayHours)!.Value;
                                 var totalHours = dayGroup.Sum(r => r.Hours);
-                                if (totalHours > fullDayHours.Value)
+                                if (totalHours > cappedHours)
                                     throw new SkemaConsumptionValidationException(new
                                     {
                                         error = "Total absence hours exceed norm day",
                                         date,
                                         totalHours,
-                                        maxHours = fullDayHours.Value,
+                                        maxHours = cappedHours,
                                     });
                             }
                             else
@@ -1251,6 +1450,51 @@ public static class SkemaEndpoints
                                         date,
                                         totalHours = nonEntitlementHours,
                                         maxHours = StandardDayHours,
+                                    });
+                            }
+                        }
+
+                        // B3 (S73 / TASK-7301) — the R2 FULL-DAY-ONLY re-check. The IN-LOCK
+                        // site is REQUIRED (the S70 B1 lesson: ANY enumeration-time predicate
+                        // must be re-evaluated under the lock). Mirrors the pre-tx guard
+                        // (same skip set, same 422 body) reading the AUTHORITATIVE in-lock
+                        // fullDayHours re-derived above, so a racing profile-PUT that changed
+                        // the day's basis between the pre-tx mirror and this lock is re-enforced
+                        // here (the racing-save loser gets the same clean 422, never an
+                        // exact-by-stale-basis persist). Null basis is owned by B1 (fail-closed);
+                        // zero-norm by B2's weekend branch.
+                        //
+                        // S73 Step-7a cycle-2 B1 (TOCTOU) — the full-day predicate is read EXACTLY
+                        // ONCE in-lock: `authoritativeFullDayOnly` was resolved above (line ~1350)
+                        // by ResolveFullDayOnlyIndicesAsync(conn, tx) AND fed to the in-lock
+                        // ComputeAsync that produced `authoritativeConsumption`. The guard REUSES
+                        // that same index set rather than querying entitlement_configs a second
+                        // time. entitlement_configs is GLOBAL (not under the per-employee D4
+                        // advisory lock); under READ COMMITTED a concurrent GlobalAdmin config
+                        // creation between two independent reads could otherwise make the divisor
+                        // (raw) and the guard (fullDayOnly=true) disagree — re-introducing the
+                        // 1.0004 divergence in that race. ONE snapshot ⇒ divisor and guard agree
+                        // by construction: a row is full-day-divided IFF it is full-day-guarded.
+                        {
+                            for (var i = 0; i < request.Absences.Length; i++)
+                            {
+                                var absence = request.Absences[i];
+                                if (!authoritativeFullDayOnly.Contains(i))
+                                    continue; // non-entitlement OR not full-day-only — same snapshot as the divisor.
+
+                                var basis = authoritativeConsumption[i].FullDayHours;
+                                if (basis is null || basis.Value <= 0m)
+                                    continue; // null → B1 (fail-closed); zero-norm → B2's weekend branch.
+
+                                var requiredHours = RoundBasis(basis)!.Value;
+                                if (absence.Hours != requiredHours)
+                                    throw new SkemaConsumptionValidationException(new
+                                    {
+                                        error = "absence_full_day_only",
+                                        absenceType = absence.AbsenceType,
+                                        date = absence.Date,
+                                        requiredHours,
+                                        message = $"{AbsenceTypeLabels.GetValueOrDefault(absence.AbsenceType, absence.AbsenceType)} kan kun registreres som hel dag ({requiredHours} timer) den {absence.Date:dd-MM-yyyy}.",
                                     });
                             }
                         }
@@ -1605,6 +1849,11 @@ public static class SkemaEndpoints
             // The new effective rowPreferences (same shape as the month GET's field). Every
             // submitted row was validated against the catalog above, so visible == the
             // submitted set in dense order — no re-read needed.
+            // S73 / TASK-7301 (R3): the response keeps the month GET's absence-type DTO shape —
+            // fullDayOnly included (today-anchored, the same catalog computation) — so the FE's
+            // post-save replacement state never drops the flag (the S72-B1 drift class).
+            var prefFullDayOnlyByType = absenceCatalog.ToDictionary(
+                c => c.Type, c => c.FullDayOnly, StringComparer.Ordinal);
             return Results.Ok(new
             {
                 configured = true,
@@ -1626,6 +1875,7 @@ public static class SkemaEndpoints
                     {
                         type = a.AbsenceType,
                         label = AbsenceTypeLabels.TryGetValue(a.AbsenceType, out var l) ? l : a.AbsenceType,
+                        fullDayOnly = prefFullDayOnlyByType.TryGetValue(a.AbsenceType, out var fdo) && fdo,
                         sortOrder = a.SortOrder
                     })
                     .ToList()
@@ -1666,8 +1916,14 @@ public static class SkemaEndpoints
 
     // ── S72 / TASK-7201 — the addable absence-type CATALOG (one shared chain) ──
 
-    /// <summary>One addable absence type: the type code + its Danish display label.</summary>
-    private sealed record AbsenceCatalogEntry(string Type, string Label);
+    /// <summary>
+    /// One addable absence type: the type code + its Danish display label.
+    /// S73 / TASK-7301 (R3): <paramref name="FullDayOnly"/> carries the dated
+    /// <c>entitlement_configs.full_day_only</c> flag resolved at the catalog anchor — served on
+    /// every absence-type DTO surface (catalog AND visible rows) so the FE renders the
+    /// "hele dage" notes and snaps entries to the served consumption basis.
+    /// </summary>
+    private sealed record AbsenceCatalogEntry(string Type, string Label, bool FullDayOnly);
 
     /// <summary>
     /// The ADDABLE absence-type catalog — the EXISTING filter chain extracted VERBATIM from
@@ -1724,14 +1980,50 @@ public static class SkemaEndpoints
 
         // Agreement → visibility → eligibility, in the established order.
         var agreementAbsenceTypes = GetAbsenceTypesForAgreement(agreementCode);
-        return agreementAbsenceTypes
+        var filteredTypes = agreementAbsenceTypes
             .Where(t => !hiddenTypes.Contains(t))
             .Where(t => childSickEligible
                 || !string.Equals(GetEntitlementType(t), "CHILD_SICK", StringComparison.Ordinal))
             .Where(t => seniorVisible || !string.Equals(t, "SENIOR_DAY", StringComparison.Ordinal))
-            .Select(t => new AbsenceCatalogEntry(
-                t, AbsenceTypeLabels.TryGetValue(t, out var l) ? l : t))
             .ToList();
+
+        // ── S73 / TASK-7301 (R3) — the served fullDayOnly flag, per entitlement type ──
+        // Resolved DATED at the SAME anchor as the rest of this catalog chain (month-end on
+        // the GET, today on the row-preferences PUT) — a DISPLAY affordance like the S59
+        // eligibility filter above; the POST save guard reads the flag per absence ROW date
+        // and stays authoritative (the established display/gate anchor split). One dated read
+        // per distinct entitlement type.
+        //
+        // S73 / TASK-7301 (H2) — the OK version is resolved FROM the anchor date
+        // (OkVersionResolver.ResolveVersion(anchor)), matching the convention the month GET's
+        // OTHER served dated fields use: dailyNorm + the consumptionBasis array resolve OK per
+        // day via OkVersionResolver inside DailyNormCalculator, NOT user.OkVersion. SENIOR_DAY
+        // flows through this same loop (it is NOT pre-seeded from the scope-guarded min_age
+        // read above, whose user.OkVersion anchor is pre-existing S59 behavior and out of this
+        // fix's scope) so every served fullDayOnly value shares this one OK-version convention.
+        var fullDayOnlyByEntitlementType = new Dictionary<string, bool>(StringComparer.Ordinal);
+
+        var catalog = new List<AbsenceCatalogEntry>(filteredTypes.Count);
+        foreach (var t in filteredTypes)
+        {
+            var fullDayOnly = false;
+            if (GetEntitlementType(t) is { } entitlementType)
+            {
+                if (!fullDayOnlyByEntitlementType.TryGetValue(entitlementType, out fullDayOnly))
+                {
+                    var datedConfig = await entitlementConfigRepo.GetByTypeAtAsync(
+                        entitlementType, agreementCode,
+                        OkVersionResolver.ResolveVersion(anchor), anchor, ct);
+                    fullDayOnly = datedConfig?.FullDayOnly ?? false;
+                    fullDayOnlyByEntitlementType[entitlementType] = fullDayOnly;
+                }
+            }
+
+            catalog.Add(new AbsenceCatalogEntry(
+                t, AbsenceTypeLabels.TryGetValue(t, out var l) ? l : t, fullDayOnly));
+        }
+
+        return catalog;
     }
 
     // ── Request DTOs ──

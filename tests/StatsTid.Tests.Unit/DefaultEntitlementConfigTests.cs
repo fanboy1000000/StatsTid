@@ -105,6 +105,10 @@ public class DefaultEntitlementConfigTests
         Assert.Equal(0m, careDay.CarryoverMax);
         Assert.False(careDay.ProRateByPartTime);
         Assert.False(careDay.IsPerEpisode);
+        // S73 / TASK-7301 (owner ruling D-A, SPRINT-73 R2): omsorgsdage are FULL-DAY-ONLY —
+        // uniform by construction across every seed path (the factory mirrors the init.sql
+        // seeds + the entitlement_configs_full_day_only_types CHECK).
+        Assert.True(careDay.FullDayOnly);
     }
 
     [Fact]
@@ -156,6 +160,10 @@ public class DefaultEntitlementConfigTests
         Assert.Equal(1, seniorDay.ResetMonth);
         Assert.False(seniorDay.ProRateByPartTime);
         Assert.False(seniorDay.IsPerEpisode);
+        // S73 / TASK-7301 (owner ruling D-A, SPRINT-73 R2): seniordage are FULL-DAY-ONLY —
+        // uniform by construction across every seed path (the factory mirrors the init.sql
+        // seeds + the entitlement_configs_full_day_only_types CHECK).
+        Assert.True(seniorDay.FullDayOnly);
     }
 
     [Fact]

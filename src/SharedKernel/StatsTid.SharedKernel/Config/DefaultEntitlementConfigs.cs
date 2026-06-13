@@ -106,6 +106,10 @@ public static class DefaultEntitlementConfigs
         CarryoverMax = 0m,
         ProRateByPartTime = false,
         IsPerEpisode = false,
+        // S73 / TASK-7301 (owner ruling D-A 2026-06-13): omsorgsdage are FULL-DAY-ONLY ("hele
+        // dage") — uniform by construction across every seed path (the DB CHECK
+        // entitlement_configs_full_day_only_types rejects a FALSE insert).
+        FullDayOnly = true,
         Description = "Omsorgsdage (2 dage pr. kalenderår)"
     };
 
@@ -149,6 +153,10 @@ public static class DefaultEntitlementConfigs
         ProRateByPartTime = false,
         IsPerEpisode = false,
         MinAge = 62,
+        // S73 / TASK-7301 (owner ruling D-A 2026-06-13): seniordage are FULL-DAY-ONLY ("hele
+        // dage") — uniform by construction across every seed path (the DB CHECK
+        // entitlement_configs_full_day_only_types rejects a FALSE insert).
+        FullDayOnly = true,
         Description = "Seniordage (aldersbetinget, fra 62 år)"
     };
 }

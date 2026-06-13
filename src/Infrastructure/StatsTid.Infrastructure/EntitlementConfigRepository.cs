@@ -431,11 +431,13 @@ public sealed class EntitlementConfigRepository
                 config_id, entitlement_type, agreement_code, ok_version,
                 annual_quota, accrual_model, reset_month, carryover_max,
                 pro_rate_by_part_time, is_per_episode, min_age, description,
+                full_day_only,
                 effective_from, effective_to, version)
             VALUES (
                 @configId, @entitlementType, @agreementCode, @okVersion,
                 @annualQuota, @accrualModel, @resetMonth, @carryoverMax,
                 @proRateByPartTime, @isPerEpisode, @minAge, @description,
+                @fullDayOnly,
                 @effectiveFrom, NULL, 1)
             RETURNING *
             """, conn, tx);
@@ -451,6 +453,9 @@ public sealed class EntitlementConfigRepository
         insertCmd.Parameters.AddWithValue("isPerEpisode", newConfig.IsPerEpisode);
         insertCmd.Parameters.AddWithValue("minAge", (object?)newConfig.MinAge ?? DBNull.Value);
         insertCmd.Parameters.AddWithValue("description", (object?)newConfig.Description ?? DBNull.Value);
+        // S73 / TASK-7301 (R2): the flag threads the full config surface — supersession (Case B)
+        // routes through this INSERT, so version-survival holds by construction.
+        insertCmd.Parameters.AddWithValue("fullDayOnly", newConfig.FullDayOnly);
         insertCmd.Parameters.AddWithValue("effectiveFrom", newConfig.EffectiveFrom);
         await using var reader = await insertCmd.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct))
@@ -504,6 +509,7 @@ public sealed class EntitlementConfigRepository
                 is_per_episode = @isPerEpisode,
                 min_age = @minAge,
                 description = @description,
+                full_day_only = @fullDayOnly,
                 version = version + 1
             WHERE config_id = @configId
               AND effective_to IS NULL
@@ -520,6 +526,10 @@ public sealed class EntitlementConfigRepository
         updateCmd.Parameters.AddWithValue("isPerEpisode", newConfig.IsPerEpisode);
         updateCmd.Parameters.AddWithValue("minAge", (object?)newConfig.MinAge ?? DBNull.Value);
         updateCmd.Parameters.AddWithValue("description", (object?)newConfig.Description ?? DBNull.Value);
+        // S73 / TASK-7301 (R2): Case C same-day edits carry the flag too — the DB CHECK
+        // (entitlement_configs_full_day_only_types) backstops any caller that tries to flip a
+        // CARE_DAY/SENIOR_DAY row to FALSE.
+        updateCmd.Parameters.AddWithValue("fullDayOnly", newConfig.FullDayOnly);
         await using var reader = await updateCmd.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct))
         {
@@ -556,6 +566,8 @@ public sealed class EntitlementConfigRepository
         IsPerEpisode = reader.GetBoolean(reader.GetOrdinal("is_per_episode")),
         MinAge = reader.IsDBNull(reader.GetOrdinal("min_age")) ? null : reader.GetInt32(reader.GetOrdinal("min_age")),
         Description = reader.IsDBNull(reader.GetOrdinal("description")) ? null : reader.GetString(reader.GetOrdinal("description")),
+        // S73 / TASK-7301 (R2): full-day-only flag, added by the s73-full-day-only-schema segment.
+        FullDayOnly = reader.GetBoolean(reader.GetOrdinal("full_day_only")),
         CreatedAt = reader.GetDateTime(reader.GetOrdinal("created_at")),
         // S30 / TASK-3003: effective-dating + row-version columns added by
         // s30-d2-ec-effective-dating + s25-d2-2-version migrations.

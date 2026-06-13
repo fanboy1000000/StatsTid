@@ -403,7 +403,13 @@ public sealed class PublisherStallReadYourWriteTests : IAsyncLifetime
     /// </summary>
     private sealed class RuleEngineStubFactory : IHttpClientFactory
     {
-        public HttpClient CreateClient(string name) => new(new RuleEngineStubHandler(), disposeHandler: false);
+        // S73 / TASK-7300 (R1): the endpoints now resolve the NAMED RuleEngine client and use
+        // RELATIVE request URIs; this stub replaces the whole factory, so it supplies the
+        // BaseAddress the production registration sets (behavior-preserving fixture change).
+        public HttpClient CreateClient(string name) => new(new RuleEngineStubHandler(), disposeHandler: false)
+        {
+            BaseAddress = new Uri("http://rule-engine:8080"),
+        };
     }
 
     private sealed class RuleEngineStubHandler : HttpMessageHandler

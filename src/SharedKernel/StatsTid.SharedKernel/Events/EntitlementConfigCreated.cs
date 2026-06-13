@@ -33,4 +33,12 @@ public sealed class EntitlementConfigCreated : DomainEventBase
     public required bool IsPerEpisode { get; init; }
     public int? MinAge { get; init; }
     public string? Description { get; init; }
+
+    /// <summary>
+    /// S73 / TASK-7301 (SPRINT-73 R2, owner ruling D-A): the full-day-only day-shape flag of the
+    /// created/updated row. ADDITIVE-NULLABLE for replay compatibility — pre-S73 stored payloads
+    /// deserialize with <c>null</c> (semantically FALSE: the rule did not exist yet); post-S73
+    /// emissions always carry the persisted row's value.
+    /// </summary>
+    public bool? FullDayOnly { get; init; }
 }

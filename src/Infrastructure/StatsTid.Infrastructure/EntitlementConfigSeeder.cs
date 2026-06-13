@@ -31,9 +31,13 @@ public static class EntitlementConfigSeeder
         var seeded = 0;
         foreach (var config in configs)
         {
+            // S73 / TASK-7301 (R2): full_day_only carried explicitly — the
+            // entitlement_configs_full_day_only_types CHECK is evaluated on the proposed tuple
+            // BEFORE conflict arbitration, so a DEFAULT-FALSE CARE_DAY/SENIOR_DAY insert would
+            // error even when ON CONFLICT would have skipped it.
             await using var cmd = new NpgsqlCommand(@"
-                INSERT INTO entitlement_configs (config_id, entitlement_type, agreement_code, ok_version, annual_quota, accrual_model, reset_month, carryover_max, pro_rate_by_part_time, is_per_episode, min_age, description, created_at)
-                VALUES (@configId, @entitlementType, @agreementCode, @okVersion, @annualQuota, @accrualModel, @resetMonth, @carryoverMax, @proRateByPartTime, @isPerEpisode, @minAge, @description, @createdAt)
+                INSERT INTO entitlement_configs (config_id, entitlement_type, agreement_code, ok_version, annual_quota, accrual_model, reset_month, carryover_max, pro_rate_by_part_time, is_per_episode, min_age, description, full_day_only, created_at)
+                VALUES (@configId, @entitlementType, @agreementCode, @okVersion, @annualQuota, @accrualModel, @resetMonth, @carryoverMax, @proRateByPartTime, @isPerEpisode, @minAge, @description, @fullDayOnly, @createdAt)
                 ON CONFLICT DO NOTHING", conn);
 
             cmd.Parameters.AddWithValue("configId", config.ConfigId);
@@ -48,6 +52,7 @@ public static class EntitlementConfigSeeder
             cmd.Parameters.AddWithValue("isPerEpisode", config.IsPerEpisode);
             cmd.Parameters.AddWithValue("minAge", config.MinAge.HasValue ? config.MinAge.Value : DBNull.Value);
             cmd.Parameters.AddWithValue("description", config.Description ?? (object)DBNull.Value);
+            cmd.Parameters.AddWithValue("fullDayOnly", config.FullDayOnly);
             cmd.Parameters.AddWithValue("createdAt", config.CreatedAt);
 
             var rows = await cmd.ExecuteNonQueryAsync();

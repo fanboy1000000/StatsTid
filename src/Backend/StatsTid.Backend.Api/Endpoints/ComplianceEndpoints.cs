@@ -21,7 +21,6 @@ public static class ComplianceEndpoints
             int month,
             UserRepository userRepo,
             IHttpClientFactory httpClientFactory,
-            IConfiguration configuration,
             TimeEntryProjectionRepository timeEntryProjectionRepo,
             IEmploymentProfileResolver profileResolver,
             OrgScopeValidator scopeValidator,
@@ -67,9 +66,12 @@ public static class ComplianceEndpoints
                 })
                 .ToList();
 
-            // Call Rule Engine via HTTP (PAT-005)
-            var ruleEngineUrl = configuration["ServiceUrls:RuleEngine"] ?? "http://rule-engine:8080";
-            var httpClient = httpClientFactory.CreateClient();
+            // Call Rule Engine via HTTP (PAT-005).
+            // S73 / TASK-7300 (R1): the NAMED rule-engine client — BaseAddress +
+            // Authorization/X-Correlation-Id forwarding are wired centrally in Program.cs
+            // (RuleEngineClient / RuleEngineHeaderForwardingHandler). This was one of the
+            // BARE call sites of the S73 incident (no bearer → rule engine 401 → 503 here).
+            var httpClient = httpClientFactory.CreateClient(Http.RuleEngineClient.Name);
             var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
             // ADR-023 D1+D3 cutover: resolve fully-hydrated dated profile via
@@ -92,7 +94,7 @@ public static class ComplianceEndpoints
             };
 
             var response = await httpClient.PostAsJsonAsync(
-                $"{ruleEngineUrl}/api/rules/check-compliance", complianceRequest, jsonOptions, ct);
+                "/api/rules/check-compliance", complianceRequest, jsonOptions, ct);
 
             if (!response.IsSuccessStatusCode)
                 return Results.Json(new { error = "Compliance check service unavailable" }, statusCode: 503);

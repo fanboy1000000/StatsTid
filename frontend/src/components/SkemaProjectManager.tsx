@@ -65,6 +65,10 @@ interface PaneEntry {
   key: string
   name: string
   code: string
+  /** S73 R5 — the served full-day-only flag (absence entries only); renders the
+      "hele dage" note next to the row. From the served absence-type DTOs — never
+      a hardcoded type list. */
+  fullDayOnly?: boolean
 }
 
 /** Prototype matchq verbatim: name OR code, case-insensitive. */
@@ -165,7 +169,10 @@ function DualPane({
                 </button>
               </span>
               <span className={styles.rowMain}>
-                <span className={styles.rowName}>{entry.name}</span>
+                <span className={styles.rowName}>
+                  {entry.name}
+                  {entry.fullDayOnly && <span className={styles.fullDayNote}>hele dage</span>}
+                </span>
                 <span className={styles.rowCode}>{entry.code}</span>
               </span>
               <button
@@ -195,7 +202,10 @@ function DualPane({
           {available.map((entry) => (
             <li className={styles.catRow} key={entry.key}>
               <span className={styles.rowMain}>
-                <span className={styles.rowName}>{entry.name}</span>
+                <span className={styles.rowName}>
+                  {entry.name}
+                  {entry.fullDayOnly && <span className={styles.fullDayNote}>hele dage</span>}
+                </span>
                 <span className={styles.rowCode}>{entry.code}</span>
               </span>
               <button
@@ -248,11 +258,13 @@ export function SkemaProjectManager({
     key: a.type,
     name: a.label,
     code: a.type,
+    fullDayOnly: a.fullDayOnly ?? false,
   }))
   const absenceCatalog: PaneEntry[] = catalogs.absenceTypes.map((a) => ({
     key: a.type,
     name: a.label,
     code: a.type,
+    fullDayOnly: a.fullDayOnly ?? false,
   }))
 
   // Emission: array order → dense sortOrder 0..n-1 (the same rule
@@ -268,7 +280,15 @@ export function SkemaProjectManager({
     )
   const applyAbsence = (next: PaneEntry[]) =>
     onAbsenceTypesChange(
-      next.map((e, i) => ({ type: e.key, label: e.name, sortOrder: i })),
+      // S73 R5 — carry the served fullDayOnly flag through so the optimistic
+      // re-render keeps the "hele dage" note (the wire PUT body ignores it; the
+      // server owns the flag). Only attach the flag when TRUE so the emitted shape
+      // is byte-identical to the pre-S73 contract for ordinary types (S72 pins).
+      next.map((e, i) =>
+        e.fullDayOnly
+          ? { type: e.key, label: e.name, sortOrder: i, fullDayOnly: true }
+          : { type: e.key, label: e.name, sortOrder: i },
+      ),
     )
 
   const tabs = [

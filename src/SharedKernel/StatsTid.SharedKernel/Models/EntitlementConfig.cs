@@ -29,6 +29,18 @@ public sealed class EntitlementConfig
     public required bool IsPerEpisode { get; init; }
     public int? MinAge { get; init; }
     public string? Description { get; init; }
+
+    /// <summary>
+    /// S73 / TASK-7301 (SPRINT-73 R2, owner ruling D-A 2026-06-13): when TRUE, a registration of
+    /// this entitlement type must equal the day's ADR-032 consumption basis EXACTLY (the Skema
+    /// save guard enforces it; partial hours are rejected 422 <c>absence_full_day_only</c>).
+    /// CARE_DAY + SENIOR_DAY carry TRUE by construction (DB CHECK
+    /// <c>entitlement_configs_full_day_only_types</c> + the admin 422 guard); CHILD_SICK stays
+    /// hours-based. Defaulted FALSE for compile-time backward compatibility — repo read/insert
+    /// paths bind the column explicitly.
+    /// </summary>
+    public bool FullDayOnly { get; init; }
+
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
 
     /// <summary>

@@ -250,7 +250,10 @@ public sealed class EntitlementConfigEndpointTests : IAsyncLifetime
             minAge: 60,
             description: "stale-test",
             effectiveFrom: today,
-            ifMatchValue: stale.ToString());
+            ifMatchValue: stale.ToString(),
+            // S73 / TASK-7301 (R7): SENIOR_DAY is full-day-only per D-A — TRUE keeps this
+            // test on its original 412 concern (the guard would otherwise 422 first).
+            fullDayOnly: true);
 
         Assert.Equal(HttpStatusCode.PreconditionFailed, rsp.StatusCode);
         var json = await rsp.Content.ReadFromJsonAsync<JsonElement>();
@@ -353,7 +356,11 @@ public sealed class EntitlementConfigEndpointTests : IAsyncLifetime
             minAge: null,
             description: "backdated-attempt",
             effectiveFrom: backdated,
-            ifMatchValue: version.ToString());
+            ifMatchValue: version.ToString(),
+            // S73 / TASK-7301 (R7): CARE_DAY is full-day-only per D-A — TRUE keeps this test
+            // on its original same-day-only-edit 422 concern (the same-day validator runs
+            // before the full-day guard, but the flag is set for forward-robustness).
+            fullDayOnly: true);
 
         Assert.Equal(HttpStatusCode.UnprocessableEntity, rsp.StatusCode);
         var json = await rsp.Content.ReadFromJsonAsync<JsonElement>();
@@ -517,12 +524,17 @@ public sealed class EntitlementConfigEndpointTests : IAsyncLifetime
             $"Could not find seeded config ({entitlementType}, {agreementCode}, {okVersion}).");
     }
 
+    // S73 / TASK-7301 (R2/R7 — legitimate behavior change, refinement
+    // REFINEMENT-s73-ui-testing-fix-bundle): the PUT body now carries fullDayOnly. The D-A
+    // construction-enforcement guard 422s a CARE_DAY/SENIOR_DAY body whose flag is
+    // false/absent, so the CARE_DAY/SENIOR_DAY call sites in this class pass TRUE to keep
+    // exercising their original concern (412/422-same-day precedence, not the new guard).
     private static async Task<HttpResponseMessage> PutAsync(
         HttpClient client, Guid configId,
         string entitlementType, string agreementCode, string okVersion,
         decimal annualQuota, string accrualModel, int resetMonth, decimal carryoverMax,
         bool proRateByPartTime, bool isPerEpisode, int? minAge, string? description,
-        DateOnly effectiveFrom, string? ifMatchValue)
+        DateOnly effectiveFrom, string? ifMatchValue, bool fullDayOnly = false)
     {
         var req = new HttpRequestMessage(HttpMethod.Put,
             $"/api/admin/entitlement-configs/{configId}")
@@ -540,6 +552,7 @@ public sealed class EntitlementConfigEndpointTests : IAsyncLifetime
                 isPerEpisode,
                 minAge,
                 description,
+                fullDayOnly,
                 effectiveFrom = effectiveFrom.ToString("yyyy-MM-dd"),
             }),
         };

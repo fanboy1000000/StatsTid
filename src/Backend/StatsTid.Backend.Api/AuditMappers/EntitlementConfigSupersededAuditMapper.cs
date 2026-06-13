@@ -14,6 +14,10 @@ public sealed class EntitlementConfigSupersededAuditMapper : IAuditProjectionMap
             entitlementType = @event.EntitlementType,
             supersededByConfigId = @event.SupersededByConfigId,
             effectiveFrom = @event.EffectiveFrom,
+            // S73 / TASK-7301 (M3) — project the D-A full-day-only legal flag so the config
+            // supersession is visible in the operational audit projection. Additive +
+            // null-tolerant (the payload field is bool?; pre-S73 events carry null).
+            fullDayOnly = @event.FullDayOnly,
         };
         return new AuditProjectionRowData(
             VisibilityScope: AuditVisibilityScope.GlobalTenantVisible,

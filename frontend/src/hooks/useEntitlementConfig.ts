@@ -26,6 +26,10 @@ export interface EntitlementConfig {
   isPerEpisode: boolean
   minAge: number | null
   description: string | null
+  // S73 / TASK-7301 — the full-day-only rule flag (R2). CARE_DAY/SENIOR_DAY
+  // configs carry TRUE (construction-enforced server-side); additive-nullable on
+  // the wire (pre-S73 rows omit it → treated as false).
+  fullDayOnly: boolean
   // ADR-019 D7 row-version optimistic-concurrency token.
   version: number
   effectiveFrom: string // ISO date
@@ -59,6 +63,11 @@ export interface EntitlementConfigCreateRequest extends EntitlementConfigPatch {
   okVersion: string
   accrualModel: AccrualModel
   resetMonth: number
+  // S73 / TASK-7301 (R2/Step-0b B2) — the full-day-only flag travels in the
+  // request body. Construction-enforced server-side for CARE_DAY/SENIOR_DAY
+  // (admin POST/PUT 422s a false/absent flag for those types); the editor
+  // sources it (no free toggle) so an unrelated edit can never reset it.
+  fullDayOnly: boolean
 }
 
 /**
@@ -78,6 +87,10 @@ export interface EntitlementConfigUpdateRequest extends EntitlementConfigPatch {
   accrualModel: AccrualModel
   resetMonth: number
   effectiveFrom: string // ISO date — must be today
+  // S73 / TASK-7301 (R2 version-survival) — the flag MUST round-trip on update,
+  // or an unrelated admin edit produces a successor with the flag reset. Sourced
+  // from the predecessor row (the page displays it read-only).
+  fullDayOnly: boolean
 }
 
 export type WithEtag<T> = T & { etag: string; version: number }

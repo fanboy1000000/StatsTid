@@ -96,8 +96,8 @@ The future Test #1 (catalog ↔ DI registrations ↔ EventSerializer parity) par
 | `WageTypeMappingDeleted` | GLOBAL_TENANT_VISIBLE | NULL | `(timeType:agreementCode:okVersion:position)` | `{timeType, okVersion, agreementCode, position}` | interface | S44c |
 | `WageTypeMappingSuperseded` | GLOBAL_TENANT_VISIBLE | NULL | `(timeType:agreementCode:okVersion:position)` | `{timeType, wageType, okVersion, agreementCode, position}` | interface | S44c |
 | `EntitlementConfigSeeded` | GLOBAL_TENANT_VISIBLE | NULL | `(agreementCode:okVersion)` | `{agreementCode, okVersion, configCount}` | interface (mapper-only, no emit site) | S44c |
-| `EntitlementConfigCreated` | GLOBAL_TENANT_VISIBLE | NULL | `config_id` | `{configId, entitlementType, agreementCode, okVersion, effectiveFrom, annualQuota, accrualModel, resetMonth}` | interface | S44c |
-| `EntitlementConfigSuperseded` | GLOBAL_TENANT_VISIBLE | NULL | `config_id` | `{configId, entitlementType, supersededByConfigId, effectiveFrom}` | interface | S44c |
+| `EntitlementConfigCreated` | GLOBAL_TENANT_VISIBLE | NULL | `config_id` | `{configId, entitlementType, agreementCode, okVersion, effectiveFrom, annualQuota, accrualModel, resetMonth, fullDayOnly}` | interface | S44c (·`fullDayOnly` S73) |
+| `EntitlementConfigSuperseded` | GLOBAL_TENANT_VISIBLE | NULL | `config_id` | `{configId, entitlementType, supersededByConfigId, effectiveFrom, fullDayOnly}` | interface | S44c (·`fullDayOnly` S73) |
 | `EntitlementConfigSoftDeleted` | GLOBAL_TENANT_VISIBLE | NULL | `config_id` | `{configId, entitlementType, agreementCode, okVersion}` | interface | S44c |
 | `LocalAgreementProfileChanged` | TENANT_TARGETED | the profile's `org_id` | `profile_id` | `{profileId, orgId, agreementCode, okVersion, effectiveFrom}` | interface | S44c |
 | `PeriodSubmitted` | TENANT_TARGETED | `employee → users.primary_org_id` | `period_id` | `{period_id, employee_id, period_start, period_end, period_type}` | interface | S44b |

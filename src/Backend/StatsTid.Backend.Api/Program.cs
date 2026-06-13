@@ -1,6 +1,7 @@
 using StatsTid.Auth;
 using StatsTid.Backend.Api.AuditMappers;
 using StatsTid.Backend.Api.Endpoints;
+using StatsTid.Backend.Api.Http;
 using StatsTid.Backend.Api.Validators;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Audit;
@@ -35,6 +36,24 @@ builder.Services.AddHostedService<DelegationExpiryService>();
 builder.Services.AddHostedService<SettlementCloseService>(); // S68 ADR-033 slice 1a — period-close poller
 
 builder.Services.AddHttpClient();
+
+// ── S73 / TASK-7300 (R1 + R1a) — the NAMED rule-engine client ──
+// ONE mechanism for backend→rule-engine auth carriage: all four call families
+// (SkemaEndpoints validate-entitlement ×2, ComplianceEndpoints check-compliance,
+// OvertimeEndpoints check-overtime-governance) resolve CreateClient(RuleEngineClient.Name).
+// The RuleEngineHeaderForwardingHandler forwards the inbound Authorization +
+// X-Correlation-Id (FORWARD-when-actor-exists / MINT-when-no-HttpContext partition —
+// see the handler doc). R1a: the handler attaches ONLY to this named client — never the
+// default builder above, so non-rule-engine outbound clients never carry the user bearer.
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddTransient<RuleEngineHeaderForwardingHandler>();
+builder.Services.AddHttpClient(RuleEngineClient.Name, (sp, client) =>
+    {
+        var config = sp.GetRequiredService<IConfiguration>();
+        client.BaseAddress = new Uri(
+            config[RuleEngineClient.BaseUrlConfigKey] ?? RuleEngineClient.DefaultBaseUrl);
+    })
+    .AddHttpMessageHandler<RuleEngineHeaderForwardingHandler>();
 
 // ── Security ──
 builder.Services.AddStatsTidJwtAuth(builder.Configuration, builder.Environment);

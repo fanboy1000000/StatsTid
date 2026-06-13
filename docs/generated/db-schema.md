@@ -757,10 +757,12 @@
 | created_at | TIMESTAMPTZ | No |  | NOW() |
 | effective_from | DATE | No |  | '0001-01-01' |
 | effective_to | DATE | Yes |  |  |
+| full_day_only | BOOLEAN | No |  | FALSE |
 | version | BIGINT | No |  | 1 |
 
 **Table constraints:**
 - CONSTRAINT entitlement_configs_vacation_reset_month CHECK ( entitlement_type <> 'VACATION' OR reset_month = 9 )
+- CONSTRAINT entitlement_configs_full_day_only_types CHECK ( entitlement_type NOT IN ('CARE_DAY', 'SENIOR_DAY') OR full_day_only )
 
 **Indexes:**
 - `idx_ec_natural_key_open` (UNIQUE) on (entitlement_type, agreement_code, ok_version) WHERE effective_to IS NULL

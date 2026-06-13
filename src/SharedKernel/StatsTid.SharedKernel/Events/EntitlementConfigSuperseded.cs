@@ -30,4 +30,11 @@ public sealed class EntitlementConfigSuperseded : DomainEventBase
 
     // Forward-pointer to the new row that replaced this predecessor
     public required Guid SupersededByConfigId { get; init; }
+
+    /// <summary>
+    /// S73 / TASK-7301 (SPRINT-73 R2, owner ruling D-A): the PREDECESSOR's full-day-only flag at
+    /// close time. ADDITIVE-NULLABLE for replay compatibility — pre-S73 stored payloads
+    /// deserialize with <c>null</c>; post-S73 emissions always carry the closed row's value.
+    /// </summary>
+    public bool? FullDayOnly { get; init; }
 }

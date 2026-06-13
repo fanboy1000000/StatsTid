@@ -1374,6 +1374,13 @@ CREATE TABLE IF NOT EXISTS entitlement_configs (
     created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     effective_from          DATE        NOT NULL DEFAULT '0001-01-01',
     effective_to            DATE,
+    -- S73 / TASK-7301 (SPRINT-73 R2, owner ruling D-A 2026-06-13): full-day-only day-shape flag.
+    -- TRUE ⇒ a registration of this entitlement type must equal the day's ADR-032 consumption
+    -- basis EXACTLY (the Skema save guard enforces it). Config-driven so the rule is versioned
+    -- and evented like every other entitlement-policy field. Greenfield CARE_DAY/SENIOR_DAY
+    -- seeds below carry TRUE inline; legacy DBs gain the column + backfill via the guarded
+    -- 's73-full-day-only-schema' segment at the end of this file.
+    full_day_only           BOOLEAN     NOT NULL DEFAULT FALSE,
     -- S68 Step-7a Codex c2 (B1 soundness) — the Danish vacation year is STATUTORILY fixed at
     -- 1 Sep – 31 Aug (samtidighedsferie, LBK 230/2021); the entire §21/§24 settlement boundary
     -- (31 Dec of the ferieår-end year) is built on reset_month = 9 for VACATION. A VACATION config
@@ -1385,6 +1392,16 @@ CREATE TABLE IF NOT EXISTS entitlement_configs (
     -- Other types (CARE_DAY/SENIOR_DAY = calendar-year reset_month 1) are unconstrained.
     CONSTRAINT entitlement_configs_vacation_reset_month CHECK (
         entitlement_type <> 'VACATION' OR reset_month = 9
+    ),
+    -- S73 / TASK-7301 (SPRINT-73 R2 construction-enforcement, the S68-B1 lesson): the D-A
+    -- owner ruling "CARE_DAY + SENIOR_DAY are FULL-DAY-ONLY" is a PRODUCT RULE, not a default —
+    -- an admin config write (endpoint, seeder, direct SQL) must not be able to silently
+    -- un-rule it. The base CREATE bakes the CHECK for greenfield DBs; the legacy path lands
+    -- the SAME named constraint via the 's73-full-day-only-schema' DO-block (CREATE TABLE IF
+    -- NOT EXISTS is a no-op on a legacy DB). Flipping this later is a deliberate schema/owner
+    -- change, mirroring the S68 VACATION reset_month enforcement above.
+    CONSTRAINT entitlement_configs_full_day_only_types CHECK (
+        entitlement_type NOT IN ('CARE_DAY', 'SENIOR_DAY') OR full_day_only
     )
 );
 
@@ -1432,6 +1449,70 @@ CREATE TABLE IF NOT EXISTS entitlement_balances (
     UNIQUE (employee_id, entitlement_type, entitlement_year)
 );
 
+-- =========================================================================
+-- S73 / TASK-7301 (SPRINT-73 R2, owner ruling D-A 2026-06-13) — the FULL-DAY-ONLY
+--   day-shape flag on entitlement_configs (CARE_DAY + SENIOR_DAY are whole days,
+--   "hele dage"; CHILD_SICK stays hours-based).
+--
+-- PLACEMENT (deliberate — differs from the at-EOF S68/S72 precedents): this guarded
+-- segment sits BEFORE the seed INSERT below because the seed now references the new
+-- full_day_only column inline (the R2 ordering pin: the CHECK must never reject
+-- init.sql's own seeds). On a LEGACY DB the base CREATE TABLE IF NOT EXISTS is a
+-- no-op, so without this block the seed INSERT would 42703 on the missing column —
+-- the column must land first in file order.
+--
+-- 3-path idempotent (the s68-vacation-reset-month-check shape):
+--   • greenfield first apply — the ALTER no-ops against the inline column, the
+--     backfill touches zero rows (the seeds have not been inserted yet; they carry
+--     TRUE inline below), and the DROP-then-ADD re-lands the same named CHECK the
+--     base CREATE already baked;
+--   • legacy first apply — the column lands, the type-keyed backfill flips every
+--     existing CARE_DAY/SENIOR_DAY row (ALL agreement/OK pairs) to TRUE, and ONLY
+--     THEN is the constraint added (remediate-then-constrain, the S68 precedent —
+--     the R2 ordering pin: backfill UPDATE BEFORE ADD CONSTRAINT);
+--   • any re-apply — the schema_migrations ledger short-circuits.
+--
+-- The S73-FULL-DAY-ONLY-SEGMENT markers are extracted VERBATIM by
+-- FullDayOnlyMigrationTests (the S71/S72 harness pattern: the test runs this exact
+-- segment against a reconstructed pre-S73 schema, twice) — keep the marker lines
+-- intact and keep all S73 DDL between them.
+-- =========================================================================
+-- S73-FULL-DAY-ONLY-SEGMENT-BEGIN
+DO $$
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s73-full-day-only-schema', 'SPRINT-73 R2 / owner ruling D-A: entitlement_configs.full_day_only BOOLEAN NOT NULL DEFAULT FALSE + type-keyed backfill (CARE_DAY + SENIOR_DAY -> TRUE, all agreement/OK pairs) + the entitlement_configs_full_day_only_types construction-enforcement CHECK (remediate-then-constrain).')
+    ON CONFLICT (migration_id) DO NOTHING;
+
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+
+    -- Legacy path: the inline column on the base CREATE cannot reach a pre-S73 DB.
+    ALTER TABLE entitlement_configs
+    ADD COLUMN IF NOT EXISTS full_day_only BOOLEAN NOT NULL DEFAULT FALSE;
+
+    -- Backfill BEFORE the constraint (R2 ordering pin): type-keyed across ALL
+    -- agreement/OK pairs — history rows included, so dated reads at any asOf
+    -- resolve the D-A rule consistently.
+    UPDATE entitlement_configs
+    SET full_day_only = TRUE
+    WHERE entitlement_type IN ('CARE_DAY', 'SENIOR_DAY')
+      AND NOT full_day_only;
+
+    -- Construction-enforcement (R2, the S68-B1 uniform-by-construction lesson):
+    -- DROP-then-ADD covers both greenfield (where the base CREATE already baked
+    -- the CHECK) and legacy (where it cannot exist yet).
+    ALTER TABLE entitlement_configs
+    DROP CONSTRAINT IF EXISTS entitlement_configs_full_day_only_types;
+
+    ALTER TABLE entitlement_configs
+    ADD CONSTRAINT entitlement_configs_full_day_only_types
+    CHECK (entitlement_type NOT IN ('CARE_DAY', 'SENIOR_DAY') OR full_day_only);
+END
+$$;
+-- S73-FULL-DAY-ONLY-SEGMENT-END
+
 -- Seed entitlement configs: AC/HK/PROSA × OK24/OK26 × 5 types = 30 rows
 -- S30 TASK-3006 (ADR-021 D3): seed-INSERT rewrite to include effective_from
 -- + ON CONFLICT on (natural_key, effective_from) targeting idx_ec_natural_key_history
@@ -1439,73 +1520,80 @@ CREATE TABLE IF NOT EXISTS entitlement_balances (
 -- TASK-2906 / ADR-020 D3 precedent on wage_type_mappings at init.sql:1335,1353).
 -- Anchor '0001-01-01' matches the base CREATE TABLE default at L1129 — sentinel
 -- "pre-launch" effective_from, NOT a real agreement-start date.
-INSERT INTO entitlement_configs (entitlement_type, agreement_code, ok_version, annual_quota, accrual_model, reset_month, carryover_max, pro_rate_by_part_time, is_per_episode, min_age, description, effective_from) VALUES
+-- S73 / TASK-7301 (R2 ordering pin, Step-0b c2): the seed INSERTs carry full_day_only INLINE —
+-- the entitlement_configs_full_day_only_types CHECK must never reject init.sql's own seeds.
+-- CARE_DAY + SENIOR_DAY rows (ALL agreement/OK pairs, AC variants included) carry TRUE per the
+-- D-A owner ruling; every other type carries FALSE (CHILD_SICK stays hours-based).
+INSERT INTO entitlement_configs (entitlement_type, agreement_code, ok_version, annual_quota, accrual_model, reset_month, carryover_max, pro_rate_by_part_time, is_per_episode, min_age, description, effective_from, full_day_only) VALUES
     -- VACATION: 25 days, reset September, carryover 5
     -- S60 / ADR-030: accrual_model = MONTHLY_ACCRUAL (samtidighedsferie, ~2,08 d/md).
     -- Sentinel reseed (NOT supersession) — preserves ADR-021 D5 invariant (no new effective_from row).
     -- S63 / ADR-031: pro_rate_by_part_time = false — flat day-count per Ferieloven §5 (sentinel reseed, NOT supersession — preserves ADR-021 D5 invariant)
-    ('VACATION', 'AC', 'OK24', 25, 'MONTHLY_ACCRUAL', 9, 5, false, false, NULL, 'Ferie – 25 dage', '0001-01-01'),
-    ('VACATION', 'AC', 'OK26', 25, 'MONTHLY_ACCRUAL', 9, 5, false, false, NULL, 'Ferie – 25 dage', '0001-01-01'),
-    ('VACATION', 'HK', 'OK24', 25, 'MONTHLY_ACCRUAL', 9, 5, false, false, NULL, 'Ferie – 25 dage', '0001-01-01'),
-    ('VACATION', 'HK', 'OK26', 25, 'MONTHLY_ACCRUAL', 9, 5, false, false, NULL, 'Ferie – 25 dage', '0001-01-01'),
-    ('VACATION', 'PROSA', 'OK24', 25, 'MONTHLY_ACCRUAL', 9, 5, false, false, NULL, 'Ferie – 25 dage', '0001-01-01'),
-    ('VACATION', 'PROSA', 'OK26', 25, 'MONTHLY_ACCRUAL', 9, 5, false, false, NULL, 'Ferie – 25 dage', '0001-01-01'),
+    ('VACATION', 'AC', 'OK24', 25, 'MONTHLY_ACCRUAL', 9, 5, false, false, NULL, 'Ferie – 25 dage', '0001-01-01', false),
+    ('VACATION', 'AC', 'OK26', 25, 'MONTHLY_ACCRUAL', 9, 5, false, false, NULL, 'Ferie – 25 dage', '0001-01-01', false),
+    ('VACATION', 'HK', 'OK24', 25, 'MONTHLY_ACCRUAL', 9, 5, false, false, NULL, 'Ferie – 25 dage', '0001-01-01', false),
+    ('VACATION', 'HK', 'OK26', 25, 'MONTHLY_ACCRUAL', 9, 5, false, false, NULL, 'Ferie – 25 dage', '0001-01-01', false),
+    ('VACATION', 'PROSA', 'OK24', 25, 'MONTHLY_ACCRUAL', 9, 5, false, false, NULL, 'Ferie – 25 dage', '0001-01-01', false),
+    ('VACATION', 'PROSA', 'OK26', 25, 'MONTHLY_ACCRUAL', 9, 5, false, false, NULL, 'Ferie – 25 dage', '0001-01-01', false),
     -- SPECIAL_HOLIDAY: 5 days, reset September, no carryover
     -- S60 / ADR-030: MONTHLY_ACCRUAL (~0,42 d/md); no forskud (ferieaftale §13 stk.4) enforced in rule engine.
     -- S63 / ADR-031: pro_rate_by_part_time = false — flat day-count per Ferieloven §5 (sentinel reseed, NOT supersession — preserves ADR-021 D5 invariant)
-    ('SPECIAL_HOLIDAY', 'AC', 'OK24', 5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01'),
-    ('SPECIAL_HOLIDAY', 'AC', 'OK26', 5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01'),
-    ('SPECIAL_HOLIDAY', 'HK', 'OK24', 5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01'),
-    ('SPECIAL_HOLIDAY', 'HK', 'OK26', 5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01'),
-    ('SPECIAL_HOLIDAY', 'PROSA', 'OK24', 5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01'),
-    ('SPECIAL_HOLIDAY', 'PROSA', 'OK26', 5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01'),
+    ('SPECIAL_HOLIDAY', 'AC', 'OK24', 5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01', false),
+    ('SPECIAL_HOLIDAY', 'AC', 'OK26', 5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01', false),
+    ('SPECIAL_HOLIDAY', 'HK', 'OK24', 5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01', false),
+    ('SPECIAL_HOLIDAY', 'HK', 'OK26', 5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01', false),
+    ('SPECIAL_HOLIDAY', 'PROSA', 'OK24', 5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01', false),
+    ('SPECIAL_HOLIDAY', 'PROSA', 'OK26', 5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01', false),
     -- CARE_DAY: 2 days, reset January, no carryover, not pro-rated
-    ('CARE_DAY', 'AC', 'OK24', 2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage', '0001-01-01'),
-    ('CARE_DAY', 'AC', 'OK26', 2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage', '0001-01-01'),
-    ('CARE_DAY', 'HK', 'OK24', 2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage', '0001-01-01'),
-    ('CARE_DAY', 'HK', 'OK26', 2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage', '0001-01-01'),
-    ('CARE_DAY', 'PROSA', 'OK24', 2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage', '0001-01-01'),
-    ('CARE_DAY', 'PROSA', 'OK26', 2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage', '0001-01-01'),
-    -- CHILD_SICK: AC=1, HK=2, PROSA=3, per-episode
-    ('CHILD_SICK', 'AC', 'OK24', 1, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barn syg – 1 dag per episode', '0001-01-01'),
-    ('CHILD_SICK', 'AC', 'OK26', 1, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barn syg – 1 dag per episode', '0001-01-01'),
-    ('CHILD_SICK', 'HK', 'OK24', 2, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barn syg – 2 dage per episode', '0001-01-01'),
-    ('CHILD_SICK', 'HK', 'OK26', 2, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barn syg – 2 dage per episode', '0001-01-01'),
-    ('CHILD_SICK', 'PROSA', 'OK24', 3, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barn syg – 3 dage per episode', '0001-01-01'),
-    ('CHILD_SICK', 'PROSA', 'OK26', 3, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barn syg – 3 dage per episode', '0001-01-01'),
+    -- S73 / TASK-7301 (D-A): full_day_only = TRUE — omsorgsdage are whole days ("hele dage").
+    ('CARE_DAY', 'AC', 'OK24', 2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage', '0001-01-01', true),
+    ('CARE_DAY', 'AC', 'OK26', 2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage', '0001-01-01', true),
+    ('CARE_DAY', 'HK', 'OK24', 2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage', '0001-01-01', true),
+    ('CARE_DAY', 'HK', 'OK26', 2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage', '0001-01-01', true),
+    ('CARE_DAY', 'PROSA', 'OK24', 2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage', '0001-01-01', true),
+    ('CARE_DAY', 'PROSA', 'OK26', 2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage', '0001-01-01', true),
+    -- CHILD_SICK: AC=1, HK=2, PROSA=3, per-episode (stays hours-based per D-A — full_day_only FALSE)
+    ('CHILD_SICK', 'AC', 'OK24', 1, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barn syg – 1 dag per episode', '0001-01-01', false),
+    ('CHILD_SICK', 'AC', 'OK26', 1, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barn syg – 1 dag per episode', '0001-01-01', false),
+    ('CHILD_SICK', 'HK', 'OK24', 2, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barn syg – 2 dage per episode', '0001-01-01', false),
+    ('CHILD_SICK', 'HK', 'OK26', 2, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barn syg – 2 dage per episode', '0001-01-01', false),
+    ('CHILD_SICK', 'PROSA', 'OK24', 3, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barn syg – 3 dage per episode', '0001-01-01', false),
+    ('CHILD_SICK', 'PROSA', 'OK26', 3, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barn syg – 3 dage per episode', '0001-01-01', false),
     -- SENIOR_DAY: 2 days/year for age 62+ (S37 TASK-3703 Bug #3 absorption 2026-05-21, Path B seed-side fix
     -- per interim-expert decision; previously paired-broken with quota=0 + min_age=60). Bug-with-no-past-impact.
-    ('SENIOR_DAY', 'AC',    'OK24', 2, 'IMMEDIATE', 1, 0, false, false, 62, 'Seniordage – kræver alder 62+', '0001-01-01'),
-    ('SENIOR_DAY', 'AC',    'OK26', 2, 'IMMEDIATE', 1, 0, false, false, 62, 'Seniordage – kræver alder 62+', '0001-01-01'),
-    ('SENIOR_DAY', 'HK',    'OK24', 2, 'IMMEDIATE', 1, 0, false, false, 62, 'Seniordage – kræver alder 62+', '0001-01-01'),
-    ('SENIOR_DAY', 'HK',    'OK26', 2, 'IMMEDIATE', 1, 0, false, false, 62, 'Seniordage – kræver alder 62+', '0001-01-01'),
-    ('SENIOR_DAY', 'PROSA', 'OK24', 2, 'IMMEDIATE', 1, 0, false, false, 62, 'Seniordage – kræver alder 62+', '0001-01-01'),
-    ('SENIOR_DAY', 'PROSA', 'OK26', 2, 'IMMEDIATE', 1, 0, false, false, 62, 'Seniordage – kræver alder 62+', '0001-01-01'),
+    -- S73 / TASK-7301 (D-A): full_day_only = TRUE — seniordage are whole days ("hele dage").
+    ('SENIOR_DAY', 'AC',    'OK24', 2, 'IMMEDIATE', 1, 0, false, false, 62, 'Seniordage – kræver alder 62+', '0001-01-01', true),
+    ('SENIOR_DAY', 'AC',    'OK26', 2, 'IMMEDIATE', 1, 0, false, false, 62, 'Seniordage – kræver alder 62+', '0001-01-01', true),
+    ('SENIOR_DAY', 'HK',    'OK24', 2, 'IMMEDIATE', 1, 0, false, false, 62, 'Seniordage – kræver alder 62+', '0001-01-01', true),
+    ('SENIOR_DAY', 'HK',    'OK26', 2, 'IMMEDIATE', 1, 0, false, false, 62, 'Seniordage – kræver alder 62+', '0001-01-01', true),
+    ('SENIOR_DAY', 'PROSA', 'OK24', 2, 'IMMEDIATE', 1, 0, false, false, 62, 'Seniordage – kræver alder 62+', '0001-01-01', true),
+    ('SENIOR_DAY', 'PROSA', 'OK26', 2, 'IMMEDIATE', 1, 0, false, false, 62, 'Seniordage – kræver alder 62+', '0001-01-01', true),
     -- S37 TASK-3701 Bug #1 absorption: AC variants (AC_RESEARCH + AC_TEACHING) mirror AC base values
     -- per interim-expert decision 2026-05-21. Bug-with-no-past-impact under pre-launch posture.
     -- VACATION inherits Ferieloven (universal); other 4 inherit AC overenskomst by structural inheritance.
     -- S60 / ADR-030: MONTHLY_ACCRUAL reseed for the AC-variant codes that exist ONLY in init.sql
     -- (DefaultEntitlementConfigs factory covers AC/HK/PROSA only — see TASK-6003). Sentinel reseed, NOT supersession.
-    ('VACATION',        'AC_RESEARCH', 'OK24', 25, 'MONTHLY_ACCRUAL', 9, 5, false, false, NULL, 'Ferie – 25 dage',                  '0001-01-01'),
-    ('VACATION',        'AC_RESEARCH', 'OK26', 25, 'MONTHLY_ACCRUAL', 9, 5, false, false, NULL, 'Ferie – 25 dage',                  '0001-01-01'),
-    ('VACATION',        'AC_TEACHING', 'OK24', 25, 'MONTHLY_ACCRUAL', 9, 5, false, false, NULL, 'Ferie – 25 dage',                  '0001-01-01'),
-    ('VACATION',        'AC_TEACHING', 'OK26', 25, 'MONTHLY_ACCRUAL', 9, 5, false, false, NULL, 'Ferie – 25 dage',                  '0001-01-01'),
-    ('SPECIAL_HOLIDAY', 'AC_RESEARCH', 'OK24',  5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage',       '0001-01-01'),
-    ('SPECIAL_HOLIDAY', 'AC_RESEARCH', 'OK26',  5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage',       '0001-01-01'),
-    ('SPECIAL_HOLIDAY', 'AC_TEACHING', 'OK24',  5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage',       '0001-01-01'),
-    ('SPECIAL_HOLIDAY', 'AC_TEACHING', 'OK26',  5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage',       '0001-01-01'),
-    ('CARE_DAY',        'AC_RESEARCH', 'OK24',  2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage',             '0001-01-01'),
-    ('CARE_DAY',        'AC_RESEARCH', 'OK26',  2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage',             '0001-01-01'),
-    ('CARE_DAY',        'AC_TEACHING', 'OK24',  2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage',             '0001-01-01'),
-    ('CARE_DAY',        'AC_TEACHING', 'OK26',  2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage',             '0001-01-01'),
-    ('CHILD_SICK',      'AC_RESEARCH', 'OK24',  1, 'IMMEDIATE', 1, 0, false, true,  NULL, 'Barn syg – 1 dag per episode',     '0001-01-01'),
-    ('CHILD_SICK',      'AC_RESEARCH', 'OK26',  1, 'IMMEDIATE', 1, 0, false, true,  NULL, 'Barn syg – 1 dag per episode',     '0001-01-01'),
-    ('CHILD_SICK',      'AC_TEACHING', 'OK24',  1, 'IMMEDIATE', 1, 0, false, true,  NULL, 'Barn syg – 1 dag per episode',     '0001-01-01'),
-    ('CHILD_SICK',      'AC_TEACHING', 'OK26',  1, 'IMMEDIATE', 1, 0, false, true,  NULL, 'Barn syg – 1 dag per episode',     '0001-01-01'),
-    ('SENIOR_DAY',      'AC_RESEARCH', 'OK24',  2, 'IMMEDIATE', 1, 0, false, false, 62,   'Seniordage – kræver alder 62+',    '0001-01-01'),
-    ('SENIOR_DAY',      'AC_RESEARCH', 'OK26',  2, 'IMMEDIATE', 1, 0, false, false, 62,   'Seniordage – kræver alder 62+',    '0001-01-01'),
-    ('SENIOR_DAY',      'AC_TEACHING', 'OK24',  2, 'IMMEDIATE', 1, 0, false, false, 62,   'Seniordage – kræver alder 62+',    '0001-01-01'),
-    ('SENIOR_DAY',      'AC_TEACHING', 'OK26',  2, 'IMMEDIATE', 1, 0, false, false, 62,   'Seniordage – kræver alder 62+',    '0001-01-01')
+    -- S73 / TASK-7301 (D-A): the AC-variant CARE_DAY/SENIOR_DAY rows mirror the base TRUE flag.
+    ('VACATION',        'AC_RESEARCH', 'OK24', 25, 'MONTHLY_ACCRUAL', 9, 5, false, false, NULL, 'Ferie – 25 dage',                  '0001-01-01', false),
+    ('VACATION',        'AC_RESEARCH', 'OK26', 25, 'MONTHLY_ACCRUAL', 9, 5, false, false, NULL, 'Ferie – 25 dage',                  '0001-01-01', false),
+    ('VACATION',        'AC_TEACHING', 'OK24', 25, 'MONTHLY_ACCRUAL', 9, 5, false, false, NULL, 'Ferie – 25 dage',                  '0001-01-01', false),
+    ('VACATION',        'AC_TEACHING', 'OK26', 25, 'MONTHLY_ACCRUAL', 9, 5, false, false, NULL, 'Ferie – 25 dage',                  '0001-01-01', false),
+    ('SPECIAL_HOLIDAY', 'AC_RESEARCH', 'OK24',  5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage',       '0001-01-01', false),
+    ('SPECIAL_HOLIDAY', 'AC_RESEARCH', 'OK26',  5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage',       '0001-01-01', false),
+    ('SPECIAL_HOLIDAY', 'AC_TEACHING', 'OK24',  5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage',       '0001-01-01', false),
+    ('SPECIAL_HOLIDAY', 'AC_TEACHING', 'OK26',  5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage',       '0001-01-01', false),
+    ('CARE_DAY',        'AC_RESEARCH', 'OK24',  2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage',             '0001-01-01', true),
+    ('CARE_DAY',        'AC_RESEARCH', 'OK26',  2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage',             '0001-01-01', true),
+    ('CARE_DAY',        'AC_TEACHING', 'OK24',  2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage',             '0001-01-01', true),
+    ('CARE_DAY',        'AC_TEACHING', 'OK26',  2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage',             '0001-01-01', true),
+    ('CHILD_SICK',      'AC_RESEARCH', 'OK24',  1, 'IMMEDIATE', 1, 0, false, true,  NULL, 'Barn syg – 1 dag per episode',     '0001-01-01', false),
+    ('CHILD_SICK',      'AC_RESEARCH', 'OK26',  1, 'IMMEDIATE', 1, 0, false, true,  NULL, 'Barn syg – 1 dag per episode',     '0001-01-01', false),
+    ('CHILD_SICK',      'AC_TEACHING', 'OK24',  1, 'IMMEDIATE', 1, 0, false, true,  NULL, 'Barn syg – 1 dag per episode',     '0001-01-01', false),
+    ('CHILD_SICK',      'AC_TEACHING', 'OK26',  1, 'IMMEDIATE', 1, 0, false, true,  NULL, 'Barn syg – 1 dag per episode',     '0001-01-01', false),
+    ('SENIOR_DAY',      'AC_RESEARCH', 'OK24',  2, 'IMMEDIATE', 1, 0, false, false, 62,   'Seniordage – kræver alder 62+',    '0001-01-01', true),
+    ('SENIOR_DAY',      'AC_RESEARCH', 'OK26',  2, 'IMMEDIATE', 1, 0, false, false, 62,   'Seniordage – kræver alder 62+',    '0001-01-01', true),
+    ('SENIOR_DAY',      'AC_TEACHING', 'OK24',  2, 'IMMEDIATE', 1, 0, false, false, 62,   'Seniordage – kræver alder 62+',    '0001-01-01', true),
+    ('SENIOR_DAY',      'AC_TEACHING', 'OK26',  2, 'IMMEDIATE', 1, 0, false, false, 62,   'Seniordage – kræver alder 62+',    '0001-01-01', true)
 ON CONFLICT (entitlement_type, agreement_code, ok_version, effective_from) DO NOTHING;
 
 -- ============================================================

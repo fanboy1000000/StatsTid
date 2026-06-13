@@ -133,6 +133,9 @@ public sealed class EntitlementConfigSupersessionTests : IAsyncLifetime
         Assert.Equal(today, result.Config.EffectiveFrom);
         Assert.Null(result.Config.EffectiveTo);
         Assert.Equal(3m, result.Config.AnnualQuota);
+        // S73 / TASK-7301 (R2 version-survival, repo level): the CARE_DAY successor row carries
+        // the predecessor's full_day_only = TRUE through the Case-B INSERT.
+        Assert.True(result.Config.FullDayOnly);
 
         // Row count for this natural key: 2 (closed predecessor + new open row).
         Assert.Equal(2L, await CountRowsForNaturalKeyAsync(EntitlementType, AgreementCode, OkVersion));
@@ -471,6 +474,12 @@ public sealed class EntitlementConfigSupersessionTests : IAsyncLifetime
         IsPerEpisode = predecessor.IsPerEpisode,
         MinAge = predecessor.MinAge,
         Description = predecessor.Description,
+        // S73 / TASK-7301 (SPRINT-73 R2/R7 — legitimate behavior change, refinement
+        // REFINEMENT-s73-ui-testing-fix-bundle): the full-day-only flag threads the full config
+        // surface; a successor must carry the predecessor's flag or the new DB CHECK
+        // entitlement_configs_full_day_only_types rejects the CARE_DAY/SENIOR_DAY INSERT —
+        // which is ALSO the repo-level version-survival contract this helper now mirrors.
+        FullDayOnly = predecessor.FullDayOnly,
         EffectiveFrom = effectiveFrom,
     };
 
@@ -565,6 +574,9 @@ public sealed class EntitlementConfigSupersessionTests : IAsyncLifetime
         Description = reader.IsDBNull(reader.GetOrdinal("description"))
             ? null
             : reader.GetString(reader.GetOrdinal("description")),
+        // S73 / TASK-7301 (R2/R7 — legitimate behavior change, refinement
+        // REFINEMENT-s73-ui-testing-fix-bundle): the test-local reader mirrors the repo's.
+        FullDayOnly = reader.GetBoolean(reader.GetOrdinal("full_day_only")),
         CreatedAt = reader.GetDateTime(reader.GetOrdinal("created_at")),
         Version = reader.GetInt64(reader.GetOrdinal("version")),
         EffectiveFrom = reader.GetFieldValue<DateOnly>(reader.GetOrdinal("effective_from")),

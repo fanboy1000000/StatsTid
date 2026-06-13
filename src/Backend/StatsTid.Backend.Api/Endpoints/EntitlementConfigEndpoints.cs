@@ -112,6 +112,8 @@ public static class EntitlementConfigEndpoints
                 Description = reader.IsDBNull(reader.GetOrdinal("description"))
                     ? null
                     : reader.GetString(reader.GetOrdinal("description")),
+                // S73 / TASK-7301 (R2): full-day-only flag threads the read surface.
+                FullDayOnly = reader.GetBoolean(reader.GetOrdinal("full_day_only")),
                 CreatedAt = reader.GetDateTime(reader.GetOrdinal("created_at")),
                 Version = reader.GetInt64(reader.GetOrdinal("version")),
                 EffectiveFrom = reader.GetFieldValue<DateOnly>(reader.GetOrdinal("effective_from")),
@@ -183,6 +185,15 @@ public static class EntitlementConfigEndpoints
                 });
             }
 
+            // 1c. S73 / TASK-7301 (SPRINT-73 R2 construction-enforcement, the S68-B1 lesson):
+            //     CARE_DAY + SENIOR_DAY are FULL-DAY-ONLY per the D-A owner ruling (2026-06-13)
+            //     — a PRODUCT RULE, not a default. A POST with the flag false/ABSENT (the DTO
+            //     defaults a missing field to false) is rejected with a friendly 422; the DB
+            //     CHECK entitlement_configs_full_day_only_types is the data-layer backstop for
+            //     any other write path.
+            if (FullDayOnlyGuard.IsViolated(body.EntitlementType, body.FullDayOnly, out var fullDayError))
+                return Results.UnprocessableEntity(fullDayError!);
+
             var streamId = $"entitlement-config-{body.EntitlementType}-{body.AgreementCode}-{body.OkVersion}";
 
             await using var conn = connectionFactory.Create();
@@ -222,6 +233,7 @@ public static class EntitlementConfigEndpoints
                     IsPerEpisode = body.IsPerEpisode,
                     MinAge = body.MinAge,
                     Description = body.Description,
+                    FullDayOnly = body.FullDayOnly, // S73 / TASK-7301 (R2)
                     EffectiveFrom = today,
                 };
 
@@ -292,6 +304,7 @@ public static class EntitlementConfigEndpoints
                     IsPerEpisode = persistedConfig.IsPerEpisode,
                     MinAge = persistedConfig.MinAge,
                     Description = persistedConfig.Description,
+                    FullDayOnly = persistedConfig.FullDayOnly, // S73 / TASK-7301 (R2, additive-nullable)
                     ActorId = actorId,
                     ActorRole = actorRole,
                     CorrelationId = actor.CorrelationId,
@@ -383,6 +396,13 @@ public static class EntitlementConfigEndpoints
                 });
             }
 
+            // 1b. S73 / TASK-7301 (SPRINT-73 R2 construction-enforcement, the S68-B1 lesson):
+            //     a PUT must not silently un-rule the D-A full-day-only ruling for
+            //     CARE_DAY/SENIOR_DAY — flag false/ABSENT → 422 (the body validator runs before
+            //     the If-Match protocol parse, mirroring the same-day validator's precedence).
+            if (FullDayOnlyGuard.IsViolated(body.EntitlementType, body.FullDayOnly, out var fullDayError))
+                return Results.UnprocessableEntity(fullDayError!);
+
             // 2. Admin-strict If-Match parse — 428 if missing or If-None-Match: * supplied.
             if (!EtagHeaderHelper.TryParseIfMatch(
                     context.Request, out var expectedVersion, out var headerError))
@@ -459,6 +479,7 @@ public static class EntitlementConfigEndpoints
                     IsPerEpisode = body.IsPerEpisode,
                     MinAge = body.MinAge,
                     Description = body.Description,
+                    FullDayOnly = body.FullDayOnly, // S73 / TASK-7301 (R2 version-survival: the editor round-trips the flag)
                     EffectiveFrom = today,
                 };
 
@@ -519,6 +540,7 @@ public static class EntitlementConfigEndpoints
                         EffectiveTo = today, // the close-date stamped on the predecessor
                         RowVersion = predecessor.Version,
                         SupersededByConfigId = saveResult.Config.ConfigId,
+                        FullDayOnly = predecessor.FullDayOnly, // S73 / TASK-7301 (R2, additive-nullable)
                         ActorId = actorId,
                         ActorRole = actorRole,
                         CorrelationId = actor.CorrelationId,
@@ -583,6 +605,7 @@ public static class EntitlementConfigEndpoints
                     IsPerEpisode = saveResult.Config.IsPerEpisode,
                     MinAge = saveResult.Config.MinAge,
                     Description = saveResult.Config.Description,
+                    FullDayOnly = saveResult.Config.FullDayOnly, // S73 / TASK-7301 (R2, additive-nullable)
                     ActorId = actorId,
                     ActorRole = actorRole,
                     CorrelationId = actor.CorrelationId,
@@ -681,6 +704,8 @@ public static class EntitlementConfigEndpoints
                             Description = reader.IsDBNull(reader.GetOrdinal("description"))
                                 ? null
                                 : reader.GetString(reader.GetOrdinal("description")),
+                            // S73 / TASK-7301 (R2): keeps the DELETE audit's previousData honest.
+                            FullDayOnly = reader.GetBoolean(reader.GetOrdinal("full_day_only")),
                             CreatedAt = reader.GetDateTime(reader.GetOrdinal("created_at")),
                             Version = reader.GetInt64(reader.GetOrdinal("version")),
                             EffectiveFrom = reader.GetFieldValue<DateOnly>(reader.GetOrdinal("effective_from")),
@@ -802,6 +827,8 @@ public static class EntitlementConfigEndpoints
         isPerEpisode = c.IsPerEpisode,
         minAge = c.MinAge,
         description = c.Description,
+        // S73 / TASK-7301 (R2): served so the admin editor (TASK-7302) can round-trip the flag.
+        fullDayOnly = c.FullDayOnly,
         effectiveFrom = c.EffectiveFrom,
         effectiveTo = c.EffectiveTo,
         version = c.Version,
@@ -828,6 +855,11 @@ public static class EntitlementConfigEndpoints
         public int? MinAge { get; init; }
         public string? Description { get; init; }
 
+        // S73 / TASK-7301 (R2): the full-day-only day-shape flag. NOT required — an ABSENT
+        // field deserializes to false, which the FullDayOnlyGuard rejects (422) for
+        // CARE_DAY/SENIOR_DAY per the D-A owner ruling ("flag false/absent → 422").
+        public bool FullDayOnly { get; init; }
+
         // S30 / TASK-3007: optional same-day-only field. Defaulted to today by the endpoint
         // when omitted; rejected with 422 when supplied with any other value.
         public DateOnly? EffectiveFrom { get; init; }
@@ -852,6 +884,11 @@ public static class EntitlementConfigEndpoints
         public required bool IsPerEpisode { get; init; }
         public int? MinAge { get; init; }
         public string? Description { get; init; }
+
+        // S73 / TASK-7301 (R2 version-survival): the editor PUTs the full config shape and must
+        // round-trip the flag. ABSENT deserializes to false → 422 for CARE_DAY/SENIOR_DAY (the
+        // FullDayOnlyGuard) — an unrelated-field edit therefore always re-asserts TRUE.
+        public bool FullDayOnly { get; init; }
 
         // S30 / TASK-3007: required. Validator rejects != today with 422.
         public required DateOnly EffectiveFrom { get; init; }

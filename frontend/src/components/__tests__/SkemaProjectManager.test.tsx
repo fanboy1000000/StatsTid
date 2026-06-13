@@ -450,3 +450,50 @@ describe('SkemaProjectManager — 422 offender rendering', () => {
     expect(screen.queryByRole('alert')).toBeNull()
   })
 })
+
+describe('SkemaProjectManager — full-day note (S73 R5)', () => {
+  // The served fullDayOnly flag rides on the absence-type DTOs (both panes).
+  const fullDayPrefs: SkemaRowPreferences = {
+    configured: true,
+    projects: SELECTED_PROJECTS,
+    absenceTypes: [
+      { type: 'VACATION', label: 'Ferie', sortOrder: 0 },
+      { type: 'CARE_DAY', label: 'Omsorgsdag', sortOrder: 1, fullDayOnly: true },
+    ],
+  }
+  const fullDayCatalogs: SkemaCatalogs = {
+    projects: CATALOG_PROJECTS,
+    absenceTypes: [
+      { type: 'VACATION', label: 'Ferie' },
+      { type: 'CARE_DAY', label: 'Omsorgsdag', fullDayOnly: true },
+      { type: 'SENIOR_DAY', label: 'Seniordag', fullDayOnly: true },
+    ],
+  }
+
+  it('renders the "hele dage" note on a SELECTED full-day absence type (from the served flag) but not on an hours-based one', async () => {
+    const user = userEvent.setup()
+    renderManager({ rowPreferences: fullDayPrefs, catalogs: fullDayCatalogs })
+    await user.click(screen.getByRole('tab', { name: 'Ferie og fravær 2' }))
+    const { mine } = getPanes()
+    const careRow = within(mine)
+      .getAllByRole('listitem')
+      .find((li) => li.textContent?.includes('Omsorgsdag')) as HTMLElement
+    expect(within(careRow).getByText('hele dage')).toBeInTheDocument()
+    const ferieRow = within(mine)
+      .getAllByRole('listitem')
+      .find((li) => li.textContent?.includes('Ferie')) as HTMLElement
+    expect(within(ferieRow).queryByText('hele dage')).toBeNull()
+  })
+
+  it('renders the "hele dage" note on a CATALOG (addable) full-day absence type', async () => {
+    const user = userEvent.setup()
+    renderManager({ rowPreferences: fullDayPrefs, catalogs: fullDayCatalogs })
+    await user.click(screen.getByRole('tab', { name: 'Ferie og fravær 2' }))
+    const { cat } = getPanes()
+    // SENIOR_DAY is addable (not selected) and carries the flag.
+    const seniorRow = within(cat)
+      .getAllByRole('listitem')
+      .find((li) => li.textContent?.includes('Seniordag')) as HTMLElement
+    expect(within(seniorRow).getByText('hele dage')).toBeInTheDocument()
+  })
+})

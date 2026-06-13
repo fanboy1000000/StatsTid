@@ -39,6 +39,9 @@ interface CreateFormState extends EditFormState {
   okVersion: string
   accrualModel: AccrualModel
   resetMonth: string
+  // S73 / TASK-7301 — the full-day-only flag on create (server 422s a false for
+  // CARE_DAY/SENIOR_DAY via the construction-enforcement guard).
+  fullDayOnly: boolean
 }
 
 const emptyEditForm: EditFormState = {
@@ -57,6 +60,7 @@ const emptyCreateForm: CreateFormState = {
   okVersion: '',
   accrualModel: 'IMMEDIATE',
   resetMonth: '1',
+  fullDayOnly: false,
 }
 
 function parseNumericField(value: string, fallback: number): number {
@@ -108,6 +112,7 @@ function createFormToRequest(f: CreateFormState): EntitlementConfigCreateRequest
     okVersion: f.okVersion.trim(),
     accrualModel: f.accrualModel,
     resetMonth: Number.parseInt(f.resetMonth, 10) || 1,
+    fullDayOnly: f.fullDayOnly,
   }
 }
 
@@ -225,6 +230,9 @@ export function EntitlementConfigEditor() {
         accrualModel: editing.accrualModel,
         resetMonth: editing.resetMonth,
         effectiveFrom: today,
+        // S73 R2 version-survival — carry the predecessor's flag round-trip so an
+        // unrelated field edit never resets it (the page displays it read-only).
+        fullDayOnly: editing.fullDayOnly,
       })
       closeEdit()
       await refetch()
@@ -502,6 +510,18 @@ export function EntitlementConfigEditor() {
                     Per episode (ikke kvote)
                   </label>
                 </div>
+                <div className={styles.checkboxField}>
+                  <input
+                    className={styles.checkbox}
+                    id="ec-fulldayonly"
+                    type="checkbox"
+                    checked={createForm.fullDayOnly}
+                    onChange={setCreateField('fullDayOnly')}
+                  />
+                  <label className={styles.checkboxLabel} htmlFor="ec-fulldayonly">
+                    Kun hele dage (omsorgs-/seniordage)
+                  </label>
+                </div>
                 <div className={styles.formFieldFull}>
                   <label className={styles.formLabel} htmlFor="ec-desc">
                     Beskrivelse
@@ -610,6 +630,20 @@ export function EntitlementConfigEditor() {
                     readOnly
                     aria-readonly="true"
                     title="Fastlaast per ADR-021 Q1(i) — opret en ny OK-version for at aendre"
+                  />
+                </div>
+                <div className={styles.formField}>
+                  <label className={styles.formLabel}>
+                    Kun hele dage
+                    <span className={styles.frozenHint}>(fastlaast)</span>
+                  </label>
+                  <input
+                    className={`${styles.input} ${styles.readOnly}`}
+                    type="text"
+                    value={editing.fullDayOnly ? 'Ja' : 'Nej'}
+                    readOnly
+                    aria-readonly="true"
+                    title="Fuld-dags-reglen er en bevidst skema-/ejer-aendring (S73) — kan ikke aendres via dette billede"
                   />
                 </div>
                 <div className={styles.formField}>

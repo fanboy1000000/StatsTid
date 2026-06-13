@@ -65,7 +65,6 @@ public static class OvertimeEndpoints
             UserRepository userRepo,
             UserAgreementCodeRepository userAgreementCodeRepo,
             IHttpClientFactory httpClientFactory,
-            IConfiguration configuration,
             OrgScopeValidator scopeValidator,
             HttpContext context,
             CancellationToken ct) =>
@@ -98,12 +97,14 @@ public static class OvertimeEndpoints
                 employeeId, periodStart, ct);
             var agreementCode = pastEffectiveAgreementCode ?? user.AgreementCode;
 
-            var ruleEngineUrl = configuration["ServiceUrls:RuleEngine"] ?? "http://rule-engine:8080";
-            var client = httpClientFactory.CreateClient();
+            // S73 / TASK-7300 (R1): the NAMED rule-engine client. The AD-HOC Authorization
+            // forwarder that lived here (the one working site of the S73 incident) is
+            // REPLACED by the central RuleEngineHeaderForwardingHandler — two coexisting
+            // forwarding mechanisms are exactly the wiring drift that caused the incident.
+            // Externally observable behavior is unchanged: the same bearer crosses the hop
+            // (plus X-Correlation-Id, which the ad-hoc block never carried).
+            var client = httpClientFactory.CreateClient(Http.RuleEngineClient.Name);
             var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, PropertyNameCaseInsensitive = true };
-
-            if (context.Request.Headers.TryGetValue("Authorization", out var authHeader))
-                client.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", authHeader.ToString());
 
             var payload = new
             {
@@ -121,7 +122,7 @@ public static class OvertimeEndpoints
             };
 
             var response = await client.PostAsJsonAsync(
-                $"{ruleEngineUrl}/api/rules/check-overtime-governance", payload, jsonOptions, ct);
+                "/api/rules/check-overtime-governance", payload, jsonOptions, ct);
 
             if (!response.IsSuccessStatusCode)
                 return Results.Json(new { error = "Overtime governance check service unavailable" }, statusCode: 503);

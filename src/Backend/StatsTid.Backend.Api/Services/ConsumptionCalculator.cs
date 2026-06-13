@@ -150,29 +150,64 @@ public sealed class ConsumptionCalculator
     /// The returned list is index-aligned with <paramref name="rows"/> (one result per input row,
     /// same order) so the caller can pair each result with the absence it computed it from.
     /// </para>
+    ///
+    /// <para>
+    /// <b>S73 / TASK-7301 Step-7a B1 — the full-day-only consumption-consistency contract.</b>
+    /// For a FULL-DAY-ONLY entitlement row (CARE_DAY / SENIOR_DAY under SPRINT-73 R2), the save
+    /// guard requires the booked <c>hours</c> to equal the 2-decimal-rounded basis
+    /// (<c>RoundBasis(fullDayHours)</c>). To make such a booking record EXACTLY 1.0 feriedage
+    /// (not <c>2.48 / 2.479 = 1.0004</c> for a non-clean fraction), the consumption divisor for
+    /// those rows must be the SAME rounded basis the guard required — so the indices in
+    /// <paramref name="fullDayOnlyRowIndices"/> divide by <see cref="RoundBasisTwoDp"/> instead of
+    /// the raw norm, yielding <c>roundedBasis / roundedBasis = 1.0</c> by construction.
+    /// <see cref="Consumption.FullDayHours"/> still carries the RAW norm (the guard derives
+    /// <c>requiredHours</c> from it via the same rounding); only the divisor for full-day rows
+    /// changes. Partial / non-full-day rows are byte-identical to the unparameterised path
+    /// (raw-norm division, ADR-032 D1).
+    /// </para>
     /// </summary>
     public async Task<IReadOnlyList<Consumption>> ComputeAsync(
         string employeeId,
         IReadOnlyList<(DateOnly Date, decimal Hours)> rows,
         string fallbackOrgId,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        IReadOnlySet<int>? fullDayOnlyRowIndices = null)
     {
         var fullDayCache = new Dictionary<DateOnly, decimal?>();
         var result = new List<Consumption>(rows.Count);
 
-        foreach (var (date, hours) in rows)
+        for (var i = 0; i < rows.Count; i++)
         {
+            var (date, hours) = rows[i];
             if (!fullDayCache.TryGetValue(date, out var fullDay))
             {
                 fullDay = await FullDayHoursAsync(employeeId, date, fallbackOrgId, ct);
                 fullDayCache[date] = fullDay;
             }
 
-            result.Add(new Consumption(date, fullDay, ToFeriedage(hours, fullDay)));
+            // FULL-DAY-ONLY rows divide by the rounded basis so an exact full day → 1.0 (B1);
+            // every other row keeps the raw-norm ADR-032 D1 divisor (byte-identical).
+            var divisor = fullDayOnlyRowIndices is not null && fullDayOnlyRowIndices.Contains(i)
+                ? RoundBasisTwoDp(fullDay)
+                : fullDay;
+
+            result.Add(new Consumption(date, fullDay, ToFeriedage(hours, divisor)));
         }
 
         return result;
     }
+
+    /// <summary>
+    /// The 2-decimal AwayFromZero projection of the per-day norm — the SAME rounding the
+    /// SkemaEndpoints full-day-only guard applies (<c>RoundBasis</c>) and the month GET serves as
+    /// <c>consumptionBasis</c>. Centralised here so the full-day consumption divisor and the
+    /// guard's <c>requiredHours</c> route through ONE rounding convention (SPRINT-73 R2/R3).
+    /// Null / non-positive passes through (the caller's anchor / weekend guards own those).
+    /// </summary>
+    public static decimal? RoundBasisTwoDp(decimal? fullDayHours)
+        => fullDayHours is { } fdh && fdh > 0m
+            ? Math.Round(fdh, 2, MidpointRounding.AwayFromZero)
+            : fullDayHours;
 
     /// <summary>
     /// ADR-032 D1 consumption conversion: <c>Math.Round(hours / fullDayHours, 4,

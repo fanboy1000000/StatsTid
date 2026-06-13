@@ -167,8 +167,12 @@ public sealed class SkemaRowPreferencesFallbackRegressionTests : IAsyncLifetime
     /// The container-less month GET still serves the COMPLETE pre-S72 field set with its
     /// established shapes (the S72 fields are purely additive): year/month/daysInMonth,
     /// projects (projectId/projectCode/projectName/sortOrder per item), absenceTypes
-    /// (type/label per item), entries, absences, workTime, dailyNorm, approval,
+    /// (type/label/fullDayOnly per item), entries, absences, workTime, dailyNorm, approval,
     /// employeeDeadline, managerDeadline.
+    /// S73 / TASK-7301 (SPRINT-73 R3/R7 — legitimate behavior change, refinement
+    /// REFINEMENT-s73-ui-testing-fix-bundle): the absence-type item set gained
+    /// <c>fullDayOnly</c> (owner ruling D-A) — the pinned per-item field set was updated to
+    /// include it, and the response gained the additive <c>consumptionBasis</c> array.
     /// </summary>
     [Fact]
     public async Task ContainerLess_ExistingFieldSet_IntactAlongsideAdditiveFields()
@@ -191,8 +195,9 @@ public sealed class SkemaRowPreferencesFallbackRegressionTests : IAsyncLifetime
         var project = body.GetProperty("projects").EnumerateArray().Single();
         Assert.Equal(new[] { "projectId", "projectCode", "projectName", "sortOrder" },
             project.EnumerateObject().Select(p => p.Name).ToArray());
+        // S73 / TASK-7301 (R3/R7 — cited above): the item set gained fullDayOnly.
         var absenceType = body.GetProperty("absenceTypes").EnumerateArray().First();
-        Assert.Equal(new[] { "type", "label" },
+        Assert.Equal(new[] { "type", "label", "fullDayOnly" },
             absenceType.EnumerateObject().Select(p => p.Name).ToArray());
         Assert.Empty(body.GetProperty("entries").EnumerateArray());
         Assert.Empty(body.GetProperty("absences").EnumerateArray());
@@ -204,6 +209,8 @@ public sealed class SkemaRowPreferencesFallbackRegressionTests : IAsyncLifetime
         Assert.True(body.TryGetProperty("catalogs", out _));
         Assert.True(body.TryGetProperty("boundaryWorkTime", out _));
         Assert.True(body.TryGetProperty("fullDayNormAtMonthEnd", out _));
+        // The S73 addition (R3) exists without having displaced anything either.
+        Assert.True(body.TryGetProperty("consumptionBasis", out _));
     }
 
     // ─────────────────────────────── helpers ───────────────────────────────

@@ -40,6 +40,10 @@ export interface WorkInterval {
 export type WorkIntervalsMap = Map<string, WorkInterval[]>  // dateKey -> intervals
 export type ManualHoursMap = Map<string, number>            // dateKey -> manual hours
 export type DailyNormMap = Map<string, number | null>       // dateKey -> norm hours (null = blank)
+// S73 / TASK-7302 — dateKey -> the served ADR-032 consumption basis (R3/R5).
+// `null` = no dated profile covers the day → NO full-day snap (the typed value
+// stands; the server rejects via the anchor-422 family — fail-closed).
+export type ConsumptionBasisMap = Map<string, number | null>
 
 interface SkemaGridProps {
   year: number
@@ -61,6 +65,12 @@ interface SkemaGridProps {
       (owner ruling D-B drops the lump-hours entry UI). */
   onManualHoursChange?: (date: string, hours: number | null) => void
   dailyNorm?: DailyNormMap
+  /** S73 R5 — the served per-day ADR-032 consumption basis. A commit in a
+      `fullDayOnly` absence cell SNAPS to `consumptionBasis.get(dateKey)`; a null
+      basis (no dated profile) means NO snap (the typed value stands, fail-closed
+      server-side). Absent map → no snap data (full-day cells behave like the
+      pre-S73 prefill — the typed value stands). */
+  consumptionBasis?: ConsumptionBasisMap
   /** S72 R4/R12 — the VISIBLE row sets + order. Absent → ALL served rows render
       (the approval surface / pre-S72 fallback). */
   rowPreferences?: SkemaRowPreferences
@@ -149,6 +159,7 @@ export function SkemaGrid({
   workIntervals,
   manualHours,
   dailyNorm,
+  consumptionBasis,
   rowPreferences,
   onOpenDay,
   onOpenManager,
@@ -174,7 +185,17 @@ export function SkemaGrid({
     const byKey = new Map(absenceRowsAll.map((r) => [r.key, r]))
     return [...rowPreferences.absenceTypes]
       .sort((a, b) => a.sortOrder - b.sortOrder)
-      .map((a) => byKey.get(a.type) ?? { type: 'absence' as const, key: a.type, label: a.label })
+      // S73 R5 — the served fullDayOnly flag rides through: the basis row (from
+      // deriveSkemaRowBasis) wins; the fallback carries the preference entry's
+      // own served flag so the "hele dage" note + snap never drop on this path
+      // (only attached when TRUE — falsy reads identically at the snap/note sites).
+      .map(
+        (a) =>
+          byKey.get(a.type) ??
+          (a.fullDayOnly
+            ? { type: 'absence' as const, key: a.type, label: a.label, fullDayOnly: true }
+            : { type: 'absence' as const, key: a.type, label: a.label }),
+      )
   }, [rowPreferences, absenceRowsAll])
 
   // ── Hidden-rows affordance (R3): served keys carrying hours in the viewed month
@@ -369,12 +390,36 @@ export function SkemaGrid({
 
   // On blur the cell reformats to 1 decimal (the display falls back to the
   // formatted cellValues entry) and flashes when the value changed.
-  const handleCellBlur = useCallback(() => {
-    if (editing && editing.raw !== editing.initial) {
-      triggerFlash(editing.key)
-    }
-    setEditing(null)
-  }, [editing, triggerFlash])
+  //
+  // S73 R5 — FULL-DAY SNAP (on commit): when the row is `fullDayOnly` and the
+  // cell holds an ENTRY (the raw text parses to a non-null, non-zero value), the
+  // value SNAPS to that day's served consumption basis. The null-basis case
+  // (no dated profile covers the day) does NOT snap and invents no value — the
+  // typed entry stands locally and the SERVER rejects it via the existing
+  // anchor-422 family (fail-closed server-side). Blank stays blank (a cleared
+  // cell propagated null already → nothing to snap). Non-full-day rows are
+  // untouched here (ADR-032 D3 norm prefill stays the only seeding, unchanged).
+  const handleCellBlur = useCallback(
+    (row: SkemaRow, dateKey: string) => {
+      if (row.type === 'absence' && row.fullDayOnly && editing) {
+        const num = editing.raw === '' ? null : parseDanishNumber(editing.raw)
+        const hasEntry = num !== null && !isNaN(num) && num !== 0
+        if (hasEntry) {
+          const basis = consumptionBasis?.get(dateKey)
+          // null basis → no snap (typed value stands, server fail-closes); a
+          // positive basis snaps the committed value to the day's full-day basis.
+          if (basis !== null && basis !== undefined && basis > 0) {
+            onCellChange(row.key, dateKey, basis)
+          }
+        }
+      }
+      if (editing && editing.raw !== editing.initial) {
+        triggerFlash(editing.key)
+      }
+      setEditing(null)
+    },
+    [editing, triggerFlash, consumptionBasis, onCellChange],
+  )
 
   const toggleGroup = useCallback((id: 'projects' | 'absences') => {
     setCollapsedGroups((g) => ({ ...g, [id]: !g[id] }))
@@ -386,11 +431,14 @@ export function SkemaGrid({
 
   const renderEditableRow = (row: SkemaRow) => {
     const rowSum = rowSums.get(row.key) ?? 0
+    // S73 R5 — the "hele dage" note renders from the SERVED fullDayOnly flag
+    // (never a hardcoded type list); an explicit row.note still wins if present.
+    const noteText = row.note ?? (row.fullDayOnly ? 'hele dage' : undefined)
     return (
       <tr key={row.key} className={row.type === 'absence' ? styles.absenceRow : undefined}>
-        <td className={styles.rowLabel} title={row.note ? `${row.label} — ${row.note}` : row.label}>
+        <td className={styles.rowLabel} title={noteText ? `${row.label} — ${noteText}` : row.label}>
           {row.label}
-          {row.note && <span className={styles.rowNote}>{row.note}</span>}
+          {noteText && <span className={styles.rowNote}>{noteText}</span>}
         </td>
         {days.map((day) => {
           const dateKey = formatDateKey(day)
@@ -417,7 +465,7 @@ export function SkemaGrid({
                 value={display}
                 onFocus={() => handleCellFocus(row, dateKey, val)}
                 onChange={(e) => handleCellInput(row.key, cellKey, dateKey, e.target.value)}
-                onBlur={handleCellBlur}
+                onBlur={() => handleCellBlur(row, dateKey)}
                 aria-label={`${row.label} dag ${day.getDate()}`}
               />
             </td>

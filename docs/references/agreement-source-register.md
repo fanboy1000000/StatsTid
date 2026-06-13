@@ -2515,6 +2515,12 @@ These observations fed into:
 
 ---
 
+### S73 provenance note — full-day-only is an OWNER PRODUCT RULING, not a source-derived cell
+
+**SR-CARE_DAY / SR-SENIOR_DAY full-day semantics (S73 owner ruling D-A, 2026-06-13).** The canonical agreement sources in this register establish the QUOTAS for CARE_DAY (omsorgsdage, 2 days) and SENIOR_DAY (seniordage, 2 days, 62+) — they do NOT establish whole-day-vs-partial-day registration SEMANTICS. The S73 ruling that CARE_DAY + SENIOR_DAY must be registered as whole days (the `entitlement_configs.full_day_only` flag, construction-enforced) is an **owner product decision** sourced from the design handoff's "hele dage" marks + owner confirmation during UI testing — NOT from a cirkulær cell. Recorded here so a future Phase-B source-verification pass treats the day-shape as owner-ruled (not source-pending) while still verifying the quotas. CHILD_SICK (barns sygedag) stays hours-based.
+
+---
+
 ## Cell Count Tracker
 
 | Agreement | OK24 cells | OK26 cells | Total |

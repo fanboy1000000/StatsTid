@@ -850,3 +850,327 @@ describe('SkemaPage — R16 ownership', () => {
     expect(skemaPageSource).toMatch(/import \{[^}]*buildWorkTimePayload[^}]*\} from '\.\.\/hooks\/useSkema'/)
   })
 })
+
+// ── S73 / TASK-7302 — the rejected-save honesty split (R4) ──
+describe('SkemaPage — R4 rejected-save honesty', () => {
+  it('R4: a 422 REVERTS the affected cell to server truth (a cell with no server value clears) and surfaces the alert', async () => {
+    await renderLoaded()
+    // The save 422s with the full-day-only body.
+    saveResponder = () =>
+      jsonResponse(
+        {
+          error: 'absence_full_day_only',
+          absenceType: 'CARE_DAY',
+          date: '2026-03-03',
+          requiredHours: 7.4,
+          message: 'full day only',
+        },
+        422,
+      )
+    vi.useFakeTimers()
+    // Register a partial CARE_DAY on Mar 3 (server truth has none), then blur so
+    // the cell is committed (the displayed value reflects cellValues, not the
+    // raw editing text).
+    const careInput = screen.getByLabelText('Omsorgsdage dag 3')
+    fireEvent.change(careInput, { target: { value: '3' } })
+    fireEvent.blur(careInput)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1100)
+    })
+    vi.useRealTimers()
+    // Reverted to server truth (no CARE_DAY on Mar 3 → blank).
+    await waitFor(() =>
+      expect((screen.getByLabelText('Omsorgsdage dag 3') as HTMLInputElement).value).toBe(''),
+    )
+    // …and the new 422 body surfaces a comprehensible Danish alert.
+    expect(screen.getByText(/Omsorgsdage skal registreres som en hel dag/)).toBeInTheDocument()
+  })
+
+  it('R4: a 422 reverts the cell to its PRE-EXISTING server value (not blank) when the server had one', async () => {
+    // Server truth: VACATION 7,4 on Mar 3 (from the fixture). Edit it to 5, get a
+    // 422 → the cell reverts to the served 7,4, not to blank.
+    await renderLoaded()
+    saveResponder = () => jsonResponse({ error: 'absence_full_day_only', absenceType: 'VACATION' }, 422)
+    vi.useFakeTimers()
+    const ferieInput = screen.getByLabelText('Ferie dag 3')
+    fireEvent.change(ferieInput, { target: { value: '5' } })
+    fireEvent.blur(ferieInput) // commit (ferie = hours-based, no snap)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1100)
+    })
+    vi.useRealTimers()
+    await waitFor(() =>
+      expect((screen.getByLabelText('Ferie dag 3') as HTMLInputElement).value).toBe('7,4'),
+    )
+  })
+
+  it('R4 overlap guard: a 422 on the OLD value does NOT revert a cell a NEWER edit already owns', async () => {
+    await renderLoaded()
+    // Save A leaves with value 2 and is HELD; it will 422.
+    let releaseAAs422!: () => void
+    saveResponder = () =>
+      new Promise((resolve) => {
+        releaseAAs422 = () =>
+          resolve(jsonResponse({ error: 'absence_full_day_only', absenceType: 'UDV' }, 422))
+      })
+    vi.useFakeTimers()
+    fireEvent.change(screen.getByLabelText('Udvikling dag 3'), { target: { value: '2' } })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1100) // save A leaves
+    })
+    // A NEWER edit takes the cell to 5 (succeeds), then commit.
+    saveResponder = null
+    const udvInput = screen.getByLabelText('Udvikling dag 3')
+    fireEvent.change(udvInput, { target: { value: '5' } })
+    fireEvent.blur(udvInput)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1100)
+    })
+    vi.useRealTimers()
+    // Now save A settles as 422 — its revert must SKIP (live 5 ≠ sent 2).
+    releaseAAs422()
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30))
+    })
+    expect((screen.getByLabelText('Udvikling dag 3') as HTMLInputElement).value).toBe('5')
+  })
+
+  it('R4: a 403 (credential-shaped) KEEPS the local edit — a mid-edit auth failure never discards typed cells, no revert', async () => {
+    // 403 is the credential-shaped non-2xx that does NOT trigger the api.ts 401
+    // reload path; it must keep the local edit (the B2 retry posture), never
+    // revert to server truth (revert is 422-ONLY).
+    await renderLoaded()
+    saveResponder = () => jsonResponse({ error: 'forbidden' }, 403)
+    vi.useFakeTimers()
+    const udvInput = screen.getByLabelText('Udvikling dag 3')
+    fireEvent.change(udvInput, { target: { value: '2' } })
+    fireEvent.blur(udvInput)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1100)
+    })
+    vi.useRealTimers()
+    // The local edit is intact (NOT reverted) — the failed/retry posture holds.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30))
+    })
+    expect((screen.getByLabelText('Udvikling dag 3') as HTMLInputElement).value).toBe('2')
+  })
+
+  it('R4 flush contract: a 422-reverted delta counts RESOLVED — a following preference PUT PROCEEDS', async () => {
+    await renderLoaded()
+    // A pending debounced edit that the FLUSH will fire — and the server 422s.
+    saveResponder = () => jsonResponse({ error: 'absence_full_day_only', absenceType: 'UDV' }, 422)
+    fireEvent.change(screen.getByLabelText('Udvikling dag 3'), { target: { value: '2' } })
+    // Modal action triggers the flush → the 422 resolves (revert) → the PUT proceeds.
+    fireEvent.click(screen.getByRole('button', { name: 'Administrer projekter' }))
+    await screen.findByText('Administrer rækker')
+    fireEvent.click(screen.getByRole('button', { name: 'Fjern Drift & support' }))
+    await waitFor(() => expect(putBodies).toHaveLength(1))
+    // No prefs-save-abort error surfaced (the flush did NOT return false).
+    expect(screen.queryByText(/Kunne ikke gemme rækkeindstillingerne/)).toBeNull()
+  })
+
+  it('R4 contrast: a 500 (non-422) flush failure still ABORTS the preference PUT (the S72 B2 posture is unchanged)', async () => {
+    await renderLoaded()
+    saveResponder = () => jsonResponse({ error: 'boom' }, 500)
+    fireEvent.change(screen.getByLabelText('Udvikling dag 3'), { target: { value: '2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Administrer projekter' }))
+    await screen.findByText('Administrer rækker')
+    fireEvent.click(screen.getByRole('button', { name: 'Fjern Drift & support' }))
+    expect(
+      await screen.findByText(/Kunne ikke gemme rækkeindstillingerne/),
+    ).toBeInTheDocument()
+    expect(fetchLog.some((e) => e.startsWith('PUT'))).toBe(false)
+    expect(putBodies).toHaveLength(0)
+  })
+
+  // ── S73 Step-7a B2 — the work-time 422 mirror of fireCellSave ──
+  it('B2: a work-time 422 REVERTS the day\'s intervals to server truth + surfaces the alert', async () => {
+    await renderLoaded()
+    // The work-time save 422s (a work-time-shaped or generic 422 body).
+    saveResponder = () =>
+      jsonResponse({ error: 'absence_full_day_only', message: 'work-time rejected' }, 422)
+
+    // Open Mar 2 (server truth: 08:00–16:00) and push the end to 17:00.
+    fireEvent.click(screen.getByRole('button', { name: 'Registrér arbejdstid 2026-03-02' }))
+    let drawer = await screen.findByRole('dialog')
+    vi.useFakeTimers()
+    fireEvent.change(within(drawer).getByLabelText('Til'), { target: { value: '17:00' } })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1100) // the 1s work-time debounce fires → 422
+    })
+    vi.useRealTimers()
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30)) // let the 422 revert settle
+    })
+
+    // The 422 alert surfaced (saveMonth maps the body into the alert surface).
+    expect(screen.getByText(/work-time rejected|hel dag/i)).toBeInTheDocument()
+
+    // Re-open the panel: it re-initialises from the (reverted) local work-time —
+    // the end is back to server truth 16:00, NOT the rejected 17:00.
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Luk' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Registrér arbejdstid 2026-03-02' }))
+    drawer = await screen.findByRole('dialog')
+    expect((within(drawer).getByLabelText('Til') as HTMLInputElement).value).toBe('16:00')
+  })
+
+  it('B2: a work-time 422 counts RESOLVED — a following preference PUT is NOT silently aborted', async () => {
+    await renderLoaded()
+    saveResponder = () =>
+      jsonResponse({ error: 'absence_full_day_only', message: 'work-time rejected' }, 422)
+
+    // Push an UNFLUSHED work-time edit (no fake timers → the debounce has not
+    // fired), then open the manager modal and remove a row: the flush fires the
+    // pending work-time save → 422 → reverts → counts RESOLVED → the PUT proceeds.
+    fireEvent.click(screen.getByRole('button', { name: 'Registrér arbejdstid 2026-03-02' }))
+    const drawer = await screen.findByRole('dialog')
+    fireEvent.change(within(drawer).getByLabelText('Til'), { target: { value: '17:00' } })
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Luk' }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Administrer projekter' }))
+    await screen.findByText('Administrer rækker')
+    fireEvent.click(screen.getByRole('button', { name: 'Fjern Drift & support' }))
+    await waitFor(() => expect(putBodies).toHaveLength(1))
+    // No prefs-save-abort error surfaced (the work-time 422 did NOT return false).
+    expect(screen.queryByText(/Kunne ikke gemme rækkeindstillingerne/)).toBeNull()
+  })
+
+  // ── S73 Step-7a cycle-2 B2 — a 422 reverts to the LAST KNOWN-GOOD save, not
+  //    the stale original-fetched value (serverWorkIntervalsRef advances on a
+  //    SUCCESSFUL save). ──
+  it('B2 (c2): a work-time 422 AFTER a successful save reverts to the SAVED value, not the original', async () => {
+    await renderLoaded()
+    // First edit SUCCEEDS (server truth must advance to 18:00).
+    saveResponder = () => jsonResponse({})
+
+    fireEvent.click(screen.getByRole('button', { name: 'Registrér arbejdstid 2026-03-02' }))
+    let drawer = await screen.findByRole('dialog')
+    vi.useFakeTimers()
+    fireEvent.change(within(drawer).getByLabelText('Til'), { target: { value: '18:00' } })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1100) // debounce fires → 200 (server truth → 18:00)
+    })
+    vi.useRealTimers()
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30))
+    })
+
+    // Now a SECOND edit on the SAME day 422s.
+    saveResponder = () =>
+      jsonResponse({ error: 'absence_full_day_only', message: 'work-time rejected' }, 422)
+    vi.useFakeTimers()
+    fireEvent.change(within(drawer).getByLabelText('Til'), { target: { value: '17:00' } })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1100) // debounce fires → 422 → revert
+    })
+    vi.useRealTimers()
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30))
+    })
+
+    // The revert restores 18:00 (the LAST KNOWN-GOOD save), NOT the original 16:00.
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Luk' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Registrér arbejdstid 2026-03-02' }))
+    drawer = await screen.findByRole('dialog')
+    expect((within(drawer).getByLabelText('Til') as HTMLInputElement).value).toBe('18:00')
+  })
+
+  // ── S73 Step-7a cycle-2 B2 (cell mirror) — the cell path shared the bug:
+  //    serverCellsRef advances on a successful cell save, so a later 422 reverts
+  //    to the saved value, not the original. ──
+  it('B2 (c2 cell): a cell 422 AFTER a successful cell save reverts to the SAVED value, not the original', async () => {
+    await renderLoaded()
+    // The fixture seeds Mar 2 Drift & support at 7,4 (allocated). First edit to
+    // 5 SUCCEEDS → server truth advances to 5.
+    saveResponder = () => jsonResponse({})
+    const input1 = screen.getByLabelText('Drift & support dag 2') as HTMLInputElement
+
+    vi.useFakeTimers()
+    fireEvent.focus(input1)
+    fireEvent.change(input1, { target: { value: '5' } })
+    fireEvent.blur(input1)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1100) // cell debounce fires → 200 (server truth → 5)
+    })
+    vi.useRealTimers()
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30))
+    })
+
+    // Second edit on the SAME cell 422s → revert to the last known-good (5), not 7,4.
+    saveResponder = () => jsonResponse({ error: 'boom' }, 422)
+    const input2 = screen.getByLabelText('Drift & support dag 2') as HTMLInputElement
+    vi.useFakeTimers()
+    fireEvent.focus(input2)
+    fireEvent.change(input2, { target: { value: '3' } })
+    fireEvent.blur(input2)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1100) // cell debounce fires → 422 → revert
+    })
+    vi.useRealTimers()
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30))
+    })
+
+    expect((screen.getByLabelText('Drift & support dag 2') as HTMLInputElement).value).toBe('5')
+  })
+})
+
+// ── S73 / TASK-7302 — the full-day snap end-to-end (R5) ──
+describe('SkemaPage — R5 full-day snap (served basis)', () => {
+  function withFullDayCare(): SkemaMonthData {
+    const base = makeMonthData()
+    return {
+      ...base,
+      // Mark CARE_DAY full-day-only on both served DTO surfaces.
+      absenceTypes: base.absenceTypes.map((a) =>
+        a.type === 'CARE_DAY' ? { ...a, fullDayOnly: true } : a,
+      ),
+      rowPreferences: {
+        ...base.rowPreferences!,
+        absenceTypes: base.rowPreferences!.absenceTypes.map((a) =>
+          a.type === 'CARE_DAY' ? { ...a, fullDayOnly: true } : a,
+        ),
+      },
+      catalogs: {
+        ...base.catalogs!,
+        absenceTypes: base.catalogs!.absenceTypes.map((a) =>
+          a.type === 'CARE_DAY' ? { ...a, fullDayOnly: true } : a,
+        ),
+      },
+      // The per-day consumption basis (7,4 on Mar 5, a weekday).
+      consumptionBasis: buildDailyNorm(),
+    }
+  }
+
+  it('R5: a partial entry in the full-day CARE_DAY cell SNAPS to the served consumption basis on commit', async () => {
+    monthData = withFullDayCare()
+    const { container } = await renderLoaded()
+    void container
+    const input = screen.getByLabelText('Omsorgsdage dag 5') as HTMLInputElement
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: '3' } })
+    fireEvent.blur(input)
+    expect(input.value).toBe('7,4') // snapped to the basis (Mar 5 weekday)
+  })
+
+  it('R5: the CARE_DAY row carries the served "hele dage" note; the ferie row does not', async () => {
+    monthData = withFullDayCare()
+    const { container } = await renderLoaded()
+    const care = gridRow(container, 'Omsorgsdage')
+    expect(care.textContent).toContain('hele dage')
+    const ferie = gridRow(container, 'Ferie')
+    expect(ferie.textContent).not.toContain('hele dage')
+  })
+
+  it('R5: ferie (hours-based) partial-day entry is UNCHANGED — a below-norm value commits as typed (no snap)', async () => {
+    monthData = withFullDayCare()
+    await renderLoaded()
+    const input = screen.getByLabelText('Ferie dag 5') as HTMLInputElement
+    fireEvent.focus(input) // ADR-032 D3 prefill seeds 7,4
+    fireEvent.change(input, { target: { value: '3,7' } })
+    fireEvent.blur(input)
+    expect(input.value).toBe('3,7') // ferie keeps the partial — no snap
+  })
+})

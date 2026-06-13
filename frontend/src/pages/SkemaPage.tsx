@@ -40,13 +40,14 @@ import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { useSkema, buildWorkTimePayload, deriveSkemaRowBasis, periodHours } from '../hooks/useSkema'
-import type { QuotaError, ApprovalValidationError, SkemaRowBasis } from '../hooks/useSkema'
+import type { QuotaError, AbsenceRuleError, ApprovalValidationError, SkemaRowBasis } from '../hooks/useSkema'
 import {
   SkemaGrid,
   type WorkInterval,
   type WorkIntervalsMap,
   type ManualHoursMap,
   type DailyNormMap,
+  type ConsumptionBasisMap,
 } from '../components/SkemaGrid'
 import { SkemaDayPanel, type DayPanelPeriod, type DayPanelProjectRow } from '../components/SkemaDayPanel'
 import { SkemaProjectManager } from '../components/SkemaProjectManager'
@@ -91,6 +92,21 @@ function formatQuotaError(q: QuotaError): string {
   const remaining = q.remaining.toFixed(1).replace('.', ',')
   const requested = q.requested.toFixed(1).replace('.', ',')
   return `Du har overskredet din kvote for ${label}. Du har ${remaining} dage tilbage, men forsøgte at registrere ${requested} dage.`
+}
+
+/** S73 R4 — the new save-422 families (`absence_full_day_only` /
+    `absence_type_not_eligible`) → a comprehensible Danish alert. */
+function formatAbsenceRuleError(e: AbsenceRuleError): string {
+  const label = DANISH_ABSENCE_LABELS[e.absenceType] ?? e.absenceType
+  if (e.error === 'absence_full_day_only') {
+    const required =
+      e.requiredHours !== undefined ? `${e.requiredHours.toFixed(2).replace(/\.?0+$/, '').replace('.', ',')} t` : null
+    return required
+      ? `${label} skal registreres som en hel dag (${required}). Registreringen blev derfor sat tilbage.`
+      : `${label} skal registreres som en hel dag. Registreringen blev derfor sat tilbage.`
+  }
+  // absence_type_not_eligible
+  return `Du er ikke berettiget til ${label} på denne dato. Registreringen blev derfor sat tilbage.`
 }
 
 function formatDanishDate(dateStr: string): string {
@@ -146,6 +162,23 @@ function toHHmm(value: string): string | null {
   return `${String(h).padStart(2, '0')}:${String(mi).padStart(2, '0')}`
 }
 
+/** S73 Step-7a B2 — value-equality of a single day's work-time (intervals +
+    manualHours), used as the overlap guard for the work-time 422 revert: revert a
+    day only when its CURRENT local value still equals what the rejected save SENT. */
+function workTimeDayEquals(
+  aIntervals: WorkInterval[], aManual: number,
+  bIntervals: WorkInterval[], bManual: number,
+): boolean {
+  if (aManual !== bManual) return false
+  if (aIntervals.length !== bIntervals.length) return false
+  for (let i = 0; i < aIntervals.length; i++) {
+    if (aIntervals[i].start !== bIntervals[i].start || aIntervals[i].end !== bIntervals[i].end) {
+      return false
+    }
+  }
+  return true
+}
+
 export function SkemaPage() {
   const { user } = useAuth()
   const employeeId = user?.employeeId ?? ''
@@ -170,7 +203,7 @@ export function SkemaPage() {
       : now.getMonth() + 1,
   )
 
-  const { data, loading, error, quotaError, approvalValidationError, clearQuotaError, clearApprovalValidationError, refetch, saveMonth, employeeApprove, submitAndApprove, reopenPeriod } = useSkema(employeeId, year, month)
+  const { data, loading, error, quotaError, absenceRuleError, approvalValidationError, clearQuotaError, clearAbsenceRuleError, clearApprovalValidationError, refetch, saveMonth, employeeApprove, submitAndApprove, reopenPeriod } = useSkema(employeeId, year, month)
   const { orgId, agreementCode } = useAuth()
   const { data: balanceData, loading: balanceLoading } = useBalanceSummary(employeeId, year, month)
   const { result: complianceResult, loading: complianceLoading } = useCompliance(employeeId, year, month)
@@ -183,6 +216,10 @@ export function SkemaPage() {
   useEffect(() => {
     localCellsRef.current = localCells
   }, [localCells])
+  // S73 R4 — server-truth cell map (the last refetched/successful month): a 422
+  // rejection reverts the affected cells to THIS value. Built the same way as the
+  // initial localCells, kept in a ref so the memoized fireCellSave reads it fresh.
+  const serverCellsRef = useRef<Map<string, number>>(new Map())
   const pendingChangesRef = useRef<{ rowKey: string; date: string; hours: number | null }[]>([])
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // S72 Step-7a B2 (+ the c2 settled-failure fix) — in-flight save promises
@@ -202,6 +239,7 @@ export function SkemaPage() {
   useEffect(() => {
     if (!data) {
       setLocalCells(new Map())
+      serverCellsRef.current = new Map()
       return
     }
     const cells = new Map<string, number>()
@@ -216,6 +254,9 @@ export function SkemaPage() {
       }
     }
     setLocalCells(cells)
+    // S73 R4 — snapshot server truth for the 422 revert (a fresh Map copy so a
+    // later localCells edit never mutates the server-truth reference).
+    serverCellsRef.current = new Map(cells)
     pendingChangesRef.current = []
   }, [data])
 
@@ -264,6 +305,16 @@ export function SkemaPage() {
     return map
   }, [data])
 
+  // S73 R5 — the served per-day ADR-032 consumption basis (the full-day snap
+  // value; null = no dated profile covers the day → no snap, server fail-closes).
+  const consumptionBasis = useMemo<ConsumptionBasisMap>(() => {
+    const map: ConsumptionBasisMap = new Map()
+    for (const cb of data?.consumptionBasis ?? []) {
+      map.set(cb.date, cb.hours)
+    }
+    return map
+  }, [data])
+
   // Local editable work-time state (intervals + manual hours; D-B: manual hours
   // have no entry UI anymore but existing values keep counting and round-trip)
   const [localWorkIntervals, setLocalWorkIntervals] = useState<WorkIntervalsMap>(new Map())
@@ -282,6 +333,15 @@ export function SkemaPage() {
   const manualHoursRef = useRef<ManualHoursMap>(localManualHours)
   useEffect(() => { workIntervalsRef.current = localWorkIntervals }, [localWorkIntervals])
   useEffect(() => { manualHoursRef.current = localManualHours }, [localManualHours])
+
+  // S73 Step-7a B2 — server-truth work-time maps (the last refetched/successful
+  // month): a work-time 422 reverts the affected day's intervals + manualHours to
+  // THESE values (the mirror of serverCellsRef for cells). Kept in refs so the
+  // memoized fireWorkTimeSave reads them fresh without re-binding.
+  const serverWorkIntervalsRef = useRef<WorkIntervalsMap>(new Map())
+  const serverManualHoursRef = useRef<ManualHoursMap>(new Map())
+  useEffect(() => { serverWorkIntervalsRef.current = workIntervalsFromData }, [workIntervalsFromData])
+  useEffect(() => { serverManualHoursRef.current = manualHoursFromData }, [manualHoursFromData])
 
   // Debounced work-time save (intervals + the preserved manual hours). The
   // payload ALWAYS builds through the hook's buildWorkTimePayload — the single
@@ -302,9 +362,89 @@ export function SkemaPage() {
       manualHoursRef.current,
     )
     if (payload.length === 0) return Promise.resolve(true)
-    const save = saveMonth([], payload).then((ok) => {
-      if (!ok) for (const d of dates) workTimeDirtyRef.current.add(d)
-      return ok
+    // S73 Step-7a B2 — capture what each date SENDS (a frozen copy of the day's
+    // intervals + manualHours), so a 422 revert can be overlap-guarded: revert a
+    // day ONLY when its CURRENT local work-time still equals what this save sent
+    // (a newer edit owns the day otherwise — the mirror of fireCellSave's guard).
+    const sentByDate = new Map(
+      dates.map((d) => [
+        d,
+        {
+          intervals: workIntervalsRef.current.get(d) ?? [],
+          manualHours: manualHoursRef.current.get(d) ?? 0,
+        },
+      ]),
+    )
+    const save = saveMonth([], payload).then((result) => {
+      if (result.status === 'rejected') {
+        // 422 — REVERT each affected day's work-time to server truth (mirror of
+        // fireCellSave). The alert is already surfaced by saveMonth; the revert
+        // is what makes "422 resolved" honest (the rejected edit no longer lingers
+        // for a later preference flush / refetch to silently discard). Counts
+        // RESOLVED (the day reverted → nothing stale).
+        const revertDates: string[] = []
+        for (const d of dates) {
+          const sent = sentByDate.get(d)!
+          // Overlap guard: skip a day a NEWER edit has changed since the send.
+          if (!workTimeDayEquals(
+            sent.intervals, sent.manualHours,
+            workIntervalsRef.current.get(d) ?? [],
+            manualHoursRef.current.get(d) ?? 0,
+          )) continue
+          revertDates.push(d)
+        }
+        if (revertDates.length > 0) {
+          setLocalWorkIntervals((prev) => {
+            const next = new Map(prev)
+            for (const d of revertDates) {
+              const truth = serverWorkIntervalsRef.current.get(d)
+              if (truth && truth.length > 0) next.set(d, truth.map((iv) => ({ ...iv })))
+              else next.delete(d)
+            }
+            return next
+          })
+          setLocalManualHours((prev) => {
+            const next = new Map(prev)
+            for (const d of revertDates) {
+              const truth = serverManualHoursRef.current.get(d)
+              if (truth && truth !== 0) next.set(d, truth)
+              else next.delete(d)
+            }
+            return next
+          })
+        }
+        return true // resolved: reverted to server truth.
+      }
+      if (result.status === 'ok') {
+        // S73 Step-7a cycle-2 B2 — ADVANCE server truth on a SUCCESSFUL save.
+        // serverWorkIntervalsRef/serverManualHoursRef are otherwise snapshotted
+        // only on LOAD/refetch (workIntervalsFromData/manualHoursFromData), so a
+        // 422 AFTER a good save would revert to the STALE original-fetched value
+        // and clobber the save. Merge each just-saved day's SENT values in (the
+        // overlap-guarded frozen copy), so a later 422 reverts to the last
+        // KNOWN-GOOD server state, not the original. Overlap-guarded: only adopt
+        // a day whose CURRENT local still equals what THIS save sent (a newer
+        // edit owns it otherwise — that edit's own save will advance truth).
+        for (const d of dates) {
+          const sent = sentByDate.get(d)!
+          if (!workTimeDayEquals(
+            sent.intervals, sent.manualHours,
+            workIntervalsRef.current.get(d) ?? [],
+            manualHoursRef.current.get(d) ?? 0,
+          )) continue
+          if (sent.intervals.length > 0)
+            serverWorkIntervalsRef.current.set(d, sent.intervals.map((iv) => ({ ...iv })))
+          else serverWorkIntervalsRef.current.delete(d)
+          if (sent.manualHours !== 0)
+            serverManualHoursRef.current.set(d, sent.manualHours)
+          else serverManualHoursRef.current.delete(d)
+        }
+        return true
+      }
+      // status 'failed' (400/401/403/404/409/5xx/network) — re-queue the dirty
+      // dates (B2 retry; the local refs still hold the edits).
+      for (const d of dates) workTimeDirtyRef.current.add(d)
+      return false
     })
     workTimeSavesInFlightRef.current.add(save)
     void save.finally(() => {
@@ -361,27 +501,86 @@ export function SkemaPage() {
   const approvalStatus = data?.approval?.status ?? 'DRAFT'
   const isReadOnly = approvalStatus === 'EMPLOYEE_APPROVED' || approvalStatus === 'APPROVED'
 
-  /** Fire a cell save for the given changes; on FAILURE the affected cells are
-      re-queued FROM LIVE LOCAL STATE — never the stale captured delta (Step-7a
-      c2 settled-failure fix + the c3 overlapping-saves fix: a newer save that
-      succeeded first must not be overwritten by an older failure's retry) —
-      and never overwriting a NEWER pending entry for the same (rowKey, date).
-      A cell whose live value is gone (cleared) is NOT re-queued (the recorded
-      R17 inherited limitation: clearing never persists through this path). */
+  /** S73 R4 — fire a cell save for the given changes and split the rejected-save
+      policy INSIDE the failure handler:
+
+      • status 'ok'        → resolved (returns true).
+      • status 'rejected'  (HTTP 422 ONLY) → REVERT the affected cells to server
+        truth + surface the alert; counts RESOLVED (returns true) so the flush
+        proceeds (dropped + reverted leaves nothing stale). The revert is GUARDED
+        by the S72-c3 overlap shape: a cell reverts ONLY when its CURRENT local
+        value still equals the value the rejected save SENT (and no newer pending
+        edit owns it) — a newer edit keeps the cell.
+      • status 'failed'    (400/401/403/404/409/5xx/network) → KEEP the local
+        edits + the B2 re-queue/retry posture (returns false). 401/403 are
+        credential-shaped — a mid-edit session expiry must never discard typed
+        cells. The re-queue rebuilds FROM LIVE LOCAL STATE (Step-7a c2/c3), never
+        the stale captured delta, and never over a NEWER pending entry; a cleared
+        cell (live undefined) is not re-queued (the R17 inherited limitation). */
   const fireCellSave = useCallback((changes: { rowKey: string; date: string; hours: number | null }[]): Promise<boolean> => {
-    const save = saveMonth(changes).then((ok) => {
-      if (!ok) {
+    const save = saveMonth(changes).then((result) => {
+      if (result.status === 'ok') {
+        // S73 Step-7a cycle-2 B2 — ADVANCE server truth on a SUCCESSFUL cell save
+        // (symmetric to the work-time fix). serverCellsRef is otherwise snapshotted
+        // only on LOAD/refetch (the `data` effect), so a 422 AFTER a good save would
+        // revert to the STALE original-fetched value and clobber the save. Adopt each
+        // just-saved cell's SENT value as the new server truth, overlap-guarded: only
+        // when the cell's CURRENT live value still equals what THIS save sent (a newer
+        // edit owns it otherwise — that edit's own save advances truth). A clear
+        // (null/0) sets server truth to absent.
+        for (const c of changes) {
+          const cellKey = `${c.rowKey}:${c.date}`
+          const live = localCellsRef.current.get(cellKey)
+          const sent = c.hours === null || c.hours === 0 ? undefined : c.hours
+          if (live !== sent) continue
+          if (sent === undefined) serverCellsRef.current.delete(cellKey)
+          else serverCellsRef.current.set(cellKey, sent)
+        }
+        return true
+      }
+      if (result.status === 'rejected') {
+        // 422 — revert the affected cells to server truth, overlap-guarded.
+        const reverts: { rowKey: string; date: string; hours: number | null }[] = []
         for (const c of changes) {
           const hasNewer = pendingChangesRef.current.some(
-            (p) => p.rowKey === c.rowKey && p.date === c.date
+            (p) => p.rowKey === c.rowKey && p.date === c.date,
           )
           if (hasNewer) continue
-          const live = localCellsRef.current.get(`${c.rowKey}:${c.date}`)
-          if (live === undefined) continue
-          pendingChangesRef.current.push({ rowKey: c.rowKey, date: c.date, hours: live })
+          const cellKey = `${c.rowKey}:${c.date}`
+          const live = localCellsRef.current.get(cellKey)
+          // The overlap guard: revert ONLY when the live value still equals what
+          // was SENT (a newer edit owns the cell otherwise). `c.hours` null/0
+          // means the sent value was a clear — compare against an absent live.
+          const sent = c.hours === null || c.hours === 0 ? undefined : c.hours
+          if (live !== sent) continue
+          const truth = serverCellsRef.current.get(cellKey)
+          reverts.push({ rowKey: c.rowKey, date: c.date, hours: truth ?? null })
         }
+        if (reverts.length > 0) {
+          setLocalCells((prev) => {
+            const next = new Map(prev)
+            for (const r of reverts) {
+              const key = `${r.rowKey}:${r.date}`
+              if (r.hours === null) next.delete(key)
+              else next.set(key, r.hours)
+            }
+            return next
+          })
+        }
+        // Resolved: the rejected deltas dropped + reverted → nothing stale.
+        return true
       }
-      return ok
+      // status 'failed' — re-queue FROM LIVE LOCAL STATE (B2), retryable.
+      for (const c of changes) {
+        const hasNewer = pendingChangesRef.current.some(
+          (p) => p.rowKey === c.rowKey && p.date === c.date,
+        )
+        if (hasNewer) continue
+        const live = localCellsRef.current.get(`${c.rowKey}:${c.date}`)
+        if (live === undefined) continue
+        pendingChangesRef.current.push({ rowKey: c.rowKey, date: c.date, hours: live })
+      }
+      return false
     })
     cellSavesInFlightRef.current.add(save)
     void save.finally(() => {
@@ -760,6 +959,14 @@ export function SkemaPage() {
         </Alert>
       )}
 
+      {/* S73 R4 — full-day-only / not-eligible save rejection (422). The cell
+          reverted to server truth; this alert explains why. */}
+      {absenceRuleError && (
+        <Alert variant="error" onDismiss={clearAbsenceRuleError}>
+          {formatAbsenceRuleError(absenceRuleError)}
+        </Alert>
+      )}
+
       {/* Approval validation error (422 — coverage or allocation) */}
       {approvalValidationError && (
         <Alert variant="error" onDismiss={clearApprovalValidationError}>
@@ -794,6 +1001,7 @@ export function SkemaPage() {
         workIntervals={localWorkIntervals}
         manualHours={localManualHours}
         dailyNorm={dailyNorm}
+        consumptionBasis={consumptionBasis}
         rowPreferences={effectivePrefs}
         onOpenDay={handleOpenDay}
         onOpenManager={openManager}

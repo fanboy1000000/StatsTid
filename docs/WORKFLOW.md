@@ -282,6 +282,10 @@ This enables agents to debug production issues autonomously. Implementation requ
 - Scoped permissions (read-only access to logs, no write access to production)
 - Prompt template extensions for runtime context injection
 
+## Composed-stack hop coverage (S73 standing principle)
+
+**Every cross-service hop gets at least one composed-stack smoke probe.** The regression harness fakes the service-to-service HTTP hop (it replaces the HttpClient/WAF), so service-to-service AUTH is only real in the composed stack. S73 found that the Backend→rule-engine calls carried no bearer → 401 → 503, breaking every quota-validated absence save and silently dropping compliance warnings IN COMPOSE, while every faked-hop regression test stayed green. The smoke suite is the only place this class of breakage is visible. When a sprint adds or changes a backend→service call (rule-engine, payroll, external, orchestrator), it MUST add or extend a composed-stack smoke probe that traverses the real hop (a 2xx where the fail-closed mapping would otherwise return 5xx is the discriminating assertion). **Recorded composed-unproved hop (S73 follow-up):** `check-overtime-governance` (Backend→rule-engine) is migrated onto the forwarding handler but has no composed-stack probe yet — the principle's first named debt.
+
 ## Documentation Drift Prevention
 To prevent documentation from diverging from code:
 - **Entropy scan step 1**: KB path validation catches stale file references

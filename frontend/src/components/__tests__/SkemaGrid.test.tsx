@@ -590,6 +590,163 @@ describe('SkemaGrid — editable cells', () => {
   })
 })
 
+// ── S73 / TASK-7302 — the full-day snap (R5) + the served-flag note ──
+describe('SkemaGrid — full-day snap (S73 R5)', () => {
+  // CARE_DAY is the served full-day-only row; VACATION (ferie) stays hours-based.
+  const fullDayRows: SkemaRow[] = [
+    { type: 'project', key: 'DRIFT', label: 'Drift' },
+    { type: 'absence', key: 'VACATION', label: 'Ferie' },
+    { type: 'absence', key: 'CARE_DAY', label: 'Omsorgsdage', fullDayOnly: true },
+  ]
+
+  /** Stateful harness so the snap's onCellChange round-trips into cellValues. */
+  function FullDayHarness({
+    consumptionBasis,
+    dailyNorm,
+    initial,
+  }: {
+    consumptionBasis?: Map<string, number | null>
+    dailyNorm?: Map<string, number | null>
+    initial?: Map<string, number>
+  }) {
+    const [cells, setCells] = useState(initial ?? new Map<string, number>())
+    return (
+      <SkemaGrid
+        year={2026}
+        month={3}
+        rows={fullDayRows}
+        cellValues={cells}
+        readOnly={false}
+        consumptionBasis={consumptionBasis}
+        dailyNorm={dailyNorm}
+        onCellChange={(rowKey, date, hours) => {
+          setCells((prev) => {
+            const next = new Map(prev)
+            const k = `${rowKey}:${date}`
+            if (hours === null) next.delete(k)
+            else next.set(k, hours)
+            return next
+          })
+        }}
+      />
+    )
+  }
+
+  it('R5: an entry in a full-day cell SNAPS to the served consumption basis on commit (blur)', () => {
+    render(
+      <FullDayHarness
+        consumptionBasis={new Map([['2026-03-02', 7.4]])}
+        dailyNorm={new Map([['2026-03-02', 7.4]])}
+      />,
+    )
+    const input = screen.getByLabelText('Omsorgsdage dag 2') as HTMLInputElement
+    fireEvent.focus(input)
+    // Type a PARTIAL value the user shouldn't be able to keep on a full-day type
+    fireEvent.change(input, { target: { value: '3' } })
+    fireEvent.blur(input)
+    // The committed value snapped to the day's basis (7,4) — not the typed 3.
+    expect(input.value).toBe('7,4')
+  })
+
+  it('R5 academic case: a null DISPLAY norm but a served basis (the ANNUAL_ACTIVITY 7.4×fraction fallback) STILL snaps', () => {
+    render(
+      <FullDayHarness
+        // The academic surface: dailyNorm null (renders blank) but the basis is
+        // served (the deliberate 7,4×fraction fallback) → the snap still fires.
+        dailyNorm={new Map<string, number | null>([['2026-03-02', null]])}
+        consumptionBasis={new Map([['2026-03-02', 3.7]])}
+      />,
+    )
+    const input = screen.getByLabelText('Omsorgsdage dag 2') as HTMLInputElement
+    fireEvent.focus(input) // no prefill (null norm), as ADR-032 D3 specifies
+    fireEvent.change(input, { target: { value: '1' } })
+    fireEvent.blur(input)
+    expect(input.value).toBe('3,7') // snapped to the academic basis
+  })
+
+  it('R5 null-basis: no dated profile covers the day → NO snap, NO invented value — the typed entry STANDS locally', () => {
+    render(
+      <FullDayHarness
+        // basis explicitly null for the day → the server fail-closes via anchor-422
+        consumptionBasis={new Map<string, number | null>([['2026-03-02', null]])}
+      />,
+    )
+    const input = screen.getByLabelText('Omsorgsdage dag 2') as HTMLInputElement
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: '3' } })
+    fireEvent.blur(input)
+    // The typed value stands — no snap, no invented basis value.
+    expect(input.value).toBe('3')
+  })
+
+  it('R5 blank-stays-blank: clearing a full-day cell on commit leaves it blank (no snap to basis)', () => {
+    render(
+      <FullDayHarness
+        consumptionBasis={new Map([['2026-03-02', 7.4]])}
+        initial={new Map([['CARE_DAY:2026-03-02', 7.4]])}
+      />,
+    )
+    const input = screen.getByLabelText('Omsorgsdage dag 2') as HTMLInputElement
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: '' } }) // clear
+    fireEvent.blur(input)
+    expect(input.value).toBe('') // blank, NOT re-snapped to 7,4
+  })
+
+  it('R5 missing-basis-map: a full-day cell with no served basis does NOT snap (the typed value stands)', () => {
+    render(<FullDayHarness />) // no consumptionBasis prop
+    const input = screen.getByLabelText('Omsorgsdage dag 2') as HTMLInputElement
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: '3' } })
+    fireEvent.blur(input)
+    expect(input.value).toBe('3')
+  })
+
+  it('R5: a NON-full-day (ferie) cell does NOT snap — a partial below-norm value commits unchanged (ferie behavior UNCHANGED)', () => {
+    render(
+      <FullDayHarness
+        consumptionBasis={new Map([['2026-03-02', 7.4]])}
+        dailyNorm={new Map([['2026-03-02', 7.4]])}
+      />,
+    )
+    const input = screen.getByLabelText('Ferie dag 2') as HTMLInputElement
+    fireEvent.focus(input) // ADR-032 D3 prefill seeds 7,4…
+    fireEvent.change(input, { target: { value: '3,7' } }) // …user edits to a partial day
+    fireEvent.blur(input)
+    expect(input.value).toBe('3,7') // ferie keeps the partial value — no snap
+  })
+
+  it('R5: the non-full-day ADR-032 D3 prefill is UNCHANGED on the ferie row even with a basis served', () => {
+    const onCellChange = vi.fn()
+    render(
+      <SkemaGrid
+        year={2026}
+        month={3}
+        rows={fullDayRows}
+        cellValues={new Map()}
+        readOnly={false}
+        onCellChange={onCellChange}
+        consumptionBasis={new Map([['2026-03-02', 7.4]])}
+        dailyNorm={new Map([['2026-03-02', 7.4]])}
+      />,
+    )
+    fireEvent.focus(screen.getByLabelText('Ferie dag 2'))
+    // Prefill still seeds the served NORM (not the basis path) on first focus.
+    expect(onCellChange).toHaveBeenCalledWith('VACATION', '2026-03-02', 7.4)
+  })
+
+  it('R5: the "hele dage" note renders from the SERVED fullDayOnly flag (not a hardcoded type list)', () => {
+    const { container } = renderGrid({ rows: fullDayRows })
+    const careRow = rowByLabel(container, 'Omsorgsdage')
+    const note = careRow.querySelector('td span')
+    expect(note?.className).toContain('rowNote')
+    expect(note?.textContent).toBe('hele dage')
+    // The hours-based ferie row carries NO note.
+    const ferieRow = rowByLabel(container, 'Ferie')
+    expect(ferieRow.querySelector('td span')).toBeNull()
+  })
+})
+
 describe('SkemaGrid — read-only / review mode (R12)', () => {
   it('renders NO inputs in read-only mode; values render as formatted text', () => {
     const { container } = renderGrid({

@@ -104,6 +104,11 @@ export interface SkemaRow {
   /** S72 / TASK-7202 — optional informational note rendered after the row label
       (e.g. "hele dage"). Informational text ONLY (SPRINT-72 R1 — no full-day snap). */
   note?: string
+  /** S73 / TASK-7302 — the served full-day-only flag (R3/R5). When true, an entry
+      in this absence row SNAPS to the day's served consumption basis on commit, and
+      the grid renders the "hele dage" note from THIS flag — never a hardcoded type
+      list. Set from the served absence-type DTOs (deriveSkemaRowBasis). */
+  fullDayOnly?: boolean
 }
 
 // ── S72 / TASK-7201 month-GET additive shapes (consumed by the redesigned grid/page) ──
@@ -122,6 +127,10 @@ export interface SkemaRowPreferenceAbsenceType {
   type: string
   label: string
   sortOrder: number
+  /** S73 / TASK-7301 — the served full-day-only flag (R3). An entry in a row of a
+      full-day-only type SNAPS to the day's served consumption basis (R5). Optional:
+      pre-S73 fixtures/mocks omit it (treated as false). */
+  fullDayOnly?: boolean
 }
 
 /** The month GET's `rowPreferences` field — the VISIBLE row sets (catalog ∩ selections
@@ -137,7 +146,20 @@ export interface SkemaRowPreferences {
     removed rows stay re-addable; stale selections never resurrect org-hidden types. */
 export interface SkemaCatalogs {
   projects: Project[]
-  absenceTypes: { type: string; label: string }[]
+  // S73 / TASK-7301 — `fullDayOnly` served on the catalog absence-type DTOs (R3),
+  // additive (pre-S73 fixtures omit it → treated as false).
+  absenceTypes: { type: string; label: string; fullDayOnly?: boolean }[]
+}
+
+/** S73 / TASK-7301 — one per-day ADR-032 consumption-basis entry (R3). The FE
+    full-day snap (R5) reads `consumptionBasis[date].hours`; `hours === null`
+    means no dated profile covers the day → NO snap (the typed entry stands
+    locally; the server rejects via the anchor-422 family — fail-closed). Derived
+    from the SAME ConsumptionCalculator path the backend guard demands (the
+    served==guard identity, R3). */
+export interface ConsumptionBasisDay {
+  date: string         // "yyyy-MM-dd"
+  hours: number | null // null = no dated profile covers the day → no snap (R5)
 }
 
 export interface WorkTimeInterval {
@@ -161,7 +183,9 @@ export interface SkemaMonthData {
   month: number
   daysInMonth: number
   projects: Project[]
-  absenceTypes: { type: string; label: string }[]
+  // S73 / TASK-7301 — `fullDayOnly` served on the month-GET absence-type DTOs (R3),
+  // additive (pre-S73 fixtures omit it → treated as false).
+  absenceTypes: { type: string; label: string; fullDayOnly?: boolean }[]
   entries: { date: string; projectCode: string; hours: number }[]
   // S72 / TASK-7201 — `feriedage` is the ADR-032 recorded per-absence day-equivalent,
   // served verbatim (nullable passthrough: null on zero-norm days / non-entitlement
@@ -189,4 +213,9 @@ export interface SkemaMonthData {
   /** The employee's weekday full-day norm at the viewed month's LAST day (R10, D-A
       hours-first cards). Null = fail-soft (no dated profile / ANNUAL_ACTIVITY). */
   fullDayNormAtMonthEnd?: number | null
+  /** S73 / TASK-7301 — the per-day ADR-032 consumption basis (R3), one entry per
+      day of the viewed month. The full-day snap (R5) reads
+      `consumptionBasis[date].hours`; null = no dated profile → no snap. Optional:
+      pre-S73 fixtures/mocks omit it (no snap data → typed value stands). */
+  consumptionBasis?: ConsumptionBasisDay[]
 }
