@@ -21,7 +21,7 @@ import { AgreementConfigEditor } from './pages/admin/AgreementConfigEditor'
 import { PositionOverrideManagement } from './pages/admin/PositionOverrideManagement'
 import { WageTypeMappingManagement } from './pages/admin/WageTypeMappingManagement'
 import { AuditLogView } from './pages/admin/AuditLogView'
-import { ReportingLineTree } from './pages/admin/ReportingLineTree'
+import { MedarbejderAdministration } from './pages/admin/MedarbejderAdministration'
 import { DelegationPage } from './pages/delegation/DelegationPage'
 import './styles/tokens.css'
 
@@ -75,7 +75,7 @@ function AppRoutes() {
           {/* LocalAdmin routes within Administration */}
           <Route element={<RequireRole minRole="LocalAdmin" />}>
             <Route path="admin/projekter" element={<ProjectManagement />} />
-            <Route path="admin/ledelseslinjer" element={<ReportingLineTree />} />
+            <Route path="admin/ledelseslinjer" element={<MedarbejderAdministration />} />
             <Route path="admin/brugerrettigheder" element={<RoleManagement />} />
           </Route>
 

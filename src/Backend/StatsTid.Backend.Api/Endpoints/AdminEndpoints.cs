@@ -1887,6 +1887,67 @@ public static class AdminEndpoints
         }).RequireAuthorization("LocalAdminOrAbove");
 
         // ═══════════════════════════════════════════
+        // S75-7500 (R1-R3) — GET /api/admin/reporting-lines/tree/{treeRootOrgId}/medarbejdere
+        //   The consolidated medarbejder-roster read backing the redesigned Medarbejder-
+        //   administration STRUCTURAL tree (FE Phase 2, tasks 7501/7502 consume this contract).
+        //   Per active styrelse user: { employeeId, displayName, enhedLabel (?? primaryOrgName),
+        //   position, structuralApproverId (the RAW active PRIMARY edge — the TREE KEY, NO
+        //   resolver), periodStatus (OPEN/SUBMITTED/APPROVED — the same last-closed-month rule as
+        //   the period-status read), outgoingVikar (the person's OWN active manager_vikar row |
+        //   null), isRoot, isOrphan (the R3 deterministic rule) } + the styrelse
+        //   pendingCountByManager (the existing S74 gated tally, reused as-is). Read-only /
+        //   additive. Scope: LocalAdminOrAbove + org-scope covers the tree root (mirrors the
+        //   sibling GET .../tree/{treeRootOrgId} + .../period-status).
+        // ═══════════════════════════════════════════
+        app.MapGet("/api/admin/reporting-lines/tree/{treeRootOrgId}/medarbejdere", async (
+            string treeRootOrgId,
+            ApprovalPeriodRepository approvalRepo,
+            OrganizationRepository orgRepo,
+            OrgScopeValidator scopeValidator,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            var actor = context.GetActorContext();
+
+            // Scope must cover the tree-root org (same gate as the tree + period-status reads).
+            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, treeRootOrgId, ct);
+            if (!allowed)
+                return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+
+            // Resolve the tree-root org → its materialized_path prefix (the styrelse subtree the
+            // roster is scoped over).
+            var treeRootOrg = await orgRepo.GetByIdAsync(treeRootOrgId, ct);
+            if (treeRootOrg is null)
+                return Results.NotFound(new { error = $"Organization {treeRootOrgId} not found" });
+
+            var roster = await approvalRepo.GetMedarbejderRosterForTreeAsync(
+                treeRootOrg.MaterializedPath, ct);
+
+            return Results.Ok(new
+            {
+                employees = roster.Employees.Select(e => new
+                {
+                    employeeId = e.EmployeeId,
+                    displayName = e.DisplayName,
+                    enhedLabel = e.EnhedLabel,
+                    position = e.Position,
+                    structuralApproverId = e.StructuralApproverId,
+                    periodStatus = e.PeriodStatus,
+                    outgoingVikar = e.OutgoingVikar is null ? null : new
+                    {
+                        vikarUserId = e.OutgoingVikar.VikarUserId,
+                        vikarDisplayName = e.OutgoingVikar.VikarDisplayName,
+                        untilDate = e.OutgoingVikar.UntilDate,
+                        reason = e.OutgoingVikar.Reason,
+                    },
+                    isRoot = e.IsRoot,
+                    isOrphan = e.IsOrphan,
+                }),
+                pendingCountByManager = roster.PendingCountByManager,
+            });
+        }).RequireAuthorization("LocalAdminOrAbove");
+
+        // ═══════════════════════════════════════════
         // S74-7404 R11b — GET /api/admin/users/search — server-side person-search (the 2000+
         //   approver/person picker). Case-insensitive q on display_name/username; scope-filtered
         //   to the caller's RBAC org-scope; paginated (limit/offset, sane default+cap); excludes

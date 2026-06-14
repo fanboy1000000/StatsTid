@@ -35,7 +35,7 @@ const tabGroups: TabGroup[] = [
       { label: 'Medarbejdere', to: '/admin/medarbejdere', minRole: 'LocalHR' },
       { label: 'Audit log', to: '/admin/auditlog', minRole: 'LocalHR' },
       { label: 'Projekter', to: '/admin/projekter', minRole: 'LocalAdmin' },
-      { label: 'Ledelseslinjer', to: '/admin/ledelseslinjer', minRole: 'LocalAdmin' },
+      { label: 'Medarbejder administration', to: '/admin/ledelseslinjer', minRole: 'LocalAdmin' },
       { label: 'Brugerrettigheder', to: '/admin/brugerrettigheder', minRole: 'LocalAdmin' },
     ],
   },

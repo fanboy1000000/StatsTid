@@ -411,10 +411,12 @@ public sealed class ApprovalPeriodRepository
                 LIMIT 1
             ) pend ON TRUE
             WHERE u.is_active = TRUE
-              AND o.materialized_path LIKE @pathPrefix
+              AND o.materialized_path LIKE @pathPrefix ESCAPE '\'
             ORDER BY u.display_name, u.user_id
             """, conn);
-        cmd.Parameters.AddWithValue("pathPrefix", treeRootPathPrefix + "%");
+        // Escape LIKE metacharacters in the (system-derived) path so a literal '%' or '_'
+        // in an org id/path cannot widen the prefix into a wildcard (cross-styrelse over-match).
+        cmd.Parameters.AddWithValue("pathPrefix", EscapeLike(treeRootPathPrefix) + "%");
 
         var employees = new List<EmployeePeriodStatus>();
         var pendingEmployeeIds = new List<string>();
@@ -469,6 +471,198 @@ public sealed class ApprovalPeriodRepository
 
         return new TreePeriodStatusProjection(employees, pendingCountByManager);
     }
+
+    // ──────────────────────────────────────────────────────────────────────
+    //  S75-7500 R1-R3 — the consolidated medarbejder-roster read (read-only)
+    // ──────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// S75-7500 (R1-R3) — the consolidated medarbejder-roster read backing the redesigned
+    /// Medarbejder-administration <b>structural tree</b> (FE Phase 2). For every ACTIVE user whose
+    /// <c>primary_org_id</c> sits within the styrelse subtree rooted at
+    /// <paramref name="treeRootPathPrefix"/> (the tree-root org's <c>materialized_path</c>) it
+    /// returns one enriched roster row, plus the styrelse <c>pendingCountByManager</c> tally REUSED
+    /// from <see cref="GetPeriodStatusProjectionForTreeAsync"/> unchanged.
+    ///
+    /// <para>
+    /// <b>The tree is STRUCTURAL, not effective-approver routed (R2).</b> Each row's
+    /// <c>structuralApproverId</c> is the person's <em>raw active PRIMARY</em>
+    /// <c>reporting_lines.manager_id</c> (a LEFT JOIN, <c>relationship='PRIMARY' AND effective_to
+    /// IS NULL</c>) — the assigned leder, NOT a <c>ResolveDesignatedApproverAsync</c> result. The
+    /// no-resolver rule applies to the TREE KEY/construction; the ONLY per-person resolver use is
+    /// the pre-existing, bounded <c>pendingCountByManager</c> tally (resolved per PENDING employee
+    /// only), which is reused as-is.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Composition (one styrelse-bounded, set-based query for the roster + joins):</b>
+    /// <list type="bullet">
+    /// <item><description><c>enhedLabel</c> = the live <c>employee_profiles.enhed_label</c>
+    /// (<c>effective_to IS NULL</c>) ?? the primary-org name (the Enhed-tag fallback);</description></item>
+    /// <item><description><c>position</c> = the live <c>employee_profiles.position</c> (for FE
+    /// search; null when no live profile / unset);</description></item>
+    /// <item><description><c>structuralApproverId</c> = the active PRIMARY edge's
+    /// <c>manager_id</c> (null when the person has no active PRIMARY approver);</description></item>
+    /// <item><description><c>outgoingVikar</c> = the person's OWN active <c>manager_vikar</c> row
+    /// (where they are the <c>absent_approver_id</c>, <c>effective_to IS NULL</c>) with the vikar's
+    /// resolved <c>display_name</c> — present iff THIS person is an away-manager covered by a vikar;
+    /// drives the FE badge + Vikar tile. The DB's <c>uq_manager_vikar_active</c> guarantees at most
+    /// one active row per absent approver, so the LEFT JOIN cannot fan-out the roster.</description></item>
+    /// </list>
+    /// </para>
+    ///
+    /// <para>
+    /// <c>periodStatus</c> reuses <see cref="GetPeriodStatusProjectionForTreeAsync"/>'s
+    /// last-closed-month projection (OPEN/SUBMITTED/APPROVED) — the SAME rule + roster scope —
+    /// joined by employee id; a roster row with no projected status (defensive) falls back to OPEN.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>R3 — the deterministic root/orphan classification (one in-memory pass over the roster):</b>
+    /// with no persisted root marker (ADR-027 D9 has none), a person with <em>no</em> active PRIMARY
+    /// approver is an <c>isRoot</c> when they are the <c>structuralApproverId</c> of ≥1 other roster
+    /// person (a people-hierarchy top), else an <c>isOrphan</c> (a legacy no-approver leaf gap). A
+    /// person WITH an active PRIMARY approver is neither. Multiple roots may co-exist in messy/Phase-1
+    /// trees (the ADR-027 D9 ≤1-root invariant is a Phase-4 enforcement concern, not enforced here).
+    /// </para>
+    ///
+    /// <para>Read-only / additive — touches no write path and emits no events.</para>
+    /// </summary>
+    /// <param name="treeRootPathPrefix">The tree-root org's <c>materialized_path</c> (e.g.
+    /// <c>/MIN01/STY02/</c>). The roster is scoped via <c>organizations.materialized_path LIKE
+    /// prefix || '%'</c> — the same path-prefix idiom as
+    /// <see cref="GetPeriodStatusProjectionForTreeAsync"/>.</param>
+    public async Task<MedarbejderRosterProjection> GetMedarbejderRosterForTreeAsync(
+        string treeRootPathPrefix, CancellationToken ct = default)
+    {
+        // (1) The structural roster + all joins in ONE styrelse-bounded, set-based query:
+        //     every active styrelse user LEFT-JOINed to their active PRIMARY edge (the raw
+        //     structuralApproverId — NO resolver), their live employee_profiles (enhedLabel/
+        //     position), their primary-org name (the enhedLabel fallback), and their OWN active
+        //     manager_vikar row (outgoingVikar) with the vikar's display name.
+        var rosterRows = new List<RosterRow>();
+        await using (var conn = _connectionFactory.Create())
+        {
+            await conn.OpenAsync(ct);
+            await using var cmd = new NpgsqlCommand(
+                """
+                SELECT
+                    u.user_id                AS employee_id,
+                    u.display_name           AS display_name,
+                    o.org_name               AS primary_org_name,
+                    ep.enhed_label           AS enhed_label,
+                    ep.position              AS position,
+                    rl.manager_id            AS structural_approver_id,
+                    mv.vikar_user_id         AS vikar_user_id,
+                    vu.display_name          AS vikar_display_name,
+                    mv.until_date            AS vikar_until_date,
+                    mv.reason                AS vikar_reason
+                FROM users u
+                JOIN organizations o ON o.org_id = u.primary_org_id
+                LEFT JOIN reporting_lines rl
+                    ON rl.employee_id = u.user_id
+                    AND rl.relationship = 'PRIMARY'
+                    AND rl.effective_to IS NULL
+                LEFT JOIN employee_profiles ep
+                    ON ep.employee_id = u.user_id
+                    AND ep.effective_to IS NULL
+                LEFT JOIN manager_vikar mv
+                    ON mv.absent_approver_id = u.user_id
+                    AND mv.effective_to IS NULL
+                LEFT JOIN users vu ON vu.user_id = mv.vikar_user_id
+                WHERE u.is_active = TRUE
+                  AND o.materialized_path LIKE @pathPrefix ESCAPE '\'
+                ORDER BY u.display_name, u.user_id
+                """, conn);
+            // Escape LIKE metacharacters in the (system-derived) path so a literal '%' or '_'
+            // in an org id/path cannot widen the prefix into a wildcard (cross-styrelse over-match).
+            cmd.Parameters.AddWithValue("pathPrefix", EscapeLike(treeRootPathPrefix) + "%");
+
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            var empOrd = reader.GetOrdinal("employee_id");
+            var nameOrd = reader.GetOrdinal("display_name");
+            var orgNameOrd = reader.GetOrdinal("primary_org_name");
+            var enhedOrd = reader.GetOrdinal("enhed_label");
+            var posOrd = reader.GetOrdinal("position");
+            var approverOrd = reader.GetOrdinal("structural_approver_id");
+            var vikarIdOrd = reader.GetOrdinal("vikar_user_id");
+            var vikarNameOrd = reader.GetOrdinal("vikar_display_name");
+            var vikarUntilOrd = reader.GetOrdinal("vikar_until_date");
+            var vikarReasonOrd = reader.GetOrdinal("vikar_reason");
+            while (await reader.ReadAsync(ct))
+            {
+                var enhed = reader.IsDBNull(enhedOrd) ? null : reader.GetString(enhedOrd);
+                var orgName = reader.GetString(orgNameOrd);
+                OutgoingVikar? vikar = reader.IsDBNull(vikarIdOrd)
+                    ? null
+                    : new OutgoingVikar(
+                        VikarUserId: reader.GetString(vikarIdOrd),
+                        // Defensive: a (theoretical) dangling vikar_user_id falls back to the id.
+                        VikarDisplayName: reader.IsDBNull(vikarNameOrd)
+                            ? reader.GetString(vikarIdOrd)
+                            : reader.GetString(vikarNameOrd),
+                        UntilDate: reader.GetFieldValue<DateOnly>(vikarUntilOrd),
+                        Reason: reader.GetString(vikarReasonOrd));
+
+                rosterRows.Add(new RosterRow(
+                    EmployeeId: reader.GetString(empOrd),
+                    DisplayName: reader.GetString(nameOrd),
+                    // enhedLabel ?? primaryOrgName (the Enhed-tag fallback).
+                    EnhedLabel: enhed ?? orgName,
+                    Position: reader.IsDBNull(posOrd) ? null : reader.GetString(posOrd),
+                    StructuralApproverId: reader.IsDBNull(approverOrd) ? null : reader.GetString(approverOrd),
+                    OutgoingVikar: vikar));
+            }
+        }
+
+        // (2) periodStatus + pendingCountByManager: REUSE the existing S74 projection (same roster
+        //     scope + same last-closed-month rule + the existing bounded gated tally) unchanged.
+        var statusProjection = await GetPeriodStatusProjectionForTreeAsync(treeRootPathPrefix, ct);
+        var statusByEmployee = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var e in statusProjection.Employees)
+            statusByEmployee[e.EmployeeId] = e.Status;
+
+        // (3) R3 root/orphan: one in-memory pass. A person is an effective people-hierarchy parent
+        //     iff they appear as some roster person's structuralApproverId. Then: no-approver +
+        //     is-a-parent = root; no-approver + parents-no-one = orphan; has-approver = neither.
+        var approverIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var r in rosterRows)
+            if (r.StructuralApproverId is not null)
+                approverIds.Add(r.StructuralApproverId);
+
+        var employees = new List<MedarbejderRosterRow>(rosterRows.Count);
+        foreach (var r in rosterRows)
+        {
+            var hasApprover = r.StructuralApproverId is not null;
+            var approvesSomeone = approverIds.Contains(r.EmployeeId);
+            var isRoot = !hasApprover && approvesSomeone;
+            var isOrphan = !hasApprover && !approvesSomeone;
+            employees.Add(new MedarbejderRosterRow(
+                EmployeeId: r.EmployeeId,
+                DisplayName: r.DisplayName,
+                EnhedLabel: r.EnhedLabel,
+                Position: r.Position,
+                StructuralApproverId: r.StructuralApproverId,
+                // Defensive fallback to OPEN if a roster row has no projected status (rosters are
+                // the same scope, so every row should be present).
+                PeriodStatus: statusByEmployee.GetValueOrDefault(r.EmployeeId, "OPEN"),
+                OutgoingVikar: r.OutgoingVikar,
+                IsRoot: isRoot,
+                IsOrphan: isOrphan));
+        }
+
+        return new MedarbejderRosterProjection(employees, statusProjection.PendingCountByManager);
+    }
+
+    /// <summary>Internal pre-classification roster row (S75-7500). Holds the joined fields before
+    /// the R3 root/orphan pass folds in <c>isRoot</c>/<c>isOrphan</c>.</summary>
+    private sealed record RosterRow(
+        string EmployeeId,
+        string DisplayName,
+        string EnhedLabel,
+        string? Position,
+        string? StructuralApproverId,
+        OutgoingVikar? OutgoingVikar);
 
     /// <summary>
     /// Maps a raw <c>approval_periods.status</c> (or <c>null</c> = no closed period) to the
@@ -871,6 +1065,52 @@ public sealed record EmployeePeriodStatus(
     string EmployeeId,
     string DisplayName,
     string Status);
+
+/// <summary>
+/// S75-7500 (R1-R3) — the consolidated medarbejder-roster projection the structural Medarbejder-
+/// administration tree consumes (<see cref="ApprovalPeriodRepository.GetMedarbejderRosterForTreeAsync"/>).
+/// One enriched row per active styrelse user + the styrelse <c>pendingCountByManager</c> tally
+/// REUSED from <see cref="TreePeriodStatusProjection"/> unchanged. Read-only / additive.
+/// </summary>
+/// <param name="Employees">The full styrelse roster, each enriched with the structural approver
+/// (raw PRIMARY edge), enhedLabel/position, last-closed-month status, the outgoing-vikar marker,
+/// and the deterministic root/orphan flags (R3).</param>
+/// <param name="PendingCountByManager">manager user_id → number of that manager's effective reports
+/// currently holding a pending period — the EXISTING S74 bounded gated tally, reused as-is.</param>
+public sealed record MedarbejderRosterProjection(
+    IReadOnlyList<MedarbejderRosterRow> Employees,
+    IReadOnlyDictionary<string, int> PendingCountByManager);
+
+/// <summary>
+/// One enriched medarbejder-roster row (S75-7500 R1). The tree keys on
+/// <paramref name="StructuralApproverId"/> (the raw active PRIMARY <c>reporting_lines.manager_id</c>
+/// — NOT a resolver result). <paramref name="EnhedLabel"/> is <c>employee_profiles.enhed_label</c>
+/// or the primary-org name fallback. <paramref name="OutgoingVikar"/> is the person's OWN active
+/// <c>manager_vikar</c> row (present iff they are an away-manager covered by a vikar).
+/// </summary>
+public sealed record MedarbejderRosterRow(
+    string EmployeeId,
+    string DisplayName,
+    string EnhedLabel,
+    string? Position,
+    string? StructuralApproverId,
+    string PeriodStatus,
+    OutgoingVikar? OutgoingVikar,
+    bool IsRoot,
+    bool IsOrphan);
+
+/// <summary>
+/// S75-7500 (R1) — the per-away-manager outgoing-vikar marker: the active
+/// <c>manager_vikar</c> row where the roster person is the <c>absent_approver_id</c>. Drives the FE
+/// vikar badge on the away-manager's row + the Vikar filter tile. <paramref name="UntilDate"/> is
+/// the INCLUSIVE "til og med" date; <paramref name="Reason"/> is the CHECK-constrained reason
+/// (FERIE/SYGDOM/ORLOV/TJENESTEREJSE/ANDET).
+/// </summary>
+public sealed record OutgoingVikar(
+    string VikarUserId,
+    string VikarDisplayName,
+    DateOnly UntilDate,
+    string Reason);
 
 /// <summary>
 /// One person-search hit (S74-7404 R11b,
