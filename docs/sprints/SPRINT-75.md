@@ -1,6 +1,6 @@
 # SPRINT 75 — Medarbejder administration, Phase 2: the tree surface (read-mostly FE + the effective-approver projection)
 
-Status: **CLOSED (ready to commit) — all 3 tasks ACCEPTED; Step-7a CONVERGED CLEAN (both lenses); full pyramid green. Awaiting owner commit/push.** 2026-06-14.
+Status: **CLOSED + PUSHED + SEALED 2026-06-14 (`eebaaa9`; CI whole-workflow GREEN run `27495661277`, all 6 jobs first-try no-flake — 12th consecutive CI-verified close).** All 3 tasks ACCEPTED; Step-7a CONVERGED CLEAN (both lenses); full pyramid green.
 Program: `.claude/plans/PLAN-s74-medarbejder-administration.md` (owner-approved 4-phase program; Phase 1 / S74 CLOSED + CI-verified at `de9bd87`). This sprint = **Phase 2 (the tree surface)**.
 Refinement: `.claude/refinements/REFINEMENT-s75-tree-surface.md` (READY; converged Codex 3B→CLEAN + Reviewer 2B-absorbed; owner OQ-A=Vikar, OQ-B=read-only-interim).
 
@@ -77,6 +77,7 @@ Scope: the full S75 working-tree change set (the 7500 roster read + B2 fix; the 
 - **Smoke 6/6** — fresh greenfield volume (`docker compose down -v` + `up -d --build`), S75-rebuilt images, greenfield `init.sql` revalidated (byte-unchanged from S74 — no S75 schema change), all 8 services healthy.
 - **FE 415/415** + `tsc --noEmit` clean (385 S74 baseline + 30: 22 helper [7501] + 7 page [7502] + 1 Step-7a orphan-card discrimination).
 - Build: 0E across the solution.
+- **CI: whole-workflow GREEN run `27495661277` (`eebaaa9`) — all 6 jobs (build-and-test, docs check_docs, smoke, gitleaks, frontend-build, lizard) first-try no-flake. 12th consecutive CI-verified close.**
 
 ## Follow-ups (recorded → ROADMAP)
 - **B1 admin-read-scoping security hardening (PRE-LAUNCH, S76):** the mixed-role scope leak in `OrgScopeValidator.ValidateOrgAccessAsync` (grants via ANY scope without a role check) — cross-cutting across all admin-read siblings, incl. the two older unescaped `LIKE` sites (`ApprovalPeriodRepository.cs:95/:113`). Owner-deferred 2026-06-14.
