@@ -1,6 +1,6 @@
 # SPRINT 74 — Medarbejder administration, Phase 1: Backend foundations (ADR-027 extension)
 
-Status: **CLOSE IN PROGRESS — all 5 tasks ACCEPTED; Step-7a CLEAN both lenses; finalizing the count + fresh-volume smoke + close-out docs, then the (owner-gated) commit.** 2026-06-13.
+Status: **CLOSED + PUSHED + SEALED 2026-06-14 (`5b5d6cd`; CI whole-workflow GREEN run `27484464423`, all 6 jobs — 11th consecutive CI-verified close). All 5 tasks ACCEPTED; Step-7a CLEAN both lenses.** 2026-06-13→2026-06-14.
 Program: `.claude/plans/PLAN-s74-medarbejder-administration.md` (owner-approved 2026-06-13; the 4-phase program). This sprint = **Phase 1 (backend only, no FE)**.
 Refinement: `.claude/refinements/REFINEMENT-s74-medarbejder-administration.md` (owner rulings OQ-1..OQ-5).
 Handoff: `design_handoff_medarbejder_administration/`.
@@ -76,4 +76,4 @@ Whole-diff dual-lens over the integrated 5-task slice (each task already passed 
 
 ## Test Summary
 
-**824u (+7) + 837r (+61, single CLEAN run 837/837 0-fail, 43m9s — no FAIL-002 sheds) + 6s (fresh greenfield volume — `docker compose down -v` + rebuilt S74 images, 6/6) + 385fe = 2052 (+68 vs S73's 1984).** Build 0E/0W; check_docs green (65 tables). Step-7a CLEAN both lenses. **Greenfield init.sql with the S74 segments (enhed_label + manager_vikar + the SELF_DELEGATION→manager_vikar migration + the 7404 index) applied CLEANLY on a fresh compose volume (postgres healthy, no init errors); all 8 services healthy; smoke 6/6.** The regression run was slow (testcontainer-per-class churn from ~70 new Docker-gated tests) but clean on the first pass.
+**824u (+7) + 837r (+61, single CLEAN run 837/837 0-fail, 43m9s — no FAIL-002 sheds) + 6s (fresh greenfield volume — `docker compose down -v` + rebuilt S74 images, 6/6) + 385fe = 2052 (+68 vs S73's 1984).** Build 0E/0W; check_docs green (65 tables). Step-7a CLEAN both lenses. **Greenfield init.sql with the S74 segments (enhed_label + manager_vikar + the SELF_DELEGATION→manager_vikar migration + the 7404 index) applied CLEANLY on a fresh compose volume (postgres healthy, no init errors); all 8 services healthy; smoke 6/6.** The regression run was slow (testcontainer-per-class churn from ~70 new Docker-gated tests) but clean on the first pass. **CI whole-workflow GREEN: run `27484464423` (all 6 jobs — build-and-test, frontend-build, smoke, docs, secret-scan, complexity — success on the first push, no flake); close commit `5b5d6cd`. 11th consecutive CI-verified close.**
