@@ -88,6 +88,8 @@ builder.Services.AddSingleton<OvertimeBalanceRepository>();
 builder.Services.AddSingleton<OvertimePreApprovalRepository>();
 builder.Services.AddSingleton<AuditProjectionRepository>();
 builder.Services.AddSingleton<ReportingLineRepository>();
+builder.Services.AddSingleton<ManagerVikarRepository>(); // S74 ADR-027 Phase 5 — approver-owned vikar storage
+builder.Services.AddSingleton<DesignatedApproverAuthorizer>(); // S74 / TASK-7402 — the ONE R5 canonical approve-authority predicate (A3, ADR-027 D4)
 builder.Services.AddSingleton<TreeSettingsRepository>();
 builder.Services.AddSingleton<EmployeeEntitlementEligibilityRepository>(); // S59
 builder.Services.AddSingleton<VacationTransferAgreementRepository>(); // S68 ADR-033 slice 1a
@@ -218,6 +220,13 @@ builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(ReportingLineS
 // S49 TASK-4908 — bulk import audit mapper
 builder.Services.AddSingleton<IAuditProjectionMapper<ReportingLineBulkImported>, ReportingLineBulkImportedAuditMapper>();
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(ReportingLineBulkImported), nameof(ReportingLineBulkImported)));
+// S74 ADR-027 Phase 5 — manager_vikar lifecycle audit mappers (Infrastructure-located, cross-process:
+// ManagerVikarEnded is also emitted by the DelegationExpiryService BackgroundService in Infrastructure).
+// ManagerVikarCreated from POST /delegate; ManagerVikarEnded from DELETE /delegate + expiry close (SPRINT-74 R4).
+builder.Services.AddSingleton<IAuditProjectionMapper<ManagerVikarCreated>, StatsTid.Infrastructure.AuditMappers.ManagerVikarCreatedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(ManagerVikarCreated), nameof(ManagerVikarCreated)));
+builder.Services.AddSingleton<IAuditProjectionMapper<ManagerVikarEnded>, StatsTid.Infrastructure.AuditMappers.ManagerVikarEndedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(ManagerVikarEnded), nameof(ManagerVikarEnded)));
 // S59 ADR-029 — per-employee entitlement eligibility (mapper lives in Infrastructure, cross-process)
 builder.Services.AddSingleton<IAuditProjectionMapper<EmployeeEntitlementEligibilitySet>, StatsTid.Infrastructure.AuditMappers.EmployeeEntitlementEligibilitySetAuditMapper>();
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(EmployeeEntitlementEligibilitySet), nameof(EmployeeEntitlementEligibilitySet)));

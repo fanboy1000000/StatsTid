@@ -19,6 +19,7 @@ public sealed class EmployeeProfileCreatedAuditMapper : IAuditProjectionMapper<E
             employeeId = @event.EmployeeId,
             partTimeFraction = @event.PartTimeFraction,
             position = @event.Position,
+            enhedLabel = @event.EnhedLabel,
             effectiveFrom = @event.EffectiveFrom,
         };
         return new AuditProjectionRowData(

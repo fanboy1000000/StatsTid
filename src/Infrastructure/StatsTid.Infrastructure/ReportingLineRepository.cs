@@ -31,10 +31,18 @@ namespace StatsTid.Infrastructure;
 public sealed class ReportingLineRepository
 {
     private readonly DbConnectionFactory _connectionFactory;
+    private readonly ManagerVikarRepository _vikarRepo;
 
-    public ReportingLineRepository(DbConnectionFactory connectionFactory)
+    /// <summary>
+    /// Primary constructor (DI). The <paramref name="vikarRepo"/> is consumed by
+    /// <see cref="ResolveDesignatedApproverAsync"/> for the S74 vikar-consult (ADR-027 D5);
+    /// it is OPTIONAL so existing tests that construct the repository with the factory
+    /// alone keep compiling — when omitted, a vikar repo is derived from the same factory.
+    /// </summary>
+    public ReportingLineRepository(DbConnectionFactory connectionFactory, ManagerVikarRepository? vikarRepo = null)
     {
         _connectionFactory = connectionFactory;
+        _vikarRepo = vikarRepo ?? new ManagerVikarRepository(connectionFactory);
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -126,6 +134,28 @@ public sealed class ReportingLineRepository
     }
 
     /// <summary>
+    /// In-transaction sibling overload: returns BOTH active PRIMARY and ACTING lines where the
+    /// employee is the SUBJECT (employee_id), reusing the caller-supplied
+    /// <paramref name="conn"/> + <paramref name="tx"/> so the read participates in the same
+    /// atomic transaction. Used by the S74 R10 delete-with-reassignment to find + close the
+    /// removed person's OWN outgoing edges within the closure tx (and to see any same-tx
+    /// changes already applied).
+    /// </summary>
+    public async Task<IReadOnlyList<ReportingLine>> GetActiveByEmployeeInTxAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, string employeeId, CancellationToken ct = default)
+    {
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT * FROM reporting_lines
+            WHERE employee_id = @employeeId
+              AND effective_to IS NULL
+            ORDER BY relationship
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("employeeId", employeeId);
+        return await ReadLinesAsync(cmd, ct);
+    }
+
+    /// <summary>
     /// Returns all active lines in the given reporting tree,
     /// ordered by manager_id then employee_id.
     /// </summary>
@@ -183,7 +213,14 @@ public sealed class ReportingLineRepository
     {
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
-        await using var tx = await conn.BeginTransactionAsync(IsolationLevel.RepeatableRead, ct);
+        // S74-7403 B1: ReadCommitted (not RepeatableRead). A RepeatableRead snapshot is pinned at
+        // the FIRST statement of the tx — which, on the lock-serialized assign paths, is the
+        // SELECT pg_advisory_xact_lock(...) that runs BEFORE the lock is granted. After a competing
+        // tx commits a new edge and releases, this tx would still read the PRE-commit snapshot and
+        // miss the edge. ReadCommitted gives each post-lock statement a fresh snapshot that sees the
+        // just-committed state, which is correct for a lock-serialized critical section (the
+        // FOR UPDATE in AcquireLockAsync + the optimistic version checks still hold).
+        await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
         try
         {
             var result = await AssignAsync(conn, tx, expectedCurrentVersion, newLine, ct);
@@ -286,7 +323,9 @@ public sealed class ReportingLineRepository
     {
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
-        await using var tx = await conn.BeginTransactionAsync(IsolationLevel.RepeatableRead, ct);
+        // S74-7403 B1: ReadCommitted (not RepeatableRead) — same rationale as AssignAsync; the
+        // lock-serialized critical section needs each post-lock statement to see committed state.
+        await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
         try
         {
             var result = await RemoveAsync(conn, tx, expectedCurrentVersion, employeeId, relationship, ct);
@@ -379,6 +418,46 @@ public sealed class ReportingLineRepository
     }
 
     /// <summary>
+    /// In-transaction sibling overload of
+    /// <see cref="ResolveTreeRootOrgIdAsync(string, CancellationToken)"/>. Reuses the
+    /// caller-supplied <paramref name="conn"/> + <paramref name="tx"/> so the walk reads the
+    /// SAME transaction's uncommitted state (S74 R9: the atomic create+assign resolves the
+    /// just-inserted user's org-tree inside the create tx, before COMMIT, so the self-contained
+    /// overload — which opens a fresh connection that cannot see the open tx — would miss it).
+    /// </summary>
+    public async Task<string> ResolveTreeRootOrgIdAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, string primaryOrgId, CancellationToken ct = default)
+    {
+        await using var cmd = new NpgsqlCommand(
+            """
+            WITH RECURSIVE ancestors AS (
+                SELECT org_id, org_type, parent_org_id, 1 AS depth
+                FROM organizations
+                WHERE org_id = @primaryOrgId AND is_active = TRUE
+                UNION ALL
+                SELECT o.org_id, o.org_type, o.parent_org_id, a.depth + 1
+                FROM organizations o
+                INNER JOIN ancestors a ON o.org_id = a.parent_org_id
+                WHERE o.is_active = TRUE AND a.depth < 10
+            )
+            SELECT org_id FROM ancestors
+            WHERE org_type IN ('MINISTRY', 'STYRELSE')
+            ORDER BY depth ASC
+            LIMIT 1
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("primaryOrgId", primaryOrgId);
+
+        var result = await cmd.ExecuteScalarAsync(ct);
+        if (result is null || result is DBNull)
+        {
+            throw new InvalidOperationException(
+                $"No MINISTRY or STYRELSE ancestor found for org_id='{primaryOrgId}'. " +
+                "Cannot resolve reporting tree root.");
+        }
+        return (string)result;
+    }
+
+    /// <summary>
     /// Validates that the employee and manager belong to the same reporting tree by
     /// resolving both users' <c>primary_org_id</c> to their respective tree roots.
     /// </summary>
@@ -391,25 +470,75 @@ public sealed class ReportingLineRepository
     {
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
+        return await ValidateSameTreeAsync(conn, tx: null, employeeId, managerId, ct);
+    }
 
-        // Fetch primary_org_id for both users in a single query.
+    /// <summary>
+    /// In-transaction sibling overload of
+    /// <see cref="ValidateSameTreeAsync(string, string, CancellationToken)"/>. Reuses the
+    /// caller-supplied <paramref name="conn"/> (+ optional <paramref name="tx"/>) so the
+    /// reads see the same transaction's uncommitted state — REQUIRED by S74 R9's atomic
+    /// create+assign, where the new user row is inserted earlier in the SAME tx and a
+    /// fresh-connection read would not yet see it. With <paramref name="tx"/> = null this is a
+    /// plain connection-reusing read (the self-contained overload above delegates to it).
+    ///
+    /// <para>
+    /// <b>S74-7403 B1 — BOTH user rows are pinned <c>FOR UPDATE</c> (cross-tree-edge race).</b>
+    /// The prior pass pinned only the EMPLOYEE row (via the caller's
+    /// <c>ResolveEmployeeTreeRootInTxAsync</c>), leaving the MANAGER row unpinned: a concurrent
+    /// cross-styrelse transfer (a PUT moving the manager's <c>primary_org_id</c>) could move the
+    /// manager AFTER this same-tree check but BEFORE the edge insert, producing a cross-tree edge
+    /// (ADR-027 D2 violation). This method now locks BOTH the employee and the manager
+    /// <c>users</c> rows <c>FOR UPDATE</c> in one statement, ORDERED BY <c>user_id</c> — so the two
+    /// trees are pinned for the whole tx (neither party can be transferred mid-assign) AND any two
+    /// concurrent assigns over an overlapping pair acquire the row locks in the SAME id-sorted
+    /// order, so they cannot deadlock against each other.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Total lock order (consistent on EVERY path — see <c>ReportingLineEndpoints</c>):</b>
+    /// (1) the two user rows here, <c>FOR UPDATE</c> in <c>user_id</c> order; (2) the per-tree
+    /// advisory lock (<see cref="AcquireTreeLockAsync"/>) on the tree root this method RETURNS;
+    /// (3) <see cref="GuardNoCycleAsync"/>; (4) <see cref="AcquireLockAsync"/>'s slot
+    /// <c>FOR UPDATE</c> on a <c>reporting_lines</c> row (a different table, locked last). The
+    /// assign paths call THIS method FIRST (it both pins the rows and yields the advisory key), so
+    /// no user row is ever locked out of id-order. The single-subject paths (remove / R10 census)
+    /// pin exactly one user row before the advisory, which is trivially id-ordered and cannot
+    /// cross with the two-row lock. The advisory lock additionally serializes a tree, so once
+    /// id-order holds on the user rows no deadlock cycle can form across the lock classes.
+    /// </para>
+    /// </summary>
+    public async Task<string> ValidateSameTreeAsync(
+        NpgsqlConnection conn, NpgsqlTransaction? tx,
+        string employeeId, string managerId, CancellationToken ct = default)
+    {
+        // S74-7403 B1: pin BOTH the employee AND the manager rows FOR UPDATE, ORDERED BY user_id.
+        // The id-sorted lock guarantees deadlock-safety (two concurrent assigns over an overlapping
+        // pair lock the shared rows in the same order); the FOR UPDATE pins both trees so neither
+        // party can be transferred between this same-tree validation and the edge insert (the
+        // cross-tree-edge race, ADR-027 D2). When employee == manager (the self-assign degenerate)
+        // ANY(@ids) collapses to a single row — harmless; the cycle guard rejects the self-edge.
+        var ids = new[] { employeeId, managerId };
         await using var cmd = new NpgsqlCommand(
             """
             SELECT user_id, primary_org_id FROM users
-            WHERE user_id IN (@employeeId, @managerId) AND is_active = TRUE
-            """, conn);
-        cmd.Parameters.AddWithValue("employeeId", employeeId);
-        cmd.Parameters.AddWithValue("managerId", managerId);
+            WHERE user_id = ANY(@ids) AND is_active = TRUE
+            ORDER BY user_id
+            FOR UPDATE
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("ids", ids);
 
         string? employeeOrgId = null;
         string? managerOrgId = null;
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
+        await using (var reader = await cmd.ExecuteReaderAsync(ct))
         {
-            var userId = reader.GetString(reader.GetOrdinal("user_id"));
-            var orgId = reader.GetString(reader.GetOrdinal("primary_org_id"));
-            if (userId == employeeId) employeeOrgId = orgId;
-            if (userId == managerId) managerOrgId = orgId;
+            while (await reader.ReadAsync(ct))
+            {
+                var userId = reader.GetString(reader.GetOrdinal("user_id"));
+                var orgId = reader.GetString(reader.GetOrdinal("primary_org_id"));
+                if (userId == employeeId) employeeOrgId = orgId;
+                if (userId == managerId) managerOrgId = orgId;
+            }
         }
 
         if (employeeOrgId is null)
@@ -417,8 +546,12 @@ public sealed class ReportingLineRepository
         if (managerOrgId is null)
             throw new InvalidOperationException($"Manager user_id='{managerId}' not found or inactive.");
 
-        var employeeTreeRoot = await ResolveTreeRootOrgIdAsync(employeeOrgId, ct);
-        var managerTreeRoot = await ResolveTreeRootOrgIdAsync(managerOrgId, ct);
+        var employeeTreeRoot = tx is null
+            ? await ResolveTreeRootOrgIdAsync(employeeOrgId, ct)
+            : await ResolveTreeRootOrgIdAsync(conn, tx, employeeOrgId, ct);
+        var managerTreeRoot = tx is null
+            ? await ResolveTreeRootOrgIdAsync(managerOrgId, ct)
+            : await ResolveTreeRootOrgIdAsync(conn, tx, managerOrgId, ct);
 
         if (employeeTreeRoot != managerTreeRoot)
         {
@@ -431,20 +564,213 @@ public sealed class ReportingLineRepository
     }
 
     // ──────────────────────────────────────────────────────────────────────
+    //  Cycle guard (S74 R8) — tree-wide advisory lock + bounded descendant walk
+    // ──────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// S74-7403 B3: an effectively-unbounded safety ceiling on the descendant cycle-walk — NOT a
+    /// real depth limit. The previous value (10) was a FALSE-NEGATIVE source: a manager at
+    /// descendant depth 11+ was never reached, so a real deep cycle was ADMITTED. The walk's true
+    /// termination guarantee is the path-array visited-set guard
+    /// (<c>NOT (rl.employee_id = ANY(d.path))</c>), which terminates even on a pre-existing loop;
+    /// this ceiling is a belt-and-suspenders backstop set far above any conceivable real tree depth
+    /// (Danish state-sector trees are ≤ ~5 deep). The walk must traverse the FULL descendant set to
+    /// catch deep cycles, so this is raised to 10_000 rather than bounding the real walk.
+    /// </summary>
+    private const int CycleWalkMaxDepth = 10_000;
+
+    /// <summary>
+    /// S74 R8 — takes a STABLE, tree-wide advisory lock keyed on the reporting
+    /// <paramref name="treeRootOrgId"/>, so EVERY assign within one tree serializes through the
+    /// cycle check. xact-scoped (auto-released at COMMIT/ROLLBACK; no manual unlock). Mirrors the
+    /// ADR-032 D4 employee advisory-lock idiom (<c>pg_advisory_xact_lock(hashtext(...))</c>) but
+    /// keyed on the tree root instead of an employee.
+    ///
+    /// <para>
+    /// <b>Why the slot <c>FOR UPDATE</c> alone is not enough (the phantom gap).</b>
+    /// <see cref="AcquireLockAsync"/> locks only the target (employee, relationship) SLOT.
+    /// Two concurrent FIRST assignments — say A→B and B→A — find NO existing row to lock, so
+    /// neither blocks the other, and they can each commit half of a 2-cycle. A descendant
+    /// <c>SELECT … FOR UPDATE</c> has the same gap (the rows it would lock don't exist yet).
+    /// Serializing all of a tree's assigns through this one advisory key closes the gap:
+    /// the cycle-walk of the second assign sees the first's committed edge (or blocks until it
+    /// commits/rolls back). Taken FIRST, before the descendant walk, on EVERY assign path.
+    /// </para>
+    /// </summary>
+    public static async Task AcquireTreeLockAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, string treeRootOrgId, CancellationToken ct = default)
+    {
+        await using var cmd = new NpgsqlCommand(
+            "SELECT pg_advisory_xact_lock(hashtext('reporting-tree-' || @treeRootOrgId))", conn, tx);
+        cmd.Parameters.AddWithValue("treeRootOrgId", treeRootOrgId);
+        await cmd.ExecuteScalarAsync(ct);
+    }
+
+    /// <summary>
+    /// S74 R8 — the cycle guard. REJECTS (via <see cref="ReportingCycleException"/>) an
+    /// assignment whose chosen <paramref name="managerId"/> is the <paramref name="employeeId"/>
+    /// itself OR any active-PRIMARY/ACTING descendant of the employee (which would create a
+    /// reporting cycle). Run inside the caller's transaction AFTER
+    /// <see cref="AcquireTreeLockAsync"/> + same-tree validation, on BOTH assign paths.
+    ///
+    /// <para>
+    /// The self-case (manager == employee) is also blocked at the DB by the
+    /// <c>CHECK (employee_id &lt;&gt; manager_id)</c>, but we reject it here too for a friendly
+    /// 4xx instead of a raw 23514. The descendant walk follows <c>manager_id → employee_id</c>
+    /// edges downward from the employee through active (<c>effective_to IS NULL</c>) lines. The walk
+    /// traverses the FULL descendant set (S74-7403 B3 — no real depth cap); the path-array
+    /// visited-set guard is the termination guarantee, with <see cref="CycleWalkMaxDepth"/> as an
+    /// effectively-unbounded safety backstop only.
+    /// </para>
+    /// </summary>
+    /// <exception cref="ReportingCycleException">If <paramref name="managerId"/> is the employee
+    /// or one of the employee's descendants.</exception>
+    public Task GuardNoCycleAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string employeeId, string managerId, CancellationToken ct = default)
+        => GuardNoCycleAsync(conn, tx, employeeId, managerId, CycleWalkMaxDepth, ct);
+
+    /// <summary>
+    /// S74-7403 B3 — internal overload taking an explicit <paramref name="maxDepth"/> safety
+    /// ceiling, so a test can run the descendant walk with the ceiling set ABOVE any conceivable
+    /// loop length (e.g. <see cref="int.MaxValue"/>) to PROVE that the path-array visited-set guard
+    /// — NOT the depth ceiling — is what terminates the walk on a pre-existing loop. Production
+    /// callers use the parameterless overload, which passes <see cref="CycleWalkMaxDepth"/>.
+    /// </summary>
+    public async Task GuardNoCycleAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string employeeId, string managerId, int maxDepth, CancellationToken ct = default)
+    {
+        // Self-cycle: a person cannot be their own manager.
+        if (string.Equals(employeeId, managerId, StringComparison.Ordinal))
+            throw new ReportingCycleException(employeeId, managerId,
+                $"Cannot assign '{managerId}' as the manager of '{employeeId}': a person cannot be their own manager.");
+
+        // Descendant-cycle: if the chosen manager is somewhere BELOW the employee in the tree,
+        // the new edge would close a loop. Walk downward (manager_id → employee_id) from the
+        // employee and reject if we reach the manager. A single recursive CTE does the bounded
+        // walk in one round-trip; the cycle-detection `path` array + depth bound guarantee
+        // termination even if legacy data already contains a loop.
+        await using var cmd = new NpgsqlCommand(
+            """
+            WITH RECURSIVE descendants AS (
+                SELECT rl.employee_id, 1 AS depth, ARRAY[rl.manager_id, rl.employee_id] AS path
+                FROM reporting_lines rl
+                WHERE rl.manager_id = @employeeId
+                  AND rl.effective_to IS NULL
+                UNION ALL
+                SELECT rl.employee_id, d.depth + 1, d.path || rl.employee_id
+                FROM reporting_lines rl
+                INNER JOIN descendants d ON rl.manager_id = d.employee_id
+                WHERE rl.effective_to IS NULL
+                  AND d.depth < @maxDepth
+                  AND NOT (rl.employee_id = ANY(d.path))   -- guard against a pre-existing loop
+            )
+            SELECT 1 FROM descendants WHERE employee_id = @managerId LIMIT 1
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("employeeId", employeeId);
+        cmd.Parameters.AddWithValue("managerId", managerId);
+        cmd.Parameters.AddWithValue("maxDepth", maxDepth);
+
+        var hit = await cmd.ExecuteScalarAsync(ct);
+        if (hit is not null)
+            throw new ReportingCycleException(employeeId, managerId,
+                $"Cannot assign '{managerId}' as the manager of '{employeeId}': '{managerId}' is a " +
+                $"subordinate (descendant) of '{employeeId}', which would create a reporting cycle.");
+    }
+
+    /// <summary>
+    /// S74-7404 R11b — returns the set of active-PRIMARY/ACTING <b>descendants</b> of
+    /// <paramref name="employeeId"/> (everyone BELOW them in the reporting tree). Read-only sibling
+    /// of <see cref="GuardNoCycleAsync"/>: it runs the SAME bounded downward
+    /// <c>manager_id → employee_id</c> walk with the SAME path-array visited-set termination guard
+    /// and the SAME <see cref="CycleWalkMaxDepth"/> safety ceiling — but instead of throwing on a
+    /// match it RETURNS the descendant id set. The cycle guard could not be reused as-is (it
+    /// short-circuits on the first hit and throws); this method materializes the whole subtree so
+    /// the person-search picker can exclude self + descendants server-side (a person cannot pick a
+    /// subordinate as their own approver — the cycle-prevention mirror for the picker, R11b). The
+    /// returned set does NOT include <paramref name="employeeId"/> itself; the caller excludes self
+    /// separately.
+    /// </summary>
+    public async Task<IReadOnlyCollection<string>> GetDescendantIdsAsync(
+        string employeeId, CancellationToken ct = default)
+    {
+        await using var conn = _connectionFactory.Create();
+        await conn.OpenAsync(ct);
+
+        // Identical descendant walk to GuardNoCycleAsync's CTE (downward manager_id → employee_id
+        // over active lines; path-array guard terminates even on a pre-existing loop; the depth
+        // bound is the effectively-unbounded safety backstop), but projecting the full id set.
+        await using var cmd = new NpgsqlCommand(
+            """
+            WITH RECURSIVE descendants AS (
+                SELECT rl.employee_id, 1 AS depth, ARRAY[rl.manager_id, rl.employee_id] AS path
+                FROM reporting_lines rl
+                WHERE rl.manager_id = @employeeId
+                  AND rl.effective_to IS NULL
+                UNION ALL
+                SELECT rl.employee_id, d.depth + 1, d.path || rl.employee_id
+                FROM reporting_lines rl
+                INNER JOIN descendants d ON rl.manager_id = d.employee_id
+                WHERE rl.effective_to IS NULL
+                  AND d.depth < @maxDepth
+                  AND NOT (rl.employee_id = ANY(d.path))   -- guard against a pre-existing loop
+            )
+            SELECT DISTINCT employee_id FROM descendants
+            """, conn);
+        cmd.Parameters.AddWithValue("employeeId", employeeId);
+        cmd.Parameters.AddWithValue("maxDepth", CycleWalkMaxDepth);
+
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            ids.Add(reader.GetString(0));
+        return ids;
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
     //  Approval delegation — designated approver resolution (ADR-027 D5)
     // ──────────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Resolves the designated approver for an employee per ADR-027 D5:
-    /// ACTING → PRIMARY → recurse up inactive chain → NULL.
+    /// Resolves the designated approver for an employee per ADR-027 D5, extended in S74
+    /// (TASK-7401 R3) with the approver-owned <c>manager_vikar</c> consult. Single-winner
+    /// precedence:
+    /// <list type="number">
+    /// <item><description>per-report admin-assigned ACTING (highest — the EXISTING check);</description></item>
+    /// <item><description>the resolved PRIMARY manager M's active vikar V covering <paramref name="asOf"/>
+    /// whose stand-in user is itself ACTIVE → return V as <c>ACTING_MANAGER</c>;</description></item>
+    /// <item><description>M if active → <c>DESIGNATED_MANAGER</c>;</description></item>
+    /// <item><description>inactive-manager escalation walk.</description></item>
+    /// </list>
     /// Returns (managerId, approvalMethod, depth) where approvalMethod is one of
-    /// "ACTING_MANAGER", "DESIGNATED_MANAGER", or null (caller uses ORG_SCOPE_FALLBACK).
+    /// "ACTING_MANAGER" (admin ACTING OR vikar — a vikar IS a stand-in/acting approver),
+    /// "DESIGNATED_MANAGER", or null (caller uses ORG_SCOPE_FALLBACK).
     /// Depth indicates how many levels the traversal walked up through inactive managers;
     /// the caller can use depth > 3 to emit a <see cref="StatsTid.SharedKernel.Events.FallbackTraversalWarning"/>.
+    ///
+    /// <para>
+    /// <paramref name="asOf"/> defaults to today (<c>null</c> ⇒ today) and sits AFTER
+    /// <paramref name="ct"/> so the existing approve/reject callers
+    /// (<c>ResolveDesignatedApproverAsync(employeeId, ct)</c>) compile UNCHANGED; 7402
+    /// passes an explicit date via the named <c>asOf:</c> argument. The vikar covers
+    /// <c>asOf</c> when <c>effective_to IS NULL AND until_date &gt;= asOf</c> (INCLUSIVE
+    /// "til og med").
+    /// </para>
+    ///
+    /// <para>
+    /// Edge cases (R3, pinned): (a) if M is INACTIVE but holds an active vikar V whose
+    /// stand-in user is ACTIVE, V WINS over escalation — and this fires in the SAME loop
+    /// iteration where M is found inactive, BEFORE the walk advances; (b) if V's stand-in
+    /// user is INACTIVE, the vikar is SKIPPED (it cannot grant usable authority) and
+    /// resolution falls through to M-if-active else escalation.
+    /// </para>
     /// </summary>
     public async Task<(string? ManagerId, string? ApprovalMethod, int Depth)> ResolveDesignatedApproverAsync(
-        string employeeId, CancellationToken ct = default)
+        string employeeId, CancellationToken ct = default, DateOnly? asOf = null)
     {
+        var effectiveAsOf = asOf ?? DateOnly.FromDateTime(DateTime.UtcNow);
+
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
 
@@ -453,7 +779,7 @@ public sealed class ReportingLineRepository
 
         while (depth < 10)
         {
-            // 1. Check ACTING line — takes precedence over PRIMARY.
+            // 1. Check ACTING line — admin-assigned ACTING takes precedence over everything.
             var actingLine = await GetActiveLineAsync(conn, currentEmployeeId, "ACTING", ct);
             if (actingLine is not null)
             {
@@ -467,12 +793,30 @@ public sealed class ReportingLineRepository
             if (primaryLine is null)
                 return (null, null, depth); // No reporting line — org-scope fallback.
 
-            var primaryManagerActive = await IsUserActiveAsync(conn, primaryLine.ManagerId, ct);
-            if (primaryManagerActive)
-                return (primaryLine.ManagerId, "DESIGNATED_MANAGER", depth);
+            var primaryManagerId = primaryLine.ManagerId;
 
-            // 3. Manager is inactive — walk up the chain.
-            currentEmployeeId = primaryLine.ManagerId;
+            // 2b. Vikar consult (S74 R3) — M's active approver-owned vikar V covering asOf,
+            //     whose stand-in user is itself ACTIVE, beats BOTH M-if-active AND the
+            //     inactive-M escalation walk. Keyed on THIS iteration's M (primaryManagerId)
+            //     BEFORE the walk advances, so the "M-inactive-but-has-active-vikar" edge
+            //     (R3a, Reviewer N1) fires here. If V's user is INACTIVE the vikar is
+            //     SKIPPED (R3b) — no usable authority — and we fall through to M / escalation.
+            var vikar = await _vikarRepo.GetActiveByApproverAsync(conn, primaryManagerId, effectiveAsOf, tx: null, ct);
+            if (vikar is not null)
+            {
+                var vikarUserActive = await IsUserActiveAsync(conn, vikar.VikarUserId, ct);
+                if (vikarUserActive)
+                    return (vikar.VikarUserId, "ACTING_MANAGER", depth);
+                // else: R3b — inactive stand-in, skip the vikar; fall through.
+            }
+
+            // 3. M if active.
+            var primaryManagerActive = await IsUserActiveAsync(conn, primaryManagerId, ct);
+            if (primaryManagerActive)
+                return (primaryManagerId, "DESIGNATED_MANAGER", depth);
+
+            // 4. Manager is inactive (and held no usable vikar) — walk up the chain.
+            currentEmployeeId = primaryManagerId;
             depth++;
         }
 
@@ -696,6 +1040,26 @@ public sealed class CrossTreeAssignmentException : Exception
 
     public CrossTreeAssignmentException(string message, Exception innerException)
         : base(message, innerException) { }
+}
+
+/// <summary>
+/// S74 R8 — thrown by <see cref="ReportingLineRepository.GuardNoCycleAsync"/> when an
+/// assignment would create a reporting cycle: the chosen manager is the employee themselves,
+/// or one of the employee's descendants. The endpoint maps this to a 4xx
+/// (<c>409 Conflict</c>) — the assignment is well-formed but conflicts with the acyclic-tree
+/// invariant (ADR-027).
+/// </summary>
+public sealed class ReportingCycleException : Exception
+{
+    public string EmployeeId { get; }
+    public string ManagerId { get; }
+
+    public ReportingCycleException(string employeeId, string managerId, string message)
+        : base(message)
+    {
+        EmployeeId = employeeId;
+        ManagerId = managerId;
+    }
 }
 
 /// <summary>

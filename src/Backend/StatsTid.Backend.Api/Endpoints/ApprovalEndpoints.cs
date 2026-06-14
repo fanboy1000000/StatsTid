@@ -175,6 +175,7 @@ public static class ApprovalEndpoints
             Guid periodId,
             ApprovalPeriodRepository approvalRepo,
             ReportingLineRepository reportingLineRepo,
+            DesignatedApproverAuthorizer designatedAuthorizer,
             TreeSettingsRepository treeSettingsRepo,
             OrgScopeValidator scopeValidator,
             OrganizationRepository orgRepo,
@@ -196,10 +197,20 @@ public static class ApprovalEndpoints
             if (period.Status is not ("SUBMITTED" or "EMPLOYEE_APPROVED"))
                 return Results.Conflict(new { error = $"Cannot approve period with status {period.Status}. Only SUBMITTED or EMPLOYEE_APPROVED periods can be approved." });
 
-            // Validate actor scope covers the period's org
+            // Authorize: EITHER the actor's RBAC org-scope covers the period's org (existing
+            // path) OR the actor holds the effective designated-approver edge for this employee
+            // RIGHT NOW (S74 / ADR-027 D4 A3 expansion — the edge grants cross-afdeling
+            // authority within the styrelse; asOf = today = "who may act NOW"). The edge is
+            // intra-tree by construction, so ADR-027 D2 (cross-styrelse forbidden) holds.
             var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, period.OrgId, ct);
             if (!allowed)
-                return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+            {
+                var today = DateOnly.FromDateTime(DateTime.UtcNow);
+                var hasEdge = await designatedAuthorizer.IsEffectiveDesignatedApproverAsync(
+                    actor.ActorId!, period.EmployeeId, asOf: today, ct: ct);
+                if (!hasEdge)
+                    return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+            }
 
             // Resolve designated approver for audit trail (ADR-027 D5).
             var (designatedManagerId, resolvedMethod, depth) =
@@ -313,6 +324,7 @@ public static class ApprovalEndpoints
             RejectPeriodRequest request,
             ApprovalPeriodRepository approvalRepo,
             ReportingLineRepository reportingLineRepo,
+            DesignatedApproverAuthorizer designatedAuthorizer,
             TreeSettingsRepository treeSettingsRepo,
             OrgScopeValidator scopeValidator,
             OrganizationRepository orgRepo,
@@ -334,10 +346,17 @@ public static class ApprovalEndpoints
             if (period.Status is not ("SUBMITTED" or "EMPLOYEE_APPROVED"))
                 return Results.Conflict(new { error = $"Cannot reject period with status {period.Status}. Only SUBMITTED or EMPLOYEE_APPROVED periods can be rejected." });
 
-            // Validate actor scope covers the period's org
+            // Authorize: org-scope (existing) OR the effective designated-approver edge at
+            // today (S74 / ADR-027 D4 A3 — same as approve; tree-bound is structural).
             var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, period.OrgId, ct);
             if (!allowed)
-                return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+            {
+                var today = DateOnly.FromDateTime(DateTime.UtcNow);
+                var hasEdge = await designatedAuthorizer.IsEffectiveDesignatedApproverAsync(
+                    actor.ActorId!, period.EmployeeId, asOf: today, ct: ct);
+                if (!hasEdge)
+                    return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+            }
 
             // Resolve designated approver for audit trail (ADR-027 D5).
             var (designatedManagerId, resolvedMethod, depth) =
@@ -903,6 +922,7 @@ public static class ApprovalEndpoints
             Guid periodId,
             ReopenPeriodRequest request,
             ApprovalPeriodRepository approvalRepo,
+            DesignatedApproverAuthorizer designatedAuthorizer,
             OrgScopeValidator scopeValidator,
             DbConnectionFactory connectionFactory,
             IOutboxEnqueue outbox,
@@ -922,7 +942,9 @@ public static class ApprovalEndpoints
 
             if (isEmployee)
             {
-                // Employee can only reopen own EMPLOYEE_APPROVED period
+                // Employee can only reopen own EMPLOYEE_APPROVED period. The A3 edge-authority
+                // OR-branch is DELIBERATELY ABSENT here — granting it to the employee arm would
+                // over-grant employees (a designated edge is a MANAGER privilege).
                 var (allowed2, reason2) = await scopeValidator.ValidateEmployeeAccessAsync(actor, period.EmployeeId, ct);
                 if (!allowed2)
                     return Results.Json(new { error = "Access denied", reason = reason2 }, statusCode: 403);
@@ -932,10 +954,19 @@ public static class ApprovalEndpoints
             }
             else
             {
-                // Leader+: validate org scope, allow EMPLOYEE_APPROVED or APPROVED
+                // Leader+: authorize via org scope (existing) OR the effective designated-approver
+                // edge at today (S74 / ADR-027 D4 A3 — the edge grants cross-afdeling authority
+                // within the styrelse; tree-bound is structural). This OR-branch lives ONLY in
+                // the Leader+ arm.
                 var (allowed2, reason2) = await scopeValidator.ValidateOrgAccessAsync(actor, period.OrgId, ct);
                 if (!allowed2)
-                    return Results.Json(new { error = "Access denied", reason = reason2 }, statusCode: 403);
+                {
+                    var today = DateOnly.FromDateTime(DateTime.UtcNow);
+                    var hasEdge = await designatedAuthorizer.IsEffectiveDesignatedApproverAsync(
+                        actor.ActorId!, period.EmployeeId, asOf: today, ct: ct);
+                    if (!hasEdge)
+                        return Results.Json(new { error = "Access denied", reason = reason2 }, statusCode: 403);
+                }
 
                 if (period.Status is not ("EMPLOYEE_APPROVED" or "APPROVED"))
                     return Results.Conflict(new { error = $"Cannot reopen period with status {period.Status}. Only EMPLOYEE_APPROVED or APPROVED periods can be reopened." });

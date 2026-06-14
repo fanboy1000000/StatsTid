@@ -138,6 +138,9 @@ public static class EmployeeProfileEndpoints
                 employeeId = profile.EmployeeId,
                 partTimeFraction = profile.PartTimeFraction,
                 position = profile.Position,
+                // S74 / TASK-7400 — free-text display label (null when unset; the FE
+                // falls back to the primary_org name).
+                enhedLabel = profile.EnhedLabel,
                 isPartTime = profile.IsPartTime,
                 version,
             });
@@ -250,7 +253,7 @@ public static class EmployeeProfileEndpoints
                 PredecessorSnapshot? preUpdate;
                 await using (var preCmd = new NpgsqlCommand(
                     """
-                    SELECT profile_id, part_time_fraction, position,
+                    SELECT profile_id, part_time_fraction, position, enhed_label,
                            effective_from, version
                     FROM employee_profiles
                     WHERE employee_id = @employeeId
@@ -269,8 +272,9 @@ public static class EmployeeProfileEndpoints
                             ProfileId: preReader.GetGuid(0),
                             PartTimeFraction: preReader.GetDecimal(1),
                             Position: preReader.IsDBNull(2) ? null : preReader.GetString(2),
-                            EffectiveFrom: preReader.GetFieldValue<DateOnly>(3),
-                            Version: preReader.GetInt64(4));
+                            EnhedLabel: preReader.IsDBNull(3) ? null : preReader.GetString(3),
+                            EffectiveFrom: preReader.GetFieldValue<DateOnly>(4),
+                            Version: preReader.GetInt64(5));
                     }
                 }
 
@@ -298,7 +302,8 @@ public static class EmployeeProfileEndpoints
                         EmployeeId: employeeId,
                         PartTimeFraction: body.PartTimeFraction,
                         Position: body.Position,
-                        EffectiveFrom: body.EffectiveFrom);
+                        EffectiveFrom: body.EffectiveFrom,
+                        EnhedLabel: body.EnhedLabel);
                     result = await repository.SupersedeAndCreateAsync(
                         conn, tx, supersedeRequest, expectedVersion, ct);
                 }
@@ -359,11 +364,13 @@ public static class EmployeeProfileEndpoints
                 {
                     partTimeFraction = preUpdate.PartTimeFraction,
                     position = preUpdate.Position,
+                    enhedLabel = preUpdate.EnhedLabel,
                 });
                 var newData = JsonSerializer.Serialize(new
                 {
                     partTimeFraction = body.PartTimeFraction,
                     position = body.Position,
+                    enhedLabel = body.EnhedLabel,
                 });
                 await using (var auditCmd = new NpgsqlCommand(
                     """
@@ -419,6 +426,7 @@ public static class EmployeeProfileEndpoints
                         EmployeeId = employeeId,
                         PartTimeFraction = body.PartTimeFraction,
                         Position = body.Position,
+                        EnhedLabel = body.EnhedLabel,
                         VersionBefore = expectedVersion,
                         VersionAfter = newVersion,
                         ActorId = actorId,
@@ -451,6 +459,7 @@ public static class EmployeeProfileEndpoints
                         NewEffectiveFrom = body.EffectiveFrom,
                         PartTimeFraction = body.PartTimeFraction,
                         Position = body.Position,
+                        EnhedLabel = body.EnhedLabel,
                         PredecessorVersion = preUpdate.Version,
                         NewVersion = newVersion,
                         ActorId = actorId,
@@ -500,6 +509,7 @@ public static class EmployeeProfileEndpoints
                     employeeId,
                     partTimeFraction = body.PartTimeFraction,
                     position = body.Position,
+                    enhedLabel = body.EnhedLabel,
                     isPartTime,
                     version = newVersion,
                 });
@@ -625,6 +635,7 @@ public static class EmployeeProfileEndpoints
                 {
                     partTimeFraction = preDelete.PartTimeFraction,
                     position = preDelete.Position,
+                    enhedLabel = preDelete.EnhedLabel,
                 });
                 await using (var auditCmd = new NpgsqlCommand(
                     """
@@ -897,6 +908,14 @@ public static class EmployeeProfileEndpoints
         public DateOnly EffectiveFrom { get; init; }
         public decimal PartTimeFraction { get; init; }
         public string? Position { get; init; }
+
+        /// <summary>
+        /// S74 / TASK-7400 — free-text "enhed" display label (additive, display-only;
+        /// inert for rules/payroll). Nullable; threaded into the supersede request +
+        /// the emitted event + audit JSON like <see cref="Position"/>. A label change
+        /// supersedes the live profile row via the same ADR-022 temporal path.
+        /// </summary>
+        public string? EnhedLabel { get; init; }
     }
 
     /// <summary>
@@ -910,6 +929,7 @@ public static class EmployeeProfileEndpoints
         Guid ProfileId,
         decimal PartTimeFraction,
         string? Position,
+        string? EnhedLabel,
         DateOnly EffectiveFrom,
         long Version);
 }

@@ -33,6 +33,10 @@ EMPLOYEE_APPROVED → DRAFT (manager reopens with reason)
 | EMPLOYEE_APPROVED | DRAFT | Leader+ | Manager reopen (`POST /api/approval/{id}/reopen`) |
 | REJECTED | DRAFT | Employee | Employee re-edits (implicit on next save) |
 
+### Manager-transition authorization (S74 / ADR-027 D13 amendment)
+
+The three **manager** transitions (`approve`, `reject`, `reopen` — the Leader+ arm) originally authorized on RBAC org-scope alone (LocalLeader+ whose scope covers the period's org). S74 (ADR-027 D13, owner ruling OQ-3a) adds an **additive OR-branch**: a manager transition is authorized if `(actor's RoleScope covers period.OrgId) OR (actor is the single resolved effective designated approver of the employee, within the same tree_root_org_id, at today)`. This lets a cross-afdeling designated approver (incl. one acting through an approver-owned vikar, ADR-027 D14) act on a report whose org their RBAC scope does not reach — bounded so cross-styrelse remains impossible (ADR-027 D2). The edge OR-branch lives ONLY in the Leader+ arm of `reopen` (its `EmployeeOrAbove`/`isEmployee` split); the **employee** transitions (`employee-approve`, and `submit`) are UNCHANGED — they do NOT inherit edge authority. The existing S50 REQUIRED-mode `428`-confirm-fallback flow is preserved. (Carries a mandatory Step-5a security review; the check-then-act revocation window is a deferred in-lock-hardening follow-up.)
+
 ### Deadlines
 
 - **Employee deadline**: Last day of month + 2 calendar days

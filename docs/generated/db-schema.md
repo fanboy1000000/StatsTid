@@ -5,7 +5,7 @@
 > Update the schema in `init.sql`, then run `python tools/generate_db_schema.py`.
 > CI fails (`tools/check_docs.py`) if this file drifts from init.sql.
 
-**Total: 64 tables** (47 primary, 17 audit).
+**Total: 65 tables** (48 primary, 17 audit).
 
 ---
 
@@ -265,6 +265,7 @@
 | version | BIGINT | No |  | 1 |
 | created_at | TIMESTAMPTZ | No |  | NOW() |
 | updated_at | TIMESTAMPTZ | No |  | NOW() |
+| enhed_label | TEXT | Yes |  |  |
 
 **Indexes:**
 - `idx_employee_profiles_live` (UNIQUE) on (employee_id) WHERE effective_to IS NULL
@@ -510,6 +511,7 @@
 - `idx_approval_org` on (org_id)
 - `idx_approval_status` on (status)
 - `idx_approval_period` on (period_start, period_end)
+- `idx_approval_employee_period_end` on (employee_id, period_end DESC)
 
 ## approval_audit
 
@@ -1319,6 +1321,28 @@
 **Table constraints:**
 - PRIMARY KEY (employee_id, absence_type)
 
+## manager_vikar
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| vikar_id | UUID | No | PK | gen_random_uuid() |
+| absent_approver_id | TEXT | No | FK→users |  |
+| vikar_user_id | TEXT | No | FK→users |  |
+| until_date | DATE | No |  |  |
+| reason | TEXT | No |  |  |
+| tree_root_org_id | TEXT | No | FK→organizations |  |
+| version | BIGINT | No |  | 1 |
+| created_by | TEXT | No |  |  |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+| effective_to | DATE | Yes |  |  |
+
+**Table constraints:**
+- CHECK (absent_approver_id <> vikar_user_id)
+
+**Indexes:**
+- `uq_manager_vikar_active` (UNIQUE) on (absent_approver_id) WHERE effective_to IS NULL
+- `idx_manager_vikar_vikar` on (vikar_user_id) WHERE effective_to IS NULL
+
 ---
 
 ## Table Summary
@@ -1389,4 +1413,5 @@
 | 62 | termination_payout_requests | -- |
 | 63 | user_skema_preferences | -- |
 | 64 | user_absence_selections | -- |
+| 65 | manager_vikar | -- |
 

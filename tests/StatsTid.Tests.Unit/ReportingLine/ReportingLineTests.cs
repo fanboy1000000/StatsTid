@@ -646,4 +646,115 @@ public class ReportingLineTests
 
         Assert.Equal(typeof(ReportingLineSelfDelegated), registeredType);
     }
+
+    // ════════════════════════════════════════════════════════════════
+    // S74 TASK-7401: manager_vikar event family (ManagerVikarCreated / ManagerVikarEnded)
+    // ════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public void EventSerializer_RoundTrips_ManagerVikarCreated()
+    {
+        var eventId = Guid.NewGuid();
+        var correlationId = Guid.NewGuid();
+        var vikarId = Guid.NewGuid();
+        var occurredAt = new DateTime(2026, 6, 13, 9, 0, 0, DateTimeKind.Utc);
+
+        var original = new ManagerVikarCreated
+        {
+            EventId = eventId,
+            OccurredAt = occurredAt,
+            Version = 1,
+            ActorId = "mgr01",
+            ActorRole = "LOCAL_LEADER",
+            CorrelationId = correlationId,
+            VikarId = vikarId,
+            AbsentApproverId = "mgr01",
+            VikarUserId = "mgr02",
+            UntilDate = new DateOnly(2026, 7, 1),
+            Reason = "ANDET",
+            TreeRootOrgId = "STY02",
+            RowVersion = 1,
+        };
+
+        var json = EventSerializer.Serialize(original);
+        var deserialized = EventSerializer.Deserialize("ManagerVikarCreated", json);
+
+        var result = Assert.IsType<ManagerVikarCreated>(deserialized);
+        Assert.Equal(eventId, result.EventId);
+        Assert.Equal(occurredAt, result.OccurredAt);
+        Assert.Equal("ManagerVikarCreated", result.EventType);
+        Assert.Equal("mgr01", result.ActorId);
+        Assert.Equal("LOCAL_LEADER", result.ActorRole);
+        Assert.Equal(correlationId, result.CorrelationId);
+        Assert.Equal(vikarId, result.VikarId);
+        Assert.Equal("mgr01", result.AbsentApproverId);
+        Assert.Equal("mgr02", result.VikarUserId);
+        Assert.Equal(new DateOnly(2026, 7, 1), result.UntilDate);
+        Assert.Equal("ANDET", result.Reason);
+        Assert.Equal("STY02", result.TreeRootOrgId);
+        Assert.Equal(1, result.RowVersion);
+    }
+
+    [Fact]
+    public void EventSerializer_RoundTrips_ManagerVikarEnded()
+    {
+        var eventId = Guid.NewGuid();
+        var correlationId = Guid.NewGuid();
+        var vikarId = Guid.NewGuid();
+        var occurredAt = new DateTime(2026, 7, 2, 0, 5, 0, DateTimeKind.Utc);
+
+        var original = new ManagerVikarEnded
+        {
+            EventId = eventId,
+            OccurredAt = occurredAt,
+            Version = 1,
+            ActorId = "SYSTEM",
+            ActorRole = "SYSTEM",
+            CorrelationId = correlationId,
+            VikarId = vikarId,
+            AbsentApproverId = "mgr01",
+            VikarUserId = "mgr02",
+            UntilDate = new DateOnly(2026, 7, 1),
+            Reason = "ANDET",
+            TreeRootOrgId = "STY02",
+            EffectiveTo = new DateOnly(2026, 7, 2),
+            EndReason = "EXPIRED",
+            RowVersion = 2,
+        };
+
+        var json = EventSerializer.Serialize(original);
+        var deserialized = EventSerializer.Deserialize("ManagerVikarEnded", json);
+
+        var result = Assert.IsType<ManagerVikarEnded>(deserialized);
+        Assert.Equal(eventId, result.EventId);
+        Assert.Equal("ManagerVikarEnded", result.EventType);
+        Assert.Equal(vikarId, result.VikarId);
+        Assert.Equal("mgr01", result.AbsentApproverId);
+        Assert.Equal("mgr02", result.VikarUserId);
+        Assert.Equal(new DateOnly(2026, 7, 1), result.UntilDate);
+        Assert.Equal("ANDET", result.Reason);
+        Assert.Equal("STY02", result.TreeRootOrgId);
+        Assert.Equal(new DateOnly(2026, 7, 2), result.EffectiveTo);
+        Assert.Equal("EXPIRED", result.EndReason);
+        Assert.Equal(2, result.RowVersion);
+    }
+
+    [Fact]
+    public void EventSerializer_Registers_ManagerVikarFamily()
+    {
+        var mapField = typeof(EventSerializer).GetField(
+            "EventTypeMap", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(mapField);
+        var map = (IReadOnlyDictionary<string, Type>)mapField!.GetValue(null)!;
+
+        Assert.True(map.TryGetValue("ManagerVikarCreated", out var createdType));
+        Assert.Equal(typeof(ManagerVikarCreated), createdType);
+        Assert.True(map.TryGetValue("ManagerVikarEnded", out var endedType));
+        Assert.Equal(typeof(ManagerVikarEnded), endedType);
+
+        // RETENTION REGRESSION (R4): ReportingLineSelfDelegated is retired from emission but
+        // its registration MUST remain so historical streams still deserialize at replay.
+        Assert.True(map.TryGetValue("ReportingLineSelfDelegated", out var retainedType));
+        Assert.Equal(typeof(ReportingLineSelfDelegated), retainedType);
+    }
 }

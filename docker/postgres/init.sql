@@ -3692,3 +3692,134 @@ BEGIN
 END
 $$;
 -- S72-ROW-PREFERENCES-SEGMENT-END
+
+-- =========================================================================
+-- S74 / ADR-027 Phase 5 — Medarbejder administration backend foundations
+--   employee_profiles.enhed_label: free-text display label (additive, display-only).
+--     Rides the EXISTING ADR-022 temporal profile versioning — a label change
+--     SUPERSEDES the live profile row exactly like position/part_time_fraction do;
+--     it is NOT a new event family and is INERT for rules/payroll. Additive,
+--     NULL backfill (FE shows the primary_org name when null).
+--   manager_vikar: approver-owned vikar (covers current+future reports); replaces
+--     the per-report SELF_DELEGATION ACTING fan-out as the self-delegation storage.
+--     Table DDL only this sprint (TASK-7400) — the repo/events/resolver land in
+--     TASK-7401. The one-time migration below closes any existing OPEN
+--     SELF_DELEGATION ACTING rows and projects them into manager_vikar (no-op on a
+--     greenfield DB; idempotent + ledger-guarded for legacy DBs).
+--   ALTER-in-segment convention (S49/S50/S51): the base employee_profiles CREATE
+--   (init.sql ~485) is NOT touched, so greenfield + legacy both converge here.
+-- =========================================================================
+
+-- (1) enhed_label additive column — display-only, NULL backfill (R1).
+ALTER TABLE employee_profiles ADD COLUMN IF NOT EXISTS enhed_label TEXT NULL;
+
+-- (2) manager_vikar table (R2) — DDL only (TASK-7400); repo/events/resolver = TASK-7401.
+--   absent_approver_id: the manager who is away (the vikar acts on their behalf).
+--   vikar_user_id:      the stand-in approver (covers absent_approver_id's CURRENT
+--                       + FUTURE reports automatically — the resolver consults this).
+--   until_date:         INCLUSIVE "til og med" — the vikar is effective THROUGH this
+--                       date; expiry closes it the day AFTER (the R4a inclusive fix,
+--                       owned by TASK-7401's DelegationExpiryService cutover).
+--   reason:             FERIE / SYGDOM / ORLOV / TJENESTEREJSE / ANDET (by-construction
+--                       CHECK, not by-seed — the S68-B1 lesson).
+--   tree_root_org_id:   the styrelse/ministry tree boundary (ADR-027), mirrors
+--                       reporting_lines.tree_root_org_id.
+--   effective_to:       close marker; NULL = active. Partial-unique below enforces
+--                       AT MOST ONE active vikar per absent_approver_id by construction.
+--   CHECK (absent_approver_id <> vikar_user_id): an approver cannot vikar for themselves.
+CREATE TABLE IF NOT EXISTS manager_vikar (
+    vikar_id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    absent_approver_id  TEXT        NOT NULL REFERENCES users(user_id),
+    vikar_user_id       TEXT        NOT NULL REFERENCES users(user_id),
+    until_date          DATE        NOT NULL,   -- INCLUSIVE "til og med"
+    reason              TEXT        NOT NULL CHECK (reason IN ('FERIE','SYGDOM','ORLOV','TJENESTEREJSE','ANDET')),
+    tree_root_org_id    TEXT        NOT NULL REFERENCES organizations(org_id),
+    version             BIGINT      NOT NULL DEFAULT 1,
+    created_by          TEXT        NOT NULL,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    effective_to        DATE        NULL,        -- close marker (NULL = active)
+    CHECK (absent_approver_id <> vikar_user_id)
+);
+
+-- At most one ACTIVE vikar per absent approver (one stand-in at a time). Partial-
+-- unique on the close marker — the active-vikar invariant is enforced by the DB,
+-- not the application (R2, by-construction).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_manager_vikar_active
+    ON manager_vikar (absent_approver_id)
+    WHERE effective_to IS NULL;
+
+-- Reverse lookup: "which active vikar rows name THIS user as the stand-in?" — used
+-- by the R10 delete-closure (TASK-7403) when the vikar_user is removed from the tree.
+-- The absent_approver_id active lookup is already covered by uq_manager_vikar_active.
+CREATE INDEX IF NOT EXISTS idx_manager_vikar_vikar
+    ON manager_vikar (vikar_user_id)
+    WHERE effective_to IS NULL;
+
+-- (3) SELF_DELEGATION → manager_vikar migration (R4). On a greenfield DB this is a
+--   no-op (no open SELF_DELEGATION ACTING rows exist). On a legacy DB it projects
+--   each distinct delegating group into ONE manager_vikar row and closes the
+--   per-report ACTING fan-out. Idempotent: skips a group that already has an active
+--   manager_vikar row (so a re-apply never double-inserts), and ledger-guarded so it
+--   runs at most once. The contract-stable endpoints + the go-forward
+--   ManagerVikarCreated/Ended event family are TASK-7401's concern — this segment
+--   only moves the legacy STORAGE.
+DO $$
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s74-medarbejder-admin-foundations', 'ADR-027 Phase 5 (SPRINT-74 TASK-7400): employee_profiles.enhed_label TEXT NULL (additive display-only label; rides ADR-022 temporal profile versioning, no new event family, inert for rules/payroll) + manager_vikar table (approver-owned vikar: vikar_id PK, absent_approver_id/vikar_user_id -> users, until_date INCLUSIVE, reason CHECK {FERIE,SYGDOM,ORLOV,TJENESTEREJSE,ANDET}, tree_root_org_id -> organizations, version, created_by, created_at, effective_to close-marker; partial-unique uq_manager_vikar_active one-active-per-approver; idx_manager_vikar_vikar reverse lookup; CHECK absent<>vikar) + one-time SELF_DELEGATION ACTING -> manager_vikar projection/close migration (no-op greenfield, idempotent legacy remediation). Table DDL + column only this task; repo/events/resolver = TASK-7401.')
+    ON CONFLICT (migration_id) DO NOTHING;
+
+    IF NOT FOUND THEN
+        -- Ledger row already present → this segment has run; do NOT re-project.
+        RETURN;
+    END IF;
+
+    -- ONE manager_vikar row per delegating manager (= created_by). A self-delegation
+    -- POST fans out per-report ACTING rows that all share one delegating manager,
+    -- one stand-in (manager_id) and one scheduled_expiry, so the natural group is the
+    -- delegating manager. DISTINCT ON (created_by) collapses the per-report fan-out
+    -- to one row and — critically — guarantees AT MOST ONE row per absent_approver_id
+    -- even if legacy data somehow carried divergent expiries/stand-ins for the same
+    -- manager (picking the latest scheduled_expiry, then the stand-in/tree of that
+    -- chosen row): the partial-unique uq_manager_vikar_active cannot be violated by
+    -- construction, not by trusting the seed shape (the S68-B1 lesson). The NOT EXISTS
+    -- guard makes a partial re-run idempotent even if the ledger row were ever cleared.
+    INSERT INTO manager_vikar (
+        absent_approver_id, vikar_user_id, until_date, reason,
+        tree_root_org_id, version, created_by, effective_to)
+    SELECT DISTINCT ON (rl.created_by)
+        rl.created_by, rl.manager_id, rl.scheduled_expiry, 'ANDET',
+        rl.tree_root_org_id, 1, rl.created_by, NULL
+    FROM reporting_lines rl
+    WHERE rl.source = 'SELF_DELEGATION'
+      AND rl.relationship = 'ACTING'
+      AND rl.effective_to IS NULL
+      AND rl.scheduled_expiry IS NOT NULL
+      AND NOT EXISTS (
+          SELECT 1 FROM manager_vikar mv
+          WHERE mv.absent_approver_id = rl.created_by
+            AND mv.effective_to IS NULL)
+    ORDER BY rl.created_by, rl.scheduled_expiry DESC;
+
+    -- Close the projected per-report SELF_DELEGATION ACTING rows (storage swap; the
+    -- contract-stable endpoints re-derive delegatedEmployees[] dynamically in 7401).
+    UPDATE reporting_lines
+       SET effective_to = CURRENT_DATE, version = version + 1
+     WHERE source = 'SELF_DELEGATION'
+       AND relationship = 'ACTING'
+       AND effective_to IS NULL;
+END
+$$;
+
+-- (4) S74-7404 R11a — supporting index for the per-styrelse period-status projection
+--   (GetPeriodStatusProjectionForTreeAsync). That read finds, per employee, the GREATEST
+--   period_end strictly before today — a DISTINCT ON (employee_id) ... ORDER BY employee_id,
+--   period_end DESC over every employee in the styrelse subtree. The existing indexes do NOT
+--   serve it: idx_approval_employee (employee_id) lacks the period_end ordering (forces a
+--   per-employee sort), and idx_approval_period (period_start, period_end) is not keyed on
+--   employee_id. A composite (employee_id, period_end DESC) lets the planner walk the latest
+--   closed period per employee directly. Additive, legacy-guarded (IF NOT EXISTS), matching the
+--   S74 ALTER-in-segment convention; greenfield + legacy converge here.
+CREATE INDEX IF NOT EXISTS idx_approval_employee_period_end
+    ON approval_periods (employee_id, period_end DESC);
+-- S74-MEDARBEJDER-ADMIN-SEGMENT-END

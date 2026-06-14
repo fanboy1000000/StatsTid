@@ -379,6 +379,7 @@ public static class AdminEndpoints
             DbConnectionFactory dbFactory,
             IOutboxEnqueue outbox,
             UserAgreementCodeRepository userAgreementCodeRepo,
+            ReportingLineRepository reportingLineRepo,
             IAuditProjectionMapper<UserCreated> auditMapper,
             IAuditProjectionMapper<EmployeeProfileCreated> profileCreatedMapper,
             IAuditProjectionMapper<UserAgreementCodeSeeded> uacSeededMapper,
@@ -518,6 +519,10 @@ public static class AdminEndpoints
                 {
                     partTimeFraction = 1.000m,
                     position = (string?)null,
+                    // S74 / TASK-7400 — admin-create profiles carry a null enhed_label
+                    // (the column defaults NULL; the FE falls back to the primary_org
+                    // name). The PUT path is the primary write surface for the label.
+                    enhedLabel = (string?)null,
                 });
                 await using (var profileAuditCmd = new NpgsqlCommand(
                     """
@@ -639,6 +644,8 @@ public static class AdminEndpoints
                     EmployeeId = request.UserId,
                     PartTimeFraction = 1.000m,
                     Position = null,
+                    // S74 / TASK-7400 — null at create; the PUT path sets the label.
+                    EnhedLabel = null,
                     EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow),
                     ActorId = actor.ActorId,
                     ActorRole = actor.ActorRole,
@@ -691,7 +698,115 @@ public static class AdminEndpoints
                 var uacSeededRow = uacSeededMapper.Map(agreementSeededEvent, uacSeededCtx);
                 await auditRepo.InsertAsync(conn, tx, agreementSeededEvent.EventId, uacSeededOutboxId, agreementSeededEvent.EventType, uacSeededRow, uacSeededCtx, ct);
 
+                // (6) S74 R9 — OPTIONAL atomic create+assign. When an approverId is supplied,
+                //     create the new person's PRIMARY reporting line under it in the SAME tx, so
+                //     the create+assign is all-or-nothing and the person is never an orphan via
+                //     this path. ValidateSameTreeAsync/cycle-guard run in-tx (the (conn,tx)
+                //     overloads see the just-inserted user row, which fresh-connection reads
+                //     could not). Emits ReportingLineAssigned + a reporting_line_audit row,
+                //     EXACTLY like the normal assign path (ReportingLineEndpoints assign).
+                if (!string.IsNullOrWhiteSpace(request.ApproverId))
+                {
+                    // S74-7403 B1 — TOTAL LOCK ORDER (identical to the assign endpoints, deadlock-safe):
+                    //   advisory → user rows id-ordered FOR UPDATE (in ValidateSameTreeAsync) → cycle
+                    //   guard → slot. NO user row is locked before the advisory.
+                    //
+                    // Step 1a: derive the advisory key from the NEW user's tree root. The new user's
+                    // primary_org_id is request.PrimaryOrgId, fixed by THIS tx's INSERT above (already
+                    // exclusively held, invisible to any concurrent transfer until COMMIT) — so the key
+                    // cannot drift and no post-validation re-acquire is needed.
+                    string rlTreeRoot;
+                    try
+                    {
+                        var newUserTreeRoot = await reportingLineRepo.ResolveTreeRootOrgIdAsync(
+                            conn, tx, request.PrimaryOrgId, ct);
+
+                        // Step 1b: take the tree advisory lock FIRST (parked → no user rows held).
+                        await ReportingLineRepository.AcquireTreeLockAsync(conn, tx, newUserTreeRoot, ct);
+
+                        // Step 2: same-tree validation UNDER the advisory — pins BOTH the new user AND
+                        // the approver `users` rows FOR UPDATE in id-order (B1: a concurrent cross-styrelse
+                        // transfer of the approver cannot create a cross-tree edge, ADR-027 D2). Returns
+                        // the authoritative common tree root (== newUserTreeRoot, since the new user's org
+                        // is fixed). W1: throws InvalidOperationException when the approver (or the new
+                        // user's org) cannot be resolved to a styrelse tree root → clean 400 below.
+                        rlTreeRoot = await reportingLineRepo.ValidateSameTreeAsync(
+                            conn, tx, request.UserId, request.ApproverId!, ct);
+                    }
+                    catch (InvalidOperationException ioEx)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.BadRequest(new { error = ioEx.Message });
+                    }
+
+                    // Step 3: R8 cycle guard — descendant walk under the held tree lock. A brand-new
+                    // person has no descendants yet, but we run it for consistency (and it self-cycle-
+                    // rejects approverId == userId with a friendly 4xx instead of a DB CHECK 23514).
+                    await reportingLineRepo.GuardNoCycleAsync(conn, tx, request.UserId, request.ApproverId!, ct);
+
+                    var newLine = new SharedKernel.Models.ReportingLine
+                    {
+                        ReportingLineId = Guid.NewGuid(),
+                        EmployeeId = request.UserId,
+                        ManagerId = request.ApproverId!,
+                        TreeRootOrgId = rlTreeRoot,
+                        Relationship = "PRIMARY",
+                        EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow),
+                        EffectiveTo = null,
+                        Source = "MANUAL",
+                        Version = 1,
+                        CreatedBy = actor.ActorId ?? "system",
+                        CreatedAt = DateTime.UtcNow,
+                    };
+                    // First assignment for a brand-new user — expectedCurrentVersion = null.
+                    var persistedLine = await reportingLineRepo.AssignAsync(conn, tx, null, newLine, ct);
+
+                    await using (var rlAuditCmd = new NpgsqlCommand(
+                        """
+                        INSERT INTO reporting_line_audit
+                            (reporting_line_id, action, actor_id, correlation_id, version_before, version_after, metadata)
+                        VALUES
+                            (@lineId, 'ASSIGNED', @actorId, @correlationId, NULL, @versionAfter, NULL)
+                        """, conn, tx))
+                    {
+                        rlAuditCmd.Parameters.AddWithValue("lineId", persistedLine.ReportingLineId);
+                        rlAuditCmd.Parameters.AddWithValue("actorId", actor.ActorId ?? "system");
+                        rlAuditCmd.Parameters.AddWithValue("correlationId", (object?)actor.CorrelationId ?? DBNull.Value);
+                        rlAuditCmd.Parameters.AddWithValue("versionAfter", (object)persistedLine.Version);
+                        await rlAuditCmd.ExecuteNonQueryAsync(ct);
+                    }
+
+                    await outbox.EnqueueAsync(conn, tx, $"reporting-line-{request.UserId}", new ReportingLineAssigned
+                    {
+                        ReportingLineId = persistedLine.ReportingLineId,
+                        EmployeeId = persistedLine.EmployeeId,
+                        ManagerId = persistedLine.ManagerId,
+                        TreeRootOrgId = persistedLine.TreeRootOrgId,
+                        Relationship = persistedLine.Relationship,
+                        EffectiveFrom = persistedLine.EffectiveFrom,
+                        Source = persistedLine.Source,
+                        RowVersion = persistedLine.Version,
+                        ActorId = actor.ActorId,
+                        ActorRole = actor.ActorRole,
+                        CorrelationId = actor.CorrelationId,
+                    }, ct);
+                }
+
                 await tx.CommitAsync(ct);
+            }
+            catch (CrossTreeAssignmentException ex)
+            {
+                // S74 R9 — the supplied approver is in a different reporting tree → 400, nothing
+                // committed (the whole create+assign rolls back atomically).
+                await tx.RollbackAsync(ct);
+                return Results.Json(new { error = ex.Message }, statusCode: 400);
+            }
+            catch (ReportingCycleException ex)
+            {
+                // S74 R9 — the supplied approver is the new person (self-cycle) → 409, nothing
+                // committed.
+                await tx.RollbackAsync(ct);
+                return Results.Json(new { error = ex.Message }, statusCode: 409);
             }
             catch (ConcurrentSeedConflictException ex)
             {
@@ -1727,6 +1842,106 @@ public static class AdminEndpoints
             });
         }).RequireAuthorization("LocalAdminOrAbove");
 
+        // ═══════════════════════════════════════════
+        // S74-7404 R11a — GET /api/admin/reporting-lines/tree/{treeRootOrgId}/period-status
+        //   Per-styrelse period-status projection for the redesigned Medarbejder-administration
+        //   tree (FE Phases 2-3): each employee's last-closed-month status (OPEN/SUBMITTED/
+        //   APPROVED) for the status badge + the per-manager pending count for the filter tiles.
+        //   Read-only / additive. Scope: LocalAdminOrAbove + org-scope covers the tree root
+        //   (mirrors the sibling GET .../tree/{treeRootOrgId}).
+        // ═══════════════════════════════════════════
+        app.MapGet("/api/admin/reporting-lines/tree/{treeRootOrgId}/period-status", async (
+            string treeRootOrgId,
+            ApprovalPeriodRepository approvalRepo,
+            OrganizationRepository orgRepo,
+            OrgScopeValidator scopeValidator,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            var actor = context.GetActorContext();
+
+            // Scope must cover the tree-root org (same gate as the tree read).
+            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, treeRootOrgId, ct);
+            if (!allowed)
+                return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+
+            // Resolve the tree-root org → its materialized_path prefix (the styrelse subtree the
+            // projection is scoped over).
+            var treeRootOrg = await orgRepo.GetByIdAsync(treeRootOrgId, ct);
+            if (treeRootOrg is null)
+                return Results.NotFound(new { error = $"Organization {treeRootOrgId} not found" });
+
+            var projection = await approvalRepo.GetPeriodStatusProjectionForTreeAsync(
+                treeRootOrg.MaterializedPath, ct);
+
+            return Results.Ok(new
+            {
+                employees = projection.Employees.Select(e => new
+                {
+                    employeeId = e.EmployeeId,
+                    displayName = e.DisplayName,
+                    status = e.Status,
+                }),
+                pendingCountByManager = projection.PendingCountByManager,
+            });
+        }).RequireAuthorization("LocalAdminOrAbove");
+
+        // ═══════════════════════════════════════════
+        // S74-7404 R11b — GET /api/admin/users/search — server-side person-search (the 2000+
+        //   approver/person picker). Case-insensitive q on display_name/username; scope-filtered
+        //   to the caller's RBAC org-scope; paginated (limit/offset, sane default+cap); excludes
+        //   self + descendants server-side when excludeEmployeeId is supplied (the cycle-prevention
+        //   mirror for the picker — a person cannot pick themselves or a subordinate as approver).
+        //   Read-only. minRole LocalAdmin (admin surface). A REAL paginated DB query.
+        // ═══════════════════════════════════════════
+        app.MapGet("/api/admin/users/search", async (
+            string? q,
+            string? excludeEmployeeId,
+            int? limit,
+            int? offset,
+            ApprovalPeriodRepository approvalRepo,
+            ReportingLineRepository reportingLineRepo,
+            OrgScopeValidator scopeValidator,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            var actor = context.GetActorContext();
+
+            // Pagination: default 50, cap 200; offset >= 0.
+            var pageLimit = Math.Clamp(limit ?? 50, 1, 200);
+            var pageOffset = Math.Max(offset ?? 0, 0);
+
+            // Scope filter: the accessible-org set (null = GLOBAL/unrestricted, [] = nobody).
+            var accessibleOrgs = await scopeValidator.GetAccessibleOrgsAsync(actor, ct);
+
+            // Self + descendant exclusion (cycle-prevention mirror): reuse 7403's bounded
+            // descendant walk via the new read-only GetDescendantIdsAsync sibling.
+            var excluded = new HashSet<string>(StringComparer.Ordinal);
+            if (!string.IsNullOrWhiteSpace(excludeEmployeeId))
+            {
+                excluded.Add(excludeEmployeeId);
+                foreach (var d in await reportingLineRepo.GetDescendantIdsAsync(excludeEmployeeId, ct))
+                    excluded.Add(d);
+            }
+
+            var (items, total) = await approvalRepo.SearchPeopleAsync(
+                q ?? string.Empty, accessibleOrgs, excluded, pageLimit, pageOffset, ct);
+
+            return Results.Ok(new
+            {
+                items = items.Select(i => new
+                {
+                    userId = i.UserId,
+                    displayName = i.DisplayName,
+                    primaryOrgName = i.PrimaryOrgName,
+                    enhedLabel = i.EnhedLabel,
+                }),
+                total,
+                limit = pageLimit,
+                offset = pageOffset,
+            });
+        }).RequireAuthorization("LocalAdminOrAbove");
+
         return app;
     }
 
@@ -1801,6 +2016,13 @@ public static class AdminEndpoints
         public required string PrimaryOrgId { get; init; }
         public required string AgreementCode { get; init; }
         public required string OkVersion { get; init; }
+
+        // S74 R9 — OPTIONAL atomic create+assign. When supplied, the create tx ALSO creates the
+        // new person's PRIMARY reporting line under this approver (same tree, cycle-guarded),
+        // emitting ReportingLineAssigned + a reporting_line_audit row — all in the SAME tx, so a
+        // person is never left an orphan via the admin create path (the FE always supplies it per
+        // OQ-2a). Omitted ⇒ behaviour unchanged (no reporting line).
+        public string? ApproverId { get; init; }
     }
 
     private sealed class UpdateUserRequest

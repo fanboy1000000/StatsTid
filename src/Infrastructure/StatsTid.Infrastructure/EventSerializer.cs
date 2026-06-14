@@ -113,8 +113,18 @@ public static class EventSerializer
         ["ReportingLineSuperseded"] = typeof(ReportingLineSuperseded),
         ["ReportingLineBulkImported"] = typeof(ReportingLineBulkImported),
         ["ReportingLineManagerDeactivated"] = typeof(ReportingLineManagerDeactivated),
-        // Sprint 51: Self-service delegation batch event (Phase 5 TASK-5104)
+        // Sprint 51: Self-service delegation batch event (Phase 5 TASK-5104).
+        // RETIRED FROM EMISSION in S74 (TASK-7401 — the manager_vikar storage cutover
+        // supersedes the per-report SELF_DELEGATION fan-out), but RETAINED here for
+        // historical replay: streams written under this discriminator before S74 must
+        // still deserialize (replay-tested). Do NOT remove this registration.
         ["ReportingLineSelfDelegated"] = typeof(ReportingLineSelfDelegated),
+        // Sprint 74: approver-owned vikar (manager_vikar) lifecycle events (ADR-027 Phase 5,
+        // SPRINT-74 R4 TASK-7401). The go-forward self-delegation storage — ManagerVikarCreated
+        // on POST /delegate, ManagerVikarEnded on DELETE /delegate + DelegationExpiryService
+        // close. Both ride reporting-line-{absentApproverId}.
+        ["ManagerVikarCreated"] = typeof(ManagerVikarCreated),
+        ["ManagerVikarEnded"] = typeof(ManagerVikarEnded),
         // Sprint 49: Approval delegation fallback traversal warning (Phase 5 ADR-027 D5)
         ["FallbackTraversalWarning"] = typeof(FallbackTraversalWarning),
         // Sprint 56: Self-recorded work-time state per (employee, date) — intervals + manual hours.
