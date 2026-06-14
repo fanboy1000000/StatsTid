@@ -105,6 +105,31 @@ public sealed class ManagerVikarRepository
     }
 
     /// <summary>
+    /// S76 / TASK-7601 fix-forward (Step-5a c1 B3) — IN-TX, <c>FOR UPDATE</c> read of the active
+    /// vikar row owned by <paramref name="absentApproverId"/> (<c>effective_to IS NULL</c>). Used
+    /// by the admin-revoke DELETE so the row that is AUTHORIZED against (its persisted
+    /// <c>tree_root_org_id</c>) is the EXACT row that is then CLOSED — the <c>FOR UPDATE</c> pin
+    /// (under the tree advisory lock) makes the authorize→close pair atomic: a concurrent
+    /// close/recreate cannot swap the active row between the authorization read and the UPDATE.
+    /// Returns <c>null</c> when no active row exists (→ 404).
+    /// </summary>
+    public async Task<ManagerVikar?> GetActiveByApproverForUpdateInTxAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string absentApproverId, CancellationToken ct = default)
+    {
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT * FROM manager_vikar
+            WHERE absent_approver_id = @absentApproverId
+              AND effective_to IS NULL
+            FOR UPDATE
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("absentApproverId", absentApproverId);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct) ? MapReader(reader) : null;
+    }
+
+    /// <summary>
     /// Reverse lookup: returns all active vikar rows that name <paramref name="vikarUserId"/>
     /// as the stand-in (<c>vikar_user_id = @id AND effective_to IS NULL</c>). Served by the
     /// <c>idx_manager_vikar_vikar</c> partial index. Used by the R10 delete-closure

@@ -101,6 +101,14 @@ Defined in `src/Infrastructure/StatsTid.Infrastructure/Security/OrgScopeValidato
 
 Service-layer enforcement called explicitly from API endpoints. Validates that the actor's `RoleScope` entries grant access to the target employee's organization unit. Uses the materialized path hierarchy (`/MIN01/STY02/`) with `text_pattern_ops` index for descendant matching. Reference: [ADR-008](knowledge-base/decisions/ADR-008-materialized-path-org-hierarchy.md).
 
+### The mixed-role scope-floor invariant (S76 / B1)
+
+**CRITICAL invariant:** an ADMIN scope-admission check must floor *per scope* by role — admission may only be granted by a scope whose `Role` meets the endpoint's policy floor. The original `OrgScopeValidator` methods (`ValidateOrgAccessAsync`, `ValidateEmployeeAccessAsync`, `GetAccessibleOrgsAsync`, `ValidateEmployeeAccessIncludingTerminatedAsync`) and `HasGlobalScope` admitted via ANY covering scope **regardless of that scope's role**. A mixed-role actor (e.g. `LocalAdmin@STY-A` who also holds a non-admin scope in STY-B) therefore passed an admin gate for STY-B via the *non-admin* scope → a cross-styrelse data/write leak.
+
+**The rule:** every admin (LocalAdminOrAbove / HROrAbove / GlobalAdmin) read or write must route through a role-FLOORED scope check, at the floor matching its `RequireAuthorization` policy (LocalAdminOrAbove → `LocalAdmin`; HROrAbove → `LocalHR`; GlobalAdmin gates require a GLOBAL scope at `GlobalAdmin`). The floored variants take a `roleFloor` and skip scopes below it (`!IsAtLeast(scope.Role, roleFloor) → continue`). The no-floor overloads remain for genuinely non-admin callers (Employee/Leader reads admit via any covering scope by design). **Exception, deliberately null-floored:** the leader year-overview reads (`BalanceEndpoints`) — a Leader-in-scope SHOULD see their active report's overview (ADR-027 R9c).
+
+**Lesson:** a scoped/structural review trace cannot enumerate every scope-admission caller — only an external whole-codebase trace found the full set (config/project/global/audit/settlement/end-date writes across 3 review cycles). When changing a scope-admission surface, sweep EVERY caller, not just the diff ([[review-lens-complementarity]]).
+
 ## Authorization Patterns
 
 - All endpoints MUST chain `.RequireAuthorization()` with one of the defined policies:

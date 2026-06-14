@@ -28,11 +28,40 @@ public sealed class OrgScopeValidator
     /// <summary>
     /// Validates whether the actor has access to a specific employee's data.
     /// Employee role can only access own data. Higher roles require org-scope coverage.
+    ///
+    /// <para>
+    /// <b>S76 / TASK-7600 B1 per-scope role floor (optional, defaulted off):</b> when
+    /// <paramref name="roleFloor"/> is supplied, a scope only admits the target if it ALSO clears
+    /// the floor (<see cref="StatsTidRoles.IsAtLeast"/> on <c>scope.Role</c>) — the same per-scope
+    /// gate <see cref="ValidateEmployeeAccessIncludingTerminatedAsync"/> applies to terminated
+    /// targets. This closes the mixed-role scope leak: an admin-policy endpoint must route through
+    /// the floored overload so that a non-admin scope covering org B can NEVER satisfy an admin
+    /// gate for B (FAIL-001: this validator binds to ANY covering scope, regardless of that
+    /// scope's role). <b>Default <c>null</c> = no floor = byte-identical legacy behavior</b> — the
+    /// Employee/Leader (EmployeeOrAbove) callers that rely on any-covering-scope admission are
+    /// untouched. The Employee own-data short-circuit is unchanged by the floor (an Employee-only
+    /// actor accessing OWN data is not gated by a role floor — ownership, not org-scope, admits).
+    /// </para>
     /// </summary>
     public async Task<(bool Allowed, string? Reason)> ValidateEmployeeAccessAsync(
         ActorContext actor, string targetEmployeeId, CancellationToken ct = default)
+        => await ValidateEmployeeAccessAsync(actor, targetEmployeeId, roleFloor: null, ct);
+
+    /// <summary>
+    /// Role-floored overload of <see cref="ValidateEmployeeAccessAsync(ActorContext, string, CancellationToken)"/>.
+    /// See that method's S76 / TASK-7600 remarks. Pass <paramref name="roleFloor"/> = the endpoint
+    /// policy's minimum admin role (LocalAdmin for LocalAdminOrAbove, LocalHR for HROrAbove); pass
+    /// <c>null</c> for the legacy no-floor behavior.
+    /// </summary>
+    public async Task<(bool Allowed, string? Reason)> ValidateEmployeeAccessAsync(
+        ActorContext actor, string targetEmployeeId, string? roleFloor, CancellationToken ct = default)
     {
-        // Ownership check: Employee accessing own data
+        // Ownership check: Employee accessing own data. The role floor does NOT apply to the
+        // own-data branch — ownership (not org-scope) is what admits here, and an actor reading
+        // their OWN record is never a privilege escalation. (No admin-policy caller routes here:
+        // admin endpoints carry an HROrAbove/LocalAdminOrAbove policy that excludes Employee
+        // tokens, so this branch is reached only by EmployeeOrAbove callers that pass roleFloor
+        // = null anyway.)
         if (IsEmployeeOnly(actor))
         {
             if (string.Equals(actor.ActorId, targetEmployeeId, StringComparison.Ordinal))
@@ -58,6 +87,11 @@ public sealed class OrgScopeValidator
 
         foreach (var scope in actor.Scopes)
         {
+            // S76 B1 per-scope floor: a scope below the policy floor never admits (continue —
+            // the final Deny fires if no scope qualifies). Inert when roleFloor is null.
+            if (roleFloor is not null && !StatsTidRoles.IsAtLeast(scope.Role, roleFloor))
+                continue;
+
             if (scope.ScopeType == "GLOBAL")
                 return (true, null);
 
@@ -134,6 +168,41 @@ public sealed class OrgScopeValidator
     /// </summary>
     public async Task<(bool Allowed, string? Reason)> ValidateEmployeeAccessIncludingTerminatedAsync(
         ActorContext actor, string targetEmployeeId, CancellationToken ct = default)
+        => await ValidateEmployeeAccessIncludingTerminatedAsync(actor, targetEmployeeId, roleFloor: null, ct);
+
+    /// <summary>
+    /// Role-floored overload of
+    /// <see cref="ValidateEmployeeAccessIncludingTerminatedAsync(ActorContext, string, CancellationToken)"/>.
+    ///
+    /// <para>
+    /// <b>S76 / TASK-7600 B1 fix-forward cycle 2 (Codex Step-5a c2, MUST-FIX) — the ACTIVE-target
+    /// leak.</b> The R9f1 per-scope floor on the loop above was conditioned on
+    /// <c>terminatedTarget</c>, so it ONLY bit a TERMINATED target. For an ACTIVE target the loop
+    /// admitted via ANY covering scope — letting a mixed-role JWT (HR@A + Leader@B) perform HR
+    /// WRITES on an ACTIVE employee in B through the Leader scope, across every HROrAbove caller
+    /// that routes here. The fix lifts the floor onto an explicit <paramref name="roleFloor"/>
+    /// parameter applied to <b>BOTH</b> the ACTIVE and the TERMINATED scope loops: when a non-null
+    /// floor is supplied, a scope only admits (in either the GLOBAL branch or the
+    /// <see cref="RoleScope.CoversOrg"/> branch) if it ALSO clears the floor
+    /// (<see cref="StatsTidRoles.IsAtLeast"/> on <c>scope.Role</c>).
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Terminated behavior is unchanged when a floor is passed</b> — the R9f1 invariant (the
+    /// ADMITTING scope must itself be LocalHR or above for a terminated target) still holds, now
+    /// expressed via <paramref name="roleFloor"/> rather than a hard-coded LocalHR. Every admin
+    /// HROrAbove caller passes <c>StatsTidRoles.LocalHR</c>, which equals the prior hard-coded
+    /// floor for terminated targets and ADDS the same floor for active targets. <b>Default
+    /// <c>null</c></b> keeps the legacy any-covering-scope-for-active / hard-LocalHR-for-terminated
+    /// behavior — but no production caller passes null: the leader year-overview READS that must
+    /// admit an in-scope leader for an ACTIVE report route through the no-floor 3-arg overload
+    /// (<c>BalanceEndpoints</c> :633/:1224, pinned by
+    /// <c>YearOverviewTests.Auth_LeaderInScope_Returns200</c>), where the floor is null AND the
+    /// terminated branch still hard-floors at LocalHR (defense-in-depth below).
+    /// </para>
+    /// </summary>
+    public async Task<(bool Allowed, string? Reason)> ValidateEmployeeAccessIncludingTerminatedAsync(
+        ActorContext actor, string targetEmployeeId, string? roleFloor, CancellationToken ct = default)
     {
         // No own-data branch (see XML doc): Employee-only actors are denied outright.
         if (IsEmployeeOnly(actor))
@@ -177,9 +246,20 @@ public sealed class OrgScopeValidator
             // org + a LocalLeader scope covering the target carries primary role LocalHR yet
             // would be admitted here by the Leader scope). Applies to BOTH the GLOBAL branch and
             // the CoversOrg branch; a below-floor scope simply never admits a terminated target
-            // (continue — the final Deny fires if no scope qualifies). Inert for ACTIVE targets:
-            // any covering scope admits, no role floor (pinned leader behavior preserved).
+            // (continue — the final Deny fires if no scope qualifies). Kept as a hard LocalHR
+            // floor even when roleFloor is null (fail-closed defense-in-depth: the no-floor
+            // leader year-overview READS only ever touch ACTIVE targets — a terminated target
+            // never reaches an admitting scope without LocalHR).
             if (terminatedTarget && !StatsTidRoles.IsAtLeast(scope.Role, StatsTidRoles.LocalHR))
+                continue;
+
+            // S76 B1 fix-forward (cycle 2, Codex c2 MUST-FIX): the EXPLICIT per-scope floor —
+            // applied to BOTH ACTIVE and TERMINATED targets — closes the active-target leak. With
+            // a non-null roleFloor (every admin HROrAbove caller passes StatsTidRoles.LocalHR), a
+            // scope below the floor never admits even an ACTIVE target, so a mixed HR@A + Leader@B
+            // JWT can no longer write/read an active B employee through the Leader scope. Inert
+            // when roleFloor is null (the leader year-overview reads).
+            if (roleFloor is not null && !StatsTidRoles.IsAtLeast(scope.Role, roleFloor))
                 continue;
 
             if (scope.ScopeType == "GLOBAL")
@@ -205,9 +285,27 @@ public sealed class OrgScopeValidator
     /// <summary>
     /// Validates whether the actor has access to a specific organization.
     /// Checks actor scopes against the target organization's materialized path.
+    ///
+    /// <para>
+    /// <b>S76 / TASK-7600 B1 per-scope role floor (optional, defaulted off):</b> see
+    /// <see cref="ValidateEmployeeAccessAsync(ActorContext, string, string?, CancellationToken)"/>.
+    /// When <paramref name="roleFloor"/> is supplied, a scope only admits the target org if it ALSO
+    /// clears the floor — closing the mixed-role leak on admin-policy org gates (a non-admin scope
+    /// covering org B can no longer satisfy an admin gate for B). Default <c>null</c> = no floor =
+    /// byte-identical legacy behavior for the EmployeeOrAbove/LeaderOrAbove callers.
+    /// </para>
     /// </summary>
     public async Task<(bool Allowed, string? Reason)> ValidateOrgAccessAsync(
         ActorContext actor, string targetOrgId, CancellationToken ct = default)
+        => await ValidateOrgAccessAsync(actor, targetOrgId, roleFloor: null, ct);
+
+    /// <summary>
+    /// Role-floored overload of <see cref="ValidateOrgAccessAsync(ActorContext, string, CancellationToken)"/>.
+    /// Pass <paramref name="roleFloor"/> = the endpoint policy's minimum admin role; <c>null</c> for
+    /// the legacy no-floor behavior.
+    /// </summary>
+    public async Task<(bool Allowed, string? Reason)> ValidateOrgAccessAsync(
+        ActorContext actor, string targetOrgId, string? roleFloor, CancellationToken ct = default)
     {
         var targetOrg = await _organizationRepository.GetByIdAsync(targetOrgId, ct);
         if (targetOrg is null)
@@ -221,6 +319,11 @@ public sealed class OrgScopeValidator
 
         foreach (var scope in actor.Scopes)
         {
+            // S76 B1 per-scope floor: a scope below the policy floor never admits (continue).
+            // Inert when roleFloor is null.
+            if (roleFloor is not null && !StatsTidRoles.IsAtLeast(scope.Role, roleFloor))
+                continue;
+
             if (scope.ScopeType == "GLOBAL")
                 return (true, null);
 
@@ -266,18 +369,45 @@ public sealed class OrgScopeValidator
     /// </summary>
     public async Task<IReadOnlyList<string>?> GetAccessibleOrgsAsync(
         ActorContext actor, CancellationToken ct = default)
+        => await GetAccessibleOrgsAsync(actor, roleFloor: null, ct);
+
+    /// <summary>
+    /// Role-floored overload of <see cref="GetAccessibleOrgsAsync(ActorContext, CancellationToken)"/>.
+    ///
+    /// <para>
+    /// <b>S76 / TASK-7600 B1 per-scope role floor:</b> when <paramref name="roleFloor"/> is
+    /// supplied, only scopes that clear the floor (<see cref="StatsTidRoles.IsAtLeast"/> on
+    /// <c>scope.Role</c>) contribute to the accessible-org union, and the GlobalAdmin short-circuit
+    /// fires only for a GLOBAL scope that ITSELF clears the floor. This closes the picker leak: the
+    /// person-search picker (admin surface) must route through the floored overload so a mixed-role
+    /// actor's non-admin scope covering org B cannot widen the accessible-org set into B's roster.
+    /// Default <c>null</c> = byte-identical legacy union (the audit-visibility / settlement reads
+    /// that intentionally union over every covering scope are untouched).
+    /// </para>
+    /// </summary>
+    public async Task<IReadOnlyList<string>?> GetAccessibleOrgsAsync(
+        ActorContext actor, string? roleFloor, CancellationToken ct = default)
     {
         if (actor.Scopes is null || actor.Scopes.Length == 0)
             return Array.Empty<string>();
 
-        // GlobalAdmin short-circuit — any GLOBAL scope means "see everything".
-        if (actor.Scopes.Any(s => string.Equals(s.ScopeType, "GLOBAL", StringComparison.Ordinal)))
+        // GlobalAdmin short-circuit — any GLOBAL scope means "see everything". Under a floor the
+        // GLOBAL scope must itself clear it (a below-floor GLOBAL scope cannot grant unrestricted
+        // admin reach).
+        if (actor.Scopes.Any(s =>
+                string.Equals(s.ScopeType, "GLOBAL", StringComparison.Ordinal) &&
+                (roleFloor is null || StatsTidRoles.IsAtLeast(s.Role, roleFloor))))
             return null;
 
         // Non-global: collect materialized-path descendants of each scope org.
         var accessibleOrgIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var scope in actor.Scopes)
         {
+            // S76 B1 per-scope floor: a scope below the floor contributes nothing to the union.
+            // Inert when roleFloor is null.
+            if (roleFloor is not null && !StatsTidRoles.IsAtLeast(scope.Role, roleFloor))
+                continue;
+
             if (scope.OrgId is null)
                 continue;
 

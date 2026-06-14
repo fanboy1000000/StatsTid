@@ -9,6 +9,7 @@ using StatsTid.SharedKernel.Audit;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Models;
+using StatsTid.SharedKernel.Security;
 
 namespace StatsTid.Backend.Api.Endpoints;
 
@@ -116,8 +117,9 @@ public static class EmployeeProfileEndpoints
 
             // Step 0b BLOCKER fix — cross-org binding. HROrAbove alone is not enough;
             // bind the actor's scopes to the target employee's organisation.
+            // S76 B1: LocalHR floor — the ADMITTING scope must itself be HR+.
             var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(
-                actor, employeeId, ct);
+                actor, employeeId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -196,9 +198,9 @@ public static class EmployeeProfileEndpoints
         {
             var actor = context.GetActorContext();
 
-            // Step 0b BLOCKER fix — cross-org binding (mirrors GET above).
+            // Step 0b BLOCKER fix — cross-org binding (mirrors GET above). S76 B1: LocalHR floor.
             var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(
-                actor, employeeId, ct);
+                actor, employeeId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -560,9 +562,9 @@ public static class EmployeeProfileEndpoints
         {
             var actor = context.GetActorContext();
 
-            // Step 0b BLOCKER fix — cross-org binding (mirrors GET / PUT).
+            // Step 0b BLOCKER fix — cross-org binding (mirrors GET / PUT). S76 B1: LocalHR floor.
             var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(
-                actor, employeeId, ct);
+                actor, employeeId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 

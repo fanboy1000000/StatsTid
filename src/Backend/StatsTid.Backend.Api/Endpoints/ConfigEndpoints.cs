@@ -135,8 +135,11 @@ public static class ConfigEndpoints
             var actor = context.GetActorContext();
             var logger = loggerFactory.CreateLogger("StatsTid.Backend.Api.Endpoints.ConfigEndpoints.ProfilePut");
 
-            // 1. Org-scope validation (P7).
-            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, orgId, ct);
+            // 1. Org-scope validation (P7). S76 / TASK-7600 B1: this is a LocalAdminOrAbove
+            //    writer — route through the LocalAdmin floor so a non-admin scope (e.g. a
+            //    Leader scope covering this org via a mixed-role JWT) can NEVER satisfy the
+            //    admin gate (FAIL-001 mixed-role scope leak).
+            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, orgId, StatsTidRoles.LocalAdmin, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -507,7 +510,9 @@ public static class ConfigEndpoints
         {
             var actor = context.GetActorContext();
 
-            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, orgId, ct);
+            // S76 / TASK-7600 B1: LocalAdminOrAbove writer → LocalAdmin floor (mixed-role
+            // scope-leak close; a covering non-admin scope cannot satisfy this admin gate).
+            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, orgId, StatsTidRoles.LocalAdmin, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 

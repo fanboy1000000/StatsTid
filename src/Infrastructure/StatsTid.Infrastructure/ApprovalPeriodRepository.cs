@@ -92,10 +92,12 @@ public sealed class ApprovalPeriodRepository
             """
             SELECT ap.* FROM approval_periods ap
             JOIN organizations o ON ap.org_id = o.org_id
-            WHERE o.materialized_path LIKE @pathPrefix AND ap.status IN ('SUBMITTED', 'EMPLOYEE_APPROVED')
+            WHERE o.materialized_path LIKE @pathPrefix ESCAPE '\' AND ap.status IN ('SUBMITTED', 'EMPLOYEE_APPROVED')
             ORDER BY ap.period_start
             """, conn);
-        cmd.Parameters.AddWithValue("pathPrefix", orgPathPrefix + "%");
+        // S76: literal-prefix the (system-derived) path — a '%' or '_' in an org id/path cannot
+        // widen the prefix into a wildcard (mirrors the S75 escape at :414/:572).
+        cmd.Parameters.AddWithValue("pathPrefix", EscapeLike(orgPathPrefix) + "%");
         return await ReadPeriodsAsync(cmd, ct);
     }
 
@@ -110,10 +112,11 @@ public sealed class ApprovalPeriodRepository
             """
             SELECT ap.* FROM approval_periods ap
             JOIN organizations o ON ap.org_id = o.org_id
-            WHERE o.materialized_path LIKE @pathPrefix AND ap.period_start < @nextMonthStart AND ap.period_end >= @monthStart
+            WHERE o.materialized_path LIKE @pathPrefix ESCAPE '\' AND ap.period_start < @nextMonthStart AND ap.period_end >= @monthStart
             ORDER BY ap.period_start
             """, conn);
-        cmd.Parameters.AddWithValue("pathPrefix", orgPathPrefix + "%");
+        // S76: literal-prefix the (system-derived) path (mirrors the S75 escape at :414/:572).
+        cmd.Parameters.AddWithValue("pathPrefix", EscapeLike(orgPathPrefix) + "%");
         cmd.Parameters.AddWithValue("monthStart", monthStart);
         cmd.Parameters.AddWithValue("nextMonthStart", nextMonthStart);
         return await ReadPeriodsAsync(cmd, ct);

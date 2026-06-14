@@ -8,6 +8,7 @@ using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Audit;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Models;
+using StatsTid.SharedKernel.Security;
 
 namespace StatsTid.Backend.Api.Endpoints;
 
@@ -106,7 +107,9 @@ public static class TerminationPayoutRequestEndpoints
             // Terminated-INCLUSIVE validator (SPRINT-70 R9c allowlist family) — the §26 target
             // is normally a DEACTIVATED leaver; HROrAbove + subtree binding unchanged (FAIL-001:
             // cross-org binding is load-bearing, the policy alone does not bind the org).
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(actor, employeeId, ct);
+            // S76 B1 fix-forward (cycle 2): LocalHR per-scope floor — a mixed HR@A + Leader@B JWT
+            // can no longer raise a §26 request against an ACTIVE B employee via the Leader scope.
+            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(actor, employeeId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 

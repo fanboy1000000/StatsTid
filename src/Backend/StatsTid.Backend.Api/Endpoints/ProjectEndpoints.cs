@@ -48,7 +48,9 @@ public static class ProjectEndpoints
         {
             var actor = context.GetActorContext();
 
-            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, orgId, ct);
+            // S76 / TASK-7600 B1: LocalAdminOrAbove writer → LocalAdmin floor (mixed-role
+            // scope-leak close; a covering non-admin scope cannot satisfy this admin gate).
+            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, orgId, StatsTidRoles.LocalAdmin, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -177,7 +179,9 @@ public static class ProjectEndpoints
         {
             var actor = context.GetActorContext();
 
-            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, orgId, ct);
+            // S76 / TASK-7600 B1: LocalAdminOrAbove writer → LocalAdmin floor (mixed-role
+            // scope-leak close; a covering non-admin scope cannot satisfy this admin gate).
+            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, orgId, StatsTidRoles.LocalAdmin, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -198,7 +202,9 @@ public static class ProjectEndpoints
         {
             var actor = context.GetActorContext();
 
-            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, orgId, ct);
+            // S76 / TASK-7600 B1: LocalAdminOrAbove writer → LocalAdmin floor (mixed-role
+            // scope-leak close; a covering non-admin scope cannot satisfy this admin gate).
+            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, orgId, StatsTidRoles.LocalAdmin, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 

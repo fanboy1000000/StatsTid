@@ -7,6 +7,7 @@ using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Audit;
 using StatsTid.SharedKernel.Events;
+using StatsTid.SharedKernel.Security;
 
 namespace StatsTid.Backend.Api.Endpoints;
 
@@ -92,8 +93,9 @@ public static class EntitlementEligibilityEndpoints
 
             // Cross-org binding — HROrAbove policy alone is not enough; bind the actor's
             // scopes to the target employee's organisation (FAIL-001: validator uses
-            // FindAll, not FindFirst, on scopes).
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, ct);
+            // FindAll, not FindFirst, on scopes). S76 B1: LocalHR floor — the ADMITTING scope
+            // must itself be HR+ (a sub-HR mixed-role scope covering the org cannot admit).
+            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -249,8 +251,8 @@ public static class EntitlementEligibilityEndpoints
             var actor = context.GetActorContext();
 
             // Cross-org binding — same as the PUT (HROrAbove policy proves role + scope shape
-            // but does NOT bind the actor to the target employee's org; FAIL-001).
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, ct);
+            // but does NOT bind the actor to the target employee's org; FAIL-001). S76 B1: LocalHR floor.
+            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -309,7 +311,8 @@ public static class EntitlementEligibilityEndpoints
         {
             var actor = context.GetActorContext();
 
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, ct);
+            // S76 B1: HROrAbove policy → LocalHR floor.
+            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -353,7 +356,8 @@ public static class EntitlementEligibilityEndpoints
         {
             var actor = context.GetActorContext();
 
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, ct);
+            // S76 B1: HROrAbove policy → LocalHR floor.
+            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 

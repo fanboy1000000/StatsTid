@@ -11,6 +11,7 @@ using StatsTid.SharedKernel.Audit;
 using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Models;
+using StatsTid.SharedKernel.Security;
 
 namespace StatsTid.Backend.Api.Endpoints;
 
@@ -123,7 +124,10 @@ public static class VacationSettlementEndpoints
             var actor = context.GetActorContext();
 
             // Cross-org binding (HROrAbove proves role + scope shape only; bind to the target's org).
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, ct);
+            // S76 / TASK-7600 B1 (completeness-sweep find): LocalHR floor — the ADMITTING scope
+            // must itself be HR+, else a mixed-role HR@A + Leader@B actor writes a §21 transfer
+            // agreement for a B employee via the non-admin Leader scope (the mixed-role leak class).
+            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -366,7 +370,10 @@ public static class VacationSettlementEndpoints
             // (the S68 B2 fix). HROrAbove policy + subtree binding unchanged; only the target
             // resolution stops filtering is_active. The S71 WAIVED verb rides the SAME surface,
             // so it inherits this authorization shape verbatim (SPRINT-71 owner D-B).
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(actor, employeeId, ct);
+            // S76 B1 fix-forward (cycle 2): LocalHR per-scope floor — a mixed HR@A + Leader@B JWT
+            // can no longer manually resolve (FORFEIT/DEFER/WAIVE) an ACTIVE B settlement row via
+            // the Leader scope.
+            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(actor, employeeId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -781,7 +788,10 @@ public static class VacationSettlementEndpoints
             // Org-scope filter — GlobalAdmin (null sentinel) sees all; LocalAdmin/HR see only their
             // subtree; Employee/unscoped → empty (the GetAccessibleOrgsAsync contract). The settled
             // rows are joined to users.primary_org_id and filtered on it.
-            var accessibleOrgs = await scopeValidator.GetAccessibleOrgsAsync(actor, ct);
+            // S76 / TASK-7600 B1 (completeness-sweep find): HROrAbove read → LocalHR floor on the
+            // accessible-org union — pre-fix a mixed HR@A + Leader@B actor had B's settlement rows
+            // unioned in via the non-admin Leader scope (the same picker-leak class 7600 closed).
+            var accessibleOrgs = await scopeValidator.GetAccessibleOrgsAsync(actor, StatsTidRoles.LocalHR, ct);
             if (accessibleOrgs is { Count: 0 })
                 return Results.Ok(new { items = Array.Empty<object>(), count = 0 });
 
@@ -851,7 +861,9 @@ public static class VacationSettlementEndpoints
             // S70 / TASK-7003 (SPRINT-70 R9c allowlist) — terminated-INCLUSIVE validator: the
             // manual §24 reconcile marker must remain operable for a deactivated leaver's
             // settled row (the S68 B2 fix). HROrAbove policy + subtree binding unchanged.
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(actor, employeeId, ct);
+            // S76 B1 fix-forward (cycle 2): LocalHR per-scope floor — a mixed HR@A + Leader@B JWT
+            // can no longer set the §24 reconcile marker on an ACTIVE B row via the Leader scope.
+            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(actor, employeeId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 

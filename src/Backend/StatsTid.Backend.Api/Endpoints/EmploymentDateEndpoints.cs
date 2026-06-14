@@ -5,6 +5,7 @@ using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Backend.Api.Services;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Security;
+using StatsTid.SharedKernel.Security;
 
 namespace StatsTid.Backend.Api.Endpoints;
 
@@ -67,7 +68,9 @@ public static class EmploymentDateEndpoints
         {
             var actor = context.GetActorContext();
 
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, ct);
+            // S76 B1: HROrAbove policy → LocalHR floor (a sub-HR scope covering the employee's
+            // org cannot satisfy this HR data gate).
+            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -110,7 +113,8 @@ public static class EmploymentDateEndpoints
         {
             var actor = context.GetActorContext();
 
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, ct);
+            // S76 B1: HROrAbove policy → LocalHR floor.
+            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -238,7 +242,10 @@ public static class EmploymentDateEndpoints
         {
             var actor = context.GetActorContext();
 
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(actor, employeeId, ct);
+            // S76 B1 fix-forward (cycle 2): LocalHR per-scope floor — the sensitive end-date READ
+            // (employment_end_date never appears in any Employee-facing DTO) must not be served to
+            // a mixed HR@A + Leader@B JWT for an ACTIVE B employee via the Leader scope.
+            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(actor, employeeId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -326,7 +333,10 @@ public static class EmploymentDateEndpoints
 
             // R9c allowlist surface — terminated-INCLUSIVE validator (HROrAbove + subtree
             // binding; the shared ValidateEmployeeAccessAsync would 403 a deactivated leaver).
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(actor, employeeId, ct);
+            // S76 B1 fix-forward (cycle 2): LocalHR per-scope floor — the end-date WRITE (the R1
+            // lifecycle/reactivation surface) must not be reachable by a mixed HR@A + Leader@B JWT
+            // for an ACTIVE B employee via the Leader scope.
+            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(actor, employeeId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 

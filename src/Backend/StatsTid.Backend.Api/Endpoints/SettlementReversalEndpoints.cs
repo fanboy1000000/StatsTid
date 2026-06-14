@@ -3,6 +3,7 @@ using StatsTid.Auth;
 using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Security;
+using StatsTid.SharedKernel.Security;
 
 namespace StatsTid.Backend.Api.Endpoints;
 
@@ -133,7 +134,10 @@ public static class SettlementReversalEndpoints
 
             // Terminated-INCLUSIVE validator (owner D-B: HROrAbove for ALL four 3b verbs, each
             // with the terminated-inclusive path — the reversal target is typically a leaver).
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(actor, employeeId, ct);
+            // S76 B1 fix-forward (cycle 2): LocalHR per-scope floor — closes the active-target
+            // mixed-role leak (HR@A + Leader@B can no longer reverse an ACTIVE B settlement via
+            // the Leader scope). HROrAbove endpoint policy + LocalHR floor are now aligned.
+            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(actor, employeeId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 

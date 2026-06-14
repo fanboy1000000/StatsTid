@@ -59,7 +59,9 @@ public static class AdminEndpoints
 
             foreach (var org in allOrgs)
             {
-                var (allowed, _) = await scopeValidator.ValidateOrgAccessAsync(actor, org.OrgId, ct);
+                // S76 B1: HROrAbove policy → LocalHR floor (a non-HR scope covering the org
+                // cannot widen this admin list).
+                var (allowed, _) = await scopeValidator.ValidateOrgAccessAsync(actor, org.OrgId, StatsTidRoles.LocalHR, ct);
                 if (allowed)
                     visibleOrgs.Add(MapOrgResponse(org));
             }
@@ -89,8 +91,9 @@ public static class AdminEndpoints
             string materializedPath;
             if (request.ParentOrgId is not null)
             {
-                // Validate actor scope covers parent org
-                var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, request.ParentOrgId, ct);
+                // Validate actor scope covers parent org. S76 B1: LocalAdminOrAbove policy →
+                // LocalAdmin floor (the admitting scope must itself be admin).
+                var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, request.ParentOrgId, StatsTidRoles.LocalAdmin, ct);
                 if (!allowed)
                     return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -207,8 +210,8 @@ public static class AdminEndpoints
             if (existingOrg is null)
                 return Results.NotFound(new { error = "Organization not found" });
 
-            // Validate actor scope covers this org
-            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, orgId, ct);
+            // Validate actor scope covers this org. S76 B1: LocalAdminOrAbove policy → LocalAdmin floor.
+            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, orgId, StatsTidRoles.LocalAdmin, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -294,8 +297,8 @@ public static class AdminEndpoints
         {
             var actor = context.GetActorContext();
 
-            // Validate actor scope covers target org
-            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, orgId, ct);
+            // Validate actor scope covers target org. S76 B1: HROrAbove policy → LocalHR floor.
+            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, orgId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -352,7 +355,8 @@ public static class AdminEndpoints
                 return Results.NotFound(new { error = "User not found" });
             var (user, version) = hit.Value;
 
-            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, user.PrimaryOrgId, ct);
+            // S76 B1: HROrAbove policy → LocalHR floor.
+            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, user.PrimaryOrgId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -391,8 +395,8 @@ public static class AdminEndpoints
             var actor = context.GetActorContext();
             var logger = loggerFactory.CreateLogger("StatsTid.Backend.Api.Endpoints.AdminEndpoints.UsersPost");
 
-            // Validate actor scope covers target org
-            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, request.PrimaryOrgId, ct);
+            // Validate actor scope covers target org. S76 B1: LocalAdminOrAbove policy → LocalAdmin floor.
+            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, request.PrimaryOrgId, StatsTidRoles.LocalAdmin, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -934,15 +938,15 @@ public static class AdminEndpoints
                     context.Request, out var expectedVersion, out var headerError))
                 return Results.Json(new { error = headerError }, statusCode: 428);
 
-            // Validate actor scope covers user's current org
-            var (allowedCurrent, reasonCurrent) = await scopeValidator.ValidateOrgAccessAsync(actor, existingUser.PrimaryOrgId, ct);
+            // Validate actor scope covers user's current org. S76 B1: LocalAdminOrAbove policy → LocalAdmin floor.
+            var (allowedCurrent, reasonCurrent) = await scopeValidator.ValidateOrgAccessAsync(actor, existingUser.PrimaryOrgId, StatsTidRoles.LocalAdmin, ct);
             if (!allowedCurrent)
                 return Results.Json(new { error = "Access denied", reason = reasonCurrent }, statusCode: 403);
 
-            // If org is changing, validate actor scope covers new org too
+            // If org is changing, validate actor scope covers new org too (same LocalAdmin floor).
             if (request.PrimaryOrgId is not null && request.PrimaryOrgId != existingUser.PrimaryOrgId)
             {
-                var (allowedNew, reasonNew) = await scopeValidator.ValidateOrgAccessAsync(actor, request.PrimaryOrgId, ct);
+                var (allowedNew, reasonNew) = await scopeValidator.ValidateOrgAccessAsync(actor, request.PrimaryOrgId, StatsTidRoles.LocalAdmin, ct);
                 if (!allowedNew)
                     return Results.Json(new { error = "Access denied", reason = reasonNew }, statusCode: 403);
             }
@@ -1555,8 +1559,8 @@ public static class AdminEndpoints
             if (targetUser is null)
                 return Results.NotFound(new { error = "User not found" });
 
-            // Validate actor scope covers user's org
-            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, targetUser.PrimaryOrgId, ct);
+            // Validate actor scope covers user's org. S76 B1: HROrAbove policy → LocalHR floor.
+            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, targetUser.PrimaryOrgId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -1590,10 +1594,10 @@ public static class AdminEndpoints
         {
             var actor = context.GetActorContext();
 
-            // Validate actor scope covers target org
+            // Validate actor scope covers target org. S76 B1: LocalAdminOrAbove policy → LocalAdmin floor.
             if (request.OrgId is not null)
             {
-                var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, request.OrgId, ct);
+                var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, request.OrgId, StatsTidRoles.LocalAdmin, ct);
                 if (!allowed)
                     return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
             }
@@ -1751,10 +1755,10 @@ public static class AdminEndpoints
             if (!isActive)
                 return Results.BadRequest(new { error = "Role assignment is already revoked" });
 
-            // Validate actor scope covers the assignment's org
+            // Validate actor scope covers the assignment's org. S76 B1: LocalAdminOrAbove policy → LocalAdmin floor.
             if (assignmentOrgId is not null)
             {
-                var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, assignmentOrgId, ct);
+                var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, assignmentOrgId, StatsTidRoles.LocalAdmin, ct);
                 if (!allowed)
                     return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
             }
@@ -1860,8 +1864,9 @@ public static class AdminEndpoints
         {
             var actor = context.GetActorContext();
 
-            // Scope must cover the tree-root org (same gate as the tree read).
-            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, treeRootOrgId, ct);
+            // Scope must cover the tree-root org (same gate as the tree read). S76 B1:
+            // LocalAdminOrAbove policy → LocalAdmin floor.
+            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, treeRootOrgId, StatsTidRoles.LocalAdmin, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -1910,7 +1915,8 @@ public static class AdminEndpoints
             var actor = context.GetActorContext();
 
             // Scope must cover the tree-root org (same gate as the tree + period-status reads).
-            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, treeRootOrgId, ct);
+            // S76 B1: LocalAdminOrAbove policy → LocalAdmin floor.
+            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, treeRootOrgId, StatsTidRoles.LocalAdmin, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -1973,7 +1979,9 @@ public static class AdminEndpoints
             var pageOffset = Math.Max(offset ?? 0, 0);
 
             // Scope filter: the accessible-org set (null = GLOBAL/unrestricted, [] = nobody).
-            var accessibleOrgs = await scopeValidator.GetAccessibleOrgsAsync(actor, ct);
+            // S76 B1: LocalAdminOrAbove policy → LocalAdmin floor — a mixed-role actor's
+            // non-admin scope covering org B must NOT widen the picker into B's roster.
+            var accessibleOrgs = await scopeValidator.GetAccessibleOrgsAsync(actor, StatsTidRoles.LocalAdmin, ct);
 
             // Self + descendant exclusion (cycle-prevention mirror): reuse 7403's bounded
             // descendant walk via the new read-only GetDescendantIdsAsync sibling.
@@ -2016,7 +2024,14 @@ public static class AdminEndpoints
             return string.Equals(actor.ActorRole, StatsTidRoles.GlobalAdmin, StringComparison.Ordinal);
         }
 
-        return actor.Scopes.Any(s => s.ScopeType == "GLOBAL");
+        // S76 / TASK-7600 B3: a GLOBAL scope only admits a GlobalAdmin operation if the scope
+        // ITSELF carries GlobalAdmin role. Pre-fix this returned true for ANY GLOBAL scope
+        // regardless of role — the mixed-role leak class (a non-admin GLOBAL scope, e.g.
+        // GLOBAL+LocalLeader, would pass the GlobalAdmin-only gates this helper guards:
+        // top-level org create, global role grant/revoke). The no-scopes fallback above is
+        // already role-correct (checks ActorRole == GlobalAdmin).
+        return actor.Scopes.Any(s =>
+            s.ScopeType == "GLOBAL" && StatsTidRoles.IsAtLeast(s.Role, StatsTidRoles.GlobalAdmin));
     }
 
     private static int GetActorHighestPrivilegeLevel(ActorContext actor)

@@ -32,8 +32,10 @@ public static class ReportingLineEndpoints
             var actor = context.GetActorContext();
             var relationship = string.IsNullOrWhiteSpace(request.Relationship) ? "PRIMARY" : request.Relationship;
 
-            // 1. Validate org scope: actor must cover employee's org.
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, request.EmployeeId, ct);
+            // 1. Validate org scope: actor must cover employee's org. S76 B1: LocalAdminOrAbove
+            //    policy → LocalAdmin floor (the admitting scope must itself be admin; a non-admin
+            //    scope covering the employee's styrelse cannot satisfy this writer gate).
+            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, request.EmployeeId, StatsTidRoles.LocalAdmin, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -240,8 +242,8 @@ public static class ReportingLineEndpoints
         {
             var actor = context.GetActorContext();
 
-            // 1. Validate scope.
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, ct);
+            // 1. Validate scope. S76 B1: LocalAdminOrAbove policy → LocalAdmin floor.
+            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, StatsTidRoles.LocalAdmin, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -396,8 +398,8 @@ public static class ReportingLineEndpoints
         {
             var actor = context.GetActorContext();
 
-            // Validate scope covers tree root org.
-            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, treeRootOrgId, ct);
+            // Validate scope covers tree root org. S76 B1: LocalAdminOrAbove policy → LocalAdmin floor.
+            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, treeRootOrgId, StatsTidRoles.LocalAdmin, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -521,8 +523,8 @@ public static class ReportingLineEndpoints
         {
             var actor = context.GetActorContext();
 
-            // 1. Validate scope.
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, ct);
+            // 1. Validate scope. S76 B1: LocalAdminOrAbove policy → LocalAdmin floor.
+            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, StatsTidRoles.LocalAdmin, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -707,8 +709,8 @@ public static class ReportingLineEndpoints
         {
             var actor = context.GetActorContext();
 
-            // 1. Validate scope.
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, ct);
+            // 1. Validate scope. S76 B1: LocalAdminOrAbove policy → LocalAdmin floor.
+            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, StatsTidRoles.LocalAdmin, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -797,6 +799,7 @@ public static class ReportingLineEndpoints
         app.MapPost("/api/admin/reporting-lines/import", async (
             ImportReportingLinesRequest request,
             ReportingLineRepository repo,
+            OrgScopeValidator scopeValidator,
             DbConnectionFactory connectionFactory,
             IOutboxEnqueue outbox,
             HttpContext context,
@@ -809,6 +812,16 @@ public static class ReportingLineEndpoints
                 return Results.BadRequest(new { error = "treeRootOrgId is required" });
             if (request.Rows is null || request.Rows.Count == 0)
                 return Results.BadRequest(new { error = "rows must not be empty" });
+
+            // S76 B1 — bulk-import org-scope gap. The GlobalAdminOnly policy gates the ROLE but
+            // this endpoint previously called NEITHER scope validator, so the actor's scope was
+            // never bound to the declared tree root. Require that an ADMIN-grade scope
+            // (LocalAdmin floor — a GlobalAdmin's GLOBAL scope clears it; a mixed-role non-admin
+            // scope does not) actually covers request.TreeRootOrgId before any write.
+            var (treeAllowed, treeReason) = await scopeValidator.ValidateOrgAccessAsync(
+                actor, request.TreeRootOrgId, StatsTidRoles.LocalAdmin, ct);
+            if (!treeAllowed)
+                return Results.Json(new { error = "Access denied", reason = treeReason }, statusCode: 403);
 
             // 2. Pre-validation pass — collect per-row errors without touching the database.
             var errors = new List<object>();
@@ -1148,8 +1161,9 @@ public static class ReportingLineEndpoints
         {
             var actor = context.GetActorContext();
 
-            // 1. Validate scope: actor must cover the person being removed.
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, ct);
+            // 1. Validate scope: actor must cover the person being removed. S76 B1:
+            //    LocalAdminOrAbove policy → LocalAdmin floor.
+            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, StatsTidRoles.LocalAdmin, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -1578,7 +1592,8 @@ public static class ReportingLineEndpoints
             CancellationToken ct) =>
         {
             var actor = context.GetActorContext();
-            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, treeRootOrgId, ct);
+            // S76 B1: LocalAdminOrAbove policy → LocalAdmin floor.
+            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, treeRootOrgId, StatsTidRoles.LocalAdmin, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -1610,7 +1625,8 @@ public static class ReportingLineEndpoints
             CancellationToken ct) =>
         {
             var actor = context.GetActorContext();
-            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, treeRootOrgId, ct);
+            // S76 B1: LocalAdminOrAbove policy → LocalAdmin floor.
+            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, treeRootOrgId, StatsTidRoles.LocalAdmin, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -1793,137 +1809,24 @@ public static class ReportingLineEndpoints
             if (string.Equals(actorId, request.ActingManagerId, StringComparison.Ordinal))
                 return Results.BadRequest(new { error = "Cannot delegate to yourself" });
 
-            // 3. Get actor's PRIMARY direct reports.
-            var directReports = (await repo.GetDirectReportsAsync(actorId, ct))
-                .Where(r => r.Relationship == "PRIMARY").ToList();
-            if (directReports.Count == 0)
-                return Results.BadRequest(new { error = "You have no direct reports to delegate" });
+            // NOTE (S76 / TASK-7601, Step-7a c1 BLOCKER): the active-vikar 409 pre-check was
+            // REMOVED from here and moved IN-LOCK (after the no-reports 400 guard). The D15
+            // restructure had hoisted the 409 to PRECEDE the (now in-lock) no-reports 400, which
+            // flipped the COMBINED state "active vikar AND zero direct reports" from the ORIGINAL
+            // 400 ("no reports to delegate") to a 409 — a contract regression for the live S51
+            // self-service UI (R2). Restoring the ORIGINAL relative order (no-reports 400 FIRST,
+            // then active-vikar 409) keeps the /delegate error contract byte-stable. The 409 is
+            // now read in-lock after directReports (see Step 4b below); the in-tx INSERT collision
+            // (uq_manager_vikar_active) remains the authoritative 409.
 
-            // 4. Check no active self-delegation exists (S74 storage cutover: read manager_vikar,
-            //    keyed on the actor = absent_approver_id). Contract-stable 409 on re-delegate —
-            //    matches the old POST behaviour (the legacy POST 409'd on an active fan-out;
-            //    revoke-first remains the flow). The DB partial-unique uq_manager_vikar_active
-            //    is the by-construction backstop (S68-B1).
-            {
-                var existingVikar = await vikarRepo.GetActiveByApproverAnyDateAsync(actorId, ct);
-                if (existingVikar is not null)
-                    return Results.Json(new { error = "Active self-delegation already exists; revoke it first" }, statusCode: 409);
-            }
-
-            // 5. Validate acting manager exists and has LocalLeader+ role.
-            var actingManagerRoles = await roleRepo.GetByUserIdAsync(request.ActingManagerId, ct);
-            var qualifyingRoleIds = new HashSet<string>(StringComparer.Ordinal)
-                { "GLOBAL_ADMIN", "LOCAL_ADMIN", "LOCAL_HR", "LOCAL_LEADER" };
-            var qualifyingAssignments = actingManagerRoles
-                .Where(ra => qualifyingRoleIds.Contains(ra.RoleId))
-                .ToList();
-
-            if (qualifyingAssignments.Count == 0)
-                return Results.BadRequest(new { error = $"Acting manager '{request.ActingManagerId}' does not hold a qualifying role (LocalLeader or above)" });
-
-            // 6. Validate acting manager's org-scope covers ALL direct reports (TASK-5105).
-            //    Inline scope validation: for each direct report, resolve their org's
-            //    materialized_path and check if any of the acting manager's scopes covers it.
-            var hasGlobalScope = qualifyingAssignments.Any(ra =>
-                string.Equals(ra.ScopeType, "GLOBAL", StringComparison.Ordinal));
-
-            if (!hasGlobalScope)
-            {
-                // Build scope org paths for the acting manager's qualifying assignments.
-                var scopeOrgPaths = new List<(string OrgId, string? MaterializedPath, string ScopeType)>();
-                foreach (var ra in qualifyingAssignments)
-                {
-                    if (ra.OrgId is null) continue;
-                    var scopeOrg = await orgRepo.GetByIdAsync(ra.OrgId, ct);
-                    scopeOrgPaths.Add((ra.OrgId, scopeOrg?.MaterializedPath, ra.ScopeType));
-                }
-
-                // For each direct report, resolve their org and check coverage.
-                var uncoveredEmployees = new List<string>();
-                var orgPathCache = new Dictionary<string, string?>(StringComparer.Ordinal);
-                foreach (var report in directReports)
-                {
-                    // Resolve employee's org materialized_path.
-                    string? empOrgPath;
-                    {
-                        await using var empConn = connectionFactory.Create();
-                        await empConn.OpenAsync(ct);
-                        await using var empCmd = new NpgsqlCommand(
-                            """
-                            SELECT o.materialized_path FROM users u
-                            JOIN organizations o ON o.org_id = u.primary_org_id
-                            WHERE u.user_id = @employeeId AND u.is_active = TRUE AND o.is_active = TRUE
-                            """, empConn);
-                        empCmd.Parameters.AddWithValue("employeeId", report.EmployeeId);
-                        var result = await empCmd.ExecuteScalarAsync(ct);
-                        empOrgPath = result as string;
-                    }
-
-                    if (empOrgPath is null)
-                    {
-                        uncoveredEmployees.Add(report.EmployeeId);
-                        continue;
-                    }
-
-                    // Check if any scope covers this employee.
-                    var covered = false;
-                    foreach (var (_, scopePath, scopeType) in scopeOrgPaths)
-                    {
-                        if (scopePath is null) continue;
-                        if (scopeType == "ORG_AND_DESCENDANTS" &&
-                            empOrgPath.StartsWith(scopePath, StringComparison.Ordinal))
-                        {
-                            covered = true;
-                            break;
-                        }
-                        if (scopeType == "ORG_ONLY" &&
-                            string.Equals(empOrgPath, scopePath, StringComparison.Ordinal))
-                        {
-                            covered = true;
-                            break;
-                        }
-                    }
-
-                    if (!covered)
-                        uncoveredEmployees.Add(report.EmployeeId);
-                }
-
-                if (uncoveredEmployees.Count > 0)
-                {
-                    return Results.BadRequest(new
-                    {
-                        error = "Acting manager's org-scope does not cover all direct reports",
-                        uncoveredEmployeeIds = uncoveredEmployees,
-                        uncoveredCount = uncoveredEmployees.Count,
-                    });
-                }
-            }
-
-            // 6b. SECURITY (ADR-027 D2 — S74-7402 B1 fix): the vikar user MUST be in the SAME
-            //     reporting tree (styrelse) as the absent approver (the actor). Role + org-scope
-            //     coverage alone do NOT guarantee this: a global-scoped user, or a leader holding
-            //     a cross-tree scope assignment, could otherwise be planted as a vikar in another
-            //     styrelse, become the resolver winner, and gain approve/reject/reopen authority
-            //     over the actor's reports cross-styrelse. This brings the vikar-creation path to
-            //     parity with the PRIMARY/ACTING assign endpoints (which all enforce
-            //     ValidateSameTreeAsync). Layer 2 (the authority predicate) re-checks structurally.
-            try
-            {
-                await repo.ValidateSameTreeAsync(actorId, request.ActingManagerId, ct);
-            }
-            catch (CrossTreeAssignmentException)
-            {
-                return Results.BadRequest(new { error = "Vikar must be in the same styrelse (tree) as you" });
-            }
-            catch (InvalidOperationException)
-            {
-                // ValidateSameTreeAsync throws InvalidOperationException when a user/org cannot be
-                // resolved to a styrelse tree root (inactive/missing user or org, or no
-                // MINISTRY/STYRELSE ancestor). Surface a clean 400 rather than a 500 (S74-7402
-                // Step-5a c2 robustness fix). Layer 2 (the authority predicate) fails closed on the
-                // same condition, so authorization stays safe regardless.
-                return Results.BadRequest(new { error = "Could not validate the vikar's styrelse (tree); ensure the vikar is an active user in your styrelse" });
-            }
+            // NOTE (S76 / TASK-7601 fix-forward, Step-5a c1 B2): the actor's PRIMARY direct-report
+            // list (step 3), the "no reports" guard, AND the vikar eligibility/coverage census
+            // (steps 5+6) are NOW read IN-LOCK (inside the tx, after the tree advisory lock) — see
+            // below. A pre-lock snapshot of the report list left a phantom gap: a report assigned
+            // by a concurrent tx (committed after a pre-lock census but before this tx took the
+            // lock) would NOT be coverage-checked yet would be auto-exposed through the vikar. The
+            // RESPONSE/contract stays byte-stable (the same 400/409 messages, the same
+            // {delegatedCount, skippedCount, actingManagerId, effectiveFrom, effectiveTo} shape).
 
             // 7. Atomic tx (ADR-018 D3): create ONE manager_vikar row + emit ManagerVikarCreated
             //    + audit, replacing the per-report SELF_DELEGATION ACTING fan-out (S74 storage
@@ -1933,22 +1836,106 @@ public static class ReportingLineEndpoints
             //    vikar effectively covers now (no admin ACTING superseding them); skipped =
             //    reports already held by an admin (non-self) ACTING — matching the old skip at
             //    the per-report fan-out (Codex W3).
-            // tree_root_org_id: the actor's reporting tree. All same-tree PRIMARY reports
-            // share one tree root (ValidateSameTreeAsync invariant), so any report's value is
-            // authoritative for the actor's tree.
-            var treeRootOrgId = directReports[0].TreeRootOrgId;
-
+            // tree_root_org_id: the actor's reporting tree. The AUTHORITATIVE root comes from the
+            // in-tx ValidateSameTreeAsync below (S76 / TASK-7601 D15 hardening) — NOT a pre-tx read.
             int delegated = 0, skipped = 0;
             ManagerVikar createdVikar;
+            try
+            {
             await using (var conn = connectionFactory.Create())
             {
                 await conn.OpenAsync(ct);
-                await using var tx = await conn.BeginTransactionAsync(IsolationLevel.RepeatableRead, ct);
+                // S76 / TASK-7601 (Deliverable B) — FULL D15 lock discipline, mirroring the assign
+                // path (S74-7403). ReadCommitted (NOT RepeatableRead): the tx's first statement is the
+                // SELECT pg_advisory_xact_lock that BLOCKS until the lock is granted; a RepeatableRead
+                // snapshot pinned there would not see a competing vikar/edge committed during the wait.
+                // ReadCommitted gives each post-lock statement a fresh snapshot — correct for a
+                // lock-serialized critical section (the FOR UPDATE pins + uq_manager_vikar_active still
+                // hold). The contract is BYTE-STABLE: request {actingManagerId, effectiveTo}, response
+                // {delegatedCount, skippedCount, actingManagerId, effectiveFrom, effectiveTo}, the 409
+                // on active, and every 400 message are all unchanged.
+                await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
                 try
                 {
+                    // ── D15 TOTAL LOCK ORDER (identical to the assign path): (1) tree advisory lock →
+                    //    (2) the two user rows id-ordered FOR UPDATE (inside ValidateSameTreeAsync) →
+                    //    (3) cycle guard → (4) the manager_vikar INSERT. No user row is locked before the
+                    //    advisory, so a tx parked on the advisory holds no user row (deadlock-safe).
+                    //
+                    // Step 1a: derive the advisory key from the actor's (absent approver's) tree root.
+                    var actorTreeRoot = await ResolveEmployeeTreeRootInTxAsync(conn, tx, repo, actorId, ct);
+                    // Step 1b: take the tree-wide advisory lock FIRST.
+                    await ReportingLineRepository.AcquireTreeLockAsync(conn, tx, actorTreeRoot, ct);
+
+                    // Step 2: SECURITY (ADR-027 D2 — S74-7402 B1) — the vikar MUST be in the SAME
+                    // styrelse as the absent approver (the actor). Now validated IN-TX under the held
+                    // advisory, pinning BOTH user rows FOR UPDATE so neither party can be transferred
+                    // between the check and the INSERT (the cross-tree-edge race). Returns the
+                    // AUTHORITATIVE common tree root used for the row + event.
+                    var treeRootOrgId = await repo.ValidateSameTreeAsync(conn, tx, actorId, request.ActingManagerId, ct);
+
+                    // Step 3: cycle guard (D15) — a report/descendant of the actor cannot be the vikar
+                    // (it would let a subordinate gain approve-authority over the actor's own reports
+                    // via the resolver). The actor is the "employee" anchor; the vikar is the "manager".
+                    // A NON-descendant leader (the normal self-delegation target) is NOT rejected.
+                    await repo.GuardNoCycleAsync(conn, tx, actorId, request.ActingManagerId, ct);
+
+                    // Step 4 (S76 / TASK-7601 fix-forward, Step-5a c1 B2): the actor's PRIMARY direct
+                    // reports read IN-LOCK (same conn/tx, under the held advisory). A report assigned
+                    // by a concurrent tx that committed before this tx took the lock is SEEN here, so
+                    // the coverage census below cannot leave an UNCOVERED report auto-exposed through
+                    // the vikar (the phantom gap). The "no reports" 400 stays byte-stable.
+                    var directReports = (await repo.GetDirectReportsAsync(conn, tx, actorId, ct))
+                        .Where(r => r.Relationship == "PRIMARY").ToList();
+                    if (directReports.Count == 0)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.BadRequest(new { error = "You have no direct reports to delegate" });
+                    }
+
+                    // Step 4b (S76 / TASK-7601, Step-7a c1 BLOCKER fix): the active-vikar 409
+                    // pre-check — relocated to fire AFTER the no-reports 400 guard, restoring
+                    // byte-stability with the pre-S76 contract. For an actor with zero direct
+                    // reports, /delegate returns 400 ("no reports") REGARDLESS of whether they
+                    // hold an active vikar — exactly as the original (S74-close) ordering did. This
+                    // is a friendly upfront read (its own connection, same as the original pre-lock
+                    // check) — NOT the authority for the 409; the in-tx INSERT collision
+                    // (uq_manager_vikar_active, surfaced below) remains the authoritative 409.
+                    // Contract-stable message + status unchanged.
+                    {
+                        var existingVikar = await vikarRepo.GetActiveByApproverAnyDateAsync(actorId, ct);
+                        if (existingVikar is not null)
+                        {
+                            await tx.RollbackAsync(ct);
+                            return Results.Json(new { error = "Active self-delegation already exists; revoke it first" }, statusCode: 409);
+                        }
+                    }
+
+                    // Step 5+6 (IN-LOCK): the acting manager (vikar) holds a qualifying LocalLeader+
+                    // role AND its org-scope covers ALL of the actor's CURRENT direct reports. Run on
+                    // the SAME conn/tx under the advisory so a concurrent report-assign / role-or-scope
+                    // revocation committed before the lock is reflected (byte-identical 400 messages).
+                    var (notEligible, uncoveredEmployees) = await EvaluateVikarCoverageInTxAsync(
+                        conn, tx, request.ActingManagerId, actorId, repo, ct);
+                    if (notEligible)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.BadRequest(new { error = $"Acting manager '{request.ActingManagerId}' does not hold a qualifying role (LocalLeader or above)" });
+                    }
+                    if (uncoveredEmployees.Count > 0)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.BadRequest(new
+                        {
+                            error = "Acting manager's org-scope does not cover all direct reports",
+                            uncoveredEmployeeIds = uncoveredEmployees,
+                            uncoveredCount = uncoveredEmployees.Count,
+                        });
+                    }
+
                     // delegatedCount / skippedCount computed INSIDE the write tx (same conn/tx,
-                    // under RepeatableRead) so the response reflects the committed state — a
-                    // concurrent admin-ACTING change cannot make the response stale (Codex W).
+                    // under ReadCommitted, after the advisory) so the response reflects the committed
+                    // state — a concurrent admin-ACTING change cannot make the response stale (Codex W).
                     foreach (var report in directReports)
                     {
                         await using var existingCmd = new NpgsqlCommand(
@@ -2022,6 +2009,29 @@ public static class ReportingLineEndpoints
                     await tx.RollbackAsync(ct);
                     throw;
                 }
+            }
+            }
+            catch (CrossTreeAssignmentException)
+            {
+                // S76 / TASK-7601 (Deliverable B) — same-tree validation moved IN-TX; a cross-tree
+                // vikar → the SAME byte-stable 400 the pre-tx ValidateSameTreeAsync emitted.
+                return Results.BadRequest(new { error = "Vikar must be in the same styrelse (tree) as you" });
+            }
+            catch (ReportingCycleException)
+            {
+                // S76 / TASK-7601 — the NEW D15 cycle guard: the chosen vikar is the actor or a
+                // descendant. Surfaced as a 400 (a malformed self-delegation choice), consistent with
+                // the other in-tx validation rejections on this endpoint (the contract has no 409 for
+                // this case — 409 is reserved for the existing active-delegation collision).
+                return Results.BadRequest(new { error = "Vikar must not be one of your own reports (a subordinate cannot stand in for you)" });
+            }
+            catch (InvalidOperationException)
+            {
+                // ValidateSameTreeAsync / ResolveEmployeeTreeRootInTxAsync throw when a user/org cannot
+                // be resolved to a styrelse tree root (inactive/missing user or org, or no
+                // MINISTRY/STYRELSE ancestor) → clean 400 (byte-stable with the prior pre-tx message),
+                // never a 500. Layer 2 (the authority predicate) fails closed on the same condition.
+                return Results.BadRequest(new { error = "Could not validate the vikar's styrelse (tree); ensure the vikar is an active user in your styrelse" });
             }
 
             return Results.Ok(new
@@ -2129,6 +2139,364 @@ public static class ReportingLineEndpoints
             }
         }).RequireAuthorization("LeaderOrAbove");
 
+        // ═══════════════════════════════════════════
+        // Endpoint 14: POST /api/admin/reporting-lines/{managerId}/vikar — admin-on-behalf vikar
+        // (S76 / TASK-7601, Deliverable A). An admin plants a stand-in (vikar) for an absent
+        // manager. This is an ADR-027 D13/D14 AUTHORIZATION surface: the resulting manager_vikar row
+        // GRANTS the vikar approve/reject/reopen authority over the manager's reports. The FULL
+        // create-authority contract runs in ONE atomic tx under the tree advisory lock.
+        // ═══════════════════════════════════════════
+
+        app.MapPost("/api/admin/reporting-lines/{managerId}/vikar", async (
+            string managerId,
+            AdminVikarRequest request,
+            ReportingLineRepository repo,
+            ManagerVikarRepository vikarRepo,
+            OrgScopeValidator scopeValidator,
+            RoleAssignmentRepository roleRepo,
+            OrganizationRepository orgRepo,
+            UserRepository userRepo,
+            DbConnectionFactory connectionFactory,
+            IOutboxEnqueue outbox,
+            AuditProjectionRepository auditRepo,
+            IAuditProjectionMapper<ManagerVikarCreated> vikarCreatedAuditMapper,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            var actor = context.GetActorContext();
+            if (string.IsNullOrEmpty(actor.ActorId))
+                return Results.Json(new { error = "Actor identity required" }, statusCode: 401);
+
+            // 0. Parse + validate the body.
+            if (string.IsNullOrWhiteSpace(request.VikarUserId))
+                return Results.BadRequest(new { error = "vikarUserId is required" });
+            if (!DateOnly.TryParse(request.EffectiveTo, out var effectiveTo))
+                return Results.BadRequest(new { error = $"Invalid effectiveTo date: '{request.EffectiveTo}'" });
+            var effectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow);
+            if (effectiveTo <= effectiveFrom)
+                return Results.BadRequest(new { error = "effectiveTo must be after today" });
+            // A manager cannot stand in for themselves; the vikar must differ from the manager.
+            if (string.Equals(request.VikarUserId, managerId, StringComparison.Ordinal))
+                return Results.BadRequest(new { error = "Vikar must differ from the manager" });
+
+            // Reason: the manager_vikar.reason CHECK admits FERIE/SYGDOM/ORLOV/TJENESTEREJSE/ANDET.
+            // Default to ANDET when omitted; reject an out-of-set value (422-style 400) rather than
+            // surfacing a raw 23514 from the INSERT.
+            var reason = string.IsNullOrWhiteSpace(request.Reason) ? "ANDET" : request.Reason!;
+            var allowedReasons = new HashSet<string>(StringComparer.Ordinal)
+                { "FERIE", "SYGDOM", "ORLOV", "TJENESTEREJSE", "ANDET" };
+            if (!allowedReasons.Contains(reason))
+                return Results.BadRequest(new { error = $"Invalid reason '{reason}' (FERIE/SYGDOM/ORLOV/TJENESTEREJSE/ANDET)" });
+
+            // S76 / TASK-7601 fix-forward (Step-5a c1 B1) — the manager must EXIST (active). Cheap
+            // pre-lock NOT-FOUND so a typo doesn't take the tree lock; the lock-stable org is
+            // re-resolved IN-TX below (a transfer cannot move the manager out from under the admin
+            // gate between this read and the INSERT).
+            var managerUser = await userRepo.GetByIdAsync(managerId, ct);
+            if (managerUser is null)
+                return Results.NotFound(new { error = $"Manager '{managerId}' not found" });
+
+            // (v-preflight) Fast 409 if the manager already has an active vikar (friendly upfront
+            //     check; the DB partial-unique uq_manager_vikar_active is the by-construction
+            //     backstop INSIDE the tx). NOTE: this is a fast-path only — the authoritative
+            //     409 is the in-tx INSERT collision (OptimisticConcurrencyException), so a vikar
+            //     created by a concurrent tx between here and the lock is still rejected.
+            if (await vikarRepo.GetActiveByApproverAnyDateAsync(managerId, ct) is not null)
+                return Results.Json(new { error = "Manager already has an active vikar; revoke it first" }, statusCode: 409);
+
+            // The atomic create — FULL D15 lock discipline (mirrors the self-delegate + assign paths).
+            // S76 / TASK-7601 fix-forward (Step-5a c1 B1): ALL authorization + coverage now runs
+            // INSIDE the tx, AFTER the tree advisory lock. Order: root → lock → admin-scope (in-tx
+            // manager org) → vikar-coverage census (in-tx report list) → same-tree → cycle → INSERT.
+            // A concurrent report-assign / role-or-scope revocation that commits before this tx takes
+            // the lock is SEEN by the in-lock census; one still in flight is BLOCKED on the same tree
+            // advisory until this tx commits. So no unauthorized vikar grant can be left committed.
+            ManagerVikar createdVikar;
+            try
+            {
+                await using var conn = connectionFactory.Create();
+                await conn.OpenAsync(ct);
+                // ReadCommitted: the advisory lock is the tx's first statement (see the self-delegate
+                // rationale). Lock order: (1) tree advisory → (2) the two user rows id-ordered
+                // FOR UPDATE (in ValidateSameTreeAsync) → (3) cycle guard → (4) manager_vikar INSERT.
+                await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
+                try
+                {
+                    // Step 1a: derive the advisory key from the MANAGER's tree root (the absent approver).
+                    var managerTreeRoot = await ResolveEmployeeTreeRootInTxAsync(conn, tx, repo, managerId, ct);
+                    // Step 1b: take the tree-wide advisory lock FIRST (before ANY auth/census read).
+                    await ReportingLineRepository.AcquireTreeLockAsync(conn, tx, managerTreeRoot, ct);
+
+                    // (i) IN-LOCK admin-scope check. Resolve the manager's CURRENT primary org IN-TX
+                    //     (so a concurrent cross-styrelse transfer cannot move them out from under the
+                    //     gate) and run the FLOORED ValidateOrgAccessAsync at the LocalAdmin floor
+                    //     (S76-7600): a non-admin scope covering the manager's styrelse cannot satisfy
+                    //     this admin gate. A scope revocation that committed before the lock is seen.
+                    var managerOrgInTx = await ResolveManagerPrimaryOrgInTxAsync(conn, tx, managerId, ct);
+                    if (managerOrgInTx is null)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.NotFound(new { error = $"Manager '{managerId}' not found" });
+                    }
+                    var (orgAllowed, orgReason) = await scopeValidator.ValidateOrgAccessAsync(
+                        actor, managerOrgInTx, StatsTidRoles.LocalAdmin, ct);
+                    if (!orgAllowed)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.Json(new { error = "Access denied", reason = orgReason }, statusCode: 403);
+                    }
+
+                    // (ii)+(iii) IN-LOCK vikar eligibility + report coverage. The report list is read
+                    //     IN-TX UNDER the held advisory (EvaluateVikarCoverageInTxAsync), so a
+                    //     concurrent report-assign cannot slip an UNCOVERED report past this check —
+                    //     the phantom gap the external lens flagged. Active-ness of the vikar is
+                    //     enforced by the per-employee is_active = TRUE reads + the same-tree FOR
+                    //     UPDATE below.
+                    var (notEligible, uncovered) = await EvaluateVikarCoverageInTxAsync(
+                        conn, tx, request.VikarUserId, managerId, repo, ct);
+                    if (notEligible)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.BadRequest(new { error = $"Vikar '{request.VikarUserId}' does not hold a qualifying role (LocalLeader or above)" });
+                    }
+                    if (uncovered.Count > 0)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.BadRequest(new
+                        {
+                            error = "Vikar's org-scope does not cover all of the manager's reports",
+                            uncoveredEmployeeIds = uncovered,
+                            uncoveredCount = uncovered.Count,
+                        });
+                    }
+
+                    // (iv) Step 2: the vikar MUST be SAME-TREE as the manager — validated IN-TX under
+                    //      the advisory, pinning BOTH user rows FOR UPDATE (the cross-tree-edge race).
+                    //      Returns the AUTHORITATIVE common tree root for the row + event. A cross-tree
+                    //      vikar → CrossTreeAssignmentException → 400.
+                    var treeRootOrgId = await repo.ValidateSameTreeAsync(conn, tx, managerId, request.VikarUserId, ct);
+
+                    // (iv) Step 3: cycle guard — a report/descendant of the manager cannot be the vikar
+                    //      (a subordinate must not gain approve-authority over their own manager's
+                    //      reports via the resolver). The manager is the "employee" anchor; the vikar
+                    //      is the "manager". → ReportingCycleException → 400.
+                    await repo.GuardNoCycleAsync(conn, tx, managerId, request.VikarUserId, ct);
+
+                    var newVikar = new ManagerVikar
+                    {
+                        VikarId = Guid.NewGuid(),
+                        AbsentApproverId = managerId,              // the absent manager (path)
+                        VikarUserId = request.VikarUserId,         // the stand-in
+                        UntilDate = effectiveTo,                   // INCLUSIVE "til og med" (R4a)
+                        Reason = reason,
+                        TreeRootOrgId = treeRootOrgId,
+                        Version = 1,
+                        CreatedBy = actor.ActorId,                 // the ADMIN created it (audit trail)
+                        CreatedAt = DateTime.UtcNow,
+                    };
+
+                    // (v) Atomic INSERT — a concurrent second active vikar collides on
+                    //     uq_manager_vikar_active (23505) → OptimisticConcurrencyException → 409.
+                    createdVikar = await vikarRepo.CreateAsync(conn, tx, newVikar, ct);
+
+                    var createdEvent = new ManagerVikarCreated
+                    {
+                        VikarId = createdVikar.VikarId,
+                        AbsentApproverId = createdVikar.AbsentApproverId,
+                        VikarUserId = createdVikar.VikarUserId,
+                        UntilDate = createdVikar.UntilDate,
+                        Reason = createdVikar.Reason,
+                        TreeRootOrgId = createdVikar.TreeRootOrgId,
+                        RowVersion = createdVikar.Version,
+                        ActorId = actor.ActorId,                   // the ADMIN, not the manager
+                        ActorRole = actor.ActorRole,
+                        CorrelationId = actor.CorrelationId,
+                    };
+                    // (vi) ADR-018 D3 + ADR-026 D2: event + audit row + state in ONE tx. The audit
+                    //      context actor = the ADMIN (actor.ActorId / actor.OrgId), NOT {managerId} —
+                    //      the S71 lesson (the audit row attributes the operator's org, while the
+                    //      TARGET org stays the manager's tree via the event's TreeRootOrgId).
+                    var createdOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"reporting-line-{managerId}", createdEvent, ct);
+                    var createdAuditCtx = new AuditProjectionContext(
+                        ActorId: actor.ActorId,
+                        ActorPrimaryOrgId: actor.OrgId,
+                        CorrelationId: actor.CorrelationId,
+                        OccurredAt: new DateTimeOffset(createdEvent.OccurredAt),
+                        ResolvedTargetOrgId: createdEvent.TreeRootOrgId);
+                    var createdAuditRow = vikarCreatedAuditMapper.Map(createdEvent, createdAuditCtx);
+                    await auditRepo.InsertAsync(conn, tx, createdEvent.EventId, createdOutboxId, createdEvent.EventType, createdAuditRow, createdAuditCtx, ct);
+
+                    await tx.CommitAsync(ct);
+                }
+                catch (OptimisticConcurrencyException)
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.Json(new { error = "Manager already has an active vikar; revoke it first" }, statusCode: 409);
+                }
+                catch
+                {
+                    await tx.RollbackAsync(ct);
+                    throw;
+                }
+            }
+            catch (CrossTreeAssignmentException)
+            {
+                return Results.BadRequest(new { error = "Vikar must be in the same styrelse (tree) as the manager" });
+            }
+            catch (ReportingCycleException)
+            {
+                return Results.BadRequest(new { error = "Vikar must not be one of the manager's own reports (a subordinate cannot stand in for them)" });
+            }
+            catch (InvalidOperationException)
+            {
+                return Results.BadRequest(new { error = "Could not validate the vikar's styrelse (tree); ensure both the manager and the vikar are active users in the same styrelse" });
+            }
+
+            return Results.Ok(new
+            {
+                vikarId = createdVikar.VikarId,
+                managerId,
+                vikarUserId = createdVikar.VikarUserId,
+                effectiveFrom,
+                effectiveTo,
+                reason = createdVikar.Reason,
+            });
+        }).RequireAuthorization("LocalAdminOrAbove");
+
+        // ═══════════════════════════════════════════
+        // Endpoint 15: DELETE /api/admin/reporting-lines/{managerId}/vikar — admin revokes the
+        // manager's active vikar (S76 / TASK-7601, Deliverable A). REVOKE-SAFE: it must stay
+        // possible to revoke even after the manager or the vikar has gone INACTIVE — so the
+        // revoke-authority anchor is the PERSISTED manager_vikar.tree_root_org_id (NOT
+        // ValidateSameTreeAsync, which requires ACTIVE users).
+        //
+        // S76 / TASK-7601 fix-forward (Step-5a c1 B3 + WARNING): the authorize→close pair is now
+        // ATOMIC and in-lock. The active row is read FOR UPDATE INSIDE the tx under the tree
+        // advisory lock, the actor is authorized against THAT EXACT row's persisted
+        // tree_root_org_id (the SOLE anchor — the old "current-manager-org OR persisted-root"
+        // fallback is REMOVED; it widened authority across two domains), and only then is the same
+        // pinned row closed. A concurrent close/recreate cannot swap the row between authorize and
+        // close. Required: (a) the actor's admin scope covers the persisted tree root + (b) an
+        // active row exists (else 404). The vikar's current activeness / coverage are NOT re-checked.
+        // ═══════════════════════════════════════════
+
+        app.MapDelete("/api/admin/reporting-lines/{managerId}/vikar", async (
+            string managerId,
+            ManagerVikarRepository vikarRepo,
+            OrgScopeValidator scopeValidator,
+            DbConnectionFactory connectionFactory,
+            IOutboxEnqueue outbox,
+            AuditProjectionRepository auditRepo,
+            IAuditProjectionMapper<ManagerVikarEnded> vikarEndedAuditMapper,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            var actor = context.GetActorContext();
+            if (string.IsNullOrEmpty(actor.ActorId))
+                return Results.Json(new { error = "Actor identity required" }, statusCode: 401);
+
+            // Cheap pre-lock existence probe — a 404 here avoids taking the tree lock for a manager
+            // with no active vikar (a typo / double-revoke). It carries the persisted tree root used
+            // to KEY the advisory lock (the manager may be inactive, so we cannot re-resolve the tree
+            // from the users row). The AUTHORITATIVE row is the in-lock FOR UPDATE re-read below.
+            var probe = await vikarRepo.GetActiveByApproverAnyDateAsync(managerId, ct);
+            if (probe is null)
+                return Results.NotFound(new { error = "No active vikar to revoke for this manager" });
+
+            // Close + emit ManagerVikarEnded + audit (admin actor-org), one atomic tx.
+            // Lock order: (1) tree advisory (keyed on the persisted tree root) → (2) the active row
+            // FOR UPDATE → (3) authorize vs THAT row's persisted tree root → (4) close.
+            ManagerVikar closed;
+            await using var conn = connectionFactory.Create();
+            await conn.OpenAsync(ct);
+            // ReadCommitted: the advisory lock is the tx's first statement (consistent with the
+            // assign/create paths); a RepeatableRead snapshot pinned there would not see a competing
+            // close/recreate committed during the wait.
+            await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
+            try
+            {
+                // (1) Take the tree advisory lock FIRST, keyed on the persisted tree root (the
+                //     revoke-safe anchor; survives an inactive manager/vikar). This serializes the
+                //     revoke against concurrent tree mutations (assigns / recreates).
+                await ReportingLineRepository.AcquireTreeLockAsync(conn, tx, probe.TreeRootOrgId, ct);
+
+                // (2) Re-read the active row FOR UPDATE under the lock — THE authoritative row. A
+                //     concurrent close/recreate that committed before this tx took the lock is seen;
+                //     one still in flight is blocked on the same advisory / row pin.
+                var activeVikar = await vikarRepo.GetActiveByApproverForUpdateInTxAsync(conn, tx, managerId, ct);
+                if (activeVikar is null)
+                {
+                    // Lost a race to a concurrent revoke/expiry — the row is already closed.
+                    await tx.RollbackAsync(ct);
+                    return Results.NotFound(new { error = "No active vikar to revoke for this manager" });
+                }
+
+                // (3) Authorize against the PINNED row's PERSISTED tree_root_org_id — the SOLE
+                //     revoke-authority anchor (WARNING: the prior "current-org OR persisted-root"
+                //     fallback is removed). The actor's admin scope must cover this exact tree root
+                //     (FLOORED at LocalAdmin: a non-admin scope covering the styrelse cannot revoke).
+                var (treeAllowed, treeReason) = await scopeValidator.ValidateOrgAccessAsync(
+                    actor, activeVikar.TreeRootOrgId, StatsTidRoles.LocalAdmin, ct);
+                if (!treeAllowed)
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.Json(new { error = "Access denied", reason = treeReason }, statusCode: 403);
+                }
+
+                // (4) Close the SAME pinned row (keyed by vikar_id, idempotent under effective_to
+                //     IS NULL). The FOR UPDATE above guarantees this is the row we authorized.
+                var today = DateOnly.FromDateTime(DateTime.UtcNow);
+                var maybeClosed = await vikarRepo.CloseAsync(conn, tx, activeVikar.VikarId, today, ct);
+                if (maybeClosed is null)
+                {
+                    // Cannot happen under the FOR UPDATE pin, but stay fail-safe.
+                    await tx.RollbackAsync(ct);
+                    return Results.NotFound(new { error = "No active vikar to revoke for this manager" });
+                }
+                closed = maybeClosed;
+
+                var endedEvent = new ManagerVikarEnded
+                {
+                    VikarId = closed.VikarId,
+                    AbsentApproverId = closed.AbsentApproverId,
+                    VikarUserId = closed.VikarUserId,
+                    UntilDate = closed.UntilDate,
+                    Reason = closed.Reason,
+                    TreeRootOrgId = closed.TreeRootOrgId,
+                    EffectiveTo = closed.EffectiveTo!.Value,
+                    EndReason = "REVOKED",
+                    RowVersion = closed.Version,
+                    ActorId = actor.ActorId,                       // the ADMIN
+                    ActorRole = actor.ActorRole,
+                    CorrelationId = actor.CorrelationId,
+                };
+                var endedOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"reporting-line-{managerId}", endedEvent, ct);
+                var endedAuditCtx = new AuditProjectionContext(
+                    ActorId: actor.ActorId,
+                    ActorPrimaryOrgId: actor.OrgId,                // the ADMIN's org (S71 lesson)
+                    CorrelationId: actor.CorrelationId,
+                    OccurredAt: new DateTimeOffset(endedEvent.OccurredAt),
+                    ResolvedTargetOrgId: endedEvent.TreeRootOrgId);
+                var endedAuditRow = vikarEndedAuditMapper.Map(endedEvent, endedAuditCtx);
+                await auditRepo.InsertAsync(conn, tx, endedEvent.EventId, endedOutboxId, endedEvent.EventType, endedAuditRow, endedAuditCtx, ct);
+
+                await tx.CommitAsync(ct);
+            }
+            catch
+            {
+                await tx.RollbackAsync(ct);
+                throw;
+            }
+
+            return Results.Ok(new
+            {
+                vikarId = closed.VikarId,
+                managerId,
+                vikarUserId = closed.VikarUserId,
+                revoked = true,
+            });
+        }).RequireAuthorization("LocalAdminOrAbove");
+
         return app;
     }
 
@@ -2187,6 +2555,157 @@ public static class ReportingLineEndpoints
         auditCmd.Parameters.AddWithValue("versionAfter", (object?)versionAfter ?? DBNull.Value);
         auditCmd.Parameters.AddWithValue("metadata", DBNull.Value);
         await auditCmd.ExecuteNonQueryAsync(ct);
+    }
+
+    // ── Helper: vikar-eligibility + report-coverage (IN-TX, IN-LOCK; self-delegate + admin-on-behalf) ──
+
+    /// <summary>
+    /// S76 / TASK-7601 fix-forward (Step-5a c1 B1/B2) — the IN-TX, IN-LOCK vikar-eligibility +
+    /// report-coverage census. The external lens found that running the
+    /// vikar-eligibility + report-coverage census OUTSIDE the tree advisory lock leaves a phantom
+    /// gap: a concurrent report-assign (committed AFTER the pre-lock census read but BEFORE the
+    /// vikar tx acquires the lock) can slip an UNCOVERED report past the check, committing an
+    /// unauthorized vikar grant. This overload runs the ENTIRE census on the caller's
+    /// <paramref name="conn"/>/<paramref name="tx"/>, AFTER the held
+    /// <see cref="ReportingLineRepository.AcquireTreeLockAsync"/> — so every read (the manager's
+    /// CURRENT PRIMARY report list, each report's org, the vikar's qualifying roles, each scope's
+    /// org path) reflects the lock-serialized committed state. A report assigned by a tx that
+    /// committed before this one took the lock is SEEN here (ReadCommitted, post-lock snapshot);
+    /// a tx still in flight is BLOCKED on the same tree advisory until this one commits.
+    ///
+    /// <para>
+    /// The eligibility/coverage SEMANTICS are byte-identical to the prior pre-lock TASK-5105 pass
+    /// (qualifying-role set = GLOBAL_ADMIN/LOCAL_ADMIN/LOCAL_HR/LOCAL_LEADER, GLOBAL short-circuit,
+    /// ORG_AND_DESCENDANTS = StartsWith / ORG_ONLY = equals; the role read mirrors
+    /// <see cref="RoleAssignmentRepository.GetByUserIdAsync"/>'s active+unexpired predicate). The
+    /// ONLY difference is the connection: the report list is read via the in-tx
+    /// <see cref="ReportingLineRepository.GetDirectReportsAsync(NpgsqlConnection, NpgsqlTransaction, string, CancellationToken)"/>
+    /// and every supporting read runs on the same conn/tx (no fresh connections), so the census
+    /// is atomic with the lock and the subsequent INSERT.
+    /// </para>
+    /// </summary>
+    private static async Task<(bool NotEligible, List<string> UncoveredEmployeeIds)>
+        EvaluateVikarCoverageInTxAsync(
+            NpgsqlConnection conn, NpgsqlTransaction tx,
+            string vikarUserId,
+            string absentApproverId,
+            ReportingLineRepository repo,
+            CancellationToken ct)
+    {
+        // (a) The candidate's qualifying role assignments — read IN-LOCK so a concurrent role
+        //     REVOCATION (a scope removed mid-grant) cannot be missed. Mirrors
+        //     RoleAssignmentRepository.GetByUserIdAsync's active+unexpired predicate.
+        var qualifyingRoleIds = new HashSet<string>(StringComparer.Ordinal)
+            { "GLOBAL_ADMIN", "LOCAL_ADMIN", "LOCAL_HR", "LOCAL_LEADER" };
+        var qualifyingAssignments = new List<(string? OrgId, string ScopeType)>();
+        await using (var roleCmd = new NpgsqlCommand(
+            """
+            SELECT ra.org_id, ra.scope_type, ra.role_id FROM role_assignments ra
+            JOIN roles r ON ra.role_id = r.role_id
+            WHERE ra.user_id = @vikarId AND ra.is_active = TRUE
+              AND (ra.expires_at IS NULL OR ra.expires_at > NOW())
+            """, conn, tx))
+        {
+            roleCmd.Parameters.AddWithValue("vikarId", vikarUserId);
+            await using var reader = await roleCmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                var roleId = reader.GetString(2);
+                if (!qualifyingRoleIds.Contains(roleId)) continue;
+                qualifyingAssignments.Add((
+                    reader.IsDBNull(0) ? null : reader.GetString(0),
+                    reader.GetString(1)));
+            }
+        }
+
+        if (qualifyingAssignments.Count == 0)
+            return (NotEligible: true, new List<string>());
+
+        // A GLOBAL-scoped qualifying assignment covers everything.
+        if (qualifyingAssignments.Any(ra => string.Equals(ra.ScopeType, "GLOBAL", StringComparison.Ordinal)))
+            return (NotEligible: false, new List<string>());
+
+        // (b) Resolve each qualifying scope's org materialized_path IN-LOCK.
+        var scopeOrgPaths = new List<(string? MaterializedPath, string ScopeType)>();
+        foreach (var (orgId, scopeType) in qualifyingAssignments)
+        {
+            if (orgId is null) continue;
+            string? path;
+            await using var orgCmd = new NpgsqlCommand(
+                "SELECT materialized_path FROM organizations WHERE org_id = @orgId AND is_active = TRUE", conn, tx);
+            orgCmd.Parameters.AddWithValue("orgId", orgId);
+            path = (await orgCmd.ExecuteScalarAsync(ct)) as string;
+            scopeOrgPaths.Add((path, scopeType));
+        }
+
+        // (c) The CRITICAL in-lock read: the absent manager's CURRENT PRIMARY reports. Read on the
+        //     same conn/tx UNDER the held advisory lock, so a report assigned by a concurrent tx
+        //     that committed before this tx took the lock is SEEN — closing the phantom gap.
+        var managerReports = (await repo.GetDirectReportsAsync(conn, tx, absentApproverId, ct))
+            .Where(r => r.Relationship == "PRIMARY").ToList();
+
+        var uncovered = new List<string>();
+        foreach (var report in managerReports)
+        {
+            string? empOrgPath;
+            await using (var empCmd = new NpgsqlCommand(
+                """
+                SELECT o.materialized_path FROM users u
+                JOIN organizations o ON o.org_id = u.primary_org_id
+                WHERE u.user_id = @employeeId AND u.is_active = TRUE AND o.is_active = TRUE
+                """, conn, tx))
+            {
+                empCmd.Parameters.AddWithValue("employeeId", report.EmployeeId);
+                empOrgPath = (await empCmd.ExecuteScalarAsync(ct)) as string;
+            }
+
+            if (empOrgPath is null)
+            {
+                uncovered.Add(report.EmployeeId);
+                continue;
+            }
+
+            var covered = false;
+            foreach (var (scopePath, scopeType) in scopeOrgPaths)
+            {
+                if (scopePath is null) continue;
+                if (scopeType == "ORG_AND_DESCENDANTS" &&
+                    empOrgPath.StartsWith(scopePath, StringComparison.Ordinal))
+                {
+                    covered = true;
+                    break;
+                }
+                if (scopeType == "ORG_ONLY" &&
+                    string.Equals(empOrgPath, scopePath, StringComparison.Ordinal))
+                {
+                    covered = true;
+                    break;
+                }
+            }
+
+            if (!covered)
+                uncovered.Add(report.EmployeeId);
+        }
+
+        return (NotEligible: false, uncovered);
+    }
+
+    /// <summary>
+    /// S76 / TASK-7601 fix-forward (Step-5a c1 B1) — the IN-TX, IN-LOCK admin-scope check. Resolves
+    /// the manager's CURRENT <c>primary_org_id</c> on the caller's conn/tx (under the held tree
+    /// advisory lock), so a concurrent cross-styrelse transfer of the manager cannot move them out
+    /// from under the admin gate between the check and the INSERT. Returns the manager's in-tx
+    /// primary org (so the caller can run the FLOORED
+    /// <see cref="OrgScopeValidator.ValidateOrgAccessAsync"/> against the lock-stable value), or
+    /// <c>null</c> if the manager is missing/inactive.
+    /// </summary>
+    private static async Task<string?> ResolveManagerPrimaryOrgInTxAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, string managerId, CancellationToken ct)
+    {
+        await using var cmd = new NpgsqlCommand(
+            "SELECT primary_org_id FROM users WHERE user_id = @managerId AND is_active = TRUE", conn, tx);
+        cmd.Parameters.AddWithValue("managerId", managerId);
+        return (await cmd.ExecuteScalarAsync(ct)) as string;
     }
 
     // ── Helper: in-tx manager_vikar reverse-lookup for the R10 closure ──
@@ -2346,6 +2865,16 @@ public static class ReportingLineEndpoints
     // ── Self-service delegation DTOs ──
 
     private sealed record DelegateRequest(string ActingManagerId, string EffectiveTo);
+
+    // ── Admin-on-behalf vikar DTO (S76 / TASK-7601) ──
+
+    /// <summary>
+    /// Body for <c>POST /api/admin/reporting-lines/{managerId}/vikar</c>. <see cref="EffectiveTo"/>
+    /// is the INCLUSIVE last-covered day ("til og med", R4a) as an ISO yyyy-MM-dd date string;
+    /// <see cref="Reason"/> is optional (defaults to ANDET) and must be one of the
+    /// <c>manager_vikar.reason</c> CHECK values when supplied.
+    /// </summary>
+    private sealed record AdminVikarRequest(string VikarUserId, string EffectiveTo, string? Reason);
 
     // ── Remove-with-reassignment DTO (S74 R10) ──
 

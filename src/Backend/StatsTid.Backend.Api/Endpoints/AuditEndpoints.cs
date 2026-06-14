@@ -2,6 +2,7 @@ using StatsTid.Auth;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Audit;
+using StatsTid.SharedKernel.Security;
 
 namespace StatsTid.Backend.Api.Endpoints;
 
@@ -23,7 +24,11 @@ public static class AuditEndpointsExtension
             CancellationToken ct = default) =>
         {
             var actor = context.GetActorContext();
-            var accessibleOrgIds = await scopeValidator.GetAccessibleOrgsAsync(actor, ct);
+            // S76 / TASK-7600 B1 (completeness-sweep find): HROrAbove read → LocalHR floor on
+            // the accessible-org union. Pre-fix a mixed-role actor (HR@A + Leader@B) had B's
+            // subtree unioned in via the non-admin Leader scope, leaking B's audit rows into
+            // the result — the same picker-leak class the original 7600 closed on person-search.
+            var accessibleOrgIds = await scopeValidator.GetAccessibleOrgsAsync(actor, StatsTidRoles.LocalHR, ct);
 
             if (accessibleOrgIds is { Count: 0 })
                 return Results.Forbid();
