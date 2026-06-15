@@ -19,11 +19,6 @@ export interface ReportingLineEntry {
   createdAt: string
 }
 
-export interface ReportingLineTreeEntry extends ReportingLineEntry {
-  employeeDisplayName: string
-  managerDisplayName: string
-}
-
 export interface DirectReport extends ReportingLineEntry {
   employeeDisplayName: string
 }
@@ -97,15 +92,6 @@ export type DeletePersonResult =
   | { ok: false; status: number; error: string; gap?: ReassignmentGap }
 
 export function useReportingLines() {
-  const fetchTree = useCallback(
-    async (treeRootOrgId: string): Promise<ApiResult<ReportingLineTreeEntry[]>> => {
-      return apiClient.get<ReportingLineTreeEntry[]>(
-        `/api/admin/reporting-lines/tree/${encodeURIComponent(treeRootOrgId)}`,
-      )
-    },
-    [],
-  )
-
   const fetchEmployeeLines = useCallback(
     async (
       employeeId: string,
@@ -173,46 +159,6 @@ export function useReportingLines() {
     [],
   )
 
-  const assignActingManager = useCallback(
-    async (
-      employeeId: string,
-      body: { managerId: string; effectiveFrom: string },
-    ): Promise<ApiResult<ReportingLineEntry>> => {
-      const result = await apiFetchWithEtag<ReportingLineEntry>(
-        `/api/admin/reporting-lines/${encodeURIComponent(employeeId)}/acting`,
-        {
-          method: 'POST',
-          body: JSON.stringify(body),
-        },
-      )
-      if (!result.ok) {
-        return { ok: false, error: result.error, status: result.status, body: result.body }
-      }
-      return { ok: true, data: result.data.data }
-    },
-    [],
-  )
-
-  const removeActingManager = useCallback(
-    async (
-      employeeId: string,
-      ifMatch: string,
-    ): Promise<ApiResult<void>> => {
-      const result = await apiFetchWithEtag<void>(
-        `/api/admin/reporting-lines/${encodeURIComponent(employeeId)}/acting`,
-        {
-          method: 'DELETE',
-          headers: { 'If-Match': ifMatch },
-        },
-      )
-      if (!result.ok) {
-        return { ok: false, error: result.error, status: result.status, body: result.body }
-      }
-      return { ok: true, data: undefined }
-    },
-    [],
-  )
-
   const fetchTreeSettings = useCallback(
     async (treeRootOrgId: string): Promise<ApiResult<{ enforcementMode: string; version: number }>> => {
       return apiClient.get<{ enforcementMode: string; version: number }>(
@@ -240,19 +186,6 @@ export function useReportingLines() {
         return { ok: false, error: result.error, status: result.status, body: result.body }
       }
       return { ok: true, data: result.data.data }
-    },
-    [],
-  )
-
-  const importLines = useCallback(
-    async (body: {
-      treeRootOrgId: string
-      rows: { employeeId: string; managerId: string; effectiveFrom: string }[]
-    }): Promise<ApiResult<{ imported: number; superseded: number; skipped: number; total: number }>> => {
-      return apiClient.post<{ imported: number; superseded: number; skipped: number; total: number }>(
-        '/api/admin/reporting-lines/import',
-        body,
-      )
     },
     [],
   )
@@ -379,14 +312,10 @@ export function useReportingLines() {
   )
 
   return {
-    fetchTree,
     fetchEmployeeLines,
     fetchDirectReports,
     assignManager,
     removeManager,
-    assignActingManager,
-    removeActingManager,
-    importLines,
     fetchTreeSettings,
     updateTreeSettings,
     searchPeople,

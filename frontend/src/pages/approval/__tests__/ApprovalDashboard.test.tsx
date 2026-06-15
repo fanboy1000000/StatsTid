@@ -341,3 +341,217 @@ describe('ApprovalDashboard', () => {
     })
   })
 })
+
+// ════════════════════════════════════════════════════════════════════════════
+// S77 TASK-7700 / R1 — the headline FE CROSS-FLOW test (Godkend tid).
+//
+// HONEST FRAMING (do NOT over-claim): this proves the UI CROSS-FLOW for a
+// Leader-level (vikar-)actor — i.e. that the actor's *my-reports* read surfaces
+// an away-manager's report, and that the Godkend / Afvis buttons issue the right
+// HTTP calls (method + URL + payload) against the approve/reject endpoint
+// contracts. It does NOT assert that a designated/vikar edge GRANTS authority —
+// that authorization is the BACKEND's job and is covered server-side (S74). The
+// actor here is a LocalLeader (NOT LocalHR), so the role-gated "Genåbn" (reopen)
+// button stays hidden and never short-circuits the flow; REOPEN is deliberately
+// NOT exercised here (proven backend-side).
+//
+// The dashboard READS via the real approval hook but the approve/reject
+// MUTATIONS call apiClient.post directly (ApprovalDashboard.tsx:228). We mock at
+// the fetch network boundary and assert the wire contract for each verb.
+// ════════════════════════════════════════════════════════════════════════════
+
+/** An away-manager's report routed to THIS leader's my-reports surface. The
+    Leader-actor sees it because it's in the my-reports payload — NOT because the
+    FE re-derived edge authority (the server already scoped this read). */
+const awayManagerReport = {
+  periodId: 'p-away-1',
+  employeeId: 'EMP_AWAY_MGR',
+  orgId: 'ORG1',
+  periodStart: '2026-05-01',
+  periodEnd: '2026-05-07',
+  periodType: 'WEEKLY',
+  status: 'SUBMITTED',
+  submittedAt: '2026-05-08T10:00:00Z',
+  approvedBy: null,
+  approvedAt: null,
+  rejectionReason: null,
+  agreementCode: 'AC',
+  okVersion: '1',
+  createdAt: '2026-05-01T00:00:00Z',
+  employeeApprovedAt: '2026-05-07T16:00:00Z',
+}
+
+// An ALREADY-APPROVED period in the same my-reports payload — used to prove the
+// role-gated Genåbn button stays hidden for a Leader (it only renders for an
+// APPROVED period AND hasMinRole(LocalHR)).
+const approvedReport = {
+  ...awayManagerReport,
+  periodId: 'p-approved-1',
+  employeeId: 'EMP_DONE',
+  status: 'APPROVED',
+  approvedBy: 'LEADER_X',
+  approvedAt: '2026-05-09T09:00:00Z',
+}
+
+// A period that exists ONLY in the unrestricted "Alle" (by-month, no my-reports)
+// read — deliberately ABSENT from the scoped my-reports payload. This makes the
+// default-tab assertions DISCRIMINATING: the my-reports tab must surface
+// EMP_AWAY_MGR (from the scoped read) and must NOT surface EMP_OTHER (the
+// unrestricted read's record). If the dashboard wrongly fed the my-reports tab
+// from the unrestricted read, EMP_AWAY_MGR would be missing AND EMP_OTHER present.
+const unrelatedReport = {
+  ...awayManagerReport,
+  periodId: 'p-other-1',
+  employeeId: 'EMP_OTHER',
+  status: 'SUBMITTED',
+}
+
+describe('ApprovalDashboard — Leader vikar-actor UI cross-flow (R1)', () => {
+  /** Route the two month reads to a my-reports payload that includes the
+      away-manager report + an approved one; record approve/reject POSTs so the
+      test can assert their method + URL + body. Returns the success Response for
+      the mutations. */
+  function mockCrossFlow() {
+    mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET'
+      if (typeof url === 'string' && url.includes('/approve') && method === 'POST') {
+        return jsonResponse({ periodId: 'p-away-1', status: 'APPROVED' })
+      }
+      if (typeof url === 'string' && url.includes('/reject') && method === 'POST') {
+        return jsonResponse({ periodId: 'p-away-1', status: 'REJECTED' })
+      }
+      if (typeof url === 'string' && url.includes('my-reports=true')) {
+        return jsonResponse([awayManagerReport, approvedReport])
+      }
+      if (typeof url === 'string' && url.includes('/api/approval/by-month')) {
+        // The UNRESTRICTED "Alle" read returns a DISTINCT dataset (no away-manager
+        // report) so the my-reports-tab assertions discriminate the scoped read.
+        return jsonResponse([unrelatedReport])
+      }
+      if (typeof url === 'string' && url.includes('/api/compliance/')) {
+        return jsonResponse({ ruleId: '', employeeId: '', success: true, violations: [], warnings: [] })
+      }
+      return jsonResponse({})
+    })
+  }
+
+  it('the my-reports surface shows the away-manager report and HIDES Genåbn for a Leader (not LocalHR)', async () => {
+    mockCrossFlow()
+    render(<ApprovalDashboard />)
+
+    // The leader's my-reports read surfaced the away-manager's report.
+    await waitFor(() => {
+      expect(screen.getByText('EMP_AWAY_MGR')).toBeDefined()
+    })
+    // The already-approved row is present too...
+    expect(screen.getByText('EMP_DONE')).toBeDefined()
+    // DISCRIMINATING: the unrestricted "Alle" read returned EMP_OTHER, but the
+    // default my-reports tab must NOT surface it — proving the visible rows come
+    // from the SCOPED my-reports read, not the unrestricted by-month read (Radix
+    // unmounts the inactive "Alle" tab, so EMP_OTHER is genuinely out of the DOM).
+    expect(screen.queryByText('EMP_OTHER')).toBeNull()
+    // ...but the reopen affordance is hidden: the actor is a LocalLeader, below
+    // the LocalHR floor (ApprovalDashboard.tsx:132 gates it on hasMinRole LocalHR).
+    expect(screen.queryByText('Genåbn')).toBeNull()
+  })
+
+  it('Godkend issues POST /api/approval/{id}/approve (method + URL, empty body)', async () => {
+    const user = userEvent.setup()
+    mockCrossFlow()
+    render(<ApprovalDashboard />)
+
+    await waitFor(() => {
+      expect(screen.getByText('EMP_AWAY_MGR')).toBeDefined()
+    })
+    // The away-manager report (SUBMITTED) shows Godkend; the approved one does not.
+    const approveButtons = screen.getAllByText('Godkend')
+    expect(approveButtons).toHaveLength(1)
+    await user.click(approveButtons[0])
+
+    // Assert the WIRE contract: POST to the approve endpoint for THIS period id,
+    // with no JSON body (the approve verb sends none).
+    await waitFor(() => {
+      const approveCall = mockFetch.mock.calls.find((call: unknown[]) => {
+        const u = call[0] as string
+        const init = call[1] as RequestInit | undefined
+        return u === '/api/approval/p-away-1/approve' && (init?.method ?? 'GET') === 'POST'
+      })
+      expect(approveCall).toBeDefined()
+    })
+    const approveCall = mockFetch.mock.calls.find((call: unknown[]) => {
+      const u = call[0] as string
+      const init = call[1] as RequestInit | undefined
+      return u === '/api/approval/p-away-1/approve' && (init?.method ?? 'GET') === 'POST'
+    })!
+    const approveInit = approveCall[1] as RequestInit
+    // No confirmFallback in the happy path (the actor is on the my-reports surface).
+    expect(approveCall[0]).not.toContain('confirmFallback')
+    // The approve verb carries no request body.
+    expect(approveInit.body).toBeUndefined()
+  })
+
+  it('Afvis issues POST /api/approval/{id}/reject with the {reason} payload', async () => {
+    const user = userEvent.setup()
+    mockCrossFlow()
+    render(<ApprovalDashboard />)
+
+    await waitFor(() => {
+      expect(screen.getByText('EMP_AWAY_MGR')).toBeDefined()
+    })
+    // Open the reject dialog for the away-manager report.
+    await user.click(screen.getByText('Afvis'))
+    const textarea = await screen.findByPlaceholderText('Begrundelse for afvisning...')
+    await user.type(textarea, 'Mangler hviletid')
+    // Confirm the rejection ("Afvis periode" is both the dialog title <h3> and the
+    // confirm <button> — scope to the button role).
+    await user.click(screen.getByRole('button', { name: 'Afvis periode' }))
+
+    // Assert the WIRE contract: POST to the reject endpoint for THIS period id,
+    // with the reason threaded in the JSON body.
+    await waitFor(() => {
+      const rejectCall = mockFetch.mock.calls.find((call: unknown[]) => {
+        const u = call[0] as string
+        const init = call[1] as RequestInit | undefined
+        return u === '/api/approval/p-away-1/reject' && (init?.method ?? 'GET') === 'POST'
+      })
+      expect(rejectCall).toBeDefined()
+    })
+    const rejectCall = mockFetch.mock.calls.find((call: unknown[]) => {
+      const u = call[0] as string
+      const init = call[1] as RequestInit | undefined
+      return u === '/api/approval/p-away-1/reject' && (init?.method ?? 'GET') === 'POST'
+    })!
+    const rejectInit = rejectCall[1] as RequestInit
+    expect(rejectCall[0]).not.toContain('confirmFallback')
+    expect(JSON.parse(rejectInit.body as string)).toEqual({ reason: 'Mangler hviletid' })
+  })
+})
+
+// S77 TASK-7700 / R5 — light a11y audit for the dashboard surface. Verifies the
+// tab bar exposes tab roles with accessible names; the action buttons are
+// reachable by name. NOTE (recorded post-program follow-up): the reject +
+// enforcement dialogs (ApprovalDashboard.tsx:381/417) are plain <div>s WITHOUT
+// dialog semantics / focus-trap / Escape / focus-return — retrofitting full
+// dialog semantics is more than a one-liner and is intentionally OUT OF SCOPE
+// here; tracked as an a11y follow-up.
+describe('ApprovalDashboard — a11y audit (R5)', () => {
+  it('the tab bar exposes both tabs by role + accessible name', async () => {
+    mockInitialFetches()
+    render(<ApprovalDashboard />)
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /Mine medarbejdere/ })).toBeDefined()
+    })
+    expect(screen.getByRole('tab', { name: /Alle i omraade/ })).toBeDefined()
+  })
+
+  it('the approve/reject row actions are buttons reachable by their accessible name', async () => {
+    mockInitialFetches()
+    render(<ApprovalDashboard />)
+    await waitFor(() => {
+      expect(screen.getByText('EMP001')).toBeDefined()
+    })
+    // Both verbs render as buttons with text accessible names.
+    expect(screen.getAllByRole('button', { name: 'Godkend' }).length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByRole('button', { name: 'Afvis' }).length).toBeGreaterThanOrEqual(1)
+  })
+})

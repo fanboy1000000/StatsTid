@@ -647,6 +647,71 @@ describe('EditPersonDrawer — role-gating', () => {
   )
 })
 
+// S77 TASK-7700 / R5 — light a11y audit (manual @testing-library assertions, NO
+// new dependency). The drawer is the scratch-built kit Drawer, which carries the
+// FULL overlay a11y set; these assertions VERIFY it (role/modal/name, the close
+// icon-button's accessible name, Escape-to-close + focus-trap wrap).
+describe('EditPersonDrawer — a11y audit (R5)', () => {
+  it('is a labelled modal dialog with an accessibly-named close button', async () => {
+    renderDrawer({ user: editUser, onSaved: vi.fn() })
+    const dialog = await screen.findByRole('dialog')
+    // role=dialog + aria-modal + an accessible name (the kit Drawer ariaLabel = title).
+    expect(dialog.getAttribute('aria-modal')).toBe('true')
+    expect(dialog.getAttribute('aria-label')).toMatch(/Redigér Test Bruger/)
+    // The ✕ close button has an accessible name ("Luk"), not a bare glyph.
+    expect(screen.getByRole('button', { name: 'Luk' })).toBeDefined()
+    // The submit button is reachable by its accessible name.
+    expect(screen.getByRole('button', { name: 'Gem ændringer' })).toBeDefined()
+  })
+
+  it('Escape closes the drawer (the kit focus-trap handles Escape)', async () => {
+    const onClose = vi.fn()
+    renderDrawer({ user: editUser, onSaved: vi.fn(), onClose })
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  it('focus-trap: Tab from the last focusable wraps to the first inside the drawer', async () => {
+    renderDrawer({ user: editUser, onSaved: vi.fn() })
+    const dialog = await screen.findByRole('dialog')
+    // Enumerate the drawer's focusables (same selector the kit uses).
+    const focusables = Array.from(
+      dialog.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ),
+    )
+    expect(focusables.length).toBeGreaterThan(1)
+    const first = focusables[0]
+    const last = focusables[focusables.length - 1]
+    // Tab from the last element wraps to the first (forward trap).
+    last.focus()
+    expect(last).toHaveFocus()
+    fireEvent.keyDown(dialog, { key: 'Tab' })
+    expect(first).toHaveFocus()
+    // Shift+Tab from the first wraps to the last (backward trap).
+    fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true })
+    expect(last).toHaveFocus()
+  })
+
+  it('returns focus to the opener trigger when the drawer unmounts (focus-return)', async () => {
+    // Mount a trigger button, focus it, then mount the drawer (the kit captures
+    // document.activeElement on open) and unmount it (restores the trigger).
+    const trigger = document.createElement('button')
+    trigger.textContent = 'Open'
+    document.body.appendChild(trigger)
+    trigger.focus()
+    expect(trigger).toHaveFocus()
+
+    const { unmount } = renderDrawer({ user: editUser, onSaved: vi.fn() })
+    await screen.findByRole('dialog')
+    // Closing/unmounting the drawer restores focus to the captured trigger.
+    unmount()
+    expect(trigger).toHaveFocus()
+    document.body.removeChild(trigger)
+  })
+})
+
 describe('EditPersonDrawer — 7603 slot', () => {
   it('renders extraSections in the lifecycle slot', async () => {
     render(

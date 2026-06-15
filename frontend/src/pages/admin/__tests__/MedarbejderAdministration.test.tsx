@@ -417,3 +417,91 @@ describe('MedarbejderAdministration — drawer integration (7604)', () => {
     })
   })
 })
+
+// S77 TASK-7700 / R5 — light a11y audit (manual @testing-library assertions, NO
+// new dependency). Verifies the toggle tiles + icon buttons carry accessible
+// names, the tree expand/collapse buttons are role+name correct, and the
+// drawer opened from the tree carries the kit's dialog semantics + focus-return.
+describe('MedarbejderAdministration — a11y audit (R5)', () => {
+  it('the 3 filter tiles are buttons with accessible names and toggle aria-pressed', async () => {
+    renderPage()
+    await waitFor(() => {
+      expect(screen.getAllByText('Birgit Bertelsen').length).toBeGreaterThanOrEqual(1)
+    })
+    // Each tile is a real <button> (keyboard-operable) with an accessible name
+    // derived from its label text, and an aria-pressed reflecting filter state.
+    const indsend = screen.getByRole('button', { name: /Ikke indsendt/ })
+    const godkend = screen.getByRole('button', { name: /Ikke godkendt/ })
+    const vikar = screen.getByRole('button', { name: /Vikar/ })
+    for (const tile of [indsend, godkend, vikar]) {
+      expect(tile.getAttribute('aria-pressed')).toBe('false')
+    }
+    // Activating a tile flips its aria-pressed → assistive tech announces the
+    // toggle state.
+    fireEvent.click(vikar)
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Vikar/ }).getAttribute('aria-pressed')).toBe('true')
+    })
+  })
+
+  it('the level segmented control is an accessible group, and tree expand/collapse buttons have names + aria-expanded', async () => {
+    renderPage()
+    await waitFor(() => {
+      expect(screen.getByText('Christian Christensen')).toBeDefined()
+    })
+    // The level control is a labelled group (role=group + aria-labelledby → "Vis niveau").
+    const group = screen.getByRole('group', { name: 'Vis niveau' })
+    expect(group).toBeDefined()
+    // A collapsed manager's toggle is a button named "Vis" with aria-expanded=false;
+    // expanding flips both the name and aria-expanded (so SR users know the state).
+    const showButtons = screen.getAllByRole('button', { name: 'Vis' })
+    expect(showButtons.length).toBeGreaterThanOrEqual(1)
+    expect(showButtons[0].getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(showButtons[0])
+    await waitFor(() => {
+      // After expanding, the same node's toggle is now named "Skjul" (hide).
+      expect(screen.getAllByRole('button', { name: 'Skjul' }).length).toBeGreaterThanOrEqual(1)
+    })
+  })
+
+  it('the search field has an accessible name', async () => {
+    renderPage()
+    await waitFor(() => {
+      expect(screen.getAllByText('Birgit Bertelsen').length).toBeGreaterThanOrEqual(1)
+    })
+    // The search box is reachable by its accessible name (aria-label), not just by
+    // placeholder — so SR users can find it.
+    expect(
+      screen.getByRole('searchbox', { name: 'Søg medarbejder, stilling eller enhed' }),
+    ).toBeDefined()
+  })
+
+  it('the EditPersonDrawer opened from the tree is a labelled modal dialog and returns focus to its trigger on close', async () => {
+    renderPage()
+    await waitFor(() => {
+      expect(screen.getByTestId('person-edit-A')).toBeDefined()
+    })
+    const trigger = screen.getByTestId('person-edit-A') as HTMLButtonElement
+    // The opener button is the active element when we click it (jsdom keeps focus
+    // on a clicked button); capture it as the expected focus-return target.
+    trigger.focus()
+    expect(trigger).toHaveFocus()
+    fireEvent.click(trigger)
+
+    // The drawer mounts as a role=dialog with aria-modal + an accessible name
+    // (the kit Drawer's ariaLabel = the drawer title).
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog.getAttribute('aria-modal')).toBe('true')
+    expect(dialog.getAttribute('aria-label')).toMatch(/Redigér Anders Andersen/)
+    // The close (✕) button carries an accessible name ("Luk"), not a bare glyph.
+    expect(screen.getByRole('button', { name: 'Luk' })).toBeDefined()
+
+    // Close via Escape (the kit Drawer's focus-trap handles Escape) → focus
+    // returns to the trigger (the kit captures it on open and restores on unmount).
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull()
+    })
+    expect(trigger).toHaveFocus()
+  })
+})

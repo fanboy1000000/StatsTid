@@ -14,6 +14,44 @@
 
 import type { MedarbejderRosterRow } from '../../hooks/useMedarbejderRoster'
 
+// R3 (S77) PERFORMANCE: the derivations below (depthMap / visibleTreeRows /
+// defaultCollapsed / collapsedForLevel / descendantsOf) all walk the tree and ask
+// "who are the children of X?" once per node. Done naively via a full-array
+// `filter` per node, that is O(n) per node → O(n²) over the whole tree (a 2000-
+// node styrelse = up to ~4M comparisons per derivation; a degenerate deep chain
+// is the worst case). The fix is a single precomputed ADJACENCY INDEX
+// (parentId -> child[]) built ONCE in O(n); every subsequent child lookup is then
+// O(1) and the whole pipeline is O(n). The build preserves the original
+// `people.filter` ORDER (a stable single pass), so the derivations emit identical
+// rows / depths / collapse sets — this is a behaviour-preserving optimisation.
+//
+// The S75 R4 cycle-safety guards (visited-set / `out`-set) are PRESERVED VERBATIM
+// in every walk below — they are now load-bearing once S76 write flows can
+// introduce a structural cycle. Only the child-lookup mechanism changed.
+
+/** Adjacency index: structuralApproverId -> the rows that report to it, in the
+    SAME order `people.filter` would have produced (insertion order of `people`).
+    Built in one O(n) pass. `null` approvers are simply not indexed (roots/orphans
+    are reached via `rootsOf`, never as someone's child). */
+type ChildIndex = Map<string, MedarbejderRosterRow[]>
+
+function buildChildIndex(people: MedarbejderRosterRow[]): ChildIndex {
+  const idx: ChildIndex = new Map()
+  for (const p of people) {
+    const parent = p.structuralApproverId
+    if (parent == null) continue
+    const bucket = idx.get(parent)
+    if (bucket) bucket.push(p)
+    else idx.set(parent, [p])
+  }
+  return idx
+}
+
+/** O(1) child lookup against a prebuilt index (empty array when none). */
+function childrenFromIndex(idx: ChildIndex, id: string): MedarbejderRosterRow[] {
+  return idx.get(id) ?? []
+}
+
 /** Map employeeId -> row. */
 export function indexBy(
   people: MedarbejderRosterRow[],
@@ -21,7 +59,9 @@ export function indexBy(
   return Object.fromEntries(people.map((p) => [p.employeeId, p]))
 }
 
-/** Direct reports of `id` — people whose structural PRIMARY manager is `id`. */
+/** Direct reports of `id` — people whose structural PRIMARY manager is `id`.
+    Public single-lookup convenience (callers use it for a one-off count); the
+    internal multi-node derivations use a prebuilt index instead (R3). */
 export function childrenOf(
   people: MedarbejderRosterRow[],
   id: string,
@@ -45,36 +85,53 @@ export function isManager(people: MedarbejderRosterRow[], id: string): boolean {
 }
 
 /** Transitive descendants of `id` (employeeIds). Cycle-safe via the `out` set
-    guard — preserved verbatim from the prototype. */
+    guard — same semantics as the prototype's recursive walk (a node is only
+    visited once; the `out`-set membership cuts cycles), but ITERATIVE (explicit
+    stack) so a degenerate deep chain cannot overflow the JS call stack. O(n) via
+    the prebuilt index. */
 export function descendantsOf(
   people: MedarbejderRosterRow[],
   id: string,
 ): Set<string> {
+  const idx = buildChildIndex(people)
   const out = new Set<string>()
-  const walk = (pid: string): void => {
-    childrenOf(people, pid).forEach((c) => {
-      if (!out.has(c.employeeId)) {
-        out.add(c.employeeId)
-        walk(c.employeeId)
-      }
-    })
+  // Seed with `id`'s direct children, in order. Reverse-push so popping yields
+  // the original child order (matches the prototype's forEach recursion order).
+  const stack: string[] = childrenFromIndex(idx, id)
+    .map((c) => c.employeeId)
+    .reverse()
+  while (stack.length > 0) {
+    const cur = stack.pop()!
+    if (out.has(cur)) continue // already seen → cycle cut (the `out`-set guard)
+    out.add(cur)
+    const kids = childrenFromIndex(idx, cur)
+    for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i].employeeId)
   }
-  walk(id)
   return out
 }
 
 /** 0-based depth of every person, walking from the roots.
-    R4: a `visited` set guards against structural cycles so the walk terminates. */
+    R4: a `visited` set guards against structural cycles so the walk terminates.
+    ITERATIVE (explicit stack) so a deep chain cannot overflow the call stack;
+    the visited-before-assign semantics and the root pre-order are preserved. */
 export function depthMap(people: MedarbejderRosterRow[]): Record<string, number> {
+  const idx = buildChildIndex(people)
   const d: Record<string, number> = {}
   const visited = new Set<string>()
-  const walk = (p: MedarbejderRosterRow, depth: number): void => {
-    if (visited.has(p.employeeId)) return
-    visited.add(p.employeeId)
-    d[p.employeeId] = depth
-    childrenOf(people, p.employeeId).forEach((c) => walk(c, depth + 1))
+  // A LIFO stack of {row, depth}. Roots are pushed in reverse so the first root
+  // is processed first; each node's children are pushed in reverse so they pop in
+  // original order — i.e. an identical pre-order to the recursive walk.
+  const stack: { row: MedarbejderRosterRow; depth: number }[] = []
+  const roots = rootsOf(people)
+  for (let i = roots.length - 1; i >= 0; i--) stack.push({ row: roots[i], depth: 0 })
+  while (stack.length > 0) {
+    const { row, depth } = stack.pop()!
+    if (visited.has(row.employeeId)) continue // cycle / re-entry guard (R4)
+    visited.add(row.employeeId)
+    d[row.employeeId] = depth
+    const kids = childrenFromIndex(idx, row.employeeId)
+    for (let i = kids.length - 1; i >= 0; i--) stack.push({ row: kids[i], depth: depth + 1 })
   }
-  rootsOf(people).forEach((r) => walk(r, 0))
   return d
 }
 
@@ -85,10 +142,11 @@ export function collapsedForLevel(
   L: number,
 ): Set<string> {
   if (!Number.isFinite(L)) return new Set()
+  const idx = buildChildIndex(people)
   const d = depthMap(people)
   const set = new Set<string>()
   people.forEach((p) => {
-    if (childrenOf(people, p.employeeId).length > 0 && (d[p.employeeId] ?? 0) >= L - 1) {
+    if (childrenFromIndex(idx, p.employeeId).length > 0 && (d[p.employeeId] ?? 0) >= L - 1) {
       set.add(p.employeeId)
     }
   })
@@ -98,10 +156,13 @@ export function collapsedForLevel(
 /** Default collapse: "team leads" — managers whose reports are all individuals —
     so the front line isn't dumped at once. Higher managers stay open. */
 export function defaultCollapsed(people: MedarbejderRosterRow[]): Set<string> {
+  const idx = buildChildIndex(people)
+  // A person is a manager iff they appear as a parent in the index — an O(1)
+  // check that replaces the per-node `isManager` full-array scan (R3).
   const set = new Set<string>()
   people.forEach((p) => {
-    const kids = childrenOf(people, p.employeeId)
-    if (kids.length > 0 && kids.every((k) => !isManager(people, k.employeeId))) {
+    const kids = childrenFromIndex(idx, p.employeeId)
+    if (kids.length > 0 && kids.every((k) => !idx.has(k.employeeId))) {
       set.add(p.employeeId)
     }
   })
@@ -139,17 +200,28 @@ export function visibleTreeRows(
   collapsed: Set<string>,
   visibleSet?: Set<string> | null,
 ): VisibleTreeRow[] {
+  const idx = buildChildIndex(people)
   const rows: VisibleTreeRow[] = []
   const visited = new Set<string>()
-  const walk = (person: MedarbejderRosterRow, depth: number): void => {
-    if (visited.has(person.employeeId)) return
-    if (visibleSet && !visibleSet.has(person.employeeId)) return
+  // ITERATIVE pre-order (explicit stack) so a deep chain cannot overflow the call
+  // stack. The per-node decisions are byte-identical to the recursive walk:
+  //   1. already visited → skip (cycle/re-entry guard, R4)
+  //   2. visibleSet active & node not in it → skip entirely (no emit, no children)
+  //   3. else emit, and descend into children UNLESS collapsed (and no visibleSet)
+  // Children + roots are reverse-pushed so they pop in original order.
+  const stack: { row: MedarbejderRosterRow; depth: number }[] = []
+  const roots = rootsOf(people)
+  for (let i = roots.length - 1; i >= 0; i--) stack.push({ row: roots[i], depth: 0 })
+  while (stack.length > 0) {
+    const { row: person, depth } = stack.pop()!
+    if (visited.has(person.employeeId)) continue
+    if (visibleSet && !visibleSet.has(person.employeeId)) continue
     visited.add(person.employeeId)
     rows.push({ row: person, depth })
     if (visibleSet || !collapsed.has(person.employeeId)) {
-      childrenOf(people, person.employeeId).forEach((c) => walk(c, depth + 1))
+      const kids = childrenFromIndex(idx, person.employeeId)
+      for (let i = kids.length - 1; i >= 0; i--) stack.push({ row: kids[i], depth: depth + 1 })
     }
   }
-  rootsOf(people).forEach((r) => walk(r, 0))
   return rows
 }

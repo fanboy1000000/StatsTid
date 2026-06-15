@@ -167,7 +167,7 @@ Routes are defined in `frontend/src/App.tsx`. Unauthenticated → `/login`; auth
 | `/admin/medarbejdere` | `UserManagement` | LocalHR | Employee/user administration |
 | `/admin/auditlog` | `AuditLogView` | LocalHR | Audit log viewer (ADR-026) |
 | `/admin/projekter` | `ProjectManagement` | LocalAdmin | Project configuration per org |
-| `/admin/ledelseslinjer` | `ReportingLineTree` | LocalAdmin | Reporting-line hierarchy (ADR-027) |
+| `/admin/ledelseslinjer` | `MedarbejderAdministration` | LocalAdmin | Medarbejder administration — the structural approval tree + the unified `EditPersonDrawer` create/edit/approver/vikar/delete surface (ADR-027 Phase 5, S74–S77; replaced the retired `ReportingLineTree`) |
 | `/admin/brugerrettigheder` | `RoleManagement` | LocalAdmin | Role / access-rights assignment |
 | `/lokal/ok-konfiguration` | `ConfigManagement` | LocalAdmin | Local agreement (OK) config overrides |
 | `/lokal/stillingstilpasninger` | `PositionOverrideManagement` | LocalAdmin | Local position overrides |

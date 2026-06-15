@@ -222,7 +222,16 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
         }
     }
 
-    private async Task<Guid> InsertPeriodAsync(string employeeId, string orgId, string status)
+    private Task<Guid> InsertPeriodAsync(string employeeId, string orgId, string status)
+        => InsertPeriodWithRangeAsync(employeeId, orgId, status, new DateOnly(2026, 5, 1), new DateOnly(2026, 5, 31));
+
+    /// <summary>
+    /// Inserts an approval period with an explicit date range — lets a single employee carry TWO
+    /// distinct periods (no unique key on employee_id/period range, only an index), which the R2
+    /// two-period vikar verb-set test needs (period-1 for approve+reopen, period-2 for reject).
+    /// </summary>
+    private async Task<Guid> InsertPeriodWithRangeAsync(
+        string employeeId, string orgId, string status, DateOnly start, DateOnly end)
     {
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
         await conn.OpenAsync();
@@ -237,8 +246,8 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
         cmd.Parameters.AddWithValue("id", id);
         cmd.Parameters.AddWithValue("emp", employeeId);
         cmd.Parameters.AddWithValue("org", orgId);
-        cmd.Parameters.AddWithValue("start", new DateOnly(2026, 5, 1));
-        cmd.Parameters.AddWithValue("end", new DateOnly(2026, 5, 31));
+        cmd.Parameters.AddWithValue("start", start);
+        cmd.Parameters.AddWithValue("end", end);
         cmd.Parameters.AddWithValue("status", status);
         await cmd.ExecuteNonQueryAsync();
         return id;
@@ -341,6 +350,62 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
         var approveRsp = await vikClient.PostAsync($"/api/approval/{periodId}/approve", null);
         Assert.Equal(HttpStatusCode.OK, approveRsp.StatusCode);
         Assert.Equal("APPROVED", await ReadStatusAsync(periodId));
+    }
+
+    /// <summary>
+    /// S77-7701 (R2) — the vikar holds the FULL manager verb-set end-to-end, not just approve.
+    /// While Mgr has an active vikar (Vik) covering today, Vik (a Leader-level stand-in,
+    /// deliberately NOT LocalHR — the token is minted <c>LocalLeader</c>, so the ONLY authority
+    /// is the vikar EDGE, never a role) can REJECT and REOPEN Emp's periods through the real HTTP
+    /// endpoints, with Vik's org-scope (AFD02) NOT covering Emp's AFD01 throughout.
+    ///
+    /// <para>
+    /// The approval state machine forbids <c>approve→reopen→reject</c> on one period (reopen takes
+    /// APPROVED→DRAFT, which reject won't accept — reject needs SUBMITTED/EMPLOYEE_APPROVED;
+    /// <see cref="ApprovalEndpoints"/> reject :346, reopen :971/:982). So this uses the LEGAL
+    /// two-period path:
+    /// <list type="bullet">
+    /// <item><description>period-1: SUBMITTED → vikar APPROVE (→ APPROVED) → vikar REOPEN
+    /// (→ DRAFT) — proves the vikar holds approve + the reopen-Leader-arm edge branch.</description></item>
+    /// <item><description>period-2 (a distinct date range): SUBMITTED → vikar REJECT
+    /// (→ REJECTED) — proves the vikar holds reject.</description></item>
+    /// </list>
+    /// Each verb is asserted to succeed (HTTP 200 + the resulting status) driven by the vikar's
+    /// client, closing the absent-vikar reject + reopen full-stack coverage gap.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Vikar_HoldsAuthority_Rejects_AndReopens_ViaEndpoints_NotViaRole()
+    {
+        // Vik is Mgr's active vikar covering today → Vik (NOT Mgr) is Emp's single effective
+        // approver. Vik's token is LocalLeader (NOT LocalHR) — only the edge grants authority.
+        await CreateVikarAsync(Mgr, Vik, DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30));
+
+        var vikClient = _factory.CreateClient();
+        vikClient.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", MintLeaderToken(Vik, "AFD02"));
+
+        // ── period-1: SUBMITTED → APPROVE → REOPEN (proves approve + reopen-Leader-arm) ──
+        var p1 = await InsertPeriodAsync(Emp, "AFD01", "SUBMITTED");
+
+        var approveRsp = await vikClient.PostAsync($"/api/approval/{p1}/approve", null);
+        Assert.Equal(HttpStatusCode.OK, approveRsp.StatusCode);
+        Assert.Equal("APPROVED", await ReadStatusAsync(p1));
+
+        // reopen (Leader arm): the vikar edge grants it (org-scope denies AFD01) → APPROVED → DRAFT.
+        var reopenRsp = await vikClient.PostAsJsonAsync(
+            $"/api/approval/{p1}/reopen", new { reason = "vikar-reopen" });
+        Assert.Equal(HttpStatusCode.OK, reopenRsp.StatusCode);
+        Assert.Equal("DRAFT", await ReadStatusAsync(p1));
+
+        // ── period-2 (distinct range): SUBMITTED → REJECT (proves reject) ──
+        var p2 = await InsertPeriodWithRangeAsync(
+            Emp, "AFD01", "SUBMITTED", new DateOnly(2026, 4, 1), new DateOnly(2026, 4, 30));
+
+        var rejectRsp = await vikClient.PostAsJsonAsync(
+            $"/api/approval/{p2}/reject", new { reason = "vikar-reject" });
+        Assert.Equal(HttpStatusCode.OK, rejectRsp.StatusCode);
+        Assert.Equal("REJECTED", await ReadStatusAsync(p2));
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
