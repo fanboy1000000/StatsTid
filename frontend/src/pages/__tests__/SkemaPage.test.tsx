@@ -298,6 +298,20 @@ function renderPage(url = '/tid/registrering?year=2026&month=3') {
 async function renderLoaded(url?: string) {
   const result = renderPage(url)
   await screen.findByText('Drift & support')
+  // PASS-2 await (fixes the recurring R2/W1 timing flake). The project-row LABELS
+  // render in the first commit (straight from useSkema's `data`), but the diff
+  // total + every day-derived cell are computed from SkemaPage's editable
+  // `localCells`/`localWorkIntervals`/`localManualHours` — which start empty and
+  // are SEEDED from `data` via effects (SkemaPage.tsx:212/239/320/324/327), so they
+  // land in a SECOND commit. A synchronous read of a day-derived cell right after
+  // the label appears therefore races that second commit (intermittently '' under
+  // CI timing). Await the diff total becoming non-blank so every renderLoaded-based
+  // test reads the settled Pass-2 state. (The default fixture's diff is -1,6; an
+  // empty/blank diff renders '' in BOTH passes, so a blank-diff fixture must use
+  // renderPage directly rather than this helper.)
+  await waitFor(() =>
+    expect(lastCell(gridRow(result.container, 'Diff. fra normtid')).textContent).not.toBe(''),
+  )
   return result
 }
 
