@@ -105,6 +105,40 @@ public sealed class ManagerVikarRepository
     }
 
     /// <summary>
+    /// S76b / TASK-7603 (BLOCKER 3) — the active (open) vikar row owned by
+    /// <paramref name="absentApproverId"/> together with the stand-in's <c>display_name</c>, for the
+    /// single-manager active-vikar GET (<c>GET .../reporting-lines/{managerId}/vikar</c>). The
+    /// roster (<c>GET .../tree/{root}/medarbejdere</c>) serves the same shape but is tree-scoped; the
+    /// unified EditPersonDrawer, opened from the UserManagement LIST (no tree context), needs a
+    /// single-manager read so an away-manager's active vikar surfaces and can be revoked.
+    /// Returns <c>null</c> when no active row exists. <c>effective_to IS NULL</c> only (matches the
+    /// roster's <c>outgoingVikar</c> selection — coverage date is NOT re-checked here).
+    /// </summary>
+    public async Task<(ManagerVikar Vikar, string VikarDisplayName)?> GetActiveByApproverWithVikarNameAsync(
+        string absentApproverId, CancellationToken ct = default)
+    {
+        await using var conn = _connectionFactory.Create();
+        await conn.OpenAsync(ct);
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT mv.*, vu.display_name AS vikar_display_name
+            FROM manager_vikar mv
+            LEFT JOIN users vu ON vu.user_id = mv.vikar_user_id
+            WHERE mv.absent_approver_id = @absentApproverId
+              AND mv.effective_to IS NULL
+            """, conn);
+        cmd.Parameters.AddWithValue("absentApproverId", absentApproverId);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+            return null;
+        var vikar = MapReader(reader);
+        var nameOrd = reader.GetOrdinal("vikar_display_name");
+        // Defensive: a (theoretical) dangling vikar_user_id falls back to the id (mirrors the roster).
+        var name = reader.IsDBNull(nameOrd) ? vikar.VikarUserId : reader.GetString(nameOrd);
+        return (vikar, name);
+    }
+
+    /// <summary>
     /// S76 / TASK-7601 fix-forward (Step-5a c1 B3) — IN-TX, <c>FOR UPDATE</c> read of the active
     /// vikar row owned by <paramref name="absentApproverId"/> (<c>effective_to IS NULL</c>). Used
     /// by the admin-revoke DELETE so the row that is AUTHORIZED against (its persisted

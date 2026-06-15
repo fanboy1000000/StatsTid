@@ -174,7 +174,7 @@ export function useOrgUsers(orgId: string) {
    * a follow-up edit can compose `If-Match` against version 1 without an
    * intermediate GET.
    */
-  const createUser = async (body: { userId?: string; username: string; displayName: string; email?: string; primaryOrgId: string; agreementCode: string; password: string }): Promise<WithEtag<User>> => {
+  const createUser = async (body: { userId?: string; username: string; displayName: string; email?: string; primaryOrgId: string; agreementCode: string; okVersion?: string; password: string; approverId?: string }): Promise<WithEtag<User>> => {
     const result = await apiFetchWithEtag<User>('/api/admin/users', {
       method: 'POST',
       body: JSON.stringify(body),

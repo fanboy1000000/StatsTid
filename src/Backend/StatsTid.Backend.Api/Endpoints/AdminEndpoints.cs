@@ -2060,7 +2060,11 @@ public static class AdminEndpoints
         orgType = org.OrgType,
         parentOrgId = org.ParentOrgId,
         materializedPath = org.MaterializedPath,
-        agreementCode = org.AgreementCode
+        agreementCode = org.AgreementCode,
+        // S76b: serve the org's denormalized okVersion so the unified-editor create
+        // flow can supply the backend-required CreateUserRequest.OkVersion (additive
+        // read field; consumers ignore unknown fields). Declared read-gap fill.
+        okVersion = org.OkVersion
     };
 
     // ── Request DTOs (co-located) ──

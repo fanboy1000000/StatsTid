@@ -260,15 +260,22 @@ public sealed class SkemaRowPreferencesPutTests : IAsyncLifetime
         var emp = await SeedEmployeeAsync(orgId);
         var projA = await InsertProjectAsync(orgId, "S72A", 10);
 
-        var outboxBefore = await CountAsync("SELECT COUNT(*) FROM outbox_events");
-        var auditBefore = await CountAsync("SELECT COUNT(*) FROM audit_projection");
-        var eventsBefore = await CountAsync("SELECT COUNT(*) FROM events");
-
         await PutOkAsync(emp, orgId, Projects((projA, 0)), AbsenceTypes(("VACATION", 0)));
 
-        Assert.Equal(outboxBefore, await CountAsync("SELECT COUNT(*) FROM outbox_events"));
-        Assert.Equal(auditBefore, await CountAsync("SELECT COUNT(*) FROM audit_projection"));
-        Assert.Equal(eventsBefore, await CountAsync("SELECT COUNT(*) FROM events"));
+        // The R4 un-evented pin, SCOPED to THIS test's freshly-seeded employee — NOT a global
+        // before/after count. A global count races a concurrent sibling's insert into the SHARED
+        // CI postgres between the `before` and `after` reads, which is the recurring
+        // SkemaRowPreferencesPut cross-test outbox/audit-contamination flake (S72/S73/S74/S76).
+        // The preference PUT is performed BY `emp` (SELF-ONLY), so any wrongly-emitted
+        // event/outbox/audit row would carry actor_id = emp (and an event/outbox stream_id
+        // referencing emp). A freshly-seeded `emp` starts with NONE, so assert ZERO rows
+        // referencing emp AFTER the write — a sibling's rows (a DIFFERENT employee) cannot
+        // interfere, making the pin order-independent under the shared DB.
+        Assert.Equal(0, await CountAsync(
+            "SELECT COUNT(*) FROM events WHERE actor_id = @p0 OR stream_id LIKE '%' || @p0 || '%'", emp));
+        Assert.Equal(0, await CountAsync(
+            "SELECT COUNT(*) FROM outbox_events WHERE actor_id = @p0 OR stream_id LIKE '%' || @p0 || '%'", emp));
+        Assert.Equal(0, await CountAsync("SELECT COUNT(*) FROM audit_projection WHERE actor_id = @p0", emp));
     }
 
     // ───────────────── authorization (SELF-ONLY — Step-5a B3) ─────────────────

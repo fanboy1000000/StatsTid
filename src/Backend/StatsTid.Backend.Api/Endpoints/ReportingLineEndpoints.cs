@@ -2140,6 +2140,56 @@ public static class ReportingLineEndpoints
         }).RequireAuthorization("LeaderOrAbove");
 
         // ═══════════════════════════════════════════
+        // Endpoint 13b: GET /api/admin/reporting-lines/{managerId}/vikar — the SINGLE-manager active
+        // vikar read (S76b / TASK-7603, BLOCKER 3). The unified EditPersonDrawer is opened from the
+        // UserManagement LIST (no tree context), so LifecycleSections cannot get `activeVikar` from a
+        // tree roster row — without this read an away-manager would show NO vikar and could not revoke
+        // it. Serves the manager's OWN active manager_vikar row (effective_to IS NULL) + the stand-in's
+        // display name, mirroring the roster's `outgoingVikar` shape; null/200 when none. Read-only /
+        // additive. Scope: LocalAdminOrAbove + the admin org-scope covers the manager's primary org
+        // (the same floor as the admin-on-behalf POST/DELETE on this path).
+        // ═══════════════════════════════════════════
+
+        app.MapGet("/api/admin/reporting-lines/{managerId}/vikar", async (
+            string managerId,
+            ManagerVikarRepository vikarRepo,
+            UserRepository userRepo,
+            OrgScopeValidator scopeValidator,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            var actor = context.GetActorContext();
+            if (string.IsNullOrEmpty(actor.ActorId))
+                return Results.Json(new { error = "Actor identity required" }, statusCode: 401);
+
+            // Authorize against the manager's CURRENT primary org at the LocalAdmin floor (a non-admin
+            // scope covering the styrelse cannot read this admin surface — mirrors the POST/DELETE gate).
+            var managerUser = await userRepo.GetByIdAsync(managerId, ct);
+            if (managerUser is null)
+                return Results.NotFound(new { error = $"Manager '{managerId}' not found" });
+            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(
+                actor, managerUser.PrimaryOrgId, StatsTidRoles.LocalAdmin, ct);
+            if (!allowed)
+                return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+
+            var active = await vikarRepo.GetActiveByApproverWithVikarNameAsync(managerId, ct);
+            if (active is null)
+                return Results.Ok(new { activeVikar = (object?)null });
+
+            var (vikar, vikarDisplayName) = active.Value;
+            return Results.Ok(new
+            {
+                activeVikar = new
+                {
+                    vikarUserId = vikar.VikarUserId,
+                    vikarDisplayName,
+                    untilDate = vikar.UntilDate,
+                    reason = vikar.Reason,
+                },
+            });
+        }).RequireAuthorization("LocalAdminOrAbove");
+
+        // ═══════════════════════════════════════════
         // Endpoint 14: POST /api/admin/reporting-lines/{managerId}/vikar — admin-on-behalf vikar
         // (S76 / TASK-7601, Deliverable A). An admin plants a stand-in (vikar) for an absent
         // manager. This is an ADR-027 D13/D14 AUTHORIZATION surface: the resulting manager_vikar row

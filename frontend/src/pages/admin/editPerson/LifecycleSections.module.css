@@ -1,0 +1,279 @@
+/* S76b / TASK-7603 — shared styles for the ledelseslinje / vikariering / fjern
+   sections inside the unified EditPersonDrawer. Square corners + IBM Plex. */
+
+.section {
+  margin-bottom: 24px;
+}
+
+.sectionLabel {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-secondary);
+  margin: 0 0 12px 0;
+}
+
+.required {
+  color: var(--color-danger);
+}
+
+.muted {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+/* ── Approver row (key/value) ── */
+.recRow {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.recKey {
+  flex: 0 0 110px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.recValue {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.assigned {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.assignedName {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.assignEmpty {
+  font-family: 'IBM Plex Sans', sans-serif;
+  padding: 6px 12px;
+  background: transparent;
+  color: var(--color-danger);
+  border: 1px dashed var(--color-danger);
+  border-radius: 0px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.assignEmpty:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ── Links ── */
+.link {
+  font-family: 'IBM Plex Sans', sans-serif;
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: var(--color-primary);
+  cursor: pointer;
+  font-size: 13px;
+  text-decoration: underline;
+}
+
+.linkDanger {
+  font-family: 'IBM Plex Sans', sans-serif;
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: var(--color-danger);
+  cursor: pointer;
+  font-size: 13px;
+  text-decoration: underline;
+}
+
+.link:disabled,
+.linkDanger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ── Vikar active display ── */
+.vikarActive {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-muted);
+  border-radius: 0px;
+}
+
+.vikarLine {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.vikarLabel {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-info, var(--color-primary));
+}
+
+/* ── Vikar form / generic form fields ── */
+.vikarForm {
+  border: 1px solid var(--color-border);
+  padding: 12px;
+  border-radius: 0px;
+}
+
+.formField {
+  margin-bottom: 12px;
+}
+
+.formLabel {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 4px;
+  color: var(--color-text);
+}
+
+.input,
+.select {
+  font-family: 'IBM Plex Sans', sans-serif;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 0px;
+  font-size: 14px;
+  box-sizing: border-box;
+  background: var(--color-white);
+}
+
+.input:focus,
+.select:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 1px var(--color-primary);
+}
+
+.pickerTrigger {
+  font-family: 'IBM Plex Sans', sans-serif;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 0px;
+  font-size: 14px;
+  background: var(--color-white);
+  cursor: pointer;
+}
+
+.pickerTrigger:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.formActions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.primaryBtn,
+.secondaryBtn,
+.ghostBtn,
+.dangerBtn {
+  font-family: 'IBM Plex Sans', sans-serif;
+  padding: 8px 14px;
+  border-radius: 0px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid var(--color-border);
+}
+
+.primaryBtn {
+  background: var(--color-primary);
+  color: var(--color-white);
+  border-color: var(--color-primary);
+}
+
+.secondaryBtn {
+  background: var(--color-white);
+  color: var(--color-text);
+}
+
+.ghostBtn {
+  background: transparent;
+  color: var(--color-text);
+  border-color: transparent;
+}
+
+.dangerBtn {
+  background: var(--color-danger);
+  color: var(--color-white);
+  border-color: var(--color-danger);
+}
+
+.primaryBtn:disabled,
+.secondaryBtn:disabled,
+.dangerBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ── Danger zone ── */
+.dangerZone {
+  border-top: 1px solid var(--color-border);
+  padding-top: 16px;
+}
+
+.dangerDialog {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--color-danger);
+  background: var(--color-danger-bg);
+  border-radius: 0px;
+}
+
+.dangerText {
+  font-size: 13px;
+  color: var(--color-text);
+  margin: 0 0 12px 0;
+  line-height: 1.4;
+}
+
+.gapList {
+  list-style: none;
+  margin: 0 0 12px 0;
+  padding: 0;
+}
+
+.gapRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.gapRow:last-child {
+  border-bottom: none;
+}
+
+.gapReport {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+}

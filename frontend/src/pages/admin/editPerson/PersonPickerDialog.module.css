@@ -1,0 +1,105 @@
+/* S76b / TASK-7603 — the searchable person-picker modal (server-search). Square
+   corners + IBM Plex per the design system; lives inside the kit Dialog panel. */
+
+.pickerContent {
+  width: 520px;
+  max-width: 92vw;
+}
+
+.search {
+  margin-bottom: 12px;
+}
+
+.searchInput {
+  font-family: 'IBM Plex Sans', sans-serif;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 0px;
+  font-size: 14px;
+  box-sizing: border-box;
+}
+
+.searchInput:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 1px var(--color-primary);
+}
+
+.list {
+  max-height: 340px;
+  overflow-y: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 0px;
+}
+
+.row {
+  font-family: 'IBM Plex Sans', sans-serif;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 12px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--color-border);
+  cursor: pointer;
+  text-align: left;
+}
+
+.row:last-child {
+  border-bottom: none;
+}
+
+.row:hover {
+  background: var(--color-bg-hover);
+}
+
+.rowText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.rowText strong {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.rowSub {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.current {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-primary);
+  flex: 0 0 auto;
+}
+
+.empty {
+  padding: 16px 12px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.error {
+  padding: 8px 12px;
+  border: 1px solid var(--color-danger);
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+  border-radius: 0px;
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+
+.foot {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}

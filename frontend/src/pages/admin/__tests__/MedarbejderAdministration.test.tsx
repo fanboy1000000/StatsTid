@@ -7,6 +7,7 @@
 // the vikar badge (display-only, no Afslut button).
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { ToastProvider } from '../../../components/ui/Toast'
 import type {
   MedarbejderRosterResponse,
   MedarbejderRosterRow,
@@ -15,20 +16,101 @@ import { MedarbejderAdministration } from '../MedarbejderAdministration'
 
 // --- Hook mocks ---
 
+// Role-gating mock for the EditPersonDrawer (rendered from the tree). LocalAdmin
+// is HR-capable (LocalAdmin ≥ LocalHR floor) so the HR sections show in edit.
+let mockRole = 'LocalAdmin'
+vi.mock('../../../contexts/AuthContext', () => ({
+  useAuth: () => ({
+    token: 'test-token',
+    user: { employeeId: 'ADMIN1', role: mockRole },
+    role: mockRole,
+    orgId: 'MIN1',
+    agreementCode: 'AC',
+    scopes: [],
+    isAuthenticated: true,
+    login: vi.fn(),
+    logout: vi.fn(),
+  }),
+}))
+
 const mockOrgs = [
   { orgId: 'MIN1', orgName: 'Finansministeriet', orgType: 'MINISTRY', parentOrgId: null, agreementCode: 'AC' },
   { orgId: 'STY1', orgName: 'Moderniseringsstyrelsen', orgType: 'STYRELSE', parentOrgId: 'MIN1', agreementCode: 'AC' },
   { orgId: 'DEP1', orgName: 'Afdeling X', orgType: 'DEPARTMENT', parentOrgId: 'STY1', agreementCode: 'AC' },
 ]
 
+// `fetchUser` (drawer edit-mode hydrate) + `createUser`/`updateUser` are exposed
+// by useOrgUsers; the drawer + the page consume them. Defaults below.
+const fetchUser = vi.fn()
+const createUser = vi.fn()
+const updateUser = vi.fn()
+const fetchUsers = vi.fn()
 vi.mock('../../../hooks/useAdmin', () => ({
   useOrganizations: () => ({ organizations: mockOrgs, loading: false, error: null }),
+  useOrgUsers: () => ({
+    users: [],
+    loading: false,
+    error: null,
+    fetchUsers,
+    fetchUser,
+    createUser,
+    updateUser,
+  }),
 }))
 
 const fetchRoster = vi.fn()
 vi.mock('../../../hooks/useMedarbejderRoster', () => ({
   useMedarbejderRoster: () => ({ fetchRoster }),
 }))
+
+// useReportingLines — the enforcement toggle (fetch/update settings) + the
+// lifecycle sections (resolve approver / reports) consume it.
+const fetchTreeSettings = vi.fn()
+const updateTreeSettings = vi.fn()
+const fetchEmployeeLines = vi.fn()
+const fetchDirectReports = vi.fn()
+vi.mock('../../../hooks/useReportingLines', () => ({
+  useReportingLines: () => ({
+    fetchTreeSettings,
+    updateTreeSettings,
+    fetchEmployeeLines,
+    fetchDirectReports,
+    searchPeople: vi.fn().mockResolvedValue({ ok: true, status: 200, data: { items: [], total: 0, limit: 60, offset: 0 } }),
+    createVikar: vi.fn(),
+    endVikar: vi.fn(),
+    deletePersonWithReassignment: vi.fn(),
+  }),
+}))
+
+// The drawer's HR-field reads go through useEntitlementEligibility — stub them so
+// the edit hydrate resolves without real fetches.
+vi.mock('../../../hooks/useEntitlementEligibility', () => ({
+  useEntitlementEligibility: () => ({
+    fetchBirthDate: vi.fn().mockResolvedValue(null),
+    fetchEmploymentStartDate: vi.fn().mockResolvedValue(null),
+    fetchChildSickEligibility: vi.fn().mockResolvedValue(null),
+    setChildSick: vi.fn(),
+    setBirthDate: vi.fn(),
+    setEmploymentStartDate: vi.fn(),
+  }),
+}))
+
+// The drawer's profile read (employeeProfileApi.fetchEmployeeProfile) goes
+// through fetch — stub global fetch to a benign 404 so it resolves to null.
+const mockFetch = vi.fn().mockResolvedValue({
+  ok: false,
+  status: 404,
+  headers: new Headers(),
+  json: async () => ({}),
+  text: async () => 'Not Found',
+})
+vi.stubGlobal('fetch', mockFetch)
+const mockStorage: Record<string, string> = { statstid_token: 'test-token' }
+vi.stubGlobal('localStorage', {
+  getItem: (key: string) => mockStorage[key] ?? null,
+  setItem: (key: string, val: string) => { mockStorage[key] = val },
+  removeItem: (key: string) => { delete mockStorage[key] },
+})
 
 // --- Fixture roster ---
 // Tree:  Birgit (root, mgr) -> Anders (OPEN), Christian (away-mgr, vikar)
@@ -73,12 +155,35 @@ const rosterResponse: MedarbejderRosterResponse = {
 }
 
 function renderPage() {
-  return render(<MedarbejderAdministration />)
+  return render(
+    <ToastProvider>
+      <MedarbejderAdministration />
+    </ToastProvider>,
+  )
 }
 
 beforeEach(() => {
+  mockRole = 'LocalAdmin'
   fetchRoster.mockReset()
   fetchRoster.mockResolvedValue({ ok: true, status: 200, data: rosterResponse })
+  fetchUser.mockReset()
+  fetchUser.mockResolvedValue({
+    userId: 'A', username: 'aandersen', displayName: 'Anders Andersen',
+    email: 'a@example.dk', primaryOrgId: 'MIN1', agreementCode: 'AC',
+    version: 1, etag: '"1"',
+  })
+  createUser.mockReset()
+  createUser.mockResolvedValue({ userId: 'EMP010', version: 1, etag: '"1"' })
+  updateUser.mockReset()
+  fetchUsers.mockReset()
+  fetchTreeSettings.mockReset()
+  fetchTreeSettings.mockResolvedValue({ ok: true, status: 200, data: { enforcementMode: 'PREFERRED', version: 3 } })
+  updateTreeSettings.mockReset()
+  updateTreeSettings.mockResolvedValue({ ok: true, status: 200, data: { enforcementMode: 'REQUIRED', version: 4 } })
+  fetchEmployeeLines.mockReset()
+  fetchEmployeeLines.mockResolvedValue({ ok: true, status: 200, data: { active: [], history: [] } })
+  fetchDirectReports.mockReset()
+  fetchDirectReports.mockResolvedValue({ ok: true, status: 200, data: [] })
 })
 
 describe('MedarbejderAdministration', () => {
@@ -174,18 +279,20 @@ describe('MedarbejderAdministration', () => {
     })
   })
 
-  it('shows the away-manager vikar badge (display-only, no Afslut button)', async () => {
+  it('shows the away-manager vikar badge (the inline row stays display-only; writes live in the drawer)', async () => {
     renderPage()
     await waitFor(() => {
       expect(screen.getByText('Christian Christensen')).toBeDefined()
     })
     // The vikar line names the covering vikar with the da-DK formatted date.
     expect(screen.getByText(/Vita Vikar til 15\. jul 2026/)).toBeDefined()
-    // Display-only: no write affordances.
+    // The ROW itself carries no inline vikar/approver write affordances — those
+    // moved into the EditPersonDrawer (opened by clicking the name). "Tilføj
+    // medarbejder" is now a real header button (entry into the create drawer).
     expect(screen.queryByText('Afslut')).toBeNull()
     expect(screen.queryByText('+ Vikar')).toBeNull()
-    expect(screen.queryByText('Tilføj medarbejder')).toBeNull()
     expect(screen.queryByText('+ Tildel godkender')).toBeNull()
+    expect(screen.getByTestId('medarbejder-add')).toBeDefined()
   })
 
   it('shows the empty state when the roster is empty', async () => {
@@ -199,6 +306,114 @@ describe('MedarbejderAdministration', () => {
       expect(
         screen.getByText('Ingen medarbejdere fundet for denne styrelse'),
       ).toBeDefined()
+    })
+  })
+})
+
+// S76b/7604 — page integration: the drawer wiring (create + edit), the
+// enforcement toggle, and roster-refetch-on-write.
+describe('MedarbejderAdministration — drawer integration (7604)', () => {
+  it('"Tilføj medarbejder" opens the EditPersonDrawer in CREATE mode', async () => {
+    renderPage()
+    await waitFor(() => {
+      expect(screen.getByTestId('medarbejder-add')).toBeDefined()
+    })
+    fireEvent.click(screen.getByTestId('medarbejder-add'))
+    await waitFor(() => {
+      // Create mode: the drawer title is "Opret medarbejder" + the create
+      // credentials block is present.
+      expect(screen.getByTestId('ep-title').textContent).toBe('Opret medarbejder')
+    })
+    expect(screen.getByTestId('ep-create-user-id')).toBeDefined()
+  })
+
+  it('clicking a tree person opens the drawer in EDIT mode (fetches the full User)', async () => {
+    renderPage()
+    await waitFor(() => {
+      expect(screen.getByTestId('person-edit-A')).toBeDefined()
+    })
+    fireEvent.click(screen.getByTestId('person-edit-A'))
+    // The full User is fetched for the clicked person.
+    await waitFor(() => {
+      expect(fetchUser).toHaveBeenCalledWith('A')
+    })
+    // Edit mode: the drawer title names the person (no create credentials block).
+    await waitFor(() => {
+      expect(screen.getByTestId('ep-title').textContent).toMatch(/Redigér Anders Andersen/)
+    })
+    expect(screen.queryByTestId('ep-create-user-id')).toBeNull()
+  })
+
+  it('toggling enforcement PREFERRED→REQUIRED calls updateTreeSettings with If-Match', async () => {
+    renderPage()
+    await waitFor(() => {
+      expect(screen.getByTestId('enforcement-toggle')).toBeDefined()
+    })
+    // The current mode renders (PREFERRED → "Aktivér håndhævelse").
+    expect(screen.getByTestId('enforcement-toggle').textContent).toMatch(/Aktivér/)
+    fireEvent.click(screen.getByTestId('enforcement-toggle'))
+    await waitFor(() => {
+      expect(updateTreeSettings).toHaveBeenCalledWith(
+        'MIN1',
+        { enforcementMode: 'REQUIRED' },
+        '"3"',
+      )
+    })
+    // The server's new mode is reflected after the success.
+    await waitFor(() => {
+      expect(screen.getByTestId('enforcement-toggle').textContent).toMatch(/Deaktivér/)
+    })
+  })
+
+  it('surfaces the population-gate 409 with the unassigned employee IDs (honest message)', async () => {
+    updateTreeSettings.mockResolvedValue({
+      ok: false,
+      status: 409,
+      error: 'population gate',
+      body: { unassignedEmployeeIds: ['EMP7', 'EMP8'] },
+    })
+    renderPage()
+    await waitFor(() => {
+      expect(screen.getByTestId('enforcement-toggle')).toBeDefined()
+    })
+    fireEvent.click(screen.getByTestId('enforcement-toggle'))
+    await waitFor(() => {
+      const err = screen.getByTestId('enforcement-error')
+      expect(err.textContent).toMatch(/mangler en udpeget godkender/)
+      expect(err.textContent).toContain('EMP7')
+      expect(err.textContent).toContain('EMP8')
+    })
+    // The mode stays PREFERRED (the toggle did not flip).
+    expect(screen.getByTestId('enforcement-toggle').textContent).toMatch(/Aktivér/)
+  })
+
+  it('refetches the roster after a drawer save (onSaved → fetchRoster), preserving view state', async () => {
+    renderPage()
+    await waitFor(() => {
+      expect(screen.getByTestId('medarbejder-add')).toBeDefined()
+    })
+    // Initial load fired once.
+    const initialCalls = fetchRoster.mock.calls.length
+    expect(initialCalls).toBeGreaterThanOrEqual(1)
+
+    // Open create, fill the required fields, and submit → createUser resolves →
+    // onSaved → the roster refetches.
+    fireEvent.click(screen.getByTestId('medarbejder-add'))
+    await waitFor(() => {
+      expect(screen.getByTestId('ep-title').textContent).toBe('Opret medarbejder')
+    })
+    fireEvent.change(screen.getByTestId('ep-create-user-id'), { target: { value: 'EMP010' } })
+    fireEvent.change(screen.getByTestId('ep-create-username'), { target: { value: 'emp010' } })
+    fireEvent.change(screen.getByTestId('ep-create-password'), { target: { value: 'pw' } })
+    fireEvent.change(screen.getByTestId('ep-display-name'), { target: { value: 'Ny Bruger' } })
+    fireEvent.click(screen.getByText('Opret medarbejder', { selector: 'button[type="submit"]' }))
+
+    await waitFor(() => {
+      expect(createUser).toHaveBeenCalled()
+    })
+    // The roster refetched after the save (one more call than the initial load).
+    await waitFor(() => {
+      expect(fetchRoster.mock.calls.length).toBeGreaterThan(initialCalls)
     })
   })
 })

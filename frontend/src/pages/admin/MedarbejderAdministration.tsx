@@ -1,5 +1,6 @@
-import { useState, useEffect, useMemo } from 'react'
-import { useOrganizations } from '../../hooks/useAdmin'
+import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useOrganizations, useOrgUsers, type User } from '../../hooks/useAdmin'
+import { useReportingLines } from '../../hooks/useReportingLines'
 import {
   useMedarbejderRoster,
   type MedarbejderRosterRow,
@@ -8,6 +9,7 @@ import {
   indexBy,
   childrenOf,
   orphansOf,
+  descendantsOf,
   depthMap,
   collapsedForLevel,
   defaultCollapsed,
@@ -15,6 +17,10 @@ import {
   visibleTreeRows,
 } from './medarbejderTree'
 import { Card, Badge, Input, Spinner } from '../../components/ui'
+import { useToast } from '../../components/ui/Toast'
+import { formatVersionAsIfMatch } from '../../lib/etag'
+import { EditPersonDrawer } from './EditPersonDrawer'
+import type { LifecycleContext } from './editPerson/LifecycleSections'
 import styles from './MedarbejderAdministration.module.css'
 
 // S75 TASK-7502. Medarbejder-administration page — Phase 2 of the program.
@@ -95,10 +101,13 @@ interface PersonRowProps {
   context: boolean
   statusFilter: StatusFilter
   pendingCountByManager: Record<string, number>
+  /** S76b/7604 — open the edit drawer for this person (row-click). */
+  onEdit: (person: MedarbejderRosterRow) => void
 }
 
-/** One rendered tree row — DISPLAY-ONLY. Name is plain text (no record drawer),
- *  approver line is read-only, vikar line has no Afslut/+Vikar buttons. */
+/** One rendered tree row. S76b/7604: the name is now a button that opens the
+ *  unified EditPersonDrawer in EDIT mode; the approver/vikar/delete writes live
+ *  inside that drawer (not inline on the row). */
 function PersonRow({
   people,
   byId,
@@ -110,6 +119,7 @@ function PersonRow({
   context,
   statusFilter,
   pendingCountByManager,
+  onEdit,
 }: PersonRowProps) {
   const reports = childrenOf(people, person.employeeId).length
   const manager = reports > 0
@@ -146,14 +156,30 @@ function PersonRow({
           <span className={styles.prowNameline}>
             {away ? (
               <span className={styles.onleave}>
-                <span className={styles.onleaveName}>{person.displayName}</span>
+                <button
+                  type="button"
+                  className={`${styles.onleaveName} ${styles.nameBtn}`}
+                  onClick={() => onEdit(person)}
+                  data-testid={`person-edit-${person.employeeId}`}
+                >
+                  {person.displayName}
+                </button>
                 <span className={styles.onleaveTag}>
                   {(person.outgoingVikar?.reason || 'fravær').toLowerCase()} · til{' '}
                   {fmtDate(person.outgoingVikar?.untilDate ?? '')}
                 </span>
               </span>
             ) : (
-              <span className={styles.prowName}>{person.displayName}</span>
+              <span className={styles.prowName}>
+                <button
+                  type="button"
+                  className={styles.nameBtn}
+                  onClick={() => onEdit(person)}
+                  data-testid={`person-edit-${person.employeeId}`}
+                >
+                  {person.displayName}
+                </button>
+              </span>
             )}
             {away && person.outgoingVikar && (
               <span className={styles.vikarline}>
@@ -208,6 +234,11 @@ function PersonRow({
 export function MedarbejderAdministration() {
   const { organizations, loading: orgsLoading } = useOrganizations()
   const { fetchRoster } = useMedarbejderRoster()
+  // `fetchUser` is org-independent — pass '' as the placeholder orgId (the hook
+  // only uses it for the auto-list fetch, which we don't consume here).
+  const { fetchUser } = useOrgUsers('')
+  const { fetchTreeSettings, updateTreeSettings } = useReportingLines()
+  const { toast } = useToast()
 
   const treeRootOrgs = useMemo(
     () =>
@@ -231,12 +262,52 @@ export function MedarbejderAdministration() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('alle')
   const [query, setQuery] = useState('')
 
+  // S76b/7604 — the unified EditPersonDrawer state.
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [drawerUser, setDrawerUser] = useState<User | null>(null)
+  const [drawerContext, setDrawerContext] = useState<LifecycleContext | undefined>(undefined)
+  const [drawerLoading, setDrawerLoading] = useState(false)
+
+  // S76b/7604 — enforcement-mode toggle (ported from ReportingLineTree).
+  const [enforcementMode, setEnforcementMode] = useState<string>('PREFERRED')
+  const [enforcementVersion, setEnforcementVersion] = useState<number>(0)
+  const [enforcementError, setEnforcementError] = useState<string | null>(null)
+  const [enforcementLoading, setEnforcementLoading] = useState(false)
+
   // Default to the first tree root org once loaded
   useEffect(() => {
     if (treeRootOrgs.length > 0 && !selectedTreeRoot) {
       setSelectedTreeRoot(treeRootOrgs[0].orgId)
     }
   }, [treeRootOrgs, selectedTreeRoot])
+
+  // The roster load — extracted so a write's onSaved can re-run it without a
+  // Styrelse switch. RESETs the view state (mirrors the original effect).
+  const loadRoster = useCallback(
+    async (treeRoot: string, resetView: boolean) => {
+      if (!treeRoot) return
+      setLoading(true)
+      setError(null)
+      if (resetView) {
+        setStatusFilter('alle')
+        setQuery('')
+        setLevelSel(null)
+      }
+      const result = await fetchRoster(treeRoot)
+      if (result.ok) {
+        setPeople(result.data.employees)
+        setPendingCountByManager(result.data.pendingCountByManager)
+        if (resetView) setCollapsed(defaultCollapsed(result.data.employees))
+      } else {
+        setPeople([])
+        setPendingCountByManager({})
+        if (resetView) setCollapsed(new Set())
+        setError(result.error)
+      }
+      setLoading(false)
+    },
+    [fetchRoster],
+  )
 
   // Load the roster whenever the selected Styrelse changes, and RESET view state.
   useEffect(() => {
@@ -265,6 +336,29 @@ export function MedarbejderAdministration() {
       cancelled = true
     }
   }, [selectedTreeRoot, fetchRoster])
+
+  // Load enforcement settings whenever the tree root changes (404 → PREFERRED).
+  const loadEnforcementSettings = useCallback(
+    async (treeRoot: string) => {
+      if (!treeRoot) return
+      setEnforcementError(null)
+      const result = await fetchTreeSettings(treeRoot)
+      if (result.ok) {
+        setEnforcementMode(result.data.enforcementMode)
+        setEnforcementVersion(result.data.version)
+      } else if (result.status === 404) {
+        setEnforcementMode('PREFERRED')
+        setEnforcementVersion(0)
+      } else {
+        setEnforcementError(result.error)
+      }
+    },
+    [fetchTreeSettings],
+  )
+
+  useEffect(() => {
+    void loadEnforcementSettings(selectedTreeRoot)
+  }, [selectedTreeRoot, loadEnforcementSettings])
 
   const byId = useMemo(() => indexBy(people), [people])
 
@@ -300,6 +394,124 @@ export function MedarbejderAdministration() {
     setLevelSel(L)
     setStatusFilter('alle')
     setCollapsed(collapsedForLevel(people, L))
+  }
+
+  // ---- S76b/7604 — drawer wiring ----
+
+  /** Build the tree-derived lifecycle context for the edit drawer so names +
+   *  the cycle-forbidden descendant set render without an extra lookup. */
+  const buildLifecycleContext = useCallback(
+    (person: MedarbejderRosterRow): LifecycleContext => {
+      const approver = person.structuralApproverId
+        ? byId[person.structuralApproverId]
+        : null
+      // self + descendants — the PersonPicker forbidden set (cycle prevention).
+      const descendantIds = descendantsOf(people, person.employeeId)
+      descendantIds.add(person.employeeId)
+      return {
+        isRoot: person.isRoot,
+        currentApproverId: person.structuralApproverId,
+        currentApproverName: approver ? approver.displayName : null,
+        approvesOthers: childrenOf(people, person.employeeId).length > 0,
+        activeVikar: person.outgoingVikar
+          ? {
+              vikarUserId: person.outgoingVikar.vikarUserId,
+              vikarDisplayName: person.outgoingVikar.vikarDisplayName,
+              untilDate: person.outgoingVikar.untilDate,
+              reason: person.outgoingVikar.reason,
+            }
+          : null,
+        descendantIds,
+      }
+    },
+    [people, byId],
+  )
+
+  const handleOpenCreate = () => {
+    setDrawerUser(null)
+    setDrawerContext(undefined)
+    setDrawerOpen(true)
+  }
+
+  /** Row-click → open the drawer in EDIT mode. The roster row is not a full
+   *  `User` (no version/username/email) — fetch it (mirrors UserManagement's
+   *  `fetchUser`) so the drawer's stamdata PUT has its If-Match token, while the
+   *  tree-derived `lifecycleContext` lets the approver/vikar names render
+   *  immediately. */
+  const handleOpenEdit = useCallback(
+    async (person: MedarbejderRosterRow) => {
+      setDrawerContext(buildLifecycleContext(person))
+      setDrawerLoading(true)
+      setDrawerOpen(true)
+      setDrawerUser(null)
+      try {
+        const fresh = await fetchUser(person.employeeId)
+        setDrawerUser(fresh)
+      } catch (err) {
+        toast({
+          title: 'Fejl',
+          description: err instanceof Error ? err.message : String(err),
+          variant: 'error',
+        })
+        setDrawerOpen(false)
+      } finally {
+        setDrawerLoading(false)
+      }
+    },
+    [buildLifecycleContext, fetchUser, toast],
+  )
+
+  const handleDrawerClose = () => {
+    setDrawerOpen(false)
+    setDrawerUser(null)
+    setDrawerContext(undefined)
+  }
+
+  /** A drawer mutation (create / edit / approver / vikar / delete) succeeded —
+   *  refetch the roster so the tree + tiles reflect the write. View state is
+   *  preserved (no reset) so the admin keeps their place. */
+  const handleDrawerSaved = useCallback(() => {
+    void loadRoster(selectedTreeRoot, false)
+  }, [loadRoster, selectedTreeRoot])
+
+  const handleToggleEnforcement = async () => {
+    if (!selectedTreeRoot) return
+    setEnforcementLoading(true)
+    setEnforcementError(null)
+    const newMode = enforcementMode === 'REQUIRED' ? 'PREFERRED' : 'REQUIRED'
+    const ifMatch = formatVersionAsIfMatch(enforcementVersion)
+    const result = await updateTreeSettings(
+      selectedTreeRoot,
+      { enforcementMode: newMode },
+      ifMatch,
+    )
+    if (result.ok) {
+      setEnforcementMode(result.data.enforcementMode)
+      setEnforcementVersion(result.data.version)
+      toast({
+        title: 'Opdateret',
+        description: `Håndhævelse sat til ${newMode === 'REQUIRED' ? 'Påkrævet' : 'Foretrukket'}`,
+        variant: 'success',
+      })
+    } else if (result.status === 409) {
+      // Population gate — surface the unassigned employee IDs honestly.
+      const body = result.body as { unassignedEmployeeIds?: string[] } | undefined
+      const ids = body?.unassignedEmployeeIds ?? []
+      setEnforcementError(
+        `Kan ikke aktivere håndhævelse: følgende medarbejdere mangler en udpeget godkender: ${ids.join(', ') || '(se serverloggen)'}`,
+      )
+    } else if (result.status === 412) {
+      toast({
+        title: 'Fejl',
+        description:
+          'Indstillingerne er ændret af en anden bruger. Genindlæser...',
+        variant: 'error',
+      })
+      await loadEnforcementSettings(selectedTreeRoot)
+    } else {
+      setEnforcementError(result.error)
+    }
+    setEnforcementLoading(false)
   }
 
   // ---- Level segmented control options ----
@@ -389,30 +601,71 @@ export function MedarbejderAdministration() {
     <div className={styles.page}>
       <div className={styles.pagehead}>
         <h1 className={styles.title}>Medarbejder administration</h1>
-        <div className={styles.instpick}>
-          <label className={styles.rolesK} htmlFor="medarbejderInst">
-            Styrelse
-          </label>
-          {orgsLoading ? (
-            <div className={styles.spinner}>
-              <Spinner size="md" />
-            </div>
-          ) : (
-            <select
-              id="medarbejderInst"
-              className={styles.select}
-              value={selectedTreeRoot}
-              onChange={(e) => setSelectedTreeRoot(e.target.value)}
-            >
-              {treeRootOrgs.map((org) => (
-                <option key={org.orgId} value={org.orgId}>
-                  {org.orgName}
-                </option>
-              ))}
-            </select>
-          )}
+        <div className={styles.headActions}>
+          <div className={styles.instpick}>
+            <label className={styles.rolesK} htmlFor="medarbejderInst">
+              Styrelse
+            </label>
+            {orgsLoading ? (
+              <div className={styles.spinner}>
+                <Spinner size="md" />
+              </div>
+            ) : (
+              <select
+                id="medarbejderInst"
+                className={styles.select}
+                value={selectedTreeRoot}
+                onChange={(e) => setSelectedTreeRoot(e.target.value)}
+              >
+                {treeRootOrgs.map((org) => (
+                  <option key={org.orgId} value={org.orgId}>
+                    {org.orgName}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+          <button
+            type="button"
+            className={styles.addBtn}
+            onClick={handleOpenCreate}
+            data-testid="medarbejder-add"
+          >
+            Tilføj medarbejder
+          </button>
         </div>
       </div>
+
+      {/* S76b/7604 — enforcement-mode toggle (PREFERRED ↔ REQUIRED). Ported from
+          ReportingLineTree; the population-gate 409 surfaces the unassigned IDs. */}
+      {selectedTreeRoot && (
+        <div className={styles.enforceRow}>
+          <span>
+            Håndhævelse af godkendelseslinjer:{' '}
+            <strong>
+              {enforcementMode === 'REQUIRED' ? 'Påkrævet' : 'Foretrukket'}
+            </strong>
+          </span>
+          <button
+            type="button"
+            className={`${styles.enforceBtn} ${enforcementMode === 'REQUIRED' ? styles.enforceBtnOn : ''}`}
+            onClick={handleToggleEnforcement}
+            disabled={enforcementLoading}
+            data-testid="enforcement-toggle"
+          >
+            {enforcementLoading
+              ? 'Opdaterer...'
+              : enforcementMode === 'REQUIRED'
+                ? 'Deaktivér håndhævelse'
+                : 'Aktivér håndhævelse'}
+          </button>
+          {enforcementError && (
+            <div className={styles.enforceErr} role="alert" data-testid="enforcement-error">
+              {enforcementError}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Filter tiles */}
       <div className={styles.stats}>
@@ -488,7 +741,14 @@ export function MedarbejderAdministration() {
                       <Avatar name={person.displayName} />
                       <div className={styles.prowId}>
                         <span className={styles.prowName}>
-                          {person.displayName}
+                          <button
+                            type="button"
+                            className={styles.nameBtn}
+                            onClick={() => handleOpenEdit(person)}
+                            data-testid={`person-edit-${person.employeeId}`}
+                          >
+                            {person.displayName}
+                          </button>
                         </span>
                         <span className={styles.prowTitle}>
                           {person.position}
@@ -602,6 +862,7 @@ export function MedarbejderAdministration() {
                       context={isContext}
                       statusFilter={statusFilter}
                       pendingCountByManager={pendingCountByManager}
+                      onEdit={handleOpenEdit}
                     />
                   )
                 })}
@@ -620,6 +881,27 @@ export function MedarbejderAdministration() {
             </Card>
           </div>
         </div>
+      )}
+
+      {/* S76b/7604 — the unified EditPersonDrawer (create + edit). In edit mode
+          we open the drawer immediately and fetch the full User; the drawer is
+          only mounted with a user (or in create mode) once that resolves, so its
+          create-vs-edit mode keys correctly off `user` presence. */}
+      {drawerOpen && drawerLoading && (
+        <div className={styles.spinner} data-testid="drawer-loading">
+          <Spinner size="lg" />
+        </div>
+      )}
+      {drawerOpen && !drawerLoading && (
+        <EditPersonDrawer
+          open={drawerOpen}
+          user={drawerUser}
+          organizations={organizations}
+          defaultOrgId={selectedTreeRoot}
+          lifecycleContext={drawerContext}
+          onClose={handleDrawerClose}
+          onSaved={handleDrawerSaved}
+        />
       )}
     </div>
   )

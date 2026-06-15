@@ -483,6 +483,59 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
+    //  S76b / TASK-7603 (BLOCKER 3) — the SINGLE-manager active-vikar GET. The unified
+    //  EditPersonDrawer (opened from the UserManagement LIST, no tree context) needs this
+    //  to surface + revoke an away-manager's vikar.
+    // ════════════════════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public async Task AdminGetVikar_ActiveRow_ReturnsVikarWithDisplayName()
+    {
+        await PlantVikarAsync(Mgr, Vik, Today().AddDays(30), TreeRootSty02);
+        var client = AdminClient(Admin, "MIN01");
+
+        var rsp = await client.GetAsync($"/api/admin/reporting-lines/{Mgr}/vikar");
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+
+        var body = await rsp.Content.ReadFromJsonAsync<ActiveVikarEnvelope>();
+        Assert.NotNull(body);
+        Assert.NotNull(body!.activeVikar);
+        Assert.Equal(Vik, body.activeVikar!.vikarUserId);
+        // The display name is JOINed from the users row (the roster's outgoingVikar shape).
+        Assert.Equal("T76 Vik", body.activeVikar.vikarDisplayName);
+        Assert.Equal("ANDET", body.activeVikar.reason);
+    }
+
+    [Fact]
+    public async Task AdminGetVikar_NoActiveRow_ReturnsNull()
+    {
+        var client = AdminClient(Admin, "MIN01");
+        var rsp = await client.GetAsync($"/api/admin/reporting-lines/{Mgr}/vikar");
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+        var body = await rsp.Content.ReadFromJsonAsync<ActiveVikarEnvelope>();
+        Assert.NotNull(body);
+        Assert.Null(body!.activeVikar);
+    }
+
+    [Fact]
+    public async Task AdminGetVikar_ActorWithoutAdminScope_Returns403()
+    {
+        await PlantVikarAsync(Mgr, Vik, Today().AddDays(30), TreeRootSty02);
+        // AdminX covers STY05 only — not the manager's STY02 primary org (AFD02) → 403.
+        var client = AdminClient(AdminX, "STY05");
+        var rsp = await client.GetAsync($"/api/admin/reporting-lines/{Mgr}/vikar");
+        Assert.Equal(HttpStatusCode.Forbidden, rsp.StatusCode);
+    }
+
+    [Fact]
+    public async Task AdminGetVikar_ManagerNotFound_Returns404()
+    {
+        var client = AdminClient(Admin, "MIN01");
+        var rsp = await client.GetAsync("/api/admin/reporting-lines/t76_nonexistent/vikar");
+        Assert.Equal(HttpStatusCode.NotFound, rsp.StatusCode);
+    }
+
+    // ════════════════════════════════════════════════════════════════════════════════
     //  Deliverable B — /delegate D15 hardening + byte-stability
     // ════════════════════════════════════════════════════════════════════════════════
 
@@ -624,6 +677,11 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
 
     private sealed record AdminVikarResponse(
         string vikarId, string managerId, string vikarUserId, string effectiveFrom, string effectiveTo, string reason);
+
+    // S76b / TASK-7603 (BLOCKER 3) — the single-manager active-vikar GET envelope.
+    private sealed record ActiveVikarEnvelope(ActiveVikarDto? activeVikar);
+    private sealed record ActiveVikarDto(
+        string vikarUserId, string vikarDisplayName, string untilDate, string reason);
 
     private sealed record ErrorBody(string error, string[]? uncoveredEmployeeIds, int? uncoveredCount);
 
