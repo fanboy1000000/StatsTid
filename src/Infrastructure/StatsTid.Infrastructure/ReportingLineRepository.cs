@@ -496,16 +496,18 @@ public sealed class ReportingLineRepository
     /// </para>
     ///
     /// <para>
-    /// <b>Total lock order (consistent on EVERY path — see <c>ReportingLineEndpoints</c>):</b>
-    /// (1) the two user rows here, <c>FOR UPDATE</c> in <c>user_id</c> order; (2) the per-tree
-    /// advisory lock (<see cref="AcquireTreeLockAsync"/>) on the tree root this method RETURNS;
-    /// (3) <see cref="GuardNoCycleAsync"/>; (4) <see cref="AcquireLockAsync"/>'s slot
-    /// <c>FOR UPDATE</c> on a <c>reporting_lines</c> row (a different table, locked last). The
-    /// assign paths call THIS method FIRST (it both pins the rows and yields the advisory key), so
-    /// no user row is ever locked out of id-order. The single-subject paths (remove / R10 census)
-    /// pin exactly one user row before the advisory, which is trivially id-ordered and cannot
-    /// cross with the two-row lock. The advisory lock additionally serializes a tree, so once
-    /// id-order holds on the user rows no deadlock cycle can form across the lock classes.
+    /// <b>Total lock order (consistent on EVERY path — see <c>ReportingLineEndpoints</c>; matches
+    /// ADR-027:149 advisory→rows):</b> (1) the per-tree advisory lock — taken by the caller BEFORE this
+    /// method, via <see cref="AcquireTreeLockForEmployeeAsync"/> (S78 R9, the drift-guarded acquire) on
+    /// the employee-current tree root; (2) the two user rows HERE, <c>FOR UPDATE</c> in <c>user_id</c>
+    /// order (so any two concurrent assigns over an overlapping pair lock the shared rows in the same
+    /// order — deadlock-safe); (3) <see cref="GuardNoCycleAsync"/>; (4) <see cref="AcquireLockAsync"/>'s
+    /// slot <c>FOR UPDATE</c> on a <c>reporting_lines</c> row (a different table, locked last). The
+    /// advisory is ALWAYS taken before any user row, so a transaction parked on the advisory holds NO
+    /// user row and cannot deadlock the advisory holder; the id-ordered two-row pin closes the
+    /// cross-tree-edge race against a concurrent transfer. (S74-7403's earlier comment listed this as
+    /// rows→advisory; that was wrong — the real + canonical order is advisory→rows, and S78 R9's
+    /// drift-guarded acquire keeps the held advisory key non-stale.)
     /// </para>
     /// </summary>
     public async Task<string> ValidateSameTreeAsync(
@@ -604,6 +606,133 @@ public sealed class ReportingLineRepository
             "SELECT pg_advisory_xact_lock(hashtext('reporting-tree-' || @treeRootOrgId))", conn, tx);
         cmd.Parameters.AddWithValue("treeRootOrgId", treeRootOrgId);
         await cmd.ExecuteScalarAsync(ct);
+    }
+
+    /// <summary>
+    /// S78 R9 — derives the CURRENT tree root for <paramref name="employeeId"/> from the live
+    /// (un-pinned) <c>users.primary_org_id</c>, reusing the caller's in-flight <c>conn</c>+<c>tx</c> so
+    /// it reads the same transaction's committed/uncommitted state. This is the same unlocked derivation
+    /// the endpoints used pre-S78 (the <c>ResolveEmployeeTreeRootInTxAsync</c> idiom): NO <c>FOR UPDATE</c>
+    /// — the advisory is the first lock; user rows are pinned only later (in <see cref="ValidateSameTreeAsync"/>).
+    /// </summary>
+    /// <exception cref="InvalidOperationException">If the employee is missing/inactive, or has no
+    /// MINISTRY/STYRELSE ancestor — the caller surfaces a clean 400/404.</exception>
+    private async Task<string> DeriveEmployeeTreeRootInTxAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, string employeeId, CancellationToken ct)
+    {
+        string? primaryOrgId;
+        await using (var cmd = new NpgsqlCommand(
+            "SELECT primary_org_id FROM users WHERE user_id = @userId AND is_active = TRUE", conn, tx))
+        {
+            cmd.Parameters.AddWithValue("userId", employeeId);
+            primaryOrgId = (string?)await cmd.ExecuteScalarAsync(ct);
+        }
+        if (primaryOrgId is null)
+            throw new InvalidOperationException($"Employee user_id='{employeeId}' not found or inactive.");
+
+        return await ResolveTreeRootOrgIdAsync(conn, tx, primaryOrgId, ct);
+    }
+
+    /// <summary>
+    /// S78 R9 — THE SHARED DRIFT-GUARDED ACQUIRE (the load-bearing concurrency primitive). Takes the
+    /// <c>reporting-tree</c> advisory for <paramref name="employeeId"/>'s CURRENT tree root and PROVES the
+    /// key is not stale, closing the S74-7403 cross-styrelse-transfer drift on every employee-current-root
+    /// mutator (reporting-line assign / remove / acting, and the transfer's old+new roots).
+    ///
+    /// <para>
+    /// The advisory key derives from the mutable <c>users.primary_org_id</c> via an UNLOCKED read, so a
+    /// concurrent transfer (<c>PUT /api/admin/users/{userId}</c> changing <c>primary_org_id</c>) that
+    /// commits between the derive and the <c>pg_advisory_xact_lock</c> would leave this mutator holding a
+    /// STALE key — two paths on different keys, no mutual exclusion. This method:
+    /// </para>
+    /// <list type="number">
+    /// <item><description>derives the current tree root (UNLOCKED);</description></item>
+    /// <item><description>acquires the <c>reporting-tree-{root}</c> xact advisory on it;</description></item>
+    /// <item><description>RE-DERIVES the root UNDER the held advisory. If it DRIFTED (a transfer committed
+    /// in between), it throws <see cref="TreeRootDriftException"/> — it does NOT release+re-acquire in-tx
+    /// (impossible with <c>pg_advisory_xact_lock</c>, which releases only at tx end) and does NOT retain
+    /// the old key while taking the new (lock-accumulation / A↔B deadlock). The caller ROLLS BACK and
+    /// RETRIES the whole request on a fresh tx.</description></item>
+    /// </list>
+    ///
+    /// <para>
+    /// Returns the verified (non-stale) tree root. The drift check runs BEFORE any user-row
+    /// <c>FOR UPDATE</c> or mutation, so a rolled-back attempt has NO side effects. NOTE: this re-derive
+    /// is correct because the advisory serializes the TREE, but a transfer changes a USER's org — so the
+    /// re-derive under the lock still observes a transfer that committed during the acquire wait (it reads
+    /// committed state, ReadCommitted). The lock makes the post-acquire root STABLE for the holder's
+    /// duration: once we hold the key for the (re-derived) root, no in-tree mutator can proceed on it, and
+    /// any transfer of THIS employee would itself have to re-derive + drift-guard, so it cannot silently
+    /// move the employee out from under a held key without the next mutator detecting drift.
+    /// </para>
+    /// </summary>
+    /// <exception cref="TreeRootDriftException">If the root drifted under the advisory (caller retries).</exception>
+    /// <exception cref="InvalidOperationException">If the employee is missing/inactive or has no
+    /// MINISTRY/STYRELSE ancestor.</exception>
+    public async Task<string> AcquireTreeLockForEmployeeAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, string employeeId, CancellationToken ct = default)
+    {
+        // (1) derive the current tree root (UNLOCKED).
+        var preAcquireRoot = await DeriveEmployeeTreeRootInTxAsync(conn, tx, employeeId, ct);
+
+        // (2) acquire the reporting-tree advisory on it.
+        await AcquireTreeLockAsync(conn, tx, preAcquireRoot, ct);
+
+        // (3) RE-DERIVE under the held advisory. A transfer that committed between (1) and (2) is now
+        //     visible (ReadCommitted); if the root moved, the key we hold is stale → signal a retry.
+        var postAcquireRoot = await DeriveEmployeeTreeRootInTxAsync(conn, tx, employeeId, ct);
+        if (!string.Equals(preAcquireRoot, postAcquireRoot, StringComparison.Ordinal))
+            throw new TreeRootDriftException(employeeId, preAcquireRoot, postAcquireRoot);
+
+        return postAcquireRoot;
+    }
+
+    /// <summary>
+    /// S78 R9 (R3) — the TRANSFER variant of the drift-guarded acquire. A cross-styrelse transfer
+    /// (<c>PUT /api/admin/users/{userId}</c> moving <c>primary_org_id</c> from one styrelse tree to
+    /// another) must hold the <c>reporting-tree</c> advisory for BOTH the OLD (current) and the NEW
+    /// (target) tree roots BEFORE it pins the users row + UPDATEs the org — so that an assign/remove in
+    /// EITHER tree blocks against the move (the employee is leaving the OLD tree and entering the NEW one).
+    ///
+    /// <para>
+    /// Derives the OLD root from <paramref name="employeeId"/>'s LIVE org and the NEW root from
+    /// <paramref name="newPrimaryOrgId"/>, then acquires the two advisories in DETERMINISTIC id-sorted
+    /// order (so two concurrent transfers over the same tree pair acquire in the same order — deadlock-
+    /// safe), then RE-DERIVES the OLD root under the held locks. If the OLD root DRIFTED (a different
+    /// transfer of this same employee committed between the derive and the acquire), it throws
+    /// <see cref="TreeRootDriftException"/> and the caller rolls back + retries on a fresh tx. The NEW root
+    /// derives from the request-fixed target org (not a mutable user row), so it cannot drift within the
+    /// request. Both locks are taken BEFORE any user-row <c>FOR UPDATE</c> (advisory → rows order).
+    /// </para>
+    ///
+    /// <para>
+    /// When the OLD and NEW roots are the SAME (an intra-tree org move) only one advisory is taken (the
+    /// id-sort dedupes) — still correct: a single tree is fully serialized.
+    /// </para>
+    /// </summary>
+    /// <returns>The verified (OLD, NEW) tree roots.</returns>
+    /// <exception cref="TreeRootDriftException">If the OLD root drifted under the advisory (caller retries).</exception>
+    /// <exception cref="InvalidOperationException">If the employee/org cannot be resolved to a tree root.</exception>
+    public async Task<(string OldRoot, string NewRoot)> AcquireTreeLocksForTransferAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, string employeeId, string newPrimaryOrgId,
+        CancellationToken ct = default)
+    {
+        // (1) derive BOTH roots UNLOCKED: OLD from the employee's live org, NEW from the target org.
+        var preOldRoot = await DeriveEmployeeTreeRootInTxAsync(conn, tx, employeeId, ct);
+        var newRoot = await ResolveTreeRootOrgIdAsync(conn, tx, newPrimaryOrgId, ct);
+
+        // (2) acquire the two advisories in id-sorted order (deadlock-safe across concurrent transfers).
+        //     Distinct + sorted: when OLD == NEW only one key is taken.
+        foreach (var root in new[] { preOldRoot, newRoot }.Distinct(StringComparer.Ordinal).OrderBy(r => r, StringComparer.Ordinal))
+            await AcquireTreeLockAsync(conn, tx, root, ct);
+
+        // (3) RE-DERIVE the OLD root under the held locks. A concurrent transfer of THIS employee that
+        //     committed between (1) and (2) is now visible → the OLD key we hold is stale → retry signal.
+        var postOldRoot = await DeriveEmployeeTreeRootInTxAsync(conn, tx, employeeId, ct);
+        if (!string.Equals(preOldRoot, postOldRoot, StringComparison.Ordinal))
+            throw new TreeRootDriftException(employeeId, preOldRoot, postOldRoot);
+
+        return (postOldRoot, newRoot);
     }
 
     /// <summary>
@@ -1040,6 +1169,44 @@ public sealed class CrossTreeAssignmentException : Exception
 
     public CrossTreeAssignmentException(string message, Exception innerException)
         : base(message, innerException) { }
+}
+
+/// <summary>
+/// S78 R9 — thrown by <see cref="ReportingLineRepository.AcquireTreeLockForEmployeeAsync"/> when the
+/// employee's tree root, RE-DERIVED under the held advisory lock, DRIFTED from the pre-acquire
+/// derivation: a concurrent cross-styrelse org-transfer (a <c>PUT /api/admin/users/{userId}</c>
+/// changing <c>primary_org_id</c>) committed between the unlocked pre-acquire derive and the advisory
+/// acquisition, so the advisory we hold is on the OLD (now stale) tree root.
+///
+/// <para>
+/// <b>Why this MUST be a rollback-and-retry signal, not an in-tx re-acquire.</b>
+/// <c>pg_advisory_xact_lock</c> releases ONLY at the end of the transaction (commit/rollback), so a
+/// mid-tx "release the stale key + acquire the fresh key" is impossible; and RETAINING the stale key
+/// while acquiring the fresh one invites lock-accumulation / an A↔B advisory deadlock. The ONLY sound
+/// recovery is to ROLLBACK the whole transaction (it has taken no user-row <c>FOR UPDATE</c> and made
+/// no mutation — the drift check runs BEFORE any of that) and RETRY the entire request body on a FRESH
+/// transaction, re-deriving the root from scratch. Each caller wraps its handler in a BOUNDED retry
+/// loop (≤3) and, on exhaustion, returns a PINNED 409 (never an incidental 5xx).
+/// </para>
+/// </summary>
+public sealed class TreeRootDriftException : Exception
+{
+    /// <summary>The stale tree root we acquired the advisory on (the pre-acquire derivation).</summary>
+    public string StaleTreeRoot { get; }
+
+    /// <summary>The authoritative tree root re-derived under the held advisory (the new root).</summary>
+    public string CurrentTreeRoot { get; }
+
+    public TreeRootDriftException(string employeeId, string staleTreeRoot, string currentTreeRoot)
+        : base(
+            $"Tree root for employee '{employeeId}' drifted under the advisory lock: acquired on " +
+            $"'{staleTreeRoot}' but re-derived as '{currentTreeRoot}' (a concurrent cross-styrelse " +
+            "transfer committed between the unlocked derive and the advisory acquisition). " +
+            "Roll back and retry on a fresh transaction.")
+    {
+        StaleTreeRoot = staleTreeRoot;
+        CurrentTreeRoot = currentTreeRoot;
+    }
 }
 
 /// <summary>

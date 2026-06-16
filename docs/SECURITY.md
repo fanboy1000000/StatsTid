@@ -109,6 +109,24 @@ Service-layer enforcement called explicitly from API endpoints. Validates that t
 
 **Lesson:** a scoped/structural review trace cannot enumerate every scope-admission caller — only an external whole-codebase trace found the full set (config/project/global/audit/settlement/end-date writes across 3 review cycles). When changing a scope-admission surface, sweep EVERY caller, not just the diff ([[review-lens-complementarity]]).
 
+### In-lock authorization serialization + the revocation-residual map (S78 / ADR-027 D18)
+
+The approve/reject/reopen endpoints originally checked authorization (org-scope + the designated-edge resolver) on a **separate committed connection BEFORE** the write tx — a check-then-act TOCTOU: a revocation in the sub-second window before commit was not caught. S78 hardened this:
+
+**The pattern (share-the-revoker-lock + in-tx re-evaluation).** True serialization of an authorization re-check against a concurrent revocation requires the action path to **hold the same lock the revoker holds**. The reporting-line write mutators serialize on the `reporting-tree-{treeRoot}` xact advisory; so the approve path acquires THAT advisory first, then re-evaluates the designated-edge authorization (+ re-classifies the REQUIRED-mode `confirmFallback` gate) STRICTLY under it. Because the action tx holds the advisory, a concurrent key-sharing revoke BLOCKS before its commit → the in-tx re-read (even on its own connection) observes the frozen committed state. A revoke committed *after* the pre-tx check but caught by the in-tx re-eval → 403.
+
+**The drift-guard (the tree-key is derived from mutable membership).** The `reporting-tree` key derives from the employee's current `primary_org_id` (mutable). A shared **drift-guarded acquire** derives → acquires the advisory → re-derives under the lock; on drift (a transfer committed mid-acquire) it **rolls back + retries the whole request** on a fresh READ COMMITTED tx (≤3 → a pinned 409). A mid-tx release is impossible (`pg_advisory_xact_lock` is xact-scoped); session locks were rejected (explicit-unlock/cancellation/pooling failure modes). This is applied to EVERY employee-current-root tree mutator + the live transfer endpoint, so all concurrent pairs hold the same current key.
+
+**The org-scope half is NOT DB-lockable.** `OrgScopeValidator` reads the actor's scopes from the **JWT `scopes` claim**, not the DB — so a scope "revocation" mutates nothing a DB lock can serialize (the grant lives in the bearer token until expiry). Only the designated-EDGE half is DB-row-based + serializable.
+
+**The NAMED revocation-residual map (NOT serialized by S78 — owner-ruled contained, all NON-corrupting):**
+- the **self-service `DELETE /delegate`** (REPEATABLE READ, persisted/own path — does not share the key);
+- **role-assignment deactivation** + **user deactivation** (`users.is_active`, flipped by ~4 paths incl. the settlement leaver flip — intractable to fully serialize without tree-locking a background service);
+- the **JWT-scope revocation** (token-lifetime — a true fix needs short token TTL / a revocation list, a platform feature);
+- the **admin-vikar-REVOKE post-transfer key-mismatch** (the revoke keys on the persisted `manager_vikar.tree_root_org_id` for revoke-safety, so after a transfer it can differ from the employee-current root).
+
+A future "full" pass would bring the role/user-deactivation + self-`/delegate`-DELETE into the lock protocol; the JWT half is a separate token-lifetime platform concern. Closing them would lift Reporting-Line & Approval Routing A−→A.
+
 ## Authorization Patterns
 
 - All endpoints MUST chain `.RequireAuthorization()` with one of the defined policies:

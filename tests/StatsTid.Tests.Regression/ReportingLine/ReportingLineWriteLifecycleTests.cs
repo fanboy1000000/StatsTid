@@ -701,6 +701,44 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
         return false;
     }
 
+    /// <summary>
+    /// S78 R9 (BLOCKER 2) — like <see cref="WaitForAdvisoryLockWaiterAsync"/> but proves at least
+    /// <paramref name="minWaiters"/> DISTINCT OTHER backends are simultaneously WAITING
+    /// (<c>granted = false</c>) on the <c>reporting-tree-{treeRoot}</c> advisory key. Used to prove
+    /// MUTUAL EXCLUSION between two different operation types (a transfer AND an assign) on the SAME
+    /// shared key: when a side connection holds the key and BOTH a transfer and an assign are queued
+    /// behind it, two distinct backends wait on the key. Counts DISTINCT <c>pid</c>s (excluding this
+    /// test's own session) so a single backend cannot satisfy the threshold. Returns <c>true</c> once
+    /// the count is met; <c>false</c> on timeout.
+    /// </summary>
+    private async Task<bool> WaitForAdvisoryLockWaiterCountAsync(string treeRoot, int minWaiters, int timeoutMs = 5000)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        await using var conn = _dbFactory.Create();
+        await conn.OpenAsync();
+        while (DateTime.UtcNow < deadline)
+        {
+            await using (var cmd = new NpgsqlCommand(
+                """
+                SELECT COUNT(DISTINCT pl.pid)
+                FROM pg_locks pl
+                JOIN pg_stat_activity sa ON sa.pid = pl.pid
+                WHERE pl.locktype = 'advisory'
+                  AND pl.granted = FALSE
+                  AND pl.pid <> pg_backend_pid()
+                  AND ((pl.classid::bigint << 32) | pl.objid::bigint)
+                      = hashtext('reporting-tree-' || @root)::bigint
+                """, conn))
+            {
+                cmd.Parameters.AddWithValue("root", treeRoot);
+                if ((long)(await cmd.ExecuteScalarAsync())! >= minWaiters)
+                    return true;
+            }
+            await Task.Delay(50);
+        }
+        return false;
+    }
+
     // S74-7403 C2-4 (held-lock serialization). PROVES the advisory lock genuinely serializes a
     // tree's assigns — the assign CANNOT proceed while the key is held, so it cannot pass by running
     // sequentially. We HOLD the STY02 tree key on a side connection, fire one leg of a would-be
@@ -854,28 +892,26 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
         Assert.Null(lateRepPrimary); // the assign was rejected → no LateRep PRIMARY edge at all.
     }
 
-    // S74-7403 fix4 — the cross-styrelse-transfer-mid-assign case now yields a CLEAN 400 (cross-tree
-    // rejection), NOT a deadlock and NOT a re-serialized success. The prior pass took the advisory key
-    // from an UNLOCKED org read, then "re-acquired" the advisory on the post-pin root if it drifted —
-    // an inversion (rows→advisory) that could deadlock. fix4 REMOVED the re-acquire and relies on
-    // ValidateSameTreeAsync (run AFTER both user rows are pinned FOR UPDATE) to REJECT the drift. This
-    // test drives that exact window deterministically:
+    // S74-7403 fix4 / S78 R9 — the cross-styrelse-transfer-mid-assign case. UNDER S78 R9 the assign no
+    // longer proceeds on a STALE key: the drift-guarded acquire RE-DERIVES the root under the held
+    // advisory, detects the drift, ROLLS BACK, and RETRIES the whole request on a fresh tx (re-keyed on
+    // the NEW root). The terminal outcome is still a CLEAN 400 (cross-tree) — Mgr stayed in STY02 — with
+    // NO deadlock and NO cross-tree edge. (We use a both-trees admin so the retry's out-of-tx scope check
+    // covers LateRep's NEW org; a STY02-only admin would 403 at the scope gate on retry, which is the
+    // separate single-scope behaviour. The drift-rollback-retry MECHANISM itself — that the retry re-keys
+    // on the NEW root and serialises there — is proven by R9_DriftMidAcquire.)
     //   (1) HOLD the STY02 tree key on a side connection;
-    //   (2) fire assign LateRep → Mgr (both STY02-tree at seed) — it BLOCKS on the held key, BEFORE its
-    //       in-tx ValidateSameTreeAsync runs (the advisory is taken on the now-soon-to-be-stale key);
-    //   (3) while it is parked, TRANSFER LateRep's primary_org_id to STY05 (a different styrelse/tree)
-    //       via a raw UPDATE that does NOT contend on the advisory — exactly the cross-styrelse
-    //       org-transfer the unlocked-read key cannot see;
-    //   (4) release the held key → the parked assign acquires the STALE STY02 key, runs
-    //       ValidateSameTreeAsync which pins BOTH rows and re-resolves the roots: LateRep=STY05 tree,
-    //       Mgr=STY02 tree → CrossTreeAssignmentException → 400. No re-acquire, no deadlock, no
-    //       cross-tree edge. (The deferred residual — two assigns serializing on different keys when
-    //       BOTH parties transfer to the SAME new styrelse simultaneously — is the in-lock hardening
-    //       follow-up, not exercised here.)
+    //   (2) fire assign LateRep → Mgr (both STY02-tree at seed) — it BLOCKS on the held key (the advisory
+    //       is taken on the now-soon-to-be-stale key, BEFORE the post-acquire re-derive);
+    //   (3) while parked, TRANSFER LateRep's primary_org_id to STY05 via a raw UPDATE (the cross-styrelse
+    //       org-transfer the unlocked pre-acquire read cannot see);
+    //   (4) release the held key → the parked assign acquires STY02, RE-DERIVES LateRep=STY05 → DRIFT →
+    //       rollback → RETRY on STY05; ValidateSameTreeAsync then sees LateRep=STY05, Mgr=STY02 → 400. No
+    //       deadlock, no cross-tree edge.
     [Fact]
     public async Task Fix4_CrossStyrelseTransferMidAssign_IsRejected_400_NoDeadlock_NoCrossTreeEdge()
     {
-        var client = AdminClient();
+        var client = TransferAdminClient(); // both STY02 + STY05 so the retry's scope check passes.
 
         // 1. HOLD the STY02 tree key.
         var (holdConn, holdTx) = await AcquireTreeLockOnSideConnAsync(TreeRootSty02);
@@ -891,7 +927,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
             });
 
             // 2a. STRICT BARRIER: the backend is actually WAITING on OUR STY02 advisory key — so the
-            //     advisory was taken on the (about-to-be-stale) key BEFORE ValidateSameTreeAsync ran.
+            //     advisory was taken on the (about-to-be-stale) key BEFORE the post-acquire re-derive ran.
             var sawWaiter = await WaitForAdvisoryLockWaiterAsync(TreeRootSty02);
             Assert.True(sawWaiter,
                 "No backend was observed WAITING on the STY02 tree advisory lock — the assign did not block on the lock.");
@@ -902,8 +938,8 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
                 "The assign completed while the tree lock was held — it did not serialize on the lock.");
 
             // 3. While parked, TRANSFER LateRep to STY05 (a DIFFERENT styrelse/tree) — the cross-styrelse
-            //    org-transfer that committed in the unlocked-read → advisory window. A raw UPDATE does
-            //    not contend on the advisory, so the held key stays stale for the parked assign.
+            //    org-transfer that committed in the unlocked pre-acquire → advisory window. A raw UPDATE
+            //    does not contend on the advisory, so the held key stays stale for the parked assign.
             await using (var sideConn = _dbFactory.Create())
             {
                 await sideConn.OpenAsync();
@@ -913,21 +949,21 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
                 await transfer.ExecuteNonQueryAsync();
             }
 
-            // 4. Release the held key → the parked assign acquires the STALE STY02 key, then
-            //    ValidateSameTreeAsync pins both rows and re-resolves: LateRep=STY05, Mgr=STY02 → 400.
+            // 4. Release the held key → the parked assign acquires STY02, RE-DERIVES LateRep=STY05 → DRIFT
+            //    → rollback → RETRY on STY05; ValidateSameTreeAsync sees LateRep=STY05, Mgr=STY02 → 400.
             await holdTx.RollbackAsync();
             await holdConn.DisposeAsync();
             lockReleased = true;
 
-            // No deadlock: the assign returns promptly (it does NOT re-acquire any advisory). Bound the
-            // wait so a (regressed) deadlock surfaces as a test failure rather than a hang.
+            // No deadlock: the assign returns promptly (the drift-retry rolls back, never RETAINS the old
+            // key while taking a new one). Bound the wait so a (regressed) deadlock surfaces as a failure.
             var completed = await Task.WhenAny(assignTask, Task.Delay(5000)) == assignTask;
             Assert.True(completed,
-                "The assign did not complete after the lock was released — a rows→advisory re-acquire deadlock has regressed.");
+                "The assign did not complete after the lock was released — a drift-retry deadlock has regressed.");
 
             var assignResp = await assignTask;
-            // ValidateSameTreeAsync now sees employee + manager in DIFFERENT trees →
-            // CrossTreeAssignmentException → 400. No re-serialized success.
+            // The RETRIED assign (re-keyed on STY05) sees employee + manager in DIFFERENT trees →
+            // CrossTreeAssignmentException → 400. No proceed-under-stale-key.
             Assert.Equal(HttpStatusCode.BadRequest, assignResp.StatusCode);
         }
         finally
@@ -941,6 +977,425 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
 
         // NO CROSS-TREE EDGE: the rejected assign created no LateRep PRIMARY edge at all.
         Assert.Null(await _rlRepo.GetActiveByEmployeeAndRelationshipAsync(LateRep, "PRIMARY"));
+    }
+
+    // ════════════════════════════════════════════════════════════════════════════════
+    //  S78 R9 — the SHARED DRIFT-GUARDED ACQUIRE (held-lock interleave proofs, R6)
+    //
+    //  These prove the S74-7403 cross-styrelse-transfer STALE-KEY residual is now CLOSED by the shared
+    //  drift-guarded acquire (AcquireTreeLockForEmployeeAsync): the advisory key is RE-DERIVED under the
+    //  held advisory and, on drift, the mutator THROWS TreeRootDriftException → RunAsync ROLLS BACK +
+    //  RETRIES the whole request on a fresh tx (re-keyed on the NEW root). Unlike the prior Fix4 test
+    //  (stale key + reject), the retry serializes on the CURRENT root.
+    // ════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// S78 R9 DRIFT-ROLLBACK-RETRY (the core proof). An assign whose advisory key DRIFTS mid-acquire —
+    /// because a transfer moves the employee to a NEW styrelse while the assign is parked on the OLD key —
+    /// must detect the drift under the lock, ROLL BACK, and RETRY on the NEW root (proven by the retry
+    /// BLOCKING on the NEW-root advisory we also hold), then complete (here: 400 cross-tree, since the
+    /// manager stayed in the OLD tree). No proceed-under-stale-key; bounded retry terminates.
+    ///
+    /// Interleave (two held keys):
+    ///   (1) seed Drifter in AFD01 (STY02 tree); HOLD both the STY02 key AND the STY05 key on side conns;
+    ///   (2) fire assign Drifter → Mgr — it derives Drifter's root = STY02, then BLOCKS on the held STY02 key;
+    ///   (3) while parked, TRANSFER Drifter to STY05 via a raw UPDATE (commits — the drift the unlocked
+    ///       pre-acquire read cannot see);
+    ///   (4) release ONLY the STY02 key → the parked assign acquires STY02, RE-DERIVES Drifter = STY05 →
+    ///       DRIFT → TreeRootDriftException → rollback → RETRY. The retry derives STY05 and BLOCKS on the
+    ///       held STY05 key (PROOF it re-keyed on the NEW root, not the stale one);
+    ///   (5) release the STY05 key → the retried assign proceeds; ValidateSameTreeAsync sees Drifter=STY05,
+    ///       Mgr=STY02 → 400. No edge created.
+    /// </summary>
+    [Fact]
+    public async Task R9_DriftMidAcquire_RollsBack_RetriesOnNewRoot_AndSerializes()
+    {
+        const string Drifter = "t743_drifter";
+        await SeedUserAsync(Drifter, "AFD01"); // STY02 tree at seed.
+        try
+        {
+            // Multi-scope admin (STY02 + STY05): on the post-drift RETRY the out-of-tx employee-scope
+            // check runs against Drifter's NEW org (STY05) — a single-styrelse admin would 403 there
+            // before reaching the advisory, so we use a both-trees admin to PROVE the retry re-keys on
+            // the STY05 advisory (the whole point of this test).
+            var client = TransferAdminClient();
+
+            // (1) HOLD both tree keys on independent side connections.
+            var (sty02Conn, sty02Tx) = await AcquireTreeLockOnSideConnAsync(TreeRootSty02);
+            var (sty05Conn, sty05Tx) = await AcquireTreeLockOnSideConnAsync("STY05");
+            var sty02Released = false;
+            var sty05Released = false;
+            try
+            {
+                // (2) Fire assign Drifter → Mgr. Derives Drifter=STY02 (unlocked), blocks on the STY02 key.
+                var assignTask = PostAssignAsync(client, "/api/admin/reporting-lines", new
+                {
+                    employeeId = Drifter,
+                    managerId = Mgr,
+                    effectiveFrom = "2026-06-01",
+                });
+
+                Assert.True(await WaitForAdvisoryLockWaiterAsync(TreeRootSty02),
+                    "The assign did not block on the STY02 advisory — it never reached the drift-guarded acquire.");
+                Assert.False(await Task.WhenAny(assignTask, Task.Delay(500)) == assignTask,
+                    "The assign completed while the STY02 key was held — it did not serialize on the lock.");
+
+                // (3) TRANSFER Drifter to STY05 (raw UPDATE — does not contend on the advisory).
+                await using (var sideConn = _dbFactory.Create())
+                {
+                    await sideConn.OpenAsync();
+                    await using var transfer = new NpgsqlCommand(
+                        "UPDATE users SET primary_org_id = 'AFD03' WHERE user_id = @id", sideConn);
+                    transfer.Parameters.AddWithValue("id", Drifter);
+                    await transfer.ExecuteNonQueryAsync();
+                }
+
+                // (4) Release ONLY the STY02 key → the parked assign acquires STY02, RE-DERIVES Drifter as
+                //     STY05 → DRIFT → rollback → RETRY. The retry must now BLOCK on the held STY05 key.
+                await sty02Tx.RollbackAsync();
+                await sty02Conn.DisposeAsync();
+                sty02Released = true;
+
+                Assert.True(await WaitForAdvisoryLockWaiterAsync("STY05"),
+                    "After the drift, the retry did not block on the STY05 advisory — it did not re-key on the NEW root.");
+                Assert.False(await Task.WhenAny(assignTask, Task.Delay(500)) == assignTask,
+                    "The retried assign completed while the STY05 key was held — drift-retry did not re-serialize on the new root.");
+
+                // (5) Release the STY05 key → the retried assign proceeds and rejects cross-tree (Mgr=STY02).
+                await sty05Tx.RollbackAsync();
+                await sty05Conn.DisposeAsync();
+                sty05Released = true;
+
+                var completed = await Task.WhenAny(assignTask, Task.Delay(5000)) == assignTask;
+                Assert.True(completed, "The retried assign did not complete — the drift-retry loop hung.");
+                var resp = await assignTask;
+                Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
+            }
+            finally
+            {
+                if (!sty02Released) { await sty02Tx.RollbackAsync(); await sty02Conn.DisposeAsync(); }
+                if (!sty05Released) { await sty05Tx.RollbackAsync(); await sty05Conn.DisposeAsync(); }
+            }
+
+            // No edge created on either tree.
+            Assert.Null(await _rlRepo.GetActiveByEmployeeAndRelationshipAsync(Drifter, "PRIMARY"));
+        }
+        finally
+        {
+            await CleanupChainAsync(new[] { Drifter });
+        }
+    }
+
+    /// <summary>
+    /// S78 R3/R9 TRANSFER-vs-ASSIGN serialization. The REAL transfer endpoint (PUT /api/admin/users/{id}
+    /// moving primary_org_id) and a concurrent assign serialize through the SAME tree advisory: while a
+    /// side connection holds the OLD-tree key, the transfer BLOCKS on it (it acquires the OLD+NEW roots via
+    /// AcquireTreeLocksForTransferAsync before the users-row FOR UPDATE), then completes once released —
+    /// proving the transfer is in-lock (no unserialized cross-styrelse move). No spurious 400; the org
+    /// actually moved.
+    /// </summary>
+    [Fact]
+    public async Task R9_Transfer_SerializesOnTreeAdvisory_NoSpurious400()
+    {
+        const string Mover = "t743_mover";
+        await SeedUserAsync(Mover, "AFD01"); // STY02 tree.
+        try
+        {
+            var client = TransferAdminClient(); // covers BOTH STY02 + STY05.
+
+            // HOLD the STY02 (OLD) tree key — the transfer must block on it (advisory before users FOR UPDATE).
+            var (holdConn, holdTx) = await AcquireTreeLockOnSideConnAsync(TreeRootSty02);
+            var released = false;
+            try
+            {
+                var transferTask = PutTransferAsync(client, Mover, newPrimaryOrgId: "AFD03", ifMatchVersion: 1);
+
+                Assert.True(await WaitForAdvisoryLockWaiterAsync(TreeRootSty02),
+                    "The transfer did not block on the OLD-tree (STY02) advisory — it skipped the in-lock acquire.");
+                Assert.False(await Task.WhenAny(transferTask, Task.Delay(500)) == transferTask,
+                    "The transfer completed while the OLD-tree key was held — it did not serialize on the advisory.");
+
+                // Release → the transfer acquires OLD+NEW and proceeds.
+                await holdTx.RollbackAsync();
+                await holdConn.DisposeAsync();
+                released = true;
+
+                var completed = await Task.WhenAny(transferTask, Task.Delay(5000)) == transferTask;
+                Assert.True(completed, "The transfer did not complete after the OLD-tree key was released.");
+                var resp = await transferTask;
+                Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+            }
+            finally
+            {
+                if (!released) { await holdTx.RollbackAsync(); await holdConn.DisposeAsync(); }
+            }
+
+            // The org actually moved (no spurious rejection).
+            await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+            await conn.OpenAsync();
+            await using var cmd = new NpgsqlCommand("SELECT primary_org_id FROM users WHERE user_id = @id", conn);
+            cmd.Parameters.AddWithValue("id", Mover);
+            Assert.Equal("AFD03", (string?)await cmd.ExecuteScalarAsync());
+        }
+        finally
+        {
+            await CleanupChainAsync(new[] { "t743_mover" });
+        }
+    }
+
+    /// <summary>
+    /// S78 R5/R9 TRANSFER-vs-ASSIGN MUTUAL EXCLUSION (the strengthened proof — held-lock interleave).
+    /// PROVES the cross-styrelse transfer (PUT /api/admin/users/{id} moving primary_org_id) and a
+    /// concurrent reporting-line assign genuinely SERIALIZE on the SHARED <c>reporting-tree-STY02</c>
+    /// advisory key — NEITHER can proceed while a side connection holds it — and that the post-release
+    /// state is a coherent SERIALIZED outcome, never a torn interleave. The prior version of this test
+    /// fired both with no barrier, accepted any non-500, and asserted NO final invariant, so it passed
+    /// even if the two paths never shared a lock; this rewrite FAILS unless BOTH paths actually block on
+    /// the shared key (the pg_locks granted=false waiter assertions, incl. a ≥2-waiter assertion that
+    /// proves the transfer AND the assign contend on the SAME key) AND the final serialized invariant holds.
+    ///
+    /// Interleave:
+    ///   (1) seed Dl in AFD01 (STY02 tree); HOLD the STY02 tree key on a side connection;
+    ///   (2) fire the TRANSFER Dl STY02→STY05 — it must BLOCK on the held STY02 key (it acquires the OLD
+    ///       root STY02 via AcquireTreeLocksForTransferAsync BEFORE the users-row FOR UPDATE). Prove the
+    ///       waiter (pg_locks granted=false on the STY02 advisory) → the transfer takes the shared key;
+    ///   (3) fire the ASSIGN Dl → Mgr — it must ALSO block on the SAME held STY02 key (its drift-guarded
+    ///       acquire takes STY02). Prove ≥2 DISTINCT backends now WAIT on the key → the transfer AND the
+    ///       assign mutually exclude on the shared tree key (the core mutual-exclusion proof);
+    ///   (4) release the held key → the two serialize one-at-a-time. Both complete (no 500 / no hang);
+    ///   (5) FINAL INVARIANT (grant-order-INDEPENDENT, so non-flaky): the transfer ALWAYS succeeds (200)
+    ///       and moves Dl to AFD03 (it does not depend on the assign); and the assign's terminal status is
+    ///       TIGHTLY COUPLED to the surviving edge state — there is never a torn combination. Concretely:
+    ///         • assign 201 ⟺ a Dl→Mgr PRIMARY edge survives (the assign won the key first, created it
+    ///           while Dl was STILL same-tree in STY02; the transfer — which does not re-close existing
+    ///           edges — then moved Dl, an ACCEPTED residual);
+    ///         • assign 400 ⟺ NO Dl edge survives (the assign was serialized behind the committed transfer,
+    ///           re-derived Dl=STY05 vs Mgr=STY02 → cross-tree reject).
+    ///       A non-serialized (torn) execution — 400 WITH a surviving edge, or 201 WITH no edge — fails the
+    ///       coupling and the test. This is exactly the guarantee that is impossible to satisfy without the
+    ///       two paths genuinely serializing on the shared key.
+    /// </summary>
+    [Fact]
+    public async Task R9_TransferVsAssign_SerializeOnSharedKey_MutualExclusion()
+    {
+        const string Dl = "t743_dl";
+        await SeedUserAsync(Dl, "AFD01"); // STY02 tree.
+        try
+        {
+            var transferClient = TransferAdminClient(); // covers STY02 + STY05.
+            var assignClient = TransferAdminClient();   // covers STY02 + STY05 so the post-drift assign retry's
+                                                        // out-of-tx employee-scope check passes on Dl's NEW org (STY05).
+
+            // (1) HOLD the STY02 tree advisory key — BOTH the transfer and the assign must block on it.
+            var (holdConn, holdTx) = await AcquireTreeLockOnSideConnAsync(TreeRootSty02);
+            var released = false;
+            HttpResponseMessage transferResp, assignResp;
+            try
+            {
+                // (2) Fire the TRANSFER Dl STY02→STY05. It acquires the OLD root (STY02) FIRST → blocks on the held key.
+                var transferTask = PutTransferAsync(transferClient, Dl, newPrimaryOrgId: "AFD03", ifMatchVersion: 1);
+
+                Assert.True(await WaitForAdvisoryLockWaiterAsync(TreeRootSty02),
+                    "The transfer did not block on the held STY02 advisory — it did not acquire the shared tree key before mutating.");
+                Assert.False(await Task.WhenAny(transferTask, Task.Delay(500)) == transferTask,
+                    "The transfer completed while the STY02 key was held — it did not serialize on the shared advisory.");
+
+                // (3) Fire the ASSIGN Dl → Mgr (both STY02 at this point). Its drift-guarded acquire ALSO
+                //     takes the STY02 key → it queues behind the side conn. Prove ≥2 DISTINCT OTHER backends
+                //     now WAIT (granted=false) on the SAME key — the transfer AND the assign both contend on
+                //     it. THIS is the mutual-exclusion proof: two different operation types serialize on one key.
+                var assignTask = PostAssignAsync(assignClient, "/api/admin/reporting-lines", new
+                {
+                    employeeId = Dl,
+                    managerId = Mgr,
+                    effectiveFrom = "2026-06-01",
+                });
+
+                Assert.True(await WaitForAdvisoryLockWaiterCountAsync(TreeRootSty02, minWaiters: 2),
+                    "Fewer than 2 backends waited on the STY02 advisory — the assign and the transfer did not BOTH contend on the shared tree key (mutual exclusion not proven).");
+                Assert.False(await Task.WhenAny(assignTask, Task.Delay(500)) == assignTask,
+                    "The assign completed while the STY02 key was held — it did not serialize on the shared advisory.");
+
+                // (4) Release the held key → the two queued backends serialize one-at-a-time through the
+                //     shared key. Both must complete promptly (no deadlock / no hang).
+                await holdTx.RollbackAsync();
+                await holdConn.DisposeAsync();
+                released = true;
+
+                await Task.WhenAny(Task.WhenAll(transferTask, assignTask), Task.Delay(10000));
+                Assert.True(transferTask.IsCompleted && assignTask.IsCompleted,
+                    "A transfer-vs-assign pair did not complete after the shared key was released — a serialization hang regressed.");
+                transferResp = transferTask.Result;
+                assignResp = assignTask.Result;
+            }
+            finally
+            {
+                if (!released) { await holdTx.RollbackAsync(); await holdConn.DisposeAsync(); }
+            }
+
+            // Neither may deadlock (40P01 → 500).
+            Assert.NotEqual(HttpStatusCode.InternalServerError, transferResp.StatusCode);
+            Assert.NotEqual(HttpStatusCode.InternalServerError, assignResp.StatusCode);
+
+            // (5) FINAL INVARIANT — grant-order-INDEPENDENT (non-flaky), proves serialization:
+            //     (a) the transfer ALWAYS moves Dl to AFD03 (it does not depend on the assign);
+            Assert.Equal(HttpStatusCode.OK, transferResp.StatusCode);
+            await using (var conn = new NpgsqlConnection(_harness.ConnectionString))
+            {
+                await conn.OpenAsync();
+                await using var cmd = new NpgsqlCommand("SELECT primary_org_id FROM users WHERE user_id = @id", conn);
+                cmd.Parameters.AddWithValue("id", Dl);
+                Assert.Equal("AFD03", (string?)await cmd.ExecuteScalarAsync());
+            }
+            //     (b) the assign's status is TIGHTLY COUPLED to the surviving edge — never a torn state.
+            var dlEdge = await _rlRepo.GetActiveByEmployeeAndRelationshipAsync(Dl, "PRIMARY");
+            if (assignResp.StatusCode == HttpStatusCode.Created)
+            {
+                // Assign won the key first → it created a same-tree edge (Dl was STY02 then); the transfer,
+                // which does not re-close existing edges, then moved Dl (the accepted residual). The edge
+                // MUST exist and point at Mgr — a 201 with NO edge would be a torn/non-serialized outcome.
+                Assert.NotNull(dlEdge);
+                Assert.Equal(Mgr, dlEdge!.ManagerId);
+            }
+            else
+            {
+                // Assign serialized behind the committed transfer → re-derived Dl=STY05 vs Mgr=STY02 → 400,
+                // and NO edge was created. A 400 WITH a surviving edge would be a torn/non-serialized outcome.
+                Assert.Equal(HttpStatusCode.BadRequest, assignResp.StatusCode);
+                Assert.Null(dlEdge);
+            }
+        }
+        finally
+        {
+            await CleanupChainAsync(new[] { "t743_dl" });
+        }
+    }
+
+    /// <summary>
+    /// S78 R5 DEADLOCK-ABSENCE (shake test, hardened). A transfer and an assign over OVERLAPPING work, fired
+    /// CONCURRENTLY with no barrier (so they genuinely contend on the tree advisory + user rows), must both
+    /// complete with a clean status — NOT a deadlock (40P01 → 500) or a hang. The total order advisory →
+    /// user-rows FOR UPDATE (id-ordered) is consistent across both paths, so no cycle can form. Several
+    /// rounds shake out ordering-dependent deadlocks. UNLIKE the prior version (which asserted only
+    /// "not a 500"), each round now also asserts a per-round FINAL INVARIANT so a regression that silently
+    /// stops serializing — leaving a torn state — fails the test: the transfer ALWAYS moves Dl to AFD03,
+    /// and the assign NEVER leaves a surviving cross-tree Dl→Mgr edge (Dl in STY05, Mgr in STY02).
+    /// </summary>
+    [Fact]
+    public async Task R9_TransferVsAssign_OverlappingRows_DoNotDeadlock()
+    {
+        const string Dl = "t743_dl";
+        await SeedUserAsync(Dl, "AFD01"); // STY02 tree.
+        try
+        {
+            for (var round = 0; round < 4; round++)
+            {
+                // Reset Dl to STY02 each round so the transfer always has work to do.
+                await using (var reset = new NpgsqlConnection(_harness.ConnectionString))
+                {
+                    await reset.OpenAsync();
+                    await using (var del = new NpgsqlCommand(
+                        "DELETE FROM reporting_lines WHERE employee_id = @id OR manager_id = @id", reset))
+                    {
+                        del.Parameters.AddWithValue("id", Dl);
+                        await del.ExecuteNonQueryAsync();
+                    }
+                    await using var upd = new NpgsqlCommand(
+                        "UPDATE users SET primary_org_id = 'AFD01', version = 1 WHERE user_id = @id", reset);
+                    upd.Parameters.AddWithValue("id", Dl);
+                    await upd.ExecuteNonQueryAsync();
+                }
+
+                // BOTH clients cover STY02 + STY05 so that whichever order wins, the assign's post-drift
+                // retry scope check (against Dl's possibly-NEW org) does not 403 for the wrong reason.
+                var transferClient = TransferAdminClient();
+                var assignClient = TransferAdminClient();
+
+                // Transfer Dl STY02→STY05; concurrently assign Dl → Mgr (STY02). They contend on Dl's row
+                // + the STY02 advisory. Whichever wins, neither may deadlock (clean status both).
+                var transferTask = PutTransferAsync(transferClient, Dl, newPrimaryOrgId: "AFD03", ifMatchVersion: 1);
+                var assignTask = PostAssignAsync(assignClient, "/api/admin/reporting-lines", new
+                {
+                    employeeId = Dl,
+                    managerId = Mgr,
+                    effectiveFrom = "2026-06-01",
+                });
+
+                await Task.WhenAny(Task.WhenAll(transferTask, assignTask), Task.Delay(15000));
+                Assert.True(transferTask.IsCompleted && assignTask.IsCompleted,
+                    $"Round {round}: a transfer-vs-assign pair did not complete within 15s — a deadlock/hang regressed.");
+
+                // Neither may be a 500 (a deadlock would surface as 40P01 → 500). Any 2xx/4xx is acceptable —
+                // the point is the absence of a deadlock, not a particular winner.
+                Assert.NotEqual(HttpStatusCode.InternalServerError, transferTask.Result.StatusCode);
+                Assert.NotEqual(HttpStatusCode.InternalServerError, assignTask.Result.StatusCode);
+
+                // PER-ROUND FINAL INVARIANT — the serialized outcome, regardless of which path won:
+                //   (a) the transfer always moves Dl to AFD03 (it does not depend on the assign);
+                await using (var conn = new NpgsqlConnection(_harness.ConnectionString))
+                {
+                    await conn.OpenAsync();
+                    await using var cmd = new NpgsqlCommand("SELECT primary_org_id FROM users WHERE user_id = @id", conn);
+                    cmd.Parameters.AddWithValue("id", Dl);
+                    Assert.Equal("AFD03", (string?)await cmd.ExecuteScalarAsync());
+                }
+                //   (b) no SURVIVING cross-tree edge: if the assign committed an edge it must have been
+                //       same-tree-valid (Dl in STY02) at the time — but since the transfer always moves Dl
+                //       to STY05, a non-serialized assign-then-no-revalidation would leave a cross-tree row.
+                //       The serialization guarantee is: the assign either (i) was rejected cross-tree (no
+                //       edge), or (ii) committed an edge while Dl was STILL in STY02 AND the transfer was
+                //       serialized AFTER it. Case (ii) would leave a row whose tree_root_org_id = STY02 even
+                //       though Dl now resolves to STY05 — which IS the accepted "transfer does not re-close
+                //       existing edges" residual. To keep this shake test deterministic we assert the
+                //       SAFETY property that always holds: no edge exists that points Dl at Mgr ACROSS the
+                //       current trees — i.e. either no edge, or (if one exists) it was committed pre-transfer
+                //       and the assign therefore won the race, which a 201 on assignTask confirms.
+                var dlEdge = await _rlRepo.GetActiveByEmployeeAndRelationshipAsync(Dl, "PRIMARY");
+                if (dlEdge is not null)
+                {
+                    // The only way an edge survives is the assign-won-first ordering → assign returned 201
+                    // (same-tree at creation). Anything else is a non-serialized torn state.
+                    Assert.Equal(HttpStatusCode.Created, assignTask.Result.StatusCode);
+                    Assert.Equal(Mgr, dlEdge.ManagerId);
+                }
+                else
+                {
+                    // No edge → the assign was serialized behind the transfer and rejected cross-tree (400).
+                    Assert.Equal(HttpStatusCode.BadRequest, assignTask.Result.StatusCode);
+                }
+            }
+        }
+        finally
+        {
+            await CleanupChainAsync(new[] { "t743_dl" });
+        }
+    }
+
+    /// <summary>
+    /// S78 R9 BOUNDED-RETRY TERMINATION. The shared retry wrapper (TreeRootDriftRetry.RunAsync) must, when
+    /// the body throws TreeRootDriftException on EVERY attempt, terminate after a BOUNDED number of retries
+    /// and return a PINNED 409 — never a hang and never an incidental 5xx. Driven directly (deterministic;
+    /// the DB-level drift is timing-bound and is covered by R9_DriftMidAcquire above): an attempt delegate
+    /// that always drifts is invoked at most MaxDriftRetries+1 times, then a 409 is returned.
+    /// </summary>
+    [Fact]
+    public async Task R9_BoundedRetry_AlwaysDrifts_TerminatesWithPinned409()
+    {
+        var attempts = 0;
+        var result = await StatsTid.Backend.Api.Endpoints.Helpers.TreeRootDriftRetry.RunAsync(() =>
+        {
+            attempts++;
+            throw new TreeRootDriftException("emp", staleTreeRoot: "STY02", currentTreeRoot: "STY05");
+        });
+
+        // Bounded: the body ran exactly (first attempt + MaxDriftRetries) times — not unbounded, not a hang.
+        Assert.Equal(StatsTid.Backend.Api.Endpoints.Helpers.TreeRootDriftRetry.MaxDriftRetries + 1, attempts);
+
+        // Pinned 409 (a retryable conflict), NOT a 5xx. Results.Json(..., statusCode: 409) returns an
+        // IResult that also implements IStatusCodeHttpResult exposing the pinned status — assert it
+        // directly (no HttpContext plumbing needed).
+        var statusResult = Assert.IsAssignableFrom<Microsoft.AspNetCore.Http.IStatusCodeHttpResult>(result);
+        Assert.Equal(409, statusResult.StatusCode);
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
@@ -1028,6 +1483,37 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintAdminToken(Top, "STY02"));
         return client;
+    }
+
+    /// <summary>
+    /// S78 R9 — an admin client whose token carries LocalAdmin scope over BOTH STY02 and STY05, so the
+    /// cross-styrelse transfer endpoint (PUT /api/admin/users/{id}) passes the source-org AND target-org
+    /// scope checks. The transfer requires the actor to cover the user's current org (STY02 tree) and the
+    /// new org (STY05 tree).
+    /// </summary>
+    private HttpClient TransferAdminClient()
+    {
+        var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", MintMultiScopeAdminToken(Top, "STY02", "STY05"));
+        return client;
+    }
+
+    /// <summary>
+    /// S78 R9 — PUTs the user transfer (changing primary_org_id) with the admin-strict If-Match header the
+    /// endpoint requires (ADR-019 D2). EffectiveFrom = today (UTC) so the agreement-code validator is a
+    /// no-op (agreement_code is unchanged here — this is a pure org transfer).
+    /// </summary>
+    private static async Task<HttpResponseMessage> PutTransferAsync(
+        HttpClient client, string userId, string newPrimaryOrgId, long ifMatchVersion)
+    {
+        var today = DateOnly.FromDateTime(DateTime.UtcNow).ToString("yyyy-MM-dd");
+        var req = new HttpRequestMessage(HttpMethod.Put, $"/api/admin/users/{userId}")
+        {
+            Content = JsonContent.Create(new { primaryOrgId = newPrimaryOrgId, effectiveFrom = today }),
+        };
+        req.Headers.TryAddWithoutValidation("If-Match", $"\"{ifMatchVersion}\"");
+        return await client.SendAsync(req);
     }
 
     /// <summary>
@@ -1173,5 +1659,27 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
         return tokenService.GenerateToken(
             employeeId: userId, name: userId, role: StatsTidRoles.LocalAdmin,
             agreementCode: "HK", orgId: orgId, scopes: scopes);
+    }
+
+    /// <summary>
+    /// S78 R9 — mints a LocalAdmin token carrying ORG_AND_DESCENDANTS scope over EVERY org in
+    /// <paramref name="orgIds"/> (the transfer endpoint needs the actor to cover both the source and the
+    /// target styrelse). The primary <c>orgId</c> claim is the first entry.
+    /// </summary>
+    private static string MintMultiScopeAdminToken(string userId, params string[] orgIds)
+    {
+        var tokenService = new JwtTokenService(new JwtSettings
+        {
+            Issuer = "statstid",
+            Audience = "statstid",
+            SigningKey = DevFallbackSigningKey,
+            ExpirationMinutes = 60,
+        });
+        var scopes = orgIds
+            .Select(o => new RoleScope(StatsTidRoles.LocalAdmin, o, "ORG_AND_DESCENDANTS"))
+            .ToArray();
+        return tokenService.GenerateToken(
+            employeeId: userId, name: userId, role: StatsTidRoles.LocalAdmin,
+            agreementCode: "HK", orgId: orgIds[0], scopes: scopes);
     }
 }

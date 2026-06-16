@@ -625,6 +625,99 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
         Assert.Equal("You have no direct reports to delegate", err!.error);
     }
 
+    /// <summary>
+    /// S78 R9 (BLOCKER 1) — the self-service <c>/delegate</c> CREATE is now an employee-current-root
+    /// mutator under the SHARED drift-guarded acquire (it keys on the self-delegating MANAGER's CURRENT
+    /// tree root). This is the <c>/delegate</c>-create mirror of
+    /// <c>ReportingLineWriteLifecycleTests.R9_DriftMidAcquire</c>: when a concurrent cross-styrelse
+    /// transfer moves the self-delegating manager to a NEW styrelse WHILE the /delegate is parked on the
+    /// OLD-root advisory, the create must detect the drift UNDER the lock, ROLL BACK, and RETRY on the NEW
+    /// root (proven by the retry BLOCKING on the NEW-root advisory we also hold) — NO proceed-under-stale-
+    /// key — then terminate cleanly (here: 400 cross-tree, since the chosen vikar stayed in the OLD tree),
+    /// creating NO vikar row.
+    ///
+    /// Interleave (two held keys, mirroring R9_DriftMidAcquire):
+    ///   (1) Mgr is in AFD02 (STY02 tree); HOLD both the STY02 key AND the STY05 key on side connections;
+    ///   (2) Mgr self-delegates to Vik (AFD02/STY02) — the create derives Mgr's root = STY02, then BLOCKS
+    ///       on the held STY02 key (advisory taken on the soon-to-be-stale key);
+    ///   (3) while parked, TRANSFER Mgr to AFD03 (STY05) via a raw UPDATE (the cross-styrelse move the
+    ///       unlocked pre-acquire read cannot see);
+    ///   (4) release ONLY STY02 → the parked create acquires STY02, RE-DERIVES Mgr = STY05 → DRIFT →
+    ///       TreeRootDriftException → rollback → RETRY. The retry derives STY05 and BLOCKS on the held
+    ///       STY05 key (PROOF it re-keyed on the NEW root, not the stale STY02 one);
+    ///   (5) release STY05 → the retried create proceeds; ValidateSameTreeAsync sees Mgr=STY05, Vik=STY02
+    ///       → 400. No manager_vikar row created.
+    /// </summary>
+    [Fact]
+    public async Task SelfDelegate_DriftMidAcquire_RollsBack_RetriesOnNewRoot_NoVikar()
+    {
+        // (1) HOLD both tree keys on independent side connections.
+        var (sty02Conn, sty02Tx) = await AcquireTreeLockOnSideConnAsync(TreeRootSty02);
+        var (sty05Conn, sty05Tx) = await AcquireTreeLockOnSideConnAsync(TreeRootSty05);
+        var sty02Released = false;
+        var sty05Released = false;
+        try
+        {
+            // (2) Mgr self-delegates to Vik. Derives Mgr=STY02 (unlocked), blocks on the held STY02 key.
+            var client = LeaderClient(Mgr, "AFD02");
+            var delegateTask = client.PostAsJsonAsync(
+                "/api/reporting-lines/delegate",
+                new { actingManagerId = Vik, effectiveTo = Today().AddDays(20).ToString("yyyy-MM-dd") });
+
+            Assert.True(await WaitForAdvisoryLockWaiterAsync(TreeRootSty02),
+                "The /delegate create did not block on the STY02 advisory — it never reached the drift-guarded acquire (BLOCKER 1 not applied).");
+            Assert.False(await Task.WhenAny(delegateTask, Task.Delay(500)) == delegateTask,
+                "The /delegate create completed while the STY02 key was held — it did not serialize on the tree advisory.");
+
+            // (3) TRANSFER Mgr to STY05 (raw UPDATE — does not contend on the advisory).
+            await using (var sideConn = new NpgsqlConnection(_harness.ConnectionString))
+            {
+                await sideConn.OpenAsync();
+                await using var transfer = new NpgsqlCommand(
+                    "UPDATE users SET primary_org_id = 'AFD03' WHERE user_id = @id", sideConn);
+                transfer.Parameters.AddWithValue("id", Mgr);
+                await transfer.ExecuteNonQueryAsync();
+            }
+
+            // (4) Release ONLY STY02 → the parked create acquires STY02, RE-DERIVES Mgr=STY05 → DRIFT →
+            //     rollback → RETRY. The retry must now BLOCK on the held STY05 key (re-keyed on the NEW root).
+            await sty02Tx.RollbackAsync();
+            await sty02Conn.DisposeAsync();
+            sty02Released = true;
+
+            Assert.True(await WaitForAdvisoryLockWaiterAsync(TreeRootSty05),
+                "After the drift, the /delegate retry did not block on the STY05 advisory — it did not re-key on the NEW root (proceed-under-stale-key).");
+            Assert.False(await Task.WhenAny(delegateTask, Task.Delay(500)) == delegateTask,
+                "The retried /delegate create completed while the STY05 key was held — drift-retry did not re-serialize on the new root.");
+
+            // (5) Release STY05 → the retried create proceeds and rejects cross-tree (Vik stayed in STY02).
+            await sty05Tx.RollbackAsync();
+            await sty05Conn.DisposeAsync();
+            sty05Released = true;
+
+            var completed = await Task.WhenAny(delegateTask, Task.Delay(5000)) == delegateTask;
+            Assert.True(completed, "The retried /delegate create did not complete — the drift-retry loop hung.");
+            var rsp = await delegateTask;
+            Assert.Equal(HttpStatusCode.BadRequest, rsp.StatusCode);
+        }
+        finally
+        {
+            if (!sty02Released) { await sty02Tx.RollbackAsync(); await sty02Conn.DisposeAsync(); }
+            if (!sty05Released) { await sty05Tx.RollbackAsync(); await sty05Conn.DisposeAsync(); }
+            // Restore Mgr to AFD02 so cleanup + other fixtures are unaffected (each test gets a fresh seed,
+            // but be explicit since this test mutates primary_org_id out-of-band).
+            await using var reset = new NpgsqlConnection(_harness.ConnectionString);
+            await reset.OpenAsync();
+            await using var upd = new NpgsqlCommand(
+                "UPDATE users SET primary_org_id = 'AFD02' WHERE user_id = @id", reset);
+            upd.Parameters.AddWithValue("id", Mgr);
+            await upd.ExecuteNonQueryAsync();
+        }
+
+        // FINAL INVARIANT: no vikar was created for Mgr (the cross-tree retry rejected before INSERT).
+        Assert.Null(await _vikarRepo.GetActiveByApproverAnyDateAsync(Mgr));
+    }
+
     // ════════════════════════════════════════════════════════════════════════════════
     //  Deliverable A — admin-on-behalf MIXED-ROLE denial (S76 / TASK-7600 B1 floor, on THIS
     //  endpoint). The actor is LocalAdmin@STY05 (a styrelse that does NOT contain the manager)
@@ -811,5 +904,65 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
         foreach (var (name, value) in ps)
             cmd.Parameters.AddWithValue(name, value);
         return (long)(await cmd.ExecuteScalarAsync())!;
+    }
+
+    // ── S78 R9 (BLOCKER 1) held-lock interleave harness (mirrors ReportingLineWriteLifecycleTests) ──
+
+    /// <summary>
+    /// Holds the <c>reporting-tree-{treeRoot}</c> xact advisory key on a SIDE connection so a test can
+    /// deterministically BLOCK any in-tree mutator (assign / remove / acting / vikar-create / transfer)
+    /// that takes the same key, until the returned tx is rolled back. The caller owns disposal.
+    /// </summary>
+    private async Task<(NpgsqlConnection conn, NpgsqlTransaction tx)> AcquireTreeLockOnSideConnAsync(string treeRoot)
+    {
+        var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        var tx = await conn.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted);
+        await using (var cmd = new NpgsqlCommand(
+            "SELECT pg_advisory_xact_lock(hashtext('reporting-tree-' || @root))", conn, tx))
+        {
+            cmd.Parameters.AddWithValue("root", treeRoot);
+            await cmd.ExecuteScalarAsync();
+        }
+        return (conn, tx);
+    }
+
+    /// <summary>
+    /// Polls <c>pg_locks</c> (joined to <c>pg_stat_activity</c> to exclude this session) until at least
+    /// one OTHER backend is WAITING (<c>granted = false</c>) on the <c>reporting-tree-{treeRoot}</c>
+    /// advisory key — proving a request actually REACHED and BLOCKED ON THE LOCK (a merely-slow or
+    /// sequentially-run request cannot satisfy it). For a single-arg <c>pg_advisory_xact_lock(bigint)</c>
+    /// the key is split classid=high32 / objid=low32, so it is rebuilt as
+    /// <c>(classid::bigint &lt;&lt; 32) | objid::bigint</c>. Returns <c>true</c> once a waiter is seen;
+    /// <c>false</c> on timeout.
+    /// </summary>
+    private async Task<bool> WaitForAdvisoryLockWaiterAsync(string treeRoot, int timeoutMs = 5000)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        while (DateTime.UtcNow < deadline)
+        {
+            await using (var cmd = new NpgsqlCommand(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM pg_locks pl
+                    JOIN pg_stat_activity sa ON sa.pid = pl.pid
+                    WHERE pl.locktype = 'advisory'
+                      AND pl.granted = FALSE
+                      AND pl.pid <> pg_backend_pid()
+                      AND ((pl.classid::bigint << 32) | pl.objid::bigint)
+                          = hashtext('reporting-tree-' || @root)::bigint
+                )
+                """, conn))
+            {
+                cmd.Parameters.AddWithValue("root", treeRoot);
+                if (await cmd.ExecuteScalarAsync() is true)
+                    return true;
+            }
+            await Task.Delay(50);
+        }
+        return false;
     }
 }

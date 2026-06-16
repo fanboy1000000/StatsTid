@@ -28,6 +28,10 @@ public static class ReportingLineEndpoints
             IOutboxEnqueue outbox,
             HttpContext context,
             CancellationToken ct) =>
+        // S78 R9 — wrap the whole body in the bounded drift-retry loop: if AcquireTreeLockForEmployeeAsync
+        // detects a concurrent cross-styrelse transfer drifted the advisory key, the attempt rolls back
+        // (no side effects — the drift check precedes every FOR UPDATE/mutation) and re-runs on a fresh tx.
+        await TreeRootDriftRetry.RunAsync(async () =>
         {
             var actor = context.GetActorContext();
             var relationship = string.IsNullOrWhiteSpace(request.Relationship) ? "PRIMARY" : request.Relationship;
@@ -66,19 +70,21 @@ public static class ReportingLineEndpoints
                 await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
                 try
                 {
-                    // S74-7403 B1 — TOTAL LOCK ORDER (identical on every path, deadlock-safe):
+                    // S74-7403 B1 / S78 R9 — TOTAL LOCK ORDER (identical on every path, deadlock-safe):
                     //   (1) tree advisory lock  →  (2) the two user rows id-ordered FOR UPDATE (inside
                     //   ValidateSameTreeAsync)  →  (3) cycle guard  →  (4) AssignAsync's slot FOR UPDATE
                     //   on reporting_lines. NO user row is locked before the advisory, so a transaction
                     //   blocked on the advisory holds no user row and cannot deadlock the advisory holder.
                     //
-                    // Step 1a: derive the advisory key from the employee's tree root (UNLOCKED read).
-                    var employeeTreeRoot = await ResolveEmployeeTreeRootInTxAsync(conn, tx, repo, request.EmployeeId, ct);
-
-                    // Step 1b: take the tree-wide advisory lock FIRST (serializes all assigns in this
-                    // tree through the cycle check; closes the concurrent-first-assign phantom gap that
-                    // the slot FOR UPDATE alone leaves). A transaction parked here holds NO user rows.
-                    await ReportingLineRepository.AcquireTreeLockAsync(conn, tx, employeeTreeRoot, ct);
+                    // Step 1 (S78 R9): take the tree-wide advisory lock FIRST via the DRIFT-GUARDED
+                    // acquire — it derives the employee's tree root UNLOCKED, acquires the advisory, then
+                    // RE-DERIVES under the held lock and throws TreeRootDriftException if a concurrent
+                    // cross-styrelse transfer moved the employee in between (the TreeRootDriftRetry.RunAsync
+                    // wrapper rolls back + retries on a fresh tx). This CLOSES the S74-7403 stale-key
+                    // residual: the held advisory key is provably the employee's current tree root, so two
+                    // paths on the same employee genuinely mutually exclude even under a simultaneous
+                    // transfer. A transaction parked on the advisory holds NO user rows.
+                    var employeeTreeRoot = await repo.AcquireTreeLockForEmployeeAsync(conn, tx, request.EmployeeId, ct);
 
                     // Step 2: validate same-tree + manager-active IN-TX, UNDER the held advisory, and
                     // PIN BOTH the employee + manager `users` rows FOR UPDATE in id-order (B1 — so
@@ -88,20 +94,15 @@ public static class ReportingLineEndpoints
                     // inactive here → 400, no orphan. Returns the AUTHORITATIVE common tree root.
                     var treeRootOrgId = await repo.ValidateSameTreeAsync(conn, tx, request.EmployeeId, request.ManagerId, ct);
 
-                    // S74-7403 fix4 — ACCEPTED RESIDUAL (no drift re-acquire). The advisory key (1a) is
-                    // derived from an UNLOCKED org read, so under a concurrent cross-styrelse org-transfer
-                    // it may be stale. We do NOT re-acquire the advisory on the post-pin root: that would
-                    // take the advisory AFTER the user rows are pinned (an inversion of the global
-                    // advisory → rows order) and can DEADLOCK with an assign already holding the corrected
-                    // key. Instead the id-ordered two-row FOR UPDATE + ValidateSameTreeAsync (run ABOVE,
-                    // after the pins) is the safety net: if a concurrent transfer made the employee and
-                    // manager cross-tree, it throws CrossTreeAssignmentException → 400, so no cross-tree
-                    // edge is ever created. RESIDUAL (deferred): two assigns serializing on DIFFERENT
-                    // advisory keys when BOTH parties transfer to the SAME new styrelse simultaneously
-                    // with the assign — a non-serialized cycle window, astronomically rare and
-                    // NON-corrupting — needs a stable tree id or an org-transfer serialization lock and is
-                    // deferred to the in-lock concurrency-hardening follow-up. No rows→advisory inversion
-                    // remains; the deadlock is eliminated.
+                    // S78 R9 — the S74-7403 stale-key residual is now CLOSED. The advisory key is no
+                    // longer taken from an unguarded unlocked read: AcquireTreeLockForEmployeeAsync (Step 1)
+                    // re-derives the root under the held advisory and signals a retry on drift, so the key
+                    // this transaction holds IS the employee's current tree root. ValidateSameTreeAsync
+                    // (below) still pins BOTH user rows FOR UPDATE in id-order and re-resolves the common
+                    // root — defence-in-depth that also rejects a cross-tree manager (the manager may be in
+                    // a different tree even with a non-stale employee key) with CrossTreeAssignmentException
+                    // → 400. The order stays advisory → user rows → slot (no inversion); the simultaneous-
+                    // transfer cycle window the prior pass deferred is eliminated by the drift guard.
 
                     // Step 3: reject an approver that is the employee or any descendant of the
                     // employee (would form a cycle).
@@ -225,7 +226,7 @@ public static class ReportingLineEndpoints
             return isFirstAssignment
                 ? Results.Created($"/api/admin/reporting-lines/{persisted.EmployeeId}", MapLineResponse(persisted))
                 : Results.Ok(MapLineResponse(persisted));
-        }).RequireAuthorization("LocalAdminOrAbove");
+        })).RequireAuthorization("LocalAdminOrAbove"); // S78 R9: extra ) closes TreeRootDriftRetry.RunAsync
 
         // ═══════════════════════════════════════════
         // Endpoint 2: DELETE /api/admin/reporting-lines/{employeeId} — Remove PRIMARY line
@@ -239,6 +240,9 @@ public static class ReportingLineEndpoints
             IOutboxEnqueue outbox,
             HttpContext context,
             CancellationToken ct) =>
+        // S78 R9 — bounded drift-retry wrapper (see Endpoint 1): a concurrent transfer that drifts the
+        // removed person's tree key under the advisory rolls back + retries on a fresh tx.
+        await TreeRootDriftRetry.RunAsync(async () =>
         {
             var actor = context.GetActorContext();
 
@@ -262,18 +266,20 @@ public static class ReportingLineEndpoints
                 await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
                 try
                 {
-                    // ── S74-7403 C2-3 / B1: acquire the tree advisory lock BEFORE the root-invariant
-                    //    census, using the SAME key primitive (ResolveEmployeeTreeRootInTxAsync) +
-                    //    AcquireTreeLockAsync the guarded assigns / R10 use. Without it the census ran
-                    //    un-serialized: it could read a one-root state and then a concurrent assign
-                    //    commits a SECOND root the instant afterward (ADR-027 D9 ≤1-root violation).
-                    //    Holding the lock for the whole census→close serializes this DELETE against every
-                    //    assign in the same tree. Lock order (the SAME global order as every path):
-                    //    tree advisory lock FIRST → RemoveAsync's slot FOR UPDATE → census. This DELETE
-                    //    pins NO user row (it inserts no edge, so B1's cross-tree-edge race does not
-                    //    apply); the key read is unlocked, consistent with "advisory before user rows".
-                    var deletedTreeRoot = await ResolveEmployeeTreeRootInTxAsync(conn, tx, repo, employeeId, ct);
-                    await ReportingLineRepository.AcquireTreeLockAsync(conn, tx, deletedTreeRoot, ct);
+                    // ── S74-7403 C2-3 / B1 + S78 R9: acquire the tree advisory lock BEFORE the
+                    //    root-invariant census, via the DRIFT-GUARDED acquire (the same shared primitive
+                    //    the assigns use). Without the lock the census ran un-serialized: it could read a
+                    //    one-root state and then a concurrent assign commits a SECOND root the instant
+                    //    afterward (ADR-027 D9 ≤1-root violation). Holding the lock for the whole
+                    //    census→close serializes this DELETE against every assign in the same tree. S78
+                    //    R9 additionally CLOSES the stale-key residual: AcquireTreeLockForEmployeeAsync
+                    //    re-derives the removed person's root under the held advisory and signals a retry
+                    //    (TreeRootDriftException → TreeRootDriftRetry.RunAsync) if a concurrent cross-styrelse
+                    //    transfer moved them, so the key is never stale. Lock order (the SAME global order
+                    //    as every path): tree advisory lock FIRST → RemoveAsync's slot FOR UPDATE →
+                    //    census. This DELETE pins NO user row (it inserts no edge, so B1's
+                    //    cross-tree-edge race does not apply).
+                    var deletedTreeRoot = await repo.AcquireTreeLockForEmployeeAsync(conn, tx, employeeId, ct);
 
                     closed = await repo.RemoveAsync(conn, tx, expectedVersion, employeeId, "PRIMARY", ct);
 
@@ -381,7 +387,7 @@ public static class ReportingLineEndpoints
 
             context.Response.Headers.ETag = $"\"{closed.Version}\"";
             return Results.NoContent();
-        }).RequireAuthorization("LocalAdminOrAbove");
+        })).RequireAuthorization("LocalAdminOrAbove"); // S78 R9: extra ) closes TreeRootDriftRetry.RunAsync
 
         // ═══════════════════════════════════════════
         // Endpoint 3: GET /api/admin/reporting-lines/tree/{treeRootOrgId} — Get tree
@@ -520,6 +526,9 @@ public static class ReportingLineEndpoints
             IOutboxEnqueue outbox,
             HttpContext context,
             CancellationToken ct) =>
+        // S78 R9 — bounded drift-retry wrapper (see Endpoint 1): a concurrent transfer that drifts the
+        // employee's tree key under the advisory rolls back + retries on a fresh tx.
+        await TreeRootDriftRetry.RunAsync(async () =>
         {
             var actor = context.GetActorContext();
 
@@ -552,28 +561,25 @@ public static class ReportingLineEndpoints
                 await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
                 try
                 {
-                    // S74-7403 B1 — TOTAL LOCK ORDER (identical to the PRIMARY assign path):
+                    // S74-7403 B1 / S78 R9 — TOTAL LOCK ORDER (identical to the PRIMARY assign path):
                     //   advisory → user rows id-ordered FOR UPDATE (in ValidateSameTreeAsync) → cycle
-                    //   guard → slot. Step 1a: derive the advisory key (UNLOCKED read).
-                    var employeeTreeRoot = await ResolveEmployeeTreeRootInTxAsync(conn, tx, repo, employeeId, ct);
-
-                    // Step 1b: tree-wide advisory lock FIRST, on the ACTING assign path too (an ACTING
-                    // manager that is the employee or a descendant forms a cycle). Parked → no user rows.
-                    await ReportingLineRepository.AcquireTreeLockAsync(conn, tx, employeeTreeRoot, ct);
+                    //   guard → slot. Step 1: take the tree-wide advisory lock FIRST via the DRIFT-GUARDED
+                    //   acquire (the ACTING assign path can form a cycle too). It re-derives the
+                    //   employee's root under the held lock and signals a retry on a concurrent transfer
+                    //   (TreeRootDriftException → TreeRootDriftRetry.RunAsync), so the held key is non-stale
+                    //   (S74-7403 residual closed). Parked → no user rows.
+                    var employeeTreeRoot = await repo.AcquireTreeLockForEmployeeAsync(conn, tx, employeeId, ct);
 
                     // Step 2: same-tree + manager-active in-tx UNDER the lock; pins BOTH user rows
                     // FOR UPDATE in id-order (B1). Returns the authoritative common tree root.
                     var treeRootOrgId = await repo.ValidateSameTreeAsync(conn, tx, employeeId, request.ManagerId, ct);
 
-                    // S74-7403 fix4 — ACCEPTED RESIDUAL (no drift re-acquire), identical to the PRIMARY
-                    // assign path. The advisory key (1a) is from an UNLOCKED org read and may be stale
-                    // under a concurrent cross-styrelse transfer, but we do NOT re-acquire on the post-pin
-                    // root (that would invert advisory → rows and can deadlock). ValidateSameTreeAsync
-                    // (run ABOVE, after both user rows are pinned FOR UPDATE) rejects any cross-tree drift
-                    // with CrossTreeAssignmentException → 400, so no cross-tree edge is created. The
-                    // residual (a simultaneous same-new-styrelse transfer serializing two assigns on
-                    // different keys — astronomically rare, non-corrupting) is deferred to the in-lock
-                    // concurrency-hardening follow-up. No rows→advisory inversion remains.
+                    // S78 R9 — the S74-7403 stale-key residual is CLOSED on this path too (identical to
+                    // the PRIMARY assign): AcquireTreeLockForEmployeeAsync (Step 1) holds the employee's
+                    // CURRENT tree root via the drift guard. ValidateSameTreeAsync (run ABOVE, after both
+                    // user rows are pinned FOR UPDATE) still rejects a cross-tree manager with
+                    // CrossTreeAssignmentException → 400 (defence-in-depth). Order stays advisory → rows →
+                    // slot; the simultaneous-transfer window is eliminated by the drift guard.
 
                     // Step 3: cycle guard.
                     await repo.GuardNoCycleAsync(conn, tx, employeeId, request.ManagerId, ct);
@@ -692,7 +698,7 @@ public static class ReportingLineEndpoints
             return isFirstAssignment
                 ? Results.Created($"/api/admin/reporting-lines/{employeeId}/acting", MapLineResponse(persisted))
                 : Results.Ok(MapLineResponse(persisted));
-        }).RequireAuthorization("LocalAdminOrAbove");
+        })).RequireAuthorization("LocalAdminOrAbove"); // S78 R9: extra ) closes TreeRootDriftRetry.RunAsync
 
         // ═══════════════════════════════════════════
         // Endpoint 7: DELETE /api/admin/reporting-lines/{employeeId}/acting — Remove acting manager
@@ -1158,6 +1164,11 @@ public static class ReportingLineEndpoints
             IAuditProjectionMapper<UserUpdated> userUpdatedAuditMapper,
             HttpContext context,
             CancellationToken ct) =>
+        // S78 R9 — bounded drift-retry wrapper (see Endpoint 1). The 5-step closure derives the removed
+        // person's tree root inside the tx (via the drift-guarded acquire); a concurrent transfer that
+        // moved them mid-acquire rolls the whole closure back + retries on a fresh tx (the drift check
+        // runs BEFORE the in-tx census/closure, so a drifted attempt has NO side effects).
+        await TreeRootDriftRetry.RunAsync(async () =>
         {
             var actor = context.GetActorContext();
 
@@ -1220,16 +1231,18 @@ public static class ReportingLineEndpoints
                 {
                     var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
-                    // ── S74-7403 B4: acquire the removed person's tree lock FIRST, then RE-READ the
-                    //    incoming edge census IN-TX (the out-of-tx preflight above is only a fast
-                    //    pre-check). With the tree lock held for the whole census→closure→deactivate,
-                    //    no concurrent assign can interleave a NEW report assigned to the removed
-                    //    person after the preflight — which would otherwise be left pointing at the
-                    //    now-inactive user (a brand-new orphan; ADR-027 D9). We resolve the removed
-                    //    person's tree root in-tx, lock on it, then iterate the AUTHORITATIVE in-tx
-                    //    edge set (not the preflight snapshot).
-                    var removedTreeRoot = await ResolveEmployeeTreeRootInTxAsync(conn, tx, repo, employeeId, ct);
-                    await ReportingLineRepository.AcquireTreeLockAsync(conn, tx, removedTreeRoot, ct);
+                    // ── S74-7403 B4 / S78 R9: acquire the removed person's tree lock FIRST via the
+                    //    DRIFT-GUARDED acquire, then RE-READ the incoming edge census IN-TX (the
+                    //    out-of-tx preflight above is only a fast pre-check). With the tree lock held for
+                    //    the whole census→closure→deactivate, no concurrent assign can interleave a NEW
+                    //    report assigned to the removed person after the preflight — which would otherwise
+                    //    be left pointing at the now-inactive user (a brand-new orphan; ADR-027 D9). S78
+                    //    R9: AcquireTreeLockForEmployeeAsync re-derives the removed person's root under the
+                    //    held advisory and signals a retry on a concurrent cross-styrelse transfer
+                    //    (TreeRootDriftException → TreeRootDriftRetry.RunAsync), so the lock we hold is on their
+                    //    CURRENT tree root (no stale key). We then iterate the AUTHORITATIVE in-tx edge
+                    //    set (not the preflight snapshot).
+                    var removedTreeRoot = await repo.AcquireTreeLockForEmployeeAsync(conn, tx, employeeId, ct);
 
                     var incomingEdgesInTx = await repo.GetDirectReportsAsync(conn, tx, employeeId, ct);
                     var incomingPrimaryInTx = incomingEdgesInTx.Where(e => e.Relationship == "PRIMARY").ToList();
@@ -1578,7 +1591,7 @@ public static class ReportingLineEndpoints
                 reportsReassigned = reportsReassignedCount,
                 actingEdgesClosed = actingEdgesClosedCount,
             });
-        }).RequireAuthorization("LocalAdminOrAbove");
+        })).RequireAuthorization("LocalAdminOrAbove"); // S78 R9: extra ) closes TreeRootDriftRetry.RunAsync
 
         // ═══════════════════════════════════════════
         // Endpoint 9: GET /api/admin/reporting-lines/tree/{treeRootOrgId}/settings — Get tree settings
@@ -1791,6 +1804,14 @@ public static class ReportingLineEndpoints
             IAuditProjectionMapper<ManagerVikarCreated> vikarCreatedAuditMapper,
             HttpContext context,
             CancellationToken ct) =>
+        // S78 R9 (BLOCKER 1) — the self-service /delegate CREATE is an employee-current-root mutator
+        // (it keys on the SELF-DELEGATING MANAGER's CURRENT tree root, same class as the admin-vikar
+        // create + the assigns), so it gets the SAME bounded drift-retry: if the drift-guarded acquire
+        // (Step 1b below) detects a concurrent cross-styrelse transfer drifted the advisory key, the
+        // attempt rolls back (no side effects — the drift check precedes every FOR UPDATE/mutation) and
+        // re-runs on a fresh tx re-keyed on the manager's NEW root. (The /delegate DELETE/revoke keys on
+        // the PERSISTED tree_root_org_id for revoke-safety and is deliberately NOT re-keyed.)
+        await TreeRootDriftRetry.RunAsync(async () =>
         {
             var actor = context.GetActorContext();
             var actorId = actor.ActorId;
@@ -1862,10 +1883,18 @@ public static class ReportingLineEndpoints
                     //    (3) cycle guard → (4) the manager_vikar INSERT. No user row is locked before the
                     //    advisory, so a tx parked on the advisory holds no user row (deadlock-safe).
                     //
-                    // Step 1a: derive the advisory key from the actor's (absent approver's) tree root.
-                    var actorTreeRoot = await ResolveEmployeeTreeRootInTxAsync(conn, tx, repo, actorId, ct);
-                    // Step 1b: take the tree-wide advisory lock FIRST.
-                    await ReportingLineRepository.AcquireTreeLockAsync(conn, tx, actorTreeRoot, ct);
+                    // Step 1 (S78 R9 BLOCKER 1): take the tree-wide advisory lock FIRST via the
+                    //    DRIFT-GUARDED acquire on the actor's (absent approver's / self-delegating
+                    //    manager's) CURRENT tree root. It derives the root UNLOCKED, acquires the advisory,
+                    //    then RE-DERIVES under the held lock and throws TreeRootDriftException if a
+                    //    concurrent cross-styrelse transfer moved the actor in between (→ the
+                    //    TreeRootDriftRetry.RunAsync wrapper rolls back + retries on a fresh tx re-keyed on
+                    //    the NEW root). This replaces the prior unguarded ResolveEmployeeTreeRootInTxAsync +
+                    //    raw AcquireTreeLockAsync, which could hold a STALE key. The held advisory key is now
+                    //    provably the actor's current tree root, so the in-lock D15 discipline below
+                    //    (same-tree validation, cycle guard, report/coverage census) all run under a
+                    //    non-stale key. The advisory is still taken BEFORE any user-row FOR UPDATE.
+                    await repo.AcquireTreeLockForEmployeeAsync(conn, tx, actorId, ct);
 
                     // Step 2: SECURITY (ADR-027 D2 — S74-7402 B1) — the vikar MUST be in the SAME
                     // styrelse as the absent approver (the actor). Now validated IN-TX under the held
@@ -2027,7 +2056,7 @@ public static class ReportingLineEndpoints
             }
             catch (InvalidOperationException)
             {
-                // ValidateSameTreeAsync / ResolveEmployeeTreeRootInTxAsync throw when a user/org cannot
+                // ValidateSameTreeAsync / AcquireTreeLockForEmployeeAsync throw when a user/org cannot
                 // be resolved to a styrelse tree root (inactive/missing user or org, or no
                 // MINISTRY/STYRELSE ancestor) → clean 400 (byte-stable with the prior pre-tx message),
                 // never a 500. Layer 2 (the authority predicate) fails closed on the same condition.
@@ -2042,7 +2071,7 @@ public static class ReportingLineEndpoints
                 effectiveFrom,
                 effectiveTo,
             });
-        }).RequireAuthorization("LeaderOrAbove");
+        })).RequireAuthorization("LeaderOrAbove"); // S78 R9: extra ) closes TreeRootDriftRetry.RunAsync
 
         // ═══════════════════════════════════════════
         // Endpoint 13: DELETE /api/reporting-lines/delegate — Revoke self-delegation
@@ -2212,6 +2241,11 @@ public static class ReportingLineEndpoints
             IAuditProjectionMapper<ManagerVikarCreated> vikarCreatedAuditMapper,
             HttpContext context,
             CancellationToken ct) =>
+        // S78 R9 — bounded drift-retry wrapper (see Endpoint 1). The vikar-CREATE keys on the absent
+        // manager's CURRENT tree root (an employee-current derivation, like the assigns) — so it carries
+        // the same S74-7403 stale-key risk and gets the drift guard. (The vikar-REVOKE deliberately keys
+        // on the PERSISTED tree_root_org_id for revoke-safety and is NOT re-keyed — see that endpoint.)
+        await TreeRootDriftRetry.RunAsync(async () =>
         {
             var actor = context.GetActorContext();
             if (string.IsNullOrEmpty(actor.ActorId))
@@ -2272,10 +2306,13 @@ public static class ReportingLineEndpoints
                 await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
                 try
                 {
-                    // Step 1a: derive the advisory key from the MANAGER's tree root (the absent approver).
-                    var managerTreeRoot = await ResolveEmployeeTreeRootInTxAsync(conn, tx, repo, managerId, ct);
-                    // Step 1b: take the tree-wide advisory lock FIRST (before ANY auth/census read).
-                    await ReportingLineRepository.AcquireTreeLockAsync(conn, tx, managerTreeRoot, ct);
+                    // Step 1 (S78 R9): take the tree-wide advisory lock FIRST (before ANY auth/census
+                    //   read) via the DRIFT-GUARDED acquire on the MANAGER's tree root (the absent
+                    //   approver). It re-derives the root under the held lock and signals a retry on a
+                    //   concurrent cross-styrelse transfer of the manager (TreeRootDriftException →
+                    //   TreeRootDriftRetry.RunAsync), so the in-lock admin-scope/coverage/same-tree checks all
+                    //   run under the manager's CURRENT, non-stale tree key.
+                    var managerTreeRoot = await repo.AcquireTreeLockForEmployeeAsync(conn, tx, managerId, ct);
 
                     // (i) IN-LOCK admin-scope check. Resolve the manager's CURRENT primary org IN-TX
                     //     (so a concurrent cross-styrelse transfer cannot move them out from under the
@@ -2411,7 +2448,7 @@ public static class ReportingLineEndpoints
                 effectiveTo,
                 reason = createdVikar.Reason,
             });
-        }).RequireAuthorization("LocalAdminOrAbove");
+        })).RequireAuthorization("LocalAdminOrAbove"); // S78 R9: extra ) closes TreeRootDriftRetry.RunAsync
 
         // ═══════════════════════════════════════════
         // Endpoint 15: DELETE /api/admin/reporting-lines/{managerId}/vikar — admin revokes the

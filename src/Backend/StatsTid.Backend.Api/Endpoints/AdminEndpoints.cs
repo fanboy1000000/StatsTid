@@ -1,3 +1,4 @@
+using System.Data;
 using System.Text.Json;
 using Npgsql;
 using StatsTid.Auth;
@@ -915,6 +916,12 @@ public static class AdminEndpoints
             ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
+        // S78 R9 (R3) — bounded drift-retry wrapper. When this PUT is a cross-styrelse TRANSFER (it
+        // changes primary_org_id) it acquires the reporting-tree advisory for BOTH the OLD + NEW roots
+        // via the drift-guarded acquire BEFORE the users-row FOR UPDATE; if a concurrent transfer of the
+        // same user drifts the OLD root under the advisory, the attempt rolls back (no side effects — the
+        // drift check precedes the FOR UPDATE + the UPDATE) and retries on a fresh tx.
+        await TreeRootDriftRetry.RunAsync(async () =>
         {
             var actor = context.GetActorContext();
             var logger = loggerFactory.CreateLogger("StatsTid.Backend.Api.Endpoints.AdminEndpoints.UsersPut");
@@ -993,7 +1000,11 @@ public static class AdminEndpoints
             var now = DateTime.UtcNow;
             await using var conn = dbFactory.Create();
             await conn.OpenAsync(ct);
-            await using var tx = await conn.BeginTransactionAsync(ct);
+            // S78 R5 — EXPLICIT ReadCommitted (do not rely on the Npgsql driver default). REPEATABLE
+            // READ would pin the snapshot BEFORE the advisory and silently defeat the tree lock (the
+            // S74-7403 lesson): the post-acquire OLD-root re-derivation must see a transfer that
+            // committed during the advisory wait, which only ReadCommitted provides.
+            await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
 
             // S35 Step 7a cycle 1 absorption (Reviewer W2) — hoist the four
             // post-update field values out of the try block so the 200 response
@@ -1012,6 +1023,25 @@ public static class AdminEndpoints
 
             try
             {
+                // S78 R3/R9 — CROSS-STYRELSE TRANSFER serialization. When this PUT moves primary_org_id
+                // to a different org, acquire the reporting-tree advisory for BOTH the OLD (current) and
+                // NEW (target) tree roots — id-ordered, deadlock-safe — BEFORE the users-row FOR UPDATE
+                // below (advisory → rows order, matching the assign/remove paths so transfer-vs-assign
+                // cannot invert). AcquireTreeLocksForTransferAsync re-derives the OLD root under the held
+                // locks and throws TreeRootDriftException (→ the drift-retry wrapper rolls back + retries)
+                // if a concurrent transfer of THIS user committed in the unlocked-read → advisory window.
+                // This closes the S74-7403 stale-key residual from the TRANSFER side: an assign/remove in
+                // either tree now blocks against the move. We use request.PrimaryOrgId vs the pre-tx
+                // existingUser snapshot only to DECIDE whether to lock; the locked-row FOR UPDATE +
+                // If-Match check below remains the authoritative version gate, and the in-tree
+                // serialization holds regardless (a stale "no change" read just skips the lock for a
+                // no-op org write).
+                if (request.PrimaryOrgId is not null &&
+                    !string.Equals(request.PrimaryOrgId, existingUser.PrimaryOrgId, StringComparison.Ordinal))
+                {
+                    await reportingLineRepo.AcquireTreeLocksForTransferAsync(conn, tx, userId, request.PrimaryOrgId, ct);
+                }
+
                 // S35 / TASK-3506 — in-tx FOR-UPDATE re-read of the users row.
                 // Atomic row + version snapshot under a row-level lock prevents the
                 // audit-trail race where the pre-tx existingUser snapshot at the top
@@ -1024,10 +1054,10 @@ public static class AdminEndpoints
                 // pre-tx existingUser for null-coalescing fallbacks, which could
                 // pick up stale data under concurrent admin edits.
                 //
-                // Lock order: users (this read) → user_agreement_codes (the
-                // agreementPredecessor read below, on the mutation branch). users
-                // is the foreign-key parent in conventional admin write flows;
-                // locking the parent first avoids deadlocks against the
+                // Lock order (S78): tree advisory (above, on transfer) → users (this
+                // read) → user_agreement_codes (the agreementPredecessor read below, on
+                // the mutation branch). users is the foreign-key parent in conventional
+                // admin write flows; locking the parent first avoids deadlocks against the
                 // UserAgreementCodeBackfillSeeder (UserAgreementCodeBackfillSeeder.cs:107-117)
                 // which reads users plain (no lock) before INSERTing into
                 // user_agreement_codes. The seeder cannot deadlock against this
@@ -1537,7 +1567,7 @@ public static class AdminEndpoints
                 agreementCode = newAgreementCode,
                 version = newUserVersion,
             });
-        }).RequireAuthorization("LocalAdminOrAbove");
+        })).RequireAuthorization("LocalAdminOrAbove"); // S78 R9: extra ) closes TreeRootDriftRetry.RunAsync
 
         // ═══════════════════════════════════════════
         // Role Assignment Endpoints

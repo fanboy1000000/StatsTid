@@ -1,6 +1,8 @@
+using System.Data;
 using Microsoft.AspNetCore.Mvc;
 using Npgsql;
 using StatsTid.Auth;
+using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
@@ -51,6 +53,22 @@ public static class ApprovalEndpoints
         long m = parts.Length > 1 ? long.Parse(parts[1]) : 0;
         long s = parts.Length > 2 ? long.Parse(parts[2]) : 0;
         return h * 3600 + m * 60 + s;
+    }
+
+    /// <summary>
+    /// Derives the persisted <c>approval_method</c> for an approve/reject from the resolved
+    /// designated approver: <c>ORG_SCOPE_FALLBACK</c> when no designated approver exists OR the actor is
+    /// NOT that designated approver; otherwise the resolver's method (<c>ACTING_MANAGER</c> /
+    /// <c>DESIGNATED_MANAGER</c>). Used at BOTH the pre-tx fast path and the in-tx authoritative
+    /// re-derivation (S78 BLOCKER 2) so the two cannot drift.
+    /// </summary>
+    private static string DeriveApprovalMethod(string? actorId, string? designatedManagerId, string? resolvedMethod)
+    {
+        if (designatedManagerId is null)
+            return "ORG_SCOPE_FALLBACK";
+        if (actorId == designatedManagerId)
+            return resolvedMethod!; // "ACTING_MANAGER" or "DESIGNATED_MANAGER"
+        return "ORG_SCOPE_FALLBACK"; // Actor is not the designated approver.
     }
 
     public static WebApplication MapApprovalEndpoints(this WebApplication app)
@@ -186,6 +204,11 @@ public static class ApprovalEndpoints
             UserRepository userRepo,
             HttpContext context,
             CancellationToken ct) =>
+        // S78 R1 — wrap the whole body in the bounded drift-retry loop: if AcquireTreeLockForEmployeeAsync
+        // (taken in-tx as the first lock-bearing statement) detects a concurrent cross-styrelse transfer
+        // drifted the employee's tree-root advisory key, the attempt rolls back (no side effects — the
+        // drift check precedes the conditional UPDATE and every mutation) and re-runs on a fresh tx.
+        await TreeRootDriftRetry.RunAsync(async () =>
         {
             var actor = context.GetActorContext();
 
@@ -202,38 +225,102 @@ public static class ApprovalEndpoints
             // RIGHT NOW (S74 / ADR-027 D4 A3 expansion — the edge grants cross-afdeling
             // authority within the styrelse; asOf = today = "who may act NOW"). The edge is
             // intra-tree by construction, so ADR-027 D2 (cross-styrelse forbidden) holds.
-            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, period.OrgId, ct);
-            if (!allowed)
+            // S78 R1: orgScopeAllowed is hoisted so the in-tx re-eval knows whether the actor was
+            // admitted by org-scope (JWT-claim-based, not re-checked in-tx) or purely by the edge.
+            var (orgScopeAllowed, orgScopeReason) = await scopeValidator.ValidateOrgAccessAsync(actor, period.OrgId, ct);
+            if (!orgScopeAllowed)
             {
                 var today = DateOnly.FromDateTime(DateTime.UtcNow);
                 var hasEdge = await designatedAuthorizer.IsEffectiveDesignatedApproverAsync(
                     actor.ActorId!, period.EmployeeId, asOf: today, ct: ct);
                 if (!hasEdge)
-                    return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+                    return Results.Json(new { error = "Access denied", reason = orgScopeReason }, statusCode: 403);
             }
 
-            // Resolve designated approver for audit trail (ADR-027 D5).
-            var (designatedManagerId, resolvedMethod, depth) =
+            // Resolve designated approver for audit trail (ADR-027 D5). PRE-tx FAST PATH (the in-tx
+            // re-derivation under the advisory is the AUTHORITATIVE one — S78 BLOCKER 2).
+            var (preDesignatedManagerId, preResolvedMethod, _) =
                 await reportingLineRepo.ResolveDesignatedApproverAsync(period.EmployeeId, ct);
 
-            // Derive approval_method based on who's actually approving vs who should be.
-            string approvalMethod;
-            if (designatedManagerId is null)
-                approvalMethod = "ORG_SCOPE_FALLBACK";
-            else if (actor.ActorId == designatedManagerId)
-                approvalMethod = resolvedMethod!; // "ACTING_MANAGER" or "DESIGNATED_MANAGER"
-            else
-                approvalMethod = "ORG_SCOPE_FALLBACK"; // Actor is not the designated approver
-
-            // S50 TASK-5007: Enforcement check.
+            // S50 TASK-5007: Enforcement check (pre-tx fast path). The treeRoot is request-stable
+            // (resolved from period.OrgId); the designated-approver classification is re-derived in-tx.
             var treeRoot = await reportingLineRepo.ResolveTreeRootOrgIdAsync(period.OrgId, ct);
             var enforcementMode = await treeSettingsRepo.GetEnforcementModeAsync(treeRoot, ct);
+            var confirmFallbackRequested =
+                context.Request.Query.ContainsKey("confirmFallback") &&
+                context.Request.Query["confirmFallback"] == "true";
+
+            // Pre-tx 428 fast path: if the pre-tx classification is already a REQUIRED-mode fallback without
+            // confirmation, 428 now (no need to take the lock). The in-tx re-derivation re-checks this under
+            // the advisory so a concurrent edge reassignment cannot BYPASS the gate (BLOCKER 2).
+            var preApprovalMethod = DeriveApprovalMethod(actor.ActorId, preDesignatedManagerId, preResolvedMethod);
+            if (enforcementMode == "REQUIRED" && preApprovalMethod == "ORG_SCOPE_FALLBACK" && !confirmFallbackRequested)
+            {
+                return Results.Json(new
+                {
+                    error = "Enforcement enabled — designated manager required",
+                    enforcementMode,
+                    designatedApproverId = preDesignatedManagerId,
+                    treeRootOrgId = treeRoot,
+                }, statusCode: 428);
+            }
+
+            // Atomic state-change + audit + outbox enqueue (ADR-018 D3).
+            await using var conn = connectionFactory.Create();
+            await conn.OpenAsync(ct);
+            await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
+
+            // S78 R1 — IN-LOCK edge-auth re-evaluation. Take the period-employee's tree-wide advisory
+            // (drift-guarded) as the FIRST lock-bearing statement, THEN re-evaluate the designated edge
+            // STRICTLY AFTER the advisory is held. Because the action tx HOLDS the reporting-tree advisory
+            // on the period-employee's CURRENT tree root, the KEY-SHARING revokers — reporting-line remove,
+            // admin-vikar CREATE, and the employee-current-root mutators (self-/delegate create, acting
+            // assign, the assign/transfer paths) — all take the SAME employee-current tree advisory (7800)
+            // and so BLOCK before their commit; this re-read then observes the FROZEN committed edge state
+            // → true serialization of the revoke-vs-approve race. (NAMED RESIDUAL: the admin-vikar REVOKE
+            // [DELETE /…/vikar] deliberately keys on the PERSISTED manager_vikar.tree_root_org_id for
+            // revoke-safety, NOT the employee-current root, so a post-transfer revoke can key on a DIFFERENT
+            // tree than this approve — the approve-vs-vikar-revoke post-transfer key-mismatch residual.
+            // That residual is non-corrupting: the revoke only ENDS an existing edge, and this in-tx
+            // re-eval re-reads the committed manager_vikar state under ReadCommitted regardless of which key
+            // either side held.) We re-check ONLY the designated edge for AUTHORITY (not org-scope:
+            // ValidateOrgAccessAsync is JWT-claim-based and cannot be serialized by a DB lock — its pre-tx
+            // check remains the gate). If the actor passed the pre-tx check PURELY via the edge (org-scope
+            // denied), a revoke that committed before we got the lock now flips the re-eval to DENY → 403.
+            await reportingLineRepo.AcquireTreeLockForEmployeeAsync(conn, tx, period.EmployeeId, ct);
+
+            var asOf = DateOnly.FromDateTime(DateTime.UtcNow);
+
+            // Compute asOf at action-time. Only re-check the edge for AUTHORITY when the pre-tx ORG-scope
+            // gate did NOT already admit the actor (orgScopeAllowed): an org-scope-admitted approval does
+            // not depend on the edge, so a revoked edge must not flip it to 403 (not the authorizing surface).
+            if (!orgScopeAllowed)
+            {
+                var stillHasEdge = await designatedAuthorizer.IsEffectiveDesignatedApproverAsync(
+                    actor.ActorId!, period.EmployeeId, asOf: asOf, ct: ct);
+                if (!stillHasEdge)
+                    return Results.Json(new { error = "Access denied", reason = orgScopeReason }, statusCode: 403);
+            }
+
+            // S78 BLOCKER 2 — re-resolve the designated approver + re-derive the enforcement classification
+            // UNDER the held advisory (the AUTHORITATIVE values for the persisted metadata + the gate). The
+            // resolver opens its own connection, but ReadCommitted + the held advisory mean it observes the
+            // FROZEN committed edge state (a concurrent reassignment is blocked from committing until we
+            // release), so this re-derivation reflects the locked tree. This is INDEPENDENT of org-scope
+            // admission: org-scope admits AUTHORITY, but the confirmFallback gate is about WHICH approver.
+            var (designatedManagerId, resolvedMethod, depth) =
+                await reportingLineRepo.ResolveDesignatedApproverAsync(period.EmployeeId, ct, asOf: asOf);
+            var approvalMethod = DeriveApprovalMethod(actor.ActorId, designatedManagerId, resolvedMethod);
             var explicitFallback = false;
 
+            // Re-evaluate the REQUIRED-mode gate IN-TX: if the locked state now makes this a fallback
+            // approval in REQUIRED mode WITHOUT confirmFallback, return the same 428 — do NOT silently
+            // approve. A concurrent edge reassignment that turned the actor into a fallback approver cannot
+            // bypass the gate. We do NOT over-deny a legitimately-unchanged approval: when the actor is
+            // still the designated/acting manager the method is NOT a fallback, so no 428 fires.
             if (enforcementMode == "REQUIRED" && approvalMethod == "ORG_SCOPE_FALLBACK")
             {
-                if (context.Request.Query.ContainsKey("confirmFallback") &&
-                    context.Request.Query["confirmFallback"] == "true")
+                if (confirmFallbackRequested)
                 {
                     explicitFallback = true;
                 }
@@ -249,12 +336,25 @@ public static class ApprovalEndpoints
                 }
             }
 
-            // Atomic state-change + audit + outbox enqueue (ADR-018 D3).
-            await using var conn = connectionFactory.Create();
-            await conn.OpenAsync(ct);
-            await using var tx = await conn.BeginTransactionAsync(ct);
+            // S78 R2 — the CONDITIONAL status transition is the FIRST mutation in the tx (BEFORE the
+            // FallbackTraversalWarning enqueue, audit insert, and action outbox), so a concurrent
+            // double-transition loser (null return = 0 rows) short-circuits to a clean 409 with NO side
+            // effects. BLOCKER 1: it RETURNs the locked-in pre-update status atomically (unused here — the
+            // approve event carries no previousStatus — but proves the accurate old status was captured).
+            var oldStatus = await approvalRepo.TryUpdateStatusConditionalAsync(
+                conn, tx, periodId, "APPROVED",
+                allowedSourceStates: new[] { "SUBMITTED", "EMPLOYEE_APPROVED" },
+                actorId: actor.ActorId,
+                rejectionReason: null,
+                designatedApproverId: designatedManagerId,
+                approvalMethod: approvalMethod,
+                explicitFallbackConfirmation: explicitFallback,
+                ct: ct);
+            if (oldStatus is null)
+                return Results.Conflict(new { error = "Period status changed concurrently; refresh and retry." });
 
-            // Emit FallbackTraversalWarning if depth > 3 (ADR-027 D5).
+            // Emit FallbackTraversalWarning if depth > 3 (ADR-027 D5). AFTER the conditional UPDATE so a
+            // 0-row loser writes no warning.
             if (depth > 3)
             {
                 var warning = new FallbackTraversalWarning
@@ -269,14 +369,6 @@ public static class ApprovalEndpoints
                 };
                 await outbox.EnqueueAsync(conn, tx, $"reporting-line-{period.EmployeeId}", warning, ct);
             }
-
-            // Transition to APPROVED
-            await approvalRepo.UpdateStatusAsync(conn, tx, periodId, "APPROVED", actor.ActorId,
-                rejectionReason: null,
-                designatedApproverId: designatedManagerId,
-                approvalMethod: approvalMethod,
-                explicitFallbackConfirmation: explicitFallback,
-                ct: ct);
 
             // Write approval audit (in-tx).
             await approvalRepo.AppendAuditAsync(
@@ -315,7 +407,7 @@ public static class ApprovalEndpoints
             await tx.CommitAsync(ct);
 
             return Results.Ok(new { periodId, status = "APPROVED" });
-        }).RequireAuthorization("LeaderOrAbove");
+        })).RequireAuthorization("LeaderOrAbove"); // S78 R1: extra ) closes TreeRootDriftRetry.RunAsync
 
         // ── Reject Period ──
 
@@ -335,6 +427,8 @@ public static class ApprovalEndpoints
             UserRepository userRepo,
             HttpContext context,
             CancellationToken ct) =>
+        // S78 R1 — bounded drift-retry wrapper (same shape as approve).
+        await TreeRootDriftRetry.RunAsync(async () =>
         {
             var actor = context.GetActorContext();
 
@@ -348,38 +442,73 @@ public static class ApprovalEndpoints
 
             // Authorize: org-scope (existing) OR the effective designated-approver edge at
             // today (S74 / ADR-027 D4 A3 — same as approve; tree-bound is structural).
-            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, period.OrgId, ct);
-            if (!allowed)
+            // S78 R1: orgScopeAllowed hoisted for the in-tx edge re-eval (same as approve).
+            var (orgScopeAllowed, orgScopeReason) = await scopeValidator.ValidateOrgAccessAsync(actor, period.OrgId, ct);
+            if (!orgScopeAllowed)
             {
                 var today = DateOnly.FromDateTime(DateTime.UtcNow);
                 var hasEdge = await designatedAuthorizer.IsEffectiveDesignatedApproverAsync(
                     actor.ActorId!, period.EmployeeId, asOf: today, ct: ct);
                 if (!hasEdge)
-                    return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+                    return Results.Json(new { error = "Access denied", reason = orgScopeReason }, statusCode: 403);
             }
 
-            // Resolve designated approver for audit trail (ADR-027 D5).
-            var (designatedManagerId, resolvedMethod, depth) =
+            // Resolve designated approver for audit trail (ADR-027 D5). PRE-tx FAST PATH; the in-tx
+            // re-derivation under the advisory is the AUTHORITATIVE one (S78 BLOCKER 2).
+            var (preDesignatedManagerId, preResolvedMethod, _) =
                 await reportingLineRepo.ResolveDesignatedApproverAsync(period.EmployeeId, ct);
 
-            // Derive approval_method based on who's actually rejecting vs who should be.
-            string approvalMethod;
-            if (designatedManagerId is null)
-                approvalMethod = "ORG_SCOPE_FALLBACK";
-            else if (actor.ActorId == designatedManagerId)
-                approvalMethod = resolvedMethod!; // "ACTING_MANAGER" or "DESIGNATED_MANAGER"
-            else
-                approvalMethod = "ORG_SCOPE_FALLBACK"; // Actor is not the designated approver
-
-            // S50 TASK-5007: Enforcement check.
+            // S50 TASK-5007: Enforcement check (pre-tx fast path). treeRoot is request-stable.
             var treeRoot = await reportingLineRepo.ResolveTreeRootOrgIdAsync(period.OrgId, ct);
             var enforcementMode = await treeSettingsRepo.GetEnforcementModeAsync(treeRoot, ct);
+            var confirmFallbackRequested =
+                context.Request.Query.ContainsKey("confirmFallback") &&
+                context.Request.Query["confirmFallback"] == "true";
+
+            // Pre-tx 428 fast path (re-checked in-tx under the advisory — BLOCKER 2).
+            var preApprovalMethod = DeriveApprovalMethod(actor.ActorId, preDesignatedManagerId, preResolvedMethod);
+            if (enforcementMode == "REQUIRED" && preApprovalMethod == "ORG_SCOPE_FALLBACK" && !confirmFallbackRequested)
+            {
+                return Results.Json(new
+                {
+                    error = "Enforcement enabled — designated manager required",
+                    enforcementMode,
+                    designatedApproverId = preDesignatedManagerId,
+                    treeRootOrgId = treeRoot,
+                }, statusCode: 428);
+            }
+
+            // Atomic state-change + audit + outbox enqueue (ADR-018 D3).
+            await using var conn = connectionFactory.Create();
+            await conn.OpenAsync(ct);
+            await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
+
+            // S78 R1 — in-lock edge-auth re-evaluation (same shape as approve): advisory FIRST, then
+            // re-check the designated edge under the held lock; org-scope stays a pre-tx-only gate.
+            await reportingLineRepo.AcquireTreeLockForEmployeeAsync(conn, tx, period.EmployeeId, ct);
+            var asOf = DateOnly.FromDateTime(DateTime.UtcNow);
+            if (!orgScopeAllowed)
+            {
+                var stillHasEdge = await designatedAuthorizer.IsEffectiveDesignatedApproverAsync(
+                    actor.ActorId!, period.EmployeeId, asOf: asOf, ct: ct);
+                if (!stillHasEdge)
+                    return Results.Json(new { error = "Access denied", reason = orgScopeReason }, statusCode: 403);
+            }
+
+            // S78 BLOCKER 2 — re-resolve + re-classify UNDER the held advisory (the authoritative values for
+            // the persisted metadata + the 428 gate). Same rationale as approve: a concurrent reassignment
+            // is blocked from committing, so the resolver observes the frozen locked tree. Independent of
+            // org-scope admission — the confirmFallback gate is about WHICH approver, not authority.
+            var (designatedManagerId, resolvedMethod, depth) =
+                await reportingLineRepo.ResolveDesignatedApproverAsync(period.EmployeeId, ct, asOf: asOf);
+            var approvalMethod = DeriveApprovalMethod(actor.ActorId, designatedManagerId, resolvedMethod);
             var explicitFallback = false;
 
+            // Re-evaluate the REQUIRED-mode gate IN-TX (no over-denial: an unchanged designated/acting
+            // approver is not a fallback, so no 428 fires).
             if (enforcementMode == "REQUIRED" && approvalMethod == "ORG_SCOPE_FALLBACK")
             {
-                if (context.Request.Query.ContainsKey("confirmFallback") &&
-                    context.Request.Query["confirmFallback"] == "true")
+                if (confirmFallbackRequested)
                 {
                     explicitFallback = true;
                 }
@@ -395,12 +524,22 @@ public static class ApprovalEndpoints
                 }
             }
 
-            // Atomic state-change + audit + outbox enqueue (ADR-018 D3).
-            await using var conn = connectionFactory.Create();
-            await conn.OpenAsync(ct);
-            await using var tx = await conn.BeginTransactionAsync(ct);
+            // S78 R2 — the CONDITIONAL status transition is the FIRST mutation (BEFORE the warning, audit,
+            // and outbox), so a null (0-row) double-transition loser short-circuits to a clean 409, no side
+            // effects. BLOCKER 1: it RETURNs the locked-in pre-update status (the accurate old status).
+            var oldStatus = await approvalRepo.TryUpdateStatusConditionalAsync(
+                conn, tx, periodId, "REJECTED",
+                allowedSourceStates: new[] { "SUBMITTED", "EMPLOYEE_APPROVED" },
+                actorId: actor.ActorId,
+                rejectionReason: request.Reason,
+                designatedApproverId: designatedManagerId,
+                approvalMethod: approvalMethod,
+                explicitFallbackConfirmation: explicitFallback,
+                ct: ct);
+            if (oldStatus is null)
+                return Results.Conflict(new { error = "Period status changed concurrently; refresh and retry." });
 
-            // Emit FallbackTraversalWarning if depth > 3 (ADR-027 D5).
+            // Emit FallbackTraversalWarning if depth > 3 (ADR-027 D5). AFTER the conditional UPDATE.
             if (depth > 3)
             {
                 var warning = new FallbackTraversalWarning
@@ -415,14 +554,6 @@ public static class ApprovalEndpoints
                 };
                 await outbox.EnqueueAsync(conn, tx, $"reporting-line-{period.EmployeeId}", warning, ct);
             }
-
-            // Transition to REJECTED
-            await approvalRepo.UpdateStatusAsync(conn, tx, periodId, "REJECTED", actor.ActorId,
-                rejectionReason: request.Reason,
-                designatedApproverId: designatedManagerId,
-                approvalMethod: approvalMethod,
-                explicitFallbackConfirmation: explicitFallback,
-                ct: ct);
 
             // Write approval audit (in-tx).
             await approvalRepo.AppendAuditAsync(
@@ -462,7 +593,7 @@ public static class ApprovalEndpoints
             await tx.CommitAsync(ct);
 
             return Results.Ok(new { periodId, status = "REJECTED", reason = request.Reason });
-        }).RequireAuthorization("LeaderOrAbove");
+        })).RequireAuthorization("LeaderOrAbove"); // S78 R1: extra ) closes TreeRootDriftRetry.RunAsync
 
         // ── Get Pending Periods ──
 
@@ -922,6 +1053,7 @@ public static class ApprovalEndpoints
             Guid periodId,
             ReopenPeriodRequest request,
             ApprovalPeriodRepository approvalRepo,
+            ReportingLineRepository reportingLineRepo,
             DesignatedApproverAuthorizer designatedAuthorizer,
             OrgScopeValidator scopeValidator,
             DbConnectionFactory connectionFactory,
@@ -931,6 +1063,11 @@ public static class ApprovalEndpoints
             UserRepository userRepo,
             HttpContext context,
             CancellationToken ct) =>
+        // S78 R1 — bounded drift-retry wrapper. The LEADER arm takes the advisory + in-tx edge re-eval;
+        // the EMPLOYEE arm takes NO advisory (it carries no designated-edge authority — a self-action),
+        // but BOTH arms get the R2 conditional UPDATE. AcquireTreeLockForEmployeeAsync only runs on the
+        // Leader arm, so the drift-retry only ever fires for the Leader arm.
+        await TreeRootDriftRetry.RunAsync(async () =>
         {
             var actor = context.GetActorContext();
 
@@ -939,6 +1076,11 @@ public static class ApprovalEndpoints
                 return Results.NotFound(new { error = "Period not found" });
 
             var isEmployee = actor.ActorRole == StatsTidRoles.Employee;
+            // S78 R1: track whether the Leader arm was admitted by org-scope (for the in-tx re-eval) and
+            // the allowed conditional-UPDATE source-state set (R2), which differs per arm.
+            var orgScopeAdmittedLeaderArm = false;
+            string? orgScopeReason = null;
+            string[] allowedSourceStates;
 
             if (isEmployee)
             {
@@ -951,6 +1093,9 @@ public static class ApprovalEndpoints
 
                 if (period.Status != "EMPLOYEE_APPROVED")
                     return Results.Json(new { error = "Access denied", reason = "Employee can only reopen EMPLOYEE_APPROVED periods" }, statusCode: 403);
+
+                // EMPLOYEE arm: only EMPLOYEE_APPROVED → DRAFT.
+                allowedSourceStates = new[] { "EMPLOYEE_APPROVED" };
             }
             else
             {
@@ -959,6 +1104,8 @@ public static class ApprovalEndpoints
                 // within the styrelse; tree-bound is structural). This OR-branch lives ONLY in
                 // the Leader+ arm.
                 var (allowed2, reason2) = await scopeValidator.ValidateOrgAccessAsync(actor, period.OrgId, ct);
+                orgScopeAdmittedLeaderArm = allowed2;
+                orgScopeReason = reason2;
                 if (!allowed2)
                 {
                     var today = DateOnly.FromDateTime(DateTime.UtcNow);
@@ -970,16 +1117,46 @@ public static class ApprovalEndpoints
 
                 if (period.Status is not ("EMPLOYEE_APPROVED" or "APPROVED"))
                     return Results.Conflict(new { error = $"Cannot reopen period with status {period.Status}. Only EMPLOYEE_APPROVED or APPROVED periods can be reopened." });
+
+                // LEADER arm: EMPLOYEE_APPROVED or APPROVED → DRAFT.
+                allowedSourceStates = new[] { "EMPLOYEE_APPROVED", "APPROVED" };
             }
 
             // Atomic state-change + audit + outbox enqueue (ADR-018 D3).
             await using var conn = connectionFactory.Create();
             await conn.OpenAsync(ct);
-            await using var tx = await conn.BeginTransactionAsync(ct);
+            await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
 
-            // Transition back to DRAFT
-            var previousStatus = period.Status;
-            await approvalRepo.UpdateStatusAsync(conn, tx, periodId, "DRAFT", actor.ActorId, ct: ct);
+            // S78 R1 — the LEADER arm only: advisory FIRST, then in-tx edge re-eval (org-scope stays a
+            // pre-tx-only gate). The EMPLOYEE arm carries no designated-edge authority (a self-action
+            // gated by ValidateEmployeeAccessAsync), so it takes NEITHER the advisory nor the re-eval.
+            if (!isEmployee)
+            {
+                await reportingLineRepo.AcquireTreeLockForEmployeeAsync(conn, tx, period.EmployeeId, ct);
+                if (!orgScopeAdmittedLeaderArm)
+                {
+                    var asOf = DateOnly.FromDateTime(DateTime.UtcNow);
+                    var stillHasEdge = await designatedAuthorizer.IsEffectiveDesignatedApproverAsync(
+                        actor.ActorId!, period.EmployeeId, asOf: asOf, ct: ct);
+                    if (!stillHasEdge)
+                        return Results.Json(new { error = "Access denied", reason = orgScopeReason }, statusCode: 403);
+                }
+            }
+
+            // S78 R2 — the CONDITIONAL status transition is the FIRST (and only) mutation before the audit
+            // + outbox; a null (0-row) loser of a concurrent double-transition short-circuits to a clean 409.
+            // S78 BLOCKER 1 — the conditional UPDATE RETURNs the LOCKED-IN pre-update status (captured
+            // atomically with FOR UPDATE), so PeriodReopened.PreviousStatus records the status that was
+            // actually present at the locked transition — NOT the stale pre-tx read (period.Status). This
+            // resolves the approve-then-reopen flip: when a concurrent approve commits between this request's
+            // pre-tx read and its locked UPDATE, the reopen's allowed source set still includes APPROVED so
+            // it wins and accurately records previousStatus=APPROVED; if the approve has NOT yet committed it
+            // sees the pre-tx status (e.g. EMPLOYEE_APPROVED) — and a row already moved fully out of the
+            // allowed set returns null → a clean 409.
+            var previousStatus = await approvalRepo.TryUpdateStatusConditionalAsync(
+                conn, tx, periodId, "DRAFT", allowedSourceStates, actor.ActorId, ct: ct);
+            if (previousStatus is null)
+                return Results.Conflict(new { error = "Period status changed concurrently; refresh and retry." });
 
             // Write audit trail (in-tx).
             await approvalRepo.AppendAuditAsync(
@@ -1019,7 +1196,7 @@ public static class ApprovalEndpoints
             await tx.CommitAsync(ct);
 
             return Results.Ok(new { periodId, status = "DRAFT" });
-        }).RequireAuthorization("EmployeeOrAbove");
+        })).RequireAuthorization("EmployeeOrAbove"); // S78 R1: extra ) closes TreeRootDriftRetry.RunAsync
 
         return app;
     }

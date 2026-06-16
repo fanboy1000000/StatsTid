@@ -911,21 +911,93 @@ public sealed class ApprovalPeriodRepository
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
+    /// <summary>
+    /// S78 R2 — the CONDITIONAL in-tx status transition. Identical to the in-tx
+    /// <see cref="UpdateStatusAsync(NpgsqlConnection, NpgsqlTransaction, Guid, string, string?, string?, string?, string?, bool, CancellationToken)"/>
+    /// overload but the UPDATE additionally guards <c>status = ANY(allowedSourceStates)</c>, so it ONLY
+    /// transitions a row that is still in an expected source state.
+    ///
+    /// <para>
+    /// <b>S78 BLOCKER 1 — the locked-in previous status.</b> The UPDATE captures the row's pre-update
+    /// status ATOMICALLY (a <c>FROM (SELECT status … FOR UPDATE)</c> snapshot + <c>RETURNING</c>), so the
+    /// caller records the status that was actually present at the moment the conditional UPDATE committed —
+    /// NOT a stale pre-tx read that a concurrent committed transition may have already moved past. The
+    /// returned value is:
+    /// <list type="bullet">
+    /// <item><description>the <b>old status string</b> (e.g. <c>"SUBMITTED"</c>, <c>"APPROVED"</c>) when
+    /// the transition won the race (exactly one row matched the allowed source set); the caller uses THIS
+    /// for the audit <c>previous_status</c> / the event <c>PreviousStatus</c> — accurate even when a
+    /// concurrent transition committed between the pre-tx read and the locked UPDATE;</description></item>
+    /// <item><description><c>null</c> when a concurrent transaction already moved the row out of every
+    /// allowed source state (0 rows — the loser of a double-transition; the caller returns a clean 409).</description></item>
+    /// </list>
+    /// This MUST be the FIRST mutation in the action tx so a <c>null</c> (0-row) result short-circuits
+    /// with NO FallbackTraversalWarning enqueue, NO audit row, and NO action outbox event written.
+    /// </para>
+    /// </summary>
+    public async Task<string?> TryUpdateStatusConditionalAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        Guid periodId, string status, IReadOnlyList<string> allowedSourceStates, string? actorId = null,
+        string? rejectionReason = null,
+        string? designatedApproverId = null, string? approvalMethod = null,
+        bool explicitFallbackConfirmation = false,
+        CancellationToken ct = default)
+    {
+        await using var cmd = BuildUpdateStatusCommand(
+            conn, tx, periodId, status, actorId, rejectionReason, designatedApproverId, approvalMethod,
+            explicitFallbackConfirmation, allowedSourceStates);
+        // The conditional form RETURNs the captured pre-update status (BLOCKER 1). A NULL/absent scalar
+        // means 0 rows matched the allowed source set → the caller returns a clean 409.
+        var result = await cmd.ExecuteScalarAsync(ct);
+        return result is string s ? s : null;
+    }
+
     private static NpgsqlCommand BuildUpdateStatusCommand(
         NpgsqlConnection conn, NpgsqlTransaction? tx,
         Guid periodId, string status, string? actorId, string? rejectionReason,
         string? designatedApproverId = null, string? approvalMethod = null,
-        bool explicitFallbackConfirmation = false)
+        bool explicitFallbackConfirmation = false,
+        IReadOnlyList<string>? allowedSourceStates = null)
     {
-        var sql = status switch
+        var conditional = allowedSourceStates is { Count: > 0 };
+
+        // The SET clause per target status (the WHERE/RETURNING shape is appended below). The
+        // CONDITIONAL path (S78 R2 + BLOCKER 1) aliases the target table as `t`, joins a
+        // `FROM (SELECT status … FOR UPDATE)` snapshot of the row's PRE-update status, guards on the
+        // allowed source set, and RETURNs that snapshotted old status — so the caller records the
+        // status that was actually present at the locked UPDATE, not a stale pre-tx read.
+        var setClause = status switch
         {
-            "SUBMITTED" => "UPDATE approval_periods SET status = 'SUBMITTED', submitted_at = NOW(), submitted_by = @actorId WHERE period_id = @periodId",
-            "EMPLOYEE_APPROVED" => "UPDATE approval_periods SET status = 'EMPLOYEE_APPROVED', employee_approved_at = NOW(), employee_approved_by = @actorId WHERE period_id = @periodId",
-            "APPROVED" => "UPDATE approval_periods SET status = 'APPROVED', approved_by = @actorId, approved_at = NOW(), designated_approver_id = @designatedApproverId, approval_method = @approvalMethod, explicit_fallback_confirmation = @explicitFallback WHERE period_id = @periodId",
-            "REJECTED" => "UPDATE approval_periods SET status = 'REJECTED', approved_by = @actorId, approved_at = NOW(), rejection_reason = @rejectionReason, designated_approver_id = @designatedApproverId, approval_method = @approvalMethod, explicit_fallback_confirmation = @explicitFallback WHERE period_id = @periodId",
-            "DRAFT" => "UPDATE approval_periods SET status = 'DRAFT', submitted_at = NULL, submitted_by = NULL, approved_by = NULL, approved_at = NULL, rejection_reason = NULL, employee_approved_at = NULL, employee_approved_by = NULL, explicit_fallback_confirmation = FALSE WHERE period_id = @periodId",
+            "SUBMITTED" => "status = 'SUBMITTED', submitted_at = NOW(), submitted_by = @actorId",
+            "EMPLOYEE_APPROVED" => "status = 'EMPLOYEE_APPROVED', employee_approved_at = NOW(), employee_approved_by = @actorId",
+            "APPROVED" => "status = 'APPROVED', approved_by = @actorId, approved_at = NOW(), designated_approver_id = @designatedApproverId, approval_method = @approvalMethod, explicit_fallback_confirmation = @explicitFallback",
+            "REJECTED" => "status = 'REJECTED', approved_by = @actorId, approved_at = NOW(), rejection_reason = @rejectionReason, designated_approver_id = @designatedApproverId, approval_method = @approvalMethod, explicit_fallback_confirmation = @explicitFallback",
+            "DRAFT" => "status = 'DRAFT', submitted_at = NULL, submitted_by = NULL, approved_by = NULL, approved_at = NULL, rejection_reason = NULL, employee_approved_at = NULL, employee_approved_by = NULL, explicit_fallback_confirmation = FALSE",
             _ => throw new ArgumentException($"Invalid status: {status}")
         };
+
+        string sql;
+        if (conditional)
+        {
+            // BLOCKER 1: snapshot the pre-update status in-statement (FOR UPDATE row-locks it before SET
+            // applies) and RETURN it. The outer WHERE re-guards the same period AND the allowed source
+            // set, so a row already moved out of the allowed states matches 0 rows → no scalar returned →
+            // the caller treats null as the 409 loser. `status = ANY(@allowedSourceStates)` is a bound
+            // parameter (the set is data, not interpolated SQL).
+            sql = $"""
+                UPDATE approval_periods AS t
+                SET {setClause}
+                FROM (SELECT status AS old_status FROM approval_periods WHERE period_id = @periodId FOR UPDATE) AS prev
+                WHERE t.period_id = @periodId AND t.status = ANY(@allowedSourceStates)
+                RETURNING prev.old_status
+                """;
+        }
+        else
+        {
+            // The UNCONDITIONAL legacy path (submit / employee-approve / sequential reopen) — unchanged
+            // shape, no RETURNING, ExecuteNonQuery by the non-conditional callers.
+            sql = $"UPDATE approval_periods SET {setClause} WHERE period_id = @periodId";
+        }
 
         var cmd = tx is null ? new NpgsqlCommand(sql, conn) : new NpgsqlCommand(sql, conn, tx);
         cmd.Parameters.AddWithValue("periodId", periodId);
@@ -938,6 +1010,8 @@ public sealed class ApprovalPeriodRepository
             cmd.Parameters.AddWithValue("approvalMethod", (object?)approvalMethod ?? DBNull.Value);
             cmd.Parameters.AddWithValue("explicitFallback", explicitFallbackConfirmation);
         }
+        if (conditional)
+            cmd.Parameters.AddWithValue("allowedSourceStates", allowedSourceStates!.ToArray());
         return cmd;
     }
 
