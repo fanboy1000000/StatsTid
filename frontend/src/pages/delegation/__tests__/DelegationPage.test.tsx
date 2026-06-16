@@ -43,6 +43,16 @@ const activeStatus = {
   ],
 }
 
+// A return date guaranteed valid against the component's min={todayIso()}
+// constraint (DelegationPage.tsx:194). Computed relative to "today" so the test
+// never time-bombs on a date rollover (was hardcoded '2026-06-15', which jsdom
+// constraint-validation rejected once the wall-clock passed it → submit blocked).
+const validReturnDate = (() => {
+  const d = new Date()
+  d.setDate(d.getDate() + 7)
+  return d.toISOString().slice(0, 10)
+})()
+
 function renderPage() {
   return render(
     <ToastProvider>
@@ -119,7 +129,7 @@ describe('DelegationPage', () => {
     fireEvent.change(managerInput, { target: { value: 'MGR002' } })
 
     const dateInput = screen.getByLabelText(/Returdato/) as HTMLInputElement
-    fireEvent.change(dateInput, { target: { value: '2026-06-15' } })
+    fireEvent.change(dateInput, { target: { value: validReturnDate } })
 
     // 2) Queue the POST response
     mockFetch.mockResolvedValueOnce({
@@ -131,7 +141,7 @@ describe('DelegationPage', () => {
         skippedCount: 0,
         actingManagerId: 'MGR002',
         effectiveFrom: '2026-05-25',
-        effectiveTo: '2026-06-15',
+        effectiveTo: validReturnDate,
       }),
     })
 
@@ -152,7 +162,7 @@ describe('DelegationPage', () => {
       expect(postCalls.length).toBe(1)
       const body = JSON.parse(postCalls[0][1].body as string)
       expect(body.actingManagerId).toBe('MGR002')
-      expect(body.effectiveTo).toBe('2026-06-15')
+      expect(body.effectiveTo).toBe(validReturnDate)
     })
   })
 
