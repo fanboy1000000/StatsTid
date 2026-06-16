@@ -71,7 +71,8 @@ public sealed class VacationSettlementRepository
                    settlement_state, trigger, snapshot::text AS snapshot_text,
                    transfer_days, payout_days, forfeit_days,
                    payout_reconciled_at, payout_reconciled_by, review_disposition,
-                   claim_disposition_days, bare_reversal_not_due,
+                   claim_disposition_days, feriehindring_transfer_days, feriehindring_reason,
+                   bare_reversal_not_due,
                    version, created_at, updated_at
             FROM vacation_settlements
             WHERE employee_id = @employeeId
@@ -126,7 +127,8 @@ public sealed class VacationSettlementRepository
                           settlement_state, trigger, snapshot::text AS snapshot_text,
                           transfer_days, payout_days, forfeit_days,
                           payout_reconciled_at, payout_reconciled_by, review_disposition,
-                          claim_disposition_days, bare_reversal_not_due,
+                          claim_disposition_days, feriehindring_transfer_days, feriehindring_reason,
+                          bare_reversal_not_due,
                           version, created_at, updated_at
                 """, conn, tx);
             cmd.Parameters.AddWithValue("employeeId", row.EmployeeId);
@@ -311,6 +313,13 @@ public sealed class VacationSettlementRepository
         ClaimDispositionDays = reader.IsDBNull(reader.GetOrdinal("claim_disposition_days"))
             ? null
             : reader.GetDecimal(reader.GetOrdinal("claim_disposition_days")),
+        // S79 slice 4 (SPRINT-79 R1/R3) — the §22 feriehindring transfer bucket + durable reason,
+        // read so SerializeSettlementForAudit + the resolve carryover composition (transfer_days +
+        // feriehindring_transfer_days) observe the persisted §22 component.
+        FeriehindringTransferDays = reader.GetDecimal(reader.GetOrdinal("feriehindring_transfer_days")),
+        FeriehindringReason = reader.IsDBNull(reader.GetOrdinal("feriehindring_reason"))
+            ? null
+            : reader.GetString(reader.GetOrdinal("feriehindring_reason")),
         BareReversalNotDue = reader.GetBoolean(reader.GetOrdinal("bare_reversal_not_due")),
         // internal-Reviewer BLOCKER (Step-5a) — `version` is BIGINT (Orchestrator schema fix);
         // read it as Int64. GetInt32 would throw InvalidCastException on the BIGINT column. Matches
@@ -369,6 +378,17 @@ public sealed record VacationSettlementRow
     /// <summary>S71 R5 — the §7/waiver resolved claim day-count (<c>claim_disposition_days</c>;
     /// non-null exactly when <see cref="ReviewDisposition"/> is MODREGNING/WAIVED, DB-paired).</summary>
     public decimal? ClaimDispositionDays { get; init; }
+
+    /// <summary>S79 slice 4 (SPRINT-79 R1/R3) — the §22 feriehindring transfer bucket
+    /// (<c>feriehindring_transfer_days</c>; days rescued from the §34 forfeiture bucket into next
+    /// year's carryover_in). Positive only under <see cref="ReviewDisposition"/> = FERIEHINDRING
+    /// (DB-paired); 0 otherwise.</summary>
+    public decimal FeriehindringTransferDays { get; init; }
+
+    /// <summary>S79 slice 4 (SPRINT-79 R1/R3) — the durable §22 impediment rationale
+    /// (<c>feriehindring_reason</c>); the queryable mirror of the FeriehindringTransferred event
+    /// field. Non-null exactly when <see cref="ReviewDisposition"/> is FERIEHINDRING (DB-paired).</summary>
+    public string? FeriehindringReason { get; init; }
 
     /// <summary>S71 R3 — the durable bare-reversal not-due marker (TRUE only on a REVERSED row;
     /// TERMINAL in 3b — no operation clears it).</summary>

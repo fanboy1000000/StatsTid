@@ -1131,6 +1131,8 @@
 | transfer_days | NUMERIC(6,2) | No |  | 0 |
 | payout_days | NUMERIC(6,2) | No |  | 0 |
 | forfeit_days | NUMERIC(6,2) | No |  | 0 |
+| feriehindring_transfer_days | NUMERIC(6,2) | No |  | 0 |
+| feriehindring_reason | TEXT | Yes |  |  |
 | payout_reconciled_at | TIMESTAMPTZ | Yes |  |  |
 | payout_reconciled_by | TEXT | Yes |  |  |
 | review_disposition | TEXT | Yes |  |  |
@@ -1143,13 +1145,14 @@
 **Table constraints:**
 - PRIMARY KEY (employee_id, entitlement_type, entitlement_year, sequence)
 - CONSTRAINT vacation_settlements_payout_reconciled_paired CHECK ( (payout_reconciled_at IS NULL AND payout_reconciled_by IS NULL) OR (payout_reconciled_at IS NOT NULL AND payout_reconciled_by IS NOT NULL) )
-- CONSTRAINT vacation_settlements_nonneg_buckets CHECK ( transfer_days >= 0 AND payout_days >= 0 AND forfeit_days >= 0 )
+- CONSTRAINT vacation_settlements_nonneg_buckets CHECK ( transfer_days >= 0 AND payout_days >= 0 AND forfeit_days >= 0 AND feriehindring_transfer_days >= 0 )
 - CONSTRAINT vacation_settlements_positive_counters CHECK (sequence >= 1 AND version >= 1)
-- CONSTRAINT vacation_settlements_review_disposition CHECK ( review_disposition IS NULL OR review_disposition IN ('FORFEIT', 'DEFER', 'MODREGNING', 'WAIVED') )
-- CONSTRAINT vacation_settlements_disposition_state CHECK ( review_disposition IS NULL OR (review_disposition = 'DEFER' AND settlement_state IN ('PENDING_REVIEW', 'REVERSED')) OR (review_disposition IN ('FORFEIT', 'MODREGNING', 'WAIVED') AND settlement_state <> 'PENDING_REVIEW') )
+- CONSTRAINT vacation_settlements_review_disposition CHECK ( review_disposition IS NULL OR review_disposition IN ('FORFEIT', 'DEFER', 'MODREGNING', 'WAIVED', 'FERIEHINDRING') )
+- CONSTRAINT vacation_settlements_disposition_state CHECK ( review_disposition IS NULL OR (review_disposition = 'DEFER' AND settlement_state IN ('PENDING_REVIEW', 'REVERSED')) OR (review_disposition IN ('FORFEIT', 'MODREGNING', 'WAIVED', 'FERIEHINDRING') AND settlement_state <> 'PENDING_REVIEW') )
 - CONSTRAINT vacation_settlements_bare_reversal_reversed_only CHECK ( bare_reversal_not_due = FALSE OR settlement_state = 'REVERSED' )
 - CONSTRAINT vacation_settlements_claim_disposition_nonneg CHECK ( claim_disposition_days IS NULL OR claim_disposition_days >= 0 )
 - CONSTRAINT vacation_settlements_claim_disposition_paired CHECK ( (claim_disposition_days IS NOT NULL) = (review_disposition IS NOT NULL AND review_disposition IN ('MODREGNING', 'WAIVED')) )
+- CONSTRAINT vacation_settlements_feriehindring_paired CHECK ( (feriehindring_reason IS NOT NULL) = (review_disposition IS NOT NULL AND review_disposition = 'FERIEHINDRING') AND ( feriehindring_transfer_days = 0 OR (review_disposition IS NOT NULL AND review_disposition = 'FERIEHINDRING') ) )
 
 **Indexes:**
 - `idx_vacation_settlements_active` (UNIQUE) on (employee_id, entitlement_type, entitlement_year) WHERE settlement_state <> 'REVERSED'

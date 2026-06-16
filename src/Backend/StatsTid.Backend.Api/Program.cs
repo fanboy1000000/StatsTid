@@ -258,6 +258,11 @@ builder.Services.AddSingleton<IAuditProjectionMapper<TerminationClaimWaived>, St
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(TerminationClaimWaived), nameof(TerminationClaimWaived)));
 builder.Services.AddSingleton<IAuditProjectionMapper<SettlementReversed>, StatsTid.Infrastructure.AuditMappers.SettlementReversedAuditMapper>();
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(SettlementReversed), nameof(SettlementReversed)));
+// S79 ADR-033 slice 4 — §22 feriehindring audit mapper (Infrastructure-located, cross-process;
+// FeriehindringTransferred from the FERIEHINDRING CAS resolve disposition — SPRINT-79 R1/R3). The
+// residual §34 remainder reuses the existing VacationForfeitedToFeriefond mapper (registered above).
+builder.Services.AddSingleton<IAuditProjectionMapper<FeriehindringTransferred>, StatsTid.Infrastructure.AuditMappers.FeriehindringTransferredAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(FeriehindringTransferred), nameof(FeriehindringTransferred)));
 
 // ── Services ──
 builder.Services.AddSingleton<ConfigResolutionService>();

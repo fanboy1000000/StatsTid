@@ -2752,6 +2752,16 @@ CREATE TABLE IF NOT EXISTS vacation_settlements (
     transfer_days           NUMERIC(6,2)  NOT NULL DEFAULT 0,
     payout_days             NUMERIC(6,2)  NOT NULL DEFAULT 0,
     forfeit_days            NUMERIC(6,2)  NOT NULL DEFAULT 0,
+    -- S79 slice 4 (SPRINT-79 R4): the §22 feriehindring bucket — days RESCUED
+    -- from the §34 forfeiture bucket (forfeit_days) and transferred into the next
+    -- entitlement year. Separately-capped from §21 (≤4 weeks / 20 days). The
+    -- resolve handler computes forfeit_days := forfeit_days - impeded, so this
+    -- bucket and forfeit_days net the original §34 remainder. feriehindring_reason
+    -- is the durable impediment rationale (queryable mirror; the
+    -- FeriehindringTransferred event field is the primary home). Both non-null/
+    -- positive only under review_disposition = 'FERIEHINDRING' (paired CHECK below).
+    feriehindring_transfer_days NUMERIC(6,2) NOT NULL DEFAULT 0,
+    feriehindring_reason    TEXT          NULL,
     payout_reconciled_at    TIMESTAMPTZ   NULL,
     payout_reconciled_by    TEXT          NULL,
     -- review_disposition value set + state coupling live in the NAMED table
@@ -2782,28 +2792,39 @@ CREATE TABLE IF NOT EXISTS vacation_settlements (
     -- Step-7a Codex W4 — DB-level integrity floors (defence-in-depth; the service/endpoint
     -- already clamp, but a malformed direct write must not produce a legally-impossible row).
     -- Bucket day-counts are never negative (a settlement disposes a non-negative remainder).
+    -- S79 slice 4: feriehindring_transfer_days >= 0 is the defence-in-depth that
+    -- rejects an over-rescue — the resolve handler computes forfeit_days :=
+    -- forfeit_days - impeded, so a negative residual (impeded > the §34 remainder)
+    -- is forbidden here AND by forfeit_days >= 0. (NO feriehindring_transfer_days <=
+    -- forfeit_days CHECK — that would wrongly reject a FULL rescue, where the rescued
+    -- days move out of forfeit_days entirely.)
     CONSTRAINT vacation_settlements_nonneg_buckets CHECK (
         transfer_days >= 0 AND payout_days >= 0 AND forfeit_days >= 0
+        AND feriehindring_transfer_days >= 0
     ),
     -- sequence/version are 1-based counters (first settlement = sequence 1, version 1).
     CONSTRAINT vacation_settlements_positive_counters CHECK (sequence >= 1 AND version >= 1),
     -- Disposition value set (S71 slice 3b R5 widened the S68 FORFEIT/DEFER pair with
-    -- MODREGNING — §7 stk.1 deduct-in-full — and WAIVED — waive-in-full). NAMED (not an
+    -- MODREGNING — §7 stk.1 deduct-in-full — and WAIVED — waive-in-full; S79 slice 4
+    -- adds FERIEHINDRING — §22 impediment rescue from forfeiture). NAMED (not an
     -- inline column CHECK) so the legacy DROP/re-ADD path converges on the same name.
     CONSTRAINT vacation_settlements_review_disposition CHECK (
         review_disposition IS NULL
-        OR review_disposition IN ('FORFEIT', 'DEFER', 'MODREGNING', 'WAIVED')
+        OR review_disposition IN ('FORFEIT', 'DEFER', 'MODREGNING', 'WAIVED', 'FERIEHINDRING')
     ),
     -- State/disposition coupling: a DEFER outcome (suspected §22-feriehindring) leaves the row
-    -- PENDING_REVIEW until slice 4 models the impediment — BUT a DEFER-marked row may be
-    -- REVERSED with its DEFER history PRESERVED (S71 slice 3b R5: reversal never destroys the
-    -- marker), so DEFER admits PENDING_REVIEW or REVERSED while DEFER+SETTLED stays impossible.
-    -- FORFEIT/MODREGNING/WAIVED each RESOLVED the review, so none can coexist with
-    -- PENDING_REVIEW (they ride SETTLED, and survive on REVERSED rows for history).
+    -- PENDING_REVIEW pending resolution — S79 slice 4 resolves it to FERIEHINDRING (rescue) or
+    -- FORFEIT (§34) — BUT a DEFER-marked row may be REVERSED with its DEFER history PRESERVED
+    -- (S71 slice 3b R5: reversal never destroys the marker), so DEFER admits PENDING_REVIEW or
+    -- REVERSED while DEFER+SETTLED stays impossible.
+    -- FORFEIT/MODREGNING/WAIVED/FERIEHINDRING each RESOLVED the review, so none can
+    -- coexist with PENDING_REVIEW (they ride SETTLED, and survive on REVERSED rows
+    -- for history). S79 slice 4: FERIEHINDRING resolves a deferred §22 impediment, so
+    -- it sits with the resolved group — admitted on SETTLED, valid if later REVERSED.
     CONSTRAINT vacation_settlements_disposition_state CHECK (
         review_disposition IS NULL
         OR (review_disposition = 'DEFER' AND settlement_state IN ('PENDING_REVIEW', 'REVERSED'))
-        OR (review_disposition IN ('FORFEIT', 'MODREGNING', 'WAIVED') AND settlement_state <> 'PENDING_REVIEW')
+        OR (review_disposition IN ('FORFEIT', 'MODREGNING', 'WAIVED', 'FERIEHINDRING') AND settlement_state <> 'PENDING_REVIEW')
     ),
     -- S71 slice 3b (R3): the bare-reversal marker is meaningful only on a REVERSED row.
     CONSTRAINT vacation_settlements_bare_reversal_reversed_only CHECK (
@@ -2820,6 +2841,23 @@ CREATE TABLE IF NOT EXISTS vacation_settlements (
     CONSTRAINT vacation_settlements_claim_disposition_paired CHECK (
         (claim_disposition_days IS NOT NULL)
         = (review_disposition IS NOT NULL AND review_disposition IN ('MODREGNING', 'WAIVED'))
+    ),
+    -- S79 slice 4 (R4/R5): the §22 reason is recorded EXACTLY when the disposition
+    -- is FERIEHINDRING (bidirectional, mirroring claim_disposition_paired: a
+    -- FERIEHINDRING row MUST carry its impediment rationale — the durable audit
+    -- record — and a reason without a FERIEHINDRING disposition is meaningless).
+    -- The day-count is a one-way guard: a positive feriehindring_transfer_days is
+    -- permitted ONLY under FERIEHINDRING (a FERIEHINDRING row MAY rescue 0 days —
+    -- the impediment was recorded but nothing fell to forfeiture — so the days side
+    -- is not made bidirectional). The IS NOT NULL guard keeps the comparison
+    -- NULL-safe.
+    CONSTRAINT vacation_settlements_feriehindring_paired CHECK (
+        (feriehindring_reason IS NOT NULL)
+        = (review_disposition IS NOT NULL AND review_disposition = 'FERIEHINDRING')
+        AND (
+            feriehindring_transfer_days = 0
+            OR (review_disposition IS NOT NULL AND review_disposition = 'FERIEHINDRING')
+        )
     )
 );
 
@@ -3423,6 +3461,103 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_vacation_settlements_bare_reversal_marker
     ON vacation_settlements (employee_id, entitlement_type, entitlement_year)
     WHERE bare_reversal_not_due;
 -- S71-SLICE3B-SEGMENT-END
+
+-- =========================================================================
+-- SPRINT 79 / ADR-033 slice 4 — §22 feriehindring schema upgrade.
+--   The greenfield CREATE TABLE above bakes the slice-4 columns + CHECKs; this
+--   schema_migrations-guarded block carries the EXISTING-table ALTERs for a
+--   pre-S79 database (the s71-slice3b / s70-employment-end-date guard pattern,
+--   3-path idempotent). Ordering discipline (SPRINT-71 W1): the additive
+--   defaulted/nullable COLUMNS land first (existing rows stay valid —
+--   feriehindring_transfer_days backfills 0, feriehindring_reason backfills
+--   NULL), then the CHECKs (DROP IF EXISTS + re-ADD). Every widened CHECK admits
+--   every row its predecessor admitted (a pure superset — the S71 WAIVED
+--   precedent), so no remediation UPDATE is needed and no intermediate state
+--   violates a constraint. On a greenfield DB this block still runs once: the
+--   ADD COLUMN IF NOT EXISTS calls no-op and the DROP/re-ADD constraint pairs
+--   recreate the identical baked-in constraints — convergent.
+-- =========================================================================
+DO $$
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s79-feriehindring-schema', 'ADR-033 slice 4 (SPRINT-79 R4/R5): §22 feriehindring on vacation_settlements — feriehindring_transfer_days NUMERIC(6,2) NOT NULL DEFAULT 0 (the §22 days rescued from the §34 forfeiture bucket into next year, separately-capped ≤4 weeks/20 days) + feriehindring_reason TEXT NULL (durable impediment rationale; queryable mirror of the FeriehindringTransferred event field). review_disposition CHECK widened with FERIEHINDRING (strict superset of the S71 FORFEIT/DEFER/MODREGNING/WAIVED set). disposition-state CHECK widened so FERIEHINDRING joins the RESOLVED group (rides SETTLED, survives on REVERSED). nonneg_buckets CHECK extended with feriehindring_transfer_days >= 0 (defence-in-depth: the resolve handler sets forfeit_days := forfeit_days - impeded, so a negative residual is rejected; NO feriehindring_transfer_days <= forfeit_days CHECK — that would reject a FULL rescue). New vacation_settlements_feriehindring_paired CHECK: feriehindring_reason IS NOT NULL IFF review_disposition = FERIEHINDRING (a FERIEHINDRING row MUST record its reason) + feriehindring_transfer_days > 0 permitted only under FERIEHINDRING. All additive/widened — every pre-S79 row stays valid, no remediation.')
+    ON CONFLICT (migration_id) DO NOTHING;
+
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+
+    -- ── Columns first (additive: defaulted / nullable) ─────────────────────
+    -- Legacy rows backfill feriehindring_transfer_days=0 + feriehindring_reason=
+    -- NULL, which every CHECK below admits (no pre-S79 row carries FERIEHINDRING).
+    ALTER TABLE vacation_settlements
+    ADD COLUMN IF NOT EXISTS feriehindring_transfer_days NUMERIC(6,2) NOT NULL DEFAULT 0;
+
+    ALTER TABLE vacation_settlements
+    ADD COLUMN IF NOT EXISTS feriehindring_reason TEXT NULL;
+
+    -- review_disposition value set widened with FERIEHINDRING. The S71 form is
+    -- already the pinned NAMED constraint; DROP it and re-ADD the widened named
+    -- form (the S71 7100 convention). Strict superset — every legacy disposition
+    -- (NULL / FORFEIT / DEFER / MODREGNING / WAIVED) still validates.
+    ALTER TABLE vacation_settlements
+    DROP CONSTRAINT IF EXISTS vacation_settlements_review_disposition;
+
+    ALTER TABLE vacation_settlements
+    ADD CONSTRAINT vacation_settlements_review_disposition
+    CHECK (
+        review_disposition IS NULL
+        OR review_disposition IN ('FORFEIT', 'DEFER', 'MODREGNING', 'WAIVED', 'FERIEHINDRING')
+    );
+
+    -- Disposition-state coupling widened: FERIEHINDRING joins the RESOLVED group
+    -- (FORFEIT/MODREGNING/WAIVED) — it resolves a deferred §22 impediment, so it
+    -- rides SETTLED and must remain valid if later REVERSED, never PENDING_REVIEW.
+    -- Superset of the S71 form: every legacy (disposition, state) pair still passes.
+    ALTER TABLE vacation_settlements
+    DROP CONSTRAINT IF EXISTS vacation_settlements_disposition_state;
+
+    ALTER TABLE vacation_settlements
+    ADD CONSTRAINT vacation_settlements_disposition_state
+    CHECK (
+        review_disposition IS NULL
+        OR (review_disposition = 'DEFER' AND settlement_state IN ('PENDING_REVIEW', 'REVERSED'))
+        OR (review_disposition IN ('FORFEIT', 'MODREGNING', 'WAIVED', 'FERIEHINDRING') AND settlement_state <> 'PENDING_REVIEW')
+    );
+
+    -- nonneg_buckets extended with feriehindring_transfer_days >= 0. Superset:
+    -- legacy rows carry the column DEFAULT 0, which satisfies the new conjunct.
+    ALTER TABLE vacation_settlements
+    DROP CONSTRAINT IF EXISTS vacation_settlements_nonneg_buckets;
+
+    ALTER TABLE vacation_settlements
+    ADD CONSTRAINT vacation_settlements_nonneg_buckets
+    CHECK (
+        transfer_days >= 0 AND payout_days >= 0 AND forfeit_days >= 0
+        AND feriehindring_transfer_days >= 0
+    );
+
+    -- New paired CHECK (separate from claim_disposition_paired — NOT overloaded).
+    -- feriehindring_reason IS NOT NULL IFF FERIEHINDRING (a FERIEHINDRING row MUST
+    -- record its reason; a reason without FERIEHINDRING is meaningless), AND a
+    -- positive feriehindring_transfer_days is permitted only under FERIEHINDRING
+    -- (one-way: a FERIEHINDRING row MAY rescue 0 days). Legacy rows hold reason
+    -- NULL + days 0 + a non-FERIEHINDRING disposition → both clauses hold.
+    ALTER TABLE vacation_settlements
+    DROP CONSTRAINT IF EXISTS vacation_settlements_feriehindring_paired;
+
+    ALTER TABLE vacation_settlements
+    ADD CONSTRAINT vacation_settlements_feriehindring_paired
+    CHECK (
+        (feriehindring_reason IS NOT NULL)
+        = (review_disposition IS NOT NULL AND review_disposition = 'FERIEHINDRING')
+        AND (
+            feriehindring_transfer_days = 0
+            OR (review_disposition IS NOT NULL AND review_disposition = 'FERIEHINDRING')
+        )
+    );
+END
+$$;
 
 -- =========================================================================
 -- SPRINT 71 / TASK-7105 — settlement_payroll_inbox composite-key migration

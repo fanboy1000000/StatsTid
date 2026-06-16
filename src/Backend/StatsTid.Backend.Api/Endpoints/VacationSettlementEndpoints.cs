@@ -353,10 +353,12 @@ public static class VacationSettlementEndpoints
             int entitlementYear,
             ResolveSettlementRequest body,
             VacationSettlementRepository settlementRepo,
+            EntitlementBalanceRepository balanceRepo,
             DbConnectionFactory connectionFactory,
             IOutboxEnqueue outbox,
             IAuditProjectionMapper<VacationForfeitedToFeriefond> forfeitAuditMapper,
             IAuditProjectionMapper<TerminationClaimWaived> waiverAuditMapper,
+            IAuditProjectionMapper<FeriehindringTransferred> feriehindringAuditMapper,
             AuditProjectionRepository auditRepo,
             UserRepository userRepo,
             OrgScopeValidator scopeValidator,
@@ -399,9 +401,9 @@ public static class VacationSettlementEndpoints
                 });
             }
 
-            // Disposition must be exactly FORFEIT, DEFER or WAIVED (S71 R5).
-            if (disposition is not ("FORFEIT" or "DEFER" or "WAIVED"))
-                return Results.UnprocessableEntity(new { error = "disposition must be 'FORFEIT', 'DEFER' or 'WAIVED'." });
+            // Disposition must be exactly FORFEIT, DEFER, WAIVED (S71 R5) or FERIEHINDRING (S79 R3).
+            if (disposition is not ("FORFEIT" or "DEFER" or "WAIVED" or "FERIEHINDRING"))
+                return Results.UnprocessableEntity(new { error = "disposition must be 'FORFEIT', 'DEFER', 'WAIVED' or 'FERIEHINDRING'." });
 
             // Admin-strict If-Match — the ADR-019 CAS token; a concurrent loser gets 412/409, never
             // a double-emit.
@@ -434,13 +436,16 @@ public static class VacationSettlementEndpoints
                     return Results.NotFound(new { error = "No active settlement found for this (employee, type, year)." });
                 }
 
-                if (disposition is "FORFEIT" or "DEFER")
+                if (disposition is "FORFEIT" or "DEFER" or "FERIEHINDRING")
                 {
-                    // S70 / TASK-7004 (SPRINT-70 R5, Step-0b cycle-4; SPRINT-71 R5 KEEPS this) —
-                    // trigger=TERMINATION rows are NOT FORFEIT/DEFER-resolvable: FORFEIT would emit
+                    // S70 / TASK-7004 (SPRINT-70 R5, Step-0b cycle-4; SPRINT-71 R5 KEEPS this; S79 R3
+                    // EXTENDS it to FERIEHINDRING) — trigger=TERMINATION rows are NOT
+                    // FORFEIT/DEFER/FERIEHINDRING-resolvable: FORFEIT would emit
                     // VacationForfeitedToFeriefond, a materially FALSE event for an over-taken-claim
                     // (the negative-pre-clamp PENDING_REVIEW row holds a §7-shaped CLAIM, not §34
-                    // forfeiture). Slice 3b's resolution for these rows is the WAIVED verb below
+                    // forfeiture); FERIEHINDRING rescues from a §34 remainder a TERMINATION row does
+                    // not carry (its forfeit_days is the |pre-clamp| §7 claim flag, never a §34
+                    // candidate). Slice 3b's resolution for TERMINATION rows is the WAIVED verb below
                     // (§7 MODREGNING stays parked). Guard placed AFTER row resolution, BEFORE any
                     // disposition logic.
                     if (string.Equals(current.Trigger, "TERMINATION", StringComparison.Ordinal))
@@ -448,12 +453,13 @@ public static class VacationSettlementEndpoints
                         await tx.RollbackAsync(ct);
                         return Results.UnprocessableEntity(new
                         {
-                            error = "A TERMINATION settlement cannot be resolved with FORFEIT or DEFER.",
+                            error = "A TERMINATION settlement cannot be resolved with FORFEIT, DEFER or FERIEHINDRING.",
                             trigger = current.Trigger,
                             settlementState = current.SettlementState,
                             hint = "FORFEIT would emit a materially false VacationForfeitedToFeriefond for an " +
-                                   "over-taken-claim; a negative-pre-clamp TERMINATION row holds a §7-shaped " +
-                                   "claim, not §34 forfeiture. Use WAIVED to waive the claim in full " +
+                                   "over-taken-claim, and FERIEHINDRING rescues from a §34 remainder a " +
+                                   "TERMINATION row does not carry; a negative-pre-clamp TERMINATION row holds " +
+                                   "a §7-shaped claim, not §34 forfeiture. Use WAIVED to waive the claim in full " +
                                    "(the §7 MODREGNING deduction is parked pending the SLS dialogue).",
                         });
                     }
@@ -518,6 +524,104 @@ public static class VacationSettlementEndpoints
                         {
                             error = "WAIVED takes no forfeitDays — the waived quantity is the row's flagged claim.",
                             flaggedClaim = current.ForfeitDays,
+                        });
+                    }
+                }
+
+                // S79 / TASK-7901 (SPRINT-79 R3) — FERIEHINDRING input validation (BEFORE the If-Match
+                // precondition, mirroring the WAIVED body-quantity guards: a malformed-input 422 must
+                // not depend on the version cursor). The §22 day-count (impededDays) + the durable
+                // reason are operator-supplied; both are validated against the in-lock row.
+                decimal impededDays = 0m;
+                string feriehindringReason = string.Empty;
+                if (disposition == "FERIEHINDRING")
+                {
+                    // The reason is REQUIRED + non-empty (the durable §22 impediment rationale — the
+                    // FeriehindringTransferred event field + the queryable feriehindring_reason mirror;
+                    // the 7900 paired CHECK requires it on a FERIEHINDRING row).
+                    feriehindringReason = (body.Reason ?? string.Empty).Trim();
+                    if (feriehindringReason.Length == 0)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.UnprocessableEntity(new
+                        {
+                            error = "FERIEHINDRING requires a non-empty reason (the §22 impediment rationale).",
+                            hint = "Record the impediment (sickness/barsel etc.) — it is the durable audit record.",
+                        });
+                    }
+
+                    // The §22 day-count must be supplied (impededDays) and positive.
+                    if (body.ImpededDays is not { } supplied)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.UnprocessableEntity(new
+                        {
+                            error = "FERIEHINDRING requires impededDays (the §22 impeded day-count to rescue).",
+                        });
+                    }
+                    impededDays = supplied;
+
+                    // Scale guard (S79 Step-5a Codex BLOCKER): impededDays must fit the NUMERIC(6,2)
+                    // persisted bucket EXACTLY. Without this a sub-cent value (e.g. 0.001) passes the
+                    // range guard but rounds to 0.00 in feriehindring_transfer_days, while the in-memory
+                    // event + carryover compose from the unrounded value → row/event/carryover divergence
+                    // (the "same day never both transfers and forfeits" determinism breaks). Reject > 2dp.
+                    if (decimal.Round(impededDays, 2) != impededDays)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.UnprocessableEntity(new
+                        {
+                            error = "impededDays must have at most 2 decimal places (the NUMERIC(6,2) day-count scale).",
+                            impededDays,
+                        });
+                    }
+
+                    // 0 < impededDays <= min(current.ForfeitDays, 20) — BOTH the flagged §34-candidate
+                    // remainder AND the independent §22 4-week / 20-day statutory cap. A clean 422 (never
+                    // a raw CHECK violation): impededDays > ForfeitDays would drive forfeit_days negative
+                    // (the §22-FIRST/§34-residual rule), and impededDays > 20 exceeds the §22 ceiling.
+                    const decimal Section22StatutoryCap = 20m;
+                    var rescueCeiling = Math.Min(current.ForfeitDays, Section22StatutoryCap);
+                    if (impededDays <= 0m || impededDays > rescueCeiling)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.UnprocessableEntity(new
+                        {
+                            error = "impededDays must satisfy 0 < impededDays <= min(forfeit_days, 20).",
+                            impededDays,
+                            flaggedRemainder = current.ForfeitDays,
+                            section22Cap = Section22StatutoryCap,
+                            rescueCeiling,
+                            hint = "The §22 rescue is bounded by BOTH the flagged §34-candidate remainder " +
+                                   "(the same day never both transfers and forfeits) AND the independent §22 " +
+                                   "4-week / 20-day statutory cap. A partial rescue leaves the residual as §34.",
+                        });
+                    }
+
+                    // S79 Step-7a BLOCKER 2 — a leaver's deferred-disposition row is NOT a §34
+                    // candidate. SettleLeaverDeferredDispositionAsync (VacationSettlementService.cs:657,
+                    // R4) writes a leaver's OTHER ferieår as trigger=YEAR_END PENDING_REVIEW with
+                    // forfeit_days = the FULL disposable (a FLAG, NOT a computed §34 bucket) and stamps
+                    // the snapshot DeferredDisposition marker (VacationSettlementSnapshot.cs:192). The
+                    // TERMINATION re-pin above does not catch it (trigger is YEAR_END), so FERIEHINDRING
+                    // would treat the full-disposable flag as a §34 remainder and wrongly transfer/forfeit
+                    // an UNPARTITIONED leaver disposition. Detect the marker on the in-lock row's snapshot
+                    // and refuse 422 (before any mutation). FORFEIT/DEFER remain the valid resolutions for
+                    // those rows (unchanged).
+                    var feriehindringValidationSnapshot = DeserializeSnapshot(current.SnapshotJson);
+                    if (feriehindringValidationSnapshot?.DeferredDisposition == true)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.UnprocessableEntity(new
+                        {
+                            error = "FERIEHINDRING cannot resolve a leaver deferred-disposition row (forfeit_days is a full-disposable flag, not a §34 candidate).",
+                            trigger = current.Trigger,
+                            settlementState = current.SettlementState,
+                            forfeitDays = current.ForfeitDays,
+                            hint = "A leaver's other-ferieår YEAR_END row carries the FULL unpartitioned " +
+                                   "disposable as a flag (SPRINT-70 R4), not a computed §34 remainder. Resolve " +
+                                   "it via FORFEIT (§34) or DEFER (suspected §22) — not the §22 rescue, which " +
+                                   "presupposes a partitioned §34-candidate remainder.",
                         });
                     }
                 }
@@ -657,6 +761,175 @@ public static class VacationSettlementEndpoints
                         forfeitDays = waived.ForfeitDays, // 0 — the cleared transient flag
                         resolved = true,
                         version = waived.Version,
+                    });
+                }
+
+                if (disposition == "FERIEHINDRING")
+                {
+                    // ── FERIEHINDRING (§22, S79 / TASK-7901; SPRINT-79 R1/R3/R8/R12) ──
+                    // The §22 impediment RESCUE of the impeded tranche from the §34 forfeiture bucket.
+                    // ONE atomic tx, already under the R12 advisory lock:
+                    //   (1) CAS PENDING_REVIEW → SETTLED, review_disposition=FERIEHINDRING, with §22
+                    //       FIRST and §34 the RESIDUAL — the same day never both transfers and forfeits:
+                    //         feriehindring_transfer_days := impededDays
+                    //         forfeit_days                := current.ForfeitDays − impededDays  (>= 0, R3-validated)
+                    //       + feriehindring_reason (the durable rationale, 7900 paired CHECK).
+                    //   (2) Source-keyed carryover (R1): OVERWRITE next-year carryover_in with
+                    //       §21 (transfer_days, already persisted at close) + §22 (impededDays), composed
+                    //       from the PERSISTED row buckets — exactly ONE WriteCarryoverInAsync; skip only
+                    //       when the sum is zero.
+                    //   (3) Emit FeriehindringTransferred (with the reason + snapshot + TransferDays =
+                    //       impededDays) + VacationForfeitedToFeriefond for the RESIDUAL forfeit_days ONLY
+                    //       IF > 0 (a FULL rescue emits no forfeit event) + the ADR-026 audit rows.
+                    // Money stays OUT (R12): §22 is balance-only — NO payroll line / staging. No `used`
+                    // mutation. The automated close is unchanged (R8): §34 is never blind-auto-forfeited.
+
+                    // S79 Step-7a BLOCKER 1 — carryover-finality guard (the superseding-side pattern,
+                    // VacationSettlementService.cs:386-396). The §22 rescue OVERWRITES next-year
+                    // carryover_in (step (2)). If year N+1 ALREADY holds an active (non-REVERSED)
+                    // settlement, its snapshot/events are FINAL — a 2024 PENDING_REVIEW row resolved
+                    // AFTER the close poll has settled 2025 would silently overwrite 2025's finalized
+                    // carryover_in, breaking replay/finality. The §22 rescue cannot be applied once the
+                    // next year is final; refuse LOUDLY (rollback + clean 409), corrupting nothing. The
+                    // in-tx GetActiveAsync excludes REVERSED rows, so this reads exactly the active
+                    // next-year settlement, and runs UNDER the held R12 advisory lock (in-lock re-read),
+                    // BEFORE the CAS mutation / any emit.
+                    var nextYearActive = await settlementRepo.GetActiveAsync(
+                        conn, tx, employeeId, entitlementType, entitlementYear + 1, ct);
+                    if (nextYearActive is not null)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.Json(new
+                        {
+                            error = "The next entitlement year is already settled; its carryover_in is final and cannot be overwritten by a §22 rescue.",
+                            failure = "NextYearAlreadySettled",
+                            nextYear = entitlementYear + 1,
+                            nextYearSettlementState = nextYearActive.SettlementState,
+                            nextYearTrigger = nextYearActive.Trigger,
+                            hint = "FERIEHINDRING re-states next year's carryover_in (§21 + §22). Once year " +
+                                   "N+1 holds an active settlement its snapshot/events are final; the §22 " +
+                                   "rescue must not retroactively mutate the settled next-year balance " +
+                                   "(consistent with the superseding-carryover finality guard).",
+                        }, statusCode: 409);
+                    }
+
+                    var residualForfeit = current.ForfeitDays - impededDays; // >= 0 by the R3 ceiling guard
+                    var rescued = await CasUpdateSettlementAsync(conn, tx,
+                        current,
+                        newState: "SETTLED",
+                        reviewDisposition: "FERIEHINDRING",
+                        forfeitDays: residualForfeit,
+                        expectedVersion, ct,
+                        feriehindringTransferDays: impededDays,
+                        feriehindringReason: feriehindringReason);
+                    if (rescued is null)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.Json(new { error = "Concurrent update — refresh and retry.", actualVersion = (long?)null }, statusCode: 409);
+                    }
+
+                    // Employee → org for the ADR-026 TENANT_TARGETED audit rows + the snapshot for the
+                    // emitted events (the is_active-unfiltered in-tx read — a YEAR_END PENDING_REVIEW row
+                    // may belong to a since-deactivated leaver, the FORFEIT-path precedent).
+                    var feriehindringOrgId = await ResolvePrimaryOrgIdInTxAsync(conn, tx, employeeId, ct);
+                    if (feriehindringOrgId is null)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.NotFound(new { error = $"Employee '{employeeId}' not found." });
+                    }
+
+                    // (2) Source-keyed carryover (R1) — compose §21 + §22 from the PERSISTED row buckets
+                    // (NOT a live re-derivation). The §21 component (transfer_days) was already written at
+                    // close if > 0; this overwrite RE-STATES §21 + §22 idempotently (WriteCarryoverInAsync
+                    // is a SET, not a +=). Skip only when the combined sum is zero (nothing to write —
+                    // never clobber an independent producer's row with 0; the §21-zero/§22-positive case
+                    // still writes). seedQuota = the snapshot's annual quota (the §21 path's convention).
+                    var feriehindringSnapshot = DeserializeSnapshot(rescued.SnapshotJson);
+                    var combinedCarryover = rescued.TransferDays + impededDays; // §21 (persisted) + §22 (rescued)
+                    if (combinedCarryover > 0m)
+                    {
+                        await balanceRepo.WriteCarryoverInAsync(
+                            conn, tx, employeeId, entitlementType, entitlementYear + 1,
+                            carryoverDays: combinedCarryover,
+                            seedQuota: feriehindringSnapshot?.AnnualQuota ?? 0m, ct);
+                    }
+
+                    // (3a) FeriehindringTransferred — the §22 rescue fact + the durable reason (R1/R3).
+                    var feriehindringStreamId = $"employee-{employeeId}";
+                    var feriehindringEvent = new FeriehindringTransferred
+                    {
+                        EmployeeId = employeeId,
+                        EntitlementType = entitlementType,
+                        EntitlementYear = entitlementYear,
+                        Sequence = rescued.Sequence,
+                        Snapshot = feriehindringSnapshot,
+                        TransferDays = impededDays,
+                        FeriehindringReason = feriehindringReason,
+                        CorrelationId = actor.CorrelationId,
+                    };
+                    var feriehindringOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, feriehindringStreamId, feriehindringEvent, ct);
+                    // ActorPrimaryOrgId = the OPERATOR's org; ResolvedTargetOrgId = the employee's (the
+                    // request-endpoint convention — a parent-org HR actor must not be attributed the
+                    // target's organizational provenance).
+                    var feriehindringAuditCtx = new AuditProjectionContext(
+                        ActorId: actorId,
+                        ActorPrimaryOrgId: actor.OrgId,
+                        CorrelationId: feriehindringEvent.CorrelationId,
+                        OccurredAt: new DateTimeOffset(DateTime.SpecifyKind(feriehindringEvent.OccurredAt, DateTimeKind.Utc)),
+                        ResolvedTargetOrgId: feriehindringOrgId);
+                    var feriehindringRowData = feriehindringAuditMapper.Map(feriehindringEvent, feriehindringAuditCtx);
+                    await auditRepo.InsertAsync(conn, tx, feriehindringEvent.EventId, feriehindringOutboxId,
+                        feriehindringEvent.EventType, feriehindringRowData, feriehindringAuditCtx, ct);
+
+                    // (3b) VacationForfeitedToFeriefond for the RESIDUAL §34 — ONLY when > 0 (a FULL
+                    // rescue emits NO forfeit event). Reuses the existing §34 mapper (R3).
+                    if (residualForfeit > 0m)
+                    {
+                        var residualForfeitEvent = new VacationForfeitedToFeriefond
+                        {
+                            EmployeeId = employeeId,
+                            EntitlementType = entitlementType,
+                            EntitlementYear = entitlementYear,
+                            Sequence = rescued.Sequence,
+                            Snapshot = feriehindringSnapshot,
+                            ForfeitDays = residualForfeit,
+                            CorrelationId = actor.CorrelationId,
+                        };
+                        var residualOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, feriehindringStreamId, residualForfeitEvent, ct);
+                        var residualAuditCtx = new AuditProjectionContext(
+                            ActorId: actorId,
+                            ActorPrimaryOrgId: actor.OrgId,
+                            CorrelationId: residualForfeitEvent.CorrelationId,
+                            OccurredAt: new DateTimeOffset(DateTime.SpecifyKind(residualForfeitEvent.OccurredAt, DateTimeKind.Utc)),
+                            ResolvedTargetOrgId: feriehindringOrgId);
+                        var residualRowData = forfeitAuditMapper.Map(residualForfeitEvent, residualAuditCtx);
+                        await auditRepo.InsertAsync(conn, tx, residualForfeitEvent.EventId, residualOutboxId,
+                            residualForfeitEvent.EventType, residualRowData, residualAuditCtx, ct);
+                    }
+
+                    // The settlement-table audit row (version transition; mirrors the Phase-2 shape).
+                    await settlementRepo.AppendAuditAsync(conn, tx, rescued, "UPDATED",
+                        previousData, SerializeSettlementForAudit(rescued),
+                        versionBefore: current.Version, versionAfter: rescued.Version,
+                        actorId, actorRole, ct);
+
+                    await tx.CommitAsync(ct);
+
+                    context.Response.Headers.ETag = $"\"{rescued.Version}\"";
+                    return Results.Ok(new
+                    {
+                        employeeId,
+                        entitlementType,
+                        entitlementYear,
+                        sequence = rescued.Sequence,
+                        settlementState = rescued.SettlementState,
+                        reviewDisposition = rescued.ReviewDisposition,
+                        feriehindringTransferDays = rescued.FeriehindringTransferDays,
+                        feriehindringReason = rescued.FeriehindringReason,
+                        forfeitDays = rescued.ForfeitDays, // the §34 residual (0 on a full rescue)
+                        carryoverIn = combinedCarryover,   // §21 + §22 written to next year (R1)
+                        resolved = true,
+                        version = rescued.Version,
                     });
                 }
 
@@ -1073,17 +1346,21 @@ public static class VacationSettlementEndpoints
     /// <summary>
     /// CAS UPDATE of the settlement state-machine row (re-asserting <paramref name="expectedVersion"/>
     /// in the WHERE so a concurrent winner yields a 0-row no-op → caller returns 409, no double-emit).
-    /// Returns the persisted row, or <c>null</c> on the 0-row CAS loss. Used by all three D10/R5
+    /// Returns the persisted row, or <c>null</c> on the 0-row CAS loss. Used by all four D10/R5/S79
     /// outcomes (FORFEIT sets SETTLED, DEFER keeps PENDING_REVIEW, WAIVED sets SETTLED + clears the
-    /// flag + records <paramref name="claimDispositionDays"/>) — the §24 reconcile path has its own
-    /// inline UPDATE (different column set). <paramref name="claimDispositionDays"/> is non-null ONLY
-    /// for WAIVED (the 7100 bidirectional CHECK pairs it with MODREGNING/WAIVED); FORFEIT/DEFER write
-    /// NULL, which is a no-op on a PENDING_REVIEW row (the pairing CHECK forbids a quantity there).
+    /// flag + records <paramref name="claimDispositionDays"/>, FERIEHINDRING sets SETTLED + nets
+    /// forfeit_days + records <paramref name="feriehindringTransferDays"/> + <paramref name="feriehindringReason"/>)
+    /// — the §24 reconcile path has its own inline UPDATE (different column set).
+    /// <paramref name="claimDispositionDays"/> is non-null ONLY for WAIVED (the 7100 bidirectional
+    /// CHECK pairs it with MODREGNING/WAIVED); <paramref name="feriehindringReason"/> is non-null ONLY
+    /// for FERIEHINDRING (the 7900 bidirectional CHECK pairs the reason with FERIEHINDRING). FORFEIT/DEFER
+    /// write NULL for both, which is a no-op on a PENDING_REVIEW row (the pairing CHECKs forbid them there).
     /// </summary>
     private static async Task<VacationSettlementRow?> CasUpdateSettlementAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
         VacationSettlementRow current, string newState, string reviewDisposition, decimal forfeitDays,
-        long expectedVersion, CancellationToken ct, decimal? claimDispositionDays = null)
+        long expectedVersion, CancellationToken ct, decimal? claimDispositionDays = null,
+        decimal feriehindringTransferDays = 0m, string? feriehindringReason = null)
     {
         await using var cmd = new NpgsqlCommand(
             """
@@ -1092,6 +1369,8 @@ public static class VacationSettlementEndpoints
                 review_disposition = @reviewDisposition,
                 forfeit_days = @forfeitDays,
                 claim_disposition_days = @claimDispositionDays,
+                feriehindring_transfer_days = @feriehindringTransferDays,
+                feriehindring_reason = @feriehindringReason,
                 version = version + 1,
                 updated_at = NOW()
             WHERE employee_id = @employeeId
@@ -1108,6 +1387,11 @@ public static class VacationSettlementEndpoints
         {
             Value = (object?)claimDispositionDays ?? DBNull.Value,
         });
+        cmd.Parameters.AddWithValue("feriehindringTransferDays", feriehindringTransferDays);
+        cmd.Parameters.Add(new NpgsqlParameter("feriehindringReason", NpgsqlTypes.NpgsqlDbType.Text)
+        {
+            Value = (object?)feriehindringReason ?? DBNull.Value,
+        });
         cmd.Parameters.AddWithValue("employeeId", current.EmployeeId);
         cmd.Parameters.AddWithValue("entitlementType", current.EntitlementType);
         cmd.Parameters.AddWithValue("entitlementYear", current.EntitlementYear);
@@ -1123,6 +1407,8 @@ public static class VacationSettlementEndpoints
             ReviewDisposition = reviewDisposition,
             ForfeitDays = forfeitDays,
             ClaimDispositionDays = claimDispositionDays,
+            FeriehindringTransferDays = feriehindringTransferDays,
+            FeriehindringReason = feriehindringReason,
             Version = newVersion,
         };
     }
@@ -1260,6 +1546,10 @@ public static class VacationSettlementEndpoints
             // S71 / TASK-7103 (R5) — the §7/waiver resolved claim quantity (null for every
             // FORFEIT/DEFER/reconcile transition; the WAIVED audit record must carry it).
             row.ClaimDispositionDays,
+            // S79 / TASK-7901 (R1/R3) — the §22 feriehindring rescued bucket + durable reason (0/null
+            // for every non-FERIEHINDRING transition; the FERIEHINDRING audit record must carry them).
+            row.FeriehindringTransferDays,
+            row.FeriehindringReason,
             PayoutReconciledAt = row.PayoutReconciledAt,
             row.PayoutReconciledBy,
             row.Version,
@@ -1277,13 +1567,23 @@ public static class VacationSettlementEndpoints
         public required DateOnly AgreementDate { get; init; }
     }
 
-    /// <summary>POST /resolve body — the D10/R5 disposition (FORFEIT / DEFER / WAIVED; MODREGNING is
-    /// 422-parked pending the SLS dialogue) + an optional explicit forfeit_days (FORFEIT only — must
-    /// equal the flagged remainder exactly; WAIVED rejects it, the waived quantity always comes from
-    /// the row).</summary>
+    /// <summary>POST /resolve body — the D10/R5/S79 disposition (FORFEIT / DEFER / WAIVED /
+    /// FERIEHINDRING; MODREGNING is 422-parked pending the SLS dialogue) + an optional explicit
+    /// forfeit_days (FORFEIT only — must equal the flagged remainder exactly; WAIVED rejects it, the
+    /// waived quantity always comes from the row) + the §22 FERIEHINDRING inputs
+    /// (<see cref="ImpededDays"/> the impeded day-count to rescue + <see cref="Reason"/> the required
+    /// non-empty impediment rationale; ignored for the other dispositions).</summary>
     private sealed record ResolveSettlementRequest
     {
         public required string Disposition { get; init; }
         public decimal? ForfeitDays { get; init; }
+
+        /// <summary>S79 (SPRINT-79 R3) — the §22 impeded day-count to rescue from the §34 forfeiture
+        /// bucket (FERIEHINDRING only; 0 &lt; impededDays &lt;= min(forfeit_days, 20)).</summary>
+        public decimal? ImpededDays { get; init; }
+
+        /// <summary>S79 (SPRINT-79 R3) — the durable §22 impediment rationale (FERIEHINDRING only;
+        /// required non-empty — the FeriehindringTransferred event field + feriehindring_reason mirror).</summary>
+        public string? Reason { get; init; }
     }
 }

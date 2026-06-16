@@ -408,6 +408,38 @@ public sealed class SettlementReversalEndpointTests : IAsyncLifetime
         Assert.NotEqual("REVERSED", (await ReadRowAsync(reconEmp, 2024, 1)).State);
     }
 
+    /// <summary>S79 R7 — a §22 FERIEHINDRING carryover-writing row (feriehindring_transfer_days > 0)
+    /// is ALSO refused by the D-A zero-bucket guard (irreversible until the compensating-reversal
+    /// follow-up), exactly like the §21 transfer_days > 0 row. Row untouched.</summary>
+    [Fact]
+    public async Task FeriehindringCarryoverWritingRow_Refused_409()
+    {
+        var client = HrClient(_dormant, CoveringOrg);
+        var feriEmp = await SeedEmployeeAsync();
+        // Seed a complete SETTLED §22-resolved row directly (feriehindring_transfer_days > 0 — the
+        // carryover-writing bucket the R7 guard reads). A direct INSERT of the final valid shape, so
+        // the test does not depend on the automated close producing a particular pre-state.
+        await ExecAsync(
+            """
+            INSERT INTO vacation_settlements
+                (employee_id, entitlement_type, entitlement_year, sequence, settlement_state,
+                 trigger, snapshot, transfer_days, payout_days, forfeit_days,
+                 review_disposition, feriehindring_transfer_days, feriehindring_reason, version)
+            VALUES
+                (@e, 'VACATION', 2024, 1, 'SETTLED', 'YEAR_END',
+                 '{"annualQuota":25,"carryoverMax":5,"resetMonth":9,"okVersion":"OK24"}'::jsonb,
+                 0, 0, 0, 'FERIEHINDRING', 10, 'sygdom hele ferieafholdelsesperioden', 1)
+            """, ("e", feriEmp));
+
+        var feri = await PostReversalAsync(client, feriEmp,
+            new { entitlementYear = 2024, expectedSettlementSequence = 1, mode = "BARE" }, "\"1\"");
+
+        Assert.Equal(HttpStatusCode.Conflict, feri.StatusCode);
+        Assert.Equal("CarryoverWritingRow",
+            (await feri.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("failure").GetString());
+        Assert.NotEqual("REVERSED", (await ReadRowAsync(feriEmp, 2024, 1)).State);
+    }
+
     // ════════════════════════════════════════════════════════════════════════
     // 412 / 428 / 422 / 404 matrix.
     // ════════════════════════════════════════════════════════════════════════

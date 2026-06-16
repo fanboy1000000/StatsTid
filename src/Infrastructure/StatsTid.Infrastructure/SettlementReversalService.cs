@@ -183,16 +183,21 @@ public sealed class SettlementReversalService
                     actualSettlementSequence: active.Sequence);
             }
 
-            // (3) D-A zero-bucket-only scope guard: a carryover-WRITING row (transfer_days > 0
-            // wrote next-year carryover_in) is NOT reversible in 3b — the carryover-compensating
-            // reversal is the named follow-up. Fail closed, loudly.
-            if (active.TransferDays > 0m)
+            // (3) D-A zero-bucket-only scope guard: a carryover-WRITING row is NOT reversible — the
+            // carryover-compensating reversal is the named follow-up. Fail closed, loudly. Two
+            // carryover-writing buckets exist: §21 transfer_days (3b) AND, since S79, §22
+            // feriehindring_transfer_days (a FERIEHINDRING resolution wrote §21+§22 into next-year
+            // carryover_in). Either > 0 ⇒ irreversible in-slice (SPRINT-79 R7 — the FERIEHINDRING
+            // row is irreversible until the compensating-reversal follow-up; the operator's recorded
+            // impediment is the legally-sensitive point of accountability).
+            if (active.TransferDays > 0m || active.FeriehindringTransferDays > 0m)
             {
                 return await FailAsync(tx, SettlementReversalFailure.CarryoverWritingRow,
-                    $"Settlement sequence {active.Sequence} wrote §21 carryover " +
-                    $"(transfer_days={active.TransferDays}) — carryover-writing rows are not " +
-                    "reversible in slice 3b (owner D-A zero-bucket-only; the carryover-compensating " +
-                    "reversal is a recorded follow-up).", ct);
+                    $"Settlement sequence {active.Sequence} wrote carryover " +
+                    $"(transfer_days={active.TransferDays}, feriehindring_transfer_days=" +
+                    $"{active.FeriehindringTransferDays}) — carryover-writing rows are not reversible " +
+                    "(owner D-A zero-bucket-only; the carryover-compensating reversal is a recorded " +
+                    "follow-up).", ct);
             }
 
             // (4) R4 reconciled-row exclusion (cycle-2 Reviewer W2). DETECTION MECHANISM
