@@ -11,7 +11,7 @@ jobs:
     name: Cyclomatic complexity report (lizard)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: actions/setup-python@v5
         with:
@@ -43,7 +43,7 @@ jobs:
     name: Secret scan (gitleaks)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0  # gitleaks needs full history for `detect` mode
 
@@ -82,7 +82,7 @@ jobs:
           --health-timeout 5s
           --health-retries 12
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           # S64 fix-forward: BugCorrectionHistorySchemaTests resolves commit SHAs from
           # the bug-correction history against git (`<sha>^{commit}`); the default
@@ -161,7 +161,7 @@ jobs:
     # smoke assertion (RegisterAndRetrieveTimeEntry 403-vs-201) went undetected for
     # weeks. Independent jobs = one red cannot blind another.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -219,7 +219,7 @@ jobs:
   frontend-build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: actions/setup-node@v4
         with:
@@ -248,7 +248,7 @@ jobs:
     # playwright.config.ts absorb transient flake). Trigger = master push + PR (the
     # workflow `on:` block) — master-only would weaken the claimed gate.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: actions/setup-node@v4
         with:
@@ -317,7 +317,7 @@ jobs:
     name: Documentation consistency (check_docs.py)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0  # sprint-inventory check needs full git history
 
