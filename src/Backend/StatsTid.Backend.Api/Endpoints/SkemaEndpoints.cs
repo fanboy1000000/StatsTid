@@ -542,6 +542,9 @@ public static class SkemaEndpoints
             // S60 / TASK-6005 — dated employment profile for the part_time_fraction used in
             // the MONTHLY_ACCRUAL earned-to-date / bookableLimit computation.
             IEmploymentProfileResolver profileResolver,
+            // S81 / TASK-8102 (R1) — year-start-aligned dated entitlement-config resolution for the
+            // pre-transaction quota validation (the GRACEFUL family; mirrors the year-overview path).
+            DatedEntitlementConfigResolverFactory datedConfigResolverFactory,
             // S66 / TASK-6603 — ADR-032 consumption (feriedage) calculator. Used in TWO places:
             // (1) the D3 per-day norm cap + the provisional pre-lock requestedDays (advisory),
             // (2) the AUTHORITATIVE in-lock re-derivation that stamps AbsenceRegistered.Feriedage
@@ -1059,22 +1062,43 @@ public static class SkemaEndpoints
                 {
                     var requestedDays = totalRequestedDays;
 
-                    // ── S30 TASK-3008 two-step pattern (ADR-021 D2 + ADR-016 D5b "fifth pattern") ──
-                    // Step 1: read the LIVE (open) row to derive ResetMonth. ResetMonth is frozen
-                    // per natural key by the TASK-3007 admin-scope 422 guard (per ADR-021 Q1 sub-fork
-                    // (i)), so the live value is safe to use for entitlement-year-start derivation
-                    // across the entire history of this natural key.
-                    var liveConfig = await entitlementConfigRepo.GetCurrentOpenAsync(
-                        entitlementType, agreementCode, user.OkVersion, ct);
-                    if (liveConfig is null)
-                        continue;
-
                     var firstAbsenceDate = request.Absences
                         .Where(a => AbsenceToEntitlementType.TryGetValue(a.AbsenceType, out var et) && et == entitlementType)
                         .Select(a => a.Date)
                         .Min();
+
+                    // ── S30 TASK-3008 two-step pattern (ADR-021 D2 + ADR-016 D5b "fifth pattern") ──
+                    // ── S81 / TASK-8102 (R1/R2) — dated-anchor correctness cutover ──
+                    // The two-step read is now anchored on the OPERATION DATE (firstAbsenceDate), not
+                    // today's live key, on BOTH dimensions (OK version + agreement code):
+                    //   Step 1 (R2): read the LIVE (open) row to derive ResetMonth at the OPERATION-DATE
+                    //     key — OkVersionResolver.ResolveVersion(firstAbsenceDate) + the agreement dated
+                    //     at firstAbsenceDate (NOT user.OkVersion + the month-start agreement). reset_month
+                    //     is frozen WITHIN a natural key by the TASK-3007 admin-scope 422 guard (ADR-021
+                    //     D5), so reading the live-open row of the operation-date key is safe — and for the
+                    //     unconstrained IMMEDIATE calendar types, whose reset_month CAN diverge across keys
+                    //     after an OK/agreement change (D5 freezes only EDITS, not new-key CREATEs), the
+                    //     operation-date key is the correct-by-construction source of the consumed
+                    //     entitlement year (SPRINT-81 §Design decision — re-derivation, not the seed
+                    //     type-uniformity assumption).
+                    //   Step 2 (R1): the quota config is read at the entitlement-year-START key — the
+                    //     year-start-dated OK version AND the year-start-dated agreement — via the shared
+                    //     DatedEntitlementConfigResolver (ADR-023 D3 graceful chain: dated row →
+                    //     operation-date-agreement liveConfig → historical-agreement live row → liveConfig).
+                    // This unifies the (formerly misaligned: live OK + month-start agreement) Skema quota
+                    // validation onto the year-overview's year-start-aligned convention. PRE-transaction
+                    // check (runs before BeginTransactionAsync below), so the non-tx read overload suffices.
+                    var opDateOkVersion = OkVersionResolver.ResolveVersion(firstAbsenceDate);
+                    var opDateAgreement = await userAgreementCodeRepo.GetByUserIdAtAsync(
+                        employeeId, firstAbsenceDate, ct) ?? user.AgreementCode;
+
+                    var liveConfig = await entitlementConfigRepo.GetCurrentOpenAsync(
+                        entitlementType, opDateAgreement, opDateOkVersion, ct);
+                    if (liveConfig is null)
+                        continue;
+
                     // S80 / TASK-8001 (R2/R10) — the entitlement (accrual) year + its accrual-window
-                    // start now come from the SHARED EntitlementPeriodResolver. VACATION + every other
+                    // start come from the SHARED EntitlementPeriodResolver. VACATION + every other
                     // type are BEHAVIOR-IDENTICAL to the old ResolveEntitlementYear/Start (the
                     // "Month ≥ reset_month" ferieår keying). SPECIAL_HOLIDAY uses the two-calendar-year
                     // taking-window mapping (1 May Y+1 .. 30 Apr Y+2): a May–Dec booking keys to accrual
@@ -1085,15 +1109,21 @@ public static class SkemaEndpoints
                     var entitlementYear = entPeriod.EntitlementYear;
                     var entitlementYearStart = entPeriod.AccrualStart;
 
-                    // Step 2: dated read at the entitlement-year-start. This is the config row that
-                    // was IN EFFECT on the day the current entitlement year started — what quota
-                    // validation must use (annual_quota / carryover_max as they stood at year-start).
-                    // Fallback: if no row was effective at year-start (e.g. this OK version came into
-                    // existence mid-year), fall back to the live config so we don't silently skip a
-                    // real quota check.
-                    var config = await entitlementConfigRepo.GetByTypeAtAsync(
-                        entitlementType, agreementCode, user.OkVersion, entitlementYearStart, ct)
-                        ?? liveConfig;
+                    // Step 2 (R1): dated read at the entitlement-year-START key (year-start OK +
+                    // year-start agreement), via the shared resolver. This is the config row that was
+                    // IN EFFECT on the day the current entitlement year started — what quota validation
+                    // must use (annual_quota / carryover_max as they stood at year-start). The resolver
+                    // encapsulates the ADR-023 D3 graceful fallback (never 500): a dated miss for a
+                    // year-start OK that came into existence mid-year, or a year-start agreement with no
+                    // dated row, falls through to the live config rather than silently skipping the check.
+                    // todayAgreementCode operand = opDateAgreement (the agreement liveConfig was read
+                    // under): so when the year-start agreement equals it, the resolver returns this exact
+                    // liveConfig; when it differs, it values against the historical agreement's own row.
+                    var datedConfigResolver = datedConfigResolverFactory.Create(
+                        employeeId, opDateOkVersion, user.AgreementCode, opDateAgreement);
+                    var config = await datedConfigResolver.ResolveDatedConfigAsync(
+                        entitlementType, entitlementYearStart,
+                        OkVersionResolver.ResolveVersion(entitlementYearStart), liveConfig, ct);
 
                     var balance = await entitlementBalanceRepo.GetByEmployeeAndTypeAsync(
                         employeeId, entitlementType, entitlementYear, ct);

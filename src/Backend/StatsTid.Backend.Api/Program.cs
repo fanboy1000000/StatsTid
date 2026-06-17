@@ -287,6 +287,11 @@ builder.Services.AddSingleton<StatsTid.Backend.Api.Services.DailyNormCalculator>
 // shared DailyNormCalculator (one norm impl, no drift) + the dated profile resolver for the
 // ANNUAL_ACTIVITY fallback discriminator. Stateless (per-call caches) ⇒ singleton-safe.
 builder.Services.AddSingleton<StatsTid.Backend.Api.Services.ConsumptionCalculator>();
+// S81 / TASK-8101 (R3) — singleton factory for the per-request graceful dated-entitlement-config
+// resolver (hoisted byte-for-byte from the YearOverview handler's former local functions). The
+// resolver INSTANCE is per-request (its agreement-by-date + live-by-(type,agreement) caches are
+// request-scoped); the FACTORY (holding the two singleton repos) is the singleton.
+builder.Services.AddSingleton<StatsTid.Infrastructure.DatedEntitlementConfigResolverFactory>();
 // S65 / TASK-6502 — server "today" seam for the new year-overview endpoint ONLY (Step-0b
 // Reviewer NOTE). TimeProvider.System is the production default; TASK-6504's test host
 // overrides it with a fixed provider. No other endpoint is refactored onto this seam.

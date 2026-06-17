@@ -48,6 +48,7 @@ public static class BalanceEndpoints
             TimeEntryProjectionRepository timeEntryProjectionRepo,
             AbsenceProjectionRepository absenceProjectionRepo,
             VacationSettlementRepository settlementRepo,
+            DatedEntitlementConfigResolverFactory datedConfigResolverFactory,
             IEventStore eventStore,
             OrgScopeValidator scopeValidator,
             IEmploymentProfileResolver profileResolver,
@@ -179,18 +180,34 @@ public static class BalanceEndpoints
 
             // ── Entitlements: load configs and balances ──
             // S30 TASK-3008 two-step pattern (ADR-021 D2 + ADR-016 D5b "fifth pattern").
-            // Step 1: read the LIVE (open) rows for this agreement/OK pair to discover the
-            // natural keys + their ResetMonth values. ResetMonth is frozen per natural key by
-            // the TASK-3007 admin-scope 422 guard (ADR-021 Q1 sub-fork (i)), so each live
-            // row's ResetMonth is safe to use for year-start derivation across the full history.
+            // S81 / TASK-8102 (R2) — Step 1 is anchored on the OPERATION DATE (monthEnd, the same
+            // as-of the per-type year derivation + earned-to-date computation use), on BOTH
+            // dimensions: OkVersionResolver.ResolveVersion(monthEnd) + the agreement dated at
+            // monthEnd — NOT the live user.OkVersion + the month-start agreement. ResetMonth is
+            // frozen WITHIN a natural key by the TASK-3007 admin-scope 422 guard (ADR-021 D5), so
+            // reading the live-open row of the operation-date key is safe; for the unconstrained
+            // IMMEDIATE calendar types whose reset_month CAN diverge across keys after an
+            // OK/agreement change, the operation-date key is the correct-by-construction source of
+            // the consumed entitlement year (SPRINT-81 §Design decision — re-derivation).
             //
             // EffectiveTo IS NULL filter is load-bearing: GetByAgreementAsync returns ALL rows
             // (open + closed predecessors). Post-supersession the bulk read contains 2 rows per
             // natural key — without this filter the loop double-emits each entitlement and
             // vacationDaysEntitlement gets overwritten with whichever row is visited last.
+            var opDateOkVersion = OkVersionResolver.ResolveVersion(monthEnd);
+            var opDateAgreement = await userAgreementCodeRepo.GetByUserIdAtAsync(
+                employeeId, monthEnd, ct) ?? user.AgreementCode;
             var liveConfigs = (await entitlementConfigRepo.GetByAgreementAsync(
-                agreementCode, user.OkVersion, ct))
+                opDateAgreement, opDateOkVersion, ct))
                 .Where(c => c.EffectiveTo is null);
+
+            // S81 / TASK-8102 (R1) — the shared GRACEFUL dated-config resolver (year-overview path).
+            // The Step-2 quota read below resolves the year-start-dated OK + year-start-dated
+            // agreement through it. todayAgreementCode operand = opDateAgreement (the agreement the
+            // live rows were read under): when a year-start agreement equals it, the resolver returns
+            // the passed live row; when it differs, the historical agreement's own row is used.
+            var datedConfigResolver = datedConfigResolverFactory.Create(
+                employeeId, opDateOkVersion, user.AgreementCode, opDateAgreement);
 
             // S60 / TASK-6005 — partTimeFraction is sourced from the dated employment profile at
             // month-end (resolved above, graceful ?? 1.0m). It is retained ONLY for the generic
@@ -215,18 +232,19 @@ public static class BalanceEndpoints
                 var period = EntitlementPeriodResolver.Resolve(live.EntitlementType, live.ResetMonth, monthEnd);
                 var entitlementYear = period.EntitlementYear;
 
-                // Step 2: dated read at the entitlement-year-start. This is the config row that
-                // was IN EFFECT when the current entitlement year started — its annual_quota /
-                // carryover_max define this year's quota for display. Per-type dated reads
-                // (not GetByAgreementAtAsync) because each type may resolve to a DIFFERENT
-                // asOfDate (different reset_month / accrual geometry → different year-start).
-                // Fallback: if no row was effective at year-start (e.g. this OK version came
-                // into existence mid-year), fall back to the live row so the entitlement still
-                // appears in the summary with the current quota values.
+                // Step 2 (S81 / TASK-8102 R1): dated read at the entitlement-year-START key — the
+                // year-start-dated OK version AND the year-start-dated agreement — via the shared
+                // resolver. This is the config row that was IN EFFECT when the current entitlement
+                // year started; its annual_quota / carryover_max define this year's quota for display.
+                // Per-type because each type may resolve to a DIFFERENT year-start (different
+                // reset_month / accrual geometry). The resolver encapsulates the ADR-023 D3 graceful
+                // fallback (never 500): a dated miss for a year-start OK that came into existence
+                // mid-year, or a year-start agreement with no dated row, falls through to the live
+                // row so the entitlement still appears in the summary with the current quota values.
                 var entitlementYearStart = period.AccrualStart;
-                var ec = await entitlementConfigRepo.GetByTypeAtAsync(
-                    live.EntitlementType, agreementCode, user.OkVersion, entitlementYearStart, ct)
-                    ?? live;
+                var ec = await datedConfigResolver.ResolveDatedConfigAsync(
+                    live.EntitlementType, entitlementYearStart,
+                    OkVersionResolver.ResolveVersion(entitlementYearStart), live, ct);
 
                 // Look up balance for this employee + type + year (read from entitlement_balances
                 // — the balance projection is owned by Skema/Time POST handlers and is unchanged
@@ -441,6 +459,7 @@ public static class BalanceEndpoints
             UserRepository userRepo,
             UserAgreementCodeRepository userAgreementCodeRepo,
             EntitlementConfigRepository entitlementConfigRepo,
+            DatedEntitlementConfigResolverFactory datedConfigResolverFactory,
             OrgScopeValidator scopeValidator,
             HttpContext context,
             CancellationToken ct) =>
@@ -469,24 +488,30 @@ public static class BalanceEndpoints
             if (user is null)
                 return Results.NotFound(new { error = "Employee not found" });
 
-            // Dated agreement_code at the requested month-start, with the same ADR-023 D3
-            // graceful fallback to the live cache as /summary.
-            var pastEffectiveAgreementCode = await userAgreementCodeRepo.GetByUserIdAtAsync(
-                employeeId, new DateOnly(year, month, 1), ct);
-            var agreementCode = pastEffectiveAgreementCode ?? user.AgreementCode;
+            // The as-of for the entitlement-year keying — the requested month's end (matches /summary).
+            // This is the OPERATION DATE that anchors the Step-1 reset_month read (S81 / TASK-8102 R2).
+            var seriesAsOf = new DateOnly(year, month, DateTime.DaysInMonth(year, month));
 
-            // Live (open) entitlement configs for this agreement/OK pair — EffectiveTo IS NULL
-            // filter is load-bearing (post-supersession the bulk read holds 2 rows per natural
-            // key; same rationale as /summary). ResetMonth is frozen per natural key, so each
-            // live row's ResetMonth safely drives year-start derivation.
+            // S81 / TASK-8102 (R2) — Step 1 is anchored on the OPERATION DATE (seriesAsOf = monthEnd),
+            // on BOTH dimensions: OkVersionResolver.ResolveVersion(seriesAsOf) + the agreement dated at
+            // seriesAsOf — NOT the live user.OkVersion + the month-start agreement. ResetMonth is frozen
+            // WITHIN a natural key (ADR-021 D5), so reading the live-open row of the operation-date key
+            // is safe (same re-derivation rationale as /summary). EffectiveTo IS NULL filter is
+            // load-bearing (post-supersession the bulk read holds 2 rows per natural key; same rationale
+            // as /summary).
+            var opDateOkVersion = OkVersionResolver.ResolveVersion(seriesAsOf);
+            var opDateAgreement = await userAgreementCodeRepo.GetByUserIdAtAsync(
+                employeeId, seriesAsOf, ct) ?? user.AgreementCode;
             var liveConfigs = (await entitlementConfigRepo.GetByAgreementAsync(
-                agreementCode, user.OkVersion, ct))
+                opDateAgreement, opDateOkVersion, ct))
                 .Where(c => c.EffectiveTo is null);
 
-            var series = new List<object>();
+            // S81 / TASK-8102 (R1) — the shared GRACEFUL dated-config resolver (year-overview path).
+            // todayAgreementCode operand = opDateAgreement (the agreement the live rows were read under).
+            var datedConfigResolver = datedConfigResolverFactory.Create(
+                employeeId, opDateOkVersion, user.AgreementCode, opDateAgreement);
 
-            // The as-of for the entitlement-year keying — the requested month's end (matches /summary).
-            var seriesAsOf = new DateOnly(year, month, DateTime.DaysInMonth(year, month));
+            var series = new List<object>();
 
             foreach (var live in liveConfigs)
             {
@@ -504,12 +529,14 @@ public static class BalanceEndpoints
                 var entitlementYear = period.EntitlementYear;
                 var ferieaarStart = period.AccrualStart;
 
-                // Dated config effective at the ferieår start defines this year's annual_quota.
-                // Fall back to the live row if no row was effective at year-start (e.g. this OK
-                // version came into existence mid-year) — same fallback as /summary.
-                var ec = await entitlementConfigRepo.GetByTypeAtAsync(
-                    live.EntitlementType, agreementCode, user.OkVersion, ferieaarStart, ct)
-                    ?? live;
+                // Step 2 (S81 / TASK-8102 R1): dated config at the entitlement-year-START key — the
+                // year-start-dated OK version AND the year-start-dated agreement — via the shared
+                // resolver, defines this year's annual_quota. The resolver's ADR-023 D3 graceful chain
+                // falls back to the live row if no row was effective at year-start (e.g. this OK version
+                // came into existence mid-year) — same fallback as /summary.
+                var ec = await datedConfigResolver.ResolveDatedConfigAsync(
+                    live.EntitlementType, ferieaarStart,
+                    OkVersionResolver.ResolveVersion(ferieaarStart), live, ct);
 
                 // MONTHLY_ACCRUAL-only: skip IMMEDIATE types entirely — no series for them.
                 if (!string.Equals(ec.AccrualModel, MonthlyAccrualModel, StringComparison.Ordinal))
@@ -606,6 +633,7 @@ public static class BalanceEndpoints
             AbsenceProjectionRepository absenceProjectionRepo,
             WorkTimeProjectionRepository workTimeProjectionRepo,
             VacationSettlementRepository settlementRepo,
+            DatedEntitlementConfigResolverFactory datedConfigResolverFactory,
             IEventStore eventStore,
             IEmploymentProfileResolver profileResolver,
             ConfigResolutionService configResolver,
@@ -788,60 +816,20 @@ public static class BalanceEndpoints
             }
 
             // ── S65 Step-7a fix: per-ferieår dated agreement-code anchoring ──
-            // The OK version is already anchored at each entitlement-year start below, but the
-            // AGREEMENT CODE operand of the dated entitlement-config reads must ALSO be the one in
-            // effect at that ferieår start — NOT today's. When an employee changes agreement (e.g.
-            // AC→HK) the earlier AC ferieår must be valued with AC quotas/carryover rules, not HK's.
-            // Mirrors the existing header dated read (user_agreement_codes, ADR-023 D3 graceful
-            // fallback to the live cache). For a single-agreement employee every date resolves to
-            // the SAME code today resolves to, so this path is byte-identical to the prior
-            // todayAgreementCode reads (ALL current tests). Cached per request: a 12-month loop over
-            // ≤3 distinct ferieår starts must not issue 12 repo calls per category.
-            var agreementByDate = new Dictionary<DateOnly, string>();
-            async Task<string> ResolveAgreementAtAsync(DateOnly asOf)
-            {
-                if (agreementByDate.TryGetValue(asOf, out var cached))
-                    return cached;
-                var resolved = await userAgreementCodeRepo.GetByUserIdAtAsync(employeeId, asOf, ct)
-                    ?? user.AgreementCode;
-                agreementByDate[asOf] = resolved;
-                return resolved;
-            }
-
-            // Fallback live (open) config for a (type, agreement) pair OTHER than today's. Only
-            // consulted when the dated read misses AND the per-ferieår agreement differs from
-            // today's — falling back to today's-agreement liveConfig in that case would re-introduce
-            // the cross-agreement bug. Cached per (type, agreement) to bound reads. Null result is
-            // cached too (so a missing per-agreement live row is not re-queried per month).
-            var liveByTypeAgreement = new Dictionary<(string Type, string Agreement), EntitlementConfig?>();
-            async Task<EntitlementConfig?> ResolveFallbackLiveAsync(string type, string agreement)
-            {
-                var key = (type, agreement);
-                if (liveByTypeAgreement.TryGetValue(key, out var cached))
-                    return cached;
-                var resolved = await entitlementConfigRepo.GetCurrentOpenAsync(
-                    type, agreement, user.OkVersion, ct);
-                liveByTypeAgreement[key] = resolved;
-                return resolved;
-            }
-
-            // Dated entitlement-config read anchored at the per-ferieår agreement code. OK version
-            // stays the year-start-anchored value passed in (already correct). Graceful fallback
-            // chain (ADR-023 D3, never 500): dated row → if the per-ferieår agreement == today's,
-            // the already-fetched live row for this type (liveConfig) → otherwise the live open row
-            // of the per-ferieår agreement → and only if THAT is null, liveConfig.
-            async Task<EntitlementConfig> ResolveDatedConfigAsync(
-                string type, DateOnly ferieaarStart, string okVersion, EntitlementConfig liveConfig)
-            {
-                var agreement = await ResolveAgreementAtAsync(ferieaarStart);
-                var dated = await entitlementConfigRepo.GetByTypeAtAsync(
-                    type, agreement, okVersion, ferieaarStart, ct);
-                if (dated is not null)
-                    return dated;
-                if (string.Equals(agreement, todayAgreementCode, StringComparison.Ordinal))
-                    return liveConfig;
-                return await ResolveFallbackLiveAsync(type, agreement) ?? liveConfig;
-            }
+            // S81 / TASK-8101 (R3) — the three former local functions (ResolveAgreementAtAsync /
+            // ResolveFallbackLiveAsync / ResolveDatedConfigAsync) + their two shared per-request
+            // caches were hoisted byte-for-byte into the shared DatedEntitlementConfigResolver
+            // (Infrastructure; it does repository I/O). One per-request instance is minted here so
+            // the matrix loop (≤3 distinct ferieår starts × ≤4 categories) + the configless
+            // probe-anchor bootstrap below SHARE the same agreement-by-date + live-by-(type,
+            // agreement) caches — bounding repo reads exactly as before. Behaviour-IDENTICAL:
+            //   - agreement code dated at each ferieår start (the SAME-code byte-identity for a
+            //     single-agreement employee),
+            //   - the year-start-anchored OK version operand passed per call,
+            //   - the ADR-023 D3 graceful fallback chain (dated → today's-agreement liveConfig →
+            //     per-agreement live → liveConfig), never 500.
+            var datedConfigResolver = datedConfigResolverFactory.Create(
+                employeeId, user.OkVersion, user.AgreementCode, todayAgreementCode);
 
             // ── Categories: saldo[12] + afholdt[12] + expiring + boundaryMonth ──
             var categories = new List<object>(YearOverviewCategoryTypes.Length);
@@ -892,10 +880,10 @@ public static class BalanceEndpoints
                     };
                     foreach (var anchor in probeAnchors)
                     {
-                        var anchorAgreement = await ResolveAgreementAtAsync(anchor);
+                        var anchorAgreement = await datedConfigResolver.ResolveAgreementAtAsync(anchor, ct);
                         if (string.Equals(anchorAgreement, todayAgreementCode, StringComparison.Ordinal))
                             continue;
-                        var altLive = await ResolveFallbackLiveAsync(type, anchorAgreement);
+                        var altLive = await datedConfigResolver.ResolveFallbackLiveAsync(type, anchorAgreement, ct);
                         if (altLive is not null)
                         {
                             liveConfig = altLive; // resetMonth discovery + ResolveDatedConfigAsync fallback terminal
@@ -922,6 +910,39 @@ public static class BalanceEndpoints
                 }
                 var resetMonth = liveConfig.ResetMonth;
 
+                // S81 / TASK-8102 (R2) — the operation-date reset_month memo. The other three
+                // Convention-A consumers (Skema quota validation, Balance /summary + /series) derive
+                // the CONSUMED entitlement year from the config governing the OPERATION DATE's key
+                // (op-date OK + op-date agreement), so the year-start derivation is correct even when
+                // reset_month DIVERGES across the OK/agreement natural keys (reachable for the
+                // unconstrained IMMEDIATE types CARE_DAY/SENIOR_DAY — only VACATION is schema-pinned to
+                // reset_month 9; SPECIAL_HOLIDAY is reset_month-independent via the resolver). The
+                // YearOverview matrix must key each month the SAME way or it split-brains against
+                // balance/validation/summary/series (the exact thing S81 closes). So for EACH month
+                // we read the open config at THAT month's operation-date key and take ITS reset_month;
+                // null (no op-date-key config) falls back to the today-key liveConfig.ResetMonth —
+                // byte-identical to the prior single-resetMonth behaviour when no op-date config
+                // exists. Memoised per (opOk, opAgreement) so a 12-month loop issues at most a handful
+                // of extra reads per type; the op-date agreement reuses datedConfigResolver's shared
+                // agreement-by-date cache. VACATION (schema-pinned 9) and the common no-divergence
+                // employee (op-date key reset_month == today-key reset_month) yield BYTE-IDENTICAL
+                // periods; SPECIAL_HOLIDAY's Resolve IGNORES reset_month entirely (S80 1-Jan geometry),
+                // so it is unaffected regardless of the value fed in.
+                var resetMonthByOpKey = new Dictionary<(string Ok, string Agreement), int>();
+                async Task<int> ResolveOpDateResetMonthAsync(DateOnly opDate)
+                {
+                    var opOk = OkVersionResolver.ResolveVersion(opDate);
+                    var opAgreement = await datedConfigResolver.ResolveAgreementAtAsync(opDate, ct);
+                    var memoKey = (opOk, opAgreement);
+                    if (resetMonthByOpKey.TryGetValue(memoKey, out var memoed))
+                        return memoed;
+                    var opConfig = await entitlementConfigRepo.GetCurrentOpenAsync(
+                        type, opAgreement, opOk, ct);
+                    var resolved = opConfig?.ResetMonth ?? resetMonth;
+                    resetMonthByOpKey[memoKey] = resolved;
+                    return resolved;
+                }
+
                 // saldo[m]: end-of-month remaining within the entitlement year CONTAINING month m.
                 // saldo = EarnedToDate(quota, 1.0, ferieaarStart, employmentStart, monthEnd)
                 //         + carryoverIn − cumulative afholdt(this type) within the ferieår up to
@@ -944,7 +965,13 @@ public static class BalanceEndpoints
                     // uses the two-calendar-year taking-window mapping + a 1-Jan accrual anchor, so a
                     // calendar-year matrix shows the accrual-year balance being taken in its taking
                     // window (the transition at 1 May matches the R2 booking keying).
-                    var period = EntitlementPeriodResolver.Resolve(type, resetMonth, monthEnd);
+                    //
+                    // S81 / TASK-8102 (R2) — the reset_month operand is re-derived from the
+                    // operation-date key (op-date OK + op-date agreement) governing THIS month's end,
+                    // matching the other three R2-corrected consumers; falls back to the today-key
+                    // liveConfig.ResetMonth when no op-date-key config exists (byte-identical to before).
+                    var resetMonthForMonth = await ResolveOpDateResetMonthAsync(monthEnd);
+                    var period = EntitlementPeriodResolver.Resolve(type, resetMonthForMonth, monthEnd);
                     var entYear = period.EntitlementYear;
                     var ferieaarStart = period.AccrualStart;
 
@@ -953,7 +980,7 @@ public static class BalanceEndpoints
                     // year-start (Step-7a fix — historical ferieår must not be valued with today's
                     // agreement), then the dated config read with the graceful fallback chain.
                     var entOkVersion = OkVersionResolver.ResolveVersion(ferieaarStart);
-                    var ec = await ResolveDatedConfigAsync(type, ferieaarStart, entOkVersion, liveConfig);
+                    var ec = await datedConfigResolver.ResolveDatedConfigAsync(type, ferieaarStart, entOkVersion, liveConfig, ct);
 
                     var balance = await entitlementBalanceRepo.GetByEmployeeAndTypeAsync(
                         employeeId, type, entYear, ct);
@@ -1017,14 +1044,22 @@ public static class BalanceEndpoints
                 // §21 deadline-year geometry. SPECIAL_HOLIDAY → closedEntYear = year−2 (boundary
                 // 30 Apr year). The settlement CLOSE itself (the godtgørelse) is TASK-8002; this stays
                 // a display-only disposition PROJECTION (D7 deferred).
+                // S81 / TASK-8103 (Step-7a cycle-2 BLOCKER fix) — the closed-ferieår disposition keys
+                // off the OPERATION-DATE reset_month (R2-consistent with the per-month saldo + the
+                // balance), NOT the today/live-key resetMonth. Jan-1 of the selected year is within the
+                // ferieår that closes during `year` for ANY reset_month (1..12), so it resolves the
+                // closed ferieår's governing key without circularity. Common case (no divergence):
+                // closedResetMonth == resetMonth ⇒ byte-identical. SPECIAL_HOLIDAY is reset_month-
+                // independent (the IsSpecialHoliday branch below).
+                var closedResetMonth = await ResolveOpDateResetMonthAsync(new DateOnly(year, 1, 1));
                 int closedEntYear;
                 if (EntitlementPeriodResolver.IsSpecialHoliday(type))
                     closedEntYear = year - 2;                          // boundary 30 Apr (Y+2) falls in `year`.
-                else if (resetMonth == 1)
+                else if (closedResetMonth == 1)
                     closedEntYear = year;                              // boundary 31 Dec E (E == year).
                 else
                     closedEntYear = year - 1;                          // boundary 31 Dec E+1 (E == year−1).
-                var closedPeriod = EntitlementPeriodResolver.ResolveForYear(type, resetMonth, closedEntYear);
+                var closedPeriod = EntitlementPeriodResolver.ResolveForYear(type, closedResetMonth, closedEntYear);
                 DateOnly closedFerieaarStart = closedPeriod.AccrualStart;
                 // boundaryDate is the EarnedToDate asOf below (a non-stored, display-only projection).
                 // S80 / TASK-8001 (BLOCKER 1 fix) — this MUST be the ACCRUAL-window END
@@ -1042,8 +1077,8 @@ public static class BalanceEndpoints
                 var closedOkVersion = OkVersionResolver.ResolveVersion(closedFerieaarStart);
                 // Step-7a fix: agreement code resolved at the CLOSED ferieår start (same dated
                 // anchoring + graceful fallback as the monthly saldo read above).
-                var closedConfig = await ResolveDatedConfigAsync(
-                    type, closedFerieaarStart, closedOkVersion, liveConfig);
+                var closedConfig = await datedConfigResolver.ResolveDatedConfigAsync(
+                    type, closedFerieaarStart, closedOkVersion, liveConfig, ct);
                 var closedBalance = await entitlementBalanceRepo.GetByEmployeeAndTypeAsync(
                     employeeId, type, closedEntYear, ct);
                 var closedCarryoverIn = closedBalance?.CarryoverIn ?? 0m;

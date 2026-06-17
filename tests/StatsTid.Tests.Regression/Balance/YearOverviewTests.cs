@@ -836,6 +836,97 @@ public sealed class YearOverviewTests : IAsyncLifetime
         Assert.Equal(4m, saldo[2].GetDecimal());
     }
 
+    // ════════════════════════════════════════════════════════════════════════
+    // 7b. S81 / TASK-8102 (R2) — YearOverview per-month reset_month re-derivation
+    //     (the Step-7a BLOCKER fix). YearOverview must derive each month's consumed
+    //     entitlement year from the OPERATION-DATE key's reset_month — matching the
+    //     three R2-corrected consumers (Skema validation, /summary, /series) — NOT a
+    //     single today/live-key reset_month. RED on the pre-fix single-resetMonth code.
+    // ════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// <b>RED on the pre-S81-fix code (the single today-key <c>resetMonth = liveConfig.ResetMonth</c>
+    /// fed to <see cref="EntitlementPeriodResolver.Resolve"/> for ALL 12 months).</b>
+    ///
+    /// <para>A history-changed CARE_DAY employee whose <c>reset_month</c> DIVERGES across OK versions:
+    /// live OK26 (CARE_DAY OK26 <c>reset_month</c> = 1, seed) while the OK24 CARE_DAY <c>reset_month</c>
+    /// is mutated to 7 (reachable — CARE_DAY's <c>reset_month</c> is unconstrained across OK versions;
+    /// only VACATION is schema-pinned to 9). Viewing calendar year 2026: the early months
+    /// (Jan–Mar, monthEnd ≤ 2026-03-31) resolve operation-date OK24 (<c>reset_month</c> 7), while
+    /// Apr–Dec resolve OK26 (<c>reset_month</c> 1). For March 2026 (monthEnd 2026-03-31) the two keys
+    /// disagree on the consumed entitlement year:</para>
+    /// <list type="bullet">
+    ///   <item><description><b>POST-fix (R2 op-date key OK24 ⇒ reset_month 7):</b> March (3) &lt; 7 ⇒
+    ///   entitlement year <b>2025</b>, accrual start 2025-07-01. saldo reads the
+    ///   <c>entitlement_year = 2025</c> balance row.</description></item>
+    ///   <item><description><b>PRE-fix (today-key liveConfig OK26 ⇒ reset_month 1):</b> March (3) ≥ 1 ⇒
+    ///   entitlement year <b>2026</b>. saldo reads the <c>entitlement_year = 2026</c> row.</description></item>
+    /// </list>
+    /// <para>CARE_DAY is IMMEDIATE (full quota 2 earned up-front, independent of which year-start the
+    /// dated config read anchors at, so <c>earned</c> = 2 in both branches), so the discriminator is
+    /// WHICH <c>entitlement_year</c> row supplies <c>carryoverIn</c>. We seed a CARE_DAY balance row at
+    /// the op-date-key year 2025 with a distinctive <c>carryover_in = 3</c> and NO row at 2026 (⇒ 0):</para>
+    /// <list type="bullet">
+    ///   <item><description><b>POST-fix:</b> March saldo = earned(2) + carryoverIn(3, from the 2025 row)
+    ///   − afholdt(0) = <b>5</b>.</description></item>
+    ///   <item><description><b>PRE-fix (RED):</b> March saldo = earned(2) + carryoverIn(0, no 2026 row)
+    ///   − afholdt(0) = <b>2</b>.</description></item>
+    /// </list>
+    /// <para>5 ≠ 2 ⇒ this test FAILS (observed 2) on the pre-fix single-resetMonth code and PASSES (5)
+    /// on the per-month op-date re-derivation — pinning that YearOverview keys each month to the SAME
+    /// entitlement year the balance / <c>/summary</c> / validation use (closing the split-brain). The
+    /// COMMON no-divergence employee (op-date key reset_month == today-key) is byte-identical and is
+    /// already covered by every existing test in this suite (all single-OK / single-agreement).</para>
+    /// </summary>
+    [Fact]
+    public async Task PerMonthResetMonth_DerivedFromOperationDateKey_NotTodayKey()
+    {
+        var employeeId = await CreateEmployeeAsync(Emp001OrgId, "AC", "OK26");
+        await RegressionSeed.SeedEmployeeAsync(
+            _harness.ConnectionString, employeeId, Emp001OrgId, "AC", "OK24");
+        // Live OK26 (the today key, 2026-06-15): CARE_DAY OK26 reset_month stays the seed value 1.
+        await SetUserOkVersionAsync(employeeId, "OK26");
+        // Mutate the open CARE_DAY OK24 (operation-date key for early 2026) reset_month to 7 — the
+        // divergence. CARE_DAY reset_month is unconstrained across OK versions (only VACATION is
+        // schema-pinned to 9), so this is a reachable production state after an OK change.
+        await SetOpenEntitlementResetMonthAsync("CARE_DAY", "AC", "OK24", 7);
+
+        // Seed the CARE_DAY balance at the OPERATION-DATE-key year (2025) with a distinctive
+        // carryover_in. No row at 2026 ⇒ the pre-fix today-key (reset_month 1) derivation reads 0.
+        await SeedEntitlementBalanceAsync(
+            employeeId, "CARE_DAY", entitlementYear: 2025, used: 0m, planned: 0m, carryoverIn: 3m);
+
+        var client = MakeFixedTodayClient(EmployeeBearerToken(employeeId, Emp001OrgId));
+        var body = await GetYearOverviewAsync(client, employeeId, 2026);
+
+        var careDay = GetCategory(body, "CARE_DAY");
+        var marchSaldo = careDay.GetProperty("saldo").EnumerateArray().ToList()[2].GetDecimal();
+
+        // POST-fix: March keys to entitlement_year 2025 (op-date OK24 reset_month 7 ⇒ 2025) ⇒
+        // earned(2, IMMEDIATE full quota) + carryoverIn(3, the 2025 row) − afholdt(0) = 5.
+        // PRE-fix (RED): March keys to 2026 (today OK26 reset_month 1) ⇒ 2 + 0 − 0 = 2.
+        Assert.Equal(5m, marchSaldo);
+
+        // Cross-check the OTHER half of the divergence: a LATE month (Nov 2026, monthEnd 2026-11-30 ⇒
+        // op-date OK26 reset_month 1) keys to entitlement_year 2026 (no row ⇒ carryoverIn 0), so its
+        // saldo is the bare immediate quota 2 — proving the per-month derivation flips at the OK
+        // boundary (Jan–Mar → OK24/7 → 2025; Apr–Dec → OK26/1 → 2026), not a single fixed key.
+        var novSaldo = careDay.GetProperty("saldo").EnumerateArray().ToList()[10].GetDecimal();
+        Assert.Equal(2m, novSaldo);
+
+        // Closed-year EXPIRING keying (Step-7a cycle-2 BLOCKER residual fix): the disposition
+        // projection's closed entitlement-year must ALSO derive from the op-date key, not the
+        // today/live key. Jan-1-2026 ⇒ OK24 / reset_month 7 ⇒ the ferieår closing in 2026 is 2025
+        // (boundary 30 Jun 2026). CARE_DAY is IMMEDIATE (earnedAtBoundary = quota 2), carryoverMax 0,
+        // and the 2025 closed balance carries carryoverIn 3 ⇒ expiring = max(0, 2 + 3 − 0 − 0 − 0) = 5.
+        // PRE-fix (today OK26 / reset_month 1 ⇒ closed year 2026, no balance row): max(0, 2 + 0) = 2.
+        // So 5 ≠ 2 ⇒ this assertion is RED on the pre-fix closed-year code (which still branched on the
+        // today-key resetMonth), pinning the closed-year disposition to the same op-date-key year the
+        // per-month saldo + the balance use.
+        var careDayExpiring = careDay.GetProperty("expiring").GetDecimal();
+        Assert.Equal(5m, careDayExpiring);
+    }
+
     /// <summary>
     /// <b>boundaryMonth = 12 for ALL categories (OQ-1 RESOLVED).</b>
     /// The disposition (expiring-beyond-cap) display anchor is December for every category per the
@@ -2000,6 +2091,49 @@ public sealed class YearOverviewTests : IAsyncLifetime
         cmd.Parameters.AddWithValue("d", employmentStart);
         cmd.Parameters.AddWithValue("u", employeeId);
         await cmd.ExecuteNonQueryAsync();
+    }
+
+    /// <summary>
+    /// S81 / TASK-8102 (R2) — sets <c>users.ok_version</c> (the LIVE / today OK version). Used by the
+    /// per-month reset_month re-derivation test to make the today key (liveConfig) and the early-2026
+    /// operation-date key resolve to DIFFERENT OK versions. Mirrors
+    /// <c>DatedQuotaAnchorTests.SetUserOkVersionAsync</c>.
+    /// </summary>
+    private async Task SetUserOkVersionAsync(string employeeId, string okVersion)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "UPDATE users SET ok_version = @ok WHERE user_id = @e", conn);
+        cmd.Parameters.AddWithValue("ok", okVersion);
+        cmd.Parameters.AddWithValue("e", employeeId);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    /// <summary>
+    /// S81 / TASK-8102 (R2) — mutates <c>reset_month</c> on the OPEN (<c>effective_to IS NULL</c>) seed
+    /// <c>entitlement_configs</c> row for a (type, agreement, ok) natural key, NO supersession (ADR-021
+    /// D5 preserved — this edits the existing key in place, the divergence the divergent-reset_month
+    /// state produces in production after an OK change). Mirrors
+    /// <c>DatedQuotaAnchorTests.SetEntitlementColumnAsync</c>; the affected-count sentinel catches seed
+    /// drift (the open row MUST exist — DefaultEntitlementConfigs seeds 5 types × 3 agreements × 2 OK).
+    /// </summary>
+    private async Task SetOpenEntitlementResetMonthAsync(
+        string entitlementType, string agreementCode, string okVersion, int resetMonth)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            UPDATE entitlement_configs SET reset_month = @v
+            WHERE entitlement_type = @t AND agreement_code = @a AND ok_version = @ok AND effective_to IS NULL
+            """, conn);
+        cmd.Parameters.AddWithValue("v", resetMonth);
+        cmd.Parameters.AddWithValue("t", entitlementType);
+        cmd.Parameters.AddWithValue("a", agreementCode);
+        cmd.Parameters.AddWithValue("ok", okVersion);
+        var affected = await cmd.ExecuteNonQueryAsync();
+        Assert.Equal(1, affected);
     }
 
     /// <summary>
