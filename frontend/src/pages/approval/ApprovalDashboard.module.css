@@ -140,35 +140,12 @@
   padding: 1rem 0;
 }
 
-/* Rejection dialog overlay */
-.dialogOverlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-}
-
-.dialog {
-  background: var(--color-white);
-  border: 1px solid var(--color-border);
-  border-radius: 0px;
-  padding: 1.5rem;
-  min-width: 400px;
-  max-width: 500px;
-}
-
-.dialogTitle {
-  font-size: 1.125rem;
-  font-weight: 600;
-  margin: 0 0 0.5rem 0;
-}
-
+/* S82 / TASK-8203 — the rejection + enforcement dialogs migrated to the kit
+   accessible Dialog (Radix; components/ui/Dialog.tsx). The kit owns the overlay,
+   the panel chrome, and the title, so the former `.dialogOverlay` / `.dialog` /
+   `.dialogTitle` rules were removed as dead. The body content styles below
+   (description / textarea / actions / buttons) are still used inside the kit
+   Dialog's children. */
 .dialogDescription {
   font-size: 0.875rem;
   color: var(--color-text-secondary);

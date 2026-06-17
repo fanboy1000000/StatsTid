@@ -57,7 +57,7 @@ function formatDate(dateStr: string | null): string {
 }
 
 export function MyPeriods() {
-  const { user } = useAuth()
+  const { user, orgId } = useAuth()
   const employeeId = user?.employeeId ?? ''
 
   const [periods, setPeriods] = useState<ApprovalPeriod[]>([])
@@ -94,6 +94,7 @@ export function MyPeriods() {
 
   const submitPeriod = async (payload: {
     employeeId: string
+    orgId: string
     periodStart: string
     periodEnd: string
     periodType: string
@@ -121,10 +122,18 @@ export function MyPeriods() {
       return
     }
 
+    // The submit endpoint requires the period's owning org (SubmitPeriodRequest.OrgId);
+    // an employee submits for their own primary org, taken from the auth context.
+    if (!orgId) {
+      setFormError('Kunne ikke fastslaa organisation. Log ind igen.')
+      return
+    }
+
     setSubmitting(true)
     try {
       await submitPeriod({
         employeeId,
+        orgId,
         periodStart,
         periodEnd,
         periodType,

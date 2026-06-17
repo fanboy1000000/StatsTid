@@ -7,6 +7,7 @@ import { apiClient } from '../../lib/api'
 import { Tabs } from '../../components/ui/Tabs'
 import { Button } from '../../components/ui/Button'
 import { Badge } from '../../components/ui/Badge'
+import { Dialog } from '../../components/ui/Dialog'
 import { ApprovalDetailPanel } from './ApprovalDetailPanel'
 import type { ApprovalPeriod } from '../../types'
 import styles from './ApprovalDashboard.module.css'
@@ -100,6 +101,7 @@ function PeriodsTable({
             <tr
               className={`${styles.periodRow}${expandedPeriodId === p.periodId ? ` ${styles.periodRowExpanded}` : ''}`}
               onClick={() => toggleExpand(p.periodId)}
+              data-testid={`period-row-${p.periodStart}`}
             >
               <td className={styles.expandCell}>
                 {expandedPeriodId === p.periodId ? '▾' : '▸'}
@@ -378,14 +380,22 @@ export function ApprovalDashboard() {
 
       <Tabs tabs={tabs} defaultValue="my-reports" />
 
-      {/* Rejection dialog */}
-      {rejectTarget && (
-        <div className={styles.dialogOverlay} onClick={closeRejectDialog}>
-          <div className={styles.dialog} onClick={e => e.stopPropagation()}>
-            <h3 className={styles.dialogTitle}>Afvis periode</h3>
-            <p className={styles.dialogDescription}>
-              Angiv begrundelse for afvisning af perioden for {rejectTarget.employeeId} ({formatDate(rejectTarget.periodStart)} &ndash; {formatDate(rejectTarget.periodEnd)}).
-            </p>
+      {/* Rejection dialog — kit Dialog (Radix focus-trap/Escape/aria; the built-in
+          close-X is the only additive change vs the old plain-div). onOpenChange(false)
+          routes to closeRejectDialog so Escape/overlay-click/X clear React state, not
+          just the visual close. */}
+      <Dialog
+        open={rejectTarget !== null}
+        onOpenChange={next => { if (!next) closeRejectDialog() }}
+        title="Afvis periode"
+        description={
+          rejectTarget
+            ? `Angiv begrundelse for afvisning af perioden for ${rejectTarget.employeeId} (${formatDate(rejectTarget.periodStart)} – ${formatDate(rejectTarget.periodEnd)}).`
+            : undefined
+        }
+      >
+        {rejectTarget && (
+          <>
             <textarea
               className={styles.dialogTextarea}
               value={rejectReason}
@@ -410,19 +420,24 @@ export function ApprovalDashboard() {
                 {rejecting ? 'Afviser...' : 'Afvis periode'}
               </button>
             </div>
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </Dialog>
 
-      {/* Enforcement confirmation dialog (428 response) */}
-      {enforcementDialog && (
-        <div className={styles.dialogOverlay} onClick={closeEnforcementDialog}>
-          <div className={styles.dialog} onClick={e => e.stopPropagation()}>
-            <h3 className={styles.dialogTitle}>Haandhaevelse aktiv</h3>
-            <p className={styles.dialogDescription}>
-              Godkendelse kraever den udpegede leder. Du er ikke den udpegede leder for denne medarbejder.
-              Vil du {enforcementDialog.action === 'approve' ? 'godkende' : 'afvise'} alligevel med organisationskopet?
-            </p>
+      {/* Enforcement confirmation dialog (428 response) — kit Dialog.
+          onOpenChange(false) routes to closeEnforcementDialog. */}
+      <Dialog
+        open={enforcementDialog !== null}
+        onOpenChange={next => { if (!next) closeEnforcementDialog() }}
+        title="Haandhaevelse aktiv"
+        description={
+          enforcementDialog
+            ? `Godkendelse kraever den udpegede leder. Du er ikke den udpegede leder for denne medarbejder. Vil du ${enforcementDialog.action === 'approve' ? 'godkende' : 'afvise'} alligevel med organisationskopet?`
+            : undefined
+        }
+      >
+        {enforcementDialog && (
+          <>
             {enforcementDialog.designatedApproverId && (
               <p className={styles.dialogDescription}>
                 Udpeget leder: {enforcementDialog.designatedApproverId}
@@ -447,9 +462,9 @@ export function ApprovalDashboard() {
                   : (enforcementDialog.action === 'approve' ? 'Godkend alligevel' : 'Afvis alligevel')}
               </button>
             </div>
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </Dialog>
     </div>
   )
 }

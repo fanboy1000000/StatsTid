@@ -247,7 +247,17 @@ Centralized fetch wrapper. All API calls go through this client.
   - `src/hooks/__tests__/`
   - `src/pages/__tests__/`
   - `src/pages/admin/__tests__/`
-- **Test count**: 128 tests across 20 test files (`npm run test`, verified 2026-05-31)
+- **Test count (component tier)**: 468 tests across 37 files (`npm run test`, verified 2026-06-17 / S82)
+- **`testTimeout` / `hookTimeout`**: 30000 (S82) — the grown userEvent-heavy suite (~200s) tripped the default 5s per-test ceiling under vitest's parallel pool even though tests pass <1s in isolation (the FAIL-002/SkemaPage load-contention class); the raised ceiling keeps the gated CI `frontend-build` (no retries) reliably green.
+
+## End-to-End Tests (Playwright — S82, the A-ceiling lifter)
+- **Runner**: Playwright (`@playwright/test`), config `frontend/playwright.config.ts` (chromium-only headless, `retries: 2`, trace/video on first-retry).
+- **Location**: `frontend/e2e/` (kept OUT of the vitest `src/**` include so the two tiers never collide). `frontend/e2e/helpers/` holds the shared `login()` + the runtime UTC non-boundary-date + per-run-nonce helpers.
+- **What it drives**: a REAL browser against the REAL app — the 7-service docker-compose stack (`:5100-5700`) + the vite **dev** server (`:3000`, whose `server.proxy` forwards `/api`→`:5100`; `vite preview` has no proxy, so the harness uses the dev server). `baseURL` is parameterized via `E2E_BASE_URL` (default `http://localhost:3000`) so the same journeys can later target a staging environment.
+- **Journeys (3 critical)**: (1) login → `/tid/registrering`; (2) `emp001` Skema absence registration → persists across reload; (3) `mgr03` approves one period + rejects another (each created as a raw SUBMITTED period via the MyPeriods submit form, on a per-run-nonce unique non-boundary month so runs are re-run-tolerant + dodge the `/submit` 409 guard).
+- **Run locally**: `cd frontend && npm run e2e` (with the compose stack up + the dev server running; the config's `webServer` auto-starts/reuses the dev server). 
+- **CI**: a dedicated **gated** `e2e-tests` job (`.github/workflows/ci.yml`), independent of `build-and-test`/`smoke-tests` (the S63 "one red must not blind another" lesson): compose up → host `/health` wait (5100-5700) → `playwright install chromium` → `npm run e2e`; on failure it uploads the Playwright report/traces + the compose logs, and `docker compose down -v` runs `if: always()`.
+- **Grade note**: this harness lifted the Frontend grade **B→A−** (S82). The remaining residual to reach **A** is a visual-regression baseline + a component-docs pass (tracked follow-ups).
 
 ## File Structure Summary
 ```

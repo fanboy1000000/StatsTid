@@ -502,8 +502,8 @@ describe('ApprovalDashboard — Leader vikar-actor UI cross-flow (R1)', () => {
     await user.click(screen.getByText('Afvis'))
     const textarea = await screen.findByPlaceholderText('Begrundelse for afvisning...')
     await user.type(textarea, 'Mangler hviletid')
-    // Confirm the rejection ("Afvis periode" is both the dialog title <h3> and the
-    // confirm <button> — scope to the button role).
+    // Confirm the rejection ("Afvis periode" is both the kit Dialog title (a Radix
+    // Dialog.Title, post-8203 migration) and the confirm <button> — scope to the button role).
     await user.click(screen.getByRole('button', { name: 'Afvis periode' }))
 
     // Assert the WIRE contract: POST to the reject endpoint for THIS period id,
@@ -529,11 +529,7 @@ describe('ApprovalDashboard — Leader vikar-actor UI cross-flow (R1)', () => {
 
 // S77 TASK-7700 / R5 — light a11y audit for the dashboard surface. Verifies the
 // tab bar exposes tab roles with accessible names; the action buttons are
-// reachable by name. NOTE (recorded post-program follow-up): the reject +
-// enforcement dialogs (ApprovalDashboard.tsx:381/417) are plain <div>s WITHOUT
-// dialog semantics / focus-trap / Escape / focus-return — retrofitting full
-// dialog semantics is more than a one-liner and is intentionally OUT OF SCOPE
-// here; tracked as an a11y follow-up.
+// reachable by name.
 describe('ApprovalDashboard — a11y audit (R5)', () => {
   it('the tab bar exposes both tabs by role + accessible name', async () => {
     mockInitialFetches()
@@ -553,5 +549,296 @@ describe('ApprovalDashboard — a11y audit (R5)', () => {
     // Both verbs render as buttons with text accessible names.
     expect(screen.getAllByRole('button', { name: 'Godkend' }).length).toBeGreaterThanOrEqual(1)
     expect(screen.getAllByRole('button', { name: 'Afvis' }).length).toBeGreaterThanOrEqual(1)
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════════
+// S82 TASK-8203 / R5 — the dialog-a11y RETROFIT (replaces the old S77 follow-up
+// placeholder). BOTH ApprovalDashboard dialogs (the reject dialog + the
+// enforcement-confirmation dialog) were migrated from hand-rolled plain <div>s to
+// the kit accessible `Dialog` (Radix: role=dialog, focus-trap, Escape, aria,
+// built-in close-X). These tests assert the a11y guarantees AND are
+// DISCRIMINATING: the Escape-closes-WITHOUT-firing assertions would FAIL if
+// onOpenChange(false) were NOT wired to the React close handlers (the stale-state
+// trap both review lenses flagged) — Escape would close visually but a subsequent
+// re-render or the lingering target state would betray the leak. The
+// payload-preservation assertions guard the behavior-preserving contract.
+// ════════════════════════════════════════════════════════════════════════════
+describe('ApprovalDashboard — dialog a11y retrofit (R5 / kit Dialog)', () => {
+  /** Route the month reads + record approve/reject POSTs; the mutations succeed. */
+  function mockDialogFlow() {
+    mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET'
+      if (typeof url === 'string' && url.includes('/approve') && method === 'POST') {
+        return jsonResponse({ periodId: 'p-1', status: 'APPROVED' })
+      }
+      if (typeof url === 'string' && url.includes('/reject') && method === 'POST') {
+        return jsonResponse({ periodId: 'p-1', status: 'REJECTED' })
+      }
+      if (typeof url === 'string' && url.includes('my-reports=true')) {
+        return jsonResponse(mockMyReportPeriods)
+      }
+      if (typeof url === 'string' && url.includes('/api/approval/by-month')) {
+        return jsonResponse(mockAllPeriods)
+      }
+      if (typeof url === 'string' && url.includes('/api/compliance/')) {
+        return jsonResponse({ ruleId: '', employeeId: '', success: true, violations: [], warnings: [] })
+      }
+      return jsonResponse({})
+    })
+  }
+
+  // ── Reject dialog ──────────────────────────────────────────────────────────
+
+  it('the reject dialog exposes role=dialog and manages focus into the panel', async () => {
+    const user = userEvent.setup()
+    mockDialogFlow()
+    render(<ApprovalDashboard />)
+    await waitFor(() => {
+      expect(screen.getByText('EMP001')).toBeDefined()
+    })
+
+    // No dialog before it's opened.
+    expect(screen.queryByRole('dialog')).toBeNull()
+
+    await user.click(screen.getAllByRole('button', { name: 'Afvis' })[0])
+
+    // role=dialog present (Radix) — the plain-div had none.
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toBeDefined()
+    // The reject-reason textarea is present (E2E selector parity: same placeholder).
+    const textarea = screen.getByPlaceholderText('Begrundelse for afvisning...')
+    expect(textarea).toBeDefined()
+    // Focus is managed INTO the panel (Radix focus-trap): the active element is the
+    // textarea (autoFocus + first focusable), i.e. focus is no longer on the trigger
+    // button outside the dialog.
+    expect(dialog.contains(document.activeElement)).toBe(true)
+  })
+
+  it('the reject confirm stays disabled until a non-empty TRIMMED reason', async () => {
+    const user = userEvent.setup()
+    mockDialogFlow()
+    render(<ApprovalDashboard />)
+    await waitFor(() => {
+      expect(screen.getByText('EMP001')).toBeDefined()
+    })
+    await user.click(screen.getAllByRole('button', { name: 'Afvis' })[0])
+
+    const confirm = await screen.findByRole('button', { name: 'Afvis periode' })
+    // Disabled with no reason.
+    expect((confirm as HTMLButtonElement).disabled).toBe(true)
+
+    // Whitespace-only reason → still disabled (trim()-gated).
+    const textarea = screen.getByPlaceholderText('Begrundelse for afvisning...')
+    await user.type(textarea, '   ')
+    expect((confirm as HTMLButtonElement).disabled).toBe(true)
+
+    // A real reason enables it.
+    await user.type(textarea, 'Mangler hviletid')
+    expect((confirm as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('Escape CLOSES the reject dialog WITHOUT firing a reject POST', async () => {
+    const user = userEvent.setup()
+    mockDialogFlow()
+    render(<ApprovalDashboard />)
+    await waitFor(() => {
+      expect(screen.getByText('EMP001')).toBeDefined()
+    })
+    await user.click(screen.getAllByRole('button', { name: 'Afvis' })[0])
+
+    // Type a reason so an accidental submit WOULD fire (discriminating: if Escape
+    // wrongly triggered the confirm, the reject POST would go out).
+    const textarea = await screen.findByPlaceholderText('Begrundelse for afvisning...')
+    await user.type(textarea, 'Skulle ikke afvises')
+
+    await user.keyboard('{Escape}')
+
+    // The dialog is gone (React state cleared, not just a visual close).
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull()
+    })
+    // DISCRIMINATING: no reject POST fired.
+    const rejectCalls = mockFetch.mock.calls.filter((call: unknown[]) => {
+      const u = call[0] as string
+      const init = call[1] as RequestInit | undefined
+      return typeof u === 'string' && u.includes('/reject') && (init?.method ?? 'GET') === 'POST'
+    })
+    expect(rejectCalls).toHaveLength(0)
+
+    // And the React state was truly cleared: re-opening starts with an EMPTY reason
+    // (closeRejectDialog resets rejectReason). This fails if onOpenChange just hid
+    // the panel visually without routing to the state-close handler.
+    await user.click(screen.getAllByRole('button', { name: 'Afvis' })[0])
+    const reopened = await screen.findByPlaceholderText('Begrundelse for afvisning...')
+    expect((reopened as HTMLTextAreaElement).value).toBe('')
+  })
+
+  it('the reject confirm still POSTs the SAME {reason} payload after migration', async () => {
+    const user = userEvent.setup()
+    mockDialogFlow()
+    render(<ApprovalDashboard />)
+    await waitFor(() => {
+      expect(screen.getByText('EMP001')).toBeDefined()
+    })
+    await user.click(screen.getAllByRole('button', { name: 'Afvis' })[0])
+
+    const textarea = await screen.findByPlaceholderText('Begrundelse for afvisning...')
+    await user.type(textarea, 'Mangler hviletid')
+    await user.click(screen.getByRole('button', { name: 'Afvis periode' }))
+
+    await waitFor(() => {
+      const rejectCall = mockFetch.mock.calls.find((call: unknown[]) => {
+        const u = call[0] as string
+        const init = call[1] as RequestInit | undefined
+        return u === '/api/approval/p-1/reject' && (init?.method ?? 'GET') === 'POST'
+      })
+      expect(rejectCall).toBeDefined()
+    })
+    const rejectCall = mockFetch.mock.calls.find((call: unknown[]) => {
+      const u = call[0] as string
+      const init = call[1] as RequestInit | undefined
+      return u === '/api/approval/p-1/reject' && (init?.method ?? 'GET') === 'POST'
+    })!
+    const rejectInit = rejectCall[1] as RequestInit
+    expect(rejectCall[0]).not.toContain('confirmFallback')
+    expect(JSON.parse(rejectInit.body as string)).toEqual({ reason: 'Mangler hviletid' })
+  })
+
+  // ── Enforcement-confirmation dialog ──────────────────────────────────────────
+
+  it('the enforcement dialog (428) exposes role=dialog', async () => {
+    const user = userEvent.setup()
+    mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (typeof url === 'string' && url.includes('/approve') && init?.method === 'POST') {
+        return {
+          ok: false,
+          status: 428,
+          headers: new Headers(),
+          json: async () => ({ designatedApproverId: 'MGR01' }),
+          text: async () => JSON.stringify({ designatedApproverId: 'MGR01' }),
+        }
+      }
+      if (typeof url === 'string' && url.includes('my-reports=true')) {
+        return jsonResponse(mockMyReportPeriods)
+      }
+      if (typeof url === 'string' && url.includes('/api/approval/by-month')) {
+        return jsonResponse(mockAllPeriods)
+      }
+      if (typeof url === 'string' && url.includes('/api/compliance/')) {
+        return jsonResponse({ ruleId: '', employeeId: '', success: true, violations: [], warnings: [] })
+      }
+      return jsonResponse({})
+    })
+
+    render(<ApprovalDashboard />)
+    await waitFor(() => {
+      expect(screen.getByText('EMP001')).toBeDefined()
+    })
+    await user.click(screen.getAllByText('Godkend')[0])
+
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toBeDefined()
+    expect(screen.getByText('Haandhaevelse aktiv')).toBeDefined()
+    expect(screen.getByText(/MGR01/)).toBeDefined()
+  })
+
+  it('Escape CLOSES the enforcement dialog WITHOUT firing the confirm (no confirmFallback POST)', async () => {
+    const user = userEvent.setup()
+    let approveCallCount = 0
+    mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (typeof url === 'string' && url.includes('/approve') && init?.method === 'POST') {
+        approveCallCount++
+        if (!url.includes('confirmFallback=true')) {
+          return {
+            ok: false,
+            status: 428,
+            headers: new Headers(),
+            json: async () => ({ designatedApproverId: 'MGR01' }),
+            text: async () => JSON.stringify({ designatedApproverId: 'MGR01' }),
+          }
+        }
+        return jsonResponse({ periodId: 'p-1', status: 'APPROVED' })
+      }
+      if (typeof url === 'string' && url.includes('my-reports=true')) {
+        return jsonResponse(mockMyReportPeriods)
+      }
+      if (typeof url === 'string' && url.includes('/api/approval/by-month')) {
+        return jsonResponse(mockAllPeriods)
+      }
+      if (typeof url === 'string' && url.includes('/api/compliance/')) {
+        return jsonResponse({ ruleId: '', employeeId: '', success: true, violations: [], warnings: [] })
+      }
+      return jsonResponse({})
+    })
+
+    render(<ApprovalDashboard />)
+    await waitFor(() => {
+      expect(screen.getByText('EMP001')).toBeDefined()
+    })
+    await user.click(screen.getAllByText('Godkend')[0])
+
+    // The enforcement dialog opened (the first approve fired + got the 428).
+    await screen.findByRole('dialog')
+    expect(approveCallCount).toBe(1)
+
+    await user.keyboard('{Escape}')
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull()
+    })
+    // DISCRIMINATING: the confirm never fired, so NO confirmFallback POST went out —
+    // and no further approve call happened at all (count still 1).
+    expect(approveCallCount).toBe(1)
+    const fallbackCalls = mockFetch.mock.calls.filter((call: unknown[]) => {
+      const u = call[0] as string
+      return typeof u === 'string' && u.includes('confirmFallback=true')
+    })
+    expect(fallbackCalls).toHaveLength(0)
+  })
+
+  it('the enforcement confirm still POSTs with confirmFallback=true after migration', async () => {
+    const user = userEvent.setup()
+    mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (typeof url === 'string' && url.includes('/approve') && init?.method === 'POST') {
+        if (!url.includes('confirmFallback=true')) {
+          return {
+            ok: false,
+            status: 428,
+            headers: new Headers(),
+            json: async () => ({ designatedApproverId: 'MGR01' }),
+            text: async () => JSON.stringify({ designatedApproverId: 'MGR01' }),
+          }
+        }
+        return jsonResponse({ periodId: 'p-1', status: 'APPROVED' })
+      }
+      if (typeof url === 'string' && url.includes('my-reports=true')) {
+        return jsonResponse(mockMyReportPeriods)
+      }
+      if (typeof url === 'string' && url.includes('/api/approval/by-month')) {
+        return jsonResponse(mockAllPeriods)
+      }
+      if (typeof url === 'string' && url.includes('/api/compliance/')) {
+        return jsonResponse({ ruleId: '', employeeId: '', success: true, violations: [], warnings: [] })
+      }
+      return jsonResponse({})
+    })
+
+    render(<ApprovalDashboard />)
+    await waitFor(() => {
+      expect(screen.getByText('EMP001')).toBeDefined()
+    })
+    await user.click(screen.getAllByText('Godkend')[0])
+    await screen.findByRole('dialog')
+
+    await user.click(screen.getByRole('button', { name: 'Godkend alligevel' }))
+
+    await waitFor(() => {
+      const fallbackCalls = mockFetch.mock.calls.filter((call: unknown[]) => {
+        const u = call[0] as string
+        return typeof u === 'string' && u.includes('confirmFallback=true')
+      })
+      expect(fallbackCalls.length).toBeGreaterThanOrEqual(1)
+    })
   })
 })
