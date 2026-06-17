@@ -1460,20 +1460,14 @@ public static class VacationSettlementEndpoints
                 resetMonth = liveConfig.ResetMonth;
         }
 
-        // Ferieår [start, end] for E, then the §21 31-Dec deadline of the ferieår-END year.
-        DateOnly ferieaarStart;
-        DateOnly ferieaarEnd;
-        if (resetMonth == 1)
-        {
-            ferieaarStart = new DateOnly(entitlementYear, 1, 1);
-            ferieaarEnd = new DateOnly(entitlementYear, 12, 31);
-        }
-        else
-        {
-            ferieaarStart = new DateOnly(entitlementYear, resetMonth, 1);
-            ferieaarEnd = ferieaarStart.AddYears(1).AddDays(-1);
-        }
-        var deadline = new DateOnly(ferieaarEnd.Year, 12, 31);
+        // S80 / TASK-8001 (R10) — the ferieår START + the §21 31-Dec deadline of the ferieår-END year
+        // now come from the shared EntitlementPeriodResolver (BEHAVIOR-IDENTICAL for VACATION: reset_month
+        // 9 ⇒ ferieaarStart 1 Sep E, deadline 31 Dec E+1; reset_month 1 ⇒ 1 Jan E / 31 Dec E). This guard
+        // is VACATION-only (the §21 stk.2 transfer applies to the >4-week VACATION tranche — see Guard 1
+        // above), so the SPECIAL_HOLIDAY geometry never reaches here.
+        var vacationPeriod = EntitlementPeriodResolver.ResolveForYear(VacationType, resetMonth, entitlementYear);
+        DateOnly ferieaarStart = vacationPeriod.AccrualStart;
+        var deadline = vacationPeriod.Boundary;
 
         if (user is null)
             return (deadline, StatutoryTransferCapFallback);

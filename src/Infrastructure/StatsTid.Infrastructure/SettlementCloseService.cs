@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging;
 using Npgsql;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.SharedKernel.Audit;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Models;
 
@@ -108,6 +109,13 @@ public sealed class SettlementCloseService : BackgroundService
     /// <summary>The entitlement type this slice settles (slice 1 = VACATION only; ADR-033 D13).</summary>
     private const string VacationType = "VACATION";
 
+    /// <summary>
+    /// S80 / TASK-8002 (ADR-033 Slice 2) — the SPECIAL_HOLIDAY (særlige feriedage) entitlement type
+    /// the §15 stk.2/§17 godtgørelse close partitions (R6). Mirrors
+    /// <see cref="EntitlementPeriodResolver.SpecialHolidayType"/>.
+    /// </summary>
+    private const string SpecialHolidayType = EntitlementPeriodResolver.SpecialHolidayType;
+
     /// <summary>YEAR_END trigger — the S68 auto-partition / the R4 leaver deferred-disposition row.</summary>
     private const string YearEndTrigger = "YEAR_END";
 
@@ -166,6 +174,20 @@ public sealed class SettlementCloseService : BackgroundService
     /// </summary>
     private readonly DateOnly? _goLiveDate;
 
+    /// <summary>
+    /// S80 / TASK-8002 (ADR-033 Slice 2, R5 — the §15 stk.1 wrongful-payout SAFETY GATE). The
+    /// SPECIAL_HOLIDAY (særlige feriedage) auto-close stays DORMANT until §15 stk.1 (the
+    /// transfer-agreement surface) is modeled — else it would auto-pay a §15 stk.2/§17 godtgørelse to
+    /// an employee who in fact had a written carry-forward agreement ("no modeled agreement" ≠ "no
+    /// agreement"). This OPERATION-level gate (default OFF) suppresses the WHOLE SPECIAL_HOLIDAY
+    /// due-enumeration/close — it writes NO rows at all (NOT PENDING_REVIEW rows, which would consume
+    /// due-detection). Sourced from <c>Settlement:SpecialHolidaySettlementEnabled</c> (a boolean;
+    /// absent/unparseable ⇒ FALSE = dormant). A recorded go-live dependency (ADR-033 R5/R12) on top of
+    /// the existing D13 <see cref="_goLiveDate"/> gate — the SPECIAL_HOLIDAY close requires BOTH.
+    /// Deterministic — a configured flag, never wall-clock — so replay/idempotency are unaffected.
+    /// </summary>
+    private readonly bool _specialHolidayEnabled;
+
     public SettlementCloseService(
         DbConnectionFactory connectionFactory,
         VacationSettlementService settlementService,
@@ -213,6 +235,14 @@ public sealed class SettlementCloseService : BackgroundService
                 "SettlementCloseService: Settlement:GoLiveDate='{Raw}' is not a valid ISO date (yyyy-MM-dd) — " +
                 "treating as unconfigured (DORMANT); no automated settlement runs until corrected.", rawGoLive);
         }
+
+        // S80 / TASK-8002 (R5) — the SPECIAL_HOLIDAY auto-close §15 stk.1 safety gate (default OFF).
+        // bool.TryParse handles "true"/"false"/"True"/"FALSE" (case-insensitive); ANY other value
+        // (or absence) FAILS CLOSED to dormant — the SPECIAL_HOLIDAY godtgørelse must never auto-pay
+        // on an ambiguous flag.
+        _specialHolidayEnabled =
+            bool.TryParse(configuration["Settlement:SpecialHolidaySettlementEnabled"], out var shEnabled)
+            && shEnabled;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -230,6 +260,15 @@ public sealed class SettlementCloseService : BackgroundService
                 "SettlementCloseService: ACTIVE — auto-closing VACATION year-end boundaries strictly after " +
                 "go-live {GoLiveDate} (ADR-033 D13); earlier boundaries remain the manual fallback.",
                 _goLiveDate.Value);
+
+        // S80 / TASK-8002 (R5) — the SPECIAL_HOLIDAY §15 stk.2/§17 godtgørelse close is OFF by default
+        // (the §15 stk.1 wrongful-payout safety gate; a recorded go-live dependency). Logged once so the
+        // dormant posture is visible. Even when ENABLED it ALSO requires the D13 go-live date.
+        _logger.LogInformation(
+            "SettlementCloseService: SPECIAL_HOLIDAY (særlige feriedage) §15 stk.2/§17 godtgørelse close is " +
+            "{Posture} (Settlement:SpecialHolidaySettlementEnabled). The auto-close stays dormant until §15 " +
+            "stk.1 (the carry-forward agreement surface) is modeled — ADR-033 Slice 2 R5.",
+            _specialHolidayEnabled ? "ENABLED (also requires the D13 go-live date)" : "DORMANT (default)");
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -267,22 +306,58 @@ public sealed class SettlementCloseService : BackgroundService
         // ── Step B gate — DORMANT (ADR-033 D13). With no configured go-live date the automated
         // close SETTLES nothing — the launch-neutral default; the manual operator fallback owns
         // every boundary until ops sets Settlement:GoLiveDate. (Posture logged once in ExecuteAsync.)
+        // The SPECIAL_HOLIDAY pass below ALSO requires the go-live date (R5 + D13), so the dormant
+        // VACATION gate covers it too — the early return is correct for BOTH passes.
         if (_goLiveDate is null) return;
 
+        // ── Step B (VACATION) — the S68 year-end / S70 leaver auto-partition pass (31-Dec geometry).
         var dueTuples = await EnumerateDueTuplesAsync(copenhagenToday, _goLiveDate.Value, ct);
-        if (dueTuples.Count == 0) return;
+        if (dueTuples.Count > 0)
+        {
+            _logger.LogInformation(
+                "SettlementCloseService: {Count} due VACATION settlement tuple(s) at Copenhagen date {Date}",
+                dueTuples.Count, copenhagenToday);
+            await SettleDueTuplesAsync(VacationType, dueTuples, ct);
+        }
 
-        _logger.LogInformation(
-            "SettlementCloseService: {Count} due VACATION settlement tuple(s) at Copenhagen date {Date}",
-            dueTuples.Count, copenhagenToday);
+        // ── Step B (SPECIAL_HOLIDAY) — S80 / TASK-8002 (ADR-033 Slice 2, R6) — the SECOND
+        // due-enumeration pass, with its OWN 30-Apr-(Y+2) godtgørelse boundary geometry (via the
+        // EntitlementPeriodResolver), SEPARATE from the VACATION 31-Dec pass. GATED behind R5: the
+        // SPECIAL_HOLIDAY §15 stk.2/§17 godtgørelse close stays DORMANT (writes NOTHING — no
+        // PENDING_REVIEW rows that would consume due-detection) until §15 stk.1 (the carry-forward
+        // agreement surface) is modeled AND ops enables it. Both gates required: the D13 go-live date
+        // (checked above) AND the explicit flag (default OFF).
+        if (_specialHolidayEnabled)
+        {
+            var specialHolidayTuples = await EnumerateDueSpecialHolidayTuplesAsync(
+                copenhagenToday, _goLiveDate.Value, ct);
+            if (specialHolidayTuples.Count > 0)
+            {
+                _logger.LogInformation(
+                    "SettlementCloseService: {Count} due SPECIAL_HOLIDAY godtgørelse settlement tuple(s) at " +
+                    "Copenhagen date {Date}",
+                    specialHolidayTuples.Count, copenhagenToday);
+                await SettleDueTuplesAsync(SpecialHolidayType, specialHolidayTuples, ct);
+            }
+        }
+    }
 
+    /// <summary>
+    /// The per-tuple settle loop, ONE transaction per due tuple (ADR-018 D3 atomic settlement). Shared
+    /// by the VACATION (31-Dec) and the S80 SPECIAL_HOLIDAY (30-Apr-Y+2 godtgørelse) passes —
+    /// <paramref name="entitlementType"/> selects which. <see cref="VacationSettlementService.SettleAsync"/>
+    /// takes the ADR-032 D4 employee advisory lock FIRST + does its in-lock single-settle re-check, so
+    /// concurrent pollers and a late re-poll are safe (exactly one settlement commits); it neither
+    /// commits nor rolls back (its all-or-nothing contract spans the row + events + audit), so the
+    /// commit/rollback is ours. Per-tuple failures stay isolated (rollback, log, continue).
+    /// </summary>
+    private async Task SettleDueTuplesAsync(
+        string entitlementType,
+        IReadOnlyList<(string EmployeeId, int EntitlementYear, string Trigger)> dueTuples,
+        CancellationToken ct)
+    {
         foreach (var (employeeId, entitlementYear, trigger) in dueTuples)
         {
-            // One transaction per tuple (ADR-018 D3 atomic settlement). SettleAsync takes the
-            // ADR-032 D4 employee advisory lock FIRST + does its in-lock single-settle re-check, so
-            // concurrent pollers and a late re-poll are safe: exactly one settlement commits. We open
-            // the tx; SettleAsync neither commits nor rolls back (its all-or-nothing contract spans
-            // the row + carryover + events + audit), so the commit/rollback is ours.
             await using var conn = _connectionFactory.Create();
             await conn.OpenAsync(ct);
             // ReadCommitted: the advisory-lock wait + the in-lock re-check inside SettleAsync need a
@@ -293,41 +368,42 @@ public sealed class SettlementCloseService : BackgroundService
             try
             {
                 // S70 Step-7a B1 — the close service ALWAYS supplies the leaver go-live floor
-                // (_goLiveDate is non-null here: the dormant gate returned above), so SettleAsync
-                // re-evaluates the R2/D13 leaver gate IN-LOCK on the re-read user (R12) — the
-                // enumeration-time ResolveLeaverTupleTrigger decision alone is pre-lock and stale-able.
+                // (_goLiveDate is non-null here: the dormant gate returned in CloseDueSettlementsAsync),
+                // so SettleAsync re-evaluates the R2/D13 leaver gate IN-LOCK on the re-read user (R12).
+                // (For SPECIAL_HOLIDAY the leaver fork is not taken — its §15 godtgørelse fork branches
+                // first — but the floor is harmlessly supplied for the uniform call shape.)
                 var outcome = await _settlementService.SettleAsync(
-                    employeeId, VacationType, entitlementYear, trigger, conn, tx,
-                    leaverGoLiveFloor: _goLiveDate.Value, ct: ct);
+                    employeeId, entitlementType, entitlementYear, trigger, conn, tx,
+                    leaverGoLiveFloor: _goLiveDate!.Value, ct: ct);
                 await tx.CommitAsync(ct);
 
                 if (outcome.DidSettle)
                     _logger.LogInformation(
-                        "SettlementCloseService: settled VACATION {Year} for {EmployeeId} ({Trigger} → {State})",
-                        entitlementYear, employeeId, trigger, outcome.Row!.SettlementState); // Row non-null when DidSettle
+                        "SettlementCloseService: settled {Type} {Year} for {EmployeeId} ({Trigger} → {State})",
+                        entitlementType, entitlementYear, employeeId, trigger, outcome.Row!.SettlementState); // Row non-null when DidSettle
                 else if (outcome.NotDue)
                     // S70 Step-7a B1 — the in-lock due re-evaluation found the tuple no longer
                     // due under the lock (a competing end-date correction won the race);
                     // corrected state wins. Nothing written; the next poll re-enumerates fresh.
                     _logger.LogDebug(
-                        "SettlementCloseService: VACATION {Year} for {EmployeeId} ({Trigger}) no longer " +
+                        "SettlementCloseService: {Type} {Year} for {EmployeeId} ({Trigger}) no longer " +
                         "due under lock; corrected state wins (benign NotDue no-op)",
-                        entitlementYear, employeeId, trigger);
+                        entitlementType, entitlementYear, employeeId, trigger);
                 else if (outcome.RefusedConflict)
                     // R7b — a TERMINATION colliding with an active row of a different trigger was
                     // REFUSED inside SettleAsync (durable SettlementManualReviewFlagged + audit, no
                     // row written, no throw). The R3 any-trigger anti-join keeps the tuple out of
                     // later due sets, so the refusal signal does not re-fire every poll.
                     _logger.LogWarning(
-                        "SettlementCloseService: {Trigger} for {EmployeeId}/{Year} REFUSED on an active " +
+                        "SettlementCloseService: {Trigger} for {EmployeeId}/{Type}/{Year} REFUSED on an active " +
                         "conflicting settlement (R7b manual-review flagged); continuing",
-                        trigger, employeeId, entitlementYear);
+                        trigger, employeeId, entitlementType, entitlementYear);
                 else
                     // The in-lock re-check / 23505 backstop found an active settlement (a concurrent
                     // poller won, or a TERMINATION already settled this year — ADR-033 D5). Benign.
                     _logger.LogDebug(
-                        "SettlementCloseService: VACATION {Year} for {EmployeeId} already settled (no-op)",
-                        entitlementYear, employeeId);
+                        "SettlementCloseService: {Type} {Year} for {EmployeeId} already settled (no-op)",
+                        entitlementType, entitlementYear, employeeId);
             }
             catch (DuplicateActiveSettlementException)
             {
@@ -336,8 +412,8 @@ public sealed class SettlementCloseService : BackgroundService
                 // settlement stands. Roll back our empty tx, log, and continue the loop (do NOT crash).
                 await SafeRollbackAsync(tx, ct);
                 _logger.LogDebug(
-                    "SettlementCloseService: VACATION {Year} for {EmployeeId} lost the settle race (benign duplicate); continuing",
-                    entitlementYear, employeeId);
+                    "SettlementCloseService: {Type} {Year} for {EmployeeId} lost the settle race (benign duplicate); continuing",
+                    entitlementType, entitlementYear, employeeId);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -346,8 +422,8 @@ public sealed class SettlementCloseService : BackgroundService
                 // settles exactly once then (ADR-033 D3).
                 await SafeRollbackAsync(tx, ct);
                 _logger.LogWarning(ex,
-                    "SettlementCloseService: failed to settle VACATION {Year} for {EmployeeId} ({Trigger}); continuing",
-                    entitlementYear, employeeId, trigger);
+                    "SettlementCloseService: failed to settle {Type} {Year} for {EmployeeId} ({Trigger}); continuing",
+                    entitlementType, entitlementYear, employeeId, trigger);
             }
         }
     }
@@ -733,6 +809,126 @@ public sealed class SettlementCloseService : BackgroundService
     }
 
     /// <summary>
+    /// S80 / TASK-8002 (ADR-033 Slice 2, R6) — the SECOND due-enumeration pass, for SPECIAL_HOLIDAY
+    /// (særlige feriedage). Builds the due <c>(employeeId, entitlementYear, trigger=YEAR_END)</c> set
+    /// with its OWN 30-Apr-(Y+2) godtgørelse boundary geometry (via the shared
+    /// <see cref="EntitlementPeriodResolver"/>), SEPARATE from the VACATION 31-Dec pass:
+    /// <list type="bullet">
+    ///   <item><description><b>Active employees only</b> — særlige feriedage have no leaver/termination
+    ///   settlement flow in this slice (the §26-termination interaction is a recorded non-goal, R12).
+    ///   Candidate years run from <c>employment_start_date</c> (floor <see cref="CandidateYearFloor"/>)
+    ///   up to today's year.</description></item>
+    ///   <item><description><b>Type-scoped anti-join</b> — the not-due predicate excludes a tuple with
+    ///   any non-REVERSED <c>vacation_settlements</c> row of <c>entitlement_type = 'SPECIAL_HOLIDAY'</c>
+    ///   (the 8001 Step-5a note: NEVER reuse the VACATION cache/anti-join without the type dimension).
+    ///   The SPECIAL_HOLIDAY type-scope keeps a VACATION settlement from suppressing a SPECIAL_HOLIDAY
+    ///   tuple and vice versa.</description></item>
+    /// </list>
+    /// Due iff the 30-Apr-(Y+2) boundary has PASSED on the Copenhagen business date AND falls strictly
+    /// after the configured go-live date (ADR-033 D13). The advisory lock stays employee-scoped inside
+    /// <see cref="VacationSettlementService.SettleAsync"/>. (The R5 §15-stk.1 OPERATION-level gate is
+    /// applied by the caller — this method is only reached when the SPECIAL_HOLIDAY close is ENABLED.)
+    /// </summary>
+    private async Task<IReadOnlyList<(string EmployeeId, int EntitlementYear, string Trigger)>>
+        EnumerateDueSpecialHolidayTuplesAsync(
+            DateOnly copenhagenToday, DateOnly goLiveDate, CancellationToken ct)
+    {
+        // Upper bound of the candidate band: the latest accrual year whose 30-Apr-(Y+2) boundary could
+        // already have passed is bounded above by copenhagenToday.Year (the boundary is 2 years after
+        // the accrual year, so accrual year ≤ today.Year is a safe over-approximation; the per-row
+        // filter below discards the not-yet-due tail). Active employees only — NO leaver year-cap.
+        var candidateUpperYear = copenhagenToday.Year;
+
+        var rows = new List<(string EmployeeId, int EntitlementYear, string AgreementCode, string OkVersion)>();
+        await using (var conn = _connectionFactory.Create())
+        {
+            await conn.OpenAsync(ct);
+            await using var cmd = new NpgsqlCommand(
+                """
+                SELECT u.user_id,
+                       gs.yr AS entitlement_year,
+                       u.agreement_code,
+                       u.ok_version
+                FROM users u
+                CROSS JOIN LATERAL generate_series(
+                    GREATEST(@floor, COALESCE(EXTRACT(YEAR FROM u.employment_start_date)::int, @floor)),
+                    @upper
+                ) AS gs(yr)
+                WHERE u.is_active = TRUE
+                  -- TYPE-SCOPED anti-join (R6 / 8001 Step-5a) — a tuple is not-due when it holds a
+                  -- non-REVERSED SPECIAL_HOLIDAY settlement row (or a bare-reversal not-due marker;
+                  -- terminal). Scoped to SPECIAL_HOLIDAY so it neither suppresses nor is suppressed by
+                  -- the VACATION pass's rows.
+                  AND NOT EXISTS (
+                        SELECT 1 FROM vacation_settlements vs
+                        WHERE vs.employee_id = u.user_id
+                          AND vs.entitlement_type = @type
+                          AND vs.entitlement_year = gs.yr
+                          AND (vs.settlement_state <> 'REVERSED' OR vs.bare_reversal_not_due)
+                  )
+                ORDER BY u.user_id, gs.yr
+                """, conn);
+            cmd.Parameters.AddWithValue("floor", CandidateYearFloor);
+            cmd.Parameters.AddWithValue("upper", candidateUpperYear);
+            cmd.Parameters.AddWithValue("type", SpecialHolidayType);
+
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                rows.Add((
+                    reader.GetString(0),
+                    reader.GetInt32(1),
+                    reader.GetString(2),
+                    reader.GetString(3)));
+            }
+        }
+
+        if (rows.Count == 0) return [];
+
+        // Per-row exact due filter on the SPECIAL_HOLIDAY 30-Apr-(Y+2) boundary. We resolve the live
+        // SPECIAL_HOLIDAY config per (agreement, ok_version) only to confirm the type is CONFIGURED
+        // for the employee's agreement (an unconfigured type has no entitlement to settle) — the
+        // BOUNDARY itself is fixed by law (the resolver ignores reset_month for SPECIAL_HOLIDAY), so
+        // the cache is keyed independently of reset_month (the type dimension is implicit: this whole
+        // method is SPECIAL_HOLIDAY-only).
+        var configuredCache = new Dictionary<(string Agreement, string Ok), bool>();
+        var due = new List<(string EmployeeId, int EntitlementYear, string Trigger)>();
+
+        foreach (var (employeeId, entitlementYear, agreementCode, okVersion) in rows)
+        {
+            var key = (agreementCode, okVersion);
+            if (!configuredCache.TryGetValue(key, out var configured))
+            {
+                var live = await _configRepo.GetCurrentOpenAsync(SpecialHolidayType, agreementCode, okVersion, ct);
+                configured = live is not null;
+                configuredCache[key] = configured;
+            }
+            if (!configured) continue; // SPECIAL_HOLIDAY unconfigured for this agreement — nothing to settle.
+
+            if (IsSpecialHolidayBoundaryPassed(entitlementYear, copenhagenToday, goLiveDate))
+                due.Add((employeeId, entitlementYear, YearEndTrigger));
+        }
+
+        return due;
+    }
+
+    /// <summary>
+    /// S80 / TASK-8002 (R6) — the SPECIAL_HOLIDAY §15 stk.2/§17 godtgørelse boundary test: the
+    /// 30-Apr-(Y+2) afholdelsesperiode end for accrual year <paramref name="entitlementYear"/>
+    /// (via the shared <see cref="EntitlementPeriodResolver"/>), evaluated on the Copenhagen business
+    /// date. Returns <c>true</c> once that boundary has PASSED AND it falls strictly after
+    /// <paramref name="goLiveDate"/> (the ADR-033 D13 launch-neutral gate, same shape as VACATION's
+    /// <see cref="IsBoundaryPassed"/>).
+    /// </summary>
+    private static bool IsSpecialHolidayBoundaryPassed(int entitlementYear, DateOnly copenhagenToday, DateOnly goLiveDate)
+    {
+        var boundary = EntitlementPeriodResolver
+            .ResolveForYear(SpecialHolidayType, resetMonth: 1, entitlementYear).Boundary; // 30 Apr (Y+2)
+        return boundary > goLiveDate          // ADR-033 D13: only boundaries strictly after go-live auto-settle.
+            && copenhagenToday > boundary;     // …and the godtgørelse deadline has actually passed.
+    }
+
+    /// <summary>
     /// The §21/§24 ferieafholdelsesperiode boundary test for VACATION entitlement-year
     /// <paramref name="entitlementYear"/> (E, the calendar year of the ferieår START — the
     /// <c>ResolveEntitlementYear</c> convention) under <paramref name="resetMonth"/>, evaluated on the
@@ -758,9 +954,11 @@ public sealed class SettlementCloseService : BackgroundService
     /// </summary>
     private static bool IsBoundaryPassed(int entitlementYear, int resetMonth, DateOnly copenhagenToday, DateOnly goLiveDate)
     {
-        var ferieaarStart = new DateOnly(entitlementYear, resetMonth, 1);
-        var ferieaarEnd = ferieaarStart.AddYears(1).AddDays(-1);
-        var boundary = new DateOnly(ferieaarEnd.Year, 12, 31); // §21 31-Dec deadline of the ferieår-end year.
+        // S80 / TASK-8001 (R10) — the §21 31-Dec deadline of the ferieår-END year now comes from the
+        // shared EntitlementPeriodResolver (BEHAVIOR-IDENTICAL for VACATION: reset_month 9 ⇒ 31 Dec
+        // E+1). VACATION-scoped here; the SPECIAL_HOLIDAY 30-Apr boundary pass is TASK-8002's concern.
+        var boundary = EntitlementPeriodResolver
+            .ResolveForYear(VacationType, resetMonth, entitlementYear).Boundary;
         return boundary > goLiveDate          // ADR-033 D13: only boundaries strictly after go-live auto-settle.
             && copenhagenToday > boundary;     // …and the deadline has actually passed on the Copenhagen date.
     }

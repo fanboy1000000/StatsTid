@@ -67,6 +67,45 @@ public sealed class Slice3bSentinelCoverageTests
     }
 
     // ════════════════════════════════════════════════════════════════════════
+    // S80 / TASK-8003 (SPRINT-80 R7/R11/R12) — the §15 stk.2/§17 godtgørelse sentinel SLS_TBD_S15S17
+    // is refused by the SAME load-bearing SLS_TBD_ prefix lock, money-free, never delivered. The
+    // SourceTimeType here is the NEW SPECIAL_HOLIDAY_SETTLEMENT_PAYOUT (NOT the §24 secondary
+    // discriminator), so the prefix is the sole load-bearing refusal — exactly the R7 claim.
+    // ════════════════════════════════════════════════════════════════════════
+
+    private static PayrollExportLine S15S17SentinelLine() => new()
+    {
+        EmployeeId = "emp1",
+        WageType = "SLS_TBD_S15S17",
+        Hours = 5m,            // a DAY-COUNT, not kroner (SLS owns the 2½% §17 rate, ≠ §10's 2,02%).
+        Amount = 0m,           // money-free.
+        PeriodStart = new DateOnly(2024, 4, 30),  // the 30-Apr-Y+2 afholdelsesperiode end.
+        PeriodEnd = new DateOnly(2024, 4, 30),
+        OkVersion = "OK24",
+        SourceTimeType = "SPECIAL_HOLIDAY_SETTLEMENT_PAYOUT",
+    };
+
+    [Fact]
+    public async Task S15S17SentinelLine_DeliveryEnabled_StillThrows()
+    {
+        var svc = BuildService(deliveryEnabled: true);
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => svc.ExportAsync(new[] { S15S17SentinelLine() }));
+        Assert.Contains(GuardMessageFragment, ex.Message);
+        Assert.Contains("SLS_TBD_S15S17", ex.Message); // the sentinel-specific (unconditional) branch
+    }
+
+    [Fact]
+    public async Task S15S17SentinelLine_DeliveryConfigAbsent_Throws()
+    {
+        var svc = BuildService(deliveryEnabled: null); // config key absent ⇒ disabled
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => svc.ExportAsync(new[] { S15S17SentinelLine() }));
+        Assert.Contains(GuardMessageFragment, ex.Message);
+        Assert.Contains("SLS_TBD_S15S17", ex.Message);
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
     // (3) The unwired-delivery CENSUS (the S69 proof, asserted at source level): the ONLY Payroll
     //     source file that touches the staged settlement_export_lines is the staging repository —
     //     no delivery path (PayrollExportService / SlsExportFormatter / the endpoints) reads it,

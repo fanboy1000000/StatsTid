@@ -140,22 +140,33 @@ public sealed class SkemaMonthlyAccrualGuardTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // SPECIAL_HOLIDAY — NO forskud (ferieaftale §13 stk.4), cap = earned + carryover(=0).
+    // SPECIAL_HOLIDAY — S80 / TASK-8001 (ADR-033 Slice 2, R1/R2 — D11 calendar-accrual correction).
     // ════════════════════════════════════════════════════════════════════════
+    //
+    // PRE-S80 (the OLD mis-model these tests pinned): SPECIAL_HOLIDAY was reset_month=9 (Sep–Aug
+    // ferieår, MONTHLY_ACCRUAL), so a Nov booking saw only ~3 months earned (≈1,25 d) and a "no
+    // forskud beyond earned" 422 was reachable mid-ferieår. POST-S80 (Cirkulære 021-24 §12, the
+    // verified law): accrual is the CALENDAR year (1 Jan–31 Dec) and days are TAKEN in the FOLLOWING
+    // 1 May–30 Apr window (§12 stk.2). By the time a day can be booked in its taking window the
+    // accrual year is FULLY accrued (5 d), so the "beyond earned" forskud scenario is unreachable
+    // for SPECIAL_HOLIDAY — only the annual 5-day QUOTA gates. These tests are rewritten to pin the
+    // NEW model + the R2 usage→accrual-year mapping (both halves). They FAIL on the unfixed reset-9
+    // code (which keys a Nov-2025 booking to ferieår 2025 and earns only ~1,25 d).
 
     /// <summary>
-    /// SPECIAL_HOLIDAY booking beyond earned-to-date is rejected 422 (no forskud). In Nov
-    /// (~3 months into the ferieår) earned ≈ 5 × 3/12 = 1,25 d and carryover = 0 (CarryoverMax
-    /// = 0). Booking 2 full days exceeds 1,25 ⇒ 422. carryover = 0 proves the cap is the
-    /// no-forskud earned limit, not a zero-carryover artifact.
+    /// S80 R2 — a SPECIAL_HOLIDAY booking in the May–Dec head of the taking window keys to accrual
+    /// year T−1 (NOT the booking's own year), and that accrual year is fully accrued (5 d), so a
+    /// booking that EXCEEDS the annual 5-day quota is rejected 422 (quota, not forskud). Booking 6
+    /// distinct days in Nov 2025 ⇒ accrual year 2024 ⇒ earned = full 5 d ⇒ 6 > 5 ⇒ 422; nothing
+    /// persists, the balance row (if ensured) is keyed to year 2024 and never used>0.
     /// </summary>
     [Fact]
-    public async Task SpecialHoliday_BeyondEarned_NoForskud_Rejected422_NothingPersisted()
+    public async Task SpecialHoliday_BeyondQuota_Rejected422_NothingPersisted_KeyedToAccrualYear()
     {
         var client = CreateEmployeeClient(CreateRuleStubbedClient());
-        // 2 distinct SPECIAL_HOLIDAY days (each 7.4h). In Nov (~3 months in) earned ≈ 1,25 d ⇒
-        // 2 d exceeds the no-forskud cap. firstAbsenceDate (Nov 2025) ⇒ ferieår 2025.
-        var dates = DistinctDays(new DateOnly(2025, 11, 4), 2);
+        // 6 distinct SPECIAL_HOLIDAY days in Nov 2025 (May–Dec ⇒ accrual year 2024, fully accrued
+        // 5 d). 6 > 5 ⇒ quota 422. carryover = 0 (CarryoverMax 0), so the cap is the annual quota.
+        var dates = DistinctDays(new DateOnly(2025, 11, 4), 6);
         var absences = dates.Select(d => (d, "SPECIAL_HOLIDAY_ALLOWANCE", 7.4m)).ToArray();
 
         var rsp = await PostAbsencesAsync(client, 2025, 11, absences);
@@ -165,32 +176,61 @@ public sealed class SkemaMonthlyAccrualGuardTests : IAsyncLifetime
         Assert.Equal("Entitlement quota exceeded", body.GetProperty("error").GetString());
         Assert.Equal(0, await CountAbsenceRowsAsync(Emp001, dates[0]));
 
-        // Atomic guard parity: nothing persisted AND no balance row left in a used>0 state.
-        var balance = await TryReadBalanceAsync(Emp001, "SPECIAL_HOLIDAY", 2025);
-        if (balance is { } b)
-            Assert.Equal(0m, b.Used); // the ensure-row INSERT may exist at zero-state, never used>0
+        // R2 keying: the balance is keyed to accrual year 2024 (T−1), NOT 2025. Nothing persisted.
+        var b2025 = await TryReadBalanceAsync(Emp001, "SPECIAL_HOLIDAY", 2025);
+        Assert.Null(b2025); // the pre-S80 reset-9 code would have keyed/touched year 2025
+        var b2024 = await TryReadBalanceAsync(Emp001, "SPECIAL_HOLIDAY", 2024);
+        if (b2024 is { } b)
+            Assert.Equal(0m, b.Used); // ensure-row INSERT may exist at zero-state, never used>0
     }
 
     /// <summary>
-    /// SPECIAL_HOLIDAY within earned-to-date succeeds. Late in the ferieår (Aug ⇒ full 5 d
-    /// earned) booking 1 day is within the earned cap ⇒ ALLOWED and persists. total_quota
-    /// seeds at the annual 5.
+    /// S80 R2 — a SPECIAL_HOLIDAY booking in the May–Dec head of the taking window: 1 day in Nov
+    /// 2025 is within the fully-accrued 5-day quota ⇒ ALLOWED, persists, and the balance is keyed to
+    /// accrual year 2024 (T−1) with total_quota = annual 5.
     /// </summary>
     [Fact]
-    public async Task SpecialHoliday_WithinEarned_Allowed_AndPersists()
+    public async Task SpecialHoliday_MayToDec_WithinQuota_Allowed_KeyedToAccrualYearTMinus1()
     {
         var client = CreateEmployeeClient(CreateRuleStubbedClient());
-        var date = new DateOnly(2026, 8, 10); // month 12 of the 2025 ferieår ⇒ earned = full 5 d
+        var date = new DateOnly(2025, 11, 4); // May–Dec 2025 ⇒ accrual year 2024 (fully accrued 5 d)
 
         var rsp = await PostAbsencesAsync(
-            client, 2026, 8, new[] { (date, "SPECIAL_HOLIDAY_ALLOWANCE", 1 * 7.4m) });
+            client, 2025, 11, new[] { (date, "SPECIAL_HOLIDAY_ALLOWANCE", 1 * 7.4m) });
 
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
         Assert.Equal(1, await CountAbsenceRowsAsync(Emp001, date));
 
-        var (totalQuota, used, _) = await ReadBalanceAsync(Emp001, "SPECIAL_HOLIDAY", 2025);
+        var (totalQuota, used, _) = await ReadBalanceAsync(Emp001, "SPECIAL_HOLIDAY", 2024);
         Assert.Equal(5m, totalQuota); // annual
         Assert.Equal(1m, used);
+        // R2 discriminator: nothing is keyed to the booking's own calendar year (the pre-S80 key).
+        Assert.Null(await TryReadBalanceAsync(Emp001, "SPECIAL_HOLIDAY", 2025));
+    }
+
+    /// <summary>
+    /// S80 R2 (the SECOND half of the two-calendar-year mapping) — a SPECIAL_HOLIDAY booking in the
+    /// Jan–Apr TAIL of the taking window keys to accrual year T−2. A 1-day booking in Mar 2025
+    /// (Jan–Apr ⇒ accrual year 2023, fully accrued) is ALLOWED and keyed to year 2023, NOT 2024 and
+    /// NOT 2025. This is the discriminating both-halves AC the Step-0b BLOCKER demanded.
+    /// </summary>
+    [Fact]
+    public async Task SpecialHoliday_JanToApr_WithinQuota_Allowed_KeyedToAccrualYearTMinus2()
+    {
+        var client = CreateEmployeeClient(CreateRuleStubbedClient());
+        var date = new DateOnly(2025, 3, 4); // Jan–Apr 2025 ⇒ accrual year 2023 (T−2, fully accrued)
+
+        var rsp = await PostAbsencesAsync(
+            client, 2025, 3, new[] { (date, "SPECIAL_HOLIDAY_ALLOWANCE", 1 * 7.4m) });
+
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+        Assert.Equal(1, await CountAbsenceRowsAsync(Emp001, date));
+
+        var (_, used, _) = await ReadBalanceAsync(Emp001, "SPECIAL_HOLIDAY", 2023);
+        Assert.Equal(1m, used);
+        // Discriminators: NOT keyed to 2024 (the May–Dec head's year) nor 2025 (the pre-S80 key).
+        Assert.Null(await TryReadBalanceAsync(Emp001, "SPECIAL_HOLIDAY", 2024));
+        Assert.Null(await TryReadBalanceAsync(Emp001, "SPECIAL_HOLIDAY", 2025));
     }
 
     // ════════════════════════════════════════════════════════════════════════

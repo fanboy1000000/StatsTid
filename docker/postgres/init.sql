@@ -1535,15 +1535,21 @@ INSERT INTO entitlement_configs (entitlement_type, agreement_code, ok_version, a
     ('VACATION', 'HK', 'OK26', 25, 'MONTHLY_ACCRUAL', 9, 5, false, false, NULL, 'Ferie – 25 dage', '0001-01-01', false),
     ('VACATION', 'PROSA', 'OK24', 25, 'MONTHLY_ACCRUAL', 9, 5, false, false, NULL, 'Ferie – 25 dage', '0001-01-01', false),
     ('VACATION', 'PROSA', 'OK26', 25, 'MONTHLY_ACCRUAL', 9, 5, false, false, NULL, 'Ferie – 25 dage', '0001-01-01', false),
-    -- SPECIAL_HOLIDAY: 5 days, reset September, no carryover
+    -- SPECIAL_HOLIDAY: 5 days, CALENDAR-year accrual (reset January), no carryover
     -- S60 / ADR-030: MONTHLY_ACCRUAL (~0,42 d/md); no forskud (ferieaftale §13 stk.4) enforced in rule engine.
     -- S63 / ADR-031: pro_rate_by_part_time = false — flat day-count per Ferieloven §5 (sentinel reseed, NOT supersession — preserves ADR-021 D5 invariant)
-    ('SPECIAL_HOLIDAY', 'AC', 'OK24', 5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01', false),
-    ('SPECIAL_HOLIDAY', 'AC', 'OK26', 5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01', false),
-    ('SPECIAL_HOLIDAY', 'HK', 'OK24', 5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01', false),
-    ('SPECIAL_HOLIDAY', 'HK', 'OK26', 5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01', false),
-    ('SPECIAL_HOLIDAY', 'PROSA', 'OK24', 5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01', false),
-    ('SPECIAL_HOLIDAY', 'PROSA', 'OK26', 5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01', false),
+    -- S80 / TASK-8001 (ADR-033 Slice 2, R1 — D11 model correction): reset_month 9 → 1. Særlige
+    -- feriedage accrue on the CALENDAR year (1 Jan–31 Dec, Cirkulære 021-24 §12), NOT the Sep–Aug
+    -- ferieår. The §12 stk.2 taking window (1 May Y+1–30 Apr Y+2) + 30-Apr-(Y+2) settlement boundary
+    -- are layered by the shared EntitlementPeriodResolver (not expressible by raw reset_month). The
+    -- VACATION-only reset_month CHECK above does NOT constrain SPECIAL_HOLIDAY. Legacy/existing DBs
+    -- are flipped by the idempotent 's80-adr033-special-holiday-calendar-accrual' UPDATE block below.
+    ('SPECIAL_HOLIDAY', 'AC', 'OK24', 5, 'MONTHLY_ACCRUAL', 1, 0, false, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01', false),
+    ('SPECIAL_HOLIDAY', 'AC', 'OK26', 5, 'MONTHLY_ACCRUAL', 1, 0, false, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01', false),
+    ('SPECIAL_HOLIDAY', 'HK', 'OK24', 5, 'MONTHLY_ACCRUAL', 1, 0, false, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01', false),
+    ('SPECIAL_HOLIDAY', 'HK', 'OK26', 5, 'MONTHLY_ACCRUAL', 1, 0, false, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01', false),
+    ('SPECIAL_HOLIDAY', 'PROSA', 'OK24', 5, 'MONTHLY_ACCRUAL', 1, 0, false, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01', false),
+    ('SPECIAL_HOLIDAY', 'PROSA', 'OK26', 5, 'MONTHLY_ACCRUAL', 1, 0, false, false, NULL, 'Særlige feriedage – 5 dage', '0001-01-01', false),
     -- CARE_DAY: 2 days, reset January, no carryover, not pro-rated
     -- S73 / TASK-7301 (D-A): full_day_only = TRUE — omsorgsdage are whole days ("hele dage").
     ('CARE_DAY', 'AC', 'OK24', 2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage', '0001-01-01', true),
@@ -1578,10 +1584,13 @@ INSERT INTO entitlement_configs (entitlement_type, agreement_code, ok_version, a
     ('VACATION',        'AC_RESEARCH', 'OK26', 25, 'MONTHLY_ACCRUAL', 9, 5, false, false, NULL, 'Ferie – 25 dage',                  '0001-01-01', false),
     ('VACATION',        'AC_TEACHING', 'OK24', 25, 'MONTHLY_ACCRUAL', 9, 5, false, false, NULL, 'Ferie – 25 dage',                  '0001-01-01', false),
     ('VACATION',        'AC_TEACHING', 'OK26', 25, 'MONTHLY_ACCRUAL', 9, 5, false, false, NULL, 'Ferie – 25 dage',                  '0001-01-01', false),
-    ('SPECIAL_HOLIDAY', 'AC_RESEARCH', 'OK24',  5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage',       '0001-01-01', false),
-    ('SPECIAL_HOLIDAY', 'AC_RESEARCH', 'OK26',  5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage',       '0001-01-01', false),
-    ('SPECIAL_HOLIDAY', 'AC_TEACHING', 'OK24',  5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage',       '0001-01-01', false),
-    ('SPECIAL_HOLIDAY', 'AC_TEACHING', 'OK26',  5, 'MONTHLY_ACCRUAL', 9, 0, false, false, NULL, 'Særlige feriedage – 5 dage',       '0001-01-01', false),
+    -- S80 / TASK-8001 (ADR-033 Slice 2, R1 — D11): CALENDAR-year accrual (reset_month 1, Cirkulære
+    -- 021-24 §12), matching the AC/HK/PROSA literals above. The idempotent UPDATE below would flip
+    -- these anyway, but the seed literal must match the end state (the SPRINT-80 seed-alignment note).
+    ('SPECIAL_HOLIDAY', 'AC_RESEARCH', 'OK24',  5, 'MONTHLY_ACCRUAL', 1, 0, false, false, NULL, 'Særlige feriedage – 5 dage',       '0001-01-01', false),
+    ('SPECIAL_HOLIDAY', 'AC_RESEARCH', 'OK26',  5, 'MONTHLY_ACCRUAL', 1, 0, false, false, NULL, 'Særlige feriedage – 5 dage',       '0001-01-01', false),
+    ('SPECIAL_HOLIDAY', 'AC_TEACHING', 'OK24',  5, 'MONTHLY_ACCRUAL', 1, 0, false, false, NULL, 'Særlige feriedage – 5 dage',       '0001-01-01', false),
+    ('SPECIAL_HOLIDAY', 'AC_TEACHING', 'OK26',  5, 'MONTHLY_ACCRUAL', 1, 0, false, false, NULL, 'Særlige feriedage – 5 dage',       '0001-01-01', false),
     ('CARE_DAY',        'AC_RESEARCH', 'OK24',  2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage',             '0001-01-01', true),
     ('CARE_DAY',        'AC_RESEARCH', 'OK26',  2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage',             '0001-01-01', true),
     ('CARE_DAY',        'AC_TEACHING', 'OK24',  2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage',             '0001-01-01', true),
@@ -2691,6 +2700,35 @@ BEGIN
 END
 $$;
 
+-- S80 / TASK-8001 (ADR-033 Slice 2, R1/R9 — D11 model correction) — SPECIAL_HOLIDAY accrual is
+-- CALENDAR-year (1 Jan–31 Dec, Cirkulære 021-24 §12), NOT the Sep–Aug ferieår. The seed above uses
+-- ON CONFLICT (...) DO NOTHING, so on a non-fresh DB the pre-existing reset_month=9 SPECIAL_HOLIDAY
+-- rows would never flip (the S60/S63 precedent). Type-keyed (NOT agreement-code-keyed) so it also
+-- covers the AC_RESEARCH/AC_TEACHING variant rows that exist ONLY in this seed (DefaultEntitlementConfigs
+-- emits AC/HK/PROSA only) — and any history rows — so the whole (entitlement_type, agreement_code,
+-- ok_version) family agrees on the calendar geometry (ADR-021 D5; no new effective_from row). The
+-- §12 stk.2 taking window (1 May Y+1–30 Apr Y+2) + 30-Apr-(Y+2) settlement boundary are LAYERED by
+-- the shared EntitlementPeriodResolver in application code (not expressible by raw reset_month, so
+-- not a DB concern). Pre-launch reseed (owner OQ-3): no production data, so no past periods to
+-- recompute; SPECIAL_HOLIDAY balances are re-derived from the corrected geometry by the live
+-- Skema/Balance read paths (ADR-024 D3 bug-with-no-past-impact). The VACATION-only
+-- entitlement_configs_vacation_reset_month CHECK does NOT constrain SPECIAL_HOLIDAY, so this UPDATE
+-- never trips a constraint. Idempotent via the WHERE reset_month = 9 predicate + the
+-- schema_migrations ledger short-circuit.
+UPDATE entitlement_configs
+   SET reset_month = 1,
+       description = 'Særlige feriedage – 5 dage'
+ WHERE entitlement_type = 'SPECIAL_HOLIDAY'
+   AND reset_month = 9;
+
+DO $$
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s80-adr033-special-holiday-calendar-accrual', 'ADR-033 Slice 2 / D11: SPECIAL_HOLIDAY (særlige feriedage) accrual corrected from the statutory Sep–Aug ferieår (reset_month=9) to the CALENDAR year (reset_month=1, Cirkulære 021-24 §12). Type-keyed idempotent UPDATE across all agreement codes + OK versions (S60/S63 sentinel-reseed pattern; no new effective_from row, preserves ADR-021 D5). The §12 stk.2 taking window (1 May Y+1–30 Apr Y+2) + 30-Apr-(Y+2) godtgørelse settlement boundary are layered by the shared EntitlementPeriodResolver in application code (the accrual year ≠ the taking-window year — a third geometry not expressible by raw reset_month). Pre-launch reseed (owner OQ-3): no production data, no past-period recompute; balances re-derived by the live read paths. The VACATION-only reset_month=9 CHECK does not constrain SPECIAL_HOLIDAY. Settlement close (godtgørelse) is TASK-8002; the staged payout line is TASK-8003.')
+    ON CONFLICT (migration_id) DO NOTHING;
+END
+$$;
+
 -- =========================================================================
 -- S66 / ADR-032 D2 — absences_projection.feriedage on EXISTING/legacy DBs.
 --   The base `CREATE TABLE IF NOT EXISTS absences_projection` (L1531) is a
@@ -3725,6 +3763,64 @@ BEGIN
         ('VACATION_TERMINATION_PAYOUT', 'SLS_TBD_S26', 'OK26', 'PROSA',       '', 'PLACEHOLDER - §26 termination vacation payout efter anmodning (Ferielov §26 stk.1); real SLS code TBD via SLS dialogue', '2020-01-01'),
         ('VACATION_TERMINATION_PAYOUT', 'SLS_TBD_S26', 'OK26', 'AC_RESEARCH', '', 'PLACEHOLDER - §26 termination vacation payout efter anmodning (Ferielov §26 stk.1); real SLS code TBD via SLS dialogue', '2020-01-01'),
         ('VACATION_TERMINATION_PAYOUT', 'SLS_TBD_S26', 'OK26', 'AC_TEACHING', '', 'PLACEHOLDER - §26 termination vacation payout efter anmodning (Ferielov §26 stk.1); real SLS code TBD via SLS dialogue', '2020-01-01')
+    ON CONFLICT (time_type, ok_version, agreement_code, position, effective_from) DO NOTHING;
+END
+$$;
+
+-- =========================================================================
+-- S80 / TASK-8003 — §15 stk.2/§17 særlige-feriedage godtgørelse wage-type
+--   mapping (SPRINT-80 R7; ADR-033 slice 2). The settlement_export_lines.wage_type
+--   for a GODTGOERELSE_S15S17 bucket resolves through wage_type_mappings on the
+--   NEW time_type SPECIAL_HOLIDAY_SETTLEMENT_PAYOUT. The resolved lønart is a
+--   PLACEHOLDER sentinel (SLS_TBD_S15S17) — the real SLS code AND the line format
+--   are UNVERIFIED, deferred to the SLS-dialogue task. The existing outbound
+--   delivery guard (PayrollExportService, the SLS_TBD_ prefix refusal) already
+--   rejects it unconditionally — the 8003 deliverable is the consumer + coverage
+--   TESTS, not new guard code. Swapping the real code in later is a one-row
+--   ADR-020 effective-dated change (the S69 owner-insight precedent).
+--
+-- MUST NOT reuse SPECIAL_HOLIDAY_ALLOWANCE -> SLS_0570 (init.sql:261): that is
+--   the CONSUMPTION lønart (a REAL deliverable code, posted when an employee TAKES
+--   a særlig feriedag). The §15 stk.2/§17 godtgørelse is a DISTINCT SETTLEMENT
+--   time_type — the unused-day cash payout at the 30-Apr-(Y+2) afholdelsesperiode
+--   end (Cirkulære 021-24 §12 stk.2; §17 = 2½%, ≠ §10's 2,02%, ADR-033 D12). The
+--   line carries only a DAY-COUNT (PayoutDays); SLS owns the 2½% rate (D1/R11/R12).
+--
+-- Verified SLS godtgørelse codes 5017/5027/5037 (recorded, NOT wired — the
+--   sentinel ships this slice; the 8004 ADR amendment records them per the owner
+--   decision "SLS = SLS_TBD_* placeholder + record the verified 5017/5027/5037").
+--
+-- ADR-020 versioned natural key + coverage: position = '' (national; the §15
+--   stk.2/§17 godtgørelse is statutory, not institution-varying), effective_from
+--   2020-01-01 open row, the EXACT s69-s24-settlement-wage-type 10-pair matrix
+--   {AC, HK, PROSA, AC_RESEARCH, AC_TEACHING} × {OK24, OK26} (SPECIAL_HOLIDAY is
+--   accrued under the same agreement/OK dimensions as VACATION).
+--
+-- schema_migrations-guarded + idempotent (the s69/s71 precedent shape): the guard
+--   short-circuits on re-apply; the inner ON CONFLICT DO NOTHING is the
+--   belt-and-suspenders. Greenfield + legacy converge identically.
+-- =========================================================================
+DO $$
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s80-s15s17-godtgoerelse-wage-type', 'ADR-033 slice 2 (SPRINT-80 R7) — §15 stk.2/§17 SPECIAL_HOLIDAY_SETTLEMENT_PAYOUT -> placeholder SLS_TBD_S15S17, ADR-020 versioned (effective-dated open row), position '''' national, covering the s69-s24 10-pair agreement/OK matrix {AC,HK,PROSA,AC_RESEARCH,AC_TEACHING}x{OK24,OK26}; sentinel refused by the existing SLS_TBD_ outbound delivery guard (consumer + coverage tests, no new guard code); the godtgørelse line carries a DAY-COUNT (D1 money-free, SLS owns the 2½% §17 rate, distinct from §10''s 2,02% D12). DISTINCT from the consumption SPECIAL_HOLIDAY_ALLOWANCE -> SLS_0570 (the real take-a-day code). Verified SLS godtgørelse codes 5017/5027/5037 recorded in the ADR, NOT wired (deferred to SLS dialogue).')
+    ON CONFLICT (migration_id) DO NOTHING;
+
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+
+    INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, position, description, effective_from) VALUES
+        ('SPECIAL_HOLIDAY_SETTLEMENT_PAYOUT', 'SLS_TBD_S15S17', 'OK24', 'AC',          '', 'PLACEHOLDER - sarlige feriedage godtgorelse (Cirkulaere 021-24 §15 stk.2/§17, 2.5%); real SLS code TBD via SLS dialogue (verified 5017/5027/5037 recorded in ADR-033)', '2020-01-01'),
+        ('SPECIAL_HOLIDAY_SETTLEMENT_PAYOUT', 'SLS_TBD_S15S17', 'OK24', 'HK',          '', 'PLACEHOLDER - sarlige feriedage godtgorelse (Cirkulaere 021-24 §15 stk.2/§17, 2.5%); real SLS code TBD via SLS dialogue (verified 5017/5027/5037 recorded in ADR-033)', '2020-01-01'),
+        ('SPECIAL_HOLIDAY_SETTLEMENT_PAYOUT', 'SLS_TBD_S15S17', 'OK24', 'PROSA',       '', 'PLACEHOLDER - sarlige feriedage godtgorelse (Cirkulaere 021-24 §15 stk.2/§17, 2.5%); real SLS code TBD via SLS dialogue (verified 5017/5027/5037 recorded in ADR-033)', '2020-01-01'),
+        ('SPECIAL_HOLIDAY_SETTLEMENT_PAYOUT', 'SLS_TBD_S15S17', 'OK24', 'AC_RESEARCH', '', 'PLACEHOLDER - sarlige feriedage godtgorelse (Cirkulaere 021-24 §15 stk.2/§17, 2.5%); real SLS code TBD via SLS dialogue (verified 5017/5027/5037 recorded in ADR-033)', '2020-01-01'),
+        ('SPECIAL_HOLIDAY_SETTLEMENT_PAYOUT', 'SLS_TBD_S15S17', 'OK24', 'AC_TEACHING', '', 'PLACEHOLDER - sarlige feriedage godtgorelse (Cirkulaere 021-24 §15 stk.2/§17, 2.5%); real SLS code TBD via SLS dialogue (verified 5017/5027/5037 recorded in ADR-033)', '2020-01-01'),
+        ('SPECIAL_HOLIDAY_SETTLEMENT_PAYOUT', 'SLS_TBD_S15S17', 'OK26', 'AC',          '', 'PLACEHOLDER - sarlige feriedage godtgorelse (Cirkulaere 021-24 §15 stk.2/§17, 2.5%); real SLS code TBD via SLS dialogue (verified 5017/5027/5037 recorded in ADR-033)', '2020-01-01'),
+        ('SPECIAL_HOLIDAY_SETTLEMENT_PAYOUT', 'SLS_TBD_S15S17', 'OK26', 'HK',          '', 'PLACEHOLDER - sarlige feriedage godtgorelse (Cirkulaere 021-24 §15 stk.2/§17, 2.5%); real SLS code TBD via SLS dialogue (verified 5017/5027/5037 recorded in ADR-033)', '2020-01-01'),
+        ('SPECIAL_HOLIDAY_SETTLEMENT_PAYOUT', 'SLS_TBD_S15S17', 'OK26', 'PROSA',       '', 'PLACEHOLDER - sarlige feriedage godtgorelse (Cirkulaere 021-24 §15 stk.2/§17, 2.5%); real SLS code TBD via SLS dialogue (verified 5017/5027/5037 recorded in ADR-033)', '2020-01-01'),
+        ('SPECIAL_HOLIDAY_SETTLEMENT_PAYOUT', 'SLS_TBD_S15S17', 'OK26', 'AC_RESEARCH', '', 'PLACEHOLDER - sarlige feriedage godtgorelse (Cirkulaere 021-24 §15 stk.2/§17, 2.5%); real SLS code TBD via SLS dialogue (verified 5017/5027/5037 recorded in ADR-033)', '2020-01-01'),
+        ('SPECIAL_HOLIDAY_SETTLEMENT_PAYOUT', 'SLS_TBD_S15S17', 'OK26', 'AC_TEACHING', '', 'PLACEHOLDER - sarlige feriedage godtgorelse (Cirkulaere 021-24 §15 stk.2/§17, 2.5%); real SLS code TBD via SLS dialogue (verified 5017/5027/5037 recorded in ADR-033)', '2020-01-01')
     ON CONFLICT (time_type, ok_version, agreement_code, position, effective_from) DO NOTHING;
 END
 $$;

@@ -86,12 +86,19 @@ public static class DefaultEntitlementConfigs
         OkVersion = okVersion,
         AnnualQuota = 5m,
         AccrualModel = "MONTHLY_ACCRUAL",
-        ResetMonth = 9,  // Ferieår: September
+        // S80 / TASK-8001 (ADR-033 Slice 2, R1 — D11 model correction): særlige feriedage accrue on
+        // the CALENDAR year (1 Jan–31 Dec, ~0,42 d/md), NOT the statutory Sep–Aug ferieår (Cirkulære
+        // 021-24 §12). The mis-modeled ResetMonth=9 settled ~4 months early and mis-keyed bookings.
+        // reset_month=1 makes the stored geometry honest (calendar accrual), and the shared
+        // EntitlementPeriodResolver layers the §12 stk.2 taking window (1 May Y+1–30 Apr Y+2) +
+        // 30-Apr-(Y+2) settlement boundary on top — neither expressible by raw reset_month. The
+        // VACATION-only reset_month CHECK (init.sql) does NOT constrain SPECIAL_HOLIDAY.
+        ResetMonth = 1,  // Calendar-year accrual (1 Jan); taking window + boundary via EntitlementPeriodResolver.
         CarryoverMax = 0m,
         // ADR-031: day-count is flat per Ferieloven §5 — part-time pro-rates consumption (§6 stk.2, S64) + value only, never the day-count
         ProRateByPartTime = false,
         IsPerEpisode = false,
-        Description = "Særlige feriedage (5 dage pr. ferieår)"
+        Description = "Særlige feriedage (5 dage pr. kalenderår)"
     };
 
     private static EntitlementConfig CreateCareDay(string agreementCode, string okVersion) => new()

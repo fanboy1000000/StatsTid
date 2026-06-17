@@ -81,12 +81,15 @@ public class ReversalSequenceArithmeticTests
     private const int Year = 2024;                              // ferieår Sep 2024 .. Aug 2025
     private const int ResetMonth = 9;                           // boundary = 31 Dec 2025 (passed at Today)
     private static readonly DateOnly Floor = new(2025, 1, 1);   // go-live before the boundary
+    // S80 / TASK-8002 — IsYearEndSupersedeDueUnderLock now takes the entitlement type (the boundary
+    // resolves type-aware via EntitlementPeriodResolver); all these clauses are VACATION geometry.
+    private const string Vac = "VACATION";
 
     [Fact]
     public void ActiveUser_NoEndDate_BoundaryPassed_PostGoLive_IsDue()
     {
         Assert.True(VacationSettlementService.IsYearEndSupersedeDueUnderLock(
-            isActive: true, employmentEndDate: null, Year, ResetMonth, Floor, Today));
+            Vac, isActive: true, employmentEndDate: null, Year, ResetMonth, Floor, Today));
     }
 
     /// <summary>Clause 1 — the ACTIVE branch only: a (manually or lifecycle) inactive user is
@@ -95,7 +98,7 @@ public class ReversalSequenceArithmeticTests
     public void InactiveUser_NotDue()
     {
         Assert.False(VacationSettlementService.IsYearEndSupersedeDueUnderLock(
-            isActive: false, employmentEndDate: null, Year, ResetMonth, Floor, Today));
+            Vac, isActive: false, employmentEndDate: null, Year, ResetMonth, Floor, Today));
     }
 
     /// <summary>Clause 2 — the S70 R4 leak-proofing pin: a PASSED-end-date leaver must never
@@ -104,7 +107,7 @@ public class ReversalSequenceArithmeticTests
     public void PassedEndDateLeaver_NotDue()
     {
         Assert.False(VacationSettlementService.IsYearEndSupersedeDueUnderLock(
-            isActive: true, employmentEndDate: new DateOnly(2026, 2, 28), Year, ResetMonth, Floor, Today));
+            Vac, isActive: true, employmentEndDate: new DateOnly(2026, 2, 28), Year, ResetMonth, Floor, Today));
     }
 
     /// <summary>A FUTURE-dated end date is fine — mirrors the enumeration's ACTIVE branch
@@ -113,7 +116,7 @@ public class ReversalSequenceArithmeticTests
     public void FutureEndDate_StillDue()
     {
         Assert.True(VacationSettlementService.IsYearEndSupersedeDueUnderLock(
-            true, new DateOnly(2026, 12, 31), Year, ResetMonth, Floor, Today));
+            Vac, true, new DateOnly(2026, 12, 31), Year, ResetMonth, Floor, Today));
     }
 
     /// <summary>End date == today is the LAST employed day (not passed) — still due.</summary>
@@ -121,7 +124,7 @@ public class ReversalSequenceArithmeticTests
     public void EndDateToday_StillDue()
     {
         Assert.True(VacationSettlementService.IsYearEndSupersedeDueUnderLock(
-            true, Today, Year, ResetMonth, Floor, Today));
+            Vac, true, Today, Year, ResetMonth, Floor, Today));
     }
 
     /// <summary>Clause 4 — the boundary (31 Dec of the ferieår-end year) has not passed:
@@ -130,7 +133,7 @@ public class ReversalSequenceArithmeticTests
     public void BoundaryNotPassed_NotDue()
     {
         Assert.False(VacationSettlementService.IsYearEndSupersedeDueUnderLock(
-            true, null, entitlementYear: 2025, ResetMonth, Floor, Today));
+            Vac, true, null, entitlementYear: 2025, ResetMonth, Floor, Today));
     }
 
     /// <summary>Clause 3 — the D13 floor: boundary == go-live is NOT strictly after ⇒ manual
@@ -139,14 +142,14 @@ public class ReversalSequenceArithmeticTests
     public void BoundaryOnGoLiveFloor_NotDue()
     {
         Assert.False(VacationSettlementService.IsYearEndSupersedeDueUnderLock(
-            true, null, Year, ResetMonth, supersedeGoLiveFloor: new DateOnly(2025, 12, 31), Today));
+            Vac, true, null, Year, ResetMonth, supersedeGoLiveFloor: new DateOnly(2025, 12, 31), Today));
     }
 
     [Fact]
     public void BoundaryStrictlyAfterGoLiveFloor_IsDue()
     {
         Assert.True(VacationSettlementService.IsYearEndSupersedeDueUnderLock(
-            true, null, Year, ResetMonth, supersedeGoLiveFloor: new DateOnly(2025, 12, 30), Today));
+            Vac, true, null, Year, ResetMonth, supersedeGoLiveFloor: new DateOnly(2025, 12, 30), Today));
     }
 
     /// <summary>Null floor = the caller supplied no go-live (direct/test drives) — clause waived.</summary>
@@ -154,7 +157,7 @@ public class ReversalSequenceArithmeticTests
     public void NullFloor_ClauseWaived_IsDue()
     {
         Assert.True(VacationSettlementService.IsYearEndSupersedeDueUnderLock(
-            true, null, Year, ResetMonth, supersedeGoLiveFloor: null, Today));
+            Vac, true, null, Year, ResetMonth, supersedeGoLiveFloor: null, Today));
     }
 
     /// <summary>reset_month 1 geometry: ferieår 2025 = calendar 2025 ⇒ boundary 31 Dec 2025
@@ -164,8 +167,8 @@ public class ReversalSequenceArithmeticTests
     public void ResetMonthOne_CalendarGeometry()
     {
         Assert.True(VacationSettlementService.IsYearEndSupersedeDueUnderLock(
-            true, null, entitlementYear: 2025, resetMonth: 1, Floor, Today));
+            Vac, true, null, entitlementYear: 2025, resetMonth: 1, Floor, Today));
         Assert.False(VacationSettlementService.IsYearEndSupersedeDueUnderLock(
-            true, null, entitlementYear: 2026, resetMonth: 1, Floor, Today));
+            Vac, true, null, entitlementYear: 2026, resetMonth: 1, Floor, Today));
     }
 }

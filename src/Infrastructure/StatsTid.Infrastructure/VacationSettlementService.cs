@@ -66,6 +66,15 @@ public sealed class VacationSettlementService
 
     private const string MonthlyAccrualModel = "MONTHLY_ACCRUAL";
 
+    /// <summary>
+    /// S80 / TASK-8002 (ADR-033 Slice 2) — the SPECIAL_HOLIDAY (særlige feriedage) entitlement type.
+    /// Mirrors <see cref="EntitlementPeriodResolver.SpecialHolidayType"/>; routed to the DEDICATED
+    /// §15 stk.2/§17 godtgørelse-only settle path (R4) — NEVER the shared §21/§24/§34 VACATION
+    /// partition (whose <c>overCap = disposable − CarryoverMax</c> with CarryoverMax=0 would flag the
+    /// whole balance as a §34 candidate → the exact compliance bug R4 forbids).
+    /// </summary>
+    private const string SpecialHolidayType = EntitlementPeriodResolver.SpecialHolidayType;
+
     /// <summary>YEAR_END trigger (ADR-033 D5) — the poll-driven boundary close.</summary>
     private const string YearEndTrigger = "YEAR_END";
 
@@ -219,6 +228,12 @@ public sealed class VacationSettlementService
             ?? throw new InvalidOperationException(
                 $"Vacation settlement: employee {employeeId} not found.");
 
+        // (3·SH) S80 / TASK-8002 — the SPECIAL_HOLIDAY §15 stk.2/§17 godtgørelse fork is handled BELOW,
+        // AFTER the in-lock TERMINATION + leaver guards (S80 Step-5a BLOCKER-1: branching it here, before
+        // those guards, would settle/pay a tuple that became a leaver/not-due AFTER enumeration but before
+        // this lock — a TOCTOU. SPECIAL_HOLIDAY reaches its dedicated godtgørelse path only as an ACTIVE,
+        // non-leaver YEAR_END tuple; the leaver fork fails it closed (R12 termination-interaction non-goal)).
+
         // (3a) S70 TERMINATION fork (SPRINT-70 R5/R6) — the crystallized termination settlement
         // record. Settles to the END DATE (whole-month §26 basis), never the ferieår end; writes
         // NO carryover and emits NO §21/§24 events.
@@ -261,6 +276,19 @@ public sealed class VacationSettlementService
         // VacationAutoPaidOut into the S69 §24 staging.
         if (user.EmploymentEndDate is { } leaverEndDate && leaverEndDate < CopenhagenToday())
         {
+            // S80 Step-5a BLOCKER-1 — a SPECIAL_HOLIDAY tuple whose employee became a leaver (end date
+            // passed) under the lock is NOT settled: the SPECIAL_HOLIDAY×termination godtgørelse
+            // interaction is an explicit 8002 NON-GOAL (R12). Fail-closed NotDue — NO godtgørelse, NO
+            // VACATION-shaped leaver-deferred row, NO event (a future termination-interaction slice owns it).
+            if (string.Equals(entitlementType, SpecialHolidayType, StringComparison.Ordinal))
+            {
+                _logger.LogDebug(
+                    "Vacation settlement NotDue (SPECIAL_HOLIDAY leaver) for {EmployeeId}/{Year}: the " +
+                    "SPECIAL_HOLIDAY×leaver godtgørelse interaction is a deferred non-goal (S80 R12).",
+                    employeeId, entitlementYear);
+                return SettlementOutcome.NotDueUnderLock();
+            }
+
             // S70 Step-7a BLOCKER B1 (Codex, fix-forward) — the SAME R2/D13 go-live floor,
             // re-checked IN-LOCK on the re-read end date. A pre-go-live leaver is the manual
             // fallback (the system never tracked that boundary): it must NEITHER get the
@@ -278,6 +306,21 @@ public sealed class VacationSettlementService
 
             return await SettleLeaverDeferredDispositionAsync(
                 conn, tx, employeeId, entitlementType, entitlementYear, user, leaverEndDate, ct);
+        }
+
+        // (3·SH) S80 / TASK-8002 (ADR-033 Slice 2, R4 HARD) — the SPECIAL_HOLIDAY §15 stk.2/§17
+        // godtgørelse. Reached ONLY for an ACTIVE (non-leaver), non-TERMINATION YEAR_END SPECIAL_HOLIDAY
+        // tuple (the TERMINATION + leaver forks above fail it closed). A DEDICATED godtgørelse-only
+        // partition + settle that NEVER threads through the shared VACATION Partition()/
+        // SettleActiveYearEndAsync — its overCap = disposable − CarryoverMax (CarryoverMax=0 for
+        // SPECIAL_HOLIDAY) would flag the whole balance as a §34 candidate → PENDING_REVIEW, the exact
+        // compliance bug R4 forbids. NO §21/§24/§34/§22, NO over-cap, NO PENDING_REVIEW: the unused
+        // remainder → godtgørelse payout_days; the row settles SETTLED. (The SPECIAL_HOLIDAY auto-close
+        // is itself R5-gated DORMANT pre-§15-stk.1 in the close service.)
+        if (string.Equals(entitlementType, SpecialHolidayType, StringComparison.Ordinal))
+        {
+            return await SettleSpecialHolidayGodtgoerelseAsync(
+                conn, tx, employeeId, entitlementType, entitlementYear, user, ct);
         }
 
         // ACTIVE-employee YEAR_END auto-partition — the S68 pass, extracted VERBATIM into
@@ -735,6 +778,191 @@ public sealed class VacationSettlementService
         return SettlementOutcome.Settled(persisted, partition: null);
     }
 
+    // ------------------------------------------------------------------
+    // S80 / TASK-8002 (ADR-033 Slice 2, R4/R8) — the SPECIAL_HOLIDAY (særlige feriedage)
+    // §15 stk.2/§17 godtgørelse close. Runs inside SettleAsync's advisory-locked caller tx (the
+    // SAME ADR-032 D4 lock + ADR-018 D3 atomicity contract); invoked ONLY from SettleAsync's
+    // (3·SH) fork after the in-lock re-check + the user re-read. DEDICATED — it never threads
+    // through the shared §21/§24/§34 VACATION Partition()/SettleActiveYearEndAsync (R4 HARD).
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// The §15 stk.2/§17 godtgørelse-only settle (SPRINT-80 R4). The unused remainder of the
+    /// SPECIAL_HOLIDAY accrual year — <c>max(0, earned − used − planned)</c> (CarryoverIn is always
+    /// 0; SPECIAL_HOLIDAY has NO §15 stk.1 carryover modeled yet) — settles ENTIRELY to the
+    /// godtgørelse <c>payout_days</c> bucket. The row settles <c>SETTLED</c> with
+    /// <c>payout_days = remainder</c> and ALL other buckets (transfer/forfeit) 0:
+    /// NO §21/§24/§34/§22, NO over-cap, NO PENDING_REVIEW (the §34 PENDING_REVIEW path the VACATION
+    /// <see cref="Partition"/> takes with CarryoverMax=0 is the exact compliance bug this method
+    /// avoids — R4). Emits <see cref="SaerligeFeriedagePaidOut"/> (PayoutDays = the remainder) +
+    /// its ADR-026 audit projection in the ONE caller tx (R8). Money-free: a DAY-COUNT, SLS owns the
+    /// 2½% (§17 ≠ §10's 2,02%; R11/R12). Replay-deterministic: the remainder is a pure function of
+    /// the captured snapshot.
+    /// </summary>
+    private async Task<SettlementOutcome> SettleSpecialHolidayGodtgoerelseAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string employeeId, string entitlementType, int entitlementYear, User user, CancellationToken ct)
+    {
+        // The SPECIAL_HOLIDAY period geometry (R10 resolver): calendar accrual (1 Jan Y .. 31 Dec Y),
+        // taking window 1 May (Y+1) .. 30 Apr (Y+2), godtgørelse boundary 30 Apr (Y+2). reset_month is
+        // irrelevant to SPECIAL_HOLIDAY's geometry (fixed by law) — the resolver ignores it for the type.
+        var period = EntitlementPeriodResolver.ResolveForYear(entitlementType, resetMonth: 1, entitlementYear);
+
+        // The dated SPECIAL_HOLIDAY config in force at the accrual start (the strictly-dated agreement +
+        // the OK version anchored at the accrual start), fail-closed. The quota basis comes from THIS
+        // config; the godtgørelse is a day-count, not a value, so no §24 wage-mapping key is needed here
+        // (the SLS_TBD_* line is 8003's concern — this method emits the event only).
+        var accrualStart = period.AccrualStart;
+        var okVersion = OkVersionResolver.ResolveVersion(accrualStart);
+        var datedAgreement = await _agreementCodeRepo.GetByUserIdAtAsync(employeeId, accrualStart, ct)
+            ?? user.AgreementCode;
+        var datedConfig =
+            await _configRepo.GetByTypeAtAsync(entitlementType, datedAgreement, okVersion, accrualStart, ct)
+            ?? await _configRepo.GetCurrentOpenAsync(entitlementType, datedAgreement, okVersion, ct)
+            ?? await _configRepo.GetCurrentOpenAsync(entitlementType, user.AgreementCode, user.OkVersion, ct)
+            ?? throw new InvalidOperationException(
+                $"SPECIAL_HOLIDAY settlement: no entitlement config resolvable for {entitlementType} under " +
+                $"agreement '{datedAgreement}' (ok_version {okVersion}) at accrual start {accrualStart:yyyy-MM-dd} " +
+                $"for employee {employeeId}; settlement capture fails closed (§15 godtgørelse needs the quota basis).");
+
+        // Earned at the ACCRUAL END (31 Dec Y) — the resolver's AccrualEnd, NOT the later 30-Apr-(Y+2)
+        // settlement boundary (the S80 / TASK-8001 BLOCKER-1 distinction: AccrualMath clamps elapsed
+        // months from the accrual start = hire for a mid-year hire but does NOT cap the asOf at the
+        // accrual-window end, so feeding the later boundary would over-count a mid-year hire). Flat
+        // day-count (fraction 1.0m per ADR-031). MONTHLY_ACCRUAL accrues to the accrual end; an
+        // IMMEDIATE config grants the full quota up-front.
+        var earned = string.Equals(datedConfig.AccrualModel, MonthlyAccrualModel, StringComparison.Ordinal)
+            ? AccrualMath.EarnedToDate(datedConfig.AnnualQuota, 1.0m, accrualStart, user.EmploymentStartDate, period.AccrualEnd)
+            : datedConfig.AnnualQuota;
+
+        // Used = the recorded SPECIAL_HOLIDAY feriedage within the TAKING window [1 May Y+1, 30 Apr Y+2]
+        // (absence_type SPECIAL_HOLIDAY_ALLOWANCE — the consumption mapping; ReadRecordedFeriedageAsync
+        // already maps the type). The taking window — NOT the accrual window — is where særlige
+        // feriedage are consumed (Cirkulære 021-24 §12 stk.2). Planned = the balance row's planned (0
+        // when no row). CarryoverIn is always 0 for SPECIAL_HOLIDAY (no §15 stk.1 modeled).
+        var recordedAbsences = await ReadRecordedFeriedageAsync(
+            conn, tx, employeeId, entitlementType, period.TakingStart, period.Boundary, ct);
+        var used = recordedAbsences.Sum(a => a.Feriedage);
+
+        var balance = await _balanceRepo.GetByEmployeeAndTypeAsync(conn, tx, employeeId, entitlementType, entitlementYear, ct);
+        var planned = balance?.Planned ?? 0m;
+
+        var snapshot = new VacationSettlementSnapshot
+        {
+            RecordedAbsences = recordedAbsences,
+            Earned = earned,
+            Used = used,
+            Planned = planned,
+            CarryoverIn = 0m,                              // SPECIAL_HOLIDAY: no §15 stk.1 carryover modeled.
+            AnnualQuota = datedConfig.AnnualQuota,
+            CarryoverMax = datedConfig.CarryoverMax,       // 0 for SPECIAL_HOLIDAY — but NEVER read as a §34 cap here (R4).
+            ResetMonth = datedConfig.ResetMonth,
+            OkVersion = okVersion,
+            AgreementCode = datedAgreement,
+            Position = (await _profileResolver.GetByEmployeeIdAtAsync(employeeId, accrualStart, ct))?.Position,
+            // The godtgørelse settlement boundary — 30 Apr (Y+2), the §12 stk.2 afholdelsesperiode end.
+            SettlementBoundaryDate = period.Boundary,
+            TransferAgreementDays = 0m,                    // no §21 for SPECIAL_HOLIDAY.
+            IsFeriehindret = false,                        // no §22 for SPECIAL_HOLIDAY (R4).
+        };
+
+        // The godtgørelse remainder — a PURE function of the snapshot (ADR-033 D3 quantity-determinism):
+        // the unused, untransferred balance, clamped at ≥ 0. ALL of it is the §15 stk.2/§17 godtgørelse.
+        var partition = PartitionSpecialHoliday(snapshot);
+        var snapshotJson = JsonSerializer.Serialize(snapshot, SnapshotJson);
+
+        var row = new VacationSettlementRow
+        {
+            EmployeeId = employeeId,
+            EntitlementType = entitlementType,
+            EntitlementYear = entitlementYear,
+            Sequence = 1,
+            SettlementState = StateSettled,                // R4: ALWAYS SETTLED — never PENDING_REVIEW.
+            Trigger = YearEndTrigger,                      // the boundary close.
+            SnapshotJson = snapshotJson,
+            TransferDays = 0m,                             // R4 godtgørelse-only row shape.
+            PayoutDays = partition.PayoutDays,             // the §15 stk.2/§17 godtgørelse day-count.
+            ForfeitDays = 0m,                              // R4: NO §34 — særlige feriedage are never forfeited.
+            Version = 1,
+        };
+
+        var actorId = $"system:settlement-close:{YearEndTrigger}";
+        const string actorRole = "System";
+
+        VacationSettlementRow persisted;
+        try
+        {
+            persisted = await _settlementRepo.InsertAsync(conn, tx, row, snapshotJson, actorId, actorRole, ct);
+        }
+        catch (DuplicateActiveSettlementException)
+        {
+            // The single-settle backstop fired between the in-lock re-check and the INSERT (a concurrent
+            // poller committed first). Swallow benignly — exactly one settlement stands (mirrors the
+            // YEAR_END path). The winner re-read must never fabricate an outcome from the unpersisted row.
+            _logger.LogInformation(
+                "SPECIAL_HOLIDAY settlement no-op: 23505 single-settle backstop for {EmployeeId}/{Type}/{Year}.",
+                employeeId, entitlementType, entitlementYear);
+            var winner = await _settlementRepo.GetActiveAsync(conn, tx, employeeId, entitlementType, entitlementYear, ct);
+            return winner is not null
+                ? SettlementOutcome.AlreadySettled(winner)
+                : throw new InvalidOperationException(
+                    $"SPECIAL_HOLIDAY settlement: 23505 single-active collision for {employeeId}/{entitlementType}/" +
+                    $"{entitlementYear}, but no active settlement row is visible on re-read — refusing to " +
+                    "fabricate an AlreadySettled outcome from the unpersisted candidate row.");
+        }
+
+        // NO carryover write (SPECIAL_HOLIDAY has no §15 stk.1 carryover; R4). Emit the godtgørelse
+        // event (R8) — the §15 stk.2/§17 payout day-count off the IMMUTABLE snapshot — + its ADR-026
+        // audit projection in the ONE caller tx.
+        var streamId = $"employee-{employeeId}";
+        var auditTargetOrgId = user.PrimaryOrgId;
+        var godtgoerelseEvent = new SaerligeFeriedagePaidOut
+        {
+            EmployeeId = employeeId,
+            EntitlementType = entitlementType,
+            EntitlementYear = entitlementYear,
+            Sequence = 1,
+            Snapshot = snapshot,
+            PayoutDays = partition.PayoutDays,
+            ActorId = actorId,
+            ActorRole = actorRole,
+        };
+        await EmitAsync(conn, tx, streamId, godtgoerelseEvent, actorId, auditTargetOrgId, auditTargetOrgId, ct);
+
+        _logger.LogInformation(
+            "SPECIAL_HOLIDAY settlement SETTLED (§15 stk.2/§17 godtgørelse) for {EmployeeId}/{Type}/{Year}: " +
+            "earned={Earned} used={Used} planned={Planned} → godtgørelse payout_days={Payout} " +
+            "(boundary {Boundary}).",
+            employeeId, entitlementType, entitlementYear, earned, used, planned,
+            partition.PayoutDays, period.Boundary);
+
+        return SettlementOutcome.Settled(persisted, partition);
+    }
+
+    /// <summary>
+    /// SPRINT-80 R4 — the SPECIAL_HOLIDAY §15 stk.2/§17 godtgørelse partition. PURE function of the
+    /// captured snapshot (ADR-033 D3 quantity-determinism; replay-stable). The unused remainder is the
+    /// disposable balance — <c>max(0, Earned + CarryoverIn − Used − Planned)</c> (CarryoverIn is 0 for
+    /// SPECIAL_HOLIDAY) — and ALL of it is the godtgørelse <c>PayoutDays</c>. There is NO over-cap, NO
+    /// §34 forfeiture, NO §21 transfer: <see cref="SettlementPartition.TransferDays"/> and
+    /// <see cref="SettlementPartition.ForfeitDays"/> are ALWAYS 0 (the deliberate divergence from the
+    /// VACATION <see cref="Partition"/>, whose <c>overCap = disposable − CarryoverMax</c> with
+    /// CarryoverMax=0 would forfeit the whole balance — the compliance bug R4 forbids). Day-count only
+    /// (NUMERIC(6,2) precision, ToEven — the D9 convention); money-free (SLS owns the 2½%; R11).
+    /// </summary>
+    internal static SettlementPartition PartitionSpecialHoliday(VacationSettlementSnapshot s)
+    {
+        var remainder = Math.Max(0m, s.Earned + s.CarryoverIn - s.Used - s.Planned);
+        var payout = Round2(remainder);
+        return new SettlementPartition(
+            Disposable: payout,
+            UnderCap: payout,   // the whole disposable is "under cap" in the godtgørelse-only sense (no §34 ceiling).
+            OverCap: 0m,        // NEVER an over-cap remainder (R4 — særlige feriedage are not §34-forfeited).
+            TransferDays: 0m,   // no §21 transfer.
+            PayoutDays: payout, // ALL of it → the §15 stk.2/§17 godtgørelse.
+            ForfeitDays: 0m);   // no §34 forfeiture.
+    }
+
     /// <summary>
     /// SPRINT-70 R7b — the TERMINATION-vs-active-YEAR_END conflict refusal (the in-tx race
     /// backstop behind the R3 any-trigger due-enumeration anti-join). Emits the durable loud
@@ -843,14 +1071,20 @@ public sealed class VacationSettlementService
     /// FORFEIT/DEFER resolve are the operator's channels there).
     /// </summary>
     public static bool IsYearEndSupersedeDueUnderLock(
-        bool isActive, DateOnly? employmentEndDate, int entitlementYear, int resetMonth,
+        string entitlementType, bool isActive, DateOnly? employmentEndDate, int entitlementYear, int resetMonth,
         DateOnly? supersedeGoLiveFloor, DateOnly copenhagenToday)
     {
         if (!isActive) return false;                                             // (1) ACTIVE branch only
         if (employmentEndDate is { } endDate && endDate < copenhagenToday)
             return false;                                                        // (2) leak-proofing: passed-end-date leaver
-        var ferieaarEnd = new DateOnly(entitlementYear, resetMonth, 1).AddYears(1).AddDays(-1);
-        var boundary = new DateOnly(ferieaarEnd.Year, 12, 31);                   // §21 31-Dec deadline (IsBoundaryPassed geometry)
+        // S80 / TASK-8002 (8001 Step-5a WARNING) — the boundary now comes from the shared
+        // EntitlementPeriodResolver, type-aware. VACATION reset_month 9 ⇒ 31 Dec E+1 (BEHAVIOR-IDENTICAL
+        // to the prior inline `new DateOnly(entitlementYear, resetMonth, 1).AddYears(1).AddDays(-1)` →
+        // 31-Dec-of-end-year derivation). The leftover inline `Month>=resetMonth`-shaped geometry would
+        // mis-handle SPECIAL_HOLIDAY supersession (30 Apr Y+2, not 31 Dec) now that 8002 introduces
+        // SPECIAL_HOLIDAY settlements — routing through the resolver type-guards it correctly.
+        var boundary = EntitlementPeriodResolver
+            .ResolveForYear(entitlementType, resetMonth, entitlementYear).Boundary;
         if (supersedeGoLiveFloor is { } floor && boundary <= floor)
             return false;                                                        // (3) D13 pre-go-live boundary ⇒ manual fallback
         return copenhagenToday > boundary;                                       // (4) boundary passed
@@ -898,6 +1132,23 @@ public sealed class VacationSettlementService
                 $"Vacation settlement supersession: employee {employeeId} not found.");
         var today = CopenhagenToday();
 
+        // S80 Step-5a BLOCKER-2 — SPECIAL_HOLIDAY supersession is OUT OF SCOPE for 8002. Routing it to
+        // SettleActiveYearEndAsync (the YEAR_END supersede branch below) would hit the shared §34
+        // Partition (CarryoverMax=0 → forfeit/PENDING_REVIEW), the R4-forbidden path; there is no
+        // dedicated SPECIAL_HOLIDAY supersede-at-sequence path yet. Fail-closed: the reversal service
+        // performs the R4 full rollback (the operator's alternative is the bare reversal verb). This is
+        // unreachable today — the SPECIAL_HOLIDAY close is R5-gated DORMANT, so no SPECIAL_HOLIDAY
+        // settlement exists to reverse+supersede — and is a recorded follow-up.
+        if (string.Equals(entitlementType, SpecialHolidayType, StringComparison.Ordinal))
+        {
+            _logger.LogDebug(
+                "Vacation settlement supersession NotDue (SPECIAL_HOLIDAY) for {EmployeeId}/{Year}: " +
+                "SPECIAL_HOLIDAY supersession is a deferred non-goal (S80 Step-5a BLOCKER-2); the " +
+                "reversal service performs the R4 full rollback.",
+                employeeId, entitlementYear);
+            return SettlementOutcome.NotDueUnderLock();
+        }
+
         // (a) supersede-as-TERMINATION — ALL clauses incl. the go-live floor (SPRINT-71 R4).
         if (IsTerminationDueUnderLock(
                 user.IsActive, user.EmploymentEndDate, entitlementYear, supersedeGoLiveFloor, today))
@@ -914,7 +1165,7 @@ public sealed class VacationSettlementService
             entitlementType, user.AgreementCode, user.OkVersion, ct);
         if (liveConfig is not null
             && IsYearEndSupersedeDueUnderLock(
-                user.IsActive, user.EmploymentEndDate, entitlementYear,
+                entitlementType, user.IsActive, user.EmploymentEndDate, entitlementYear,
                 liveConfig.ResetMonth, supersedeGoLiveFloor, today))
         {
             return await SettleActiveYearEndAsync(
@@ -1109,21 +1360,23 @@ public sealed class VacationSettlementService
         }
         var resetMonth = liveConfig.ResetMonth;
 
-        // The closed ferieår [start, end] for the settled entitlementYear. reset_month==1 → calendar
-        // year (Jan 1 .. Dec 31 of entitlementYear); else → the reset_month-based ferieår whose YEAR
-        // is entitlementYear (e.g. VACATION reset_month 9 → Sep 1 (entitlementYear) .. Aug 31 (year+1)).
-        DateOnly closedFerieaarStart;
-        DateOnly boundaryDate;
-        if (resetMonth == 1)
-        {
-            closedFerieaarStart = new DateOnly(entitlementYear, 1, 1);
-            boundaryDate = new DateOnly(entitlementYear, 12, 31);
-        }
-        else
-        {
-            closedFerieaarStart = new DateOnly(entitlementYear, resetMonth, 1);
-            boundaryDate = closedFerieaarStart.AddYears(1).AddDays(-1);
-        }
+        // S80 / TASK-8001 (R10) — the closed accrual-window START for the settled entitlementYear now
+        // comes from the shared EntitlementPeriodResolver (BEHAVIOR-IDENTICAL for VACATION: reset_month
+        // 9 ⇒ Sep 1 E; reset_month 1 ⇒ Jan 1 E; SPECIAL_HOLIDAY ⇒ Jan 1 E when TASK-8002 settles it).
+        //
+        // The VALUATION boundary (boundaryDate) is DELIBERATELY the ferieår END date — 31 Aug for
+        // VACATION reset_month 9; 31 Dec E for reset_month 1 — NOT the resolver's Boundary (the §21
+        // 31-Dec DEADLINE used by IsBoundaryPassed for due-detection). These are two distinct concepts
+        // for VACATION: this date is the AccrualMath.EarnedToDate asOf AND the STORED
+        // SettlementBoundaryDate snapshot field (the S69 W1 anchor; the §24 wage-mapping asOf). Keeping
+        // it the ferieår END preserves the snapshot byte-for-byte (the hard VACATION-unchanged
+        // invariant). TASK-8002 supplies SPECIAL_HOLIDAY's own valuation boundary (30 Apr E+2) when it
+        // wires the SPECIAL_HOLIDAY settle path — that is OUT of this task's scope.
+        var closedFerieaarStart = EntitlementPeriodResolver
+            .ResolveForYear(entitlementType, resetMonth, entitlementYear).AccrualStart;
+        DateOnly boundaryDate = resetMonth == 1
+            ? new DateOnly(entitlementYear, 12, 31)
+            : closedFerieaarStart.AddYears(1).AddDays(-1);
 
         // S70 / TASK-7004 (SPRINT-70 R5) — the VALUATION boundary. YEAR_END values at the ferieår
         // end (unchanged); a TERMINATION values at the employment END DATE (whole-month §26 basis,

@@ -588,9 +588,12 @@ public sealed class YearOverviewTests : IAsyncLifetime
     /// boundary remainder is positive now reports that FULL remainder as expiring (SPECIAL_HOLIDAY
     /// → godtgørelse-bound; CARE_DAY → lapsing).
     /// <list type="bullet">
-    ///   <item><description><b>SPECIAL_HOLIDAY</b> (quota 5, MONTHLY_ACCRUAL, resetMonth 9,
-    ///   carryoverMax 0): closed boundary ferieår = 2024, boundary 2025-08-31, earnedAtBoundary =
-    ///   full 12 months = 5; raw = 5 − 0 = 5; expiring = max(0, 5 − 0) = <b>5</b>.</description></item>
+    ///   <item><description><b>SPECIAL_HOLIDAY</b> (quota 5, MONTHLY_ACCRUAL, S80/D11 CALENDAR
+    ///   accrual): for the selected year 2025 the closed accrual year whose 30-Apr boundary falls in
+    ///   2025 is 2023 (boundary 2025-04-30), accrual start 2023-01-01, earnedAtBoundary = full 12
+    ///   months = 5; raw = 5 − 0 = 5; expiring = max(0, 5 − 0) = <b>5</b>. (The expiring VALUE is
+    ///   boundary-date-invariant: EarnedToDate clamps at 12 months, so the D11 geometry change keeps
+    ///   the value 5; only the closed accrual year + boundary date move.)</description></item>
     ///   <item><description><b>CARE_DAY</b> (quota 2, IMMEDIATE, resetMonth 1, carryoverMax 0):
     ///   closed boundary ferieår = 2025 (calendar), IMMEDIATE ⇒ earnedAtBoundary = full quota = 2;
     ///   raw = 2 − 0 = 2; expiring = max(0, 2 − 0) = <b>2</b>.</description></item>
@@ -610,9 +613,12 @@ public sealed class YearOverviewTests : IAsyncLifetime
         // (converts to the 2½% godtgørelse). raw = 5 > cap 0 ⇒ expiring = 5 EXACTLY.
         var shExpiring = GetCategory(body, "SPECIAL_HOLIDAY")
             .GetProperty("expiring").GetDecimal();
+        // S80 / TASK-8001 (D11): SPECIAL_HOLIDAY's closed accrual year for selected-year 2025 is 2023
+        // (calendar accrual, boundary 30 Apr 2025). The expiring VALUE is unchanged (5) because
+        // EarnedToDate clamps at 12 months — the geometry change moves the dates, not the value.
         var expectedSh = ExpectedExpiring(
-            annualQuota: 5m, closedFerieaarStart: new DateOnly(2024, 9, 1), employmentStart: null,
-            boundaryDate: new DateOnly(2025, 8, 31),
+            annualQuota: 5m, closedFerieaarStart: new DateOnly(2023, 1, 1), employmentStart: null,
+            boundaryDate: new DateOnly(2025, 4, 30),
             carryoverIn: 0m, used: 0m, planned: 0m, carryoverMax: 0m);
         Assert.Equal(5m, expectedSh);            // sanity: full quota expires past the 0 cap
         Assert.Equal(expectedSh, shExpiring);    // endpoint reports the full beyond-cap remainder
@@ -713,6 +719,121 @@ public sealed class YearOverviewTests : IAsyncLifetime
             carryoverIn: 0m, used: 0m, planned: 0m, carryoverMax: 5m);
         Assert.Equal(20m, expected);         // sanity: 25 − 5 = 20 expires beyond the cap
         Assert.Equal(expected, expiring);    // endpoint reports the exact beyond-cap remainder
+    }
+
+    /// <summary>
+    /// <b>S80 / TASK-8001 (BLOCKER 1) — the mid-ferieår-hire VACATION earned-at-boundary MUST use the
+    /// ACCRUAL-window END (31 Aug), NOT the §21 31-Dec settlement boundary.</b>
+    ///
+    /// <para>This is the discriminating regression for the BLOCKER-1 fix. A VACATION employee hired
+    /// MID-ferieår (1 Jan 2025; ferieår 2024 = Sep 2024 – Aug 2025) accrues from
+    /// <c>max(ferieaarStart, employmentStart) = 1 Jan 2025</c>. The earned-at-boundary projection that
+    /// feeds <c>expiring</c> reads <see cref="AccrualMath.EarnedToDate"/> at the closed ferieår's
+    /// model boundary:</para>
+    /// <list type="bullet">
+    ///   <item><description><b>CORRECT (post-fix, AccrualEnd = 31 Aug 2025):</b> months elapsed Jan→Aug
+    ///   = 8 ⇒ earned = 25 × 8/12 ≈ 16,67. expiring = max(0, 16,67 − cap 5) = <b>11,67</b>.</description></item>
+    ///   <item><description><b>WRONG (pre-fix, Boundary = 31 Dec 2025):</b> EarnedToDate clamps elapsed
+    ///   months at 12 (Jan→Dec = 12) ⇒ earned = full 25. expiring = max(0, 25 − 5) = <b>20</b> — the
+    ///   over-count.</description></item>
+    /// </list>
+    /// <para>The two predictions DIFFER (11,67 ≠ 20), so this test is RED on the pre-fix
+    /// <c>boundaryDate = closedPeriod.Boundary</c> code (commit 2ddd6b5) and GREEN on the
+    /// <c>closedPeriod.AccrualEnd</c> fix. A full-ferieår employee (null employment start) would yield
+    /// 12 months at BOTH dates — which is exactly why every existing expiring test (all
+    /// <c>employmentStart: null</c>) was blind to this regression (the 398/398 coverage gap).</para>
+    /// </summary>
+    [Fact]
+    public async Task Expiring_MidFerieaarHireVacation_UsesAccrualEnd_NotSettlementBoundary()
+    {
+        var employeeId = await CreateEmployeeAsync(Emp001OrgId, "AC", "OK24");
+        await RegressionSeed.SeedEmployeeAsync(
+            _harness.ConnectionString, employeeId, Emp001OrgId, "AC", "OK24");
+
+        // Mid-ferieår hire: 1 Jan 2025 falls INSIDE ferieår 2024 (Sep 2024 – Aug 2025). Accrual
+        // begins at max(2024-09-01, 2025-01-01) = 2025-01-01 ⇒ 8 months earned by the 31-Aug-2025
+        // accrual end, 12 (clamped) by the 31-Dec-2025 §21 boundary.
+        await SetEmploymentStartDateAsync(employeeId, new DateOnly(2025, 1, 1));
+
+        // Closed boundary ferieår for selected year 2025 = ferieår 2024 → entitlement_year 2024.
+        // All-zero operands so raw = earnedAtBoundary; carryoverMax = 5 (the VACATION config).
+        await SeedEntitlementBalanceAsync(
+            employeeId, "VACATION", entitlementYear: 2024, used: 0m, planned: 0m, carryoverIn: 0m);
+
+        var client = MakeFixedTodayClient(EmployeeBearerToken(employeeId, Emp001OrgId));
+        var body = await GetYearOverviewAsync(client, employeeId, 2025);
+
+        var expiring = GetCategory(body, "VACATION").GetProperty("expiring").GetDecimal();
+
+        // CORRECT (post-fix): earned at the ACCRUAL END (31 Aug 2025) = 25 × 8/12; expiring = that − 5.
+        var expectedCorrect = ExpectedExpiring(
+            annualQuota: 25m, closedFerieaarStart: new DateOnly(2024, 9, 1),
+            employmentStart: new DateOnly(2025, 1, 1),
+            boundaryDate: new DateOnly(2025, 8, 31),   // AccrualEnd, NOT the 31-Dec §21 Boundary
+            carryoverIn: 0m, used: 0m, planned: 0m, carryoverMax: 5m);
+
+        // WRONG (pre-fix): earned at the §21 31-Dec-2025 Boundary clamps to the full 12 months = 25.
+        var wrongAtSettlementBoundary = ExpectedExpiring(
+            annualQuota: 25m, closedFerieaarStart: new DateOnly(2024, 9, 1),
+            employmentStart: new DateOnly(2025, 1, 1),
+            boundaryDate: new DateOnly(2025, 12, 31),  // the pre-fix asOf — over-counts
+            carryoverIn: 0m, used: 0m, planned: 0m, carryoverMax: 5m);
+
+        Assert.Equal(Math.Round(25m * 8 / 12m - 5m, 2), expectedCorrect); // sanity: 8/12 − cap = 11,67
+        Assert.Equal(20m, wrongAtSettlementBoundary);                     // sanity: the pre-fix 25 − 5
+        Assert.NotEqual(expectedCorrect, wrongAtSettlementBoundary);      // the two paths DIVERGE
+        Assert.Equal(expectedCorrect, expiring);                         // endpoint uses AccrualEnd
+    }
+
+    /// <summary>
+    /// <b>S80 / TASK-8001 (BLOCKER 2) — the SPECIAL_HOLIDAY saldo subtracts afholdt keyed to the
+    /// RESOLVED accrual year (its taking window), NOT a raw date range anchored at the accrual
+    /// start.</b>
+    ///
+    /// <para>A single SPECIAL_HOLIDAY booking on 4 Mar 2025 belongs to accrual year 2023 (Jan–Apr T →
+    /// accrual T−2; its taking window is 1 May 2024 – 30 Apr 2025). The year-overview saldo matrix for
+    /// the selected year 2025 renders DIFFERENT accrual years in different months (the taking-window
+    /// mapping): the Nov-2025 slot is accrual year 2024 (May–Dec T → T−1), the Mar-2025 slot is accrual
+    /// year 2023 (Jan–Apr T → T−2). So the SAME response pins both halves:</para>
+    /// <list type="bullet">
+    ///   <item><description><b>Nov 2025 (accrual 2024):</b> the Mar-2025 booking must NOT reduce it
+    ///   (it is a 2023 booking). Post-fix afholdt window = [TakingStart 1 May 2025, 30 Nov 2025] EXCLUDES
+    ///   4 Mar 2025 ⇒ saldo = earned 5 − 0 = <b>5</b>. PRE-FIX the window was [AccrualStart 1 Jan 2024,
+    ///   30 Nov 2025], which WRONGLY includes 4 Mar 2025 ⇒ saldo = 5 − 1 = <b>4</b> (the split-brain).
+    ///   This slot is the discriminator: RED (4) on commit 2ddd6b5, GREEN (5) on the fix.</description></item>
+    ///   <item><description><b>Mar 2025 (accrual 2023):</b> the Mar-2025 booking DOES reduce it. Post-fix
+    ///   window = [TakingStart 1 May 2024, 31 Mar 2025] INCLUDES 4 Mar 2025 ⇒ saldo = 5 − 1 = <b>4</b>.
+    ///   (This holds pre- and post-fix; it pins that the booking is correctly attributed to 2023.)</description></item>
+    /// </list>
+    /// <para>No SPECIAL_HOLIDAY balance row is seeded ⇒ carryoverIn = 0; quota 5, carryoverMax 0
+    /// (the DefaultEntitlementConfigs SPECIAL_HOLIDAY config). The booking is recorded as 1,0 feriedage
+    /// (a full-timer 7,4h day, ADR-032 D1 norm-based).</para>
+    /// </summary>
+    [Fact]
+    public async Task SpecialHolidaySaldo_BookingKeyedToResolvedAccrualYear_NotRawDateRange()
+    {
+        var employeeId = await CreateEmployeeAsync(Emp001OrgId, "AC", "OK24");
+        await RegressionSeed.SeedEmployeeAsync(
+            _harness.ConnectionString, employeeId, Emp001OrgId, "AC", "OK24");
+
+        // One SPECIAL_HOLIDAY booking on 4 Mar 2025 ⇒ accrual year 2023 (Jan–Apr 2025 → T−2),
+        // taking window 1 May 2024 – 30 Apr 2025. The absence_type SPECIAL_HOLIDAY_ALLOWANCE maps to
+        // entitlement type SPECIAL_HOLIDAY (EntitlementMapping). 7,4h ⇒ 1,0 feriedage (full-timer day).
+        await SeedAbsenceProjectionRowAsync(
+            employeeId, new DateOnly(2025, 3, 4), "SPECIAL_HOLIDAY_ALLOWANCE", hours: 7.4m, feriedage: 1.0m);
+
+        var client = MakeFixedTodayClient(EmployeeBearerToken(employeeId, Emp001OrgId));
+        var body = await GetYearOverviewAsync(client, employeeId, 2025);
+
+        var saldo = GetCategory(body, "SPECIAL_HOLIDAY")
+            .GetProperty("saldo").EnumerateArray().ToList();
+
+        // index 10 = November 2025 ⇒ accrual year 2024. The Mar-2025 (accrual-2023) booking must NOT
+        // reduce it. Post-fix: 5. Pre-fix split-brain: 4 (the date-range subtraction double-counts it).
+        Assert.Equal(5m, saldo[10].GetDecimal());
+
+        // index 2 = March 2025 ⇒ accrual year 2023. The Mar-2025 booking DOES reduce it ⇒ 5 − 1 = 4.
+        Assert.Equal(4m, saldo[2].GetDecimal());
     }
 
     /// <summary>
@@ -1860,6 +1981,24 @@ public sealed class YearOverviewTests : IAsyncLifetime
         cmd.Parameters.AddWithValue("used", used);
         cmd.Parameters.AddWithValue("planned", planned);
         cmd.Parameters.AddWithValue("carryover", carryoverIn);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    /// <summary>
+    /// Sets <c>users.employment_start_date</c> (the HR-managed hire date the accrual seams thread as
+    /// <c>employmentStart</c> into <see cref="AccrualMath.EarnedToDate"/>). Used by the mid-ferieår-hire
+    /// BLOCKER-1 test to drive a partial-year accrual where the accrual-window end (31 Aug) and the §21
+    /// 31-Dec settlement boundary yield DIFFERENT earned-at-boundary values. Citation:
+    /// <c>users.employment_start_date</c> column at init.sql:2656 (S60/ADR-030, NULLABLE DATE).
+    /// </summary>
+    private async Task SetEmploymentStartDateAsync(string employeeId, DateOnly employmentStart)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "UPDATE users SET employment_start_date = @d WHERE user_id = @u", conn);
+        cmd.Parameters.AddWithValue("d", employmentStart);
+        cmd.Parameters.AddWithValue("u", employeeId);
         await cmd.ExecuteNonQueryAsync();
     }
 

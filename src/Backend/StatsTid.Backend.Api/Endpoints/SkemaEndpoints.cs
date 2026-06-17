@@ -89,31 +89,12 @@ public static class SkemaEndpoints
         return age;
     }
 
-    /// <summary>
-    /// Resolve the entitlement year for a given date based on the reset month.
-    /// If resetMonth is 9 (ferieår) and date is September+, year = date.Year; else year = date.Year - 1.
-    /// </summary>
-    private static int ResolveEntitlementYear(DateOnly date, int resetMonth)
-    {
-        return date.Month >= resetMonth ? date.Year : date.Year - 1;
-    }
-
-    /// <summary>
-    /// S30 / TASK-3008 — derive the entitlement-year START DATE for a given relevant date
-    /// and reset month. Used as the <c>asOfDate</c> for dated reads against
-    /// <see cref="EntitlementConfigRepository.GetByTypeAtAsync(string, string, string, DateOnly, CancellationToken)"/>
-    /// (two-step pattern: live <c>ResetMonth</c> read first, then dated re-read at year-start).
-    /// resetMonth is 1-12. The entitlement year starts on (resetMonth, 1) of either the relevantDate's
-    /// calendar year (when month &gt;= resetMonth) or the prior calendar year (when month &lt; resetMonth).
-    /// E.g. AC VACATION resetMonth=9, relevantDate=2026-05-14 → year-start = 2025-09-01.
-    /// </summary>
-    private static DateOnly ResolveEntitlementYearStart(DateOnly relevantDate, int resetMonth)
-    {
-        var year = relevantDate.Month >= resetMonth
-            ? relevantDate.Year
-            : relevantDate.Year - 1;
-        return new DateOnly(year, resetMonth, 1);
-    }
+    // S80 / TASK-8001 (R10) — the Backend-local ResolveEntitlementYear / ResolveEntitlementYearStart
+    // helpers were removed. The entitlement (accrual) year + its accrual-window start now come from the
+    // single shared StatsTid.SharedKernel.Calendar.EntitlementPeriodResolver (already imported via the
+    // `using StatsTid.SharedKernel.Calendar;` above), which expresses the SPECIAL_HOLIDAY third geometry
+    // (calendar accrual + 1 May–30 Apr taking window) the raw reset_month branches could not. VACATION +
+    // every other type stay BEHAVIOR-IDENTICAL (the "Month ≥ reset_month" keying lives in the resolver).
 
     // ── S60 / TASK-6005 — monthly-accrual model constant ──
 
@@ -1092,8 +1073,17 @@ public static class SkemaEndpoints
                         .Where(a => AbsenceToEntitlementType.TryGetValue(a.AbsenceType, out var et) && et == entitlementType)
                         .Select(a => a.Date)
                         .Min();
-                    var entitlementYear = ResolveEntitlementYear(firstAbsenceDate, liveConfig.ResetMonth);
-                    var entitlementYearStart = ResolveEntitlementYearStart(firstAbsenceDate, liveConfig.ResetMonth);
+                    // S80 / TASK-8001 (R2/R10) — the entitlement (accrual) year + its accrual-window
+                    // start now come from the SHARED EntitlementPeriodResolver. VACATION + every other
+                    // type are BEHAVIOR-IDENTICAL to the old ResolveEntitlementYear/Start (the
+                    // "Month ≥ reset_month" ferieår keying). SPECIAL_HOLIDAY uses the two-calendar-year
+                    // taking-window mapping (1 May Y+1 .. 30 Apr Y+2): a May–Dec booking keys to accrual
+                    // year T−1, a Jan–Apr booking to T−2 — and accrual is anchored to 1 Jan (R1), so the
+                    // EarnedToDate ferieaarStart below is the resolver's AccrualStart, NOT reset_month/1.
+                    var entPeriod = EntitlementPeriodResolver.Resolve(
+                        entitlementType, liveConfig.ResetMonth, firstAbsenceDate);
+                    var entitlementYear = entPeriod.EntitlementYear;
+                    var entitlementYearStart = entPeriod.AccrualStart;
 
                     // Step 2: dated read at the entitlement-year-start. This is the config row that
                     // was IN EFFECT on the day the current entitlement year started — what quota

@@ -239,6 +239,10 @@ builder.Services.AddSingleton<IAuditProjectionMapper<VacationForfeitedToFeriefon
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(VacationForfeitedToFeriefond), nameof(VacationForfeitedToFeriefond)));
 builder.Services.AddSingleton<IAuditProjectionMapper<SettlementManualReviewFlagged>, StatsTid.Infrastructure.AuditMappers.SettlementManualReviewFlaggedAuditMapper>();
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(SettlementManualReviewFlagged), nameof(SettlementManualReviewFlagged)));
+// S80 ADR-033 slice 2 — særlige-feriedage §15 stk.2/§17 godtgørelse audit mapper (Infrastructure-located,
+// cross-process; SaerligeFeriedagePaidOut from the SPECIAL_HOLIDAY godtgørelse close — SPRINT-80 R8).
+builder.Services.AddSingleton<IAuditProjectionMapper<SaerligeFeriedagePaidOut>, StatsTid.Infrastructure.AuditMappers.SaerligeFeriedagePaidOutAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(SaerligeFeriedagePaidOut), nameof(SaerligeFeriedagePaidOut)));
 // S70 ADR-033 slice 3a — termination-foundation audit mappers (Infrastructure-located, cross-process;
 // EmployeeEmploymentEndDateSet from the admin end-date endpoint, EmployeeEndDateDeactivationApplied from
 // the SettlementCloseService Step-A flip, TerminationSettled from the settlement pass — SPRINT-70 R10)

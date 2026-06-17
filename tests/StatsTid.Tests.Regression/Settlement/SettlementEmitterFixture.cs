@@ -61,6 +61,13 @@ internal static class SettlementEmitterFixture
     public const string TerminationSentinelWageType = "SLS_TBD_S26";
     public const string EventLevelBucket = "_EVENT";
 
+    // S80 / TASK-8003 — §15 stk.2/§17 særlige-feriedage godtgørelse consumer axes (SPRINT-80 R7).
+    public const string SpecialHolidayType = "SPECIAL_HOLIDAY";
+    public const string GodtgoerelseBucket = "GODTGOERELSE_S15S17";
+    public const string GodtgoerelseTimeType = "SPECIAL_HOLIDAY_SETTLEMENT_PAYOUT";
+    public const string GodtgoerelseSentinelWageType = "SLS_TBD_S15S17";
+    public const string SpecialHolidayConsumptionWageType = "SLS_0570"; // the CONSUMPTION lønart — must NOT be the godtgørelse line.
+
     /// <summary>The synthetic settlement-boundary date written into the D-tests' snapshots and used as
     /// the emitter's dated-mapping <c>asOf</c>. A fixed, freely-chosen value — NOT the production
     /// reset-9 ferieår-end (a real VACATION reset_month-9 ferieår 2024 ends Aug 31 2025, per
@@ -396,6 +403,51 @@ internal static class SettlementEmitterFixture
         return eventId;
     }
 
+    /// <summary>
+    /// Writes a <c>SaerligeFeriedagePaidOut</c> (§15 stk.2/§17 godtgørelse, S80 R7) to the canonical
+    /// <c>events</c> table via the production <see cref="PostgresEventStore.AppendAsync"/> (the
+    /// godtgørelse consumer's source). EntitlementType = SPECIAL_HOLIDAY; the snapshot's
+    /// <c>agreementCode</c>/<c>okVersion</c>/<c>position</c>/<c>settlementBoundaryDate</c> are the
+    /// wage-mapping key the consumer resolves off; <c>payoutDays</c> is what it stages as the line's
+    /// <c>hours</c>. Returns the <c>event_id</c>.
+    /// </summary>
+    public static async Task<Guid> WriteSaerligeFeriedagePaidOutEventAsync(
+        DbConnectionFactory factory, string employeeId, decimal payoutDays,
+        string? agreementCode = "AC", string? okVersion = "OK24", string? position = null,
+        DateOnly? boundaryDate = null, int year = 2022, int sequence = 1)
+    {
+        var snapshot = new VacationSettlementSnapshot
+        {
+            Earned = 5m,
+            Used = 5m - payoutDays,
+            Planned = 0m,
+            CarryoverIn = 0m,
+            AnnualQuota = 5m,
+            CarryoverMax = 0m,
+            ResetMonth = 1,
+            OkVersion = okVersion,
+            AgreementCode = agreementCode,
+            Position = position,
+            SettlementBoundaryDate = boundaryDate ?? BoundaryDate,
+            TransferAgreementDays = 0m,
+            IsFeriehindret = false,
+        };
+        var eventId = Guid.NewGuid();
+        var @event = new SaerligeFeriedagePaidOut
+        {
+            EventId = eventId,
+            EmployeeId = employeeId,
+            EntitlementType = SpecialHolidayType,
+            EntitlementYear = year,
+            Sequence = sequence,
+            Snapshot = snapshot,
+            PayoutDays = payoutDays,
+        };
+        var store = new PostgresEventStore(factory);
+        await store.AppendAsync($"employee-{employeeId}", @event);
+        return eventId;
+    }
+
     /// <summary>Writes a <c>SettlementReversed</c> (R10 shape) to the canonical <c>events</c> table
     /// via the production <see cref="PostgresEventStore.AppendAsync"/> (the reversal consumer's source).</summary>
     public static async Task<Guid> WriteSettlementReversedEventAsync(
@@ -556,10 +608,10 @@ internal static class SettlementEmitterFixture
     }
 
     /// <summary>Counts the staged lines for the employee's settlement bucket (default the §24
-    /// bucket at sequence 1 — the S69 call shape; S71 callers pass other buckets/sequences).</summary>
+    /// bucket at sequence 1 — the S69 call shape; S71/S80 callers pass other buckets/sequences/types).</summary>
     public static async Task<long> LineCountAsync(
         string connectionString, string employeeId, int year = 2024, int sequence = 1,
-        string bucket = AutoPayoutBucket)
+        string bucket = AutoPayoutBucket, string entitlementType = VacationType)
     {
         await using var conn = new NpgsqlConnection(connectionString);
         await conn.OpenAsync();
@@ -570,7 +622,7 @@ internal static class SettlementEmitterFixture
               AND sequence = @seq AND bucket = @b
             """, conn);
         cmd.Parameters.AddWithValue("e", employeeId);
-        cmd.Parameters.AddWithValue("t", VacationType);
+        cmd.Parameters.AddWithValue("t", entitlementType);
         cmd.Parameters.AddWithValue("y", year);
         cmd.Parameters.AddWithValue("seq", sequence);
         cmd.Parameters.AddWithValue("b", bucket);
@@ -593,7 +645,7 @@ internal static class SettlementEmitterFixture
     /// wage-key columns + the S71 R8 reversal-shape columns the assertions check.</summary>
     public static async Task<StagedLine?> ReadLineAsync(
         string connectionString, string employeeId, int year = 2024, int sequence = 1,
-        string bucket = AutoPayoutBucket)
+        string bucket = AutoPayoutBucket, string entitlementType = VacationType)
     {
         await using var conn = new NpgsqlConnection(connectionString);
         await conn.OpenAsync();
@@ -606,7 +658,7 @@ internal static class SettlementEmitterFixture
               AND sequence = @seq AND bucket = @b
             """, conn);
         cmd.Parameters.AddWithValue("e", employeeId);
-        cmd.Parameters.AddWithValue("t", VacationType);
+        cmd.Parameters.AddWithValue("t", entitlementType);
         cmd.Parameters.AddWithValue("y", year);
         cmd.Parameters.AddWithValue("seq", sequence);
         cmd.Parameters.AddWithValue("b", bucket);

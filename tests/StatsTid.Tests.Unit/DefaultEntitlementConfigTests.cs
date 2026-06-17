@@ -77,17 +77,21 @@ public class DefaultEntitlementConfigTests
     [Theory]
     [InlineData("AC", "OK24")]
     [InlineData("HK", "OK26")]
-    public void SpecialHolidayConfigs_Have5Quota_September_NoCarryover(string agreement, string okVersion)
+    public void SpecialHolidayConfigs_Have5Quota_CalendarAccrual_NoCarryover(string agreement, string okVersion)
     {
         var configs = DefaultEntitlementConfigs.GetConfigsForAgreement(agreement, okVersion);
         var special = configs.Single(c => c.EntitlementType == "SPECIAL_HOLIDAY");
 
         Assert.Equal(5m, special.AnnualQuota);
-        Assert.Equal(9, special.ResetMonth);
+        // S80 / TASK-8001 (ADR-033 Slice 2, R1/R9 — D11 model correction): the DISCRIMINATING
+        // before/after pin. SPECIAL_HOLIDAY accrual is now the CALENDAR year (reset_month 1, Cirkulære
+        // 021-24 §12), NOT the mis-modeled Sep–Aug ferieår (reset_month 9). This assertion FAILS on the
+        // pre-S80 seed. The §12 stk.2 taking window + 30-Apr-(Y+2) boundary are layered by
+        // EntitlementPeriodResolver (see EntitlementPeriodResolverTests), not stored on the config.
+        Assert.Equal(1, special.ResetMonth);
         Assert.Equal(0m, special.CarryoverMax);
         // S63 / ADR-031: SPECIAL_HOLIDAY day-count is FLAT (fraction-independent) per Ferieloven §5
         // — same rationale as VACATION; the earned day-count never scales by the part-time fraction.
-        // Flipped True→False.
         Assert.False(special.ProRateByPartTime);
         Assert.False(special.IsPerEpisode);
     }

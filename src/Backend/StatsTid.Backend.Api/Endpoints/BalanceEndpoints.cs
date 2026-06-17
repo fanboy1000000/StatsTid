@@ -205,26 +205,25 @@ public static class BalanceEndpoints
 
             foreach (var live in liveConfigs)
             {
-                // Calculate entitlement year based on the live ResetMonth (immutable per natural key).
-                int entitlementYear;
-                if (live.ResetMonth == 1)
-                {
-                    entitlementYear = year;
-                }
-                else
-                {
-                    entitlementYear = month >= live.ResetMonth ? year : year - 1;
-                }
+                // S80 / TASK-8001 (R2/R10) — the entitlement (accrual) year + its accrual-window start
+                // now come from the SHARED EntitlementPeriodResolver, anchored at the requested month-end
+                // (the same as-of the earned-to-date computation below uses). VACATION + every other type
+                // are BEHAVIOR-IDENTICAL to the old inline keying (reset_month==1 → calendar year; else
+                // "Month ≥ reset_month"). SPECIAL_HOLIDAY uses the two-calendar-year taking-window mapping
+                // (1 May Y+1 .. 30 Apr Y+2) and a 1-Jan accrual anchor (R1), neither expressible by raw
+                // reset_month.
+                var period = EntitlementPeriodResolver.Resolve(live.EntitlementType, live.ResetMonth, monthEnd);
+                var entitlementYear = period.EntitlementYear;
 
                 // Step 2: dated read at the entitlement-year-start. This is the config row that
                 // was IN EFFECT when the current entitlement year started — its annual_quota /
                 // carryover_max define this year's quota for display. Per-type dated reads
                 // (not GetByAgreementAtAsync) because each type may resolve to a DIFFERENT
-                // asOfDate (different reset_month → different year-start).
+                // asOfDate (different reset_month / accrual geometry → different year-start).
                 // Fallback: if no row was effective at year-start (e.g. this OK version came
                 // into existence mid-year), fall back to the live row so the entitlement still
                 // appears in the summary with the current quota values.
-                var entitlementYearStart = new DateOnly(entitlementYear, live.ResetMonth, 1);
+                var entitlementYearStart = period.AccrualStart;
                 var ec = await entitlementConfigRepo.GetByTypeAtAsync(
                     live.EntitlementType, agreementCode, user.OkVersion, entitlementYearStart, ct)
                     ?? live;
@@ -486,22 +485,24 @@ public static class BalanceEndpoints
 
             var series = new List<object>();
 
+            // The as-of for the entitlement-year keying — the requested month's end (matches /summary).
+            var seriesAsOf = new DateOnly(year, month, DateTime.DaysInMonth(year, month));
+
             foreach (var live in liveConfigs)
             {
-                // Derive the entitlement year EXACTLY as /summary does (from the requested
-                // (year, month) relative to the immutable ResetMonth). VACATION/SPECIAL_HOLIDAY
-                // reset in September, so e.g. a request for 2025-10 resolves to ferieår 2025.
-                int entitlementYear;
-                if (live.ResetMonth == 1)
-                {
-                    entitlementYear = year;
-                }
-                else
-                {
-                    entitlementYear = month >= live.ResetMonth ? year : year - 1;
-                }
-
-                var ferieaarStart = new DateOnly(entitlementYear, live.ResetMonth, 1);
+                // S80 / TASK-8001 (R2/R10) — derive the entitlement (accrual) year + accrual-window
+                // start via the shared EntitlementPeriodResolver (same as /summary), anchored at the
+                // requested month-end. VACATION + every reset_month type are BEHAVIOR-IDENTICAL
+                // (reset_month==1 → calendar year; else "Month ≥ reset_month"). SPECIAL_HOLIDAY uses
+                // the calendar accrual (1 Jan) + two-calendar-year taking-window mapping: a query in
+                // the taking window resolves to the prior accrual year, and the 12-month curve below
+                // therefore renders that accrual year's Jan–Dec earning progression. (Consequence: for
+                // SPECIAL_HOLIDAY the isSelected month — in the TAKING window — may not coincide with
+                // any curve point, which lies in the ACCRUAL window; that is correct — the curve shows
+                // when the days were EARNED, the query is when you LOOK.)
+                var period = EntitlementPeriodResolver.Resolve(live.EntitlementType, live.ResetMonth, seriesAsOf);
+                var entitlementYear = period.EntitlementYear;
+                var ferieaarStart = period.AccrualStart;
 
                 // Dated config effective at the ferieår start defines this year's annual_quota.
                 // Fall back to the live row if no row was effective at year-start (e.g. this OK
@@ -936,9 +937,16 @@ public static class BalanceEndpoints
                     // afholdt[m] = day-equivalents mapped to this type within calendar month m.
                     afholdt[m - 1] = Math.Round(AfholdtWithin(type, monthStart, monthEnd), 2);
 
-                    // Entitlement year + its start for the ferieår containing month m.
-                    var entYear = ResolveEntitlementYear(monthStart, resetMonth);
-                    var ferieaarStart = new DateOnly(entYear, resetMonth, 1);
+                    // S80 / TASK-8001 (R2/R10) — the entitlement (accrual) year + accrual-window start
+                    // governing month m, via the SHARED EntitlementPeriodResolver (anchored at this
+                    // month's end). VACATION + every other type are BEHAVIOR-IDENTICAL to the old
+                    // ResolveEntitlementYear + (entYear, resetMonth, 1) ferieaarStart. SPECIAL_HOLIDAY
+                    // uses the two-calendar-year taking-window mapping + a 1-Jan accrual anchor, so a
+                    // calendar-year matrix shows the accrual-year balance being taken in its taking
+                    // window (the transition at 1 May matches the R2 booking keying).
+                    var period = EntitlementPeriodResolver.Resolve(type, resetMonth, monthEnd);
+                    var entYear = period.EntitlementYear;
+                    var ferieaarStart = period.AccrualStart;
 
                     // Config dated at the entitlement-year START (ADR-021 D2, same as /summary):
                     // OK resolved at the year-start, AND the agreement code resolved at the
@@ -956,7 +964,30 @@ public static class BalanceEndpoints
                             ec.AnnualQuota, 1.0m, ferieaarStart, user.EmploymentStartDate, monthEnd)
                         : ec.AnnualQuota; // IMMEDIATE: full quota earned up-front.
 
-                    var cumulativeAfholdt = AfholdtWithin(type, ferieaarStart, monthEnd);
+                    // S80 / TASK-8001 (BLOCKER 2 fix) — the afholdt subtracted must be the bookings of
+                    // THIS accrual year (entYear), summed over the window in which entYear's days are
+                    // TAKEN. For VACATION/calendar types accrual == taking, so the window is
+                    // [AccrualStart, monthEnd] (unchanged, byte-identical to pre-S80). For
+                    // SPECIAL_HOLIDAY the accrual year Y is taken 1 May (Y+1) – 30 Apr (Y+2) — a window
+                    // that does NOT overlap [AccrualStart=1 Jan Y, monthEnd]; a date-range subtraction
+                    // anchored at AccrualStart would (a) miss this accrual year's real bookings and
+                    // (b) wrongly subtract a DIFFERENT accrual year's bookings that happen to fall in
+                    // [1 Jan Y, monthEnd] (e.g. a Mar-Y booking belongs to accrual Y−2, not Y). So sum
+                    // over [TakingStart, min(monthEnd, Boundary)] — the taking window, clamped to the
+                    // viewed month so the running cumulative tracks the calendar matrix.
+                    DateOnly afholdtFrom;
+                    DateOnly afholdtTo;
+                    if (EntitlementPeriodResolver.IsSpecialHoliday(type))
+                    {
+                        afholdtFrom = period.TakingStart;
+                        afholdtTo = monthEnd < period.Boundary ? monthEnd : period.Boundary;
+                    }
+                    else
+                    {
+                        afholdtFrom = ferieaarStart;
+                        afholdtTo = monthEnd;
+                    }
+                    var cumulativeAfholdt = AfholdtWithin(type, afholdtFrom, afholdtTo);
                     saldo[m - 1] = Math.Round(earned + carryoverIn - cumulativeAfholdt, 2);
                 }
 
@@ -976,19 +1007,38 @@ public static class BalanceEndpoints
                 // SAME ferieår as earnedAtBoundary — NOT the live current-ferieår row; the
                 // ferieRemaining tile uses the live balances, a different quantity). carryoverMax
                 // is year-start dated.
-                DateOnly closedFerieaarStart;
-                DateOnly boundaryDate;
-                if (resetMonth == 1)
-                {
-                    closedFerieaarStart = new DateOnly(year, 1, 1);
-                    boundaryDate = new DateOnly(year, 12, 31);
-                }
+                //
+                // S80 / TASK-8001 (R3/R10) — the CLOSED accrual year whose disposition boundary falls
+                // in the selected calendar `year`, derived via the SHARED EntitlementPeriodResolver so
+                // SPECIAL_HOLIDAY's calendar-accrual / 30-Apr-(Y+2) boundary is expressed (the old
+                // reset_month-9 branch would have invented a non-existent 31-Aug boundary). VACATION +
+                // calendar types stay BYTE-IDENTICAL: reset_month 1 → closedEntYear = year (boundary
+                // 31 Dec year); reset_month 9 → closedEntYear = year−1 (boundary 31 Aug year), the
+                // §21 deadline-year geometry. SPECIAL_HOLIDAY → closedEntYear = year−2 (boundary
+                // 30 Apr year). The settlement CLOSE itself (the godtgørelse) is TASK-8002; this stays
+                // a display-only disposition PROJECTION (D7 deferred).
+                int closedEntYear;
+                if (EntitlementPeriodResolver.IsSpecialHoliday(type))
+                    closedEntYear = year - 2;                          // boundary 30 Apr (Y+2) falls in `year`.
+                else if (resetMonth == 1)
+                    closedEntYear = year;                              // boundary 31 Dec E (E == year).
                 else
-                {
-                    closedFerieaarStart = new DateOnly(year - 1, resetMonth, 1);
-                    boundaryDate = closedFerieaarStart.AddYears(1).AddDays(-1); // 31 Aug of selected year
-                }
-                var closedEntYear = closedFerieaarStart.Year;
+                    closedEntYear = year - 1;                          // boundary 31 Dec E+1 (E == year−1).
+                var closedPeriod = EntitlementPeriodResolver.ResolveForYear(type, resetMonth, closedEntYear);
+                DateOnly closedFerieaarStart = closedPeriod.AccrualStart;
+                // boundaryDate is the EarnedToDate asOf below (a non-stored, display-only projection).
+                // S80 / TASK-8001 (BLOCKER 1 fix) — this MUST be the ACCRUAL-window END
+                // (closedPeriod.AccrualEnd: 31 Aug E+1 for VACATION, 31 Dec E for calendar types,
+                // 31 Dec Y for SPECIAL_HOLIDAY), NOT the resolver's Boundary (the §21 31-Dec DEADLINE
+                // / 30-Apr-E+2 settlement boundary, which falls LATER). AccrualMath.EarnedToDate
+                // clamps elapsed months FROM the accrual start (= the hire date for a mid-ferieår
+                // hire), capped at 12 — it does NOT cap the asOf at the accrual-window end. So feeding
+                // the later Boundary OVER-COUNTS a mid-ferieår hire (e.g. a VACATION hire on 1 Jan
+                // accrues 8 months by 31 Aug, but a 31-Dec asOf would read the full 12). For a
+                // full-ferieår employee both dates yield 12 months (byte-identical to pre-S80); the
+                // mid-hire case is where they diverge. IMMEDIATE types ignore boundaryDate
+                // (earnedAtBoundary = AnnualQuota).
+                DateOnly boundaryDate = closedPeriod.AccrualEnd;
                 var closedOkVersion = OkVersionResolver.ResolveVersion(closedFerieaarStart);
                 // Step-7a fix: agreement code resolved at the CLOSED ferieår start (same dated
                 // anchoring + graceful fallback as the monthly saldo read above).
@@ -1085,16 +1135,21 @@ public static class BalanceEndpoints
 
             var seniorLiveConfig = await entitlementConfigRepo.GetCurrentOpenAsync(
                 "SENIOR_DAY", todayAgreementCode, user.OkVersion, ct);
+            // S80 / TASK-8001 (R10) — SENIOR_DAY year-start via the shared resolver (BEHAVIOR-IDENTICAL:
+            // a calendar reset_month-1 type, so the accrual start is 1 Jan of the entitlement year).
             int? seniorMinAge = seniorLiveConfig is not null
-                ? (await entitlementConfigRepo.GetByTypeAtAsync(
-                        "SENIOR_DAY", todayAgreementCode,
-                        OkVersionResolver.ResolveVersion(new DateOnly(
-                            ResolveEntitlementYear(today, seniorLiveConfig.ResetMonth),
-                            seniorLiveConfig.ResetMonth, 1)),
-                        new DateOnly(
-                            ResolveEntitlementYear(today, seniorLiveConfig.ResetMonth),
-                            seniorLiveConfig.ResetMonth, 1), ct))?.MinAge ?? seniorLiveConfig.MinAge
+                ? await ResolveSeniorMinAgeAsync(seniorLiveConfig)
                 : null;
+
+            async Task<int?> ResolveSeniorMinAgeAsync(EntitlementConfig live)
+            {
+                var seniorStart = EntitlementPeriodResolver
+                    .Resolve("SENIOR_DAY", live.ResetMonth, today).AccrualStart;
+                return (await entitlementConfigRepo.GetByTypeAtAsync(
+                        "SENIOR_DAY", todayAgreementCode,
+                        OkVersionResolver.ResolveVersion(seniorStart), seniorStart, ct))?.MinAge
+                    ?? live.MinAge;
+            }
             // Eligible when no age gate is configured, OR the employee meets it as of today.
             var seniorDayEligible = seniorMinAge is null
                 || (user.BirthDate is { } dob && AgeAsOf(dob, today) >= seniorMinAge.Value);
@@ -1106,8 +1161,14 @@ public static class BalanceEndpoints
                 var live = await entitlementConfigRepo.GetCurrentOpenAsync(
                     type, todayAgreementCode, user.OkVersion, ct);
                 if (live is null) return null;
-                var entYear = ResolveEntitlementYear(today, live.ResetMonth);
-                var ferieaarStart = new DateOnly(entYear, live.ResetMonth, 1);
+                // S80 / TASK-8001 (R2/R10) — the entitlement (accrual) year + accrual start for `type`
+                // as-of today, via the shared resolver. The four tiles cover VACATION/CARE_DAY/
+                // SENIOR_DAY/CHILD_SICK only (NOT SPECIAL_HOLIDAY), all BEHAVIOR-IDENTICAL to the old
+                // ResolveEntitlementYear keying; routing through the resolver keeps the geometry in one
+                // place (and would key SPECIAL_HOLIDAY correctly if a tile is ever added).
+                var period = EntitlementPeriodResolver.Resolve(type, live.ResetMonth, today);
+                var entYear = period.EntitlementYear;
+                var ferieaarStart = period.AccrualStart;
                 var ec = await entitlementConfigRepo.GetByTypeAtAsync(
                     type, todayAgreementCode, OkVersionResolver.ResolveVersion(ferieaarStart),
                     ferieaarStart, ct) ?? live;
@@ -1231,12 +1292,9 @@ public static class BalanceEndpoints
 
     // ── S65 / TASK-6502 helpers (BalanceEndpoints-local) ──
 
-    /// <summary>
-    /// Resolve the entitlement year for a date given a reset month: month ≥ resetMonth ⇒
-    /// date.Year, else date.Year − 1 (mirrors the SkemaEndpoints two-step pattern).
-    /// </summary>
-    private static int ResolveEntitlementYear(DateOnly date, int resetMonth)
-        => date.Month >= resetMonth ? date.Year : date.Year - 1;
+    // S80 / TASK-8001 (R10) — the BalanceEndpoints-local ResolveEntitlementYear helper was removed;
+    // the entitlement (accrual) year + accrual start now come from the shared
+    // StatsTid.SharedKernel.Calendar.EntitlementPeriodResolver (the SPECIAL_HOLIDAY third-geometry hoist).
 
     /// <summary>
     /// Pure integer-age computation as-of a date (mirrors the SkemaEndpoints senior-gate

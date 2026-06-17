@@ -72,15 +72,16 @@ public sealed class SettlementInboxLineRepository
     public readonly record struct PendingEvent(Guid EventId, string EventType, string Data);
 
     /// <summary>
-    /// The authoritative poll selection (S69 Step-0b B1/W8; S71 type-discriminated): the canonical
-    /// <c>events</c>-table rows of the three consumed settlement types
-    /// (<c>VacationAutoPaidOut</c> / <c>TerminationPayoutRequested</c> / <c>SettlementReversed</c>)
-    /// that have NO TERMINAL inbox row — i.e. no <c>settlement_payroll_inbox</c> row at all, or
-    /// only rows still in the single non-terminal <c>RETRY_PENDING</c> status. ANY terminal row
-    /// (any bucket, incl. a terminal <c>'_EVENT'</c> row) excludes the event from re-selection —
-    /// sound because a multi-bucket event writes ALL its bucket checkpoints atomically in one tx
-    /// (R7: no partial subset can ever commit). Ordered by <c>global_position</c> for stable
-    /// cross-type progress; no cursor table (events are rare; the inbox is the dedup).
+    /// The authoritative poll selection (S69 Step-0b B1/W8; S71 type-discriminated; S80 R7 adds the
+    /// §15 stk.2/§17 godtgørelse type): the canonical <c>events</c>-table rows of the consumed
+    /// settlement types (<c>VacationAutoPaidOut</c> / <c>TerminationPayoutRequested</c> /
+    /// <c>SettlementReversed</c> / <c>SaerligeFeriedagePaidOut</c>) that have NO TERMINAL inbox row
+    /// — i.e. no <c>settlement_payroll_inbox</c> row at all, or only rows still in the single
+    /// non-terminal <c>RETRY_PENDING</c> status. ANY terminal row (any bucket, incl. a terminal
+    /// <c>'_EVENT'</c> row) excludes the event from re-selection — sound because a multi-bucket
+    /// event writes ALL its bucket checkpoints atomically in one tx (R7: no partial subset can ever
+    /// commit). Ordered by <c>global_position</c> for stable cross-type progress; no cursor table
+    /// (events are rare; the inbox is the dedup).
     /// </summary>
     public async Task<IReadOnlyList<PendingEvent>> GetUnconsumedSettlementEventsAsync(int batchSize, CancellationToken ct)
     {
@@ -90,7 +91,7 @@ public sealed class SettlementInboxLineRepository
             $"""
             SELECT e.event_id, e.event_type, e.data::text
             FROM events e
-            WHERE e.event_type IN ('VacationAutoPaidOut', 'TerminationPayoutRequested', 'SettlementReversed')
+            WHERE e.event_type IN ('VacationAutoPaidOut', 'TerminationPayoutRequested', 'SettlementReversed', 'SaerligeFeriedagePaidOut')
               AND NOT EXISTS (
                     SELECT 1 FROM settlement_payroll_inbox i
                     WHERE i.source_event_id = e.event_id

@@ -21,6 +21,10 @@ namespace StatsTid.Integrations.Payroll.Services;
 ///     request <c>OPEN → LINE_STAGED</c> promotion (R6), all one tx;</item>
 ///   <item><see cref="SettlementReversed"/> → one compensating REVERSAL line per staged ORIGINAL
 ///     line of the reversed settlement row (R8/R9), every bucket atomically in ONE tx (R7).</item>
+///   <item><see cref="SaerligeFeriedagePaidOut"/> → the §15 stk.2/§17 SPECIAL_HOLIDAY godtgørelse
+///     ORIGINAL line (S80 R7; <c>SLS_TBD_S15S17</c>, <c>hours = PayoutDays</c>, the
+///     <c>GODTGOERELSE_S15S17</c> bucket), the §24 path structurally — snapshot-keyed at the
+///     captured 30-Apr-Y+2 boundary, money-free, staged-never-delivered.</item>
 /// </list>
 ///
 /// <para>
@@ -76,11 +80,21 @@ public sealed class SettlementExportEmitter : BackgroundService
     /// <summary>The §26 wage-type-mapping <c>time_type</c> (S71 TASK-7105 R11 seed — maps to the SLS_TBD_S26 sentinel).</summary>
     private const string TerminationTimeType = "VACATION_TERMINATION_PAYOUT";
 
+    /// <summary>The §15 stk.2/§17 godtgørelse wage-type-mapping <c>time_type</c> (S80 TASK-8003 R7 seed —
+    /// maps to the SLS_TBD_S15S17 sentinel; DISTINCT from the SPECIAL_HOLIDAY consumption mapping
+    /// SPECIAL_HOLIDAY_ALLOWANCE → SLS_0570, which is a real deliverable code — this is the settlement line).</summary>
+    private const string SpecialHolidaySettlementTimeType = "SPECIAL_HOLIDAY_SETTLEMENT_PAYOUT";
+
     /// <summary>The §24 auto-payout bucket — the line/inbox <c>bucket</c> axis (ADR-033 D4).</summary>
     private const string AutoPayoutBucket = "AUTO_PAYOUT_24";
 
     /// <summary>The §26 termination-payout bucket (S71 — the ADR-033 D2 §26 leg's line/inbox axis).</summary>
     private const string TerminationPayoutBucket = "TERMINATION_PAYOUT_26";
+
+    /// <summary>The §15 stk.2/§17 godtgørelse bucket (S80 R7 — the SPECIAL_HOLIDAY settlement leg's
+    /// line/inbox axis; distinct from AUTO_PAYOUT_24 / TERMINATION_PAYOUT_26 so the checkpoint
+    /// <c>(source_event_id, bucket)</c> is exactly-once for this line).</summary>
+    private const string SpecialHolidayGodtgoerelseBucket = "GODTGOERELSE_S15S17";
 
     /// <summary>The consumer identity recorded on staged lines' <c>created_by</c> (originals AND
     /// compensating reversal lines — one BackgroundService stages both).</summary>
@@ -141,7 +155,8 @@ public sealed class SettlementExportEmitter : BackgroundService
     {
         _logger.LogInformation(
             "SettlementExportEmitter started — staging settlement export lines from VacationAutoPaidOut / " +
-            "TerminationPayoutRequested / SettlementReversed (delivery disabled; SLS_TBD_* sentinels never leave the system).");
+            "TerminationPayoutRequested / SettlementReversed / SaerligeFeriedagePaidOut (delivery disabled; " +
+            "SLS_TBD_* sentinels never leave the system).");
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -181,6 +196,9 @@ public sealed class SettlementExportEmitter : BackgroundService
                         break;
                     case "SettlementReversed":
                         await ProcessSettlementReversedAsync(pending, ct);
+                        break;
+                    case "SaerligeFeriedagePaidOut":
+                        await ProcessSaerligeFeriedagePaidOutAsync(pending, ct);
                         break;
                     default:
                         // Unreachable (the poll's event_type IN (...) filter) — log, never throw.
@@ -606,6 +624,162 @@ public sealed class SettlementExportEmitter : BackgroundService
     }
 
     // ════════════════════════════════════════════════════════════════════════
+    // §15 stk.2/§17 — SaerligeFeriedagePaidOut (S80 R7: the særlige-feriedage godtgørelse line).
+    // ════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Process ONE §15 stk.2/§17 SPECIAL_HOLIDAY godtgørelse event end-to-end — the §24
+    /// <see cref="ProcessAutoPaidOutAsync"/> path structurally (the event carries its own immutable
+    /// snapshot; the line keys off it), targeting the distinct <c>GODTGOERELSE_S15S17</c> bucket
+    /// and the <c>SPECIAL_HOLIDAY_SETTLEMENT_PAYOUT → SLS_TBD_S15S17</c> mapping. Under the employee
+    /// advisory lock in ONE tx: terminal re-check; fail-closed key validation off the event snapshot;
+    /// dated ADR-020 lønart lookup at <c>asOf = Snapshot.SettlementBoundaryDate</c> (the 30 Apr Y+2
+    /// afholdelsesperiode end the close captured); stage ONE money-free <c>ORIGINAL</c> line
+    /// (<c>hours = PayoutDays</c>, <c>amount = 0</c>); promote the inbox to terminal PROCESSED. A
+    /// missing snapshot/key/mapping fails closed (RETRY_PENDING → DEAD_LETTER on budget), never a
+    /// fallback. The <c>SLS_TBD_*</c> sentinel is refused by the outbound delivery guard — staged,
+    /// never delivered (R11/R12 money-free; SLS owns the 2½%, §17 ≠ §10's 2,02%, D12).
+    /// </summary>
+    private async Task ProcessSaerligeFeriedagePaidOutAsync(
+        SettlementInboxLineRepository.PendingEvent pending, CancellationToken ct)
+    {
+        // (−1) Poison guard (mirrors the §24 path): an un-deserializable payload has no recoverable
+        //      identity ⇒ dead-letter terminally at (source_event_id, '_EVENT'), no advisory lock.
+        SaerligeFeriedagePaidOut @event;
+        try
+        {
+            @event = (SaerligeFeriedagePaidOut)EventSerializer.Deserialize(pending.EventType, pending.Data);
+        }
+        catch (Exception deserEx) when (deserEx is not OperationCanceledException)
+        {
+            await DeadLetterPoisonAsync(pending, deserEx, ct);
+            return;
+        }
+
+        var identity = new SettlementIdentity(
+            @event.EmployeeId, @event.EntitlementType, @event.EntitlementYear, @event.Sequence,
+            SpecialHolidayGodtgoerelseBucket);
+
+        var (conn, tx) = await _repo.BeginLockedAsync(identity.EmployeeId, ct);
+        try
+        {
+            // (0) Terminal re-check UNDER THE LOCK (the S69 select→lock TOCTOU guard), bucket-aware:
+            //     a terminal row at the godtgørelse bucket OR a terminal '_EVENT' row finalize it.
+            var terminal = await _repo.GetTerminalStatusAsync(conn, tx, pending.EventId, SpecialHolidayGodtgoerelseBucket, ct);
+            if (terminal is not null)
+            {
+                await tx.CommitAsync(ct);
+                _logger.LogInformation(
+                    "SettlementExportEmitter: §15 stk.2/§17 event {EventId} already {Status} — skipping.",
+                    pending.EventId, terminal);
+                return;
+            }
+
+            // PARITY NOTE vs the §24 path (S80 Step-5a, intentional for this slice):
+            //   • The §24 step (1) `IsPayoutReconciledAsync` SKIPPED_RECONCILED branch is OMITTED — there
+            //     is NO §15/§17 operator-reconciliation surface (correct, not a gap).
+            //   • The §24 step (0b) under-lock REVERSED-row probe (SKIPPED_VOIDED) is OMITTED — a RECORDED
+            //     GO-LIVE FOLLOW-UP (the SPECIAL_HOLIDAY reversal-handling cluster, with the 8002 deferred
+            //     supersede path + the R9 retrofit). NON-corrupting here: the SPECIAL_HOLIDAY close is
+            //     R5-gated DORMANT (no SaerligeFeriedagePaidOut is ever emitted pre-launch) and the line is
+            //     SLS_TBD_* never-delivered, so no reversal can interleave. MUST land before the §15-stk.1
+            //     go-live gate opens, else a line staged after a reversal could orphan (uncompensated).
+
+            // (1) Fail-closed validation (B5) — a missing snapshot / agreement code / OK-version /
+            //     boundary date is a DETERMINISTIC failure (never a live/empty/hard-coded fallback).
+            var snapshot = @event.Snapshot;
+            if (snapshot is null
+                || string.IsNullOrEmpty(snapshot.AgreementCode)
+                || string.IsNullOrEmpty(snapshot.OkVersion)
+                || snapshot.SettlementBoundaryDate == default)
+            {
+                await SafeRollbackAsync(tx, ct);
+                await HandleDeterministicFailureAsync(pending, identity,
+                    "SaerligeFeriedagePaidOut snapshot is missing a required wage-mapping key datum " +
+                    "(snapshot/AgreementCode/OkVersion/SettlementBoundaryDate); cannot stage a §15 stk.2/§17 " +
+                    "godtgørelse line (fail-closed, no fallback).",
+                    ct);
+                return;
+            }
+
+            // (2) Resolve the godtgørelse lønart off the SNAPSHOT (replay-deterministic; no live
+            //     lookup) — the full ADR-020 dated natural key at asOf = the captured 30-Apr-Y+2
+            //     settlement boundary. The new SPECIAL_HOLIDAY_SETTLEMENT_PAYOUT time_type resolves
+            //     to the SLS_TBD_S15S17 sentinel — DISTINCT from the consumption SLS_0570.
+            var position = snapshot.Position ?? "";
+            var mapping = await _wageTypeMappings.GetByKeyAtAsync(
+                SpecialHolidaySettlementTimeType, snapshot.OkVersion!, snapshot.AgreementCode!, position,
+                snapshot.SettlementBoundaryDate, ct);
+            if (mapping is null)
+            {
+                await SafeRollbackAsync(tx, ct);
+                await HandleDeterministicFailureAsync(pending, identity,
+                    $"No §15 stk.2/§17 wage_type_mapping for (time_type={SpecialHolidaySettlementTimeType}, " +
+                    $"ok_version={snapshot.OkVersion}, agreement_code={snapshot.AgreementCode}, position='{position}') " +
+                    $"as-of {snapshot.SettlementBoundaryDate:yyyy-MM-dd}; cannot stage a godtgørelse line (fail-closed, no fallback).",
+                    ct);
+                return;
+            }
+
+            // (3) Build the money-free ORIGINAL line (hours = PayoutDays, amount pinned to 0 in SQL,
+            //     NO rate read — SLS owns the 2½% §17 godtgørelse rate).
+            var line = new SettlementExportLineInput
+            {
+                EmployeeId = identity.EmployeeId,
+                EntitlementType = identity.EntitlementType,
+                EntitlementYear = identity.EntitlementYear,
+                Sequence = identity.Sequence,
+                Bucket = SpecialHolidayGodtgoerelseBucket,
+                WageType = mapping.WageType,
+                Hours = @event.PayoutDays,
+                OkVersion = snapshot.OkVersion!,
+                AgreementCode = snapshot.AgreementCode!,
+                Position = position,
+                PeriodStart = snapshot.SettlementBoundaryDate,
+                PeriodEnd = snapshot.SettlementBoundaryDate,
+                SourceEventId = pending.EventId,
+                CreatedBy = EmitterActor,
+            };
+
+            // (4) Insert with verify-on-conflict (a non-identical collision DEAD_LETTERs, reporting
+            //     the enumerated mismatches; a same-event identical row is a benign redelivery).
+            var insert = await _repo.InsertLineAsync(conn, tx, line, ct);
+            if (insert.Outcome == LineInsertOutcome.Collision)
+            {
+                await SafeRollbackAsync(tx, ct);
+                await HandleFailureAsync(pending, new InvalidOperationException(
+                    $"settlement_export_lines bucket {SpecialHolidayGodtgoerelseBucket} for {identity.EmployeeId}/" +
+                    $"{identity.EntitlementType}/{identity.EntitlementYear} (seq {identity.Sequence}) already holds a " +
+                    $"line that does NOT match event {pending.EventId}'s immutable line shape ({insert.CollisionDetail}); " +
+                    "refusing to mask a settlement-line collision."),
+                    isCollision: true, ct);
+                return;
+            }
+
+            // (5) Promote the inbox to terminal PROCESSED (Inserted OR BenignRedelivery).
+            await _repo.PromoteToTerminalAsync(conn, tx, pending.EventId, identity, "PROCESSED", ct);
+            await tx.CommitAsync(ct);
+
+            _logger.LogInformation(
+                "SettlementExportEmitter: staged §15 stk.2/§17 godtgørelse line for {EmployeeId}/{Type}/{Year} " +
+                "(seq {Sequence}): {Days} day(s) → {WageType} (amount=0, money-free), as-of {AsOf:yyyy-MM-dd}; " +
+                "inbox PROCESSED ({Outcome}).",
+                identity.EmployeeId, identity.EntitlementType, identity.EntitlementYear, identity.Sequence,
+                @event.PayoutDays, mapping.WageType, snapshot.SettlementBoundaryDate, insert.Outcome);
+        }
+        catch
+        {
+            await SafeRollbackAsync(tx, ct);
+            throw; // transient/unexpected — caller records RETRY_PENDING diagnostics.
+        }
+        finally
+        {
+            await tx.DisposeAsync();
+            await conn.DisposeAsync();
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
     // Reversal — SettlementReversed (S71 R8/R9: compensating lines, never mutation).
     // ════════════════════════════════════════════════════════════════════════
 
@@ -879,6 +1053,11 @@ public sealed class SettlementExportEmitter : BackgroundService
                 var e = (SettlementReversed)EventSerializer.Deserialize(pending.EventType, pending.Data);
                 return new SettlementIdentity(e.EmployeeId, e.EntitlementType, e.EntitlementYear,
                     ReversalExportSequence(e.SettlementSequence), SettlementInboxLineRepository.EventLevelBucket);
+            }
+            case "SaerligeFeriedagePaidOut":
+            {
+                var e = (SaerligeFeriedagePaidOut)EventSerializer.Deserialize(pending.EventType, pending.Data);
+                return new SettlementIdentity(e.EmployeeId, e.EntitlementType, e.EntitlementYear, e.Sequence, SpecialHolidayGodtgoerelseBucket);
             }
             default:
                 throw new InvalidOperationException(

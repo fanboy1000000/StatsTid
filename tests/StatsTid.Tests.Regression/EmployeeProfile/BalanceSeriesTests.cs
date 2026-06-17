@@ -115,29 +115,59 @@ public sealed class BalanceSeriesTests : IAsyncLifetime
 
         foreach (var entry in series)
         {
-            // ferieår 2025: reset month 9 → ferieaarStart 2025-09-01, entitlementYear 2025.
-            Assert.Equal("2025-09-01", entry.GetProperty("ferieaarStart").GetString());
-            Assert.Equal(2025, entry.GetProperty("entitlementYear").GetInt32());
+            var type = entry.GetProperty("type").GetString();
 
-            var expectedQuota = entry.GetProperty("type").GetString() == "VACATION" ? 25m : 5m;
+            // S80 / TASK-8001 (ADR-033 Slice 2, R1/R2 — D11): the two MONTHLY_ACCRUAL types now have
+            // DIFFERENT geometries. VACATION keeps the Sep–Aug ferieår (reset_month 9); SPECIAL_HOLIDAY
+            // accrues on the CALENDAR year (Cirkulære 021-24 §12) and is TAKEN the following May–Apr,
+            // so an Oct-2025 query resolves SPECIAL_HOLIDAY to ACCRUAL year 2024 (the May–Dec head of
+            // its taking window maps to T−1), and the curve renders that 2024 Jan–Dec accrual.
+            DateOnly accrualStart;
+            int expectedEntYear;
+            if (type == "VACATION")
+            {
+                accrualStart = new DateOnly(2025, 9, 1);
+                expectedEntYear = 2025;
+            }
+            else // SPECIAL_HOLIDAY
+            {
+                accrualStart = new DateOnly(2024, 1, 1);
+                expectedEntYear = 2024;
+            }
+
+            Assert.Equal(accrualStart.ToString("yyyy-MM-dd"), entry.GetProperty("ferieaarStart").GetString());
+            Assert.Equal(expectedEntYear, entry.GetProperty("entitlementYear").GetInt32());
+
+            var expectedQuota = type == "VACATION" ? 25m : 5m;
             Assert.Equal(expectedQuota, entry.GetProperty("annualQuota").GetDecimal());
 
             var points = entry.GetProperty("points").EnumerateArray().ToList();
             Assert.Equal(12, points.Count);
 
-            // The 12 month-ends are exactly the ferieår months Sep..Aug, each on its true last day.
+            // The 12 month-ends are exactly the accrual months from accrualStart, each on its true last day.
             var expectedMonthEnds = Enumerable.Range(0, 12)
-                .Select(i => new DateOnly(2025, 9, 1).AddMonths(i))
+                .Select(i => accrualStart.AddMonths(i))
                 .Select(d => (string?)new DateOnly(d.Year, d.Month, DateTime.DaysInMonth(d.Year, d.Month))
                     .ToString("yyyy-MM-dd"))
                 .ToList();
             var actualMonthEnds = points.Select(p => p.GetProperty("monthEnd").GetString()).ToList();
             Assert.Equal(expectedMonthEnds, actualMonthEnds);
 
-            // Exactly one point is the selected ("now") point — the requested month (October).
+            // The selected ("now") point is the requested month (October 2025) WHEN it falls inside the
+            // curve. For VACATION (Sep 2025–Aug 2026 curve) Oct 2025 is point 2 ⇒ exactly one selected.
+            // For SPECIAL_HOLIDAY the curve is the 2024 ACCRUAL year, which does NOT contain Oct 2025 —
+            // the query is in the taking window, after accrual completed — so NO point is selected (the
+            // curve shows when the days were EARNED, not when you query). Both are correct under D11.
             var selected = points.Where(p => p.GetProperty("isSelected").GetBoolean()).ToList();
-            Assert.Single(selected);
-            Assert.Equal("2025-10-31", selected[0].GetProperty("monthEnd").GetString());
+            if (type == "VACATION")
+            {
+                Assert.Single(selected);
+                Assert.Equal("2025-10-31", selected[0].GetProperty("monthEnd").GetString());
+            }
+            else
+            {
+                Assert.Empty(selected); // SPECIAL_HOLIDAY: Oct 2025 is outside the 2024 accrual curve.
+            }
         }
     }
 
@@ -227,13 +257,16 @@ public sealed class BalanceSeriesTests : IAsyncLifetime
 
         var client = EmployeeClient(employeeId);
 
-        // October = month 2 of the September 2025 ferieår. Full-time flat earned = quota × 2/12, 2dp:
-        //   VACATION 25 ⇒ Round(25 × 2/12, 2);  SPECIAL_HOLIDAY 5 ⇒ Round(5 × 2/12, 2).
+        // October 2025 = month 2 of the September 2025 ferieår for VACATION ⇒ full-time flat earned
+        // = 25 × 2/12, 2dp. S80 / TASK-8001 (D11): SPECIAL_HOLIDAY now accrues on the CALENDAR year and
+        // is TAKEN the following May–Apr, so the Oct-2025 query resolves it to ACCRUAL year 2024, which
+        // is FULLY accrued by Oct 2025 (12+ months from 1 Jan 2024) ⇒ earned = full 5 d. The
+        // fraction-INDEPENDENCE proof still holds (5, not 0.5×5), it is just no longer a 2/12 figure.
         var vacationEarned = await GetSummaryEarnedAsync(client, employeeId, QueryYear, QueryMonth, "VACATION");
         var specialEarned = await GetSummaryEarnedAsync(client, employeeId, QueryYear, QueryMonth, "SPECIAL_HOLIDAY");
 
         Assert.Equal(Math.Round(25m * 2 / 12m, 2), vacationEarned);  // == full-time, NOT 0.5×
-        Assert.Equal(Math.Round(5m * 2 / 12m, 2), specialEarned);    // == full-time, NOT 0.5×
+        Assert.Equal(5m, specialEarned);                             // fully accrued (accrual year 2024), == full-time
     }
 
     /// <summary>

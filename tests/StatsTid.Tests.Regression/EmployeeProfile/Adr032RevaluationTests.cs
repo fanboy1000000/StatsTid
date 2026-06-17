@@ -147,6 +147,70 @@ public sealed class Adr032RevaluationTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════════════
+    // S80 / TASK-8001 (BLOCKER 3) — SPECIAL_HOLIDAY revaluation keys to the RESOLVED
+    // accrual year (taking-window mapping), NOT the raw calendar year.
+    // ════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// <b>S80 / TASK-8001 (BLOCKER 3) — a profile-fraction PUT revaluing a SPECIAL_HOLIDAY absence in
+    /// the Jan–Apr TAIL of the taking window must adjust the balance row keyed to accrual year T−2 (the
+    /// resolver's taking-window mapping), NOT the booking's own calendar year.</b>
+    ///
+    /// <para><c>ApplyRevaluationAsync</c> groups the per-row delta by <c>(type, entitlementYear)</c>.
+    /// The fix routes <c>entitlementYear</c> through <see cref="EntitlementPeriodResolver"/>; the pre-fix
+    /// code used a local <c>ResolveEntitlementYear(date, resetMonth)</c> helper = raw
+    /// <c>date.Month &gt;= resetMonth ? date.Year : date.Year − 1</c>, which after the S80 reseed
+    /// (SPECIAL_HOLIDAY reset_month 1) keys EVERY SPECIAL_HOLIDAY date to its own calendar year — a
+    /// split-brain vs the booking/balance paths (which key Jan–Apr T → accrual T−2).</para>
+    ///
+    /// <para>We book a SPECIAL_HOLIDAY day on a FUTURE Feb weekday (Jan–Apr window, always ≥ today and
+    /// in next year). Feb of (today.Year + 1) ⇒ accrual year (today.Year − 1) under the resolver
+    /// (Jan–Apr T → T−2), but (today.Year + 1) under the pre-fix calendar helper. After the half-time
+    /// PUT, the revaluation +1.0 used-delta + the EntitlementBalanceRevalued event must land on the
+    /// T−2 accrual year; nothing on the booking's calendar year. That divergence is RED on commit
+    /// 2ddd6b5 (which would key/touch the calendar year).</para>
+    /// </summary>
+    [Fact]
+    public async Task SpecialHolidayFractionChange_RevaluesAccrualYearTMinus2_NotCalendarYear()
+    {
+        var employeeId = await SeedFullTimeEmployeeAsync();
+
+        // A future Feb weekday (Jan–Apr window) of NEXT year — always ≥ today, always in Jan–Apr.
+        // Resolver: Jan–Apr T → accrual year T−2. Calendar (pre-fix) helper: the booking's own year.
+        var bookingDate = NextWeekday(new DateOnly(Today.Year + 1, 2, 14));
+        var resolvedAccrualYear = bookingDate.Year - 2;   // T−2 (the correct, resolver-keyed year)
+        var calendarYear = bookingDate.Year;              // the pre-fix split-brain key
+
+        await BookSpecialHolidayAsync(employeeId, bookingDate, 7.4m); // 1.0 feriedag at full-time
+        Assert.Equal(1.0m, await ReadFeriedageAsync(employeeId, bookingDate));
+
+        // PUT: full-time → half-time, effectiveFrom = today (the booking is ≥ today ⇒ revalued).
+        var adminClient = AdminClient();
+        var version = await ReadProfileVersionAsync(adminClient, employeeId);
+        var putRsp = await PutProfileAsync(
+            adminClient, employeeId, Today, 0.500m, position: null, ifMatch: $"\"{version}\"");
+        Assert.Equal(HttpStatusCode.OK, putRsp.StatusCode);
+
+        // The recorded feriedage doubled (7.4 / 3.7 = 2.0) — the revaluation ran.
+        Assert.Equal(2.0m, await ReadFeriedageAsync(employeeId, bookingDate));
+
+        // The used delta (+1.0) landed on the RESOLVED accrual year (T−2), keyed correctly.
+        var (_, usedResolved) = await ReadBalanceAsync(employeeId, "SPECIAL_HOLIDAY", resolvedAccrualYear);
+        Assert.Equal(2.0m, usedResolved); // booked 1.0 + revaluation delta +1.0
+
+        // And NOTHING was keyed/touched on the booking's raw calendar year (the pre-fix split-brain
+        // would have created/adjusted THIS row instead). No row ⇒ the resolver keyed it correctly.
+        Assert.False(await BalanceRowExistsAsync(employeeId, "SPECIAL_HOLIDAY", calendarYear),
+            $"BLOCKER 3: a SPECIAL_HOLIDAY balance row keyed to the raw calendar year {calendarYear} " +
+            $"means the revaluation used the calendar helper, not the taking-window resolver (T−2 = {resolvedAccrualYear}).");
+
+        // The EntitlementBalanceRevalued event carries entitlementYear = the resolved T−2 year.
+        var revaluedYears = await ReadRevaluedEntitlementYearsAsync(employeeId, "SPECIAL_HOLIDAY");
+        Assert.Contains(resolvedAccrualYear, revaluedYears);
+        Assert.DoesNotContain(calendarYear, revaluedYears);
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
     // Revaluation past the cap — negative remaining tolerated (no 500).
     // ════════════════════════════════════════════════════════════════════════
 
@@ -386,6 +450,62 @@ public sealed class Adr032RevaluationTests : IAsyncLifetime
             }
         }
         return (count, newFeriedage);
+    }
+
+    /// <summary>Books a SPECIAL_HOLIDAY day via the future-only Skema save path (the raw absence
+    /// type is <c>SPECIAL_HOLIDAY_ALLOWANCE</c>, which maps to the <c>SPECIAL_HOLIDAY</c> entitlement).</summary>
+    private async Task BookSpecialHolidayAsync(string employeeId, DateOnly date, decimal hours)
+    {
+        var client = _ruleStubbedClient;
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", MintEmployeeToken(employeeId, OrgId));
+        var rsp = await client.PostAsJsonAsync($"/api/skema/{employeeId}/save", new
+        {
+            year = date.Year,
+            month = date.Month,
+            absences = new[]
+            {
+                new { date = date.ToString("yyyy-MM-dd"), absenceType = "SPECIAL_HOLIDAY_ALLOWANCE", hours },
+            },
+        });
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+    }
+
+    /// <summary>True iff an <c>entitlement_balances</c> row exists for the (employee, type, year) key.</summary>
+    private async Task<bool> BalanceRowExistsAsync(string employeeId, string entitlementType, int year)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "SELECT 1 FROM entitlement_balances WHERE employee_id = @e AND entitlement_type = @t AND entitlement_year = @y",
+            conn);
+        cmd.Parameters.AddWithValue("e", employeeId);
+        cmd.Parameters.AddWithValue("t", entitlementType);
+        cmd.Parameters.AddWithValue("y", year);
+        return (await cmd.ExecuteScalarAsync()) is not null;
+    }
+
+    /// <summary>The set of <c>entitlementYear</c> values carried by the EntitlementBalanceRevalued
+    /// events (sync-written outbox_events) for this employee + type.</summary>
+    private async Task<HashSet<int>> ReadRevaluedEntitlementYearsAsync(string employeeId, string entitlementType)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        var years = new HashSet<int>();
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT event_payload FROM outbox_events
+            WHERE stream_id = @s AND event_type = 'EntitlementBalanceRevalued'
+            """, conn);
+        cmd.Parameters.AddWithValue("s", $"employee-{employeeId}");
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            using var doc = JsonDocument.Parse(reader.GetString(0));
+            if (doc.RootElement.GetProperty("entitlementType").GetString() == entitlementType)
+                years.Add(doc.RootElement.GetProperty("entitlementYear").GetInt32());
+        }
+        return years;
     }
 
     /// <summary>Diagnostic: the distinct stream_id(s) on which an EntitlementBalanceRevalued event

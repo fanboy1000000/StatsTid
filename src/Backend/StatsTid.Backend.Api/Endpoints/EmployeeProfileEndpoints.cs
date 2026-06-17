@@ -6,6 +6,7 @@ using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Audit;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Models;
@@ -739,9 +740,10 @@ public static class EmployeeProfileEndpoints
     ///
     /// <para>
     /// <b>Grouping + write (ADR-032 D4).</b> Affected rows are grouped by (entitlementType,
-    /// entitlementYear) — the entitlement year derived the SAME ferieår-anchoring way the Skema /
-    /// Balance paths use (<see cref="ResolveEntitlementYear"/> against the live entitlement config's
-    /// reset_month). For each group where any per-row value changed: <c>usedDelta = Σ(new − old)</c>
+    /// entitlementYear) — the entitlement year derived the SAME way the Skema / Balance paths use,
+    /// via the shared <see cref="EntitlementPeriodResolver"/> (S80/8001: SPECIAL_HOLIDAY keys to the
+    /// taking-window accrual year, NOT the raw reset_month calendar year). For each group where any
+    /// per-row value changed: <c>usedDelta = Σ(new − old)</c>
     /// is applied — together with the per-absence replacement set — via the UNGATED
     /// <see cref="EntitlementBalanceRepository.ApplyRevaluationAsync"/> (revaluation may push
     /// <c>used</c> past the cap — this is NOT the booking path; all-or-nothing on the projection
@@ -832,7 +834,16 @@ public static class EmployeeProfileEndpoints
             if (resetMonth is null)
                 continue; // no config for this type/agreement/ok — cannot anchor the year; skip.
 
-            var entitlementYear = ResolveEntitlementYear(row.Date, resetMonth.Value);
+            // S80 / TASK-8001 (BLOCKER 3 fix) — route the per-row entitlement (accrual) year through
+            // the SHARED EntitlementPeriodResolver, NOT the old raw "Month >= resetMonth" helper. The
+            // booking/balance paths (SkemaEndpoints / BalanceEndpoints) key SPECIAL_HOLIDAY via the
+            // two-calendar-year taking-window mapping (May–Dec T → accrual T−1; Jan–Apr T → accrual
+            // T−2), which a raw reset_month=1 helper CANNOT express (it would key every month to its
+            // own calendar year) — so the revaluation would hit the WRONG balance row (a split-brain
+            // vs booking). The resolver reproduces the pre-S80 keying EXACTLY for VACATION + every
+            // other type, so those revaluations are byte-identical.
+            var entitlementYear = EntitlementPeriodResolver
+                .Resolve(entitlementType, resetMonth.Value, row.Date).EntitlementYear;
 
             var key = (entitlementType, entitlementYear);
             if (!groups.TryGetValue(key, out var acc))
@@ -872,14 +883,6 @@ public static class EmployeeProfileEndpoints
                 conn, tx, revaluedEvent.EventId, outboxId, revaluedEvent.EventType, auditRow, revaluedAuditCtx, ct);
         }
     }
-
-    /// <summary>
-    /// S66 / TASK-6604 — ferieår-anchored entitlement-year derivation, mirroring
-    /// <c>SkemaEndpoints.ResolveEntitlementYear</c> (the canonical Skema/Balance rule): when the
-    /// date's month is ≥ reset_month the year is the date's calendar year, else the prior year.
-    /// </summary>
-    private static int ResolveEntitlementYear(DateOnly date, int resetMonth)
-        => date.Month >= resetMonth ? date.Year : date.Year - 1;
 
     // ── Request DTO ──
 
