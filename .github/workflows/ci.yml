@@ -33,7 +33,7 @@ jobs:
           exit 0
 
       - name: Upload lizard report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: lizard-ccn-report
@@ -138,14 +138,14 @@ jobs:
         continue-on-error: true  # coverage failure must not fail the build during baseline window
 
       - name: Upload test results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: test-results
           path: '**/TestResults/*.trx'
 
       - name: Upload coverage artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: coverage-cobertura
@@ -199,13 +199,13 @@ jobs:
 
       - name: Upload smoke logs artifact
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: smoke-failure-logs
           path: smoke-failure-logs.txt
 
       - name: Upload smoke test results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: smoke-test-results
@@ -294,14 +294,14 @@ jobs:
 
       - name: Upload compose logs on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-failure-logs
           path: e2e-failure-logs.txt
 
       - name: Upload Playwright report + traces on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report
           path: |
