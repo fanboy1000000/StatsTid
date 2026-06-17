@@ -1,6 +1,6 @@
 # SPRINT-80 — ADR-033 Slice 2: særlige feriedage (D11 model correction + §15 stk.2/§17 godtgørelse)
 
-**Status:** CLOSED LOCALLY 2026-06-16 (local commit; push + CI-verify deferred — owner out of GitHub Actions minutes). Refinement: `.claude/refinements/REFINEMENT-s80-saerlige-feriedage-godtgoerelse.md` (READY, owner-ratified 2026-06-16). Building LOCALLY (owner out of GitHub Actions — local commit, push deferred).
+**Status:** CLOSED + PUSHED + CI-VERIFIED (local close 2026-06-16; pushed + CI GREEN `27668412493` 2026-06-17 after the owner restored Actions billing). Refinement: `.claude/refinements/REFINEMENT-s80-saerlige-feriedage-godtgoerelse.md` (READY, owner-ratified 2026-06-16). Building LOCALLY (owner out of GitHub Actions — local commit, push deferred).
 
 ## Premise
 The last remaining ADR-033 settlement slice. Særlige feriedage (`SPECIAL_HOLIDAY`, the agreement-based "6th week", 5 days) are mis-modeled today with `ResetMonth=9` (the statutory Sep–Aug ferieår); the verified law (Cirkulære 021-24 §12) is **calendar-year accrual (1 Jan–31 Dec) + a 1 May–30 Apr taking window**, with unused-untransferred days **paid out (§15 stk.2/§17, 2½% godtgørelse)** at the **30 Apr** boundary — NO §34 forfeiture, NO §22 feriehindring, NO carryover. D11 corrects the model; the godtgørelse settlement makes the precise window meaningful. Money stays out (SLS owns 2½%); D13-gated.
@@ -82,7 +82,7 @@ Full local pyramid (S80 is backend-only — no FE diff):
 - **Frontend:** 459/459 (unchanged — S80 touched no FE file).
 - **Pyramid total: 856u + 956r + 6s + 459fe = 2277 (+54 vs S79's 2223).**
 
-**CI status:** CI-pending — the owner is out of GitHub Actions minutes (the S78 close `27596242792` was the last CI-verified close, 16th consecutive). The full pyramid is verified LOCALLY green; the push (the held S79 `699cc3a` + this S80 close) + CI-verify ride the next push when the Actions allowance returns. The consecutive-CI-pending close gate is waived for S80 via `.claude/reviews/SPRINT-80-ci-pending-WAIVED.md` (S79 was the first CI-pending close; this is the second consecutive — Actions-exhaustion, NOT a Docker-down/locally-unverified close).
+**CI status:** ✅ **CI GREEN — run `27668412493` (all 6 jobs)**, 2026-06-17. S80 closed locally 2026-06-16 CI-pending (the owner was out of GitHub Actions minutes / a failed payment); when billing was restored 2026-06-17 the held stack was pushed and the S80 tree (`7ecd706`) verified green by run `27668412493` (and again as part of the full stack by the S81 run `27702124630` on `7d18bff`). The earlier `SPRINT-80-ci-pending-WAIVED.md` is now moot. https://github.com/fanboy1000000/StatsTid/actions/runs/27668412493
 
 
 ## Close
