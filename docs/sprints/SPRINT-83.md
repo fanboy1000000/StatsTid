@@ -3,9 +3,10 @@
 | Field | Value |
 |-------|-------|
 | **Sprint** | 83 |
-| **Status** | planned |
+| **Status** | complete |
 | **Start Date** | 2026-06-19 |
-| **End Date** | — |
+| **End Date** | 2026-06-19 |
+| **CI Verified** | ✅ GREEN — run [`27835672469`](https://github.com/fanboy1000000/StatsTid/actions/runs/27835672469) on `b2809c1`, all 7 jobs success (incl. `build-and-test` = full regression on Linux + services-postgres, + the gated `e2e-tests`) |
 | **Orchestrator Approved** | yes — 2026-06-19 |
 | **Build Verified** | yes — `dotnet build StatsTid.sln` 0 warnings 0 errors |
 | **Test Verified** | yes — 856 unit + 977 regression + 6 smoke (no schema change, S82 greenfield) + 468 fe + 3 e2e = 2310 (+5); regression green (the ~53 first-run failures root-caused to the missing compose Postgres :5432 prerequisite + 1 transient shed — all re-run green; see Test Summary adjudication); CI authoritative on push |
@@ -174,7 +175,11 @@ _Internal Reviewer findings:_
 
 S83 delta: **+5 regression tests** (4 revoke/auth concurrency in `AdminVikarOnBehalfTests` + 1 deactivated-approver pin in `DesignatedApproverAuthorityTests`); .NET regression-only, unit/FE/smoke/e2e unchanged.
 
-**Regression adjudication (NOT a regression, NOT FAIL-002 churn).** The first two full-suite runs reported ~53 failures. Root-caused to **the documented SPRINT-68 ops prerequisite**: the ReportingLine-era classes `ManagerVikarEngineTests` (15) + `ReportingLineRepositoryTests` (37) hardcode `Host=localhost;Port=5432` (`ManagerVikarEngineTests.cs:28-29`) and require the **compose Postgres on :5432** to be running (else connection-refused — *not* a regression); it was not up during those runs. After `docker compose up postgres` (init.sql → 65 tables), the two classes pass **52/52 in 1s**. The remaining 1 failure was a single transient testcontainer shed in `FeriehindringResolutionTests` (true FAIL-002), which passes **17/17** on its own. **All failures were connection/container-start (`InitializeAsync`/`Socket`), ZERO assertion failures**; my change is C# repo/endpoint logic that cannot affect container startup, and the new helper's direct blast radius (`AdminVikarOnBehalfTests` + `DesignatedApproverAuthorityTests` + `ReportingLineWriteLifecycleTests` + `ApprovalConcurrencyHardeningTests`) passed 78/78 exclusively. The full 977 is green by composition (run-2's 924 pass ∪ the re-run 53) + a confirmatory clean full run with compose Postgres up. **CI (Linux + services-postgres, immune to both the local :5432-compose requirement and Docker-Desktop-Windows sheds) is the authoritative full-suite gate on push.**
+**Regression adjudication — all 977 green; NOT a regression (ZERO assertion failures throughout).** Two distinct, well-understood environmental effects, both resolved:
+1. **Missing compose-Postgres prerequisite (the documented SPRINT-68 ops fact).** The first two full runs were done with compose Postgres DOWN; the ReportingLine-era classes `ManagerVikarEngineTests` (15) + `ReportingLineRepositoryTests` (37) hardcode `Host=localhost;Port=5432` (`ManagerVikarEngineTests.cs:28-29`) and require the compose Postgres on :5432 (else connection-refused — *not* a regression). After `docker compose up postgres` (init.sql → 65 tables) the two classes pass **52/52 in 1s**.
+2. **FAIL-002 testcontainer sheds** (Docker Desktop sheds container starts under sustained churn — KB FAIL-002, S65/S66 precedent). The confirmatory clean full run WITH compose up (`s83-regression-run3-clean.log`, 50m31s) was **974/977**, with the 3 residual failures all `DockerHarness.StartAsync`/`WaitStrategy` container-start sheds (`ProfileLegacyEventNonEmissionTests`, `EmployeeProfileAtomicTests`, `SettlementSchemaConstraintTests` — all unrelated to this change). Per the FAIL-002 close protocol (never modify tests; re-run exclusively) the 3 pass **10/10** on their own.
+
+∴ **977/977 green** = run-3's 974 pass ∪ the 3 sheds re-run green. My change is C# repo/endpoint logic that cannot affect container startup; the new helper's direct blast radius (`AdminVikarOnBehalfTests` + `DesignatedApproverAuthorityTests` + `ReportingLineWriteLifecycleTests` + `ApprovalConcurrencyHardeningTests`) passed **78/78 exclusively**. **CI (Linux + services-postgres — immune to BOTH the local :5432-compose requirement and Docker-Desktop-Windows sheds) is the authoritative full-suite gate on push (run `27835672469`).**
 
 ## Plan Review / External Review artifacts
 - Step-0b: `## Plan Review (Step 0b)` above (Codex 2 cycles, Reviewer 1 cycle).
