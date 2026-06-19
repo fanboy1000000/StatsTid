@@ -6,6 +6,7 @@
 | **Status** | complete |
 | **Start Date** | 2026-06-19 |
 | **End Date** | 2026-06-20 |
+| **CI Verified** | ✅ GREEN — run [`27850480763`](https://github.com/fanboy1000000/StatsTid/actions/runs/27850480763) on `37b2aba`, all 7 jobs (build-and-test full regression incl. the new security tests + smoke + docs + complexity + gitleaks + frontend-build + e2e). The gated **e2e job flaked once** on the S82-documented SkemaPage `waitForResponse('/api/skema/emp001/save')` contention class (provably independent of S85 — backend roles/CHECKs only; the full regression + smoke + the login/approval journeys all passed) → **clean on re-run, S85 unchanged**. |
 | **Orchestrator Approved** | yes — 2026-06-20 |
 | **Build Verified** | yes — `dotnet build StatsTid.sln` 0 errors (touched projects 0 warnings; pre-existing warn-opt-out debt unchanged) |
 | **Test Verified** | yes — 8/8 security classes green independently (6 new RoleAssignmentGrantRevokeEndpointTests + 2 reconciled AdminAtomicTests); agent ran 27/27 (incl. DesignatedApproverAuthority); db-schema in sync; fresh-seed CHECK validation 0 violations; full pyramid → CI on push |
