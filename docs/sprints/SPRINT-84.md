@@ -6,6 +6,7 @@
 | **Status** | complete |
 | **Start Date** | 2026-06-19 |
 | **End Date** | 2026-06-19 |
+| **CI Verified** | ✅ GREEN — run [`27844942535`](https://github.com/fanboy1000000/StatsTid/actions/runs/27844942535) on `4ee365b`, all 7 jobs success (build-and-test full regression + smoke + e2e + docs + complexity + gitleaks + frontend-build). The demo overlay is never mounted in CI → suites ran init.sql-only, all green; isolation confirmed. |
 | **Orchestrator Approved** | yes — 2026-06-19 |
 | **Build Verified** | yes — `dotnet build StatsTid.sln` 0 errors (the new projects emit 0 warnings; pre-existing non-blocking warnings remain in the established warn-opt-out projects, unchanged by S84) |
 | **Test Verified** | yes — 856 unit + 29 DemoSeed (NEW, dev-run) green; baseline regression/smoke/e2e UNAFFECTED (no `src/` change; CI runs init.sql-only). Full-scale demo loaded + verified end-to-end (see Test Summary) |
