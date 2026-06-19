@@ -72,6 +72,8 @@
     OR '$(MSBuildProjectName)' == 'StatsTid.Tests.Regression'
     OR '$(MSBuildProjectName)' == 'StatsTid.Tests.Smoke'
     OR '$(MSBuildProjectName)' == 'ProjectionBackfill'
+    OR '$(MSBuildProjectName)' == 'StatsTid.DemoSeed'
+    OR '$(MSBuildProjectName)' == 'StatsTid.Tests.DemoSeed'
     OR '$(MSBuildProjectName)' == 'MockPayroll'
     OR '$(MSBuildProjectName)' == 'MockExternal'">
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>

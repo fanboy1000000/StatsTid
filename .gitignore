@@ -46,3 +46,4 @@ coverage/
 # Python tooling artifacts
 __pycache__/
 *.pyc
+tools/StatsTid.DemoSeed/demo-manifest*.json

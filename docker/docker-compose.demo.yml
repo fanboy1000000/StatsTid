@@ -1,0 +1,26 @@
+# ============================================================================
+# Opt-in DEMO dataset overlay (S84). NEVER referenced by CI (.github/workflows/ci.yml
+# uses docker/docker-compose.yml only → init.sql-only test/smoke/e2e fixtures stay intact).
+#
+# Usage (rich manual-testing stack):
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.demo.yml up -d --build
+# then run the demo API loader (tools/StatsTid.DemoSeed) to build the trees + activity.
+#
+# Adds the demo seed to the postgres init dir. ORDERING IS LOAD-BEARING — and SUBTLE:
+# the Postgres entrypoint runs /docker-entrypoint-initdb.d/* in BYTE-LEXICAL order, where a
+# digit ('9'=0x39) sorts BEFORE a letter ('i'=0x69). The base compose mounts the schema as
+# `init.sql` (target unchanged here, so it is NOT re-mounted/duplicated). A plain `99-…`
+# target would therefore run BEFORE `init.sql` — against a schema-less DB (the Codex BLOCKER).
+# We mount the demo file with a `zz-` prefix so it sorts strictly AFTER `init.sql` and runs
+# against the LIVE schema. The on-disk name stays `99-demo-seed.sql`; only the container
+# mount path is prefixed. Init scripts only run on a FRESH volume (docker compose down -v).
+#
+# OPS WARNING: the demo stack and the :5432-coupled local Regression tests (e.g.
+# ReportingLineRepositoryTests, which assert baseline seed counts) cannot share :5432.
+# `docker compose ... down -v` the demo stack before running those tests locally. CI is
+# unaffected (it uses its own services-postgres seeded from init.sql only).
+# ============================================================================
+services:
+  postgres:
+    volumes:
+      - ./postgres/99-demo-seed.sql:/docker-entrypoint-initdb.d/zz-demo-seed.sql

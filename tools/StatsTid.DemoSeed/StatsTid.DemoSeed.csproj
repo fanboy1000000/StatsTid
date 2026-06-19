@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>StatsTid.Tools.DemoSeed</RootNamespace>
+    <AssemblyName>StatsTid.Tools.DemoSeed</AssemblyName>
+
+    <!-- This is an OFFLINE demo-data generator, NOT a security surface:
+         CA5394 — System.Random with a FIXED seed is the deterministic-output requirement
+                  (same seed ⇒ byte-identical dataset). A crypto RNG would defeat the
+                  entire reproducibility contract. No security decision rides on these draws.
+         CA2100 — every SQL string in this tool is a STATIC literal (no user input); the
+                  only parameterised values flow through NpgsqlCommand parameters. -->
+    <NoWarn>$(NoWarn);CA5394;CA2100</NoWarn>
+  </PropertyGroup>
+
+  <!-- S84 / TASK-8401 + TASK-8403: deterministic demo-data generator + API loader.
+       SELF-CONTAINED: no production project references (the generator is pure C#;
+       the loader drives the live API over HttpClient; the optional post-load
+       verification uses Npgsql directly). Same Npgsql version as Infrastructure
+       (8.0.3) to avoid transitive drift. -->
+  <ItemGroup>
+    <PackageReference Include="Npgsql" Version="8.0.3" />
+  </ItemGroup>
+
+</Project>

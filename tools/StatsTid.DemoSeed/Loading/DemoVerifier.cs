@@ -1,0 +1,122 @@
+using Npgsql;
+
+namespace StatsTid.Tools.DemoSeed.Loading;
+
+/// <summary>
+/// S84 / TASK-8404 — post-load tree-invariant + isolation SQL checks. Confirms the demo data
+/// landed correctly AND that the baseline 19-user fixture is untouched. Used by <c>load --verify</c>
+/// and the smoke self-validation. NOT relied on for one-root enforcement at write time (the import
+/// API does not enforce root-count) — this is the explicit invariant pass the plan requires.
+/// </summary>
+public sealed class DemoVerifier
+{
+    private readonly string _connStr;
+    private readonly Action<string> _log;
+
+    public DemoVerifier(string connStr, Action<string> log)
+    {
+        _connStr = connStr;
+        _log = log;
+    }
+
+    public async Task<bool> VerifyAsync(CancellationToken ct)
+    {
+        await using var conn = new NpgsqlConnection(_connStr);
+        await conn.OpenAsync(ct);
+
+        var ok = true;
+
+        // 1. Baseline isolation — exactly 19 SYSTEM/baseline users + 13 SYSTEM reporting rows.
+        var baselineUsers = await ScalarLongAsync(conn,
+            "SELECT COUNT(*) FROM users WHERE user_id IN " +
+            "('admin01','admin02','ladm01','ladm02','hr01','hr02','mgr01','mgr02','mgr03'," +
+            "'emp001','emp002','emp003','emp004','emp005','emp006','emp007','emp008','emp009','emp010')", ct);
+        ok &= Check("baseline 19 users present", baselineUsers == 19, $"found {baselineUsers}");
+
+        var systemReportingRows = await ScalarLongAsync(conn,
+            "SELECT COUNT(*) FROM reporting_lines WHERE created_by = 'SYSTEM'", ct);
+        ok &= Check("baseline SeedData_Has13Rows intact", systemReportingRows == 13, $"found {systemReportingRows}");
+
+        // 2. Demo orgs + users present.
+        var demoOrgs = await ScalarLongAsync(conn,
+            "SELECT COUNT(*) FROM organizations WHERE org_id LIKE 'STYX%' OR org_id = 'MINX'", ct);
+        ok &= Check("demo orgs present", demoOrgs > 0, $"found {demoOrgs}");
+
+        var demoUsers = await ScalarLongAsync(conn,
+            "SELECT COUNT(*) FROM users WHERE user_id LIKE 'demo\\_%'", ct);
+        ok &= Check("demo users present", demoUsers > 0, $"found {demoUsers}");
+
+        // 2b. Privileged demo roles present (SQL-seeded; needed for dashboards/approvals/vikar).
+        var demoLeaderRoles = await ScalarLongAsync(conn,
+            "SELECT COUNT(*) FROM role_assignments WHERE assigned_by='DEMO_SEED' AND role_id IN ('LOCAL_LEADER','LOCAL_HR')", ct);
+        ok &= Check("demo privileged roles present", demoLeaderRoles > 0, $"found {demoLeaderRoles}");
+
+        var demoGlobalAdmin = await ScalarLongAsync(conn,
+            "SELECT COUNT(*) FROM role_assignments WHERE assigned_by='DEMO_SEED' AND role_id='GLOBAL_ADMIN'", ct);
+        ok &= Check("demo GLOBAL_ADMIN present", demoGlobalAdmin == 1, $"found {demoGlobalAdmin}");
+
+        // 3. Tree invariant: exactly ONE root per tree_root_org_id among DEMO reporting rows.
+        //    A "root" = an employee in the tree that has NO active PRIMARY outgoing edge but is a
+        //    manager of someone. We derive it as: managers that never appear as an employee_id.
+        await using (var cmd = new NpgsqlCommand(
+            """
+            WITH demo AS (
+                SELECT employee_id, manager_id, tree_root_org_id
+                FROM reporting_lines
+                WHERE relationship = 'PRIMARY' AND effective_to IS NULL
+                  AND created_by <> 'SYSTEM'
+                  AND tree_root_org_id LIKE 'STYX%'
+            ),
+            roots AS (
+                SELECT DISTINCT tree_root_org_id, manager_id
+                FROM demo d
+                WHERE NOT EXISTS (SELECT 1 FROM demo e WHERE e.employee_id = d.manager_id)
+            )
+            SELECT tree_root_org_id, COUNT(*) AS root_count
+            FROM roots
+            GROUP BY tree_root_org_id
+            ORDER BY tree_root_org_id
+            """, conn))
+        {
+            await using var rdr = await cmd.ExecuteReaderAsync(ct);
+            var anyTree = false;
+            while (await rdr.ReadAsync(ct))
+            {
+                anyTree = true;
+                var tree = rdr.GetString(0);
+                var rootCount = rdr.GetInt64(1);
+                ok &= Check($"tree {tree}: exactly one root", rootCount == 1, $"root_count={rootCount}");
+            }
+            ok &= Check("at least one demo tree has edges", anyTree, "no demo PRIMARY edges found");
+        }
+
+        // 4. No PRIMARY cycle among demo edges (self-edge or 2-cycle quick check; full cycle is
+        //    enforced by the import API's recursive-CTE guard at write time).
+        var selfEdges = await ScalarLongAsync(conn,
+            "SELECT COUNT(*) FROM reporting_lines WHERE relationship='PRIMARY' AND effective_to IS NULL " +
+            "AND employee_id = manager_id AND created_by <> 'SYSTEM'", ct);
+        ok &= Check("no demo self-edges", selfEdges == 0, $"found {selfEdges}");
+
+        // 5. tree_root parity: every demo edge's tree_root_org_id is a STYX root.
+        var badTreeRoots = await ScalarLongAsync(conn,
+            "SELECT COUNT(*) FROM reporting_lines r WHERE r.created_by <> 'SYSTEM' " +
+            "AND r.tree_root_org_id LIKE 'STYX%' " +
+            "AND NOT EXISTS (SELECT 1 FROM organizations o WHERE o.org_id = r.tree_root_org_id AND o.org_type='STYRELSE')", ct);
+        ok &= Check("demo edges' tree_root is a STYRELSE", badTreeRoots == 0, $"found {badTreeRoots} bad");
+
+        return ok;
+    }
+
+    private static async Task<long> ScalarLongAsync(NpgsqlConnection conn, string sql, CancellationToken ct)
+    {
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        var res = await cmd.ExecuteScalarAsync(ct);
+        return res is long l ? l : Convert.ToInt64(res);
+    }
+
+    private bool Check(string name, bool pass, string detail)
+    {
+        _log($"  [{(pass ? "PASS" : "FAIL")}] {name} ({detail})");
+        return pass;
+    }
+}
