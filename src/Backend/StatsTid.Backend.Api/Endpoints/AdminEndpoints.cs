@@ -1624,18 +1624,45 @@ public static class AdminEndpoints
         {
             var actor = context.GetActorContext();
 
-            // Validate actor scope covers target org. S76 B1: LocalAdminOrAbove policy → LocalAdmin floor.
-            if (request.OrgId is not null)
+            // Validate scope type first — the shape gate below keys off ScopeType, not OrgId.
+            if (request.ScopeType is not ("GLOBAL" or "ORG_ONLY" or "ORG_AND_DESCENDANTS"))
+                return Results.BadRequest(new { error = "Invalid scopeType. Must be GLOBAL, ORG_ONLY, or ORG_AND_DESCENDANTS" });
+
+            // S85 / TASK-8501 (P7 privilege-escalation fix). Gate "global" on ScopeType, NOT
+            // on `OrgId is null`. The pre-S85 guard keyed global-ness off OrgId, so a LocalAdmin
+            // could grant {scopeType:'GLOBAL', orgId:'STY01'} — a non-null org let the
+            // ValidateOrgAccessAsync branch admit it, yet RoleScope.CoversOrg treats ANY GLOBAL
+            // scope as all-org access → effective global escalation. Now:
+            //   (A) shape: GLOBAL ⟹ OrgId IS NULL + HasGlobalScope(actor); non-GLOBAL ⟹ OrgId
+            //       non-null + the org-scope check.
+            if (request.ScopeType == "GLOBAL")
             {
+                if (request.OrgId is not null)
+                    return Results.BadRequest(new { error = "A GLOBAL-scoped role assignment must not carry an orgId (org_id must be null)." });
+                if (!HasGlobalScope(actor))
+                    return Results.Json(new { error = "Access denied", reason = "Only GlobalAdmin can grant global-scoped roles" }, statusCode: 403);
+            }
+            else
+            {
+                if (request.OrgId is null)
+                    return Results.BadRequest(new { error = "A non-GLOBAL-scoped role assignment requires an orgId." });
+                // Validate actor scope covers target org. S76 B1: LocalAdminOrAbove policy → LocalAdmin floor.
                 var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, request.OrgId, StatsTidRoles.LocalAdmin, ct);
                 if (!allowed)
                     return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
             }
-            else
+
+            // S85 / TASK-8501 (B) role↔scope coupling. AuthEndpoints.MapRoleIdToName maps an
+            // inherently-global role_id (GLOBAL_ADMIN) → the JWT primary role (ActorRole), and the
+            // GlobalAdminOnly policy checks the ROLE, not the scope. So a GLOBAL_ADMIN row with a
+            // non-GLOBAL scope would still mint an effective GlobalAdmin on the holder's next login.
+            // Require GLOBAL_ADMIN ⟹ ScopeType=='GLOBAL' + OrgId IS NULL + HasGlobalScope(actor).
+            if (string.Equals(request.RoleId, "GLOBAL_ADMIN", StringComparison.OrdinalIgnoreCase))
             {
-                // Granting a GLOBAL scope — only GlobalAdmin
+                if (request.ScopeType != "GLOBAL" || request.OrgId is not null)
+                    return Results.BadRequest(new { error = "GLOBAL_ADMIN must be granted with scopeType=GLOBAL and no orgId." });
                 if (!HasGlobalScope(actor))
-                    return Results.Json(new { error = "Access denied", reason = "Only GlobalAdmin can grant global-scoped roles" }, statusCode: 403);
+                    return Results.Json(new { error = "Access denied", reason = "Only GlobalAdmin can grant the GLOBAL_ADMIN role" }, statusCode: 403);
             }
 
             // Validate target user exists
@@ -1652,10 +1679,6 @@ public static class AdminEndpoints
             var targetRoleLevel = RoleHierarchy[request.RoleId];
             if (targetRoleLevel < actorLevel)
                 return Results.Json(new { error = "Access denied", reason = "Cannot grant a role with higher privilege than your own" }, statusCode: 403);
-
-            // Validate scope type
-            if (request.ScopeType is not ("GLOBAL" or "ORG_ONLY" or "ORG_AND_DESCENDANTS"))
-                return Results.BadRequest(new { error = "Invalid scopeType. Must be GLOBAL, ORG_ONLY, or ORG_AND_DESCENDANTS" });
 
             // Insert role assignment + audit
             var assignmentId = Guid.NewGuid();
@@ -1683,18 +1706,28 @@ public static class AdminEndpoints
                 assignCmd.Parameters.AddWithValue("expiresAt", (object?)request.ExpiresAt ?? DBNull.Value);
                 await assignCmd.ExecuteNonQueryAsync(ct);
 
-                // Insert audit record
+                // Insert audit record. S85 / TASK-8501: aligned to the real role_assignment_audit
+                // schema (init.sql:663) — audit_id is BIGSERIAL (auto), timestamp DEFAULT NOW()
+                // (omit both); action 'GRANTED' (the CHECK vocabulary, not 'GRANT'); actor_id +
+                // NOT-NULL actor_role columns (matching the users_audit idiom); details is JSONB
+                // (a small object via ::jsonb, not a free-text string — the original 22P02 cause).
+                var grantDetails = JsonSerializer.Serialize(new
+                {
+                    summary = $"Granted {request.RoleId} on {request.OrgId ?? "GLOBAL"} ({request.ScopeType}) to {request.UserId}",
+                    roleId = request.RoleId,
+                    orgId = request.OrgId,
+                    scopeType = request.ScopeType,
+                    userId = request.UserId,
+                });
                 await using var auditCmd = new NpgsqlCommand(
                     """
-                    INSERT INTO role_assignment_audit (audit_id, assignment_id, action, performed_by, performed_at, details)
-                    VALUES (@auditId, @assignmentId, 'GRANT', @performedBy, @performedAt, @details)
+                    INSERT INTO role_assignment_audit (assignment_id, action, actor_id, actor_role, details)
+                    VALUES (@assignmentId, 'GRANTED', @actorId, @actorRole, @details::jsonb)
                     """, conn, tx);
-                auditCmd.Parameters.AddWithValue("auditId", Guid.NewGuid());
                 auditCmd.Parameters.AddWithValue("assignmentId", assignmentId);
-                auditCmd.Parameters.AddWithValue("performedBy", actor.ActorId ?? "system");
-                auditCmd.Parameters.AddWithValue("performedAt", now);
-                auditCmd.Parameters.AddWithValue("details",
-                    $"Granted {request.RoleId} on {request.OrgId ?? "GLOBAL"} ({request.ScopeType}) to {request.UserId}");
+                auditCmd.Parameters.AddWithValue("actorId", actor.ActorId ?? "system");
+                auditCmd.Parameters.AddWithValue("actorRole", actor.ActorRole ?? "unknown");
+                auditCmd.Parameters.AddWithValue("details", grantDetails);
                 await auditCmd.ExecuteNonQueryAsync(ct);
 
                 // Emit domain event in-tx (BEFORE CommitAsync) so role_assignments
@@ -1778,6 +1811,7 @@ public static class AdminEndpoints
             var assignmentUserId = reader.GetString(reader.GetOrdinal("user_id"));
             var assignmentRoleId = reader.GetString(reader.GetOrdinal("role_id"));
             var assignmentOrgId = reader.IsDBNull(reader.GetOrdinal("org_id")) ? null : reader.GetString(reader.GetOrdinal("org_id"));
+            var assignmentScopeType = reader.GetString(reader.GetOrdinal("scope_type"));
             var isActive = reader.GetBoolean(reader.GetOrdinal("is_active"));
             await reader.CloseAsync();
             await lookupConn.CloseAsync();
@@ -1786,7 +1820,16 @@ public static class AdminEndpoints
                 return Results.BadRequest(new { error = "Role assignment is already revoked" });
 
             // Validate actor scope covers the assignment's org. S76 B1: LocalAdminOrAbove policy → LocalAdmin floor.
-            if (assignmentOrgId is not null)
+            // S85 / TASK-8501: gate global-ness on the stored scope_type, NOT on `org_id is null`
+            // (the shape CHECK keeps them equivalent, but keying on scope_type matches the grant
+            // guard and is robust to any legacy/divergent row).
+            if (assignmentScopeType == "GLOBAL")
+            {
+                // Revoking a GLOBAL scope — only GlobalAdmin
+                if (!HasGlobalScope(actor))
+                    return Results.Json(new { error = "Access denied", reason = "Only GlobalAdmin can revoke global-scoped roles" }, statusCode: 403);
+            }
+            else if (assignmentOrgId is not null)
             {
                 var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, assignmentOrgId, StatsTidRoles.LocalAdmin, ct);
                 if (!allowed)
@@ -1794,9 +1837,10 @@ public static class AdminEndpoints
             }
             else
             {
-                // Revoking a GLOBAL scope — only GlobalAdmin
+                // Defensive: a non-GLOBAL scope with a null org_id is a malformed row (the shape
+                // CHECK forbids it). Refuse rather than silently admit a de-privileging operation.
                 if (!HasGlobalScope(actor))
-                    return Results.Json(new { error = "Access denied", reason = "Only GlobalAdmin can revoke global-scoped roles" }, statusCode: 403);
+                    return Results.Json(new { error = "Access denied", reason = "Cannot determine org scope for this assignment" }, statusCode: 403);
             }
 
             // Deactivate assignment + insert audit
@@ -1812,17 +1856,26 @@ public static class AdminEndpoints
                 deactivateCmd.Parameters.AddWithValue("assignmentId", request.AssignmentId);
                 await deactivateCmd.ExecuteNonQueryAsync(ct);
 
+                // Insert audit record. S85 / TASK-8501: aligned to the real role_assignment_audit
+                // schema — action 'REVOKED' (CHECK vocabulary), actor_id + NOT-NULL actor_role,
+                // details as JSONB (::jsonb), audit_id/timestamp auto. See the grant-path note.
+                var revokeDetails = JsonSerializer.Serialize(new
+                {
+                    summary = $"Revoked {assignmentRoleId} from {assignmentUserId}"
+                        + (request.Reason is not null ? $". Reason: {request.Reason}" : ""),
+                    roleId = assignmentRoleId,
+                    userId = assignmentUserId,
+                    reason = request.Reason,
+                });
                 await using var auditCmd = new NpgsqlCommand(
                     """
-                    INSERT INTO role_assignment_audit (audit_id, assignment_id, action, performed_by, performed_at, details)
-                    VALUES (@auditId, @assignmentId, 'REVOKE', @performedBy, @performedAt, @details)
+                    INSERT INTO role_assignment_audit (assignment_id, action, actor_id, actor_role, details)
+                    VALUES (@assignmentId, 'REVOKED', @actorId, @actorRole, @details::jsonb)
                     """, conn, tx);
-                auditCmd.Parameters.AddWithValue("auditId", Guid.NewGuid());
                 auditCmd.Parameters.AddWithValue("assignmentId", request.AssignmentId);
-                auditCmd.Parameters.AddWithValue("performedBy", actor.ActorId ?? "system");
-                auditCmd.Parameters.AddWithValue("performedAt", now);
-                auditCmd.Parameters.AddWithValue("details",
-                    $"Revoked {assignmentRoleId} from {assignmentUserId}" + (request.Reason is not null ? $". Reason: {request.Reason}" : ""));
+                auditCmd.Parameters.AddWithValue("actorId", actor.ActorId ?? "system");
+                auditCmd.Parameters.AddWithValue("actorRole", actor.ActorRole ?? "unknown");
+                auditCmd.Parameters.AddWithValue("details", revokeDetails);
                 await auditCmd.ExecuteNonQueryAsync(ct);
 
                 // Emit domain event in-tx (BEFORE CommitAsync) so role_assignments

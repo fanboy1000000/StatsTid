@@ -149,17 +149,20 @@ public sealed class AdminAtomicTests : IAsyncLifetime
                     await assignCmd.ExecuteNonQueryAsync();
                 }
 
-                // Step 2: role_assignment_audit INSERT — mirrors AdminEndpoints.cs L594 verbatim
-                // (column shape `audit_id, assignment_id, action, performed_by, performed_at, details`
-                // matches what production code emits today).
+                // Step 2: role_assignment_audit INSERT — mirrors the S85/TASK-8501 production
+                // shape (AdminEndpoints.cs grant path): the real init.sql column list
+                // `assignment_id, action='GRANTED', actor_id, actor_role, details::jsonb`
+                // (audit_id BIGSERIAL + timestamp DEFAULT auto). The pre-S85 form
+                // (audit_id UUID, action='GRANT', performed_by/performed_at, details TEXT)
+                // violated 5 columns/the CHECK against the real schema.
                 await using (var auditCmd = new NpgsqlCommand(
                     """
-                    INSERT INTO role_assignment_audit (audit_id, assignment_id, action, performed_by, performed_at, details)
-                    VALUES (@auditId, @assignmentId, 'GRANT', 'tester', NOW(), 'Forced-rollback test')
+                    INSERT INTO role_assignment_audit (assignment_id, action, actor_id, actor_role, details)
+                    VALUES (@assignmentId, 'GRANTED', 'tester', 'GlobalAdmin', @details::jsonb)
                     """, conn, tx))
                 {
-                    auditCmd.Parameters.AddWithValue("auditId", Guid.NewGuid());
                     auditCmd.Parameters.AddWithValue("assignmentId", assignmentId);
+                    auditCmd.Parameters.AddWithValue("details", """{"summary":"Forced-rollback test"}""");
                     await auditCmd.ExecuteNonQueryAsync();
                 }
 
@@ -205,9 +208,10 @@ public sealed class AdminAtomicTests : IAsyncLifetime
     /// <c>role_assignment_audit</c> tables — not in
     /// <see cref="ForcedRollbackHarness.ForcedRollbackSchema"/> because S24's harness only
     /// covered Phase-2 endpoint tables. Column shapes mirror <c>docker/postgres/init.sql</c>
-    /// (users, roles, role_assignments) plus the production endpoint's audit-INSERT column
-    /// list (action, performed_by, performed_at — what AdminEndpoints.cs L594 actually
-    /// executes today). Idempotent.
+    /// (users, roles, role_assignments, role_assignment_audit). S85 / TASK-8501 reconciled the
+    /// role_assignment_audit fixture to the canonical init.sql schema (audit_id BIGSERIAL,
+    /// action CHECK, actor_id/actor_role, details JSONB) — the pre-S85 fixture mirrored the
+    /// production INSERT bug (performed_by/performed_at/details TEXT) and masked it. Idempotent.
     /// </summary>
     private const string AdminSchema = """
         CREATE TABLE IF NOT EXISTS users (
@@ -252,13 +256,20 @@ public sealed class AdminAtomicTests : IAsyncLifetime
             UNIQUE (user_id, role_id, org_id)
         );
 
+        -- S85 / TASK-8501: reconciled to the real init.sql:663 schema (audit_id BIGSERIAL,
+        -- action CHECK vocabulary, actor_id/actor_role NOT NULL, details JSONB, timestamp
+        -- DEFAULT NOW()) — the pre-S85 fixture replicated the buggy column shape
+        -- (audit_id UUID, performed_by, performed_at, details TEXT, no CHECK), which masked
+        -- the production INSERT defect. The real WAF endpoint tests
+        -- (RoleAssignmentGrantRevokeEndpointTests) now hit the canonical init.sql schema.
         CREATE TABLE IF NOT EXISTS role_assignment_audit (
-            audit_id            UUID        PRIMARY KEY,
+            audit_id            BIGSERIAL   PRIMARY KEY,
             assignment_id       UUID        NOT NULL,
-            action              TEXT        NOT NULL,
-            performed_by        TEXT        NOT NULL,
-            performed_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            details             TEXT
+            action              TEXT        NOT NULL CHECK (action IN ('GRANTED', 'REVOKED', 'EXPIRED', 'MODIFIED')),
+            actor_id            TEXT        NOT NULL,
+            actor_role          TEXT        NOT NULL,
+            details             JSONB,
+            timestamp           TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
 
         -- S31 / TASK-3104 fixture DDL drift: employee_profiles + audit mirror

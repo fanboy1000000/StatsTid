@@ -373,6 +373,8 @@
 
 **Table constraints:**
 - UNIQUE (user_id, role_id, org_id)
+- CONSTRAINT role_assignments_global_scope_shape CHECK ((scope_type = 'GLOBAL') = (org_id IS NULL))
+- CONSTRAINT role_assignments_global_admin_requires_global CHECK (role_id <> 'GLOBAL_ADMIN' OR scope_type = 'GLOBAL')
 
 **Indexes:**
 - `idx_role_assignments_user` on (user_id)

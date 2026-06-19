@@ -653,7 +653,18 @@ CREATE TABLE IF NOT EXISTS role_assignments (
     assigned_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     expires_at          TIMESTAMPTZ,
     is_active           BOOLEAN     NOT NULL DEFAULT TRUE,
-    UNIQUE (user_id, role_id, org_id)
+    UNIQUE (user_id, role_id, org_id),
+    -- S85 / TASK-8501 (P7 privilege-escalation backstop, defense-in-depth). Two additive
+    -- CHECKs prevent a future code path from re-opening the grant escalation closed in
+    -- AdminEndpoints.cs:
+    --   (i) shape: a GLOBAL scope must have a null org and vice versa (a {GLOBAL, non-null org}
+    --       row is the escalation shape — RoleScope.CoversOrg treats any GLOBAL as all-org);
+    --   (ii) role↔scope: the inherently-global GLOBAL_ADMIN role_id may only be assigned with
+    --       a GLOBAL scope (AuthEndpoints maps role_id→the JWT primary role; a GLOBAL_ADMIN row
+    --       with a non-GLOBAL scope still mints an effective GlobalAdmin).
+    -- Pre-validated against 3,827 live rows (baseline seed + demo): 0 violations.
+    CONSTRAINT role_assignments_global_scope_shape CHECK ((scope_type = 'GLOBAL') = (org_id IS NULL)),
+    CONSTRAINT role_assignments_global_admin_requires_global CHECK (role_id <> 'GLOBAL_ADMIN' OR scope_type = 'GLOBAL')
 );
 CREATE INDEX IF NOT EXISTS idx_role_assignments_user ON role_assignments(user_id);
 CREATE INDEX IF NOT EXISTS idx_role_assignments_org ON role_assignments(org_id);
@@ -4054,3 +4065,45 @@ $$;
 CREATE INDEX IF NOT EXISTS idx_approval_employee_period_end
     ON approval_periods (employee_id, period_end DESC);
 -- S74-MEDARBEJDER-ADMIN-SEGMENT-END
+
+-- =========================================================================
+-- S85 / TASK-8501 — role_assignments privilege-escalation CHECK backstop
+--   (legacy-upgrade path; the greenfield CREATE TABLE above already carries both
+--    CONSTRAINTs). `CREATE TABLE IF NOT EXISTS` skips an existing role_assignments
+--    table on upgrade, so the two CHECKs would never land on a legacy DB without
+--    this explicit ALTER. Both are additive and pre-validated against all 3,827
+--    live rows (baseline seed + demo): 0 violations.
+--      (i)  shape: (scope_type = 'GLOBAL') = (org_id IS NULL)
+--      (ii) role↔scope: role_id <> 'GLOBAL_ADMIN' OR scope_type = 'GLOBAL'
+--   Idempotent: DROP CONSTRAINT IF EXISTS then ADD (the project ALTER-in-DO-block
+--   convention). The ALTERs run UNCONDITIONALLY (outside the ledger guard) so they
+--   also repair a DB that ran a pre-S85 init.sql; the ledger row bounds future
+--   one-shot work for this migration.
+-- =========================================================================
+DO $$
+BEGIN
+    ALTER TABLE role_assignments
+    DROP CONSTRAINT IF EXISTS role_assignments_global_scope_shape;
+    ALTER TABLE role_assignments
+    ADD CONSTRAINT role_assignments_global_scope_shape
+    CHECK ((scope_type = 'GLOBAL') = (org_id IS NULL));
+
+    ALTER TABLE role_assignments
+    DROP CONSTRAINT IF EXISTS role_assignments_global_admin_requires_global;
+    ALTER TABLE role_assignments
+    ADD CONSTRAINT role_assignments_global_admin_requires_global
+    CHECK (role_id <> 'GLOBAL_ADMIN' OR scope_type = 'GLOBAL');
+
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s85-role-assignments-escalation-checks', 'S85/TASK-8501 (P7): additive role_assignments CHECKs — (i) (scope_type=GLOBAL)=(org_id IS NULL) shape backstop; (ii) role_id<>GLOBAL_ADMIN OR scope_type=GLOBAL role-scope coupling. Defense-in-depth on the grant privilege-escalation closed in AdminEndpoints.cs. Pre-validated 0 violations on 3,827 live rows.')
+    ON CONFLICT (migration_id) DO NOTHING;
+
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+
+    -- Future one-shot work for this migration goes here (none today — the ALTERs
+    -- above are the entire migration body, lifted out of the guard for repair
+    -- idempotency).
+END
+$$;
