@@ -841,6 +841,61 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
+    //  S83 / TASK-8303 — DEACTIVATED designated approver fails the in-lock authority re-check.
+    //  The in-lock approve/reject path re-evaluates IsEffectiveDesignatedApproverAsync UNDER the
+    //  held tree advisory (ApprovalEndpoints ~:290/:299); its FIRST gate is
+    //  DesignatedApproverAuthorizer.IsActiveLeaderOrAboveAsync (the authorizer :131-145), which
+    //  requires the actor to be an ACTIVE user holding a LeaderOrAbove role. When the designated
+    //  approver is deactivated (users.is_active = FALSE) that gate fails CLOSED → the edge no longer
+    //  grants authority, org-scope still denies (AFD02 ⊄ AFD01) → 403 on BOTH approve and reject.
+    //  NO production change pins this — it asserts the existing fail-closed behavior is intact, the
+    //  authorization complement to the TASK-8301 revoke-serialization change.
+    // ════════════════════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public async Task DeactivatedDesignatedApprover_CannotApprove_NorReject_FailsClosed()
+    {
+        // Mgr is Emp's cross-afdeling PRIMARY designated approver (org-scope AFD02 does NOT cover
+        // Emp's AFD01) — only the edge grants authority. Sanity: the edge grants it WHILE Mgr is active.
+        var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory));
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        Assert.True(await authorizer.IsEffectiveDesignatedApproverAsync(Mgr, Emp, asOf: today),
+            "Precondition: an ACTIVE Mgr must hold the designated edge over Emp.");
+
+        // DEACTIVATE the designated approver.
+        await using (var conn = new NpgsqlConnection(_harness.ConnectionString))
+        {
+            await conn.OpenAsync();
+            await using var deact = new NpgsqlCommand(
+                "UPDATE users SET is_active = FALSE WHERE user_id = @mgr", conn);
+            deact.Parameters.AddWithValue("mgr", Mgr);
+            await deact.ExecuteNonQueryAsync();
+        }
+
+        // The authority predicate now denies (the IsActiveLeaderOrAbove gate fails closed).
+        Assert.False(await authorizer.IsEffectiveDesignatedApproverAsync(Mgr, Emp, asOf: today),
+            "A deactivated approver must not hold the designated edge (fail-closed).");
+
+        // APPROVE is denied (org-scope no + the deactivated edge denied by the in-lock re-check → 403).
+        var approvePeriod = await InsertPeriodWithRangeAsync(
+            Emp, "AFD01", "SUBMITTED", new DateOnly(2026, 5, 1), new DateOnly(2026, 5, 31));
+        var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "AFD02"));
+        var approveRsp = await client.PostAsync($"/api/approval/{approvePeriod}/approve", null);
+        Assert.Equal(HttpStatusCode.Forbidden, approveRsp.StatusCode);
+        Assert.Equal("SUBMITTED", await ReadStatusAsync(approvePeriod));
+
+        // REJECT is denied too — a SEPARATE period (reject needs SUBMITTED/EMPLOYEE_APPROVED).
+        var rejectPeriod = await InsertPeriodWithRangeAsync(
+            Emp, "AFD01", "SUBMITTED", new DateOnly(2026, 6, 1), new DateOnly(2026, 6, 30));
+        var rejectRsp = await client.PostAsJsonAsync(
+            $"/api/approval/{rejectPeriod}/reject", new { reason = "should-be-denied" });
+        Assert.Equal(HttpStatusCode.Forbidden, rejectRsp.StatusCode);
+        Assert.Equal("SUBMITTED", await ReadStatusAsync(rejectPeriod));
+    }
+
+    // ════════════════════════════════════════════════════════════════════════════════
     //  Helpers
     // ════════════════════════════════════════════════════════════════════════════════
 

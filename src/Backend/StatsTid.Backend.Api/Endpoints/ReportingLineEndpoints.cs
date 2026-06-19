@@ -2075,6 +2075,18 @@ public static class ReportingLineEndpoints
 
         // ═══════════════════════════════════════════
         // Endpoint 13: DELETE /api/reporting-lines/delegate — Revoke self-delegation
+        //
+        // S83 / ADR-027 D18→D19 — the self-revoke is now SERIALIZED on the revoke subject's tree
+        // under the SHARED revoke-safe drift-guarded acquire (AcquireRevokeTreeLocksAsync). Pre-S83 it
+        // took NO advisory at all (just a RepeatableRead snapshot), so a concurrent cross-styrelse
+        // transfer of the self-delegating manager, or a key-sharing in-tree mutator, could proceed with
+        // no mutual exclusion against the revoke. It now ALWAYS locks the PERSISTED
+        // manager_vikar.tree_root_org_id (the immutable revoke-authority anchor — survives an
+        // inactive/transferred subject) and, when derivable, the subject's CURRENT root too (drift-
+        // guarded). The drift guard wraps the body in TreeRootDriftRetry.RunAsync (a concurrent transfer
+        // committing mid-acquire → rollback + retry on a fresh tx). The cheap existence probe is taken
+        // PRE-lock (it also carries the persisted root used to KEY the advisory); a missing active row
+        // → the existing 404 (behavior-equivalent to the prior post-close null check).
         // ═══════════════════════════════════════════
 
         app.MapDelete("/api/reporting-lines/delegate", async (
@@ -2092,80 +2104,104 @@ public static class ReportingLineEndpoints
             if (string.IsNullOrEmpty(actorId))
                 return Results.Json(new { error = "Actor identity required" }, statusCode: 401);
 
-            await using var conn = connectionFactory.Create();
-            await conn.OpenAsync(ct);
-            await using var tx = await conn.BeginTransactionAsync(IsolationLevel.RepeatableRead, ct);
-            try
-            {
-                // S74 storage cutover: close the actor's single active manager_vikar row + emit
-                // ManagerVikarEnded, one atomic tx (ADR-018 D3). revokedCount stays in the response
-                // (contract-stable) — set to the number of CURRENT PRIMARY reports the vikar covered
-                // (excluding admin-ACTING-superseded ones), or 1 if it covered none but the row existed.
-                // coveredCount read INSIDE the write tx (same conn/tx, under RepeatableRead) so the
-                // response reflects the committed state — no separate-connection staleness (Codex W).
-                // It reads active reporting_lines, unchanged by the vikar close.
-                int coveredCount;
-                await using (var countCmd = new NpgsqlCommand(
-                    """
-                    SELECT COUNT(*) FROM reporting_lines rl
-                    WHERE rl.manager_id = @actorId
-                      AND rl.relationship = 'PRIMARY'
-                      AND rl.effective_to IS NULL
-                      AND NOT EXISTS (
-                          SELECT 1 FROM reporting_lines admin_act
-                          WHERE admin_act.employee_id = rl.employee_id
-                            AND admin_act.relationship = 'ACTING'
-                            AND admin_act.effective_to IS NULL
-                            AND admin_act.source <> 'SELF_DELEGATION')
-                    """, conn, tx))
-                {
-                    countCmd.Parameters.AddWithValue("actorId", actorId);
-                    coveredCount = Convert.ToInt32(await countCmd.ExecuteScalarAsync(ct) ?? 0);
-                }
+            // Cheap pre-lock existence probe — a 404 here avoids taking the tree lock when there is no
+            // active self-delegation (a double-revoke / stale UI). It carries the PERSISTED tree root
+            // used to KEY the revoke-safe advisory (the actor may have transferred/deactivated, so the
+            // persisted column — not a live users derivation — is the stable anchor). For self-
+            // delegation the absent approver == the actor, so we key on the actor.
+            var probe = await vikarRepo.GetActiveByApproverAnyDateAsync(actorId, ct);
+            if (probe is null)
+                return Results.NotFound(new { error = "No active self-delegation to revoke" });
 
-                var today = DateOnly.FromDateTime(DateTime.UtcNow);
-                var closed = await vikarRepo.CloseByApproverAsync(conn, tx, actorId, today, ct);
-                if (closed is null)
+            // S83 — bounded drift-retry wrapper: the in-tx body re-keys from scratch on a concurrent
+            // transfer that drifts the subject's current root under the advisory.
+            return await TreeRootDriftRetry.RunAsync(async () =>
+            {
+                await using var conn = connectionFactory.Create();
+                await conn.OpenAsync(ct);
+                // ReadCommitted: the advisory is the tx's first lock-bearing statement (consistent with
+                // the assign/create/admin-revoke paths); a RepeatableRead snapshot pinned before the
+                // lock would not observe a competing mutation committed during the lock wait.
+                await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
+                try
+                {
+                    // (1) Take the revoke-safe tree advisories FIRST (before any read/mutation): the
+                    //     persisted root ALWAYS + the subject's current root when derivable (drift-
+                    //     guarded). Serializes this revoke against in-tree mutators / a transfer.
+                    await repo.AcquireRevokeTreeLocksAsync(conn, tx, probe.TreeRootOrgId, actorId, ct);
+
+                    // S74 storage cutover: close the actor's single active manager_vikar row + emit
+                    // ManagerVikarEnded, one atomic tx (ADR-018 D3). revokedCount stays in the response
+                    // (contract-stable) — set to the number of CURRENT PRIMARY reports the vikar covered
+                    // (excluding admin-ACTING-superseded ones), or 1 if it covered none but the row existed.
+                    // coveredCount read INSIDE the write tx (same conn/tx) so the response reflects the
+                    // committed state — no separate-connection staleness (Codex W). It reads active
+                    // reporting_lines, unchanged by the vikar close.
+                    int coveredCount;
+                    await using (var countCmd = new NpgsqlCommand(
+                        """
+                        SELECT COUNT(*) FROM reporting_lines rl
+                        WHERE rl.manager_id = @actorId
+                          AND rl.relationship = 'PRIMARY'
+                          AND rl.effective_to IS NULL
+                          AND NOT EXISTS (
+                              SELECT 1 FROM reporting_lines admin_act
+                              WHERE admin_act.employee_id = rl.employee_id
+                                AND admin_act.relationship = 'ACTING'
+                                AND admin_act.effective_to IS NULL
+                                AND admin_act.source <> 'SELF_DELEGATION')
+                        """, conn, tx))
+                    {
+                        countCmd.Parameters.AddWithValue("actorId", actorId);
+                        coveredCount = Convert.ToInt32(await countCmd.ExecuteScalarAsync(ct) ?? 0);
+                    }
+
+                    var today = DateOnly.FromDateTime(DateTime.UtcNow);
+                    var closed = await vikarRepo.CloseByApproverAsync(conn, tx, actorId, today, ct);
+                    if (closed is null)
+                    {
+                        // Lost a race to a concurrent revoke/expiry between the probe and the lock — the
+                        // row is already closed. Byte-stable with the prior post-close null check.
+                        await tx.RollbackAsync(ct);
+                        return Results.NotFound(new { error = "No active self-delegation to revoke" });
+                    }
+
+                    var endedEvent = new ManagerVikarEnded
+                    {
+                        VikarId = closed.VikarId,
+                        AbsentApproverId = closed.AbsentApproverId,
+                        VikarUserId = closed.VikarUserId,
+                        UntilDate = closed.UntilDate,
+                        Reason = closed.Reason,
+                        TreeRootOrgId = closed.TreeRootOrgId,
+                        EffectiveTo = closed.EffectiveTo!.Value,
+                        EndReason = "REVOKED",
+                        RowVersion = closed.Version,
+                        ActorId = actor.ActorId,
+                        ActorRole = actor.ActorRole,
+                        CorrelationId = actor.CorrelationId,
+                    };
+                    // ADR-018 D3 + ADR-026 D2: event + audit-projection row + state in ONE tx.
+                    var endedOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"reporting-line-{actorId}", endedEvent, ct);
+                    var endedAuditCtx = new AuditProjectionContext(
+                        ActorId: actor.ActorId,
+                        ActorPrimaryOrgId: actor.OrgId,
+                        CorrelationId: actor.CorrelationId,
+                        OccurredAt: new DateTimeOffset(endedEvent.OccurredAt),
+                        ResolvedTargetOrgId: endedEvent.TreeRootOrgId);
+                    var endedAuditRow = vikarEndedAuditMapper.Map(endedEvent, endedAuditCtx);
+                    await auditRepo.InsertAsync(conn, tx, endedEvent.EventId, endedOutboxId, endedEvent.EventType, endedAuditRow, endedAuditCtx, ct);
+
+                    await tx.CommitAsync(ct);
+
+                    return Results.Ok(new { revokedCount = coveredCount > 0 ? coveredCount : 1 });
+                }
+                catch
                 {
                     await tx.RollbackAsync(ct);
-                    return Results.NotFound(new { error = "No active self-delegation to revoke" });
+                    throw;
                 }
-
-                var endedEvent = new ManagerVikarEnded
-                {
-                    VikarId = closed.VikarId,
-                    AbsentApproverId = closed.AbsentApproverId,
-                    VikarUserId = closed.VikarUserId,
-                    UntilDate = closed.UntilDate,
-                    Reason = closed.Reason,
-                    TreeRootOrgId = closed.TreeRootOrgId,
-                    EffectiveTo = closed.EffectiveTo!.Value,
-                    EndReason = "REVOKED",
-                    RowVersion = closed.Version,
-                    ActorId = actor.ActorId,
-                    ActorRole = actor.ActorRole,
-                    CorrelationId = actor.CorrelationId,
-                };
-                // ADR-018 D3 + ADR-026 D2: event + audit-projection row + state in ONE tx.
-                var endedOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"reporting-line-{actorId}", endedEvent, ct);
-                var endedAuditCtx = new AuditProjectionContext(
-                    ActorId: actor.ActorId,
-                    ActorPrimaryOrgId: actor.OrgId,
-                    CorrelationId: actor.CorrelationId,
-                    OccurredAt: new DateTimeOffset(endedEvent.OccurredAt),
-                    ResolvedTargetOrgId: endedEvent.TreeRootOrgId);
-                var endedAuditRow = vikarEndedAuditMapper.Map(endedEvent, endedAuditCtx);
-                await auditRepo.InsertAsync(conn, tx, endedEvent.EventId, endedOutboxId, endedEvent.EventType, endedAuditRow, endedAuditCtx, ct);
-
-                await tx.CommitAsync(ct);
-
-                return Results.Ok(new { revokedCount = coveredCount > 0 ? coveredCount : 1 });
-            }
-            catch
-            {
-                await tx.RollbackAsync(ct);
-                throw;
-            }
+            });
         }).RequireAuthorization("LeaderOrAbove");
 
         // ═══════════════════════════════════════════
@@ -2469,6 +2505,7 @@ public static class ReportingLineEndpoints
 
         app.MapDelete("/api/admin/reporting-lines/{managerId}/vikar", async (
             string managerId,
+            ReportingLineRepository repo,
             ManagerVikarRepository vikarRepo,
             OrgScopeValidator scopeValidator,
             DbConnectionFactory connectionFactory,
@@ -2486,101 +2523,114 @@ public static class ReportingLineEndpoints
             // with no active vikar (a typo / double-revoke). It carries the persisted tree root used
             // to KEY the advisory lock (the manager may be inactive, so we cannot re-resolve the tree
             // from the users row). The AUTHORITATIVE row is the in-lock FOR UPDATE re-read below.
+            // The probe stays OUTSIDE the drift-retry — it is an existence check + the persisted root,
+            // both stable across a retry.
             var probe = await vikarRepo.GetActiveByApproverAnyDateAsync(managerId, ct);
             if (probe is null)
                 return Results.NotFound(new { error = "No active vikar to revoke for this manager" });
 
-            // Close + emit ManagerVikarEnded + audit (admin actor-org), one atomic tx.
-            // Lock order: (1) tree advisory (keyed on the persisted tree root) → (2) the active row
-            // FOR UPDATE → (3) authorize vs THAT row's persisted tree root → (4) close.
-            ManagerVikar closed;
-            await using var conn = connectionFactory.Create();
-            await conn.OpenAsync(ct);
-            // ReadCommitted: the advisory lock is the tx's first statement (consistent with the
-            // assign/create paths); a RepeatableRead snapshot pinned there would not see a competing
-            // close/recreate committed during the wait.
-            await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
-            try
+            // S83 / ADR-027 D18→D19 — bounded drift-retry wrapper. Pre-S83 this revoke took ONLY the
+            // PERSISTED-root advisory; a concurrent cross-styrelse transfer of the manager, or a key-
+            // sharing mutator on the manager's CURRENT tree, could proceed on a DIFFERENT key with no
+            // mutual exclusion. The revoke-safe acquire now ALSO locks the manager's current root (when
+            // derivable, drift-guarded) on top of the always-locked persisted anchor, so a concurrent
+            // current-root drift → rollback + retry on a fresh tx.
+            return await TreeRootDriftRetry.RunAsync(async () =>
             {
-                // (1) Take the tree advisory lock FIRST, keyed on the persisted tree root (the
-                //     revoke-safe anchor; survives an inactive manager/vikar). This serializes the
-                //     revoke against concurrent tree mutations (assigns / recreates).
-                await ReportingLineRepository.AcquireTreeLockAsync(conn, tx, probe.TreeRootOrgId, ct);
-
-                // (2) Re-read the active row FOR UPDATE under the lock — THE authoritative row. A
-                //     concurrent close/recreate that committed before this tx took the lock is seen;
-                //     one still in flight is blocked on the same advisory / row pin.
-                var activeVikar = await vikarRepo.GetActiveByApproverForUpdateInTxAsync(conn, tx, managerId, ct);
-                if (activeVikar is null)
+                // Close + emit ManagerVikarEnded + audit (admin actor-org), one atomic tx.
+                // Lock order: (1) revoke-safe tree advisories (persisted root + current root when
+                // derivable) → (2) the active row FOR UPDATE → (3) authorize vs THAT row's persisted
+                // tree root → (4) close.
+                ManagerVikar closed;
+                await using var conn = connectionFactory.Create();
+                await conn.OpenAsync(ct);
+                // ReadCommitted: the advisory lock is the tx's first statement (consistent with the
+                // assign/create paths); a RepeatableRead snapshot pinned there would not see a competing
+                // close/recreate committed during the wait.
+                await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
+                try
                 {
-                    // Lost a race to a concurrent revoke/expiry — the row is already closed.
-                    await tx.RollbackAsync(ct);
-                    return Results.NotFound(new { error = "No active vikar to revoke for this manager" });
+                    // (1) Take the REVOKE-SAFE tree advisories FIRST: the persisted tree root (the
+                    //     revoke-safe anchor; survives an inactive manager/vikar) ALWAYS + the manager's
+                    //     CURRENT root when derivable (drift-guarded). Serializes the revoke against
+                    //     concurrent tree mutations (assigns / recreates) AND a live transfer.
+                    await repo.AcquireRevokeTreeLocksAsync(conn, tx, probe.TreeRootOrgId, managerId, ct);
+
+                    // (2) Re-read the active row FOR UPDATE under the lock — THE authoritative row. A
+                    //     concurrent close/recreate that committed before this tx took the lock is seen;
+                    //     one still in flight is blocked on the same advisory / row pin.
+                    var activeVikar = await vikarRepo.GetActiveByApproverForUpdateInTxAsync(conn, tx, managerId, ct);
+                    if (activeVikar is null)
+                    {
+                        // Lost a race to a concurrent revoke/expiry — the row is already closed.
+                        await tx.RollbackAsync(ct);
+                        return Results.NotFound(new { error = "No active vikar to revoke for this manager" });
+                    }
+
+                    // (3) Authorize against the PINNED row's PERSISTED tree_root_org_id — the SOLE
+                    //     revoke-authority anchor (WARNING: the prior "current-org OR persisted-root"
+                    //     fallback is removed). The actor's admin scope must cover this exact tree root
+                    //     (FLOORED at LocalAdmin: a non-admin scope covering the styrelse cannot revoke).
+                    var (treeAllowed, treeReason) = await scopeValidator.ValidateOrgAccessAsync(
+                        actor, activeVikar.TreeRootOrgId, StatsTidRoles.LocalAdmin, ct);
+                    if (!treeAllowed)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.Json(new { error = "Access denied", reason = treeReason }, statusCode: 403);
+                    }
+
+                    // (4) Close the SAME pinned row (keyed by vikar_id, idempotent under effective_to
+                    //     IS NULL). The FOR UPDATE above guarantees this is the row we authorized.
+                    var today = DateOnly.FromDateTime(DateTime.UtcNow);
+                    var maybeClosed = await vikarRepo.CloseAsync(conn, tx, activeVikar.VikarId, today, ct);
+                    if (maybeClosed is null)
+                    {
+                        // Cannot happen under the FOR UPDATE pin, but stay fail-safe.
+                        await tx.RollbackAsync(ct);
+                        return Results.NotFound(new { error = "No active vikar to revoke for this manager" });
+                    }
+                    closed = maybeClosed;
+
+                    var endedEvent = new ManagerVikarEnded
+                    {
+                        VikarId = closed.VikarId,
+                        AbsentApproverId = closed.AbsentApproverId,
+                        VikarUserId = closed.VikarUserId,
+                        UntilDate = closed.UntilDate,
+                        Reason = closed.Reason,
+                        TreeRootOrgId = closed.TreeRootOrgId,        // the PINNED row's persisted root
+                        EffectiveTo = closed.EffectiveTo!.Value,
+                        EndReason = "REVOKED",
+                        RowVersion = closed.Version,
+                        ActorId = actor.ActorId,                       // the ADMIN
+                        ActorRole = actor.ActorRole,
+                        CorrelationId = actor.CorrelationId,
+                    };
+                    var endedOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"reporting-line-{managerId}", endedEvent, ct);
+                    var endedAuditCtx = new AuditProjectionContext(
+                        ActorId: actor.ActorId,
+                        ActorPrimaryOrgId: actor.OrgId,                // the ADMIN's org (S71 lesson)
+                        CorrelationId: actor.CorrelationId,
+                        OccurredAt: new DateTimeOffset(endedEvent.OccurredAt),
+                        ResolvedTargetOrgId: endedEvent.TreeRootOrgId);
+                    var endedAuditRow = vikarEndedAuditMapper.Map(endedEvent, endedAuditCtx);
+                    await auditRepo.InsertAsync(conn, tx, endedEvent.EventId, endedOutboxId, endedEvent.EventType, endedAuditRow, endedAuditCtx, ct);
+
+                    await tx.CommitAsync(ct);
+
+                    return Results.Ok(new
+                    {
+                        vikarId = closed.VikarId,
+                        managerId,
+                        vikarUserId = closed.VikarUserId,
+                        revoked = true,
+                    });
                 }
-
-                // (3) Authorize against the PINNED row's PERSISTED tree_root_org_id — the SOLE
-                //     revoke-authority anchor (WARNING: the prior "current-org OR persisted-root"
-                //     fallback is removed). The actor's admin scope must cover this exact tree root
-                //     (FLOORED at LocalAdmin: a non-admin scope covering the styrelse cannot revoke).
-                var (treeAllowed, treeReason) = await scopeValidator.ValidateOrgAccessAsync(
-                    actor, activeVikar.TreeRootOrgId, StatsTidRoles.LocalAdmin, ct);
-                if (!treeAllowed)
+                catch
                 {
                     await tx.RollbackAsync(ct);
-                    return Results.Json(new { error = "Access denied", reason = treeReason }, statusCode: 403);
+                    throw;
                 }
-
-                // (4) Close the SAME pinned row (keyed by vikar_id, idempotent under effective_to
-                //     IS NULL). The FOR UPDATE above guarantees this is the row we authorized.
-                var today = DateOnly.FromDateTime(DateTime.UtcNow);
-                var maybeClosed = await vikarRepo.CloseAsync(conn, tx, activeVikar.VikarId, today, ct);
-                if (maybeClosed is null)
-                {
-                    // Cannot happen under the FOR UPDATE pin, but stay fail-safe.
-                    await tx.RollbackAsync(ct);
-                    return Results.NotFound(new { error = "No active vikar to revoke for this manager" });
-                }
-                closed = maybeClosed;
-
-                var endedEvent = new ManagerVikarEnded
-                {
-                    VikarId = closed.VikarId,
-                    AbsentApproverId = closed.AbsentApproverId,
-                    VikarUserId = closed.VikarUserId,
-                    UntilDate = closed.UntilDate,
-                    Reason = closed.Reason,
-                    TreeRootOrgId = closed.TreeRootOrgId,
-                    EffectiveTo = closed.EffectiveTo!.Value,
-                    EndReason = "REVOKED",
-                    RowVersion = closed.Version,
-                    ActorId = actor.ActorId,                       // the ADMIN
-                    ActorRole = actor.ActorRole,
-                    CorrelationId = actor.CorrelationId,
-                };
-                var endedOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"reporting-line-{managerId}", endedEvent, ct);
-                var endedAuditCtx = new AuditProjectionContext(
-                    ActorId: actor.ActorId,
-                    ActorPrimaryOrgId: actor.OrgId,                // the ADMIN's org (S71 lesson)
-                    CorrelationId: actor.CorrelationId,
-                    OccurredAt: new DateTimeOffset(endedEvent.OccurredAt),
-                    ResolvedTargetOrgId: endedEvent.TreeRootOrgId);
-                var endedAuditRow = vikarEndedAuditMapper.Map(endedEvent, endedAuditCtx);
-                await auditRepo.InsertAsync(conn, tx, endedEvent.EventId, endedOutboxId, endedEvent.EventType, endedAuditRow, endedAuditCtx, ct);
-
-                await tx.CommitAsync(ct);
-            }
-            catch
-            {
-                await tx.RollbackAsync(ct);
-                throw;
-            }
-
-            return Results.Ok(new
-            {
-                vikarId = closed.VikarId,
-                managerId,
-                vikarUserId = closed.VikarUserId,
-                revoked = true,
             });
         }).RequireAuthorization("LocalAdminOrAbove");
 

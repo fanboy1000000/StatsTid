@@ -762,6 +762,162 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
+    //  S83 / TASK-8301 (ADR-027 D18→D19) — the REVOKE-SAFE drift-guarded acquire on the two
+    //  reporting-edge revokes. Pre-S83 the self-/delegate DELETE took NO advisory at all and the
+    //  admin-vikar DELETE took ONLY the PERSISTED-root advisory; both now go through
+    //  AcquireRevokeTreeLocksAsync (always lock the persisted root + the subject's current root when
+    //  derivable, drift-guarded). These tests use the held-lock interleave harness
+    //  (AcquireTreeLockOnSideConnAsync / WaitForAdvisoryLockWaiterAsync) and the STY02/STY05 cross-
+    //  styrelse fixture (Mgr in AFD02/STY02; AFD03 is in STY05 — the transfer target).
+    // ════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// TEST 1 — REVOKE-SAFETY / inactive subject: the admin-revoke of a manager whose
+    /// <c>users.is_active = FALSE</c> still SUCCEEDS via the persisted-only lock path. The new
+    /// <see cref="ReportingLineRepository.AcquireRevokeTreeLocksAsync"/> DEFENSIVELY derives the
+    /// subject's current root and SWALLOWS the missing/inactive throw, so an inactive manager never
+    /// 500s the revoke (it collapses to the always-locked persisted root). RED against a NAIVE variant
+    /// that unconditionally derives the current root (which would throw InvalidOperationException →
+    /// 500). (Distinct from <see cref="AdminDelete_RevokeSafe_WhenManagerAndVikarInactive_StillSucceeds"/>,
+    /// which the pre-S83 no-derive code already passed; this one is named for the helper's defensive catch.)
+    /// </summary>
+    [Fact]
+    public async Task AdminDelete_InactiveManager_RevokeSafe_NoCurrentRootDerive_StillSucceeds()
+    {
+        var vikar = await PlantVikarAsync(Mgr, Vik, Today().AddDays(30), TreeRootSty02);
+        await DeactivateUserAsync(Mgr); // the current-root derive would now throw — must be swallowed.
+
+        var client = AdminClient(Admin, "MIN01");
+        var rsp = await client.DeleteAsync($"/api/admin/reporting-lines/{Mgr}/vikar");
+
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+        Assert.Null(await _vikarRepo.GetActiveByApproverAnyDateAsync(Mgr));
+        Assert.True(await CountAsync(
+            "SELECT COUNT(*) FROM audit_projection WHERE event_type = 'ManagerVikarEnded' AND target_resource_id = @id",
+            ("id", vikar.ToString())) == 1);
+    }
+
+    /// <summary>
+    /// TEST 2 — R1 OWNER-TRANSFER (persisted ≠ current): a self-delegation row whose owner (Mgr)
+    /// transferred styrelse AFTER creating it (persisted root STY02 ≠ owner current root STY05);
+    /// the self-DELETE succeeds AND SERIALIZES on the PERSISTED root (STY02). We prove serialization
+    /// by holding the STY02 advisory on a side connection and showing the self-DELETE BLOCKS on it.
+    ///
+    /// RED on the PRE-S83 no-lock self-DELETE: it took NO advisory, so it would NOT block on the held
+    /// STY02 key — it would complete while the key is held (the assertion that it stays incomplete fails).
+    /// </summary>
+    [Fact]
+    public async Task SelfDelete_OwnerTransferred_SerializesOnPersistedRoot_AndSucceeds()
+    {
+        // Mgr self-delegates to Vik (persisted tree root = STY02), then TRANSFERS to AFD03 (STY05).
+        await PlantVikarAsync(Mgr, Vik, Today().AddDays(30), TreeRootSty02);
+        await TransferUserAsync(Mgr, "AFD03"); // STY05 tree — now persisted(STY02) ≠ current(STY05).
+
+        // Hold the PERSISTED-root (STY02) advisory on a side connection.
+        var (sideConn, sideTx) = await AcquireTreeLockOnSideConnAsync(TreeRootSty02);
+        var released = false;
+        try
+        {
+            var client = LeaderClient(Mgr, "AFD02");
+            var deleteTask = client.DeleteAsync("/api/reporting-lines/delegate");
+
+            // It must REACH + BLOCK on the held STY02 advisory (the persisted-root lock). On the
+            // pre-S83 no-lock self-DELETE this waiter never appears (no advisory taken).
+            Assert.True(await WaitForAdvisoryLockWaiterAsync(TreeRootSty02),
+                "The self-DELETE did not block on the STY02 (persisted-root) advisory — it took no revoke-safe lock (TASK-8301 not applied to /delegate).");
+            Assert.False(await Task.WhenAny(deleteTask, Task.Delay(500)) == deleteTask,
+                "The self-DELETE completed while the STY02 persisted-root key was held — it did not serialize on the revoke-safe advisory.");
+
+            // Release STY02 → the revoke proceeds and succeeds.
+            await sideTx.RollbackAsync();
+            await sideConn.DisposeAsync();
+            released = true;
+
+            var completed = await Task.WhenAny(deleteTask, Task.Delay(5000)) == deleteTask;
+            Assert.True(completed, "The self-DELETE did not complete after the persisted-root key released.");
+            var rsp = await deleteTask;
+            Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+            Assert.Null(await _vikarRepo.GetActiveByApproverAnyDateAsync(Mgr));
+        }
+        finally
+        {
+            if (!released) { await sideTx.RollbackAsync(); await sideConn.DisposeAsync(); }
+            await TransferUserAsync(Mgr, "AFD02"); // restore for cleanup symmetry.
+        }
+    }
+
+    /// <summary>
+    /// TEST 3 — ACTIVE→INACTIVE RACE: the revoke must NOT 500 when the subject is deactivated such
+    /// that the current-root derive would throw — it falls back to persisted-only and succeeds. This
+    /// is the self-DELETE arm (the absent approver = the actor), with Mgr deactivated before the call.
+    /// On the new code the defensive try/catch in AcquireRevokeTreeLocksAsync swallows the
+    /// InvalidOperationException; a NAIVE unconditional-derive variant would surface a 500.
+    /// </summary>
+    [Fact]
+    public async Task SelfDelete_SubjectDeactivated_DoesNotError_FallsBackToPersistedOnly()
+    {
+        await PlantVikarAsync(Mgr, Vik, Today().AddDays(30), TreeRootSty02);
+        await DeactivateUserAsync(Mgr); // derive of Mgr's current root will throw — must be swallowed.
+
+        var client = LeaderClient(Mgr, "AFD02");
+        var rsp = await client.DeleteAsync("/api/reporting-lines/delegate");
+
+        // NOT a 500 — a clean 200, persisted-only.
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+        Assert.Null(await _vikarRepo.GetActiveByApproverAnyDateAsync(Mgr));
+    }
+
+    /// <summary>
+    /// TEST 4 — WAITER-BASED MUTUAL EXCLUSION on the CURRENT root: with persisted(STY02) ≠
+    /// current(STY05) for an ACTIVE subject, hold ONLY the CURRENT-root (STY05) advisory on a side
+    /// connection and assert the admin-revoke BLOCKS until it releases. This proves the revoke-safe
+    /// acquire takes the subject's CURRENT root in addition to the persisted root — a true mutual-
+    /// exclusion assertion (the request must PARK on the STY05 key, not just reach a final state).
+    ///
+    /// RED on the PRE-S83 admin-revoke: it locked ONLY the persisted root (STY02) and never the current
+    /// root, so it would NOT block on the held STY05 key — it would complete while STY05 is held.
+    /// </summary>
+    [Fact]
+    public async Task AdminDelete_PersistedNeqCurrent_BlocksOnCurrentRootAdvisory_UntilReleased()
+    {
+        // Plant the vikar with persisted STY02, then transfer the (still ACTIVE) manager to STY05.
+        await PlantVikarAsync(Mgr, Vik, Today().AddDays(30), TreeRootSty02);
+        await TransferUserAsync(Mgr, "AFD03"); // STY05 tree — current root now STY05, persisted STY02.
+
+        // Hold ONLY the CURRENT-root (STY05) advisory.
+        var (sideConn, sideTx) = await AcquireTreeLockOnSideConnAsync(TreeRootSty05);
+        var released = false;
+        try
+        {
+            var client = AdminClient(Admin, "MIN01");
+            var deleteTask = client.DeleteAsync($"/api/admin/reporting-lines/{Mgr}/vikar");
+
+            // The revoke must BLOCK on the held STY05 (current-root) advisory. Pre-S83 it only locked
+            // STY02 → this waiter never appears and the request completes.
+            Assert.True(await WaitForAdvisoryLockWaiterAsync(TreeRootSty05),
+                "The admin-revoke did not block on the STY05 (current-root) advisory — it did not lock the subject's current root (TASK-8301 not applied).");
+            Assert.False(await Task.WhenAny(deleteTask, Task.Delay(500)) == deleteTask,
+                "The admin-revoke completed while the STY05 current-root key was held — it did not serialize on the current-root advisory.");
+
+            // Release STY05 → the revoke proceeds.
+            await sideTx.RollbackAsync();
+            await sideConn.DisposeAsync();
+            released = true;
+
+            var completed = await Task.WhenAny(deleteTask, Task.Delay(5000)) == deleteTask;
+            Assert.True(completed, "The admin-revoke did not complete after the current-root key released.");
+            var rsp = await deleteTask;
+            Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+            Assert.Null(await _vikarRepo.GetActiveByApproverAnyDateAsync(Mgr));
+        }
+        finally
+        {
+            if (!released) { await sideTx.RollbackAsync(); await sideConn.DisposeAsync(); }
+            await TransferUserAsync(Mgr, "AFD02"); // restore for cleanup symmetry.
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════════════
     //  Helpers
     // ════════════════════════════════════════════════════════════════════════════════
 
@@ -867,6 +1023,21 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
         await conn.OpenAsync();
         await using var cmd = new NpgsqlCommand("UPDATE users SET is_active = FALSE WHERE user_id = @id", conn);
+        cmd.Parameters.AddWithValue("id", userId);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    /// <summary>
+    /// S83 — out-of-band cross-styrelse transfer (a raw <c>primary_org_id</c> UPDATE, the move the
+    /// unlocked pre-acquire derive cannot pre-see). Used by the persisted≠current revoke tests; the
+    /// owning test restores AFD02 in its <c>finally</c>.
+    /// </summary>
+    private async Task TransferUserAsync(string userId, string newPrimaryOrgId)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand("UPDATE users SET primary_org_id = @org WHERE user_id = @id", conn);
+        cmd.Parameters.AddWithValue("org", newPrimaryOrgId);
         cmd.Parameters.AddWithValue("id", userId);
         await cmd.ExecuteNonQueryAsync();
     }

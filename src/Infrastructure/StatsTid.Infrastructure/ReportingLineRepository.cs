@@ -736,6 +736,106 @@ public sealed class ReportingLineRepository
     }
 
     /// <summary>
+    /// S83 / ADR-027 D18→D19 — THE REVOKE-SAFE drift-guarded acquire (the third member of the
+    /// drift-guarded acquire family, alongside <see cref="AcquireTreeLockForEmployeeAsync"/> and
+    /// <see cref="AcquireTreeLocksForTransferAsync"/>). It closes the two reporting-edge revoke
+    /// serialization gaps left by S78 D18: the self-<c>/delegate</c> DELETE took NO advisory at all,
+    /// and the admin-vikar DELETE took ONLY the PERSISTED-root advisory — so a concurrent
+    /// cross-styrelse transfer of the revoke SUBJECT, or a key-sharing mutator on the subject's
+    /// CURRENT tree, could proceed on a DIFFERENT key with no mutual exclusion against the revoke.
+    ///
+    /// <para>
+    /// The revoke must remain SAFE even when the subject is inactive/transferred — so the PERSISTED
+    /// <c>manager_vikar.tree_root_org_id</c> (<paramref name="persistedRoot"/>) is the immutable
+    /// revoke-authority anchor and is ALWAYS locked (it is a fixed column on the row and cannot drift).
+    /// On top of that this method ALSO locks the subject's CURRENT tree root when one can be derived,
+    /// so the revoke serializes against in-tree mutators / a transfer on the live tree too. Crucially
+    /// the current-root derivation is DEFENSIVE: <see cref="DeriveEmployeeTreeRootInTxAsync"/> throws
+    /// <see cref="InvalidOperationException"/> when the subject is missing/inactive (its
+    /// <c>WHERE … AND is_active = TRUE</c> filter), and we SWALLOW that throw — "no current root" —
+    /// rather than pre-gating on a separate <c>SELECT is_active</c>. Catching the derive's throw is
+    /// what closes the active→inactive race: a deactivation that commits mid-request must never 500 a
+    /// revoke-safe path; it simply collapses to the persisted-only lock set.
+    /// </para>
+    ///
+    /// <list type="number">
+    /// <item><description>Always lock <paramref name="persistedRoot"/> (the immutable anchor).</description></item>
+    /// <item><description>DEFENSIVE-DERIVE the subject's current root (swallow the missing/inactive throw).</description></item>
+    /// <item><description>Acquire the union <c>{persistedRoot} ∪ {currentRoot?}</c> in the SAME distinct +
+    /// id-sorted order as <see cref="AcquireTreeLocksForTransferAsync"/> — uniform lock ordering, so a
+    /// revoke and a transfer over the same tree pair are deadlock-safe against each other. All advisories
+    /// are taken BEFORE any caller row <c>FOR UPDATE</c> (advisory → rows order).</description></item>
+    /// <item><description>DRIFT-GUARD THE CURRENT ROOT ONLY (the persisted root cannot drift): if a current
+    /// root was derived, RE-DERIVE it under the held locks — again defensively (a subject that deactivated
+    /// UNDER the lock now throws → treat as "no current root", fall back to persisted-only, NO error). If the
+    /// re-derived current root DIFFERS from the first, throw <see cref="TreeRootDriftException"/> so the
+    /// caller's <c>TreeRootDriftRetry.RunAsync</c> rolls back + retries on a fresh tx (a concurrent transfer
+    /// committed between the derive and the acquire → the current key we hold is stale).</description></item>
+    /// </list>
+    ///
+    /// <para>
+    /// Returns the set of locked roots (the callers do not need it — they only need the locks held +
+    /// drift signalled — but it is convenient for assertions / diagnostics).
+    /// </para>
+    /// </summary>
+    /// <param name="persistedRoot">The immutable revoke-authority anchor (the persisted
+    /// <c>manager_vikar.tree_root_org_id</c>); always locked.</param>
+    /// <param name="subjectId">The revoke subject (the absent approver / manager) whose CURRENT tree
+    /// root is additionally locked when derivable.</param>
+    /// <exception cref="TreeRootDriftException">If the subject's CURRENT root drifted under the advisory
+    /// (caller retries on a fresh tx).</exception>
+    public async Task<IReadOnlyCollection<string>> AcquireRevokeTreeLocksAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, string persistedRoot, string subjectId,
+        CancellationToken ct = default)
+    {
+        // (1) DEFENSIVE-DERIVE the subject's CURRENT root (UNLOCKED). Swallow the missing/inactive
+        //     throw — that is the active→inactive-race close: no current root, not a 500.
+        string? preAcquireCurrentRoot = null;
+        try
+        {
+            preAcquireCurrentRoot = await DeriveEmployeeTreeRootInTxAsync(conn, tx, subjectId, ct);
+        }
+        catch (InvalidOperationException)
+        {
+            // Subject missing/inactive (or no MINISTRY/STYRELSE ancestor) → no derivable current root.
+            // The persisted root alone keeps the revoke safe.
+        }
+
+        // (2) Acquire the union {persistedRoot} ∪ {currentRoot?} in distinct + id-sorted order (the
+        //     EXACT idiom AcquireTreeLocksForTransferAsync uses — uniform ordering, deadlock-safe vs
+        //     the transfer path). When the current root equals the persisted root only one key is taken.
+        var roots = preAcquireCurrentRoot is null
+            ? new[] { persistedRoot }
+            : new[] { persistedRoot, preAcquireCurrentRoot };
+        var lockedRoots = roots.Distinct(StringComparer.Ordinal).OrderBy(r => r, StringComparer.Ordinal).ToArray();
+        foreach (var root in lockedRoots)
+            await AcquireTreeLockAsync(conn, tx, root, ct);
+
+        // (3) DRIFT-GUARD the CURRENT root only (the persisted root is a fixed column — it cannot drift).
+        //     Re-derive under the held locks, again DEFENSIVELY: if the subject deactivated UNDER the
+        //     lock the re-derive now throws → treat as "no current root", fall back to persisted-only,
+        //     no error. If the re-derived current root differs from the first, the key we hold is stale.
+        if (preAcquireCurrentRoot is not null)
+        {
+            string? postAcquireCurrentRoot = null;
+            try
+            {
+                postAcquireCurrentRoot = await DeriveEmployeeTreeRootInTxAsync(conn, tx, subjectId, ct);
+            }
+            catch (InvalidOperationException)
+            {
+                // Subject deactivated under the held lock → no current root; persisted-only is still safe.
+            }
+
+            if (postAcquireCurrentRoot is not null
+                && !string.Equals(preAcquireCurrentRoot, postAcquireCurrentRoot, StringComparison.Ordinal))
+                throw new TreeRootDriftException(subjectId, preAcquireCurrentRoot, postAcquireCurrentRoot);
+        }
+
+        return lockedRoots;
+    }
+
+    /// <summary>
     /// S74 R8 — the cycle guard. REJECTS (via <see cref="ReportingCycleException"/>) an
     /// assignment whose chosen <paramref name="managerId"/> is the <paramref name="employeeId"/>
     /// itself OR any active-PRIMARY/ACTING descendant of the employee (which would create a
