@@ -39,6 +39,13 @@ interface VikarSectionProps {
   forbidden?: Set<string>
   /** Fired after a successful create/end so the caller refetches. */
   onChanged?: () => void
+  /** S86 — reveal the create form immediately on mount (the inline tree-row
+      "+ Vikar" affordance is a single click → the form appears). The drawer does
+      NOT pass this (its affordance is the "Opret vikariering" button). */
+  autoOpenForm?: boolean
+  /** S86 — fired when the inline create form is cancelled (Annullér) so the inline
+      wrapper collapses back to its "+ Vikar" trigger. Drawer does NOT pass it. */
+  onCancel?: () => void
   disabled?: boolean
 }
 
@@ -48,12 +55,14 @@ export function VikarSection({
   activeVikar,
   forbidden,
   onChanged,
+  autoOpenForm = false,
+  onCancel,
   disabled = false,
 }: VikarSectionProps) {
   const { toast } = useToast()
   const { createVikar, endVikar } = useReportingLines()
   const [busy, setBusy] = useState(false)
-  const [showForm, setShowForm] = useState(false)
+  const [showForm, setShowForm] = useState(autoOpenForm)
   const [pickerOpen, setPickerOpen] = useState(false)
 
   // Form state.
@@ -207,7 +216,10 @@ export function VikarSection({
             <button
               type="button"
               className={styles.ghostBtn}
-              onClick={resetForm}
+              onClick={() => {
+                resetForm()
+                onCancel?.()
+              }}
               disabled={busy}
             >
               Annullér

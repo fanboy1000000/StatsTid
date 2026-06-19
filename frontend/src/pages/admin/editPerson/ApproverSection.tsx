@@ -29,6 +29,11 @@ interface ApproverSectionProps {
   /** The current PRIMARY reporting line's ETag (If-Match for a reassign/remove).
       Absent ⇒ a FIRST assign (If-None-Match:*). */
   currentReportingLineEtag?: string | null
+  /** S86 — the display name of the vikar currently covering the ASSIGNED approver
+      (when that approver is away). Renders the info-blue "· pt. <vikar> (vikar)"
+      annotation on the "Godkendes af" block (hifi README:191/235). Derived by the
+      caller from the approver's own `outgoingVikar` (the away-set lookup). */
+  approverAwayVikarName?: string | null
   /** Self + descendants — the cycle-prevention forbidden set (also enforced
       server-side via `excludeEmployeeId`). */
   forbidden?: Set<string>
@@ -38,6 +43,13 @@ interface ApproverSectionProps {
   onDraftApproverChange?: (id: string | null, name: string | null) => void
   /** Fired after a successful assign/reassign/remove so the caller refetches. */
   onChanged?: () => void
+  /** S86 — open the PersonPickerDialog immediately on mount (the inline row
+      affordance is a single click: "Skift"/"+ Tildel" → picker opens directly).
+      The drawer does NOT pass this (its affordance is a click inside the section). */
+  autoOpenPicker?: boolean
+  /** S86 — fired when the picker is dismissed WITHOUT picking (inline wrapper
+      collapses back to its trigger so the bulky section doesn't linger inline). */
+  onPickerDismiss?: () => void
   disabled?: boolean
 }
 
@@ -49,16 +61,19 @@ export function ApproverSection({
   currentApproverId,
   currentApproverName,
   currentReportingLineEtag,
+  approverAwayVikarName,
   forbidden,
   draftApproverId,
   draftApproverName,
   onDraftApproverChange,
   onChanged,
+  autoOpenPicker = false,
+  onPickerDismiss,
   disabled = false,
 }: ApproverSectionProps) {
   const { toast } = useToast()
   const { assignManager, removeManager } = useReportingLines()
-  const [pickerOpen, setPickerOpen] = useState(false)
+  const [pickerOpen, setPickerOpen] = useState(autoOpenPicker)
   const [busy, setBusy] = useState(false)
   // Edit-mode local mirror so the row updates immediately after an assign/remove
   // without waiting for a parent refetch (the parent ALSO refetches via onChanged).
@@ -174,6 +189,14 @@ export function ApproverSection({
           ) : shownId ? (
             <span className={styles.assigned} data-testid="approver-assigned">
               <span className={styles.assignedName}>{shownName ?? shownId}</span>
+              {/* S86 — info-blue away annotation: shown only while the displayed
+                  approver is still the context-supplied one (no in-session
+                  reassign), since the away name is keyed to THAT approver. */}
+              {approverAwayVikarName && localApproverId === undefined && mode === 'edit' && (
+                <em className={styles.apprVikar} data-testid="approver-away">
+                  {' '}· pt. {approverAwayVikarName} (vikar)
+                </em>
+              )}
               <button
                 type="button"
                 className={styles.link}
@@ -214,7 +237,10 @@ export function ApproverSection({
         forbidden={forbidden}
         excludeEmployeeId={mode === 'edit' ? employeeId : undefined}
         onPick={handlePick}
-        onClose={() => setPickerOpen(false)}
+        onClose={() => {
+          setPickerOpen(false)
+          onPickerDismiss?.()
+        }}
       />
     </section>
   )

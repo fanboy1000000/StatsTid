@@ -6,7 +6,7 @@
 // (the cycle-prevention mirror); a client-side `forbidden` set is the additional
 // defence-in-depth mirror (R4: forbidden = self + descendantsOf), filtering any
 // stray hit before render.
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { Dialog } from '../../../components/ui'
 import { useReportingLines, type PersonSearchHit } from '../../../hooks/useReportingLines'
 import styles from './PersonPickerDialog.module.css'
@@ -106,6 +106,19 @@ export function PersonPickerDialog({
     [onPick],
   )
 
+  // Hifi (README:258): Enter in the search field picks the FIRST visible result
+  // (after the client-side forbidden filter), mirroring the prototype's
+  // `pickFirst`. Guarded on a non-empty result list so an empty search is a no-op.
+  const handleSearchKeyDown = useCallback(
+    (e: KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === 'Enter' && shown.length > 0) {
+        e.preventDefault()
+        handlePick(shown[0].userId, shown[0].displayName)
+      }
+    },
+    [shown, handlePick],
+  )
+
   return (
     <Dialog
       open={open}
@@ -124,6 +137,7 @@ export function PersonPickerDialog({
           placeholder="Søg på navn eller enhed…"
           value={q}
           onChange={(e) => setQ(e.target.value)}
+          onKeyDown={handleSearchKeyDown}
           data-testid="picker-search"
         />
       </div>

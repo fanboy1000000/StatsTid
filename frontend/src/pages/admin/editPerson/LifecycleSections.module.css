@@ -56,6 +56,13 @@
   color: var(--color-text);
 }
 
+/* S86 — info-blue "· pt. <vikar> (vikar)" away annotation (hifi .ll-appr--vikar). */
+.apprVikar {
+  color: var(--color-info);
+  font-style: normal;
+  font-size: 12px;
+}
+
 .assignEmpty {
   font-family: 'IBM Plex Sans', sans-serif;
   padding: 6px 12px;

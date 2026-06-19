@@ -21,16 +21,26 @@ import { useToast } from '../../components/ui/Toast'
 import { formatVersionAsIfMatch } from '../../lib/etag'
 import { EditPersonDrawer } from './EditPersonDrawer'
 import type { LifecycleContext } from './editPerson/LifecycleSections'
+import { InlineApproverControl } from './editPerson/InlineApproverControl'
+import { InlineVikarControl } from './editPerson/InlineVikarControl'
 import styles from './MedarbejderAdministration.module.css'
 
-// S75 TASK-7502. Medarbejder-administration page — Phase 2 of the program.
-// READ-ONLY this phase: every write affordance from the prototype is stripped
-// (no "Tilføj medarbejder", no approver picker, no +Vikar/Afslut, no record
-// drawer, no orphan assign, no enforcement toggle). The structural ledelseslinje
-// tree is rendered from the 7501 roster contract via the pure helpers in
-// medarbejderTree.ts. Write flows land in S76. The shell mirrors
-// ReportingLineTree.tsx (bare <div>, AppLayout provided by the routing shell;
-// Styrelse selector = useOrganizations filtered to MINISTRY/STYRELSE).
+// Medarbejder-administration page (admin/ledelseslinjer). The structural
+// ledelseslinje tree is rendered from the 7501 roster contract via the pure
+// helpers in medarbejderTree.ts. The shell mirrors ReportingLineTree.tsx (bare
+// <div>, AppLayout provided by the routing shell; Styrelse selector =
+// useOrganizations filtered to MINISTRY/STYRELSE).
+//
+// WRITE AFFORDANCES (full-edit lives in the EditPersonDrawer — opened by clicking
+// a person's name; S76b/7604). S86 ADDED inline QUICK-ACTION write affordances on
+// the tree rows + the orphan card (hifi parity): Skift / + Tildel godkender on the
+// approver block, + Vikar on a not-away manager, Afslut on an away manager's vikar
+// line, and an inline approver-assign on each orphan row. Each lazy-mounts the
+// SHARED drawer section components (ApproverSection / VikarSection) — the single
+// mutation cores — so the row and the drawer hit ONE save path (no second writer).
+// The approver-block shows the info-blue "· pt. <vikar> (vikar)" annotation when
+// the assigned approver is currently away. The enforcement-mode toggle (ADR-027
+// D11) sits unobtrusively above the tiles.
 
 // The prototype's period copy is not served this phase — hardcode the literals
 // (ledelseslinjer-data.jsx PERIOD_LABEL / PERIOD_DEADLINE).
@@ -103,11 +113,17 @@ interface PersonRowProps {
   pendingCountByManager: Record<string, number>
   /** S76b/7604 — open the edit drawer for this person (row-click). */
   onEdit: (person: MedarbejderRosterRow) => void
+  /** S86 — open the edit drawer for an arbitrary person by id (the vikar-name link). */
+  onEditById: (id: string) => void
+  /** S86 — fired after an inline mutation so the page refetches the roster. */
+  onChanged: () => void
 }
 
-/** One rendered tree row. S76b/7604: the name is now a button that opens the
- *  unified EditPersonDrawer in EDIT mode; the approver/vikar/delete writes live
- *  inside that drawer (not inline on the row). */
+/** One rendered tree row. The name opens the unified EditPersonDrawer in EDIT
+ *  mode (full edit). S86 ADDS inline quick-action write affordances on the row —
+ *  Skift / + Tildel godkender (approver block), + Vikar (not-away manager), Afslut
+ *  (away manager's vikar line) — each lazy-mounting the SHARED ApproverSection /
+ *  VikarSection mutation cores (no second save path; the drawer is unchanged). */
 function PersonRow({
   people,
   byId,
@@ -120,12 +136,25 @@ function PersonRow({
   statusFilter,
   pendingCountByManager,
   onEdit,
+  onEditById,
+  onChanged,
 }: PersonRowProps) {
   const reports = childrenOf(people, person.employeeId).length
   const manager = reports > 0
   const away = person.outgoingVikar != null
   const pend = pendingCountByManager[person.employeeId] ?? 0
   const mgr = person.structuralApproverId ? byId[person.structuralApproverId] : null
+  // S86 — is THIS person's assigned approver currently away? (O(1) via byId; the
+  // roster carries outgoingVikar on the away person's own row → look it up on the
+  // approver). Drives the info-blue "· pt. <vikar> (vikar)" approver annotation.
+  const approverAwayVikarName = mgr?.outgoingVikar?.vikarDisplayName ?? null
+  // S86 — the cycle-prevention forbidden set for this person's inline pickers
+  // (self + descendants), computed lazily inside the control via a small helper.
+  const forbiddenFor = (id: string): Set<string> => {
+    const set = descendantsOf(people, id)
+    set.add(id)
+    return set
+  }
 
   const rowCls = [
     styles.prow,
@@ -186,11 +215,50 @@ function PersonRow({
                 <span className={styles.vikarlineK}>
                   <IconClock /> Vikar
                 </span>
-                <span className={styles.vikarlineName}>
-                  {person.outgoingVikar.vikarDisplayName} til{' '}
-                  {fmtDate(person.outgoingVikar.untilDate)}
+                {/* S86 — the vikar NAME is now a link → opens that person's record
+                    (hifi ledelseslinjer-tree.jsx:70), with the "til <date>" after. */}
+                <button
+                  type="button"
+                  className={`${styles.nameBtn} ${styles.vikarlineName}`}
+                  onClick={() => onEditById(person.outgoingVikar!.vikarUserId)}
+                  data-testid={`vikar-link-${person.employeeId}`}
+                  title={`${person.outgoingVikar.vikarDisplayName} varetager godkendelser til ${fmtDate(person.outgoingVikar.untilDate)}`}
+                >
+                  {person.outgoingVikar.vikarDisplayName}
+                </button>
+                <span className={styles.muted}>
+                  til {fmtDate(person.outgoingVikar.untilDate)}
                 </span>
+                <span className={styles.muted}>·</span>
+                {/* S86 — inline "Afslut": lazy-mounts the shared VikarSection in its
+                    active-vikar state (it owns the endVikar call). */}
+                <InlineVikarControl
+                  managerId={person.employeeId}
+                  managerName={person.displayName}
+                  computeForbidden={() => forbiddenFor(person.employeeId)}
+                  mode="end"
+                  activeVikar={{
+                    vikarUserId: person.outgoingVikar.vikarUserId,
+                    vikarDisplayName: person.outgoingVikar.vikarDisplayName,
+                    untilDate: person.outgoingVikar.untilDate,
+                    reason: person.outgoingVikar.reason,
+                  }}
+                  onChanged={onChanged}
+                  className={styles.link}
+                />
               </span>
+            )}
+            {/* S86 — a not-away manager gets the inline "+ Vikar" affordance (lazy
+                mounts the shared VikarSection with its create form). */}
+            {manager && !away && (
+              <InlineVikarControl
+                managerId={person.employeeId}
+                managerName={person.displayName}
+                computeForbidden={() => forbiddenFor(person.employeeId)}
+                mode="create"
+                onChanged={onChanged}
+                className={`${styles.link} ${styles.addvikar}`}
+              />
             )}
             {statusFilter === 'indsend' && person.periodStatus === 'OPEN' && !person.isOrphan && (
               <Badge variant="warning">Ikke indsendt</Badge>
@@ -218,13 +286,43 @@ function PersonRow({
           <span className={styles.muted} style={{ fontSize: 13 }}>
             Øverste godkendelseslinje
           </span>
-        ) : (
+        ) : person.structuralApproverId ? (
           <span className={styles.appr}>
             <span className={styles.rolesK}>Godkendes af</span>
             <span className={styles.apprName}>
               {mgr ? mgr.displayName : person.structuralApproverId}
             </span>
+            {/* S86 — info-blue away annotation when the assigned approver is away. */}
+            {approverAwayVikarName && (
+              <em className={styles.apprVikar} data-testid={`approver-away-${person.employeeId}`}>
+                {' '}· pt. {approverAwayVikarName} (vikar)
+              </em>
+            )}
+            {/* S86 — inline "Skift": lazy-mounts the shared ApproverSection
+                (ETag-resolved) → its picker reassigns. */}
+            <InlineApproverControl
+              employeeId={person.employeeId}
+              personName={person.displayName}
+              currentApproverId={person.structuralApproverId}
+              currentApproverName={mgr ? mgr.displayName : person.structuralApproverId}
+              computeForbidden={() => forbiddenFor(person.employeeId)}
+              trigger="change"
+              onChanged={onChanged}
+              className={styles.link}
+            />
           </span>
+        ) : (
+          /* S86 — no approver (a non-root, non-orphan line break): inline assign. */
+          <InlineApproverControl
+            employeeId={person.employeeId}
+            personName={person.displayName}
+            currentApproverId={null}
+            currentApproverName={null}
+            computeForbidden={() => forbiddenFor(person.employeeId)}
+            trigger="assign"
+            onChanged={onChanged}
+            className={styles.assignEmpty}
+          />
         )}
       </div>
     </div>
@@ -412,6 +510,10 @@ export function MedarbejderAdministration() {
         isRoot: person.isRoot,
         currentApproverId: person.structuralApproverId,
         currentApproverName: approver ? approver.displayName : null,
+        // S86 — is the assigned approver currently away? (O(1) via the byId index;
+        // the roster carries outgoingVikar on the AWAY person's own row, so look it
+        // up on the approver). Drives the drawer's "· pt. <vikar> (vikar)".
+        currentApproverAwayVikarName: approver?.outgoingVikar?.vikarDisplayName ?? null,
         approvesOthers: childrenOf(people, person.employeeId).length > 0,
         activeVikar: person.outgoingVikar
           ? {
@@ -459,6 +561,37 @@ export function MedarbejderAdministration() {
       }
     },
     [buildLifecycleContext, fetchUser, toast],
+  )
+
+  /** S86 — open the edit drawer for a person by id (the inline vikar-name link
+   *  opens the covering vikar's record). When the id is a roster row we get the
+   *  full tree context; otherwise we fetch the User and open with no context. */
+  const handleOpenEditById = useCallback(
+    async (id: string) => {
+      const roster = byId[id]
+      if (roster) {
+        await handleOpenEdit(roster)
+        return
+      }
+      setDrawerContext(undefined)
+      setDrawerLoading(true)
+      setDrawerOpen(true)
+      setDrawerUser(null)
+      try {
+        const fresh = await fetchUser(id)
+        setDrawerUser(fresh)
+      } catch (err) {
+        toast({
+          title: 'Fejl',
+          description: err instanceof Error ? err.message : String(err),
+          variant: 'error',
+        })
+        setDrawerOpen(false)
+      } finally {
+        setDrawerLoading(false)
+      }
+    },
+    [byId, handleOpenEdit, fetchUser, toast],
   )
 
   const handleDrawerClose = () => {
@@ -758,6 +891,24 @@ export function MedarbejderAdministration() {
                         </span>
                       </div>
                     </div>
+                    {/* S86 — the orphan card's ONE write affordance: inline assign
+                        an approver (fixes the broken line) via the shared core. */}
+                    <div className={styles.prowAppr}>
+                      <InlineApproverControl
+                        employeeId={person.employeeId}
+                        personName={person.displayName}
+                        currentApproverId={null}
+                        currentApproverName={null}
+                        computeForbidden={() => {
+                          const set = descendantsOf(people, person.employeeId)
+                          set.add(person.employeeId)
+                          return set
+                        }}
+                        trigger="assign"
+                        onChanged={handleDrawerSaved}
+                        className={styles.assignEmpty}
+                      />
+                    </div>
                   </div>
                 ))}
               </div>
@@ -863,6 +1014,8 @@ export function MedarbejderAdministration() {
                       statusFilter={statusFilter}
                       pendingCountByManager={pendingCountByManager}
                       onEdit={handleOpenEdit}
+                      onEditById={handleOpenEditById}
+                      onChanged={handleDrawerSaved}
                     />
                   )
                 })}

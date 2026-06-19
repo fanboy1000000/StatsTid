@@ -69,15 +69,26 @@ const fetchTreeSettings = vi.fn()
 const updateTreeSettings = vi.fn()
 const fetchEmployeeLines = vi.fn()
 const fetchDirectReports = vi.fn()
+// S86 — the inline affordances drive the SHARED mutation cores (assign/remove/
+// vikar); searchPeople feeds the picker. These are referenced by the per-test
+// `useReportingLines` closure below (one mock object, referentially stable per
+// render — PAT-007).
+const assignManager = vi.fn()
+const removeManager = vi.fn()
+const createVikar = vi.fn()
+const endVikar = vi.fn()
+const searchPeople = vi.fn()
 vi.mock('../../../hooks/useReportingLines', () => ({
   useReportingLines: () => ({
     fetchTreeSettings,
     updateTreeSettings,
     fetchEmployeeLines,
     fetchDirectReports,
-    searchPeople: vi.fn().mockResolvedValue({ ok: true, status: 200, data: { items: [], total: 0, limit: 60, offset: 0 } }),
-    createVikar: vi.fn(),
-    endVikar: vi.fn(),
+    searchPeople,
+    assignManager,
+    removeManager,
+    createVikar,
+    endVikar,
     deletePersonWithReassignment: vi.fn(),
   }),
 }))
@@ -184,6 +195,33 @@ beforeEach(() => {
   fetchEmployeeLines.mockResolvedValue({ ok: true, status: 200, data: { active: [], history: [] } })
   fetchDirectReports.mockReset()
   fetchDirectReports.mockResolvedValue({ ok: true, status: 200, data: [] })
+  // S86 — inline-affordance mutation mocks.
+  assignManager.mockReset()
+  assignManager.mockResolvedValue({ ok: true, status: 200, data: { reportingLineId: 'RL1', version: 5 } })
+  removeManager.mockReset()
+  removeManager.mockResolvedValue({ ok: true, status: 200, data: undefined })
+  createVikar.mockReset()
+  createVikar.mockResolvedValue({
+    ok: true,
+    status: 201,
+    data: { vikarId: 'VK1', managerId: 'B', vikarUserId: 'V2', effectiveFrom: '2026-06-20', effectiveTo: '2026-07-31', reason: 'FERIE' },
+  })
+  endVikar.mockReset()
+  endVikar.mockResolvedValue({ ok: true, status: 200, data: undefined })
+  searchPeople.mockReset()
+  searchPeople.mockResolvedValue({
+    ok: true,
+    status: 200,
+    data: {
+      items: [
+        { userId: 'P1', displayName: 'Pernille Pedersen', primaryOrgName: 'Finansministeriet', enhedLabel: 'Enhed B' },
+        { userId: 'P2', displayName: 'Preben Poulsen', primaryOrgName: 'Finansministeriet', enhedLabel: 'Enhed C' },
+      ],
+      total: 2,
+      limit: 60,
+      offset: 0,
+    },
+  })
 })
 
 describe('MedarbejderAdministration', () => {
@@ -279,19 +317,23 @@ describe('MedarbejderAdministration', () => {
     })
   })
 
-  it('shows the away-manager vikar badge (the inline row stays display-only; writes live in the drawer)', async () => {
+  it('shows the away-manager vikar line with the linked vikar name + inline Afslut affordance (S86)', async () => {
     renderPage()
     await waitFor(() => {
       expect(screen.getByText('Christian Christensen')).toBeDefined()
     })
-    // The vikar line names the covering vikar with the da-DK formatted date.
-    expect(screen.getByText(/Vita Vikar til 15\. jul 2026/)).toBeDefined()
-    // The ROW itself carries no inline vikar/approver write affordances — those
-    // moved into the EditPersonDrawer (opened by clicking the name). "Tilføj
-    // medarbejder" is now a real header button (entry into the create drawer).
-    expect(screen.queryByText('Afslut')).toBeNull()
-    expect(screen.queryByText('+ Vikar')).toBeNull()
-    expect(screen.queryByText('+ Tildel godkender')).toBeNull()
+    // S86 — the vikar NAME is now a LINK (button) → opens that person's record,
+    // and the "til <date>" sits beside it (da-DK formatted).
+    const vikarLink = screen.getByTestId('vikar-link-C')
+    expect(vikarLink.tagName).toBe('BUTTON')
+    expect(vikarLink.textContent).toBe('Vita Vikar')
+    // The "til <date>" appears on both the on-leave name tag and the vikar line.
+    expect(screen.getAllByText(/til 15\. jul 2026/).length).toBeGreaterThanOrEqual(1)
+    // S86 — the row now carries the inline write affordances the hifi shows
+    // (INVERTED from the old display-only assertions): an away manager's vikar
+    // line has "Afslut"; the approver block has "Skift"; "Tilføj medarbejder"
+    // remains the create entry.
+    expect(screen.getByTestId('inline-vikar-end-C')).toBeDefined()
     expect(screen.getByTestId('medarbejder-add')).toBeDefined()
   })
 
@@ -430,9 +472,12 @@ describe('MedarbejderAdministration — a11y audit (R5)', () => {
     })
     // Each tile is a real <button> (keyboard-operable) with an accessible name
     // derived from its label text, and an aria-pressed reflecting filter state.
+    // S86 — the tree now also has an inline "+ Vikar" button, so the bare /Vikar/
+    // name is ambiguous; target the tiles by their unique detail copy + the fact
+    // that ONLY tiles carry aria-pressed.
     const indsend = screen.getByRole('button', { name: /Ikke indsendt/ })
     const godkend = screen.getByRole('button', { name: /Ikke godkendt/ })
-    const vikar = screen.getByRole('button', { name: /Vikar/ })
+    const vikar = screen.getByRole('button', { name: /aktive vikarieringer/ })
     for (const tile of [indsend, godkend, vikar]) {
       expect(tile.getAttribute('aria-pressed')).toBe('false')
     }
@@ -440,7 +485,9 @@ describe('MedarbejderAdministration — a11y audit (R5)', () => {
     // toggle state.
     fireEvent.click(vikar)
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Vikar/ }).getAttribute('aria-pressed')).toBe('true')
+      expect(
+        screen.getByRole('button', { name: /aktive vikarieringer/ }).getAttribute('aria-pressed'),
+      ).toBe('true')
     })
   })
 
@@ -503,5 +550,179 @@ describe('MedarbejderAdministration — a11y audit (R5)', () => {
       expect(screen.queryByRole('dialog')).toBeNull()
     })
     expect(trigger).toHaveFocus()
+  })
+})
+
+// S86 / TASK-8601 — the NEW inline row-level write affordances. These reuse the
+// SHARED ApproverSection / VikarSection mutation cores mounted inline on the tree
+// row + the orphan card (no second save path). Each test below targets behaviour
+// that did NOT exist on the pre-S86 read-only row (RED-on-old): the inline
+// triggers, the ETag-resolved reassign, the orphan inline assign, the +Vikar/
+// Afslut flows, Enter-to-pick, and the approver-away annotation.
+describe('MedarbejderAdministration — inline write affordances (S86/8601)', () => {
+  it('renders the inline approver "Skift" + "+ Vikar" triggers on the right rows (RED-on-old)', async () => {
+    renderPage()
+    await waitFor(() => {
+      expect(screen.getByText('Anders Andersen')).toBeDefined()
+    })
+    // Anders has an approver (B) and is not a manager → "Skift" present, no "+ Vikar".
+    expect(screen.getByTestId('inline-approver-change-A')).toBeDefined()
+    expect(screen.queryByTestId('inline-vikar-add-A')).toBeNull()
+    // Birgit is a not-away manager → "+ Vikar" present (she is root → no approver block).
+    expect(screen.getByTestId('inline-vikar-add-B')).toBeDefined()
+    // Christian is an AWAY manager → no "+ Vikar", an "Afslut" instead.
+    expect(screen.queryByTestId('inline-vikar-add-C')).toBeNull()
+    expect(screen.getByTestId('inline-vikar-end-C')).toBeDefined()
+  })
+
+  it('shows the info-blue approver-away annotation when the assigned approver is away (byId lookup)', async () => {
+    // Make Dorte's approver (Christian) away — Dorte is under C, and C has an
+    // outgoingVikar in the fixture → Dorte's approver block annotates "· pt. ...".
+    renderPage()
+    await waitFor(() => {
+      expect(screen.getByText('Christian Christensen')).toBeDefined()
+    })
+    // Expand Christian so Dorte renders.
+    screen.getAllByRole('button', { name: 'Vis' }).forEach((b) => fireEvent.click(b))
+    await waitFor(() => {
+      expect(screen.getByTestId('approver-away-D')).toBeDefined()
+    })
+    expect(screen.getByTestId('approver-away-D').textContent).toMatch(/pt\. Vita Vikar \(vikar\)/)
+    // Anders' approver (Birgit) is NOT away → no annotation on Anders.
+    expect(screen.queryByTestId('approver-away-A')).toBeNull()
+  })
+
+  it('inline "Skift" resolves the active PRIMARY line ETag, then reassigns with If-Match (no roster-state assign)', async () => {
+    // The reassign must hydrate the line version first (fetchEmployeeLines) and
+    // pass it as If-Match — never assign from the roster row (which has no version).
+    fetchEmployeeLines.mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: { active: [{ relationship: 'PRIMARY', managerId: 'B', version: 9, reportingLineId: 'RL-A' }], history: [] },
+    })
+    renderPage()
+    await waitFor(() => {
+      expect(screen.getByTestId('inline-approver-change-A')).toBeDefined()
+    })
+    fireEvent.click(screen.getByTestId('inline-approver-change-A'))
+    // The ETag resolve fires for the clicked employee.
+    await waitFor(() => {
+      expect(fetchEmployeeLines).toHaveBeenCalledWith('A')
+    })
+    // The picker auto-opens (single-click affordance) with the mocked results.
+    const pickRow = await screen.findByTestId('picker-row-P1')
+    fireEvent.click(pickRow)
+    // assignManager is called with If-Match = the resolved line's version ("9"),
+    // NOT a first-assign (If-None-Match), since A already has a PRIMARY line.
+    await waitFor(() => {
+      expect(assignManager).toHaveBeenCalled()
+    })
+    const [body, ifMatch] = assignManager.mock.calls[0]
+    expect(body).toMatchObject({ employeeId: 'A', managerId: 'P1' })
+    expect(ifMatch).toBe('"9"')
+  })
+
+  it('orphan-card inline "+ Tildel godkender" assigns via the shared core (first-assign, If-None-Match)', async () => {
+    // Erik is an orphan (no line) → resolve returns no PRIMARY → first-assign uses
+    // If-None-Match:* (ifMatch undefined).
+    fetchEmployeeLines.mockResolvedValue({ ok: true, status: 200, data: { active: [], history: [] } })
+    renderPage()
+    await waitFor(() => {
+      expect(screen.getByText('Erik Eriksen')).toBeDefined()
+    })
+    fireEvent.click(screen.getByTestId('inline-approver-assign-E'))
+    await waitFor(() => {
+      expect(fetchEmployeeLines).toHaveBeenCalledWith('E')
+    })
+    const pickRow = await screen.findByTestId('picker-row-P2')
+    fireEvent.click(pickRow)
+    await waitFor(() => {
+      expect(assignManager).toHaveBeenCalled()
+    })
+    const [body, ifMatch] = assignManager.mock.calls[0]
+    expect(body).toMatchObject({ employeeId: 'E', managerId: 'P2' })
+    expect(ifMatch).toBeUndefined()
+  })
+
+  it('inline "+ Vikar" opens the shared VikarForm and creates a vikar, then refetches the roster', async () => {
+    renderPage()
+    await waitFor(() => {
+      expect(screen.getByTestId('inline-vikar-add-B')).toBeDefined()
+    })
+    const before = fetchRoster.mock.calls.length
+    fireEvent.click(screen.getByTestId('inline-vikar-add-B'))
+    // The shared VikarSection form auto-opens (the create form).
+    const form = await screen.findByTestId('vikar-form')
+    expect(form).toBeDefined()
+    // Pick a vikar via the picker.
+    fireEvent.click(screen.getByTestId('vikar-pick'))
+    const pickRow = await screen.findByTestId('picker-row-P1')
+    fireEvent.click(pickRow)
+    // Fill the "Til og med" date and submit.
+    fireEvent.change(screen.getByTestId('vikar-until'), { target: { value: '2026-07-31' } })
+    fireEvent.click(screen.getByTestId('vikar-create'))
+    await waitFor(() => {
+      expect(createVikar).toHaveBeenCalledWith(
+        'B',
+        expect.objectContaining({ vikarUserId: 'P1', effectiveTo: '2026-07-31' }),
+      )
+    })
+    // The page refetches the roster on the inline success (onChanged → loadRoster).
+    await waitFor(() => {
+      expect(fetchRoster.mock.calls.length).toBeGreaterThan(before)
+    })
+  })
+
+  it('inline "Afslut" ends the away-manager vikar via the shared core + refetches', async () => {
+    renderPage()
+    await waitFor(() => {
+      expect(screen.getByTestId('inline-vikar-end-C')).toBeDefined()
+    })
+    const before = fetchRoster.mock.calls.length
+    fireEvent.click(screen.getByTestId('inline-vikar-end-C'))
+    // The shared VikarSection mounts in its active-vikar state → its "Afslut".
+    const confirmEnd = await screen.findByTestId('vikar-end')
+    fireEvent.click(confirmEnd)
+    await waitFor(() => {
+      expect(endVikar).toHaveBeenCalledWith('C')
+    })
+    await waitFor(() => {
+      expect(fetchRoster.mock.calls.length).toBeGreaterThan(before)
+    })
+  })
+
+  it('the inline vikar NAME link opens the covering vikar record (fetchUser by id)', async () => {
+    renderPage()
+    await waitFor(() => {
+      expect(screen.getByTestId('vikar-link-C')).toBeDefined()
+    })
+    // The covering vikar (V) is not in the roster fixture → handleOpenEditById
+    // falls back to fetchUser(id).
+    fireEvent.click(screen.getByTestId('vikar-link-C'))
+    await waitFor(() => {
+      expect(fetchUser).toHaveBeenCalledWith('V')
+    })
+  })
+
+  it('Enter in the picker search picks the first result (hifi Enter-to-pick)', async () => {
+    fetchEmployeeLines.mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: { active: [{ relationship: 'PRIMARY', managerId: 'B', version: 3, reportingLineId: 'RL-A' }], history: [] },
+    })
+    renderPage()
+    await waitFor(() => {
+      expect(screen.getByTestId('inline-approver-change-A')).toBeDefined()
+    })
+    fireEvent.click(screen.getByTestId('inline-approver-change-A'))
+    const search = await screen.findByTestId('picker-search')
+    // Wait for the debounced results to render (the first row is P1).
+    await screen.findByTestId('picker-row-P1')
+    // Enter picks the first VISIBLE result (P1) without clicking it.
+    fireEvent.keyDown(search, { key: 'Enter' })
+    await waitFor(() => {
+      expect(assignManager).toHaveBeenCalled()
+    })
+    expect(assignManager.mock.calls[0][0]).toMatchObject({ managerId: 'P1' })
   })
 })

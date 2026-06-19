@@ -22,6 +22,9 @@ export interface LifecycleContext {
   isRoot?: boolean
   currentApproverId?: string | null
   currentApproverName?: string | null
+  /** S86 — the display name of the vikar covering the ASSIGNED approver when that
+      approver is currently away (→ the "· pt. <vikar> (vikar)" annotation). */
+  currentApproverAwayVikarName?: string | null
   /** Whether the person approves anyone (→ show the vikar section). */
   approvesOthers?: boolean
   activeVikar?: ActiveVikar | null
@@ -181,6 +184,7 @@ export function LifecycleSections({
         currentApproverId={approverId}
         currentApproverName={approverName}
         currentReportingLineEtag={resolvedEtag}
+        approverAwayVikarName={context?.currentApproverAwayVikarName ?? null}
         forbidden={forbidden}
         draftApproverId={draftApproverId}
         draftApproverName={draftApproverName}
