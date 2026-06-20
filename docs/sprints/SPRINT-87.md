@@ -6,6 +6,7 @@
 | **Status** | complete |
 | **Start Date** | 2026-06-20 |
 | **End Date** | 2026-06-20 |
+| **CI Verified** | ✅ GREEN — run [`27865753722`](https://github.com/fanboy1000000/StatsTid/actions/runs/27865753722) on `4ffb49d`, all 7 jobs (incl. build-and-test = full .NET regression with TeamOverviewAggregateTests, and the e2e driving the new TeamOversigt page in chromium — first run, no flake). |
 | **Orchestrator Approved** | yes — 2026-06-20 |
 | **Build Verified** | yes — `dotnet build` 0/0; FE `tsc`/`build` clean |
 | **Test Verified** | yes — TeamOverviewAggregateTests 15/15; FE vitest 494; approval suite 80/80; full pyramid + e2e on CI |
