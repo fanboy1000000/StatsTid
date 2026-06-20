@@ -6,6 +6,7 @@
 | **Status** | complete |
 | **Start Date** | 2026-06-20 |
 | **End Date** | 2026-06-20 |
+| **CI Verified** | ✅ GREEN — run [`27852937661`](https://github.com/fanboy1000000/StatsTid/actions/runs/27852937661) on `e7d65ef`, all 7 jobs (incl. the e2e driving the real page in chromium — a real-browser check of the inline affordances; clean, no flake). |
 | **Orchestrator Approved** | yes — 2026-06-20 |
 | **Build Verified** | yes — `npm run build` clean; `tsc --noEmit` clean |
 | **Test Verified** | yes — FE vitest 476 (+8); admin classes 104/104 independently; .NET tiers unchanged (FE-only) → full pyramid + e2e on CI |
