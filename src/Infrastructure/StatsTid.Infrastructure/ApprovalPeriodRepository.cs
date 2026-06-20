@@ -335,6 +335,120 @@ public sealed class ApprovalPeriodRepository
     }
 
     // ──────────────────────────────────────────────────────────────────────
+    //  S87-8701 — the team-overview roster read (read-only)
+    // ──────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// S87-8701 — the roster backing the leader Teamoversigt aggregate
+    /// (<c>GET /api/approval/team-overview</c>). One row per employee in the actor's
+    /// <b>designated-act-authority set</b> (ADR-027 D13 "see == act"), for the requested
+    /// (<paramref name="year"/>, <paramref name="month"/>), <b>extended to emit zero-period
+    /// reports</b>: an employee the leader may act on who has NO <c>approval_periods</c> row this
+    /// month still appears, with a null period (a DRAFT row, no actions).
+    ///
+    /// <para>
+    /// <b>Roster derivation (the correctness crux — NOT <c>/reports</c>, NOT period-first):</b>
+    /// <list type="number">
+    /// <item><description>the shared <see cref="DesignatedCandidateEmployeesCte"/> yields the
+    /// tree-root-bounded candidate SUPERSET INDEPENDENTLY of periods (descend from the actor + every
+    /// approver they vikar for, advance through INACTIVE sub-managers, same-tree);</description></item>
+    /// <item><description>each candidate is filtered through the canonical R5 predicate
+    /// (<see cref="DesignatedApproverAuthorizer.IsEffectiveDesignatedApproverAsync"/>) at
+    /// <c>today</c> — keeps EXACTLY the employees the leader can act on, the SAME code the action
+    /// endpoints authorize through (no see/act drift);</description></item>
+    /// <item><description>each surviving employee is LEFT JOINed (in-memory) to their (year,month)
+    /// <c>approval_periods</c> row — an employee with no period emits a row with a null period.</description></item>
+    /// </list>
+    /// </para>
+    ///
+    /// <para>
+    /// Distinct from <see cref="GetByMonthForDesignatedReportsAsync"/> (period-FIRST: it joins
+    /// <c>approval_periods</c> to the candidate CTE, so it can never surface a zero-period employee).
+    /// This method enumerates the candidate EMPLOYEES (not their periods) and the LEFT JOIN to the
+    /// month period is what makes the zero-period DRAFT row possible. <c>displayName</c> +
+    /// <c>usersAgreementCode</c> come from <c>users</c> so a no-period row can still render a name +
+    /// agreement. Read-only / additive — touches no write path and emits no events.
+    /// </para>
+    /// </summary>
+    /// <param name="actorId">The acting leader (the JWT subject).</param>
+    /// <param name="year">The requested year (validated by the caller).</param>
+    /// <param name="month">The requested month 1–12 (validated by the caller).</param>
+    public async Task<List<TeamOverviewRosterRow>> GetTeamOverviewRosterAsync(
+        string actorId, int year, int month, CancellationToken ct = default)
+    {
+        var monthStart = new DateOnly(year, month, 1);
+        var nextMonthStart = monthStart.AddMonths(1);
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+
+        // (1) Candidate EMPLOYEES (tree-root-bounded superset) + their users name/agreement, LEFT
+        //     JOINed to the (year,month) period. One styrelse-tree-bounded query. The LEFT JOIN to
+        //     approval_periods is what lets a candidate with NO period this month still come back
+        //     (period_id NULL → the DRAFT zero-period row). DISTINCT ON (employee_id) collapses the
+        //     (rare) multi-period-per-month case to the latest-starting period, deterministically.
+        var sql = $"""
+            {DesignatedCandidateEmployeesCte}
+            SELECT DISTINCT ON (u.user_id)
+                   u.user_id                AS employee_id,
+                   u.display_name           AS display_name,
+                   u.agreement_code         AS users_agreement_code,
+                   ap.period_id             AS period_id
+            FROM candidate_employees ce
+            JOIN users u ON u.user_id = ce.employee_id
+            LEFT JOIN approval_periods ap
+                ON ap.employee_id = u.user_id
+               AND ap.period_start < @nextMonthStart
+               AND ap.period_end >= @monthStart
+            ORDER BY u.user_id, ap.period_start DESC
+            """;
+
+        var candidateRows = new List<(string EmployeeId, string DisplayName, string UsersAgreementCode, Guid? PeriodId)>();
+        await using (var conn = _connectionFactory.Create())
+        {
+            await conn.OpenAsync(ct);
+            await using var cmd = new NpgsqlCommand(sql, conn);
+            cmd.Parameters.AddWithValue("actorId", actorId);
+            cmd.Parameters.AddWithValue("today", today);
+            cmd.Parameters.AddWithValue("monthStart", monthStart);
+            cmd.Parameters.AddWithValue("nextMonthStart", nextMonthStart);
+
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            var empOrd = reader.GetOrdinal("employee_id");
+            var nameOrd = reader.GetOrdinal("display_name");
+            var agrOrd = reader.GetOrdinal("users_agreement_code");
+            var pidOrd = reader.GetOrdinal("period_id");
+            while (await reader.ReadAsync(ct))
+            {
+                candidateRows.Add((
+                    reader.GetString(empOrd),
+                    reader.GetString(nameOrd),
+                    reader.GetString(agrOrd),
+                    reader.IsDBNull(pidOrd) ? null : reader.GetGuid(pidOrd)));
+            }
+        }
+
+        if (candidateRows.Count == 0)
+            return new List<TeamOverviewRosterRow>();
+
+        // (2) Filter the candidate EMPLOYEES through the canonical R5 predicate at today — exactly
+        //     the same single-effective-approver decision the action endpoints + the my-reports
+        //     dashboard authorize through (see == act, no drift). One decision per distinct employee.
+        var result = new List<TeamOverviewRosterRow>(candidateRows.Count);
+        foreach (var row in candidateRows)
+        {
+            var isApprover = await _designatedAuthorizer.IsEffectiveDesignatedApproverAsync(
+                actorId, row.EmployeeId, asOf: today, ct: ct);
+            if (!isApprover)
+                continue;
+            result.Add(new TeamOverviewRosterRow(
+                EmployeeId: row.EmployeeId,
+                DisplayName: row.DisplayName,
+                UsersAgreementCode: row.UsersAgreementCode,
+                PeriodId: row.PeriodId));
+        }
+        return result;
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
     //  S74-7404 R11a — per-styrelse period-status projection (read-only)
     // ──────────────────────────────────────────────────────────────────────
 
@@ -1200,3 +1314,18 @@ public sealed record PersonSearchHit(
     string DisplayName,
     string PrimaryOrgName,
     string? EnhedLabel);
+
+/// <summary>
+/// S87-8701 — one roster entry for the leader Teamoversigt aggregate
+/// (<see cref="ApprovalPeriodRepository.GetTeamOverviewRosterAsync"/>). One per employee in the
+/// leader's designated-act-authority set for the requested month. <paramref name="PeriodId"/> is
+/// <c>null</c> when the employee has NO <c>approval_periods</c> row that month (the zero-period
+/// DRAFT row — no actions). <paramref name="DisplayName"/> + <paramref name="UsersAgreementCode"/>
+/// come from <c>users</c> so a no-period row can still render a name + agreement (the endpoint
+/// prefers the PERIOD's agreement_code when a period exists, else this users fallback).
+/// </summary>
+public sealed record TeamOverviewRosterRow(
+    string EmployeeId,
+    string DisplayName,
+    string UsersAgreementCode,
+    Guid? PeriodId);

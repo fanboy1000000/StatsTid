@@ -7,6 +7,7 @@ using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Audit;
+using StatsTid.SharedKernel.Config;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Security;
@@ -23,6 +24,38 @@ public static class ApprovalEndpoints
     /// genuine 0.01 mismatch blocks the approval.
     /// </summary>
     private const decimal AllocationTolerance = 0.005m;
+
+    /// <summary>
+    /// S87-8701 — camelCase JSON options matching the <c>work_time_projection.intervals</c> JSONB
+    /// shape (the same casing <see cref="StatsTid.Infrastructure.WorkTimeProjectionRepository"/>
+    /// persists/reads with: <c>[{"start":"08:00","end":"12:00"}]</c>).
+    /// </summary>
+    private static readonly System.Text.Json.JsonSerializerOptions TeamOverviewIntervalsJsonOptions = new()
+    {
+        PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
+    };
+
+    /// <summary>
+    /// S87-8701 — reads the subset of <c>approval_periods</c> columns the team-overview row needs
+    /// (status / submitted_at / approved_at [the neutral decisionAt — rejects write it too] /
+    /// rejection_reason / agreement_code). A local minimal reader so the endpoint can batch the
+    /// non-null period ids with one <c>WHERE period_id = ANY(...)</c> query.
+    /// </summary>
+    private static ApprovalPeriod ReadTeamOverviewPeriod(Npgsql.NpgsqlDataReader reader) => new()
+    {
+        PeriodId = reader.GetGuid(reader.GetOrdinal("period_id")),
+        EmployeeId = reader.GetString(reader.GetOrdinal("employee_id")),
+        OrgId = reader.GetString(reader.GetOrdinal("org_id")),
+        PeriodStart = DateOnly.FromDateTime(reader.GetDateTime(reader.GetOrdinal("period_start"))),
+        PeriodEnd = DateOnly.FromDateTime(reader.GetDateTime(reader.GetOrdinal("period_end"))),
+        PeriodType = reader.GetString(reader.GetOrdinal("period_type")),
+        Status = reader.GetString(reader.GetOrdinal("status")),
+        SubmittedAt = reader.IsDBNull(reader.GetOrdinal("submitted_at")) ? null : reader.GetDateTime(reader.GetOrdinal("submitted_at")),
+        ApprovedAt = reader.IsDBNull(reader.GetOrdinal("approved_at")) ? null : reader.GetDateTime(reader.GetOrdinal("approved_at")),
+        RejectionReason = reader.IsDBNull(reader.GetOrdinal("rejection_reason")) ? null : reader.GetString(reader.GetOrdinal("rejection_reason")),
+        AgreementCode = reader.GetString(reader.GetOrdinal("agreement_code")),
+        OkVersion = reader.GetString(reader.GetOrdinal("ok_version")),
+    };
 
     /// <summary>
     /// Sums work-interval hours for a day, mirroring the frontend grid calc
@@ -784,6 +817,329 @@ public static class ApprovalEndpoints
             }).ToList();
 
             return Results.Ok(result);
+        }).RequireAuthorization("LeaderOrAbove");
+
+        // ── S87-8701 — Team Overview aggregate (leader Teamoversigt) ──
+        //
+        // GET /api/approval/team-overview?year=&month= (LeaderOrAbove). One row per employee in the
+        // ACTOR's designated-act-authority set (ADR-027 D13 see == act): the roster comes from the
+        // SAME designated-candidate CTE → R5 predicate the approval queries use, LEFT JOINed to the
+        // (year,month) period so a zero-period report still appears as a DRAFT row (periodId=null).
+        // It is NOT org-scope and NOT /reports — a non-leader / a leader with no reports gets an
+        // empty set. The balance/norm/ferie/flex/warning fields are computed via BATCHED, set-based
+        // reads over the team's employee-ids (NOT 40× the full /summary; NOT a re-implementation of
+        // the dated-OK/entitlement resolution — the S81 split-brain is left untouched, the
+        // authoritative full Saldi stay on /summary, lazy-on-expand = P2/S88). NO rule-engine call:
+        // hasWarning mirrors ONLY the ALLOCATION arm of the approve gate (a deliberate P1 narrowing).
+        app.MapGet("/api/approval/team-overview", async (
+            [FromQuery] int year,
+            [FromQuery] int month,
+            ApprovalPeriodRepository approvalRepo,
+            AgreementConfigRepository agreementConfigRepo,
+            DbConnectionFactory connectionFactory,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            if (year < 2020 || year > 2100)
+                return Results.BadRequest(new { error = "Invalid year. Must be between 2020 and 2100." });
+            if (month < 1 || month > 12)
+                return Results.BadRequest(new { error = "Invalid month. Must be between 1 and 12." });
+
+            var actor = context.GetActorContext();
+            if (string.IsNullOrEmpty(actor.ActorId))
+                return Results.Json(new { error = "Access denied", reason = "No actor identity" }, statusCode: 403);
+
+            // (1) The roster = the actor's designated-act-authority set for (year, month), with
+            //     zero-period DRAFT rows. The repo derives it from the candidate CTE → R5 predicate
+            //     (NOT org-scope, NOT /reports), so this is inherently designated-approver-scoped: a
+            //     non-approver / a leader with no reports gets an empty roster (NOT an org-scope leak).
+            var roster = await approvalRepo.GetTeamOverviewRosterAsync(actor.ActorId, year, month, ct);
+            if (roster.Count == 0)
+                return Results.Ok(new { employees = Array.Empty<object>() });
+
+            var employeeIds = roster.Select(r => r.EmployeeId).Distinct().ToArray();
+            var periodIds = roster.Where(r => r.PeriodId is not null).Select(r => r.PeriodId!.Value).ToArray();
+
+            var monthStart = new DateOnly(year, month, 1);
+            var monthEnd = new DateOnly(year, month, DateTime.DaysInMonth(year, month));
+            // VACATION is schema-pinned to reset_month = 9 (init.sql CHECK), so the ferieår for the
+            // requested month is the SAME keying the /summary EntitlementPeriodResolver path uses for
+            // VACATION — derived here without re-implementing the dated-config resolution.
+            var vacationYear = month >= 9 ? year : year - 1;
+            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+
+            // (2) ONE bounded query per field, set-based over the team's employee-ids (≤ ~40 rows) —
+            //     NOT a per-employee /summary loop, NOT a per-employee event replay.
+            await using var conn = connectionFactory.Create();
+            await conn.OpenAsync(ct);
+
+            // (2a) The full period rows for the non-null period ids (status / submittedAt /
+            //      decisionAt [= approved_at; rejects write it too] / rejectionReason / agreement).
+            var periodById = new Dictionary<Guid, ApprovalPeriod>();
+            if (periodIds.Length > 0)
+            {
+                await using var cmd = new NpgsqlCommand(
+                    "SELECT * FROM approval_periods WHERE period_id = ANY(@ids)", conn);
+                cmd.Parameters.AddWithValue("ids", periodIds);
+                await using var reader = await cmd.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                {
+                    var p = ReadTeamOverviewPeriod(reader);
+                    periodById[p.PeriodId] = p;
+                }
+            }
+
+            // (2b) normRegistered = summed time_entries_projection hours per employee for the month.
+            var registeredByEmployee = new Dictionary<string, decimal>(StringComparer.Ordinal);
+            await using (var cmd = new NpgsqlCommand(
+                """
+                SELECT employee_id, COALESCE(SUM(hours), 0) AS total
+                FROM time_entries_projection
+                WHERE employee_id = ANY(@ids) AND date >= @start AND date <= @end
+                GROUP BY employee_id
+                """, conn))
+            {
+                cmd.Parameters.AddWithValue("ids", employeeIds);
+                cmd.Parameters.AddWithValue("start", monthStart);
+                cmd.Parameters.AddWithValue("end", monthEnd);
+                await using var reader = await cmd.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                    registeredByEmployee[reader.GetString(0)] = reader.GetDecimal(1);
+            }
+
+            // (2c) allocated(NORMAL + non-null TaskId) hours per (employee, date) for the month —
+            //      the ALLOCATION arm of the approve gate (ApprovalEndpoints ~:960). Used WITH the
+            //      work-time worked hours below to compute hasWarning = (worked − allocated) > tol.
+            var allocatedByEmployeeDay = new Dictionary<(string, DateOnly), decimal>();
+            await using (var cmd = new NpgsqlCommand(
+                """
+                SELECT employee_id, date, COALESCE(SUM(hours), 0) AS allocated
+                FROM time_entries_projection
+                WHERE employee_id = ANY(@ids) AND date >= @start AND date <= @end
+                  AND activity_type = 'NORMAL' AND task_id IS NOT NULL
+                GROUP BY employee_id, date
+                """, conn))
+            {
+                cmd.Parameters.AddWithValue("ids", employeeIds);
+                cmd.Parameters.AddWithValue("start", monthStart);
+                cmd.Parameters.AddWithValue("end", monthEnd);
+                await using var reader = await cmd.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                    allocatedByEmployeeDay[(reader.GetString(0),
+                        DateOnly.FromDateTime(reader.GetDateTime(1)))] = reader.GetDecimal(2);
+            }
+
+            // (2d) worked(intervals + manual_hours) per (employee, date) from work_time_projection.
+            var workedByEmployeeDay = new Dictionary<(string, DateOnly), decimal>();
+            await using (var cmd = new NpgsqlCommand(
+                """
+                SELECT employee_id, date, intervals, manual_hours
+                FROM work_time_projection
+                WHERE employee_id = ANY(@ids) AND date >= @start AND date <= @end
+                """, conn))
+            {
+                cmd.Parameters.AddWithValue("ids", employeeIds);
+                cmd.Parameters.AddWithValue("start", monthStart);
+                cmd.Parameters.AddWithValue("end", monthEnd);
+                await using var reader = await cmd.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                {
+                    var empId = reader.GetString(0);
+                    var date = DateOnly.FromDateTime(reader.GetDateTime(1));
+                    var intervalsJson = reader.GetString(2);
+                    var manual = reader.GetDecimal(3);
+                    var intervals = System.Text.Json.JsonSerializer.Deserialize<List<WorkInterval>>(
+                        intervalsJson, TeamOverviewIntervalsJsonOptions) ?? new List<WorkInterval>();
+                    var worked = SumIntervalHours(intervals) + manual;
+                    var key = (empId, date);
+                    workedByEmployeeDay[key] = workedByEmployeeDay.TryGetValue(key, out var ex) ? ex + worked : worked;
+                }
+            }
+
+            // (2e) ferieUsed/ferieTotal = entitlement_balances VACATION used/total_quota for the
+            //      ferieår of the requested month (ADR-032 ferieår-correct — NOT vacationDaysUsed).
+            var ferieByEmployee = new Dictionary<string, (decimal Used, decimal Total)>(StringComparer.Ordinal);
+            await using (var cmd = new NpgsqlCommand(
+                """
+                SELECT employee_id, used, total_quota
+                FROM entitlement_balances
+                WHERE employee_id = ANY(@ids) AND entitlement_type = 'VACATION' AND entitlement_year = @vacYear
+                """, conn))
+            {
+                cmd.Parameters.AddWithValue("ids", employeeIds);
+                cmd.Parameters.AddWithValue("vacYear", vacationYear);
+                await using var reader = await cmd.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                    ferieByEmployee[reader.GetString(0)] = (reader.GetDecimal(1), reader.GetDecimal(2));
+            }
+
+            // (2f) flexBalance = the latest FlexBalanceUpdated NewBalance per employee. Flex has no
+            //      projection (it lives ONLY in the employee-{id} event stream), so this is a BOUNDED,
+            //      set-based read: DISTINCT ON (stream_id) over the team's streams, picking the highest
+            //      stream_version FlexBalanceUpdated row — NOT a per-employee full-stream replay loop.
+            //      The stored JSON is camelCase (EventSerializer) → data->>'newBalance'.
+            var flexByEmployee = new Dictionary<string, decimal>(StringComparer.Ordinal);
+            var flexStreamIds = employeeIds.Select(id => $"employee-{id}").ToArray();
+            await using (var cmd = new NpgsqlCommand(
+                """
+                SELECT DISTINCT ON (stream_id) stream_id, (data->>'newBalance') AS new_balance
+                FROM events
+                WHERE stream_id = ANY(@streamIds) AND event_type = 'FlexBalanceUpdated'
+                ORDER BY stream_id, stream_version DESC
+                """, conn))
+            {
+                cmd.Parameters.AddWithValue("streamIds", flexStreamIds);
+                await using var reader = await cmd.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                {
+                    var streamId = reader.GetString(0);
+                    var empId = streamId.StartsWith("employee-", StringComparison.Ordinal)
+                        ? streamId.Substring("employee-".Length)
+                        : streamId;
+                    if (!reader.IsDBNull(1) && decimal.TryParse(reader.GetString(1),
+                            System.Globalization.NumberStyles.Number,
+                            System.Globalization.CultureInfo.InvariantCulture, out var bal))
+                        flexByEmployee[empId] = bal;
+                }
+            }
+
+            // (2g) awayToday = an absence covering TODAY. PER-EMPLOYEE FAULT-ISOLATED: a failure of
+            //      THIS read degrades EVERY row's awayToday to false (never a whole-table 500); a
+            //      successful read populates the set and a missing employee is simply false.
+            var awayTodaySet = new HashSet<string>(StringComparer.Ordinal);
+            var awayTodayAvailable = true;
+            try
+            {
+                await using var cmd = new NpgsqlCommand(
+                    """
+                    SELECT DISTINCT employee_id
+                    FROM absences_projection
+                    WHERE employee_id = ANY(@ids) AND date = @today
+                    """, conn);
+                cmd.Parameters.AddWithValue("ids", employeeIds);
+                cmd.Parameters.AddWithValue("today", today);
+                await using var reader = await cmd.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                    awayTodaySet.Add(reader.GetString(0));
+            }
+            catch (Exception)
+            {
+                // Fault-isolated: the awayToday signal is best-effort. Degrade the flag to false for
+                // ALL rows rather than failing the whole team-overview load.
+                awayTodayAvailable = false;
+            }
+
+            // (2h) normExpected = (weekdays/5) × weeklyNorm per employee. weeklyNorm resolves from the
+            //      employee's agreement config, cached per distinct (agreement, ok) pair so the
+            //      lookups are bounded (≤ #distinct agreements, NOT per-employee). Mirrors the
+            //      /summary norm-expected derivation (weekday count × weekly norm / 5) without the
+            //      heavy per-employee dated-config resolution.
+            var weekdays = 0;
+            for (var d = monthStart; d <= monthEnd; d = d.AddDays(1))
+                if (d.DayOfWeek is not (DayOfWeek.Saturday or DayOfWeek.Sunday))
+                    weekdays++;
+
+            // Resolve each roster employee's (agreement, ok) once (users row), then weekly norm once
+            // per distinct pair. The agreement used is the PERIOD's when a period exists (the same
+            // dimension the period was submitted under), else the users fallback; ok comes from users.
+            var usersInfo = new Dictionary<string, (string Agreement, string OkVersion)>(StringComparer.Ordinal);
+            await using (var cmd = new NpgsqlCommand(
+                "SELECT user_id, agreement_code, ok_version FROM users WHERE user_id = ANY(@ids)", conn))
+            {
+                cmd.Parameters.AddWithValue("ids", employeeIds);
+                await using var reader = await cmd.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                    usersInfo[reader.GetString(0)] = (reader.GetString(1), reader.GetString(2));
+            }
+
+            var weeklyNormCache = new Dictionary<(string, string), decimal>();
+            async Task<decimal> ResolveWeeklyNormAsync(string agreement, string okVersion)
+            {
+                var key = (agreement, okVersion);
+                if (weeklyNormCache.TryGetValue(key, out var cached))
+                    return cached;
+                var dbConfig = await agreementConfigRepo.GetActiveAsync(agreement, okVersion, ct);
+                var norm = dbConfig?.WeeklyNormHours
+                    ?? CentralAgreementConfigs.TryGetConfig(agreement, okVersion)?.WeeklyNormHours
+                    ?? 37.0m;
+                weeklyNormCache[key] = norm;
+                return norm;
+            }
+
+            // (3) Assemble one row per roster employee.
+            var employees = new List<object>(roster.Count);
+            foreach (var r in roster)
+            {
+                ApprovalPeriod? period = r.PeriodId is not null && periodById.TryGetValue(r.PeriodId.Value, out var p) ? p : null;
+                var status = period?.Status ?? "DRAFT";
+                var agreement = period?.AgreementCode ?? r.UsersAgreementCode;
+
+                // decisionAt is NEUTRAL: rejects write approved_at too (no stored rejectedAt), so
+                // status disambiguates approve vs reject. Only surfaced for APPROVED/REJECTED rows.
+                DateTime? decisionAt = status is "APPROVED" or "REJECTED" ? period?.ApprovedAt : null;
+                var rejectionReason = status == "REJECTED" ? period?.RejectionReason : null;
+
+                var (uAgreement, uOk) = usersInfo.TryGetValue(r.EmployeeId, out var ui)
+                    ? ui
+                    : (r.UsersAgreementCode, "OK24");
+                // Norm-expected uses the period's agreement when present (consistent with the row's
+                // displayed agreement), else the users agreement; ok is from users (the live cache).
+                var weeklyNorm = await ResolveWeeklyNormAsync(agreement, uOk);
+                var normExpected = (weekdays / 5.0m) * weeklyNorm;
+
+                var normRegistered = registeredByEmployee.GetValueOrDefault(r.EmployeeId, 0m);
+                var overtime = Math.Max(0m, normRegistered - normExpected);
+
+                var (ferieUsed, ferieTotal) = ferieByEmployee.GetValueOrDefault(r.EmployeeId, (0m, 0m));
+                var flexBalance = flexByEmployee.GetValueOrDefault(r.EmployeeId, 0m);
+                var awayToday = awayTodayAvailable && awayTodaySet.Contains(r.EmployeeId);
+
+                // hasWarning = the cheap allocation-imbalance warning (|worked − allocated| > tol on
+                // ANY day in the month). Mirrors the allocation arm of the approve gate SYMMETRICALLY
+                // (the gate flags Math.Abs(worked − allocated) ≥ tol — both under- AND over-allocation
+                // are un-approvable; S87 Step-7a), — NO rule-engine / compliance call. A named P1
+                // narrowing: it does NOT mirror the coverage/uncovered-days arm, so false ≠ submittable.
+                var hasWarning = false;
+                var daysWithEither = new HashSet<DateOnly>();
+                for (var d = monthStart; d <= monthEnd; d = d.AddDays(1))
+                {
+                    if (workedByEmployeeDay.ContainsKey((r.EmployeeId, d)) ||
+                        allocatedByEmployeeDay.ContainsKey((r.EmployeeId, d)))
+                        daysWithEither.Add(d);
+                }
+                foreach (var d in daysWithEither)
+                {
+                    var worked = Math.Round(workedByEmployeeDay.GetValueOrDefault((r.EmployeeId, d), 0m), 2);
+                    var allocated = Math.Round(allocatedByEmployeeDay.GetValueOrDefault((r.EmployeeId, d), 0m), 2);
+                    if (Math.Abs(worked - allocated) > AllocationTolerance)
+                    {
+                        hasWarning = true;
+                        break;
+                    }
+                }
+
+                employees.Add(new
+                {
+                    periodId = r.PeriodId,
+                    employeeId = r.EmployeeId,
+                    displayName = r.DisplayName,
+                    agreement,
+                    status,
+                    submittedAt = period?.SubmittedAt,
+                    decisionAt,
+                    rejectionReason,
+                    normExpected,
+                    normRegistered,
+                    flexBalance,
+                    overtime,
+                    ferieUsed,
+                    ferieTotal,
+                    awayToday,
+                    hasWarning,
+                });
+            }
+
+            return Results.Ok(new { employees });
         }).RequireAuthorization("LeaderOrAbove");
 
         // ── Get Employee Periods ──

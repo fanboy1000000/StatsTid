@@ -12,7 +12,7 @@ interface TabDef {
 
 const TABS: TabDef[] = [
   { label: 'Min tid', minRole: null, firstRoute: '/tid/registrering', prefix: '/tid' },
-  { label: 'Godkend tid', minRole: 'LocalLeader', firstRoute: '/godkend/godkendelser', prefix: '/godkend' },
+  { label: 'Godkend tid', minRole: 'LocalLeader', firstRoute: '/godkend/oversigt', prefix: '/godkend' },
   { label: 'Administration', minRole: 'LocalHR', firstRoute: '/admin/medarbejdere', prefix: '/admin' },
   { label: 'Lokale tilpasninger', minRole: 'LocalAdmin', firstRoute: '/lokal/ok-konfiguration', prefix: '/lokal' },
   { label: 'Global administration', minRole: 'GlobalAdmin', firstRoute: '/global/overenskomster', prefix: '/global' },

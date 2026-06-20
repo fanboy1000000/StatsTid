@@ -1,0 +1,555 @@
+/* S87 / TASK-8702 — Leder Teamoversigt (design_handoff_leder_oversigt).
+   Hifi: 0px radius everywhere, 1px hairline borders, oes-green #066b43,
+   IBM Plex Sans, Danish copy, decimal-comma numbers. P1 = the table (no
+   expandable detail row — that is P2/S88). */
+
+.page {
+  font-family: var(--font-family);
+  color: var(--color-text);
+}
+
+/* ── Page header ───────────────────────────────────────────────────────────── */
+.pageHeader {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+}
+
+.title {
+  margin: 0 0 4px;
+  font-size: 30px;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--color-text);
+}
+
+.subline {
+  margin: 0;
+  font-size: 15px;
+  color: var(--color-text-secondary);
+}
+
+.monthStepper {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--color-border);
+  background: var(--color-white);
+}
+
+.stepperBtn {
+  background: none;
+  border: none;
+  padding: 8px 12px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-text);
+  cursor: pointer;
+  font-family: var(--font-family);
+}
+
+.stepperBtn:hover {
+  background: var(--color-gray-100);
+}
+
+.stepperLabel {
+  font-size: 15px;
+  font-weight: 600;
+  padding: 0 8px;
+  min-width: 120px;
+  text-align: center;
+}
+
+/* ── KPI band ──────────────────────────────────────────────────────────────── */
+.kpiBand {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.kpiCard {
+  background: var(--color-white);
+  border: 1px solid var(--color-border);
+  padding: 16px 18px;
+}
+
+.kpiCardPrimary {
+  border-top: 3px solid var(--color-primary);
+}
+
+.kpiLabel {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+}
+
+.kpiValue {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--color-text);
+}
+
+.kpiValuePrimary {
+  color: var(--color-primary);
+}
+
+.kpiValueWarning {
+  color: var(--color-warning);
+}
+
+.kpiSuffix {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+}
+
+/* ── Toolbar ───────────────────────────────────────────────────────────────── */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.search {
+  flex: none;
+  width: 260px;
+  padding: 8px 12px;
+  font-size: 15px;
+  font-family: var(--font-family);
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-white);
+  color: var(--color-text);
+  border-radius: 0;
+}
+
+.chips {
+  display: flex;
+  gap: 6px;
+}
+
+.chip {
+  padding: 7px 14px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-white);
+  color: var(--color-text);
+  border-radius: 0;
+  font-family: var(--font-family);
+}
+
+.chipActive {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.chipCount {
+  opacity: 0.7;
+}
+
+.toolbarSpacer {
+  flex: 1;
+}
+
+.bulkBtn {
+  padding: 8px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--color-primary);
+  background: var(--color-primary);
+  color: #fff;
+  border-radius: 0;
+  font-family: var(--font-family);
+}
+
+.bulkBtn:hover {
+  background: var(--color-primary-hover);
+}
+
+.bulkBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ── Table ─────────────────────────────────────────────────────────────────── */
+.tableCard {
+  background: var(--color-white);
+  border: 1px solid var(--color-border);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 15px;
+}
+
+.headRow {
+  border-bottom: 2px solid var(--color-border-strong);
+}
+
+.table th {
+  text-align: left;
+  padding: 12px 12px;
+  font-weight: 600;
+  color: var(--color-text);
+  white-space: nowrap;
+}
+
+.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.handlingHead {
+  width: 180px;
+}
+
+.checkboxCell {
+  width: 40px;
+  text-align: center;
+  padding: 12px 8px;
+}
+
+.checkboxCell input {
+  accent-color: var(--color-primary);
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.checkboxCell input:disabled {
+  cursor: not-allowed;
+}
+
+.bodyRow {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.bodyRow td {
+  padding: 13px 12px;
+}
+
+.rowSelected {
+  background: var(--color-gray-50);
+}
+
+.empName {
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.empId {
+  font-family: var(--font-family-mono, 'IBM Plex Mono', ui-monospace, monospace);
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  margin-left: 6px;
+}
+
+.secondary {
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.nowrap {
+  white-space: nowrap;
+}
+
+.right {
+  text-align: right;
+}
+
+/* ── Status badge ──────────────────────────────────────────────────────────── */
+.badge {
+  display: inline-block;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 2px 8px;
+  white-space: nowrap;
+  border-radius: 0;
+}
+
+.badgeIndsendt {
+  background: var(--color-info-light);
+  color: var(--color-info);
+}
+
+.badgeGodkendt {
+  background: var(--color-success-light);
+  color: var(--color-success);
+}
+
+.badgeAfvist {
+  background: var(--color-error-light);
+  color: var(--color-error);
+}
+
+.badgeKladde {
+  background: var(--color-gray-100);
+  color: var(--color-gray-500);
+}
+
+/* ── Norm progress bar ─────────────────────────────────────────────────────── */
+.barTrack {
+  margin-top: 5px;
+  width: 120px;
+  height: 5px;
+  background: var(--color-gray-200);
+}
+
+.barFill {
+  height: 100%;
+}
+
+.barGreen {
+  background: var(--color-primary);
+}
+
+.barInfo {
+  background: var(--color-info);
+}
+
+.barWarn {
+  background: var(--color-warning);
+}
+
+/* ── Flex column ───────────────────────────────────────────────────────────── */
+.flexCell {
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.flexPositive {
+  color: var(--color-primary);
+}
+
+.flexNegative {
+  color: var(--color-error);
+}
+
+.flexZero {
+  color: var(--color-text-secondary);
+}
+
+/* ── Warnings ──────────────────────────────────────────────────────────────── */
+.warnChip {
+  display: inline-block;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 2px 8px;
+  background: var(--color-warning-light);
+  color: var(--color-warning);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+  border-radius: 0;
+}
+
+.emDash {
+  color: var(--color-gray-400);
+}
+
+/* ── Handling cell ─────────────────────────────────────────────────────────── */
+.handlingCell {
+  white-space: nowrap;
+}
+
+.handlingActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.approveBtn {
+  padding: 5px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--color-primary);
+  background: var(--color-primary);
+  color: #fff;
+  border-radius: 0;
+  font-family: var(--font-family);
+}
+
+.approveBtn:hover {
+  background: var(--color-primary-hover);
+}
+
+.approveBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.rejectBtn {
+  padding: 5px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--color-error);
+  background: var(--color-white);
+  color: var(--color-error);
+  border-radius: 0;
+  font-family: var(--font-family);
+}
+
+.rejectBtn:hover {
+  background: var(--color-error-light);
+}
+
+.rejectBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.reopenBtn {
+  padding: 5px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-white);
+  color: var(--color-text);
+  border-radius: 0;
+  font-family: var(--font-family);
+}
+
+.reopenBtn:hover {
+  background: var(--color-gray-100);
+}
+
+.reopenBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.notSubmitted {
+  font-size: 13px;
+  color: var(--color-gray-400);
+}
+
+.outcomeConflict {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-error);
+}
+
+/* ── Empty / loading ───────────────────────────────────────────────────────── */
+.emptyTable {
+  padding: 32px;
+  text-align: center;
+  color: var(--color-text-secondary);
+}
+
+/* ── Toast / alert banners ─────────────────────────────────────────────────── */
+.alert {
+  border: 1px solid var(--color-error);
+  border-radius: 0;
+  background: var(--color-error-light);
+  color: var(--color-error);
+  padding: 12px 16px;
+  font-size: 14px;
+  margin-bottom: 16px;
+}
+
+.alertSuccess {
+  border: 1px solid var(--color-success);
+  border-radius: 0;
+  background: var(--color-success-light);
+  color: var(--color-success);
+  padding: 12px 16px;
+  font-size: 14px;
+  margin-bottom: 16px;
+}
+
+/* ── Dialog body (kit Dialog owns overlay/panel/title chrome) ──────────────── */
+.dialogLabel {
+  display: block;
+  font-size: 14px;
+  font-weight: 500;
+  margin-bottom: 6px;
+  color: var(--color-text);
+}
+
+.dialogLabelOptional {
+  font-weight: 400;
+  color: var(--color-text-secondary);
+}
+
+.dialogDescription {
+  font-size: 14px;
+  color: var(--color-text-secondary);
+  margin: 0 0 16px;
+}
+
+.dialogTextarea {
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 15px;
+  line-height: 1.5;
+  font-family: var(--font-family);
+  color: var(--color-text);
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-white);
+  resize: vertical;
+  box-sizing: border-box;
+  border-radius: 0;
+}
+
+.dialogTextarea:focus {
+  outline: 2px solid var(--color-gray-600);
+  outline-offset: 2px;
+}
+
+.dialogActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.cancelBtn {
+  padding: 8px 18px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-white);
+  color: var(--color-text);
+  border-radius: 0;
+  font-family: var(--font-family);
+}
+
+.cancelBtn:hover {
+  background: var(--color-gray-100);
+}
+
+.confirmRejectBtn {
+  padding: 8px 18px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--color-error);
+  background: var(--color-error);
+  color: #fff;
+  border-radius: 0;
+  font-family: var(--font-family);
+}
+
+.confirmRejectBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

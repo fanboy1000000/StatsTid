@@ -139,14 +139,14 @@ Guards compose via nested `<Route element={<RequireRole minRole=.../>}>` wrapper
 | Tab | Path prefix | Min Role | First route |
 |-----|-------------|----------|-------------|
 | Min tid | `/tid` | any auth | `/tid/registrering` |
-| Godkend tid | `/godkend` | LocalLeader | `/godkend/godkendelser` |
+| Godkend tid | `/godkend` | LocalLeader | `/godkend/oversigt` (S87 — was `/godkend/godkendelser`, now redirects) |
 | Administration | `/admin` | LocalHR | `/admin/medarbejdere` |
 | Lokale tilpasninger | `/lokal` | LocalAdmin | `/lokal/ok-konfiguration` |
 | Global administration | `/global` | GlobalAdmin | `/global/overenskomster` |
 
 **Level 2 — `Sidebar`** shows items for the active group only, each filtered by `hasMinRole`:
 - **Min tid**: Registrering (`/tid/registrering`), Oversigt (`/tid/oversigt`)
-- **Godkend tid**: Godkendelser (`/godkend/godkendelser`), Vikariering (`/godkend/vikariering`)
+- **Godkend tid**: Oversigt (`/godkend/oversigt`, the S87 Teamoversigt), Vikariering (`/godkend/vikariering`)
 - **Administration**: Medarbejdere (LocalHR), Audit log (LocalHR), Projekter, Ledelseslinjer, Brugerrettigheder (LocalAdmin)
 - **Lokale tilpasninger**: Lokal OK konfiguration, Lokale stillingstilpasninger
 - **Global administration**: Overenskomster, Organisation, Lønartstilknytning
@@ -162,7 +162,8 @@ Routes are defined in `frontend/src/App.tsx`. Unauthenticated → `/login`; auth
 | `/tid/registrering` | `SkemaPage` | any auth | Monthly time registration (three-row work-time, S56) |
 | `/tid/oversigt` | `OversightPage` | any auth | S61 annual dashboard — being replaced by `ArsoversigtPage` (Direction E year grid) in S65 |
 | `/tid/mine-perioder` | `MyPeriods` | any auth | Own submitted periods (no nav item) |
-| `/godkend/godkendelser` | `ApprovalDashboard` | LocalLeader | Manager approval; expandable `ApprovalDetailPanel` (S55) |
+| `/godkend/oversigt` | `TeamOversigt` | LocalLeader | S87 leader Teamoversigt — per-employee table + KPI + bulk-approve over `GET /api/approval/team-overview`; expandable detail = P2/S88 |
+| `/godkend/godkendelser` | → redirect | — | S87 → `/godkend/oversigt` (`ApprovalDashboard` retained dead-but-tested until S88) |
 | `/godkend/vikariering` | `DelegationPage` | LocalLeader | Delegation / vikariering (ADR-027) |
 | `/admin/medarbejdere` | `UserManagement` | LocalHR | Employee/user administration |
 | `/admin/auditlog` | `AuditLogView` | LocalHR | Audit log viewer (ADR-026) |

@@ -57,10 +57,11 @@ in EventSerializer (deserialize-only) for historical event replay.
 |----------|--------|-------------|------|------------|-------|------|
 | `/api/approval/submit` | POST | MyPeriods | useApprovals | ApprovalPeriod | PeriodSubmitted | Employee+ |
 | `/api/approval/{periodId}/employee-approve` | POST | SkemaPage | useSkema | ApprovalPeriod | PeriodEmployeeApproved | Employee+ |
-| `/api/approval/{periodId}/approve` | POST | ApprovalDashboard | usePendingApprovals | ApprovalPeriod | PeriodApproved | Leader+ |
-| `/api/approval/{periodId}/reject` | POST | ApprovalDashboard | usePendingApprovals | ApprovalPeriod | PeriodRejected | Leader+ |
-| `/api/approval/{periodId}/reopen` | POST | ApprovalDashboard | usePendingApprovals | ApprovalPeriod | PeriodReopened | Leader+ |
-| `/api/approval/pending` | GET | ApprovalDashboard | usePendingApprovals | ApprovalPeriod | — | Leader+ |
+| `/api/approval/{periodId}/approve` | POST | TeamOversigt (S87; was ApprovalDashboard) | apiClient (status-aware) | ApprovalPeriod | PeriodApproved | Leader+ |
+| `/api/approval/{periodId}/reject` | POST | TeamOversigt (S87; was ApprovalDashboard) | apiClient (status-aware) | ApprovalPeriod | PeriodRejected | Leader+ |
+| `/api/approval/{periodId}/reopen` | POST | TeamOversigt (S87; was ApprovalDashboard) | apiClient (status-aware) | ApprovalPeriod | PeriodReopened | LocalHR+ |
+| `/api/approval/team-overview` | GET | TeamOversigt | useTeamOverview | (aggregate read) | — | Leader+ (designated-approver-scoped) |
+| `/api/approval/pending` | GET | ApprovalDashboard (retired S87→S88) | usePendingApprovals | ApprovalPeriod | — | Leader+ |
 | `/api/approval/{employeeId}` | GET | MyPeriods | useApprovals | ApprovalPeriod | — | Employee+ |
 
 ### Administration

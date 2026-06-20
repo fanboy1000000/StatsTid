@@ -10,7 +10,11 @@ import { ArsoversigtPage } from './pages/ArsoversigtPage'
 import { HealthDashboard } from './pages/HealthDashboard'
 import { NotFoundPage } from './pages/NotFoundPage'
 import { MyPeriods } from './pages/approval/MyPeriods'
-import { ApprovalDashboard } from './pages/approval/ApprovalDashboard'
+// S87 / TASK-8702 (OQ-3): ApprovalDashboard is no longer routed — approvals moved
+// to TeamOversigt at /godkend/oversigt. The component file is retained (and its
+// vitest stays green as dead-but-tested) until S88 parity; it is intentionally not
+// imported here so the redirect is the only entry point to the old surface.
+import { TeamOversigt } from './pages/approval/TeamOversigt'
 import { OrgManagement } from './pages/admin/OrgManagement'
 import { UserManagement } from './pages/admin/UserManagement'
 import { RoleManagement } from './pages/admin/RoleManagement'
@@ -62,7 +66,11 @@ function AppRoutes() {
 
           {/* === Godkend tid (LocalLeader+) === */}
           <Route element={<RequireRole minRole="LocalLeader" />}>
-            <Route path="godkend/godkendelser" element={<ApprovalDashboard />} />
+            <Route path="godkend/oversigt" element={<TeamOversigt />} />
+            {/* S87 / TASK-8702 (OQ-3): approvals now live in the Teamoversigt.
+                The old standalone dashboard route redirects; the ApprovalDashboard
+                component is retained (unreferenced via nav) until S88 parity. */}
+            <Route path="godkend/godkendelser" element={<Navigate to="/godkend/oversigt" replace />} />
             <Route path="godkend/vikariering" element={<DelegationPage />} />
           </Route>
 

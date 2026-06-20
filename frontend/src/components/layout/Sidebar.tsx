@@ -25,7 +25,9 @@ const tabGroups: TabGroup[] = [
   {
     prefix: '/godkend',
     items: [
-      { label: 'Godkendelser', to: '/godkend/godkendelser', minRole: 'LocalLeader' },
+      // S87 / TASK-8702 (OQ-3): approvals merged into the Teamoversigt. The old
+      // "Godkendelser" item is removed; "Oversigt" leads the group.
+      { label: 'Oversigt', to: '/godkend/oversigt', minRole: 'LocalLeader' },
       { label: 'Vikariering', to: '/godkend/vikariering', minRole: 'LocalLeader' },
     ],
   },
