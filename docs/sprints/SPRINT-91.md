@@ -8,7 +8,7 @@
 | **End Date** | 2026-06-21 |
 | **Orchestrator Approved** | yes (owner-ruled both cleanups; the HR-tree-access expansion is a deliberate P7 decision) |
 | **Build Verified** | yes (`dotnet build` 0 err; `tsc` + `npm run build` clean) |
-| **Test Verified** | yes — local: FE 495, build 0 err, the S91 security suite `S91TreePageHrAccessTests` 15/15 + the scope-leak suites (MixedRoleScopeLeak/AdminVikar/etc.) 100/100 (testcontainers); full regression + smoke + e2e via CI |
+| **Test Verified** | yes — local: FE 495 + the S91 security suite 15/15 + scope-leak suites 100/100; **CI GREEN run `27915641624`, all 7 jobs** (build-and-test = regression **1055** + smoke + e2e). One e2e flake (the unrelated skema-registration journey timed out on a backend response under a service-health hiccup; passed on re-run — S91 touches no skema/absence/rule code) |
 
 ## Sprint Goal
 Two owner-requested cleanups: (1) the small Teamoversigt **REJECTED-row dead-button** fix (a rejected month showed a Genåbn that 409s server-side); (2) **remove the old "Medarbejdere" page** (`UserManagement`, LocalHR) and **open the "Medarbejder administration" tree page** (`MedarbejderAdministration`, currently LocalAdmin) to LocalHR — a deliberate **P7 privilege expansion** so HR keeps employee management on the surviving page.
@@ -46,7 +46,7 @@ Build + FE (tsc/vitest/build) + the affected backend regression (the reporting-l
 | Tier | S90 | S91 | Δ | Note |
 |------|-----|-----|---|------|
 | Unit | 856 | 856 | 0 | no unit change (the auth tests are Regression) |
-| Regression | 1040 | _via CI_ | +15 | `S91TreePageHrAccessTests` (15: HR-in-scope 200 RED-on-old / out-of-scope 403 / below-HR 403); scope-leak suites 100/100 re-verified. Full count via CI (the `:5432`-coupled classes need the S90 schema; the demo holds `:5432`) |
+| Regression | 1040 | 1055 | +15 | `S91TreePageHrAccessTests` (15: HR-in-scope 200 RED-on-old / out-of-scope 403 / below-HR 403); scope-leak suites 100/100 re-verified. **CI build-and-test = 1055** |
 | Smoke | 6 | 6 | 0 | no schema change |
 | Frontend (vitest) | 499 | 495 | −4 | +1 REJECTED dead-button test; −5 from the `UserManagement.test` deletion |
 | e2e | 3 | 3 | 0 | via CI |
