@@ -8,7 +8,7 @@
 | **End Date** | 2026-06-21 |
 | **Orchestrator Approved** | yes (Step-0b BLOCKERs B1+B2 resolved, baked into TASK-8801/8802) |
 | **Build Verified** | yes (`dotnet build` 0 err; `tsc` + `npm run build` clean) |
-| **Test Verified** | yes — local full pyramid green (regression 1015 effective; 6 FAIL-002 testcontainer sheds isolation-cleared 31/31); push + CI-verify to follow |
+| **Test Verified** | yes — local full pyramid green (regression 1015 effective; 6 FAIL-002 testcontainer sheds isolation-cleared 31/31) **AND CI GREEN run `27899371454`, all 7 jobs** (incl. build-and-test = full Linux regression + the e2e driving the new page) |
 
 ## Sprint Goal
 P2 of the `design_handoff_leder_oversigt` redesign (the 2-sprint split, OQ-4): the **expandable employee detail row** on the S87 TeamOversigt page — the accordion + the detail panel (Saldi grid + project-allocation Fordeling + the §-alerts + the footer), with the heavy per-employee data **lazy-fetched on expand** (the OQ-2 ruling: full compliance lazy, not in the table aggregate). Closes the leder-oversigt feature. Mostly frontend + ONE small backend read (the allocation breakdown).
