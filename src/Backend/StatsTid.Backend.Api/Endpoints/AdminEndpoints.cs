@@ -396,8 +396,11 @@ public static class AdminEndpoints
             var actor = context.GetActorContext();
             var logger = loggerFactory.CreateLogger("StatsTid.Backend.Api.Endpoints.AdminEndpoints.UsersPost");
 
-            // Validate actor scope covers target org. S76 B1: LocalAdminOrAbove policy → LocalAdmin floor.
-            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, request.PrimaryOrgId, StatsTidRoles.LocalAdmin, ct);
+            // Validate actor scope covers target org. S91 TASK-9102: tree-page surface opened to
+            // LocalHR — HROrAbove policy → LocalHR floor. Org-scope containment unchanged (HR stays
+            // bounded to its own org subtree; the optional create+assign approver below remains
+            // same-tree-validated, so the new edge cannot escape the actor's scope).
+            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, request.PrimaryOrgId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -880,7 +883,7 @@ public static class AdminEndpoints
                 okVersion = request.OkVersion,
                 version = 1L,
             });
-        }).RequireAuthorization("LocalAdminOrAbove");
+        }).RequireAuthorization("HROrAbove"); // S91 TASK-9102: tree-page surface opened to LocalHR
 
         // 5. PUT /api/admin/users/{userId} — Update user
         //
@@ -945,15 +948,18 @@ public static class AdminEndpoints
                     context.Request, out var expectedVersion, out var headerError))
                 return Results.Json(new { error = headerError }, statusCode: 428);
 
-            // Validate actor scope covers user's current org. S76 B1: LocalAdminOrAbove policy → LocalAdmin floor.
-            var (allowedCurrent, reasonCurrent) = await scopeValidator.ValidateOrgAccessAsync(actor, existingUser.PrimaryOrgId, StatsTidRoles.LocalAdmin, ct);
+            // Validate actor scope covers user's current org. S91 TASK-9102: tree-page surface opened
+            // to LocalHR — HROrAbove policy → LocalHR floor. Org-scope containment unchanged.
+            var (allowedCurrent, reasonCurrent) = await scopeValidator.ValidateOrgAccessAsync(actor, existingUser.PrimaryOrgId, StatsTidRoles.LocalHR, ct);
             if (!allowedCurrent)
                 return Results.Json(new { error = "Access denied", reason = reasonCurrent }, statusCode: 403);
 
-            // If org is changing, validate actor scope covers new org too (same LocalAdmin floor).
+            // If org is changing, validate actor scope covers new org too (same LocalHR floor). A
+            // transfer still requires the actor to cover BOTH the old AND the new org — an HR actor
+            // cannot move a user into a styrelse it does not cover (containment preserved on transfer).
             if (request.PrimaryOrgId is not null && request.PrimaryOrgId != existingUser.PrimaryOrgId)
             {
-                var (allowedNew, reasonNew) = await scopeValidator.ValidateOrgAccessAsync(actor, request.PrimaryOrgId, StatsTidRoles.LocalAdmin, ct);
+                var (allowedNew, reasonNew) = await scopeValidator.ValidateOrgAccessAsync(actor, request.PrimaryOrgId, StatsTidRoles.LocalHR, ct);
                 if (!allowedNew)
                     return Results.Json(new { error = "Access denied", reason = reasonNew }, statusCode: 403);
             }
@@ -1567,7 +1573,7 @@ public static class AdminEndpoints
                 agreementCode = newAgreementCode,
                 version = newUserVersion,
             });
-        })).RequireAuthorization("LocalAdminOrAbove"); // S78 R9: extra ) closes TreeRootDriftRetry.RunAsync
+        })).RequireAuthorization("HROrAbove"); // S91 TASK-9102: tree-page surface opened to LocalHR. S78 R9: extra ) closes TreeRootDriftRetry.RunAsync
 
         // ═══════════════════════════════════════════
         // Role Assignment Endpoints
@@ -1998,8 +2004,9 @@ public static class AdminEndpoints
             var actor = context.GetActorContext();
 
             // Scope must cover the tree-root org (same gate as the tree + period-status reads).
-            // S76 B1: LocalAdminOrAbove policy → LocalAdmin floor.
-            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, treeRootOrgId, StatsTidRoles.LocalAdmin, ct);
+            // S91 TASK-9102: tree-page roster opened to LocalHR — HROrAbove policy → LocalHR floor.
+            // Org-scope containment unchanged (HR sees only its own org subtree's roster).
+            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, treeRootOrgId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -2034,7 +2041,7 @@ public static class AdminEndpoints
                 }),
                 pendingCountByManager = roster.PendingCountByManager,
             });
-        }).RequireAuthorization("LocalAdminOrAbove");
+        }).RequireAuthorization("HROrAbove"); // S91 TASK-9102: tree-page roster opened to LocalHR
 
         // ═══════════════════════════════════════════
         // S74-7404 R11b — GET /api/admin/users/search — server-side person-search (the 2000+
@@ -2062,9 +2069,10 @@ public static class AdminEndpoints
             var pageOffset = Math.Max(offset ?? 0, 0);
 
             // Scope filter: the accessible-org set (null = GLOBAL/unrestricted, [] = nobody).
-            // S76 B1: LocalAdminOrAbove policy → LocalAdmin floor — a mixed-role actor's
-            // non-admin scope covering org B must NOT widen the picker into B's roster.
-            var accessibleOrgs = await scopeValidator.GetAccessibleOrgsAsync(actor, StatsTidRoles.LocalAdmin, ct);
+            // S91 TASK-9102: tree-page picker opened to LocalHR — HROrAbove policy → LocalHR floor —
+            // a mixed-role actor's below-HR scope covering org B must NOT widen the picker into B's
+            // roster. Org-scope containment unchanged (the picker stays bounded to HR's own subtree).
+            var accessibleOrgs = await scopeValidator.GetAccessibleOrgsAsync(actor, StatsTidRoles.LocalHR, ct);
 
             // Self + descendant exclusion (cycle-prevention mirror): reuse 7403's bounded
             // descendant walk via the new read-only GetDescendantIdsAsync sibling.
@@ -2092,7 +2100,7 @@ public static class AdminEndpoints
                 limit = pageLimit,
                 offset = pageOffset,
             });
-        }).RequireAuthorization("LocalAdminOrAbove");
+        }).RequireAuthorization("HROrAbove"); // S91 TASK-9102: tree-page picker opened to LocalHR
 
         return app;
     }

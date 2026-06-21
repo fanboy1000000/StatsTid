@@ -15,7 +15,6 @@ import { MyPeriods } from './pages/approval/MyPeriods'
 // redirects here.
 import { TeamOversigt } from './pages/approval/TeamOversigt'
 import { OrgManagement } from './pages/admin/OrgManagement'
-import { UserManagement } from './pages/admin/UserManagement'
 import { RoleManagement } from './pages/admin/RoleManagement'
 import { ProjectManagement } from './pages/admin/ProjectManagement'
 import { ConfigManagement } from './pages/config/ConfigManagement'
@@ -75,13 +74,15 @@ function AppRoutes() {
           {/* === Administration (mixed: LocalHR and LocalAdmin) === */}
           {/* LocalHR routes */}
           <Route element={<RequireRole minRole="LocalHR" />}>
-            <Route path="admin/medarbejdere" element={<UserManagement />} />
+            {/* S91 / TASK-9103: the old UserManagement list ("Medarbejdere") was
+                removed; HR keeps employee management on the surviving tree page,
+                opened to LocalHR here (a deliberate P7 expansion). */}
+            <Route path="admin/ledelseslinjer" element={<MedarbejderAdministration />} />
             <Route path="admin/auditlog" element={<AuditLogView />} />
           </Route>
           {/* LocalAdmin routes within Administration */}
           <Route element={<RequireRole minRole="LocalAdmin" />}>
             <Route path="admin/projekter" element={<ProjectManagement />} />
-            <Route path="admin/ledelseslinjer" element={<MedarbejderAdministration />} />
             <Route path="admin/brugerrettigheder" element={<RoleManagement />} />
           </Route>
 

@@ -20,11 +20,12 @@ interface StatusMeta {
   rank: number
   /** A pending (leader-approvable) row → has Godkend/Afvis actions + selectable. */
   isPending: boolean
-  /** A decided row (Godkendt/Afvist) → reopen-eligible; the Genåbn control shows to
-   *  the leader who sees the row (S89 Phase 1 — was LocalHR+; the backend Leader+ arm
-   *  already authorizes it). Until the Phase 2 payroll-export lock exists there is no
-   *  exported-state check. NOTE: a REJECTED row's reopen 409s server-side — pre-existing. */
+  /** A decided row (Godkendt/Afvist) — used for sort rank + display. */
   isDecided: boolean
+  /** Reopen-eligible: APPROVED only (→ the Genåbn control, S89; gated on !payrollExported,
+   *  S90). A REJECTED period is NOT reopenable — the backend reopen 409s it; the employee
+   *  re-submits instead — so it shows no Genåbn (was a dead button pre-S91). */
+  isReopenable: boolean
   isDraft: boolean
 }
 
@@ -32,13 +33,13 @@ function statusMeta(status: TeamOverviewRow['status']): StatusMeta {
   switch (status) {
     case 'SUBMITTED':
     case 'EMPLOYEE_APPROVED':
-      return { label: 'Indsendt', badgeClass: styles.badgeIndsendt, rank: 0, isPending: true, isDecided: false, isDraft: false }
+      return { label: 'Indsendt', badgeClass: styles.badgeIndsendt, rank: 0, isPending: true, isDecided: false, isReopenable: false, isDraft: false }
     case 'APPROVED':
-      return { label: 'Godkendt', badgeClass: styles.badgeGodkendt, rank: 2, isPending: false, isDecided: true, isDraft: false }
+      return { label: 'Godkendt', badgeClass: styles.badgeGodkendt, rank: 2, isPending: false, isDecided: true, isReopenable: true, isDraft: false }
     case 'REJECTED':
-      return { label: 'Afvist', badgeClass: styles.badgeAfvist, rank: 1, isPending: false, isDecided: true, isDraft: false }
+      return { label: 'Afvist', badgeClass: styles.badgeAfvist, rank: 1, isPending: false, isDecided: true, isReopenable: false, isDraft: false }
     default:
-      return { label: 'Kladde', badgeClass: styles.badgeKladde, rank: 3, isPending: false, isDecided: false, isDraft: true }
+      return { label: 'Kladde', badgeClass: styles.badgeKladde, rank: 3, isPending: false, isDecided: false, isReopenable: false, isDraft: true }
   }
 }
 
@@ -268,12 +269,12 @@ function TeamRowDetail({
                   Godkend måned
                 </button>
               </>
-            ) : meta.isDecided && row.periodId && row.payrollExported ? (
+            ) : meta.isReopenable && row.periodId && row.payrollExported ? (
               // S90 — the month is sent to lønkørsel: corrections-only, no reopen.
               <span className={styles.exportedBadge} title="Måneden er sendt til lønkørsel og kan ikke genåbnes">
                 Sendt til lønkørsel
               </span>
-            ) : meta.isDecided && row.periodId ? (
+            ) : meta.isReopenable && row.periodId ? (
               <button
                 type="button"
                 className={styles.detailReopenBtn}
@@ -821,12 +822,12 @@ export function TeamOversigt() {
                             </button>
                             {bulkOutcome === 'conflict' && <span className={styles.outcomeConflict}>Ændret</span>}
                           </div>
-                        ) : meta.isDecided && row.periodId && row.payrollExported ? (
+                        ) : meta.isReopenable && row.periodId && row.payrollExported ? (
                           // S90 — the month is sent to lønkørsel: corrections-only, no reopen.
                           <span className={styles.exportedBadge} title="Måneden er sendt til lønkørsel og kan ikke genåbnes">
                             Sendt til lønkørsel
                           </span>
-                        ) : meta.isDecided && row.periodId ? (
+                        ) : meta.isReopenable && row.periodId ? (
                           <button
                             type="button"
                             className={styles.reopenBtn}
@@ -835,6 +836,10 @@ export function TeamOversigt() {
                           >
                             Genåbn
                           </button>
+                        ) : row.status === 'REJECTED' && row.periodId ? (
+                          // S91 — a rejected month is not reopenable (the employee re-submits);
+                          // no dead Genåbn button. The Status column already shows "Afvist".
+                          <span className={styles.notSubmitted}>Afventer ny indsendelse</span>
                         ) : (
                           <span className={styles.notSubmitted}>Ikke indsendt</span>
                         )}

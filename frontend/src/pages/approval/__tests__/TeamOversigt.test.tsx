@@ -407,6 +407,17 @@ describe('TeamOversigt — reopen visibility (S89 Phase 1: leader+)', () => {
     const approvedRow = screen.getByTestId('team-row-emp002')
     expect(within(approvedRow).getByRole('button', { name: 'Genåbn' })).toBeInTheDocument()
   })
+
+  it('a REJECTED row shows NO Genåbn (not reopenable; the employee re-submits) — S91 dead-button fix', async () => {
+    authState.role = 'LocalLeader'
+    mockOverview()
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Carla Eng')).toBeInTheDocument())
+    const rejectedRow = screen.getByTestId('team-row-emp003') // REJECTED
+    // RED on the old code: a REJECTED (isDecided) row rendered a dead Genåbn that 409s.
+    expect(within(rejectedRow).queryByRole('button', { name: 'Genåbn' })).toBeNull()
+    expect(within(rejectedRow).getByText('Afventer ny indsendelse')).toBeInTheDocument()
+  })
 })
 
 // ── S90 / TASK-9005 — payroll-export lock surfacing ──────────────────────────

@@ -140,14 +140,14 @@ Guards compose via nested `<Route element={<RequireRole minRole=.../>}>` wrapper
 |-----|-------------|----------|-------------|
 | Min tid | `/tid` | any auth | `/tid/registrering` |
 | Godkend tid | `/godkend` | LocalLeader | `/godkend/oversigt` (S87 — was `/godkend/godkendelser`, now redirects) |
-| Administration | `/admin` | LocalHR | `/admin/medarbejdere` |
+| Administration | `/admin` | LocalHR | `/admin/ledelseslinjer` (S91 — was `/admin/medarbejdere`, page removed) |
 | Lokale tilpasninger | `/lokal` | LocalAdmin | `/lokal/ok-konfiguration` |
 | Global administration | `/global` | GlobalAdmin | `/global/overenskomster` |
 
 **Level 2 — `Sidebar`** shows items for the active group only, each filtered by `hasMinRole`:
 - **Min tid**: Registrering (`/tid/registrering`), Oversigt (`/tid/oversigt`)
 - **Godkend tid**: Oversigt (`/godkend/oversigt`, the S87 Teamoversigt), Vikariering (`/godkend/vikariering`)
-- **Administration**: Medarbejdere (LocalHR), Audit log (LocalHR), Projekter, Ledelseslinjer, Brugerrettigheder (LocalAdmin)
+- **Administration**: Medarbejder administration (LocalHR — S91), Audit log (LocalHR), Projekter, Brugerrettigheder (LocalAdmin)
 - **Lokale tilpasninger**: Lokal OK konfiguration, Lokale stillingstilpasninger
 - **Global administration**: Overenskomster, Organisation, Lønartstilknytning
 
@@ -165,10 +165,9 @@ Routes are defined in `frontend/src/App.tsx`. Unauthenticated → `/login`; auth
 | `/godkend/oversigt` | `TeamOversigt` | LocalLeader | S87 leader Teamoversigt — per-employee table + KPI + bulk-approve over `GET /api/approval/team-overview`; expandable detail = P2/S88 |
 | `/godkend/godkendelser` | → redirect | — | S87 → `/godkend/oversigt` (`ApprovalDashboard` retained dead-but-tested until S88) |
 | `/godkend/vikariering` | `DelegationPage` | LocalLeader | Delegation / vikariering (ADR-027) |
-| `/admin/medarbejdere` | `UserManagement` | LocalHR | Employee/user administration |
 | `/admin/auditlog` | `AuditLogView` | LocalHR | Audit log viewer (ADR-026) |
 | `/admin/projekter` | `ProjectManagement` | LocalAdmin | Project configuration per org |
-| `/admin/ledelseslinjer` | `MedarbejderAdministration` | LocalAdmin | Medarbejder administration — the structural approval tree + the unified `EditPersonDrawer` create/edit/approver/vikar/delete surface (ADR-027 Phase 5, S74–S77; replaced the retired `ReportingLineTree`) |
+| `/admin/ledelseslinjer` | `MedarbejderAdministration` | LocalHR | Medarbejder administration — the structural approval tree + the unified `EditPersonDrawer` create/edit/approver/vikar/delete surface (ADR-027 Phase 5, S74–S77; replaced the retired `ReportingLineTree`). S91 (TASK-9103): opened to LocalHR — the old `UserManagement` list (`/admin/medarbejdere`) was removed and HR keeps employee management here (a deliberate P7 expansion; backend auth lowered in TASK-9102) |
 | `/admin/brugerrettigheder` | `RoleManagement` | LocalAdmin | Role / access-rights assignment |
 | `/lokal/ok-konfiguration` | `ConfigManagement` | LocalAdmin | Local agreement (OK) config overrides |
 | `/lokal/stillingstilpasninger` | `PositionOverrideManagement` | LocalAdmin | Local position overrides |

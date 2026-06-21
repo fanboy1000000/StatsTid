@@ -36,10 +36,12 @@ public static class ReportingLineEndpoints
             var actor = context.GetActorContext();
             var relationship = string.IsNullOrWhiteSpace(request.Relationship) ? "PRIMARY" : request.Relationship;
 
-            // 1. Validate org scope: actor must cover employee's org. S76 B1: LocalAdminOrAbove
-            //    policy → LocalAdmin floor (the admitting scope must itself be admin; a non-admin
-            //    scope covering the employee's styrelse cannot satisfy this writer gate).
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, request.EmployeeId, StatsTidRoles.LocalAdmin, ct);
+            // 1. Validate org scope: actor must cover employee's org. S91 TASK-9102: this tree-page
+            //    surface is opened to LocalHR — HROrAbove policy → LocalHR floor (the admitting scope
+            //    must itself be HR-or-above; a below-HR scope covering the employee's styrelse cannot
+            //    satisfy this writer gate). Org-scope CONTAINMENT is unchanged — an HR actor stays
+            //    bounded to its own org subtree (the floor only drops LocalAdmin → LocalHR).
+            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, request.EmployeeId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -226,7 +228,7 @@ public static class ReportingLineEndpoints
             return isFirstAssignment
                 ? Results.Created($"/api/admin/reporting-lines/{persisted.EmployeeId}", MapLineResponse(persisted))
                 : Results.Ok(MapLineResponse(persisted));
-        })).RequireAuthorization("LocalAdminOrAbove"); // S78 R9: extra ) closes TreeRootDriftRetry.RunAsync
+        })).RequireAuthorization("HROrAbove"); // S91 TASK-9102: tree-page surface opened to LocalHR. S78 R9: extra ) closes TreeRootDriftRetry.RunAsync
 
         // ═══════════════════════════════════════════
         // Endpoint 2: DELETE /api/admin/reporting-lines/{employeeId} — Remove PRIMARY line
@@ -246,8 +248,9 @@ public static class ReportingLineEndpoints
         {
             var actor = context.GetActorContext();
 
-            // 1. Validate scope. S76 B1: LocalAdminOrAbove policy → LocalAdmin floor.
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, StatsTidRoles.LocalAdmin, ct);
+            // 1. Validate scope. S91 TASK-9102: tree-page surface opened to LocalHR — HROrAbove
+            //    policy → LocalHR floor. Org-scope containment unchanged (HR stays org-bounded).
+            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -387,7 +390,7 @@ public static class ReportingLineEndpoints
 
             context.Response.Headers.ETag = $"\"{closed.Version}\"";
             return Results.NoContent();
-        })).RequireAuthorization("LocalAdminOrAbove"); // S78 R9: extra ) closes TreeRootDriftRetry.RunAsync
+        })).RequireAuthorization("HROrAbove"); // S91 TASK-9102: tree-page surface opened to LocalHR. S78 R9: extra ) closes TreeRootDriftRetry.RunAsync
 
         // ═══════════════════════════════════════════
         // Endpoint 3: GET /api/admin/reporting-lines/tree/{treeRootOrgId} — Get tree
@@ -1172,9 +1175,11 @@ public static class ReportingLineEndpoints
         {
             var actor = context.GetActorContext();
 
-            // 1. Validate scope: actor must cover the person being removed. S76 B1:
-            //    LocalAdminOrAbove policy → LocalAdmin floor.
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, StatsTidRoles.LocalAdmin, ct);
+            // 1. Validate scope: actor must cover the person being removed. S91 TASK-9102: tree-page
+            //    surface opened to LocalHR — HROrAbove policy → LocalHR floor. Org-scope containment
+            //    unchanged (HR stays bounded to its own org subtree; the replacement-approver edges
+            //    below remain same-tree-validated, so reassignment cannot escape the actor's scope).
+            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -1591,7 +1596,7 @@ public static class ReportingLineEndpoints
                 reportsReassigned = reportsReassignedCount,
                 actingEdgesClosed = actingEdgesClosedCount,
             });
-        })).RequireAuthorization("LocalAdminOrAbove"); // S78 R9: extra ) closes TreeRootDriftRetry.RunAsync
+        })).RequireAuthorization("HROrAbove"); // S91 TASK-9102: tree-page surface opened to LocalHR. S78 R9: extra ) closes TreeRootDriftRetry.RunAsync
 
         // ═══════════════════════════════════════════
         // Endpoint 9: GET /api/admin/reporting-lines/tree/{treeRootOrgId}/settings — Get tree settings
@@ -1605,8 +1610,9 @@ public static class ReportingLineEndpoints
             CancellationToken ct) =>
         {
             var actor = context.GetActorContext();
-            // S76 B1: LocalAdminOrAbove policy → LocalAdmin floor.
-            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, treeRootOrgId, StatsTidRoles.LocalAdmin, ct);
+            // S91 TASK-9102: tree-page surface opened to LocalHR — HROrAbove policy → LocalHR floor
+            // (org-scope containment unchanged; HR stays org-bounded).
+            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, treeRootOrgId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -1620,7 +1626,7 @@ public static class ReportingLineEndpoints
 
             context.Response.Headers.ETag = $"\"{settings.Version}\"";
             return Results.Ok(new { enforcementMode = settings.EnforcementMode, version = settings.Version });
-        }).RequireAuthorization("LocalAdminOrAbove");
+        }).RequireAuthorization("HROrAbove"); // S91 TASK-9102: tree-page surface opened to LocalHR
 
         // ═══════════════════════════════════════════
         // Endpoint 10: PUT /api/admin/reporting-lines/tree/{treeRootOrgId}/settings — Update tree settings
@@ -1638,8 +1644,9 @@ public static class ReportingLineEndpoints
             CancellationToken ct) =>
         {
             var actor = context.GetActorContext();
-            // S76 B1: LocalAdminOrAbove policy → LocalAdmin floor.
-            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, treeRootOrgId, StatsTidRoles.LocalAdmin, ct);
+            // S91 TASK-9102: tree-page surface opened to LocalHR — HROrAbove policy → LocalHR floor
+            // (org-scope containment unchanged; HR stays org-bounded).
+            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, treeRootOrgId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -1704,7 +1711,7 @@ public static class ReportingLineEndpoints
                     actualVersion = ex.ActualVersion,
                 }, statusCode: 412);
             }
-        }).RequireAuthorization("LocalAdminOrAbove");
+        }).RequireAuthorization("HROrAbove"); // S91 TASK-9102: tree-page surface opened to LocalHR
 
         // ═══════════════════════════════════════════
         // Endpoint 11: GET /api/reporting-lines/delegate — Get active self-delegation status
@@ -2227,13 +2234,14 @@ public static class ReportingLineEndpoints
             if (string.IsNullOrEmpty(actor.ActorId))
                 return Results.Json(new { error = "Actor identity required" }, statusCode: 401);
 
-            // Authorize against the manager's CURRENT primary org at the LocalAdmin floor (a non-admin
-            // scope covering the styrelse cannot read this admin surface — mirrors the POST/DELETE gate).
+            // Authorize against the manager's CURRENT primary org at the LocalHR floor (S91 TASK-9102:
+            // tree-page surface opened to LocalHR; a below-HR scope covering the styrelse cannot read
+            // this surface — mirrors the POST/DELETE gate). Org-scope containment unchanged.
             var managerUser = await userRepo.GetByIdAsync(managerId, ct);
             if (managerUser is null)
                 return Results.NotFound(new { error = $"Manager '{managerId}' not found" });
             var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(
-                actor, managerUser.PrimaryOrgId, StatsTidRoles.LocalAdmin, ct);
+                actor, managerUser.PrimaryOrgId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -2252,7 +2260,7 @@ public static class ReportingLineEndpoints
                     reason = vikar.Reason,
                 },
             });
-        }).RequireAuthorization("LocalAdminOrAbove");
+        }).RequireAuthorization("HROrAbove"); // S91 TASK-9102: tree-page surface opened to LocalHR
 
         // ═══════════════════════════════════════════
         // Endpoint 14: POST /api/admin/reporting-lines/{managerId}/vikar — admin-on-behalf vikar
@@ -2352,9 +2360,10 @@ public static class ReportingLineEndpoints
 
                     // (i) IN-LOCK admin-scope check. Resolve the manager's CURRENT primary org IN-TX
                     //     (so a concurrent cross-styrelse transfer cannot move them out from under the
-                    //     gate) and run the FLOORED ValidateOrgAccessAsync at the LocalAdmin floor
-                    //     (S76-7600): a non-admin scope covering the manager's styrelse cannot satisfy
-                    //     this admin gate. A scope revocation that committed before the lock is seen.
+                    //     gate) and run the FLOORED ValidateOrgAccessAsync at the LocalHR floor
+                    //     (S91 TASK-9102 — tree-page surface opened to LocalHR): a below-HR scope
+                    //     covering the manager's styrelse cannot satisfy this gate. Org-scope
+                    //     containment unchanged. A scope revocation that committed before the lock is seen.
                     var managerOrgInTx = await ResolveManagerPrimaryOrgInTxAsync(conn, tx, managerId, ct);
                     if (managerOrgInTx is null)
                     {
@@ -2362,7 +2371,7 @@ public static class ReportingLineEndpoints
                         return Results.NotFound(new { error = $"Manager '{managerId}' not found" });
                     }
                     var (orgAllowed, orgReason) = await scopeValidator.ValidateOrgAccessAsync(
-                        actor, managerOrgInTx, StatsTidRoles.LocalAdmin, ct);
+                        actor, managerOrgInTx, StatsTidRoles.LocalHR, ct);
                     if (!orgAllowed)
                     {
                         await tx.RollbackAsync(ct);
@@ -2484,7 +2493,7 @@ public static class ReportingLineEndpoints
                 effectiveTo,
                 reason = createdVikar.Reason,
             });
-        })).RequireAuthorization("LocalAdminOrAbove"); // S78 R9: extra ) closes TreeRootDriftRetry.RunAsync
+        })).RequireAuthorization("HROrAbove"); // S91 TASK-9102: tree-page surface opened to LocalHR. S78 R9: extra ) closes TreeRootDriftRetry.RunAsync
 
         // ═══════════════════════════════════════════
         // Endpoint 15: DELETE /api/admin/reporting-lines/{managerId}/vikar — admin revokes the
@@ -2569,10 +2578,11 @@ public static class ReportingLineEndpoints
 
                     // (3) Authorize against the PINNED row's PERSISTED tree_root_org_id — the SOLE
                     //     revoke-authority anchor (WARNING: the prior "current-org OR persisted-root"
-                    //     fallback is removed). The actor's admin scope must cover this exact tree root
-                    //     (FLOORED at LocalAdmin: a non-admin scope covering the styrelse cannot revoke).
+                    //     fallback is removed). The actor's scope must cover this exact tree root
+                    //     (FLOORED at LocalHR — S91 TASK-9102, tree-page surface opened to LocalHR: a
+                    //     below-HR scope covering the styrelse cannot revoke. Containment unchanged).
                     var (treeAllowed, treeReason) = await scopeValidator.ValidateOrgAccessAsync(
-                        actor, activeVikar.TreeRootOrgId, StatsTidRoles.LocalAdmin, ct);
+                        actor, activeVikar.TreeRootOrgId, StatsTidRoles.LocalHR, ct);
                     if (!treeAllowed)
                     {
                         await tx.RollbackAsync(ct);
@@ -2632,7 +2642,7 @@ public static class ReportingLineEndpoints
                     throw;
                 }
             });
-        }).RequireAuthorization("LocalAdminOrAbove");
+        }).RequireAuthorization("HROrAbove"); // S91 TASK-9102: tree-page surface opened to LocalHR
 
         return app;
     }
