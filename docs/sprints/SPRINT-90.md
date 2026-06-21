@@ -8,7 +8,7 @@
 | **End Date** | 2026-06-21 |
 | **Orchestrator Approved** | yes (Step-0b dual-lens; 4 BLOCKERs + WARNINGs baked into the tasks; forks resolved) |
 | **Build Verified** | yes (`dotnet build` 0 err; `tsc` + `npm run build` clean) |
-| **Test Verified** | yes — local: unit 856, FE 499, the S90 regression suite 43/43 (PayrollExportRecord/ReopenPayrollLock/RetroactiveCorrectionManifest/AuditProjectionParity/TeamOverviewAggregate, testcontainers); the FULL fresh-greenfield regression + smoke + e2e (init.sql change) via CI |
+| **Test Verified** | yes — local: unit 856, FE 499, the S90 regression suite 43/43 (testcontainers) **AND CI GREEN run `27910135469`, all 7 jobs** (build-and-test = full fresh-greenfield regression **1040** + smoke + e2e) |
 
 ## Sprint Goal
 **Phase 2 of the "reopen until sent to payroll" decision** (`REFINEMENT-reopen-until-payroll-lock.md`; S89 shipped Phase 1). Build the per-(employee, month) **payroll-export lock** so that once a month is sent to payroll it can no longer be reopened (corrections only); and close the latent **duplicate-export gap** (today `/calculate-and-export` has no idempotency). Owner rulings: **OQ-1** lock-at-export-committed · **OQ-2** corrections-only post-lock (no recall; no reopen for ANY role) · **OQ-5** one-transaction atomic refactor · **OQ-6** raw `/export`+`/export-period` under the lock+idempotency.
@@ -86,7 +86,7 @@ Pyramid (S89 → S90):
 | Tier | S89 | S90 | Δ | Note |
 |------|-----|-----|---|------|
 | Unit | 856 | 856 | 0 | the Payroll unit tests were re-pointed to the new `ExportAsync` signature; same count |
-| Regression | 1015 | _via CI fresh-greenfield_ | +~26 | new: `PayrollExportRecordTests`, `ReopenPayrollLockTests`, `RetroactiveCorrectionManifestTests`, `TeamOverviewAggregate` lock tests + the 3 Step-7a fix tests. **The init.sql change requires a fresh-greenfield run → the authoritative full regression + smoke run in CI** (build-and-test); locally the S90 blast-radius (43, testcontainers) + unit + FE are green |
+| Regression | 1015 | 1040 | +25 | new: `PayrollExportRecordTests`, `ReopenPayrollLockTests`, `RetroactiveCorrectionManifestTests`, `TeamOverviewAggregate` lock tests + the 3 Step-7a fix tests. **CI fresh-greenfield (build-and-test) = 1040/1040** (the init.sql change needs a fresh greenfield); locally the S90 blast-radius 43/43 (testcontainers) + unit + FE green |
 | Smoke | 6 | 6 | 0 | fresh greenfield (the `payroll_export_records` table + reseed) — via CI |
 | Frontend (vitest) | 495 | 499 | +4 | the lock-surfacing (Genåbn hidden for exported rows + the "Sendt til lønkørsel" indicator) |
 | e2e | 3 | 3 | 0 | via CI |
