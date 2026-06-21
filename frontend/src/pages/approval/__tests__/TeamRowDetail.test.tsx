@@ -457,22 +457,22 @@ describe('TeamRowDetail — footer reuses the parent handlers (no second save pa
     expect(within(dialog).getByPlaceholderText('Skriv en kort begrundelse til medarbejderen…')).toBeInTheDocument()
   })
 
-  it('a LocalHR sees "Genåbn måned" in the footer of a decided row; a Leader does not', async () => {
-    const user = userEvent.setup()
-    authState.role = 'LocalHR'
-    mockRoutes({ overview: [row({ status: 'APPROVED', decisionAt: '2026-04-01T08:00:00Z' })] })
-    renderPage()
-    await expandFirstRow(user)
-    expect(screen.getByRole('button', { name: 'Genåbn måned' })).toBeInTheDocument()
-  })
-
-  it('a Leader does NOT see "Genåbn måned" in the footer of a decided row', async () => {
+  it('a Leader SEES "Genåbn måned" in the footer of a decided row (S89 Phase 1; was LocalHR+)', async () => {
     const user = userEvent.setup()
     authState.role = 'LocalLeader'
     mockRoutes({ overview: [row({ status: 'APPROVED', decisionAt: '2026-04-01T08:00:00Z' })] })
     renderPage()
     await expandFirstRow(user)
     expect(screen.getByTestId('team-detail-row-emp001')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Genåbn måned' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Genåbn måned' })).toBeInTheDocument()
+  })
+
+  it('a LocalHR also sees "Genåbn måned" in the footer of a decided row', async () => {
+    const user = userEvent.setup()
+    authState.role = 'LocalHR'
+    mockRoutes({ overview: [row({ status: 'APPROVED', decisionAt: '2026-04-01T08:00:00Z' })] })
+    renderPage()
+    await expandFirstRow(user)
+    expect(screen.getByRole('button', { name: 'Genåbn måned' })).toBeInTheDocument()
   })
 })

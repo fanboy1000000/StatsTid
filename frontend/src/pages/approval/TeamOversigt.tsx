@@ -1,6 +1,5 @@
 import { useState, useCallback, useMemo, useRef, useEffect, Fragment } from 'react'
 import { useAuth } from '../../contexts/AuthContext'
-import { hasMinRole } from '../../lib/roles'
 import { formatMonthLabel } from '../../lib/locale'
 import { apiClient } from '../../lib/api'
 import { Dialog } from '../../components/ui/Dialog'
@@ -21,7 +20,10 @@ interface StatusMeta {
   rank: number
   /** A pending (leader-approvable) row → has Godkend/Afvis actions + selectable. */
   isPending: boolean
-  /** A decided row (Godkendt/Afvist) → reopen-eligible (LocalHR+ only). */
+  /** A decided row (Godkendt/Afvist) → reopen-eligible; the Genåbn control shows to
+   *  the leader who sees the row (S89 Phase 1 — was LocalHR+; the backend Leader+ arm
+   *  already authorizes it). Until the Phase 2 payroll-export lock exists there is no
+   *  exported-state check. NOTE: a REJECTED row's reopen 409s server-side — pre-existing. */
   isDecided: boolean
   isDraft: boolean
 }
@@ -80,7 +82,6 @@ interface TeamRowDetailProps {
   row: TeamOverviewRow
   year: number
   month: number
-  isHrPlus: boolean
   busy: boolean
   onApprove: (row: TeamOverviewRow) => void
   onReject: (row: TeamOverviewRow) => void
@@ -88,7 +89,7 @@ interface TeamRowDetailProps {
 }
 
 function TeamRowDetail({
-  id, row, year, month, isHrPlus, busy, onApprove, onReject, onReopen,
+  id, row, year, month, busy, onApprove, onReject, onReopen,
 }: TeamRowDetailProps) {
   const meta = statusMeta(row.status)
   // Lazy fetches — fire on mount (mount == expand).
@@ -267,7 +268,7 @@ function TeamRowDetail({
                   Godkend måned
                 </button>
               </>
-            ) : meta.isDecided && row.periodId && isHrPlus ? (
+            ) : meta.isDecided && row.periodId ? (
               <button
                 type="button"
                 className={styles.detailReopenBtn}
@@ -285,8 +286,7 @@ function TeamRowDetail({
 }
 
 export function TeamOversigt() {
-  const { role, orgId } = useAuth()
-  const isHrPlus = hasMinRole(role, 'LocalHR')
+  const { orgId } = useAuth()
 
   const now = new Date()
   const [year, setYear] = useState(now.getFullYear())
@@ -513,7 +513,7 @@ export function TeamOversigt() {
     setRejecting(false)
   }
 
-  // ── Reopen (LocalHR+ only) ─────────────────────────────────────────────────
+  // ── Reopen (leader+; S89 Phase 1 — was LocalHR+) ───────────────────────────
   const handleReopen = async (row: TeamOverviewRow) => {
     if (!row.periodId) return
     setBusyId(row.employeeId)
@@ -817,16 +817,14 @@ export function TeamOversigt() {
                             {bulkOutcome === 'conflict' && <span className={styles.outcomeConflict}>Ændret</span>}
                           </div>
                         ) : meta.isDecided && row.periodId ? (
-                          isHrPlus ? (
-                            <button
-                              type="button"
-                              className={styles.reopenBtn}
-                              onClick={() => handleReopen(row)}
-                              disabled={busyId === row.employeeId}
-                            >
-                              Genåbn
-                            </button>
-                          ) : null
+                          <button
+                            type="button"
+                            className={styles.reopenBtn}
+                            onClick={() => handleReopen(row)}
+                            disabled={busyId === row.employeeId}
+                          >
+                            Genåbn
+                          </button>
                         ) : (
                           <span className={styles.notSubmitted}>Ikke indsendt</span>
                         )}
@@ -839,7 +837,6 @@ export function TeamOversigt() {
                           row={row}
                           year={year}
                           month={month}
-                          isHrPlus={isHrPlus}
                           busy={busyId === row.employeeId || bulkRunning}
                           onApprove={handleApprove}
                           onReject={openReject}

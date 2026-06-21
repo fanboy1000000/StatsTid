@@ -5,8 +5,8 @@
 // filter chips + full-team counts; live search; column sort; bulk-select +
 // "Godkend N valgte" (sequential approve loop with a 428→confirm→retry row and
 // a 409 lost-race row); the reject dialog (kit Radix Dialog, optional reason);
-// reopen LocalHR+ gating; and the nav redirect (godkend/godkendelser →
-// godkend/oversigt).
+// reopen visibility (S89 Phase 1: shown to leader+, was LocalHR+); and the nav
+// redirect (godkend/godkendelser → godkend/oversigt).
 //
 // PAT-007: the useAuth mock returns a referentially-stable object so the page's
 // memoised derivations don't thrash. fetch is mocked at the network boundary.
@@ -387,17 +387,17 @@ describe('TeamOversigt — reject dialog (kit Radix Dialog)', () => {
   })
 })
 
-describe('TeamOversigt — reopen gating (LocalHR+)', () => {
-  it('a Leader does NOT see the Genåbn control on a decided row', async () => {
+describe('TeamOversigt — reopen visibility (S89 Phase 1: leader+)', () => {
+  it('a Leader SEES the Genåbn control on a decided row (was LocalHR+ pre-S89)', async () => {
     authState.role = 'LocalLeader'
     mockOverview()
     renderPage()
     await waitFor(() => expect(screen.getByText('Bo Dahl')).toBeInTheDocument())
     const approvedRow = screen.getByTestId('team-row-emp002') // APPROVED
-    expect(within(approvedRow).queryByRole('button', { name: 'Genåbn' })).toBeNull()
+    expect(within(approvedRow).getByRole('button', { name: 'Genåbn' })).toBeInTheDocument()
   })
 
-  it('LocalHR sees the Genåbn control on a decided row', async () => {
+  it('LocalHR also sees the Genåbn control on a decided row', async () => {
     authState.role = 'LocalHR'
     mockOverview()
     renderPage()
