@@ -63,6 +63,8 @@ function row(over: Partial<Record<string, unknown>> = {}) {
     ferieTotal: 25,
     awayToday: false,
     hasWarning: false,
+    payrollExported: false,
+    payrollExportedAt: null,
     ...over,
   }
 }
@@ -404,6 +406,76 @@ describe('TeamOversigt — reopen visibility (S89 Phase 1: leader+)', () => {
     await waitFor(() => expect(screen.getByText('Bo Dahl')).toBeInTheDocument())
     const approvedRow = screen.getByTestId('team-row-emp002')
     expect(within(approvedRow).getByRole('button', { name: 'Genåbn' })).toBeInTheDocument()
+  })
+})
+
+// ── S90 / TASK-9005 — payroll-export lock surfacing ──────────────────────────
+// Once a month is sent to lønkørsel (payrollExported=true) the reopen control
+// disappears (corrections-only, ADR-034) and a non-actionable "Sendt til
+// lønkørsel" indicator shows instead. A non-exported decided row keeps the S89
+// leader-reopen behavior.
+describe('TeamOversigt — payroll-export lock (S90)', () => {
+  it('an EXPORTED decided row hides Genåbn and shows "Sendt til lønkørsel"', async () => {
+    mockOverview([
+      row({
+        periodId: 'p-2', employeeId: 'emp002', displayName: 'Bo Dahl',
+        status: 'APPROVED', payrollExported: true, payrollExportedAt: '2026-04-12T08:00:00Z',
+      }),
+    ])
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Bo Dahl')).toBeInTheDocument())
+    const exportedRow = screen.getByTestId('team-row-emp002')
+    // No reopen control — the month is locked.
+    expect(within(exportedRow).queryByRole('button', { name: 'Genåbn' })).toBeNull()
+    // The non-actionable lock indicator is shown instead.
+    expect(within(exportedRow).getByText('Sendt til lønkørsel')).toBeInTheDocument()
+  })
+
+  it('a NON-exported decided row still shows Genåbn (S89 preserved)', async () => {
+    mockOverview([
+      row({
+        periodId: 'p-2', employeeId: 'emp002', displayName: 'Bo Dahl',
+        status: 'APPROVED', payrollExported: false,
+      }),
+    ])
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Bo Dahl')).toBeInTheDocument())
+    const decidedRow = screen.getByTestId('team-row-emp002')
+    expect(within(decidedRow).getByRole('button', { name: 'Genåbn' })).toBeInTheDocument()
+    expect(within(decidedRow).queryByText('Sendt til lønkørsel')).toBeNull()
+  })
+
+  it('the detail footer hides "Genåbn måned" and shows the lock indicator for an exported row', async () => {
+    const user = userEvent.setup()
+    mockOverview([
+      row({
+        periodId: 'p-2', employeeId: 'emp002', displayName: 'Bo Dahl',
+        status: 'APPROVED', payrollExported: true, payrollExportedAt: '2026-04-12T08:00:00Z',
+      }),
+    ])
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Bo Dahl')).toBeInTheDocument())
+    // Expand the detail panel.
+    await user.click(screen.getByRole('button', { name: /detaljer for Bo Dahl/ }))
+    const detail = await screen.findByTestId('team-detail-row-emp002')
+    expect(within(detail).queryByRole('button', { name: 'Genåbn måned' })).toBeNull()
+    expect(within(detail).getByText('Sendt til lønkørsel')).toBeInTheDocument()
+  })
+
+  it('the detail footer keeps "Genåbn måned" for a NON-exported decided row (S89 preserved)', async () => {
+    const user = userEvent.setup()
+    mockOverview([
+      row({
+        periodId: 'p-2', employeeId: 'emp002', displayName: 'Bo Dahl',
+        status: 'APPROVED', payrollExported: false,
+      }),
+    ])
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Bo Dahl')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /detaljer for Bo Dahl/ }))
+    const detail = await screen.findByTestId('team-detail-row-emp002')
+    expect(within(detail).getByRole('button', { name: 'Genåbn måned' })).toBeInTheDocument()
+    expect(within(detail).queryByText('Sendt til lønkørsel')).toBeNull()
   })
 })
 

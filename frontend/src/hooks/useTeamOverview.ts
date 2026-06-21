@@ -36,6 +36,16 @@ export interface TeamOverviewRow {
   ferieTotal: number
   awayToday: boolean
   hasWarning: boolean
+  /**
+   * S90 / TASK-9005 — the month is sent to lønkørsel (a payroll_export_records row
+   * exists for this employee + (year, month)). Once true the month is corrections-only
+   * (post-export lock, ADR-034) → the page HIDES the Genåbn control and shows a
+   * "Sendt til lønkørsel" indicator instead. A read-only cross-context flag the backend
+   * aggregate surfaces; the Backend never writes the Payroll-owned lock table.
+   */
+  payrollExported: boolean
+  /** When `payrollExported`, the export timestamp; null otherwise. */
+  payrollExportedAt?: string | null
 }
 
 interface TeamOverviewResponse {

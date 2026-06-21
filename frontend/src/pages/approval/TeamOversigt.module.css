@@ -441,6 +441,20 @@
   color: var(--color-gray-400);
 }
 
+/* S90 — "Sendt til lønkørsel" lock indicator (non-actionable; replaces Genåbn
+   once the month is exported to payroll). Square corners, hairline, neutral. */
+.exportedBadge {
+  display: inline-block;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 4px 10px;
+  border: 1px solid var(--color-border);
+  background: var(--color-gray-100);
+  color: var(--color-text-secondary);
+  border-radius: 0;
+  white-space: nowrap;
+}
+
 .outcomeConflict {
   font-size: 12px;
   font-weight: 500;

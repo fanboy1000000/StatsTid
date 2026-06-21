@@ -44,6 +44,7 @@ public sealed class RetroactiveCorrectionService
     private readonly IOutboxEnqueue _outbox;
     private readonly AuditProjectionRepository _auditRepo;
     private readonly IAuditProjectionMapper<RetroactiveCorrectionRequested> _auditMapper;
+    private readonly PayrollExportRecordRepository _exportRecordRepo;
     private readonly ILogger<RetroactiveCorrectionService> _logger;
 
     public RetroactiveCorrectionService(
@@ -52,6 +53,7 @@ public sealed class RetroactiveCorrectionService
         IOutboxEnqueue outbox,
         AuditProjectionRepository auditRepo,
         IAuditProjectionMapper<RetroactiveCorrectionRequested> auditMapper,
+        PayrollExportRecordRepository exportRecordRepo,
         ILogger<RetroactiveCorrectionService> logger)
     {
         _calculationService = calculationService;
@@ -59,6 +61,7 @@ public sealed class RetroactiveCorrectionService
         _outbox = outbox;
         _auditRepo = auditRepo;
         _auditMapper = auditMapper;
+        _exportRecordRepo = exportRecordRepo;
         _logger = logger;
     }
 
@@ -66,6 +69,19 @@ public sealed class RetroactiveCorrectionService
     /// Recalculates a past period and produces correction lines by diffing against
     /// the previously-exported lines. All segmentation is delegated to the planner
     /// inside <see cref="PeriodCalculationService"/>.
+    ///
+    /// <para>
+    /// <strong>S90 / TASK-9004 (ADR-034 / B3) — the manifest IS the diff baseline.</strong>
+    /// The diff baseline is NO LONGER caller-supplied: it is READ from
+    /// <c>payroll_export_records.current_effective_lines</c> for the (employee, year, month) the
+    /// period falls in (the month derived from <paramref name="periodStart"/>). A month with NO
+    /// export record (never sent to payroll) is rejected with
+    /// <see cref="PayrollExportNotFoundException"/> — a never-exported month is reopened/edited, NOT
+    /// corrected (corrections-only-post-lock). After the correction computes its new effective lines,
+    /// the baseline is UPDATED to that corrected state IN THE SAME tx that emits the correction event
+    /// + audit row, so a SECOND correction diffs against the FIRST correction's result (no
+    /// double-count). <c>original_lines</c> stays immutable.
+    /// </para>
     ///
     /// <para>
     /// <paramref name="okTransitionDate"/> and <paramref name="previousOkVersion"/>
@@ -100,7 +116,6 @@ public sealed class RetroactiveCorrectionService
         DateOnly periodStart,
         DateOnly periodEnd,
         decimal previousFlexBalance,
-        IReadOnlyList<PayrollExportLine> previousExportLines,
         string reason,
         string actorId,
         string? authorizationHeader = null,
@@ -126,6 +141,26 @@ public sealed class RetroactiveCorrectionService
                 Success = false,
                 ErrorMessage = "OkTransitionDate and PreviousOkVersion must both be provided or both omitted."
             };
+        }
+
+        // S90 / TASK-9004 (B3) — the diff baseline is the PERSISTED manifest, not caller input.
+        // The (employee, year, month) this period falls in. The month/year are derived from periodStart
+        // (consistent with how PayrollExportService keys a record by line.PeriodStart).
+        var corrYear = periodStart.Year;
+        var corrMonth = periodStart.Month;
+
+        // Pre-compute existence gate (corrections-only-post-lock): a month with NO export record was
+        // never sent to payroll → there is nothing to correct; reject BEFORE the (expensive) rule-engine
+        // compute so the operator reopens/edits instead. This is a cheap, non-locking probe; the
+        // AUTHORITATIVE baseline used for the diff is re-read under FOR UPDATE inside the correction tx
+        // below (BLOCKER 3 — so two concurrent /recalculate calls serialize on the same row).
+        var preCheckBaseline = await _exportRecordRepo.TryReadCurrentEffectiveLinesAsync(
+            profile.EmployeeId, corrYear, corrMonth, ct);
+        if (preCheckBaseline is null)
+        {
+            throw new PayrollExportNotFoundException(
+                $"Måneden er ikke sendt til lønkørsel (medarbejder '{profile.EmployeeId}', {corrYear}-{corrMonth:D2}) " +
+                $"— der er intet at korrigere; genåbn i stedet.");
         }
 
         // Canonicalise OK versions from the period/transition dates so the audit event
@@ -195,24 +230,56 @@ public sealed class RetroactiveCorrectionService
         // newResult.RuleResults already carries the across-segment net delta.
         decimal? flexDelta = ExtractFlexDelta(newResult.RuleResults);
 
-        // Diff new export lines against previous. ProduceCorrectionLines already
-        // honours each line's per-line OkVersion (S14), which is exactly what the
-        // planner-driven path emits — so OK-version-aware diffing works whether
-        // the planner produced 1 or N segments.
-        var correctionLines = ProduceCorrectionLines(
-            profile, previousExportLines, newResult.ExportLines, periodStart, periodEnd,
-            flexDelta, okTransitionDate, canonicalPreviousOkVersion);
-
-        // Emit RetroactiveCorrectionRequested event (non-fatal if fails).
-        // Persist the canonical (date-resolved) OK versions and the profile Position
-        // so the audit trail reflects what actually ran, not what the caller sent.
-        // ManifestId joins this event to SegmentManifestCreated for the actual
-        // N-segment plan (closes Codex P2 / Reviewer audit-event NOTE: the
-        // OkVersion/PreviousOkVersion pair only describes the canonicalized
-        // 2-version view — full segmentation is recoverable via the manifest).
+        var resolvedOrgId = profile.OrgId
+            ?? throw new InvalidOperationException(
+                $"Audit projection: employee {profile.EmployeeId} has no OrgId; cannot resolve target_org_id.");
         var manifestId = newResult.RuleResults.FirstOrDefault()?.ManifestId ?? Guid.Empty;
-        try
+
+        // ── BLOCKER 2 + 3 — the baseline read + diff + event + audit + baseline-UPDATE are now ONE
+        // MANDATORY, SERIALIZED transactional unit. ──
+        //
+        // BLOCKER 3: the AUTHORITATIVE diff baseline is re-read under SELECT … FOR UPDATE INSIDE this
+        // tx and the row lock is HELD through the diff compute + the UpdateCurrentEffectiveLinesAsync
+        // + the COMMIT. Two concurrent /recalculate calls for the same (employee, month) therefore
+        // SERIALIZE: the second blocks on the FOR UPDATE until the first commits, then reads the
+        // FIRST correction's updated baseline (no last-update-wins / no diff against a stale baseline).
+        //
+        // BLOCKER 2: the event enqueue + audit insert + baseline UPDATE are LOAD-BEARING (they advance
+        // the diff baseline so the NEXT correction does not double-count). A failure of ANY of them
+        // must FAIL the whole call (rethrow → the endpoint maps a 5xx) and roll the tx back — it must
+        // NEVER be swallowed into a phantom Success=true (which would hand the caller correction lines
+        // while leaving the baseline un-advanced → the exact B3 double-count this sprint prevents).
+        IReadOnlyList<CorrectionExportLine> correctionLines;
+        await using (var conn = _connectionFactory.Create())
         {
+            await conn.OpenAsync(ct);
+            await using var tx = await conn.BeginTransactionAsync(ct);
+
+            // BLOCKER 3 — the authoritative baseline, read + locked inside the tx. A null here means
+            // the record vanished between the pre-check probe and this lock (concurrent deletion) →
+            // fail loud (corrections-only-post-lock; nothing is committed).
+            var lockedBaseline = await PayrollExportRecordRepository.TryReadCurrentEffectiveLinesForUpdateAsync(
+                conn, tx, profile.EmployeeId, corrYear, corrMonth, ct);
+            if (lockedBaseline is null)
+            {
+                throw new PayrollExportNotFoundException(
+                    $"Payroll-eksportrækken for medarbejder '{profile.EmployeeId}' ({corrYear}-{corrMonth:D2}) " +
+                    $"forsvandt under korrektionen; korrektionen blev rullet tilbage.");
+            }
+
+            // Diff new export lines against the LOCKED baseline. ProduceCorrectionLines already honours
+            // each line's per-line OkVersion (S14), which is exactly what the planner-driven path emits
+            // — so OK-version-aware diffing works whether the planner produced 1 or N segments.
+            correctionLines = ProduceCorrectionLines(
+                profile, lockedBaseline, newResult.ExportLines, periodStart, periodEnd,
+                flexDelta, okTransitionDate, canonicalPreviousOkVersion);
+
+            // Emit RetroactiveCorrectionRequested (MANDATORY — see BLOCKER 2 above).
+            // Persist the canonical (date-resolved) OK versions and the profile Position so the audit
+            // trail reflects what actually ran, not what the caller sent. ManifestId joins this event
+            // to SegmentManifestCreated for the actual N-segment plan (closes Codex P2 / Reviewer
+            // audit-event NOTE: the OkVersion/PreviousOkVersion pair only describes the canonicalized
+            // 2-version view — full segmentation is recoverable via the manifest).
             var correctionEvent = new RetroactiveCorrectionRequested
             {
                 EmployeeId = profile.EmployeeId,
@@ -231,13 +298,7 @@ public sealed class RetroactiveCorrectionService
                 ManifestId = manifestId
             };
 
-            var resolvedOrgId = profile.OrgId
-                ?? throw new InvalidOperationException(
-                    $"Audit projection: employee {profile.EmployeeId} has no OrgId; cannot resolve target_org_id.");
             var streamId = $"retro-correction-{profile.EmployeeId}-{periodStart:yyyy-MM-dd}";
-            await using var conn = _connectionFactory.Create();
-            await conn.OpenAsync(ct);
-            await using var tx = await conn.BeginTransactionAsync(ct);
             var outboxId = await _outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, correctionEvent, ct);
             var auditCtx = new AuditProjectionContext(
                 ActorId: actorId,
@@ -247,11 +308,24 @@ public sealed class RetroactiveCorrectionService
                 ResolvedTargetOrgId: resolvedOrgId);
             var auditRow = _auditMapper.Map(correctionEvent, auditCtx);
             await _auditRepo.InsertAsync(conn, tx, correctionEvent.EventId, outboxId, correctionEvent.EventType, auditRow, auditCtx, ct);
+
+            // B3 — evolve the diff baseline IN THE SAME tx (still under the held FOR UPDATE lock):
+            // current_effective_lines := the corrected lines, so a SECOND correction diffs against THIS
+            // correction's result (no double-count). original_lines is left immutable. The corrected
+            // lines are newResult.ExportLines (what a future correction must diff against). A 0-row
+            // update means the record vanished mid-tx — fail loud rather than silently desync.
+            var rowsUpdated = await PayrollExportRecordRepository.UpdateCurrentEffectiveLinesAsync(
+                conn, tx, profile.EmployeeId, corrYear, corrMonth, newResult.ExportLines, ct);
+            if (rowsUpdated == 0)
+            {
+                throw new PayrollExportNotFoundException(
+                    $"Payroll-eksportrækken for medarbejder '{profile.EmployeeId}' ({corrYear}-{corrMonth:D2}) " +
+                    $"forsvandt under korrektionen; korrektionen blev rullet tilbage.");
+            }
+
+            // COMMIT — releases the FOR UPDATE lock; the baseline is durably advanced. Any throw above
+            // disposes the tx (rollback) WITHOUT this commit and propagates (BLOCKER 2: no swallow).
             await tx.CommitAsync(ct);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to emit RetroactiveCorrectionRequested event for {EmployeeId}", profile.EmployeeId);
         }
 
         _logger.LogInformation(
@@ -375,4 +449,15 @@ public sealed class RetroactiveCorrectionResult
     public required IReadOnlyList<CorrectionExportLine> CorrectionLines { get; init; }
     public required bool Success { get; init; }
     public string? ErrorMessage { get; init; }
+}
+
+/// <summary>
+/// S90 / TASK-9004 (ADR-034 / B3) — raised when <c>/recalculate</c> is asked to correct a month
+/// that has NO <c>payroll_export_records</c> row (never sent to payroll). A never-exported month is
+/// reopened/edited, not corrected (corrections-only-post-lock) — the endpoint maps this to a clean
+/// 4xx ("Måneden er ikke sendt til lønkørsel — der er intet at korrigere; genåbn i stedet.").
+/// </summary>
+public sealed class PayrollExportNotFoundException : Exception
+{
+    public PayrollExportNotFoundException(string message) : base(message) { }
 }

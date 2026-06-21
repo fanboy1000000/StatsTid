@@ -17,6 +17,10 @@ public static class EventSerializer
     {
         ["TimeEntryRegistered"] = typeof(TimeEntryRegistered),
         ["NormCheckCompleted"] = typeof(NormCheckCompleted),
+        // Sprint 90 (ADR-034): RESHAPED from the vestigial S22-era trace event into the
+        // per-(employee, year, month) payroll-export lock fact (TASK-9001). Type name
+        // preserved (the serialization key); zero historical emit sites → reshape is
+        // replay-safe. Emitted per employee-month on employee-{id} from TASK-9002.
         ["PayrollExportGenerated"] = typeof(PayrollExportGenerated),
         ["IntegrationDeliveryTracked"] = typeof(IntegrationDeliveryTracked),
         ["AbsenceRegistered"] = typeof(AbsenceRegistered),

@@ -182,6 +182,7 @@ Period status lifecycle: DRAFT → SUBMITTED → APPROVED or REJECTED
 Employees submit their own periods
 Leaders approve/reject periods for employees within their organizational scope. The system routes pending approvals to the employee's designated manager (ADR-027); any leader with matching org scope retains approval authority. When enforcement is enabled per-tree (ADR-027 D11), non-designated approvers must explicitly confirm the org-scope fallback (soft enforcement via 428 + confirmation)
 Only APPROVED periods may be exported to payroll
+A leader may reopen an APPROVED month **until it is sent to payroll**; once exported the month is locked — reopen is refused for all roles and changes go through retroactive corrections (ADR-034, S89/S90). Monthly payroll export is idempotent per (employee, month)
 Rejection must include a reason
 All status transitions must be auditable (who, when, reason)
 

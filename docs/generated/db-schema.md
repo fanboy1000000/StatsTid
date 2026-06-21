@@ -5,7 +5,7 @@
 > Update the schema in `init.sql`, then run `python tools/generate_db_schema.py`.
 > CI fails (`tools/check_docs.py`) if this file drifts from init.sql.
 
-**Total: 65 tables** (48 primary, 17 audit).
+**Total: 66 tables** (49 primary, 17 audit).
 
 ---
 
@@ -1348,6 +1348,27 @@
 - `uq_manager_vikar_active` (UNIQUE) on (absent_approver_id) WHERE effective_to IS NULL
 - `idx_manager_vikar_vikar` on (vikar_user_id) WHERE effective_to IS NULL
 
+## payroll_export_records
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| export_id | UUID | No | PK |  |
+| period_id | UUID | Yes |  |  |
+| employee_id | TEXT | No |  |  |
+| year | INT | No |  |  |
+| month | INT | No |  |  |
+| exported_at | TIMESTAMPTZ | No |  | NOW() |
+| original_lines | JSONB | No |  |  |
+| current_effective_lines | JSONB | No |  |  |
+| content_hash | TEXT | No |  |  |
+| source | TEXT | No |  | 'CALCULATE_AND_EXPORT' |
+
+**Table constraints:**
+- CONSTRAINT uq_payroll_export_employee_month UNIQUE (employee_id, year, month)
+
+**Indexes:**
+- `idx_payroll_export_records_period` on (period_id)
+
 ---
 
 ## Table Summary
@@ -1419,4 +1440,5 @@
 | 63 | user_skema_preferences | -- |
 | 64 | user_absence_selections | -- |
 | 65 | manager_vikar | -- |
+| 66 | payroll_export_records | -- |
 

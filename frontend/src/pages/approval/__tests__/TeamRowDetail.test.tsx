@@ -68,6 +68,8 @@ function row(over: Partial<Record<string, unknown>> = {}) {
     ferieTotal: 25,
     awayToday: false,
     hasWarning: false,
+    payrollExported: false,
+    payrollExportedAt: null,
     ...over,
   }
 }

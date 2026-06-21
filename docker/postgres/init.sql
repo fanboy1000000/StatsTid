@@ -4107,3 +4107,69 @@ BEGIN
     -- idempotency).
 END
 $$;
+
+-- =========================================================================
+-- S90 / TASK-9001 — payroll_export_records (the per-(employee, year, month)
+--   payroll-export LOCK + corrections MANIFEST + duplicate-export IDEMPOTENCY).
+--   ADR-034 (payroll-export lock). REGULAR MONTHLY TIME — this is DELIBERATELY
+--   NOT a settlement table (settlement_export_lines above is the ADR-033 ferie
+--   §-payout staging; this row is the normal /calculate-and-export handoff fact).
+--
+--   The row's EXISTENCE per (employee_id, year, month) == "sent to payroll":
+--     - LOCK: the Backend reopen handler does a read-only cross-context lookup
+--       (OQ-A); present → 409 corrections-only for ALL roles (OQ-2). The Payroll
+--       service is the SOLE writer; the Backend NEVER writes this table.
+--     - IDEMPOTENCY: UNIQUE (employee_id, year, month) (OQ-B) + content_hash —
+--       same key + same hash → no-op return; same key + DIFFERENT hash → 409
+--       "already exported, use a correction". Closes the pre-existing duplicate-
+--       export gap on /calculate-and-export AND raw /export + /export-period.
+--     - MANIFEST: original_lines is the immutable first-export manifest;
+--       current_effective_lines is updated when a correction export commits (B3)
+--       so a 2nd correction diffs against the CURRENT baseline, not the original
+--       (no double-count). /recalculate retrieves PreviousExportLines from here
+--       (TASK-9004) instead of the caller supplying it.
+--
+--   period_id is NULLABLE: the raw /export + /export-period endpoints bypass
+--   approval and may carry no approval period. source records the originating
+--   endpoint (CALCULATE_AND_EXPORT default; EXPORT / EXPORT_PERIOD for the raw
+--   paths). exported_at is the COMMIT-time lock instant (OQ-1). The row is
+--   written ATOMICALLY in the refactored export tx in TASK-9002 — TASK-9001
+--   establishes the schema + event + audit mapper only (NO emit site yet).
+--   Greenfield only — no production data.
+-- =========================================================================
+CREATE TABLE IF NOT EXISTS payroll_export_records (
+    export_id                UUID          PRIMARY KEY,
+    period_id                UUID          NULL,         -- nullable: the raw /export endpoints bypass approval
+    employee_id              TEXT          NOT NULL,
+    year                     INT           NOT NULL,
+    month                    INT           NOT NULL,
+    exported_at              TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    original_lines           JSONB         NOT NULL,     -- the manifest as first exported (immutable)
+    current_effective_lines  JSONB         NOT NULL,     -- updated when a correction export commits (B3)
+    content_hash             TEXT          NOT NULL,     -- idempotency content semantics
+    source                   TEXT          NOT NULL DEFAULT 'CALCULATE_AND_EXPORT',
+    CONSTRAINT uq_payroll_export_employee_month UNIQUE (employee_id, year, month)
+);
+
+-- Reopen lookup path (Backend cross-context read): the lock check resolves the
+-- approval period's (employee, year, month), but a period_id-keyed lookup serves
+-- the direct reopen-by-period probe. Mirrors the settlement_export_lines
+-- per-employee secondary index convention.
+CREATE INDEX IF NOT EXISTS idx_payroll_export_records_period
+    ON payroll_export_records (period_id);
+
+-- schema_migrations ledger entry — mirrors the init.sql s69-adr033-slice1b
+-- template. The `CREATE TABLE IF NOT EXISTS` + `CREATE INDEX IF NOT EXISTS`
+-- above run on EVERY init.sql execution (greenfield AND a full re-run against an
+-- older database — init.sql is applied in full), so they ARE the additive
+-- migration for a legacy DB; the DO block records only the ledger key (documentary
+-- for greenfield, a forward-compat marker if init.sql ever runs against an older
+-- database). No `CREATE TABLE` inside the DO block — that would make
+-- generate_db_schema.py double-count the table.
+DO $$
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s90-payroll-export-lock', 'S90/TASK-9001 (ADR-034): payroll_export_records — the per-(employee_id, year, month) payroll-export lock + corrections manifest + duplicate-export idempotency. Row existence == sent to payroll (Backend reads cross-context, Payroll is sole writer); UNIQUE (employee_id, year, month) + content_hash = idempotency; original_lines immutable first-export manifest + current_effective_lines updated when a correction export commits (B3); period_id nullable (raw /export bypasses approval). Atomic write lands in TASK-9002 (this migration is schema + event + audit mapper only). Greenfield only — no production data.')
+    ON CONFLICT (migration_id) DO NOTHING;
+END
+$$;

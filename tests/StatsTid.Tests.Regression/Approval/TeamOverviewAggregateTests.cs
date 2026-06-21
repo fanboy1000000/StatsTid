@@ -196,6 +196,7 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
         await ExecAsync(conn, "DELETE FROM manager_vikar WHERE absent_approver_id = ANY(@ids) OR vikar_user_id = ANY(@ids)");
         await ExecAsync(conn, "DELETE FROM reporting_lines WHERE employee_id = ANY(@ids) OR manager_id = ANY(@ids)");
         await ExecAsync(conn, "DELETE FROM role_assignments WHERE user_id = ANY(@ids)");
+        await ExecAsync(conn, "DELETE FROM payroll_export_records WHERE employee_id = ANY(@ids)");
         await ExecAsync(conn, "DELETE FROM time_entries_projection WHERE employee_id = ANY(@ids)");
         await ExecAsync(conn, "DELETE FROM work_time_projection WHERE employee_id = ANY(@ids)");
         await ExecAsync(conn, "DELETE FROM absences_projection WHERE employee_id = ANY(@ids)");
@@ -345,6 +346,26 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
         cmd.Parameters.AddWithValue("s", streamId);
         cmd.Parameters.AddWithValue("ver", _flexVersion++);
         cmd.Parameters.AddWithValue("data", data);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    private async Task InsertPayrollExportRecordAsync(string employeeId, int year, int month, Guid? periodId = null)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            INSERT INTO payroll_export_records
+                (export_id, period_id, employee_id, year, month, exported_at,
+                 original_lines, current_effective_lines, content_hash, source)
+            VALUES
+                (@xid, @pid, @emp, @y, @m, NOW(), '[]'::jsonb, '[]'::jsonb, 'test-hash', 'CALCULATE_AND_EXPORT')
+            """, conn);
+        cmd.Parameters.AddWithValue("xid", Guid.NewGuid());
+        cmd.Parameters.AddWithValue("pid", (object?)periodId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("emp", employeeId);
+        cmd.Parameters.AddWithValue("y", year);
+        cmd.Parameters.AddWithValue("m", month);
         await cmd.ExecuteNonQueryAsync();
     }
 
@@ -531,6 +552,52 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
 
         var rows = await GetTeamOverviewAsync(Mgr, 2026, 5);
         Assert.Equal(12.5m, rows.Single(r => EmployeeId(r) == Emp).GetProperty("flexBalance").GetDecimal());
+    }
+
+    // ════════════════════════════════════════════════════════════════════════════════
+    //  S90 / TASK-9005 — payrollExported (the cross-context payroll-export lock flag)
+    // ════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// payrollExported = TRUE iff the employee has a payroll_export_records row for the requested
+    /// (year, month) — a READ-ONLY cross-context read of the Payroll-owned lock table (ADR-034). One
+    /// exported employee (Emp, May 2026) + one non-exported (EmpNoPeriod) in the SAME team-overview;
+    /// the flag discriminates them. The exported row also surfaces payrollExportedAt.
+    /// </summary>
+    [Fact]
+    public async Task PayrollExported_True_ForEmployeeWithExportRecord_FalseOtherwise()
+    {
+        var periodId = await InsertPeriodAsync(Emp, "AFD01", "APPROVED");
+        await InsertPeriodAsync(EmpNoPeriod, "AFD01", "APPROVED",
+            start: new DateOnly(2026, 5, 1), end: new DateOnly(2026, 5, 31));
+        // Emp's May 2026 is sent to lønkørsel; EmpNoPeriod's is NOT.
+        await InsertPayrollExportRecordAsync(Emp, 2026, 5, periodId);
+
+        var rows = await GetTeamOverviewAsync(Mgr, 2026, 5);
+
+        var empRow = rows.Single(r => EmployeeId(r) == Emp);
+        Assert.True(empRow.GetProperty("payrollExported").GetBoolean());
+        Assert.NotEqual(JsonValueKind.Null, empRow.GetProperty("payrollExportedAt").ValueKind);
+
+        var npRow = rows.Single(r => EmployeeId(r) == EmpNoPeriod);
+        Assert.False(npRow.GetProperty("payrollExported").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, npRow.GetProperty("payrollExportedAt").ValueKind);
+    }
+
+    /// <summary>
+    /// The export lock is per-(employee, year, month): an export record for a DIFFERENT month does
+    /// NOT mark the requested month as exported.
+    /// </summary>
+    [Fact]
+    public async Task PayrollExported_False_WhenExportRecordIsForADifferentMonth()
+    {
+        await InsertPeriodAsync(Emp, "AFD01", "APPROVED");
+        // Emp has an export record for June 2026, but the team-overview is requested for May 2026.
+        await InsertPayrollExportRecordAsync(Emp, 2026, 6);
+
+        var rows = await GetTeamOverviewAsync(Mgr, 2026, 5);
+        var empRow = rows.Single(r => EmployeeId(r) == Emp);
+        Assert.False(empRow.GetProperty("payrollExported").GetBoolean());
     }
 
     // ════════════════════════════════════════════════════════════════════════════════

@@ -19,8 +19,9 @@ namespace StatsTid.Tests.Regression.PhaseE;
 ///   <item><description>Test 1b: every <c>interface</c> catalog row has a
 ///   matching <c>IAuditProjectionMapper&lt;T&gt;</c> implementation in the
 ///   <c>StatsTid.Backend.Api</c> assembly.</description></item>
-///   <item><description>Test 1c: exactly 6 <c>TBD-*</c> deferred rows exist
-///   (1 cross-process + 1 unemitted + 4 adr025) — catches silent
+///   <item><description>Test 1c: exactly 4 <c>TBD-*</c> deferred rows exist
+///   (4 adr025; the cross-process row resolved in S45 and the
+///   defined-but-unemitted row resolved in S90) — catches silent
 ///   additions/removals of TBD markers.</description></item>
 /// </list>
 ///
@@ -191,11 +192,13 @@ public sealed class AuditProjectionParityTests
     }
 
     /// <summary>
-    /// Exactly 6 TBD-* deferred rows must exist in the catalog:
-    /// 1 <c>TBD-defined-but-unemitted</c>,
+    /// Exactly 4 TBD-* deferred rows must exist in the catalog:
+    /// 0 <c>TBD-defined-but-unemitted</c>,
     /// 4 <c>TBD-adr025-implementation-pending</c>. Catches silent
     /// additions/removals of TBD markers.
     /// S45: cross-process-deferred resolved (RetroactiveCorrectionRequested → interface).
+    /// S90: defined-but-unemitted resolved (PayrollExportGenerated reshaped into the
+    /// ADR-034 payroll-export lock fact → interface cross-process; TBD count 5 → 4).
     /// </summary>
     [Fact]
     public void AllTbdDeferredRows_AreExplicitlyMarked()
@@ -208,10 +211,12 @@ public sealed class AuditProjectionParityTests
             return kind.StartsWith("TBD-", StringComparison.OrdinalIgnoreCase);
         }).ToList();
 
-        Assert.Equal(5, tbdRows.Count);
+        Assert.Equal(4, tbdRows.Count);
 
+        // S90: PayrollExportGenerated was the sole TBD-defined-but-unemitted row; it is now
+        // a real interface (cross-process) row, so zero rows carry that marker.
         var unemitted = tbdRows.Where(r => r.MapperKind.Contains("TBD-defined-but-unemitted")).ToList();
-        Assert.Single(unemitted);
+        Assert.Empty(unemitted);
 
         var adr025 = tbdRows.Where(r => r.MapperKind.Contains("TBD-adr025-implementation-pending")).ToList();
         Assert.Equal(4, adr025.Count);

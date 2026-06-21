@@ -1029,6 +1029,28 @@ public static class ApprovalEndpoints
                 awayTodayAvailable = false;
             }
 
+            // (2g2) payrollExported = the employee has a payroll_export_records row for (year, month).
+            //       S90/TASK-9005 — a READ-ONLY cross-context lookup of the Payroll-owned lock table
+            //       (ADR-034: the Backend reads this, NEVER writes it). The row's EXISTENCE per
+            //       (employee_id, year, month) == "sent to lønkørsel" → the FE hides Genåbn for these
+            //       rows (the month is corrections-only post-export). ONE batched set-based read over
+            //       the team's employee-ids (the same shape as the reads above), NOT a per-row query.
+            var payrollExportedByEmployee = new Dictionary<string, DateTime>(StringComparer.Ordinal);
+            await using (var cmd = new NpgsqlCommand(
+                """
+                SELECT employee_id, exported_at
+                FROM payroll_export_records
+                WHERE employee_id = ANY(@ids) AND year = @year AND month = @month
+                """, conn))
+            {
+                cmd.Parameters.AddWithValue("ids", employeeIds);
+                cmd.Parameters.AddWithValue("year", year);
+                cmd.Parameters.AddWithValue("month", month);
+                await using var reader = await cmd.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                    payrollExportedByEmployee[reader.GetString(0)] = reader.GetDateTime(1);
+            }
+
             // (2h) normExpected = (weekdays/5) × weeklyNorm per employee. weeklyNorm resolves from the
             //      employee's agreement config, cached per distinct (agreement, ok) pair so the
             //      lookups are bounded (≤ #distinct agreements, NOT per-employee). Mirrors the
@@ -1094,6 +1116,10 @@ public static class ApprovalEndpoints
                 var flexBalance = flexByEmployee.GetValueOrDefault(r.EmployeeId, 0m);
                 var awayToday = awayTodayAvailable && awayTodaySet.Contains(r.EmployeeId);
 
+                // payrollExported = the month is sent to lønkørsel (a payroll_export_records row
+                // exists for this employee + (year, month)). The FE gates the reopen control on this.
+                var payrollExported = payrollExportedByEmployee.TryGetValue(r.EmployeeId, out var exportedAt);
+
                 // hasWarning = the cheap allocation-imbalance warning (|worked − allocated| > tol on
                 // ANY day in the month). Mirrors the allocation arm of the approve gate SYMMETRICALLY
                 // (the gate flags Math.Abs(worked − allocated) ≥ tol — both under- AND over-allocation
@@ -1136,6 +1162,8 @@ public static class ApprovalEndpoints
                     ferieTotal,
                     awayToday,
                     hasWarning,
+                    payrollExported,
+                    payrollExportedAt = payrollExported ? exportedAt : (DateTime?)null,
                 });
             }
 
@@ -1650,8 +1678,58 @@ public static class ApprovalEndpoints
                 }
             }
 
-            // S78 R2 — the CONDITIONAL status transition is the FIRST (and only) mutation before the audit
-            // + outbox; a null (0-row) loser of a concurrent double-transition short-circuits to a clean 409.
+            // ── S90 / TASK-9003 (B2) — the PAYROLL-EXPORT LOCK gate (ADR-034) ──
+            // Once a month has been sent to payroll (a payroll_export_records row exists for the period's
+            // (employee, year, month)), it can NO LONGER be reopened — corrections only, for ALL roles
+            // (OQ-2: no recall, no admin reopen). The check is ADDITIVE and lives INSIDE this tx, AFTER the
+            // advisory acquire and BEFORE the conditional UPDATE, so it composes with the existing S78/S83
+            // hardening without disturbing it.
+            //
+            // PLACEMENT (B2 — the export↔reopen TOCTOU race): we DO NOT read the lock at the pre-tx load
+            // (:1581). We first take a ROW lock on the approval period (SELECT … FOR UPDATE), which
+            // SERIALIZES against the TASK-9002 export tx's own `SELECT … FOR UPDATE` on the same row — so an
+            // export commit and a reopen can never interleave on the same period; whichever takes the row
+            // lock first wins and the other observes the committed outcome. ONLY THEN do we read
+            // payroll_export_records, guaranteeing we see the export's committed lock row (or its absence).
+            // The row lock is taken for BOTH arms (the employee arm reaches only EMPLOYEE_APPROVED, which is
+            // pre-export, so it will rarely match — but we apply the gate UNIFORMLY: cheap and correct).
+            await using (var rowLockCmd = new NpgsqlCommand(
+                "SELECT status FROM approval_periods WHERE period_id = @pid FOR UPDATE", conn, tx))
+            {
+                rowLockCmd.Parameters.AddWithValue("pid", periodId);
+                await rowLockCmd.ExecuteScalarAsync(ct);
+            }
+
+            // ADR-034 READ-ONLY CROSS-CONTEXT CONTRACT — the Backend READS the Payroll-owned
+            // payroll_export_records table to resolve the lock; it must NEVER WRITE it (the Payroll service
+            // is the sole writer, TASK-9002). Inlined on the existing (conn, tx) — no Payroll project
+            // reference (same DB). The lock key is the period's (employee_id, year, month).
+            await using (var lockCmd = new NpgsqlCommand(
+                """
+                SELECT 1 FROM payroll_export_records
+                WHERE employee_id = @emp AND year = @y AND month = @m
+                """, conn, tx))
+            {
+                lockCmd.Parameters.AddWithValue("emp", period.EmployeeId);
+                lockCmd.Parameters.AddWithValue("y", period.PeriodStart.Year);
+                lockCmd.Parameters.AddWithValue("m", period.PeriodStart.Month);
+                var exported = await lockCmd.ExecuteScalarAsync(ct);
+                if (exported is not null)
+                {
+                    // Discriminated 409 (kind="payroll-locked"), distinct from the status-conflict 409
+                    // below. Fires for EVERY role (OQ-2 corrections-only). No mutation has run yet.
+                    return Results.Json(new
+                    {
+                        error = "Period locked",
+                        kind = "payroll-locked",
+                        reason = "Måneden er sendt til lønkørsel — brug en korrektion.",
+                    }, statusCode: 409);
+                }
+            }
+
+            // S78 R2 — the CONDITIONAL status transition is the FIRST (and only) STATE mutation before the
+            // audit + outbox; a null (0-row) loser of a concurrent double-transition short-circuits to a
+            // clean 409.
             // S78 BLOCKER 1 — the conditional UPDATE RETURNs the LOCKED-IN pre-update status (captured
             // atomically with FOR UPDATE), so PeriodReopened.PreviousStatus records the status that was
             // actually present at the locked transition — NOT the stale pre-tx read (period.Status). This

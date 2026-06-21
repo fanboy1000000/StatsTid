@@ -54,11 +54,19 @@ builder.Services.AddHostedService<SettlementExportEmitter>();
 builder.Services.AddSingleton<IEmploymentProfileResolver, EmploymentProfileResolver>();
 builder.Services.AddSingleton<PayrollMappingService>();
 builder.Services.AddSingleton<PayrollExportService>();
+// S90 / TASK-9004 (ADR-034): the corrections seam over payroll_export_records — reads
+// current_effective_lines as the /recalculate diff baseline (B3) and rewrites it in the
+// correction tx so a 2nd correction diffs against the 1st correction's result.
+builder.Services.AddSingleton<PayrollExportRecordRepository>();
 builder.Services.AddSingleton<PeriodCalculationService>();
 builder.Services.AddSingleton<RetroactiveCorrectionService>();
 // S45: cross-process audit projection for RetroactiveCorrectionRequested
 builder.Services.AddSingleton<AuditProjectionRepository>();
 builder.Services.AddSingleton<StatsTid.SharedKernel.Audit.IAuditProjectionMapper<StatsTid.SharedKernel.Events.RetroactiveCorrectionRequested>, StatsTid.Infrastructure.AuditMappers.RetroactiveCorrectionRequestedAuditMapper>();
+// S90 (ADR-034 / TASK-9001): cross-process audit projection for PayrollExportGenerated
+// — the per-(employee, year, month) payroll-export lock fact, emitted from this
+// process (TASK-9002). Mirrors the RetroactiveCorrectionRequested registration above.
+builder.Services.AddSingleton<StatsTid.SharedKernel.Audit.IAuditProjectionMapper<StatsTid.SharedKernel.Events.PayrollExportGenerated>, StatsTid.Infrastructure.AuditMappers.PayrollExportGeneratedAuditMapper>();
 builder.Services.AddSingleton<ApprovalPeriodRepository>();
 builder.Services.AddSingleton<LocalConfigurationRepository>();
 // S21 TASK-2108 (ADR-017 D9c): hydrates BoundarySources.LocalProfileActivations on
@@ -115,6 +123,7 @@ app.MapPost("/api/payroll/export", async (
     PayrollExportRequest request,
     PayrollMappingService mapping,
     PayrollExportService export,
+    HttpContext httpContext,
     CancellationToken ct) =>
 {
     // TASK-2010 (S20): per-line OK-version stamping inside the mapper supersedes the
@@ -132,14 +141,26 @@ app.MapPost("/api/payroll/export", async (
     if (lines.Count == 0)
         return Results.BadRequest(new { success = false, error = "No mappable line items" });
 
-    var result = await export.ExportAsync(lines, ct);
-    return result.Success ? Results.Ok(result) : Results.UnprocessableEntity(result);
+    // S90 / TASK-9002 (OQ-6): the raw /export gets the lock record + idempotency, but
+    // passes a null PeriodId — it bypasses approval BY DESIGN (admin retroactive / internal
+    // calls), so the B2 APPROVED FOR UPDATE re-check does not apply. source = EXPORT.
+    var context = BuildExportContext(httpContext, request.Profile, periodId: null, source: "EXPORT");
+    try
+    {
+        var result = await export.ExportAsync(lines, context, ct);
+        return result.Success ? Results.Ok(result) : Results.UnprocessableEntity(result);
+    }
+    catch (PayrollExportConflictException ex)
+    {
+        return Results.Json(new { success = false, error = ex.Message, kind = "payroll-export-conflict" }, statusCode: 409);
+    }
 }).RequireAuthorization("GlobalAdminOnly");
 
 app.MapPost("/api/payroll/export-period", async (
     PayrollPeriodExportRequest request,
     PayrollMappingService mapping,
     PayrollExportService export,
+    HttpContext httpContext,
     CancellationToken ct) =>
 {
     var allLines = new List<PayrollExportLine>();
@@ -159,8 +180,20 @@ app.MapPost("/api/payroll/export-period", async (
     if (allLines.Count == 0)
         return Results.BadRequest(new { success = false, error = "No mappable line items in period" });
 
-    var result = await export.ExportAsync(allLines, ct);
-    return result.Success ? Results.Ok(result) : Results.UnprocessableEntity(result);
+    // S90 / TASK-9002 (OQ-6 + B4): the raw /export-period flattens multiple periods/months
+    // into one call; ExportAsync groups by (employee, year, month) and writes ONE record per
+    // tuple, all-or-nothing. Null PeriodId → skips the B2 APPROVED re-check (bypasses approval
+    // by design). source = EXPORT_PERIOD.
+    var context = BuildExportContext(httpContext, request.Profile, periodId: null, source: "EXPORT_PERIOD");
+    try
+    {
+        var result = await export.ExportAsync(allLines, context, ct);
+        return result.Success ? Results.Ok(result) : Results.UnprocessableEntity(result);
+    }
+    catch (PayrollExportConflictException ex)
+    {
+        return Results.Json(new { success = false, error = ex.Message, kind = "payroll-export-conflict" }, statusCode: 409);
+    }
 }).RequireAuthorization("GlobalAdminOnly");
 
 app.MapPost("/api/payroll/calculate-and-export", async (
@@ -230,7 +263,38 @@ app.MapPost("/api/payroll/calculate-and-export", async (
     // If calculation produced export lines, send to payroll
     if (result.ExportLines.Count > 0)
     {
-        var exportResult = await export.ExportAsync(result.ExportLines, ct);
+        // S90 / TASK-9002 (B2 + OQ-1): thread the approval period id so ExportAsync re-asserts
+        // status='APPROVED' under FOR UPDATE before writing the lock record — closing the
+        // export↔reopen race. The lock is set at COMMIT, independent of downstream delivery.
+        var actorId = httpContext.User.FindFirst("sub")?.Value;
+        var context = new PayrollExportContext
+        {
+            PeriodId = approval.PeriodId,
+            Source = "CALCULATE_AND_EXPORT",
+            ActorId = actorId,
+            ActorRole = actor.ActorRole,
+            ResolvedTargetOrgId = request.Profile.OrgId,
+            CorrelationId = correlationId,
+        };
+        ExportResult exportResult;
+        try
+        {
+            exportResult = await export.ExportAsync(result.ExportLines, context, ct);
+        }
+        catch (PayrollExportConflictException ex)
+        {
+            // Already exported for this month (idempotency: different content), or the period
+            // was no longer APPROVED at export time (B2) → 409 corrections-only.
+            return Results.Json(new
+            {
+                result.EmployeeId,
+                result.PeriodStart,
+                result.PeriodEnd,
+                Success = false,
+                error = ex.Message,
+                kind = "payroll-export-conflict"
+            }, statusCode: 409);
+        }
         if (!exportResult.Success)
         {
             return Results.UnprocessableEntity(new
@@ -291,22 +355,42 @@ app.MapPost("/api/payroll/recalculate", async (
     // Extract actor ID from claims
     var actorId = httpContext.User.FindFirst("sub")?.Value ?? "unknown";
 
-    var result = await correctionService.RecalculateAsync(
-        request.Profile,
-        request.Entries,
-        request.Absences,
-        request.PeriodStart,
-        request.PeriodEnd,
-        request.PreviousFlexBalance,
-        request.PreviousExportLines,
-        request.Reason,
-        actorId,
-        authHeader,
-        correlationId,
-        idempotencyToken,
-        request.OkTransitionDate,
-        request.PreviousOkVersion,
-        ct);
+    RetroactiveCorrectionResult result;
+    try
+    {
+        // S90 / TASK-9004 (B3): the diff baseline is read from payroll_export_records
+        // (current_effective_lines), NOT from the request body — corrections require a prior
+        // export. A never-exported month throws PayrollExportNotFoundException → a clean 422 below.
+        result = await correctionService.RecalculateAsync(
+            request.Profile,
+            request.Entries,
+            request.Absences,
+            request.PeriodStart,
+            request.PeriodEnd,
+            request.PreviousFlexBalance,
+            request.Reason,
+            actorId,
+            authHeader,
+            correlationId,
+            idempotencyToken,
+            request.OkTransitionDate,
+            request.PreviousOkVersion,
+            ct);
+    }
+    catch (PayrollExportNotFoundException ex)
+    {
+        // A correction of a month never sent to payroll — there is nothing to correct; the operator
+        // reopens/edits instead (corrections-only-post-lock). Discriminated so the FE can branch.
+        return Results.Json(new
+        {
+            success = false,
+            error = ex.Message,
+            kind = "payroll-not-exported",
+            employeeId = request.Profile.EmployeeId,
+            periodStart = request.PeriodStart,
+            periodEnd = request.PeriodEnd
+        }, statusCode: 422);
+    }
 
     if (!result.Success)
         return Results.UnprocessableEntity(result);
@@ -357,6 +441,31 @@ app.MapPost("/api/payroll/export-corrections", (CorrectionExportRequest request)
 
 app.Run();
 
+// S90 / TASK-9002 — builds the PayrollExportContext for the raw /export + /export-period
+// endpoints (the calculate-and-export path builds its own context inline because it already
+// has the resolved actor + correlation id + the approval period). The raw endpoints pass a
+// null PeriodId (they bypass approval by design). ResolvedTargetOrgId comes from the request's
+// EmploymentProfile.OrgId (mirroring RetroactiveCorrectionService's audit-org resolution).
+static PayrollExportContext BuildExportContext(
+    HttpContext httpContext, EmploymentProfile profile, Guid? periodId, string source)
+{
+    var actorId = httpContext.User.FindFirst("sub")?.Value;
+    var actorRole = httpContext.User.FindFirst("role")?.Value;
+    Guid? correlationId = httpContext.Request.Headers.TryGetValue("X-Correlation-Id", out var corrValues)
+        && Guid.TryParse(corrValues.FirstOrDefault(), out var parsedCorr)
+            ? parsedCorr
+            : null;
+    return new PayrollExportContext
+    {
+        PeriodId = periodId,
+        Source = source,
+        ActorId = actorId,
+        ActorRole = actorRole,
+        ResolvedTargetOrgId = profile.OrgId,
+        CorrelationId = correlationId,
+    };
+}
+
 public sealed class PayrollExportRequest
 {
     public required CalculationResult CalculationResult { get; init; }
@@ -387,7 +496,17 @@ public sealed class RecalculateRequest
     public required DateOnly PeriodStart { get; init; }
     public required DateOnly PeriodEnd { get; init; }
     public decimal PreviousFlexBalance { get; init; }
-    public required List<PayrollExportLine> PreviousExportLines { get; init; }
+
+    /// <summary>
+    /// DEPRECATED (S90 / TASK-9004 / B3). The correction diff baseline is now read from
+    /// <c>payroll_export_records.current_effective_lines</c>, NOT from the request body — so a
+    /// SECOND correction diffs against the FIRST correction's result (no double-count), and the
+    /// manifest does not have to be re-supplied (and could not be kept correct caller-side anyway).
+    /// Retained as an OPTIONAL field so pre-S90 callers that still send it deserialize without error;
+    /// the value is IGNORED.
+    /// </summary>
+    public List<PayrollExportLine>? PreviousExportLines { get; init; }
+
     public required string Reason { get; init; }
     public Guid? IdempotencyToken { get; init; }
 

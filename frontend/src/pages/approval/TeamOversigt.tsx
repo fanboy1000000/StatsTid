@@ -268,6 +268,11 @@ function TeamRowDetail({
                   Godkend måned
                 </button>
               </>
+            ) : meta.isDecided && row.periodId && row.payrollExported ? (
+              // S90 — the month is sent to lønkørsel: corrections-only, no reopen.
+              <span className={styles.exportedBadge} title="Måneden er sendt til lønkørsel og kan ikke genåbnes">
+                Sendt til lønkørsel
+              </span>
             ) : meta.isDecided && row.periodId ? (
               <button
                 type="button"
@@ -816,6 +821,11 @@ export function TeamOversigt() {
                             </button>
                             {bulkOutcome === 'conflict' && <span className={styles.outcomeConflict}>Ændret</span>}
                           </div>
+                        ) : meta.isDecided && row.periodId && row.payrollExported ? (
+                          // S90 — the month is sent to lønkørsel: corrections-only, no reopen.
+                          <span className={styles.exportedBadge} title="Måneden er sendt til lønkørsel og kan ikke genåbnes">
+                            Sendt til lønkørsel
+                          </span>
                         ) : meta.isDecided && row.periodId ? (
                           <button
                             type="button"

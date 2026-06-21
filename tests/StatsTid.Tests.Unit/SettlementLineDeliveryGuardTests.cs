@@ -2,6 +2,8 @@ using System.Net;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using StatsTid.Infrastructure;
+using StatsTid.Infrastructure.AuditMappers;
+using StatsTid.Infrastructure.Outbox;
 using StatsTid.Integrations.Payroll.Services;
 using StatsTid.SharedKernel.Models;
 
@@ -28,6 +30,12 @@ namespace StatsTid.Tests.Unit;
 public sealed class SettlementLineDeliveryGuardTests
 {
     private const string GuardMessageFragment = "Settlement export line delivery is disabled";
+
+    // S90 / TASK-9002: ExportAsync now takes a PayrollExportContext. The guard runs first, so
+    // its content is irrelevant to these guard tests; a null PeriodId keeps the (unreachable here)
+    // B2 APPROVED re-check out of the picture.
+    private static PayrollExportContext ExportContext() =>
+        new() { Source = "EXPORT", PeriodId = null, ActorId = "test-actor", ResolvedTargetOrgId = "ORG_X" };
 
     // A normal (non-settlement) line — the guard is a no-op for it.
     private static PayrollExportLine NormalLine() => new()
@@ -77,7 +85,7 @@ public sealed class SettlementLineDeliveryGuardTests
     {
         var svc = BuildService(deliveryEnabled: true);
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => svc.ExportAsync(new[] { SentinelLine() }));
+            () => svc.ExportAsync(new[] { SentinelLine() }, ExportContext()));
         Assert.Contains(GuardMessageFragment, ex.Message);
         Assert.Contains("SLS_TBD_S24", ex.Message); // the sentinel-specific branch
     }
@@ -87,7 +95,7 @@ public sealed class SettlementLineDeliveryGuardTests
     {
         var svc = BuildService(deliveryEnabled: null); // config key absent ⇒ disabled
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => svc.ExportAsync(new[] { SentinelLine() }));
+            () => svc.ExportAsync(new[] { SentinelLine() }, ExportContext()));
         Assert.Contains(GuardMessageFragment, ex.Message);
     }
 
@@ -100,7 +108,7 @@ public sealed class SettlementLineDeliveryGuardTests
     {
         var svc = BuildService(deliveryEnabled: null); // absent ⇒ disabled (fail-closed default)
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => svc.ExportAsync(new[] { NonSentinelSettlementLine() }));
+            () => svc.ExportAsync(new[] { NonSentinelSettlementLine() }, ExportContext()));
         Assert.Contains(GuardMessageFragment, ex.Message);
     }
 
@@ -109,7 +117,7 @@ public sealed class SettlementLineDeliveryGuardTests
     {
         var svc = BuildService(deliveryEnabled: false); // not "true" ⇒ disabled
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => svc.ExportAsync(new[] { NonSentinelSettlementLine() }));
+            () => svc.ExportAsync(new[] { NonSentinelSettlementLine() }, ExportContext()));
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -124,7 +132,7 @@ public sealed class SettlementLineDeliveryGuardTests
         // line ⇒ disabled by default. Proves the discriminator is the line's data, not a caller flag.
         var svc = BuildService(deliveryEnabled: null);
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => svc.ExportAsync(new[] { NonSentinelSettlementLine() }));
+            () => svc.ExportAsync(new[] { NonSentinelSettlementLine() }, ExportContext()));
         Assert.Contains(GuardMessageFragment, ex.Message);
     }
 
@@ -137,7 +145,7 @@ public sealed class SettlementLineDeliveryGuardTests
     {
         var svc = BuildService(deliveryEnabled: false);
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => svc.ExportAsync(new[] { NormalLine(), SentinelLine() }));
+            () => svc.ExportAsync(new[] { NormalLine(), SentinelLine() }, ExportContext()));
         Assert.Contains(GuardMessageFragment, ex.Message);
         // (The throw happens before WriteToOutboxAsync, so neither line reaches the outbox — verified
         // DB-side in the Docker companion ReconcileEmitterMutualExclusionTests / emitter suite; here we
@@ -156,7 +164,7 @@ public sealed class SettlementLineDeliveryGuardTests
         // outbox write and fails with a CONNECTION error — NOT the guard's InvalidOperationException.
         var svc = BuildService(deliveryEnabled: null, connectionString: "Host=127.0.0.1;Port=1;Database=none;Username=x;Password=y;Timeout=1;Command Timeout=1");
 
-        var ex = await Record.ExceptionAsync(() => svc.ExportAsync(new[] { NormalLine() }));
+        var ex = await Record.ExceptionAsync(() => svc.ExportAsync(new[] { NormalLine() }, ExportContext()));
         Assert.NotNull(ex); // it fails at the DB (proves the guard did not short-circuit it)
         Assert.False(
             ex is InvalidOperationException ioe && ioe.Message.Contains(GuardMessageFragment),
@@ -173,9 +181,17 @@ public sealed class SettlementLineDeliveryGuardTests
             cfgItems["Settlement:LineDeliveryEnabled"] = deliveryEnabled.Value ? "true" : "false";
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(cfgItems).Build();
 
+        // S90 / TASK-9002: the atomic refactor added 3 ctor deps. None is reached by the guard
+        // tests (the guard throws first), so a real PostgresEventStore / repository / mapper wired
+        // to the (unreachable) bad connection string is fine — they are never invoked.
+        var factory = new DbConnectionFactory(connectionString);
+        var eventStore = new PostgresEventStore(factory, new OutboxServiceContext("payroll"));
         return new PayrollExportService(
             new NoopHttpClientFactory(),
-            new DbConnectionFactory(connectionString),
+            factory,
+            eventStore,
+            new AuditProjectionRepository(factory),
+            new PayrollExportGeneratedAuditMapper(),
             configuration,
             NullLogger<PayrollExportService>.Instance);
     }

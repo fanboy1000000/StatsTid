@@ -2,6 +2,8 @@ using System.Net;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using StatsTid.Infrastructure;
+using StatsTid.Infrastructure.AuditMappers;
+using StatsTid.Infrastructure.Outbox;
 using StatsTid.Integrations.Payroll.Services;
 using StatsTid.SharedKernel.Models;
 
@@ -21,6 +23,11 @@ namespace StatsTid.Tests.Unit;
 public sealed class Slice3bSentinelCoverageTests
 {
     private const string GuardMessageFragment = "Settlement export line delivery is disabled";
+
+    // S90 / TASK-9002: ExportAsync now takes a PayrollExportContext. The sentinel guard runs first,
+    // so the context content is irrelevant to these refusal tests.
+    private static PayrollExportContext ExportContext() =>
+        new() { Source = "EXPORT", PeriodId = null, ActorId = "test-actor", ResolvedTargetOrgId = "ORG_X" };
 
     // The §26 staged-line shape: the placeholder sentinel lønart + the NEW time_type. NOTE the
     // SourceTimeType is VACATION_TERMINATION_PAYOUT — NOT the §24 VACATION_SETTLEMENT_PAYOUT the
@@ -47,7 +54,7 @@ public sealed class Slice3bSentinelCoverageTests
     {
         var svc = BuildService(deliveryEnabled: true);
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => svc.ExportAsync(new[] { S26SentinelLine() }));
+            () => svc.ExportAsync(new[] { S26SentinelLine() }, ExportContext()));
         Assert.Contains(GuardMessageFragment, ex.Message);
         Assert.Contains("SLS_TBD_S26", ex.Message); // the sentinel-specific (unconditional) branch
     }
@@ -61,7 +68,7 @@ public sealed class Slice3bSentinelCoverageTests
     {
         var svc = BuildService(deliveryEnabled: null); // config key absent ⇒ disabled
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => svc.ExportAsync(new[] { S26SentinelLine() }));
+            () => svc.ExportAsync(new[] { S26SentinelLine() }, ExportContext()));
         Assert.Contains(GuardMessageFragment, ex.Message);
         Assert.Contains("SLS_TBD_S26", ex.Message);
     }
@@ -90,7 +97,7 @@ public sealed class Slice3bSentinelCoverageTests
     {
         var svc = BuildService(deliveryEnabled: true);
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => svc.ExportAsync(new[] { S15S17SentinelLine() }));
+            () => svc.ExportAsync(new[] { S15S17SentinelLine() }, ExportContext()));
         Assert.Contains(GuardMessageFragment, ex.Message);
         Assert.Contains("SLS_TBD_S15S17", ex.Message); // the sentinel-specific (unconditional) branch
     }
@@ -100,7 +107,7 @@ public sealed class Slice3bSentinelCoverageTests
     {
         var svc = BuildService(deliveryEnabled: null); // config key absent ⇒ disabled
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => svc.ExportAsync(new[] { S15S17SentinelLine() }));
+            () => svc.ExportAsync(new[] { S15S17SentinelLine() }, ExportContext()));
         Assert.Contains(GuardMessageFragment, ex.Message);
         Assert.Contains("SLS_TBD_S15S17", ex.Message);
     }
@@ -174,9 +181,16 @@ public sealed class Slice3bSentinelCoverageTests
             cfgItems["Settlement:LineDeliveryEnabled"] = deliveryEnabled.Value ? "true" : "false";
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(cfgItems).Build();
 
+        // S90 / TASK-9002: the atomic refactor added 3 ctor deps; the sentinel guard throws before
+        // any of them is reached, so real instances wired to the (unreachable) bad connection are fine.
+        var factory = new DbConnectionFactory(connectionString);
+        var eventStore = new PostgresEventStore(factory, new OutboxServiceContext("payroll"));
         return new PayrollExportService(
             new NoopHttpClientFactory(),
-            new DbConnectionFactory(connectionString),
+            factory,
+            eventStore,
+            new AuditProjectionRepository(factory),
+            new PayrollExportGeneratedAuditMapper(),
             configuration,
             NullLogger<PayrollExportService>.Instance);
     }
