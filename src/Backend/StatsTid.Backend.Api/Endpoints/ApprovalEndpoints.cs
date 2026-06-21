@@ -1142,6 +1142,157 @@ public static class ApprovalEndpoints
             return Results.Ok(new { employees });
         }).RequireAuthorization("LeaderOrAbove");
 
+        // ── S88-8801 — Allocation breakdown (the leder-oversigt expandable detail's Fordeling) ──
+        //
+        // GET /api/approval/{employeeId}/allocation-breakdown?year=&month= (LeaderOrAbove). The
+        // per-employee project-allocation slice the team-overview detail row lazy-fetches on expand.
+        // AUTH (B1/B2 predicate): designated-approver-scoped via DesignatedApproverAuthorizer
+        // .IsEffectiveDesignatedApproverAsync(actorId, employeeId, today) — the SAME predicate the S87
+        // team-overview roster filters through (ApprovalPeriodRepository:432), so breakdown-authorized
+        // == roster: no 403 on a row the leader can see, and no org-scope leak (NOT ValidateEmployeeAccessAsync).
+        //
+        // The figures REPLICATE the S87 aggregate's per-(employee,day) worked/allocated maps for THIS
+        // employee (a per-employee slice of :910-957) so the result is PROVABLY identical to the row:
+        //   hasAllocationImbalance — the AUTHORITATIVE per-day ANY check, computed IDENTICALLY to the
+        //     aggregate's hasWarning loop (:1102-1119): iterate the days with either worked or allocated;
+        //     true iff ANY day has Math.Abs(round(worked_d,2) − round(allocated_d,2)) > AllocationTolerance.
+        //     It MUST NOT be derived from the under/over sums — summing sub-tolerance daily deltas could
+        //     trip a sum past tol where the per-day ANY check (and thus the table chip) would not.
+        //   underAllocated / overAllocated — DISPLAY-only directional sums over the per-rounded-day deltas.
+        //   allocations[] — month-sum NORMAL+non-null-TaskId hours grouped by TaskId (a display aid,
+        //     sums to allocated).
+        app.MapGet("/api/approval/{employeeId}/allocation-breakdown", async (
+            string employeeId,
+            [FromQuery] int year,
+            [FromQuery] int month,
+            DesignatedApproverAuthorizer designatedAuthorizer,
+            DbConnectionFactory connectionFactory,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            if (year < 2020 || year > 2100)
+                return Results.BadRequest(new { error = "Invalid year. Must be between 2020 and 2100." });
+            if (month < 1 || month > 12)
+                return Results.BadRequest(new { error = "Invalid month. Must be between 1 and 12." });
+
+            var actor = context.GetActorContext();
+            if (string.IsNullOrEmpty(actor.ActorId))
+                return Results.Json(new { error = "Access denied", reason = "No actor identity" }, statusCode: 403);
+
+            // AUTH (B1): the designated-approver edge — exactly the predicate the team-overview roster
+            // filters through, so a row the leader can see is always breakdown-authorized (no org-scope leak).
+            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+            var authorized = await designatedAuthorizer.IsEffectiveDesignatedApproverAsync(
+                actor.ActorId!, employeeId, asOf: today, ct: ct);
+            if (!authorized)
+                return Results.Json(new { error = "Access denied" }, statusCode: 403);
+
+            var monthStart = new DateOnly(year, month, 1);
+            var monthEnd = new DateOnly(year, month, DateTime.DaysInMonth(year, month));
+
+            await using var conn = connectionFactory.Create();
+            await conn.OpenAsync(ct);
+
+            // (a) allocated(NORMAL + non-null TaskId) hours per DAY for this employee — same SQL as the
+            //     aggregate's per-(employee,day) allocation read (:914-930), filtered to this employee.
+            var allocatedByDay = new Dictionary<DateOnly, decimal>();
+            await using (var cmd = new NpgsqlCommand(
+                """
+                SELECT date, COALESCE(SUM(hours), 0) AS allocated
+                FROM time_entries_projection
+                WHERE employee_id = @id AND date >= @start AND date <= @end
+                  AND activity_type = 'NORMAL' AND task_id IS NOT NULL
+                GROUP BY date
+                """, conn))
+            {
+                cmd.Parameters.AddWithValue("id", employeeId);
+                cmd.Parameters.AddWithValue("start", monthStart);
+                cmd.Parameters.AddWithValue("end", monthEnd);
+                await using var reader = await cmd.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                    allocatedByDay[DateOnly.FromDateTime(reader.GetDateTime(0))] = reader.GetDecimal(1);
+            }
+
+            // (b) worked(intervals + manual_hours) per DAY from work_time_projection — same as :932-957.
+            var workedByDay = new Dictionary<DateOnly, decimal>();
+            await using (var cmd = new NpgsqlCommand(
+                """
+                SELECT date, intervals, manual_hours
+                FROM work_time_projection
+                WHERE employee_id = @id AND date >= @start AND date <= @end
+                """, conn))
+            {
+                cmd.Parameters.AddWithValue("id", employeeId);
+                cmd.Parameters.AddWithValue("start", monthStart);
+                cmd.Parameters.AddWithValue("end", monthEnd);
+                await using var reader = await cmd.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                {
+                    var date = DateOnly.FromDateTime(reader.GetDateTime(0));
+                    var intervalsJson = reader.GetString(1);
+                    var manual = reader.GetDecimal(2);
+                    var intervals = System.Text.Json.JsonSerializer.Deserialize<List<WorkInterval>>(
+                        intervalsJson, TeamOverviewIntervalsJsonOptions) ?? new List<WorkInterval>();
+                    var workedDay = SumIntervalHours(intervals) + manual;
+                    workedByDay[date] = workedByDay.TryGetValue(date, out var ex) ? ex + workedDay : workedDay;
+                }
+            }
+
+            // (c) allocations[] — month-sum NORMAL+non-null-TaskId hours grouped by TaskId (display bars;
+            //     sums to allocated). Stable order by taskId for deterministic rendering.
+            var allocations = new List<object>();
+            await using (var cmd = new NpgsqlCommand(
+                """
+                SELECT task_id, COALESCE(SUM(hours), 0) AS hours
+                FROM time_entries_projection
+                WHERE employee_id = @id AND date >= @start AND date <= @end
+                  AND activity_type = 'NORMAL' AND task_id IS NOT NULL
+                GROUP BY task_id
+                ORDER BY task_id
+                """, conn))
+            {
+                cmd.Parameters.AddWithValue("id", employeeId);
+                cmd.Parameters.AddWithValue("start", monthStart);
+                cmd.Parameters.AddWithValue("end", monthEnd);
+                await using var reader = await cmd.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                    allocations.Add(new { taskId = reader.GetString(0), hours = reader.GetDecimal(1) });
+            }
+
+            // (d) The month totals + the per-day directional sums + the AUTHORITATIVE per-day ANY check.
+            var worked = workedByDay.Values.Sum();
+            var allocated = allocatedByDay.Values.Sum();
+
+            var daysWithEither = new HashSet<DateOnly>();
+            foreach (var d in workedByDay.Keys) daysWithEither.Add(d);
+            foreach (var d in allocatedByDay.Keys) daysWithEither.Add(d);
+
+            decimal underAllocated = 0m;
+            decimal overAllocated = 0m;
+            var hasAllocationImbalance = false;
+            foreach (var d in daysWithEither)
+            {
+                var workedD = Math.Round(workedByDay.GetValueOrDefault(d, 0m), 2);
+                var allocatedD = Math.Round(allocatedByDay.GetValueOrDefault(d, 0m), 2);
+                underAllocated += Math.Max(0m, workedD - allocatedD);
+                overAllocated += Math.Max(0m, allocatedD - workedD);
+                // AUTHORITATIVE imbalance = the SAME per-day ANY check the table hasWarning uses (the
+                // approve gate, both directions). NOT derived from the summed under/over (B1 drift).
+                if (Math.Abs(workedD - allocatedD) > AllocationTolerance)
+                    hasAllocationImbalance = true;
+            }
+
+            return Results.Ok(new
+            {
+                allocations,
+                worked,
+                allocated,
+                underAllocated = Math.Round(underAllocated, 2),
+                overAllocated = Math.Round(overAllocated, 2),
+                hasAllocationImbalance,
+            });
+        }).RequireAuthorization("LeaderOrAbove");
+
         // ── Get Employee Periods ──
 
         app.MapGet("/api/approval/{employeeId}", async (

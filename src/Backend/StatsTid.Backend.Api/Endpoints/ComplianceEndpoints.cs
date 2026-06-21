@@ -24,6 +24,7 @@ public static class ComplianceEndpoints
             TimeEntryProjectionRepository timeEntryProjectionRepo,
             IEmploymentProfileResolver profileResolver,
             OrgScopeValidator scopeValidator,
+            DesignatedApproverAuthorizer designatedAuthorizer,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -35,9 +36,22 @@ public static class ComplianceEndpoints
 
             if (actor.ActorRole != StatsTidRoles.Employee)
             {
+                // S88-8801 B2 — ADDITIVE designated-approver OR-branch (mirrors the approve endpoint's
+                // OR-pattern, ApprovalEndpoints:263-271). The team-overview roster is the DESIGNATED-
+                // approver set, which (ADR-027 D13) admits cross-afdeling vikar/escalation approvers
+                // whose org-scope does NOT cover the employee; without this branch their lazy Advarsel
+                // fetch on the expandable detail row would 403 (a systematic hole masked as a transient
+                // fault). org-scope stays the primary gate; the edge only ADDS access — every existing
+                // caller (employee-self / HR / org-scope) is preserved.
                 var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, ct);
                 if (!allowed)
-                    return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+                {
+                    var today = DateOnly.FromDateTime(DateTime.UtcNow);
+                    var hasEdge = await designatedAuthorizer.IsEffectiveDesignatedApproverAsync(
+                        actor.ActorId!, employeeId, asOf: today, ct: ct);
+                    if (!hasEdge)
+                        return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+                }
             }
 
             var user = await userRepo.GetByIdAsync(employeeId, ct);

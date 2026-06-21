@@ -553,3 +553,271 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* ── S88 — accordion chevron + expandable detail row ──────────────────────── */
+.clickableRow {
+  cursor: pointer;
+}
+
+.chevronBtn {
+  background: none;
+  border: none;
+  padding: 0 6px 0 0;
+  margin: 0;
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  font-family: var(--font-family);
+  line-height: 1;
+}
+
+.chevronBtn:focus-visible {
+  outline: 2px solid var(--color-gray-600);
+  outline-offset: 2px;
+}
+
+.chevron {
+  display: inline-block;
+  font-size: 12px;
+  transition: transform 0.15s;
+}
+
+.chevronOpen {
+  transform: rotate(90deg);
+}
+
+/* The detail <tr> carries no padding; its single <td colSpan=9> owns the box. */
+.detailRow {
+  background: var(--color-gray-50);
+}
+
+.detailCell {
+  background: var(--color-gray-50);
+  padding: 22px 24px 24px 44px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.detailInner {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.detailColumns {
+  display: flex;
+  gap: 32px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.detailCol {
+  flex: 1;
+  min-width: 320px;
+}
+
+.detailLabel {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-secondary);
+  margin-bottom: 10px;
+}
+
+/* Saldi — 4-cell hairline grid (1px gap + bg = dividers). */
+.saldiGrid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1px;
+  background: var(--color-border);
+  border: 1px solid var(--color-border);
+}
+
+.saldiCell {
+  background: var(--color-white);
+  padding: 12px 14px;
+}
+
+.saldiCellLabel {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  margin-bottom: 4px;
+}
+
+.saldiCellValue {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+/* Fordeling af arbejdstid. */
+.fordelingHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.fordelingHead .detailLabel {
+  margin-bottom: 0;
+}
+
+.fordelingSum {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.fordelingList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.allocEntry {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.allocLine {
+  display: flex;
+  justify-content: space-between;
+  font-size: 14px;
+  color: var(--color-text);
+}
+
+.allocImbalance .allocLabel,
+.allocImbalance .allocValue {
+  color: var(--color-warning);
+  font-weight: 600;
+}
+
+.allocTrack {
+  width: 100%;
+  height: 5px;
+  background: var(--color-gray-200);
+}
+
+.allocFill {
+  height: 100%;
+  background: var(--color-primary);
+}
+
+.allocFillMuted {
+  background: var(--color-gray-400);
+}
+
+.allocFillImbalance {
+  background: var(--color-warning);
+}
+
+.detailMuted {
+  font-size: 14px;
+  color: var(--color-text-secondary);
+}
+
+/* Alerts — 1px border + 4px left accent + tinted bg. */
+.detailAlert {
+  border: 1px solid var(--color-border);
+  padding: 12px 16px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.detailAlertWarn {
+  border-color: var(--color-warning);
+  border-left: 4px solid var(--color-warning);
+  background: var(--color-warning-light);
+  color: var(--color-text);
+}
+
+.detailAlertError {
+  border-color: var(--color-error);
+  border-left: 4px solid var(--color-error);
+  background: var(--color-error-light);
+  color: var(--color-text);
+}
+
+/* Footer. */
+.detailFooter {
+  border-top: 1px solid var(--color-border);
+  padding-top: 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.detailStatusLine {
+  font-size: 14px;
+  color: var(--color-text-secondary);
+}
+
+.detailFooterActions {
+  display: flex;
+  gap: 8px;
+}
+
+.detailApproveBtn {
+  padding: 8px 18px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--color-primary);
+  background: var(--color-primary);
+  color: #fff;
+  border-radius: 0;
+  font-family: var(--font-family);
+}
+
+.detailApproveBtn:hover {
+  background: var(--color-primary-hover);
+}
+
+.detailApproveBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.detailRejectBtn {
+  padding: 8px 18px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--color-error);
+  background: var(--color-white);
+  color: var(--color-error);
+  border-radius: 0;
+  font-family: var(--font-family);
+}
+
+.detailRejectBtn:hover {
+  background: var(--color-error-light);
+}
+
+.detailRejectBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.detailReopenBtn {
+  padding: 8px 18px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-white);
+  color: var(--color-text);
+  border-radius: 0;
+  font-family: var(--font-family);
+}
+
+.detailReopenBtn:hover {
+  background: var(--color-gray-100);
+}
+
+.detailReopenBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

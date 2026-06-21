@@ -68,6 +68,23 @@ direction}]}` — distinguishable from the existing coverage 422 (`missingDays`)
 coverage check (both must pass). Surfaced in the UI by an "Ikke fordelt" row + a "Fordeling af
 arbejdstid" summary card.
 
+**S88 amendment — the read-side surfaces of this gate must mirror the SAME per-day predicate.**
+Two read endpoints expose the gate's allocation signal and MUST agree with the approve gate bit-for-bit
+(no month-vs-day drift):
+- `GET /api/approval/team-overview` (S87) — the per-employee `hasWarning` is the per-day ANY check:
+  `true` iff ANY day has `|round(worked_d,2) − round(allocated_d,2)| > 0.005` (`ApprovalEndpoints.cs`
+  team-overview handler).
+- `GET /api/approval/{employeeId}/allocation-breakdown` (S88, the leder-oversigt expandable detail's
+  Fordeling) — returns `hasAllocationImbalance` computed by the **identical per-day ANY check**, so it
+  equals the table row's `hasWarning` exactly. `underAllocated`/`overAllocated` (Σ per-rounded-day
+  directional deltas) and `allocations[]` (NORMAL+non-null-TaskId hours by TaskId, summing to
+  `allocated`) are **display-only** — `hasAllocationImbalance` is NEVER derived from those sums (summing
+  sub-tolerance daily deltas could trip a month total past `0.005` where the per-day ANY check would
+  not, re-introducing drift in the opposite direction). Authorized via the designated-approver predicate
+  (`IsEffectiveDesignatedApproverAsync`), so it cannot 403 a row the leader sees on the team-overview.
+  The detail's "Manglende fordeling"/"Overfordeling" alerts gate behind `hasAllocationImbalance` so the
+  opened detail never contradicts the row chip.
+
 ### D5 — Timer retirement (write path removed, events retained)
 The `/api/timer/*` endpoints, `TimerSessionRepository`, the `TimerSession` model, and the
 `timer_sessions` table are removed. The `timer_sessions` DROP co-lands with the code removal after a
