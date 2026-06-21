@@ -8,7 +8,7 @@
 | **End Date** | 2026-06-21 |
 | **Orchestrator Approved** | yes |
 | **Build Verified** | yes (`tsc --noEmit` + `npm run build` clean) |
-| **Test Verified** | yes — FE vitest 495/495; .NET tiers unchanged (FE-only); CI to confirm |
+| **Test Verified** | yes — FE vitest 495/495; .NET tiers unchanged (FE-only) **AND CI GREEN run `27906298705`, all 7 jobs** (incl. build-and-test + e2e) |
 
 ## Sprint Goal
 **Phase 1 of the "reopen until sent to payroll" decision** (`REFINEMENT-reopen-until-payroll-lock.md`, owner-ruled 2026-06-21): show the **Genåbn** (reopen) control to a **LocalLeader** on the Teamoversigt page, instead of restricting it to LocalHR+. FE-only — the backend reopen Leader+ arm already authorizes it (`ApprovalEndpoints.cs:1607-1630`), and `SkemaPage` already exposes leader reopen (`SkemaPage.tsx:1115`); this makes Teamoversigt consistent and delivers the owner's intent that a leader can reopen an approved month. **Phase 2 (the payroll-export lock + idempotency + atomic refactor) is a separate, later sprint** — until it exists there is no exported-state to gate on, and a leader cannot trigger an export (`/calculate-and-export` is LocalAdmin+, manual, no automation, no FE caller), so Phase 1 carries no payroll risk.
