@@ -8,7 +8,7 @@
 | **End Date** | 2026-06-23 |
 | **Orchestrator Approved** | yes — 2026-06-23 |
 | **Build Verified** | yes — `dotnet build` 0 warnings 0 errors (combined tree) |
-| **Test Verified** | yes (local, fresh-greenfield Postgres): 856 unit + 1060 regression + 6 smoke + 29 demoseed + 495 fe; CI-pending (push-triggered full pyramid confirmation to follow; backfilled at close-polish) |
+| **Test Verified** | yes — CI GREEN `27988737234` (all 7 jobs, 2026-06-23): 856 unit + 1060 regression + 6 smoke + 29 demoseed + 495 fe = 2446 |
 
 ## Sprint Goal
 Flatten the org **data model** from the 4-tier MINISTRY/STYRELSE/AFDELING/TEAM tree to the target **MAO → Organisation** structure (the former AFDELING/TEAM units demoted to **Enhed** display-metadata on the user), as the foundation the flat role-scope (S93), flat approval (S94), and tree-machinery retirement (S95) build on. **Authority is RE-BASED to the Organisation, not held identical** (see below). Greenfield reseed; no production-data migration. Phase 1 of the flat-authority reform (refinement: `.claude/refinements/REFINEMENT-flat-authority-model.md`).
@@ -233,7 +233,7 @@ Both fixes re-verified green in isolation (3/3 affected tests pass).
 | Smoke | 6 | all passing |
 | DemoSeed | 29 | all passing |
 | Frontend (vitest) | 495 | all passing |
-| **Total** | **2446** | CI confirmation pending |
+| **Total** | **2446** | CI GREEN `27988737234` (all 7 jobs) |
 
 ## Agent Effectiveness
 
