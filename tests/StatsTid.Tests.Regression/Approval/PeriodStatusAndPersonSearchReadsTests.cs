@@ -16,7 +16,7 @@ namespace StatsTid.Tests.Regression.Approval;
 /// S74-7404 (R11a + R11b) — the two backend READS the redesigned Medarbejder-administration FE
 /// (Phases 2-3) consumes:
 /// <list type="number">
-/// <item><description><b>R11a</b> the per-styrelse period-status projection
+/// <item><description><b>R11a</b> the per-tree (Organisation) period-status projection
 /// (<see cref="ApprovalPeriodRepository.GetPeriodStatusProjectionForTreeAsync"/> →
 /// <c>GET /api/admin/reporting-lines/tree/{treeRootOrgId}/period-status</c>): each employee's
 /// last-closed-month status (greatest <c>period_end &lt; today</c>) projected to OPEN/SUBMITTED/
@@ -27,9 +27,9 @@ namespace StatsTid.Tests.Regression.Approval;
 /// self + descendants server-side (the cycle-prevention mirror via 7403's bounded descendant
 /// walk).</description></item>
 /// </list>
-/// Reads only — no events, no writes. Topology reuses the seed STY02 tree
-/// (<c>/MIN01/STY02/</c> root, AFD01/AFD02 afdelinger) with isolated <c>t7404_*</c> users; a
-/// cross-styrelse STY05 user proves the scope bound.
+/// Reads only — no events, no writes. Topology reuses the seed STY02 tree (S92/ADR-035 flatten:
+/// <c>/MIN01/STY02/</c> root, all members on the STY02 Organisation — the former sub-org rows are gone)
+/// with isolated <c>t7404_*</c> users; a cross-MAO STY05 user proves the scope bound.
 /// </summary>
 [Trait("Category", "Docker")]
 public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
@@ -41,34 +41,34 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
     private DbConnectionFactory _dbFactory = null!;
 
     // ── Test users ────────────────────────────────────────────────────────────────────
-    // STY02 tree (/MIN01/STY02/):
-    private const string Mgr = "t7404_mgr";          // AFD02 — LocalLeader; PRIMARY manager of the AFD01 employees
-    private const string EmpOpenDraft = "t7404_e_draft";    // AFD01 — last closed period is DRAFT → OPEN
-    private const string EmpOpenRejected = "t7404_e_rej";   // AFD01 — last closed period is REJECTED → OPEN
-    private const string EmpOpenNone = "t7404_e_none";      // AFD01 — NO closed period → OPEN
-    private const string EmpSubmitted = "t7404_e_sub";      // AFD01 — last closed period is SUBMITTED → SUBMITTED
-    private const string EmpEmpApproved = "t7404_e_ea";     // AFD01 — last closed period is EMPLOYEE_APPROVED → SUBMITTED
-    private const string EmpApproved = "t7404_e_appr";      // AFD01 — last closed period is APPROVED → APPROVED
+    // STY02 Organisation (/MIN01/STY02/):
+    private const string Mgr = "t7404_mgr";          // STY02 — LocalLeader; PRIMARY manager of the STY02 employees
+    private const string EmpOpenDraft = "t7404_e_draft";    // STY02 — last closed period is DRAFT → OPEN
+    private const string EmpOpenRejected = "t7404_e_rej";   // STY02 — last closed period is REJECTED → OPEN
+    private const string EmpOpenNone = "t7404_e_none";      // STY02 — NO closed period → OPEN
+    private const string EmpSubmitted = "t7404_e_sub";      // STY02 — last closed period is SUBMITTED → SUBMITTED
+    private const string EmpEmpApproved = "t7404_e_ea";     // STY02 — last closed period is EMPLOYEE_APPROVED → SUBMITTED
+    private const string EmpApproved = "t7404_e_appr";      // STY02 — last closed period is APPROVED → APPROVED
     // Search-only fixtures:
-    private const string Sub = "t7404_sub";          // AFD01 — a DESCENDANT of Mgr (reports to Mgr) — search excludes it
-    private const string SearchAfd02 = "t7404_sara"; // AFD02 — "Sara Searchable" (display-name match target)
-    // Cross-styrelse (STY05, /MIN02/STY05/):
+    private const string Sub = "t7404_sub";          // STY02 — a DESCENDANT of Mgr (reports to Mgr) — search excludes it
+    private const string SearchAfd02 = "t7404_sara"; // STY02 — "Sara Searchable" (display-name match target)
+    // Cross-MAO (STY05, /MIN02/STY05/):
     private const string EmpX = "t7404_x";           // STY05 — out-of-scope for a STY02-scoped admin
 
     // BLOCKER fixtures (tile↔dashboard tally-gate consistency, cross-org discrimination):
-    private const string MgrNoRole = "t7404_mgr_norole"; // AFD02 — ACTIVE PRIMARY manager but NO LeaderOrAbove
+    private const string MgrNoRole = "t7404_mgr_norole"; // STY02 — ACTIVE PRIMARY manager but NO LeaderOrAbove
                                                          //   role (role-revoked) → resolver returns it, the
                                                          //   canonical predicate DENIES → must NOT be tallied.
-    private const string EmpRevoked = "t7404_e_revoked"; // AFD01 — pending, reports PRIMARY to MgrNoRole.
+    private const string EmpRevoked = "t7404_e_revoked"; // STY02 — pending, reports PRIMARY to MgrNoRole.
 
     // Deep-descendant fixtures (R11b GetDescendantIds multi-level + cyclic-graph termination):
-    private const string DChild = "t7404_d_child";       // AFD01 — direct report of Mgr
-    private const string DGrand = "t7404_d_grand";       // AFD01 — reports to DChild (2 levels under Mgr)
-    private const string DGreat = "t7404_d_great";       // AFD01 — reports to DGrand (3 levels under Mgr)
+    private const string DChild = "t7404_d_child";       // STY02 — direct report of Mgr
+    private const string DGrand = "t7404_d_grand";       // STY02 — reports to DChild (2 levels under Mgr)
+    private const string DGreat = "t7404_d_great";       // STY02 — reports to DGrand (3 levels under Mgr)
     // Cyclic legacy graph (raw-planted, bypassing the AssignAsync cycle guard):
-    private const string CycA = "t7404_cyc_a";           // AFD01 — A → B → C → A (manager edges)
-    private const string CycB = "t7404_cyc_b";           // AFD01
-    private const string CycC = "t7404_cyc_c";           // AFD01
+    private const string CycA = "t7404_cyc_a";           // STY02 — A → B → C → A (manager edges)
+    private const string CycB = "t7404_cyc_b";           // STY02
+    private const string CycC = "t7404_cyc_c";           // STY02
 
     private const string TreeRootSty02 = "STY02";
 
@@ -115,24 +115,24 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
             """
             INSERT INTO users (user_id, username, password_hash, display_name, email, primary_org_id, agreement_code, ok_version, is_active)
             VALUES
-                (@mgr,     @mgr,     '$2a$11$fake', 'T7404 Mgr',       't7404_mgr@test.dk',     'AFD02', 'HK', 'OK24', TRUE),
-                (@edraft,  @edraft,  '$2a$11$fake', 'T7404 EmpDraft',  't7404_e_draft@test.dk', 'AFD01', 'HK', 'OK24', TRUE),
-                (@erej,    @erej,    '$2a$11$fake', 'T7404 EmpRej',    't7404_e_rej@test.dk',   'AFD01', 'HK', 'OK24', TRUE),
-                (@enone,   @enone,   '$2a$11$fake', 'T7404 EmpNone',   't7404_e_none@test.dk',  'AFD01', 'HK', 'OK24', TRUE),
-                (@esub,    @esub,    '$2a$11$fake', 'T7404 EmpSub',    't7404_e_sub@test.dk',   'AFD01', 'HK', 'OK24', TRUE),
-                (@eea,     @eea,     '$2a$11$fake', 'T7404 EmpEA',     't7404_e_ea@test.dk',    'AFD01', 'HK', 'OK24', TRUE),
-                (@eappr,   @eappr,   '$2a$11$fake', 'T7404 EmpAppr',   't7404_e_appr@test.dk',  'AFD01', 'HK', 'OK24', TRUE),
-                (@sub,     @sub,     '$2a$11$fake', 'T7404 Sub',       't7404_sub@test.dk',     'AFD01', 'HK', 'OK24', TRUE),
-                (@sara,    @sara,    '$2a$11$fake', 'Sara Searchable', 't7404_sara@test.dk',    'AFD02', 'HK', 'OK24', TRUE),
+                (@mgr,     @mgr,     '$2a$11$fake', 'T7404 Mgr',       't7404_mgr@test.dk',     'STY02', 'HK', 'OK24', TRUE),
+                (@edraft,  @edraft,  '$2a$11$fake', 'T7404 EmpDraft',  't7404_e_draft@test.dk', 'STY02', 'HK', 'OK24', TRUE),
+                (@erej,    @erej,    '$2a$11$fake', 'T7404 EmpRej',    't7404_e_rej@test.dk',   'STY02', 'HK', 'OK24', TRUE),
+                (@enone,   @enone,   '$2a$11$fake', 'T7404 EmpNone',   't7404_e_none@test.dk',  'STY02', 'HK', 'OK24', TRUE),
+                (@esub,    @esub,    '$2a$11$fake', 'T7404 EmpSub',    't7404_e_sub@test.dk',   'STY02', 'HK', 'OK24', TRUE),
+                (@eea,     @eea,     '$2a$11$fake', 'T7404 EmpEA',     't7404_e_ea@test.dk',    'STY02', 'HK', 'OK24', TRUE),
+                (@eappr,   @eappr,   '$2a$11$fake', 'T7404 EmpAppr',   't7404_e_appr@test.dk',  'STY02', 'HK', 'OK24', TRUE),
+                (@sub,     @sub,     '$2a$11$fake', 'T7404 Sub',       't7404_sub@test.dk',     'STY02', 'HK', 'OK24', TRUE),
+                (@sara,    @sara,    '$2a$11$fake', 'Sara Searchable', 't7404_sara@test.dk',    'STY02', 'HK', 'OK24', TRUE),
                 (@empx,    @empx,    '$2a$11$fake', 'T7404 EmpX',      't7404_x@test.dk',       'STY05', 'HK', 'OK24', TRUE),
-                (@mgrnr,   @mgrnr,   '$2a$11$fake', 'T7404 MgrNoRole', 't7404_mgr_nr@test.dk',  'AFD02', 'HK', 'OK24', TRUE),
-                (@erev,    @erev,    '$2a$11$fake', 'T7404 EmpRevoked','t7404_e_rev@test.dk',   'AFD01', 'HK', 'OK24', TRUE),
-                (@dchild,  @dchild,  '$2a$11$fake', 'T7404 DChild',    't7404_d_child@test.dk', 'AFD01', 'HK', 'OK24', TRUE),
-                (@dgrand,  @dgrand,  '$2a$11$fake', 'T7404 DGrand',    't7404_d_grand@test.dk', 'AFD01', 'HK', 'OK24', TRUE),
-                (@dgreat,  @dgreat,  '$2a$11$fake', 'T7404 DGreat',    't7404_d_great@test.dk', 'AFD01', 'HK', 'OK24', TRUE),
-                (@cyca,    @cyca,    '$2a$11$fake', 'T7404 CycA',      't7404_cyc_a@test.dk',   'AFD01', 'HK', 'OK24', TRUE),
-                (@cycb,    @cycb,    '$2a$11$fake', 'T7404 CycB',      't7404_cyc_b@test.dk',   'AFD01', 'HK', 'OK24', TRUE),
-                (@cycc,    @cycc,    '$2a$11$fake', 'T7404 CycC',      't7404_cyc_c@test.dk',   'AFD01', 'HK', 'OK24', TRUE)
+                (@mgrnr,   @mgrnr,   '$2a$11$fake', 'T7404 MgrNoRole', 't7404_mgr_nr@test.dk',  'STY02', 'HK', 'OK24', TRUE),
+                (@erev,    @erev,    '$2a$11$fake', 'T7404 EmpRevoked','t7404_e_rev@test.dk',   'STY02', 'HK', 'OK24', TRUE),
+                (@dchild,  @dchild,  '$2a$11$fake', 'T7404 DChild',    't7404_d_child@test.dk', 'STY02', 'HK', 'OK24', TRUE),
+                (@dgrand,  @dgrand,  '$2a$11$fake', 'T7404 DGrand',    't7404_d_grand@test.dk', 'STY02', 'HK', 'OK24', TRUE),
+                (@dgreat,  @dgreat,  '$2a$11$fake', 'T7404 DGreat',    't7404_d_great@test.dk', 'STY02', 'HK', 'OK24', TRUE),
+                (@cyca,    @cyca,    '$2a$11$fake', 'T7404 CycA',      't7404_cyc_a@test.dk',   'STY02', 'HK', 'OK24', TRUE),
+                (@cycb,    @cycb,    '$2a$11$fake', 'T7404 CycB',      't7404_cyc_b@test.dk',   'STY02', 'HK', 'OK24', TRUE),
+                (@cycc,    @cycc,    '$2a$11$fake', 'T7404 CycC',      't7404_cyc_c@test.dk',   'STY02', 'HK', 'OK24', TRUE)
             ON CONFLICT DO NOTHING
             """, conn))
         {
@@ -140,13 +140,13 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
             await cmd.ExecuteNonQueryAsync();
         }
 
-        // Mgr is a LocalLeader covering AFD02 (the per-manager pending tally needs the resolver to
+        // Mgr is a LocalLeader covering STY02 (the per-manager pending tally needs the resolver to
         // return an active leader; the dashboard/predicate role gate is separate but the period-
         // status tally only needs ResolveDesignatedApproverAsync to return Mgr).
         await using (var cmd = new NpgsqlCommand(
             """
             INSERT INTO role_assignments (user_id, role_id, org_id, scope_type, assigned_by)
-            VALUES (@mgr, 'LOCAL_LEADER', 'AFD02', 'ORG_AND_DESCENDANTS', 'TEST')
+            VALUES (@mgr, 'LOCAL_LEADER', 'STY02', 'ORG_AND_DESCENDANTS', 'TEST')
             ON CONFLICT DO NOTHING
             """, conn))
         {
@@ -155,7 +155,7 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
         }
 
         var rlRepo = new ReportingLineRepository(_dbFactory);
-        // All AFD01 status-fixtures + Sub report PRIMARY to Mgr (AFD02) → Mgr is their effective
+        // All STY02 status-fixtures + Sub report PRIMARY to Mgr (STY02) → Mgr is their effective
         // approver, and Sub is a DESCENDANT of Mgr (search self/descendant exclusion).
         foreach (var emp in new[] { EmpSubmitted, EmpEmpApproved, EmpOpenDraft, Sub })
             await rlRepo.AssignAsync(null, MakeLine(emp, Mgr));
@@ -284,11 +284,11 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
     public async Task PeriodStatusProjection_MapsEachRawStatus_ToFe3State_OnLastClosedMonth()
     {
         // One closed period per employee with each raw status; EmpOpenNone gets none.
-        await InsertClosedPeriodAsync(EmpOpenDraft, "AFD01", "DRAFT");
-        await InsertClosedPeriodAsync(EmpOpenRejected, "AFD01", "REJECTED");
-        await InsertClosedPeriodAsync(EmpSubmitted, "AFD01", "SUBMITTED");
-        await InsertClosedPeriodAsync(EmpEmpApproved, "AFD01", "EMPLOYEE_APPROVED");
-        await InsertClosedPeriodAsync(EmpApproved, "AFD01", "APPROVED");
+        await InsertClosedPeriodAsync(EmpOpenDraft, "STY02", "DRAFT");
+        await InsertClosedPeriodAsync(EmpOpenRejected, "STY02", "REJECTED");
+        await InsertClosedPeriodAsync(EmpSubmitted, "STY02", "SUBMITTED");
+        await InsertClosedPeriodAsync(EmpEmpApproved, "STY02", "EMPLOYEE_APPROVED");
+        await InsertClosedPeriodAsync(EmpApproved, "STY02", "APPROVED");
 
         var repo = NewApprovalRepo();
         var projection = await repo.GetPeriodStatusProjectionForTreeAsync("/MIN01/STY02/");
@@ -303,7 +303,7 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
         Assert.Equal("SUBMITTED", StatusOf(EmpEmpApproved));// EMPLOYEE_APPROVED → SUBMITTED
         Assert.Equal("APPROVED", StatusOf(EmpApproved));    // APPROVED → APPROVED
 
-        // The cross-styrelse EmpX (STY05) is NOT in the STY02 projection.
+        // The cross-MAO EmpX (STY05) is NOT in the STY02 projection.
         Assert.DoesNotContain(projection.Employees, e => e.EmployeeId == EmpX);
     }
 
@@ -314,9 +314,9 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
 
         // An EARLIER closed period (APPROVED) + a LATER (but still closed) period (REJECTED) +
         // a FUTURE period (SUBMITTED, period_end >= today — must be ignored).
-        await InsertPeriodAsync(EmpApproved, "AFD01", "APPROVED", today.AddDays(-90), today.AddDays(-60));
-        await InsertPeriodAsync(EmpApproved, "AFD01", "REJECTED", today.AddDays(-40), today.AddDays(-10));
-        await InsertPeriodAsync(EmpApproved, "AFD01", "SUBMITTED", today.AddDays(1), today.AddDays(20));
+        await InsertPeriodAsync(EmpApproved, "STY02", "APPROVED", today.AddDays(-90), today.AddDays(-60));
+        await InsertPeriodAsync(EmpApproved, "STY02", "REJECTED", today.AddDays(-40), today.AddDays(-10));
+        await InsertPeriodAsync(EmpApproved, "STY02", "SUBMITTED", today.AddDays(1), today.AddDays(20));
 
         var repo = NewApprovalRepo();
         var projection = await repo.GetPeriodStatusProjectionForTreeAsync("/MIN01/STY02/");
@@ -329,12 +329,12 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
     [Fact]
     public async Task PeriodStatusProjection_PerManagerPendingCount_TalliesToEffectiveApprover()
     {
-        // Two AFD01 employees with an OUTSTANDING (pending) period both resolve to Mgr as the
+        // Two STY02 employees with an OUTSTANDING (pending) period both resolve to Mgr as the
         // effective approver → Mgr's pending count = 2. A future/closed-non-pending status does
         // not add to the count.
-        await InsertClosedPeriodAsync(EmpSubmitted, "AFD01", "SUBMITTED");        // pending
-        await InsertClosedPeriodAsync(EmpEmpApproved, "AFD01", "EMPLOYEE_APPROVED"); // pending
-        await InsertClosedPeriodAsync(EmpOpenDraft, "AFD01", "DRAFT");           // NOT pending
+        await InsertClosedPeriodAsync(EmpSubmitted, "STY02", "SUBMITTED");        // pending
+        await InsertClosedPeriodAsync(EmpEmpApproved, "STY02", "EMPLOYEE_APPROVED"); // pending
+        await InsertClosedPeriodAsync(EmpOpenDraft, "STY02", "DRAFT");           // NOT pending
 
         var repo = NewApprovalRepo();
         var projection = await repo.GetPeriodStatusProjectionForTreeAsync("/MIN01/STY02/");
@@ -364,9 +364,9 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
     public async Task PerManagerPendingCount_RoleRevokedResolvedApprover_IsNotTallied_TileMatchesEmptyDashboard()
     {
         // EmpRevoked → MgrNoRole (active manager, role-revoked: NO LeaderOrAbove). Pending period.
-        await InsertClosedPeriodAsync(EmpRevoked, "AFD01", "SUBMITTED");
+        await InsertClosedPeriodAsync(EmpRevoked, "STY02", "SUBMITTED");
         // A genuine leader (Mgr) with a pending report in the SAME projection (discrimination).
-        await InsertClosedPeriodAsync(EmpSubmitted, "AFD01", "SUBMITTED");
+        await InsertClosedPeriodAsync(EmpSubmitted, "STY02", "SUBMITTED");
 
         var repo = NewApprovalRepo();
 
@@ -398,7 +398,7 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
     [Fact]
     public async Task PeriodStatus_Endpoint_ScopedAdmin_GetsProjection_AndOutOfScopeDenied()
     {
-        await InsertClosedPeriodAsync(EmpApproved, "AFD01", "APPROVED");
+        await InsertClosedPeriodAsync(EmpApproved, "STY02", "APPROVED");
 
         // STY02-scoped LocalAdmin → 200 with the projection containing EmpApproved=APPROVED.
         var sty02Client = _factory.CreateClient();
@@ -427,7 +427,7 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
     [Fact]
     public async Task PersonSearch_ScopeFiltered_ExcludesOutOfScope_AndUnrestrictedForGlobal()
     {
-        // STY02-scoped admin: "T7404" matches the AFD01/AFD02 fixtures but NOT the STY05 EmpX.
+        // STY02-scoped admin: "T7404" matches the STY02 fixtures but NOT the STY05 EmpX.
         var (sty02Items, _) = await SearchAsync(MintAdminToken("admin_sty02", "STY02"), q: "T7404");
         Assert.Contains(sty02Items, i => i.UserId == Mgr);
         Assert.DoesNotContain(sty02Items, i => i.UserId == EmpX); // STY05 out of scope
@@ -446,7 +446,7 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
         var (withExclusion, _) = await SearchAsync(token, q: "T7404", excludeEmployeeId: Mgr);
         Assert.DoesNotContain(withExclusion, i => i.UserId == Mgr); // self excluded
         Assert.DoesNotContain(withExclusion, i => i.UserId == Sub); // descendant excluded
-        // A non-descendant AFD01 employee is still present.
+        // A non-descendant STY02 employee is still present.
         Assert.Contains(withExclusion, i => i.UserId == EmpOpenNone);
 
         // Without the exclusion, Mgr + Sub ARE present (proving the exclusion is what removed them).
@@ -594,8 +594,8 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
     //
     //  Validates (does NOT optimize — both reads already shipped) that the consolidated roster
     //  read AND the server-side person-search return correctly, scoped, and within a sane time
-    //  budget at a realistic styrelse size. ~2000 employees are BULK-inserted into AFD01 (inside
-    //  STY02's subtree) via a single set-based unnest insert so the suite stays fast, then torn
+    //  budget at a realistic Organisation size. ~2000 employees are BULK-inserted into STY02 via a
+    //  single set-based unnest insert so the suite stays fast, then torn
     //  down by their own distinct prefix (NOT via the shared AllUsers fixture cleanup).
     // ════════════════════════════════════════════════════════════════════════════════
 
@@ -605,7 +605,7 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
     [Fact]
     public async Task Scale_2000Employees_RosterAndSearch_ReturnCorrectly_ScopedAndPaginated_WithinBudget()
     {
-        // Bulk-seed ~2000 active employees into AFD01 (within /MIN01/STY02/), self-contained.
+        // Bulk-seed ~2000 active employees into STY02 (/MIN01/STY02/), self-contained.
         await BulkSeedScaleEmployeesAsync(ScaleEmployeeCount);
         try
         {
@@ -621,11 +621,11 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
             var scaleInRoster = roster.Employees.Count(e => e.EmployeeId.StartsWith(ScalePrefix, StringComparison.Ordinal));
             Assert.Equal(ScaleEmployeeCount, scaleInRoster);
             Assert.True(roster.Employees.Count >= ScaleEmployeeCount);
-            // Sane time budget for a single styrelse-bounded set-based read (generous for CI).
+            // Sane time budget for a single Organisation-bounded set-based read (generous for CI).
             Assert.True(rosterMs < 15_000, $"Roster read took {rosterMs} ms at {ScaleEmployeeCount} employees (budget 15s).");
 
             // ── (2) Server-side person-search: correct + scoped + paginated at scale. ──
-            // A STY02-scoped LocalAdmin (org-scope covers STY02 + AFD01/AFD02) searches the bulk
+            // A STY02-scoped LocalAdmin (org-scope covers STY02) searches the bulk
             // cohort by the shared display-name token; the result is scoped (no STY05 leak) and a
             // REAL paginated DB slice (a stable full total independent of the page size).
             var adminToken = MintAdminToken("admin_sty02", "STY02");
@@ -647,7 +647,7 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
             var p1Ids = page.Items.Select(i => i.UserId).ToHashSet();
             Assert.DoesNotContain(deep.Items.Select(i => i.UserId), id => p1Ids.Contains(id));
 
-            // Scope bound holds at scale: the cross-styrelse STY05 fixture (EmpX) is NOT returned
+            // Scope bound holds at scale: the cross-MAO STY05 fixture (EmpX) is NOT returned
             // for the STY02-scoped admin even though it matches nothing here — assert via a global
             // search that EmpX exists, then that the scoped search for it returns empty.
             var (scopedEmpX, _) = await SearchAsync(adminToken, q: "T7404 EmpX");
@@ -660,7 +660,7 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// BULK-inserts <paramref name="count"/> active employees into AFD01 in ONE set-based
+    /// BULK-inserts <paramref name="count"/> active employees into STY02 in ONE set-based
     /// <c>unnest</c> statement (fast — no per-row round-trip). Ids are <c>t7701_scale_{i}</c> and
     /// the display name is "Scale Person NNNNN" so the search-token "Scale Person" matches the
     /// whole cohort. Also back-removes any host-seeder-created profile rows so cleanup is clean.
@@ -682,7 +682,7 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
         await using var cmd = new NpgsqlCommand(
             """
             INSERT INTO users (user_id, username, password_hash, display_name, email, primary_org_id, agreement_code, ok_version, is_active)
-            SELECT uid, uid, '$2a$11$fake', nm, em, 'AFD01', 'HK', 'OK24', TRUE
+            SELECT uid, uid, '$2a$11$fake', nm, em, 'STY02', 'HK', 'OK24', TRUE
             FROM unnest(@ids, @names, @emails) AS t(uid, nm, em)
             ON CONFLICT DO NOTHING
             """, conn);

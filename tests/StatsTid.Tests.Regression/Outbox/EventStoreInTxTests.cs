@@ -188,7 +188,7 @@ public sealed class EventStoreInTxTests : IAsyncLifetime
         await using var cmd = new NpgsqlCommand(
             """
             INSERT INTO organizations (org_id, org_name, org_type, materialized_path, agreement_code, ok_version)
-            VALUES (@orgId, @orgId || ' Test Org', 'STYRELSE', '/' || @orgId || '/', 'HK', 'OK24')
+            VALUES (@orgId, @orgId || ' Test Org', 'ORGANISATION', '/' || @orgId || '/', 'HK', 'OK24')
             ON CONFLICT (org_id) DO NOTHING
             """, conn);
         cmd.Parameters.AddWithValue("orgId", orgId);

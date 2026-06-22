@@ -58,7 +58,7 @@ public sealed class TxContractTests : IAsyncLifetime
         CREATE TABLE IF NOT EXISTS organizations (
             org_id              TEXT        PRIMARY KEY,
             org_name            TEXT        NOT NULL,
-            org_type            TEXT        NOT NULL CHECK (org_type IN ('MINISTRY', 'STYRELSE', 'AFDELING', 'TEAM')),
+            org_type            TEXT        NOT NULL CHECK (org_type IN ('MAO', 'ORGANISATION')),
             parent_org_id       TEXT        REFERENCES organizations(org_id),
             materialized_path   TEXT        NOT NULL,
             agreement_code      TEXT        NOT NULL DEFAULT 'AC',
@@ -328,7 +328,7 @@ public sealed class TxContractTests : IAsyncLifetime
         await using (var seedOrg = new NpgsqlCommand(
             """
             INSERT INTO organizations (org_id, org_name, org_type, materialized_path, agreement_code, ok_version)
-            VALUES ('STY02', 'STY02 Test Org', 'STYRELSE', '/STY02/', 'HK', 'OK24')
+            VALUES ('STY02', 'STY02 Test Org', 'ORGANISATION', '/STY02/', 'HK', 'OK24')
             ON CONFLICT (org_id) DO NOTHING
             """, conn))
             await seedOrg.ExecuteNonQueryAsync(ct);

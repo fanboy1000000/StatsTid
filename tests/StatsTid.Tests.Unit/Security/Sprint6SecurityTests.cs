@@ -30,7 +30,7 @@ public class Sprint6SecurityTests
     {
         var scope = new RoleScope("GlobalAdmin", null, "GLOBAL");
 
-        Assert.True(scope.CoversOrg("/MIN01/STY02/AFD01/", null));
+        Assert.True(scope.CoversOrg("/MIN01/STY02/", null));
         Assert.True(scope.CoversOrg("/MIN01/", null));
         Assert.True(scope.CoversOrg("/ANOTHER/ORG/PATH/", null));
     }
@@ -40,7 +40,7 @@ public class Sprint6SecurityTests
     {
         var scope = new RoleScope("LocalHR", "MIN01", "ORG_AND_DESCENDANTS");
 
-        Assert.True(scope.CoversOrg("/MIN01/STY02/AFD01/", "/MIN01/"));
+        Assert.True(scope.CoversOrg("/MIN01/STY02/", "/MIN01/"));
         Assert.True(scope.CoversOrg("/MIN01/STY01/", "/MIN01/"));
         Assert.True(scope.CoversOrg("/MIN01/", "/MIN01/"));
     }
@@ -59,25 +59,25 @@ public class Sprint6SecurityTests
     [Fact]
     public void RoleScope_OrgOnly_CoversExactMatchOnly()
     {
-        var scope = new RoleScope("Employee", "AFD01", "ORG_ONLY");
+        var scope = new RoleScope("Employee", "STY02", "ORG_ONLY");
 
-        Assert.True(scope.CoversOrg("/MIN01/STY02/AFD01/", "/MIN01/STY02/AFD01/"));
-        // Parent org path does not match
-        Assert.False(scope.CoversOrg("/MIN01/STY02/", "/MIN01/STY02/AFD01/"));
-        // Child org path does not match
-        Assert.False(scope.CoversOrg("/MIN01/STY02/AFD01/TEAM01/", "/MIN01/STY02/AFD01/"));
+        Assert.True(scope.CoversOrg("/MIN01/STY02/", "/MIN01/STY02/"));
+        // Parent org path (the MAO) does not match
+        Assert.False(scope.CoversOrg("/MIN01/", "/MIN01/STY02/"));
+        // A deeper path under the Organisation does not match (ORG_ONLY = exact only)
+        Assert.False(scope.CoversOrg("/MIN01/STY02/UNIT01/", "/MIN01/STY02/"));
     }
 
     [Fact]
     public void RoleScope_NullPaths_ReturnsFalseForNonGlobalScopes()
     {
-        var orgAndDescScope = new RoleScope("LocalLeader", "AFD01", "ORG_AND_DESCENDANTS");
-        var orgOnlyScope = new RoleScope("Employee", "AFD01", "ORG_ONLY");
+        var orgAndDescScope = new RoleScope("LocalLeader", "STY02", "ORG_AND_DESCENDANTS");
+        var orgOnlyScope = new RoleScope("Employee", "STY02", "ORG_ONLY");
 
-        Assert.False(orgAndDescScope.CoversOrg(null, "/MIN01/STY02/AFD01/"));
-        Assert.False(orgAndDescScope.CoversOrg("/MIN01/STY02/AFD01/", null));
-        Assert.False(orgOnlyScope.CoversOrg(null, "/MIN01/STY02/AFD01/"));
-        Assert.False(orgOnlyScope.CoversOrg("/MIN01/STY02/AFD01/", null));
+        Assert.False(orgAndDescScope.CoversOrg(null, "/MIN01/STY02/"));
+        Assert.False(orgAndDescScope.CoversOrg("/MIN01/STY02/", null));
+        Assert.False(orgOnlyScope.CoversOrg(null, "/MIN01/STY02/"));
+        Assert.False(orgOnlyScope.CoversOrg("/MIN01/STY02/", null));
     }
 
     // ---------------------------------------------------------------
@@ -200,7 +200,7 @@ public class Sprint6SecurityTests
         {
             OrgId = "MIN01",
             OrgName = "Finansministeriet",
-            OrgType = "MINISTRY",
+            OrgType = "MAO",
             MaterializedPath = "/MIN01/",
             AgreementCode = "AC",
             OkVersion = "OK24"
@@ -208,7 +208,7 @@ public class Sprint6SecurityTests
 
         Assert.Equal("MIN01", org.OrgId);
         Assert.Equal("Finansministeriet", org.OrgName);
-        Assert.Equal("MINISTRY", org.OrgType);
+        Assert.Equal("MAO", org.OrgType);
         Assert.Null(org.ParentOrgId);
         Assert.Equal("/MIN01/", org.MaterializedPath);
         Assert.Equal("AC", org.AgreementCode);
@@ -224,7 +224,7 @@ public class Sprint6SecurityTests
         {
             PeriodId = periodId,
             EmployeeId = "EMP001",
-            OrgId = "AFD01",
+            OrgId = "STY02",
             PeriodStart = new DateOnly(2024, 6, 3),
             PeriodEnd = new DateOnly(2024, 6, 9),
             PeriodType = "WEEKLY",
@@ -235,7 +235,7 @@ public class Sprint6SecurityTests
 
         Assert.Equal(periodId, period.PeriodId);
         Assert.Equal("EMP001", period.EmployeeId);
-        Assert.Equal("AFD01", period.OrgId);
+        Assert.Equal("STY02", period.OrgId);
         Assert.Equal(new DateOnly(2024, 6, 3), period.PeriodStart);
         Assert.Equal(new DateOnly(2024, 6, 9), period.PeriodEnd);
         Assert.Equal("WEEKLY", period.PeriodType);
@@ -287,7 +287,7 @@ public class Sprint6SecurityTests
         {
             OrgId = "TEST01",
             OrgName = "Test Ministry",
-            OrgType = "MINISTRY",
+            OrgType = "MAO",
             MaterializedPath = "/TEST01/",
             AgreementCode = "AC",
             OkVersion = "OK24"
@@ -365,7 +365,7 @@ public class Sprint6SecurityTests
         {
             PeriodId = periodId,
             EmployeeId = "EMP001",
-            OrgId = "AFD01",
+            OrgId = "STY02",
             PeriodStart = new DateOnly(2024, 6, 3),
             PeriodEnd = new DateOnly(2024, 6, 9),
             PeriodType = "WEEKLY"
@@ -381,7 +381,7 @@ public class Sprint6SecurityTests
         {
             PeriodId = approvedId,
             EmployeeId = "EMP001",
-            OrgId = "AFD01",
+            OrgId = "STY02",
             PeriodStart = new DateOnly(2024, 6, 3),
             PeriodEnd = new DateOnly(2024, 6, 9),
             ApprovedBy = "leader01"
@@ -397,7 +397,7 @@ public class Sprint6SecurityTests
         {
             PeriodId = rejectedId,
             EmployeeId = "EMP001",
-            OrgId = "AFD01",
+            OrgId = "STY02",
             PeriodStart = new DateOnly(2024, 6, 3),
             PeriodEnd = new DateOnly(2024, 6, 9),
             RejectedBy = "leader01",
@@ -489,8 +489,8 @@ public class Sprint6SecurityTests
         var org = new Organization
         {
             OrgId = "STY01",
-            OrgName = "Styrelse 1",
-            OrgType = "STYRELSE",
+            OrgName = "Organisation 1",
+            OrgType = "ORGANISATION",
             ParentOrgId = "MIN01",
             MaterializedPath = "/MIN01/STY01/",
             AgreementCode = "HK",
@@ -499,6 +499,6 @@ public class Sprint6SecurityTests
 
         Assert.Equal("MIN01", org.ParentOrgId);
         Assert.Equal("/MIN01/STY01/", org.MaterializedPath);
-        Assert.Equal("STYRELSE", org.OrgType);
+        Assert.Equal("ORGANISATION", org.OrgType);
     }
 }

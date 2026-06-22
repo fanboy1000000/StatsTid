@@ -21,9 +21,9 @@ namespace StatsTid.Tests.Regression.ReportingLine;
 /// discriminatingly.
 ///
 /// <para>
-/// <b>Topology (init.sql seed orgs):</b> STY02 tree = {STY02 root, AFD01, AFD02} under MIN01;
-/// STY05 tree = {STY05 root, AFD03, AFD04} under MIN02. The admin actor (<c>t76_admin</c>) sits at
-/// MIN01 with a LOCAL_ADMIN scope over MIN01 (ORG_AND_DESCENDANTS) — so it COVERS STY02 yet its
+/// <b>Topology (init.sql seed orgs, S92/ADR-035 flatten):</b> MIN01 (MAO) has Organisation STY02;
+/// MIN02 (MAO) has Organisation STY05 — a different tree_root. The admin actor (<c>t76_admin</c>) sits
+/// at MIN01 with a LOCAL_ADMIN scope over MIN01 (ORG_AND_DESCENDANTS) — so it COVERS STY02 yet its
 /// primary org (MIN01) is NOT the manager's tree root (STY02): the CROSS-ORG fixture that
 /// discriminates the audit row's actor org from the target tree (the S71 green-but-weak lesson).
 /// </para>
@@ -44,15 +44,16 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
     private ReportingLineRepository _rlRepo = null!;
     private ManagerVikarRepository _vikarRepo = null!;
 
-    // ── STY02 tree users ──
+    // ── STY02 Organisation users ──
     private const string Admin = "t76_admin";      // MIN01 — LOCAL_ADMIN @ MIN01 (covers STY02; org ≠ STY02)
     private const string AdminX = "t76_admin_x";   // STY05 — LOCAL_ADMIN @ STY05 (does NOT cover STY02)
-    private const string Mgr = "t76_mgr";          // AFD02 — the absent manager (LOCAL_LEADER)
-    private const string Emp = "t76_emp";          // AFD01 — reports PRIMARY to Mgr
-    private const string Sub = "t76_sub";          // AFD01 — reports PRIMARY to Emp (Mgr's descendant)
-    private const string Vik = "t76_vik";          // AFD02 — valid vikar, LOCAL_LEADER @ STY02 (covers AFD01)
-    private const string VikNarrow = "t76_vik_n";  // AFD02 — LOCAL_LEADER @ AFD02 ONLY (does NOT cover AFD01)
-    // ── STY05 (cross-tree) ──
+    private const string Mgr = "t76_mgr";          // STY02 — the absent manager (LOCAL_LEADER)
+    private const string Emp = "t76_emp";          // STY02 — reports PRIMARY to Mgr
+    private const string Sub = "t76_sub";          // STY02 — reports PRIMARY to Emp (Mgr's descendant)
+    private const string Vik = "t76_vik";          // STY02 — valid vikar, LOCAL_LEADER @ STY02 (covers Emp)
+    private const string VikNarrow = "t76_vik_n";  // STY01 — LOCAL_LEADER @ STY01 ONLY (a DIFFERENT Organisation
+                                                   //   under the same MAO; does NOT cover Mgr's STY02 report Emp)
+    // ── STY05 (cross-tree Organisation under a DIFFERENT MAO MIN02) ──
     private const string VikX = "t76_vik_x";       // STY05 — LOCAL_LEADER @ STY05 (different tree_root)
 
     private const string TreeRootSty02 = "STY02";
@@ -100,11 +101,11 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
             VALUES
                 (@admin,  @admin,  '$2a$11$fake', 'T76 Admin',  't76_admin@test.dk',  'MIN01', 'AC', 'OK24', TRUE),
                 (@adminx, @adminx, '$2a$11$fake', 'T76 AdminX', 't76_admin_x@test.dk','STY05', 'HK', 'OK24', TRUE),
-                (@mgr,    @mgr,    '$2a$11$fake', 'T76 Mgr',    't76_mgr@test.dk',    'AFD02', 'HK', 'OK24', TRUE),
-                (@emp,    @emp,    '$2a$11$fake', 'T76 Emp',    't76_emp@test.dk',    'AFD01', 'HK', 'OK24', TRUE),
-                (@sub,    @sub,    '$2a$11$fake', 'T76 Sub',    't76_sub@test.dk',    'AFD01', 'HK', 'OK24', TRUE),
-                (@vik,    @vik,    '$2a$11$fake', 'T76 Vik',    't76_vik@test.dk',    'AFD02', 'HK', 'OK24', TRUE),
-                (@vikn,   @vikn,   '$2a$11$fake', 'T76 VikN',   't76_vik_n@test.dk',  'AFD02', 'HK', 'OK24', TRUE),
+                (@mgr,    @mgr,    '$2a$11$fake', 'T76 Mgr',    't76_mgr@test.dk',    'STY02', 'HK', 'OK24', TRUE),
+                (@emp,    @emp,    '$2a$11$fake', 'T76 Emp',    't76_emp@test.dk',    'STY02', 'HK', 'OK24', TRUE),
+                (@sub,    @sub,    '$2a$11$fake', 'T76 Sub',    't76_sub@test.dk',    'STY02', 'HK', 'OK24', TRUE),
+                (@vik,    @vik,    '$2a$11$fake', 'T76 Vik',    't76_vik@test.dk',    'STY02', 'HK', 'OK24', TRUE),
+                (@vikn,   @vikn,   '$2a$11$fake', 'T76 VikN',   't76_vik_n@test.dk',  'STY01', 'HK', 'OK24', TRUE),
                 (@vikx,   @vikx,   '$2a$11$fake', 'T76 VikX',   't76_vik_x@test.dk',  'STY05', 'HK', 'OK24', TRUE)
             ON CONFLICT DO NOTHING
             """, conn))
@@ -119,19 +120,19 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
             VALUES
                 (@admin,  'LOCAL_ADMIN',  'MIN01', 'ORG_AND_DESCENDANTS', 'TEST'),
                 (@adminx, 'LOCAL_ADMIN',  'STY05', 'ORG_AND_DESCENDANTS', 'TEST'),
-                (@mgr,    'LOCAL_LEADER', 'AFD02', 'ORG_AND_DESCENDANTS', 'TEST'),
+                (@mgr,    'LOCAL_LEADER', 'STY02', 'ORG_AND_DESCENDANTS', 'TEST'),
                 (@vik,    'LOCAL_LEADER', 'STY02', 'ORG_AND_DESCENDANTS', 'TEST'),
-                (@vikn,   'LOCAL_LEADER', 'AFD02', 'ORG_AND_DESCENDANTS', 'TEST'),
+                (@vikn,   'LOCAL_LEADER', 'STY01', 'ORG_AND_DESCENDANTS', 'TEST'),
                 (@vikx,   'LOCAL_LEADER', 'STY05', 'ORG_AND_DESCENDANTS', 'TEST'),
-                -- B4 (S76-7601 fix-forward): VikX's PRIMARY org is STY05 (a DIFFERENT tree), but this
-                -- extra STY02-scoped LOCAL_LEADER grant makes its org-scope COVER the manager's AFD01
-                -- report (path /MIN01/STY02/AFD01/ StartsWith /MIN01/STY02/). So the cross-tree-vikar
-                -- POST now PASSES the coverage census and is rejected SPECIFICALLY by the same-tree
-                -- guard (VikX's PRIMARY org STY05 resolves to tree root STY05 != STY02) — exercising
-                -- the S74-7402 cross-styrelse-via-vikar defense, not the coverage gate.
+                -- B4 (S76-7601 fix-forward): VikX's PRIMARY org is STY05 (a DIFFERENT MAO/tree), but this
+                -- extra STY02-scoped LOCAL_LEADER grant makes its org-scope COVER the manager's report
+                -- Emp (path /MIN01/STY02/ StartsWith /MIN01/STY02/). So the cross-tree-vikar POST now
+                -- PASSES the coverage census and is rejected SPECIFICALLY by the same-tree guard (VikX's
+                -- PRIMARY org STY05 resolves to tree root STY05 != STY02) — exercising the S74-7402
+                -- cross-tree-via-vikar defense, not the coverage gate.
                 (@vikx,   'LOCAL_LEADER', 'STY02', 'ORG_AND_DESCENDANTS', 'TEST'),
                 (@sub,    'LOCAL_LEADER', 'STY02', 'ORG_AND_DESCENDANTS', 'TEST'),
-                (@emp,    'EMPLOYEE',     'AFD01', 'ORG_ONLY',            'TEST')
+                (@emp,    'EMPLOYEE',     'STY02', 'ORG_ONLY',            'TEST')
             ON CONFLICT DO NOTHING
             """, conn))
         {
@@ -139,9 +140,9 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
             await cmd.ExecuteNonQueryAsync();
         }
 
-        // Emp (AFD01) reports PRIMARY to Mgr (AFD02) — the manager's report (cross-afdeling, same tree).
+        // Emp (STY02) reports PRIMARY to Mgr (STY02) — the manager's report (same Organisation, same tree).
         await _rlRepo.AssignAsync(null, MakeLine(Emp, Mgr));
-        // Sub (AFD01) reports PRIMARY to Emp → Sub is a DESCENDANT of Mgr (the cycle fixture).
+        // Sub (STY02) reports PRIMARY to Emp → Sub is a DESCENDANT of Mgr (the cycle fixture).
         await _rlRepo.AssignAsync(null, MakeLine(Sub, Emp));
     }
 
@@ -272,12 +273,12 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
     [Fact]
     public async Task AdminPost_CrossTreeVikar_RejectedBySameTreeGuard_NotCoverage_Returns400()
     {
-        // B4 (S76-7601 fix-forward): VikX's PRIMARY org is STY05 (a DIFFERENT styrelse tree) but it
+        // B4 (S76-7601 fix-forward): VikX's PRIMARY org is STY05 (a DIFFERENT MAO/tree) but it
         // ALSO carries a STY02-scoped LOCAL_LEADER grant, so its org-scope DOES cover the manager's
-        // AFD01 report. Coverage therefore PASSES — the ONLY thing that can reject this is the in-tx
+        // STY02 report Emp. Coverage therefore PASSES — the ONLY thing that can reject this is the in-tx
         // same-tree guard (ValidateSameTreeAsync resolves VikX's PRIMARY org STY05 → tree root STY05
         // != STY02 → CrossTreeAssignmentException → 400). This discriminatingly exercises the
-        // S74-7402 cross-styrelse-via-vikar defense (a non-discriminating fixture would be rejected by
+        // S74-7402 cross-tree-via-vikar defense (a non-discriminating fixture would be rejected by
         // coverage first, never reaching the same-tree arm).
         // Sanity: confirm VikX WOULD pass coverage (the discriminating-fixture precondition).
         Assert.True(await CountAsync(
@@ -289,7 +290,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
             $"/api/admin/reporting-lines/{Mgr}/vikar",
             new { vikarUserId = VikX, effectiveTo = Today().AddDays(30).ToString("yyyy-MM-dd") });
         Assert.Equal(HttpStatusCode.BadRequest, rsp.StatusCode);
-        // The rejection is the same-tree (styrelse) message, NOT the coverage message.
+        // The rejection is the same-tree message (the server still says "styrelse"), NOT the coverage message.
         var err = await rsp.Content.ReadFromJsonAsync<ErrorBody>();
         Assert.NotNull(err);
         Assert.Contains("styrelse", err!.error, StringComparison.OrdinalIgnoreCase);
@@ -312,7 +313,8 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
     [Fact]
     public async Task AdminPost_VikarScopeDoesNotCoverAllReports_Rejected()
     {
-        // VikNarrow's scope is AFD02 ONLY; the manager's report (Emp) is in AFD01 → not covered.
+        // VikNarrow's scope is STY01 ONLY (a DIFFERENT Organisation); the manager's report (Emp) is on
+        // STY02 → not covered → the coverage census rejects FIRST (before the same-tree guard).
         var client = AdminClient(Admin, "MIN01");
         var rsp = await client.PostAsJsonAsync(
             $"/api/admin/reporting-lines/{Mgr}/vikar",
@@ -521,7 +523,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
     public async Task AdminGetVikar_ActorWithoutAdminScope_Returns403()
     {
         await PlantVikarAsync(Mgr, Vik, Today().AddDays(30), TreeRootSty02);
-        // AdminX covers STY05 only — not the manager's STY02 primary org (AFD02) → 403.
+        // AdminX covers STY05 only — not the manager's STY02 primary org → 403.
         var client = AdminClient(AdminX, "STY05");
         var rsp = await client.GetAsync($"/api/admin/reporting-lines/{Mgr}/vikar");
         Assert.Equal(HttpStatusCode.Forbidden, rsp.StatusCode);
@@ -544,7 +546,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
     {
         // Mgr self-delegates to Vik (a non-descendant same-tree leader covering Mgr's report).
         var effectiveTo = Today().AddDays(20);
-        var client = LeaderClient(Mgr, "AFD02");
+        var client = LeaderClient(Mgr, "STY02");
         var rsp = await client.PostAsJsonAsync(
             "/api/reporting-lines/delegate",
             new { actingManagerId = Vik, effectiveTo = effectiveTo.ToString("yyyy-MM-dd") });
@@ -572,7 +574,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
         // Sub is a descendant of Mgr; the NEW D15 cycle guard rejects it (a subordinate cannot
         // stand in for their own manager). Sub is same-tree + covers Mgr's report, so only the
         // cycle guard fires → 400.
-        var client = LeaderClient(Mgr, "AFD02");
+        var client = LeaderClient(Mgr, "STY02");
         var rsp = await client.PostAsJsonAsync(
             "/api/reporting-lines/delegate",
             new { actingManagerId = Sub, effectiveTo = Today().AddDays(20).ToString("yyyy-MM-dd") });
@@ -583,7 +585,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
     [Fact]
     public async Task SelfDelegate_SecondActive_Returns409_ContractStable()
     {
-        var client = LeaderClient(Mgr, "AFD02");
+        var client = LeaderClient(Mgr, "STY02");
         var first = await client.PostAsJsonAsync(
             "/api/reporting-lines/delegate",
             new { actingManagerId = Vik, effectiveTo = Today().AddDays(20).ToString("yyyy-MM-dd") });
@@ -606,14 +608,14 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
         // restores the ORIGINAL relative order (no-reports 400 FIRST, then active-vikar 409). This test
         // pins exactly that combined state: it MUST 400 with the no-reports body — never 409.
         //
-        // Vik (AFD02, LOCAL_LEADER @ STY02) has NO direct reports. Plant an ACTIVE vikar keyed on Vik
+        // Vik (STY02, LOCAL_LEADER @ STY02) has NO direct reports. Plant an ACTIVE vikar keyed on Vik
         // (absent_approver_id = Vik) so the 409 pre-condition is ALSO satisfied. With the bug, the
         // active-vikar 409 fired first; with the fix the no-reports 400 fires first.
         await PlantVikarAsync(Vik, VikNarrow, Today().AddDays(30), TreeRootSty02);
         // Sanity: the 409 pre-condition is genuinely present (an active vikar owned by Vik).
         Assert.NotNull(await _vikarRepo.GetActiveByApproverAnyDateAsync(Vik));
 
-        var client = LeaderClient(Vik, "AFD02");
+        var client = LeaderClient(Vik, "STY02");
         var rsp = await client.PostAsJsonAsync(
             "/api/reporting-lines/delegate",
             new { actingManagerId = Mgr, effectiveTo = Today().AddDays(20).ToString("yyyy-MM-dd") });
@@ -629,18 +631,18 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
     /// S78 R9 (BLOCKER 1) — the self-service <c>/delegate</c> CREATE is now an employee-current-root
     /// mutator under the SHARED drift-guarded acquire (it keys on the self-delegating MANAGER's CURRENT
     /// tree root). This is the <c>/delegate</c>-create mirror of
-    /// <c>ReportingLineWriteLifecycleTests.R9_DriftMidAcquire</c>: when a concurrent cross-styrelse
-    /// transfer moves the self-delegating manager to a NEW styrelse WHILE the /delegate is parked on the
+    /// <c>ReportingLineWriteLifecycleTests.R9_DriftMidAcquire</c>: when a concurrent cross-tree
+    /// transfer moves the self-delegating manager to a NEW tree WHILE the /delegate is parked on the
     /// OLD-root advisory, the create must detect the drift UNDER the lock, ROLL BACK, and RETRY on the NEW
     /// root (proven by the retry BLOCKING on the NEW-root advisory we also hold) — NO proceed-under-stale-
     /// key — then terminate cleanly (here: 400 cross-tree, since the chosen vikar stayed in the OLD tree),
     /// creating NO vikar row.
     ///
     /// Interleave (two held keys, mirroring R9_DriftMidAcquire):
-    ///   (1) Mgr is in AFD02 (STY02 tree); HOLD both the STY02 key AND the STY05 key on side connections;
-    ///   (2) Mgr self-delegates to Vik (AFD02/STY02) — the create derives Mgr's root = STY02, then BLOCKS
+    ///   (1) Mgr is on STY02 (STY02 tree); HOLD both the STY02 key AND the STY05 key on side connections;
+    ///   (2) Mgr self-delegates to Vik (STY02) — the create derives Mgr's root = STY02, then BLOCKS
     ///       on the held STY02 key (advisory taken on the soon-to-be-stale key);
-    ///   (3) while parked, TRANSFER Mgr to AFD03 (STY05) via a raw UPDATE (the cross-styrelse move the
+    ///   (3) while parked, TRANSFER Mgr to STY05 via a raw UPDATE (the cross-tree move the
     ///       unlocked pre-acquire read cannot see);
     ///   (4) release ONLY STY02 → the parked create acquires STY02, RE-DERIVES Mgr = STY05 → DRIFT →
     ///       TreeRootDriftException → rollback → RETRY. The retry derives STY05 and BLOCKS on the held
@@ -659,7 +661,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
         try
         {
             // (2) Mgr self-delegates to Vik. Derives Mgr=STY02 (unlocked), blocks on the held STY02 key.
-            var client = LeaderClient(Mgr, "AFD02");
+            var client = LeaderClient(Mgr, "STY02");
             var delegateTask = client.PostAsJsonAsync(
                 "/api/reporting-lines/delegate",
                 new { actingManagerId = Vik, effectiveTo = Today().AddDays(20).ToString("yyyy-MM-dd") });
@@ -674,7 +676,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
             {
                 await sideConn.OpenAsync();
                 await using var transfer = new NpgsqlCommand(
-                    "UPDATE users SET primary_org_id = 'AFD03' WHERE user_id = @id", sideConn);
+                    "UPDATE users SET primary_org_id = 'STY05' WHERE user_id = @id", sideConn);
                 transfer.Parameters.AddWithValue("id", Mgr);
                 await transfer.ExecuteNonQueryAsync();
             }
@@ -704,12 +706,12 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
         {
             if (!sty02Released) { await sty02Tx.RollbackAsync(); await sty02Conn.DisposeAsync(); }
             if (!sty05Released) { await sty05Tx.RollbackAsync(); await sty05Conn.DisposeAsync(); }
-            // Restore Mgr to AFD02 so cleanup + other fixtures are unaffected (each test gets a fresh seed,
+            // Restore Mgr to STY02 so cleanup + other fixtures are unaffected (each test gets a fresh seed,
             // but be explicit since this test mutates primary_org_id out-of-band).
             await using var reset = new NpgsqlConnection(_harness.ConnectionString);
             await reset.OpenAsync();
             await using var upd = new NpgsqlCommand(
-                "UPDATE users SET primary_org_id = 'AFD02' WHERE user_id = @id", reset);
+                "UPDATE users SET primary_org_id = 'STY02' WHERE user_id = @id", reset);
             upd.Parameters.AddWithValue("id", Mgr);
             await upd.ExecuteNonQueryAsync();
         }
@@ -720,7 +722,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
 
     // ════════════════════════════════════════════════════════════════════════════════
     //  Deliverable A — admin-on-behalf MIXED-ROLE denial (S76 / TASK-7600 B1 floor, on THIS
-    //  endpoint). The actor is LocalAdmin@STY05 (a styrelse that does NOT contain the manager)
+    //  endpoint). The actor is LocalAdmin@STY05 (an Organisation/MAO that does NOT contain the manager)
     //  AND holds a non-admin LocalLeader@MIN01 scope that DOES cover the manager's STY02 tree.
     //  The LocalAdminOrAbove policy passes on the JWT's primary LocalAdmin role; the FLOORED
     //  ValidateOrgAccessAsync(.., LocalAdmin) is the gate. DISCRIMINATING: on the UNFLOORED
@@ -732,9 +734,9 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
     public async Task AdminPost_MixedRoleActor_AdminDisjoint_LeaderCovers_Returns403()
     {
         // Mixed-role: LocalAdmin@STY05 (disjoint — STY05 path /MIN02/STY05/ does NOT cover the
-        // manager's AFD02 /MIN01/STY02/AFD02/) + LocalLeader@MIN01 (/MIN01/ COVERS AFD02). Floored
-        // at LocalAdmin: only the STY05 admin scope counts and it misses AFD02 → 403. On the
-        // unfloored overload the LocalLeader@MIN01 scope covers AFD02 → would have ADMITTED (leak).
+        // manager's STY02 /MIN01/STY02/) + LocalLeader@MIN01 (/MIN01/ COVERS STY02). Floored
+        // at LocalAdmin: only the STY05 admin scope counts and it misses STY02 → 403. On the
+        // unfloored overload the LocalLeader@MIN01 scope covers STY02 → would have ADMITTED (leak).
         var client = MixedRoleClient("t76_mix_post", StatsTidRoles.LocalAdmin, "STY05", StatsTidRoles.LocalLeader, "MIN01");
         var rsp = await client.PostAsJsonAsync(
             $"/api/admin/reporting-lines/{Mgr}/vikar",
@@ -768,7 +770,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
     //  AcquireRevokeTreeLocksAsync (always lock the persisted root + the subject's current root when
     //  derivable, drift-guarded). These tests use the held-lock interleave harness
     //  (AcquireTreeLockOnSideConnAsync / WaitForAdvisoryLockWaiterAsync) and the STY02/STY05 cross-
-    //  styrelse fixture (Mgr in AFD02/STY02; AFD03 is in STY05 — the transfer target).
+    //  tree fixture (Mgr on STY02; STY05 is a different MAO/tree — the transfer target).
     // ════════════════════════════════════════════════════════════════════════════════
 
     /// <summary>
@@ -799,7 +801,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
 
     /// <summary>
     /// TEST 2 — R1 OWNER-TRANSFER (persisted ≠ current): a self-delegation row whose owner (Mgr)
-    /// transferred styrelse AFTER creating it (persisted root STY02 ≠ owner current root STY05);
+    /// transferred to a different tree AFTER creating it (persisted root STY02 ≠ owner current root STY05);
     /// the self-DELETE succeeds AND SERIALIZES on the PERSISTED root (STY02). We prove serialization
     /// by holding the STY02 advisory on a side connection and showing the self-DELETE BLOCKS on it.
     ///
@@ -809,16 +811,16 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
     [Fact]
     public async Task SelfDelete_OwnerTransferred_SerializesOnPersistedRoot_AndSucceeds()
     {
-        // Mgr self-delegates to Vik (persisted tree root = STY02), then TRANSFERS to AFD03 (STY05).
+        // Mgr self-delegates to Vik (persisted tree root = STY02), then TRANSFERS to STY05 (a different tree).
         await PlantVikarAsync(Mgr, Vik, Today().AddDays(30), TreeRootSty02);
-        await TransferUserAsync(Mgr, "AFD03"); // STY05 tree — now persisted(STY02) ≠ current(STY05).
+        await TransferUserAsync(Mgr, "STY05"); // STY05 tree — now persisted(STY02) ≠ current(STY05).
 
         // Hold the PERSISTED-root (STY02) advisory on a side connection.
         var (sideConn, sideTx) = await AcquireTreeLockOnSideConnAsync(TreeRootSty02);
         var released = false;
         try
         {
-            var client = LeaderClient(Mgr, "AFD02");
+            var client = LeaderClient(Mgr, "STY02");
             var deleteTask = client.DeleteAsync("/api/reporting-lines/delegate");
 
             // It must REACH + BLOCK on the held STY02 advisory (the persisted-root lock). On the
@@ -842,7 +844,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
         finally
         {
             if (!released) { await sideTx.RollbackAsync(); await sideConn.DisposeAsync(); }
-            await TransferUserAsync(Mgr, "AFD02"); // restore for cleanup symmetry.
+            await TransferUserAsync(Mgr, "STY02"); // restore for cleanup symmetry.
         }
     }
 
@@ -859,7 +861,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
         await PlantVikarAsync(Mgr, Vik, Today().AddDays(30), TreeRootSty02);
         await DeactivateUserAsync(Mgr); // derive of Mgr's current root will throw — must be swallowed.
 
-        var client = LeaderClient(Mgr, "AFD02");
+        var client = LeaderClient(Mgr, "STY02");
         var rsp = await client.DeleteAsync("/api/reporting-lines/delegate");
 
         // NOT a 500 — a clean 200, persisted-only.
@@ -882,7 +884,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
     {
         // Plant the vikar with persisted STY02, then transfer the (still ACTIVE) manager to STY05.
         await PlantVikarAsync(Mgr, Vik, Today().AddDays(30), TreeRootSty02);
-        await TransferUserAsync(Mgr, "AFD03"); // STY05 tree — current root now STY05, persisted STY02.
+        await TransferUserAsync(Mgr, "STY05"); // STY05 tree — current root now STY05, persisted STY02.
 
         // Hold ONLY the CURRENT-root (STY05) advisory.
         var (sideConn, sideTx) = await AcquireTreeLockOnSideConnAsync(TreeRootSty05);
@@ -913,7 +915,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
         finally
         {
             if (!released) { await sideTx.RollbackAsync(); await sideConn.DisposeAsync(); }
-            await TransferUserAsync(Mgr, "AFD02"); // restore for cleanup symmetry.
+            await TransferUserAsync(Mgr, "STY02"); // restore for cleanup symmetry.
         }
     }
 
@@ -1028,9 +1030,9 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// S83 — out-of-band cross-styrelse transfer (a raw <c>primary_org_id</c> UPDATE, the move the
+    /// S83 — out-of-band cross-tree transfer (a raw <c>primary_org_id</c> UPDATE, the move the
     /// unlocked pre-acquire derive cannot pre-see). Used by the persisted≠current revoke tests; the
-    /// owning test restores AFD02 in its <c>finally</c>.
+    /// owning test restores STY02 in its <c>finally</c>.
     /// </summary>
     private async Task TransferUserAsync(string userId, string newPrimaryOrgId)
     {

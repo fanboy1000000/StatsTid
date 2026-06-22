@@ -72,7 +72,7 @@ public sealed class AdminAtomicTests : IAsyncLifetime
                 {
                     cmd.Parameters.AddWithValue("orgId", orgId);
                     cmd.Parameters.AddWithValue("orgName", "Forced-Rollback Org");
-                    cmd.Parameters.AddWithValue("orgType", "STYRELSE");
+                    cmd.Parameters.AddWithValue("orgType", "ORGANISATION");
                     cmd.Parameters.AddWithValue("materializedPath", $"/{orgId}/");
                     await cmd.ExecuteNonQueryAsync();
                 }
@@ -81,7 +81,7 @@ public sealed class AdminAtomicTests : IAsyncLifetime
                 {
                     OrgId = orgId,
                     OrgName = "Forced-Rollback Org",
-                    OrgType = "STYRELSE",
+                    OrgType = "ORGANISATION",
                     MaterializedPath = $"/{orgId}/",
                     AgreementCode = "AC",
                     OkVersion = "OK24",
@@ -388,7 +388,7 @@ public sealed class AdminAtomicTests : IAsyncLifetime
         await using (var seedOrg = new NpgsqlCommand(
             """
             INSERT INTO organizations (org_id, org_name, org_type, materialized_path, agreement_code, ok_version)
-            VALUES (@orgId, 'Forced-Rollback RA Org', 'STYRELSE', @path, 'AC', 'OK24')
+            VALUES (@orgId, 'Forced-Rollback RA Org', 'ORGANISATION', @path, 'AC', 'OK24')
             ON CONFLICT (org_id) DO NOTHING
             """, conn))
         {

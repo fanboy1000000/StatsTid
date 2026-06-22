@@ -54,7 +54,7 @@ public sealed class AuditProjectionSyncInTxTests : IAsyncLifetime
             await conn.OpenAsync();
             await using var cmd = new NpgsqlCommand(
                 @"INSERT INTO organizations (org_id, org_name, org_type, materialized_path)
-                  VALUES ('ORG_SYNC_TEST', 'Sync Test Org', 'STYRELSE', '/ORG_SYNC_TEST/')
+                  VALUES ('ORG_SYNC_TEST', 'Sync Test Org', 'ORGANISATION', '/ORG_SYNC_TEST/')
                   ON CONFLICT DO NOTHING", conn);
             await cmd.ExecuteNonQueryAsync();
         }
@@ -90,7 +90,7 @@ public sealed class AuditProjectionSyncInTxTests : IAsyncLifetime
         {
             OrgId = orgId,
             OrgName = "Sync Commit Org",
-            OrgType = "STYRELSE",
+            OrgType = "ORGANISATION",
             ParentOrgId = null,
             MaterializedPath = $"/{orgId}/",
             AgreementCode = "AC",
@@ -162,7 +162,7 @@ public sealed class AuditProjectionSyncInTxTests : IAsyncLifetime
         {
             OrgId = orgId,
             OrgName = "Sync Rollback Org",
-            OrgType = "STYRELSE",
+            OrgType = "ORGANISATION",
             ParentOrgId = null,
             MaterializedPath = $"/{orgId}/",
             AgreementCode = "AC",

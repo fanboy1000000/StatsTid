@@ -6,7 +6,12 @@ public sealed class DemoOrg
     public required string OrgId { get; init; }
     public required string OrgName { get; init; }
 
-    /// <summary>MINISTRY | STYRELSE | AFDELING | TEAM.</summary>
+    /// <summary>
+    /// S92 / ADR-035 — the flattened taxonomy: <c>MAO</c> (root) | <c>ORGANISATION</c>
+    /// (under a MAO). The former MINISTRY/STYRELSE/AFDELING/TEAM 4-tier tree is retired:
+    /// MINISTRY→MAO, STYRELSE→ORGANISATION, and the AFDELING/TEAM leaf orgs are collapsed
+    /// to <c>employee_profiles.enhed_label</c> display metadata on the user (no org row).
+    /// </summary>
     public required string OrgType { get; init; }
 
     public required string? ParentOrgId { get; init; }
@@ -14,10 +19,10 @@ public sealed class DemoOrg
     public required string AgreementCode { get; init; }
     public required string OkVersion { get; init; }
 
-    /// <summary>The styrelse-tree root org id this org belongs under (for tree grouping).</summary>
+    /// <summary>The ORGANISATION-tree root org id this org belongs under (for tree grouping).</summary>
     public required string TreeRootOrgId { get; init; }
 
-    /// <summary>Depth within the tree (root STYRELSE = 1).</summary>
+    /// <summary>Depth within the tree (root MAO = 0, ORGANISATION = 1).</summary>
     public required int Depth { get; init; }
 }
 
@@ -45,8 +50,17 @@ public sealed class DemoUser
 
     public required bool IsActive { get; init; }
 
-    /// <summary>The styrelse-tree root org id (for tree grouping).</summary>
+    /// <summary>The ORGANISATION-tree root org id (for tree grouping). Equals <see cref="PrimaryOrgId"/>
+    /// post-S92 flatten — every demo user sits directly on their Organisation.</summary>
     public required string TreeRootOrgId { get; init; }
+
+    /// <summary>
+    /// S92 / ADR-035 — the former AFDELING/TEAM leaf-org name the user used to sit on,
+    /// now carried as display-only <c>employee_profiles.enhed_label</c> metadata (the user
+    /// itself moved UP to the parent Organisation). Null for the Organisation-root manager
+    /// (it sits directly on the Organisation, no sub-unit). Inert for rules/payroll.
+    /// </summary>
+    public string? EnhedLabel { get; set; }
 
     /// <summary>True if this user manages at least one direct report (gets a LOCAL_LEADER grant).</summary>
     public bool IsManager { get; set; }

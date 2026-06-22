@@ -95,7 +95,7 @@ internal static class RegressionSeed
                 """
                 INSERT INTO organizations (org_id, org_name, org_type, parent_org_id,
                                            materialized_path, agreement_code, ok_version)
-                VALUES (@orgId, @orgName, 'STYRELSE', NULL, @path, @agreementCode, @okVersion)
+                VALUES (@orgId, @orgName, 'ORGANISATION', NULL, @path, @agreementCode, @okVersion)
                 ON CONFLICT (org_id) DO NOTHING
                 """, conn);
             orgCmd.Parameters.AddWithValue("orgId", orgId);

@@ -116,7 +116,7 @@ public class AuthorizationPolicyTests
         // Arrange: Employee role is not in AllowedRoles for LocalAdminOrAbove
         var principal = BuildPrincipal(
             StatsTidRoles.Employee,
-            new[] { new RoleScope(StatsTidRoles.Employee, "AFD01", "ORG_ONLY") });
+            new[] { new RoleScope(StatsTidRoles.Employee, "STY02", "ORG_ONLY") });
 
         // Act
         var succeeded = await EvaluateAsync(principal, LocalAdminOrAboveRequirement());

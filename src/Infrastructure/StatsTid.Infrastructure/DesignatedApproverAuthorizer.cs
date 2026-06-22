@@ -36,8 +36,10 @@ namespace StatsTid.Infrastructure;
 /// actor and the employee (via <see cref="ReportingLineRepository.ValidateSameTreeAsync"/>)
 /// and denies on any mismatch. The cross-styrelse bound is thus TRULY structural in the
 /// authority predicate (ADR-027 D2), independent of how any edge/vikar was created — even a
-/// directly-planted cross-tree vikar row is denied. Legitimate cross-AFDELING approval is
-/// unaffected: afdelinger within one styrelse share the same <c>tree_root_org_id</c>.
+/// directly-planted cross-tree vikar row is denied. (S92/ADR-035 flatten: a tree root is
+/// now a MAO/ORGANISATION row; the former afdelinger are collapsed into their parent
+/// ORGANISATION, so an intra-Organisation edge naturally shares the same
+/// <c>tree_root_org_id</c>. Transitional machinery — retired in S95.)
 /// </para>
 ///
 /// <para>
@@ -103,7 +105,8 @@ public sealed class DesignatedApproverAuthorizer
         //     even a directly-planted cross-styrelse vikar row that wins resolution must be
         //     denied here. ValidateSameTreeAsync resolves both users' primary_org_id to their
         //     tree roots and throws CrossTreeAssignmentException on mismatch; a throw ⇒ deny.
-        //     (Legitimate cross-AFDELING within one styrelse shares a tree root ⇒ still passes.)
+        //     (S92 flatten: both users now resolve to their ORGANISATION (or MAO) root; an
+        //     intra-Organisation edge shares a tree root ⇒ still passes.)
         try
         {
             await _reportingLineRepo.ValidateSameTreeAsync(employeeId, actorId, ct);
@@ -114,7 +117,7 @@ public sealed class DesignatedApproverAuthorizer
         }
         catch (InvalidOperationException)
         {
-            // Either user not found / inactive, or no MINISTRY/STYRELSE ancestor — cannot
+            // Either user not found / inactive, or no MAO/ORGANISATION ancestor — cannot
             // affirm same-tree, so deny (fail-closed).
             return false;
         }

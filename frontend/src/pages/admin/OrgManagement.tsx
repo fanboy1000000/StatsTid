@@ -7,17 +7,13 @@ import styles from './OrgManagement.module.css'
 const AGREEMENT_CODES = ['AC', 'HK', 'PROSA'] as const
 
 const ORG_TYPE_OPTIONS = [
-  { value: 'MINISTRY', label: 'Ministerium' },
-  { value: 'STYRELSE', label: 'Styrelse' },
-  { value: 'AFDELING', label: 'Afdeling' },
-  { value: 'TEAM', label: 'Team' },
+  { value: 'MAO', label: 'Ministeransvarsområde' },
+  { value: 'ORGANISATION', label: 'Organisation' },
 ] as const
 
 const ORG_TYPE_LABELS: Record<string, string> = {
-  MINISTRY: 'Ministerium',
-  STYRELSE: 'Styrelse',
-  AFDELING: 'Afdeling',
-  TEAM: 'Team',
+  MAO: 'Ministeransvarsområde',
+  ORGANISATION: 'Organisation',
 }
 
 interface CreateOrgForm {
@@ -43,7 +39,7 @@ export function OrgManagement() {
   const [form, setForm] = useState<CreateOrgForm>({
     orgId: '',
     orgName: '',
-    orgType: 'STYRELSE',
+    orgType: 'ORGANISATION',
     parentOrgId: '',
     agreementCode: 'AC',
   })
@@ -69,7 +65,7 @@ export function OrgManagement() {
     setForm({
       orgId: '',
       orgName: '',
-      orgType: 'STYRELSE',
+      orgType: 'ORGANISATION',
       parentOrgId: '',
       agreementCode: 'AC',
     })

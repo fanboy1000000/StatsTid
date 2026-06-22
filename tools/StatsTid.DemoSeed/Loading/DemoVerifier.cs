@@ -97,12 +97,32 @@ public sealed class DemoVerifier
             "AND employee_id = manager_id AND created_by <> 'SYSTEM'", ct);
         ok &= Check("no demo self-edges", selfEdges == 0, $"found {selfEdges}");
 
-        // 5. tree_root parity: every demo edge's tree_root_org_id is a STYX root.
+        // 5. tree_root parity: every demo edge's tree_root_org_id is a STYX root, which is an
+        //    ORGANISATION post-S92 flatten (ADR-035 — STYRELSE→ORGANISATION; no AFDELING/TEAM).
         var badTreeRoots = await ScalarLongAsync(conn,
             "SELECT COUNT(*) FROM reporting_lines r WHERE r.created_by <> 'SYSTEM' " +
             "AND r.tree_root_org_id LIKE 'STYX%' " +
-            "AND NOT EXISTS (SELECT 1 FROM organizations o WHERE o.org_id = r.tree_root_org_id AND o.org_type='STYRELSE')", ct);
-        ok &= Check("demo edges' tree_root is a STYRELSE", badTreeRoots == 0, $"found {badTreeRoots} bad");
+            "AND NOT EXISTS (SELECT 1 FROM organizations o WHERE o.org_id = r.tree_root_org_id AND o.org_type='ORGANISATION')", ct);
+        ok &= Check("demo edges' tree_root is an ORGANISATION", badTreeRoots == 0, $"found {badTreeRoots} bad");
+
+        // 6. Flatten parity (S92 / ADR-035): every demo user's primary_org is an ORGANISATION
+        //    (never a MAO, never a removed AFDELING/TEAM); no demo org row carries a retired type.
+        var demoUsersOffOrganisation = await ScalarLongAsync(conn,
+            "SELECT COUNT(*) FROM users u WHERE u.user_id LIKE 'demo\\_%' " +
+            "AND NOT EXISTS (SELECT 1 FROM organizations o WHERE o.org_id = u.primary_org_id AND o.org_type='ORGANISATION')", ct);
+        ok &= Check("demo users' primary_org is an ORGANISATION", demoUsersOffOrganisation == 0, $"found {demoUsersOffOrganisation} off-Organisation");
+
+        var demoOrgsBadType = await ScalarLongAsync(conn,
+            "SELECT COUNT(*) FROM organizations WHERE (org_id LIKE 'STYX%' OR org_id = 'MINX') " +
+            "AND org_type NOT IN ('MAO','ORGANISATION')", ct);
+        ok &= Check("demo orgs carry only MAO/ORGANISATION types", demoOrgsBadType == 0, $"found {demoOrgsBadType} bad-type");
+
+        // 7. enhed_label presence (S92 / ADR-035): the moved-up rank-and-file carry a display-only
+        //    enhed_label (the former AFDELING/TEAM unit name). At least one such row must exist.
+        var demoEnhedLabels = await ScalarLongAsync(conn,
+            "SELECT COUNT(*) FROM employee_profiles p WHERE p.employee_id LIKE 'demo\\_%' " +
+            "AND p.effective_to IS NULL AND p.enhed_label IS NOT NULL", ct);
+        ok &= Check("demo enhed_label profiles present", demoEnhedLabels > 0, $"found {demoEnhedLabels}");
 
         return ok;
     }

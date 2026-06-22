@@ -22,7 +22,7 @@ public class Sprint7ApprovalTests
         {
             PeriodId = Guid.NewGuid(),
             EmployeeId = "EMP001",
-            OrgId = "AFD01",
+            OrgId = "STY01",
             PeriodStart = new DateOnly(2024, 6, 3),
             PeriodEnd = new DateOnly(2024, 6, 9),
             PeriodType = "WEEKLY",
@@ -47,7 +47,7 @@ public class Sprint7ApprovalTests
         {
             PeriodId = Guid.NewGuid(),
             EmployeeId = "EMP001",
-            OrgId = "AFD01",
+            OrgId = "STY01",
             PeriodStart = new DateOnly(2024, 6, 3),
             PeriodEnd = new DateOnly(2024, 6, 9),
             PeriodType = "WEEKLY",
@@ -75,7 +75,7 @@ public class Sprint7ApprovalTests
         {
             PeriodId = Guid.NewGuid(),
             EmployeeId = "EMP001",
-            OrgId = "AFD01",
+            OrgId = "STY01",
             PeriodStart = new DateOnly(2024, 6, 3),
             PeriodEnd = new DateOnly(2024, 6, 9),
             PeriodType = "WEEKLY",
@@ -102,7 +102,7 @@ public class Sprint7ApprovalTests
         {
             PeriodId = Guid.NewGuid(),
             EmployeeId = "EMP001",
-            OrgId = "AFD01",
+            OrgId = "STY01",
             PeriodStart = new DateOnly(2024, 6, 3),
             PeriodEnd = new DateOnly(2024, 6, 9),
             PeriodType = "WEEKLY",
@@ -139,7 +139,7 @@ public class Sprint7ApprovalTests
             ActorRole = "Employee",
             PeriodId = periodId,
             EmployeeId = "EMP001",
-            OrgId = "AFD01",
+            OrgId = "STY01",
             PeriodStart = new DateOnly(2024, 6, 3),
             PeriodEnd = new DateOnly(2024, 6, 9),
             PeriodType = "WEEKLY"
@@ -154,7 +154,7 @@ public class Sprint7ApprovalTests
         Assert.Equal(eventId, roundTripped.EventId);
         Assert.Equal(periodId, roundTripped.PeriodId);
         Assert.Equal("EMP001", roundTripped.EmployeeId);
-        Assert.Equal("AFD01", roundTripped.OrgId);
+        Assert.Equal("STY01", roundTripped.OrgId);
         Assert.Equal(new DateOnly(2024, 6, 3), roundTripped.PeriodStart);
         Assert.Equal(new DateOnly(2024, 6, 9), roundTripped.PeriodEnd);
         Assert.Equal("WEEKLY", roundTripped.PeriodType);
@@ -177,7 +177,7 @@ public class Sprint7ApprovalTests
             ActorRole = "LocalLeader",
             PeriodId = periodId,
             EmployeeId = "EMP001",
-            OrgId = "AFD01",
+            OrgId = "STY01",
             PeriodStart = new DateOnly(2024, 6, 3),
             PeriodEnd = new DateOnly(2024, 6, 9),
             ApprovedBy = "leader01"
@@ -192,7 +192,7 @@ public class Sprint7ApprovalTests
         Assert.Equal(eventId, roundTripped.EventId);
         Assert.Equal(periodId, roundTripped.PeriodId);
         Assert.Equal("EMP001", roundTripped.EmployeeId);
-        Assert.Equal("AFD01", roundTripped.OrgId);
+        Assert.Equal("STY01", roundTripped.OrgId);
         Assert.Equal(new DateOnly(2024, 6, 3), roundTripped.PeriodStart);
         Assert.Equal(new DateOnly(2024, 6, 9), roundTripped.PeriodEnd);
         Assert.Equal("leader01", roundTripped.ApprovedBy);
@@ -213,7 +213,7 @@ public class Sprint7ApprovalTests
             ActorRole = "LocalLeader",
             PeriodId = periodId,
             EmployeeId = "EMP001",
-            OrgId = "AFD01",
+            OrgId = "STY01",
             PeriodStart = new DateOnly(2024, 6, 3),
             PeriodEnd = new DateOnly(2024, 6, 9),
             RejectedBy = "leader01",
@@ -229,7 +229,7 @@ public class Sprint7ApprovalTests
         Assert.Equal(eventId, roundTripped.EventId);
         Assert.Equal(periodId, roundTripped.PeriodId);
         Assert.Equal("EMP001", roundTripped.EmployeeId);
-        Assert.Equal("AFD01", roundTripped.OrgId);
+        Assert.Equal("STY01", roundTripped.OrgId);
         Assert.Equal(new DateOnly(2024, 6, 3), roundTripped.PeriodStart);
         Assert.Equal(new DateOnly(2024, 6, 9), roundTripped.PeriodEnd);
         Assert.Equal("leader01", roundTripped.RejectedBy);

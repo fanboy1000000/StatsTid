@@ -19,12 +19,12 @@ public class Sprint7ScopeTests
     {
         var scope = new RoleScope(StatsTidRoles.GlobalAdmin, null, "GLOBAL");
 
-        // Deeply nested: 4 levels
-        Assert.True(scope.CoversOrg("/MIN01/STY02/AFD01/TEAM01/", null));
-        // Root-level ministry
+        // Organisation under a MAO
+        Assert.True(scope.CoversOrg("/MIN01/STY02/", null));
+        // Root-level MAO
         Assert.True(scope.CoversOrg("/MIN01/", null));
         // Sibling subtree
-        Assert.True(scope.CoversOrg("/MIN02/STY01/AFD03/", null));
+        Assert.True(scope.CoversOrg("/MIN02/STY01/", null));
         // Null target path — GLOBAL still returns true
         Assert.True(scope.CoversOrg(null, null));
     }
@@ -39,12 +39,12 @@ public class Sprint7ScopeTests
         var scope = new RoleScope(StatsTidRoles.LocalAdmin, "MIN01", "ORG_AND_DESCENDANTS");
         var scopeOrgPath = "/MIN01/";
 
-        // Direct child
+        // Direct child (the Organisation under the MAO)
         Assert.True(scope.CoversOrg("/MIN01/STY02/", scopeOrgPath));
-        // Grandchild (two levels below)
-        Assert.True(scope.CoversOrg("/MIN01/STY02/AFD01/", scopeOrgPath));
-        // Great-grandchild (three levels below)
-        Assert.True(scope.CoversOrg("/MIN01/STY02/AFD01/TEAM01/", scopeOrgPath));
+        // A sibling Organisation under the same MAO
+        Assert.True(scope.CoversOrg("/MIN01/STY01/", scopeOrgPath));
+        // A deeper sub-path under an Organisation (prefix coverage is depth-agnostic)
+        Assert.True(scope.CoversOrg("/MIN01/STY02/UNIT01/", scopeOrgPath));
         // Exact match (self)
         Assert.True(scope.CoversOrg("/MIN01/", scopeOrgPath));
     }
@@ -67,11 +67,11 @@ public class Sprint7ScopeTests
         var scope = new RoleScope(StatsTidRoles.LocalLeader, "STY02", "ORG_AND_DESCENDANTS");
         var scopeOrgPath = "/MIN01/STY02/";
 
-        // Sibling styrelse under same ministry
+        // Sibling Organisation under same MAO
         Assert.False(scope.CoversOrg("/MIN01/STY01/", scopeOrgPath));
-        // Sibling's child
-        Assert.False(scope.CoversOrg("/MIN01/STY01/AFD01/", scopeOrgPath));
-        // Different ministry entirely
+        // Sibling's sub-path
+        Assert.False(scope.CoversOrg("/MIN01/STY01/UNIT01/", scopeOrgPath));
+        // Different MAO entirely
         Assert.False(scope.CoversOrg("/MIN02/STY02/", scopeOrgPath));
     }
 
@@ -82,25 +82,25 @@ public class Sprint7ScopeTests
     [Fact]
     public void OrgOnly_CoversExactMatchOnly()
     {
-        var scope = new RoleScope(StatsTidRoles.Employee, "AFD01", "ORG_ONLY");
-        var scopeOrgPath = "/MIN01/STY02/AFD01/";
+        var scope = new RoleScope(StatsTidRoles.Employee, "STY02", "ORG_ONLY");
+        var scopeOrgPath = "/MIN01/STY02/";
 
         // Exact match succeeds
-        Assert.True(scope.CoversOrg("/MIN01/STY02/AFD01/", scopeOrgPath));
+        Assert.True(scope.CoversOrg("/MIN01/STY02/", scopeOrgPath));
     }
 
     [Fact]
     public void OrgOnly_DoesNotCoverChildOrgs()
     {
-        var scope = new RoleScope(StatsTidRoles.Employee, "AFD01", "ORG_ONLY");
-        var scopeOrgPath = "/MIN01/STY02/AFD01/";
+        var scope = new RoleScope(StatsTidRoles.Employee, "STY02", "ORG_ONLY");
+        var scopeOrgPath = "/MIN01/STY02/";
 
-        // Child org under AFD01
-        Assert.False(scope.CoversOrg("/MIN01/STY02/AFD01/TEAM01/", scopeOrgPath));
-        // Parent org
-        Assert.False(scope.CoversOrg("/MIN01/STY02/", scopeOrgPath));
-        // Sibling
-        Assert.False(scope.CoversOrg("/MIN01/STY02/AFD02/", scopeOrgPath));
+        // A deeper sub-path under the Organisation
+        Assert.False(scope.CoversOrg("/MIN01/STY02/UNIT01/", scopeOrgPath));
+        // Parent org (the MAO)
+        Assert.False(scope.CoversOrg("/MIN01/", scopeOrgPath));
+        // Sibling Organisation
+        Assert.False(scope.CoversOrg("/MIN01/STY01/", scopeOrgPath));
     }
 
     // ---------------------------------------------------------------
@@ -115,8 +115,8 @@ public class Sprint7ScopeTests
             ActorId: "EMP001",
             ActorRole: StatsTidRoles.Employee,
             CorrelationId: Guid.NewGuid(),
-            OrgId: "AFD01",
-            Scopes: new[] { new RoleScope(StatsTidRoles.Employee, "AFD01", "ORG_ONLY") });
+            OrgId: "STY02",
+            Scopes: new[] { new RoleScope(StatsTidRoles.Employee, "STY02", "ORG_ONLY") });
 
         var targetEmployeeId = "EMP001";
 
@@ -133,8 +133,8 @@ public class Sprint7ScopeTests
             ActorId: "EMP001",
             ActorRole: StatsTidRoles.Employee,
             CorrelationId: Guid.NewGuid(),
-            OrgId: "AFD01",
-            Scopes: new[] { new RoleScope(StatsTidRoles.Employee, "AFD01", "ORG_ONLY") });
+            OrgId: "STY02",
+            Scopes: new[] { new RoleScope(StatsTidRoles.Employee, "STY02", "ORG_ONLY") });
 
         var targetEmployeeId = "EMP002";
 
@@ -163,11 +163,11 @@ public class Sprint7ScopeTests
             OrgId: "STY02",
             Scopes: scopes);
 
-        var targetOrgPath = "/MIN01/STY02/AFD01/";
+        var targetOrgPath = "/MIN01/STY02/";
 
-        // First scope (ORG_ONLY for STY01) doesn't cover /MIN01/STY02/AFD01/
+        // First scope (ORG_ONLY for STY01) doesn't cover /MIN01/STY02/
         Assert.False(scopes[0].CoversOrg(targetOrgPath, "/MIN01/STY01/"));
-        // Second scope (ORG_AND_DESCENDANTS for STY02) covers /MIN01/STY02/AFD01/
+        // Second scope (ORG_AND_DESCENDANTS for STY02) covers /MIN01/STY02/
         Assert.True(scopes[1].CoversOrg(targetOrgPath, "/MIN01/STY02/"));
 
         // Access granted if ANY scope covers
@@ -189,13 +189,13 @@ public class Sprint7ScopeTests
             ActorId: "USR01",
             ActorRole: StatsTidRoles.Employee,
             CorrelationId: Guid.NewGuid(),
-            OrgId: "AFD01",
+            OrgId: "STY02",
             Scopes: Array.Empty<RoleScope>());
 
-        var targetOrgPath = "/MIN01/STY02/AFD01/";
+        var targetOrgPath = "/MIN01/STY02/";
 
         // No scopes means no scope can cover the target
-        bool hasAccess = actor.Scopes!.Any(s => s.CoversOrg(targetOrgPath, "/MIN01/STY02/AFD01/"));
+        bool hasAccess = actor.Scopes!.Any(s => s.CoversOrg(targetOrgPath, "/MIN01/STY02/"));
 
         Assert.False(hasAccess);
     }

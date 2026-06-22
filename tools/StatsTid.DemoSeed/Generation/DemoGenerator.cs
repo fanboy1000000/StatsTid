@@ -12,8 +12,13 @@ namespace StatsTid.Tools.DemoSeed.Generation;
 ///   - No wall-clock: all dates derive from <see cref="_referenceDate"/>.
 ///   - Stable ids: org/user ids are positional (demo_styx1_0007 …) so ordering is fixed.
 ///
-/// Structural realism: 4–6 levels, span ~TargetSpan, 12–18% managers, EXACTLY ONE root per
-/// tree, NO cycles (the manager of an employee is always strictly closer to the root).
+/// Structural realism (S92 / ADR-035 flatten): the org tree is 2 LEVELS — MAO (root) →
+/// ORGANISATION (the smallest authority unit). The former AFDELING/TEAM leaf orgs are gone;
+/// every user sits directly on their Organisation and carries the former leaf-unit name as a
+/// display-only <c>employee_profiles.enhed_label</c>. The REPORTING tree keeps its realistic
+/// depth (span ~TargetSpan, 12–18% managers, EXACTLY ONE root per Organisation, NO cycles —
+/// the manager of an employee is always strictly closer to the root); reporting depth is a
+/// people-graph property, independent of the now-flat ORG graph.
 /// </summary>
 public sealed class DemoGenerator
 {
@@ -65,12 +70,13 @@ public sealed class DemoGenerator
             Password = Password,
         };
 
-        // 1. Ministry (MINISTRY root, NOT a styrelse tree — orgs only, no users).
-        var ministry = new DemoOrg
+        // 1. MAO root (Ministeransvarsområde — the former MINISTRY). Orgs only, no users:
+        //    every user sits on an ORGANISATION under this MAO (S92 / ADR-035 flatten).
+        var mao = new DemoOrg
         {
             OrgId = _config.MinistryId,
             OrgName = _config.MinistryName,
-            OrgType = "MINISTRY",
+            OrgType = "MAO",
             ParentOrgId = null,
             MaterializedPath = $"/{_config.MinistryId}/",
             AgreementCode = "AC",
@@ -78,12 +84,12 @@ public sealed class DemoGenerator
             TreeRootOrgId = _config.MinistryId,
             Depth = 0,
         };
-        orgs.Add(ministry);
+        orgs.Add(mao);
 
-        // 2. Per-tree generation.
+        // 2. Per-tree generation (one ORGANISATION per profile, under the MAO).
         foreach (var profile in _config.Trees)
         {
-            GenerateTree(profile, ministry, orgs, users, employeeRoles, privilegedRoles, manifest);
+            GenerateTree(profile, mao, orgs, users, employeeRoles, privilegedRoles, manifest);
         }
 
         // 3. Activity / part-time / vikar / messy plans (need the full user list).
@@ -107,7 +113,7 @@ public sealed class DemoGenerator
 
     private void GenerateTree(
         TreeProfile profile,
-        DemoOrg ministry,
+        DemoOrg mao,
         List<DemoOrg> orgs,
         List<DemoUser> users,
         List<DemoRoleRow> employeeRoles,
@@ -117,87 +123,58 @@ public sealed class DemoGenerator
         var root = profile.TreeRootOrgId;
         var lower = root.ToLowerInvariant();
 
-        // ── 2a. Org hierarchy: STYRELSE root (depth 1) → centres (AFDELING, depth 2) →
-        //        kontorer (AFDELING, depth 3) → teams (TEAM, depth 4..5). 4–6 levels incl.
-        //        the ministry at depth 0. The structure scales with TargetUsers. ──
-        var styrelse = new DemoOrg
+        // ── 2a. Org hierarchy (S92 / ADR-035 flatten): ONE ORGANISATION (depth 1) under the
+        //        MAO (depth 0). NO AFDELING/TEAM org rows — the former leaf-unit names become
+        //        display-only enhed_label metadata on the users (see the Enhed pool below).
+        //        The Organisation is BOTH the user-home org AND the reporting-tree root. ──
+        var organisation = new DemoOrg
         {
             OrgId = root,
             OrgName = profile.OrgName,
-            OrgType = "STYRELSE",
-            ParentOrgId = ministry.OrgId,
-            MaterializedPath = $"/{ministry.OrgId}/{root}/",
+            OrgType = "ORGANISATION",
+            ParentOrgId = mao.OrgId,
+            MaterializedPath = $"/{mao.OrgId}/{root}/",
             AgreementCode = profile.RootAgreement,
             OkVersion = "OK24",
             TreeRootOrgId = root,
             Depth = 1,
         };
-        orgs.Add(styrelse);
+        orgs.Add(organisation);
 
-        // Size the sub-org tree so leaf orgs hold ~TargetSpan users.
+        var treeOrgs = new List<DemoOrg> { organisation };
+
+        // The set of Enhed (former leaf-unit) display labels this Organisation's rank-and-file
+        // are distributed across. Sized like the old leaf-org fan-out (~TargetSpan users per
+        // enhed) so the demo keeps realistic per-unit grouping — purely as a display label now.
         var leafTarget = Math.Max(1, profile.TargetUsers / Math.Max(1, _config.TargetSpan));
-        var centreCount = Math.Clamp((int)Math.Ceiling(Math.Sqrt(leafTarget) / 1.5), 1, DanishPools.CentreFragments.Length);
+        var enhedCount = Math.Clamp(leafTarget, 1, DanishPools.EnhedFragments.Length);
+        var enheder = new List<string>(enhedCount);
+        for (var e = 0; e < enhedCount; e++)
+            enheder.Add(DanishPools.EnhedFragments[e % DanishPools.EnhedFragments.Length]);
 
-        var treeOrgs = new List<DemoOrg> { styrelse };
-        var leafOrgs = new List<DemoOrg>();
-
-        int orgSeq = 0;
-        string NextOrgId() => $"{root}_{(++orgSeq):D3}";
-
-        for (var c = 0; c < centreCount; c++)
-        {
-            var centre = MakeChildOrg(NextOrgId(), DanishPools.CentreFragments[c % DanishPools.CentreFragments.Length] + $" {c + 1}",
-                "AFDELING", styrelse, root, 2, profile.RootAgreement);
-            orgs.Add(centre);
-            treeOrgs.Add(centre);
-
-            var kontorCount = Math.Clamp((int)Math.Ceiling(Math.Sqrt(leafTarget) / centreCount) + 1, 1, 6);
-            for (var k = 0; k < kontorCount; k++)
-            {
-                var kontor = MakeChildOrg(NextOrgId(), DanishPools.KontorFragments[(c + k) % DanishPools.KontorFragments.Length] + $" {c + 1}.{k + 1}",
-                    "AFDELING", centre, root, 3, profile.RootAgreement);
-                orgs.Add(kontor);
-                treeOrgs.Add(kontor);
-
-                // For the big tree, add a TEAM layer (depth 4) so we reach 5–6 levels.
-                if (profile.TargetUsers >= 600)
-                {
-                    var teamCount = Math.Clamp(2 + (k % 2), 1, 4);
-                    for (var t = 0; t < teamCount; t++)
-                    {
-                        var team = MakeChildOrg(NextOrgId(), DanishPools.TeamFragments[(k + t) % DanishPools.TeamFragments.Length] + $" {c + 1}.{k + 1}.{t + 1}",
-                            "TEAM", kontor, root, 4, profile.RootAgreement);
-                        orgs.Add(team);
-                        treeOrgs.Add(team);
-                        leafOrgs.Add(team);
-                    }
-                }
-                else
-                {
-                    leafOrgs.Add(kontor);
-                }
-            }
-        }
-
-        // ── 2b. Users. The styrelse-root org gets the tree's top manager (the SINGLE root of
-        //        the reporting tree). Other users spread across leaf orgs. ──
+        // ── 2b. Users. EVERY user sits directly on the ORGANISATION (primary_org = the
+        //        Organisation, tree_root = the Organisation). The top manager (the SINGLE
+        //        reporting-tree root) sits on the Organisation with NO enhed_label; the
+        //        rank-and-file carry a round-robin enhed_label (their former leaf unit). ──
         int userSeq = 0;
         string NextUserId() => $"demo_{lower}_{(++userSeq):D4}";
 
         var treeUsers = new List<DemoUser>();
 
-        // The top manager (reporting-tree root). primary_org = the styrelse root.
-        var topManager = MakeUser(NextUserId(), styrelse.OrgId, root, profile, isSenior: true, leaverAllowed: false);
+        // The top manager (reporting-tree root). primary_org = the Organisation; no enhed_label
+        // (it sits at the Organisation level, not in a sub-unit).
+        var topManager = MakeUser(NextUserId(), organisation.OrgId, root, profile, isSenior: true, leaverAllowed: false, enhedLabel: null);
         topManager.IsManager = true;
         users.Add(topManager);
         treeUsers.Add(topManager);
 
-        // Remaining users spread round-robin across leaf orgs (deterministic).
+        // Remaining users: all on the Organisation, round-robin across the Enhed labels
+        // (deterministic — same index walk as the old leaf-org distribution).
         var remaining = profile.TargetUsers - 1;
         for (var i = 0; i < remaining; i++)
         {
-            var org = leafOrgs[i % leafOrgs.Count];
-            var u = MakeUser(NextUserId(), org.OrgId, root, profile, isSenior: false, leaverAllowed: true);
+            var enhed = enheder[i % enheder.Count];
+            var u = MakeUser(NextUserId(), organisation.OrgId, root, profile, isSenior: false, leaverAllowed: true, enhedLabel: enhed);
             users.Add(u);
             treeUsers.Add(u);
         }
@@ -214,7 +191,7 @@ public sealed class DemoGenerator
         foreach (var u in treeUsers)
             employeeRoles.Add(new DemoRoleRow { UserId = u.UserId, RoleId = "EMPLOYEE", OrgId = u.PrimaryOrgId, ScopeType = "ORG_ONLY" });
 
-        // ── 2e. Privileged roles: one LOCAL_HR at the styrelse root + a LOCAL_LEADER for every
+        // ── 2e. Privileged roles: one LOCAL_HR at the ORGANISATION root + a LOCAL_LEADER for every
         //        ACTIVE manager (so the dashboards/approvals/vikar work). SQL-SEEDED (event-less)
         //        because the live POST /api/admin/roles/grant endpoint has a pre-existing schema
         //        bug (its role_assignment_audit INSERT targets non-existent columns) — see SPRINT-84.
@@ -301,21 +278,7 @@ public sealed class DemoGenerator
         }
     }
 
-    private DemoOrg MakeChildOrg(string orgId, string name, string orgType, DemoOrg parent, string treeRoot, int depth, string agreement) =>
-        new()
-        {
-            OrgId = orgId,
-            OrgName = name,
-            OrgType = orgType,
-            ParentOrgId = parent.OrgId,
-            MaterializedPath = $"{parent.MaterializedPath}{orgId}/",
-            AgreementCode = agreement,
-            OkVersion = "OK24",
-            TreeRootOrgId = treeRoot,
-            Depth = depth,
-        };
-
-    private DemoUser MakeUser(string userId, string orgId, string treeRoot, TreeProfile profile, bool isSenior, bool leaverAllowed)
+    private DemoUser MakeUser(string userId, string orgId, string treeRoot, TreeProfile profile, bool isSenior, bool leaverAllowed, string? enhedLabel)
     {
         var first = DanishPools.FirstNames[_rng.Next(DanishPools.FirstNames.Length)];
         var last = DanishPools.LastNames[_rng.Next(DanishPools.LastNames.Length)];
@@ -367,6 +330,7 @@ public sealed class DemoGenerator
             EmploymentEndDate = endDate,
             IsActive = isActive,
             TreeRootOrgId = treeRoot,
+            EnhedLabel = enhedLabel,
         };
     }
 
@@ -395,6 +359,9 @@ public sealed class DemoGenerator
                 EmployeeId = u.UserId,
                 PartTimeFraction = fraction,
                 Position = position,
+                // S92 / ADR-035 — carry the user's enhed_label so the profile PUT (which
+                // supersedes the full live row) preserves the SQL-pre-seeded display label.
+                EnhedLabel = u.EnhedLabel,
             });
         }
     }
@@ -559,12 +526,13 @@ public sealed class DemoGenerator
                     });
                     break;
                 case "CROSS_STYRELSE_TRANSFER":
-                    // Related = the top manager of a DIFFERENT tree.
+                    // Related = the top manager of a DIFFERENT Organisation tree (post-S92 flatten
+                    // the tree root IS the Organisation; "cross-styrelse" == cross-Organisation).
                     var otherTree = manifest.Trees.FirstOrDefault(t => t.TreeRootOrgId != u.TreeRootOrgId);
                     manifest.MessyCases.Add(new DemoMessyCase
                     {
                         Kind = kind, EmployeeId = u.UserId,
-                        Note = "Cross-styrelse transfer candidate (a stale-key drift / edge-auth surface).",
+                        Note = "Cross-Organisation transfer candidate (a stale-key drift / edge-auth surface).",
                         RelatedId = otherTree?.RootEmployeeId,
                         Value = otherTree?.TreeRootOrgId,
                     });

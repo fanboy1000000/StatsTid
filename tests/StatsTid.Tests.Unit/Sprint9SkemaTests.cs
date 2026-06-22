@@ -22,14 +22,14 @@ public class Sprint9SkemaTests
         var project = new Project
         {
             ProjectId = Guid.NewGuid(),
-            OrgId = "AFD01",
+            OrgId = "STY01",
             ProjectCode = "PROJ-001",
             ProjectName = "Drift",
             CreatedBy = "ladm01"
         };
 
         Assert.NotEqual(Guid.Empty, project.ProjectId);
-        Assert.Equal("AFD01", project.OrgId);
+        Assert.Equal("STY01", project.OrgId);
         Assert.Equal("PROJ-001", project.ProjectCode);
         Assert.Equal("Drift", project.ProjectName);
         Assert.Equal("ladm01", project.CreatedBy);
@@ -41,7 +41,7 @@ public class Sprint9SkemaTests
         var activeProject = new Project
         {
             ProjectId = Guid.NewGuid(),
-            OrgId = "AFD01",
+            OrgId = "STY01",
             ProjectCode = "PROJ-ACTIVE",
             ProjectName = "Active Project",
             IsActive = true,
@@ -51,7 +51,7 @@ public class Sprint9SkemaTests
         var deactivatedProject = new Project
         {
             ProjectId = Guid.NewGuid(),
-            OrgId = "AFD01",
+            OrgId = "STY01",
             ProjectCode = "PROJ-DEACTIVATED",
             ProjectName = "Deactivated Project",
             IsActive = false,
@@ -98,7 +98,7 @@ public class Sprint9SkemaTests
             new Project
             {
                 ProjectId = Guid.NewGuid(),
-                OrgId = "AFD01",
+                OrgId = "STY01",
                 ProjectCode = "PROJ-A",
                 ProjectName = "Project A",
                 SortOrder = 1,
@@ -107,7 +107,7 @@ public class Sprint9SkemaTests
             new Project
             {
                 ProjectId = Guid.NewGuid(),
-                OrgId = "AFD01",
+                OrgId = "STY01",
                 ProjectCode = "PROJ-B",
                 ProjectName = "Project B",
                 SortOrder = 2,
@@ -116,7 +116,7 @@ public class Sprint9SkemaTests
             new Project
             {
                 ProjectId = Guid.NewGuid(),
-                OrgId = "AFD02",
+                OrgId = "STY02",
                 ProjectCode = "PROJ-C",
                 ProjectName = "Project C",
                 SortOrder = 1,
@@ -125,10 +125,10 @@ public class Sprint9SkemaTests
         };
 
         // Filter by orgId — simulates GetByOrgAsync behavior
-        var afd01Projects = projects.Where(p => p.OrgId == "AFD01").ToList();
+        var sty01Projects = projects.Where(p => p.OrgId == "STY01").ToList();
 
-        Assert.Equal(2, afd01Projects.Count);
-        Assert.All(afd01Projects, p => Assert.Equal("AFD01", p.OrgId));
+        Assert.Equal(2, sty01Projects.Count);
+        Assert.All(sty01Projects, p => Assert.Equal("STY01", p.OrgId));
     }
 
     [Fact]
@@ -138,7 +138,7 @@ public class Sprint9SkemaTests
         var project = new Project
         {
             ProjectId = Guid.NewGuid(),
-            OrgId = "AFD01",
+            OrgId = "STY01",
             ProjectCode = "PROJ-TO-DELETE",
             ProjectName = "To be deactivated",
             IsActive = true,
@@ -180,7 +180,7 @@ public class Sprint9SkemaTests
         {
             PeriodId = Guid.NewGuid(),
             EmployeeId = "EMP001",
-            OrgId = "AFD01",
+            OrgId = "STY01",
             PeriodStart = new DateOnly(2026, 3, 1),
             PeriodEnd = new DateOnly(2026, 3, 31),
             PeriodType = "MONTHLY",
@@ -221,7 +221,7 @@ public class Sprint9SkemaTests
         {
             PeriodId = Guid.NewGuid(),
             EmployeeId = "EMP001",
-            OrgId = "AFD01",
+            OrgId = "STY01",
             PeriodStart = new DateOnly(2026, 3, 1),
             PeriodEnd = new DateOnly(2026, 3, 31),
             PeriodType = "MONTHLY",
@@ -256,7 +256,7 @@ public class Sprint9SkemaTests
         {
             PeriodId = Guid.NewGuid(),
             EmployeeId = "EMP001",
-            OrgId = "AFD01",
+            OrgId = "STY01",
             PeriodStart = new DateOnly(2026, 3, 1),
             PeriodEnd = periodEnd,
             PeriodType = "MONTHLY",
@@ -280,7 +280,7 @@ public class Sprint9SkemaTests
         {
             PeriodId = Guid.NewGuid(),
             EmployeeId = "EMP001",
-            OrgId = "AFD01",
+            OrgId = "STY01",
             PeriodStart = new DateOnly(2026, 3, 1),
             PeriodEnd = new DateOnly(2026, 3, 31),
             PeriodType = "MONTHLY",
@@ -322,7 +322,7 @@ public class Sprint9SkemaTests
         {
             PeriodId = Guid.NewGuid(),
             EmployeeId = "EMP001",
-            OrgId = "AFD01",
+            OrgId = "STY01",
             PeriodStart = new DateOnly(2026, 3, 1),
             PeriodEnd = new DateOnly(2026, 3, 31),
             PeriodType = "MONTHLY",
@@ -343,7 +343,7 @@ public class Sprint9SkemaTests
         {
             PeriodId = Guid.NewGuid(),
             EmployeeId = "EMP001",
-            OrgId = "AFD01",
+            OrgId = "STY01",
             PeriodStart = new DateOnly(2026, 3, 1),
             PeriodEnd = new DateOnly(2026, 3, 31),
             PeriodType = "MONTHLY",
@@ -383,7 +383,7 @@ public class Sprint9SkemaTests
         {
             PeriodId = Guid.NewGuid(),
             EmployeeId = "EMP001",
-            OrgId = "AFD01",
+            OrgId = "STY01",
             PeriodStart = new DateOnly(2026, 3, 1),
             PeriodEnd = new DateOnly(2026, 3, 31),
             PeriodType = "MONTHLY",
@@ -422,7 +422,7 @@ public class Sprint9SkemaTests
         {
             PeriodId = Guid.NewGuid(),
             EmployeeId = "EMP001",
-            OrgId = "AFD01",
+            OrgId = "STY01",
             PeriodStart = new DateOnly(2026, 3, 1),
             PeriodEnd = new DateOnly(2026, 3, 31),
             PeriodType = "MONTHLY",
@@ -463,7 +463,7 @@ public class Sprint9SkemaTests
             new Project
             {
                 ProjectId = Guid.NewGuid(),
-                OrgId = "AFD01",
+                OrgId = "STY01",
                 ProjectCode = "DRIFT",
                 ProjectName = "Drift",
                 SortOrder = 1,
@@ -484,7 +484,7 @@ public class Sprint9SkemaTests
         {
             PeriodId = Guid.NewGuid(),
             EmployeeId = "EMP001",
-            OrgId = "AFD01",
+            OrgId = "STY01",
             PeriodStart = new DateOnly(2026, 3, 1),
             PeriodEnd = new DateOnly(2026, 3, 31),
             PeriodType = "MONTHLY",
@@ -569,7 +569,7 @@ public class Sprint9SkemaTests
         {
             PeriodId = Guid.NewGuid(),
             EmployeeId = "EMP001",
-            OrgId = "AFD01",
+            OrgId = "STY01",
             PeriodStart = new DateOnly(2026, 3, 1),
             PeriodEnd = new DateOnly(2026, 3, 31),
             PeriodType = "MONTHLY",
@@ -589,7 +589,7 @@ public class Sprint9SkemaTests
         {
             PeriodId = Guid.NewGuid(),
             EmployeeId = "EMP001",
-            OrgId = "AFD01",
+            OrgId = "STY01",
             PeriodStart = new DateOnly(2026, 3, 1),
             PeriodEnd = new DateOnly(2026, 3, 31),
             PeriodType = "MONTHLY",
@@ -607,7 +607,7 @@ public class Sprint9SkemaTests
         {
             PeriodId = Guid.NewGuid(),
             EmployeeId = "EMP001",
-            OrgId = "AFD01",
+            OrgId = "STY01",
             PeriodStart = new DateOnly(2026, 3, 1),
             PeriodEnd = new DateOnly(2026, 3, 31),
             PeriodType = "MONTHLY",
@@ -628,7 +628,7 @@ public class Sprint9SkemaTests
             new AbsenceTypeVisibility
             {
                 Id = Guid.NewGuid(),
-                OrgId = "AFD01",
+                OrgId = "STY01",
                 AbsenceType = "CHILD_SICK_DAY_3",
                 IsHidden = true,
                 SetBy = "ladm01"
@@ -636,7 +636,7 @@ public class Sprint9SkemaTests
             new AbsenceTypeVisibility
             {
                 Id = Guid.NewGuid(),
-                OrgId = "AFD01",
+                OrgId = "STY01",
                 AbsenceType = "LEAVE_WITHOUT_PAY",
                 IsHidden = true,
                 SetBy = "ladm01"
@@ -674,7 +674,7 @@ public class Sprint9SkemaTests
         {
             PeriodId = Guid.NewGuid(),
             EmployeeId = "EMP001",
-            OrgId = "AFD01",
+            OrgId = "STY01",
             PeriodStart = new DateOnly(2026, 3, 1),
             PeriodEnd = new DateOnly(2026, 3, 31),
             ActorId = "EMP001",
@@ -685,7 +685,7 @@ public class Sprint9SkemaTests
         {
             PeriodId = Guid.NewGuid(),
             EmployeeId = "EMP001",
-            OrgId = "AFD01",
+            OrgId = "STY01",
             PeriodStart = new DateOnly(2026, 3, 1),
             PeriodEnd = new DateOnly(2026, 3, 31),
             Reason = "Correction needed",
@@ -738,7 +738,7 @@ public class Sprint9SkemaTests
             OccurredAt = new DateTime(2026, 3, 5, 10, 0, 0, DateTimeKind.Utc),
             PeriodId = Guid.NewGuid(),
             EmployeeId = "EMP001",
-            OrgId = "AFD01",
+            OrgId = "STY01",
             PeriodStart = new DateOnly(2026, 3, 1),
             PeriodEnd = new DateOnly(2026, 3, 31),
             ActorId = "EMP001",
@@ -752,7 +752,7 @@ public class Sprint9SkemaTests
         Assert.Equal(originalPeriodEmployeeApproved.EventId, rt1.EventId);
         Assert.Equal(originalPeriodEmployeeApproved.PeriodId, rt1.PeriodId);
         Assert.Equal("EMP001", rt1.EmployeeId);
-        Assert.Equal("AFD01", rt1.OrgId);
+        Assert.Equal("STY01", rt1.OrgId);
         Assert.Equal(new DateOnly(2026, 3, 1), rt1.PeriodStart);
         Assert.Equal(new DateOnly(2026, 3, 31), rt1.PeriodEnd);
 
@@ -763,7 +763,7 @@ public class Sprint9SkemaTests
             OccurredAt = new DateTime(2026, 3, 6, 9, 0, 0, DateTimeKind.Utc),
             PeriodId = Guid.NewGuid(),
             EmployeeId = "EMP001",
-            OrgId = "AFD01",
+            OrgId = "STY01",
             PeriodStart = new DateOnly(2026, 3, 1),
             PeriodEnd = new DateOnly(2026, 3, 31),
             Reason = "Fejl i registrering",

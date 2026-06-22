@@ -356,7 +356,7 @@ public sealed class AuditProjectionCatalogCloseTests : IAsyncLifetime
         await conn.OpenAsync();
         await using var cmd = new NpgsqlCommand(
             @"INSERT INTO organizations (org_id, org_name, org_type, materialized_path)
-              VALUES (@orgId, 'Test Org', 'MINISTRY', @orgId)
+              VALUES (@orgId, 'Test Org', 'MAO', @orgId)
               ON CONFLICT (org_id) DO NOTHING", conn);
         cmd.Parameters.AddWithValue("orgId", orgId);
         await cmd.ExecuteNonQueryAsync();

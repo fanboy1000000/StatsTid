@@ -25,7 +25,7 @@ internal static class ProfileTestSchema
         CREATE TABLE IF NOT EXISTS organizations (
             org_id              TEXT        PRIMARY KEY,
             org_name            TEXT        NOT NULL,
-            org_type            TEXT        NOT NULL CHECK (org_type IN ('MINISTRY', 'STYRELSE', 'AFDELING', 'TEAM')),
+            org_type            TEXT        NOT NULL CHECK (org_type IN ('MAO', 'ORGANISATION')),
             parent_org_id       TEXT        REFERENCES organizations(org_id),
             materialized_path   TEXT        NOT NULL,
             agreement_code      TEXT        NOT NULL DEFAULT 'AC',
@@ -132,7 +132,7 @@ internal static class ProfileTestSchema
         await using var cmd = new NpgsqlCommand(
             """
             INSERT INTO organizations (org_id, org_name, org_type, materialized_path, agreement_code, ok_version)
-            VALUES (@orgId, @orgId || ' Test Org', 'STYRELSE', '/' || @orgId || '/', 'HK', 'OK24')
+            VALUES (@orgId, @orgId || ' Test Org', 'ORGANISATION', '/' || @orgId || '/', 'HK', 'OK24')
             ON CONFLICT (org_id) DO NOTHING
             """, conn);
         cmd.Parameters.AddWithValue("orgId", orgId);

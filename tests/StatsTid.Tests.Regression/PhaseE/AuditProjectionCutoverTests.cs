@@ -90,7 +90,7 @@ public sealed class AuditProjectionCutoverTests : IAsyncLifetime
         var mapper = _sp.GetRequiredService<IAuditProjectionMapper<OrganizationCreated>>();
         var ev = new OrganizationCreated
         {
-            OrgId = orgId, OrgName = "Happy Org", OrgType = "STYRELSE",
+            OrgId = orgId, OrgName = "Happy Org", OrgType = "ORGANISATION",
             ParentOrgId = null, MaterializedPath = $"/{orgId}/", AgreementCode = "AC", OkVersion = "OK24",
         };
 
@@ -239,7 +239,7 @@ public sealed class AuditProjectionCutoverTests : IAsyncLifetime
         var orgId = $"ORG_FR_{Guid.NewGuid():N}".Substring(0, 16);
         var ev = new OrganizationCreated
         {
-            OrgId = orgId, OrgName = "Rollback Org", OrgType = "STYRELSE",
+            OrgId = orgId, OrgName = "Rollback Org", OrgType = "ORGANISATION",
             ParentOrgId = null, MaterializedPath = $"/{orgId}/", AgreementCode = "AC", OkVersion = "OK24",
         };
         var throwingOutbox = new ForcedRollbackHarness.ThrowingOutboxEnqueue();
@@ -464,7 +464,7 @@ public sealed class AuditProjectionCutoverTests : IAsyncLifetime
         await conn.OpenAsync();
         await using (var orgCmd = new NpgsqlCommand(
             @"INSERT INTO organizations (org_id, org_name, org_type, materialized_path)
-              VALUES (@id, 'Test Org', 'STYRELSE', @path)
+              VALUES (@id, 'Test Org', 'ORGANISATION', @path)
               ON CONFLICT DO NOTHING", conn))
         {
             orgCmd.Parameters.AddWithValue("id", TestOrgId);

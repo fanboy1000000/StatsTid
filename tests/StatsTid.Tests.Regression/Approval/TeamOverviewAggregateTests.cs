@@ -27,10 +27,14 @@ namespace StatsTid.Tests.Regression.Approval;
 /// </para>
 ///
 /// <para>
-/// Topology mirrors <see cref="DesignatedApproverAuthorityTests"/>: STY02 tree = {STY02, AFD01, AFD02};
-/// STY05 tree = {STY05, AFD03, AFD04} (a different tree_root). The designated approver (<c>Mgr</c>,
-/// AFD02) is the PRIMARY manager of <c>Emp</c> in the SIBLING afdeling AFD01, with scope = AFD02 only,
-/// so org-scope alone never grants — only the edge does.
+/// Topology mirrors <see cref="DesignatedApproverAuthorityTests"/> (S92/ADR-035 flatten):
+/// STY02 is an ORGANISATION under MAO MIN01; STY05 is an ORGANISATION under a DIFFERENT MAO MIN02
+/// (a different tree_root). Emp and Mgr are BOTH on the STY02 Organisation (the smallest authority
+/// unit post-flatten); the designated PRIMARY edge grants approve authority. Because the
+/// team-overview roster is the designated-act-authority SET (edge-derived, NOT org-scope), the
+/// negative "no-edge actor does not see Emp" assertions hold without org-scope coarsening pulling Emp
+/// in. <c>Other</c> stays on STY02 because it ALSO holds a designated ACTING edge over EmpActing
+/// (same-tree required for that edge to grant).
 /// </para>
 /// </summary>
 [Trait("Category", "Docker")]
@@ -42,18 +46,18 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
     private StatsTidWebApplicationFactory _factory = null!;
     private DbConnectionFactory _dbFactory = null!;
 
-    // STY02 tree:
-    private const string Emp = "t87_emp";          // AFD01 — Mgr's cross-afdeling PRIMARY report
-    private const string Mgr = "t87_mgr";          // AFD02 — designated approver; scope = AFD02 only
-    private const string Vik = "t87_vik";          // AFD02 — Mgr's vikar stand-in (a Leader)
-    private const string EmpVik = "t87_emp_vik";   // AFD01 — reports PRIMARY to AwayMgr (vikar-covered)
-    private const string AwayMgr = "t87_awaymgr";  // AFD02 — away manager, covered by Vik
-    private const string EmpIm = "t87_emp_im";     // AFD01 — reports to an INACTIVE manager
-    private const string InactiveMgr = "t87_imgr"; // AFD02 — INACTIVE; escalates to Mgr
-    private const string EmpActing = "t87_emp_act"; // AFD01 — Mgr's PRIMARY report BUT reassigned via ACTING to Other
-    private const string Other = "t87_other";      // AFD02 — a Leader; holds the ACTING edge over EmpActing
-    private const string EmpNoPeriod = "t87_emp_np"; // AFD01 — Mgr's report with NO period this month
-    // STY05 tree (cross-styrelse):
+    // STY02 Organisation (MAO MIN01):
+    private const string Emp = "t87_emp";          // STY02 — Mgr's PRIMARY report
+    private const string Mgr = "t87_mgr";          // STY02 — designated approver
+    private const string Vik = "t87_vik";          // STY02 — Mgr's vikar stand-in (a Leader)
+    private const string EmpVik = "t87_emp_vik";   // STY02 — reports PRIMARY to AwayMgr (vikar-covered)
+    private const string AwayMgr = "t87_awaymgr";  // STY02 — away manager, covered by Vik
+    private const string EmpIm = "t87_emp_im";     // STY02 — reports to an INACTIVE manager
+    private const string InactiveMgr = "t87_imgr"; // STY02 — INACTIVE; escalates to Mgr
+    private const string EmpActing = "t87_emp_act"; // STY02 — Mgr's PRIMARY report BUT reassigned via ACTING to Other
+    private const string Other = "t87_other";      // STY02 — a Leader; holds the ACTING edge over EmpActing
+    private const string EmpNoPeriod = "t87_emp_np"; // STY02 — Mgr's report with NO period this month
+    // STY05 Organisation (a DIFFERENT MAO MIN02 — cross-tree):
     private const string EmpX = "t87_emp_x";       // STY05 — different tree_root
     private const string MgrX = "t87_mgr_x";       // STY05 — EmpX's own manager
 
@@ -100,16 +104,16 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
             """
             INSERT INTO users (user_id, username, password_hash, display_name, email, primary_org_id, agreement_code, ok_version, is_active)
             VALUES
-                (@emp,    @emp,    '$2a$11$fake', 'T87 Emp',     't87_emp@test.dk',     'AFD01', 'HK', 'OK24', TRUE),
-                (@mgr,    @mgr,    '$2a$11$fake', 'T87 Mgr',     't87_mgr@test.dk',     'AFD02', 'HK', 'OK24', TRUE),
-                (@vik,    @vik,    '$2a$11$fake', 'T87 Vikar',   't87_vik@test.dk',     'AFD02', 'HK', 'OK24', TRUE),
-                (@empvik, @empvik, '$2a$11$fake', 'T87 EmpVik',  't87_emp_vik@test.dk', 'AFD01', 'HK', 'OK24', TRUE),
-                (@away,   @away,   '$2a$11$fake', 'T87 AwayMgr', 't87_awaymgr@test.dk', 'AFD02', 'HK', 'OK24', TRUE),
-                (@empim,  @empim,  '$2a$11$fake', 'T87 EmpIM',   't87_emp_im@test.dk',  'AFD01', 'HK', 'OK24', TRUE),
-                (@imgr,   @imgr,   '$2a$11$fake', 'T87 IMgr',    't87_imgr@test.dk',    'AFD02', 'HK', 'OK24', FALSE),
-                (@empact, @empact, '$2a$11$fake', 'T87 EmpAct',  't87_emp_act@test.dk', 'AFD01', 'HK', 'OK24', TRUE),
-                (@other,  @other,  '$2a$11$fake', 'T87 Other',   't87_other@test.dk',   'AFD02', 'HK', 'OK24', TRUE),
-                (@empnp,  @empnp,  '$2a$11$fake', 'T87 EmpNP',   't87_emp_np@test.dk',  'AFD01', 'HK', 'OK24', TRUE),
+                (@emp,    @emp,    '$2a$11$fake', 'T87 Emp',     't87_emp@test.dk',     'STY02', 'HK', 'OK24', TRUE),
+                (@mgr,    @mgr,    '$2a$11$fake', 'T87 Mgr',     't87_mgr@test.dk',     'STY02', 'HK', 'OK24', TRUE),
+                (@vik,    @vik,    '$2a$11$fake', 'T87 Vikar',   't87_vik@test.dk',     'STY02', 'HK', 'OK24', TRUE),
+                (@empvik, @empvik, '$2a$11$fake', 'T87 EmpVik',  't87_emp_vik@test.dk', 'STY02', 'HK', 'OK24', TRUE),
+                (@away,   @away,   '$2a$11$fake', 'T87 AwayMgr', 't87_awaymgr@test.dk', 'STY02', 'HK', 'OK24', TRUE),
+                (@empim,  @empim,  '$2a$11$fake', 'T87 EmpIM',   't87_emp_im@test.dk',  'STY02', 'HK', 'OK24', TRUE),
+                (@imgr,   @imgr,   '$2a$11$fake', 'T87 IMgr',    't87_imgr@test.dk',    'STY02', 'HK', 'OK24', FALSE),
+                (@empact, @empact, '$2a$11$fake', 'T87 EmpAct',  't87_emp_act@test.dk', 'STY02', 'HK', 'OK24', TRUE),
+                (@other,  @other,  '$2a$11$fake', 'T87 Other',   't87_other@test.dk',   'STY02', 'HK', 'OK24', TRUE),
+                (@empnp,  @empnp,  '$2a$11$fake', 'T87 EmpNP',   't87_emp_np@test.dk',  'STY02', 'HK', 'OK24', TRUE),
                 (@empx,   @empx,   '$2a$11$fake', 'T87 EmpX',    't87_emp_x@test.dk',   'STY05', 'HK', 'OK24', TRUE),
                 (@mgrx,   @mgrx,   '$2a$11$fake', 'T87 MgrX',    't87_mgr_x@test.dk',   'STY05', 'HK', 'OK24', TRUE)
             ON CONFLICT DO NOTHING
@@ -123,15 +127,15 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
             """
             INSERT INTO role_assignments (user_id, role_id, org_id, scope_type, assigned_by)
             VALUES
-                (@mgr,    'LOCAL_LEADER', 'AFD02', 'ORG_AND_DESCENDANTS', 'TEST'),
-                (@vik,    'LOCAL_LEADER', 'AFD02', 'ORG_AND_DESCENDANTS', 'TEST'),
-                (@other,  'LOCAL_LEADER', 'AFD02', 'ORG_AND_DESCENDANTS', 'TEST'),
+                (@mgr,    'LOCAL_LEADER', 'STY02', 'ORG_AND_DESCENDANTS', 'TEST'),
+                (@vik,    'LOCAL_LEADER', 'STY02', 'ORG_AND_DESCENDANTS', 'TEST'),
+                (@other,  'LOCAL_LEADER', 'STY02', 'ORG_AND_DESCENDANTS', 'TEST'),
                 (@mgrx,   'LOCAL_LEADER', 'STY05', 'ORG_AND_DESCENDANTS', 'TEST'),
-                (@emp,    'EMPLOYEE',     'AFD01', 'ORG_ONLY',            'TEST'),
-                (@empvik, 'EMPLOYEE',     'AFD01', 'ORG_ONLY',            'TEST'),
-                (@empim,  'EMPLOYEE',     'AFD01', 'ORG_ONLY',            'TEST'),
-                (@empact, 'EMPLOYEE',     'AFD01', 'ORG_ONLY',            'TEST'),
-                (@empnp,  'EMPLOYEE',     'AFD01', 'ORG_ONLY',            'TEST'),
+                (@emp,    'EMPLOYEE',     'STY02', 'ORG_ONLY',            'TEST'),
+                (@empvik, 'EMPLOYEE',     'STY02', 'ORG_ONLY',            'TEST'),
+                (@empim,  'EMPLOYEE',     'STY02', 'ORG_ONLY',            'TEST'),
+                (@empact, 'EMPLOYEE',     'STY02', 'ORG_ONLY',            'TEST'),
+                (@empnp,  'EMPLOYEE',     'STY02', 'ORG_ONLY',            'TEST'),
                 (@empx,   'EMPLOYEE',     'STY05', 'ORG_ONLY',            'TEST')
             ON CONFLICT DO NOTHING
             """, conn))
@@ -142,20 +146,20 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
 
         var rlRepo = new ReportingLineRepository(_dbFactory);
 
-        // Emp (AFD01) reports PRIMARY to Mgr (AFD02) — the cross-afdeling, same-tree edge.
+        // Emp (STY02) reports PRIMARY to Mgr (STY02) — the same-Organisation, same-tree edge.
         await rlRepo.AssignAsync(null, MakeLine(Emp, Mgr, TreeRootSty02, "PRIMARY"));
-        // EmpNoPeriod (AFD01) reports PRIMARY to Mgr — same edge, but no period this month.
+        // EmpNoPeriod (STY02) reports PRIMARY to Mgr — same edge, but no period this month.
         await rlRepo.AssignAsync(null, MakeLine(EmpNoPeriod, Mgr, TreeRootSty02, "PRIMARY"));
-        // EmpVik (AFD01) reports PRIMARY to AwayMgr (AFD02) — AwayMgr is covered by a vikar (set in test).
+        // EmpVik (STY02) reports PRIMARY to AwayMgr (STY02) — AwayMgr is covered by a vikar (set in test).
         await rlRepo.AssignAsync(null, MakeLine(EmpVik, AwayMgr, TreeRootSty02, "PRIMARY"));
-        // EmpIm (AFD01) → InactiveMgr (inactive, AFD02) → Mgr — inactive-escalation up to Mgr.
+        // EmpIm (STY02) → InactiveMgr (inactive, STY02) → Mgr — inactive-escalation up to Mgr.
         await rlRepo.AssignAsync(null, MakeLine(EmpIm, InactiveMgr, TreeRootSty02, "PRIMARY"));
         await rlRepo.AssignAsync(null, MakeLine(InactiveMgr, Mgr, TreeRootSty02, "PRIMARY"));
-        // EmpActing (AFD01) reports PRIMARY to Mgr BUT is reassigned via an ACTING edge to Other →
+        // EmpActing (STY02) reports PRIMARY to Mgr BUT is reassigned via an ACTING edge to Other →
         // Other is the single effective approver, NOT Mgr (the acting-reassigned-away case).
         await rlRepo.AssignAsync(null, MakeLine(EmpActing, Mgr, TreeRootSty02, "PRIMARY"));
         await rlRepo.AssignAsync(null, MakeLine(EmpActing, Other, TreeRootSty02, "ACTING"));
-        // EmpX (STY05) reports PRIMARY to MgrX (STY05) — the cross-styrelse tree.
+        // EmpX (STY05) reports PRIMARY to MgrX (STY05) — the cross-MAO (cross-tree) Organisation.
         await rlRepo.AssignAsync(null, MakeLine(EmpX, MgrX, TreeRootSty05, "PRIMARY"));
     }
 
@@ -392,10 +396,10 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
     public async Task Roster_IsActAuthoritySet_Vikar_And_Escalation_Appear_ActingReassigned_DoesNot()
     {
         await CreateVikarAsync(AwayMgr, Vik, DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30));
-        await InsertPeriodAsync(Emp, "AFD01", "SUBMITTED");
-        await InsertPeriodAsync(EmpVik, "AFD01", "SUBMITTED");
-        await InsertPeriodAsync(EmpIm, "AFD01", "SUBMITTED");
-        await InsertPeriodAsync(EmpActing, "AFD01", "SUBMITTED");
+        await InsertPeriodAsync(Emp, "STY02", "SUBMITTED");
+        await InsertPeriodAsync(EmpVik, "STY02", "SUBMITTED");
+        await InsertPeriodAsync(EmpIm, "STY02", "SUBMITTED");
+        await InsertPeriodAsync(EmpActing, "STY02", "SUBMITTED");
 
         // Mgr's team-overview: Emp + EmpIm (escalation) + EmpNoPeriod; NOT EmpActing (reassigned away).
         var mgrRows = await GetTeamOverviewAsync(Mgr, 2026, 5);
@@ -427,14 +431,14 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
     public async Task Roster_VikarCoverageReport_IsApprovable_SeeEqualsAct()
     {
         await CreateVikarAsync(AwayMgr, Vik, DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30));
-        var periodId = await InsertPeriodAsync(EmpVik, "AFD01", "SUBMITTED");
+        var periodId = await InsertPeriodAsync(EmpVik, "STY02", "SUBMITTED");
 
         var rows = await GetTeamOverviewAsync(Vik, 2026, 5);
         var row = rows.Single(r => EmployeeId(r) == EmpVik);
         Assert.Equal(periodId, row.GetProperty("periodId").GetGuid());
 
-        // The same period is approvable by the vikar (org-scope AFD02 does NOT cover AFD01).
-        var client = LeaderClient(Vik, "AFD02");
+        // The same period is approvable by the vikar via the vikar EDGE (EmpVik + Vik both on STY02).
+        var client = LeaderClient(Vik, "STY02");
         var approveRsp = await client.PostAsync($"/api/approval/{periodId}/approve", null);
         Assert.Equal(HttpStatusCode.OK, approveRsp.StatusCode);
     }
@@ -464,7 +468,7 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
     [Fact]
     public async Task Ferie_ComesFromVacationEntitlement_UsedAndTotal_ForRequestedFerieaar()
     {
-        await InsertPeriodAsync(Emp, "AFD01", "SUBMITTED");
+        await InsertPeriodAsync(Emp, "STY02", "SUBMITTED");
         // May 2026 → ferieår (reset_month 9) = 2025.
         await SetVacationBalanceAsync(Emp, 2025, used: 7m, totalQuota: 25m);
 
@@ -478,7 +482,7 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
     public async Task DecisionAt_IsNeutral_StatusDisambiguates_Reject()
     {
         // A REJECTED period writes approved_at too + a reason; status disambiguates.
-        await InsertPeriodAsync(Emp, "AFD01", "REJECTED", rejectionReason: "needs fixing");
+        await InsertPeriodAsync(Emp, "STY02", "REJECTED", rejectionReason: "needs fixing");
 
         var rows = await GetTeamOverviewAsync(Mgr, 2026, 5);
         var row = rows.Single(r => EmployeeId(r) == Emp);
@@ -490,7 +494,7 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
     [Fact]
     public async Task DecisionAt_PresentForApproved_NoRejectionReason()
     {
-        await InsertPeriodAsync(Emp, "AFD01", "APPROVED");
+        await InsertPeriodAsync(Emp, "STY02", "APPROVED");
 
         var rows = await GetTeamOverviewAsync(Mgr, 2026, 5);
         var row = rows.Single(r => EmployeeId(r) == Emp);
@@ -502,8 +506,8 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
     [Fact]
     public async Task AwayToday_True_ForEmployeeWithTodayCoveringAbsence()
     {
-        await InsertPeriodAsync(Emp, "AFD01", "SUBMITTED");
-        await InsertPeriodAsync(EmpNoPeriod, "AFD01", "SUBMITTED", // give it a period so it's not the no-period case
+        await InsertPeriodAsync(Emp, "STY02", "SUBMITTED");
+        await InsertPeriodAsync(EmpNoPeriod, "STY02", "SUBMITTED", // give it a period so it's not the no-period case
             start: new DateOnly(2026, 5, 1), end: new DateOnly(2026, 5, 31));
         await InsertAbsenceTodayAsync(Emp);
 
@@ -515,7 +519,7 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
     [Fact]
     public async Task AwayToday_FaultIsolated_BrokenAbsenceRead_StillReturnsRows_FlagFalse()
     {
-        await InsertPeriodAsync(Emp, "AFD01", "SUBMITTED");
+        await InsertPeriodAsync(Emp, "STY02", "SUBMITTED");
         await InsertAbsenceTodayAsync(Emp);
 
         // Break the absences_projection read for THIS request by dropping the table the query reads.
@@ -546,7 +550,7 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
     [Fact]
     public async Task FlexBalance_ComesFromLatestFlexEvent()
     {
-        await InsertPeriodAsync(Emp, "AFD01", "SUBMITTED");
+        await InsertPeriodAsync(Emp, "STY02", "SUBMITTED");
         await InsertFlexEventAsync(Emp, 3m);
         await InsertFlexEventAsync(Emp, 12.5m); // the LATEST (highest stream_version) wins
 
@@ -567,8 +571,8 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
     [Fact]
     public async Task PayrollExported_True_ForEmployeeWithExportRecord_FalseOtherwise()
     {
-        var periodId = await InsertPeriodAsync(Emp, "AFD01", "APPROVED");
-        await InsertPeriodAsync(EmpNoPeriod, "AFD01", "APPROVED",
+        var periodId = await InsertPeriodAsync(Emp, "STY02", "APPROVED");
+        await InsertPeriodAsync(EmpNoPeriod, "STY02", "APPROVED",
             start: new DateOnly(2026, 5, 1), end: new DateOnly(2026, 5, 31));
         // Emp's May 2026 is sent to lønkørsel; EmpNoPeriod's is NOT.
         await InsertPayrollExportRecordAsync(Emp, 2026, 5, periodId);
@@ -591,7 +595,7 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
     [Fact]
     public async Task PayrollExported_False_WhenExportRecordIsForADifferentMonth()
     {
-        await InsertPeriodAsync(Emp, "AFD01", "APPROVED");
+        await InsertPeriodAsync(Emp, "STY02", "APPROVED");
         // Emp has an export record for June 2026, but the team-overview is requested for May 2026.
         await InsertPayrollExportRecordAsync(Emp, 2026, 6);
 
@@ -607,12 +611,12 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
     [Fact]
     public async Task HasWarning_True_WhenWorkedExceedsAllocated_NoRuleEngineCalled()
     {
-        await InsertPeriodAsync(Emp, "AFD01", "SUBMITTED");
+        await InsertPeriodAsync(Emp, "STY02", "SUBMITTED");
         // worked 7.4h, allocated 0 (no NORMAL+TaskId entry) → "Ikke fordelt" > 0 → hasWarning.
         await InsertWorkTimeAsync(Emp, new DateOnly(2026, 5, 4), 7.4m);
 
         // A balanced employee: worked == allocated → no warning.
-        await InsertPeriodAsync(EmpNoPeriod, "AFD01", "SUBMITTED",
+        await InsertPeriodAsync(EmpNoPeriod, "STY02", "SUBMITTED",
             start: new DateOnly(2026, 5, 1), end: new DateOnly(2026, 5, 31));
         await InsertWorkTimeAsync(EmpNoPeriod, new DateOnly(2026, 5, 4), 7.4m);
         await InsertTimeEntryAsync(EmpNoPeriod, new DateOnly(2026, 5, 4), 7.4m, "NORMAL", "TASK-1");
@@ -631,7 +635,7 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
         // OVER-allocated day (allocated > worked — more project hours booked than worked time)
         // is un-approvable and must surface a warning too. RED on the old one-direction check
         // (worked − allocated > tol → −5.4 > tol → false); GREEN on the symmetric |·| mirror.
-        await InsertPeriodAsync(Emp, "AFD01", "SUBMITTED",
+        await InsertPeriodAsync(Emp, "STY02", "SUBMITTED",
             start: new DateOnly(2026, 6, 1), end: new DateOnly(2026, 6, 30));
         await InsertWorkTimeAsync(Emp, new DateOnly(2026, 6, 2), 2.0m);
         await InsertTimeEntryAsync(Emp, new DateOnly(2026, 6, 2), 7.4m, "NORMAL", "TASK-1");
@@ -663,10 +667,12 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
     [Fact]
     public async Task NonApprover_GetsOwnEmptySet_NoOrgScopeLeak()
     {
-        await InsertPeriodAsync(Emp, "AFD01", "SUBMITTED");
+        await InsertPeriodAsync(Emp, "STY02", "SUBMITTED");
 
-        // Other is a Leader in AFD02 but holds NO designated edge over Emp (AFD01) — Emp must NOT
-        // appear in Other's set (no org-scope leak: AFD02 scope does not pull in AFD01's Emp).
+        // Other is a Leader on STY02 but holds NO designated edge over Emp — Emp must NOT appear in
+        // Other's set. The team-overview roster is the designated-act-authority SET (edge-derived),
+        // so even though Other now shares STY02 org-scope with Emp post-flatten, org-scope does NOT
+        // add a row (this read is NOT ValidateEmployeeAccessAsync); only an edge would.
         var rows = await GetTeamOverviewAsync(Other, 2026, 5);
         Assert.DoesNotContain(Emp, rows.Select(EmployeeId));
     }
@@ -686,7 +692,7 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
     {
         var client = _factory.CreateClient();
         client.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", MintEmployeeToken(Emp, "AFD01"));
+            new AuthenticationHeaderValue("Bearer", MintEmployeeToken(Emp, "STY02"));
         var rsp = await client.GetAsync("/api/approval/team-overview?year=2026&month=5");
         Assert.Equal(HttpStatusCode.Forbidden, rsp.StatusCode);
     }
@@ -709,8 +715,8 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
     public async Task BalanceReads_AreBatched_OneCallReturnsAllRows()
     {
         // 6 reports under Mgr (Emp, EmpIm via escalation, EmpNoPeriod) + add periods.
-        await InsertPeriodAsync(Emp, "AFD01", "SUBMITTED");
-        await InsertPeriodAsync(EmpIm, "AFD01", "SUBMITTED");
+        await InsertPeriodAsync(Emp, "STY02", "SUBMITTED");
+        await InsertPeriodAsync(EmpIm, "STY02", "SUBMITTED");
         await SetVacationBalanceAsync(Emp, 2025, 3m, 25m);
         await SetVacationBalanceAsync(EmpIm, 2025, 9m, 25m);
         await InsertFlexEventAsync(Emp, 5m);
@@ -747,7 +753,7 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
     private static string ActorOrg(string actorId) => actorId switch
     {
         MgrX => "STY05",
-        _ => "AFD02",
+        _ => "STY02",
     };
 
     private HttpClient LeaderClient(string userId, string orgId)

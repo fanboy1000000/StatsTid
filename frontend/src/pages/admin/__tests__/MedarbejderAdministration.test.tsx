@@ -34,8 +34,8 @@ vi.mock('../../../contexts/AuthContext', () => ({
 }))
 
 const mockOrgs = [
-  { orgId: 'MIN1', orgName: 'Finansministeriet', orgType: 'MINISTRY', parentOrgId: null, agreementCode: 'AC' },
-  { orgId: 'STY1', orgName: 'Moderniseringsstyrelsen', orgType: 'STYRELSE', parentOrgId: 'MIN1', agreementCode: 'AC' },
+  { orgId: 'MIN1', orgName: 'Finansministeriet', orgType: 'MAO', parentOrgId: null, agreementCode: 'AC' },
+  { orgId: 'STY1', orgName: 'Moderniseringsstyrelsen', orgType: 'ORGANISATION', parentOrgId: 'MIN1', agreementCode: 'AC' },
   { orgId: 'DEP1', orgName: 'Afdeling X', orgType: 'DEPARTMENT', parentOrgId: 'STY1', agreementCode: 'AC' },
 ]
 
@@ -225,7 +225,7 @@ beforeEach(() => {
 })
 
 describe('MedarbejderAdministration', () => {
-  it('renders the Styrelse selector with only MINISTRY/STYRELSE orgs', async () => {
+  it('renders the Styrelse selector with only MAO/ORGANISATION orgs', async () => {
     renderPage()
     await waitFor(() => {
       expect(screen.getAllByText('Birgit Bertelsen').length).toBeGreaterThanOrEqual(1)

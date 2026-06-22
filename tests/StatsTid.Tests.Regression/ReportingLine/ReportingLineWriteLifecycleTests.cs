@@ -41,8 +41,9 @@ namespace StatsTid.Tests.Regression.ReportingLine;
 /// </para>
 ///
 /// <para>
-/// Topology (init.sql seed orgs): STY02 tree = {STY02 root, AFD01, AFD02}; STY05 tree =
-/// {STY05 root, AFD03, AFD04}, under different ministries. Endpoint-level via
+/// Topology (init.sql seed orgs, S92/ADR-035 flatten): MIN01 (MAO) has Organisation STY02; MIN02 (MAO)
+/// has Organisation STY05 — a different tree_root. Each Organisation is its own tree root (the former
+/// former sub-org rows are gone; cross-tree fixtures move between Organisations). Endpoint-level via
 /// <see cref="StatsTidWebApplicationFactory"/>; direct repository assertions for the forced-rollback
 /// atomicity (the endpoint lambda cannot be invoked here, mirroring the TASK-7401 pattern).
 /// </para>
@@ -60,18 +61,18 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
     private PostgresEventStore _outbox = null!;
     private AuditProjectionRepository _auditRepo = null!;
 
-    // ── STY02 tree users ──
-    private const string Top = "t743_top";          // AFD02 — top manager (root-ish, scope cover)
-    private const string Mgr = "t743_mgr";          // AFD02 — reports to Top; manager of Emp/Emp2
-    private const string Emp = "t743_emp";          // AFD01 — reports PRIMARY to Mgr
-    private const string Emp2 = "t743_emp2";        // AFD01 — reports PRIMARY to Mgr
-    private const string Sub = "t743_sub";          // AFD01 — reports PRIMARY to Emp (Emp's descendant)
-    private const string Repl = "t743_repl";        // AFD02 — a valid replacement approver
-    private const string NewGuy = "t743_new";       // AFD01 — created fresh in R9 tests (not pre-seeded)
-    private const string CycX = "t743_cyc_x";       // AFD01 — no edges; W2 concurrent-cycle leg X
-    private const string CycY = "t743_cyc_y";       // AFD02 — no edges; W2 concurrent-cycle leg Y
-    private const string LateRep = "t743_late_rep"; // AFD01 — no edges; W2 concurrent assign-vs-delete report
-    // ── STY05 (cross-tree) ──
+    // ── STY02 Organisation users ──
+    private const string Top = "t743_top";          // STY02 — top manager (root-ish, scope cover)
+    private const string Mgr = "t743_mgr";          // STY02 — reports to Top; manager of Emp/Emp2
+    private const string Emp = "t743_emp";          // STY02 — reports PRIMARY to Mgr
+    private const string Emp2 = "t743_emp2";        // STY02 — reports PRIMARY to Mgr
+    private const string Sub = "t743_sub";          // STY02 — reports PRIMARY to Emp (Emp's descendant)
+    private const string Repl = "t743_repl";        // STY02 — a valid replacement approver
+    private const string NewGuy = "t743_new";       // STY02 — created fresh in R9 tests (not pre-seeded)
+    private const string CycX = "t743_cyc_x";       // STY02 — no edges; W2 concurrent-cycle leg X
+    private const string CycY = "t743_cyc_y";       // STY02 — no edges; W2 concurrent-cycle leg Y
+    private const string LateRep = "t743_late_rep"; // STY02 — no edges; W2 concurrent assign-vs-delete report
+    // ── STY05 (cross-tree Organisation under a DIFFERENT MAO MIN02) ──
     private const string MgrX = "t743_mgr_x";       // STY05 — different tree_root
 
     private const string TreeRootSty02 = "STY02";
@@ -118,15 +119,15 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
             """
             INSERT INTO users (user_id, username, password_hash, display_name, email, primary_org_id, agreement_code, ok_version, is_active)
             VALUES
-                (@top,  @top,  '$2a$11$fake', 'T743 Top',  't743_top@test.dk',  'AFD02', 'HK', 'OK24', TRUE),
-                (@mgr,  @mgr,  '$2a$11$fake', 'T743 Mgr',  't743_mgr@test.dk',  'AFD02', 'HK', 'OK24', TRUE),
-                (@emp,  @emp,  '$2a$11$fake', 'T743 Emp',  't743_emp@test.dk',  'AFD01', 'HK', 'OK24', TRUE),
-                (@emp2, @emp2, '$2a$11$fake', 'T743 Emp2', 't743_emp2@test.dk', 'AFD01', 'HK', 'OK24', TRUE),
-                (@sub,  @sub,  '$2a$11$fake', 'T743 Sub',  't743_sub@test.dk',  'AFD01', 'HK', 'OK24', TRUE),
-                (@repl, @repl, '$2a$11$fake', 'T743 Repl', 't743_repl@test.dk', 'AFD02', 'HK', 'OK24', TRUE),
-                (@cycx, @cycx, '$2a$11$fake', 'T743 CycX', 't743_cyc_x@test.dk','AFD01', 'HK', 'OK24', TRUE),
-                (@cycy, @cycy, '$2a$11$fake', 'T743 CycY', 't743_cyc_y@test.dk','AFD02', 'HK', 'OK24', TRUE),
-                (@late, @late, '$2a$11$fake', 'T743 Late', 't743_late@test.dk', 'AFD01', 'HK', 'OK24', TRUE),
+                (@top,  @top,  '$2a$11$fake', 'T743 Top',  't743_top@test.dk',  'STY02', 'HK', 'OK24', TRUE),
+                (@mgr,  @mgr,  '$2a$11$fake', 'T743 Mgr',  't743_mgr@test.dk',  'STY02', 'HK', 'OK24', TRUE),
+                (@emp,  @emp,  '$2a$11$fake', 'T743 Emp',  't743_emp@test.dk',  'STY02', 'HK', 'OK24', TRUE),
+                (@emp2, @emp2, '$2a$11$fake', 'T743 Emp2', 't743_emp2@test.dk', 'STY02', 'HK', 'OK24', TRUE),
+                (@sub,  @sub,  '$2a$11$fake', 'T743 Sub',  't743_sub@test.dk',  'STY02', 'HK', 'OK24', TRUE),
+                (@repl, @repl, '$2a$11$fake', 'T743 Repl', 't743_repl@test.dk', 'STY02', 'HK', 'OK24', TRUE),
+                (@cycx, @cycx, '$2a$11$fake', 'T743 CycX', 't743_cyc_x@test.dk','STY02', 'HK', 'OK24', TRUE),
+                (@cycy, @cycy, '$2a$11$fake', 'T743 CycY', 't743_cyc_y@test.dk','STY02', 'HK', 'OK24', TRUE),
+                (@late, @late, '$2a$11$fake', 'T743 Late', 't743_late@test.dk', 'STY02', 'HK', 'OK24', TRUE),
                 (@mgrx, @mgrx, '$2a$11$fake', 'T743 MgrX', 't743_mgr_x@test.dk','STY05', 'HK', 'OK24', TRUE)
             ON CONFLICT DO NOTHING
             """, conn))
@@ -135,7 +136,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
             await cmd.ExecuteNonQueryAsync();
         }
 
-        // Admin actor scope: Top is a LOCAL_ADMIN over STY02 (covers AFD01 + AFD02) so the admin
+        // Admin actor scope: Top is a LOCAL_ADMIN over STY02 (covers the whole STY02 Organisation) so the admin
         // endpoints (LocalAdminOrAbove) pass org-scope on every test user.
         await using (var cmd = new NpgsqlCommand(
             """
@@ -313,7 +314,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
             password = "password",
             displayName = "T743 New",
             email = "t743_new@test.dk",
-            primaryOrgId = "AFD01",
+            primaryOrgId = "STY02",
             agreementCode = "HK",
             okVersion = "OK24",
             approverId = Mgr,    // R9 — atomic create + assign under Mgr
@@ -352,7 +353,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
             username = NewGuy,
             password = "password",
             displayName = "T743 New",
-            primaryOrgId = "AFD01",
+            primaryOrgId = "STY02",
             agreementCode = "HK",
             okVersion = "OK24",
             approverId = MgrX,    // STY05 — different reporting tree
@@ -376,7 +377,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
             username = NewGuy,
             password = "password",
             displayName = "T743 New",
-            primaryOrgId = "AFD01",
+            primaryOrgId = "STY02",
             agreementCode = "HK",
             okVersion = "OK24",
             approverId = NewGuy,   // self-cycle
@@ -397,7 +398,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
             username = NewGuy,
             password = "password",
             displayName = "T743 New",
-            primaryOrgId = "AFD01",
+            primaryOrgId = "STY02",
             agreementCode = "HK",
             okVersion = "OK24",
             // no approverId
@@ -892,7 +893,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
         Assert.Null(lateRepPrimary); // the assign was rejected → no LateRep PRIMARY edge at all.
     }
 
-    // S74-7403 fix4 / S78 R9 — the cross-styrelse-transfer-mid-assign case. UNDER S78 R9 the assign no
+    // S74-7403 fix4 / S78 R9 — the cross-tree (cross-MAO) transfer-mid-assign case. UNDER S78 R9 the assign no
     // longer proceeds on a STALE key: the drift-guarded acquire RE-DERIVES the root under the held
     // advisory, detects the drift, ROLLS BACK, and RETRIES the whole request on a fresh tx (re-keyed on
     // the NEW root). The terminal outcome is still a CLEAN 400 (cross-tree) — Mgr stayed in STY02 — with
@@ -903,7 +904,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
     //   (1) HOLD the STY02 tree key on a side connection;
     //   (2) fire assign LateRep → Mgr (both STY02-tree at seed) — it BLOCKS on the held key (the advisory
     //       is taken on the now-soon-to-be-stale key, BEFORE the post-acquire re-derive);
-    //   (3) while parked, TRANSFER LateRep's primary_org_id to STY05 via a raw UPDATE (the cross-styrelse
+    //   (3) while parked, TRANSFER LateRep's primary_org_id to STY05 via a raw UPDATE (the cross-tree
     //       org-transfer the unlocked pre-acquire read cannot see);
     //   (4) release the held key → the parked assign acquires STY02, RE-DERIVES LateRep=STY05 → DRIFT →
     //       rollback → RETRY on STY05; ValidateSameTreeAsync then sees LateRep=STY05, Mgr=STY02 → 400. No
@@ -937,7 +938,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
             Assert.False(finishedEarly,
                 "The assign completed while the tree lock was held — it did not serialize on the lock.");
 
-            // 3. While parked, TRANSFER LateRep to STY05 (a DIFFERENT styrelse/tree) — the cross-styrelse
+            // 3. While parked, TRANSFER LateRep to STY05 (a DIFFERENT Organisation/MAO/tree) — the cross-tree
             //    org-transfer that committed in the unlocked pre-acquire → advisory window. A raw UPDATE
             //    does not contend on the advisory, so the held key stays stale for the parked assign.
             await using (var sideConn = _dbFactory.Create())
@@ -982,7 +983,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
     // ════════════════════════════════════════════════════════════════════════════════
     //  S78 R9 — the SHARED DRIFT-GUARDED ACQUIRE (held-lock interleave proofs, R6)
     //
-    //  These prove the S74-7403 cross-styrelse-transfer STALE-KEY residual is now CLOSED by the shared
+    //  These prove the S74-7403 cross-tree-transfer STALE-KEY residual is now CLOSED by the shared
     //  drift-guarded acquire (AcquireTreeLockForEmployeeAsync): the advisory key is RE-DERIVED under the
     //  held advisory and, on drift, the mutator THROWS TreeRootDriftException → RunAsync ROLLS BACK +
     //  RETRIES the whole request on a fresh tx (re-keyed on the NEW root). Unlike the prior Fix4 test
@@ -991,13 +992,13 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
 
     /// <summary>
     /// S78 R9 DRIFT-ROLLBACK-RETRY (the core proof). An assign whose advisory key DRIFTS mid-acquire —
-    /// because a transfer moves the employee to a NEW styrelse while the assign is parked on the OLD key —
+    /// because a transfer moves the employee to a NEW tree (Organisation/MAO) while the assign is parked on the OLD key —
     /// must detect the drift under the lock, ROLL BACK, and RETRY on the NEW root (proven by the retry
     /// BLOCKING on the NEW-root advisory we also hold), then complete (here: 400 cross-tree, since the
     /// manager stayed in the OLD tree). No proceed-under-stale-key; bounded retry terminates.
     ///
     /// Interleave (two held keys):
-    ///   (1) seed Drifter in AFD01 (STY02 tree); HOLD both the STY02 key AND the STY05 key on side conns;
+    ///   (1) seed Drifter in STY02 (STY02 tree); HOLD both the STY02 key AND the STY05 key on side conns;
     ///   (2) fire assign Drifter → Mgr — it derives Drifter's root = STY02, then BLOCKS on the held STY02 key;
     ///   (3) while parked, TRANSFER Drifter to STY05 via a raw UPDATE (commits — the drift the unlocked
     ///       pre-acquire read cannot see);
@@ -1011,11 +1012,11 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
     public async Task R9_DriftMidAcquire_RollsBack_RetriesOnNewRoot_AndSerializes()
     {
         const string Drifter = "t743_drifter";
-        await SeedUserAsync(Drifter, "AFD01"); // STY02 tree at seed.
+        await SeedUserAsync(Drifter, "STY02"); // STY02 tree at seed.
         try
         {
             // Multi-scope admin (STY02 + STY05): on the post-drift RETRY the out-of-tx employee-scope
-            // check runs against Drifter's NEW org (STY05) — a single-styrelse admin would 403 there
+            // check runs against Drifter's NEW org (STY05) — a single-Organisation admin would 403 there
             // before reaching the advisory, so we use a both-trees admin to PROVE the retry re-keys on
             // the STY05 advisory (the whole point of this test).
             var client = TransferAdminClient();
@@ -1045,7 +1046,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
                 {
                     await sideConn.OpenAsync();
                     await using var transfer = new NpgsqlCommand(
-                        "UPDATE users SET primary_org_id = 'AFD03' WHERE user_id = @id", sideConn);
+                        "UPDATE users SET primary_org_id = 'STY05' WHERE user_id = @id", sideConn);
                     transfer.Parameters.AddWithValue("id", Drifter);
                     await transfer.ExecuteNonQueryAsync();
                 }
@@ -1091,14 +1092,14 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
     /// moving primary_org_id) and a concurrent assign serialize through the SAME tree advisory: while a
     /// side connection holds the OLD-tree key, the transfer BLOCKS on it (it acquires the OLD+NEW roots via
     /// AcquireTreeLocksForTransferAsync before the users-row FOR UPDATE), then completes once released —
-    /// proving the transfer is in-lock (no unserialized cross-styrelse move). No spurious 400; the org
+    /// proving the transfer is in-lock (no unserialized cross-tree move). No spurious 400; the org
     /// actually moved.
     /// </summary>
     [Fact]
     public async Task R9_Transfer_SerializesOnTreeAdvisory_NoSpurious400()
     {
         const string Mover = "t743_mover";
-        await SeedUserAsync(Mover, "AFD01"); // STY02 tree.
+        await SeedUserAsync(Mover, "STY02"); // STY02 tree.
         try
         {
             var client = TransferAdminClient(); // covers BOTH STY02 + STY05.
@@ -1108,7 +1109,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
             var released = false;
             try
             {
-                var transferTask = PutTransferAsync(client, Mover, newPrimaryOrgId: "AFD03", ifMatchVersion: 1);
+                var transferTask = PutTransferAsync(client, Mover, newPrimaryOrgId: "STY05", ifMatchVersion: 1);
 
                 Assert.True(await WaitForAdvisoryLockWaiterAsync(TreeRootSty02),
                     "The transfer did not block on the OLD-tree (STY02) advisory — it skipped the in-lock acquire.");
@@ -1135,7 +1136,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
             await conn.OpenAsync();
             await using var cmd = new NpgsqlCommand("SELECT primary_org_id FROM users WHERE user_id = @id", conn);
             cmd.Parameters.AddWithValue("id", Mover);
-            Assert.Equal("AFD03", (string?)await cmd.ExecuteScalarAsync());
+            Assert.Equal("STY05", (string?)await cmd.ExecuteScalarAsync());
         }
         finally
         {
@@ -1145,7 +1146,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
 
     /// <summary>
     /// S78 R5/R9 TRANSFER-vs-ASSIGN MUTUAL EXCLUSION (the strengthened proof — held-lock interleave).
-    /// PROVES the cross-styrelse transfer (PUT /api/admin/users/{id} moving primary_org_id) and a
+    /// PROVES the cross-tree transfer (PUT /api/admin/users/{id} moving primary_org_id) and a
     /// concurrent reporting-line assign genuinely SERIALIZE on the SHARED <c>reporting-tree-STY02</c>
     /// advisory key — NEITHER can proceed while a side connection holds it — and that the post-release
     /// state is a coherent SERIALIZED outcome, never a torn interleave. The prior version of this test
@@ -1155,7 +1156,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
     /// proves the transfer AND the assign contend on the SAME key) AND the final serialized invariant holds.
     ///
     /// Interleave:
-    ///   (1) seed Dl in AFD01 (STY02 tree); HOLD the STY02 tree key on a side connection;
+    ///   (1) seed Dl in STY02 (STY02 tree); HOLD the STY02 tree key on a side connection;
     ///   (2) fire the TRANSFER Dl STY02→STY05 — it must BLOCK on the held STY02 key (it acquires the OLD
     ///       root STY02 via AcquireTreeLocksForTransferAsync BEFORE the users-row FOR UPDATE). Prove the
     ///       waiter (pg_locks granted=false on the STY02 advisory) → the transfer takes the shared key;
@@ -1164,7 +1165,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
     ///       assign mutually exclude on the shared tree key (the core mutual-exclusion proof);
     ///   (4) release the held key → the two serialize one-at-a-time. Both complete (no 500 / no hang);
     ///   (5) FINAL INVARIANT (grant-order-INDEPENDENT, so non-flaky): the transfer ALWAYS succeeds (200)
-    ///       and moves Dl to AFD03 (it does not depend on the assign); and the assign's terminal status is
+    ///       and moves Dl to STY05 (it does not depend on the assign); and the assign's terminal status is
     ///       TIGHTLY COUPLED to the surviving edge state — there is never a torn combination. Concretely:
     ///         • assign 201 ⟺ a Dl→Mgr PRIMARY edge survives (the assign won the key first, created it
     ///           while Dl was STILL same-tree in STY02; the transfer — which does not re-close existing
@@ -1179,7 +1180,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
     public async Task R9_TransferVsAssign_SerializeOnSharedKey_MutualExclusion()
     {
         const string Dl = "t743_dl";
-        await SeedUserAsync(Dl, "AFD01"); // STY02 tree.
+        await SeedUserAsync(Dl, "STY02"); // STY02 tree.
         try
         {
             var transferClient = TransferAdminClient(); // covers STY02 + STY05.
@@ -1193,7 +1194,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
             try
             {
                 // (2) Fire the TRANSFER Dl STY02→STY05. It acquires the OLD root (STY02) FIRST → blocks on the held key.
-                var transferTask = PutTransferAsync(transferClient, Dl, newPrimaryOrgId: "AFD03", ifMatchVersion: 1);
+                var transferTask = PutTransferAsync(transferClient, Dl, newPrimaryOrgId: "STY05", ifMatchVersion: 1);
 
                 Assert.True(await WaitForAdvisoryLockWaiterAsync(TreeRootSty02),
                     "The transfer did not block on the held STY02 advisory — it did not acquire the shared tree key before mutating.");
@@ -1238,14 +1239,14 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
             Assert.NotEqual(HttpStatusCode.InternalServerError, assignResp.StatusCode);
 
             // (5) FINAL INVARIANT — grant-order-INDEPENDENT (non-flaky), proves serialization:
-            //     (a) the transfer ALWAYS moves Dl to AFD03 (it does not depend on the assign);
+            //     (a) the transfer ALWAYS moves Dl to STY05 (it does not depend on the assign);
             Assert.Equal(HttpStatusCode.OK, transferResp.StatusCode);
             await using (var conn = new NpgsqlConnection(_harness.ConnectionString))
             {
                 await conn.OpenAsync();
                 await using var cmd = new NpgsqlCommand("SELECT primary_org_id FROM users WHERE user_id = @id", conn);
                 cmd.Parameters.AddWithValue("id", Dl);
-                Assert.Equal("AFD03", (string?)await cmd.ExecuteScalarAsync());
+                Assert.Equal("STY05", (string?)await cmd.ExecuteScalarAsync());
             }
             //     (b) the assign's status is TIGHTLY COUPLED to the surviving edge — never a torn state.
             var dlEdge = await _rlRepo.GetActiveByEmployeeAndRelationshipAsync(Dl, "PRIMARY");
@@ -1278,14 +1279,14 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
     /// user-rows FOR UPDATE (id-ordered) is consistent across both paths, so no cycle can form. Several
     /// rounds shake out ordering-dependent deadlocks. UNLIKE the prior version (which asserted only
     /// "not a 500"), each round now also asserts a per-round FINAL INVARIANT so a regression that silently
-    /// stops serializing — leaving a torn state — fails the test: the transfer ALWAYS moves Dl to AFD03,
+    /// stops serializing — leaving a torn state — fails the test: the transfer ALWAYS moves Dl to STY05,
     /// and the assign NEVER leaves a surviving cross-tree Dl→Mgr edge (Dl in STY05, Mgr in STY02).
     /// </summary>
     [Fact]
     public async Task R9_TransferVsAssign_OverlappingRows_DoNotDeadlock()
     {
         const string Dl = "t743_dl";
-        await SeedUserAsync(Dl, "AFD01"); // STY02 tree.
+        await SeedUserAsync(Dl, "STY02"); // STY02 tree.
         try
         {
             for (var round = 0; round < 4; round++)
@@ -1301,7 +1302,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
                         await del.ExecuteNonQueryAsync();
                     }
                     await using var upd = new NpgsqlCommand(
-                        "UPDATE users SET primary_org_id = 'AFD01', version = 1 WHERE user_id = @id", reset);
+                        "UPDATE users SET primary_org_id = 'STY02', version = 1 WHERE user_id = @id", reset);
                     upd.Parameters.AddWithValue("id", Dl);
                     await upd.ExecuteNonQueryAsync();
                 }
@@ -1313,7 +1314,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
 
                 // Transfer Dl STY02→STY05; concurrently assign Dl → Mgr (STY02). They contend on Dl's row
                 // + the STY02 advisory. Whichever wins, neither may deadlock (clean status both).
-                var transferTask = PutTransferAsync(transferClient, Dl, newPrimaryOrgId: "AFD03", ifMatchVersion: 1);
+                var transferTask = PutTransferAsync(transferClient, Dl, newPrimaryOrgId: "STY05", ifMatchVersion: 1);
                 var assignTask = PostAssignAsync(assignClient, "/api/admin/reporting-lines", new
                 {
                     employeeId = Dl,
@@ -1331,13 +1332,13 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
                 Assert.NotEqual(HttpStatusCode.InternalServerError, assignTask.Result.StatusCode);
 
                 // PER-ROUND FINAL INVARIANT — the serialized outcome, regardless of which path won:
-                //   (a) the transfer always moves Dl to AFD03 (it does not depend on the assign);
+                //   (a) the transfer always moves Dl to STY05 (it does not depend on the assign);
                 await using (var conn = new NpgsqlConnection(_harness.ConnectionString))
                 {
                     await conn.OpenAsync();
                     await using var cmd = new NpgsqlCommand("SELECT primary_org_id FROM users WHERE user_id = @id", conn);
                     cmd.Parameters.AddWithValue("id", Dl);
-                    Assert.Equal("AFD03", (string?)await cmd.ExecuteScalarAsync());
+                    Assert.Equal("STY05", (string?)await cmd.ExecuteScalarAsync());
                 }
                 //   (b) no SURVIVING cross-tree edge: if the assign committed an edge it must have been
                 //       same-tree-valid (Dl in STY02) at the time — but since the transfer always moves Dl
@@ -1412,7 +1413,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
     public async Task C2_4_DeepCycle_BeyondOldDepthCap_IsDetected_AndRejected()
     {
         const int depth = 14; // > the old cap of 10.
-        var chain = await SeedLinearChainAsync("dc", depth, "AFD01");
+        var chain = await SeedLinearChainAsync("dc", depth, "STY02");
 
         var client = AdminClient();
         // Assign the chain TOP (chain[0]) to report to the DEEPEST node (chain[depth]) — a cycle that
@@ -1448,8 +1449,8 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
         // Plant pc_a ↔ pc_b directly (a reciprocal active PRIMARY 2-cycle the guard would never allow).
         var pcA = "t743_pc_a";
         var pcB = "t743_pc_b";
-        await SeedUserAsync(pcA, "AFD01");
-        await SeedUserAsync(pcB, "AFD01");
+        await SeedUserAsync(pcA, "STY02");
+        await SeedUserAsync(pcB, "STY02");
         await InsertRawEdgeAsync(pcA, pcB); // pc_a reports to pc_b
         await InsertRawEdgeAsync(pcB, pcA); // pc_b reports to pc_a  → loop
 
@@ -1487,7 +1488,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
 
     /// <summary>
     /// S78 R9 — an admin client whose token carries LocalAdmin scope over BOTH STY02 and STY05, so the
-    /// cross-styrelse transfer endpoint (PUT /api/admin/users/{id}) passes the source-org AND target-org
+    /// cross-tree transfer endpoint (PUT /api/admin/users/{id}) passes the source-org AND target-org
     /// scope checks. The transfer requires the actor to cover the user's current org (STY02 tree) and the
     /// new org (STY05 tree).
     /// </summary>
@@ -1664,7 +1665,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
     /// <summary>
     /// S78 R9 — mints a LocalAdmin token carrying ORG_AND_DESCENDANTS scope over EVERY org in
     /// <paramref name="orgIds"/> (the transfer endpoint needs the actor to cover both the source and the
-    /// target styrelse). The primary <c>orgId</c> claim is the first entry.
+    /// target tree). The primary <c>orgId</c> claim is the first entry.
     /// </summary>
     private static string MintMultiScopeAdminToken(string userId, params string[] orgIds)
     {

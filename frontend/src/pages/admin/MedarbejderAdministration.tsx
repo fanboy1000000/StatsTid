@@ -29,7 +29,7 @@ import styles from './MedarbejderAdministration.module.css'
 // ledelseslinje tree is rendered from the 7501 roster contract via the pure
 // helpers in medarbejderTree.ts. The shell mirrors ReportingLineTree.tsx (bare
 // <div>, AppLayout provided by the routing shell; Styrelse selector =
-// useOrganizations filtered to MINISTRY/STYRELSE).
+// useOrganizations filtered to MAO/ORGANISATION).
 //
 // WRITE AFFORDANCES (full-edit lives in the EditPersonDrawer — opened by clicking
 // a person's name; S76b/7604). S86 ADDED inline QUICK-ACTION write affordances on
@@ -341,7 +341,7 @@ export function MedarbejderAdministration() {
   const treeRootOrgs = useMemo(
     () =>
       organizations.filter(
-        (o) => o.orgType === 'MINISTRY' || o.orgType === 'STYRELSE',
+        (o) => o.orgType === 'MAO' || o.orgType === 'ORGANISATION',
       ),
     [organizations],
   )

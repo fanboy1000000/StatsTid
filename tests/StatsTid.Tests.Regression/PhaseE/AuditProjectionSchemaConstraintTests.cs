@@ -77,7 +77,7 @@ public sealed class AuditProjectionSchemaConstraintTests : IAsyncLifetime
         // Pre-seed the FK target.
         await using (var orgCmd = new NpgsqlCommand(
             @"INSERT INTO organizations (org_id, org_name, org_type, materialized_path)
-              VALUES ('ORG_TEST_OK', 'OK Org', 'STYRELSE', '/ORG_TEST_OK/')
+              VALUES ('ORG_TEST_OK', 'OK Org', 'ORGANISATION', '/ORG_TEST_OK/')
               ON CONFLICT DO NOTHING", conn))
         {
             await orgCmd.ExecuteNonQueryAsync();

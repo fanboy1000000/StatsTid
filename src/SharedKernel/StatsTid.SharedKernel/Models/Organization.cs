@@ -4,7 +4,7 @@ public sealed class Organization
 {
     public required string OrgId { get; init; }
     public required string OrgName { get; init; }
-    public required string OrgType { get; init; }  // MINISTRY, STYRELSE, AFDELING, TEAM
+    public required string OrgType { get; init; }  // MAO, ORGANISATION (S92/ADR-035 flatten)
     public string? ParentOrgId { get; init; }
     public required string MaterializedPath { get; init; }  // e.g. "/MIN01/STY01/"
     public required string AgreementCode { get; init; }  // default agreement for org

@@ -36,10 +36,11 @@ namespace StatsTid.Tests.Regression.Approval;
 /// </list>
 ///
 /// <para>
-/// Topology reuses the seed orgs from <see cref="DesignatedApproverAuthorityTests"/> (STY02 tree =
-/// {STY02, AFD01, AFD02}). The designated approver (<c>s78_mgr</c>, AFD02, scope AFD02 ONLY) is the
-/// cross-afdeling PRIMARY manager of <c>s78_emp</c> (AFD01) — org-scope alone DENIES, only the edge
-/// grants, so the edge is the load-bearing authorizing surface the in-lock re-eval guards.
+/// Topology reuses the seed orgs from <see cref="DesignatedApproverAuthorityTests"/> (S92/ADR-035
+/// flatten: STY02 is an ORGANISATION under MAO MIN01). The designated approver (<c>s78_mgr</c>, STY02)
+/// is the PRIMARY manager of <c>s78_emp</c> (STY02); the PRIMARY edge is the load-bearing authorizing
+/// surface the in-lock re-eval guards. (Post-flatten Mgr ALSO org-scope-covers Emp, but the deep-chain
+/// designated cases below resolve PURELY via the edge.)
 /// </para>
 /// </summary>
 [Trait("Category", "Docker")]
@@ -51,23 +52,23 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
     private StatsTidWebApplicationFactory _factory = null!;
     private DbConnectionFactory _dbFactory = null!;
 
-    // STY02 tree — distinct from the seed + the S74 test users.
-    private const string Emp = "s78_emp";   // AFD01 — the report (sibling afdeling to the approver)
-    private const string Mgr = "s78_mgr";   // AFD02 — PRIMARY manager of Emp; scope = AFD02 ONLY
-    private const string Vik = "s78_vik";   // AFD02 — Mgr's vikar stand-in (a Leader)
+    // STY02 Organisation — distinct from the seed + the S74 test users.
+    private const string Emp = "s78_emp";   // STY02 — the report
+    private const string Mgr = "s78_mgr";   // STY02 — PRIMARY manager of Emp
+    private const string Vik = "s78_vik";   // STY02 — Mgr's vikar stand-in (a Leader)
     // B1 real-revoker co-location (the admin-vikar CREATE endpoint, Endpoint 14):
     private const string Adm = "s78_adm";   // STY02 — LOCAL_ADMIN @ STY02 (the admin-on-behalf actor)
-    private const string Cov = "s78_cov";   // AFD02 — LOCAL_LEADER @ STY02 (covers AFD01 → a valid vikar for Mgr)
+    private const string Cov = "s78_cov";   // STY02 — LOCAL_LEADER @ STY02 (covers Emp → a valid vikar for Mgr)
     // B2 deep fallback-traversal chain (seeded inline in the B2 test; listed here only so the
     // shared cleanup removes them). DEmp → DM1(inactive) → DM2(inactive) → DM3(inactive) →
     // DM4(inactive) → DM5(active): the escalation walk advances 4 levels (depth = 4 > 3) so the
     // resolved approver DM5 genuinely emits ONE FallbackTraversalWarning.
-    private const string DEmp = "s78_demp";  // AFD01 — the deep-chain report
-    private const string DM1 = "s78_dm1";    // AFD02 — inactive
-    private const string DM2 = "s78_dm2";    // AFD02 — inactive
-    private const string DM3 = "s78_dm3";    // AFD02 — inactive
-    private const string DM4 = "s78_dm4";    // AFD02 — inactive
-    private const string DM5 = "s78_dm5";    // AFD02 — ACTIVE; the resolved approver at depth 4
+    private const string DEmp = "s78_demp";  // STY02 — the deep-chain report
+    private const string DM1 = "s78_dm1";    // STY02 — inactive
+    private const string DM2 = "s78_dm2";    // STY02 — inactive
+    private const string DM3 = "s78_dm3";    // STY02 — inactive
+    private const string DM4 = "s78_dm4";    // STY02 — inactive
+    private const string DM5 = "s78_dm5";    // STY02 — ACTIVE; the resolved approver at depth 4
     private const string TreeRootSty02 = "STY02";
 
     private static readonly string[] AllUsers =
@@ -133,10 +134,11 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
     {
         // Seed the DEEP fallback chain (depth 4 > 3 → the resolved approver DM5 emits ONE warning).
         await SeedDeepFallbackChainAsync();
-        var periodId = await InsertPeriodAsync(DEmp, "AFD01", "SUBMITTED");
-        // DM5 is the resolved DESIGNATED_MANAGER of DEmp at depth 4; it approves PURELY via the edge
-        // (DM5's org-scope is AFD02, which does NOT cover DEmp's AFD01) → DESIGNATED_MANAGER, no 428.
-        var client = LeaderClient(DM5, "AFD02");
+        var periodId = await InsertPeriodAsync(DEmp, "STY02", "SUBMITTED");
+        // DM5 is the resolved DESIGNATED_MANAGER of DEmp at depth 4 (escalation through the inactive
+        // DM1..DM4) → DESIGNATED_MANAGER, no 428 (DM5 is the designated approver, so even with org-scope
+        // also covering DEmp post-flatten the classification is designated, not a fallback).
+        var client = LeaderClient(DM5, "STY02");
 
         // HOLD the STY02 tree key so both approves park on the advisory (both take it in-tx).
         var (holdConn, holdTx) = await AcquireTreeLockOnSideConnAsync(TreeRootSty02);
@@ -205,12 +207,12 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
             """
             INSERT INTO users (user_id, username, password_hash, display_name, email, primary_org_id, agreement_code, ok_version, is_active)
             VALUES
-                (@demp, @demp, '$2a$11$fake', 'S78 DEmp', 's78_demp@test.dk', 'AFD01', 'HK', 'OK24', TRUE),
-                (@dm1,  @dm1,  '$2a$11$fake', 'S78 DM1',  's78_dm1@test.dk',  'AFD02', 'HK', 'OK24', FALSE),
-                (@dm2,  @dm2,  '$2a$11$fake', 'S78 DM2',  's78_dm2@test.dk',  'AFD02', 'HK', 'OK24', FALSE),
-                (@dm3,  @dm3,  '$2a$11$fake', 'S78 DM3',  's78_dm3@test.dk',  'AFD02', 'HK', 'OK24', FALSE),
-                (@dm4,  @dm4,  '$2a$11$fake', 'S78 DM4',  's78_dm4@test.dk',  'AFD02', 'HK', 'OK24', FALSE),
-                (@dm5,  @dm5,  '$2a$11$fake', 'S78 DM5',  's78_dm5@test.dk',  'AFD02', 'HK', 'OK24', TRUE)
+                (@demp, @demp, '$2a$11$fake', 'S78 DEmp', 's78_demp@test.dk', 'STY02', 'HK', 'OK24', TRUE),
+                (@dm1,  @dm1,  '$2a$11$fake', 'S78 DM1',  's78_dm1@test.dk',  'STY02', 'HK', 'OK24', FALSE),
+                (@dm2,  @dm2,  '$2a$11$fake', 'S78 DM2',  's78_dm2@test.dk',  'STY02', 'HK', 'OK24', FALSE),
+                (@dm3,  @dm3,  '$2a$11$fake', 'S78 DM3',  's78_dm3@test.dk',  'STY02', 'HK', 'OK24', FALSE),
+                (@dm4,  @dm4,  '$2a$11$fake', 'S78 DM4',  's78_dm4@test.dk',  'STY02', 'HK', 'OK24', FALSE),
+                (@dm5,  @dm5,  '$2a$11$fake', 'S78 DM5',  's78_dm5@test.dk',  'STY02', 'HK', 'OK24', TRUE)
             ON CONFLICT DO NOTHING
             """, conn))
         {
@@ -223,14 +225,14 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
             await cmd.ExecuteNonQueryAsync();
         }
 
-        // DM5 must be a LeaderOrAbove for IsEffectiveDesignatedApproverAsync's explicit role gate. Its
-        // scope is AFD02 ONLY (it does NOT cover DEmp's AFD01) → DM5 authorizes purely via the edge.
+        // DM5 must be a LeaderOrAbove for IsEffectiveDesignatedApproverAsync's explicit role gate. It
+        // is the resolved designated approver of DEmp (the edge classifies the approve as designated).
         await using (var cmd = new NpgsqlCommand(
             """
             INSERT INTO role_assignments (user_id, role_id, org_id, scope_type, assigned_by)
             VALUES
-                (@dm5,  'LOCAL_LEADER', 'AFD02', 'ORG_AND_DESCENDANTS', 'TEST'),
-                (@demp, 'EMPLOYEE',     'AFD01', 'ORG_ONLY',            'TEST')
+                (@dm5,  'LOCAL_LEADER', 'STY02', 'ORG_AND_DESCENDANTS', 'TEST'),
+                (@demp, 'EMPLOYEE',     'STY02', 'ORG_ONLY',            'TEST')
             ON CONFLICT DO NOTHING
             """, conn))
         {
@@ -280,8 +282,8 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
     [Fact]
     public async Task R2_ConcurrentApproveVsReopen_SerializeOnLock_NoTornState_ReopenRecordsLockedInPrevStatus()
     {
-        var periodId = await InsertPeriodAsync(Emp, "AFD01", "EMPLOYEE_APPROVED");
-        var client = LeaderClient(Mgr, "AFD02");
+        var periodId = await InsertPeriodAsync(Emp, "STY02", "EMPLOYEE_APPROVED");
+        var client = LeaderClient(Mgr, "STY02");
 
         // HOLD the STY02 tree key so BOTH verbs park on the advisory (both take it in-tx) → they serialize
         // on the lock; whichever acquires first arbitrates the chained transition.
@@ -349,8 +351,8 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
     [Fact]
     public async Task R2_EmployeeReopenArm_ConditionalUpdate_OneWinner_One409()
     {
-        var periodId = await InsertPeriodAsync(Emp, "AFD01", "EMPLOYEE_APPROVED");
-        var empClient = EmployeeClient(Emp, "AFD01");
+        var periodId = await InsertPeriodAsync(Emp, "STY02", "EMPLOYEE_APPROVED");
+        var empClient = EmployeeClient(Emp, "STY02");
 
         var legA = empClient.PostAsJsonAsync($"/api/approval/{periodId}/reopen", new { reason = "a" });
         var legB = empClient.PostAsJsonAsync($"/api/approval/{periodId}/reopen", new { reason = "b" });
@@ -374,8 +376,8 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
     [Fact]
     public async Task R2_LeaderReopenArm_ConcurrentDouble_OneWinner_One409()
     {
-        var periodId = await InsertPeriodAsync(Emp, "AFD01", "APPROVED");
-        var client = LeaderClient(Mgr, "AFD02");
+        var periodId = await InsertPeriodAsync(Emp, "STY02", "APPROVED");
+        var client = LeaderClient(Mgr, "STY02");
 
         var (holdConn, holdTx) = await AcquireTreeLockOnSideConnAsync(TreeRootSty02);
         Task<HttpResponseMessage> legA, legB;
@@ -417,8 +419,8 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
     [Fact]
     public async Task R1_HeldTreeLock_BlocksApprove_UntilReleased_ThenProceeds()
     {
-        var periodId = await InsertPeriodAsync(Emp, "AFD01", "SUBMITTED");
-        var client = LeaderClient(Mgr, "AFD02");
+        var periodId = await InsertPeriodAsync(Emp, "STY02", "SUBMITTED");
+        var client = LeaderClient(Mgr, "STY02");
 
         var (holdConn, holdTx) = await AcquireTreeLockOnSideConnAsync(TreeRootSty02);
         try
@@ -451,9 +453,11 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
     /// <summary>
     /// SERIALIZATION CATCHES A REVOKE THAT COMMITS *AFTER* THE PRE-TX CHECK (the load-bearing R1 proof —
     /// the whole point of the in-tx re-evaluation, NOT merely "a lock exists" and NOT a revoke that
-    /// committed before the request). Vik is Mgr's active vikar → Vik (a Leader, scope AFD02) is Emp's
-    /// single effective approver via the vikar edge; org-scope (AFD02) does NOT cover Emp's AFD01, so the
-    /// edge is the ONLY grant.
+    /// committed before the request). Vik is Mgr's active vikar → Vik (a Leader) is Emp's single
+    /// effective approver via the vikar edge. S92 flatten: to keep the EDGE the ONLY grant (so the in-tx
+    /// EDGE re-eval — gated on !orgScopeAllowed — actually runs), Vik's TOKEN is minted with a disjoint
+    /// scope (STY01, NOT covering Emp's STY02), while Vik still holds the vikar edge in the DB. Org-scope
+    /// therefore denies; only the (revocable) edge grants.
     ///
     /// <para>The DETERMINISTIC interleave (held-lock barrier):</para>
     /// <list type="number">
@@ -475,8 +479,10 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
     public async Task R1_RevokeCommittedWhileApproveBlocked_InTxReeval_Denies403()
     {
         await CreateVikarAsync(Mgr, Vik, DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30));
-        var periodId = await InsertPeriodAsync(Emp, "AFD01", "SUBMITTED");
-        var vikClient = LeaderClient(Vik, "AFD02");
+        var periodId = await InsertPeriodAsync(Emp, "STY02", "SUBMITTED");
+        // Vik's TOKEN scope is STY01 (disjoint from Emp's STY02) → org-scope denies, so the ONLY grant is
+        // the vikar EDGE — letting the in-tx edge re-eval (gated on !orgScopeAllowed) run and catch the revoke.
+        var vikClient = LeaderClient(Vik, "STY01");
 
         var (holdConn, holdTx) = await AcquireTreeLockOnSideConnAsync(TreeRootSty02);
         try
@@ -521,7 +527,9 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
     /// employee-current-root mutator that takes the tree advisory as its FIRST in-tx statement).
     ///
     /// <para>WHY admin-vikar CREATE is a genuine REVOKE of Mgr's authority over Emp: Mgr approves Emp's
-    /// period PURELY via the PRIMARY edge (Mgr's org-scope is AFD02, which does NOT cover Emp's AFD01).
+    /// period PURELY via the PRIMARY edge. S92 flatten: Mgr's DB org (STY02) would org-cover Emp, so to
+    /// keep the approve EDGE-only (so the in-tx EDGE re-eval — gated on !orgScopeAllowed — runs and the
+    /// revoke-wins branch lands on 403) Mgr's approve TOKEN is minted with a disjoint scope (STY01).
     /// Planting an active vikar (<c>Cov</c>) FOR Mgr makes the resolver return <c>Cov</c> — not Mgr — as
     /// Emp's single effective approver (the R3 vikar-consult step), so Mgr is no longer the designated
     /// approver of Emp. That is exactly the edge revocation the in-tx re-eval must catch.</para>
@@ -547,8 +555,8 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
     [Fact]
     public async Task R1_RealAdminVikarRevoke_CoLocatesOnSameTreeKey_AsApprove_SerializedOutcome()
     {
-        var periodId = await InsertPeriodAsync(Emp, "AFD01", "SUBMITTED");
-        var approveClient = LeaderClient(Mgr, "AFD02");   // approves PURELY via the edge (org-scope AFD02 ⊉ AFD01)
+        var periodId = await InsertPeriodAsync(Emp, "STY02", "SUBMITTED");
+        var approveClient = LeaderClient(Mgr, "STY01");   // disjoint token scope → approves PURELY via the edge
         var adminClient = AdminClient(Adm, "STY02");      // the admin-on-behalf actor (covers STY02)
 
         // HOLD the STY02 tree key so BOTH the approve AND the real admin-vikar CREATE park on the SAME
@@ -559,7 +567,7 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
         {
             approveLeg = approveClient.PostAsync($"/api/approval/{periodId}/approve", null);
             // The REAL revoker: plant Cov as Mgr's vikar (Cov is LOCAL_LEADER @ STY02 → covers Mgr's
-            // only report, Emp@AFD01). This endpoint keys on Mgr's current tree root = STY02.
+            // only report, Emp on STY02). This endpoint keys on Mgr's current tree root = STY02.
             vikarCreateLeg = adminClient.PostAsJsonAsync(
                 $"/api/admin/reporting-lines/{Mgr}/vikar",
                 new { vikarUserId = Cov, effectiveTo = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30).ToString("yyyy-MM-dd"), reason = "FERIE" });
@@ -619,7 +627,7 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
     ///
     /// <para>Topology (Vik is the approver-under-test's period owner this time):</para>
     /// <list type="bullet">
-    /// <item><description>Vik (AFD02) reports PRIMARY to Mgr (AFD02). Mgr's scope is AFD02 → Mgr's
+    /// <item><description>Vik (STY02) reports PRIMARY to Mgr (STY02). Mgr's scope is STY02 → Mgr's
     /// org-scope COVERS Vik's period (authority via org-scope holds regardless of the edge).</description></item>
     /// <item><description>Pre-tx, Mgr IS Vik's single resolved designated approver (the PRIMARY edge) →
     /// approval_method = DESIGNATED_MANAGER (NOT a fallback) → Mgr passes the pre-tx 428 fast path and
@@ -631,7 +639,7 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
     /// confirmFallback. It passes the pre-tx 428 fast path (designated), then BLOCKS on the held key.</description></item>
     /// <item><description>WHILE parked, COMMIT an ACTING reassignment (Vik → Emp, admin-ACTING takes
     /// resolver precedence) — now EMP, not Mgr, is Vik's designated approver. Mgr is still org-scope
-    /// authorized over AFD02, but is now an ORG_SCOPE_FALLBACK approver.</description></item>
+    /// authorized over STY02, but is now an ORG_SCOPE_FALLBACK approver.</description></item>
     /// <item><description>RELEASE → the in-tx EDGE re-eval is SKIPPED (org-scope admits), but the in-tx
     /// RE-CLASSIFICATION makes approval_method = ORG_SCOPE_FALLBACK in REQUIRED mode WITHOUT
     /// confirmFallback → the 428 gate FIRES in-tx. Had the gate used the STALE pre-tx classification, this
@@ -642,10 +650,10 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
     [Fact]
     public async Task R1_ReassignmentWhileApproveBlocked_InTxReclassify_FiresConfirmFallback428()
     {
-        // Vik reports PRIMARY to Mgr (both AFD02 — org-scope ALSO covers, so authority never lapses).
+        // Vik reports PRIMARY to Mgr (both STY02 — org-scope ALSO covers, so authority never lapses).
         await new ReportingLineRepository(_dbFactory).AssignAsync(null, MakeLine(Vik, Mgr, TreeRootSty02));
-        var periodId = await InsertPeriodAsync(Vik, "AFD02", "SUBMITTED");
-        var mgrClient = LeaderClient(Mgr, "AFD02");
+        var periodId = await InsertPeriodAsync(Vik, "STY02", "SUBMITTED");
+        var mgrClient = LeaderClient(Mgr, "STY02");
 
         var (holdConn, holdTx) = await AcquireTreeLockOnSideConnAsync(TreeRootSty02);
         try
@@ -659,7 +667,7 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
 
             // WHILE parked, COMMIT the reassignment: an ACTING edge Vik → Emp (admin-ACTING wins resolver
             // precedence). Emp is now Vik's designated approver; Mgr becomes an ORG_SCOPE_FALLBACK approver
-            // (but org-scope AFD02 still authorizes Mgr → the edge re-eval is skipped, only the gate rejects).
+            // (but org-scope STY02 still authorizes Mgr → the edge re-eval is skipped, only the gate rejects).
             await InsertActingLineDirectAsync(Vik, Emp, TreeRootSty02);
 
             // Release → the in-tx re-classification: Mgr = ORG_SCOPE_FALLBACK in REQUIRED mode WITHOUT
@@ -690,7 +698,7 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
 
     /// <summary>
     /// The complement of the revoke test: an org-scope-admitted approval is NOT denied by a missing edge.
-    /// Mgr's scope covers AFD02; an AFD02 employee period (Vik's own, no edge to Mgr) is approvable purely
+    /// Mgr's scope covers STY02; a STY02 employee period (Vik's own, no edge to Mgr) is approvable purely
     /// on org-scope. The in-tx re-eval is SKIPPED when org-scope admitted (orgScopeAllowed), so the lack
     /// of any designated edge does not flip it to 403. STY02 is REQUIRED-mode, so the org-scope fallback
     /// first 428s → confirmFallback completes it (the unchanged S50 flow). This guards against the R1
@@ -699,8 +707,8 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
     [Fact]
     public async Task R1_OrgScopeAdmitted_NotDeniedBy_InTxEdgeReeval()
     {
-        var periodId = await InsertPeriodAsync(Vik, "AFD02", "SUBMITTED"); // AFD02 employee, in Mgr's scope
-        var client = LeaderClient(Mgr, "AFD02");
+        var periodId = await InsertPeriodAsync(Vik, "STY02", "SUBMITTED"); // STY02 employee, in Mgr's scope
+        var client = LeaderClient(Mgr, "STY02");
 
         // REQUIRED-mode org-scope fallback → 428 without confirmation (unchanged S50), then 200 with it.
         var unconfirmed = await client.PostAsync($"/api/approval/{periodId}/approve", null);
@@ -716,8 +724,9 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
 
     /// <summary>
     /// BLOCKER 2 — NO OVER-DENIAL + correct LOCKED metadata for a legitimately-unchanged designated
-    /// approval. Mgr is Emp's seeded PRIMARY manager (org-scope AFD02 does NOT cover Emp's AFD01 → the
-    /// edge is the grant). We run the approve behind a held advisory (so the in-tx re-resolution + the
+    /// approval. Mgr is Emp's seeded PRIMARY designated manager (same STY02 Organisation; the edge
+    /// classifies the approve as DESIGNATED even though org-scope also covers). We run the approve behind
+    /// a held advisory (so the in-tx re-resolution + the
     /// in-tx 428 re-evaluation both execute), with nothing changing while it is parked. The in-tx
     /// re-derivation must NOT over-deny (Mgr is still the designated manager — NOT a fallback, so no 428
     /// fires even in REQUIRED mode) and MUST persist the IN-TX-resolved metadata
@@ -728,8 +737,8 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
     [Fact]
     public async Task R1_UnchangedDesignatedApproval_BehindHeldLock_NotOverDenied_PersistsLockedMetadata()
     {
-        var periodId = await InsertPeriodAsync(Emp, "AFD01", "SUBMITTED");
-        var client = LeaderClient(Mgr, "AFD02");
+        var periodId = await InsertPeriodAsync(Emp, "STY02", "SUBMITTED");
+        var client = LeaderClient(Mgr, "STY02");
 
         var (holdConn, holdTx) = await AcquireTreeLockOnSideConnAsync(TreeRootSty02);
         try
@@ -815,11 +824,11 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
             """
             INSERT INTO users (user_id, username, password_hash, display_name, email, primary_org_id, agreement_code, ok_version, is_active)
             VALUES
-                (@emp, @emp, '$2a$11$fake', 'S78 Emp', 's78_emp@test.dk', 'AFD01', 'HK', 'OK24', TRUE),
-                (@mgr, @mgr, '$2a$11$fake', 'S78 Mgr', 's78_mgr@test.dk', 'AFD02', 'HK', 'OK24', TRUE),
-                (@vik, @vik, '$2a$11$fake', 'S78 Vik', 's78_vik@test.dk', 'AFD02', 'HK', 'OK24', TRUE),
+                (@emp, @emp, '$2a$11$fake', 'S78 Emp', 's78_emp@test.dk', 'STY02', 'HK', 'OK24', TRUE),
+                (@mgr, @mgr, '$2a$11$fake', 'S78 Mgr', 's78_mgr@test.dk', 'STY02', 'HK', 'OK24', TRUE),
+                (@vik, @vik, '$2a$11$fake', 'S78 Vik', 's78_vik@test.dk', 'STY02', 'HK', 'OK24', TRUE),
                 (@adm, @adm, '$2a$11$fake', 'S78 Adm', 's78_adm@test.dk', 'STY02', 'AC', 'OK24', TRUE),
-                (@cov, @cov, '$2a$11$fake', 'S78 Cov', 's78_cov@test.dk', 'AFD02', 'HK', 'OK24', TRUE)
+                (@cov, @cov, '$2a$11$fake', 'S78 Cov', 's78_cov@test.dk', 'STY02', 'HK', 'OK24', TRUE)
             ON CONFLICT DO NOTHING
             """, conn))
         {
@@ -831,13 +840,13 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
             """
             INSERT INTO role_assignments (user_id, role_id, org_id, scope_type, assigned_by)
             VALUES
-                (@mgr, 'LOCAL_LEADER', 'AFD02', 'ORG_AND_DESCENDANTS', 'TEST'),
-                (@vik, 'LOCAL_LEADER', 'AFD02', 'ORG_AND_DESCENDANTS', 'TEST'),
+                (@mgr, 'LOCAL_LEADER', 'STY02', 'ORG_AND_DESCENDANTS', 'TEST'),
+                (@vik, 'LOCAL_LEADER', 'STY02', 'ORG_AND_DESCENDANTS', 'TEST'),
                 (@adm, 'LOCAL_ADMIN',  'STY02', 'ORG_AND_DESCENDANTS', 'TEST'),
-                -- Cov is a LOCAL_LEADER scoped at STY02 (covers AFD01 + AFD02) → a VALID vikar for Mgr:
-                -- its org-scope covers Mgr's only report (Emp in AFD01). Distinct from Vik (AFD02-only).
+                -- Cov is a LOCAL_LEADER scoped at STY02 (covers Emp) → a VALID vikar for Mgr:
+                -- its org-scope covers Mgr's only report (Emp on STY02).
                 (@cov, 'LOCAL_LEADER', 'STY02', 'ORG_AND_DESCENDANTS', 'TEST'),
-                (@emp, 'EMPLOYEE',     'AFD01', 'ORG_ONLY',            'TEST')
+                (@emp, 'EMPLOYEE',     'STY02', 'ORG_ONLY',            'TEST')
             ON CONFLICT DO NOTHING
             """, conn))
         {
@@ -845,7 +854,7 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
             await cmd.ExecuteNonQueryAsync();
         }
 
-        // Emp (AFD01) reports PRIMARY to Mgr (AFD02) — the cross-afdeling, same-tree edge.
+        // Emp (STY02) reports PRIMARY to Mgr (STY02) — the same-Organisation, same-tree edge.
         await new ReportingLineRepository(_dbFactory).AssignAsync(null, MakeLine(Emp, Mgr, TreeRootSty02));
     }
 

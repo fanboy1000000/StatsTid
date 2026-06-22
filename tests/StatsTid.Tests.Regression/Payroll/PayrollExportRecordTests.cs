@@ -46,7 +46,7 @@ public sealed class PayrollExportRecordTests : IAsyncLifetime
             await conn.OpenAsync();
             await using var cmd = new NpgsqlCommand(
                 @"INSERT INTO organizations (org_id, org_name, org_type, materialized_path)
-                  VALUES (@id, 'Payroll Export Test Org', 'STYRELSE', @path)
+                  VALUES (@id, 'Payroll Export Test Org', 'ORGANISATION', @path)
                   ON CONFLICT DO NOTHING", conn);
             cmd.Parameters.AddWithValue("id", OrgId);
             cmd.Parameters.AddWithValue("path", $"/{OrgId}/");

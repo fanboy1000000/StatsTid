@@ -18,11 +18,10 @@ namespace StatsTid.Tests.Regression.Approval;
 /// reopen). The check is an ADDITIVE in-tx gate placed AFTER the period row lock and BEFORE the existing
 /// S78 conditional status UPDATE, so it composes with the S78/S83 reopen hardening.
 ///
-/// <para>Topology mirrors <see cref="ApprovalConcurrencyHardeningTests"/> (STY02 tree, distinct
-/// <c>s90_*</c> users): the designated approver <c>s90_mgr</c> (AFD02, scope AFD02 ONLY) is the
-/// cross-afdeling PRIMARY manager of <c>s90_emp</c> (AFD01) — org-scope alone DENIES, only the PRIMARY
-/// edge grants. A LocalHR (<c>s90_hr</c>, STY02) and a GlobalAdmin (<c>s90_ga</c>) exercise the
-/// "all roles" arm of OQ-2.</para>
+/// <para>Topology mirrors <see cref="ApprovalConcurrencyHardeningTests"/> (S92/ADR-035 flatten — STY02
+/// Organisation, distinct <c>s90_*</c> users): the designated approver <c>s90_mgr</c> (STY02) is the
+/// PRIMARY manager of <c>s90_emp</c> (STY02) — the PRIMARY edge grants the leader reopen. A LocalHR
+/// (<c>s90_hr</c>, STY02) and a GlobalAdmin (<c>s90_ga</c>) exercise the "all roles" arm of OQ-2.</para>
 ///
 /// <para>RED-on-old: against the pre-9003 handler ALL of these reopens of an APPROVED, exported period
 /// would have returned 200 → DRAFT. The export-lock gate makes them a discriminated
@@ -37,9 +36,9 @@ public sealed class ReopenPayrollLockTests : IAsyncLifetime
     private StatsTidWebApplicationFactory _factory = null!;
     private DbConnectionFactory _dbFactory = null!;
 
-    // STY02 tree — distinct from the seed + the S78 test users.
-    private const string Emp = "s90_emp";   // AFD01 — the report (cross-afdeling to its manager)
-    private const string Mgr = "s90_mgr";   // AFD02 — PRIMARY manager of Emp; scope = AFD02 ONLY
+    // STY02 Organisation — distinct from the seed + the S78 test users.
+    private const string Emp = "s90_emp";   // STY02 — the report
+    private const string Mgr = "s90_mgr";   // STY02 — PRIMARY manager of Emp
     private const string Hr = "s90_hr";     // STY02 — LOCAL_HR @ STY02
     private const string Ga = "s90_ga";     // GLOBAL_ADMIN
     private const string TreeRootSty02 = "STY02";
@@ -88,7 +87,7 @@ public sealed class ReopenPayrollLockTests : IAsyncLifetime
     public async Task PreExport_LeaderReopen_Approved_Succeeds_200_Draft()
     {
         var periodId = await InsertApprovedPeriodAsync();
-        var client = LeaderClient(Mgr, "AFD02");
+        var client = LeaderClient(Mgr, "STY02");
 
         var rsp = await client.PostAsJsonAsync($"/api/approval/{periodId}/reopen", new { reason = "pre-export" });
 
@@ -110,7 +109,7 @@ public sealed class ReopenPayrollLockTests : IAsyncLifetime
     {
         var periodId = await InsertApprovedPeriodAsync();
         await InsertExportRecordAsync(periodId, Emp, 2026, 5);
-        var client = LeaderClient(Mgr, "AFD02");
+        var client = LeaderClient(Mgr, "STY02");
 
         var rsp = await client.PostAsJsonAsync($"/api/approval/{periodId}/reopen", new { reason = "post-export" });
 
@@ -171,7 +170,7 @@ public sealed class ReopenPayrollLockTests : IAsyncLifetime
         // A DISTINCT month (April) so it doesn't collide with the May exported period below on the
         // approval_periods (employee_id, period_start, period_end) UNIQUE.
         var draftId = await InsertPeriodAsync("DRAFT", new DateOnly(2026, 4, 1), new DateOnly(2026, 4, 30));
-        var client = LeaderClient(Mgr, "AFD02");
+        var client = LeaderClient(Mgr, "STY02");
         var statusRsp = await client.PostAsJsonAsync($"/api/approval/{draftId}/reopen", new { reason = "x" });
         Assert.Equal(HttpStatusCode.Conflict, statusRsp.StatusCode);
         Assert.Null(await ReadKindAsync(statusRsp)); // no discriminator on the status-conflict 409
@@ -197,7 +196,7 @@ public sealed class ReopenPayrollLockTests : IAsyncLifetime
     {
         var periodId = await InsertApprovedPeriodAsync();
         await InsertExportRecordAsync(periodId, Emp, 2026, 5); // committed BEFORE the reopen
-        var client = LeaderClient(Mgr, "AFD02");
+        var client = LeaderClient(Mgr, "STY02");
 
         var rsp = await client.PostAsJsonAsync($"/api/approval/{periodId}/reopen", new { reason = "race" });
 
@@ -215,8 +214,8 @@ public sealed class ReopenPayrollLockTests : IAsyncLifetime
             """
             INSERT INTO users (user_id, username, password_hash, display_name, email, primary_org_id, agreement_code, ok_version, is_active)
             VALUES
-                (@emp, @emp, '$2a$11$fake', 'S90 Emp', 's90_emp@test.dk', 'AFD01', 'HK', 'OK24', TRUE),
-                (@mgr, @mgr, '$2a$11$fake', 'S90 Mgr', 's90_mgr@test.dk', 'AFD02', 'HK', 'OK24', TRUE),
+                (@emp, @emp, '$2a$11$fake', 'S90 Emp', 's90_emp@test.dk', 'STY02', 'HK', 'OK24', TRUE),
+                (@mgr, @mgr, '$2a$11$fake', 'S90 Mgr', 's90_mgr@test.dk', 'STY02', 'HK', 'OK24', TRUE),
                 (@hr,  @hr,  '$2a$11$fake', 'S90 HR',  's90_hr@test.dk',  'STY02', 'AC', 'OK24', TRUE),
                 (@ga,  @ga,  '$2a$11$fake', 'S90 GA',  's90_ga@test.dk',  'STY02', 'AC', 'OK24', TRUE)
             ON CONFLICT DO NOTHING
@@ -230,11 +229,11 @@ public sealed class ReopenPayrollLockTests : IAsyncLifetime
             """
             INSERT INTO role_assignments (user_id, role_id, org_id, scope_type, assigned_by)
             VALUES
-                (@mgr, 'LOCAL_LEADER', 'AFD02', 'ORG_AND_DESCENDANTS', 'TEST'),
+                (@mgr, 'LOCAL_LEADER', 'STY02', 'ORG_AND_DESCENDANTS', 'TEST'),
                 (@hr,  'LOCAL_HR',     'STY02', 'ORG_AND_DESCENDANTS', 'TEST'),
                 -- GLOBAL_ADMIN must be (org_id IS NULL, scope_type='GLOBAL') per the S85 CHECKs.
                 (@ga,  'GLOBAL_ADMIN', NULL,    'GLOBAL',              'TEST'),
-                (@emp, 'EMPLOYEE',     'AFD01', 'ORG_ONLY',            'TEST')
+                (@emp, 'EMPLOYEE',     'STY02', 'ORG_ONLY',            'TEST')
             ON CONFLICT DO NOTHING
             """, conn))
         {
@@ -242,8 +241,8 @@ public sealed class ReopenPayrollLockTests : IAsyncLifetime
             await cmd.ExecuteNonQueryAsync();
         }
 
-        // Emp (AFD01) reports PRIMARY to Mgr (AFD02) — the cross-afdeling, same-tree edge that grants the
-        // leader reopen (org-scope AFD02 alone does NOT cover AFD01).
+        // Emp (STY02) reports PRIMARY to Mgr (STY02) — the same-Organisation, same-tree edge that grants
+        // the leader reopen.
         await new ReportingLineRepository(_dbFactory).AssignAsync(null, MakeLine(Emp, Mgr, TreeRootSty02));
     }
 
@@ -307,7 +306,7 @@ public sealed class ReopenPayrollLockTests : IAsyncLifetime
             INSERT INTO approval_periods
                 (period_id, employee_id, org_id, period_start, period_end, period_type, status, agreement_code, ok_version, submitted_at, submitted_by)
             VALUES
-                (@id, @emp, 'AFD01', @start, @end, 'MONTHLY', @status, 'HK', 'OK24', NOW(), @emp)
+                (@id, @emp, 'STY02', @start, @end, 'MONTHLY', @status, 'HK', 'OK24', NOW(), @emp)
             """, conn);
         cmd.Parameters.AddWithValue("id", id);
         cmd.Parameters.AddWithValue("emp", Emp);

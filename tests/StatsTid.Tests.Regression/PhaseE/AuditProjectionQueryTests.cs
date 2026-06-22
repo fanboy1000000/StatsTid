@@ -33,12 +33,10 @@ public sealed class AuditProjectionQueryTests : IAsyncLifetime
 
     // Org subtree:  MIN01
     //                ├── STY01
-    //                │     └── AFD01
     //                └── STY02
     // ORG_EXTERNAL  (different subtree; LocalAdmin@MIN01 should NOT cover)
     private const string MinId = "MIN01";
     private const string Sty01Id = "STY01";
-    private const string Afd01Id = "AFD01";
     private const string Sty02Id = "STY02";
     private const string ExternalId = "ORG_EXTERNAL";
 
@@ -56,11 +54,10 @@ public sealed class AuditProjectionQueryTests : IAsyncLifetime
             await conn.OpenAsync();
             await using var cmd = new NpgsqlCommand(@"
                 INSERT INTO organizations (org_id, org_name, org_type, parent_org_id, materialized_path) VALUES
-                  ('MIN01', 'Ministry 01',    'MINISTRY', NULL,    '/MIN01/'),
-                  ('STY01', 'Styrelse 01',    'STYRELSE', 'MIN01', '/MIN01/STY01/'),
-                  ('AFD01', 'Afdeling 01',    'AFDELING', 'STY01', '/MIN01/STY01/AFD01/'),
-                  ('STY02', 'Styrelse 02',    'STYRELSE', 'MIN01', '/MIN01/STY02/'),
-                  ('ORG_EXTERNAL', 'External', 'MINISTRY', NULL,   '/ORG_EXTERNAL/')
+                  ('MIN01', 'Ministry 01',    'MAO', NULL,    '/MIN01/'),
+                  ('STY01', 'Styrelse 01',    'ORGANISATION', 'MIN01', '/MIN01/STY01/'),
+                  ('STY02', 'Styrelse 02',    'ORGANISATION', 'MIN01', '/MIN01/STY02/'),
+                  ('ORG_EXTERNAL', 'External', 'MAO', NULL,   '/ORG_EXTERNAL/')
                 ON CONFLICT DO NOTHING", conn);
             await cmd.ExecuteNonQueryAsync();
         }
@@ -102,11 +99,10 @@ public sealed class AuditProjectionQueryTests : IAsyncLifetime
             new[] { new RoleScope(StatsTidRoles.LocalAdmin, MinId, "ORG_AND_DESCENDANTS") });
         var result = await _orgScopeValidator.GetAccessibleOrgsAsync(actor);
         Assert.NotNull(result);
-        // Subtree: MIN01 + STY01 + AFD01 + STY02 = 4 orgs; ORG_EXTERNAL excluded
-        Assert.Equal(4, result!.Count);
+        // Subtree: MIN01 + STY01 + STY02 = 3 orgs; ORG_EXTERNAL excluded
+        Assert.Equal(3, result!.Count);
         Assert.Contains(MinId, result);
         Assert.Contains(Sty01Id, result);
-        Assert.Contains(Afd01Id, result);
         Assert.Contains(Sty02Id, result);
         Assert.DoesNotContain(ExternalId, result);
     }
@@ -157,7 +153,7 @@ public sealed class AuditProjectionQueryTests : IAsyncLifetime
         // + all GLOBAL_TENANT_VISIBLE rows, but NOT GLOBAL_ADMIN_ONLY rows.
         // Seeded: 3 TENANT_TARGETED (MIN01, STY01, ORG_EXTERNAL) + 3 GLOBAL_TENANT_VISIBLE + 3 GLOBAL_ADMIN_ONLY
         // Visible to MIN01 LocalAdmin: 2 TENANT (MIN01, STY01) + 3 GLOBAL_TENANT = 5
-        var subtreeOrgIds = new[] { MinId, Sty01Id, Afd01Id, Sty02Id };
+        var subtreeOrgIds = new[] { MinId, Sty01Id, Sty02Id };
         var (rows, totalCount) = await _auditRepo.QueryByOrgScopeAsync(
             accessibleOrgIds: subtreeOrgIds,
             filter: new AuditQueryFilter(),

@@ -175,6 +175,9 @@ public sealed class DemoLoader
                 effectiveFrom = today,
                 partTimeFraction = p.PartTimeFraction,
                 position = p.Position,
+                // S92 / ADR-035 — preserve the SQL-pre-seeded enhed_label across the
+                // supersession (the PUT replaces the full live row; omitting it NULLs it out).
+                enhedLabel = p.EnhedLabel,
             }, version.Value, ct);
 
             if (putStatus == HttpStatusCode.OK)

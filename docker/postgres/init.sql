@@ -435,11 +435,15 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON audit_log(timestamp);
 -- SPRINT 6: RBAC, Organizational Hierarchy, Period Approval
 -- ============================================================
 
--- Organization hierarchy (Ministry -> Styrelse -> Afdeling -> Team)
+-- Organization hierarchy (MAO -> Organisation). S92 flatten (ADR-035): the former
+-- 4-tier MINISTRY/STYRELSE/AFDELING/TEAM tree collapses to 2 levels — MINISTRY -> MAO
+-- (Ministeransvarsområde, root), STYRELSE -> ORGANISATION (the smallest authority unit),
+-- AFDELING/TEAM removed as org rows (their members re-point UP to the parent ORGANISATION;
+-- the former unit name lands on employee_profiles.enhed_label as display-only metadata).
 CREATE TABLE IF NOT EXISTS organizations (
     org_id              TEXT        PRIMARY KEY,
     org_name            TEXT        NOT NULL,
-    org_type            TEXT        NOT NULL CHECK (org_type IN ('MINISTRY', 'STYRELSE', 'AFDELING', 'TEAM')),
+    org_type            TEXT        NOT NULL CHECK (org_type IN ('MAO', 'ORGANISATION')),
     parent_org_id       TEXT        REFERENCES organizations(org_id),
     materialized_path   TEXT        NOT NULL,
     agreement_code      TEXT        NOT NULL DEFAULT 'AC',
@@ -828,80 +832,88 @@ INSERT INTO roles (role_id, role_name, description, hierarchy_level) VALUES
     ('EMPLOYEE', 'Employee', 'Registers own time, views own data', 5)
 ON CONFLICT DO NOTHING;
 
--- Seed test organization hierarchy — two ministries for multi-tenant testing
--- Ministry 1: Finansministeriet (existing)
--- Ministry 2: Beskaeftigelsesministeriet (new — provides cross-institution isolation testing)
+-- Seed test organization hierarchy — two MAOs for multi-tenant testing.
+-- S92 flatten (ADR-035): MINISTRY -> MAO (root); STYRELSE -> ORGANISATION (under a MAO);
+-- the 5 former AFDELING rows are REMOVED — their members + role_assignments re-point UP
+-- to the parent ORGANISATION, and the former unit name becomes display-only enhed_label.
+-- materialized_path stays the SAME 2-level strings (now MAO -> ORGANISATION).
+-- MAO 1: Finansministeriet (existing)
+-- MAO 2: Beskaeftigelsesministeriet (provides cross-institution isolation testing)
 INSERT INTO organizations (org_id, org_name, org_type, parent_org_id, materialized_path, agreement_code, ok_version) VALUES
-    ('MIN01', 'Finansministeriet', 'MINISTRY', NULL, '/MIN01/', 'AC', 'OK24'),
-    ('STY01', 'Medarbejder- og Kompetencestyrelsen', 'STYRELSE', 'MIN01', '/MIN01/STY01/', 'AC', 'OK24'),
-    ('STY02', 'Statens IT', 'STYRELSE', 'MIN01', '/MIN01/STY02/', 'HK', 'OK24'),
-    ('STY03', 'Ekonomistyrelsen', 'STYRELSE', 'MIN01', '/MIN01/STY03/', 'AC', 'OK24'),
-    ('AFD01', 'IT-Drift', 'AFDELING', 'STY02', '/MIN01/STY02/AFD01/', 'HK', 'OK24'),
-    ('AFD02', 'Systemudvikling', 'AFDELING', 'STY02', '/MIN01/STY02/AFD02/', 'PROSA', 'OK24'),
-    ('MIN02', 'Beskaeftigelsesministeriet', 'MINISTRY', NULL, '/MIN02/', 'AC', 'OK24'),
-    ('STY04', 'Styrelsen for Arbejdsmarked og Rekruttering', 'STYRELSE', 'MIN02', '/MIN02/STY04/', 'AC', 'OK24'),
-    ('STY05', 'Arbejdstilsynet', 'STYRELSE', 'MIN02', '/MIN02/STY05/', 'HK', 'OK24'),
-    ('AFD03', 'Tilsyn Nord', 'AFDELING', 'STY05', '/MIN02/STY05/AFD03/', 'HK', 'OK24'),
-    ('AFD04', 'Tilsyn Syd', 'AFDELING', 'STY05', '/MIN02/STY05/AFD04/', 'HK', 'OK24'),
-    ('AFD05', 'Forskning og Analyse', 'AFDELING', 'STY04', '/MIN02/STY04/AFD05/', 'AC', 'OK24')
+    ('MIN01', 'Finansministeriet', 'MAO', NULL, '/MIN01/', 'AC', 'OK24'),
+    ('STY01', 'Medarbejder- og Kompetencestyrelsen', 'ORGANISATION', 'MIN01', '/MIN01/STY01/', 'AC', 'OK24'),
+    ('STY02', 'Statens IT', 'ORGANISATION', 'MIN01', '/MIN01/STY02/', 'HK', 'OK24'),
+    ('STY03', 'Ekonomistyrelsen', 'ORGANISATION', 'MIN01', '/MIN01/STY03/', 'AC', 'OK24'),
+    ('MIN02', 'Beskaeftigelsesministeriet', 'MAO', NULL, '/MIN02/', 'AC', 'OK24'),
+    ('STY04', 'Styrelsen for Arbejdsmarked og Rekruttering', 'ORGANISATION', 'MIN02', '/MIN02/STY04/', 'AC', 'OK24'),
+    ('STY05', 'Arbejdstilsynet', 'ORGANISATION', 'MIN02', '/MIN02/STY05/', 'HK', 'OK24')
 ON CONFLICT DO NOTHING;
 
 -- Seed test users (bcrypt hashes for simple dev passwords)
 -- ALL users share the same dev password: "password" (bcrypt hash below)
 -- Note: These are bcrypt($2a$11$) hashes for development ONLY — never use in production
 --
--- User overview:
--- ┌─────────┬──────────────────────────────┬──────────────┬─────────┬───────┐
--- │ User    │ Name                         │ Role         │ Org     │ Agr.  │
--- ├─────────┼──────────────────────────────┼──────────────┼─────────┼───────┤
--- │ admin01 │ Anna Vestergaard             │ GLOBAL_ADMIN │ MIN01   │ AC    │
--- │ admin02 │ Bo Kristensen                │ GLOBAL_ADMIN │ MIN02   │ AC    │
--- │ ladm01  │ Christine Dahl               │ LOCAL_ADMIN  │ STY02   │ HK    │
--- │ ladm02  │ Daniel Friis                 │ LOCAL_ADMIN  │ STY05   │ HK    │
--- │ hr01    │ Eva Mortensen                │ LOCAL_HR     │ MIN01   │ HK    │
--- │ hr02    │ Frederik Bak                 │ LOCAL_HR     │ MIN02   │ AC    │
--- │ mgr01   │ Gitte Holm                   │ LOCAL_LEADER │ AFD01   │ HK    │
--- │ mgr02   │ Henrik Noergaard             │ LOCAL_LEADER │ AFD03   │ HK    │
--- │ mgr03   │ Ida Soerensen                │ LOCAL_LEADER │ STY01   │ AC    │
--- │ emp001  │ Jesper Andersen              │ EMPLOYEE     │ STY01   │ AC    │
--- │ emp002  │ Karen Nielsen                │ EMPLOYEE     │ AFD01   │ HK    │
--- │ emp003  │ Lars Pedersen                │ EMPLOYEE     │ AFD02   │ PROSA │
--- │ emp004  │ Mette Hansen                 │ EMPLOYEE     │ STY03   │ AC    │
--- │ emp005  │ Niels Joergensen             │ EMPLOYEE     │ AFD01   │ HK    │
--- │ emp006  │ Olivia Madsen                │ EMPLOYEE     │ STY04   │ AC    │
--- │ emp007  │ Peter Larsen                 │ EMPLOYEE     │ AFD03   │ HK    │
--- │ emp008  │ Rikke Thomsen                │ EMPLOYEE     │ AFD04   │ HK    │
--- │ emp009  │ Soeren Jensen                │ EMPLOYEE     │ AFD05   │ AC    │
--- │ emp010  │ Tina Christensen             │ EMPLOYEE     │ AFD02   │ PROSA │
--- └─────────┴──────────────────────────────┴──────────────┴─────────┴───────┘
+-- User overview (S92 flatten — every user now sits on an ORGANISATION; the former
+-- AFDELING-pointed users moved UP to their parent ORGANISATION and carry the former
+-- unit name as enhed_label; the two MAO-level admins moved DOWN to the first
+-- ORGANISATION under their MAO. The "Org" column below is the post-flatten reality):
+-- ┌─────────┬──────────────────────────────┬──────────────┬─────────┬───────┬───────────────────┐
+-- │ User    │ Name                         │ Role         │ Org     │ Agr.  │ enhed_label       │
+-- ├─────────┼──────────────────────────────┼──────────────┼─────────┼───────┼───────────────────┤
+-- │ admin01 │ Anna Vestergaard             │ GLOBAL_ADMIN │ STY01   │ AC    │ (none — was MIN01)│
+-- │ admin02 │ Bo Kristensen                │ GLOBAL_ADMIN │ STY04   │ AC    │ (none — was MIN02)│
+-- │ ladm01  │ Christine Dahl               │ LOCAL_ADMIN  │ STY02   │ HK    │ (none)            │
+-- │ ladm02  │ Daniel Friis                 │ LOCAL_ADMIN  │ STY05   │ HK    │ (none)            │
+-- │ hr01    │ Eva Mortensen                │ LOCAL_HR     │ STY02   │ HK    │ (none)            │
+-- │ hr02    │ Frederik Bak                 │ LOCAL_HR     │ STY04   │ AC    │ (none)            │
+-- │ mgr01   │ Gitte Holm                   │ LOCAL_LEADER │ STY02   │ HK    │ IT-Drift          │
+-- │ mgr02   │ Henrik Noergaard             │ LOCAL_LEADER │ STY05   │ HK    │ Tilsyn Nord       │
+-- │ mgr03   │ Ida Soerensen                │ LOCAL_LEADER │ STY01   │ AC    │ (none)            │
+-- │ emp001  │ Jesper Andersen              │ EMPLOYEE     │ STY01   │ AC    │ (none)            │
+-- │ emp002  │ Karen Nielsen                │ EMPLOYEE     │ STY02   │ HK    │ IT-Drift          │
+-- │ emp003  │ Lars Pedersen                │ EMPLOYEE     │ STY02   │ PROSA │ Systemudvikling   │
+-- │ emp004  │ Mette Hansen                 │ EMPLOYEE     │ STY03   │ AC    │ (none)            │
+-- │ emp005  │ Niels Joergensen             │ EMPLOYEE     │ STY02   │ HK    │ IT-Drift          │
+-- │ emp006  │ Olivia Madsen                │ EMPLOYEE     │ STY04   │ AC    │ (none)            │
+-- │ emp007  │ Peter Larsen                 │ EMPLOYEE     │ STY05   │ HK    │ Tilsyn Nord       │
+-- │ emp008  │ Rikke Thomsen                │ EMPLOYEE     │ STY05   │ HK    │ Tilsyn Syd        │
+-- │ emp009  │ Soeren Jensen                │ EMPLOYEE     │ STY04   │ AC    │ Forskning og Analyse│
+-- │ emp010  │ Tina Christensen             │ EMPLOYEE     │ STY02   │ PROSA │ Systemudvikling   │
+-- └─────────┴──────────────────────────────┴──────────────┴─────────┴───────┴───────────────────┘
 INSERT INTO users (user_id, username, password_hash, display_name, email, primary_org_id, agreement_code, ok_version) VALUES
-    ('admin01', 'admin01', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Anna Vestergaard', 'anna.vestergaard@fm.dk', 'MIN01', 'AC', 'OK24'),
-    ('admin02', 'admin02', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Bo Kristensen', 'bo.kristensen@bm.dk', 'MIN02', 'AC', 'OK24'),
+    ('admin01', 'admin01', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Anna Vestergaard', 'anna.vestergaard@fm.dk', 'STY01', 'AC', 'OK24'),
+    ('admin02', 'admin02', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Bo Kristensen', 'bo.kristensen@bm.dk', 'STY04', 'AC', 'OK24'),
     ('ladm01', 'ladm01', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Christine Dahl', 'christine.dahl@statens-it.dk', 'STY02', 'HK', 'OK24'),
     ('ladm02', 'ladm02', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Daniel Friis', 'daniel.friis@at.dk', 'STY05', 'HK', 'OK24'),
     ('hr01', 'hr01', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Eva Mortensen', 'eva.mortensen@fm.dk', 'STY02', 'HK', 'OK24'),
     ('hr02', 'hr02', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Frederik Bak', 'frederik.bak@bm.dk', 'STY04', 'AC', 'OK24'),
-    ('mgr01', 'mgr01', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Gitte Holm', 'gitte.holm@statens-it.dk', 'AFD01', 'HK', 'OK24'),
-    ('mgr02', 'mgr02', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Henrik Noergaard', 'henrik.noergaard@at.dk', 'AFD03', 'HK', 'OK24'),
+    ('mgr01', 'mgr01', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Gitte Holm', 'gitte.holm@statens-it.dk', 'STY02', 'HK', 'OK24'),
+    ('mgr02', 'mgr02', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Henrik Noergaard', 'henrik.noergaard@at.dk', 'STY05', 'HK', 'OK24'),
     ('mgr03', 'mgr03', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Ida Soerensen', 'ida.soerensen@mfk.dk', 'STY01', 'AC', 'OK24'),
     ('emp001', 'emp001', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Jesper Andersen', 'jesper.andersen@mfk.dk', 'STY01', 'AC', 'OK24'),
-    ('emp002', 'emp002', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Karen Nielsen', 'karen.nielsen@statens-it.dk', 'AFD01', 'HK', 'OK24'),
-    ('emp003', 'emp003', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Lars Pedersen', 'lars.pedersen@statens-it.dk', 'AFD02', 'PROSA', 'OK24'),
+    ('emp002', 'emp002', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Karen Nielsen', 'karen.nielsen@statens-it.dk', 'STY02', 'HK', 'OK24'),
+    ('emp003', 'emp003', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Lars Pedersen', 'lars.pedersen@statens-it.dk', 'STY02', 'PROSA', 'OK24'),
     ('emp004', 'emp004', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Mette Hansen', 'mette.hansen@oes.dk', 'STY03', 'AC', 'OK24'),
-    ('emp005', 'emp005', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Niels Joergensen', 'niels.joergensen@statens-it.dk', 'AFD01', 'HK', 'OK24'),
+    ('emp005', 'emp005', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Niels Joergensen', 'niels.joergensen@statens-it.dk', 'STY02', 'HK', 'OK24'),
     ('emp006', 'emp006', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Olivia Madsen', 'olivia.madsen@star.dk', 'STY04', 'AC', 'OK24'),
-    ('emp007', 'emp007', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Peter Larsen', 'peter.larsen@at.dk', 'AFD03', 'HK', 'OK24'),
-    ('emp008', 'emp008', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Rikke Thomsen', 'rikke.thomsen@at.dk', 'AFD04', 'HK', 'OK24'),
-    ('emp009', 'emp009', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Soeren Jensen', 'soeren.jensen@star.dk', 'AFD05', 'AC', 'OK24'),
-    ('emp010', 'emp010', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Tina Christensen', 'tina.christensen@statens-it.dk', 'AFD02', 'PROSA', 'OK24')
+    ('emp007', 'emp007', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Peter Larsen', 'peter.larsen@at.dk', 'STY05', 'HK', 'OK24'),
+    ('emp008', 'emp008', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Rikke Thomsen', 'rikke.thomsen@at.dk', 'STY05', 'HK', 'OK24'),
+    ('emp009', 'emp009', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Soeren Jensen', 'soeren.jensen@star.dk', 'STY04', 'AC', 'OK24'),
+    ('emp010', 'emp010', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Tina Christensen', 'tina.christensen@statens-it.dk', 'STY02', 'PROSA', 'OK24')
 ON CONFLICT DO NOTHING;
 
 -- Seed role assignments
--- Global Admins: admin01 (Finansministeriet), admin02 (Beskaeftigelsesministeriet)
+-- S92 flatten (ADR-035): the 9 former AFDELING-keyed org_id values are re-pointed UP
+-- onto the parent ORGANISATION (AFD01/AFD02 -> STY02; AFD03/AFD04 -> STY05; AFD05 -> STY04).
+-- This is the INTENDED afdeling->Organisation coarsening (Enhed holds no authority; the
+-- Organisation is the smallest authority unit). The MAO-keyed HR scopes (hr01->MIN01,
+-- hr02->MIN02) are LEFT AS-IS: the MINISTRY->MAO rename is identity-preserving and
+-- ORG_AND_DESCENDANTS from a MAO still covers every ORGANISATION beneath it.
+-- Global Admins: admin01, admin02 (GLOBAL)
 -- Local Admins: ladm01 (Statens IT subtree), ladm02 (Arbejdstilsynet subtree)
--- Local HR: hr01 (Finansministeriet subtree), hr02 (Beskaeftigelsesministeriet subtree)
--- Local Leaders: mgr01 (IT-Drift), mgr02 (Tilsyn Nord), mgr03 (MFK)
--- Employees: emp001-010 at their respective departments
+-- Local HR: hr01 (Finansministeriet/MAO subtree), hr02 (Beskaeftigelsesministeriet/MAO subtree)
+-- Local Leaders: mgr01 (Statens IT, enhed IT-Drift), mgr02 (Arbejdstilsynet, enhed Tilsyn Nord), mgr03 (MFK)
+-- Employees: emp001-010 on their respective Organisations
 INSERT INTO role_assignments (user_id, role_id, org_id, scope_type, assigned_by) VALUES
     ('admin01', 'GLOBAL_ADMIN', NULL, 'GLOBAL', 'system'),
     ('admin02', 'GLOBAL_ADMIN', NULL, 'GLOBAL', 'system'),
@@ -909,19 +921,19 @@ INSERT INTO role_assignments (user_id, role_id, org_id, scope_type, assigned_by)
     ('ladm02', 'LOCAL_ADMIN', 'STY05', 'ORG_AND_DESCENDANTS', 'admin02'),
     ('hr01', 'LOCAL_HR', 'MIN01', 'ORG_AND_DESCENDANTS', 'admin01'),
     ('hr02', 'LOCAL_HR', 'MIN02', 'ORG_AND_DESCENDANTS', 'admin02'),
-    ('mgr01', 'LOCAL_LEADER', 'AFD01', 'ORG_AND_DESCENDANTS', 'ladm01'),
-    ('mgr02', 'LOCAL_LEADER', 'AFD03', 'ORG_AND_DESCENDANTS', 'ladm02'),
+    ('mgr01', 'LOCAL_LEADER', 'STY02', 'ORG_AND_DESCENDANTS', 'ladm01'),
+    ('mgr02', 'LOCAL_LEADER', 'STY05', 'ORG_AND_DESCENDANTS', 'ladm02'),
     ('mgr03', 'LOCAL_LEADER', 'STY01', 'ORG_AND_DESCENDANTS', 'admin01'),
     ('emp001', 'EMPLOYEE', 'STY01', 'ORG_ONLY', 'mgr03'),
-    ('emp002', 'EMPLOYEE', 'AFD01', 'ORG_ONLY', 'mgr01'),
-    ('emp003', 'EMPLOYEE', 'AFD02', 'ORG_ONLY', 'ladm01'),
+    ('emp002', 'EMPLOYEE', 'STY02', 'ORG_ONLY', 'mgr01'),
+    ('emp003', 'EMPLOYEE', 'STY02', 'ORG_ONLY', 'ladm01'),
     ('emp004', 'EMPLOYEE', 'STY03', 'ORG_ONLY', 'admin01'),
-    ('emp005', 'EMPLOYEE', 'AFD01', 'ORG_ONLY', 'mgr01'),
+    ('emp005', 'EMPLOYEE', 'STY02', 'ORG_ONLY', 'mgr01'),
     ('emp006', 'EMPLOYEE', 'STY04', 'ORG_ONLY', 'hr02'),
-    ('emp007', 'EMPLOYEE', 'AFD03', 'ORG_ONLY', 'mgr02'),
-    ('emp008', 'EMPLOYEE', 'AFD04', 'ORG_ONLY', 'ladm02'),
-    ('emp009', 'EMPLOYEE', 'AFD05', 'ORG_ONLY', 'hr02'),
-    ('emp010', 'EMPLOYEE', 'AFD02', 'ORG_ONLY', 'ladm01')
+    ('emp007', 'EMPLOYEE', 'STY05', 'ORG_ONLY', 'mgr02'),
+    ('emp008', 'EMPLOYEE', 'STY05', 'ORG_ONLY', 'ladm02'),
+    ('emp009', 'EMPLOYEE', 'STY04', 'ORG_ONLY', 'hr02'),
+    ('emp010', 'EMPLOYEE', 'STY02', 'ORG_ONLY', 'ladm01')
 ON CONFLICT DO NOTHING;
 
 -- ============================================================
@@ -994,7 +1006,7 @@ ALTER TABLE approval_periods ADD CONSTRAINT approval_periods_status_check
 INSERT INTO local_configurations (config_id, org_id, config_area, config_key, config_value, effective_from, agreement_code, ok_version, created_by) VALUES
     ('a0000001-0000-0000-0000-000000000001', 'STY02', 'FLEX_RULES', 'MaxFlexBalance', '"80.0"', '2024-01-01', 'HK', 'OK24', 'ladm01'),
     ('a0000001-0000-0000-0000-000000000002', 'STY02', 'WORKING_TIME', 'PlanningStartDay', '"MONDAY"', '2024-01-01', 'HK', 'OK24', 'ladm01'),
-    ('a0000001-0000-0000-0000-000000000003', 'AFD01', 'OPERATIONAL', 'ApprovalCutoffDay', '"25"', '2024-01-01', 'HK', 'OK24', 'ladm01')
+    ('a0000001-0000-0000-0000-000000000003', 'STY02', 'OPERATIONAL', 'ApprovalCutoffDay', '"25"', '2024-01-01', 'HK', 'OK24', 'ladm01')
 ON CONFLICT DO NOTHING;
 
 -- ============================================================
@@ -1011,13 +1023,14 @@ INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code
     ('SICK_DAY', 'SLS_0540', 'OK26', 'PROSA', 'Sick day', '2020-01-01')
 ON CONFLICT (time_type, ok_version, agreement_code, position, effective_from) DO NOTHING;
 
--- Sample projects for test orgs
+-- Sample projects for test orgs. S92 flatten: the former AFD01/AFD02 projects re-point
+-- to their parent ORGANISATION STY02 (Statens IT) — the afdeling org rows are gone.
 INSERT INTO projects (org_id, project_code, project_name, sort_order, created_by) VALUES
-    ('AFD01', 'DRIFT-01', 'Daglig drift', 1, 'ladm01'),
-    ('AFD01', 'PROJ-ALPHA', 'Projekt Alpha', 2, 'ladm01'),
-    ('AFD01', 'PROJ-BETA', 'Projekt Beta', 3, 'ladm01'),
-    ('AFD02', 'SYSDEV-01', 'Systemudvikling', 1, 'ladm01'),
-    ('AFD02', 'VEDL-01', 'Vedligeholdelse', 2, 'ladm01')
+    ('STY02', 'DRIFT-01', 'Daglig drift', 1, 'ladm01'),
+    ('STY02', 'PROJ-ALPHA', 'Projekt Alpha', 2, 'ladm01'),
+    ('STY02', 'PROJ-BETA', 'Projekt Beta', 3, 'ladm01'),
+    ('STY02', 'SYSDEV-01', 'Systemudvikling', 4, 'ladm01'),
+    ('STY02', 'VEDL-01', 'Vedligeholdelse', 5, 'ladm01')
 ON CONFLICT DO NOTHING;
 
 -- ============================================================
@@ -2419,9 +2432,11 @@ CREATE TABLE IF NOT EXISTS reporting_line_audit (
 CREATE INDEX IF NOT EXISTS idx_reporting_line_audit_line
     ON reporting_line_audit(reporting_line_id);
 
--- ── Seed reporting lines (12 PRIMARY + 1 ACTING = 13 rows across 7 trees) ──
+-- ── Seed reporting lines (12 PRIMARY + 1 ACTING = 13 rows across the Organisation trees) ──
 -- Tree roots have NO reporting line (they are root by absence of a row).
--- tree_root_org_id derivation: nearest MINISTRY or STYRELSE ancestor.
+-- tree_root_org_id derivation: nearest MAO or ORGANISATION ancestor (S92 flatten;
+-- the STY0x roots below are now ORGANISATION rows — transitional tree machinery,
+-- re-pointed not removed, per ADR-035).
 INSERT INTO reporting_lines (employee_id, manager_id, tree_root_org_id, relationship, effective_from, source, created_by) VALUES
     -- Tree STY01 (Medarbejder- og Kompetencestyrelsen): root = mgr03
     ('emp001', 'mgr03',  'STY01', 'PRIMARY', '2024-01-01', 'MANUAL', 'SYSTEM'),
@@ -4065,6 +4080,19 @@ $$;
 CREATE INDEX IF NOT EXISTS idx_approval_employee_period_end
     ON approval_periods (employee_id, period_end DESC);
 -- S74-MEDARBEJDER-ADMIN-SEGMENT-END
+
+-- =========================================================================
+-- S92 / ADR-035 — enhed_label for the AFDELING-collapse moved users.
+--   DELIBERATELY NOT pre-seeded here. employee_profiles is an event-sourced
+--   projection (ADR-022/ADR-018 D13); pre-seeding projection rows in init.sql
+--   without their EmployeeProfileCreated outbox events breaks event-sourcing
+--   integrity (the projection could not be rebuilt from the event log) and the
+--   established EmployeeProfileSeeder pattern (which emits the events). P3
+--   (event-sourcing) outranks the cosmetic baseline label (P9), so the 9 moved
+--   users get a NULL-enhed_label default profile via the seeder like everyone
+--   else (the FE shows primary_org_name when enhed_label IS NULL, per ADR-022).
+--   The DEMO seed (99-demo-seed.sql, dev-tooling) carries realistic enhed labels.
+-- =========================================================================
 
 -- =========================================================================
 -- S85 / TASK-8501 — role_assignments privilege-escalation CHECK backstop

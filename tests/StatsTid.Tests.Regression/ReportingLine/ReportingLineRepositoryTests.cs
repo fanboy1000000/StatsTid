@@ -44,16 +44,19 @@ public sealed class ReportingLineRepositoryTests : IAsyncLifetime
         await CleanupTestDataAsync(conn);
 
         // Insert test users in orgs that let us exercise same-tree and cross-tree logic.
+        // S92 flatten (ADR-035): the former AFDELING orgs (AFD01/AFD02) no longer exist — their
+        // members re-point UP to the parent ORGANISATION (STY02). STY02/STY05 are now ORGANISATION
+        // rows; same-tree = same ORGANISATION (STY02), cross-tree = STY02 vs STY05.
         await using var cmd = new NpgsqlCommand(
             """
             INSERT INTO users (user_id, username, password_hash, display_name, email, primary_org_id, agreement_code, ok_version)
             VALUES
-                (@emp,      @emp,      '$2a$11$fake', 'Test Employee RL',   'test_emp@test.dk',   'AFD01', 'HK', 'OK24'),
+                (@emp,      @emp,      '$2a$11$fake', 'Test Employee RL',   'test_emp@test.dk',   'STY02', 'HK', 'OK24'),
                 (@mgrA,     @mgrA,     '$2a$11$fake', 'Test Manager A',     'test_mgra@test.dk',  'STY02', 'HK', 'OK24'),
-                (@mgrB,     @mgrB,     '$2a$11$fake', 'Test Manager B',     'test_mgrb@test.dk',  'AFD02', 'HK', 'OK24'),
+                (@mgrB,     @mgrB,     '$2a$11$fake', 'Test Manager B',     'test_mgrb@test.dk',  'STY02', 'HK', 'OK24'),
                 (@empCross, @empCross, '$2a$11$fake', 'Test Cross-Tree',    'test_cross@test.dk', 'STY05', 'HK', 'OK24'),
-                (@empNoRl,  @empNoRl,  '$2a$11$fake', 'Test No RL',         'test_norl@test.dk',  'AFD01', 'HK', 'OK24'),
-                (@mgrC,     @mgrC,     '$2a$11$fake', 'Test Manager C',     'test_mgrc@test.dk',  'AFD01', 'HK', 'OK24')
+                (@empNoRl,  @empNoRl,  '$2a$11$fake', 'Test No RL',         'test_norl@test.dk',  'STY02', 'HK', 'OK24'),
+                (@mgrC,     @mgrC,     '$2a$11$fake', 'Test Manager C',     'test_mgrc@test.dk',  'STY02', 'HK', 'OK24')
             ON CONFLICT DO NOTHING
             """, conn);
         cmd.Parameters.AddWithValue("emp", TestEmp);
@@ -321,7 +324,7 @@ public sealed class ReportingLineRepositoryTests : IAsyncLifetime
     [Fact]
     public async Task ValidateSameTree_CrossTree_ThrowsCrossTreeAssignmentException()
     {
-        // TestEmp is in AFD01 → tree root STY02
+        // TestEmp is in STY02 → tree root STY02
         // TestEmpCross is in STY05 → tree root STY05
         // Assigning TestEmp under TestEmpCross (different trees) should throw.
         await Assert.ThrowsAsync<CrossTreeAssignmentException>(
@@ -369,18 +372,21 @@ public sealed class ReportingLineRepositoryTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════
-    // 12. ResolveTreeRootOrgIdAsync — AFD01 → STY02
+    // 12. ResolveTreeRootOrgIdAsync — STY02 (an ORGANISATION) → STY02
+    //     S92 flatten (ADR-035): the former AFD01→STY02 walk collapses — a user
+    //     now sits directly on the ORGANISATION, which IS its own tree root.
     // ════════════════════════════════════════════════════════════════
 
     [Fact]
-    public async Task ResolveTreeRoot_AFD01_ReturnsSTY02()
+    public async Task ResolveTreeRoot_STY02_ReturnsSTY02()
     {
-        var root = await _repo.ResolveTreeRootOrgIdAsync("AFD01");
+        var root = await _repo.ResolveTreeRootOrgIdAsync("STY02");
         Assert.Equal("STY02", root);
     }
 
     // ════════════════════════════════════════════════════════════════
-    // 13. ResolveTreeRootOrgIdAsync — MIN01 → MIN01
+    // 13. ResolveTreeRootOrgIdAsync — MIN01 (a MAO) → MIN01
+    //     The MINISTRY→MAO rename is identity-preserving: a MAO is its own root.
     // ════════════════════════════════════════════════════════════════
 
     [Fact]
@@ -538,7 +544,7 @@ public sealed class ReportingLineRepositoryTests : IAsyncLifetime
     [Fact]
     public async Task ApprovalPeriod_ApprovePopulatesRoutingFields()
     {
-        // Use seed employee emp002 (org AFD01, HK, OK24) who has a reporting line to mgr01.
+        // Use seed employee emp002 (org STY02, HK, OK24) who has a reporting line to mgr01.
         // Use a distant date range to avoid collisions with seed or other test data.
         var periodStart = new DateOnly(2099, 1, 1);
         var periodEnd = new DateOnly(2099, 1, 31);
@@ -565,7 +571,7 @@ public sealed class ReportingLineRepositoryTests : IAsyncLifetime
         {
             PeriodId = Guid.NewGuid(),
             EmployeeId = "emp002",
-            OrgId = "AFD01",
+            OrgId = "STY02",
             PeriodStart = periodStart,
             PeriodEnd = periodEnd,
             PeriodType = "MONTHLY",
@@ -730,7 +736,7 @@ public sealed class ReportingLineRepositoryTests : IAsyncLifetime
         // STY02 tree has full seed data with reporting lines for all employees.
         // The only users without a reporting-line-as-employee are tree roots
         // (who are managers but not employees in the tree).
-        // However, test_emp_rl_norl is in AFD01 (STY02 tree) and has NO reporting line.
+        // However, test_emp_rl_norl is in STY02 (the STY02 tree) and has NO reporting line.
         // We need to exclude it for this test by giving it a reporting line first.
         await _repo.AssignAsync(
             expectedCurrentVersion: null,
@@ -741,7 +747,7 @@ public sealed class ReportingLineRepositoryTests : IAsyncLifetime
             var (isPopulated, unassigned) = await settingsRepo.ValidateTreePopulatedAsync("STY02");
 
             // With our test user now having a reporting line + all seed data intact,
-            // the only unassigned should be test_emp_rl (also in AFD01/STY02 tree) who
+            // the only unassigned should be test_emp_rl (also in the STY02 tree) who
             // has no reporting line at start-of-test. But test_emp_rl is cleaned up in
             // InitializeAsync, so reporting_lines for test_emp_rl are removed.
             // The seed employees should all be covered. Let's verify our norl user is NOT
@@ -765,7 +771,7 @@ public sealed class ReportingLineRepositoryTests : IAsyncLifetime
     {
         var settingsRepo = new TreeSettingsRepository(_factory);
 
-        // test_emp_rl_norl is in AFD01 (tree root STY02) and has NO reporting line.
+        // test_emp_rl_norl is in STY02 (tree root STY02) and has NO reporting line.
         // ValidateTreePopulatedAsync should return it in the unassigned list.
         var (isPopulated, unassigned) = await settingsRepo.ValidateTreePopulatedAsync("STY02");
 
@@ -805,7 +811,7 @@ public sealed class ReportingLineRepositoryTests : IAsyncLifetime
         {
             PeriodId = Guid.NewGuid(),
             EmployeeId = "emp002",
-            OrgId = "AFD01",
+            OrgId = "STY02",
             PeriodStart = periodStart,
             PeriodEnd = periodEnd,
             PeriodType = "MONTHLY",

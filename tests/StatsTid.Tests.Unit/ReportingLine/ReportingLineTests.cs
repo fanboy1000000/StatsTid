@@ -418,7 +418,7 @@ public class ReportingLineTests
             CorrelationId = correlationId,
             PeriodId = periodId,
             EmployeeId = "emp001",
-            OrgId = "AFD01",
+            OrgId = "STY01",
             PeriodStart = new DateOnly(2026, 5, 1),
             PeriodEnd = new DateOnly(2026, 5, 31),
             ApprovedBy = "mgr01",
@@ -432,7 +432,7 @@ public class ReportingLineTests
         Assert.Equal(eventId, result.EventId);
         Assert.Equal(periodId, result.PeriodId);
         Assert.Equal("emp001", result.EmployeeId);
-        Assert.Equal("AFD01", result.OrgId);
+        Assert.Equal("STY01", result.OrgId);
         Assert.Equal("mgr01", result.ApprovedBy);
         Assert.True(result.ExplicitFallbackConfirmation,
             "ExplicitFallbackConfirmation must survive serialization round-trip when set to true.");
@@ -456,7 +456,7 @@ public class ReportingLineTests
             CorrelationId = correlationId,
             PeriodId = periodId,
             EmployeeId = "emp002",
-            OrgId = "AFD02",
+            OrgId = "STY02",
             PeriodStart = new DateOnly(2026, 5, 1),
             PeriodEnd = new DateOnly(2026, 5, 31),
             RejectedBy = "mgr02",
@@ -471,7 +471,7 @@ public class ReportingLineTests
         Assert.Equal(eventId, result.EventId);
         Assert.Equal(periodId, result.PeriodId);
         Assert.Equal("emp002", result.EmployeeId);
-        Assert.Equal("AFD02", result.OrgId);
+        Assert.Equal("STY02", result.OrgId);
         Assert.Equal("mgr02", result.RejectedBy);
         Assert.Equal("Incomplete entries", result.RejectionReason);
         Assert.True(result.ExplicitFallbackConfirmation,
@@ -485,7 +485,7 @@ public class ReportingLineTests
         {
             PeriodId = Guid.NewGuid(),
             EmployeeId = "emp003",
-            OrgId = "AFD01",
+            OrgId = "STY01",
             PeriodStart = new DateOnly(2026, 6, 1),
             PeriodEnd = new DateOnly(2026, 6, 30),
             ApprovedBy = "mgr01",

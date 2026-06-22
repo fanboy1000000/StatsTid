@@ -625,8 +625,8 @@ public sealed class WaiverResolutionTests : IAsyncLifetime
         await using var cmd = new NpgsqlCommand(
             """
             INSERT INTO organizations (org_id, org_name, org_type, parent_org_id, materialized_path)
-            VALUES (@p, @p, 'STYRELSE', NULL, '/' || @p || '/'),
-                   (@c, @c, 'AFDELING', @p, '/' || @p || '/' || @c || '/')
+            VALUES (@p, @p, 'MAO', NULL, '/' || @p || '/'),
+                   (@c, @c, 'ORGANISATION', @p, '/' || @p || '/' || @c || '/')
             ON CONFLICT DO NOTHING
             """, conn);
         cmd.Parameters.AddWithValue("p", parentOrg);

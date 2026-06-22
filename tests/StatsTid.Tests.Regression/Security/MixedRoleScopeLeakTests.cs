@@ -315,9 +315,9 @@ public sealed class MixedRoleScopeLeakTests : IAsyncLifetime
 
         var rsp = await client.PostAsync("/api/admin/organizations", JsonContent.Create(new
         {
-            orgId = "STYNEW_" + Guid.NewGuid().ToString("N")[..6],
+            orgId = "MAONEW_" + Guid.NewGuid().ToString("N")[..6],
             orgName = "Leak probe top-level",
-            orgType = "STYRELSE",
+            orgType = "MAO", // S92 flatten: top-level org is a MAO (ORGANISATION requires a MAO parent)
             parentOrgId = (string?)null, // top-level → HasGlobalScope gate
             agreementCode = "AC",
             okVersion = "OK24",
@@ -335,9 +335,9 @@ public sealed class MixedRoleScopeLeakTests : IAsyncLifetime
 
         var rsp = await client.PostAsync("/api/admin/organizations", JsonContent.Create(new
         {
-            orgId = "STYNEW_" + Guid.NewGuid().ToString("N")[..6],
+            orgId = "MAONEW_" + Guid.NewGuid().ToString("N")[..6],
             orgName = "Genuine global create",
-            orgType = "STYRELSE",
+            orgType = "MAO", // S92 flatten: top-level org is a MAO (ORGANISATION requires a MAO parent)
             parentOrgId = (string?)null,
             agreementCode = "AC",
             okVersion = "OK24",

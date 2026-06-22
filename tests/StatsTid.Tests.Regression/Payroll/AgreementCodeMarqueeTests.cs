@@ -295,7 +295,7 @@ public sealed class AgreementCodeMarqueeTests : IAsyncLifetime
             """
             INSERT INTO organizations (org_id, org_name, org_type, parent_org_id, materialized_path,
                                        agreement_code, ok_version)
-            VALUES (@orgId, 'Marquee Org', 'STYRELSE', NULL, '/MARQ/',
+            VALUES (@orgId, 'Marquee Org', 'ORGANISATION', NULL, '/MARQ/',
                     @agreementCode, @okVersion)
             ON CONFLICT (org_id) DO NOTHING
             """, conn))

@@ -1,9 +1,15 @@
 # StatsTid.DemoSeed — realistic demo/test dataset (S84)
 
 A **deterministic** generator + API loader that produces a large, realistic **demo** dataset
-for manual testing and demos: 5 styrelse trees (1×~2,000, 1×~600, 3×~250 ≈ **3,350 employees**)
-with realistic hierarchy, agreement/category/age/tenure spread, a light activity slice, and
+for manual testing and demos: 1 demo MAO with 5 Organisations (1×~2,000, 1×~600, 3×~250 ≈
+**3,350 employees**) with agreement/category/age/tenure spread, a light activity slice, and
 ~20–30 hand-curated "messy" cases.
+
+> **Org model (S92 / ADR-035 flatten):** the tree is 2 levels — **MAO** (`MINX`, root) →
+> **Organisation** (`STYX1…STYX5`). There are NO AFDELING/TEAM org rows; every user sits
+> directly on their Organisation and carries the former leaf-unit name as a display-only
+> `employee_profiles.enhed_label`. The REPORTING tree keeps its realistic depth (it is a
+> people-graph, independent of the now-flat org graph).
 
 > **This is DEMO data, fully isolated from the test fixture.** It is **opt-in** (a separate
 > compose overlay), uses distinct ids (`MINX` / `STYX1…STYX5` / `demo_*`) and `DEMO_SEED`

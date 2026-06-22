@@ -16,10 +16,10 @@ namespace StatsTid.Backend.Api.Endpoints;
 
 public static class AdminEndpoints
 {
-    // ── Valid org types ──
+    // ── Valid org types (S92/ADR-035 flatten: MAO root -> ORGANISATION) ──
     private static readonly HashSet<string> ValidOrgTypes = new(StringComparer.OrdinalIgnoreCase)
     {
-        "MINISTRY", "STYRELSE", "AFDELING", "TEAM"
+        "MAO", "ORGANISATION"
     };
 
     // ── Role ID to hierarchy-level mapping for privilege check ──
@@ -88,6 +88,16 @@ public static class AdminEndpoints
             if (!ValidOrgTypes.Contains(request.OrgType))
                 return Results.BadRequest(new { error = $"Invalid orgType. Must be one of: {string.Join(", ", ValidOrgTypes)}" });
 
+            var orgType = request.OrgType.ToUpperInvariant();
+
+            // S92/ADR-035 type-scoped parent rules:
+            //   MAO          = root         → MUST NOT have a parent.
+            //   ORGANISATION = under a MAO  → MUST have a parent, and that parent MUST be a MAO.
+            if (orgType == "MAO" && request.ParentOrgId is not null)
+                return Results.BadRequest(new { error = "A MAO is a root organization and must not have a parent." });
+            if (orgType == "ORGANISATION" && request.ParentOrgId is null)
+                return Results.BadRequest(new { error = "An ORGANISATION must have a MAO parent." });
+
             // Compute materialized path
             string materializedPath;
             if (request.ParentOrgId is not null)
@@ -102,11 +112,16 @@ public static class AdminEndpoints
                 if (parentOrg is null)
                     return Results.BadRequest(new { error = "Parent organization not found" });
 
+                // S92/ADR-035: an ORGANISATION's parent must be a MAO (the only valid
+                // non-root level). MAO never reaches this branch (rejected above).
+                if (orgType == "ORGANISATION" && parentOrg.OrgType != "MAO")
+                    return Results.BadRequest(new { error = $"An ORGANISATION's parent must be a MAO (got {parentOrg.OrgType})." });
+
                 materializedPath = $"{parentOrg.MaterializedPath}{request.OrgId}/";
             }
             else
             {
-                // Top-level org — only GlobalAdmin should create these
+                // Top-level org (a MAO root) — only GlobalAdmin should create these
                 if (!HasGlobalScope(actor))
                     return Results.Json(new { error = "Access denied", reason = "Only GlobalAdmin can create top-level organizations" }, statusCode: 403);
 

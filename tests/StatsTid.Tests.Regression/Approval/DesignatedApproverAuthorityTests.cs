@@ -17,31 +17,32 @@ namespace StatsTid.Tests.Regression.Approval;
 /// S74 / ADR-027 D4 amendment (SPRINT-74 R5/R6/R7, TASK-7402) — the A3 approve-authority
 /// expansion: the effective designated-approver edge now GRANTS approve / reject / reopen
 /// authority and my-reports VISIBILITY for an employee anywhere in the same
-/// <c>tree_root_org_id</c>, even when the approver's RBAC org-scope does not cover that
-/// afdeling (OQ-3a, a P7 privilege expansion). The load-bearing invariant proven here is
-/// <b>see == act</b>: every period the my-reports dashboard surfaces is approvable/reopenable
-/// via the SAME canonical predicate, and ADR-027 D2 (cross-styrelse forbidden) still holds
-/// because the resolving edge is intra-tree by construction.
+/// <c>tree_root_org_id</c> (OQ-3a, a P7 privilege expansion). The load-bearing invariant proven
+/// here is <b>see == act</b>: every period the my-reports dashboard surfaces is
+/// approvable/reopenable via the SAME canonical predicate, and ADR-027 D2 (cross-tree forbidden)
+/// still holds because the resolving edge is intra-tree by construction.
 ///
 /// <para>
-/// <b>CROSS-ORG fixtures (the S71 green-but-weak lesson).</b> A same-org fixture cannot
-/// discriminate edge-authority from org-scope. The designated approver
-/// (<c>t74_mgr</c>, AFD02) is the PRIMARY manager of an employee in a SIBLING afdeling
-/// (<c>t74_emp</c>, AFD01) within the same styrelse (STY02), and the approver's scope covers
-/// AFD02 ONLY — so org-scope alone DENIES; only the edge grants. A cross-styrelse employee
-/// (<c>t74_emp_x</c>, STY05 = a different tree_root) proves the D2 bound.
+/// <b>CROSS-ORG fixtures (the S71 green-but-weak lesson; S92/ADR-035 flatten).</b> Post-flatten
+/// the smallest authority unit is the Organisation. The designated approver (<c>t74_mgr</c>) and
+/// its report (<c>t74_emp</c>) are BOTH on the STY02 Organisation, and the PRIMARY edge grants —
+/// authority is proven by the EDGE (no sub-Organisation scope exists any more). A no-edge Leader on a
+/// DIFFERENT Organisation under the SAME MAO (<c>t74_other</c>, STY01) proves org-scope alone does
+/// NOT reach Emp (the approve still 403s), and a cross-MAO employee (<c>t74_emp_x</c>, STY05 = a
+/// different tree_root) proves the D2 bound.
 /// </para>
 ///
 /// <para>
-/// Topology (init.sql seed orgs): STY02 tree = {STY02 root, AFD01, AFD02}; STY05 tree =
-/// {STY05 root, AFD03, AFD04}. The two trees sit under different ministries (MIN01 / MIN02).
+/// Topology (init.sql seed orgs, post-flatten): MIN01 (MAO) has Organisations STY01 + STY02;
+/// MIN02 (MAO) has Organisation STY05 (a different tree_root). Each Organisation is its own tree
+/// root.
 /// </para>
 ///
 /// <para>
 /// Endpoint-level integration via <see cref="StatsTidWebApplicationFactory"/> (the real
 /// Backend.Api over a fresh testcontainer) for the route→read→approve→reopen path; direct
 /// <see cref="DesignatedApproverAuthorizer"/> + repository assertions for the discriminating
-/// single-winner edges (vikar-supersedes-PRIMARY, inactive-vikar-skip, cross-styrelse-block).
+/// single-winner edges (vikar-supersedes-PRIMARY, inactive-vikar-skip, cross-tree-block).
 /// </para>
 /// </summary>
 [Trait("Category", "Docker")]
@@ -54,14 +55,17 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
     private DbConnectionFactory _dbFactory = null!;
 
     // ── Test users (all distinct from seed) ──────────────────────────────────────────
-    // STY02 tree:
-    private const string Emp = "t74_emp";        // AFD01 — the report (sibling afdeling to the approver)
-    private const string Mgr = "t74_mgr";        // AFD02 — PRIMARY manager of Emp; scope = AFD02 ONLY
-    private const string Vik = "t74_vik";        // AFD02 — Mgr's vikar stand-in (a Leader)
-    private const string EmpInactiveMgr = "t74_emp_im"; // AFD01 — reports to an INACTIVE manager
-    private const string InactiveMgr = "t74_imgr";      // AFD02 — INACTIVE; escalates up to Mgr
-    private const string Other = "t74_other";    // AFD02 — a Leader who holds NO edge over Emp
-    // STY05 tree (cross-styrelse):
+    // STY02 Organisation (MAO MIN01):
+    private const string Emp = "t74_emp";        // STY02 — the report
+    private const string Mgr = "t74_mgr";        // STY02 — PRIMARY manager of Emp
+    private const string Vik = "t74_vik";        // STY02 — Mgr's vikar stand-in (a Leader)
+    private const string EmpInactiveMgr = "t74_emp_im"; // STY02 — reports to an INACTIVE manager
+    private const string InactiveMgr = "t74_imgr";      // STY02 — INACTIVE; escalates up to Mgr
+    private const string Other = "t74_other";    // STY01 — a Leader on a DIFFERENT Organisation (same
+                                                 //   MAO MIN01) who holds NO edge over Emp: org-scope
+                                                 //   does NOT reach Emp (STY01 ≠ STY02), so it stays a
+                                                 //   genuinely-disjoint non-covering scope post-flatten.
+    // STY05 Organisation (a DIFFERENT MAO MIN02 — cross-tree):
     private const string EmpX = "t74_emp_x";     // STY05 — different tree_root
     private const string MgrX = "t74_mgr_x";     // STY05 — EmpX's own manager
 
@@ -107,12 +111,12 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
             """
             INSERT INTO users (user_id, username, password_hash, display_name, email, primary_org_id, agreement_code, ok_version, is_active)
             VALUES
-                (@emp,   @emp,   '$2a$11$fake', 'T74 Emp',   't74_emp@test.dk',   'AFD01', 'HK', 'OK24', TRUE),
-                (@mgr,   @mgr,   '$2a$11$fake', 'T74 Mgr',   't74_mgr@test.dk',   'AFD02', 'HK', 'OK24', TRUE),
-                (@vik,   @vik,   '$2a$11$fake', 'T74 Vikar', 't74_vik@test.dk',   'AFD02', 'HK', 'OK24', TRUE),
-                (@empim, @empim, '$2a$11$fake', 'T74 EmpIM', 't74_emp_im@test.dk','AFD01', 'HK', 'OK24', TRUE),
-                (@imgr,  @imgr,  '$2a$11$fake', 'T74 IMgr',  't74_imgr@test.dk',  'AFD02', 'HK', 'OK24', FALSE),
-                (@other, @other, '$2a$11$fake', 'T74 Other', 't74_other@test.dk', 'AFD02', 'HK', 'OK24', TRUE),
+                (@emp,   @emp,   '$2a$11$fake', 'T74 Emp',   't74_emp@test.dk',   'STY02', 'HK', 'OK24', TRUE),
+                (@mgr,   @mgr,   '$2a$11$fake', 'T74 Mgr',   't74_mgr@test.dk',   'STY02', 'HK', 'OK24', TRUE),
+                (@vik,   @vik,   '$2a$11$fake', 'T74 Vikar', 't74_vik@test.dk',   'STY02', 'HK', 'OK24', TRUE),
+                (@empim, @empim, '$2a$11$fake', 'T74 EmpIM', 't74_emp_im@test.dk','STY02', 'HK', 'OK24', TRUE),
+                (@imgr,  @imgr,  '$2a$11$fake', 'T74 IMgr',  't74_imgr@test.dk',  'STY02', 'HK', 'OK24', FALSE),
+                (@other, @other, '$2a$11$fake', 'T74 Other', 't74_other@test.dk', 'STY01', 'HK', 'OK24', TRUE),
                 (@empx,  @empx,  '$2a$11$fake', 'T74 EmpX',  't74_emp_x@test.dk', 'STY05', 'HK', 'OK24', TRUE),
                 (@mgrx,  @mgrx,  '$2a$11$fake', 'T74 MgrX',  't74_mgr_x@test.dk', 'STY05', 'HK', 'OK24', TRUE)
             ON CONFLICT DO NOTHING
@@ -123,18 +127,20 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
         }
 
         // Role assignments — Mgr/Vik/Other/MgrX are Leaders; the IsActiveLeaderOrAbove gate
-        // reads role_assignments + roles.hierarchy_level. Scopes are AFD02 (Mgr/Vik/Other) and
-        // STY05 (MgrX) — deliberately NOT covering AFD01 (Emp) so org-scope alone denies.
+        // reads role_assignments + roles.hierarchy_level. Mgr/Vik are scoped at STY02 (they DO cover
+        // Emp post-flatten, but authority over Emp is proven by the designated EDGE). Other is scoped
+        // at STY01 (a DIFFERENT Organisation under the same MAO) — deliberately NOT covering STY02's
+        // Emp, so the no-edge Other still org-scope-DENIES Emp. MgrX is STY05 (a different MAO/tree).
         await using (var cmd = new NpgsqlCommand(
             """
             INSERT INTO role_assignments (user_id, role_id, org_id, scope_type, assigned_by)
             VALUES
-                (@mgr,   'LOCAL_LEADER', 'AFD02', 'ORG_AND_DESCENDANTS', 'TEST'),
-                (@vik,   'LOCAL_LEADER', 'AFD02', 'ORG_AND_DESCENDANTS', 'TEST'),
-                (@other, 'LOCAL_LEADER', 'AFD02', 'ORG_AND_DESCENDANTS', 'TEST'),
+                (@mgr,   'LOCAL_LEADER', 'STY02', 'ORG_AND_DESCENDANTS', 'TEST'),
+                (@vik,   'LOCAL_LEADER', 'STY02', 'ORG_AND_DESCENDANTS', 'TEST'),
+                (@other, 'LOCAL_LEADER', 'STY01', 'ORG_AND_DESCENDANTS', 'TEST'),
                 (@mgrx,  'LOCAL_LEADER', 'STY05', 'ORG_AND_DESCENDANTS', 'TEST'),
-                (@emp,   'EMPLOYEE',     'AFD01', 'ORG_ONLY',            'TEST'),
-                (@empim, 'EMPLOYEE',     'AFD01', 'ORG_ONLY',            'TEST'),
+                (@emp,   'EMPLOYEE',     'STY02', 'ORG_ONLY',            'TEST'),
+                (@empim, 'EMPLOYEE',     'STY02', 'ORG_ONLY',            'TEST'),
                 (@empx,  'EMPLOYEE',     'STY05', 'ORG_ONLY',            'TEST')
             ON CONFLICT DO NOTHING
             """, conn))
@@ -145,13 +151,13 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
 
         var rlRepo = new ReportingLineRepository(_dbFactory);
 
-        // Emp (AFD01) reports PRIMARY to Mgr (AFD02) — the cross-afdeling, same-tree edge.
+        // Emp (STY02) reports PRIMARY to Mgr (STY02) — the same-Organisation, same-tree edge.
         await rlRepo.AssignAsync(null, MakeLine(Emp, Mgr, TreeRootSty02));
-        // EmpInactiveMgr (AFD01) reports PRIMARY to InactiveMgr (AFD02, inactive)…
+        // EmpInactiveMgr (STY02) reports PRIMARY to InactiveMgr (STY02, inactive)…
         await rlRepo.AssignAsync(null, MakeLine(EmpInactiveMgr, InactiveMgr, TreeRootSty02));
         // …and InactiveMgr reports PRIMARY to Mgr → EmpInactiveMgr escalates up to Mgr.
         await rlRepo.AssignAsync(null, MakeLine(InactiveMgr, Mgr, TreeRootSty02));
-        // EmpX (STY05) reports PRIMARY to MgrX (STY05) — the cross-styrelse tree.
+        // EmpX (STY05) reports PRIMARY to MgrX (STY05) — the cross-MAO (cross-tree) Organisation.
         await rlRepo.AssignAsync(null, MakeLine(EmpX, MgrX, TreeRootSty05));
     }
 
@@ -258,8 +264,8 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
 
     /// <summary>
     /// Directly plants a <c>manager_vikar</c> row with an explicit <paramref name="treeRoot"/>.
-    /// Used by the S74-7402 B1 cross-tree-vikar regression to construct a CROSS-styrelse vikar
-    /// row that the Layer-1 POST guard now refuses — proving the Layer-2 authority predicate
+    /// Used by the S74-7402 B1 cross-tree-vikar regression to construct a CROSS-MAO (cross-tree)
+    /// vikar row that the Layer-1 POST guard now refuses — proving the Layer-2 authority predicate
     /// denies even a directly-planted cross-tree vikar row, independent of edge-creation.
     /// </summary>
     private async Task CreateVikarRawAsync(string absentApprover, string vikarUser, DateOnly untilDate, string treeRoot)
@@ -300,23 +306,24 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
     // ════════════════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// The end-to-end Phase-1 test: a cross-afdeling designated approver (Mgr, AFD02, scope
-    /// does NOT cover Emp's AFD01) SEES Emp's period on the my-reports dashboard AND can
-    /// approve it AND reopen it — all via the edge, with org-scope denying throughout.
+    /// The end-to-end Phase-1 test: a designated approver (Mgr, STY02) SEES Emp's period on the
+    /// my-reports dashboard AND can approve it AND reopen it — all via the designated PRIMARY edge.
+    /// Post-flatten Mgr ALSO org-scope-covers Emp (both on STY02), but the see/act path is the edge.
     /// </summary>
     [Fact]
     public async Task Edge_CrossAfdeling_Manager_Sees_Approves_AndReopens_OnMyReports()
     {
-        var periodId = await InsertPeriodAsync(Emp, "AFD01", "SUBMITTED");
+        var periodId = await InsertPeriodAsync(Emp, "STY02", "SUBMITTED");
         var client = _factory.CreateClient();
         client.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "AFD02"));
+            new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "STY02"));
 
         // READ: the period appears on Mgr's my-reports (edge visibility, NOT org-scope).
         var pending = await GetMyReportsAsync(client);
         Assert.Contains(pending, p => p == periodId);
 
-        // ACT (approve): org-scope denies (AFD01 ⊄ AFD02), the edge grants → 200.
+        // ACT (approve): Mgr is the designated PRIMARY approver of Emp → DESIGNATED_MANAGER (no
+        // fallback 428) → 200. Post-flatten Mgr also org-scope-covers Emp, but the edge classifies it.
         var approveRsp = await client.PostAsync($"/api/approval/{periodId}/approve", null);
         Assert.Equal(HttpStatusCode.OK, approveRsp.StatusCode);
         Assert.Equal("APPROVED", await ReadStatusAsync(periodId));
@@ -330,17 +337,17 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
     /// <summary>
     /// The vikar-holds-authority case end-to-end: while Mgr has an active vikar (Vik) covering
     /// today, Vik (NOT Mgr) is the single effective approver — Vik SEES Emp's period on
-    /// my-reports AND can approve it; Vik's org-scope (AFD02) does not cover Emp's AFD01.
+    /// my-reports AND can approve it; the vikar EDGE is the grant (Vik + Emp both on STY02).
     /// </summary>
     [Fact]
     public async Task Vikar_HoldsAuthority_Sees_AndApproves_WhileMgrIsSuperseded()
     {
         await CreateVikarAsync(Mgr, Vik, DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30));
-        var periodId = await InsertPeriodAsync(Emp, "AFD01", "SUBMITTED");
+        var periodId = await InsertPeriodAsync(Emp, "STY02", "SUBMITTED");
 
         var vikClient = _factory.CreateClient();
         vikClient.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", MintLeaderToken(Vik, "AFD02"));
+            new AuthenticationHeaderValue("Bearer", MintLeaderToken(Vik, "STY02"));
 
         // The vikar SEES the absent manager's report.
         var vikPending = await GetMyReportsAsync(vikClient);
@@ -357,7 +364,7 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
     /// While Mgr has an active vikar (Vik) covering today, Vik (a Leader-level stand-in,
     /// deliberately NOT LocalHR — the token is minted <c>LocalLeader</c>, so the ONLY authority
     /// is the vikar EDGE, never a role) can REJECT and REOPEN Emp's periods through the real HTTP
-    /// endpoints, with Vik's org-scope (AFD02) NOT covering Emp's AFD01 throughout.
+    /// endpoints (Vik + Emp both on STY02; the vikar edge classifies the action as DESIGNATED).
     ///
     /// <para>
     /// The approval state machine forbids <c>approve→reopen→reject</c> on one period (reopen takes
@@ -383,16 +390,16 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
 
         var vikClient = _factory.CreateClient();
         vikClient.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", MintLeaderToken(Vik, "AFD02"));
+            new AuthenticationHeaderValue("Bearer", MintLeaderToken(Vik, "STY02"));
 
         // ── period-1: SUBMITTED → APPROVE → REOPEN (proves approve + reopen-Leader-arm) ──
-        var p1 = await InsertPeriodAsync(Emp, "AFD01", "SUBMITTED");
+        var p1 = await InsertPeriodAsync(Emp, "STY02", "SUBMITTED");
 
         var approveRsp = await vikClient.PostAsync($"/api/approval/{p1}/approve", null);
         Assert.Equal(HttpStatusCode.OK, approveRsp.StatusCode);
         Assert.Equal("APPROVED", await ReadStatusAsync(p1));
 
-        // reopen (Leader arm): the vikar edge grants it (org-scope denies AFD01) → APPROVED → DRAFT.
+        // reopen (Leader arm): the vikar edge grants it (Vik + Emp both on STY02) → APPROVED → DRAFT.
         var reopenRsp = await vikClient.PostAsJsonAsync(
             $"/api/approval/{p1}/reopen", new { reason = "vikar-reopen" });
         Assert.Equal(HttpStatusCode.OK, reopenRsp.StatusCode);
@@ -400,7 +407,7 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
 
         // ── period-2 (distinct range): SUBMITTED → REJECT (proves reject) ──
         var p2 = await InsertPeriodWithRangeAsync(
-            Emp, "AFD01", "SUBMITTED", new DateOnly(2026, 4, 1), new DateOnly(2026, 4, 30));
+            Emp, "STY02", "SUBMITTED", new DateOnly(2026, 4, 1), new DateOnly(2026, 4, 30));
 
         var rejectRsp = await vikClient.PostAsJsonAsync(
             $"/api/approval/{p2}/reject", new { reason = "vikar-reject" });
@@ -409,17 +416,17 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
-    //  D4 regression case (1) — sibling-afdeling edge → approvable AND reopenable AND visible
-    //  (covered by the integration test above; this asserts the reject path of the same edge)
+    //  D4 regression case (1) — same-Organisation designated edge → approvable AND reopenable AND
+    //  visible (covered by the integration test above; this asserts the reject path of the same edge)
     // ════════════════════════════════════════════════════════════════════════════════
 
     [Fact]
     public async Task Edge_CrossAfdeling_Manager_CanReject()
     {
-        var periodId = await InsertPeriodAsync(Emp, "AFD01", "SUBMITTED");
+        var periodId = await InsertPeriodAsync(Emp, "STY02", "SUBMITTED");
         var client = _factory.CreateClient();
         client.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "AFD02"));
+            new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "STY02"));
 
         var rejectRsp = await client.PostAsJsonAsync($"/api/approval/{periodId}/reject", new { reason = "edge-reject" });
         Assert.Equal(HttpStatusCode.OK, rejectRsp.StatusCode);
@@ -427,7 +434,7 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
-    //  D4 regression case (2) — cross-styrelse edge → BLOCKED (different tree_root, D2)
+    //  D4 regression case (2) — cross-MAO edge → BLOCKED (different tree_root, D2)
     // ════════════════════════════════════════════════════════════════════════════════
 
     [Fact]
@@ -444,7 +451,7 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
 
         var client = _factory.CreateClient();
         client.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "AFD02"));
+            new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "STY02"));
 
         // Not on Mgr's my-reports…
         var pending = await GetMyReportsAsync(client);
@@ -463,30 +470,30 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
     //  GetByMonthForDesignatedReportsAsync) were rewritten to the single-immediate-effective-
     //  approver semantics (shared candidate CTE + the R5 predicate), but only the pending read
     //  was covered. This proves see == act on the by-month surface too, with the SAME cross-org
-    //  discrimination: the cross-afdeling designated approver sees the report on by-month, and a
-    //  cross-styrelse manager does not.
+    //  discrimination: the same-Organisation designated approver sees the report on by-month, and a
+    //  cross-MAO (cross-tree) manager does not.
     // ════════════════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// By-month read completeness: the cross-AFDELING designated approver (Mgr, AFD02, the
-    /// PRIMARY effective approver of Emp in the sibling AFD01, org-scope NOT covering AFD01)
-    /// SEES Emp's period on the <c>/api/approval/by-month?my-reports=true</c> read for the
-    /// period's month — edge visibility, not org-scope. A cross-STYRELSE manager (MgrX, STY05 =
-    /// a different tree_root) does NOT see it (ADR-027 D2). Emp's seeded period is May 2026.
+    /// By-month read completeness: the designated approver (Mgr, STY02, the PRIMARY effective approver
+    /// of Emp on the same STY02 Organisation) SEES Emp's period on the
+    /// <c>/api/approval/by-month?my-reports=true</c> read for the period's month — edge visibility. A
+    /// cross-MAO manager (MgrX, STY05 = a different tree_root) does NOT see it (ADR-027 D2). Emp's
+    /// seeded period is May 2026.
     /// </summary>
     [Fact]
     public async Task ByMonth_CrossAfdelingDesignated_Sees_AndCrossStyrelse_DoesNot()
     {
-        var periodId = await InsertPeriodAsync(Emp, "AFD01", "SUBMITTED"); // May 2026
+        var periodId = await InsertPeriodAsync(Emp, "STY02", "SUBMITTED"); // May 2026
 
-        // Mgr (cross-afdeling designated approver) SEES Emp's period on the by-month read.
+        // Mgr (the same-Organisation designated approver) SEES Emp's period on the by-month read.
         var mgrClient = _factory.CreateClient();
         mgrClient.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "AFD02"));
+            new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "STY02"));
         var mgrByMonth = await GetByMonthMyReportsAsync(mgrClient, 2026, 5);
         Assert.Contains(mgrByMonth, p => p == periodId);
 
-        // MgrX (cross-styrelse, STY05 tree) does NOT see Emp's STY02 period — the candidate set
+        // MgrX (cross-MAO, STY05 tree) does NOT see Emp's STY02 period — the candidate set
         // is tree-root bounded and the R5 predicate denies the cross-tree actor. D2 holds.
         var mgrxClient = _factory.CreateClient();
         mgrxClient.DefaultRequestHeaders.Authorization =
@@ -501,54 +508,56 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
     //  The resolver's highest-precedence winner (step 1) is a per-report admin-assigned ACTING
     //  edge (relationship='ACTING'), which beats the resolved PRIMARY manager. Code-traced
     //  complete but untested end-to-end: prove a DIRECT admin-ACTING holder (not the PRIMARY
-    //  manager, not a vikar) gains BOTH visibility and authority cross-afdeling within the tree.
+    //  manager, not a vikar) gains BOTH visibility and authority within the same Organisation/tree.
     // ════════════════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Direct admin-ACTING precedence: <c>Other</c> (AFD02 Leader, NOT Emp's PRIMARY manager
-    /// [that is Mgr], NOT a vikar) holds a DIRECT admin-assigned ACTING edge over Emp (AFD01).
-    /// ACTING is the resolver's precedence step 1, so Other — not Mgr — is the single effective
-    /// approver. Asserts the predicate grants Other authority, the period is visible on Other's
-    /// my-reports, and approve succeeds (200) — precedence step 1 grants BOTH visibility and
-    /// authority cross-afdeling within the styrelse (Other's AFD02 scope does NOT cover AFD01).
+    /// Direct admin-ACTING precedence: <c>Vik</c> (a STY02 Leader, NOT Emp's PRIMARY manager
+    /// [that is Mgr]) holds a DIRECT admin-assigned ACTING edge over Emp. ACTING is the resolver's
+    /// precedence step 1, so Vik — not Mgr — is the single effective approver. Asserts the predicate
+    /// grants Vik authority, the period is visible on Vik's my-reports, and approve succeeds (200) —
+    /// precedence step 1 grants BOTH visibility and authority via the edge. (Pre-flatten this used the
+    /// no-edge <c>Other</c> as the ACTING holder; post-flatten Other lives on a DIFFERENT Organisation
+    /// STY01 — a cross-tree ACTING edge would be denied by the same-tree predicate — so the same-tree
+    /// Leader <c>Vik</c> carries the ACTING edge here.)
     /// </summary>
     [Fact]
-    public async Task AdminActing_DirectEdge_TakesPrecedence_Sees_AndApproves_CrossAfdeling()
+    public async Task AdminActing_DirectEdge_TakesPrecedence_Sees_AndApproves_SameOrganisation()
     {
-        // Other holds a DIRECT admin-ACTING edge over Emp (cross-afdeling, same STY02 tree).
+        // Vik holds a DIRECT admin-ACTING edge over Emp (same STY02 Organisation/tree).
         // ACTING wins resolver precedence step 1 over Emp's PRIMARY manager (Mgr).
         await new ReportingLineRepository(_dbFactory)
-            .AssignAsync(null, MakeActingLine(Emp, Other, TreeRootSty02));
-        var periodId = await InsertPeriodAsync(Emp, "AFD01", "SUBMITTED");
+            .AssignAsync(null, MakeActingLine(Emp, Vik, TreeRootSty02));
+        var periodId = await InsertPeriodAsync(Emp, "STY02", "SUBMITTED");
 
         var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory));
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
         // The admin-ACTING holder is the single effective approver (precedence over PRIMARY).
-        Assert.True(await authorizer.IsEffectiveDesignatedApproverAsync(Other, Emp, asOf: today));
+        Assert.True(await authorizer.IsEffectiveDesignatedApproverAsync(Vik, Emp, asOf: today));
 
-        var otherClient = _factory.CreateClient();
-        otherClient.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", MintLeaderToken(Other, "AFD02"));
+        var vikClient = _factory.CreateClient();
+        vikClient.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", MintLeaderToken(Vik, "STY02"));
 
-        // SEES it on my-reports (visibility), org-scope (AFD02) NOT covering Emp's AFD01.
-        var pending = await GetMyReportsAsync(otherClient);
+        // SEES it on my-reports via the designated (ACTING) edge.
+        var pending = await GetMyReportsAsync(vikClient);
         Assert.Contains(pending, p => p == periodId);
 
         // …and APPROVES it (authority) — precedence step 1 grants both see and act.
-        var approveRsp = await otherClient.PostAsync($"/api/approval/{periodId}/approve", null);
+        var approveRsp = await vikClient.PostAsync($"/api/approval/{periodId}/approve", null);
         Assert.Equal(HttpStatusCode.OK, approveRsp.StatusCode);
         Assert.Equal("APPROVED", await ReadStatusAsync(periodId));
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
-    //  S74-7402 B1 (SECURITY, ADR-027 D2) — the cross-styrelse VIKAR hole, two-layer fix
+    //  S74-7402 B1 (SECURITY, ADR-027 D2) — the cross-MAO VIKAR hole, two-layer fix
     //
     //  Defect: the /delegate POST validated the vikar's ROLE + org-scope coverage but NEVER
     //  same-tree between the absent approver and the vikar. A global-scoped (or cross-tree-
-    //  scoped) leader could be planted as a vikar in another styrelse, win the resolver's
+    //  scoped) leader could be planted as a vikar in another Organisation/MAO, win the resolver's
     //  vikar consult, and — under 7402's authority expansion — gain approve/reject/reopen over
-    //  a report in a DIFFERENT styrelse. The earlier cross-styrelse test only covered an actor
+    //  a report in a DIFFERENT tree. The earlier cross-tree test only covered an actor
     //  holding NO edge; it masked this vikar route.
     // ════════════════════════════════════════════════════════════════════════════════
 
@@ -556,23 +565,23 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
     /// LAYER 2 (predicate, defense-in-depth): even a DIRECTLY-PLANTED cross-tree vikar row
     /// (MgrX, STY05, set as Mgr's vikar) is denied authority over Emp (STY02). The resolver's
     /// vikar consult WOULD return MgrX as the single winner for Emp (it does not itself check
-    /// tree), so without the predicate same-tree re-check MgrX would gain cross-styrelse
+    /// tree), so without the predicate same-tree re-check MgrX would gain cross-tree
     /// authority. Assert: not the effective approver, not on my-reports, approve → 403.
     /// </summary>
     [Fact]
     public async Task CrossTreeVikar_DirectlyPlanted_IsDenied_ByPredicate_NotVisible_NorApprovable()
     {
-        // MgrX lives in STY05; plant him as Mgr's (STY02) vikar — a cross-styrelse vikar row
+        // MgrX lives in STY05; plant him as Mgr's (STY02) vikar — a cross-MAO (cross-tree) vikar row
         // (the row the Layer-1 POST guard now refuses; here we plant it directly to prove the
         // predicate Layer-2 denies it independently of edge creation).
         await CreateVikarRawAsync(Mgr, MgrX, DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30), TreeRootSty05);
-        var periodId = await InsertPeriodAsync(Emp, "AFD01", "SUBMITTED");
+        var periodId = await InsertPeriodAsync(Emp, "STY02", "SUBMITTED");
 
         var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory));
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
         // Sanity: the resolver DOES return MgrX as the single winner for Emp (cross-tree vikar
-        // wins the consult) — so the ONLY thing standing between MgrX and cross-styrelse
+        // wins the consult) — so the ONLY thing standing between MgrX and cross-tree
         // authority is the predicate's Layer-2 same-tree re-check.
         var (resolved, _, _) = await new ReportingLineRepository(_dbFactory)
             .ResolveDesignatedApproverAsync(Emp, asOf: today);
@@ -596,22 +605,22 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// LAYER 1 (source): the /delegate POST refuses a cross-styrelse <c>actingManagerId</c>.
+    /// LAYER 1 (source): the /delegate POST refuses a cross-tree (cross-MAO) <c>actingManagerId</c>.
     /// Mgr (STY02, the absent approver, PRIMARY manager of Emp) attempts to delegate to MgrX
     /// (STY05). MgrX is granted a GLOBAL scope so the role + org-scope coverage checks PASS —
-    /// isolating the new same-tree guard as the gate that fires → 400 "same styrelse". No vikar
-    /// row is created.
+    /// isolating the new same-tree guard as the gate that fires → 400 (the server message still says
+    /// "same styrelse (tree)"). No vikar row is created.
     /// </summary>
     [Fact]
     public async Task DelegatePost_CrossStyrelseActingManager_IsRejected_SameTree_400()
     {
-        // Make MgrX a global-scoped leader so steps 5 (role) + 6 (org-scope coverage of Emp,
-        // AFD01) PASS — the realistic attack vector, and it isolates the Layer-1 same-tree guard.
+        // Make MgrX a global-scoped leader so steps 5 (role) + 6 (org-scope coverage of Emp on
+        // STY02) PASS — the realistic attack vector, and it isolates the Layer-1 same-tree guard.
         await GrantGlobalLeaderScopeAsync(MgrX);
 
         var mgrClient = _factory.CreateClient();
         mgrClient.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "AFD02"));
+            new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "STY02"));
 
         var rsp = await mgrClient.PostAsJsonAsync("/api/reporting-lines/delegate", new
         {
@@ -629,28 +638,28 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// The fix did NOT over-block: a LEGITIMATE same-styrelse cross-AFDELING vikar still holds
-    /// authority. Vik (AFD02) is Mgr's (AFD02) vikar and the single effective approver of Emp
-    /// (AFD01) — afdelinger AFD01/AFD02 share the STY02 tree_root, so BOTH layers pass: the
-    /// predicate grants Vik authority over Emp AND the period is visible on Vik's my-reports.
+    /// The fix did NOT over-block: a LEGITIMATE same-Organisation vikar still holds authority.
+    /// Vik (STY02) is Mgr's (STY02) vikar and the single effective approver of Emp (STY02) — Vik
+    /// and Emp share the STY02 tree_root, so BOTH layers pass: the predicate grants Vik authority
+    /// over Emp AND the period is visible on Vik's my-reports.
     /// </summary>
     [Fact]
     public async Task SameStyrelse_CrossAfdelingVikar_StillHoldsAuthority_AndIsVisible()
     {
         await CreateVikarAsync(Mgr, Vik, DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30)); // STY02 root
-        var periodId = await InsertPeriodAsync(Emp, "AFD01", "SUBMITTED");
+        var periodId = await InsertPeriodAsync(Emp, "STY02", "SUBMITTED");
 
         var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory));
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
-        // Layer 2 PASSES: Vik (AFD02) and Emp (AFD01) share the STY02 tree root.
+        // Layer 2 PASSES: Vik (STY02) and Emp (STY02) share the STY02 tree root.
         Assert.True(await authorizer.IsEffectiveDesignatedApproverAsync(Vik, Emp, asOf: today));
 
         var vikClient = _factory.CreateClient();
         vikClient.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", MintLeaderToken(Vik, "AFD02"));
+            new AuthenticationHeaderValue("Bearer", MintLeaderToken(Vik, "STY02"));
 
-        // Visible on my-reports (the legitimate cross-afdeling vikar is NOT over-blocked).
+        // Visible on my-reports (the legitimate same-Organisation vikar is NOT over-blocked).
         var pending = await GetMyReportsAsync(vikClient);
         Assert.Contains(pending, p => p == periodId);
     }
@@ -662,16 +671,17 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
     [Fact]
     public async Task ActorWithoutEdge_IsNotEffectiveApprover_AndCannotApprove()
     {
-        var periodId = await InsertPeriodAsync(Emp, "AFD01", "SUBMITTED");
+        var periodId = await InsertPeriodAsync(Emp, "STY02", "SUBMITTED");
 
         var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory));
-        // Other is a Leader in AFD02 but holds NO reporting edge over Emp.
+        // Other is a Leader on STY01 (a DIFFERENT Organisation) holding NO reporting edge over Emp —
+        // neither an edge nor org-scope (STY01 ⊉ STY02) reaches Emp.
         Assert.False(await authorizer.IsEffectiveDesignatedApproverAsync(
             Other, Emp, asOf: DateOnly.FromDateTime(DateTime.UtcNow)));
 
         var client = _factory.CreateClient();
         client.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", MintLeaderToken(Other, "AFD02"));
+            new AuthenticationHeaderValue("Bearer", MintLeaderToken(Other, "STY01"));
 
         var approveRsp = await client.PostAsync($"/api/approval/{periodId}/approve", null);
         Assert.Equal(HttpStatusCode.Forbidden, approveRsp.StatusCode);
@@ -683,22 +693,26 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
     {
         // Vik is the active vikar for Mgr → the single effective approver of Emp is Vik, NOT Mgr.
         await CreateVikarAsync(Mgr, Vik, DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30));
-        var periodId = await InsertPeriodAsync(Emp, "AFD01", "SUBMITTED");
+        var periodId = await InsertPeriodAsync(Emp, "STY02", "SUBMITTED");
 
         var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory));
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         Assert.True(await authorizer.IsEffectiveDesignatedApproverAsync(Vik, Emp, asOf: today));
         Assert.False(await authorizer.IsEffectiveDesignatedApproverAsync(Mgr, Emp, asOf: today));
 
-        // The HTTP path agrees: Mgr (the superseded PRIMARY, scope AFD02) cannot approve Emp's
-        // AFD01 period — org-scope denies and the edge now resolves to Vik, not Mgr → 403.
+        // The HTTP path agrees that Mgr is NOT the designated approver: the edge now resolves to Vik,
+        // not Mgr, so Mgr is no longer a DESIGNATED_MANAGER for Emp. S92 flatten: Mgr (STY02) DOES
+        // org-scope-cover Emp (STY02) now, so the approve is admitted as an ORG_SCOPE_FALLBACK in
+        // REQUIRED mode → 428 (confirmFallback required), NOT a designated 200 and NOT 403. (Pre-flatten
+        // Mgr's sub-Organisation scope did not cover Emp, so the same case was a 403; the edge-supersession
+        // proof now lives in the predicate + my-reports assertions, with the HTTP outcome a fallback 428.)
         var mgrClient = _factory.CreateClient();
         mgrClient.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "AFD02"));
+            new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "STY02"));
         var approveRsp = await mgrClient.PostAsync($"/api/approval/{periodId}/approve", null);
-        Assert.Equal(HttpStatusCode.Forbidden, approveRsp.StatusCode);
+        Assert.Equal((HttpStatusCode)428, approveRsp.StatusCode);
 
-        // And Mgr does not SEE it on my-reports (see == act).
+        // And Mgr does not SEE it on my-reports (see == act): the designated edge resolves to Vik.
         var mgrPending = await GetMyReportsAsync(mgrClient);
         Assert.DoesNotContain(mgrPending, p => p == periodId);
     }
@@ -712,7 +726,7 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
     {
         // EmpInactiveMgr → InactiveMgr (inactive) → Mgr. The single effective approver of
         // EmpInactiveMgr escalates UP past the inactive manager to Mgr.
-        var periodId = await InsertPeriodAsync(EmpInactiveMgr, "AFD01", "SUBMITTED");
+        var periodId = await InsertPeriodAsync(EmpInactiveMgr, "STY02", "SUBMITTED");
 
         var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory));
         Assert.True(await authorizer.IsEffectiveDesignatedApproverAsync(
@@ -720,7 +734,7 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
 
         var client = _factory.CreateClient();
         client.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "AFD02"));
+            new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "STY02"));
 
         var pending = await GetMyReportsAsync(client);
         Assert.Contains(pending, p => p == periodId); // sees
@@ -736,16 +750,16 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
     [Fact]
     public async Task OrgScopeManager_StillApproves_ViaOrgScope_NoEdgeNeeded()
     {
-        // Mgr's scope covers AFD02. A period FOR an AFD02 employee (Vik, in AFD02, with no
-        // reporting edge to Mgr) is approvable by Mgr purely on org-scope. STY02's tree is
-        // seeded REQUIRED, so an org-scope-FALLBACK approval first 428s for confirmation (the
-        // unchanged S50 flow) — confirmFallback=true then completes it. This proves the pure
-        // org-scope path is UNAFFECTED by the A3 edge expansion.
-        var periodId = await InsertPeriodAsync(Vik, "AFD02", "SUBMITTED");
+        // Mgr's scope covers STY02. A period FOR a STY02 employee (Vik, with no reporting edge to
+        // Mgr) is approvable by Mgr purely on org-scope. STY02 is seeded REQUIRED, so an
+        // org-scope-FALLBACK approval first 428s for confirmation (the unchanged S50 flow) —
+        // confirmFallback=true then completes it. This proves the pure org-scope path is
+        // UNAFFECTED by the A3 edge expansion.
+        var periodId = await InsertPeriodAsync(Vik, "STY02", "SUBMITTED");
 
         var client = _factory.CreateClient();
         client.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "AFD02"));
+            new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "STY02"));
 
         // Without confirmation: the S50 REQUIRED-mode 428 (org-scope fallback), preserved.
         var unconfirmed = await client.PostAsync($"/api/approval/{periodId}/approve", null);
@@ -758,20 +772,23 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task DefaultPending_OrgScopeView_Unchanged_ShowsOrgScopedPeriods_NotCrossAfdelingEdge()
+    public async Task DefaultPending_OrgScopeView_Unchanged_ShowsOrgScopedPeriods_NotOutOfScope()
     {
-        // Default /pending (no my-reports) is the pure org-scope view: Mgr (scope AFD02) sees an
-        // AFD02 period but NOT the cross-afdeling edge report in AFD01.
-        var afd02PeriodId = await InsertPeriodAsync(Vik, "AFD02", "SUBMITTED");
-        var afd01EdgePeriodId = await InsertPeriodAsync(Emp, "AFD01", "SUBMITTED");
+        // Default /pending (no my-reports) is the pure org-scope view: Mgr (scope STY02) sees an
+        // in-scope STY02 period (Vik's, no edge to Mgr) but NOT a period in a DIFFERENT Organisation
+        // (Other, STY01 — same MAO, no org-scope reach, no edge). S92 flatten: with the
+        // sub-Organisation scope gone, the out-of-org-scope discriminator is now a sibling
+        // Organisation — Other on STY01 is the genuinely-disjoint subject.
+        var inScopePeriodId = await InsertPeriodAsync(Vik, "STY02", "SUBMITTED");
+        var outOfScopePeriodId = await InsertPeriodAsync(Other, "STY01", "SUBMITTED");
 
         var client = _factory.CreateClient();
         client.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "AFD02"));
+            new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "STY02"));
 
         var defaultPending = await GetPendingAsync(client, myReports: false);
-        Assert.Contains(defaultPending, p => p == afd02PeriodId);          // org-scope shows AFD02
-        Assert.DoesNotContain(defaultPending, p => p == afd01EdgePeriodId); // NOT the cross-afd edge
+        Assert.Contains(defaultPending, p => p == inScopePeriodId);       // org-scope shows STY02
+        Assert.DoesNotContain(defaultPending, p => p == outOfScopePeriodId); // NOT the out-of-scope STY01 period
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
@@ -782,15 +799,19 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
     public async Task EmployeeApprove_UnaffectedByEdge_OnlyOwnPeriod()
     {
         // Mgr holds the designated edge over Emp, but employee-approve is the EMPLOYEE's own
-        // gate — Mgr (a Leader, not Emp) cannot employee-approve Emp's period through the edge.
-        var periodId = await InsertPeriodAsync(Emp, "AFD01", "SUBMITTED");
+        // gate — a Leader (not Emp) cannot employee-approve Emp's period THROUGH THE EDGE.
+        // S92 flatten: Mgr's DB org (STY02) now org-scope-covers Emp, so to isolate the EDGE (and
+        // prove it does NOT unlock employee-approve) we mint Mgr's token with a NON-covering scope
+        // (STY01 — a different Organisation). Mgr still HOLDS the PRIMARY edge in the DB, but neither
+        // the edge nor the (deliberately disjoint) token scope grants the employee gate → 403.
+        var periodId = await InsertPeriodAsync(Emp, "STY02", "SUBMITTED");
 
         var mgrClient = _factory.CreateClient();
         mgrClient.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "AFD02"));
+            new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "STY01"));
 
-        // employee-approve requires own-data (scope) — Mgr's AFD02 scope does not cover Emp's
-        // AFD01, and the edge does NOT apply to this employee-gate endpoint → 403.
+        // employee-approve requires own-data (scope) — Mgr's token scope (STY01) does not cover Emp's
+        // STY02 period, and the edge does NOT apply to this employee-gate endpoint → 403.
         var rsp = await mgrClient.PostAsync($"/api/approval/{periodId}/employee-approve", null);
         Assert.Equal(HttpStatusCode.Forbidden, rsp.StatusCode);
         Assert.Equal("SUBMITTED", await ReadStatusAsync(periodId));
@@ -806,11 +827,11 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
         // An EMPLOYEE actor (Emp) cannot reopen via an edge — the edge OR-branch lives only in
         // the Leader arm. Emp reopening EmpInactiveMgr's (someone else's) period is denied by
         // the employee-own-data gate, never relaxed by an edge.
-        var periodId = await InsertPeriodAsync(EmpInactiveMgr, "AFD01", "EMPLOYEE_APPROVED");
+        var periodId = await InsertPeriodAsync(EmpInactiveMgr, "STY02", "EMPLOYEE_APPROVED");
 
         var empClient = _factory.CreateClient();
         empClient.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", MintEmployeeToken(Emp, "AFD01"));
+            new AuthenticationHeaderValue("Bearer", MintEmployeeToken(Emp, "STY02"));
 
         var rsp = await empClient.PostAsJsonAsync($"/api/approval/{periodId}/reopen", new { reason = "x" });
         Assert.Equal(HttpStatusCode.Forbidden, rsp.StatusCode);
@@ -847,7 +868,9 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
     //  DesignatedApproverAuthorizer.IsActiveLeaderOrAboveAsync (the authorizer :131-145), which
     //  requires the actor to be an ACTIVE user holding a LeaderOrAbove role. When the designated
     //  approver is deactivated (users.is_active = FALSE) that gate fails CLOSED → the edge no longer
-    //  grants authority, org-scope still denies (AFD02 ⊄ AFD01) → 403 on BOTH approve and reject.
+    //  grants authority; with a deliberately disjoint token scope (STY01, NOT covering Emp's STY02)
+    //  org-scope also denies → 403 on BOTH approve and reject. (S92 flatten: Mgr's DB org STY02 would
+    //  org-cover Emp, so to isolate the deactivated-EDGE fail-closed we mint a non-covering STY01 token.)
     //  NO production change pins this — it asserts the existing fail-closed behavior is intact, the
     //  authorization complement to the TASK-8301 revoke-serialization change.
     // ════════════════════════════════════════════════════════════════════════════════
@@ -855,8 +878,8 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
     [Fact]
     public async Task DeactivatedDesignatedApprover_CannotApprove_NorReject_FailsClosed()
     {
-        // Mgr is Emp's cross-afdeling PRIMARY designated approver (org-scope AFD02 does NOT cover
-        // Emp's AFD01) — only the edge grants authority. Sanity: the edge grants it WHILE Mgr is active.
+        // Mgr is Emp's PRIMARY designated approver on the same STY02 Organisation — the edge grants
+        // authority. Sanity: the edge grants it WHILE Mgr is active.
         var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory));
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         Assert.True(await authorizer.IsEffectiveDesignatedApproverAsync(Mgr, Emp, asOf: today),
@@ -876,19 +899,20 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
         Assert.False(await authorizer.IsEffectiveDesignatedApproverAsync(Mgr, Emp, asOf: today),
             "A deactivated approver must not hold the designated edge (fail-closed).");
 
-        // APPROVE is denied (org-scope no + the deactivated edge denied by the in-lock re-check → 403).
+        // APPROVE is denied: the deactivated edge is denied by the in-lock re-check AND Mgr's token
+        // scope (STY01) does not cover Emp's STY02 period → org-scope also denies → 403.
         var approvePeriod = await InsertPeriodWithRangeAsync(
-            Emp, "AFD01", "SUBMITTED", new DateOnly(2026, 5, 1), new DateOnly(2026, 5, 31));
+            Emp, "STY02", "SUBMITTED", new DateOnly(2026, 5, 1), new DateOnly(2026, 5, 31));
         var client = _factory.CreateClient();
         client.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "AFD02"));
+            new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "STY01"));
         var approveRsp = await client.PostAsync($"/api/approval/{approvePeriod}/approve", null);
         Assert.Equal(HttpStatusCode.Forbidden, approveRsp.StatusCode);
         Assert.Equal("SUBMITTED", await ReadStatusAsync(approvePeriod));
 
         // REJECT is denied too — a SEPARATE period (reject needs SUBMITTED/EMPLOYEE_APPROVED).
         var rejectPeriod = await InsertPeriodWithRangeAsync(
-            Emp, "AFD01", "SUBMITTED", new DateOnly(2026, 6, 1), new DateOnly(2026, 6, 30));
+            Emp, "STY02", "SUBMITTED", new DateOnly(2026, 6, 1), new DateOnly(2026, 6, 30));
         var rejectRsp = await client.PostAsJsonAsync(
             $"/api/approval/{rejectPeriod}/reject", new { reason = "should-be-denied" });
         Assert.Equal(HttpStatusCode.Forbidden, rejectRsp.StatusCode);

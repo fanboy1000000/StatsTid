@@ -209,7 +209,7 @@ public static class ReportingLineEndpoints
             catch (InvalidOperationException ex)
             {
                 // S74-7403 W1 — ValidateSameTreeAsync (now in-tx) throws when a user/org cannot be
-                // resolved (missing/inactive user, or no MINISTRY/STYRELSE ancestor) → clean 400
+                // resolved (missing/inactive user, or no MAO/ORGANISATION ancestor) → clean 400
                 // rather than a 500.
                 return Results.BadRequest(new { error = ex.Message });
             }
@@ -1122,7 +1122,7 @@ public static class ReportingLineEndpoints
             catch (InvalidOperationException ex)
             {
                 // S74-7403 C2-2 — the in-tx ValidateSameTreeAsync threw because an edge's manager (or
-                // employee) is now inactive/missing, or no MINISTRY/STYRELSE ancestor resolves. A
+                // employee) is now inactive/missing, or no MAO/ORGANISATION ancestor resolves. A
                 // concurrent R10-delete that deactivated the manager between the out-of-tx pre-check
                 // and this in-tx validation lands here → clean 400, whole batch rolled back (no D9
                 // orphan inserted to an inactive manager).
@@ -1575,8 +1575,8 @@ public static class ReportingLineEndpoints
             }
             catch (InvalidOperationException ex)
             {
-                // S74-7403 W1 — a replacement (or the removed person) cannot be resolved to a
-                // styrelse tree root (missing/inactive user, or no MINISTRY/STYRELSE ancestor) →
+                // S74-7403 W1 — a replacement (or the removed person) cannot be resolved to an
+                // Organisation tree root (missing/inactive user, or no MAO/ORGANISATION ancestor) →
                 // clean 400 rather than a 500. The whole closure rolled back.
                 return Results.BadRequest(new { error = ex.Message });
             }
@@ -1650,12 +1650,13 @@ public static class ReportingLineEndpoints
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
-            // Validate treeRootOrgId is actually a MINISTRY or STYRELSE (Codex S50 W2).
+            // Validate treeRootOrgId is actually a MAO or ORGANISATION (Codex S50 W2;
+            // S92/ADR-035 re-point — a tree root is now a MAO or ORGANISATION row).
             var treeRootOrg = await orgRepo.GetByIdAsync(treeRootOrgId, ct);
             if (treeRootOrg is null)
                 return Results.NotFound(new { error = $"Organization {treeRootOrgId} not found" });
-            if (treeRootOrg.OrgType is not ("MINISTRY" or "STYRELSE"))
-                return Results.BadRequest(new { error = $"Organization {treeRootOrgId} is type {treeRootOrg.OrgType}, not a tree root (must be MINISTRY or STYRELSE)" });
+            if (treeRootOrg.OrgType is not ("MAO" or "ORGANISATION"))
+                return Results.BadRequest(new { error = $"Organization {treeRootOrgId} is type {treeRootOrg.OrgType}, not a tree root (must be MAO or ORGANISATION)" });
 
             // Parse If-Match
             if (!EtagHeaderHelper.TryParseIfMatch(context.Request, out var expectedVersion, out var headerError))
@@ -2064,8 +2065,8 @@ public static class ReportingLineEndpoints
             catch (InvalidOperationException)
             {
                 // ValidateSameTreeAsync / AcquireTreeLockForEmployeeAsync throw when a user/org cannot
-                // be resolved to a styrelse tree root (inactive/missing user or org, or no
-                // MINISTRY/STYRELSE ancestor) → clean 400 (byte-stable with the prior pre-tx message),
+                // be resolved to an Organisation tree root (inactive/missing user or org, or no
+                // MAO/ORGANISATION ancestor) → clean 400 (byte-stable with the prior pre-tx message),
                 // never a 500. Layer 2 (the authority predicate) fails closed on the same condition.
                 return Results.BadRequest(new { error = "Could not validate the vikar's styrelse (tree); ensure the vikar is an active user in your styrelse" });
             }
@@ -2888,7 +2889,7 @@ public static class ReportingLineEndpoints
     /// <summary>
     /// Resolves the reporting tree root for <paramref name="employeeId"/> WITHIN the caller's tx, so a
     /// path can derive the tree advisory-lock KEY. Reads the employee's <c>primary_org_id</c> in-tx
-    /// (an active user) and walks up to the MINISTRY/STYRELSE root via the repository's in-tx resolver.
+    /// (an active user) and walks up to the MAO/ORGANISATION root via the repository's in-tx resolver.
     ///
     /// <para>
     /// <b>S74-7403 B1 — total lock order (consistent on EVERY path, to avoid deadlock):</b>
@@ -2917,7 +2918,7 @@ public static class ReportingLineEndpoints
     /// </para>
     /// </summary>
     /// <exception cref="InvalidOperationException">If the employee is missing/inactive, or has no
-    /// MINISTRY/STYRELSE ancestor — surfaced as a clean 400 by the caller (W1).</exception>
+    /// MAO/ORGANISATION ancestor — surfaced as a clean 400 by the caller (W1).</exception>
     private static async Task<string> ResolveEmployeeTreeRootInTxAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
         ReportingLineRepository repo, string employeeId, CancellationToken ct)

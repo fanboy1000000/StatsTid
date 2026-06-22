@@ -22,16 +22,17 @@ namespace StatsTid.Tests.Regression.Approval;
 /// The tree is STRUCTURAL: each row's <c>structuralApproverId</c> is the person's RAW active
 /// PRIMARY <c>reporting_lines.manager_id</c> (a left-join edge, NOT a resolver result); the vikar
 /// is a per-away-manager annotation (the person's OWN active <c>manager_vikar</c> row). The read
-/// enriches the styrelse roster with <c>enhedLabel ?? primaryOrgName</c> + <c>position</c> +
+/// enriches the Organisation roster with <c>enhedLabel ?? primaryOrgName</c> + <c>position</c> +
 /// last-closed-month <c>periodStatus</c> + <c>outgoingVikar</c> + the deterministic
 /// <c>isRoot</c>/<c>isOrphan</c> flags, and reuses the existing S74 <c>pendingCountByManager</c>
 /// tally unchanged. Reads only — no events, no writes.
 /// </para>
 ///
 /// <para>
-/// Topology reuses the seed STY02 tree (<c>/MIN01/STY02/</c> root, AFD01/AFD02 afdelinger) with
-/// isolated <c>t7500_*</c> users; a cross-styrelse STY05 user proves the scope bound and a
-/// cross-org fixture proves the roster scoping excludes out-of-tree people.
+/// Topology reuses the seed STY02 tree (S92/ADR-035 flatten: <c>/MIN01/STY02/</c> root, all members
+/// on the STY02 Organisation — the former sub-org rows are gone) with isolated <c>t7500_*</c> users; a
+/// cross-MAO STY05 user proves the scope bound and a cross-org fixture proves the roster scoping
+/// excludes out-of-tree people.
 /// </para>
 /// </summary>
 [Trait("Category", "Docker")]
@@ -43,22 +44,22 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
     private StatsTidWebApplicationFactory _factory = null!;
     private DbConnectionFactory _dbFactory = null!;
 
-    // ── STY02 tree (/MIN01/STY02/) ─────────────────────────────────────────────────────
-    // The people hierarchy:
-    //   RootMgr (AFD02) — NO active PRIMARY approver, approves >=1 → isRoot
-    //   ├─ EmpA / EmpB (AFD01)   — report PRIMARY to RootMgr → have an approver (neither root nor orphan)
-    //   AwayMgr (AFD02)          — also a structural parent; has an active OUTGOING vikar → outgoingVikar set
-    //   └─ EmpAway (AFD01)       — reports PRIMARY to AwayMgr (stays under the away manager)
-    //   Orphan (AFD01)           — NO approver, approves NO one → isOrphan
-    private const string RootMgr = "t7500_root_mgr";   // AFD02 — root (no approver, approves EmpA/EmpB)
-    private const string EmpA = "t7500_emp_a";         // AFD01 — reports to RootMgr; last-closed APPROVED
-    private const string EmpB = "t7500_emp_b";         // AFD01 — reports to RootMgr; last-closed SUBMITTED (pending)
-    private const string AwayMgr = "t7500_away_mgr";   // AFD02 — has an active outgoing vikar; approves EmpAway
-    private const string EmpAway = "t7500_emp_away";   // AFD01 — reports to AwayMgr; last-closed DRAFT → OPEN
-    private const string Vikar = "t7500_vikar";        // AFD02 — the stand-in named on AwayMgr's vikar row
-    private const string Orphan = "t7500_orphan";      // AFD01 — no approver, approves no one → isOrphan
+    // ── STY02 Organisation (/MIN01/STY02/) ──────────────────────────────────────────────
+    // The people hierarchy (all on the STY02 Organisation post-flatten):
+    //   RootMgr (STY02) — NO active PRIMARY approver, approves >=1 → isRoot
+    //   ├─ EmpA / EmpB (STY02)   — report PRIMARY to RootMgr → have an approver (neither root nor orphan)
+    //   AwayMgr (STY02)          — also a structural parent; has an active OUTGOING vikar → outgoingVikar set
+    //   └─ EmpAway (STY02)       — reports PRIMARY to AwayMgr (stays under the away manager)
+    //   Orphan (STY02)           — NO approver, approves NO one → isOrphan
+    private const string RootMgr = "t7500_root_mgr";   // STY02 — root (no approver, approves EmpA/EmpB)
+    private const string EmpA = "t7500_emp_a";         // STY02 — reports to RootMgr; last-closed APPROVED
+    private const string EmpB = "t7500_emp_b";         // STY02 — reports to RootMgr; last-closed SUBMITTED (pending)
+    private const string AwayMgr = "t7500_away_mgr";   // STY02 — has an active outgoing vikar; approves EmpAway
+    private const string EmpAway = "t7500_emp_away";   // STY02 — reports to AwayMgr; last-closed DRAFT → OPEN
+    private const string Vikar = "t7500_vikar";        // STY02 — the stand-in named on AwayMgr's vikar row
+    private const string Orphan = "t7500_orphan";      // STY02 — no approver, approves no one → isOrphan
 
-    // Cross-styrelse (STY05, /MIN02/STY05/) — out-of-scope for a STY02-scoped admin AND out-of-roster.
+    // Cross-MAO (STY05, /MIN02/STY05/) — out-of-scope for a STY02-scoped admin AND out-of-roster.
     private const string EmpX = "t7500_x";             // STY05
 
     private const string TreeRootSty02 = "STY02";
@@ -103,13 +104,13 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
             """
             INSERT INTO users (user_id, username, password_hash, display_name, email, primary_org_id, agreement_code, ok_version, is_active)
             VALUES
-                (@rootmgr, @rootmgr, '$2a$11$fake', 'T7500 RootMgr',  't7500_root_mgr@test.dk', 'AFD02', 'HK', 'OK24', TRUE),
-                (@empa,    @empa,    '$2a$11$fake', 'T7500 EmpA',     't7500_emp_a@test.dk',    'AFD01', 'HK', 'OK24', TRUE),
-                (@empb,    @empb,    '$2a$11$fake', 'T7500 EmpB',     't7500_emp_b@test.dk',    'AFD01', 'HK', 'OK24', TRUE),
-                (@awaymgr, @awaymgr, '$2a$11$fake', 'T7500 AwayMgr',  't7500_away_mgr@test.dk', 'AFD02', 'HK', 'OK24', TRUE),
-                (@empaway, @empaway, '$2a$11$fake', 'T7500 EmpAway',  't7500_emp_away@test.dk', 'AFD01', 'HK', 'OK24', TRUE),
-                (@vikar,   @vikar,   '$2a$11$fake', 'T7500 Vikar',    't7500_vikar@test.dk',    'AFD02', 'HK', 'OK24', TRUE),
-                (@orphan,  @orphan,  '$2a$11$fake', 'T7500 Orphan',   't7500_orphan@test.dk',   'AFD01', 'HK', 'OK24', TRUE),
+                (@rootmgr, @rootmgr, '$2a$11$fake', 'T7500 RootMgr',  't7500_root_mgr@test.dk', 'STY02', 'HK', 'OK24', TRUE),
+                (@empa,    @empa,    '$2a$11$fake', 'T7500 EmpA',     't7500_emp_a@test.dk',    'STY02', 'HK', 'OK24', TRUE),
+                (@empb,    @empb,    '$2a$11$fake', 'T7500 EmpB',     't7500_emp_b@test.dk',    'STY02', 'HK', 'OK24', TRUE),
+                (@awaymgr, @awaymgr, '$2a$11$fake', 'T7500 AwayMgr',  't7500_away_mgr@test.dk', 'STY02', 'HK', 'OK24', TRUE),
+                (@empaway, @empaway, '$2a$11$fake', 'T7500 EmpAway',  't7500_emp_away@test.dk', 'STY02', 'HK', 'OK24', TRUE),
+                (@vikar,   @vikar,   '$2a$11$fake', 'T7500 Vikar',    't7500_vikar@test.dk',    'STY02', 'HK', 'OK24', TRUE),
+                (@orphan,  @orphan,  '$2a$11$fake', 'T7500 Orphan',   't7500_orphan@test.dk',   'STY02', 'HK', 'OK24', TRUE),
                 (@empx,    @empx,    '$2a$11$fake', 'T7500 EmpX',     't7500_x@test.dk',        'STY05', 'HK', 'OK24', TRUE)
             ON CONFLICT DO NOTHING
             """, conn))
@@ -118,11 +119,11 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
             await cmd.ExecuteNonQueryAsync();
         }
 
-        // RootMgr is a LocalLeader covering AFD02 (so the resolver returns it for the pending tally).
+        // RootMgr is a LocalLeader covering STY02 (so the resolver returns it for the pending tally).
         await using (var cmd = new NpgsqlCommand(
             """
             INSERT INTO role_assignments (user_id, role_id, org_id, scope_type, assigned_by)
-            VALUES (@rootmgr, 'LOCAL_LEADER', 'AFD02', 'ORG_AND_DESCENDANTS', 'TEST')
+            VALUES (@rootmgr, 'LOCAL_LEADER', 'STY02', 'ORG_AND_DESCENDANTS', 'TEST')
             ON CONFLICT DO NOTHING
             """, conn))
         {
@@ -257,9 +258,9 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
     [Fact]
     public async Task Roster_StructuralApproverId_IsRawPrimaryEdge_AndStatusMapsPerState()
     {
-        await InsertClosedPeriodAsync(EmpA, "AFD01", "APPROVED");     // → APPROVED
-        await InsertClosedPeriodAsync(EmpB, "AFD01", "SUBMITTED");    // → SUBMITTED
-        await InsertClosedPeriodAsync(EmpAway, "AFD01", "DRAFT");     // → OPEN (DRAFT)
+        await InsertClosedPeriodAsync(EmpA, "STY02", "APPROVED");     // → APPROVED
+        await InsertClosedPeriodAsync(EmpB, "STY02", "SUBMITTED");    // → SUBMITTED
+        await InsertClosedPeriodAsync(EmpAway, "STY02", "DRAFT");     // → OPEN (DRAFT)
         // Orphan/RootMgr: no closed period → OPEN.
 
         var repo = NewApprovalRepo();
@@ -280,7 +281,7 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
         Assert.Equal("OPEN", Row(EmpAway).PeriodStatus);      // DRAFT → OPEN
         Assert.Equal("OPEN", Row(RootMgr).PeriodStatus);      // no closed period → OPEN
 
-        // Cross-styrelse EmpX is NOT in the STY02 roster (path-prefix scoping).
+        // Cross-MAO EmpX is NOT in the STY02 roster (path-prefix scoping).
         Assert.DoesNotContain(roster.Employees, e => e.EmployeeId == EmpX);
     }
 
@@ -370,7 +371,7 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
     public async Task Roster_EnhedLabel_FallsBackToOrgName_WhenNull_AndPositionServed()
     {
         // EmpA: explicit enhed_label + position. EmpB: position but NO label → enhedLabel falls
-        // back to the primary-org name (AFD01).
+        // back to the primary-org name (STY02).
         await SetProfileAsync(EmpA, enhedLabel: "Team Alpha", position: "Sagsbehandler");
         await SetProfileAsync(EmpB, enhedLabel: null, position: "Fuldmægtig");
 
@@ -383,13 +384,13 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
         Assert.Equal("Team Alpha", Row(EmpA).EnhedLabel);
         Assert.Equal("Sagsbehandler", Row(EmpA).Position);
 
-        // Null label → org-NAME fallback (AFD01's org_name = "IT-Drift", the human-readable name,
+        // Null label → org-NAME fallback (STY02's org_name = "Statens IT", the human-readable name,
         // NOT the org id); position still served.
-        Assert.Equal("IT-Drift", Row(EmpB).EnhedLabel);
+        Assert.Equal("Statens IT", Row(EmpB).EnhedLabel);
         Assert.Equal("Fuldmægtig", Row(EmpB).Position);
 
         // No profile at all (Orphan) → org-name fallback + null position.
-        Assert.Equal("IT-Drift", Row(Orphan).EnhedLabel);
+        Assert.Equal("Statens IT", Row(Orphan).EnhedLabel);
         Assert.Null(Row(Orphan).Position);
     }
 
@@ -398,8 +399,8 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
     {
         // EmpB holds a pending (SUBMITTED) period and resolves to RootMgr (an active LocalLeader)
         // → RootMgr tallies 1. EmpA's APPROVED period is not pending.
-        await InsertClosedPeriodAsync(EmpA, "AFD01", "APPROVED");
-        await InsertClosedPeriodAsync(EmpB, "AFD01", "SUBMITTED");
+        await InsertClosedPeriodAsync(EmpA, "STY02", "APPROVED");
+        await InsertClosedPeriodAsync(EmpB, "STY02", "SUBMITTED");
 
         var repo = NewApprovalRepo();
         var roster = await repo.GetMedarbejderRosterForTreeAsync("/MIN01/STY02/");
@@ -419,7 +420,7 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
     [Fact]
     public async Task RosterEndpoint_ScopedAdmin_GetsRoster_AndCrossStyrelseDenied()
     {
-        await InsertClosedPeriodAsync(EmpA, "AFD01", "APPROVED");
+        await InsertClosedPeriodAsync(EmpA, "STY02", "APPROVED");
         await SetProfileAsync(EmpA, enhedLabel: "Team Alpha", position: "Sagsbehandler");
         await InsertActiveVikarAsync(AwayMgr, Vikar, new DateOnly(2099, 12, 31), "SYGDOM");
 
@@ -461,7 +462,7 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
         var orphan = employees.EnumerateArray().First(e => e.GetProperty("employeeId").GetString() == Orphan);
         Assert.True(orphan.GetProperty("isOrphan").GetBoolean());
 
-        // No-leak: the cross-styrelse EmpX (STY05) MUST be absent from the STY02 roster the
+        // No-leak: the cross-MAO EmpX (STY05) MUST be absent from the STY02 roster the
         // endpoint serves — the path-prefix scope bound holds through the HTTP surface, not just
         // the repository-direct call (Codex Step-5a no-leak WARNING).
         Assert.DoesNotContain(

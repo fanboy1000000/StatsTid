@@ -24,7 +24,7 @@ internal static class AuditProjectionTestSchema
         CREATE TABLE IF NOT EXISTS organizations (
             org_id              TEXT        PRIMARY KEY,
             org_name            TEXT        NOT NULL,
-            org_type            TEXT        NOT NULL CHECK (org_type IN ('MINISTRY', 'STYRELSE', 'AFDELING', 'TEAM')),
+            org_type            TEXT        NOT NULL CHECK (org_type IN ('MAO', 'ORGANISATION')),
             parent_org_id       TEXT        REFERENCES organizations(org_id),
             materialized_path   TEXT        NOT NULL,
             agreement_code      TEXT        NOT NULL DEFAULT 'AC',

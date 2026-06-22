@@ -1891,7 +1891,7 @@ public sealed class YearOverviewTests : IAsyncLifetime
             """
             INSERT INTO organizations (org_id, org_name, org_type, parent_org_id,
                                        materialized_path, agreement_code, ok_version)
-            VALUES (@orgId, @orgName, 'STYRELSE', NULL, @path, @ac, @ok)
+            VALUES (@orgId, @orgName, 'ORGANISATION', NULL, @path, @ac, @ok)
             ON CONFLICT (org_id) DO NOTHING
             """, conn))
         {
@@ -1934,7 +1934,7 @@ public sealed class YearOverviewTests : IAsyncLifetime
             """
             INSERT INTO organizations (org_id, org_name, org_type, parent_org_id,
                                        materialized_path, agreement_code, ok_version)
-            VALUES (@orgId, @orgName, 'STYRELSE', NULL, @path, @ac, @ok)
+            VALUES (@orgId, @orgName, 'ORGANISATION', NULL, @path, @ac, @ok)
             ON CONFLICT (org_id) DO NOTHING
             """, conn))
         {
@@ -2157,7 +2157,7 @@ public sealed class YearOverviewTests : IAsyncLifetime
             """
             INSERT INTO organizations (org_id, org_name, org_type, parent_org_id,
                                        materialized_path, agreement_code, ok_version)
-            VALUES (@orgId, @orgName, 'STYRELSE', NULL, @path, @ac, @ok)
+            VALUES (@orgId, @orgName, 'ORGANISATION', NULL, @path, @ac, @ok)
             ON CONFLICT (org_id) DO NOTHING
             """, conn))
         {

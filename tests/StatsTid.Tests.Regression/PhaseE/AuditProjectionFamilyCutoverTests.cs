@@ -45,7 +45,7 @@ public sealed class AuditProjectionFamilyCutoverTests : IAsyncLifetime
             await seedConn.OpenAsync();
             await using var seedCmd = new NpgsqlCommand(
                 @"INSERT INTO organizations (org_id, org_name, org_type, materialized_path)
-                  VALUES (@id, 'S44B Test Org', 'STYRELSE', @path)
+                  VALUES (@id, 'S44B Test Org', 'ORGANISATION', @path)
                   ON CONFLICT DO NOTHING", seedConn);
             seedCmd.Parameters.AddWithValue("id", TestOrgId);
             seedCmd.Parameters.AddWithValue("path", $"/{TestOrgId}/");

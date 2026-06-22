@@ -375,10 +375,12 @@ public sealed class ReportingLineRepository
 
     /// <summary>
     /// Walks up <c>organizations.parent_org_id</c> from <paramref name="primaryOrgId"/>
-    /// until finding an organization with <c>org_type IN ('MINISTRY', 'STYRELSE')</c>.
-    /// Returns the <c>org_id</c> of the tree root.
+    /// until finding an organization with <c>org_type IN ('MAO', 'ORGANISATION')</c>.
+    /// Returns the <c>org_id</c> of the tree root. (S92/ADR-035 flatten: the former
+    /// MINISTRY/STYRELSE literals were re-pointed to MAO/ORGANISATION — identity-preserving
+    /// for tree-root resolution. Transitional machinery, retired in S95.)
     /// </summary>
-    /// <exception cref="InvalidOperationException">If no MINISTRY/STYRELSE ancestor is found
+    /// <exception cref="InvalidOperationException">If no MAO/ORGANISATION ancestor is found
     /// within the maximum traversal depth.</exception>
     public async Task<string> ResolveTreeRootOrgIdAsync(
         string primaryOrgId, CancellationToken ct = default)
@@ -387,7 +389,7 @@ public sealed class ReportingLineRepository
         await conn.OpenAsync(ct);
 
         // Recursive CTE: walk from the given org upward through parent_org_id until
-        // we find a MINISTRY or STYRELSE. Max depth ~5 in Danish state sector hierarchy.
+        // we find a MAO or ORGANISATION. Max depth ~2 post-S92 flatten (MAO -> ORGANISATION).
         await using var cmd = new NpgsqlCommand(
             """
             WITH RECURSIVE ancestors AS (
@@ -401,7 +403,7 @@ public sealed class ReportingLineRepository
                 WHERE o.is_active = TRUE AND a.depth < 10
             )
             SELECT org_id FROM ancestors
-            WHERE org_type IN ('MINISTRY', 'STYRELSE')
+            WHERE org_type IN ('MAO', 'ORGANISATION')
             ORDER BY depth ASC
             LIMIT 1
             """, conn);
@@ -411,7 +413,7 @@ public sealed class ReportingLineRepository
         if (result is null || result is DBNull)
         {
             throw new InvalidOperationException(
-                $"No MINISTRY or STYRELSE ancestor found for org_id='{primaryOrgId}'. " +
+                $"No MAO or ORGANISATION ancestor found for org_id='{primaryOrgId}'. " +
                 "Cannot resolve reporting tree root.");
         }
         return (string)result;
@@ -441,7 +443,7 @@ public sealed class ReportingLineRepository
                 WHERE o.is_active = TRUE AND a.depth < 10
             )
             SELECT org_id FROM ancestors
-            WHERE org_type IN ('MINISTRY', 'STYRELSE')
+            WHERE org_type IN ('MAO', 'ORGANISATION')
             ORDER BY depth ASC
             LIMIT 1
             """, conn, tx);
@@ -451,7 +453,7 @@ public sealed class ReportingLineRepository
         if (result is null || result is DBNull)
         {
             throw new InvalidOperationException(
-                $"No MINISTRY or STYRELSE ancestor found for org_id='{primaryOrgId}'. " +
+                $"No MAO or ORGANISATION ancestor found for org_id='{primaryOrgId}'. " +
                 "Cannot resolve reporting tree root.");
         }
         return (string)result;
@@ -616,7 +618,7 @@ public sealed class ReportingLineRepository
     /// — the advisory is the first lock; user rows are pinned only later (in <see cref="ValidateSameTreeAsync"/>).
     /// </summary>
     /// <exception cref="InvalidOperationException">If the employee is missing/inactive, or has no
-    /// MINISTRY/STYRELSE ancestor — the caller surfaces a clean 400/404.</exception>
+    /// MAO/ORGANISATION ancestor — the caller surfaces a clean 400/404.</exception>
     private async Task<string> DeriveEmployeeTreeRootInTxAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx, string employeeId, CancellationToken ct)
     {
@@ -668,7 +670,7 @@ public sealed class ReportingLineRepository
     /// </summary>
     /// <exception cref="TreeRootDriftException">If the root drifted under the advisory (caller retries).</exception>
     /// <exception cref="InvalidOperationException">If the employee is missing/inactive or has no
-    /// MINISTRY/STYRELSE ancestor.</exception>
+    /// MAO/ORGANISATION ancestor.</exception>
     public async Task<string> AcquireTreeLockForEmployeeAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx, string employeeId, CancellationToken ct = default)
     {
@@ -797,7 +799,7 @@ public sealed class ReportingLineRepository
         }
         catch (InvalidOperationException)
         {
-            // Subject missing/inactive (or no MINISTRY/STYRELSE ancestor) → no derivable current root.
+            // Subject missing/inactive (or no MAO/ORGANISATION ancestor) → no derivable current root.
             // The persisted root alone keeps the revoke safe.
         }
 
@@ -1259,7 +1261,7 @@ public sealed class ReportingLineRepository
 
 /// <summary>
 /// Thrown by <see cref="ReportingLineRepository.ValidateSameTreeAsync"/> when the manager
-/// and employee belong to different reporting trees (different MINISTRY/STYRELSE roots).
+/// and employee belong to different reporting trees (different MAO/ORGANISATION roots).
 /// The endpoint maps this to <c>422 Unprocessable Entity</c>.
 /// </summary>
 public sealed class CrossTreeAssignmentException : Exception

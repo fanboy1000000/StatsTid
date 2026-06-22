@@ -59,7 +59,7 @@ public sealed class AuditProjectionBackfillIdempotencyTests : IAsyncLifetime
             await conn.OpenAsync();
             await using var cmd = new NpgsqlCommand(
                 @"INSERT INTO organizations (org_id, org_name, org_type, materialized_path)
-                  VALUES ('ORG_TEST_BF', 'Backfill Test Org', 'STYRELSE', '/ORG_TEST_BF/')
+                  VALUES ('ORG_TEST_BF', 'Backfill Test Org', 'ORGANISATION', '/ORG_TEST_BF/')
                   ON CONFLICT DO NOTHING", conn);
             await cmd.ExecuteNonQueryAsync();
         }
@@ -102,7 +102,7 @@ public sealed class AuditProjectionBackfillIdempotencyTests : IAsyncLifetime
         {
             OrgId = "ORG_TEST_BF",
             OrgName = "Backfill Test Org",
-            OrgType = "STYRELSE",
+            OrgType = "ORGANISATION",
             MaterializedPath = "/ORG_TEST_BF/",
             AgreementCode = "AC",
             OkVersion = "OK24",
@@ -159,7 +159,7 @@ public sealed class AuditProjectionBackfillIdempotencyTests : IAsyncLifetime
         {
             OrgId = "ORG_TEST_NM",
             OrgName = "NoMapper Org",
-            OrgType = "STYRELSE",
+            OrgType = "ORGANISATION",
             MaterializedPath = "/ORG_TEST_NM/",
             AgreementCode = "AC",
             OkVersion = "OK24",
@@ -170,7 +170,7 @@ public sealed class AuditProjectionBackfillIdempotencyTests : IAsyncLifetime
             await conn.OpenAsync();
             await using var cmd = new NpgsqlCommand(
                 @"INSERT INTO organizations (org_id, org_name, org_type, materialized_path)
-                  VALUES (@id, 'NoMapper Org', 'STYRELSE', '/ORG_TEST_NM/')
+                  VALUES (@id, 'NoMapper Org', 'ORGANISATION', '/ORG_TEST_NM/')
                   ON CONFLICT DO NOTHING", conn);
             cmd.Parameters.AddWithValue("id", evt.OrgId);
             await cmd.ExecuteNonQueryAsync();

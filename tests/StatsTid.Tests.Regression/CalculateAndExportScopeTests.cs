@@ -55,7 +55,7 @@ public sealed class CalculateAndExportScopeTests : IAsyncLifetime
         CREATE TABLE IF NOT EXISTS organizations (
             org_id              TEXT        PRIMARY KEY,
             org_name            TEXT        NOT NULL,
-            org_type            TEXT        NOT NULL CHECK (org_type IN ('MINISTRY', 'STYRELSE', 'AFDELING', 'TEAM')),
+            org_type            TEXT        NOT NULL CHECK (org_type IN ('MAO', 'ORGANISATION')),
             parent_org_id       TEXT        REFERENCES organizations(org_id),
             materialized_path   TEXT        NOT NULL,
             agreement_code      TEXT        NOT NULL DEFAULT 'AC',
@@ -142,11 +142,11 @@ public sealed class CalculateAndExportScopeTests : IAsyncLifetime
         // Two root-level ministries with disjoint materialized paths.
         await ExecAsync(conn,
             "INSERT INTO organizations(org_id, org_name, org_type, materialized_path) " +
-            "VALUES (@id, @name, 'MINISTRY', @path)",
+            "VALUES (@id, @name, 'MAO', @path)",
             ("id", OrgA), ("name", "Ministry A"), ("path", OrgAPath));
         await ExecAsync(conn,
             "INSERT INTO organizations(org_id, org_name, org_type, materialized_path) " +
-            "VALUES (@id, @name, 'MINISTRY', @path)",
+            "VALUES (@id, @name, 'MAO', @path)",
             ("id", OrgB), ("name", "Ministry B"), ("path", OrgBPath));
 
         // One employee per ministry, primary_org_id pointing at their own.

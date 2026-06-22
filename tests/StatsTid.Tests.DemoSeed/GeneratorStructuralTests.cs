@@ -5,8 +5,13 @@ namespace StatsTid.Tests.DemoSeed;
 
 /// <summary>
 /// S84 / TASK-8401 — structural-realism + isolation invariants on the generated manifest/dataset:
-/// one root per tree, no cycles, 4–6 levels, span in band, 12–18% managers, id-disjoint from the
-/// baseline, agreement mix within tolerance.
+/// one root per tree, no cycles, span in band, 12–18% managers, id-disjoint from the baseline,
+/// agreement mix within tolerance.
+///
+/// <para>S92 / ADR-035 flatten: the demo org tree is now 2 LEVELS — MAO (depth 0, root) →
+/// ORGANISATION (depth 1, the smallest authority unit). The former AFDELING/TEAM leaf orgs are
+/// gone (their unit names became display-only enhed labels), so the org-depth invariant asserts
+/// exactly 2 levels, and the baseline-disjointness set no longer carries AFD0x org ids.</para>
 /// </summary>
 public sealed class GeneratorStructuralTests
 {
@@ -14,8 +19,10 @@ public sealed class GeneratorStructuralTests
 
     private static DemoDataset Gen(string scale) => new DemoGenerator(scale, 42, Ref).Generate();
 
+    // S92 / ADR-035 flatten: the init.sql baseline orgs are now MAO (MIN0x) + ORGANISATION (STY0x)
+    // only — the 5 former AFDELING rows (AFD0x) were removed.
     private static readonly string[] BaselineOrgIds =
-        { "MIN01", "MIN02", "STY01", "STY02", "STY03", "STY04", "STY05", "AFD01", "AFD02", "AFD03", "AFD04", "AFD05" };
+        { "MIN01", "MIN02", "STY01", "STY02", "STY03", "STY04", "STY05" };
     private static readonly string[] BaselineUserIds =
         { "admin01", "admin02", "ladm01", "ladm02", "hr01", "hr02", "mgr01", "mgr02", "mgr03",
           "emp001", "emp002", "emp003", "emp004", "emp005", "emp006", "emp007", "emp008", "emp009", "emp010" };
@@ -61,14 +68,15 @@ public sealed class GeneratorStructuralTests
     [Theory]
     [InlineData("smoke")]
     [InlineData("full")]
-    public void OrgHierarchy_Has4To6Levels(string scale)
+    public void OrgHierarchy_IsExactlyTwoLevels(string scale)
     {
         var ds = Gen(scale);
-        // Depth incl. ministry (0). Max org depth + the reporting layers give the experienced depth;
-        // assert the ORG tree itself reaches at least 4 levels (ministry..team or ministry..kontor)
-        // and no deeper than 6.
-        var maxOrgDepth = ds.Orgs.Max(o => o.Depth); // 0=ministry,1=styrelse,2=centre,3=kontor,4=team
-        Assert.InRange(maxOrgDepth, 3, 5); // ministry(0)→...→leaf; 3..5 org-depth = 4..6 levels incl. ministry
+        // S92 / ADR-035 flatten: the org tree is 2 levels — MAO (depth 0, root) → ORGANISATION
+        // (depth 1, the smallest authority unit). No AFDELING/TEAM leaf orgs remain.
+        var maxOrgDepth = ds.Orgs.Max(o => o.Depth); // 0=MAO, 1=ORGANISATION
+        Assert.Equal(1, maxOrgDepth);
+        Assert.Contains(ds.Orgs, o => o.Depth == 0); // the MAO root exists
+        Assert.All(ds.Orgs, o => Assert.InRange(o.Depth, 0, 1));
     }
 
     [Theory]
@@ -143,7 +151,7 @@ public sealed class GeneratorStructuralTests
         var ds = Gen("smoke");
         Assert.Single(ds.Manifest.Trees);
         Assert.InRange(ds.Users.Count, 20, 60);
-        Assert.InRange(ds.Orgs.Count, 2, 12); // ministry + styrelse + a few sub-orgs
+        Assert.InRange(ds.Orgs.Count, 2, 12); // S92 flatten: MAO + one ORGANISATION per tree
     }
 
     [Theory]

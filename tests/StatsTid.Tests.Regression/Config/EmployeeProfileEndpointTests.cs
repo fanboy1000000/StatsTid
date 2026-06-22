@@ -33,9 +33,10 @@ namespace StatsTid.Tests.Regression.Config;
 ///
 /// <para>
 /// JWT minting follows the dev-fallback signing key pattern verbatim. The cross-org
-/// test mints an HR token scoped to <c>AFD02</c> (sibling subtree under <c>STY02</c>
-/// per init.sql L723) — that does NOT cover emp001 (in <c>STY01</c>) so the
-/// <c>OrgScopeValidator</c> rejects with 403.
+/// test mints an HR token scoped (ORG_ONLY) to <c>STY02</c> — a DIFFERENT Organisation
+/// under the same MAO (MIN01) — that does NOT cover emp001 (in <c>STY01</c>) so the
+/// <c>OrgScopeValidator</c> rejects with 403. (S92 flatten: the former AFD02-keyed scope
+/// coarsens to its parent Organisation STY02; STY02 still does not cover the STY01 employee.)
 /// </para>
 /// </summary>
 [Trait("Category", "Docker")]
@@ -43,9 +44,9 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
 {
     private const string DevFallbackSigningKey = "StatsTid_Sprint3_DevKey_MustBeAtLeast32BytesLong!";
 
-    // Seeded employees in init.sql L730-737 — used across tests as known fixtures.
-    // emp001 sits in STY01 (path /MIN01/STY01/); emp002 in AFD01 (/MIN01/STY02/AFD01/);
-    // emp003 in AFD02 (/MIN01/STY02/AFD02/).
+    // Seeded employees in init.sql — used across tests as known fixtures.
+    // S92 flatten: emp001 sits in STY01 (path /MIN01/STY01/); emp002/emp003 in STY02
+    // (/MIN01/STY02/) — the former AFD01/AFD02 afdelinger collapsed into STY02.
     private const string Emp001 = "emp001";
     private const string Emp001OrgPath = "/MIN01/STY01/";
 
@@ -195,11 +196,11 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
     public async Task Get_ByHrFromDifferentOrg_Returns403()
     {
         var client = _factory.CreateClient();
-        // HR token scoped to AFD02 only (path /MIN01/STY02/AFD02/) — does NOT cover
-        // emp001's org STY01 (path /MIN01/STY01/).
+        // HR token scoped ORG_ONLY to STY02 (a DIFFERENT Organisation, path /MIN01/STY02/) —
+        // does NOT cover emp001's org STY01 (path /MIN01/STY01/).
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintHrToken(
-                actorId: "hr_afd02_qa", orgId: "AFD02", scopeType: "ORG_ONLY"));
+                actorId: "hr_sty02_qa", orgId: "STY02", scopeType: "ORG_ONLY"));
 
         var rsp = await client.GetAsync($"/api/admin/employee-profiles/{Emp001}");
         Assert.Equal(HttpStatusCode.Forbidden, rsp.StatusCode);
@@ -211,7 +212,7 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
         var client = _factory.CreateClient();
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintHrToken(
-                actorId: "hr_afd02_qa", orgId: "AFD02", scopeType: "ORG_ONLY"));
+                actorId: "hr_sty02_qa", orgId: "STY02", scopeType: "ORG_ONLY"));
 
         var rsp = await PutAsync(client, Emp001,
             weeklyNormHours: 30.0m, partTimeFraction: 0.5m, position: "Attempted Edit",

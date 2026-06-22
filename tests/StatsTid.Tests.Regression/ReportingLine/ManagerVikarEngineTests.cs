@@ -63,7 +63,7 @@ public sealed class ManagerVikarEngineTests : IAsyncLifetime
             """
             INSERT INTO users (user_id, username, password_hash, display_name, email, primary_org_id, agreement_code, ok_version, is_active)
             VALUES
-                (@emp,   @emp,   '$2a$11$fake', 'TV Emp',   'tv_emp@test.dk',   'AFD01', 'HK', 'OK24', TRUE),
+                (@emp,   @emp,   '$2a$11$fake', 'TV Emp',   'tv_emp@test.dk',   'STY02', 'HK', 'OK24', TRUE),
                 (@mgr,   @mgr,   '$2a$11$fake', 'TV Mgr',   'tv_mgr@test.dk',   'STY02', 'HK', 'OK24', TRUE),
                 (@vik,   @vik,   '$2a$11$fake', 'TV Vikar', 'tv_vik@test.dk',   'STY02', 'HK', 'OK24', TRUE),
                 (@admin, @admin, '$2a$11$fake', 'TV Admin', 'tv_admin@test.dk', 'STY02', 'HK', 'OK24', TRUE)
