@@ -8,7 +8,7 @@
 | **End Date** | 2026-06-23 |
 | **Orchestrator Approved** | yes — 2026-06-23 |
 | **Build Verified** | yes — `dotnet build` 0 errors (combined tree) |
-| **Test Verified** | yes (local, fresh-greenfield Postgres): 854 unit + 1068 regression + 6 smoke + 29 demoseed + 495 fe; CI-pending (push-triggered full pyramid confirmation; backfilled at close-polish) |
+| **Test Verified** | yes — CI GREEN `28011098005` (all 7 jobs, 2026-06-23): 854 unit + 1068 regression + 6 smoke + 29 demoseed + 495 fe = 2452 |
 
 > **v2 (post Step-0b dual-lens).** Corrected the seed count (7 not 9), the picker-method dormancy claim, the demo expansion (no MAO-rooted demo scope exists), the RED-on-old framing, broader `GetAccessibleOrgsAsync` consumers, and **resolved OQ1 to REJECT MAO-typed ORG_ONLY grants** (Codex BLOCKER — a MAO scope confers org-structure admin, not inert). See Plan Review (Step 0b).
 
@@ -221,7 +221,7 @@ All 7 tasks complete (4 slice agents — Backend 9301/9302/9303, Frontend 9304, 
 | Smoke | 6 | all passing |
 | DemoSeed | 29 | all passing |
 | Frontend (vitest) | 495 | all passing |
-| **Total** | **2452** | CI confirmation pending |
+| **Total** | **2452** | CI GREEN `28011098005` (all 7 jobs) |
 
 ## Agent Effectiveness
 
