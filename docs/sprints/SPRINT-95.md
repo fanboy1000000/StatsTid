@@ -8,7 +8,7 @@
 | **End Date** | 2026-06-23 |
 | **Orchestrator Approved** | yes — 2026-06-23 |
 | **Build Verified** | yes — `dotnet build` 0 errors (combined tree) |
-| **Test Verified** | yes (local, fresh-greenfield Postgres): 850 unit + 1070 regression + 6 smoke + 29 demoseed + 492 fe; CI-pending (push-triggered full pyramid confirmation; backfilled at close-polish) |
+| **Test Verified** | yes — CI GREEN `28030465294` (all 7 jobs, 2026-06-23): 850 unit + 1070 regression + 6 smoke + 29 demoseed + 492 fe = 2447 |
 
 > **v2 (post Step-0b dual-lens).** Reframed the equivalence to the always-true `tree_root == primary_org` (not "primary_org IS an Organisation"); **KEEP the `tree_root_org_id` columns** (they have many load-bearing readers — drop was unsafe), populate from `primary_org` directly; added the Organisation-home guard + the missed callers. The lock-equivalence core was VALIDATED by both lenses. See Plan Review.
 
@@ -205,7 +205,7 @@ All 7 tasks complete (Backend 9501/9502/9503, Tests 9506, ADR 9507; **TASK-9504 
 | Smoke | 6 | all passing |
 | DemoSeed | 29 | all passing |
 | Frontend (vitest) | 492 | all passing |
-| **Total** | **2447** | CI confirmation pending |
+| **Total** | **2447** | CI GREEN `28030465294` (all 7 jobs) |
 
 ## Agent Effectiveness
 
