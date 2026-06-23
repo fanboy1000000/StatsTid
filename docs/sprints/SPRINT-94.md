@@ -8,7 +8,7 @@
 | **End Date** | 2026-06-23 |
 | **Orchestrator Approved** | yes — 2026-06-23 |
 | **Build Verified** | yes — `dotnet build` 0 errors (combined tree) |
-| **Test Verified** | yes (local, fresh-greenfield Postgres): 850 unit + 1062 regression + 6 smoke + 29 demoseed + 492 fe; CI-pending (push-triggered full pyramid confirmation; backfilled at close-polish) |
+| **Test Verified** | yes — CI GREEN `28019562226` (all 7 jobs, 2026-06-23): 850 unit + 1062 regression + 6 smoke + 29 demoseed + 492 fe = 2439 |
 
 > **v2 (post Step-0b dual-lens).** Added the live enforcement-mode ADMIN surface (BLOCKER 1), the `ExplicitFallbackConfirmation` event/model/overload drop (BLOCKER 2), the `period.OrgId`→`ValidateEmployeeAccessAsync(empId)` fallback binding (WARNING 3), the SET-clause lockstep removal, the orphan/read-act residuals, and the FE-test + `ForcedRollbackHarness` scope. See Plan Review (Step 0b).
 
@@ -209,7 +209,7 @@ All 7 tasks complete (Backend 9401/9402/9403, Frontend 9404, Tests 9406, ADR 940
 | Smoke | 6 | all passing |
 | DemoSeed | 29 | all passing |
 | Frontend (vitest) | 492 | all passing (−3 deleted enforcement-dialog cases) |
-| **Total** | **2439** | CI confirmation pending |
+| **Total** | **2439** | CI GREEN `28019562226` (all 7 jobs) |
 
 ## Agent Effectiveness
 
