@@ -132,9 +132,9 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
                 -- B4 (S76-7601 fix-forward): VikX's PRIMARY org is STY05 (a DIFFERENT MAO/tree), but this
                 -- extra STY02-scoped LOCAL_LEADER grant makes its org-scope COVER the manager's report
                 -- Emp (exact ORG_ONLY membership of STY02). So the cross-tree-vikar POST now
-                -- PASSES the coverage census and is rejected SPECIFICALLY by the same-tree guard (VikX's
-                -- PRIMARY org STY05 resolves to tree root STY05 != STY02) — exercising the S74-7402
-                -- cross-tree-via-vikar defense, not the coverage gate.
+                -- PASSES the coverage census and is rejected SPECIFICALLY by the same-Organisation guard
+                -- (VikX's PRIMARY org STY05 != STY02) — exercising the S74-7402
+                -- cross-Organisation-via-vikar defense, not the coverage gate.
                 (@vikx,   'LOCAL_LEADER', 'STY02', 'ORG_ONLY', 'TEST'),
                 (@sub,    'LOCAL_LEADER', 'STY02', 'ORG_ONLY', 'TEST'),
                 (@emp,    'EMPLOYEE',     'STY02', 'ORG_ONLY', 'TEST')
@@ -281,8 +281,8 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
         // B4 (S76-7601 fix-forward): VikX's PRIMARY org is STY05 (a DIFFERENT MAO/tree) but it
         // ALSO carries a STY02-scoped LOCAL_LEADER grant, so its org-scope DOES cover the manager's
         // STY02 report Emp. Coverage therefore PASSES — the ONLY thing that can reject this is the in-tx
-        // same-tree guard (ValidateSameTreeAsync resolves VikX's PRIMARY org STY05 → tree root STY05
-        // != STY02 → CrossTreeAssignmentException → 400). This discriminatingly exercises the
+        // same-Organisation guard (ValidateSameOrganisationAsync reads VikX's PRIMARY org STY05 != Mgr's
+        // STY02 → CrossOrganisationAssignmentException → 400). This discriminatingly exercises the
         // S74-7402 cross-tree-via-vikar defense (a non-discriminating fixture would be rejected by
         // coverage first, never reaching the same-tree arm).
         // Sanity: confirm VikX WOULD pass coverage (the discriminating-fixture precondition).
@@ -455,7 +455,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
     public async Task AdminDelete_RevokeSafe_WhenManagerAndVikarInactive_StillSucceeds()
     {
         var vikar = await PlantVikarAsync(Mgr, Vik, Today().AddDays(30), TreeRootSty02);
-        // Deactivate BOTH the manager and the vikar — ValidateSameTreeAsync would now fail, but the
+        // Deactivate BOTH the manager and the vikar — ValidateSameOrganisationAsync would now fail, but the
         // revoke must still succeed via the persisted manager_vikar.tree_root_org_id.
         await DeactivateUserAsync(Mgr);
         await DeactivateUserAsync(Vik);
@@ -652,7 +652,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
     ///   (4) release ONLY STY02 → the parked create acquires STY02, RE-DERIVES Mgr = STY05 → DRIFT →
     ///       TreeRootDriftException → rollback → RETRY. The retry derives STY05 and BLOCKS on the held
     ///       STY05 key (PROOF it re-keyed on the NEW root, not the stale STY02 one);
-    ///   (5) release STY05 → the retried create proceeds; ValidateSameTreeAsync sees Mgr=STY05, Vik=STY02
+    ///   (5) release STY05 → the retried create proceeds; ValidateSameOrganisationAsync sees Mgr=STY05, Vik=STY02
     ///       → 400. No manager_vikar row created.
     /// </summary>
     [Fact]

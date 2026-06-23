@@ -869,7 +869,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
             lockReleased = true;
 
             var assignResp = await assignTask;
-            // The in-tx ValidateSameTreeAsync filters is_active = TRUE; Mgr now reads inactive →
+            // The in-tx ValidateSameOrganisationAsync filters is_active = TRUE; Mgr now reads inactive →
             // InvalidOperationException → 400. No edge created.
             Assert.Equal(HttpStatusCode.BadRequest, assignResp.StatusCode);
         }
@@ -907,8 +907,8 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
     //   (3) while parked, TRANSFER LateRep's primary_org_id to STY05 via a raw UPDATE (the cross-tree
     //       org-transfer the unlocked pre-acquire read cannot see);
     //   (4) release the held key → the parked assign acquires STY02, RE-DERIVES LateRep=STY05 → DRIFT →
-    //       rollback → RETRY on STY05; ValidateSameTreeAsync then sees LateRep=STY05, Mgr=STY02 → 400. No
-    //       deadlock, no cross-tree edge.
+    //       rollback → RETRY on STY05; ValidateSameOrganisationAsync then sees LateRep=STY05, Mgr=STY02 → 400. No
+    //       deadlock, no cross-Organisation edge.
     [Fact]
     public async Task Fix4_CrossStyrelseTransferMidAssign_IsRejected_400_NoDeadlock_NoCrossTreeEdge()
     {
@@ -951,7 +951,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
             }
 
             // 4. Release the held key → the parked assign acquires STY02, RE-DERIVES LateRep=STY05 → DRIFT
-            //    → rollback → RETRY on STY05; ValidateSameTreeAsync sees LateRep=STY05, Mgr=STY02 → 400.
+            //    → rollback → RETRY on STY05; ValidateSameOrganisationAsync sees LateRep=STY05, Mgr=STY02 → 400.
             await holdTx.RollbackAsync();
             await holdConn.DisposeAsync();
             lockReleased = true;
@@ -963,8 +963,8 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
                 "The assign did not complete after the lock was released — a drift-retry deadlock has regressed.");
 
             var assignResp = await assignTask;
-            // The RETRIED assign (re-keyed on STY05) sees employee + manager in DIFFERENT trees →
-            // CrossTreeAssignmentException → 400. No proceed-under-stale-key.
+            // The RETRIED assign (re-keyed on STY05) sees employee + manager in DIFFERENT Organisations →
+            // CrossOrganisationAssignmentException → 400. No proceed-under-stale-key.
             Assert.Equal(HttpStatusCode.BadRequest, assignResp.StatusCode);
         }
         finally
@@ -1005,7 +1005,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
     ///   (4) release ONLY the STY02 key → the parked assign acquires STY02, RE-DERIVES Drifter = STY05 →
     ///       DRIFT → TreeRootDriftException → rollback → RETRY. The retry derives STY05 and BLOCKS on the
     ///       held STY05 key (PROOF it re-keyed on the NEW root, not the stale one);
-    ///   (5) release the STY05 key → the retried assign proceeds; ValidateSameTreeAsync sees Drifter=STY05,
+    ///   (5) release the STY05 key → the retried assign proceeds; ValidateSameOrganisationAsync sees Drifter=STY05,
     ///       Mgr=STY02 → 400. No edge created.
     /// </summary>
     [Fact]

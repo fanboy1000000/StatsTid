@@ -74,7 +74,7 @@ public static class ReportingLineEndpoints
                 {
                     // S74-7403 B1 / S78 R9 — TOTAL LOCK ORDER (identical on every path, deadlock-safe):
                     //   (1) tree advisory lock  →  (2) the two user rows id-ordered FOR UPDATE (inside
-                    //   ValidateSameTreeAsync)  →  (3) cycle guard  →  (4) AssignAsync's slot FOR UPDATE
+                    //   ValidateSameOrganisationAsync)  →  (3) cycle guard  →  (4) AssignAsync's slot FOR UPDATE
                     //   on reporting_lines. NO user row is locked before the advisory, so a transaction
                     //   blocked on the advisory holds no user row and cannot deadlock the advisory holder.
                     //
@@ -94,15 +94,15 @@ public static class ReportingLineEndpoints
                     // cross-tree-edge race, ADR-027 D2). Sees the current committed user state, so a
                     // concurrent R10 that deactivated the manager (committed before us) makes it read
                     // inactive here → 400, no orphan. Returns the AUTHORITATIVE common tree root.
-                    var treeRootOrgId = await repo.ValidateSameTreeAsync(conn, tx, request.EmployeeId, request.ManagerId, ct);
+                    var treeRootOrgId = await repo.ValidateSameOrganisationAsync(conn, tx, request.EmployeeId, request.ManagerId, ct);
 
                     // S78 R9 — the S74-7403 stale-key residual is now CLOSED. The advisory key is no
                     // longer taken from an unguarded unlocked read: AcquireTreeLockForEmployeeAsync (Step 1)
                     // re-derives the root under the held advisory and signals a retry on drift, so the key
-                    // this transaction holds IS the employee's current tree root. ValidateSameTreeAsync
+                    // this transaction holds IS the employee's current tree root. ValidateSameOrganisationAsync
                     // (below) still pins BOTH user rows FOR UPDATE in id-order and re-resolves the common
                     // root — defence-in-depth that also rejects a cross-tree manager (the manager may be in
-                    // a different tree even with a non-stale employee key) with CrossTreeAssignmentException
+                    // a different tree even with a non-stale employee key) with CrossOrganisationAssignmentException
                     // → 400. The order stays advisory → user rows → slot (no inversion); the simultaneous-
                     // transfer cycle window the prior pass deferred is eliminated by the drift guard.
 
@@ -200,7 +200,7 @@ public static class ReportingLineEndpoints
                 // S74 R8 — the chosen manager is the employee or a descendant → 409.
                 return Results.Json(new { error = ex.Message }, statusCode: 409);
             }
-            catch (CrossTreeAssignmentException ex)
+            catch (CrossOrganisationAssignmentException ex)
             {
                 // S74-7403 B1-companion — same-tree validation moved in-tx; the manager and
                 // employee belong to different reporting trees → 400.
@@ -208,7 +208,7 @@ public static class ReportingLineEndpoints
             }
             catch (InvalidOperationException ex)
             {
-                // S74-7403 W1 — ValidateSameTreeAsync (now in-tx) throws when a user/org cannot be
+                // S74-7403 W1 — ValidateSameOrganisationAsync (now in-tx) throws when a user/org cannot be
                 // resolved (missing/inactive user, or no MAO/ORGANISATION ancestor) → clean 400
                 // rather than a 500.
                 return Results.BadRequest(new { error = ex.Message });
@@ -565,7 +565,7 @@ public static class ReportingLineEndpoints
                 try
                 {
                     // S74-7403 B1 / S78 R9 — TOTAL LOCK ORDER (identical to the PRIMARY assign path):
-                    //   advisory → user rows id-ordered FOR UPDATE (in ValidateSameTreeAsync) → cycle
+                    //   advisory → user rows id-ordered FOR UPDATE (in ValidateSameOrganisationAsync) → cycle
                     //   guard → slot. Step 1: take the tree-wide advisory lock FIRST via the DRIFT-GUARDED
                     //   acquire (the ACTING assign path can form a cycle too). It re-derives the
                     //   employee's root under the held lock and signals a retry on a concurrent transfer
@@ -575,13 +575,13 @@ public static class ReportingLineEndpoints
 
                     // Step 2: same-tree + manager-active in-tx UNDER the lock; pins BOTH user rows
                     // FOR UPDATE in id-order (B1). Returns the authoritative common tree root.
-                    var treeRootOrgId = await repo.ValidateSameTreeAsync(conn, tx, employeeId, request.ManagerId, ct);
+                    var treeRootOrgId = await repo.ValidateSameOrganisationAsync(conn, tx, employeeId, request.ManagerId, ct);
 
                     // S78 R9 — the S74-7403 stale-key residual is CLOSED on this path too (identical to
                     // the PRIMARY assign): AcquireTreeLockForEmployeeAsync (Step 1) holds the employee's
-                    // CURRENT tree root via the drift guard. ValidateSameTreeAsync (run ABOVE, after both
+                    // CURRENT tree root via the drift guard. ValidateSameOrganisationAsync (run ABOVE, after both
                     // user rows are pinned FOR UPDATE) still rejects a cross-tree manager with
-                    // CrossTreeAssignmentException → 400 (defence-in-depth). Order stays advisory → rows →
+                    // CrossOrganisationAssignmentException → 400 (defence-in-depth). Order stays advisory → rows →
                     // slot; the simultaneous-transfer window is eliminated by the drift guard.
 
                     // Step 3: cycle guard.
@@ -676,14 +676,14 @@ public static class ReportingLineEndpoints
                 // S74 R8 — the chosen acting manager is the employee or a descendant → 409.
                 return Results.Json(new { error = ex.Message }, statusCode: 409);
             }
-            catch (CrossTreeAssignmentException ex)
+            catch (CrossOrganisationAssignmentException ex)
             {
                 // S74-7403 B1-companion — same-tree validation moved in-tx → 400.
                 return Results.Json(new { error = ex.Message }, statusCode: 400);
             }
             catch (InvalidOperationException ex)
             {
-                // S74-7403 W1 — unresolvable user/org from the in-tx ValidateSameTreeAsync → 400.
+                // S74-7403 W1 — unresolvable user/org from the in-tx ValidateSameOrganisationAsync → 400.
                 return Results.BadRequest(new { error = ex.Message });
             }
             catch (OptimisticConcurrencyException ex)
@@ -881,21 +881,17 @@ public static class ReportingLineEndpoints
                 }
             }
 
-            // Batch resolve unique org IDs to tree roots.
+            // Resolve unique org IDs to their Organisation (the advisory key + tree_root_org_id).
+            // S95 / ADR-035 slice 4: the tree-WALK is RETIRED — post-S92 a user's Organisation IS their
+            // primary_org_id (the former ResolveTreeRootOrgIdAsync always returned the input org), so the
+            // mapping is the identity. Every primary_org_id read from an active user above is a real org,
+            // so all rows resolve; the per-row "cannot resolve" guard below is now defensively unreachable
+            // (kept for shape parity with the single-assign path). The batch request.TreeRootOrgId field
+            // stays — by construction every row is single-Organisation.
             var uniqueOrgIds = new HashSet<string>(userLookup.Values.Select(v => v.PrimaryOrgId), StringComparer.Ordinal);
             var orgToTreeRoot = new Dictionary<string, string>(StringComparer.Ordinal);
             foreach (var orgId in uniqueOrgIds)
-            {
-                try
-                {
-                    var treeRoot = await repo.ResolveTreeRootOrgIdAsync(orgId, ct);
-                    orgToTreeRoot[orgId] = treeRoot;
-                }
-                catch (InvalidOperationException)
-                {
-                    // Will surface as per-row error below.
-                }
-            }
+                orgToTreeRoot[orgId] = orgId;
 
             // Validate each row against lookup data.
             for (var i = 0; i < request.Rows.Count; i++)
@@ -969,7 +965,7 @@ public static class ReportingLineEndpoints
                     // pre-validated to resolve to request.TreeRootOrgId, so the whole import belongs to
                     // one tree and serializes through this one lock — bringing the bulk path to parity
                     // with the guarded single assigns under the SAME global order (advisory → user rows
-                    // id-ordered FOR UPDATE → cycle guard → slot): the per-row ValidateSameTreeAsync
+                    // id-ordered FOR UPDATE → cycle guard → slot): the per-row ValidateSameOrganisationAsync
                     // below pins each edge's user pair AFTER this advisory, so a concurrent same-tree
                     // assign (also advisory-first) cannot deadlock against the import.
                     await ReportingLineRepository.AcquireTreeLockAsync(conn, tx, request.TreeRootOrgId, ct);
@@ -1004,17 +1000,17 @@ public static class ReportingLineEndpoints
                         //    pre-validation (the early 400) is only a fast pre-check: a concurrent
                         //    R10-delete could have DEACTIVATED the manager (or an org transfer moved either
                         //    party out of the tree) AFTER that pre-check — inserting an edge to a
-                        //    now-inactive manager would be a brand-new D9 orphan. ValidateSameTreeAsync
+                        //    now-inactive manager would be a brand-new D9 orphan. ValidateSameOrganisationAsync
                         //    re-reads is_active = TRUE for both parties (an inactive/missing one →
                         //    InvalidOperationException), that they share a tree root
-                        //    (CrossTreeAssignmentException otherwise), AND pins BOTH rows FOR UPDATE in
+                        //    (CrossOrganisationAssignmentException otherwise), AND pins BOTH rows FOR UPDATE in
                         //    id-order (B1 — no cross-tree-edge race; under the held advisory, step 2 of the
                         //    order); either exception propagates and rolls the WHOLE batch back. We
                         //    additionally pin the resolved root to the import's declared TreeRootOrgId (a
                         //    same-tree pair that drifted to ANOTHER tree must not be silently imported).
-                        var rowTreeRoot = await repo.ValidateSameTreeAsync(conn, tx, row.EmployeeId, row.ManagerId, ct);
+                        var rowTreeRoot = await repo.ValidateSameOrganisationAsync(conn, tx, row.EmployeeId, row.ManagerId, ct);
                         if (!string.Equals(rowTreeRoot, request.TreeRootOrgId, StringComparison.Ordinal))
-                            throw new CrossTreeAssignmentException(
+                            throw new CrossOrganisationAssignmentException(
                                 $"Row employee '{row.EmployeeId}'/manager '{row.ManagerId}' now resolves to tree " +
                                 $"'{rowTreeRoot}', not the import's declared tree '{request.TreeRootOrgId}'.");
 
@@ -1099,7 +1095,7 @@ public static class ReportingLineEndpoints
                     throw;
                 }
             }
-            catch (CrossTreeAssignmentException ex)
+            catch (CrossOrganisationAssignmentException ex)
             {
                 return Results.BadRequest(new { error = ex.Message });
             }
@@ -1121,7 +1117,7 @@ public static class ReportingLineEndpoints
             }
             catch (InvalidOperationException ex)
             {
-                // S74-7403 C2-2 — the in-tx ValidateSameTreeAsync threw because an edge's manager (or
+                // S74-7403 C2-2 — the in-tx ValidateSameOrganisationAsync threw because an edge's manager (or
                 // employee) is now inactive/missing, or no MAO/ORGANISATION ancestor resolves. A
                 // concurrent R10-delete that deactivated the manager between the out-of-tx pre-check
                 // and this in-tx validation lands here → clean 400, whole batch rolled back (no D9
@@ -1286,7 +1282,7 @@ public static class ReportingLineEndpoints
                         var replacement = replacements[rep.EmployeeId];
 
                         // Same-tree (in-tx so it sees the current committed users) + cycle guard.
-                        // S74-7403 B1: ValidateSameTreeAsync pins BOTH the report + replacement `users`
+                        // S74-7403 B1: ValidateSameOrganisationAsync pins BOTH the report + replacement `users`
                         // rows FOR UPDATE in id-order (no cross-tree-edge race). The OUTER advisory on
                         // the removed person's tree (acquired above, before the census) is ALREADY held
                         // here, and the report (a direct report) + its same-tree replacement are in that
@@ -1296,17 +1292,17 @@ public static class ReportingLineEndpoints
                         // S74-7403 fix4 — NO inner per-report advisory re-acquire. The prior pass
                         // re-acquired the advisory on repTreeRoot after pinning the rows; that inverts the
                         // global advisory → rows order (rows then advisory) and can DEADLOCK with an
-                        // assign already holding repTreeRoot. We rely on ValidateSameTreeAsync (which pins
-                        // both rows FOR UPDATE) to REJECT — with CrossTreeAssignmentException → 400 — any
+                        // assign already holding repTreeRoot. We rely on ValidateSameOrganisationAsync (which pins
+                        // both rows FOR UPDATE) to REJECT — with CrossOrganisationAssignmentException → 400 — any
                         // replacement a concurrent transfer drove cross-tree, so no cross-tree edge is
                         // created and no rows→advisory inversion remains. The residual (a simultaneous
                         // same-new-styrelse transfer) is the same deferred in-lock hardening follow-up.
                         string repTreeRoot;
                         try
                         {
-                            repTreeRoot = await repo.ValidateSameTreeAsync(conn, tx, rep.EmployeeId, replacement, ct);
+                            repTreeRoot = await repo.ValidateSameOrganisationAsync(conn, tx, rep.EmployeeId, replacement, ct);
                         }
-                        catch (CrossTreeAssignmentException ex)
+                        catch (CrossOrganisationAssignmentException ex)
                         {
                             await tx.RollbackAsync(ct);
                             return Results.Json(new { error = ex.Message, reportEmployeeId = rep.EmployeeId }, statusCode: 400);
@@ -1568,7 +1564,7 @@ public static class ReportingLineEndpoints
             {
                 return Results.Json(new { error = ex.Message }, statusCode: 409);
             }
-            catch (CrossTreeAssignmentException ex)
+            catch (CrossOrganisationAssignmentException ex)
             {
                 // S74-7403 — a replacement is in a different reporting tree than its report → 400.
                 return Results.Json(new { error = ex.Message }, statusCode: 400);
@@ -1757,7 +1753,7 @@ public static class ReportingLineEndpoints
             //    reports already held by an admin (non-self) ACTING — matching the old skip at
             //    the per-report fan-out (Codex W3).
             // tree_root_org_id: the actor's reporting tree. The AUTHORITATIVE root comes from the
-            // in-tx ValidateSameTreeAsync below (S76 / TASK-7601 D15 hardening) — NOT a pre-tx read.
+            // in-tx ValidateSameOrganisationAsync below (S76 / TASK-7601 D15 hardening) — NOT a pre-tx read.
             int delegated = 0, skipped = 0;
             ManagerVikar createdVikar;
             try
@@ -1778,7 +1774,7 @@ public static class ReportingLineEndpoints
                 try
                 {
                     // ── D15 TOTAL LOCK ORDER (identical to the assign path): (1) tree advisory lock →
-                    //    (2) the two user rows id-ordered FOR UPDATE (inside ValidateSameTreeAsync) →
+                    //    (2) the two user rows id-ordered FOR UPDATE (inside ValidateSameOrganisationAsync) →
                     //    (3) cycle guard → (4) the manager_vikar INSERT. No user row is locked before the
                     //    advisory, so a tx parked on the advisory holds no user row (deadlock-safe).
                     //
@@ -1800,7 +1796,7 @@ public static class ReportingLineEndpoints
                     // advisory, pinning BOTH user rows FOR UPDATE so neither party can be transferred
                     // between the check and the INSERT (the cross-tree-edge race). Returns the
                     // AUTHORITATIVE common tree root used for the row + event.
-                    var treeRootOrgId = await repo.ValidateSameTreeAsync(conn, tx, actorId, request.ActingManagerId, ct);
+                    var treeRootOrgId = await repo.ValidateSameOrganisationAsync(conn, tx, actorId, request.ActingManagerId, ct);
 
                     // Step 3: cycle guard (D15) — a report/descendant of the actor cannot be the vikar
                     // (it would let a subordinate gain approve-authority over the actor's own reports
@@ -1939,10 +1935,10 @@ public static class ReportingLineEndpoints
                 }
             }
             }
-            catch (CrossTreeAssignmentException)
+            catch (CrossOrganisationAssignmentException)
             {
                 // S76 / TASK-7601 (Deliverable B) — same-tree validation moved IN-TX; a cross-tree
-                // vikar → the SAME byte-stable 400 the pre-tx ValidateSameTreeAsync emitted.
+                // vikar → the SAME byte-stable 400 the pre-tx ValidateSameOrganisationAsync emitted.
                 return Results.BadRequest(new { error = "Vikar must be in the same styrelse (tree) as you" });
             }
             catch (ReportingCycleException)
@@ -1955,7 +1951,7 @@ public static class ReportingLineEndpoints
             }
             catch (InvalidOperationException)
             {
-                // ValidateSameTreeAsync / AcquireTreeLockForEmployeeAsync throw when a user/org cannot
+                // ValidateSameOrganisationAsync / AcquireTreeLockForEmployeeAsync throw when a user/org cannot
                 // be resolved to an Organisation tree root (inactive/missing user or org, or no
                 // MAO/ORGANISATION ancestor) → clean 400 (byte-stable with the prior pre-tx message),
                 // never a 500. Layer 2 (the authority predicate) fails closed on the same condition.
@@ -2238,7 +2234,7 @@ public static class ReportingLineEndpoints
                 await conn.OpenAsync(ct);
                 // ReadCommitted: the advisory lock is the tx's first statement (see the self-delegate
                 // rationale). Lock order: (1) tree advisory → (2) the two user rows id-ordered
-                // FOR UPDATE (in ValidateSameTreeAsync) → (3) cycle guard → (4) manager_vikar INSERT.
+                // FOR UPDATE (in ValidateSameOrganisationAsync) → (3) cycle guard → (4) manager_vikar INSERT.
                 await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
                 try
                 {
@@ -2297,8 +2293,8 @@ public static class ReportingLineEndpoints
                     // (iv) Step 2: the vikar MUST be SAME-TREE as the manager — validated IN-TX under
                     //      the advisory, pinning BOTH user rows FOR UPDATE (the cross-tree-edge race).
                     //      Returns the AUTHORITATIVE common tree root for the row + event. A cross-tree
-                    //      vikar → CrossTreeAssignmentException → 400.
-                    var treeRootOrgId = await repo.ValidateSameTreeAsync(conn, tx, managerId, request.VikarUserId, ct);
+                    //      vikar → CrossOrganisationAssignmentException → 400.
+                    var treeRootOrgId = await repo.ValidateSameOrganisationAsync(conn, tx, managerId, request.VikarUserId, ct);
 
                     // (iv) Step 3: cycle guard — a report/descendant of the manager cannot be the vikar
                     //      (a subordinate must not gain approve-authority over their own manager's
@@ -2363,7 +2359,7 @@ public static class ReportingLineEndpoints
                     throw;
                 }
             }
-            catch (CrossTreeAssignmentException)
+            catch (CrossOrganisationAssignmentException)
             {
                 return Results.BadRequest(new { error = "Vikar must be in the same styrelse (tree) as the manager" });
             }
@@ -2392,7 +2388,7 @@ public static class ReportingLineEndpoints
         // manager's active vikar (S76 / TASK-7601, Deliverable A). REVOKE-SAFE: it must stay
         // possible to revoke even after the manager or the vikar has gone INACTIVE — so the
         // revoke-authority anchor is the PERSISTED manager_vikar.tree_root_org_id (NOT
-        // ValidateSameTreeAsync, which requires ACTIVE users).
+        // ValidateSameOrganisationAsync, which requires ACTIVE users).
         //
         // S76 / TASK-7601 fix-forward (Step-5a c1 B3 + WARNING): the authorize→close pair is now
         // ATOMIC and in-lock. The active row is read FOR UPDATE INSIDE the tx under the tree
@@ -2769,60 +2765,6 @@ public static class ReportingLineEndpoints
         while (await reader.ReadAsync(ct))
             ids.Add(reader.GetGuid(0));
         return ids;
-    }
-
-    // ── Helper: in-tx employee tree-root resolution (S74-7403 B1 advisory-key derivation) ──
-
-    /// <summary>
-    /// Resolves the reporting tree root for <paramref name="employeeId"/> WITHIN the caller's tx, so a
-    /// path can derive the tree advisory-lock KEY. Reads the employee's <c>primary_org_id</c> in-tx
-    /// (an active user) and walks up to the MAO/ORGANISATION root via the repository's in-tx resolver.
-    ///
-    /// <para>
-    /// <b>S74-7403 B1 — total lock order (consistent on EVERY path, to avoid deadlock):</b>
-    /// <c>tree advisory lock → user rows (id-ordered FOR UPDATE) → reporting_lines slot FOR UPDATE</c>.
-    /// To honour this, NO user row may be locked BEFORE the advisory lock. This helper therefore reads
-    /// <c>primary_org_id</c> WITHOUT a <c>FOR UPDATE</c> row lock — it only derives the advisory key.
-    /// The earlier C2-1 pin (a <c>FOR UPDATE</c> here, ahead of the advisory) had to be removed: with
-    /// B1 also locking the manager row inside <see cref="ReportingLineRepository.ValidateSameTreeAsync"/>,
-    /// a pre-advisory employee pin would let a transaction hold one user row while waiting on the
-    /// advisory, and a reciprocal transaction (employee/manager swapped) could deadlock against it.
-    /// </para>
-    ///
-    /// <para>
-    /// <b>S74-7403 fix4 — stale-key handling is now REJECT, not re-acquire.</b> The advisory key from
-    /// this UNLOCKED read may be stale if a concurrent cross-styrelse org-transfer committed between this
-    /// read and the advisory. The post-advisory
-    /// <see cref="ReportingLineRepository.ValidateSameTreeAsync"/> locks BOTH user rows
-    /// <c>FOR UPDATE</c> and re-resolves the authoritative common tree root; if the transfer made the
-    /// employee and manager cross-tree it throws <see cref="CrossTreeAssignmentException"/> → 400, so no
-    /// cross-tree edge is created. The prior "drift re-acquire" (re-taking the advisory on the
-    /// authoritative root AFTER the row pins) was REMOVED: it inverted the global
-    /// <c>advisory → user rows</c> order and could deadlock. The accepted, deferred residual — a
-    /// simultaneous same-new-styrelse transfer serializing two assigns on different advisory keys
-    /// (astronomically rare, non-corrupting) — needs a stable tree id or an org-transfer serialization
-    /// lock (the in-lock concurrency-hardening follow-up).
-    /// </para>
-    /// </summary>
-    /// <exception cref="InvalidOperationException">If the employee is missing/inactive, or has no
-    /// MAO/ORGANISATION ancestor — surfaced as a clean 400 by the caller (W1).</exception>
-    private static async Task<string> ResolveEmployeeTreeRootInTxAsync(
-        NpgsqlConnection conn, NpgsqlTransaction tx,
-        ReportingLineRepository repo, string employeeId, CancellationToken ct)
-    {
-        string? primaryOrgId;
-        await using (var cmd = new NpgsqlCommand(
-            // S74-7403 B1: NO FOR UPDATE — the advisory lock (taken by the caller right after this
-            // read) is the first lock; user rows are pinned only later, inside ValidateSameTreeAsync.
-            "SELECT primary_org_id FROM users WHERE user_id = @userId AND is_active = TRUE", conn, tx))
-        {
-            cmd.Parameters.AddWithValue("userId", employeeId);
-            primaryOrgId = (string?)await cmd.ExecuteScalarAsync(ct);
-        }
-        if (primaryOrgId is null)
-            throw new InvalidOperationException($"Employee user_id='{employeeId}' not found or inactive.");
-
-        return await repo.ResolveTreeRootOrgIdAsync(conn, tx, primaryOrgId, ct);
     }
 
     // ── Helper: look up display names for a batch of user IDs ──

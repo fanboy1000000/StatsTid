@@ -396,6 +396,7 @@ public static class AdminEndpoints
         app.MapPost("/api/admin/users", async (
             CreateUserRequest request,
             OrgScopeValidator scopeValidator,
+            OrganizationRepository orgRepo,
             DbConnectionFactory dbFactory,
             IOutboxEnqueue outbox,
             UserAgreementCodeRepository userAgreementCodeRepo,
@@ -418,6 +419,17 @@ public static class AdminEndpoints
             var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, request.PrimaryOrgId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+
+            // S95 / ADR-035 slice 4 — ORGANISATION-HOME GUARD. A user must sit on an ORGANISATION
+            // (employees live on Organisations, not on MAOs — the flat-authority model). Reject a
+            // primary_org_id whose org_type is not ORGANISATION (mirrors the S93 grant-MAO-reject).
+            // This makes "users sit on Organisations" invariant by-construction via the guarded
+            // endpoint; raw-SQL seeds (init.sql / demo) comply by construction.
+            var homeOrg = await orgRepo.GetByIdAsync(request.PrimaryOrgId, ct);
+            if (homeOrg is null)
+                return Results.BadRequest(new { error = "Primary org not found." });
+            if (!string.Equals(homeOrg.OrgType, "ORGANISATION", StringComparison.Ordinal))
+                return Results.BadRequest(new { error = "A user's primary org must be an Organisation (a MAO holds no employees)." });
 
             // Hash password with BCrypt
             var passwordHash = BCrypt.Net.BCrypt.HashPassword(request.Password);
@@ -724,36 +736,37 @@ public static class AdminEndpoints
                 // (6) S74 R9 — OPTIONAL atomic create+assign. When an approverId is supplied,
                 //     create the new person's PRIMARY reporting line under it in the SAME tx, so
                 //     the create+assign is all-or-nothing and the person is never an orphan via
-                //     this path. ValidateSameTreeAsync/cycle-guard run in-tx (the (conn,tx)
+                //     this path. ValidateSameOrganisationAsync/cycle-guard run in-tx (the (conn,tx)
                 //     overloads see the just-inserted user row, which fresh-connection reads
                 //     could not). Emits ReportingLineAssigned + a reporting_line_audit row,
                 //     EXACTLY like the normal assign path (ReportingLineEndpoints assign).
                 if (!string.IsNullOrWhiteSpace(request.ApproverId))
                 {
                     // S74-7403 B1 — TOTAL LOCK ORDER (identical to the assign endpoints, deadlock-safe):
-                    //   advisory → user rows id-ordered FOR UPDATE (in ValidateSameTreeAsync) → cycle
-                    //   guard → slot. NO user row is locked before the advisory.
+                    //   advisory → user rows id-ordered FOR UPDATE (in ValidateSameOrganisationAsync) →
+                    //   cycle guard → slot. NO user row is locked before the advisory.
                     //
-                    // Step 1a: derive the advisory key from the NEW user's tree root. The new user's
-                    // primary_org_id is request.PrimaryOrgId, fixed by THIS tx's INSERT above (already
+                    // Step 1a: derive the advisory key from the NEW user's Organisation. S95 / ADR-035
+                    // slice 4: the tree-WALK is RETIRED — the new user's Organisation IS its
+                    // primary_org_id (request.PrimaryOrgId), fixed by THIS tx's INSERT above (already
                     // exclusively held, invisible to any concurrent transfer until COMMIT) — so the key
                     // cannot drift and no post-validation re-acquire is needed.
                     string rlTreeRoot;
                     try
                     {
-                        var newUserTreeRoot = await reportingLineRepo.ResolveTreeRootOrgIdAsync(
-                            conn, tx, request.PrimaryOrgId, ct);
+                        var newUserTreeRoot = request.PrimaryOrgId;
 
                         // Step 1b: take the tree advisory lock FIRST (parked → no user rows held).
                         await ReportingLineRepository.AcquireTreeLockAsync(conn, tx, newUserTreeRoot, ct);
 
-                        // Step 2: same-tree validation UNDER the advisory — pins BOTH the new user AND
-                        // the approver `users` rows FOR UPDATE in id-order (B1: a concurrent cross-styrelse
-                        // transfer of the approver cannot create a cross-tree edge, ADR-027 D2). Returns
-                        // the authoritative common tree root (== newUserTreeRoot, since the new user's org
-                        // is fixed). W1: throws InvalidOperationException when the approver (or the new
-                        // user's org) cannot be resolved to a styrelse tree root → clean 400 below.
-                        rlTreeRoot = await reportingLineRepo.ValidateSameTreeAsync(
+                        // Step 2: same-Organisation validation UNDER the advisory — pins BOTH the new user
+                        // AND the approver `users` rows FOR UPDATE in id-order (B1: a concurrent
+                        // cross-Organisation transfer of the approver cannot create a cross-Organisation
+                        // edge, ADR-027 D2). Returns the authoritative common Organisation (==
+                        // newUserTreeRoot, since the new user's org is fixed). W1: throws
+                        // InvalidOperationException when the approver (or the new user's org) cannot be
+                        // resolved → clean 400 below.
+                        rlTreeRoot = await reportingLineRepo.ValidateSameOrganisationAsync(
                             conn, tx, request.UserId, request.ApproverId!, ct);
                     }
                     catch (InvalidOperationException ioEx)
@@ -817,9 +830,9 @@ public static class AdminEndpoints
 
                 await tx.CommitAsync(ct);
             }
-            catch (CrossTreeAssignmentException ex)
+            catch (CrossOrganisationAssignmentException ex)
             {
-                // S74 R9 — the supplied approver is in a different reporting tree → 400, nothing
+                // S74 R9 — the supplied approver is in a different Organisation → 400, nothing
                 // committed (the whole create+assign rolls back atomically).
                 await tx.RollbackAsync(ct);
                 return Results.Json(new { error = ex.Message }, statusCode: 400);
@@ -923,6 +936,7 @@ public static class AdminEndpoints
             UpdateUserRequest request,
             UserRepository userRepo,
             OrgScopeValidator scopeValidator,
+            OrganizationRepository orgRepo,
             IOutboxEnqueue outbox,
             DbConnectionFactory dbFactory,
             UserAgreementCodeRepository userAgreementCodeRepo,
@@ -977,6 +991,15 @@ public static class AdminEndpoints
                 var (allowedNew, reasonNew) = await scopeValidator.ValidateOrgAccessAsync(actor, request.PrimaryOrgId, StatsTidRoles.LocalHR, ct);
                 if (!allowedNew)
                     return Results.Json(new { error = "Access denied", reason = reasonNew }, statusCode: 403);
+
+                // S95 / ADR-035 slice 4 — ORGANISATION-HOME GUARD (transfer). The new home must be an
+                // ORGANISATION (employees live on Organisations, not MAOs). Reject a transfer to a
+                // non-ORGANISATION primary_org_id (mirrors the create guard + the S93 grant-MAO-reject).
+                var newHomeOrg = await orgRepo.GetByIdAsync(request.PrimaryOrgId, ct);
+                if (newHomeOrg is null)
+                    return Results.BadRequest(new { error = "Primary org not found." });
+                if (!string.Equals(newHomeOrg.OrgType, "ORGANISATION", StringComparison.Ordinal))
+                    return Results.BadRequest(new { error = "A user's primary org must be an Organisation (a MAO holds no employees)." });
             }
 
             // S34 / TASK-3407 — agreement_code mutation predicate (null-safe + Ordinal

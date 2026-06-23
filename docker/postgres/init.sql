@@ -463,6 +463,14 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash       TEXT        NOT NULL,
     display_name        TEXT        NOT NULL,
     email               TEXT,
+    -- S95 / ADR-035 slice 4 — ORGANISATION-HOME INVARIANT: a user's primary_org_id MUST
+    -- reference an ORGANISATION-typed org (employees live on Organisations, not MAOs — the
+    -- flat-authority model). This is enforced at the APPLICATION layer (AdminEndpoints user
+    -- create POST + transfer PUT reject a non-ORGANISATION primary_org) — a DB CHECK cannot
+    -- cross-reference organizations.org_type from users without a trigger, and we keep raw-SQL
+    -- seeds (this file + the demo) bypassing it by design. The seed users below all sit on
+    -- ORGANISATION-typed STY0x orgs, so they comply. The user's Organisation IS this column
+    -- (the reporting "tree root" of every user == primary_org_id — the tree-WALK was retired).
     primary_org_id      TEXT        NOT NULL REFERENCES organizations(org_id),
     agreement_code      TEXT        NOT NULL DEFAULT 'AC',
     ok_version          TEXT        NOT NULL DEFAULT 'OK24',

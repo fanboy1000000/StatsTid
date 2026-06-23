@@ -47,9 +47,11 @@ public sealed class AuditProjectionQueryTests : IAsyncLifetime
         await Outbox.OutboxTestSchema.ApplyAsync(_harness.ConnectionString);
         await AuditProjectionTestSchema.ApplyAsync(_harness.ConnectionString);
 
-        // Seed organizations with materialized paths matching ValidateOrgAccessAsync
-        // / GetDescendantsAsync semantic. Paths are root-anchored "/X/Y/Z/" with
-        // trailing slash so LIKE 'parentPath%' includes the parent + descendants.
+        // Seed organizations with materialized paths matching the (historical) org-access
+        // subtree semantic. Paths are root-anchored "/X/Y/Z/" with trailing slash so
+        // LIKE 'parentPath%' includes the parent + descendants. (S95 / ADR-035 slice 4:
+        // the materialized-path subtree walk GetDescendantsAsync is retired; this seed is
+        // retained for the audit-projection path fixtures only.)
         await using (var conn = new NpgsqlConnection(_harness.ConnectionString))
         {
             await conn.OpenAsync();

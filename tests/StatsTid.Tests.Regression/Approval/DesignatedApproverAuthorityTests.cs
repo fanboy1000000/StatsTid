@@ -442,8 +442,8 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
     {
         var periodId = await InsertPeriodAsync(EmpX, "STY05", "SUBMITTED");
 
-        // Mgr (STY02 tree) is NOT EmpX's (STY05 tree) effective approver — the resolver returns
-        // EmpX's own manager, never a cross-tree actor (ValidateSameTreeAsync invariant).
+        // Mgr (STY02) is NOT EmpX's (STY05) effective approver — the resolver returns
+        // EmpX's own manager, never a cross-Organisation actor (ValidateSameOrganisationAsync invariant).
         var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory));
         var isEdge = await authorizer.IsEffectiveDesignatedApproverAsync(
             Mgr, EmpX, asOf: DateOnly.FromDateTime(DateTime.UtcNow));

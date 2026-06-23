@@ -370,114 +370,41 @@ public sealed class ReportingLineRepository
     }
 
     // ──────────────────────────────────────────────────────────────────────
-    //  Helper / tree-resolution methods
+    //  Helper / Organisation-membership methods
     // ──────────────────────────────────────────────────────────────────────
+    //
+    // S95 / ADR-035 slice 4 — the tree-WALK machinery is RETIRED. Post-S92 every
+    // user's reporting "tree root" is provably their own primary_org_id: the former
+    // ResolveTreeRootOrgIdAsync walked up parent_org_id to the first org_type IN
+    // ('MAO','ORGANISATION'), and since BOTH permitted types are terminal the walk
+    // ALWAYS returned the input org at depth 1. So tree_root == primary_org for every
+    // user, ALWAYS. We therefore read primary_org_id DIRECTLY (no CTE) — byte-identical
+    // to the old walk result — and the lock domain (the advisory keyed on primary_org)
+    // is unchanged. ValidateSameTreeAsync → ValidateSameOrganisationAsync below.
 
     /// <summary>
-    /// Walks up <c>organizations.parent_org_id</c> from <paramref name="primaryOrgId"/>
-    /// until finding an organization with <c>org_type IN ('MAO', 'ORGANISATION')</c>.
-    /// Returns the <c>org_id</c> of the tree root. (S92/ADR-035 flatten: the former
-    /// MINISTRY/STYRELSE literals were re-pointed to MAO/ORGANISATION — identity-preserving
-    /// for tree-root resolution. Transitional machinery, retired in S95.)
+    /// Validates that the employee and manager belong to the same Organisation by
+    /// reading both users' <c>primary_org_id</c> directly and comparing them for equality.
+    /// (S95 / ADR-035 slice 4: replaces the retired tree-WALK — post-S92 the "tree root"
+    /// of a user IS their <c>primary_org_id</c>, so a direct equality of the two homes is
+    /// byte-identical to the old <c>ValidateSameTreeAsync</c> result.)
     /// </summary>
-    /// <exception cref="InvalidOperationException">If no MAO/ORGANISATION ancestor is found
-    /// within the maximum traversal depth.</exception>
-    public async Task<string> ResolveTreeRootOrgIdAsync(
-        string primaryOrgId, CancellationToken ct = default)
-    {
-        await using var conn = _connectionFactory.Create();
-        await conn.OpenAsync(ct);
-
-        // Recursive CTE: walk from the given org upward through parent_org_id until
-        // we find a MAO or ORGANISATION. Max depth ~2 post-S92 flatten (MAO -> ORGANISATION).
-        await using var cmd = new NpgsqlCommand(
-            """
-            WITH RECURSIVE ancestors AS (
-                SELECT org_id, org_type, parent_org_id, 1 AS depth
-                FROM organizations
-                WHERE org_id = @primaryOrgId AND is_active = TRUE
-                UNION ALL
-                SELECT o.org_id, o.org_type, o.parent_org_id, a.depth + 1
-                FROM organizations o
-                INNER JOIN ancestors a ON o.org_id = a.parent_org_id
-                WHERE o.is_active = TRUE AND a.depth < 10
-            )
-            SELECT org_id FROM ancestors
-            WHERE org_type IN ('MAO', 'ORGANISATION')
-            ORDER BY depth ASC
-            LIMIT 1
-            """, conn);
-        cmd.Parameters.AddWithValue("primaryOrgId", primaryOrgId);
-
-        var result = await cmd.ExecuteScalarAsync(ct);
-        if (result is null || result is DBNull)
-        {
-            throw new InvalidOperationException(
-                $"No MAO or ORGANISATION ancestor found for org_id='{primaryOrgId}'. " +
-                "Cannot resolve reporting tree root.");
-        }
-        return (string)result;
-    }
-
-    /// <summary>
-    /// In-transaction sibling overload of
-    /// <see cref="ResolveTreeRootOrgIdAsync(string, CancellationToken)"/>. Reuses the
-    /// caller-supplied <paramref name="conn"/> + <paramref name="tx"/> so the walk reads the
-    /// SAME transaction's uncommitted state (S74 R9: the atomic create+assign resolves the
-    /// just-inserted user's org-tree inside the create tx, before COMMIT, so the self-contained
-    /// overload — which opens a fresh connection that cannot see the open tx — would miss it).
-    /// </summary>
-    public async Task<string> ResolveTreeRootOrgIdAsync(
-        NpgsqlConnection conn, NpgsqlTransaction tx, string primaryOrgId, CancellationToken ct = default)
-    {
-        await using var cmd = new NpgsqlCommand(
-            """
-            WITH RECURSIVE ancestors AS (
-                SELECT org_id, org_type, parent_org_id, 1 AS depth
-                FROM organizations
-                WHERE org_id = @primaryOrgId AND is_active = TRUE
-                UNION ALL
-                SELECT o.org_id, o.org_type, o.parent_org_id, a.depth + 1
-                FROM organizations o
-                INNER JOIN ancestors a ON o.org_id = a.parent_org_id
-                WHERE o.is_active = TRUE AND a.depth < 10
-            )
-            SELECT org_id FROM ancestors
-            WHERE org_type IN ('MAO', 'ORGANISATION')
-            ORDER BY depth ASC
-            LIMIT 1
-            """, conn, tx);
-        cmd.Parameters.AddWithValue("primaryOrgId", primaryOrgId);
-
-        var result = await cmd.ExecuteScalarAsync(ct);
-        if (result is null || result is DBNull)
-        {
-            throw new InvalidOperationException(
-                $"No MAO or ORGANISATION ancestor found for org_id='{primaryOrgId}'. " +
-                "Cannot resolve reporting tree root.");
-        }
-        return (string)result;
-    }
-
-    /// <summary>
-    /// Validates that the employee and manager belong to the same reporting tree by
-    /// resolving both users' <c>primary_org_id</c> to their respective tree roots.
-    /// </summary>
-    /// <returns>The common <c>tree_root_org_id</c>.</returns>
-    /// <exception cref="CrossTreeAssignmentException">If the employee and manager belong
-    /// to different reporting trees.</exception>
+    /// <returns>The common <c>primary_org_id</c> (the Organisation), stored in
+    /// <c>reporting_lines.tree_root_org_id</c> — the same value the walk produced.</returns>
+    /// <exception cref="CrossOrganisationAssignmentException">If the employee and manager belong
+    /// to different Organisations.</exception>
     /// <exception cref="InvalidOperationException">If either user is not found.</exception>
-    public async Task<string> ValidateSameTreeAsync(
+    public async Task<string> ValidateSameOrganisationAsync(
         string employeeId, string managerId, CancellationToken ct = default)
     {
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
-        return await ValidateSameTreeAsync(conn, tx: null, employeeId, managerId, ct);
+        return await ValidateSameOrganisationAsync(conn, tx: null, employeeId, managerId, ct);
     }
 
     /// <summary>
     /// In-transaction sibling overload of
-    /// <see cref="ValidateSameTreeAsync(string, string, CancellationToken)"/>. Reuses the
+    /// <see cref="ValidateSameOrganisationAsync(string, string, CancellationToken)"/>. Reuses the
     /// caller-supplied <paramref name="conn"/> (+ optional <paramref name="tx"/>) so the
     /// reads see the same transaction's uncommitted state — REQUIRED by S74 R9's atomic
     /// create+assign, where the new user row is inserted earlier in the SAME tx and a
@@ -485,43 +412,50 @@ public sealed class ReportingLineRepository
     /// plain connection-reusing read (the self-contained overload above delegates to it).
     ///
     /// <para>
-    /// <b>S74-7403 B1 — BOTH user rows are pinned <c>FOR UPDATE</c> (cross-tree-edge race).</b>
-    /// The prior pass pinned only the EMPLOYEE row (via the caller's
-    /// <c>ResolveEmployeeTreeRootInTxAsync</c>), leaving the MANAGER row unpinned: a concurrent
-    /// cross-styrelse transfer (a PUT moving the manager's <c>primary_org_id</c>) could move the
-    /// manager AFTER this same-tree check but BEFORE the edge insert, producing a cross-tree edge
-    /// (ADR-027 D2 violation). This method now locks BOTH the employee and the manager
-    /// <c>users</c> rows <c>FOR UPDATE</c> in one statement, ORDERED BY <c>user_id</c> — so the two
-    /// trees are pinned for the whole tx (neither party can be transferred mid-assign) AND any two
+    /// <b>S95 / ADR-035 slice 4 — the tree-WALK is gone; this compares <c>primary_org_id</c>
+    /// directly.</b> Post-S92 a user's reporting "tree root" IS their <c>primary_org_id</c>
+    /// (the former walk always returned the input org at depth 1), so same-Organisation is a
+    /// direct equality of the two homes — byte-identical to the old same-tree result and the
+    /// same Organisation value stored in <c>reporting_lines.tree_root_org_id</c>.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>S74-7403 B1 — BOTH user rows are pinned <c>FOR UPDATE</c> (cross-Organisation-edge race).</b>
+    /// The prior pass pinned only the EMPLOYEE row, leaving the MANAGER row unpinned: a concurrent
+    /// cross-Organisation transfer (a PUT moving the manager's <c>primary_org_id</c>) could move the
+    /// manager AFTER this check but BEFORE the edge insert, producing a cross-Organisation edge
+    /// (ADR-027 D2 violation). This method KEEPS locking BOTH the employee and the manager
+    /// <c>users</c> rows <c>FOR UPDATE</c> in one statement, ORDERED BY <c>user_id</c> — so both
+    /// homes are pinned for the whole tx (neither party can be transferred mid-assign) AND any two
     /// concurrent assigns over an overlapping pair acquire the row locks in the SAME id-sorted
     /// order, so they cannot deadlock against each other.
     /// </para>
     ///
     /// <para>
     /// <b>Total lock order (consistent on EVERY path — see <c>ReportingLineEndpoints</c>; matches
-    /// ADR-027:149 advisory→rows):</b> (1) the per-tree advisory lock — taken by the caller BEFORE this
-    /// method, via <see cref="AcquireTreeLockForEmployeeAsync"/> (S78 R9, the drift-guarded acquire) on
-    /// the employee-current tree root; (2) the two user rows HERE, <c>FOR UPDATE</c> in <c>user_id</c>
-    /// order (so any two concurrent assigns over an overlapping pair lock the shared rows in the same
-    /// order — deadlock-safe); (3) <see cref="GuardNoCycleAsync"/>; (4) <see cref="AcquireLockAsync"/>'s
-    /// slot <c>FOR UPDATE</c> on a <c>reporting_lines</c> row (a different table, locked last). The
-    /// advisory is ALWAYS taken before any user row, so a transaction parked on the advisory holds NO
-    /// user row and cannot deadlock the advisory holder; the id-ordered two-row pin closes the
-    /// cross-tree-edge race against a concurrent transfer. (S74-7403's earlier comment listed this as
-    /// rows→advisory; that was wrong — the real + canonical order is advisory→rows, and S78 R9's
-    /// drift-guarded acquire keeps the held advisory key non-stale.)
+    /// ADR-027:149 advisory→rows):</b> (1) the per-Organisation advisory lock — taken by the caller
+    /// BEFORE this method, via <see cref="AcquireTreeLockForEmployeeAsync"/> (S78 R9, the
+    /// drift-guarded acquire) on the employee's current Organisation; (2) the two user rows HERE,
+    /// <c>FOR UPDATE</c> in <c>user_id</c> order (so any two concurrent assigns over an overlapping
+    /// pair lock the shared rows in the same order — deadlock-safe); (3)
+    /// <see cref="GuardNoCycleAsync"/>; (4) <see cref="AcquireLockAsync"/>'s slot <c>FOR UPDATE</c>
+    /// on a <c>reporting_lines</c> row (a different table, locked last). The advisory is ALWAYS taken
+    /// before any user row, so a transaction parked on the advisory holds NO user row and cannot
+    /// deadlock the advisory holder; the id-ordered two-row pin closes the cross-Organisation-edge
+    /// race against a concurrent transfer.
     /// </para>
     /// </summary>
-    public async Task<string> ValidateSameTreeAsync(
+    public async Task<string> ValidateSameOrganisationAsync(
         NpgsqlConnection conn, NpgsqlTransaction? tx,
         string employeeId, string managerId, CancellationToken ct = default)
     {
         // S74-7403 B1: pin BOTH the employee AND the manager rows FOR UPDATE, ORDERED BY user_id.
         // The id-sorted lock guarantees deadlock-safety (two concurrent assigns over an overlapping
-        // pair lock the shared rows in the same order); the FOR UPDATE pins both trees so neither
-        // party can be transferred between this same-tree validation and the edge insert (the
-        // cross-tree-edge race, ADR-027 D2). When employee == manager (the self-assign degenerate)
-        // ANY(@ids) collapses to a single row — harmless; the cycle guard rejects the self-edge.
+        // pair lock the shared rows in the same order); the FOR UPDATE pins both homes so neither
+        // party can be transferred between this same-Organisation validation and the edge insert (the
+        // cross-Organisation-edge race, ADR-027 D2). When employee == manager (the self-assign
+        // degenerate) ANY(@ids) collapses to a single row — harmless; the cycle guard rejects the
+        // self-edge.
         var ids = new[] { employeeId, managerId };
         await using var cmd = new NpgsqlCommand(
             """
@@ -550,21 +484,16 @@ public sealed class ReportingLineRepository
         if (managerOrgId is null)
             throw new InvalidOperationException($"Manager user_id='{managerId}' not found or inactive.");
 
-        var employeeTreeRoot = tx is null
-            ? await ResolveTreeRootOrgIdAsync(employeeOrgId, ct)
-            : await ResolveTreeRootOrgIdAsync(conn, tx, employeeOrgId, ct);
-        var managerTreeRoot = tx is null
-            ? await ResolveTreeRootOrgIdAsync(managerOrgId, ct)
-            : await ResolveTreeRootOrgIdAsync(conn, tx, managerOrgId, ct);
-
-        if (employeeTreeRoot != managerTreeRoot)
+        // S95: the user's Organisation IS their primary_org_id (no walk). Same-Organisation is a
+        // direct equality — byte-identical to the retired same-tree resolution.
+        if (!string.Equals(employeeOrgId, managerOrgId, StringComparison.Ordinal))
         {
-            throw new CrossTreeAssignmentException(
-                $"Manager '{managerId}' (tree root '{managerTreeRoot}') and employee '{employeeId}' " +
-                $"(tree root '{employeeTreeRoot}') belong to different reporting trees.");
+            throw new CrossOrganisationAssignmentException(
+                $"Manager '{managerId}' (Organisation '{managerOrgId}') and employee '{employeeId}' " +
+                $"(Organisation '{employeeOrgId}') belong to different Organisations.");
         }
 
-        return employeeTreeRoot;
+        return employeeOrgId;
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -611,15 +540,23 @@ public sealed class ReportingLineRepository
     }
 
     /// <summary>
-    /// S78 R9 — derives the CURRENT tree root for <paramref name="employeeId"/> from the live
-    /// (un-pinned) <c>users.primary_org_id</c>, reusing the caller's in-flight <c>conn</c>+<c>tx</c> so
-    /// it reads the same transaction's committed/uncommitted state. This is the same unlocked derivation
-    /// the endpoints used pre-S78 (the <c>ResolveEmployeeTreeRootInTxAsync</c> idiom): NO <c>FOR UPDATE</c>
-    /// — the advisory is the first lock; user rows are pinned only later (in <see cref="ValidateSameTreeAsync"/>).
+    /// S78 R9 — derives the CURRENT advisory key (the Organisation) for <paramref name="employeeId"/>
+    /// from the live (un-pinned) <c>users.primary_org_id</c>, reusing the caller's in-flight
+    /// <c>conn</c>+<c>tx</c> so it reads the same transaction's committed/uncommitted state. NO
+    /// <c>FOR UPDATE</c> — the advisory is the first lock; user rows are pinned only later (in
+    /// <see cref="ValidateSameOrganisationAsync"/>).
+    ///
+    /// <para>
+    /// S95 / ADR-035 slice 4 — the tree-WALK is RETIRED: post-S92 a user's reporting "tree root" IS
+    /// their <c>primary_org_id</c> (the former walk always returned the input org at depth 1), so this
+    /// reads <c>primary_org_id</c> DIRECTLY — byte-identical to the old <c>ResolveTreeRootOrgIdAsync</c>
+    /// result. The method name and the <c>reporting-tree-</c> lock prefix are KEPT (internal; renaming
+    /// them risks a divergent advisory — a cosmetic follow-up).
+    /// </para>
     /// </summary>
-    /// <exception cref="InvalidOperationException">If the employee is missing/inactive, or has no
-    /// MAO/ORGANISATION ancestor — the caller surfaces a clean 400/404.</exception>
-    private async Task<string> DeriveEmployeeTreeRootInTxAsync(
+    /// <exception cref="InvalidOperationException">If the employee is missing/inactive — the caller
+    /// surfaces a clean 400/404.</exception>
+    private static async Task<string> DeriveEmployeeTreeRootInTxAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx, string employeeId, CancellationToken ct)
     {
         string? primaryOrgId;
@@ -632,7 +569,8 @@ public sealed class ReportingLineRepository
         if (primaryOrgId is null)
             throw new InvalidOperationException($"Employee user_id='{employeeId}' not found or inactive.");
 
-        return await ResolveTreeRootOrgIdAsync(conn, tx, primaryOrgId, ct);
+        // S95: the user's Organisation (the advisory key) IS their primary_org_id — no walk.
+        return primaryOrgId;
     }
 
     /// <summary>
@@ -720,8 +658,10 @@ public sealed class ReportingLineRepository
         CancellationToken ct = default)
     {
         // (1) derive BOTH roots UNLOCKED: OLD from the employee's live org, NEW from the target org.
+        //     S95 — the user's Organisation (the advisory key) IS their primary_org_id; the NEW key is
+        //     the request-fixed target org directly (no walk), so it cannot drift within the request.
         var preOldRoot = await DeriveEmployeeTreeRootInTxAsync(conn, tx, employeeId, ct);
-        var newRoot = await ResolveTreeRootOrgIdAsync(conn, tx, newPrimaryOrgId, ct);
+        var newRoot = newPrimaryOrgId;
 
         // (2) acquire the two advisories in id-sorted order (deadlock-safe across concurrent transfers).
         //     Distinct + sorted: when OLD == NEW only one key is taken.
@@ -1260,16 +1200,17 @@ public sealed class ReportingLineRepository
 }
 
 /// <summary>
-/// Thrown by <see cref="ReportingLineRepository.ValidateSameTreeAsync"/> when the manager
-/// and employee belong to different reporting trees (different MAO/ORGANISATION roots).
-/// The endpoint maps this to <c>422 Unprocessable Entity</c>.
+/// Thrown by <see cref="ReportingLineRepository.ValidateSameOrganisationAsync(string, string, CancellationToken)"/>
+/// when the manager and employee belong to different Organisations (different
+/// <c>primary_org_id</c> homes). The endpoint maps this to a 4xx (the assign callers return 400).
+/// (S95 / ADR-035 slice 4: renamed from <c>CrossTreeAssignmentException</c> with the tree-WALK retirement.)
 /// </summary>
-public sealed class CrossTreeAssignmentException : Exception
+public sealed class CrossOrganisationAssignmentException : Exception
 {
-    public CrossTreeAssignmentException(string message)
+    public CrossOrganisationAssignmentException(string message)
         : base(message) { }
 
-    public CrossTreeAssignmentException(string message, Exception innerException)
+    public CrossOrganisationAssignmentException(string message, Exception innerException)
         : base(message, innerException) { }
 }
 

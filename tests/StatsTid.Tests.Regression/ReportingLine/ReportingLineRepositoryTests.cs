@@ -8,7 +8,8 @@ namespace StatsTid.Tests.Regression.ReportingLine;
 /// Docker-gated integration tests for <see cref="ReportingLineRepository"/>.
 /// Connects to the running PostgreSQL container (init.sql already applied) and
 /// validates CRUD operations, seed data, partial-unique-index enforcement,
-/// optimistic concurrency, tree-root resolution, and cross-tree rejection.
+/// optimistic concurrency, and cross-Organisation rejection (S95: the tree-WALK is retired —
+/// same-Organisation is a direct primary_org equality, not a recursive tree-root resolution).
 ///
 /// Tests that WRITE use dedicated test users (test_emp_rl / test_mgr_rl_a/b /
 /// test_emp_rl_cross) to avoid polluting shared seed data. Cleanup in DisposeAsync.
@@ -43,10 +44,11 @@ public sealed class ReportingLineRepositoryTests : IAsyncLifetime
         // Clean up any leftover test data from a previous interrupted run.
         await CleanupTestDataAsync(conn);
 
-        // Insert test users in orgs that let us exercise same-tree and cross-tree logic.
+        // Insert test users in orgs that let us exercise same-Organisation and cross-Organisation logic.
         // S92 flatten (ADR-035): the former AFDELING orgs (AFD01/AFD02) no longer exist — their
         // members re-point UP to the parent ORGANISATION (STY02). STY02/STY05 are now ORGANISATION
-        // rows; same-tree = same ORGANISATION (STY02), cross-tree = STY02 vs STY05.
+        // rows. S95 (ADR-035 slice 4): the tree-WALK is retired — same-Organisation = same primary_org
+        // (STY02), cross-Organisation = STY02 vs STY05.
         await using var cmd = new NpgsqlCommand(
             """
             INSERT INTO users (user_id, username, password_hash, display_name, email, primary_org_id, agreement_code, ok_version)
@@ -313,17 +315,18 @@ public sealed class ReportingLineRepositoryTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════
-    //  9. Cross-tree rejection — ValidateSameTreeAsync throws
+    //  9. Cross-Organisation rejection — ValidateSameOrganisationAsync throws
+    //     S95 / ADR-035 slice 4: the tree-WALK is retired — a user's Organisation
+    //     IS their primary_org_id, so same-Organisation is a direct primary_org equality.
     // ════════════════════════════════════════════════════════════════
 
     [Fact]
-    public async Task ValidateSameTree_CrossTree_ThrowsCrossTreeAssignmentException()
+    public async Task ValidateSameOrganisation_CrossOrganisation_ThrowsCrossOrganisationAssignmentException()
     {
-        // TestEmp is in STY02 → tree root STY02
-        // TestEmpCross is in STY05 → tree root STY05
-        // Assigning TestEmp under TestEmpCross (different trees) should throw.
-        await Assert.ThrowsAsync<CrossTreeAssignmentException>(
-            () => _repo.ValidateSameTreeAsync(TestEmp, TestEmpCross));
+        // TestEmp's primary_org is STY02; TestEmpCross's is STY05 (a different Organisation).
+        // Assigning TestEmp under TestEmpCross (different Organisations) should throw.
+        await Assert.ThrowsAsync<CrossOrganisationAssignmentException>(
+            () => _repo.ValidateSameOrganisationAsync(TestEmp, TestEmpCross));
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -366,30 +369,12 @@ public sealed class ReportingLineRepositoryTests : IAsyncLifetime
                 MakeLine(TestEmp, TestMgrA)));
     }
 
-    // ════════════════════════════════════════════════════════════════
-    // 12. ResolveTreeRootOrgIdAsync — STY02 (an ORGANISATION) → STY02
-    //     S92 flatten (ADR-035): the former AFD01→STY02 walk collapses — a user
-    //     now sits directly on the ORGANISATION, which IS its own tree root.
-    // ════════════════════════════════════════════════════════════════
-
-    [Fact]
-    public async Task ResolveTreeRoot_STY02_ReturnsSTY02()
-    {
-        var root = await _repo.ResolveTreeRootOrgIdAsync("STY02");
-        Assert.Equal("STY02", root);
-    }
-
-    // ════════════════════════════════════════════════════════════════
-    // 13. ResolveTreeRootOrgIdAsync — MIN01 (a MAO) → MIN01
-    //     The MINISTRY→MAO rename is identity-preserving: a MAO is its own root.
-    // ════════════════════════════════════════════════════════════════
-
-    [Fact]
-    public async Task ResolveTreeRoot_MIN01_ReturnsMIN01()
-    {
-        var root = await _repo.ResolveTreeRootOrgIdAsync("MIN01");
-        Assert.Equal("MIN01", root);
-    }
+    // S95 (TASK-9506): tests 12-13 (ResolveTreeRoot_STY02_ReturnsSTY02 /
+    // ResolveTreeRoot_MIN01_ReturnsMIN01) were DELETED — the recursive tree-WALK
+    // (ResolveTreeRootOrgIdAsync) is RETIRED (ADR-035 slice 4). Post-S92 a user's "tree root"
+    // IS their primary_org_id (the walk always returned the input org at depth 1), so there is
+    // no walk to assert. The same-Organisation equality is covered by test 9 above
+    // (ValidateSameOrganisation_CrossOrganisation_*).
 
     // ════════════════════════════════════════════════════════════════
     // 14. Seed data — 14 rows total (TASK-4815)

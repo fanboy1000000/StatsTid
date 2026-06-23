@@ -32,20 +32,10 @@ public sealed class OrganizationRepository
         return await ReadOrgsAsync(cmd, ct);
     }
 
-    public async Task<IReadOnlyList<Organization>> GetDescendantsAsync(string orgId, CancellationToken ct = default)
-    {
-        await using var conn = _connectionFactory.Create();
-        await conn.OpenAsync(ct);
-        await using var cmd = new NpgsqlCommand(
-            @"SELECT o.* FROM organizations o
-              WHERE o.materialized_path LIKE (
-                  SELECT materialized_path FROM organizations WHERE org_id = @orgId
-              ) || '%'
-              AND o.is_active = TRUE
-              ORDER BY o.materialized_path", conn);
-        cmd.Parameters.AddWithValue("orgId", orgId);
-        return await ReadOrgsAsync(cmd, ct);
-    }
+    // S95 / ADR-035 slice 4 — GetDescendantsAsync (the materialized-path subtree walk) was RETIRED
+    // here: it lost its only production caller in S93 (OrgScopeValidator.GetAccessibleOrgsAsync now
+    // returns the exact assigned org set, no subtree expansion) and is removed with the rest of the
+    // tree-WALK machinery in S95.
 
     private static async Task<IReadOnlyList<Organization>> ReadOrgsAsync(NpgsqlCommand cmd, CancellationToken ct)
     {

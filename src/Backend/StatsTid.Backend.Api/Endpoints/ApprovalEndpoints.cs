@@ -278,13 +278,13 @@ public static class ApprovalEndpoints
             var (preDesignatedManagerId, preResolvedMethod, _) =
                 await reportingLineRepo.ResolveDesignatedApproverAsync(period.EmployeeId, ct);
 
-            // The treeRoot is request-stable (resolved from period.OrgId) and is still needed for the
-            // FallbackTraversalWarning.TreeRootOrgId (depth>3) payload below. S94 / TASK-9402: the
-            // REQUIRED-mode enforcement read + the pre-tx fallback-confirm fast path were RETIRED here —
-            // ORG_SCOPE_FALLBACK remains a valid approval_method classification (DeriveApprovalMethod
-            // below), but it no longer gates the approval. (ResolveTreeRootOrgIdAsync itself stays —
-            // S95 owns its deletion.)
-            var treeRoot = await reportingLineRepo.ResolveTreeRootOrgIdAsync(period.OrgId, ct);
+            // The treeRoot is request-stable and is still needed for the
+            // FallbackTraversalWarning.TreeRootOrgId (depth>3) payload below. S95 / ADR-035 slice 4:
+            // the tree-WALK (ResolveTreeRootOrgIdAsync) is RETIRED — post-S92 the period's reporting
+            // "tree root" IS period.OrgId directly (the walk always returned the input org), so the
+            // warning's TreeRootOrgId field (name kept — no event-shape change) is sourced from
+            // period.OrgId. (S94 / TASK-9402 already retired the REQUIRED-mode gate here.)
+            var treeRoot = period.OrgId;
 
             // Atomic state-change + audit + outbox enqueue (ADR-018 D3).
             await using var conn = connectionFactory.Create();
@@ -457,8 +457,10 @@ public static class ApprovalEndpoints
                 await reportingLineRepo.ResolveDesignatedApproverAsync(period.EmployeeId, ct);
 
             // treeRoot is request-stable and still needed for the FallbackTraversalWarning (depth>3)
-            // below. S94 / TASK-9402: the REQUIRED-mode 428 enforcement gate was RETIRED (same as approve).
-            var treeRoot = await reportingLineRepo.ResolveTreeRootOrgIdAsync(period.OrgId, ct);
+            // below. S95 / ADR-035 slice 4: the tree-WALK is RETIRED — the period's "tree root" IS
+            // period.OrgId directly (field name kept; no event-shape change). (S94 / TASK-9402 already
+            // retired the REQUIRED-mode 428 gate here.)
+            var treeRoot = period.OrgId;
 
             // Atomic state-change + audit + outbox enqueue (ADR-018 D3).
             await using var conn = connectionFactory.Create();

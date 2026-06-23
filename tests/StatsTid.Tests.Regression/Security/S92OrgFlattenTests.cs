@@ -30,9 +30,10 @@ namespace StatsTid.Tests.Regression.Security;
 ///
 /// <para>These tests pin each direction:</para>
 /// <list type="bullet">
-///   <item>(a) a user under an ORGANISATION resolves THAT Organisation as its reporting tree root
-///         (<see cref="ResolveTreeRootOrgIdAsync"/>) — the former AFD01→STY02 walk collapses to
-///         STY02→STY02.</item>
+///   <item>(a) a user under an ORGANISATION HAS that Organisation as its reporting "tree root" —
+///         read DIRECTLY from <c>primary_org_id</c> (S95 / ADR-035 slice 4: the recursive tree-WALK
+///         <c>ResolveTreeRootOrgIdAsync</c> is RETIRED; the former AFD01→STY02 walk collapses to a
+///         direct STY02 home).</item>
 ///   <item>(b) an <c>ORG_ONLY</c> scope that pre-flatten keyed an afdeling, now re-pointed to the
 ///         parent ORGANISATION, COVERS the Organisation (the stated coarsening delta).</item>
 ///   <item>(c) an admin <c>ORG_ONLY</c> scope at the ORGANISATION still REACHES a moved-up report
@@ -78,24 +79,25 @@ public sealed class S92OrgFlattenTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
-    //  (a) Tree-root resolution: a user on an ORGANISATION resolves THAT Organisation.
-    //      RED-on-old: pre-flatten a user sat on AFD01 and the walk climbed AFD01→STY02;
-    //      post-flatten the user sits ON STY02 (an ORGANISATION = its own tree root).
+    //  (a) Tree-root identity: a user on an ORGANISATION HAS that Organisation as its home.
+    //      S95 / ADR-035 slice 4 — the recursive tree-WALK (ResolveTreeRootOrgIdAsync) is RETIRED.
+    //      Post-S92 a user's reporting "tree root" simply IS their primary_org_id (the former walk
+    //      always returned the input org at depth 1, since both MAO and ORGANISATION are terminal),
+    //      so the equivalence we pin is now a DIRECT primary_org read — no walk.
+    //      RED-on-old: pre-flatten a user sat on AFD01 and the walk climbed AFD01→STY02; post-flatten
+    //      the user sits directly ON STY02 (an ORGANISATION), and primary_org IS the root.
     // ════════════════════════════════════════════════════════════════════════════════
 
     [Fact]
-    public async Task ResolveTreeRoot_UserUnderOrganisation_ResolvesThatOrganisation()
+    public async Task UserUnderOrganisation_PrimaryOrgIsThatOrganisation()
     {
-        var repo = new ReportingLineRepository(_dbFactory);
+        // Seed a user directly ON the Organisation STY02.
+        var emp = await SeedEmployeeAsync("s92_treeroot", OrgSty02);
 
-        // The Organisation is its own tree root (the depth-1 nearest MAO/ORGANISATION ancestor
-        // of an ORGANISATION is itself).
-        var root = await repo.ResolveTreeRootOrgIdAsync(OrgSty02);
-        Assert.Equal(OrgSty02, root);
-
-        // And the MAO above it resolves to itself (the MINISTRY→MAO rename is identity-preserving).
-        var maoRoot = await repo.ResolveTreeRootOrgIdAsync(MaoMin01);
-        Assert.Equal(MaoMin01, maoRoot);
+        // The user's home (its "tree root" under the flat model) IS its primary_org_id — read it
+        // directly, no recursive ancestor walk (the walk is gone).
+        var home = await SelectPrimaryOrgAsync(emp);
+        Assert.Equal(OrgSty02, home);
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
@@ -253,6 +255,17 @@ public sealed class S92OrgFlattenTests : IAsyncLifetime
             new OrganizationRepository(factory),
             new UserRepository(factory),
             NullLogger<OrgScopeValidator>.Instance);
+    }
+
+    private async Task<string?> SelectPrimaryOrgAsync(string userId)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "SELECT primary_org_id FROM users WHERE user_id = @id", conn);
+        cmd.Parameters.AddWithValue("id", userId);
+        var result = await cmd.ExecuteScalarAsync();
+        return result as string;
     }
 
     private async Task<string> SeedEmployeeAsync(string prefix, string orgId)

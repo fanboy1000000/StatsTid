@@ -27,13 +27,14 @@ namespace StatsTid.Infrastructure;
 /// </para>
 ///
 /// <para>
-/// <b>Tree bound is structural, AND explicitly re-checked (S74-7402 B1 fix).</b> Most
-/// resolving edges are intra-tree by the assign-time
-/// <see cref="ReportingLineRepository.ValidateSameTreeAsync"/> invariant — but a
-/// <c>manager_vikar</c> stand-in is approver-owned and was historically created without
-/// a same-tree check, so <c>actor == resolvedManager</c> alone did NOT guarantee the same
-/// <c>tree_root_org_id</c>. This predicate therefore re-derives the tree root for BOTH the
-/// actor and the employee (via <see cref="ReportingLineRepository.ValidateSameTreeAsync"/>)
+/// <b>Organisation bound is structural, AND explicitly re-checked (S74-7402 B1 fix).</b> Most
+/// resolving edges are intra-Organisation by the assign-time
+/// <see cref="ReportingLineRepository.ValidateSameOrganisationAsync(string, string, CancellationToken)"/>
+/// invariant — but a <c>manager_vikar</c> stand-in is approver-owned and was historically created
+/// without a same-Organisation check, so <c>actor == resolvedManager</c> alone did NOT guarantee the
+/// same Organisation. This predicate therefore re-checks the Organisation for BOTH the actor and the
+/// employee (via
+/// <see cref="ReportingLineRepository.ValidateSameOrganisationAsync(string, string, CancellationToken)"/>)
 /// and denies on any mismatch. The cross-styrelse bound is thus TRULY structural in the
 /// authority predicate (ADR-027 D2), independent of how any edge/vikar was created — even a
 /// directly-planted cross-tree vikar row is denied. (S92/ADR-035 flatten: a tree root is
@@ -100,25 +101,25 @@ public sealed class DesignatedApproverAuthorizer
             return false;
 
         // (4) SECURITY (ADR-027 D2 — S74-7402 B1 fix): re-verify STRUCTURALLY that the actor
-        //     and the employee share a tree_root_org_id. We do NOT trust edge-creation
-        //     correctness alone — an approver-owned vikar could historically be cross-tree, so
-        //     even a directly-planted cross-styrelse vikar row that wins resolution must be
-        //     denied here. ValidateSameTreeAsync resolves both users' primary_org_id to their
-        //     tree roots and throws CrossTreeAssignmentException on mismatch; a throw ⇒ deny.
-        //     (S92 flatten: both users now resolve to their ORGANISATION (or MAO) root; an
-        //     intra-Organisation edge shares a tree root ⇒ still passes.)
+        //     and the employee share an Organisation (the same primary_org_id). We do NOT trust
+        //     edge-creation correctness alone — an approver-owned vikar could historically be
+        //     cross-Organisation, so even a directly-planted cross-Organisation vikar row that wins
+        //     resolution must be denied here. S95 / ADR-035 slice 4: ValidateSameOrganisationAsync
+        //     reads both users' primary_org_id directly (the tree-WALK is retired — post-S92 the
+        //     Organisation IS the primary_org_id) and throws CrossOrganisationAssignmentException on
+        //     mismatch; a throw ⇒ deny. An intra-Organisation edge shares a home ⇒ still passes.
         try
         {
-            await _reportingLineRepo.ValidateSameTreeAsync(employeeId, actorId, ct);
+            await _reportingLineRepo.ValidateSameOrganisationAsync(employeeId, actorId, ct);
         }
-        catch (CrossTreeAssignmentException)
+        catch (CrossOrganisationAssignmentException)
         {
             return false;
         }
         catch (InvalidOperationException)
         {
-            // Either user not found / inactive, or no MAO/ORGANISATION ancestor — cannot
-            // affirm same-tree, so deny (fail-closed).
+            // Either user not found / inactive — cannot affirm same-Organisation, so deny
+            // (fail-closed).
             return false;
         }
 
