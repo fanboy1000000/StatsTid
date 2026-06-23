@@ -2722,9 +2722,9 @@ public static class ReportingLineEndpoints
     /// a tx still in flight is BLOCKED on the same tree advisory until this one commits.
     ///
     /// <para>
-    /// The eligibility/coverage SEMANTICS are byte-identical to the prior pre-lock TASK-5105 pass
+    /// The eligibility/coverage SEMANTICS preserve the prior pre-lock TASK-5105 pass
     /// (qualifying-role set = GLOBAL_ADMIN/LOCAL_ADMIN/LOCAL_HR/LOCAL_LEADER, GLOBAL short-circuit,
-    /// ORG_AND_DESCENDANTS = StartsWith / ORG_ONLY = equals; the role read mirrors
+    /// ORG_ONLY = exact-equals — S93/ADR-035 dropped the ORG_AND_DESCENDANTS prefix branch; the role read mirrors
     /// <see cref="RoleAssignmentRepository.GetByUserIdAsync"/>'s active+unexpired predicate). The
     /// ONLY difference is the connection: the report list is read via the in-tx
     /// <see cref="ReportingLineRepository.GetDirectReportsAsync(NpgsqlConnection, NpgsqlTransaction, string, CancellationToken)"/>
@@ -2817,12 +2817,8 @@ public static class ReportingLineEndpoints
             foreach (var (scopePath, scopeType) in scopeOrgPaths)
             {
                 if (scopePath is null) continue;
-                if (scopeType == "ORG_AND_DESCENDANTS" &&
-                    empOrgPath.StartsWith(scopePath, StringComparison.Ordinal))
-                {
-                    covered = true;
-                    break;
-                }
+                // S93 / ADR-035 slice 2 (flat role-scope): ORG_ONLY exact-match only; the
+                // ORG_AND_DESCENDANTS prefix branch is dropped (coverage = exact membership).
                 if (scopeType == "ORG_ONLY" &&
                     string.Equals(empOrgPath, scopePath, StringComparison.Ordinal))
                 {

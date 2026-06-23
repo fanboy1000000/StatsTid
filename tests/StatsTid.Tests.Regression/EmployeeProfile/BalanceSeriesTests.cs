@@ -518,7 +518,7 @@ public sealed class BalanceSeriesTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// A leader scoped to STY01 (= emp001's org, /MIN01/STY01/) with ORG_AND_DESCENDANTS ⇒ 200,
+    /// A leader scoped to STY01 (= emp001's org, /MIN01/STY01/) with ORG_ONLY (S93 flat role-scope) ⇒ 200,
     /// and gets the same MONTHLY_ACCRUAL-only shape.
     /// </summary>
     [Fact]
@@ -701,7 +701,7 @@ public sealed class BalanceSeriesTests : IAsyncLifetime
             role: StatsTidRoles.LocalLeader,
             agreementCode: "AC",
             orgId: scopeOrgId,
-            scopes: new[] { new RoleScope(StatsTidRoles.LocalLeader, scopeOrgId, "ORG_AND_DESCENDANTS") });
+            scopes: new[] { new RoleScope(StatsTidRoles.LocalLeader, scopeOrgId, "ORG_ONLY") });
     }
 
     private static JwtSettings DevSettings() => new()

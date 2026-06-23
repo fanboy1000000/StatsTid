@@ -42,7 +42,7 @@ namespace StatsTid.Tests.Regression.Settlement;
 public sealed class ReconcileEmitterMutualExclusionTests : IAsyncLifetime
 {
     private const string DevFallbackSigningKey = "StatsTid_Sprint3_DevKey_MustBeAtLeast32BytesLong!";
-    private const string CoveringOrg = "MIN01"; // covers STY01 via ORG_AND_DESCENDANTS
+    private const string CoveringOrg = "STY01";  // S93 flat role-scope: covers STY01 by exact ORG_ONLY match (a MAO no longer covers a child)
     private const int Year = 2024;
 
     private TestFixtures.DockerHarness _harness = null!;
@@ -155,7 +155,7 @@ public sealed class ReconcileEmitterMutualExclusionTests : IAsyncLifetime
         return svc.GenerateToken(
             employeeId: actorId, name: actorId, role: StatsTidRoles.LocalHR,
             agreementCode: "AC", orgId: orgId,
-            scopes: new[] { new RoleScope(StatsTidRoles.LocalHR, orgId, "ORG_AND_DESCENDANTS") });
+            scopes: new[] { new RoleScope(StatsTidRoles.LocalHR, orgId, "ORG_ONLY") });
     }
 
     private async Task<bool> PayoutReconciledAsync(string employeeId)

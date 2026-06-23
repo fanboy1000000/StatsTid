@@ -66,12 +66,13 @@ public sealed class SkemaEntitlementEligibilityGuardTests : IAsyncLifetime
     private const string Emp001 = "emp001";
     private const string Emp001OrgId = "STY01";
 
-    // HR scoped MIN01 ⊇ STY01 (init.sql hr01: LOCAL_HR, MIN01, ORG_AND_DESCENDANTS) → in-scope
-    // for emp001. hr02 is scoped MIN02 (disjoint) → cross-org reject.
+    // S93 flat role-scope: hr01 is scoped ORG_ONLY to STY01 (emp001's own org) → in-scope for
+    // emp001 by exact membership. hr02 is scoped STY05 (cross-org from STY01) → cross-org reject.
+    // (A MAO scope no longer covers a child; coverage is exact Organisation-set membership.)
     private const string Hr01 = "hr01";
-    private const string Hr01ScopeOrg = "MIN01";
+    private const string Hr01ScopeOrg = "STY01";
     private const string Hr02 = "hr02";
-    private const string Hr02ScopeOrg = "MIN02";
+    private const string Hr02ScopeOrg = "STY05";
 
     private TestFixtures.DockerHarness _harness = null!;
     private StatsTidWebApplicationFactory _factory = null!;
@@ -315,9 +316,9 @@ public sealed class SkemaEntitlementEligibilityGuardTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// HR scoped to a disjoint org (hr02 @ MIN02) cannot set eligibility for emp001 (MIN01
-    /// subtree) → 403 (OrgScopeValidator cross-org guard). Passes the HROrAbove policy but
-    /// fails the explicit scope binding.
+    /// HR scoped to a disjoint org (hr02 @ STY05) cannot set eligibility for emp001 (STY01,
+    /// cross-org) → 403 (OrgScopeValidator cross-org guard). Passes the HROrAbove policy but
+    /// fails the explicit scope binding. (S93 flat role-scope: exact ORG_ONLY membership.)
     /// </summary>
     [Fact]
     public async Task EligibilityWrite_CrossOrgHr_IsForbidden()
@@ -437,8 +438,8 @@ public sealed class SkemaEntitlementEligibilityGuardTests : IAsyncLifetime
 
     /// <summary>
     /// GET eligibility is HROrAbove + cross-org bound (mirrors the PUT, FAIL-001). A non-HR
-    /// caller (Employee) is 401/403; HR scoped to a disjoint org (hr02 @ MIN02) reading emp001
-    /// (MIN01 subtree) is 403 (OrgScopeValidator). An in-scope HR succeeds.
+    /// caller (Employee) is 401/403; HR scoped to a disjoint org (hr02 @ STY05) reading emp001
+    /// (STY01, cross-org) is 403 (OrgScopeValidator). An in-scope HR succeeds.
     /// </summary>
     [Fact]
     public async Task GetEligibility_NonHr_And_CrossOrgHr_AreForbidden_InScopeAllowed()
@@ -450,12 +451,12 @@ public sealed class SkemaEntitlementEligibilityGuardTests : IAsyncLifetime
             empRsp.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.Unauthorized,
             $"Expected 401/403 for a non-HR GET, got {(int)empRsp.StatusCode}.");
 
-        // Cross-org HR (hr02 @ MIN02) — passes the policy, fails the scope binding → 403.
+        // Cross-org HR (hr02 @ STY05) — passes the policy, fails the scope binding → 403.
         var crossOrgHr = HrClient(Hr02, Hr02ScopeOrg);
         var crossRsp = await GetEligibilityAsync(crossOrgHr, Emp001, "CHILD_SICK");
         Assert.Equal(HttpStatusCode.Forbidden, crossRsp.StatusCode);
 
-        // In-scope HR (hr01 @ MIN01 ⊇ STY01) — allowed.
+        // In-scope HR (hr01 @ STY01 = emp001's org) — allowed.
         var inScopeHr = HrClient(Hr01, Hr01ScopeOrg);
         var okRsp = await GetEligibilityAsync(inScopeHr, Emp001, "CHILD_SICK");
         Assert.Equal(HttpStatusCode.OK, okRsp.StatusCode);
@@ -641,7 +642,7 @@ public sealed class SkemaEntitlementEligibilityGuardTests : IAsyncLifetime
             role: StatsTidRoles.LocalHR,
             agreementCode: "AC",
             orgId: scopeOrgId,
-            scopes: new[] { new RoleScope(StatsTidRoles.LocalHR, scopeOrgId, "ORG_AND_DESCENDANTS") });
+            scopes: new[] { new RoleScope(StatsTidRoles.LocalHR, scopeOrgId, "ORG_ONLY") });
     }
 
     private static JwtSettings DevSettings() => new()

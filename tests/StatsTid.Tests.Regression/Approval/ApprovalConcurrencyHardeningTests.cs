@@ -231,7 +231,7 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
             """
             INSERT INTO role_assignments (user_id, role_id, org_id, scope_type, assigned_by)
             VALUES
-                (@dm5,  'LOCAL_LEADER', 'STY02', 'ORG_AND_DESCENDANTS', 'TEST'),
+                (@dm5,  'LOCAL_LEADER', 'STY02', 'ORG_ONLY', 'TEST'),
                 (@demp, 'EMPLOYEE',     'STY02', 'ORG_ONLY',            'TEST')
             ON CONFLICT DO NOTHING
             """, conn))
@@ -840,12 +840,12 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
             """
             INSERT INTO role_assignments (user_id, role_id, org_id, scope_type, assigned_by)
             VALUES
-                (@mgr, 'LOCAL_LEADER', 'STY02', 'ORG_AND_DESCENDANTS', 'TEST'),
-                (@vik, 'LOCAL_LEADER', 'STY02', 'ORG_AND_DESCENDANTS', 'TEST'),
-                (@adm, 'LOCAL_ADMIN',  'STY02', 'ORG_AND_DESCENDANTS', 'TEST'),
+                (@mgr, 'LOCAL_LEADER', 'STY02', 'ORG_ONLY', 'TEST'),
+                (@vik, 'LOCAL_LEADER', 'STY02', 'ORG_ONLY', 'TEST'),
+                (@adm, 'LOCAL_ADMIN',  'STY02', 'ORG_ONLY', 'TEST'),
                 -- Cov is a LOCAL_LEADER scoped at STY02 (covers Emp) → a VALID vikar for Mgr:
                 -- its org-scope covers Mgr's only report (Emp on STY02).
-                (@cov, 'LOCAL_LEADER', 'STY02', 'ORG_AND_DESCENDANTS', 'TEST'),
+                (@cov, 'LOCAL_LEADER', 'STY02', 'ORG_ONLY', 'TEST'),
                 (@emp, 'EMPLOYEE',     'STY02', 'ORG_ONLY',            'TEST')
             ON CONFLICT DO NOTHING
             """, conn))
@@ -1082,7 +1082,7 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
     private static string MintAdminToken(string userId, string orgId)
     {
         var tokenService = NewTokenService();
-        var scopes = new[] { new RoleScope(StatsTidRoles.LocalAdmin, orgId, "ORG_AND_DESCENDANTS") };
+        var scopes = new[] { new RoleScope(StatsTidRoles.LocalAdmin, orgId, "ORG_ONLY") };
         return tokenService.GenerateToken(
             employeeId: userId, name: userId, role: StatsTidRoles.LocalAdmin,
             agreementCode: "AC", orgId: orgId, scopes: scopes);
@@ -1091,7 +1091,7 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
     private static string MintLeaderToken(string userId, string orgId)
     {
         var tokenService = NewTokenService();
-        var scopes = new[] { new RoleScope(StatsTidRoles.LocalLeader, orgId, "ORG_AND_DESCENDANTS") };
+        var scopes = new[] { new RoleScope(StatsTidRoles.LocalLeader, orgId, "ORG_ONLY") };
         return tokenService.GenerateToken(
             employeeId: userId, name: userId, role: StatsTidRoles.LocalLeader,
             agreementCode: "HK", orgId: orgId, scopes: scopes);

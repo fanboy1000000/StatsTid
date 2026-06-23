@@ -1636,6 +1636,7 @@ public static class AdminEndpoints
             GrantRoleRequest request,
             UserRepository userRepo,
             OrgScopeValidator scopeValidator,
+            OrganizationRepository orgRepo,
             DbConnectionFactory dbFactory,
             IOutboxEnqueue outbox,
             IAuditProjectionMapper<RoleAssignmentGranted> auditMapper,
@@ -1646,8 +1647,9 @@ public static class AdminEndpoints
             var actor = context.GetActorContext();
 
             // Validate scope type first — the shape gate below keys off ScopeType, not OrgId.
-            if (request.ScopeType is not ("GLOBAL" or "ORG_ONLY" or "ORG_AND_DESCENDANTS"))
-                return Results.BadRequest(new { error = "Invalid scopeType. Must be GLOBAL, ORG_ONLY, or ORG_AND_DESCENDANTS" });
+            // S93 / ADR-035 slice 2 (flat role-scope): ORG_AND_DESCENDANTS is dropped.
+            if (request.ScopeType is not ("GLOBAL" or "ORG_ONLY"))
+                return Results.BadRequest(new { error = "Invalid scopeType. Must be GLOBAL or ORG_ONLY" });
 
             // S85 / TASK-8501 (P7 privilege-escalation fix). Gate "global" on ScopeType, NOT
             // on `OrgId is null`. The pre-S85 guard keyed global-ness off OrgId, so a LocalAdmin
@@ -1671,6 +1673,16 @@ public static class AdminEndpoints
                 var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, request.OrgId, StatsTidRoles.LocalAdmin, ct);
                 if (!allowed)
                     return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+
+                // S93 / ADR-035 slice 2 — OQ1 (Codex BLOCKER). An ORG_ONLY grant's org_id MUST
+                // resolve to an ORGANISATION. A MAO is not an authority unit: a MAO-typed scope
+                // confers org-STRUCTURE admin (it passes the create-under-MAO / MAO-update gates),
+                // not inert roster reach. Reject it at grant.
+                var targetOrg = await orgRepo.GetByIdAsync(request.OrgId, ct);
+                if (targetOrg is null)
+                    return Results.BadRequest(new { error = "Target org not found." });
+                if (!string.Equals(targetOrg.OrgType, "ORGANISATION", StringComparison.Ordinal))
+                    return Results.BadRequest(new { error = "A non-GLOBAL (ORG_ONLY) role assignment requires an Organisation org_id (a MAO is not a valid scope target)." });
             }
 
             // S85 / TASK-8501 (B) role↔scope coupling. AuthEndpoints.MapRoleIdToName maps an

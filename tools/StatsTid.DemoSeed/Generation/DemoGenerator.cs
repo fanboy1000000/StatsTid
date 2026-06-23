@@ -200,13 +200,13 @@ public sealed class DemoGenerator
         //        is left EMPTY (the loader has nothing to grant). ──
         privilegedRoles.Add(new DemoRoleRow
         {
-            UserId = topManager.UserId, RoleId = "LOCAL_HR", OrgId = root, ScopeType = "ORG_AND_DESCENDANTS",
+            UserId = topManager.UserId, RoleId = "LOCAL_HR", OrgId = root, ScopeType = "ORG_ONLY",
         });
         foreach (var m in treeUsers.Where(u => u.IsManager && u.IsActive))
         {
             privilegedRoles.Add(new DemoRoleRow
             {
-                UserId = m.UserId, RoleId = "LOCAL_LEADER", OrgId = m.PrimaryOrgId, ScopeType = "ORG_AND_DESCENDANTS",
+                UserId = m.UserId, RoleId = "LOCAL_LEADER", OrgId = m.PrimaryOrgId, ScopeType = "ORG_ONLY",
             });
         }
 
@@ -445,10 +445,11 @@ public sealed class DemoGenerator
 
     // ── Vikars: one per tree. The ABSENT manager is a MID-LEVEL manager (a manager that itself
     //    reports to someone); the VIKAR is the TREE-ROOT top manager, who holds LOCAL_HR at the
-    //    styrelse root with ORG_AND_DESCENDANTS scope — covering the WHOLE tree, hence ALL of the
-    //    mid-manager's reports (the vikar-coverage census requires the stand-in's scope to cover
-    //    every report's org). A root→report vikar would FAIL coverage because a single mid-org
-    //    LOCAL_LEADER scope cannot cover the root's tree-wide reports. ──
+    //    Organisation (post-S92 flatten the Organisation IS the whole tree) with ORG_ONLY scope —
+    //    covering EVERY user (all sit directly on the Organisation), hence ALL of the mid-manager's
+    //    reports (the vikar-coverage census requires the stand-in's scope to cover every report's
+    //    org). All demo users share the single Organisation org, so the LOCAL_HR ORG_ONLY scope at
+    //    the Organisation covers the whole tree. ──
     private void GenerateVikars(List<DemoUser> users, DemoManifest manifest)
     {
         var effectiveTo = _referenceDate.AddMonths(2).ToString("yyyy-MM-dd");

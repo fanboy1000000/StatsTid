@@ -124,6 +124,21 @@ public sealed class DemoVerifier
             "AND p.effective_to IS NULL AND p.enhed_label IS NOT NULL", ct);
         ok &= Check("demo enhed_label profiles present", demoEnhedLabels > 0, $"found {demoEnhedLabels}");
 
+        // 8. Scope-flatten parity (S93 / ADR-035): ORG_AND_DESCENDANTS is DROPPED. Every demo role
+        //    row must be GLOBAL or ORG_ONLY — ZERO ORG_AND_DESCENDANTS. The backend init.sql CHECK
+        //    (scope_type IN ('GLOBAL','ORG_ONLY')) enforces this at write time; this is the explicit
+        //    data assertion.
+        var demoOrgAndDescendants = await ScalarLongAsync(conn,
+            "SELECT COUNT(*) FROM role_assignments WHERE assigned_by='DEMO_SEED' AND scope_type='ORG_AND_DESCENDANTS'", ct);
+        ok &= Check("zero demo ORG_AND_DESCENDANTS rows", demoOrgAndDescendants == 0, $"found {demoOrgAndDescendants}");
+
+        // 9. Every demo ORG_ONLY role row's org_id is an ORGANISATION (never a MAO root, never NULL).
+        //    Covers the HR/leader/employee scopes — all rooted on the Organisation post-flatten.
+        var demoBadScopeOrg = await ScalarLongAsync(conn,
+            "SELECT COUNT(*) FROM role_assignments ra WHERE ra.assigned_by='DEMO_SEED' AND ra.scope_type='ORG_ONLY' " +
+            "AND NOT EXISTS (SELECT 1 FROM organizations o WHERE o.org_id = ra.org_id AND o.org_type='ORGANISATION')", ct);
+        ok &= Check("demo ORG_ONLY scopes resolve to an ORGANISATION", demoBadScopeOrg == 0, $"found {demoBadScopeOrg} bad");
+
         return ok;
     }
 

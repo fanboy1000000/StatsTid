@@ -5,8 +5,12 @@ namespace StatsTid.Tests.Unit.Security;
 
 /// <summary>
 /// Tests for Sprint 7: OrgScopeValidator-related scope logic, RoleScope.CoversOrg
-/// with Sprint 7 scenarios (deeply nested orgs, multiple scopes, employee self-access),
-/// and ActorContext construction patterns for scope-based access control.
+/// with Sprint 7 scenarios (multiple scopes, employee self-access), and ActorContext
+/// construction patterns for scope-based access control.
+///
+/// <para>S93 / ADR-035 slice 2 (flat role-scope): ORG_AND_DESCENDANTS subtree inheritance
+/// is dropped. Coverage is now exact Organisation-set membership; the former
+/// ORG_AND_DESCENDANTS prefix-coverage cases are removed.</para>
 /// </summary>
 public class Sprint7ScopeTests
 {
@@ -30,53 +34,9 @@ public class Sprint7ScopeTests
     }
 
     // ---------------------------------------------------------------
-    // 2. ORG_AND_DESCENDANTS scope tests
-    // ---------------------------------------------------------------
-
-    [Fact]
-    public void OrgAndDescendants_CoversChildAndGrandchildPaths()
-    {
-        var scope = new RoleScope(StatsTidRoles.LocalAdmin, "MIN01", "ORG_AND_DESCENDANTS");
-        var scopeOrgPath = "/MIN01/";
-
-        // Direct child (the Organisation under the MAO)
-        Assert.True(scope.CoversOrg("/MIN01/STY02/", scopeOrgPath));
-        // A sibling Organisation under the same MAO
-        Assert.True(scope.CoversOrg("/MIN01/STY01/", scopeOrgPath));
-        // A deeper sub-path under an Organisation (prefix coverage is depth-agnostic)
-        Assert.True(scope.CoversOrg("/MIN01/STY02/UNIT01/", scopeOrgPath));
-        // Exact match (self)
-        Assert.True(scope.CoversOrg("/MIN01/", scopeOrgPath));
-    }
-
-    [Fact]
-    public void OrgAndDescendants_DoesNotCoverParentOrg()
-    {
-        var scope = new RoleScope(StatsTidRoles.LocalHR, "STY02", "ORG_AND_DESCENDANTS");
-        var scopeOrgPath = "/MIN01/STY02/";
-
-        // Parent org path /MIN01/ does not start with /MIN01/STY02/
-        Assert.False(scope.CoversOrg("/MIN01/", scopeOrgPath));
-        // Root path does not match
-        Assert.False(scope.CoversOrg("/", scopeOrgPath));
-    }
-
-    [Fact]
-    public void OrgAndDescendants_DoesNotCoverSiblingSubtree()
-    {
-        var scope = new RoleScope(StatsTidRoles.LocalLeader, "STY02", "ORG_AND_DESCENDANTS");
-        var scopeOrgPath = "/MIN01/STY02/";
-
-        // Sibling Organisation under same MAO
-        Assert.False(scope.CoversOrg("/MIN01/STY01/", scopeOrgPath));
-        // Sibling's sub-path
-        Assert.False(scope.CoversOrg("/MIN01/STY01/UNIT01/", scopeOrgPath));
-        // Different MAO entirely
-        Assert.False(scope.CoversOrg("/MIN02/STY02/", scopeOrgPath));
-    }
-
-    // ---------------------------------------------------------------
-    // 3. ORG_ONLY scope tests
+    // 2. ORG_ONLY scope tests — exact Organisation-set membership
+    //    (S93: ORG_AND_DESCENDANTS subtree coverage is gone; the former
+    //    prefix-coverage cases are deleted — coverage is exact-equality only.)
     // ---------------------------------------------------------------
 
     [Fact]
@@ -101,6 +61,49 @@ public class Sprint7ScopeTests
         Assert.False(scope.CoversOrg("/MIN01/", scopeOrgPath));
         // Sibling Organisation
         Assert.False(scope.CoversOrg("/MIN01/STY01/", scopeOrgPath));
+    }
+
+    [Fact]
+    public void OrgOnly_DoesNotCoverParentMaoOrRoot()
+    {
+        // S93: an ORG_ONLY scope keyed on an Organisation never reaches its parent MAO
+        // (no subtree branch survives — a MAO is a strictly different org_id).
+        var scope = new RoleScope(StatsTidRoles.LocalHR, "STY02", "ORG_ONLY");
+        var scopeOrgPath = "/MIN01/STY02/";
+
+        // Parent MAO path /MIN01/ is not an exact match
+        Assert.False(scope.CoversOrg("/MIN01/", scopeOrgPath));
+        // Root path does not match
+        Assert.False(scope.CoversOrg("/", scopeOrgPath));
+    }
+
+    [Fact]
+    public void OrgOnly_DoesNotCoverSiblingOrganisation()
+    {
+        // S93: even within the same MAO, an ORG_ONLY scope never reaches a sibling Organisation.
+        var scope = new RoleScope(StatsTidRoles.LocalLeader, "STY02", "ORG_ONLY");
+        var scopeOrgPath = "/MIN01/STY02/";
+
+        // Sibling Organisation under the same MAO
+        Assert.False(scope.CoversOrg("/MIN01/STY01/", scopeOrgPath));
+        // Different MAO entirely
+        Assert.False(scope.CoversOrg("/MIN02/STY02/", scopeOrgPath));
+    }
+
+    [Fact]
+    public void StaleRemovedScopeType_IsDefaultDenied_NotExactMatched()
+    {
+        // S93 Step-7a hardening (ADR-035 slice 2): a stale pre-S93 JWT carrying the REMOVED
+        // ORG_AND_DESCENDANTS type must NOT fall through to exact-match its root (which would let an
+        // old MAO-rooted token pass the org-structure gates, bypassing the OQ1 grant-time MAO guard
+        // for the token lifetime). CoversOrg DEFAULT-DENIES any non-GLOBAL type that is not ORG_ONLY.
+        var stale = new RoleScope(StatsTidRoles.LocalAdmin, "MIN01", "ORG_AND_DESCENDANTS");
+        // Pre-fix this exact-matched its own root /MIN01/ (the bypass); now denied.
+        Assert.False(stale.CoversOrg("/MIN01/", "/MIN01/"));
+        // And, as before the fix, it never reached descendants.
+        Assert.False(stale.CoversOrg("/MIN01/STY02/", "/MIN01/"));
+        // An unknown/garbage type is likewise denied (defense-in-depth).
+        Assert.False(new RoleScope(StatsTidRoles.LocalAdmin, "STY02", "BOGUS").CoversOrg("/MIN01/STY02/", "/MIN01/STY02/"));
     }
 
     // ---------------------------------------------------------------
@@ -153,7 +156,7 @@ public class Sprint7ScopeTests
         var scopes = new[]
         {
             new RoleScope(StatsTidRoles.LocalLeader, "STY01", "ORG_ONLY"),
-            new RoleScope(StatsTidRoles.LocalHR, "STY02", "ORG_AND_DESCENDANTS"),
+            new RoleScope(StatsTidRoles.LocalHR, "STY02", "ORG_ONLY"),
         };
 
         var actor = new ActorContext(
@@ -167,7 +170,7 @@ public class Sprint7ScopeTests
 
         // First scope (ORG_ONLY for STY01) doesn't cover /MIN01/STY02/
         Assert.False(scopes[0].CoversOrg(targetOrgPath, "/MIN01/STY01/"));
-        // Second scope (ORG_AND_DESCENDANTS for STY02) covers /MIN01/STY02/
+        // Second scope (ORG_ONLY for STY02) covers /MIN01/STY02/ by exact match
         Assert.True(scopes[1].CoversOrg(targetOrgPath, "/MIN01/STY02/"));
 
         // Access granted if ANY scope covers

@@ -135,10 +135,10 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
             """
             INSERT INTO role_assignments (user_id, role_id, org_id, scope_type, assigned_by)
             VALUES
-                (@mgr,   'LOCAL_LEADER', 'STY02', 'ORG_AND_DESCENDANTS', 'TEST'),
-                (@vik,   'LOCAL_LEADER', 'STY02', 'ORG_AND_DESCENDANTS', 'TEST'),
-                (@other, 'LOCAL_LEADER', 'STY01', 'ORG_AND_DESCENDANTS', 'TEST'),
-                (@mgrx,  'LOCAL_LEADER', 'STY05', 'ORG_AND_DESCENDANTS', 'TEST'),
+                (@mgr,   'LOCAL_LEADER', 'STY02', 'ORG_ONLY', 'TEST'),
+                (@vik,   'LOCAL_LEADER', 'STY02', 'ORG_ONLY', 'TEST'),
+                (@other, 'LOCAL_LEADER', 'STY01', 'ORG_ONLY', 'TEST'),
+                (@mgrx,  'LOCAL_LEADER', 'STY05', 'ORG_ONLY', 'TEST'),
                 (@emp,   'EMPLOYEE',     'STY02', 'ORG_ONLY',            'TEST'),
                 (@empim, 'EMPLOYEE',     'STY02', 'ORG_ONLY',            'TEST'),
                 (@empx,  'EMPLOYEE',     'STY05', 'ORG_ONLY',            'TEST')
@@ -967,7 +967,7 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
         var tokenService = NewTokenService();
         // The scope's Role must be the StatsTidRoles value ("LocalLeader") — the
         // ScopeAuthorizationHandler matches RoleScope.Role against the policy's AllowedRoles.
-        var scopes = new[] { new RoleScope(StatsTidRoles.LocalLeader, orgId, "ORG_AND_DESCENDANTS") };
+        var scopes = new[] { new RoleScope(StatsTidRoles.LocalLeader, orgId, "ORG_ONLY") };
         return tokenService.GenerateToken(
             employeeId: userId, name: userId, role: StatsTidRoles.LocalLeader,
             agreementCode: "HK", orgId: orgId, scopes: scopes);

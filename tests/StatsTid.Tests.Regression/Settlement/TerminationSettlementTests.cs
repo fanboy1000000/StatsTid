@@ -973,7 +973,7 @@ public sealed class TerminationSettlementTests : IAsyncLifetime
         var token = svc.GenerateToken(
             employeeId: "hr_s70_term", name: "hr_s70_term", role: StatsTidRoles.LocalHR,
             agreementCode: "AC", orgId: OrgId,
-            scopes: new[] { new RoleScope(StatsTidRoles.LocalHR, OrgId, "ORG_AND_DESCENDANTS") });
+            scopes: new[] { new RoleScope(StatsTidRoles.LocalHR, OrgId, "ORG_ONLY") });
         var client = _factory.CreateClient();
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
         return client;

@@ -267,7 +267,7 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
                 role: StatsTidRoles.LocalLeader,
                 scopeRole: StatsTidRoles.LocalLeader,
                 orgId: "STY01",
-                scopeType: "ORG_AND_DESCENDANTS"));
+                scopeType: "ORG_ONLY"));
 
         var rsp = await client.GetAsync($"/api/admin/employee-profiles/{Emp001}");
         Assert.Equal(HttpStatusCode.Forbidden, rsp.StatusCode);
@@ -277,10 +277,10 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
     public async Task Get_AsHr_SameOrg_Returns200()
     {
         var client = _factory.CreateClient();
-        // HR scoped to MIN01 + descendants → covers emp001 in STY01 (under MIN01).
+        // HR scoped ORG_ONLY to STY01 (emp001's org) → covers emp001 (S93 flat role-scope).
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintHrToken(
-                actorId: "hr_min01_qa", orgId: "MIN01", scopeType: "ORG_AND_DESCENDANTS"));
+                actorId: "hr_sty01_qa", orgId: "STY01", scopeType: "ORG_ONLY"));
 
         var rsp = await client.GetAsync($"/api/admin/employee-profiles/{Emp001}");
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);

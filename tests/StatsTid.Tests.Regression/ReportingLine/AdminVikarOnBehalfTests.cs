@@ -21,10 +21,11 @@ namespace StatsTid.Tests.Regression.ReportingLine;
 /// discriminatingly.
 ///
 /// <para>
-/// <b>Topology (init.sql seed orgs, S92/ADR-035 flatten):</b> MIN01 (MAO) has Organisation STY02;
-/// MIN02 (MAO) has Organisation STY05 — a different tree_root. The admin actor (<c>t76_admin</c>) sits
-/// at MIN01 with a LOCAL_ADMIN scope over MIN01 (ORG_AND_DESCENDANTS) — so it COVERS STY02 yet its
-/// primary org (MIN01) is NOT the manager's tree root (STY02): the CROSS-ORG fixture that
+/// <b>Topology (init.sql seed orgs, S92/ADR-035 flatten + S93 flat role-scope):</b> MIN01 (MAO) has
+/// Organisation STY02; MIN02 (MAO) has Organisation STY05 — a different tree_root. The admin actor
+/// (<c>t76_admin</c>) has its USER primary org at MIN01 but a LOCAL_ADMIN scope keyed on STY02
+/// (exact ORG_ONLY membership — a MAO no longer covers a child via subtree) — so it COVERS STY02 yet
+/// its primary org (MIN01) is NOT the manager's tree root (STY02): the CROSS-ORG fixture that
 /// discriminates the audit row's actor org from the target tree (the S71 green-but-weak lesson).
 /// </para>
 ///
@@ -45,7 +46,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
     private ManagerVikarRepository _vikarRepo = null!;
 
     // ── STY02 Organisation users ──
-    private const string Admin = "t76_admin";      // MIN01 — LOCAL_ADMIN @ MIN01 (covers STY02; org ≠ STY02)
+    private const string Admin = "t76_admin";      // primary org MIN01 — LOCAL_ADMIN scope @ STY02 (covers STY02; primary org ≠ STY02)
     private const string AdminX = "t76_admin_x";   // STY05 — LOCAL_ADMIN @ STY05 (does NOT cover STY02)
     private const string Mgr = "t76_mgr";          // STY02 — the absent manager (LOCAL_LEADER)
     private const string Emp = "t76_emp";          // STY02 — reports PRIMARY to Mgr
@@ -118,21 +119,25 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
             """
             INSERT INTO role_assignments (user_id, role_id, org_id, scope_type, assigned_by)
             VALUES
-                (@admin,  'LOCAL_ADMIN',  'MIN01', 'ORG_AND_DESCENDANTS', 'TEST'),
-                (@adminx, 'LOCAL_ADMIN',  'STY05', 'ORG_AND_DESCENDANTS', 'TEST'),
-                (@mgr,    'LOCAL_LEADER', 'STY02', 'ORG_AND_DESCENDANTS', 'TEST'),
-                (@vik,    'LOCAL_LEADER', 'STY02', 'ORG_AND_DESCENDANTS', 'TEST'),
-                (@vikn,   'LOCAL_LEADER', 'STY01', 'ORG_AND_DESCENDANTS', 'TEST'),
-                (@vikx,   'LOCAL_LEADER', 'STY05', 'ORG_AND_DESCENDANTS', 'TEST'),
+                -- S93 flat role-scope: coverage is exact Organisation-set membership. The admin's
+                -- covering scope keys directly on STY02 (a MAO no longer covers a child via subtree);
+                -- its USER primary_org_id stays MIN01 (the users seed above) — so the cross-org audit
+                -- discriminator (actor org MIN01 ≠ target tree STY02) is preserved.
+                (@admin,  'LOCAL_ADMIN',  'STY02', 'ORG_ONLY', 'TEST'),
+                (@adminx, 'LOCAL_ADMIN',  'STY05', 'ORG_ONLY', 'TEST'),
+                (@mgr,    'LOCAL_LEADER', 'STY02', 'ORG_ONLY', 'TEST'),
+                (@vik,    'LOCAL_LEADER', 'STY02', 'ORG_ONLY', 'TEST'),
+                (@vikn,   'LOCAL_LEADER', 'STY01', 'ORG_ONLY', 'TEST'),
+                (@vikx,   'LOCAL_LEADER', 'STY05', 'ORG_ONLY', 'TEST'),
                 -- B4 (S76-7601 fix-forward): VikX's PRIMARY org is STY05 (a DIFFERENT MAO/tree), but this
                 -- extra STY02-scoped LOCAL_LEADER grant makes its org-scope COVER the manager's report
-                -- Emp (path /MIN01/STY02/ StartsWith /MIN01/STY02/). So the cross-tree-vikar POST now
+                -- Emp (exact ORG_ONLY membership of STY02). So the cross-tree-vikar POST now
                 -- PASSES the coverage census and is rejected SPECIFICALLY by the same-tree guard (VikX's
                 -- PRIMARY org STY05 resolves to tree root STY05 != STY02) — exercising the S74-7402
                 -- cross-tree-via-vikar defense, not the coverage gate.
-                (@vikx,   'LOCAL_LEADER', 'STY02', 'ORG_AND_DESCENDANTS', 'TEST'),
-                (@sub,    'LOCAL_LEADER', 'STY02', 'ORG_AND_DESCENDANTS', 'TEST'),
-                (@emp,    'EMPLOYEE',     'STY02', 'ORG_ONLY',            'TEST')
+                (@vikx,   'LOCAL_LEADER', 'STY02', 'ORG_ONLY', 'TEST'),
+                (@sub,    'LOCAL_LEADER', 'STY02', 'ORG_ONLY', 'TEST'),
+                (@emp,    'EMPLOYEE',     'STY02', 'ORG_ONLY', 'TEST')
             ON CONFLICT DO NOTHING
             """, conn))
         {
@@ -215,7 +220,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
     public async Task AdminPost_HappyPath_CreatesVikar_AndAuditRow()
     {
         var effectiveTo = Today().AddDays(30);
-        var client = AdminClient(Admin, "MIN01");
+        var client = AdminClient(Admin, "MIN01", "STY02");
         var rsp = await client.PostAsJsonAsync(
             $"/api/admin/reporting-lines/{Mgr}/vikar",
             new { vikarUserId = Vik, effectiveTo = effectiveTo.ToString("yyyy-MM-dd"), reason = "FERIE" });
@@ -253,7 +258,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
     public async Task AdminPost_CrossOrgAdmin_AuditRow_CarriesAdminOrg_NotManagerTree()
     {
         // The CROSS-ORG discriminator (S71): Admin's org is MIN01, the manager's tree root is STY02.
-        var client = AdminClient(Admin, "MIN01");
+        var client = AdminClient(Admin, "MIN01", "STY02");
         var rsp = await client.PostAsJsonAsync(
             $"/api/admin/reporting-lines/{Mgr}/vikar",
             new { vikarUserId = Vik, effectiveTo = Today().AddDays(30).ToString("yyyy-MM-dd") });
@@ -285,7 +290,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
             "SELECT COUNT(*) FROM role_assignments WHERE user_id = @id AND org_id = 'STY02'",
             ("id", VikX)) >= 1);
 
-        var client = AdminClient(Admin, "MIN01");
+        var client = AdminClient(Admin, "MIN01", "STY02");
         var rsp = await client.PostAsJsonAsync(
             $"/api/admin/reporting-lines/{Mgr}/vikar",
             new { vikarUserId = VikX, effectiveTo = Today().AddDays(30).ToString("yyyy-MM-dd") });
@@ -302,7 +307,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
     {
         // Sub is a descendant of Mgr (Sub → Emp → Mgr). Sub is same-tree + leader + covers the
         // report (STY02 scope), so ONLY the cycle guard can reject it → 400.
-        var client = AdminClient(Admin, "MIN01");
+        var client = AdminClient(Admin, "MIN01", "STY02");
         var rsp = await client.PostAsJsonAsync(
             $"/api/admin/reporting-lines/{Mgr}/vikar",
             new { vikarUserId = Sub, effectiveTo = Today().AddDays(30).ToString("yyyy-MM-dd") });
@@ -315,7 +320,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
     {
         // VikNarrow's scope is STY01 ONLY (a DIFFERENT Organisation); the manager's report (Emp) is on
         // STY02 → not covered → the coverage census rejects FIRST (before the same-tree guard).
-        var client = AdminClient(Admin, "MIN01");
+        var client = AdminClient(Admin, "MIN01", "STY02");
         var rsp = await client.PostAsJsonAsync(
             $"/api/admin/reporting-lines/{Mgr}/vikar",
             new { vikarUserId = VikNarrow, effectiveTo = Today().AddDays(30).ToString("yyyy-MM-dd") });
@@ -347,7 +352,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
     [Fact]
     public async Task AdminPost_SecondActiveVikar_Returns409()
     {
-        var client = AdminClient(Admin, "MIN01");
+        var client = AdminClient(Admin, "MIN01", "STY02");
         var first = await client.PostAsJsonAsync(
             $"/api/admin/reporting-lines/{Mgr}/vikar",
             new { vikarUserId = Vik, effectiveTo = Today().AddDays(30).ToString("yyyy-MM-dd") });
@@ -396,7 +401,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
         }
 
         // Fire the POST — it must BLOCK on the advisory (T_block holds it).
-        var client = AdminClient(Admin, "MIN01");
+        var client = AdminClient(Admin, "MIN01", "STY02");
         var postTask = client.PostAsJsonAsync(
             $"/api/admin/reporting-lines/{Mgr}/vikar",
             new { vikarUserId = Vik, effectiveTo = Today().AddDays(30).ToString("yyyy-MM-dd") });
@@ -426,7 +431,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
     public async Task AdminDelete_RevokesVikar_EmitsEndedEvent_AndAudit()
     {
         var vikar = await PlantVikarAsync(Mgr, Vik, Today().AddDays(30), TreeRootSty02);
-        var client = AdminClient(Admin, "MIN01");
+        var client = AdminClient(Admin, "MIN01", "STY02");
 
         var rsp = await client.DeleteAsync($"/api/admin/reporting-lines/{Mgr}/vikar");
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
@@ -455,7 +460,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
         await DeactivateUserAsync(Mgr);
         await DeactivateUserAsync(Vik);
 
-        var client = AdminClient(Admin, "MIN01");
+        var client = AdminClient(Admin, "MIN01", "STY02");
         var rsp = await client.DeleteAsync($"/api/admin/reporting-lines/{Mgr}/vikar");
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
         Assert.Null(await _vikarRepo.GetActiveByApproverAnyDateAsync(Mgr));
@@ -479,7 +484,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
     [Fact]
     public async Task AdminDelete_NoActiveRow_Returns404()
     {
-        var client = AdminClient(Admin, "MIN01");
+        var client = AdminClient(Admin, "MIN01", "STY02");
         var rsp = await client.DeleteAsync($"/api/admin/reporting-lines/{Mgr}/vikar");
         Assert.Equal(HttpStatusCode.NotFound, rsp.StatusCode);
     }
@@ -494,7 +499,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
     public async Task AdminGetVikar_ActiveRow_ReturnsVikarWithDisplayName()
     {
         await PlantVikarAsync(Mgr, Vik, Today().AddDays(30), TreeRootSty02);
-        var client = AdminClient(Admin, "MIN01");
+        var client = AdminClient(Admin, "MIN01", "STY02");
 
         var rsp = await client.GetAsync($"/api/admin/reporting-lines/{Mgr}/vikar");
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
@@ -511,7 +516,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
     [Fact]
     public async Task AdminGetVikar_NoActiveRow_ReturnsNull()
     {
-        var client = AdminClient(Admin, "MIN01");
+        var client = AdminClient(Admin, "MIN01", "STY02");
         var rsp = await client.GetAsync($"/api/admin/reporting-lines/{Mgr}/vikar");
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
         var body = await rsp.Content.ReadFromJsonAsync<ActiveVikarEnvelope>();
@@ -532,7 +537,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
     [Fact]
     public async Task AdminGetVikar_ManagerNotFound_Returns404()
     {
-        var client = AdminClient(Admin, "MIN01");
+        var client = AdminClient(Admin, "MIN01", "STY02");
         var rsp = await client.GetAsync("/api/admin/reporting-lines/t76_nonexistent/vikar");
         Assert.Equal(HttpStatusCode.NotFound, rsp.StatusCode);
     }
@@ -722,22 +727,23 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
 
     // ════════════════════════════════════════════════════════════════════════════════
     //  Deliverable A — admin-on-behalf MIXED-ROLE denial (S76 / TASK-7600 B1 floor, on THIS
-    //  endpoint). The actor is LocalAdmin@STY05 (an Organisation/MAO that does NOT contain the manager)
-    //  AND holds a non-admin LocalLeader@MIN01 scope that DOES cover the manager's STY02 tree.
+    //  endpoint). The actor is LocalAdmin@STY05 (an Organisation that does NOT contain the manager)
+    //  AND holds a non-admin LocalLeader@STY02 scope that DOES cover the manager's STY02 Organisation.
     //  The LocalAdminOrAbove policy passes on the JWT's primary LocalAdmin role; the FLOORED
     //  ValidateOrgAccessAsync(.., LocalAdmin) is the gate. DISCRIMINATING: on the UNFLOORED
-    //  overload the covering LocalLeader@MIN01 scope would have ADMITTED (the B1 leak) — these
+    //  overload the covering LocalLeader@STY02 scope would have ADMITTED (the B1 leak) — these
     //  tests prove the floor is load-bearing on the POST and the DELETE specifically.
+    //  S93 flat role-scope: the covering scope keys directly on STY02 (exact ORG_ONLY membership).
     // ════════════════════════════════════════════════════════════════════════════════
 
     [Fact]
     public async Task AdminPost_MixedRoleActor_AdminDisjoint_LeaderCovers_Returns403()
     {
-        // Mixed-role: LocalAdmin@STY05 (disjoint — STY05 path /MIN02/STY05/ does NOT cover the
-        // manager's STY02 /MIN01/STY02/) + LocalLeader@MIN01 (/MIN01/ COVERS STY02). Floored
-        // at LocalAdmin: only the STY05 admin scope counts and it misses STY02 → 403. On the
-        // unfloored overload the LocalLeader@MIN01 scope covers STY02 → would have ADMITTED (leak).
-        var client = MixedRoleClient("t76_mix_post", StatsTidRoles.LocalAdmin, "STY05", StatsTidRoles.LocalLeader, "MIN01");
+        // Mixed-role: LocalAdmin@STY05 (disjoint — STY05 does NOT cover the manager's STY02) +
+        // LocalLeader@STY02 (COVERS STY02 by exact ORG_ONLY membership). Floored at LocalAdmin:
+        // only the STY05 admin scope counts and it misses STY02 → 403. On the unfloored overload
+        // the LocalLeader@STY02 scope covers STY02 → would have ADMITTED (leak).
+        var client = MixedRoleClient("t76_mix_post", StatsTidRoles.LocalAdmin, "STY05", StatsTidRoles.LocalLeader, "STY02");
         var rsp = await client.PostAsJsonAsync(
             $"/api/admin/reporting-lines/{Mgr}/vikar",
             new { vikarUserId = Vik, effectiveTo = Today().AddDays(30).ToString("yyyy-MM-dd") });
@@ -750,12 +756,12 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
     [Fact]
     public async Task AdminDelete_MixedRoleActor_AdminDisjoint_LeaderCovers_Returns403()
     {
-        // Same mixed-role shape against the DELETE. The persisted vikar tree_root is STY02
-        // (/MIN01/STY02/): floored at LocalAdmin the STY05 admin scope does not cover STY02 → 403,
-        // even though the LocalLeader@MIN01 scope does (it is below the floor). Discriminating —
-        // the unfloored overload would have admitted the revoke via the covering Leader scope.
+        // Same mixed-role shape against the DELETE. The persisted vikar tree_root is STY02:
+        // floored at LocalAdmin the STY05 admin scope does not cover STY02 → 403, even though the
+        // LocalLeader@STY02 scope does (it is below the floor). Discriminating — the unfloored
+        // overload would have admitted the revoke via the covering Leader scope.
         await PlantVikarAsync(Mgr, Vik, Today().AddDays(30), TreeRootSty02);
-        var client = MixedRoleClient("t76_mix_del", StatsTidRoles.LocalAdmin, "STY05", StatsTidRoles.LocalLeader, "MIN01");
+        var client = MixedRoleClient("t76_mix_del", StatsTidRoles.LocalAdmin, "STY05", StatsTidRoles.LocalLeader, "STY02");
         var rsp = await client.DeleteAsync($"/api/admin/reporting-lines/{Mgr}/vikar");
 
         Assert.Equal(HttpStatusCode.Forbidden, rsp.StatusCode);
@@ -789,7 +795,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
         var vikar = await PlantVikarAsync(Mgr, Vik, Today().AddDays(30), TreeRootSty02);
         await DeactivateUserAsync(Mgr); // the current-root derive would now throw — must be swallowed.
 
-        var client = AdminClient(Admin, "MIN01");
+        var client = AdminClient(Admin, "MIN01", "STY02");
         var rsp = await client.DeleteAsync($"/api/admin/reporting-lines/{Mgr}/vikar");
 
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
@@ -891,7 +897,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
         var released = false;
         try
         {
-            var client = AdminClient(Admin, "MIN01");
+            var client = AdminClient(Admin, "MIN01", "STY02");
             var deleteTask = client.DeleteAsync($"/api/admin/reporting-lines/{Mgr}/vikar");
 
             // The revoke must BLOCK on the held STY05 (current-root) advisory. Pre-S83 it only locked
@@ -938,11 +944,15 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
 
     private static DateOnly Today() => DateOnly.FromDateTime(DateTime.UtcNow);
 
-    private HttpClient AdminClient(string userId, string orgId)
+    // S93 flat role-scope: a token's PRIMARY org (the JWT orgId — the cross-org audit
+    // discriminator) is decoupled from its access-granting SCOPE org (exact ORG_ONLY membership).
+    // scopeOrg defaults to the primary org (the common case); the cross-org admin passes
+    // primary=MIN01 + scopeOrg=STY02 so it covers STY02 yet attributes audit to MIN01.
+    private HttpClient AdminClient(string userId, string orgId, string? scopeOrg = null)
     {
         var client = _factory.CreateClient();
         client.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", MintToken(userId, orgId, StatsTidRoles.LocalAdmin, "LOCAL_ADMIN"));
+            new AuthenticationHeaderValue("Bearer", MintToken(userId, orgId, StatsTidRoles.LocalAdmin, "LOCAL_ADMIN", scopeOrg));
         return client;
     }
 
@@ -971,8 +981,8 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
         });
         var scopes = new[]
         {
-            new RoleScope(adminRole, adminOrg, "ORG_AND_DESCENDANTS"),
-            new RoleScope(otherRole, otherOrg, "ORG_AND_DESCENDANTS"),
+            new RoleScope(adminRole, adminOrg, "ORG_ONLY"),
+            new RoleScope(otherRole, otherOrg, "ORG_ONLY"),
         };
         var bearer = tokenService.GenerateToken(
             employeeId: userId, name: userId, role: adminRole,
@@ -982,7 +992,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
         return client;
     }
 
-    private static string MintToken(string userId, string orgId, string role, string scopeRoleId)
+    private static string MintToken(string userId, string orgId, string role, string scopeRoleId, string? scopeOrg = null)
     {
         var tokenService = new JwtTokenService(new JwtSettings
         {
@@ -993,8 +1003,9 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
         });
         // The scope's Role must be the StatsTidRoles value — the ScopeAuthorizationHandler matches
         // RoleScope.Role against the policy's AllowedRoles, and the floored OrgScopeValidator matches
-        // it against the LocalAdmin floor.
-        var scopes = new[] { new RoleScope(role, orgId, "ORG_AND_DESCENDANTS") };
+        // it against the LocalAdmin floor. S93 flat role-scope: exact ORG_ONLY membership; the scope
+        // org defaults to the primary org but may be a different Organisation (cross-org admin).
+        var scopes = new[] { new RoleScope(role, scopeOrg ?? orgId, "ORG_ONLY") };
         return tokenService.GenerateToken(
             employeeId: userId, name: userId, role: role,
             agreementCode: "HK", orgId: orgId, scopes: scopes);

@@ -97,7 +97,7 @@ public class AuthorizationPolicyTests
         // Arrange: a LocalAdmin — even with a valid org scope — is NOT a global admin
         var principal = BuildPrincipal(
             StatsTidRoles.LocalAdmin,
-            new[] { new RoleScope(StatsTidRoles.LocalAdmin, "MIN01", "ORG_AND_DESCENDANTS") });
+            new[] { new RoleScope(StatsTidRoles.LocalAdmin, "STY01", "ORG_ONLY") });
 
         // Act
         var succeeded = await EvaluateAsync(principal, GlobalAdminOnlyRequirement());
@@ -131,7 +131,7 @@ public class AuthorizationPolicyTests
         // Arrange: LocalAdmin with a LocalAdmin-role scope claim — RequireOrgScope=true
         var principal = BuildPrincipal(
             StatsTidRoles.LocalAdmin,
-            new[] { new RoleScope(StatsTidRoles.LocalAdmin, "MIN01", "ORG_AND_DESCENDANTS") });
+            new[] { new RoleScope(StatsTidRoles.LocalAdmin, "STY01", "ORG_ONLY") });
 
         // Act
         var succeeded = await EvaluateAsync(principal, LocalAdminOrAboveRequirement());

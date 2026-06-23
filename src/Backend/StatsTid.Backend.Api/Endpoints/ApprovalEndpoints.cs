@@ -679,16 +679,10 @@ public static class ApprovalEndpoints
                     // GLOBAL scope: get all pending periods (use "/" as root path prefix)
                     scopePending = await approvalRepo.GetPendingByOrgPathAsync("/", ct);
                 }
-                else if (scope.ScopeType == "ORG_AND_DESCENDANTS" && scope.OrgId is not null)
-                {
-                    // Get the scope org's materialized path, then query by path prefix
-                    var scopeOrg = await orgRepo.GetByIdAsync(scope.OrgId, ct);
-                    if (scopeOrg is null) continue;
-                    scopePending = await approvalRepo.GetPendingByOrgPathAsync(scopeOrg.MaterializedPath, ct);
-                }
                 else if (scope.ScopeType == "ORG_ONLY" && scope.OrgId is not null)
                 {
-                    // ORG_ONLY: get pending for that specific org
+                    // ORG_ONLY: get pending for that specific org (S93/ADR-035: exact membership,
+                    // no subtree).
                     scopePending = await approvalRepo.GetPendingByOrgAsync(scope.OrgId, ct);
                 }
                 else
@@ -778,16 +772,10 @@ public static class ApprovalEndpoints
                     // GLOBAL scope: get all periods (use "/" as root path prefix)
                     scopePeriods = await approvalRepo.GetByMonthAndOrgPathAsync("/", year, month, ct);
                 }
-                else if (scope.ScopeType == "ORG_AND_DESCENDANTS" && scope.OrgId is not null)
-                {
-                    // Get the scope org's materialized path, then query by path prefix
-                    var scopeOrg = await orgRepo.GetByIdAsync(scope.OrgId, ct);
-                    if (scopeOrg is null) continue;
-                    scopePeriods = await approvalRepo.GetByMonthAndOrgPathAsync(scopeOrg.MaterializedPath, year, month, ct);
-                }
                 else if (scope.ScopeType == "ORG_ONLY" && scope.OrgId is not null)
                 {
-                    // ORG_ONLY: get periods for that specific org
+                    // ORG_ONLY: get periods for that specific org (S93/ADR-035: exact membership,
+                    // no subtree).
                     scopePeriods = await approvalRepo.GetByMonthAndOrgAsync(scope.OrgId, year, month, ct);
                 }
                 else

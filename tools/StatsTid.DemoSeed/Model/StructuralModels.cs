@@ -83,7 +83,7 @@ public sealed class DemoRoleRow
     /// <summary>NULL for a GLOBAL scope.</summary>
     public required string? OrgId { get; init; }
 
-    /// <summary>GLOBAL | ORG_ONLY | ORG_AND_DESCENDANTS.</summary>
+    /// <summary>GLOBAL | ORG_ONLY.</summary>
     public required string ScopeType { get; init; }
 }
 

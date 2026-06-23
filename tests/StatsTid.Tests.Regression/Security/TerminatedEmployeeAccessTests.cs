@@ -56,7 +56,7 @@ public sealed class TerminatedEmployeeAccessTests : IAsyncLifetime
     private const string DevFallbackSigningKey = "StatsTid_Sprint3_DevKey_MustBeAtLeast32BytesLong!";
     private const string OrgId = "STY01";        // target employees' org (/MIN01/STY01/)
     private const string DisjointOrg = "STY05";  // /MIN02/STY05/ — disjoint from STY01
-    private const string CoveringOrg = "MIN01";  // covers STY01 via ORG_AND_DESCENDANTS
+    private const string CoveringOrg = "STY01";  // S93 flat role-scope: covers STY01 by exact ORG_ONLY match (a MAO no longer covers a child)
     private const string VacationType = "VACATION";
     private const int SettledYear = 2025;
 
@@ -511,7 +511,7 @@ public sealed class TerminatedEmployeeAccessTests : IAsyncLifetime
             "mix_v_g", StatsTidRoles.LocalHR, Guid.NewGuid(), DisjointOrg,
             new[]
             {
-                new RoleScope(StatsTidRoles.LocalHR, DisjointOrg, "ORG_AND_DESCENDANTS"),
+                new RoleScope(StatsTidRoles.LocalHR, DisjointOrg, "ORG_ONLY"),
                 new RoleScope(StatsTidRoles.LocalLeader, null, "GLOBAL"),
             });
         var glb = await validator.ValidateEmployeeAccessIncludingTerminatedAsync(globalLeader, terminated);
@@ -750,7 +750,7 @@ public sealed class TerminatedEmployeeAccessTests : IAsyncLifetime
         return svc.GenerateToken(
             employeeId: actorId, name: actorId, role: StatsTidRoles.LocalHR,
             agreementCode: "AC", orgId: orgId,
-            scopes: new[] { new RoleScope(StatsTidRoles.LocalHR, orgId, "ORG_AND_DESCENDANTS") });
+            scopes: new[] { new RoleScope(StatsTidRoles.LocalHR, orgId, "ORG_ONLY") });
     }
 
     private static string EmployeeToken(string actorId, string orgId)
@@ -768,7 +768,7 @@ public sealed class TerminatedEmployeeAccessTests : IAsyncLifetime
         return svc.GenerateToken(
             employeeId: actorId, name: actorId, role: StatsTidRoles.LocalLeader,
             agreementCode: "AC", orgId: orgId,
-            scopes: new[] { new RoleScope(StatsTidRoles.LocalLeader, orgId, "ORG_AND_DESCENDANTS") });
+            scopes: new[] { new RoleScope(StatsTidRoles.LocalLeader, orgId, "ORG_ONLY") });
     }
 
     /// <summary>R9f1 escalation shape: primary role LocalHR (highest of the scopes, as the
@@ -783,8 +783,8 @@ public sealed class TerminatedEmployeeAccessTests : IAsyncLifetime
             agreementCode: "AC", orgId: DisjointOrg,
             scopes: new[]
             {
-                new RoleScope(StatsTidRoles.LocalHR, DisjointOrg, "ORG_AND_DESCENDANTS"),
-                new RoleScope(StatsTidRoles.LocalLeader, CoveringOrg, "ORG_AND_DESCENDANTS"),
+                new RoleScope(StatsTidRoles.LocalHR, DisjointOrg, "ORG_ONLY"),
+                new RoleScope(StatsTidRoles.LocalLeader, CoveringOrg, "ORG_ONLY"),
             });
     }
 
@@ -798,7 +798,7 @@ public sealed class TerminatedEmployeeAccessTests : IAsyncLifetime
             agreementCode: "AC", orgId: DisjointOrg,
             scopes: new[]
             {
-                new RoleScope(StatsTidRoles.LocalHR, DisjointOrg, "ORG_AND_DESCENDANTS"),
+                new RoleScope(StatsTidRoles.LocalHR, DisjointOrg, "ORG_ONLY"),
                 new RoleScope(StatsTidRoles.LocalLeader, null, "GLOBAL"),
             });
     }
@@ -813,11 +813,11 @@ public sealed class TerminatedEmployeeAccessTests : IAsyncLifetime
 
     private static ActorContext HrActor(string actorId, string scopeOrgId) => new(
         actorId, StatsTidRoles.LocalHR, Guid.NewGuid(), scopeOrgId,
-        new[] { new RoleScope(StatsTidRoles.LocalHR, scopeOrgId, "ORG_AND_DESCENDANTS") });
+        new[] { new RoleScope(StatsTidRoles.LocalHR, scopeOrgId, "ORG_ONLY") });
 
     private static ActorContext LeaderActor(string actorId, string scopeOrgId) => new(
         actorId, StatsTidRoles.LocalLeader, Guid.NewGuid(), scopeOrgId,
-        new[] { new RoleScope(StatsTidRoles.LocalLeader, scopeOrgId, "ORG_AND_DESCENDANTS") });
+        new[] { new RoleScope(StatsTidRoles.LocalLeader, scopeOrgId, "ORG_ONLY") });
 
     private static ActorContext EmployeeActor(string actorId, string orgId) => new(
         actorId, StatsTidRoles.Employee, Guid.NewGuid(), orgId,
@@ -828,8 +828,8 @@ public sealed class TerminatedEmployeeAccessTests : IAsyncLifetime
         actorId, StatsTidRoles.LocalHR, Guid.NewGuid(), DisjointOrg,
         new[]
         {
-            new RoleScope(StatsTidRoles.LocalHR, DisjointOrg, "ORG_AND_DESCENDANTS"),
-            new RoleScope(StatsTidRoles.LocalLeader, CoveringOrg, "ORG_AND_DESCENDANTS"),
+            new RoleScope(StatsTidRoles.LocalHR, DisjointOrg, "ORG_ONLY"),
+            new RoleScope(StatsTidRoles.LocalLeader, CoveringOrg, "ORG_ONLY"),
         });
 
     private OrgScopeValidator MakeValidator()

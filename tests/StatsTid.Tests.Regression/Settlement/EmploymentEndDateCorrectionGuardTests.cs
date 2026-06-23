@@ -40,7 +40,7 @@ public sealed class EmploymentEndDateCorrectionGuardTests : IAsyncLifetime
 {
     private const string DevFallbackSigningKey = "StatsTid_Sprint3_DevKey_MustBeAtLeast32BytesLong!";
     private const string OrgId = "STY01";
-    private const string CoveringOrg = "MIN01";
+    private const string CoveringOrg = "STY01";  // S93 flat role-scope: covers STY01 by exact ORG_ONLY match (a MAO no longer covers a child)
     private const string VacationType = "VACATION";
 
     private TestFixtures.DockerHarness _harness = null!;
@@ -219,7 +219,7 @@ public sealed class EmploymentEndDateCorrectionGuardTests : IAsyncLifetime
         var token = svc.GenerateToken(
             employeeId: "hr_s71_r13", name: "hr_s71_r13", role: StatsTidRoles.LocalHR,
             agreementCode: "AC", orgId: CoveringOrg,
-            scopes: new[] { new RoleScope(StatsTidRoles.LocalHR, CoveringOrg, "ORG_AND_DESCENDANTS") });
+            scopes: new[] { new RoleScope(StatsTidRoles.LocalHR, CoveringOrg, "ORG_ONLY") });
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
         return client;
     }

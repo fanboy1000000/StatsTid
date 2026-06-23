@@ -33,8 +33,9 @@ namespace StatsTid.Tests.Regression.Security;
 /// keep EmployeeOrAbove/LeaderOrAbove callers byte-identical.</para>
 ///
 /// <para><b>Discrimination.</b> Every test mints a mixed-role actor whose ADMIN scope sits in a
-/// DISJOINT styrelse (STY05, <c>/MIN02/STY05/</c>) while its NON-admin scope COVERS the target via
-/// MIN01 (<c>/MIN01/</c>, ancestor of the STY01 target). On the PRE-FIX unfloored code the covering
+/// DISJOINT styrelse (STY05, <c>/MIN02/STY05/</c>) while its NON-admin scope COVERS the target
+/// Organisation directly (STY01, <c>/MIN01/STY01/</c> — S93 flat model: exact ORG_ONLY membership,
+/// no MAO subtree). On the PRE-FIX unfloored code the covering
 /// non-admin scope admitted (the leak); each test asserts the FLOORED path now DENIES — and the
 /// validator-direct tests prove the leak directly by showing the no-floor overload STILL admits the
 /// same actor. Positive controls pin the no-regression: a correctly-scoped admin/HR still succeeds.</para>
@@ -50,7 +51,10 @@ public sealed class MixedRoleScopeLeakTests : IAsyncLifetime
 
     private const string TargetOrg = "STY01";    // /MIN01/STY01/ — the target styrelse (org "B")
     private const string DisjointOrg = "STY05";  // /MIN02/STY05/ — disjoint admin home (org "A")
-    private const string CoveringOrg = "MIN01";  // /MIN01/ — covers STY01 via ORG_AND_DESCENDANTS
+    // S93 / ADR-035 slice 2 (flat role-scope): coverage is exact Organisation-set membership.
+    // The covering scope must now key directly on the target Organisation (STY01) — a MAO (MIN01)
+    // no longer covers a child via subtree.
+    private const string CoveringOrg = "STY01";  // /MIN01/STY01/ — covers STY01 by exact ORG_ONLY match
 
     private TestFixtures.DockerHarness _harness = null!;
     private StatsTidWebApplicationFactory _factory = null!;
@@ -665,12 +669,12 @@ public sealed class MixedRoleScopeLeakTests : IAsyncLifetime
 
         var hr = new ActorContext(
             "hr_ok", StatsTidRoles.LocalHR, Guid.NewGuid(), CoveringOrg,
-            new[] { new RoleScope(StatsTidRoles.LocalHR, CoveringOrg, "ORG_AND_DESCENDANTS") });
+            new[] { new RoleScope(StatsTidRoles.LocalHR, CoveringOrg, "ORG_ONLY") });
         Assert.True((await validator.ValidateEmployeeAccessAsync(hr, emp, StatsTidRoles.LocalHR)).Allowed);
 
         var admin = new ActorContext(
             "admin_ok2", StatsTidRoles.LocalAdmin, Guid.NewGuid(), CoveringOrg,
-            new[] { new RoleScope(StatsTidRoles.LocalAdmin, CoveringOrg, "ORG_AND_DESCENDANTS") });
+            new[] { new RoleScope(StatsTidRoles.LocalAdmin, CoveringOrg, "ORG_ONLY") });
         Assert.True((await validator.ValidateOrgAccessAsync(admin, TargetOrg, StatsTidRoles.LocalAdmin)).Allowed);
         Assert.True((await validator.ValidateEmployeeAccessAsync(admin, emp, StatsTidRoles.LocalAdmin)).Allowed);
     }
@@ -691,8 +695,8 @@ public sealed class MixedRoleScopeLeakTests : IAsyncLifetime
         actorId, adminRole, Guid.NewGuid(), DisjointOrg,
         new[]
         {
-            new RoleScope(adminRole, DisjointOrg, "ORG_AND_DESCENDANTS"),
-            new RoleScope(StatsTidRoles.LocalLeader, CoveringOrg, "ORG_AND_DESCENDANTS"),
+            new RoleScope(adminRole, DisjointOrg, "ORG_ONLY"),
+            new RoleScope(StatsTidRoles.LocalLeader, CoveringOrg, "ORG_ONLY"),
         });
 
     /// <summary>JWT twin of <see cref="AdminAtAPlusLeaderCoveringB"/> for a LocalAdmin admin role.</summary>
@@ -704,8 +708,8 @@ public sealed class MixedRoleScopeLeakTests : IAsyncLifetime
             agreementCode: "AC", orgId: DisjointOrg,
             scopes: new[]
             {
-                new RoleScope(adminRole, DisjointOrg, "ORG_AND_DESCENDANTS"),
-                new RoleScope(StatsTidRoles.LocalLeader, CoveringOrg, "ORG_AND_DESCENDANTS"),
+                new RoleScope(adminRole, DisjointOrg, "ORG_ONLY"),
+                new RoleScope(StatsTidRoles.LocalLeader, CoveringOrg, "ORG_ONLY"),
             });
     }
 
@@ -733,7 +737,7 @@ public sealed class MixedRoleScopeLeakTests : IAsyncLifetime
         return svc.GenerateToken(
             employeeId: actorId, name: actorId, role: role,
             agreementCode: "AC", orgId: orgId,
-            scopes: new[] { new RoleScope(role, orgId, "ORG_AND_DESCENDANTS") });
+            scopes: new[] { new RoleScope(role, orgId, "ORG_ONLY") });
     }
 
     private static JwtTokenService NewTokenService() => new(new JwtSettings

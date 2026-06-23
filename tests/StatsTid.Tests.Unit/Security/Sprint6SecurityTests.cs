@@ -35,26 +35,9 @@ public class Sprint6SecurityTests
         Assert.True(scope.CoversOrg("/ANOTHER/ORG/PATH/", null));
     }
 
-    [Fact]
-    public void RoleScope_OrgAndDescendants_CoversChildOrgs()
-    {
-        var scope = new RoleScope("LocalHR", "MIN01", "ORG_AND_DESCENDANTS");
-
-        Assert.True(scope.CoversOrg("/MIN01/STY02/", "/MIN01/"));
-        Assert.True(scope.CoversOrg("/MIN01/STY01/", "/MIN01/"));
-        Assert.True(scope.CoversOrg("/MIN01/", "/MIN01/"));
-    }
-
-    [Fact]
-    public void RoleScope_OrgAndDescendants_DoesNotCoverSiblingSubtrees()
-    {
-        var scope = new RoleScope("LocalAdmin", "STY02", "ORG_AND_DESCENDANTS");
-
-        // /MIN01/STY01/ does NOT start with /MIN01/STY02/
-        Assert.False(scope.CoversOrg("/MIN01/STY01/", "/MIN01/STY02/"));
-        // A completely different subtree
-        Assert.False(scope.CoversOrg("/MIN02/STY01/", "/MIN01/STY02/"));
-    }
+    // S93 / ADR-035 slice 2: ORG_AND_DESCENDANTS subtree coverage is dropped — the former
+    // "covers child orgs" and "does not cover sibling subtrees" cases are removed. Coverage is
+    // exact Organisation-set membership (exact-equality) only.
 
     [Fact]
     public void RoleScope_OrgOnly_CoversExactMatchOnly()
@@ -66,16 +49,15 @@ public class Sprint6SecurityTests
         Assert.False(scope.CoversOrg("/MIN01/", "/MIN01/STY02/"));
         // A deeper path under the Organisation does not match (ORG_ONLY = exact only)
         Assert.False(scope.CoversOrg("/MIN01/STY02/UNIT01/", "/MIN01/STY02/"));
+        // A sibling Organisation does not match (no subtree branch survives)
+        Assert.False(scope.CoversOrg("/MIN01/STY01/", "/MIN01/STY02/"));
     }
 
     [Fact]
     public void RoleScope_NullPaths_ReturnsFalseForNonGlobalScopes()
     {
-        var orgAndDescScope = new RoleScope("LocalLeader", "STY02", "ORG_AND_DESCENDANTS");
         var orgOnlyScope = new RoleScope("Employee", "STY02", "ORG_ONLY");
 
-        Assert.False(orgAndDescScope.CoversOrg(null, "/MIN01/STY02/"));
-        Assert.False(orgAndDescScope.CoversOrg("/MIN01/STY02/", null));
         Assert.False(orgOnlyScope.CoversOrg(null, "/MIN01/STY02/"));
         Assert.False(orgOnlyScope.CoversOrg("/MIN01/STY02/", null));
     }
@@ -152,7 +134,7 @@ public class Sprint6SecurityTests
         var scopes = new List<RoleScope>
         {
             new("GlobalAdmin", null, "GLOBAL"),
-            new("LocalHR", "STY02", "ORG_AND_DESCENDANTS")
+            new("LocalHR", "STY02", "ORG_ONLY")
         };
 
         var token = sut.GenerateToken("admin01", "Admin User", "GlobalAdmin", "AC", "MIN01", scopes);
@@ -166,7 +148,7 @@ public class Sprint6SecurityTests
         Assert.Contains("GlobalAdmin", allScopesText);
         Assert.Contains("GLOBAL", allScopesText);
         Assert.Contains("LocalHR", allScopesText);
-        Assert.Contains("ORG_AND_DESCENDANTS", allScopesText);
+        Assert.Contains("ORG_ONLY", allScopesText);
     }
 
     [Fact]
@@ -452,7 +434,7 @@ public class Sprint6SecurityTests
             UserId = "USR01",
             RoleId = "LocalHR",
             OrgId = "STY02",
-            ScopeType = "ORG_AND_DESCENDANTS",
+            ScopeType = "ORG_ONLY",
             AssignedBy = "admin01"
         };
 
@@ -460,7 +442,7 @@ public class Sprint6SecurityTests
         Assert.Equal("USR01", assignment.UserId);
         Assert.Equal("LocalHR", assignment.RoleId);
         Assert.Equal("STY02", assignment.OrgId);
-        Assert.Equal("ORG_AND_DESCENDANTS", assignment.ScopeType);
+        Assert.Equal("ORG_ONLY", assignment.ScopeType);
         Assert.Equal("admin01", assignment.AssignedBy);
         Assert.Null(assignment.ExpiresAt);
         Assert.True(assignment.IsActive);

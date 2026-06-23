@@ -73,9 +73,9 @@ public sealed record RoleScope(string Role, string? OrgId, string ScopeType)
 |-------|--------|-------------|
 | `Role` | Any `StatsTidRoles` constant | The role granted in this scope |
 | `OrgId` | Organization ID or `null` | The org unit this scope applies to (`null` for GLOBAL) |
-| `ScopeType` | `GLOBAL`, `ORG_ONLY`, `ORG_AND_DESCENDANTS` | Breadth of the scope |
+| `ScopeType` | `GLOBAL`, `ORG_ONLY` | Breadth of the scope. **S93/ADR-035 slice 2: `ORG_AND_DESCENDANTS` REMOVED** — role-scope coverage is now EXACT Organisation-set membership (the union of a user's `ORG_ONLY` rows; no subtree inheritance). A non-GLOBAL (`ORG_ONLY`) grant's `OrgId` must be an `ORGANISATION` (a MAO is rejected at grant — OQ1). |
 
-Embedded in JWT as the `scopes` claim. Reference: [ADR-009](knowledge-base/decisions/ADR-009-scope-embedded-jwt.md).
+Embedded in JWT as the `scopes` claim. Reference: [ADR-009](knowledge-base/decisions/ADR-009-scope-embedded-jwt.md), [ADR-035](knowledge-base/decisions/ADR-035-flat-authority-model.md) (flat role-scope).
 
 ### ActorContext Extraction
 
@@ -99,7 +99,7 @@ Extraction logic (`GetActorContext` extension on `HttpContext`):
 
 Defined in `src/Infrastructure/StatsTid.Infrastructure/Security/OrgScopeValidator.cs`.
 
-Service-layer enforcement called explicitly from API endpoints. Validates that the actor's `RoleScope` entries grant access to the target employee's organization unit. Uses the materialized path hierarchy (`/MIN01/STY02/`) with `text_pattern_ops` index for descendant matching. Reference: [ADR-008](knowledge-base/decisions/ADR-008-materialized-path-org-hierarchy.md).
+Service-layer enforcement called explicitly from API endpoints. Validates that the actor's `RoleScope` entries grant access to the target employee's organization unit. **S93/ADR-035 slice 2:** access is now **exact Organisation-set membership** — `CoversOrg` is GLOBAL + exact-path-equality (the `ORG_AND_DESCENDANTS` prefix branch is removed), and `GetAccessibleOrgsAsync` returns the assigned set with NO `GetDescendantsAsync` subtree expansion. The materialized path (`/MIN01/STY02/`) + `text_pattern_ops` index + `GetDescendantsAsync` are now **dormant for authority** (formal retirement with the tree machinery in S95). References: [ADR-035](knowledge-base/decisions/ADR-035-flat-authority-model.md), [ADR-008](knowledge-base/decisions/ADR-008-materialized-path-org-hierarchy.md).
 
 ### The mixed-role scope-floor invariant (S76 / B1)
 

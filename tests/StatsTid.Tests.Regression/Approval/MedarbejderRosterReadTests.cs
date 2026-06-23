@@ -123,7 +123,7 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
         await using (var cmd = new NpgsqlCommand(
             """
             INSERT INTO role_assignments (user_id, role_id, org_id, scope_type, assigned_by)
-            VALUES (@rootmgr, 'LOCAL_LEADER', 'STY02', 'ORG_AND_DESCENDANTS', 'TEST')
+            VALUES (@rootmgr, 'LOCAL_LEADER', 'STY02', 'ORG_ONLY', 'TEST')
             ON CONFLICT DO NOTHING
             """, conn))
         {
@@ -493,7 +493,7 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
 
     private static string MintAdminToken(string userId, string orgId)
     {
-        var scopes = new[] { new RoleScope(StatsTidRoles.LocalAdmin, orgId, "ORG_AND_DESCENDANTS") };
+        var scopes = new[] { new RoleScope(StatsTidRoles.LocalAdmin, orgId, "ORG_ONLY") };
         return NewTokenService().GenerateToken(
             employeeId: userId, name: userId, role: StatsTidRoles.LocalAdmin,
             agreementCode: "HK", orgId: orgId, scopes: scopes);

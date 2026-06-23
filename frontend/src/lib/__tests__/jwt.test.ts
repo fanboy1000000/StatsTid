@@ -35,7 +35,7 @@ describe('decodeJwt', () => {
 describe('parseScopes', () => {
   it('parses valid scopes JSON', () => {
     const scopes = JSON.stringify([
-      { role: 'LocalAdmin', orgId: 'ORG1', scopeType: 'ORG_AND_DESCENDANTS' },
+      { role: 'LocalAdmin', orgId: 'ORG1', scopeType: 'ORG_ONLY' },
     ])
     const result = parseScopes(scopes)
     expect(result).toHaveLength(1)

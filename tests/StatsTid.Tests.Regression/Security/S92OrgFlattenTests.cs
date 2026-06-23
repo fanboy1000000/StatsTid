@@ -11,36 +11,41 @@ using StatsTid.Tests.Regression.TestSupport;
 namespace StatsTid.Tests.Regression.Security;
 
 /// <summary>
-/// S92 / TASK-9206 — collapse-direction RED-on-old assertions for the ADR-035 org-model flatten.
+/// S92 / TASK-9206 + S93 / TASK-9306 — RED-on-old assertions for the ADR-035 org-model flatten
+/// AND the flat role-scope mechanism (slice 2).
 ///
-/// <para><b>The change under test.</b> The org taxonomy flattened from 4 tiers
+/// <para><b>S92 (slice 1).</b> The org taxonomy flattened from 4 tiers
 /// (MINISTRY/STYRELSE/AFDELING/TEAM) to 2 tiers (MAO → ORGANISATION). The former AFDELING/TEAM
 /// org rows are gone; their members re-point UP to the parent ORGANISATION (the intended
 /// <i>coarsening</i> — Enhed holds no authority, so the smallest authority unit is the
-/// Organisation). The role-scope MECHANISM (<see cref="RoleScope.CoversOrg"/> / ORG_AND_DESCENDANTS
-/// / materialized-path prefix) is UNCHANGED this sprint; only the granularity it operates at
-/// changed (afdeling → Organisation).</para>
+/// Organisation).</para>
 ///
-/// <para><b>The proof obligation</b> (per the sprint's authority-change framing) is NOT a single
-/// "behaviour-identity" assertion. It is: rename-identical + collapse-with-stated-coverage-deltas
-/// + NO narrowing. These tests pin each direction:</para>
+/// <para><b>S93 (slice 2).</b> The role-scope MECHANISM also flattened: <c>ORG_AND_DESCENDANTS</c>
+/// subtree inheritance is DROPPED. <see cref="RoleScope.CoversOrg"/> is now GLOBAL + exact-equality
+/// only, and <c>GetAccessibleOrgsAsync</c> returns exactly the assigned (role-floored) org set with
+/// NO materialized-path descendant expansion. Coverage is the union of a user's explicit ORG_ONLY
+/// rows. The post-S92 MAO-rooted HR rows were EXPANDED to explicit per-Organisation rows
+/// (hr01→{STY01,STY02,STY03}; hr02→{STY04,STY05}) so coverage stays IDENTICAL — the proof obligation
+/// is: no narrowing AND no widening.</para>
+///
+/// <para>These tests pin each direction:</para>
 /// <list type="bullet">
 ///   <item>(a) a user under an ORGANISATION resolves THAT Organisation as its reporting tree root
 ///         (<see cref="ResolveTreeRootOrgIdAsync"/>) — the former AFD01→STY02 walk collapses to
 ///         STY02→STY02.</item>
 ///   <item>(b) an <c>ORG_ONLY</c> scope that pre-flatten keyed an afdeling, now re-pointed to the
 ///         parent ORGANISATION, COVERS the Organisation (the stated coarsening delta).</item>
-///   <item>(c) an <c>ORG_AND_DESCENDANTS</c> admin scoped at the ORGANISATION still REACHES a
-///         moved-up report (the reach is PRESERVED — the parent path still contains the user).</item>
-///   <item>(d) NO NARROWING: re-pointing an afdeling-keyed scope UP to its Organisation only ever
-///         WIDENS-or-equals coverage — the post-flatten accessible-org set is a superset-or-equal
-///         of the conceptual afdeling-only set.</item>
+///   <item>(c) an admin <c>ORG_ONLY</c> scope at the ORGANISATION still REACHES a moved-up report
+///         that now sits directly ON that Organisation (exact membership).</item>
+///   <item>(d) COVERAGE-IDENTITY (the S93 RED-on-old): hr01's MAO scope EXPANDED to explicit
+///         ORG_ONLY rows {STY01,STY02,STY03} reaches EXACTLY {STY01,STY02,STY03} — no narrowing,
+///         no widening (and NOT cross-MAO STY05).</item>
 ///   <item>(e) the <c>org_type</c> CHECK REJECTS an attempt to insert an <c>'AFDELING'</c> row.</item>
 /// </list>
 ///
 /// <para>Fixture/JWT conventions mirror <see cref="MixedRoleScopeLeakTests"/> (same WAF harness,
-/// the seed org tree MIN01/STY01/STY02/STY05). The seed orgs are the post-flatten init.sql ones:
-/// MIN01/MIN02 = MAO; STY01..STY05 = ORGANISATION.</para>
+/// the seed org tree MIN01/STY01/STY02/STY03/STY05). The seed orgs are the post-flatten init.sql
+/// ones: MIN01/MIN02 = MAO; STY01..STY05 = ORGANISATION.</para>
 /// </summary>
 [Trait("Category", "Docker")]
 public sealed class S92OrgFlattenTests : IAsyncLifetime
@@ -49,6 +54,7 @@ public sealed class S92OrgFlattenTests : IAsyncLifetime
     private const string MaoMin01 = "MIN01";          // /MIN01/            — a MAO (former MINISTRY)
     private const string OrgSty01 = "STY01";          // /MIN01/STY01/      — an ORGANISATION under MIN01
     private const string OrgSty02 = "STY02";          // /MIN01/STY02/      — the Organisation the former AFD01/AFD02 collapse into
+    private const string OrgSty03 = "STY03";          // /MIN01/STY03/      — the 3rd ORGANISATION under MIN01 (S93: hr01's expanded set)
     private const string OrgSty05 = "STY05";          // /MIN02/STY05/      — an ORGANISATION under a DIFFERENT MAO
 
     private TestFixtures.DockerHarness _harness = null!;
@@ -118,21 +124,21 @@ public sealed class S92OrgFlattenTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
-    //  (c) Preserved reach: an ORG_AND_DESCENDANTS admin scoped at the ORGANISATION still
-    //      reaches a moved-up report. RED-on-old: the report used to sit on AFD01 (under the
-    //      STY02 subtree); post-flatten it sits directly on STY02 and the admin's STY02
-    //      ORG_AND_DESCENDANTS scope still contains it (the parent path still covers it).
+    //  (c) Preserved reach: an admin ORG_ONLY scope at the ORGANISATION still reaches a moved-up
+    //      report. RED-on-old: the report used to sit on AFD01 (under the STY02 subtree);
+    //      post-flatten it sits directly ON STY02 and the admin's STY02 ORG_ONLY scope contains it
+    //      by exact membership (S93: no subtree branch needed — the report IS on the scoped org).
     // ════════════════════════════════════════════════════════════════════════════════
 
     [Fact]
-    public async Task OrgAndDescendants_AtOrganisation_StillReachesMovedUpReport()
+    public async Task OrgOnly_AtOrganisation_StillReachesMovedUpReport()
     {
         var report = await SeedEmployeeAsync("s92_movedup", OrgSty02);
         var validator = MakeValidator();
 
         var admin = new ActorContext(
             "s92_admin", StatsTidRoles.LocalAdmin, Guid.NewGuid(), OrgSty02,
-            new[] { new RoleScope(StatsTidRoles.LocalAdmin, OrgSty02, "ORG_AND_DESCENDANTS") });
+            new[] { new RoleScope(StatsTidRoles.LocalAdmin, OrgSty02, "ORG_ONLY") });
 
         // Org-access to the Organisation itself, and employee-access to the moved-up report,
         // both still hold under the floored admin path.
@@ -145,35 +151,76 @@ public sealed class S92OrgFlattenTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
-    //  (d) NO NARROWING: re-pointing an afdeling-keyed scope UP to its parent Organisation
-    //      only ever WIDENS-or-equals coverage. We compare the post-flatten accessible-org
-    //      set of a MAO-scoped HR (the kind of actor that contained the whole subtree) against
-    //      the conceptual afdeling-only set {STY02} — the post-flatten set is a SUPERSET-or-equal.
-    //      RED-on-old: nothing the flatten does removes an org from an actor's reach.
+    //  (d) COVERAGE-IDENTITY (the S93 RED-on-old): hr01's post-S92 MAO ORG_AND_DESCENDANTS scope
+    //      was EXPANDED to explicit per-Organisation ORG_ONLY rows {STY01,STY02,STY03}. The
+    //      accessible-org set must be EXACTLY {STY01,STY02,STY03} — no narrowing (every org under
+    //      MIN01 still reached) AND no widening (no descendant expansion, no spurious extras).
+    //
+    //      RED-on-old: on pre-S93 code GetAccessibleOrgsAsync expanded a MAO ORG_AND_DESCENDANTS
+    //      scope via the materialized-path subtree, so a single MIN01 scope returned the subtree
+    //      ({MIN01, STY01, STY02, STY03}). Post-S93 it returns EXACTLY the explicit assigned set —
+    //      so the test BOTH drops MIN01 (the MAO itself is no longer a member) AND keeps all three
+    //      Organisations (the expansion preserved coverage). A one-row MIN01 ORG_ONLY scope would
+    //      now reach EXACTLY {MIN01} (no children) — proving the expansion is load-bearing.
     // ════════════════════════════════════════════════════════════════════════════════
 
     [Fact]
-    public async Task NoNarrowing_PostFlattenAccessibleSet_IsSupersetOfAfdelingOnlySet()
+    public async Task CoverageIdentity_Hr01ExpandedScope_ReachesExactlyTheThreeOrganisations()
     {
         var validator = MakeValidator();
 
-        // An HR scoped at the MAO MIN01 (the seed hr01's shape) — ORG_AND_DESCENDANTS over the MAO.
+        // hr01's post-S93 shape: explicit ORG_ONLY rows over the three Organisations under MIN01.
         var hr = new ActorContext(
-            "s92_hr", StatsTidRoles.LocalHR, Guid.NewGuid(), MaoMin01,
-            new[] { new RoleScope(StatsTidRoles.LocalHR, MaoMin01, "ORG_AND_DESCENDANTS") });
+            "s92_hr", StatsTidRoles.LocalHR, Guid.NewGuid(), OrgSty01,
+            new[]
+            {
+                new RoleScope(StatsTidRoles.LocalHR, OrgSty01, "ORG_ONLY"),
+                new RoleScope(StatsTidRoles.LocalHR, OrgSty02, "ORG_ONLY"),
+                new RoleScope(StatsTidRoles.LocalHR, OrgSty03, "ORG_ONLY"),
+            });
 
         var accessible = await validator.GetAccessibleOrgsAsync(hr, StatsTidRoles.LocalHR);
         Assert.NotNull(accessible); // a bounded set (not the GLOBAL unrestricted sentinel)
 
-        // The conceptual "afdeling-only" set — the orgs the actor reached pre-flatten — re-pointed
-        // up to their Organisations. Every one of them must still be reachable post-flatten: the
-        // re-point only ever moved a scope UP the path (widen-or-equal, never narrow).
-        var conceptualAfdelingOnly = new[] { OrgSty01, OrgSty02 }; // both under MIN01 (the MAO subtree)
-        foreach (var org in conceptualAfdelingOnly)
-            Assert.Contains(org, accessible!);
+        // EXACT membership — no narrowing AND no widening.
+        var actual = new HashSet<string>(accessible!);
+        Assert.Equal(new HashSet<string> { OrgSty01, OrgSty02, OrgSty03 }, actual);
 
-        // And the MAO's reach does NOT spuriously include a different-MAO Organisation (bounded).
+        // Explicitly: every Organisation under MIN01 reached (no narrowing) …
+        Assert.Contains(OrgSty01, accessible!);
+        Assert.Contains(OrgSty02, accessible!);
+        Assert.Contains(OrgSty03, accessible!);
+        // … the MAO itself is NOT a member (no subtree key) …
+        Assert.DoesNotContain(MaoMin01, accessible!);
+        // … and there is NO widening to a different-MAO Organisation (bounded).
         Assert.DoesNotContain(OrgSty05, accessible!);
+    }
+
+    // ════════════════════════════════════════════════════════════════════════════════
+    //  (d-no-widening) A SINGLE MAO-keyed ORG_ONLY scope reaches EXACTLY {MAO} — no descendant
+    //      expansion. This is the sharpest no-widening pin: it proves GetAccessibleOrgsAsync no
+    //      longer walks the subtree, which is WHY the seed had to expand hr01 to explicit rows.
+    //      (Such a MAO-typed grant is rejected at the grant endpoint by OQ1; this exercises the
+    //      validator directly on a force-constructed scope.)
+    // ════════════════════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public async Task NoWidening_SingleMaoScope_ReachesExactlyTheMaoOnly_NoDescendants()
+    {
+        var validator = MakeValidator();
+
+        var hr = new ActorContext(
+            "s92_hr_mao", StatsTidRoles.LocalHR, Guid.NewGuid(), MaoMin01,
+            new[] { new RoleScope(StatsTidRoles.LocalHR, MaoMin01, "ORG_ONLY") });
+
+        var accessible = await validator.GetAccessibleOrgsAsync(hr, StatsTidRoles.LocalHR);
+        Assert.NotNull(accessible);
+
+        // Exactly the MAO — the children STY01/STY02/STY03 are NOT pulled in.
+        Assert.Equal(new HashSet<string> { MaoMin01 }, new HashSet<string>(accessible!));
+        Assert.DoesNotContain(OrgSty01, accessible!);
+        Assert.DoesNotContain(OrgSty02, accessible!);
+        Assert.DoesNotContain(OrgSty03, accessible!);
     }
 
     // ════════════════════════════════════════════════════════════════════════════════

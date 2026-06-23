@@ -169,30 +169,33 @@ public sealed class WaiverResolutionTests : IAsyncLifetime
     // S71 Step-7a W1 pin — audit actor-org provenance: the ADR-026 row records the OPERATOR's
     // org in actor_primary_org_id and the EMPLOYEE's resolved org in target_org_id (the
     // request-endpoint / lifecycle-writer convention). The same-org facts above cannot
-    // discriminate the two columns — this fact uses a parent-org HR actor over a
-    // child-org leaver (ORG_AND_DESCENDANTS subtree admission).
+    // discriminate the two columns — this fact uses an HR actor whose PRIMARY org differs from
+    // the target leaver's org. S93 flat role-scope: the actor holds an exact ORG_ONLY scope on the
+    // leaver's (child) Organisation while its token's primary org is a DIFFERENT org — so the audit
+    // records the primary org, not the scope/target org.
     // ════════════════════════════════════════════════════════════════════════
 
     [Fact]
     public async Task Waive_ParentOrgHrActor_AuditRowCarriesActorOrgNotTargetOrg()
     {
-        const string parentOrg = "STY71WP";
-        const string childOrg = "STY71WC";
-        await SeedOrgPairAsync(parentOrg, childOrg);
+        const string actorOrg = "STY71WP";   // the actor's PRIMARY org (recorded in actor_primary_org_id)
+        const string childOrg = "STY71WC";   // the leaver's org (the access-granting scope + target_org_id)
+        await SeedOrgPairAsync(actorOrg, childOrg);
 
         var employeeId = "emp_s71_waiver_" + Guid.NewGuid().ToString("N")[..8];
         await RegressionSeed.SeedEmployeeAsync(_harness.ConnectionString, employeeId, childOrg, "AC", "OK24");
         await MarkLeaverAsync(employeeId, EndDate);
         await SeedSettlementRowAsync(employeeId, Ferieaar, Termination, "PENDING_REVIEW", forfeitDays: ClaimDays);
 
-        var rsp = await ResolveAsync(HrClientFor(parentOrg), employeeId, Ferieaar, "WAIVED", ifMatch: "\"1\"");
+        // Actor: primary org = actorOrg, access-granting scope = the child org the leaver sits on.
+        var rsp = await ResolveAsync(HrClientFor(actorOrg, childOrg), employeeId, Ferieaar, "WAIVED", ifMatch: "\"1\"");
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
 
         Assert.Equal(1L, await CountAsync(
             "audit_projection",
             "event_type = 'TerminationClaimWaived' AND target_resource_id = @r " +
             "AND actor_primary_org_id = @actorOrg AND target_org_id = @targetOrg",
-            ("r", employeeId), ("actorOrg", parentOrg), ("targetOrg", childOrg)));
+            ("r", employeeId), ("actorOrg", actorOrg), ("targetOrg", childOrg)));
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -532,13 +535,19 @@ public sealed class WaiverResolutionTests : IAsyncLifetime
 
     private HttpClient HrClient() => HrClientFor(OrgId);
 
-    private HttpClient HrClientFor(string orgId)
+    // S93 flat role-scope: the HR actor's access-granting scope is exact ORG_ONLY membership. The
+    // single-arg form keys the scope on the same org as the actor's primary org (the common case);
+    // the two-arg form lets a test give the actor a DIFFERENT primary org than its scope org (used
+    // to discriminate actor_primary_org_id from the access-granting scope org).
+    private HttpClient HrClientFor(string orgId) => HrClientFor(orgId, orgId);
+
+    private HttpClient HrClientFor(string primaryOrgId, string scopeOrgId)
     {
         var svc = new JwtTokenService(DevSettings());
         var token = svc.GenerateToken(
             employeeId: "hr_s71_waiver", name: "hr_s71_waiver", role: StatsTidRoles.LocalHR,
-            agreementCode: "AC", orgId: orgId,
-            scopes: new[] { new RoleScope(StatsTidRoles.LocalHR, orgId, "ORG_AND_DESCENDANTS") });
+            agreementCode: "AC", orgId: primaryOrgId,
+            scopes: new[] { new RoleScope(StatsTidRoles.LocalHR, scopeOrgId, "ORG_ONLY") });
         return ClientWith(token);
     }
 
@@ -615,9 +624,10 @@ public sealed class WaiverResolutionTests : IAsyncLifetime
         return employeeId;
     }
 
-    /// <summary>Root-anchored parent/child org pair (the AuditProjectionQueryTests path
-    /// convention) so an ORG_AND_DESCENDANTS scope on the parent admits the child via the
-    /// materialized-path subtree check. Idempotent; pre-empts the seeder's flat ensureOrg.</summary>
+    /// <summary>A MAO + child-ORGANISATION org pair. S93 flat role-scope: the actor scopes
+    /// directly on the child Organisation (exact ORG_ONLY); the MAO parent only serves as a
+    /// DIFFERENT primary-org label so the audit row's actor_primary_org_id can be discriminated
+    /// from target_org_id. Idempotent; pre-empts the seeder's flat ensureOrg.</summary>
     private async Task SeedOrgPairAsync(string parentOrg, string childOrg)
     {
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);

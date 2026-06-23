@@ -123,11 +123,11 @@ public sealed class AllocationBreakdownEndpointTests : IAsyncLifetime
             """
             INSERT INTO role_assignments (user_id, role_id, org_id, scope_type, assigned_by)
             VALUES
-                (@mgr,    'LOCAL_LEADER', 'STY02', 'ORG_AND_DESCENDANTS', 'TEST'),
-                (@vik,    'LOCAL_LEADER', 'STY02', 'ORG_AND_DESCENDANTS', 'TEST'),
-                (@other,  'LOCAL_LEADER', 'STY01', 'ORG_AND_DESCENDANTS', 'TEST'),
-                (@hr,     'LOCAL_HR',     'STY02', 'ORG_AND_DESCENDANTS', 'TEST'),
-                (@mgrx,   'LOCAL_LEADER', 'STY05', 'ORG_AND_DESCENDANTS', 'TEST'),
+                (@mgr,    'LOCAL_LEADER', 'STY02', 'ORG_ONLY', 'TEST'),
+                (@vik,    'LOCAL_LEADER', 'STY02', 'ORG_ONLY', 'TEST'),
+                (@other,  'LOCAL_LEADER', 'STY01', 'ORG_ONLY', 'TEST'),
+                (@hr,     'LOCAL_HR',     'STY02', 'ORG_ONLY', 'TEST'),
+                (@mgrx,   'LOCAL_LEADER', 'STY05', 'ORG_ONLY', 'TEST'),
                 (@emp,    'EMPLOYEE',     'STY02', 'ORG_ONLY',            'TEST'),
                 (@empvik, 'EMPLOYEE',     'STY02', 'ORG_ONLY',            'TEST'),
                 (@empim,  'EMPLOYEE',     'STY02', 'ORG_ONLY',            'TEST'),
@@ -627,7 +627,7 @@ public sealed class AllocationBreakdownEndpointTests : IAsyncLifetime
     private static string MintToken(string userId, string orgId, string role)
     {
         var tokenService = NewTokenService();
-        var scopeType = role == StatsTidRoles.Employee ? "ORG_ONLY" : "ORG_AND_DESCENDANTS";
+        var scopeType = role == StatsTidRoles.Employee ? "ORG_ONLY" : "ORG_ONLY";
         var scopes = new[] { new RoleScope(role, orgId, scopeType) };
         return tokenService.GenerateToken(
             employeeId: userId, name: userId, role: role,

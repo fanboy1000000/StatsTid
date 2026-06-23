@@ -6,7 +6,7 @@ public sealed class RoleAssignment
     public required string UserId { get; init; }
     public required string RoleId { get; init; }
     public string? OrgId { get; init; }  // NULL = global scope
-    public required string ScopeType { get; init; }  // GLOBAL, ORG_ONLY, ORG_AND_DESCENDANTS
+    public required string ScopeType { get; init; }  // GLOBAL, ORG_ONLY (S93/ADR-035: ORG_AND_DESCENDANTS dropped)
     public required string AssignedBy { get; init; }
     public DateTime AssignedAt { get; init; } = DateTime.UtcNow;
     public DateTime? ExpiresAt { get; init; }

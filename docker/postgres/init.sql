@@ -652,7 +652,7 @@ CREATE TABLE IF NOT EXISTS role_assignments (
     user_id             TEXT        NOT NULL REFERENCES users(user_id),
     role_id             TEXT        NOT NULL REFERENCES roles(role_id),
     org_id              TEXT        REFERENCES organizations(org_id),
-    scope_type          TEXT        NOT NULL CHECK (scope_type IN ('GLOBAL', 'ORG_ONLY', 'ORG_AND_DESCENDANTS')),
+    scope_type          TEXT        NOT NULL CHECK (scope_type IN ('GLOBAL', 'ORG_ONLY')),
     assigned_by         TEXT        NOT NULL,
     assigned_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     expires_at          TIMESTAMPTZ,
@@ -903,27 +903,35 @@ INSERT INTO users (user_id, username, password_hash, display_name, email, primar
 ON CONFLICT DO NOTHING;
 
 -- Seed role assignments
--- S92 flatten (ADR-035): the 9 former AFDELING-keyed org_id values are re-pointed UP
--- onto the parent ORGANISATION (AFD01/AFD02 -> STY02; AFD03/AFD04 -> STY05; AFD05 -> STY04).
--- This is the INTENDED afdeling->Organisation coarsening (Enhed holds no authority; the
--- Organisation is the smallest authority unit). The MAO-keyed HR scopes (hr01->MIN01,
--- hr02->MIN02) are LEFT AS-IS: the MINISTRY->MAO rename is identity-preserving and
--- ORG_AND_DESCENDANTS from a MAO still covers every ORGANISATION beneath it.
+-- S93 flatten (ADR-035 slice 2, flat role-scope): ORG_AND_DESCENDANTS is dropped. Coverage is now
+-- EXACT Organisation-set membership (the union of a user's ORG_ONLY rows; no materialized-path
+-- subtree). Every non-GLOBAL row's org_id MUST be an ORGANISATION (never a MAO).
+--   * The 2 former MAO-rooted HR scopes EXPAND to explicit per-ORGANISATION rows (coverage-identical
+--     to post-S92): hr01->MIN01 becomes hr01->{STY01,STY02,STY03}; hr02->MIN02 becomes
+--     hr02->{STY04,STY05}. The expanded rows are distinct org_ids, so UNIQUE(user_id,role_id,org_id)
+--     holds.
+--   * The 5 Organisation-rooted ORG_AND_DESCENDANTS rows (ladm01->STY02, ladm02->STY05, mgr01->STY02,
+--     mgr02->STY05, mgr03->STY01) convert 1:1 to ORG_ONLY.
+-- (S92 history: the former AFDELING-keyed org_id values were re-pointed UP onto the parent
+-- ORGANISATION; the Organisation is the smallest authority unit.)
 -- Global Admins: admin01, admin02 (GLOBAL)
--- Local Admins: ladm01 (Statens IT subtree), ladm02 (Arbejdstilsynet subtree)
--- Local HR: hr01 (Finansministeriet/MAO subtree), hr02 (Beskaeftigelsesministeriet/MAO subtree)
--- Local Leaders: mgr01 (Statens IT, enhed IT-Drift), mgr02 (Arbejdstilsynet, enhed Tilsyn Nord), mgr03 (MFK)
+-- Local Admins: ladm01 (Statens IT), ladm02 (Arbejdstilsynet)
+-- Local HR: hr01 (Finansministeriet org-set {STY01,STY02,STY03}), hr02 (Beskaeftigelsesministeriet org-set {STY04,STY05})
+-- Local Leaders: mgr01 (Statens IT, enhed IT-Drift), mgr02 (Arbejdstilsynet, enhed Tilsyn Nord), mgr03 (MFK/STY01)
 -- Employees: emp001-010 on their respective Organisations
 INSERT INTO role_assignments (user_id, role_id, org_id, scope_type, assigned_by) VALUES
     ('admin01', 'GLOBAL_ADMIN', NULL, 'GLOBAL', 'system'),
     ('admin02', 'GLOBAL_ADMIN', NULL, 'GLOBAL', 'system'),
-    ('ladm01', 'LOCAL_ADMIN', 'STY02', 'ORG_AND_DESCENDANTS', 'admin01'),
-    ('ladm02', 'LOCAL_ADMIN', 'STY05', 'ORG_AND_DESCENDANTS', 'admin02'),
-    ('hr01', 'LOCAL_HR', 'MIN01', 'ORG_AND_DESCENDANTS', 'admin01'),
-    ('hr02', 'LOCAL_HR', 'MIN02', 'ORG_AND_DESCENDANTS', 'admin02'),
-    ('mgr01', 'LOCAL_LEADER', 'STY02', 'ORG_AND_DESCENDANTS', 'ladm01'),
-    ('mgr02', 'LOCAL_LEADER', 'STY05', 'ORG_AND_DESCENDANTS', 'ladm02'),
-    ('mgr03', 'LOCAL_LEADER', 'STY01', 'ORG_AND_DESCENDANTS', 'admin01'),
+    ('ladm01', 'LOCAL_ADMIN', 'STY02', 'ORG_ONLY', 'admin01'),
+    ('ladm02', 'LOCAL_ADMIN', 'STY05', 'ORG_ONLY', 'admin02'),
+    ('hr01', 'LOCAL_HR', 'STY01', 'ORG_ONLY', 'admin01'),
+    ('hr01', 'LOCAL_HR', 'STY02', 'ORG_ONLY', 'admin01'),
+    ('hr01', 'LOCAL_HR', 'STY03', 'ORG_ONLY', 'admin01'),
+    ('hr02', 'LOCAL_HR', 'STY04', 'ORG_ONLY', 'admin02'),
+    ('hr02', 'LOCAL_HR', 'STY05', 'ORG_ONLY', 'admin02'),
+    ('mgr01', 'LOCAL_LEADER', 'STY02', 'ORG_ONLY', 'ladm01'),
+    ('mgr02', 'LOCAL_LEADER', 'STY05', 'ORG_ONLY', 'ladm02'),
+    ('mgr03', 'LOCAL_LEADER', 'STY01', 'ORG_ONLY', 'admin01'),
     ('emp001', 'EMPLOYEE', 'STY01', 'ORG_ONLY', 'mgr03'),
     ('emp002', 'EMPLOYEE', 'STY02', 'ORG_ONLY', 'mgr01'),
     ('emp003', 'EMPLOYEE', 'STY02', 'ORG_ONLY', 'ladm01'),

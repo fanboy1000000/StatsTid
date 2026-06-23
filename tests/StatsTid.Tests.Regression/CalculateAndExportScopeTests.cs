@@ -174,7 +174,7 @@ public sealed class CalculateAndExportScopeTests : IAsyncLifetime
             ActorRole: StatsTidRoles.LocalAdmin,
             CorrelationId: Guid.NewGuid(),
             OrgId: orgId,
-            Scopes: new[] { new RoleScope(StatsTidRoles.LocalAdmin, orgId, "ORG_AND_DESCENDANTS") });
+            Scopes: new[] { new RoleScope(StatsTidRoles.LocalAdmin, orgId, "ORG_ONLY") });
 
     private static ActorContext GlobalAdmin() =>
         new(
@@ -207,7 +207,8 @@ public sealed class CalculateAndExportScopeTests : IAsyncLifetime
     // Branch 2: LocalAdmin from org A, target employee in org A → accepted.
     //
     // Pins that the fix didn't over-rotate: same-org admin must still pass.
-    // ORG_AND_DESCENDANTS scope on /MIN_A/ covers /MIN_A/ itself.
+    // S93 flat role-scope: an ORG_ONLY scope on MIN_A covers MIN_A itself by exact match
+    // (self-coverage — the target EMP_A sits in MIN_A, the scope's own org).
     // -----------------------------------------------------------------------
     [Fact]
     public async Task SameOrgAdmin_Accepted()

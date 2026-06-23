@@ -572,35 +572,36 @@ public sealed class FeriehindringResolutionTests : IAsyncLifetime
 
     // ════════════════════════════════════════════════════════════════════════
     // Audit actor-org provenance — the ADR-026 rows record the OPERATOR's org + the EMPLOYEE's
-    // resolved org. A same-org fixture cannot discriminate; this uses a parent-org HR actor over a
-    // child-org employee (ORG_AND_DESCENDANTS subtree admission).
+    // resolved org. A same-org fixture cannot discriminate; this uses an HR actor whose PRIMARY org
+    // differs from the target employee's org. S93 flat role-scope: the actor holds an exact ORG_ONLY
+    // scope on the employee's (child) Organisation while its token's primary org is a DIFFERENT org.
     // ════════════════════════════════════════════════════════════════════════
 
     [Fact]
     public async Task ParentOrgHrActor_AuditRowsCarryActorOrgNotTargetOrg()
     {
-        const string parentOrg = "STY79FP";
-        const string childOrg = "STY79FC";
-        await SeedOrgPairAsync(parentOrg, childOrg);
+        const string actorOrg = "STY79FP";   // the actor's PRIMARY org (recorded in actor_primary_org_id)
+        const string childOrg = "STY79FC";   // the employee's org (the access-granting scope + target_org_id)
+        await SeedOrgPairAsync(actorOrg, childOrg);
 
         var employeeId = "emp_s79_fh_" + Guid.NewGuid().ToString("N")[..8];
         await RegressionSeed.SeedEmployeeAsync(_harness.ConnectionString, employeeId, childOrg, "AC", "OK24");
         await SeedSettlementRowAsync(employeeId, Ferieaar, YearEnd, "PENDING_REVIEW",
             forfeitDays: 15m, transferDays: 0m);
 
-        var rsp = await ResolveFeriehindringAsync(HrClientFor(parentOrg), employeeId, Ferieaar,
+        var rsp = await ResolveFeriehindringAsync(HrClientFor(actorOrg, childOrg), employeeId, Ferieaar,
             impededDays: 10m, reason: Reason, ifMatch: "\"1\"");
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
 
-        // Both emitted events' audit rows: actor org = parent, target org = child.
+        // Both emitted events' audit rows: actor org = the actor's primary org, target org = child.
         Assert.Equal(1L, await CountAsync("audit_projection",
             "event_type = 'FeriehindringTransferred' AND target_resource_id = @r " +
             "AND actor_primary_org_id = @actorOrg AND target_org_id = @targetOrg",
-            ("r", employeeId), ("actorOrg", parentOrg), ("targetOrg", childOrg)));
+            ("r", employeeId), ("actorOrg", actorOrg), ("targetOrg", childOrg)));
         Assert.Equal(1L, await CountAsync("audit_projection",
             "event_type = 'VacationForfeitedToFeriefond' AND target_resource_id = @r " +
             "AND actor_primary_org_id = @actorOrg AND target_org_id = @targetOrg",
-            ("r", employeeId), ("actorOrg", parentOrg), ("targetOrg", childOrg)));
+            ("r", employeeId), ("actorOrg", actorOrg), ("targetOrg", childOrg)));
     }
 
     private async Task<bool> HasUngrantedAdvisoryWaitAsync()
@@ -616,13 +617,18 @@ public sealed class FeriehindringResolutionTests : IAsyncLifetime
 
     private HttpClient HrClient() => HrClientFor(OrgId);
 
-    private HttpClient HrClientFor(string orgId)
+    // S93 flat role-scope: exact ORG_ONLY membership. The single-arg form keys the scope on the
+    // actor's primary org; the two-arg form decouples the primary org from the access-granting
+    // scope org (used to discriminate actor_primary_org_id from target_org_id).
+    private HttpClient HrClientFor(string orgId) => HrClientFor(orgId, orgId);
+
+    private HttpClient HrClientFor(string primaryOrgId, string scopeOrgId)
     {
         var svc = new JwtTokenService(DevSettings());
         var token = svc.GenerateToken(
             employeeId: "hr_s79_fh", name: "hr_s79_fh", role: StatsTidRoles.LocalHR,
-            agreementCode: "AC", orgId: orgId,
-            scopes: new[] { new RoleScope(StatsTidRoles.LocalHR, orgId, "ORG_AND_DESCENDANTS") });
+            agreementCode: "AC", orgId: primaryOrgId,
+            scopes: new[] { new RoleScope(StatsTidRoles.LocalHR, scopeOrgId, "ORG_ONLY") });
         return ClientWith(token);
     }
 

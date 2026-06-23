@@ -39,7 +39,7 @@ public sealed class EmploymentEndDateLifecycleTests : IAsyncLifetime
     private const string DevFallbackSigningKey = "StatsTid_Sprint3_DevKey_MustBeAtLeast32BytesLong!";
     private const string OrgId = "STY01";        // target employees' org (/MIN01/STY01/)
     private const string DisjointOrg = "STY05";  // /MIN02/STY05/ — disjoint from STY01
-    private const string CoveringOrg = "MIN01";  // covers STY01 via ORG_AND_DESCENDANTS
+    private const string CoveringOrg = "STY01";  // S93 flat role-scope: covers STY01 by exact ORG_ONLY match (a MAO no longer covers a child)
     private const string VacationType = "VACATION";
 
     private TestFixtures.DockerHarness _harness = null!;
@@ -571,7 +571,7 @@ public sealed class EmploymentEndDateLifecycleTests : IAsyncLifetime
         return svc.GenerateToken(
             employeeId: actorId, name: actorId, role: StatsTidRoles.LocalHR,
             agreementCode: "AC", orgId: orgId,
-            scopes: new[] { new RoleScope(StatsTidRoles.LocalHR, orgId, "ORG_AND_DESCENDANTS") });
+            scopes: new[] { new RoleScope(StatsTidRoles.LocalHR, orgId, "ORG_ONLY") });
     }
 
     private static string EmployeeToken(string actorId, string orgId)
@@ -589,7 +589,7 @@ public sealed class EmploymentEndDateLifecycleTests : IAsyncLifetime
         return svc.GenerateToken(
             employeeId: actorId, name: actorId, role: StatsTidRoles.LocalLeader,
             agreementCode: "AC", orgId: orgId,
-            scopes: new[] { new RoleScope(StatsTidRoles.LocalLeader, orgId, "ORG_AND_DESCENDANTS") });
+            scopes: new[] { new RoleScope(StatsTidRoles.LocalLeader, orgId, "ORG_ONLY") });
     }
 
     private static JwtSettings DevSettings() => new()

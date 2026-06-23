@@ -11,7 +11,7 @@ export interface JwtPayload {
 export interface RoleScope {
   role: string
   orgId: string
-  scopeType: 'GLOBAL' | 'ORG_ONLY' | 'ORG_AND_DESCENDANTS'
+  scopeType: 'GLOBAL' | 'ORG_ONLY'
 }
 
 function base64UrlDecode(str: string): string {

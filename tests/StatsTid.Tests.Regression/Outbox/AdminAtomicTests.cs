@@ -248,7 +248,7 @@ public sealed class AdminAtomicTests : IAsyncLifetime
             user_id             TEXT        NOT NULL REFERENCES users(user_id),
             role_id             TEXT        NOT NULL REFERENCES roles(role_id),
             org_id              TEXT        REFERENCES organizations(org_id),
-            scope_type          TEXT        NOT NULL CHECK (scope_type IN ('GLOBAL', 'ORG_ONLY', 'ORG_AND_DESCENDANTS')),
+            scope_type          TEXT        NOT NULL CHECK (scope_type IN ('GLOBAL', 'ORG_ONLY')),
             assigned_by         TEXT        NOT NULL,
             assigned_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             expires_at          TIMESTAMPTZ,

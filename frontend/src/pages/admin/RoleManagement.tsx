@@ -27,7 +27,6 @@ const ROLE_OPTIONS = [
 const SCOPE_TYPE_OPTIONS = [
   { value: 'GLOBAL', label: 'Global' },
   { value: 'ORG_ONLY', label: 'Kun organisation' },
-  { value: 'ORG_AND_DESCENDANTS', label: 'Organisation og underenheder' },
 ]
 
 function roleDanishLabel(roleId: string): string {
@@ -41,8 +40,6 @@ function scopeBadgeVariant(scopeType: string): 'info' | 'default' | 'warning' {
       return 'info'
     case 'ORG_ONLY':
       return 'default'
-    case 'ORG_AND_DESCENDANTS':
-      return 'warning'
     default:
       return 'default'
   }

@@ -48,7 +48,7 @@ public sealed class TerminationPayoutRequestEndpointTests : IAsyncLifetime
     private const string DevFallbackSigningKey = "StatsTid_Sprint3_DevKey_MustBeAtLeast32BytesLong!";
     private const string OrgId = "STY01";
     private const string DisjointOrg = "STY05";
-    private const string CoveringOrg = "MIN01";
+    private const string CoveringOrg = "STY01";  // S93 flat role-scope: covers STY01 by exact ORG_ONLY match (a MAO no longer covers a child)
     private const string VacationType = "VACATION";
     private const string Termination = "TERMINATION";
     private const string HrActorId = "hr_s71_req";
@@ -418,7 +418,7 @@ public sealed class TerminationPayoutRequestEndpointTests : IAsyncLifetime
         return svc.GenerateToken(
             employeeId: actorId, name: actorId, role: StatsTidRoles.LocalHR,
             agreementCode: "AC", orgId: orgId,
-            scopes: new[] { new RoleScope(StatsTidRoles.LocalHR, orgId, "ORG_AND_DESCENDANTS") });
+            scopes: new[] { new RoleScope(StatsTidRoles.LocalHR, orgId, "ORG_ONLY") });
     }
 
     private static string EmployeeToken(string actorId, string orgId)
@@ -436,7 +436,7 @@ public sealed class TerminationPayoutRequestEndpointTests : IAsyncLifetime
         return svc.GenerateToken(
             employeeId: actorId, name: actorId, role: StatsTidRoles.LocalLeader,
             agreementCode: "AC", orgId: orgId,
-            scopes: new[] { new RoleScope(StatsTidRoles.LocalLeader, orgId, "ORG_AND_DESCENDANTS") });
+            scopes: new[] { new RoleScope(StatsTidRoles.LocalLeader, orgId, "ORG_ONLY") });
     }
 
     private static JwtSettings DevSettings() => new()

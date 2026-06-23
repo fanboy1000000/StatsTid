@@ -25,7 +25,7 @@ S74–S91 built a designated-approver + same-tree-containment + `ORG_AND_DESCEND
 
 **D4 — Phasing (owner-confirmed; org-model flatten FIRST).**
 - **S92** = org-model flatten (this slice — D5).
-- **S93** = flat role-scope (drop `ORG_AND_DESCENDANTS`; coverage = explicit Organisation-set membership; `CoversOrg`/`OrgScopeValidator`/JWT/grant-revoke/FE picker).
+- **S93** = flat role-scope (drop `ORG_AND_DESCENDANTS`; coverage = explicit Organisation-set membership; `CoversOrg`/`OrgScopeValidator`/JWT/grant-revoke/FE picker). **✅ LANDED — see the S93 amendment below.**
 - **S94** = flat approval (`CanApprove` = edge OR HR/Admin-over-Organisation; same-Organisation vikar; retire `reporting_line_tree_settings` + the REQUIRED-mode 428 gate).
 - **S95** = retire the tree machinery (`tree_root_org_id`, `ResolveTreeRootOrgIdAsync`, `ValidateSameTreeAsync`, `CrossTreeAssignmentException`; re-key the advisory locks to the flat Organisation/employee key per the lock matrix in the refinement).
 - **later** = the redesigned Organisation admin page + the structured/rich Enhed UX.
@@ -51,3 +51,12 @@ S74–S91 built a designated-approver + same-tree-containment + `ORG_AND_DESCEND
 - **No event-vocabulary change in S92**; org create/update events + audit unchanged.
 - **Concurrency (S95)**: dropping `tree_root_org_id` removes a serialization domain, not just a mutable key — the refinement's lock matrix ("any mutation changing employee E's effective-approver holds E's lock; vikar fans out to E∈reports(M); cycle guard locks both endpoints id-sorted; the ≥3-node proof is a first-class deliverable") governs the re-key.
 - This ADR is the umbrella; each slice (S93/S94/S95) amends D4/D5/D6 with its landed status.
+
+## S93 Amendment (2026-06-23) — flat role-scope LANDED
+**`ORG_AND_DESCENDANTS` is removed.** Role-scope coverage is now **exact Organisation-set membership** — the union of a user's `ORG_ONLY` rows; `scope_type` is `{GLOBAL, ORG_ONLY}`. `RoleScope.CoversOrg` is GLOBAL + exact-equality only; `OrgScopeValidator.GetAccessibleOrgsAsync` returns the assigned (role-floored) set with NO `GetDescendantsAsync` subtree expansion; the `ApprovalEndpoints` pickers + the `ReportingLineEndpoints` vikar-eligibility drop their prefix arms (the GLOBAL `"/"` arm stays). `GetDescendantsAsync` + the path-prefix matching are now **dormant, pending formal retirement with the tree machinery in S95** (ADR-008 materialized-path role narrows accordingly).
+
+**Coverage-IDENTITY (P7).** S93 is a pure mechanism change — coverage is preserved exactly relative to post-S92 — by **expanding** the MAO-rooted scopes to explicit per-Organisation rows: the seed `hr01→MIN01`/`hr02→MIN02` ORG_AND_DESCENDANTS became `hr01→{STY01,STY02,STY03}` / `hr02→{STY04,STY05}` ORG_ONLY. (The demo had no MAO-rooted scope — all 457 converted 1:1.) `S92OrgFlattenTests` + `S93FlatRoleScopeTests` pin no-narrowing + no-widening.
+
+**OQ1 — ORG_ONLY grants restricted to ORGANISATION org_ids.** A non-GLOBAL (ORG_ONLY) grant whose `org_id` is a **MAO** is REJECTED (400). Rationale (Step-0b dual-lens — Codex caught what the internal lens cleared, [[review-lens-complementarity]]): a MAO is not an authority unit, but a MAO-typed scope would pass the org-STRUCTURE gates (`AdminEndpoints` org-create-under-parent + MAO-update), conferring MAO-structure admin. Rejecting it at grant closes the vector; the org-create/edit endpoint POLICY is deliberately untouched this sprint — the **org-structure-admin tier** (GlobalAdmin-only vs MAO-scopable) is the **Organisation-page sprint's** decision. Consequence: post-S93 only a GLOBAL holder satisfies a MAO org-access check, so creating/editing a MAO is effectively GlobalAdmin (a natural consequence of the expansion, not a policy change).
+
+**Unchanged**: the S85 escalation CHECKs retained; JWT + the audit mapper/repo are enum-agnostic (no change); the ADR-027 disposition table (D6) is untouched (S93 does not touch the tree machinery). **NEXT: S94** = flat approval (`CanApprove` edge OR HR/Admin-over-Organisation; same-Organisation vikar; retire REQUIRED-mode).

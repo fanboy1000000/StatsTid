@@ -140,7 +140,7 @@ public sealed class YearOverviewTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// A leader scoped to emp001's org (STY01 / ORG_AND_DESCENDANTS) → 200 (in-scope access).
+    /// A leader scoped to emp001's org (STY01 / ORG_ONLY, S93 flat role-scope) → 200 (in-scope access).
     /// </summary>
     [Fact]
     public async Task Auth_LeaderInScope_Returns200()
@@ -151,7 +151,7 @@ public sealed class YearOverviewTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// A leader scoped to a DISJOINT org subtree (STY05 / ORG_AND_DESCENDANTS) reading emp001
+    /// A leader scoped to a DISJOINT org (STY05 / ORG_ONLY, S93 flat role-scope) reading emp001
     /// whose primary org is STY01 → 403 (out-of-scope negative branch, Step-0b Codex W3).
     /// </summary>
     [Fact]
@@ -1848,7 +1848,7 @@ public sealed class YearOverviewTests : IAsyncLifetime
             role: StatsTidRoles.LocalLeader,
             agreementCode: "AC",
             orgId: scopeOrgId,
-            scopes: new[] { new RoleScope(StatsTidRoles.LocalLeader, scopeOrgId, "ORG_AND_DESCENDANTS") });
+            scopes: new[] { new RoleScope(StatsTidRoles.LocalLeader, scopeOrgId, "ORG_ONLY") });
     }
 
     private static string LocalAdminBearerToken(string actorId, string scopeOrgId)
@@ -1860,7 +1860,7 @@ public sealed class YearOverviewTests : IAsyncLifetime
             role: StatsTidRoles.LocalAdmin,
             agreementCode: "AC",
             orgId: scopeOrgId,
-            scopes: new[] { new RoleScope(StatsTidRoles.LocalAdmin, scopeOrgId, "ORG_AND_DESCENDANTS") });
+            scopes: new[] { new RoleScope(StatsTidRoles.LocalAdmin, scopeOrgId, "ORG_ONLY") });
     }
 
     private static JwtSettings DevJwtSettings() => new()

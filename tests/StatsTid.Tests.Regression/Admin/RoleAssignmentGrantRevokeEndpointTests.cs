@@ -265,6 +265,83 @@ public sealed class RoleAssignmentGrantRevokeEndpointTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
+    //  S93 / ADR-035 slice 2 — flat role-scope grant guards (RED on pre-S93 code)
+    // ════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// S93 (a): the grant endpoint REJECTS an ORG_AND_DESCENDANTS scopeType with 400 (the enum
+    /// collapsed to {GLOBAL, ORG_ONLY}). RED on pre-S93 code: ORG_AND_DESCENDANTS was an accepted
+    /// scopeType and the row minted (201).
+    /// </summary>
+    [Fact]
+    public async Task Grant_OrgAndDescendantsScopeType_IsRejected_400_NoRowMinted()
+    {
+        var client = GlobalAdminClient(); // a fully-privileged actor — the rejection is scope-shape, not authz
+
+        var rsp = await client.PostAsJsonAsync("/api/admin/roles/grant", new
+        {
+            userId = TargetEmp,
+            roleId = "LOCAL_LEADER",
+            orgId = OrgStorelse,
+            scopeType = "ORG_AND_DESCENDANTS",
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, rsp.StatusCode);
+        Assert.Equal(0, await CountAssignmentsAsync(TargetEmp));
+    }
+
+    /// <summary>
+    /// S93 OQ1 (b): an ORG_ONLY grant whose org_id resolves to a MAO (org_type='MAO', e.g. MIN01)
+    /// is REJECTED with 400 — a MAO is not an authority unit (a MAO-typed scope confers
+    /// org-structure admin, not inert roster reach). RED on pre-S93 code: the MAO org_id passed
+    /// (ORG_AND_DESCENDANTS over a MAO covered the whole subtree) and the row minted.
+    /// The actor is GlobalAdmin so it clears ValidateOrgAccessAsync — the rejection is the OQ1
+    /// org-type gate, not authorization.
+    /// </summary>
+    [Fact]
+    public async Task Grant_OrgOnly_OnMaoOrgId_IsRejected_400_NoRowMinted()
+    {
+        var client = GlobalAdminClient();
+
+        var rsp = await client.PostAsJsonAsync("/api/admin/roles/grant", new
+        {
+            userId = TargetEmp,
+            roleId = "LOCAL_HR",
+            orgId = "MIN01",            // a MAO (org_type='MAO'), not an ORGANISATION
+            scopeType = "ORG_ONLY",
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, rsp.StatusCode);
+        Assert.Equal(0, await CountAssignmentsAsync(TargetEmp));
+    }
+
+    /// <summary>
+    /// S93 OQ1 (b, positive control): an ORG_ONLY grant whose org_id is an ORGANISATION (STY01) is
+    /// ACCEPTED (201) — proves the OQ1 gate rejects only MAOs, not every non-GLOBAL grant.
+    /// </summary>
+    [Fact]
+    public async Task Grant_OrgOnly_OnOrganisationOrgId_Returns201()
+    {
+        var client = GlobalAdminClient();
+
+        var rsp = await client.PostAsJsonAsync("/api/admin/roles/grant", new
+        {
+            userId = TargetEmp,
+            roleId = "LOCAL_HR",
+            orgId = OrgStorelse,        // STY01 — an ORGANISATION under MIN01
+            scopeType = "ORG_ONLY",
+        });
+
+        Assert.Equal(HttpStatusCode.Created, rsp.StatusCode);
+        var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
+        var assignmentId = body.GetProperty("assignmentId").GetGuid();
+        var (_, orgId, scopeType, isActive) = await ReadAssignmentAsync(assignmentId);
+        Assert.Equal(OrgStorelse, orgId);
+        Assert.Equal("ORG_ONLY", scopeType);
+        Assert.True(isActive);
+    }
+
+    // ════════════════════════════════════════════════════════════════════════════════
     //  Seed / cleanup / helpers
     // ════════════════════════════════════════════════════════════════════════════════
 
@@ -348,7 +425,7 @@ public sealed class RoleAssignmentGrantRevokeEndpointTests : IAsyncLifetime
     private HttpClient LocalAdminClient()
     {
         var client = _factory.CreateClient();
-        var scopes = new[] { new RoleScope(StatsTidRoles.LocalAdmin, OrgStorelse, "ORG_AND_DESCENDANTS") };
+        var scopes = new[] { new RoleScope(StatsTidRoles.LocalAdmin, OrgStorelse, "ORG_ONLY") };
         var token = NewTokenService().GenerateToken(
             employeeId: LocalAdminActor, name: LocalAdminActor, role: StatsTidRoles.LocalAdmin,
             agreementCode: "AC", orgId: OrgStorelse, scopes: scopes);

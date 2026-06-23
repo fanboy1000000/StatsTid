@@ -385,11 +385,11 @@ public sealed class OrgScopeValidator
     /// that intentionally union over every covering scope are untouched).
     /// </para>
     /// </summary>
-    public async Task<IReadOnlyList<string>?> GetAccessibleOrgsAsync(
+    public Task<IReadOnlyList<string>?> GetAccessibleOrgsAsync(
         ActorContext actor, string? roleFloor, CancellationToken ct = default)
     {
         if (actor.Scopes is null || actor.Scopes.Length == 0)
-            return Array.Empty<string>();
+            return Task.FromResult<IReadOnlyList<string>?>(Array.Empty<string>());
 
         // GlobalAdmin short-circuit — any GLOBAL scope means "see everything". Under a floor the
         // GLOBAL scope must itself clear it (a below-floor GLOBAL scope cannot grant unrestricted
@@ -397,9 +397,13 @@ public sealed class OrgScopeValidator
         if (actor.Scopes.Any(s =>
                 string.Equals(s.ScopeType, "GLOBAL", StringComparison.Ordinal) &&
                 (roleFloor is null || StatsTidRoles.IsAtLeast(s.Role, roleFloor))))
-            return null;
+            return Task.FromResult<IReadOnlyList<string>?>(null);
 
-        // Non-global: collect materialized-path descendants of each scope org.
+        // Non-global: the accessible-org set is EXACTLY the assigned (role-floored) ORG_ONLY orgs.
+        // S93 / ADR-035 slice 2 (flat role-scope): no materialized-path subtree expansion —
+        // coverage is exact Organisation-set membership (the union of the actor's ORG_ONLY rows).
+        // No DB round-trip is needed anymore (the GetDescendantsAsync call is gone), so this is a
+        // synchronous projection returned via a completed Task.
         var accessibleOrgIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var scope in actor.Scopes)
         {
@@ -408,17 +412,20 @@ public sealed class OrgScopeValidator
             if (roleFloor is not null && !StatsTidRoles.IsAtLeast(scope.Role, roleFloor))
                 continue;
 
+            // S93 hardening (ADR-035 slice 2, Step-7a): only ORG_ONLY scopes contribute. DEFAULT-DENY
+            // any non-ORG_ONLY non-GLOBAL type (GLOBAL is already handled by the short-circuit above
+            // and carries a null OrgId) — a stale pre-S93 token's removed type (ORG_AND_DESCENDANTS)
+            // must not inject its org into the accessible set.
+            if (!string.Equals(scope.ScopeType, "ORG_ONLY", StringComparison.Ordinal))
+                continue;
+
             if (scope.OrgId is null)
                 continue;
 
-            // Include the scope org itself + its descendants (GetDescendantsAsync
-            // returns the subtree rooted at orgId per materialized-path predicate).
-            var descendants = await _organizationRepository.GetDescendantsAsync(scope.OrgId, ct);
-            foreach (var org in descendants)
-                accessibleOrgIds.Add(org.OrgId);
+            accessibleOrgIds.Add(scope.OrgId);
         }
 
-        return accessibleOrgIds.ToArray();
+        return Task.FromResult<IReadOnlyList<string>?>(accessibleOrgIds.ToArray());
     }
 
     /// <summary>

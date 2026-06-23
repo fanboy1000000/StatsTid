@@ -229,8 +229,8 @@ public sealed class ReopenPayrollLockTests : IAsyncLifetime
             """
             INSERT INTO role_assignments (user_id, role_id, org_id, scope_type, assigned_by)
             VALUES
-                (@mgr, 'LOCAL_LEADER', 'STY02', 'ORG_AND_DESCENDANTS', 'TEST'),
-                (@hr,  'LOCAL_HR',     'STY02', 'ORG_AND_DESCENDANTS', 'TEST'),
+                (@mgr, 'LOCAL_LEADER', 'STY02', 'ORG_ONLY', 'TEST'),
+                (@hr,  'LOCAL_HR',     'STY02', 'ORG_ONLY', 'TEST'),
                 -- GLOBAL_ADMIN must be (org_id IS NULL, scope_type='GLOBAL') per the S85 CHECKs.
                 (@ga,  'GLOBAL_ADMIN', NULL,    'GLOBAL',              'TEST'),
                 (@emp, 'EMPLOYEE',     'STY02', 'ORG_ONLY',            'TEST')
@@ -379,7 +379,7 @@ public sealed class ReopenPayrollLockTests : IAsyncLifetime
 
     private static string MintLeaderToken(string userId, string orgId)
     {
-        var scopes = new[] { new RoleScope(StatsTidRoles.LocalLeader, orgId, "ORG_AND_DESCENDANTS") };
+        var scopes = new[] { new RoleScope(StatsTidRoles.LocalLeader, orgId, "ORG_ONLY") };
         return NewTokenService().GenerateToken(
             employeeId: userId, name: userId, role: StatsTidRoles.LocalLeader,
             agreementCode: "HK", orgId: orgId, scopes: scopes);
@@ -387,7 +387,7 @@ public sealed class ReopenPayrollLockTests : IAsyncLifetime
 
     private static string MintHrToken(string userId, string orgId)
     {
-        var scopes = new[] { new RoleScope(StatsTidRoles.LocalHR, orgId, "ORG_AND_DESCENDANTS") };
+        var scopes = new[] { new RoleScope(StatsTidRoles.LocalHR, orgId, "ORG_ONLY") };
         return NewTokenService().GenerateToken(
             employeeId: userId, name: userId, role: StatsTidRoles.LocalHR,
             agreementCode: "AC", orgId: orgId, scopes: scopes);

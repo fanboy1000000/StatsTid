@@ -15,7 +15,8 @@ namespace StatsTid.Tests.Regression.PhaseE;
 /// <list type="bullet">
 ///   <item><description><c>OrgScopeValidator.GetAccessibleOrgsAsync</c>
 ///   per-role contract (GlobalAdmin → null sentinel; LocalAdmin →
-///   materialized-path descendants; Employee → empty list).</description></item>
+///   the EXACT assigned ORG_ONLY set (S93 flat role-scope: no subtree
+///   expansion); Employee → empty list).</description></item>
 ///   <item><description><c>AuditProjectionRepository.QueryByOrgScopeAsync</c>
 ///   3-tier visibility filter (TENANT_TARGETED scope-by-target +
 ///   GLOBAL_TENANT_VISIBLE always + GLOBAL_ADMIN_ONLY only for GlobalAdmin).</description></item>
@@ -89,21 +90,29 @@ public sealed class AuditProjectionQueryTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task GetAccessibleOrgs_LocalAdminAtMIN01_ReturnsSubtreeDescendants()
+    public async Task GetAccessibleOrgs_LocalAdminWithExplicitOrgRows_ReturnsExactlyThoseOrgs()
     {
+        // S93 flat role-scope: a LocalAdmin holds EXPLICIT per-Organisation ORG_ONLY rows over the
+        // two Organisations under MIN01 (the post-S92 expansion of the former MAO subtree scope).
+        // GetAccessibleOrgsAsync returns EXACTLY that set — no materialized-path descendant walk,
+        // and the MAO itself (MIN01) is not a member.
         var actor = new ActorContext(
             "local-admin-1",
             StatsTidRoles.LocalAdmin,
             Guid.NewGuid(),
-            MinId,
-            new[] { new RoleScope(StatsTidRoles.LocalAdmin, MinId, "ORG_AND_DESCENDANTS") });
+            Sty01Id,
+            new[]
+            {
+                new RoleScope(StatsTidRoles.LocalAdmin, Sty01Id, "ORG_ONLY"),
+                new RoleScope(StatsTidRoles.LocalAdmin, Sty02Id, "ORG_ONLY"),
+            });
         var result = await _orgScopeValidator.GetAccessibleOrgsAsync(actor);
         Assert.NotNull(result);
-        // Subtree: MIN01 + STY01 + STY02 = 3 orgs; ORG_EXTERNAL excluded
-        Assert.Equal(3, result!.Count);
-        Assert.Contains(MinId, result);
+        // Exact assigned set: STY01 + STY02 = 2 orgs; the MAO (MIN01) and ORG_EXTERNAL excluded.
+        Assert.Equal(2, result!.Count);
         Assert.Contains(Sty01Id, result);
         Assert.Contains(Sty02Id, result);
+        Assert.DoesNotContain(MinId, result);
         Assert.DoesNotContain(ExternalId, result);
     }
 
@@ -145,17 +154,19 @@ public sealed class AuditProjectionQueryTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task QueryByOrgScope_LocalAdminAtMIN01_IncludesScopeTargetedPlusGlobalVisible_ExcludesAdminOnly()
+    public async Task QueryByOrgScope_LocalAdminWithExplicitOrgRows_IncludesScopeTargetedPlusGlobalVisible_ExcludesAdminOnly()
     {
         await SeedNineAuditRowsAsync();
 
-        // LocalAdmin@MIN01 sees: all TENANT_TARGETED rows whose target_org_id is in the MIN01 subtree
-        // + all GLOBAL_TENANT_VISIBLE rows, but NOT GLOBAL_ADMIN_ONLY rows.
-        // Seeded: 3 TENANT_TARGETED (MIN01, STY01, ORG_EXTERNAL) + 3 GLOBAL_TENANT_VISIBLE + 3 GLOBAL_ADMIN_ONLY
-        // Visible to MIN01 LocalAdmin: 2 TENANT (MIN01, STY01) + 3 GLOBAL_TENANT = 5
-        var subtreeOrgIds = new[] { MinId, Sty01Id, Sty02Id };
+        // S93 flat role-scope: the accessible-org set is the EXACT assigned ORG_ONLY set {STY01,STY02}
+        // (no MAO, no subtree expansion). A LocalAdmin with those rows sees all TENANT_TARGETED rows
+        // whose target_org_id is in that exact set + all GLOBAL_TENANT_VISIBLE rows, but NOT
+        // GLOBAL_ADMIN_ONLY rows.
+        // Seeded: 3 TENANT_TARGETED (STY01, STY02, ORG_EXTERNAL) + 3 GLOBAL_TENANT_VISIBLE + 3 GLOBAL_ADMIN_ONLY
+        // Visible: 2 TENANT (STY01, STY02) + 3 GLOBAL_TENANT = 5
+        var accessibleOrgIds = new[] { Sty01Id, Sty02Id };
         var (rows, totalCount) = await _auditRepo.QueryByOrgScopeAsync(
-            accessibleOrgIds: subtreeOrgIds,
+            accessibleOrgIds: accessibleOrgIds,
             filter: new AuditQueryFilter(),
             page: 1,
             pageSize: 100);
@@ -188,8 +199,10 @@ public sealed class AuditProjectionQueryTests : IAsyncLifetime
     // -------------------------------------------------------------------
 
     /// <summary>
-    /// Seeds 9 audit_projection rows: 3 TENANT_TARGETED (one each at MIN01,
-    /// STY01, ORG_EXTERNAL) + 3 GLOBAL_TENANT_VISIBLE + 3 GLOBAL_ADMIN_ONLY.
+    /// Seeds 9 audit_projection rows: 3 TENANT_TARGETED (one each at STY01,
+    /// STY02, ORG_EXTERNAL) + 3 GLOBAL_TENANT_VISIBLE + 3 GLOBAL_ADMIN_ONLY.
+    /// S93 flat role-scope: the in-scope admin's exact ORG_ONLY set is {STY01,STY02}, so the two
+    /// Organisation-targeted rows are visible and the ORG_EXTERNAL one is not.
     /// </summary>
     private async Task SeedNineAuditRowsAsync()
     {
@@ -197,11 +210,11 @@ public sealed class AuditProjectionQueryTests : IAsyncLifetime
         await conn.OpenAsync();
         for (int i = 0; i < 3; i++)
         {
-            // TENANT_TARGETED — one per (MIN01, STY01, ORG_EXTERNAL)
+            // TENANT_TARGETED — one per (STY01, STY02, ORG_EXTERNAL)
             var targetOrg = i switch
             {
-                0 => MinId,
-                1 => Sty01Id,
+                0 => Sty01Id,
+                1 => Sty02Id,
                 _ => ExternalId,
             };
             await InsertAuditRowAsync(conn, "TENANT_TARGETED", targetOrg, $"TestEventTenant{i}");

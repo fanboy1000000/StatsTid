@@ -141,7 +141,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
         await using (var cmd = new NpgsqlCommand(
             """
             INSERT INTO role_assignments (user_id, role_id, org_id, scope_type, assigned_by)
-            VALUES (@top, 'LOCAL_ADMIN', 'STY02', 'ORG_AND_DESCENDANTS', 'TEST')
+            VALUES (@top, 'LOCAL_ADMIN', 'STY02', 'ORG_ONLY', 'TEST')
             ON CONFLICT DO NOTHING
             """, conn))
         {
@@ -1656,14 +1656,14 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
             SigningKey = DevFallbackSigningKey,
             ExpirationMinutes = 60,
         });
-        var scopes = new[] { new RoleScope(StatsTidRoles.LocalAdmin, orgId, "ORG_AND_DESCENDANTS") };
+        var scopes = new[] { new RoleScope(StatsTidRoles.LocalAdmin, orgId, "ORG_ONLY") };
         return tokenService.GenerateToken(
             employeeId: userId, name: userId, role: StatsTidRoles.LocalAdmin,
             agreementCode: "HK", orgId: orgId, scopes: scopes);
     }
 
     /// <summary>
-    /// S78 R9 — mints a LocalAdmin token carrying ORG_AND_DESCENDANTS scope over EVERY org in
+    /// S78 R9 — mints a LocalAdmin token carrying an ORG_ONLY scope (S93 flat role-scope) over EVERY org in
     /// <paramref name="orgIds"/> (the transfer endpoint needs the actor to cover both the source and the
     /// target tree). The primary <c>orgId</c> claim is the first entry.
     /// </summary>
@@ -1677,7 +1677,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
             ExpirationMinutes = 60,
         });
         var scopes = orgIds
-            .Select(o => new RoleScope(StatsTidRoles.LocalAdmin, o, "ORG_AND_DESCENDANTS"))
+            .Select(o => new RoleScope(StatsTidRoles.LocalAdmin, o, "ORG_ONLY"))
             .ToArray();
         return tokenService.GenerateToken(
             employeeId: userId, name: userId, role: StatsTidRoles.LocalAdmin,

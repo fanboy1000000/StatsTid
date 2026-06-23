@@ -46,7 +46,7 @@ public sealed class S91TreePageHrAccessTests : IAsyncLifetime
 
     private const string TargetOrg = "STY01";    // /MIN01/STY01/ — the styrelse the tree page acts over
     private const string DisjointOrg = "STY05";  // /MIN02/STY05/ — disjoint HR home (out-of-scope actor)
-    private const string CoveringOrg = "MIN01";  // /MIN01/ — covers STY01 (the in-scope HR home)
+    private const string CoveringOrg = "STY01";  // S93 flat role-scope: covers STY01 by exact ORG_ONLY match (a MAO no longer covers a child)
 
     private TestFixtures.DockerHarness _harness = null!;
     private StatsTidWebApplicationFactory _factory = null!;
@@ -316,14 +316,14 @@ public sealed class S91TreePageHrAccessTests : IAsyncLifetime
         return client;
     }
 
-    /// <summary>A single-scope token anchored at <paramref name="orgId"/> (ORG_AND_DESCENDANTS).</summary>
+    /// <summary>A single-scope token anchored at <paramref name="orgId"/> (ORG_ONLY, S93 flat role-scope).</summary>
     private static string AdminToken(string role, string orgId, string actorId)
     {
         var svc = NewTokenService();
         return svc.GenerateToken(
             employeeId: actorId, name: actorId, role: role,
             agreementCode: "AC", orgId: orgId,
-            scopes: new[] { new RoleScope(role, orgId, "ORG_AND_DESCENDANTS") });
+            scopes: new[] { new RoleScope(role, orgId, "ORG_ONLY") });
     }
 
     /// <summary>The out-of-scope escalation shape: primary role LocalHR anchored in the DISJOINT
@@ -338,8 +338,8 @@ public sealed class S91TreePageHrAccessTests : IAsyncLifetime
             agreementCode: "AC", orgId: DisjointOrg,
             scopes: new[]
             {
-                new RoleScope(StatsTidRoles.LocalHR, DisjointOrg, "ORG_AND_DESCENDANTS"),
-                new RoleScope(StatsTidRoles.LocalLeader, CoveringOrg, "ORG_AND_DESCENDANTS"),
+                new RoleScope(StatsTidRoles.LocalHR, DisjointOrg, "ORG_ONLY"),
+                new RoleScope(StatsTidRoles.LocalLeader, CoveringOrg, "ORG_ONLY"),
             });
     }
 
