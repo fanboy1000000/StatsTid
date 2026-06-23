@@ -8,7 +8,7 @@
 | **End Date** | 2026-06-23 |
 | **Orchestrator Approved** | yes — 2026-06-23 |
 | **Build Verified** | yes — `dotnet build StatsTid.sln` 0 errors |
-| **Test Verified** | yes (local, fresh-greenfield): 850 unit + 1072 regression (1070 central + 2 new `is_active` pins verified in-class) + 6 smoke + 29 demoseed + 492 fe; CI-pending (backfilled at close-polish) |
+| **Test Verified** | yes (local, fresh-greenfield): 850 unit + 1072 regression (1070 central + 2 new `is_active` pins verified in-class) + 6 smoke + 29 demoseed + 492 fe; CI GREEN `28049023613` (all 7 jobs) |
 
 ## Sprint Goal
 Two recorded low-risk follow-ups from the flat-authority reform (owner-requested 2026-06-23):
@@ -43,7 +43,7 @@ Two recorded low-risk follow-ups from the flat-authority reform (owner-requested
 - [x] P3 — Event sourcing (event FIELD rename is name-keyed-by-TYPE serializer + greenfield = replay-safe; no event TYPE change; both lenses confirmed)
 - [x] P4 — Concurrency (the lock-prefix string renamed consistently across ALL acquire sites + the test's reconstruction — prod↔test both `reporting-org-`, verified; the `is_active` guard uses `FOR UPDATE OF u` to preserve the S74 user-only row-pin)
 - [x] P7 — Security (the `is_active` guard restores the repository-level fail-closed; no widening; the endpoint org-scope gate already filtered `is_active` — defense-in-depth)
-- [x] P8 — CI/CD (greenfield reseed; 1072 regression green locally; CI confirmation pending)
+- [x] P8 — CI/CD (greenfield reseed; 1072 regression green locally; CI GREEN `28049023613`)
 
 ## Task Log (planned)
 
@@ -99,7 +99,7 @@ Both cleanups landed. The rename touched **~50 files** across 4 disjoint slices 
 | Smoke | 6 | all passing |
 | DemoSeed | 29 | all passing |
 | Frontend (vitest) | 492 | all passing |
-| **Total** | **2449** | CI confirmation pending |
+| **Total** | **2449** | CI GREEN `28049023613` (all 7 jobs) |
 
 ## Sprint Retrospective
 **What went well**: a clean 4-token mechanical rename across 4 disjoint slices in parallel — the identical token mapping kept every layer consistent; the compiler + full pyramid (not a review) were the real verification, and Step-0b was correctly skipped (pure tech-debt). The critical risk (the `reporting-org-` lock-prefix string drifting between prod + the held-lock test) was called out in the plan + verified by both Step-7a lenses. The `is_active` test surfaced the endpoint's pre-existing org-scope-gate protection — clarifying the guard's true layer.
