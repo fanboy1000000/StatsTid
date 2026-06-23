@@ -87,6 +87,33 @@ public sealed class DemoRoleRow
     public required string ScopeType { get; init; }
 }
 
+/// <summary>
+/// S97 / TASK-9706 — a structured <c>enheder</c> row: the DISTINCT former-unit display name
+/// per Organisation, promoted from the per-user <c>enhed_label</c>. PURE DISPLAY METADATA
+/// (ADR-035 — zero authority/scope/approval meaning). The <see cref="EnhedId"/> is a
+/// deterministic-per-run UUID (varies by Organisation + name index); it is the FK target the
+/// <see cref="DemoUserEnhed"/> tags resolve to. <see cref="OrganisationId"/> is always an
+/// ORGANISATION-typed org (the same org the tagged users sit on — the same-Organisation invariant).
+/// </summary>
+public sealed class DemoEnhed
+{
+    public required string EnhedId { get; init; }
+    public required string OrganisationId { get; init; }
+    public required string Name { get; init; }
+}
+
+/// <summary>
+/// S97 / TASK-9706 — a <c>user_enheder</c> membership tag: a user → one of their Organisation's
+/// enheder. The demo carries ONE label per user (round-robin over the Organisation's enhed pool),
+/// so each user gets ONE tag; the multi-tag link supports N, but the demo models 1 per user.
+/// Invariant (verified): the tagged enhed's <c>organisation_id</c> == the user's <c>primary_org_id</c>.
+/// </summary>
+public sealed class DemoUserEnhed
+{
+    public required string UserId { get; init; }
+    public required string EnhedId { get; init; }
+}
+
 /// <summary>The full generated dataset (the SQL artifact + the manifest are both derived from this).</summary>
 public sealed class DemoDataset
 {
@@ -98,6 +125,12 @@ public sealed class DemoDataset
 
     /// <summary>Privileged LOCAL_HR / LOCAL_LEADER rows (SQL-seeded; see <see cref="DemoRoleRow"/>).</summary>
     public required List<DemoRoleRow> PrivilegedRoles { get; init; }
+
+    /// <summary>S97 — DISTINCT structured enheder per Organisation (promoted from <c>enhed_label</c>).</summary>
+    public required List<DemoEnhed> Enheder { get; init; }
+
+    /// <summary>S97 — per-user enhed membership tags (the user's label → their org's matching enhed).</summary>
+    public required List<DemoUserEnhed> UserEnheder { get; init; }
 
     public required DemoManifest Manifest { get; init; }
 }

@@ -56,6 +56,55 @@ Apply the guarded ALTER blocks from init.sql in order. Each sprint's additions a
 | S35 | users | version BIGINT, users_audit table | ~L1843-1844 |
 | S40 | role_config_overrides + role_config_override_audit, overtime_pre_approvals extension | New tables + columns | ~L1900-1982 |
 | S43 | audit_projection | New table (CREATE IF NOT EXISTS) | ~L2035-2080 |
+| S97 | enheder + user_enheder | New tables (CREATE IF NOT EXISTS) + partial-unique `idx_enheder_active_name` | ~L563-589 |
+
+## S97 — Enhed structured-metadata backfill (TASK-9704)
+
+S97 replaces the free-text `employee_profiles.enhed_label` with a structured `enheder`
+entity table + a `user_enheder` multi-tag membership link (ADR-035; pure display metadata,
+zero authority/scope/approval meaning). `enhed_label` is **kept read-only** as a display
+fallback — it is NOT dropped this sprint.
+
+### Schema (apply the guarded blocks for a legacy DB)
+
+The two new tables are `CREATE TABLE IF NOT EXISTS` (init.sql ~L563-589), so they apply on
+both greenfield and legacy. On an incremental upgrade, run those blocks (incl. the partial
+unique index `idx_enheder_active_name ON enheder (organisation_id, lower(name)) WHERE
+deleted_at IS NULL` and the `idx_user_enheder_enhed` index).
+
+### Data backfill (`EnhedBackfillSeeder`, runs at app startup)
+
+The backfill runs automatically in `Program.cs` AFTER the employee-profile seed. It is the
+**legacy-db-upgrade mechanism**, not a greenfield seeder:
+
+- **Source = the projection column, not an event replay.** It reads
+  `SELECT DISTINCT u.primary_org_id, ep.enhed_label FROM employee_profiles ep JOIN users u
+  ON u.user_id = ep.employee_id WHERE ep.effective_to IS NULL AND ep.enhed_label IS NOT NULL
+  AND TRIM(ep.enhed_label) <> ''`. The demo seed wrote `enhed_label` by a raw projection
+  INSERT and never emitted `EmployeeProfileCreated.EnhedLabel`, so a replay would migrate
+  nothing — the column is the only source of truth.
+- **Event-sourced (no raw projection INSERT — the S92 lesson).** For each distinct
+  `(Organisation, label)` it emits `EnhedCreated` (stream `enhed-{id}`); then for each
+  labeled user it emits `UserEnhederChanged(userId, [enhedId])` (stream `user-{userId}`).
+  Projection writes + outbox events commit in one tx each (ADR-018 D3).
+- **Greenfield = NO-OP by design.** The init.sql baseline (what CI reseeds) has
+  `enhed_label` universally NULL, so the source query returns zero rows and the seeder
+  exits early. There is nothing to migrate on a fresh bootstrap — labels only exist on a
+  database that carried demo/legacy `enhed_label` values.
+- **Idempotent.** Re-running does not duplicate enheder (it reuses any existing active
+  enhed matching `(organisation_id, lower(name))` — the partial-unique key) or tags (it
+  skips a user whose current `user_enheder` set already equals the desired single tag). A
+  concurrent-startup `23505` on the active-name index is caught and re-resolved to the
+  winner's id.
+
+### Verification (legacy DB with labels)
+
+```sql
+-- One active enhed per distinct (org, label) that appears on a live profile:
+SELECT COUNT(*) FROM enheder WHERE deleted_at IS NULL;
+-- Every live, labeled user carries exactly one tag (no user loses metadata):
+SELECT COUNT(*) FROM user_enheder;
+```
 
 ## Known Ordering Gap
 

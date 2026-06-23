@@ -60,6 +60,8 @@ public sealed class DemoGenerator
         var users = new List<DemoUser>();
         var employeeRoles = new List<DemoRoleRow>();
         var privilegedRoles = new List<DemoRoleRow>();
+        var enheder = new List<DemoEnhed>();
+        var userEnheder = new List<DemoUserEnhed>();
 
         var manifest = new DemoManifest
         {
@@ -98,6 +100,11 @@ public sealed class DemoGenerator
         GenerateVikars(users, manifest);
         GenerateMessyCases(users, manifest);
 
+        // 3b. S97 / TASK-9706 — promote the per-user enhed_label into the structured enheder
+        //     entity table + per-user user_enheder tags (derived from the final user list, so the
+        //     DISTINCT-per-Organisation set + the FK-resolving tags are computed once over all users).
+        GenerateEnheder(users, enheder, userEnheder);
+
         // 4. Disjointness assertion (NOTE-1 — ON CONFLICT silently drops collisions).
         AssertDisjointFromBaseline(orgs, users, manifest);
 
@@ -107,8 +114,73 @@ public sealed class DemoGenerator
             Users = users,
             EmployeeRoles = employeeRoles,
             PrivilegedRoles = privilegedRoles,
+            Enheder = enheder,
+            UserEnheder = userEnheder,
             Manifest = manifest,
         };
+    }
+
+    // ── S97 / TASK-9706 — structured enheder + user_enheder tags ──────────────────────────────
+    //
+    // The demo today carries ONE display label per rank-and-file user (a former AFDELING/TEAM unit
+    // name, round-robin from DanishPools.EnhedFragments within their Organisation). This promotes
+    // that flat label into the S97 structured model:
+    //   1. enheder    — the DISTINCT (organisation_id, name) labels, one row per distinct pair,
+    //                   each with a DETERMINISTIC-PER-RUN UUID (so the user_enheder FK resolves and
+    //                   the artifact is byte-stable for a fixed seed/scale).
+    //   2. user_enheder — one tag per labelled user (label → their org's matching enhed). The link
+    //                   table supports N tags/user; the demo's one-label-per-user model yields one
+    //                   tag each (NOTE). The top manager (NULL label) gets no tag.
+    //
+    // Same-Organisation invariant: a user's enhed is looked up by (PrimaryOrgId, EnhedLabel), so the
+    // tagged enhed's organisation_id is ALWAYS the user's primary_org_id by construction. The
+    // partial-unique (organisation_id, lower(name)) WHERE deleted_at IS NULL holds because we emit
+    // the DISTINCT set (no active-name dup per org).
+    private static void GenerateEnheder(
+        List<DemoUser> users,
+        List<DemoEnhed> enheder,
+        List<DemoUserEnhed> userEnheder)
+    {
+        // (org, name) → enhed_id. Deterministic-per-run UUID derived from the (org|name) key so it
+        // is stable across the whole generation pass (the Guid.NewGuid/Math.random caveat in
+        // workflow scripts does NOT apply to the demo tool, but FK resolution + byte-stability DO
+        // require the tag and its enhed to agree on the id — hence a derived, key-stable UUID).
+        var enhedIds = new Dictionary<(string Org, string Name), string>();
+
+        foreach (var u in users)
+        {
+            if (u.EnhedLabel is null) continue; // org-root manager: no sub-unit, no tag.
+
+            var key = (u.PrimaryOrgId, u.EnhedLabel);
+            if (!enhedIds.TryGetValue(key, out var enhedId))
+            {
+                enhedId = DeterministicEnhedId(u.PrimaryOrgId, u.EnhedLabel);
+                enhedIds[key] = enhedId;
+                enheder.Add(new DemoEnhed
+                {
+                    EnhedId = enhedId,
+                    OrganisationId = u.PrimaryOrgId,
+                    Name = u.EnhedLabel,
+                });
+            }
+
+            userEnheder.Add(new DemoUserEnhed { UserId = u.UserId, EnhedId = enhedId });
+        }
+    }
+
+    /// <summary>
+    /// A deterministic-per-run UUID for an enhed, derived from its (organisation, name) key via a
+    /// stable MD5 hash (RFC-4122 variant/version bits stamped). Byte-identical for a fixed
+    /// (seed, scale, reference-date) — the determinism contract — and varies by org + name so two
+    /// orgs sharing a name get distinct ids and the user_enheder FK resolves to the right row.
+    /// </summary>
+    private static string DeterministicEnhedId(string organisationId, string name)
+    {
+        var key = $"enhed|{organisationId}|{name}";
+        var bytes = System.Security.Cryptography.MD5.HashData(System.Text.Encoding.UTF8.GetBytes(key));
+        bytes[6] = (byte)((bytes[6] & 0x0F) | 0x40); // version 4
+        bytes[8] = (byte)((bytes[8] & 0x3F) | 0x80); // RFC-4122 variant
+        return new Guid(bytes).ToString();
     }
 
     private void GenerateTree(

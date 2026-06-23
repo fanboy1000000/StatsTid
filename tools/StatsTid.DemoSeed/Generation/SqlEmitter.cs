@@ -12,6 +12,11 @@ namespace StatsTid.Tools.DemoSeed.Generation;
 /// SQL-seeded rather than issued via the API because <c>POST /api/admin/roles/grant</c> has a
 /// pre-existing production defect — see SPRINT-84 Discovered Defects.)
 ///
+/// S97 / TASK-9706 also emits the structured <c>enheder</c> + <c>user_enheder</c> tables
+/// (ADR-035 display metadata, promoted from the per-user <c>enhed_label</c>): the DISTINCT
+/// (organisation, name) labels with deterministic-per-run UUIDs + one membership tag per
+/// labelled user. The <c>enhed_label</c> pre-seed stays as the transitional display fallback.
+///
 /// Only the reporting TREE + activity are LOADED POST-BOOT via the API (event-emitting; OQ-4)
 /// and so are NOT in this file.
 ///
@@ -137,6 +142,38 @@ public static class SqlEmitter
             sb.AppendLine();
         }
 
+        // ── 3c. S97 / TASK-9706 — structured enheder + user_enheder tags (ADR-035) ──
+        //     Promote the per-user enhed_label (above) into the S97 structured model: the DISTINCT
+        //     (organisation_id, name) labels become enheder rows (deterministic-per-run UUID id),
+        //     and each labelled user gets a user_enheder tag (label → their org's matching enhed).
+        //     PURE DISPLAY METADATA — zero authority/scope/approval meaning. The enhed_label pre-seed
+        //     above STAYS (the transitional read-only display fallback). The DISTINCT set satisfies the
+        //     partial-unique (organisation_id, lower(name)) WHERE deleted_at IS NULL; the
+        //     user_enheder FK resolves to the row emitted just above. ON CONFLICT DO NOTHING (re-run-safe;
+        //     a fresh volume is empty so nothing is dropped). Runs as zz-demo-seed.sql AFTER init.sql,
+        //     which creates the enheder / user_enheder tables.
+        if (dataset.Enheder.Count > 0)
+        {
+            sb.AppendLine("-- ── Demo enheder (DISTINCT former-unit display names per Organisation; ADR-035 metadata) ──");
+            sb.AppendLine("INSERT INTO enheder (enhed_id, organisation_id, name) VALUES");
+            AppendRows(sb, dataset.Enheder, (rb, e) =>
+                rb.Append('(')
+                  .Append("UUID ").Append(Lit(e.EnhedId)).Append(", ")
+                  .Append(Lit(e.OrganisationId)).Append(", ")
+                  .Append(Lit(e.Name)).Append(')'));
+            sb.AppendLine("ON CONFLICT DO NOTHING;");
+            sb.AppendLine();
+
+            sb.AppendLine("-- ── Demo user_enheder tags (one per labelled user; same-Organisation invariant) ──");
+            sb.AppendLine("INSERT INTO user_enheder (user_id, enhed_id) VALUES");
+            AppendRows(sb, dataset.UserEnheder, (rb, t) =>
+                rb.Append('(')
+                  .Append(Lit(t.UserId)).Append(", ")
+                  .Append("UUID ").Append(Lit(t.EnhedId)).Append(')'));
+            sb.AppendLine("ON CONFLICT DO NOTHING;");
+            sb.AppendLine();
+        }
+
         // ── 4. Demo GLOBAL_ADMIN role row (GLOBAL scope; login derives the JWT scopes from this) ──
         sb.AppendLine("-- ── Demo GLOBAL_ADMIN role assignment (GLOBAL scope) ──");
         sb.AppendLine("INSERT INTO role_assignments (user_id, role_id, org_id, scope_type, assigned_by) VALUES");
@@ -190,6 +227,7 @@ public static class SqlEmitter
             $"-- scale={m.Scale}  seed={m.Seed}  referenceDate={m.ReferenceDate}\n" +
             $"-- orgs={dataset.Orgs.Count}  users={dataset.Users.Count} (+1 demo_admin)  " +
             $"employeeRoles={dataset.EmployeeRoles.Count}  privilegedRoles={dataset.PrivilegedRoles.Count}\n" +
+            $"-- enheder={dataset.Enheder.Count}  userEnheder={dataset.UserEnheder.Count} (S97 / ADR-035 structured Enhed metadata)\n" +
             "-- ============================================================================\n\n";
     }
 

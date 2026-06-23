@@ -22,6 +22,7 @@
 
 import { useCallback, useState } from 'react'
 import { useOrgUsers, type UserMutationError, type WithEtag, type User } from './useAdmin'
+import { useEnheder } from './useEnheder'
 import {
   useEntitlementEligibility,
   type ChildSickEligibilitySnapshot,
@@ -65,6 +66,9 @@ export interface EditLiveState {
   employmentStartInitial: string
   childSickRowExists: boolean
   childSickVersion: number | null
+  // S97 / TASK-9705 — the person's enhed tag-id set at dialog-open (the dirtiness
+  // baseline for the set-user-tags PUT; the PUT is an idempotent full overwrite).
+  enhedIdsInitial: string[]
 }
 
 /** What the drawer passes to `saveEdit` — the form values + dirtiness flags. */
@@ -92,10 +96,20 @@ export interface SaveEditResult {
   staleConflict: StaleConflict | null
 }
 
+/** Order-independent equality of two enhed-id sets (the tags PUT is a full
+    overwrite, so only the SET matters — not the order). */
+function sameIdSet(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false
+  const sa = new Set(a)
+  for (const id of b) if (!sa.has(id)) return false
+  return true
+}
+
 export function useEditPerson() {
   // `useOrgUsers('')` gives us the user mutation helpers without binding to an
   // org list (the drawer doesn't own a roster — it's handed a user to edit).
   const { createUser, updateUser, fetchUser } = useOrgUsers('')
+  const { setUserEnheder } = useEnheder()
   const {
     setChildSick,
     fetchChildSickEligibility,
@@ -314,6 +328,22 @@ export function useEditPerson() {
         }
       }
 
+      // (6) S97 / TASK-9705 — set-user-tags PUT. HR-gated; independent (no
+      // If-Match — the backend FOR-UPDATE-locks the user row vs a concurrent
+      // transfer and validates each id ∈ the user's org's ACTIVE enheder). Only
+      // when the selection changed (full-overwrite idempotent; the set, not the
+      // order, is what matters). A 400 (dead/foreign enhed) surfaces per-section.
+      if (input.isHr && !sameIdSet(input.profile.enhedIds, live.enhedIdsInitial)) {
+        try {
+          await setUserEnheder(live.user.userId, input.profile.enhedIds)
+          live = { ...live, enhedIdsInitial: [...input.profile.enhedIds] }
+          mark('enheder', 'committed')
+        } catch (err) {
+          ok = false
+          mark('enheder', 'failed', err instanceof Error ? err.message : String(err))
+        }
+      }
+
       setSaving(false)
       return { ok, live, staleConflict }
     },
@@ -323,6 +353,7 @@ export function useEditPerson() {
       setEmploymentStartDate,
       setChildSick,
       fetchChildSickEligibility,
+      setUserEnheder,
       resetSections,
     ],
   )

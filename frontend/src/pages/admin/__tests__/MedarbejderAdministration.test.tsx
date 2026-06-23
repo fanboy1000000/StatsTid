@@ -222,7 +222,9 @@ describe('MedarbejderAdministration', () => {
     await waitFor(() => {
       expect(screen.getAllByText('Birgit Bertelsen').length).toBeGreaterThanOrEqual(1)
     })
-    const select = screen.getByRole('combobox') as HTMLSelectElement
+    // S97 — target the Styrelse select specifically (the page now also renders the
+    // EnhederPanel's own Organisation selector, so getByRole('combobox') is ambiguous).
+    const select = screen.getByLabelText('Styrelse') as HTMLSelectElement
     const optionTexts = Array.from(select.options).map((o) => o.textContent)
     expect(optionTexts.some((t) => t!.includes('Finansministeriet'))).toBe(true)
     expect(optionTexts.some((t) => t!.includes('Moderniseringsstyrelsen'))).toBe(true)

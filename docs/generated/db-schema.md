@@ -5,7 +5,7 @@
 > Update the schema in `init.sql`, then run `python tools/generate_db_schema.py`.
 > CI fails (`tools/check_docs.py`) if this file drifts from init.sql.
 
-**Total: 65 tables** (48 primary, 17 audit).
+**Total: 67 tables** (50 primary, 17 audit).
 
 ---
 
@@ -290,6 +290,34 @@
 **Indexes:**
 - `idx_employee_profile_audit_profile_id` on (profile_id)
 - `idx_employee_profile_audit_employee_id` on (employee_id)
+
+## enheder
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| enhed_id | UUID | No | PK | gen_random_uuid() |
+| organisation_id | TEXT | No | FK→organizations |  |
+| name | TEXT | No |  |  |
+| deleted_at | TIMESTAMPTZ | Yes |  |  |
+| version | BIGINT | No |  | 1 |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+
+**Indexes:**
+- `idx_enheder_active_name` (UNIQUE) on (organisation_id, lower(name) WHERE deleted_at IS NULL
+- `idx_enheder_org` on (organisation_id)
+
+## user_enheder
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| user_id | TEXT | No | FK→users |  |
+| enhed_id | UUID | No | FK→enheder |  |
+
+**Table constraints:**
+- PRIMARY KEY (user_id, enhed_id)
+
+**Indexes:**
+- `idx_user_enheder_enhed` on (enhed_id)
 
 ## user_agreement_codes
 
@@ -1379,54 +1407,56 @@
 | 13 | users | -- |
 | 14 | employee_profiles | -- |
 | 15 | employee_profile_audit | audit |
-| 16 | user_agreement_codes | -- |
-| 17 | user_agreement_codes_audit | audit |
-| 18 | users_audit | audit |
-| 19 | roles | -- |
-| 20 | role_assignments | -- |
-| 21 | role_assignment_audit | audit |
-| 22 | local_configurations | -- |
-| 23 | local_configuration_audit | audit |
-| 24 | local_agreement_profiles | -- |
-| 25 | local_agreement_profile_audit | audit |
-| 26 | approval_periods | -- |
-| 27 | approval_audit | audit |
-| 28 | projects | -- |
-| 29 | user_project_selections | -- |
-| 30 | absence_type_visibility | -- |
-| 31 | positions | -- |
-| 32 | agreement_configs | -- |
-| 33 | agreement_config_audit | audit |
-| 34 | compensatory_rest | -- |
-| 35 | position_override_configs | -- |
-| 36 | position_override_config_audit | audit |
-| 37 | wage_type_mapping_audit | audit |
-| 38 | entitlement_configs | -- |
-| 39 | entitlement_config_audit | audit |
-| 40 | entitlement_balances | -- |
-| 41 | time_entries_projection | -- |
-| 42 | absences_projection | -- |
-| 43 | work_time_projection | -- |
-| 44 | overtime_balances | -- |
-| 45 | overtime_pre_approvals | -- |
-| 46 | segment_manifests | -- |
-| 47 | role_config_overrides | -- |
-| 48 | role_config_override_audit | audit |
-| 49 | overtime_authorization_audit | audit |
-| 50 | audit_projection | -- |
-| 51 | reporting_lines | -- |
-| 52 | reporting_line_audit | audit |
-| 53 | employee_entitlement_eligibility | -- |
-| 54 | employee_entitlement_eligibility_audit | audit |
-| 55 | vacation_settlements | -- |
-| 56 | vacation_transfer_agreements | -- |
-| 57 | vacation_settlement_audit | audit |
-| 58 | vacation_transfer_agreement_audit | audit |
-| 59 | settlement_payroll_inbox | -- |
-| 60 | settlement_export_lines | -- |
-| 61 | termination_payout_requests | -- |
-| 62 | user_skema_preferences | -- |
-| 63 | user_absence_selections | -- |
-| 64 | manager_vikar | -- |
-| 65 | payroll_export_records | -- |
+| 16 | enheder | -- |
+| 17 | user_enheder | -- |
+| 18 | user_agreement_codes | -- |
+| 19 | user_agreement_codes_audit | audit |
+| 20 | users_audit | audit |
+| 21 | roles | -- |
+| 22 | role_assignments | -- |
+| 23 | role_assignment_audit | audit |
+| 24 | local_configurations | -- |
+| 25 | local_configuration_audit | audit |
+| 26 | local_agreement_profiles | -- |
+| 27 | local_agreement_profile_audit | audit |
+| 28 | approval_periods | -- |
+| 29 | approval_audit | audit |
+| 30 | projects | -- |
+| 31 | user_project_selections | -- |
+| 32 | absence_type_visibility | -- |
+| 33 | positions | -- |
+| 34 | agreement_configs | -- |
+| 35 | agreement_config_audit | audit |
+| 36 | compensatory_rest | -- |
+| 37 | position_override_configs | -- |
+| 38 | position_override_config_audit | audit |
+| 39 | wage_type_mapping_audit | audit |
+| 40 | entitlement_configs | -- |
+| 41 | entitlement_config_audit | audit |
+| 42 | entitlement_balances | -- |
+| 43 | time_entries_projection | -- |
+| 44 | absences_projection | -- |
+| 45 | work_time_projection | -- |
+| 46 | overtime_balances | -- |
+| 47 | overtime_pre_approvals | -- |
+| 48 | segment_manifests | -- |
+| 49 | role_config_overrides | -- |
+| 50 | role_config_override_audit | audit |
+| 51 | overtime_authorization_audit | audit |
+| 52 | audit_projection | -- |
+| 53 | reporting_lines | -- |
+| 54 | reporting_line_audit | audit |
+| 55 | employee_entitlement_eligibility | -- |
+| 56 | employee_entitlement_eligibility_audit | audit |
+| 57 | vacation_settlements | -- |
+| 58 | vacation_transfer_agreements | -- |
+| 59 | vacation_settlement_audit | audit |
+| 60 | vacation_transfer_agreement_audit | audit |
+| 61 | settlement_payroll_inbox | -- |
+| 62 | settlement_export_lines | -- |
+| 63 | termination_payout_requests | -- |
+| 64 | user_skema_preferences | -- |
+| 65 | user_absence_selections | -- |
+| 66 | manager_vikar | -- |
+| 67 | payroll_export_records | -- |
 

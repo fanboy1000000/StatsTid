@@ -1,0 +1,176 @@
+/* S97 / TASK-9705 — the org-scoped Enheder management panel.
+   0px radius, 1px hairlines, tokens only (mirrors the medarbejder-admin styles). */
+
+.panel {
+  margin-bottom: 24px;
+}
+
+.panelTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.orgpick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rolesK {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-gray-500);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.select {
+  font-family: var(--font-family);
+  min-width: 220px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 0px;
+  font-size: 14px;
+  box-sizing: border-box;
+  background: #fff;
+}
+
+.select:focus-visible {
+  outline: var(--focus-outline);
+  outline-offset: 2px;
+}
+
+.createRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.createRow > :first-child {
+  flex: 1 1 auto;
+  max-width: 360px;
+}
+
+.addBtn {
+  appearance: none;
+  font-family: var(--font-family);
+  font-size: 14px;
+  font-weight: 600;
+  padding: 8px 16px;
+  border: 1px solid var(--color-primary);
+  background: var(--color-primary);
+  color: #fff;
+  cursor: pointer;
+  border-radius: 0px;
+  white-space: nowrap;
+}
+
+.addBtn:hover:not(:disabled) {
+  background: var(--color-primary-dark);
+}
+
+.addBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.addBtn:focus-visible {
+  outline: var(--focus-outline);
+  outline-offset: 2px;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.row > :first-child {
+  flex: 1 1 auto;
+  max-width: 360px;
+}
+
+.rowName {
+  font-size: 14px;
+  color: var(--color-text);
+}
+
+.rowActions {
+  display: flex;
+  gap: 12px;
+  flex: 0 0 auto;
+}
+
+.link {
+  appearance: none;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font-family: var(--font-family);
+  font-size: 13px;
+  color: var(--color-link);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.link:hover:not(:disabled) {
+  color: var(--color-primary-dark);
+}
+
+.link:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.link:focus-visible {
+  outline: var(--focus-outline);
+  outline-offset: 2px;
+}
+
+.danger {
+  color: var(--color-error);
+}
+
+.muted {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  margin: 8px 0;
+}
+
+.alert {
+  padding: 8px 12px;
+  border: 1px solid var(--color-error);
+  background: var(--color-error-light);
+  color: var(--color-error);
+  border-radius: 0px;
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+
+.spinner {
+  display: flex;
+  justify-content: center;
+  padding: 24px 0;
+}

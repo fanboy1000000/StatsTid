@@ -21,6 +21,9 @@ import { EditPersonDrawer } from './EditPersonDrawer'
 import type { LifecycleContext } from './editPerson/LifecycleSections'
 import { InlineApproverControl } from './editPerson/InlineApproverControl'
 import { InlineVikarControl } from './editPerson/InlineVikarControl'
+import { EnhederPanel } from './enheder/EnhederPanel'
+import { useEnheder, type Enhed } from '../../hooks/useEnheder'
+import { useReportingLines } from '../../hooks/useReportingLines'
 import styles from './MedarbejderAdministration.module.css'
 
 // Medarbejder-administration page (admin/ledelseslinjer). The structural
@@ -332,6 +335,8 @@ export function MedarbejderAdministration() {
   // `fetchUser` is org-independent — pass '' as the placeholder orgId (the hook
   // only uses it for the auto-list fetch, which we don't consume here).
   const { fetchUser } = useOrgUsers('')
+  const { fetchEnheder } = useEnheder()
+  const { searchPeople } = useReportingLines()
   const { toast } = useToast()
 
   const treeRootOrgs = useMemo(
@@ -356,11 +361,23 @@ export function MedarbejderAdministration() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('alle')
   const [query, setQuery] = useState('')
 
+  // S97 / TASK-9705 — the Enhed search-filter. `enhedFilterOptions` are the active
+  // enheder of the selected Organisation (populates the dropdown); `enhedFilterId`
+  // is the chosen one; `enhedMatchUserIds` is the server-scoped user-id set from
+  // GET /api/admin/users/search?enhedId=… (org-bounded server-side — a name-equal
+  // enhed in another org cannot widen it). null = no enhed filter active.
+  const [enhedFilterOptions, setEnhedFilterOptions] = useState<Enhed[]>([])
+  const [enhedFilterId, setEnhedFilterId] = useState('')
+  const [enhedMatchUserIds, setEnhedMatchUserIds] = useState<Set<string> | null>(null)
+
   // S76b/7604 — the unified EditPersonDrawer state.
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [drawerUser, setDrawerUser] = useState<User | null>(null)
   const [drawerContext, setDrawerContext] = useState<LifecycleContext | undefined>(undefined)
   const [drawerLoading, setDrawerLoading] = useState(false)
+  // S97 — the editing person's current enhed tag names (the roster `enhedLabel`,
+  // a comma-joined display label) → seeds the drawer's tag picker selection.
+  const [drawerEnhedTagNames, setDrawerEnhedTagNames] = useState<string | null>(null)
 
   // Default to the first tree root org once loaded
   useEffect(() => {
@@ -406,6 +423,10 @@ export function MedarbejderAdministration() {
     setStatusFilter('alle')
     setQuery('')
     setLevelSel(null)
+    // S97 — RESET the Enhed filter on a Styrelse switch (R6: a different Org's
+    // enheder don't apply to the new tree).
+    setEnhedFilterId('')
+    setEnhedMatchUserIds(null)
     fetchRoster(selectedTreeRoot).then((result) => {
       if (cancelled) return
       if (result.ok) {
@@ -424,6 +445,48 @@ export function MedarbejderAdministration() {
       cancelled = true
     }
   }, [selectedTreeRoot, fetchRoster])
+
+  // S97 — populate the Enhed filter dropdown from the selected Organisation's
+  // ACTIVE enheder. A MAO 400s (no enheder) → the filter is simply empty/hidden.
+  useEffect(() => {
+    if (!selectedTreeRoot) {
+      setEnhedFilterOptions([])
+      return
+    }
+    let cancelled = false
+    void fetchEnheder(selectedTreeRoot).then((result) => {
+      if (cancelled) return
+      setEnhedFilterOptions(result.ok ? result.data : [])
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [selectedTreeRoot, fetchEnheder])
+
+  // S97 — resolve the chosen Enhed → the server-scoped matching user-id set. The
+  // server keeps it org-bounded (a name-equal enhed in another org cannot widen
+  // it); '' clears the filter. Paginated defensively at a high limit so a large
+  // enhed doesn't truncate the set (the tree is already a single Organisation).
+  useEffect(() => {
+    if (!enhedFilterId) {
+      setEnhedMatchUserIds(null)
+      return
+    }
+    let cancelled = false
+    void searchPeople({ enhedId: enhedFilterId, limit: 5000 }).then((result) => {
+      if (cancelled) return
+      if (result.ok) {
+        setEnhedMatchUserIds(new Set(result.data.items.map((p) => p.userId)))
+      } else {
+        // A failed search → an EMPTY match set (the filter is honestly "no rows")
+        // rather than silently showing everyone.
+        setEnhedMatchUserIds(new Set())
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [enhedFilterId, searchPeople])
 
   const byId = useMemo(() => indexBy(people), [people])
 
@@ -499,6 +562,7 @@ export function MedarbejderAdministration() {
   const handleOpenCreate = () => {
     setDrawerUser(null)
     setDrawerContext(undefined)
+    setDrawerEnhedTagNames(null)
     setDrawerOpen(true)
   }
 
@@ -510,6 +574,9 @@ export function MedarbejderAdministration() {
   const handleOpenEdit = useCallback(
     async (person: MedarbejderRosterRow) => {
       setDrawerContext(buildLifecycleContext(person))
+      // S97 — seed the drawer's tag picker from the roster's enhed display label
+      // (the comma-joined active-tag names; falls back to org name server-side).
+      setDrawerEnhedTagNames(person.enhedLabel ?? null)
       setDrawerLoading(true)
       setDrawerOpen(true)
       setDrawerUser(null)
@@ -541,6 +608,9 @@ export function MedarbejderAdministration() {
         return
       }
       setDrawerContext(undefined)
+      // S97 — no roster row for an off-tree person; the picker seeds empty (the
+      // user's active tags still load from their org's enheder list).
+      setDrawerEnhedTagNames(null)
       setDrawerLoading(true)
       setDrawerOpen(true)
       setDrawerUser(null)
@@ -565,6 +635,7 @@ export function MedarbejderAdministration() {
     setDrawerOpen(false)
     setDrawerUser(null)
     setDrawerContext(undefined)
+    setDrawerEnhedTagNames(null)
   }
 
   /** A drawer mutation (create / edit / approver / vikar / delete) succeeded —
@@ -612,6 +683,19 @@ export function MedarbejderAdministration() {
       )
     }
 
+    // S97 — the Enhed filter intersects the server-scoped user-id set with the
+    // current (status/query) selection (or seeds it when no other filter is on).
+    if (enhedMatchUserIds) {
+      ids = new Set(
+        people
+          .filter(
+            (p) =>
+              enhedMatchUserIds.has(p.employeeId) && (!ids || ids.has(p.employeeId)),
+          )
+          .map((p) => p.employeeId),
+      )
+    }
+
     const orphanIds = new Set(orphansOf(people).map((p) => p.employeeId))
     const orphanMatchCount = ids
       ? [...ids].filter((id) => orphanIds.has(id)).length
@@ -636,7 +720,7 @@ export function MedarbejderAdministration() {
       visibleSet: vSet,
       orphanMatches: orphanMatchCount,
     }
-  }, [statusFilter, q, people, pendingCountByManager, byId])
+  }, [statusFilter, q, people, pendingCountByManager, byId, enhedMatchUserIds])
 
   const rows = useMemo(
     () => visibleTreeRows(people, collapsed, visibleSet),
@@ -729,6 +813,14 @@ export function MedarbejderAdministration() {
           <p className={styles.statDetail}>aktive vikarieringer</p>
         </button>
       </div>
+
+      {/* S97 / TASK-9705 — the org-scoped Enheder management panel. Its own
+          selector is seeded from the page's selected Styrelse but is MULTI-org
+          (the actor's full accessible tree-root list) so an HR covering several
+          Organisations can manage each one's enheder without leaving the page. */}
+      {treeRootOrgs.length > 0 && (
+        <EnhederPanel organisations={treeRootOrgs} selectedOrgId={selectedTreeRoot} />
+      )}
 
       {error && <div className={styles.alert}>{error}</div>}
 
@@ -866,6 +958,29 @@ export function MedarbejderAdministration() {
                     : 'aktive vikarieringer'}
                 </span>
               )}
+              {/* S97 — filter the list by structured Enhed (server-scoped to the
+                  Organisation). Hidden when the Org has no enheder (e.g. a MAO). */}
+              {enhedFilterOptions.length > 0 && (
+                <div className={styles.instpick}>
+                  <label className={styles.rolesK} htmlFor="medarbejderEnhedFilter">
+                    Enhed
+                  </label>
+                  <select
+                    id="medarbejderEnhedFilter"
+                    className={styles.select}
+                    value={enhedFilterId}
+                    onChange={(e) => setEnhedFilterId(e.target.value)}
+                    data-testid="medarbejder-enhed-filter"
+                  >
+                    <option value="">Alle enheder</option>
+                    {enhedFilterOptions.map((enhed) => (
+                      <option key={enhed.enhedId} value={enhed.enhedId}>
+                        {enhed.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
               <div className={styles.search}>
                 <Input
                   id="medarbejderSearch"
@@ -948,6 +1063,7 @@ export function MedarbejderAdministration() {
           organizations={organizations}
           defaultOrgId={selectedTreeRoot}
           lifecycleContext={drawerContext}
+          currentEnhedTagNames={drawerEnhedTagNames}
           onClose={handleDrawerClose}
           onSaved={handleDrawerSaved}
         />

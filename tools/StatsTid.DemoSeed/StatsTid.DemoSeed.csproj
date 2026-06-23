@@ -13,8 +13,11 @@
                   (same seed ⇒ byte-identical dataset). A crypto RNG would defeat the
                   entire reproducibility contract. No security decision rides on these draws.
          CA2100 — every SQL string in this tool is a STATIC literal (no user input); the
-                  only parameterised values flow through NpgsqlCommand parameters. -->
-    <NoWarn>$(NoWarn);CA5394;CA2100</NoWarn>
+                  only parameterised values flow through NpgsqlCommand parameters.
+         CA5351 — MD5 here is a DETERMINISTIC ID derivation (S97 enhed_id from the
+                  organisation|name key), NOT a security primitive. A stable hash is required
+                  so the user_enheder FK resolves to the same enhed_id; no secret is hashed. -->
+    <NoWarn>$(NoWarn);CA5394;CA2100;CA5351</NoWarn>
   </PropertyGroup>
 
   <!-- S84 / TASK-8401 + TASK-8403: deterministic demo-data generator + API loader.

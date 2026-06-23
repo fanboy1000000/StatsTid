@@ -546,6 +546,61 @@ INSERT INTO schema_migrations (migration_id, applied_at)
     VALUES ('s31-d3-employee-profile-store', NOW())
     ON CONFLICT (migration_id) DO NOTHING;
 
+-- ── Sprint 97 (ADR-035 / S97): structured Enhed metadata + multi-tag membership ──
+-- Replaces the flat free-text `employee_profiles.enhed_label` with a deduplicated,
+-- per-Organisation `enheder` entity table + a `user_enheder` multi-tag link. An Enhed
+-- is PURE DISPLAY METADATA: it carries ZERO authority/scope/approval/payroll meaning
+-- (ADR-035 — the Organisation is the only authority unit; Enhed holds none). It belongs
+-- to exactly ONE ORGANISATION-typed org (enforced at the create-endpoint via an org-type
+-- guard; the FK below only enforces existence). Non-temporal latest-wins projection
+-- (model after work_time_projection / ADR-028 D1, NOT the ADR-022 temporal profile):
+-- `enheder` is the EnhedCreated/Renamed/Deleted projection, `user_enheder` is the
+-- UserEnheder‌Changed (full-set, idempotent overwrite) projection. `enhed_label` is KEPT
+-- (read-only display fallback; the `EnhedLabel` field stays frozen on the
+-- EmployeeProfile* events + audit mappers). Soft-delete (`deleted_at`) keeps the
+-- `user_enheder → enheder` FK valid — memberships to a soft-deleted enhed are
+-- projection-FILTERED at read time, NOT hard-deleted (no fan-out untag race, P4).
+CREATE TABLE IF NOT EXISTS enheder (
+    enhed_id         UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    organisation_id  TEXT         NOT NULL REFERENCES organizations(org_id),
+    name             TEXT         NOT NULL,
+    deleted_at       TIMESTAMPTZ  NULL,
+    version          BIGINT       NOT NULL DEFAULT 1,
+    created_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+-- Active-name dedup: at most one ACTIVE (non-deleted) enhed per (Organisation, lower(name)).
+-- Partial — soft-deleted names are recreatable (delete-then-recreate-same-name allowed).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_enheder_active_name
+    ON enheder (organisation_id, lower(name))
+    WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_enheder_org ON enheder (organisation_id);
+
+-- user_enheder — the multi-tag membership link (a user → 0..N enheder, all within the
+-- user's own Organisation; the same-Organisation invariant is enforced at the COMMAND
+-- layer — set-tags validates each enhed.organisation_id == the FOR-UPDATE'd user's
+-- primary_org_id, and a transfer CLEARS the rows in-tx — NOT a DB trigger). Soft-delete
+-- on `enheder` keeps this FK valid (no hard delete of an enhed). NON-temporal: a user's
+-- full tag set is delete-all-then-insert overwritten on UserEnhederChanged.
+-- ON DELETE CASCADE on BOTH parents: a tag is a pure membership link owned by both the
+-- user and the enhed. Neither parent is ever HARD-deleted in production (users are
+-- soft-deactivated via employment_end_date; enheder are soft-deleted via deleted_at), so
+-- the cascade never fires at runtime — it only keeps hard-delete cleanups (tests / a
+-- legacy DBA purge) FK-safe without an explicit pre-delete of the link. Orthogonal to the
+-- transfer-clears-tags path (that is an UPDATE of primary_org_id, not a DELETE).
+CREATE TABLE IF NOT EXISTS user_enheder (
+    user_id   TEXT  NOT NULL REFERENCES users(user_id)     ON DELETE CASCADE,
+    enhed_id  UUID  NOT NULL REFERENCES enheder(enhed_id)  ON DELETE CASCADE,
+    PRIMARY KEY (user_id, enhed_id)
+);
+CREATE INDEX IF NOT EXISTS idx_user_enheder_enhed ON user_enheder (enhed_id);
+
+-- schema_migrations ledger entry — documentary for S97 greenfield-only, forward-compat
+-- marker if init.sql ever runs against an older database (the CREATE ... IF NOT EXISTS
+-- blocks above serve both greenfield + legacy; no guarded ALTER needed — brand-new tables).
+INSERT INTO schema_migrations (migration_id, applied_at)
+    VALUES ('s97-enhed-structured-multitag', NOW())
+    ON CONFLICT (migration_id) DO NOTHING;
+
 -- ── Phase 4e (Sprint 34): user_agreement_codes versioned-history store ──
 -- ADR-023 D2 option (b): per-user agreement-code history table so payroll
 -- export can perform an effective-date lookup (mirroring S29 wage_type_mappings

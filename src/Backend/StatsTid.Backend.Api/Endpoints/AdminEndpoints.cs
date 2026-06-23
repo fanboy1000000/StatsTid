@@ -941,9 +941,11 @@ public static class AdminEndpoints
             DbConnectionFactory dbFactory,
             UserAgreementCodeRepository userAgreementCodeRepo,
             ReportingLineRepository reportingLineRepo,
+            EnhedRepository enhedRepo,
             IAuditProjectionMapper<UserUpdated> auditMapper,
             IAuditProjectionMapper<UserAgreementCodeChanged> uacChangedMapper,
             IAuditProjectionMapper<UserAgreementCodeSuperseded> uacSupersededMapper,
+            IAuditProjectionMapper<UserEnhederChanged> enhederChangedMapper,
             AuditProjectionRepository auditRepo,
             ILoggerFactory loggerFactory,
             HttpContext context,
@@ -1531,6 +1533,40 @@ public static class AdminEndpoints
                     }
                 }
 
+                // S97 / ADR-035 (BLOCKER B) — TRANSFER-CLEARS-TAGS. An Enhed tag never crosses
+                // Organisations (the same-Organisation invariant). When this PUT moves the user to
+                // a different Organisation, CLEAR the user's enhed tags IN THIS SAME TX (Enhed is
+                // throwaway display metadata — CLEAR, not block). GATED on the EXISTING org-change
+                // predicate (reused verbatim from the transfer-lock decision at L1083-1084) so a
+                // NON-transfer PUT (display_name/email/agreement-only edit) does NOT touch
+                // user_enheder. DELETE the rows + enqueue UserEnhederChanged(empty) + the
+                // audit-projection row, atomically with the UserUpdated above (mirrors the
+                // L1304-1312 outbox+audit pattern). ResolvedTargetOrgId = newPrimaryOrgId (the
+                // POST-transfer org).
+                if (request.PrimaryOrgId is not null &&
+                    !string.Equals(request.PrimaryOrgId, existingUser.PrimaryOrgId, StringComparison.Ordinal))
+                {
+                    var enhederClearedEvent = new UserEnhederChanged
+                    {
+                        UserId = userId,
+                        EnhedIds = Array.Empty<Guid>(),
+                        ActorId = actor.ActorId,
+                        ActorRole = actor.ActorRole,
+                        CorrelationId = actor.CorrelationId,
+                    };
+                    await enhedRepo.ApplyUserEnhederChangedAsync(conn, tx, enhederClearedEvent, ct);
+
+                    var enhederClearedOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"user-{userId}", enhederClearedEvent, ct);
+                    var enhederClearedCtx = new AuditProjectionContext(
+                        ActorId: actor.ActorId,
+                        ActorPrimaryOrgId: actor.OrgId,
+                        CorrelationId: actor.CorrelationId,
+                        OccurredAt: new DateTimeOffset(enhederClearedEvent.OccurredAt),
+                        ResolvedTargetOrgId: newPrimaryOrgId);
+                    var enhederClearedRow = enhederChangedMapper.Map(enhederClearedEvent, enhederClearedCtx);
+                    await auditRepo.InsertAsync(conn, tx, enhederClearedEvent.EventId, enhederClearedOutboxId, enhederClearedEvent.EventType, enhederClearedRow, enhederClearedCtx, ct);
+                }
+
                 await tx.CommitAsync(ct);
             }
             catch (OptimisticConcurrencyException ex)
@@ -2104,6 +2140,7 @@ public static class AdminEndpoints
         app.MapGet("/api/admin/users/search", async (
             string? q,
             string? excludeEmployeeId,
+            string? enhedId,
             int? limit,
             int? offset,
             ApprovalPeriodRepository approvalRepo,
@@ -2134,8 +2171,18 @@ public static class AdminEndpoints
                     excluded.Add(d);
             }
 
+            // S97 / WARNING E — optional enhed-id filter (still org-bounded inside SearchPeopleAsync;
+            // a name-equal enhed in another org cannot widen results). A malformed value 400s.
+            Guid? enhedFilter = null;
+            if (!string.IsNullOrWhiteSpace(enhedId))
+            {
+                if (!Guid.TryParse(enhedId, out var parsedEnhedId))
+                    return Results.BadRequest(new { error = "Invalid enhedId." });
+                enhedFilter = parsedEnhedId;
+            }
+
             var (items, total) = await approvalRepo.SearchPeopleAsync(
-                q ?? string.Empty, accessibleOrgs, excluded, pageLimit, pageOffset, ct);
+                q ?? string.Empty, accessibleOrgs, excluded, pageLimit, pageOffset, ct, enhedFilter);
 
             return Results.Ok(new
             {
@@ -2151,6 +2198,397 @@ public static class AdminEndpoints
                 offset = pageOffset,
             });
         }).RequireAuthorization("HROrAbove"); // S91 TASK-9102: tree-page picker opened to LocalHR
+
+        // ═══════════════════════════════════════════
+        // S97 / ADR-035 (TASK-9703) — structured Enhed CRUD + set-user-tags.
+        //   Enhed is PURE DISPLAY metadata: ZERO authority/scope/approval meaning. Every
+        //   endpoint is org-scope-FLOORED via ValidateOrgAccessAsync(actor, org, LocalHR)
+        //   (the S76/S91 per-scope floor — org-scope containment preserved; cross-org blocked).
+        //   The Enhed surface is ABSENT from OrgScopeValidator/RoleScope.CoversOrg/
+        //   DesignatedApproverAuthorizer — tagging two users the same enhed grants neither any
+        //   authority over the other (an explicit RED test in TASK-9707 pins this).
+        // ═══════════════════════════════════════════
+
+        // GET /api/admin/enheder?organisationId=… — list ACTIVE enheder for ONE Organisation.
+        // The Organisation must be ∈ the actor's accessible orgs (ValidateOrgAccessAsync LocalHR
+        // is the exact containment check; GLOBAL admits any existing org).
+        app.MapGet("/api/admin/enheder", async (
+            string? organisationId,
+            EnhedRepository enhedRepo,
+            OrgScopeValidator scopeValidator,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            var actor = context.GetActorContext();
+            if (string.IsNullOrWhiteSpace(organisationId))
+                return Results.BadRequest(new { error = "organisationId is required." });
+
+            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, organisationId, StatsTidRoles.LocalHR, ct);
+            if (!allowed)
+                return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+
+            var rows = await enhedRepo.ListActiveByOrgAsync(organisationId, ct);
+            return Results.Ok(new
+            {
+                enheder = rows.Select(e => new
+                {
+                    enhedId = e.EnhedId,
+                    organisationId = e.OrganisationId,
+                    name = e.Name,
+                    version = e.Version,
+                }),
+            });
+        }).RequireAuthorization("HROrAbove");
+
+        // POST /api/admin/enheder { organisationId, name } — create. Floored on the target
+        // Organisation. Rejects (400) a non-ORGANISATION org_type (mirrors the primary_org guard
+        // at the users POST — an Enhed belongs to an ORGANISATION, not a MAO). 409 on active-name
+        // dup (23505 on idx_enheder_active_name). Emits EnhedCreated (plain outbox — display
+        // metadata, no audit-projection row, mirroring ReportingLineManagerDeactivated).
+        app.MapPost("/api/admin/enheder", async (
+            CreateEnhedRequest request,
+            EnhedRepository enhedRepo,
+            OrganizationRepository orgRepo,
+            OrgScopeValidator scopeValidator,
+            DbConnectionFactory dbFactory,
+            IOutboxEnqueue outbox,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            var actor = context.GetActorContext();
+            if (request is null || string.IsNullOrWhiteSpace(request.OrganisationId) || string.IsNullOrWhiteSpace(request.Name))
+                return Results.BadRequest(new { error = "organisationId and name are required." });
+
+            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, request.OrganisationId, StatsTidRoles.LocalHR, ct);
+            if (!allowed)
+                return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+
+            // ORGANISATION-typed guard (mirror the users POST primary_org guard, same 400 shape).
+            var org = await orgRepo.GetByIdAsync(request.OrganisationId, ct);
+            if (org is null)
+                return Results.BadRequest(new { error = "Organisation not found." });
+            if (!string.Equals(org.OrgType, "ORGANISATION", StringComparison.Ordinal))
+                return Results.BadRequest(new { error = "An Enhed must belong to an Organisation (a MAO holds no enheder)." });
+
+            var enhedId = Guid.NewGuid();
+            var @event = new EnhedCreated
+            {
+                EnhedId = enhedId,
+                OrganisationId = request.OrganisationId,
+                Name = request.Name.Trim(),
+                ActorId = actor.ActorId,
+                ActorRole = actor.ActorRole,
+                CorrelationId = actor.CorrelationId,
+            };
+
+            await using var conn = dbFactory.Create();
+            await conn.OpenAsync(ct);
+            await using var tx = await conn.BeginTransactionAsync(ct);
+            try
+            {
+                await enhedRepo.ApplyEnhedCreatedAsync(conn, tx, @event, ct);
+                await outbox.EnqueueAsync(conn, tx, $"enhed-{enhedId}", @event, ct);
+                await tx.CommitAsync(ct);
+            }
+            catch (PostgresException pgEx) when (pgEx.SqlState == "23505")
+            {
+                await tx.RollbackAsync(ct);
+                return Results.Conflict(new { error = "An active enhed with this name already exists in this Organisation." });
+            }
+            catch
+            {
+                await tx.RollbackAsync(ct);
+                throw;
+            }
+
+            context.Response.Headers.ETag = "\"1\"";
+            return Results.Created($"/api/admin/enheder/{enhedId}", new
+            {
+                enhedId,
+                organisationId = @event.OrganisationId,
+                name = @event.Name,
+                version = 1L,
+            });
+        }).RequireAuthorization("HROrAbove");
+
+        // PUT /api/admin/enheder/{id} { name } (If-Match) — rename. Floored on the enhed's
+        // owning Organisation. 409 on active-name dup. Emits EnhedRenamed.
+        app.MapPut("/api/admin/enheder/{id}", async (
+            string id,
+            RenameEnhedRequest request,
+            EnhedRepository enhedRepo,
+            OrgScopeValidator scopeValidator,
+            DbConnectionFactory dbFactory,
+            IOutboxEnqueue outbox,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            var actor = context.GetActorContext();
+            if (request is null || string.IsNullOrWhiteSpace(request.Name))
+                return Results.BadRequest(new { error = "name is required." });
+            if (!Guid.TryParse(id, out var enhedId))
+                return Results.BadRequest(new { error = "Invalid enhed id." });
+
+            if (!EtagHeaderHelper.TryParseIfMatch(context.Request, out var expectedVersion, out var headerError))
+                return Results.Json(new { error = headerError }, statusCode: 428);
+
+            var existing = await enhedRepo.GetByIdAsync(id, ct);
+            if (existing is null || existing.IsDeleted)
+                return Results.NotFound(new { error = "Enhed not found." });
+
+            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, existing.OrganisationId, StatsTidRoles.LocalHR, ct);
+            if (!allowed)
+                return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+
+            if (existing.Version != expectedVersion)
+                return Results.Json(new
+                {
+                    error = "Concurrency precondition failed",
+                    expectedVersion,
+                    actualVersion = existing.Version,
+                }, statusCode: 412);
+
+            var @event = new EnhedRenamed
+            {
+                EnhedId = enhedId,
+                Name = request.Name.Trim(),
+                ActorId = actor.ActorId,
+                ActorRole = actor.ActorRole,
+                CorrelationId = actor.CorrelationId,
+            };
+
+            await using var conn = dbFactory.Create();
+            await conn.OpenAsync(ct);
+            await using var tx = await conn.BeginTransactionAsync(ct);
+            try
+            {
+                // BLOCKER 2 — IN-UPDATE optimistic concurrency: the version predicate lives in the
+                // UPDATE itself, so two concurrent If-Match:"N" renames cannot both commit. On a
+                // 0-row update we re-read (in-tx) to distinguish 404 (absent/soft-deleted) from 412
+                // (version drift) and emit NOTHING (no event on a no-op write).
+                var affected = await enhedRepo.ApplyEnhedRenamedAsync(conn, tx, @event, expectedVersion, ct);
+                if (affected == 0)
+                {
+                    var current = await enhedRepo.GetByIdInTxAsync(conn, tx, enhedId, ct);
+                    await tx.RollbackAsync(ct);
+                    if (current is null || current.IsDeleted)
+                        return Results.NotFound(new { error = "Enhed not found." });
+                    return Results.Json(new
+                    {
+                        error = "Concurrency precondition failed",
+                        expectedVersion,
+                        actualVersion = current.Version,
+                    }, statusCode: 412);
+                }
+
+                await outbox.EnqueueAsync(conn, tx, $"enhed-{enhedId}", @event, ct);
+                await tx.CommitAsync(ct);
+            }
+            catch (PostgresException pgEx) when (pgEx.SqlState == "23505")
+            {
+                await tx.RollbackAsync(ct);
+                return Results.Conflict(new { error = "An active enhed with this name already exists in this Organisation." });
+            }
+            catch
+            {
+                await tx.RollbackAsync(ct);
+                throw;
+            }
+
+            var newVersion = expectedVersion + 1;
+            context.Response.Headers.ETag = $"\"{newVersion}\"";
+            return Results.Ok(new
+            {
+                enhedId,
+                organisationId = existing.OrganisationId,
+                name = @event.Name,
+                version = newVersion,
+            });
+        }).RequireAuthorization("HROrAbove");
+
+        // DELETE /api/admin/enheder/{id} (If-Match) — SOFT delete. Floored on the enhed's owning
+        // Organisation. NO fan-out untag write — memberships are projection-FILTERED. Emits
+        // EnhedDeleted.
+        app.MapDelete("/api/admin/enheder/{id}", async (
+            string id,
+            EnhedRepository enhedRepo,
+            OrgScopeValidator scopeValidator,
+            DbConnectionFactory dbFactory,
+            IOutboxEnqueue outbox,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            var actor = context.GetActorContext();
+            if (!Guid.TryParse(id, out var enhedId))
+                return Results.BadRequest(new { error = "Invalid enhed id." });
+
+            if (!EtagHeaderHelper.TryParseIfMatch(context.Request, out var expectedVersion, out var headerError))
+                return Results.Json(new { error = headerError }, statusCode: 428);
+
+            var existing = await enhedRepo.GetByIdAsync(id, ct);
+            if (existing is null || existing.IsDeleted)
+                return Results.NotFound(new { error = "Enhed not found." });
+
+            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, existing.OrganisationId, StatsTidRoles.LocalHR, ct);
+            if (!allowed)
+                return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+
+            if (existing.Version != expectedVersion)
+                return Results.Json(new
+                {
+                    error = "Concurrency precondition failed",
+                    expectedVersion,
+                    actualVersion = existing.Version,
+                }, statusCode: 412);
+
+            var @event = new EnhedDeleted
+            {
+                EnhedId = enhedId,
+                ActorId = actor.ActorId,
+                ActorRole = actor.ActorRole,
+                CorrelationId = actor.CorrelationId,
+            };
+
+            await using var conn = dbFactory.Create();
+            await conn.OpenAsync(ct);
+            await using var tx = await conn.BeginTransactionAsync(ct);
+            try
+            {
+                // BLOCKER 2 — IN-UPDATE optimistic concurrency: a stale If-Match or an
+                // already-deleted/absent row matches 0 rows. On 0 rows we re-read (in-tx) to map
+                // 404 (absent/already-deleted) vs 412 (version drift) and emit NOTHING.
+                var affected = await enhedRepo.ApplyEnhedDeletedAsync(conn, tx, @event, expectedVersion, ct);
+                if (affected == 0)
+                {
+                    var current = await enhedRepo.GetByIdInTxAsync(conn, tx, enhedId, ct);
+                    await tx.RollbackAsync(ct);
+                    if (current is null || current.IsDeleted)
+                        return Results.NotFound(new { error = "Enhed not found." });
+                    return Results.Json(new
+                    {
+                        error = "Concurrency precondition failed",
+                        expectedVersion,
+                        actualVersion = current.Version,
+                    }, statusCode: 412);
+                }
+
+                await outbox.EnqueueAsync(conn, tx, $"enhed-{enhedId}", @event, ct);
+                await tx.CommitAsync(ct);
+            }
+            catch
+            {
+                await tx.RollbackAsync(ct);
+                throw;
+            }
+
+            return Results.NoContent();
+        }).RequireAuthorization("HROrAbove");
+
+        // PUT /api/admin/users/{userId}/enheder { enhedIds: [] } — set the user's full tag set.
+        // Floored via ValidateEmployeeAccessAsync(actor, userId, LocalHR) (org-scope over the
+        // user's CURRENT org). TOCTOU-safe (WARNING C): in the tx, SELECT primary_org_id ...
+        // FOR UPDATE (lock the user row); validate EACH enhedId ∈ {active enheder WHERE
+        // organisation_id = the-locked-org AND deleted_at IS NULL} (a dead/foreign enhed → 400);
+        // overwrite user_enheder; emit UserEnhederChanged (+ audit-projection). A concurrent
+        // transfer serializes before (the new org's enheder fail validation) or after (the
+        // transfer's clear wins).
+        app.MapPut("/api/admin/users/{userId}/enheder", async (
+            string userId,
+            SetUserEnhederRequest request,
+            EnhedRepository enhedRepo,
+            OrgScopeValidator scopeValidator,
+            DbConnectionFactory dbFactory,
+            IOutboxEnqueue outbox,
+            IAuditProjectionMapper<UserEnhederChanged> auditMapper,
+            AuditProjectionRepository auditRepo,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            var actor = context.GetActorContext();
+            var requestedIds = (request?.EnhedIds ?? Array.Empty<Guid>()).Distinct().ToArray();
+
+            // Floor: org-scope (LocalHR) over the user's CURRENT org (ValidateEmployeeAccessAsync
+            // resolves the target's primary_org and checks containment).
+            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, userId, StatsTidRoles.LocalHR, ct);
+            if (!allowed)
+                return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+
+            await using var conn = dbFactory.Create();
+            await conn.OpenAsync(ct);
+            await using var tx = await conn.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
+            try
+            {
+                // WARNING C — lock the user row; the locked primary_org is the authoritative
+                // validation org (a concurrent transfer either committed before this lock — then
+                // the new org's enheder fail validation — or blocks until after — then its
+                // empty-set clear wins on commit).
+                var lockedOrg = await enhedRepo.LockUserPrimaryOrgAsync(conn, tx, userId, ct);
+                if (lockedOrg is null)
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.NotFound(new { error = "User not found." });
+                }
+
+                // BLOCKER 1 — TOCTOU floor re-check UNDER the lock. The pre-lock
+                // ValidateEmployeeAccessAsync floored against the user's PRE-LOCK org; if the user
+                // was transferred between that check and this FOR UPDATE, an actor scoped only to
+                // the OLD org could set/clear tags on a user now in a NEW org they don't cover.
+                // Re-validate the floor against the LOCKED (current) org — mirrors the in-lock
+                // re-eval discipline in the reporting-line write paths. 403 if the actor does not
+                // cover the user's current Organisation.
+                var (lockedAllowed, lockedReason) =
+                    await scopeValidator.ValidateOrgAccessAsync(actor, lockedOrg, StatsTidRoles.LocalHR, ct);
+                if (!lockedAllowed)
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.Json(new { error = "Access denied", reason = lockedReason }, statusCode: 403);
+                }
+
+                // Validate EACH requested enhed_id ∈ the locked org's ACTIVE enheder. Any
+                // missing id is a dead/foreign enhed → 400 (the same-Organisation invariant).
+                var valid = await enhedRepo.FilterValidActiveEnhedIdsForOrgAsync(conn, tx, lockedOrg, requestedIds, ct);
+                if (valid.Count != requestedIds.Length)
+                {
+                    await tx.RollbackAsync(ct);
+                    var validSet = new HashSet<Guid>(valid);
+                    var rejected = requestedIds.Where(x => !validSet.Contains(x)).ToArray();
+                    return Results.BadRequest(new
+                    {
+                        error = "One or more enheder are not active enheder of the user's Organisation.",
+                        rejected,
+                    });
+                }
+
+                var @event = new UserEnhederChanged
+                {
+                    UserId = userId,
+                    EnhedIds = requestedIds,
+                    ActorId = actor.ActorId,
+                    ActorRole = actor.ActorRole,
+                    CorrelationId = actor.CorrelationId,
+                };
+                await enhedRepo.ApplyUserEnhederChangedAsync(conn, tx, @event, ct);
+
+                var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"user-{userId}", @event, ct);
+                var auditCtx = new AuditProjectionContext(
+                    ActorId: actor.ActorId,
+                    ActorPrimaryOrgId: actor.OrgId,
+                    CorrelationId: actor.CorrelationId,
+                    OccurredAt: new DateTimeOffset(@event.OccurredAt),
+                    ResolvedTargetOrgId: lockedOrg);
+                var auditRow = auditMapper.Map(@event, auditCtx);
+                await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
+
+                await tx.CommitAsync(ct);
+            }
+            catch
+            {
+                await tx.RollbackAsync(ct);
+                throw;
+            }
+
+            return Results.Ok(new { userId, enhedIds = requestedIds });
+        }).RequireAuthorization("HROrAbove");
 
         return app;
     }
@@ -2286,6 +2724,26 @@ public static class AdminEndpoints
     {
         public required Guid AssignmentId { get; init; }
         public string? Reason { get; init; }
+    }
+
+    // ── S97 / ADR-035 — structured Enhed request DTOs ──
+    private sealed class CreateEnhedRequest
+    {
+        public required string OrganisationId { get; init; }
+        public required string Name { get; init; }
+    }
+
+    private sealed class RenameEnhedRequest
+    {
+        public required string Name { get; init; }
+    }
+
+    private sealed class SetUserEnhederRequest
+    {
+        /// <summary>The FULL active Enhed-id set the user should be tagged with (an empty /
+        /// omitted array clears all tags). Idempotent overwrite — validated against the user's
+        /// locked primary_org's active enheder before the projection write.</summary>
+        public IReadOnlyList<Guid>? EnhedIds { get; init; }
     }
 
     /// <summary>

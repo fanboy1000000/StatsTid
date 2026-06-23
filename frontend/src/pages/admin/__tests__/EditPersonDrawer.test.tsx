@@ -105,6 +105,16 @@ function setupRouter(overrides: RouterOverrides = {}) {
       if (url.includes(pattern)) return factory(init)
     }
     const method = init?.method ?? 'GET'
+    // S97 — the ProfileSection's EnhedTagPicker lists the person's Organisation
+    // enheder (GET /api/admin/enheder?organisationId=…). Default to one active
+    // enhed ("Netværk") so the picker renders + name-seeds from the roster label.
+    if (url.includes('/api/admin/enheder')) {
+      if (method === 'PUT') return ok(undefined)
+      return ok([{ enhedId: 'ENH-NET', organisationId: 'ORG1', name: 'Netværk', version: 1 }])
+    }
+    if (url.includes('/api/admin/users/') && url.includes('/enheder')) {
+      return ok(undefined)
+    }
     if (url.includes('/api/admin/employee-profiles/')) {
       return ok(profileBody, '"1"')
     }
@@ -221,35 +231,53 @@ describe('EditPersonDrawer — create flow', () => {
     // HR fields (profile + entitlement) are unavailable at create — the POST
     // seeds defaults; HR edits happen via the post-create PUTs.
     expect(screen.queryByTestId('ep-part-time')).toBeNull()
-    expect(screen.queryByTestId('ep-enhed')).toBeNull()
+    // S97 — the structured-enhed tag picker (replaced the free-text field) is part
+    // of the HR profile section → also absent on create.
+    expect(screen.queryByTestId('ep-enheder-picker')).toBeNull()
     expect(screen.queryByTestId('ep-birth-date')).toBeNull()
   })
 })
 
 describe('EditPersonDrawer — edit flow per-endpoint contract', () => {
-  it('hydrates the sections + sends the users PUT and the enhedLabel profile PUT', async () => {
-    const userCalls = collect('/api/admin/users/')
+  it('hydrates the sections + sends the users PUT and the structured-enhed tags PUT', async () => {
+    // S97 / TASK-9705 — the free-text enhedLabel field is RETIRED in favour of the
+    // structured multi-tag picker. The profile PUT still carries the (read-only,
+    // hydrated) enhedLabel unchanged; toggling a tag fires the SEPARATE set-user-
+    // tags PUT (PUT /api/admin/users/{id}/enheder) with the chosen enhed ids.
+    // All /api/admin/users/ calls (the users-row PUT carries `displayName`; the
+    // set-user-tags PUT carries `enhedIds` — both hit this substring).
+    const usersCalls = collect('/api/admin/users/')
     const profileCalls = collect('/api/admin/employee-profiles/')
     const onSaved = vi.fn()
-    renderDrawer({ user: editUser, onSaved })
+    renderDrawer({ user: editUser, currentEnhedTagNames: null, onSaved })
 
-    // Profile (incl. enhedLabel) hydrated from the GET.
+    // The structured tag picker renders the org's active enheder as checkboxes.
     await waitFor(() => {
-      expect((screen.getByTestId('ep-enhed') as HTMLInputElement).value).toBe('Netværk')
+      expect(screen.getByTestId('ep-enheder-picker')).toBeDefined()
     })
-
-    fireEvent.change(screen.getByTestId('ep-enhed'), { target: { value: 'Drift' } })
+    // Select the "Netværk" tag (checkbox label = enhed name).
+    fireEvent.click(screen.getByLabelText('Netværk'))
     fireEvent.click(screen.getByText('Gem ændringer'))
 
     await waitFor(() => {
       expect(onSaved).toHaveBeenCalled()
     })
-    const userPut = userCalls.find((c) => c.method === 'PUT')
+    // The users-row PUT (body has displayName) carries the dialog-open If-Match.
+    const userPut = usersCalls.find(
+      (c) => c.method === 'PUT' && (c.body as { displayName?: string })?.displayName !== undefined,
+    )
+    expect(userPut).toBeDefined()
     expect(userPut!.headers['If-Match']).toBe('"1"')
+    // The profile PUT carries the unchanged read-only enhedLabel.
     const profilePut = profileCalls.find((c) => c.method === 'PUT')
     expect(profilePut!.headers['If-Match']).toBe('"1"')
-    // enhedLabel threaded through the profile PUT body.
-    expect((profilePut!.body as { enhedLabel: string }).enhedLabel).toBe('Drift')
+    expect((profilePut!.body as { enhedLabel: string }).enhedLabel).toBe('Netværk')
+    // The set-user-tags PUT (body has enhedIds) fired with the selected enhed id.
+    const tagPut = usersCalls.find(
+      (c) => c.method === 'PUT' && (c.body as { enhedIds?: string[] })?.enhedIds !== undefined,
+    )
+    expect(tagPut).toBeDefined()
+    expect((tagPut!.body as { enhedIds: string[] }).enhedIds).toEqual(['ENH-NET'])
   })
 
   it('CHILD_SICK CREATE uses If-None-Match: * when no live row exists', async () => {
@@ -385,6 +413,13 @@ function setupSharedUsersVersionRouter(initialVersion = 1) {
   mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET'
 
+    // S97 — the enhed picker list + the (un-touched) set-tags PUT.
+    if (url.includes('/api/admin/users/') && url.includes('/enheder')) {
+      return ok(undefined)
+    }
+    if (url.includes('/api/admin/enheder')) {
+      return ok([{ enhedId: 'ENH-NET', organisationId: 'ORG1', name: 'Netværk', version: 1 }])
+    }
     // employee-profiles — a SEPARATE version (not the shared users row).
     if (url.includes('/api/admin/employee-profiles/')) {
       return ok(profileBody, '"1"')
@@ -507,7 +542,7 @@ describe('EditPersonDrawer — 412 staleConflict banner', () => {
     renderDrawer({ user: editUser, onSaved: vi.fn() })
 
     await waitFor(() => {
-      expect(screen.getByTestId('ep-enhed')).toBeDefined()
+      expect(screen.getByTestId('ep-part-time')).toBeDefined()
     })
     fireEvent.change(screen.getByTestId('ep-display-name'), { target: { value: 'Ændret Navn' } })
     fireEvent.click(screen.getByText('Gem ændringer'))
@@ -531,6 +566,8 @@ describe('EditPersonDrawer — 412 staleConflict banner', () => {
     const userCalls: Array<{ method: string; ifMatch?: string }> = []
     mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
       const method = init?.method ?? 'GET'
+      if (url.includes('/api/admin/users/') && url.includes('/enheder')) return ok(undefined)
+      if (url.includes('/api/admin/enheder')) return ok([{ enhedId: 'ENH-NET', organisationId: 'ORG1', name: 'Netværk', version: 1 }])
       if (url.includes('/api/admin/employee-profiles/')) return ok(profileBody, '"1"')
       if (url.includes('/birth-date')) return ok({ employeeId: 'EMP001', birthDate: null, version: usersVersion }, `"${usersVersion}"`)
       if (url.includes('/employment-start-date')) return ok({ employeeId: 'EMP001', employmentStartDate: null, version: usersVersion }, `"${usersVersion}"`)
@@ -558,7 +595,7 @@ describe('EditPersonDrawer — 412 staleConflict banner', () => {
     renderDrawer({ user: editUser, onSaved, onClose })
 
     await waitFor(() => {
-      expect(screen.getByTestId('ep-enhed')).toBeDefined()
+      expect(screen.getByTestId('ep-part-time')).toBeDefined()
     })
     fireEvent.change(screen.getByTestId('ep-display-name'), { target: { value: 'Ændret Navn' } })
     fireEvent.click(screen.getByText('Gem ændringer'))
@@ -599,9 +636,11 @@ describe('EditPersonDrawer — per-section partial-failure honesty', () => {
     renderDrawer({ user: editUser, onSaved, onClose })
 
     await waitFor(() => {
-      expect(screen.getByTestId('ep-enhed')).toBeDefined()
+      expect(screen.getByTestId('ep-position')).toBeDefined()
     })
-    fireEvent.change(screen.getByTestId('ep-enhed'), { target: { value: 'Drift' } })
+    // Dirty the profile via the position field (the free-text enhed field is gone
+    // — S97 retired it; the profile PUT still owns position/part-time/enhedLabel).
+    fireEvent.change(screen.getByTestId('ep-position'), { target: { value: 'Chefkonsulent' } })
     fireEvent.click(screen.getByText('Gem ændringer'))
 
     // The profile section shows its error; the drawer stays OPEN (no onSaved/close).
@@ -626,7 +665,8 @@ describe('EditPersonDrawer — role-gating', () => {
     })
     // Stamdata is visible; the HR profile/entitlement sections are hidden.
     expect(screen.queryByTestId('ep-part-time')).toBeNull()
-    expect(screen.queryByTestId('ep-enhed')).toBeNull()
+    // S97 — the structured-enhed tag picker is part of the HR profile section.
+    expect(screen.queryByTestId('ep-enheder-picker')).toBeNull()
     expect(screen.queryByTestId('ep-birth-date')).toBeNull()
     expect(screen.queryByTestId('ep-child-sick')).toBeNull()
   })
@@ -640,9 +680,13 @@ describe('EditPersonDrawer — role-gating', () => {
       await waitFor(() => {
         expect(screen.getByTestId('ep-part-time')).toBeDefined()
       })
-      expect(screen.getByTestId('ep-enhed')).toBeDefined()
+      expect(screen.getByTestId('ep-position')).toBeDefined()
       expect(screen.getByTestId('ep-birth-date')).toBeDefined()
       expect(screen.getByTestId('ep-child-sick')).toBeDefined()
+      // S97 — the structured-enhed tag picker replaces the old free-text field.
+      await waitFor(() => {
+        expect(screen.getByTestId('ep-enheder-picker')).toBeDefined()
+      })
     },
   )
 })

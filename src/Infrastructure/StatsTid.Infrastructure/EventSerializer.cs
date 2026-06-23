@@ -172,6 +172,15 @@ public static class EventSerializer
         // (slice Step-0 gate (i) — its payload shape depends on the SLS cap answer).
         ["TerminationPayoutRequested"] = typeof(TerminationPayoutRequested),
         ["TerminationClaimWaived"] = typeof(TerminationClaimWaived),
+        // Sprint 97 (ADR-035): structured Enhed metadata + multi-tag membership events.
+        // PURE DISPLAY metadata — ZERO authority/scope/approval meaning. Enhed*-events ride
+        // enhed-{enhedId} (latest-wins, non-temporal projection into `enheder`);
+        // UserEnhederChanged rides user-{userId} (full-set idempotent overwrite into
+        // `user_enheder`). Name-keyed registration; round-trips unchanged on replay.
+        ["EnhedCreated"] = typeof(EnhedCreated),
+        ["EnhedRenamed"] = typeof(EnhedRenamed),
+        ["EnhedDeleted"] = typeof(EnhedDeleted),
+        ["UserEnhederChanged"] = typeof(UserEnhederChanged),
     };
 
     public static string Serialize(IDomainEvent @event)

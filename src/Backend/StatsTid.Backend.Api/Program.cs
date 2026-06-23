@@ -83,6 +83,7 @@ builder.Services.AddSingleton<EntitlementBalanceRepository>();
 builder.Services.AddSingleton<TimeEntryProjectionRepository>();
 builder.Services.AddSingleton<AbsenceProjectionRepository>();
 builder.Services.AddSingleton<WorkTimeProjectionRepository>();
+builder.Services.AddSingleton<EnhedRepository>(); // S97 ADR-035 — structured Enhed metadata + multi-tag membership (pure display, zero authority)
 builder.Services.AddSingleton<CompensatoryRestRepository>();
 builder.Services.AddSingleton<OvertimeBalanceRepository>();
 builder.Services.AddSingleton<OvertimePreApprovalRepository>();
@@ -226,6 +227,11 @@ builder.Services.AddSingleton<IAuditProjectionMapper<ManagerVikarCreated>, Stats
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(ManagerVikarCreated), nameof(ManagerVikarCreated)));
 builder.Services.AddSingleton<IAuditProjectionMapper<ManagerVikarEnded>, StatsTid.Infrastructure.AuditMappers.ManagerVikarEndedAuditMapper>();
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(ManagerVikarEnded), nameof(ManagerVikarEnded)));
+// S97 ADR-035 — UserEnhederChanged audit mapper (set-user-tags + transfer-clears-tags). TENANT_TARGETED;
+// target org from context.ResolvedTargetOrgId (the user's primary_org). EnhedCreated/Renamed/Deleted ride
+// plain EnqueueAsync (no audit-projection row — display-metadata events, mirroring ReportingLineManagerDeactivated).
+builder.Services.AddSingleton<IAuditProjectionMapper<UserEnhederChanged>, UserEnhederChangedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(UserEnhederChanged), nameof(UserEnhederChanged)));
 // S59 ADR-029 — per-employee entitlement eligibility (mapper lives in Infrastructure, cross-process)
 builder.Services.AddSingleton<IAuditProjectionMapper<EmployeeEntitlementEligibilitySet>, StatsTid.Infrastructure.AuditMappers.EmployeeEntitlementEligibilitySetAuditMapper>();
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(EmployeeEntitlementEligibilitySet), nameof(EmployeeEntitlementEligibilitySet)));
@@ -330,6 +336,23 @@ using (var scope = app.Services.CreateScope())
     var outbox = app.Services.GetRequiredService<IOutboxEnqueue>();
     var logger = app.Services.GetRequiredService<ILogger<Program>>();
     await EmployeeProfileSeeder.SeedAsync(dbFactory, outbox, logger);
+}
+
+// ── S97 / TASK-9704 / ADR-035: backfill structured enheder + user_enheder tags ──
+// LEGACY-DB-UPGRADE mechanism (Step-0b BLOCKER A): migrates the legacy free-text
+// employee_profiles.enhed_label PROJECTION column (NOT an event replay — the demo seed
+// never emitted EmployeeProfileCreated.EnhedLabel) into the structured enheder table +
+// user_enheder multi-tag link, via EnhedCreated + UserEnhederChanged events (event-sourced,
+// no raw projection INSERT — the S92 lesson). Runs AFTER the employee-profile seed (it reads
+// the live employee_profiles rows). GREENFIELD NO-OP by design: the init.sql/CI baseline has
+// enhed_label universally NULL → the source query returns zero rows. Idempotent: reuses an
+// existing active enhed per (org, lower(name)) and skips users whose tag set already matches.
+{
+    var dbFactory = app.Services.GetRequiredService<DbConnectionFactory>();
+    var outbox = app.Services.GetRequiredService<IOutboxEnqueue>();
+    var enhedRepo = app.Services.GetRequiredService<EnhedRepository>();
+    var logger = app.Services.GetRequiredService<ILogger<Program>>();
+    await EnhedBackfillSeeder.SeedAsync(dbFactory, outbox, enhedRepo, logger);
 }
 
 // ── S34 / TASK-3403: seed user_agreement_codes for any active user lacking a live row ──
