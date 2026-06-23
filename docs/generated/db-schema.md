@@ -1033,7 +1033,7 @@
 | reporting_line_id | UUID | No | PK | gen_random_uuid() |
 | employee_id | TEXT | No | FK→users |  |
 | manager_id | TEXT | No | FK→users |  |
-| tree_root_org_id | TEXT | No | FK→organizations |  |
+| organisation_id | TEXT | No | FK→organizations |  |
 | relationship | TEXT | No |  | 'PRIMARY' |
 | effective_from | DATE | No |  |  |
 | effective_to | DATE | Yes |  |  |
@@ -1051,7 +1051,7 @@
 - `uq_reporting_line_active_acting` (UNIQUE) on (employee_id) WHERE effective_to IS NULL AND relationship = 'ACTING'
 - `idx_reporting_lines_manager` on (manager_id) WHERE effective_to IS NULL
 - `idx_reporting_lines_employee_history` on (employee_id, effective_from DESC)
-- `idx_reporting_lines_tree_root` on (tree_root_org_id) WHERE effective_to IS NULL
+- `idx_reporting_lines_tree_root` on (organisation_id) WHERE effective_to IS NULL
 
 ## reporting_line_audit
 
@@ -1324,7 +1324,7 @@
 | vikar_user_id | TEXT | No | FK→users |  |
 | until_date | DATE | No |  |  |
 | reason | TEXT | No |  |  |
-| tree_root_org_id | TEXT | No | FK→organizations |  |
+| organisation_id | TEXT | No | FK→organizations |  |
 | version | BIGINT | No |  | 1 |
 | created_by | TEXT | No |  |  |
 | created_at | TIMESTAMPTZ | No |  | NOW() |

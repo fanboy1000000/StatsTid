@@ -3,7 +3,7 @@ namespace StatsTid.Tools.DemoSeed.Generation;
 /// <summary>Per-tree generation profile (OQ-3 org/agreement-mix defaults).</summary>
 internal sealed class TreeProfile
 {
-    public required string TreeRootOrgId { get; init; }
+    public required string OrganisationId { get; init; }
     public required string OrgName { get; init; }
 
     /// <summary>Target user count for this tree.</summary>
@@ -64,7 +64,7 @@ internal sealed class ScaleConfig
         {
             new TreeProfile
             {
-                TreeRootOrgId = "STYX1",
+                OrganisationId = "STYX1",
                 OrgName = "Demostyrelsen (smoke)",
                 TargetUsers = 30,
                 AgreementMix = (55, 35, 10),
@@ -88,7 +88,7 @@ internal sealed class ScaleConfig
             // Big mixed operational agency
             new TreeProfile
             {
-                TreeRootOrgId = "STYX1",
+                OrganisationId = "STYX1",
                 OrgName = "Den Store Operationelle Styrelse",
                 TargetUsers = 2000,
                 AgreementMix = (55, 35, 10),
@@ -97,7 +97,7 @@ internal sealed class ScaleConfig
             // Mid-size policy styrelse, AC-heavy
             new TreeProfile
             {
-                TreeRootOrgId = "STYX2",
+                OrganisationId = "STYX2",
                 OrgName = "Politikstyrelsen",
                 TargetUsers = 600,
                 AgreementMix = (85, 12, 3),
@@ -106,7 +106,7 @@ internal sealed class ScaleConfig
             // Small board/naevn — AC
             new TreeProfile
             {
-                TreeRootOrgId = "STYX3",
+                OrganisationId = "STYX3",
                 OrgName = "Klagenaevnet",
                 TargetUsers = 250,
                 AgreementMix = (80, 18, 2),
@@ -115,7 +115,7 @@ internal sealed class ScaleConfig
             // Small inspection agency — HK-heavy
             new TreeProfile
             {
-                TreeRootOrgId = "STYX4",
+                OrganisationId = "STYX4",
                 OrgName = "Inspektionsstyrelsen",
                 TargetUsers = 250,
                 AgreementMix = (25, 70, 5),
@@ -124,7 +124,7 @@ internal sealed class ScaleConfig
             // Small IT unit — PROSA-present
             new TreeProfile
             {
-                TreeRootOrgId = "STYX5",
+                OrganisationId = "STYX5",
                 OrgName = "Den Digitale Styrelse",
                 TargetUsers = 250,
                 AgreementMix = (30, 25, 45),

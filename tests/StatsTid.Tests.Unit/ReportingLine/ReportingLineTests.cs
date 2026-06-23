@@ -35,7 +35,7 @@ public class ReportingLineTests
             ReportingLineId = reportingLineId,
             EmployeeId = "emp001",
             ManagerId = "mgr01",
-            TreeRootOrgId = "STY02",
+            OrganisationId = "STY02",
             Relationship = "PRIMARY",
             EffectiveFrom = new DateOnly(2024, 1, 1),
             Source = "MANUAL",
@@ -56,7 +56,7 @@ public class ReportingLineTests
         Assert.Equal(reportingLineId, result.ReportingLineId);
         Assert.Equal("emp001", result.EmployeeId);
         Assert.Equal("mgr01", result.ManagerId);
-        Assert.Equal("STY02", result.TreeRootOrgId);
+        Assert.Equal("STY02", result.OrganisationId);
         Assert.Equal("PRIMARY", result.Relationship);
         Assert.Equal(new DateOnly(2024, 1, 1), result.EffectiveFrom);
         Assert.Equal("MANUAL", result.Source);
@@ -86,7 +86,7 @@ public class ReportingLineTests
             EmployeeId = "emp002",
             PreviousManagerId = "mgr01",
             NewManagerId = "mgr02",
-            TreeRootOrgId = "STY03",
+            OrganisationId = "STY03",
             EffectiveFrom = new DateOnly(2024, 1, 1),
             EffectiveTo = new DateOnly(2024, 6, 30),
             RowVersion = 2,
@@ -107,7 +107,7 @@ public class ReportingLineTests
         Assert.Equal("emp002", result.EmployeeId);
         Assert.Equal("mgr01", result.PreviousManagerId);
         Assert.Equal("mgr02", result.NewManagerId);
-        Assert.Equal("STY03", result.TreeRootOrgId);
+        Assert.Equal("STY03", result.OrganisationId);
         Assert.Equal(new DateOnly(2024, 1, 1), result.EffectiveFrom);
         Assert.Equal(new DateOnly(2024, 6, 30), result.EffectiveTo);
         Assert.Equal(2, result.RowVersion);
@@ -122,7 +122,7 @@ public class ReportingLineTests
             EmployeeId = "emp003",
             PreviousManagerId = "mgr01",
             NewManagerId = null,
-            TreeRootOrgId = "STY02",
+            OrganisationId = "STY02",
             EffectiveFrom = new DateOnly(2024, 3, 1),
             EffectiveTo = new DateOnly(2024, 9, 30),
             RowVersion = 3,
@@ -157,7 +157,7 @@ public class ReportingLineTests
             ActorRole = "GLOBAL_ADMIN",
             CorrelationId = correlationId,
             BatchId = batchId,
-            TreeRootOrgId = "STY02",
+            OrganisationId = "STY02",
             LineCount = 47,
             Source = "CSV_IMPORT",
         };
@@ -174,7 +174,7 @@ public class ReportingLineTests
         Assert.Equal("GLOBAL_ADMIN", result.ActorRole);
         Assert.Equal(correlationId, result.CorrelationId);
         Assert.Equal(batchId, result.BatchId);
-        Assert.Equal("STY02", result.TreeRootOrgId);
+        Assert.Equal("STY02", result.OrganisationId);
         Assert.Equal(47, result.LineCount);
         Assert.Equal("CSV_IMPORT", result.Source);
     }
@@ -201,7 +201,7 @@ public class ReportingLineTests
             ReportingLineId = reportingLineId,
             EmployeeId = "emp005",
             ManagerId = "mgr03",
-            TreeRootOrgId = "STY04",
+            OrganisationId = "STY04",
         };
 
         var json = EventSerializer.Serialize(original);
@@ -218,7 +218,7 @@ public class ReportingLineTests
         Assert.Equal(reportingLineId, result.ReportingLineId);
         Assert.Equal("emp005", result.EmployeeId);
         Assert.Equal("mgr03", result.ManagerId);
-        Assert.Equal("STY04", result.TreeRootOrgId);
+        Assert.Equal("STY04", result.OrganisationId);
     }
 
     // ---------------------------------------------------------------
@@ -275,7 +275,7 @@ public class ReportingLineTests
             ReportingLineId = reportingLineId,
             EmployeeId = "emp010",
             ManagerId = "mgr05",
-            TreeRootOrgId = "STY02",
+            OrganisationId = "STY02",
             Relationship = "PRIMARY",
             EffectiveFrom = effectiveFrom,
             EffectiveTo = effectiveTo,
@@ -287,7 +287,7 @@ public class ReportingLineTests
         Assert.Equal(reportingLineId, line.ReportingLineId);
         Assert.Equal("emp010", line.EmployeeId);
         Assert.Equal("mgr05", line.ManagerId);
-        Assert.Equal("STY02", line.TreeRootOrgId);
+        Assert.Equal("STY02", line.OrganisationId);
         Assert.Equal("PRIMARY", line.Relationship);
         Assert.Equal(effectiveFrom, line.EffectiveFrom);
         Assert.Equal(effectiveTo, line.EffectiveTo);
@@ -304,7 +304,7 @@ public class ReportingLineTests
             ReportingLineId = Guid.NewGuid(),
             EmployeeId = "emp011",
             ManagerId = "mgr06",
-            TreeRootOrgId = "STY02",
+            OrganisationId = "STY02",
             Relationship = "SECONDARY",
             EffectiveFrom = new DateOnly(2024, 1, 1),
             EffectiveTo = null,
@@ -358,7 +358,7 @@ public class ReportingLineTests
             EmployeeId = "emp001",
             ResolvedManagerId = "mgr03",
             Depth = 4,
-            TreeRootOrgId = "STY02",
+            OrganisationId = "STY02",
         };
 
         var json = EventSerializer.Serialize(original);
@@ -375,7 +375,7 @@ public class ReportingLineTests
         Assert.Equal("emp001", result.EmployeeId);
         Assert.Equal("mgr03", result.ResolvedManagerId);
         Assert.Equal(4, result.Depth);
-        Assert.Equal("STY02", result.TreeRootOrgId);
+        Assert.Equal("STY02", result.OrganisationId);
     }
 
     [Fact]
@@ -413,7 +413,7 @@ public class ReportingLineTests
             ReportingLineId = Guid.NewGuid(),
             EmployeeId = "emp001",
             ManagerId = "mgr01",
-            TreeRootOrgId = "STY02",
+            OrganisationId = "STY02",
             Relationship = "ACTING",
             EffectiveFrom = new DateOnly(2026, 5, 1),
             Source = "SELF_DELEGATION",
@@ -433,7 +433,7 @@ public class ReportingLineTests
             ReportingLineId = Guid.NewGuid(),
             EmployeeId = "emp002",
             ManagerId = "mgr02",
-            TreeRootOrgId = "STY02",
+            OrganisationId = "STY02",
             Relationship = "PRIMARY",
             EffectiveFrom = new DateOnly(2026, 5, 1),
             Source = "MANUAL",
@@ -532,7 +532,7 @@ public class ReportingLineTests
             VikarUserId = "mgr02",
             UntilDate = new DateOnly(2026, 7, 1),
             Reason = "ANDET",
-            TreeRootOrgId = "STY02",
+            OrganisationId = "STY02",
             RowVersion = 1,
         };
 
@@ -551,7 +551,7 @@ public class ReportingLineTests
         Assert.Equal("mgr02", result.VikarUserId);
         Assert.Equal(new DateOnly(2026, 7, 1), result.UntilDate);
         Assert.Equal("ANDET", result.Reason);
-        Assert.Equal("STY02", result.TreeRootOrgId);
+        Assert.Equal("STY02", result.OrganisationId);
         Assert.Equal(1, result.RowVersion);
     }
 
@@ -576,7 +576,7 @@ public class ReportingLineTests
             VikarUserId = "mgr02",
             UntilDate = new DateOnly(2026, 7, 1),
             Reason = "ANDET",
-            TreeRootOrgId = "STY02",
+            OrganisationId = "STY02",
             EffectiveTo = new DateOnly(2026, 7, 2),
             EndReason = "EXPIRED",
             RowVersion = 2,
@@ -593,7 +593,7 @@ public class ReportingLineTests
         Assert.Equal("mgr02", result.VikarUserId);
         Assert.Equal(new DateOnly(2026, 7, 1), result.UntilDate);
         Assert.Equal("ANDET", result.Reason);
-        Assert.Equal("STY02", result.TreeRootOrgId);
+        Assert.Equal("STY02", result.OrganisationId);
         Assert.Equal(new DateOnly(2026, 7, 2), result.EffectiveTo);
         Assert.Equal("EXPIRED", result.EndReason);
         Assert.Equal(2, result.RowVersion);

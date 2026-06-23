@@ -32,7 +32,7 @@ namespace StatsTid.Tests.Regression.Security;
 /// <list type="bullet">
 ///   <item>(a) a user under an ORGANISATION HAS that Organisation as its reporting "tree root" —
 ///         read DIRECTLY from <c>primary_org_id</c> (S95 / ADR-035 slice 4: the recursive tree-WALK
-///         <c>ResolveTreeRootOrgIdAsync</c> is RETIRED; the former AFD01→STY02 walk collapses to a
+///         <c>ResolveOrganisationIdAsync</c> is RETIRED; the former AFD01→STY02 walk collapses to a
 ///         direct STY02 home).</item>
 ///   <item>(b) an <c>ORG_ONLY</c> scope that pre-flatten keyed an afdeling, now re-pointed to the
 ///         parent ORGANISATION, COVERS the Organisation (the stated coarsening delta).</item>
@@ -80,7 +80,7 @@ public sealed class S92OrgFlattenTests : IAsyncLifetime
 
     // ════════════════════════════════════════════════════════════════════════════════
     //  (a) Tree-root identity: a user on an ORGANISATION HAS that Organisation as its home.
-    //      S95 / ADR-035 slice 4 — the recursive tree-WALK (ResolveTreeRootOrgIdAsync) is RETIRED.
+    //      S95 / ADR-035 slice 4 — the recursive tree-WALK (ResolveOrganisationIdAsync) is RETIRED.
     //      Post-S92 a user's reporting "tree root" simply IS their primary_org_id (the former walk
     //      always returned the input org at depth 1, since both MAO and ORGANISATION are terminal),
     //      so the equivalence we pin is now a DIRECT primary_org read — no walk.

@@ -121,14 +121,14 @@ public sealed class ReportingLineRepositoryTests : IAsyncLifetime
     private static SharedKernel.Models.ReportingLine MakeLine(
         string employeeId,
         string managerId,
-        string treeRootOrgId = "STY02",
+        string organisationId = "STY02",
         string relationship = "PRIMARY",
         string source = "MANUAL") => new()
     {
         ReportingLineId = Guid.Empty,           // AssignAsync generates a new UUID
         EmployeeId = employeeId,
         ManagerId = managerId,
-        TreeRootOrgId = treeRootOrgId,
+        OrganisationId = organisationId,
         Relationship = relationship,
         EffectiveFrom = new DateOnly(2026, 5, 1),
         Source = source,
@@ -226,7 +226,7 @@ public sealed class ReportingLineRepositoryTests : IAsyncLifetime
         // All returned lines must belong to the STY02 tree and be active.
         Assert.All(lines, l =>
         {
-            Assert.Equal("STY02", l.TreeRootOrgId);
+            Assert.Equal("STY02", l.OrganisationId);
             Assert.Null(l.EffectiveTo);
         });
     }
@@ -371,7 +371,7 @@ public sealed class ReportingLineRepositoryTests : IAsyncLifetime
 
     // S95 (TASK-9506): tests 12-13 (ResolveTreeRoot_STY02_ReturnsSTY02 /
     // ResolveTreeRoot_MIN01_ReturnsMIN01) were DELETED — the recursive tree-WALK
-    // (ResolveTreeRootOrgIdAsync) is RETIRED (ADR-035 slice 4). Post-S92 a user's "tree root"
+    // (ResolveOrganisationIdAsync) is RETIRED (ADR-035 slice 4). Post-S92 a user's "tree root"
     // IS their primary_org_id (the walk always returned the input org at depth 1), so there is
     // no walk to assert. The same-Organisation equality is covered by test 9 above
     // (ValidateSameOrganisation_CrossOrganisation_*).
@@ -408,7 +408,7 @@ public sealed class ReportingLineRepositoryTests : IAsyncLifetime
         await using var cmd = new NpgsqlCommand(
             """
             INSERT INTO reporting_lines
-                (employee_id, manager_id, tree_root_org_id, relationship,
+                (employee_id, manager_id, organisation_id, relationship,
                  effective_from, source, created_by)
             VALUES
                 ('emp001', 'mgr03', 'STY01', 'PRIMARY',
@@ -619,7 +619,7 @@ public sealed class ReportingLineRepositoryTests : IAsyncLifetime
             ReportingLineId = line.ReportingLineId,
             EmployeeId = line.EmployeeId,
             ManagerId = line.ManagerId,
-            TreeRootOrgId = line.TreeRootOrgId,
+            OrganisationId = line.OrganisationId,
             Relationship = line.Relationship,
             EffectiveFrom = line.EffectiveFrom,
             Source = line.Source,
@@ -676,7 +676,7 @@ public sealed class ReportingLineRepositoryTests : IAsyncLifetime
             ReportingLineId = Guid.Empty,
             EmployeeId = TestEmp,
             ManagerId = TestMgrC,
-            TreeRootOrgId = "STY02",
+            OrganisationId = "STY02",
             Relationship = "ACTING",
             EffectiveFrom = new DateOnly(2026, 5, 1),
             Source = "SELF_DELEGATION",
@@ -724,7 +724,7 @@ public sealed class ReportingLineRepositoryTests : IAsyncLifetime
         await using var insertCmd = new NpgsqlCommand(
             """
             INSERT INTO reporting_lines
-                (reporting_line_id, employee_id, manager_id, tree_root_org_id, relationship,
+                (reporting_line_id, employee_id, manager_id, organisation_id, relationship,
                  effective_from, source, version, scheduled_expiry, created_by)
             VALUES
                 (@id, @emp, @mgr, 'STY02', 'ACTING',
@@ -766,7 +766,7 @@ public sealed class ReportingLineRepositoryTests : IAsyncLifetime
             ReportingLineId = Guid.Empty,
             EmployeeId = TestEmp,
             ManagerId = TestMgrC,
-            TreeRootOrgId = "STY02",
+            OrganisationId = "STY02",
             Relationship = "ACTING",
             EffectiveFrom = new DateOnly(2026, 5, 1),
             Source = "SELF_DELEGATION",
@@ -816,7 +816,7 @@ public sealed class ReportingLineRepositoryTests : IAsyncLifetime
         await using var cmd = new NpgsqlCommand(
             """
             INSERT INTO reporting_lines
-                (employee_id, manager_id, tree_root_org_id, relationship,
+                (employee_id, manager_id, organisation_id, relationship,
                  effective_from, source, created_by)
             VALUES
                 (@emp, @mgr, 'STY02', 'ACTING',

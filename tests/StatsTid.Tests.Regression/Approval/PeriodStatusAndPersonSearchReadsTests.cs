@@ -18,7 +18,7 @@ namespace StatsTid.Tests.Regression.Approval;
 /// <list type="number">
 /// <item><description><b>R11a</b> the per-tree (Organisation) period-status projection
 /// (<see cref="ApprovalPeriodRepository.GetPeriodStatusProjectionForTreeAsync"/> →
-/// <c>GET /api/admin/reporting-lines/tree/{treeRootOrgId}/period-status</c>): each employee's
+/// <c>GET /api/admin/reporting-lines/tree/{organisationId}/period-status</c>): each employee's
 /// last-closed-month status (greatest <c>period_end &lt; today</c>) projected to OPEN/SUBMITTED/
 /// APPROVED + the per-manager pending count.</description></item>
 /// <item><description><b>R11b</b> the server-side person-search
@@ -194,7 +194,7 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
         ReportingLineId = Guid.Empty,
         EmployeeId = employeeId,
         ManagerId = managerId,
-        TreeRootOrgId = TreeRootSty02,
+        OrganisationId = TreeRootSty02,
         Relationship = "PRIMARY",
         EffectiveFrom = new DateOnly(2026, 1, 1),
         Source = "MANUAL",
@@ -580,7 +580,7 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
         await using var cmd = new NpgsqlCommand(
             """
             INSERT INTO reporting_lines
-                (employee_id, manager_id, tree_root_org_id, relationship, effective_from, source, version, created_by)
+                (employee_id, manager_id, organisation_id, relationship, effective_from, source, version, created_by)
             VALUES (@emp, @mgr, @root, 'PRIMARY', '2026-01-01', 'MANUAL', 1, 'TEST')
             """, conn);
         cmd.Parameters.AddWithValue("emp", employeeId);

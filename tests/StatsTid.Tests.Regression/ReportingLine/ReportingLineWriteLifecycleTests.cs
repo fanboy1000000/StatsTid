@@ -219,7 +219,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
         ReportingLineId = Guid.Empty,
         EmployeeId = employeeId,
         ManagerId = managerId,
-        TreeRootOrgId = TreeRootSty02,
+        OrganisationId = TreeRootSty02,
         Relationship = relationship,
         EffectiveFrom = new DateOnly(2026, 1, 1),
         Source = "MANUAL",
@@ -550,7 +550,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
                 ReportingLineId = newEdgeId,
                 EmployeeId = Emp,
                 ManagerId = Top,
-                TreeRootOrgId = TreeRootSty02,
+                OrganisationId = TreeRootSty02,
                 Relationship = "PRIMARY",
                 EffectiveFrom = today,
                 Source = "MANUAL",
@@ -562,7 +562,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
                 ReportingLineId = persisted.ReportingLineId,
                 EmployeeId = Emp,
                 ManagerId = Top,
-                TreeRootOrgId = TreeRootSty02,
+                OrganisationId = TreeRootSty02,
                 Relationship = "PRIMARY",
                 EffectiveFrom = today,
                 Source = "MANUAL",
@@ -580,7 +580,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
                 VikarUserId = closed.VikarUserId,
                 UntilDate = closed.UntilDate,
                 Reason = closed.Reason,
-                TreeRootOrgId = closed.TreeRootOrgId,
+                OrganisationId = closed.OrganisationId,
                 EffectiveTo = closed.EffectiveTo!.Value,
                 EndReason = "APPROVER_REMOVED",
                 RowVersion = closed.Version,
@@ -593,7 +593,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
                 ActorPrimaryOrgId: TreeRootSty02,
                 CorrelationId: endedEvent.CorrelationId,
                 OccurredAt: new DateTimeOffset(DateTime.SpecifyKind(endedEvent.OccurredAt, DateTimeKind.Utc)),
-                ResolvedTargetOrgId: endedEvent.TreeRootOrgId);
+                ResolvedTargetOrgId: endedEvent.OrganisationId);
             var rowData = new ManagerVikarEndedAuditMapper().Map(endedEvent, ctx);
             await _auditRepo.InsertAsync(conn, tx, endedEvent.EventId, outboxId, endedEvent.EventType, rowData, ctx);
 
@@ -643,7 +643,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
 
     /// <summary>
     /// The tree advisory key the endpoints take for the STY02 tree:
-    /// <c>pg_advisory_xact_lock(hashtext('reporting-tree-STY02'))</c>. Holding it on a side
+    /// <c>pg_advisory_xact_lock(hashtext('reporting-org-STY02'))</c>. Holding it on a side
     /// connection lets a test deterministically BLOCK any in-tree assign/remove until released.
     /// </summary>
     private async Task<(NpgsqlConnection conn, NpgsqlTransaction tx)> AcquireTreeLockOnSideConnAsync(string treeRoot)
@@ -652,7 +652,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
         await conn.OpenAsync();
         var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
         await using (var cmd = new NpgsqlCommand(
-            "SELECT pg_advisory_xact_lock(hashtext('reporting-tree-' || @root))", conn, tx))
+            "SELECT pg_advisory_xact_lock(hashtext('reporting-org-' || @root))", conn, tx))
         {
             cmd.Parameters.AddWithValue("root", treeRoot);
             await cmd.ExecuteScalarAsync();
@@ -665,7 +665,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
     /// tree advisory lock for <paramref name="treeRoot"/>. Polls <c>pg_locks</c> (joined to
     /// <c>pg_stat_activity</c> to exclude this test's own session) until at least one OTHER backend
     /// holds a NOT-GRANTED (<c>granted = false</c>) <c>advisory</c> lock whose 64-bit key
-    /// reconstructs to <c>hashtext('reporting-tree-' || treeRoot)</c>. For a single-argument
+    /// reconstructs to <c>hashtext('reporting-org-' || treeRoot)</c>. For a single-argument
     /// <c>pg_advisory_xact_lock(bigint)</c> the key is split as <c>classid</c> = high 32 bits,
     /// <c>objid</c> = low 32 bits, so the key is rebuilt as
     /// <c>(classid::bigint &lt;&lt; 32) | objid::bigint</c>. Returns <c>true</c> once a waiter is
@@ -689,7 +689,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
                       AND pl.granted = FALSE
                       AND pl.pid <> pg_backend_pid()
                       AND ((pl.classid::bigint << 32) | pl.objid::bigint)
-                          = hashtext('reporting-tree-' || @root)::bigint
+                          = hashtext('reporting-org-' || @root)::bigint
                 )
                 """, conn))
             {
@@ -705,7 +705,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
     /// <summary>
     /// S78 R9 (BLOCKER 2) — like <see cref="WaitForAdvisoryLockWaiterAsync"/> but proves at least
     /// <paramref name="minWaiters"/> DISTINCT OTHER backends are simultaneously WAITING
-    /// (<c>granted = false</c>) on the <c>reporting-tree-{treeRoot}</c> advisory key. Used to prove
+    /// (<c>granted = false</c>) on the <c>reporting-org-{treeRoot}</c> advisory key. Used to prove
     /// MUTUAL EXCLUSION between two different operation types (a transfer AND an assign) on the SAME
     /// shared key: when a side connection holds the key and BOTH a transfer and an assign are queued
     /// behind it, two distinct backends wait on the key. Counts DISTINCT <c>pid</c>s (excluding this
@@ -728,7 +728,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
                   AND pl.granted = FALSE
                   AND pl.pid <> pg_backend_pid()
                   AND ((pl.classid::bigint << 32) | pl.objid::bigint)
-                      = hashtext('reporting-tree-' || @root)::bigint
+                      = hashtext('reporting-org-' || @root)::bigint
                 """, conn))
             {
                 cmd.Parameters.AddWithValue("root", treeRoot);
@@ -1147,7 +1147,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
     /// <summary>
     /// S78 R5/R9 TRANSFER-vs-ASSIGN MUTUAL EXCLUSION (the strengthened proof — held-lock interleave).
     /// PROVES the cross-tree transfer (PUT /api/admin/users/{id} moving primary_org_id) and a
-    /// concurrent reporting-line assign genuinely SERIALIZE on the SHARED <c>reporting-tree-STY02</c>
+    /// concurrent reporting-line assign genuinely SERIALIZE on the SHARED <c>reporting-org-STY02</c>
     /// advisory key — NEITHER can proceed while a side connection holds it — and that the post-release
     /// state is a coherent SERIALIZED outcome, never a torn interleave. The prior version of this test
     /// fired both with no barrier, accepted any non-500, and asserted NO final invariant, so it passed
@@ -1345,7 +1345,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
                 //       to STY05, a non-serialized assign-then-no-revalidation would leave a cross-tree row.
                 //       The serialization guarantee is: the assign either (i) was rejected cross-tree (no
                 //       edge), or (ii) committed an edge while Dl was STILL in STY02 AND the transfer was
-                //       serialized AFTER it. Case (ii) would leave a row whose tree_root_org_id = STY02 even
+                //       serialized AFTER it. Case (ii) would leave a row whose organisation_id = STY02 even
                 //       though Dl now resolves to STY05 — which IS the accepted "transfer does not re-close
                 //       existing edges" residual. To keep this shake test deterministic we assert the
                 //       SAFETY property that always holds: no edge exists that points Dl at Mgr ACROSS the
@@ -1616,7 +1616,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
         await using var cmd = new NpgsqlCommand(
             """
             INSERT INTO reporting_lines (
-                reporting_line_id, employee_id, manager_id, tree_root_org_id,
+                reporting_line_id, employee_id, manager_id, organisation_id,
                 relationship, effective_from, effective_to, source, version, created_by, created_at)
             VALUES (@id, @emp, @mgr, @root, 'PRIMARY', '2026-01-01', NULL, 'MANUAL', 1, 'TEST', NOW())
             """, conn);
@@ -1639,7 +1639,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
             VikarUserId = vikarUser,
             UntilDate = untilDate,
             Reason = "ANDET",
-            TreeRootOrgId = TreeRootSty02,
+            OrganisationId = TreeRootSty02,
             Version = 1,
             CreatedBy = "TEST",
         });

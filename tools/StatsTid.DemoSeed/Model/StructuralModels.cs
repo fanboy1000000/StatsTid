@@ -20,7 +20,7 @@ public sealed class DemoOrg
     public required string OkVersion { get; init; }
 
     /// <summary>The ORGANISATION-tree root org id this org belongs under (for tree grouping).</summary>
-    public required string TreeRootOrgId { get; init; }
+    public required string OrganisationId { get; init; }
 
     /// <summary>Depth within the tree (root MAO = 0, ORGANISATION = 1).</summary>
     public required int Depth { get; init; }
@@ -52,7 +52,7 @@ public sealed class DemoUser
 
     /// <summary>The ORGANISATION-tree root org id (for tree grouping). Equals <see cref="PrimaryOrgId"/>
     /// post-S92 flatten — every demo user sits directly on their Organisation.</summary>
-    public required string TreeRootOrgId { get; init; }
+    public required string OrganisationId { get; init; }
 
     /// <summary>
     /// S92 / ADR-035 — the former AFDELING/TEAM leaf-org name the user used to sit on,

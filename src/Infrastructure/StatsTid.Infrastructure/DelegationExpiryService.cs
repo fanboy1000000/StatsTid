@@ -80,7 +80,7 @@ public sealed class DelegationExpiryService : BackgroundService
         await using (var findCmd = new NpgsqlCommand(
             """
             SELECT vikar_id, absent_approver_id, vikar_user_id, until_date, reason,
-                   tree_root_org_id, version, created_by, created_at, effective_to
+                   organisation_id, version, created_by, created_at, effective_to
             FROM manager_vikar
             WHERE effective_to IS NULL
               AND until_date < CURRENT_DATE
@@ -96,7 +96,7 @@ public sealed class DelegationExpiryService : BackgroundService
                     VikarUserId = reader.GetString(2),
                     UntilDate = DateOnly.FromDateTime(reader.GetDateTime(3)),
                     Reason = reader.GetString(4),
-                    TreeRootOrgId = reader.GetString(5),
+                    OrganisationId = reader.GetString(5),
                     Version = reader.GetInt64(6),
                     CreatedBy = reader.GetString(7),
                     CreatedAt = reader.GetDateTime(8),
@@ -132,7 +132,7 @@ public sealed class DelegationExpiryService : BackgroundService
                     VikarUserId = closed.VikarUserId,
                     UntilDate = closed.UntilDate,
                     Reason = closed.Reason,
-                    TreeRootOrgId = closed.TreeRootOrgId,
+                    OrganisationId = closed.OrganisationId,
                     EffectiveTo = closed.EffectiveTo!.Value,
                     EndReason = "EXPIRED",
                     RowVersion = closed.Version,
@@ -146,10 +146,10 @@ public sealed class DelegationExpiryService : BackgroundService
                     conn, tx, $"reporting-line-{closed.AbsentApproverId}", @event, ct);
                 var auditCtx = new AuditProjectionContext(
                     ActorId: @event.ActorId,
-                    ActorPrimaryOrgId: @event.TreeRootOrgId,
+                    ActorPrimaryOrgId: @event.OrganisationId,
                     CorrelationId: @event.CorrelationId,
                     OccurredAt: new DateTimeOffset(DateTime.SpecifyKind(@event.OccurredAt, DateTimeKind.Utc)),
-                    ResolvedTargetOrgId: @event.TreeRootOrgId);
+                    ResolvedTargetOrgId: @event.OrganisationId);
                 var auditRow = _endedAuditMapper.Map(@event, auditCtx);
                 await _auditRepo.InsertAsync(
                     conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);

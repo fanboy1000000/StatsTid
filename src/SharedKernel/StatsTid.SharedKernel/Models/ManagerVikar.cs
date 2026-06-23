@@ -22,7 +22,7 @@ public sealed class ManagerVikar
     public required string VikarUserId { get; init; }
     public required DateOnly UntilDate { get; init; }
     public required string Reason { get; init; }
-    public required string TreeRootOrgId { get; init; }
+    public required string OrganisationId { get; init; }
     public required long Version { get; init; }
     public required string CreatedBy { get; init; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;

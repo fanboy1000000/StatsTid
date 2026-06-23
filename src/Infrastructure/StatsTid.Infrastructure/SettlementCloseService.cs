@@ -550,7 +550,7 @@ public sealed class SettlementCloseService : BackgroundService
                         ReportingLineId = line.ReportingLineId,
                         EmployeeId = line.EmployeeId,
                         ManagerId = line.ManagerId,
-                        TreeRootOrgId = line.TreeRootOrgId,
+                        OrganisationId = line.OrganisationId,
                         ActorId = StepAActorId,
                         ActorRole = SystemActorRole,
                     };

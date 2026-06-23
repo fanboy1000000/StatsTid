@@ -8,7 +8,7 @@ namespace StatsTid.Infrastructure.AuditMappers;
 /// S74 / ADR-027 Phase 5 (SPRINT-74 R4, TASK-7401). <see cref="IAuditProjectionMapper{TEvent}"/>
 /// for <see cref="ManagerVikarCreated"/> — the approver-owned vikar created on
 /// <c>POST /api/reporting-lines/delegate</c>. TENANT_TARGETED; target_org_id =
-/// <c>tree_root_org_id</c> carried on the event (mirrors the S48
+/// <c>organisation_id</c> carried on the event (mirrors the S48
 /// <see cref="ReportingLineAssigned"/> mapper — the event already carries the tree root,
 /// so no <c>context.ResolvedTargetOrgId</c> lookup is needed); target_resource_id =
 /// the vikar_id.
@@ -37,12 +37,12 @@ public sealed class ManagerVikarCreatedAuditMapper : IAuditProjectionMapper<Mana
             vikarUserId = @event.VikarUserId,
             untilDate = @event.UntilDate.ToString("yyyy-MM-dd"),
             reason = @event.Reason,
-            treeRootOrgId = @event.TreeRootOrgId,
+            organisationId = @event.OrganisationId,
             rowVersion = @event.RowVersion,
         };
         return new AuditProjectionRowData(
             VisibilityScope: AuditVisibilityScope.TenantTargeted,
-            TargetOrgId: @event.TreeRootOrgId ?? context.ResolvedTargetOrgId,
+            TargetOrgId: @event.OrganisationId ?? context.ResolvedTargetOrgId,
             TargetResourceId: @event.VikarId.ToString(),
             DetailsJson: JsonSerializer.Serialize(details, JsonOptions));
     }

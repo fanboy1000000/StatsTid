@@ -35,11 +35,11 @@ public sealed class GeneratorStructuralTests
         var ds = Gen(scale);
         foreach (var tree in ds.Manifest.Trees)
         {
-            var edges = ds.Manifest.ReportingEdges.Where(e => e.TreeRootOrgId == tree.TreeRootOrgId).ToList();
+            var edges = ds.Manifest.ReportingEdges.Where(e => e.OrganisationId == tree.OrganisationId).ToList();
             var employees = edges.Select(e => e.EmployeeId).ToHashSet();
             // A root = a manager that never appears as an employee in this tree.
             var roots = edges.Select(e => e.ManagerId).Where(m => !employees.Contains(m)).ToHashSet();
-            Assert.True(roots.Count == 1, $"tree {tree.TreeRootOrgId} has {roots.Count} roots: {string.Join(",", roots)}");
+            Assert.True(roots.Count == 1, $"tree {tree.OrganisationId} has {roots.Count} roots: {string.Join(",", roots)}");
             Assert.Equal(tree.RootEmployeeId, roots.Single());
         }
     }
@@ -125,7 +125,7 @@ public sealed class GeneratorStructuralTests
     public void Full_AgreementMix_BigTree_WithinTolerance()
     {
         var ds = Gen("full");
-        var bigTreeUsers = ds.Users.Where(u => u.TreeRootOrgId == "STYX1").ToList();
+        var bigTreeUsers = ds.Users.Where(u => u.OrganisationId == "STYX1").ToList();
         Assert.NotEmpty(bigTreeUsers);
         double ac = bigTreeUsers.Count(u => u.AgreementCode == "AC") / (double)bigTreeUsers.Count;
         double hk = bigTreeUsers.Count(u => u.AgreementCode == "HK") / (double)bigTreeUsers.Count;

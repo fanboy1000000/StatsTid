@@ -279,10 +279,10 @@ public static class ApprovalEndpoints
                 await reportingLineRepo.ResolveDesignatedApproverAsync(period.EmployeeId, ct);
 
             // The treeRoot is request-stable and is still needed for the
-            // FallbackTraversalWarning.TreeRootOrgId (depth>3) payload below. S95 / ADR-035 slice 4:
-            // the tree-WALK (ResolveTreeRootOrgIdAsync) is RETIRED — post-S92 the period's reporting
+            // FallbackTraversalWarning.OrganisationId (depth>3) payload below. S95 / ADR-035 slice 4:
+            // the tree-WALK (ResolveOrganisationIdAsync) is RETIRED — post-S92 the period's reporting
             // "tree root" IS period.OrgId directly (the walk always returned the input org), so the
-            // warning's TreeRootOrgId field (name kept — no event-shape change) is sourced from
+            // warning's OrganisationId field (name kept — no event-shape change) is sourced from
             // period.OrgId. (S94 / TASK-9402 already retired the REQUIRED-mode gate here.)
             var treeRoot = period.OrgId;
 
@@ -299,7 +299,7 @@ public static class ApprovalEndpoints
             // assign, the assign/transfer paths) — all take the SAME employee-current tree advisory (7800)
             // and so BLOCK before their commit; this re-read then observes the FROZEN committed edge state
             // → true serialization of the revoke-vs-approve race. (NAMED RESIDUAL: the admin-vikar REVOKE
-            // [DELETE /…/vikar] deliberately keys on the PERSISTED manager_vikar.tree_root_org_id for
+            // [DELETE /…/vikar] deliberately keys on the PERSISTED manager_vikar.organisation_id for
             // revoke-safety, NOT the employee-current root, so a post-transfer revoke can key on a DIFFERENT
             // tree than this approve — the approve-vs-vikar-revoke post-transfer key-mismatch residual.
             // That residual is non-corrupting: the revoke only ENDS an existing edge, and this in-tx
@@ -359,7 +359,7 @@ public static class ApprovalEndpoints
                     EmployeeId = period.EmployeeId,
                     ResolvedManagerId = designatedManagerId,
                     Depth = depth,
-                    TreeRootOrgId = treeRoot,
+                    OrganisationId = treeRoot,
                     ActorId = actor.ActorId,
                     ActorRole = actor.ActorRole,
                     CorrelationId = actor.CorrelationId,
@@ -509,7 +509,7 @@ public static class ApprovalEndpoints
                     EmployeeId = period.EmployeeId,
                     ResolvedManagerId = designatedManagerId,
                     Depth = depth,
-                    TreeRootOrgId = treeRoot,
+                    OrganisationId = treeRoot,
                     ActorId = actor.ActorId,
                     ActorRole = actor.ActorRole,
                     CorrelationId = actor.CorrelationId,

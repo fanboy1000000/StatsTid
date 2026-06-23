@@ -902,7 +902,7 @@ public sealed class SettlementCloseLeaverTests : IAsyncLifetime
         await ExecAsync(
             """
             INSERT INTO reporting_lines
-                (employee_id, manager_id, tree_root_org_id, relationship, effective_from, created_by)
+                (employee_id, manager_id, organisation_id, relationship, effective_from, created_by)
             VALUES (@employeeId, @managerId, @treeRoot, 'PRIMARY', @from, 'test_s70_close')
             """,
             ("employeeId", employeeId), ("managerId", managerId),

@@ -142,7 +142,7 @@ public sealed class ManagerVikarRepository
     /// S76 / TASK-7601 fix-forward (Step-5a c1 B3) — IN-TX, <c>FOR UPDATE</c> read of the active
     /// vikar row owned by <paramref name="absentApproverId"/> (<c>effective_to IS NULL</c>). Used
     /// by the admin-revoke DELETE so the row that is AUTHORIZED against (its persisted
-    /// <c>tree_root_org_id</c>) is the EXACT row that is then CLOSED — the <c>FOR UPDATE</c> pin
+    /// <c>organisation_id</c>) is the EXACT row that is then CLOSED — the <c>FOR UPDATE</c> pin
     /// (under the tree advisory lock) makes the authorize→close pair atomic: a concurrent
     /// close/recreate cannot swap the active row between the authorization read and the UPDATE.
     /// Returns <c>null</c> when no active row exists (→ 404).
@@ -211,17 +211,17 @@ public sealed class ManagerVikarRepository
             """
             INSERT INTO manager_vikar (
                 vikar_id, absent_approver_id, vikar_user_id, until_date, reason,
-                tree_root_org_id, version, created_by, created_at, effective_to)
+                organisation_id, version, created_by, created_at, effective_to)
             VALUES (
                 @vikarId, @absentApproverId, @vikarUserId, @untilDate, @reason,
-                @treeRootOrgId, @version, @createdBy, @createdAt, NULL)
+                @organisationId, @version, @createdBy, @createdAt, NULL)
             """, conn, tx);
         cmd.Parameters.AddWithValue("vikarId", newId);
         cmd.Parameters.AddWithValue("absentApproverId", newVikar.AbsentApproverId);
         cmd.Parameters.AddWithValue("vikarUserId", newVikar.VikarUserId);
         cmd.Parameters.AddWithValue("untilDate", newVikar.UntilDate);
         cmd.Parameters.AddWithValue("reason", newVikar.Reason);
-        cmd.Parameters.AddWithValue("treeRootOrgId", newVikar.TreeRootOrgId);
+        cmd.Parameters.AddWithValue("organisationId", newVikar.OrganisationId);
         cmd.Parameters.AddWithValue("version", version);
         cmd.Parameters.AddWithValue("createdBy", newVikar.CreatedBy);
         cmd.Parameters.AddWithValue("createdAt", createdAt);
@@ -248,7 +248,7 @@ public sealed class ManagerVikarRepository
             VikarUserId = newVikar.VikarUserId,
             UntilDate = newVikar.UntilDate,
             Reason = newVikar.Reason,
-            TreeRootOrgId = newVikar.TreeRootOrgId,
+            OrganisationId = newVikar.OrganisationId,
             Version = version,
             CreatedBy = newVikar.CreatedBy,
             CreatedAt = createdAt,
@@ -316,7 +316,7 @@ public sealed class ManagerVikarRepository
         VikarUserId = reader.GetString(reader.GetOrdinal("vikar_user_id")),
         UntilDate = DateOnly.FromDateTime(reader.GetDateTime(reader.GetOrdinal("until_date"))),
         Reason = reader.GetString(reader.GetOrdinal("reason")),
-        TreeRootOrgId = reader.GetString(reader.GetOrdinal("tree_root_org_id")),
+        OrganisationId = reader.GetString(reader.GetOrdinal("organisation_id")),
         Version = reader.GetInt64(reader.GetOrdinal("version")),
         CreatedBy = reader.GetString(reader.GetOrdinal("created_by")),
         CreatedAt = reader.GetDateTime(reader.GetOrdinal("created_at")),

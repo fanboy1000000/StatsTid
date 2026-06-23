@@ -534,10 +534,10 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
     /// Emp's single effective approver (the R3 vikar-consult step), so Mgr is no longer the designated
     /// approver of Emp. That is exactly the edge revocation the in-tx re-eval must catch.</para>
     ///
-    /// <para>The CO-LOCATION proof (≥2 distinct waiters on ONE key): HOLD <c>reporting-tree-STY02</c> on a
+    /// <para>The CO-LOCATION proof (≥2 distinct waiters on ONE key): HOLD <c>reporting-org-STY02</c> on a
     /// side connection, then fire BOTH the approve (for Emp, tree STY02) AND the admin-vikar CREATE (for
     /// Mgr, whose tree root is STY02) concurrently. Assert <c>minWaiters: 2</c> — both endpoints PARK on
-    /// the SAME <c>reporting-tree-STY02</c> advisory (a synthetic key or a non-co-located revoker could
+    /// the SAME <c>reporting-org-STY02</c> advisory (a synthetic key or a non-co-located revoker could
     /// not produce two distinct waiters on this exact key).</para>
     ///
     /// <para>SERIALIZED OUTCOME after release (lock-acquisition order is non-deterministic — BOTH orders are
@@ -572,11 +572,11 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
                 $"/api/admin/reporting-lines/{Mgr}/vikar",
                 new { vikarUserId = Cov, effectiveTo = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30).ToString("yyyy-MM-dd"), reason = "FERIE" });
 
-            // BOTH legs must park on the SAME reporting-tree-STY02 advisory key — the real-co-location
+            // BOTH legs must park on the SAME reporting-org-STY02 advisory key — the real-co-location
             // proof (≥2 distinct waiters). A synthetic key or a non-co-located revoke endpoint could not
             // satisfy this against THIS key.
             Assert.True(await WaitForAdvisoryLockWaiterCountAsync(TreeRootSty02, minWaiters: 2),
-                "Expected BOTH the approve AND the real admin-vikar CREATE endpoint to park on the SAME reporting-tree-STY02 advisory key (≥2 waiters) — proving the real revoker co-locates with the approve.");
+                "Expected BOTH the approve AND the real admin-vikar CREATE endpoint to park on the SAME reporting-org-STY02 advisory key (≥2 waiters) — proving the real revoker co-locates with the approve.");
 
             await holdTx.RollbackAsync();
             await holdConn.DisposeAsync();
@@ -683,7 +683,7 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
         await conn.OpenAsync();
         var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
         await using var cmd = new NpgsqlCommand(
-            "SELECT pg_advisory_xact_lock(hashtext('reporting-tree-' || @root))", conn, tx);
+            "SELECT pg_advisory_xact_lock(hashtext('reporting-org-' || @root))", conn, tx);
         cmd.Parameters.AddWithValue("root", treeRoot);
         await cmd.ExecuteScalarAsync();
         return (conn, tx);
@@ -708,7 +708,7 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
                   AND pl.granted = FALSE
                   AND pl.pid <> pg_backend_pid()
                   AND ((pl.classid::bigint << 32) | pl.objid::bigint)
-                      = hashtext('reporting-tree-' || @root)::bigint
+                      = hashtext('reporting-org-' || @root)::bigint
                 """, conn))
             {
                 cmd.Parameters.AddWithValue("root", treeRoot);
@@ -778,7 +778,7 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
         ReportingLineId = Guid.Empty,
         EmployeeId = employeeId,
         ManagerId = managerId,
-        TreeRootOrgId = treeRoot,
+        OrganisationId = treeRoot,
         Relationship = "PRIMARY",
         EffectiveFrom = new DateOnly(2026, 1, 1),
         Source = "MANUAL",
@@ -848,7 +848,7 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
             VikarUserId = vikarUser,
             UntilDate = untilDate,
             Reason = "FERIE",
-            TreeRootOrgId = TreeRootSty02,
+            OrganisationId = TreeRootSty02,
             Version = 1,
             CreatedBy = "TEST",
         });

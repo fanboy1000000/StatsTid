@@ -69,16 +69,16 @@ public sealed class DemoLoader
         foreach (var tree in _manifest.Trees)
         {
             var edges = _manifest.ReportingEdges
-                .Where(e => e.TreeRootOrgId == tree.TreeRootOrgId)
+                .Where(e => e.OrganisationId == tree.OrganisationId)
                 .ToList();
-            _log($"Importing {edges.Count} edges for tree {tree.TreeRootOrgId} in batches of {_batchSize} ...");
+            _log($"Importing {edges.Count} edges for tree {tree.OrganisationId} in batches of {_batchSize} ...");
 
             for (var offset = 0; offset < edges.Count; offset += _batchSize)
             {
                 var batch = edges.Skip(offset).Take(_batchSize).ToList();
                 var payload = new
                 {
-                    treeRootOrgId = tree.TreeRootOrgId,
+                    organisationId = tree.OrganisationId,
                     rows = batch.Select(e => new
                     {
                         employeeId = e.EmployeeId,
@@ -89,13 +89,13 @@ public sealed class DemoLoader
                 var (status, body) = await _api.ImportReportingLinesAsync(payload, ct);
                 if (status != HttpStatusCode.OK)
                     throw new InvalidOperationException(
-                        $"Import batch failed for tree {tree.TreeRootOrgId} (offset {offset}): {(int)status} {body}");
+                        $"Import batch failed for tree {tree.OrganisationId} (offset {offset}): {(int)status} {body}");
 
                 var (imported, skipped) = ParseImportCounts(body);
                 result.EdgesImported += imported;
                 result.EdgesSkipped += skipped;
             }
-            _log($"  tree {tree.TreeRootOrgId}: imported so far={result.EdgesImported}, skipped={result.EdgesSkipped}");
+            _log($"  tree {tree.OrganisationId}: imported so far={result.EdgesImported}, skipped={result.EdgesSkipped}");
         }
     }
 

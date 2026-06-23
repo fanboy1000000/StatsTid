@@ -628,7 +628,7 @@ public sealed class EmploymentEndDateLifecycleTests : IAsyncLifetime
         await using var cmd = new NpgsqlCommand(
             """
             INSERT INTO reporting_lines
-                (employee_id, manager_id, tree_root_org_id, relationship, effective_from, created_by)
+                (employee_id, manager_id, organisation_id, relationship, effective_from, created_by)
             VALUES (@employeeId, @managerId, @treeRoot, 'PRIMARY', @from, 'test_s70_ed')
             """, conn);
         cmd.Parameters.AddWithValue("employeeId", employeeId);

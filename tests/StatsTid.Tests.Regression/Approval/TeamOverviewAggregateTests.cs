@@ -184,7 +184,7 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
         ReportingLineId = Guid.Empty,
         EmployeeId = employeeId,
         ManagerId = managerId,
-        TreeRootOrgId = treeRoot,
+        OrganisationId = treeRoot,
         Relationship = relationship,
         EffectiveFrom = new DateOnly(2026, 1, 1),
         Source = "MANUAL",
@@ -776,7 +776,7 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
             VikarUserId = vikarUser,
             UntilDate = untilDate,
             Reason = "FERIE",
-            TreeRootOrgId = TreeRootSty02,
+            OrganisationId = TreeRootSty02,
             Version = 1,
             CreatedBy = "TEST",
         });

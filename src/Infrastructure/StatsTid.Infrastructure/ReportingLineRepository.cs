@@ -160,18 +160,18 @@ public sealed class ReportingLineRepository
     /// ordered by manager_id then employee_id.
     /// </summary>
     public async Task<IReadOnlyList<ReportingLine>> GetTreeAsync(
-        string treeRootOrgId, CancellationToken ct = default)
+        string organisationId, CancellationToken ct = default)
     {
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
         await using var cmd = new NpgsqlCommand(
             """
             SELECT * FROM reporting_lines
-            WHERE tree_root_org_id = @treeRootOrgId
+            WHERE organisation_id = @organisationId
               AND effective_to IS NULL
             ORDER BY manager_id, employee_id
             """, conn);
-        cmd.Parameters.AddWithValue("treeRootOrgId", treeRootOrgId);
+        cmd.Parameters.AddWithValue("organisationId", organisationId);
         return await ReadLinesAsync(cmd, ct);
     }
 
@@ -300,7 +300,7 @@ public sealed class ReportingLineRepository
             ReportingLineId = newId,
             EmployeeId = newLine.EmployeeId,
             ManagerId = newLine.ManagerId,
-            TreeRootOrgId = newLine.TreeRootOrgId,
+            OrganisationId = newLine.OrganisationId,
             Relationship = newLine.Relationship,
             EffectiveFrom = newLine.EffectiveFrom,
             EffectiveTo = null,
@@ -375,7 +375,7 @@ public sealed class ReportingLineRepository
     //
     // S95 / ADR-035 slice 4 — the tree-WALK machinery is RETIRED. Post-S92 every
     // user's reporting "tree root" is provably their own primary_org_id: the former
-    // ResolveTreeRootOrgIdAsync walked up parent_org_id to the first org_type IN
+    // ResolveOrganisationIdAsync walked up parent_org_id to the first org_type IN
     // ('MAO','ORGANISATION'), and since BOTH permitted types are terminal the walk
     // ALWAYS returned the input org at depth 1. So tree_root == primary_org for every
     // user, ALWAYS. We therefore read primary_org_id DIRECTLY (no CTE) — byte-identical
@@ -390,7 +390,7 @@ public sealed class ReportingLineRepository
     /// byte-identical to the old <c>ValidateSameTreeAsync</c> result.)
     /// </summary>
     /// <returns>The common <c>primary_org_id</c> (the Organisation), stored in
-    /// <c>reporting_lines.tree_root_org_id</c> — the same value the walk produced.</returns>
+    /// <c>reporting_lines.organisation_id</c> — the same value the walk produced.</returns>
     /// <exception cref="CrossOrganisationAssignmentException">If the employee and manager belong
     /// to different Organisations.</exception>
     /// <exception cref="InvalidOperationException">If either user is not found.</exception>
@@ -416,7 +416,7 @@ public sealed class ReportingLineRepository
     /// directly.</b> Post-S92 a user's reporting "tree root" IS their <c>primary_org_id</c>
     /// (the former walk always returned the input org at depth 1), so same-Organisation is a
     /// direct equality of the two homes — byte-identical to the old same-tree result and the
-    /// same Organisation value stored in <c>reporting_lines.tree_root_org_id</c>.
+    /// same Organisation value stored in <c>reporting_lines.organisation_id</c>.
     /// </para>
     ///
     /// <para>
@@ -459,10 +459,11 @@ public sealed class ReportingLineRepository
         var ids = new[] { employeeId, managerId };
         await using var cmd = new NpgsqlCommand(
             """
-            SELECT user_id, primary_org_id FROM users
-            WHERE user_id = ANY(@ids) AND is_active = TRUE
-            ORDER BY user_id
-            FOR UPDATE
+            SELECT u.user_id, u.primary_org_id FROM users u
+            JOIN organizations o ON o.org_id = u.primary_org_id AND o.is_active = TRUE
+            WHERE u.user_id = ANY(@ids) AND u.is_active = TRUE
+            ORDER BY u.user_id
+            FOR UPDATE OF u
             """, conn, tx);
         cmd.Parameters.AddWithValue("ids", ids);
 
@@ -480,9 +481,9 @@ public sealed class ReportingLineRepository
         }
 
         if (employeeOrgId is null)
-            throw new InvalidOperationException($"Employee user_id='{employeeId}' not found or inactive.");
+            throw new InvalidOperationException($"Employee user_id='{employeeId}' not found, inactive, or home Organisation inactive.");
         if (managerOrgId is null)
-            throw new InvalidOperationException($"Manager user_id='{managerId}' not found or inactive.");
+            throw new InvalidOperationException($"Manager user_id='{managerId}' not found, inactive, or home Organisation inactive.");
 
         // S95: the user's Organisation IS their primary_org_id (no walk). Same-Organisation is a
         // direct equality — byte-identical to the retired same-tree resolution.
@@ -514,7 +515,7 @@ public sealed class ReportingLineRepository
 
     /// <summary>
     /// S74 R8 — takes a STABLE, tree-wide advisory lock keyed on the reporting
-    /// <paramref name="treeRootOrgId"/>, so EVERY assign within one tree serializes through the
+    /// <paramref name="organisationId"/>, so EVERY assign within one tree serializes through the
     /// cycle check. xact-scoped (auto-released at COMMIT/ROLLBACK; no manual unlock). Mirrors the
     /// ADR-032 D4 employee advisory-lock idiom (<c>pg_advisory_xact_lock(hashtext(...))</c>) but
     /// keyed on the tree root instead of an employee.
@@ -531,11 +532,11 @@ public sealed class ReportingLineRepository
     /// </para>
     /// </summary>
     public static async Task AcquireTreeLockAsync(
-        NpgsqlConnection conn, NpgsqlTransaction tx, string treeRootOrgId, CancellationToken ct = default)
+        NpgsqlConnection conn, NpgsqlTransaction tx, string organisationId, CancellationToken ct = default)
     {
         await using var cmd = new NpgsqlCommand(
-            "SELECT pg_advisory_xact_lock(hashtext('reporting-tree-' || @treeRootOrgId))", conn, tx);
-        cmd.Parameters.AddWithValue("treeRootOrgId", treeRootOrgId);
+            "SELECT pg_advisory_xact_lock(hashtext('reporting-org-' || @organisationId))", conn, tx);
+        cmd.Parameters.AddWithValue("organisationId", organisationId);
         await cmd.ExecuteScalarAsync(ct);
     }
 
@@ -549,8 +550,8 @@ public sealed class ReportingLineRepository
     /// <para>
     /// S95 / ADR-035 slice 4 — the tree-WALK is RETIRED: post-S92 a user's reporting "tree root" IS
     /// their <c>primary_org_id</c> (the former walk always returned the input org at depth 1), so this
-    /// reads <c>primary_org_id</c> DIRECTLY — byte-identical to the old <c>ResolveTreeRootOrgIdAsync</c>
-    /// result. The method name and the <c>reporting-tree-</c> lock prefix are KEPT (internal; renaming
+    /// reads <c>primary_org_id</c> DIRECTLY — byte-identical to the old <c>ResolveOrganisationIdAsync</c>
+    /// result. The method name and the <c>reporting-org-</c> lock prefix are KEPT (internal; renaming
     /// them risks a divergent advisory — a cosmetic follow-up).
     /// </para>
     /// </summary>
@@ -561,13 +562,17 @@ public sealed class ReportingLineRepository
     {
         string? primaryOrgId;
         await using (var cmd = new NpgsqlCommand(
-            "SELECT primary_org_id FROM users WHERE user_id = @userId AND is_active = TRUE", conn, tx))
+            """
+            SELECT u.primary_org_id FROM users u
+            JOIN organizations o ON o.org_id = u.primary_org_id AND o.is_active = TRUE
+            WHERE u.user_id = @userId AND u.is_active = TRUE
+            """, conn, tx))
         {
             cmd.Parameters.AddWithValue("userId", employeeId);
             primaryOrgId = (string?)await cmd.ExecuteScalarAsync(ct);
         }
         if (primaryOrgId is null)
-            throw new InvalidOperationException($"Employee user_id='{employeeId}' not found or inactive.");
+            throw new InvalidOperationException($"Employee user_id='{employeeId}' not found, inactive, or home Organisation inactive.");
 
         // S95: the user's Organisation (the advisory key) IS their primary_org_id — no walk.
         return primaryOrgId;
@@ -587,7 +592,7 @@ public sealed class ReportingLineRepository
     /// </para>
     /// <list type="number">
     /// <item><description>derives the current tree root (UNLOCKED);</description></item>
-    /// <item><description>acquires the <c>reporting-tree-{root}</c> xact advisory on it;</description></item>
+    /// <item><description>acquires the <c>reporting-org-{root}</c> xact advisory on it;</description></item>
     /// <item><description>RE-DERIVES the root UNDER the held advisory. If it DRIFTED (a transfer committed
     /// in between), it throws <see cref="TreeRootDriftException"/> — it does NOT release+re-acquire in-tx
     /// (impossible with <c>pg_advisory_xact_lock</c>, which releases only at tx end) and does NOT retain
@@ -688,7 +693,7 @@ public sealed class ReportingLineRepository
     ///
     /// <para>
     /// The revoke must remain SAFE even when the subject is inactive/transferred — so the PERSISTED
-    /// <c>manager_vikar.tree_root_org_id</c> (<paramref name="persistedRoot"/>) is the immutable
+    /// <c>manager_vikar.organisation_id</c> (<paramref name="persistedRoot"/>) is the immutable
     /// revoke-authority anchor and is ALWAYS locked (it is a fixed column on the row and cannot drift).
     /// On top of that this method ALSO locks the subject's CURRENT tree root when one can be derived,
     /// so the revoke serializes against in-tree mutators / a transfer on the live tree too. Crucially
@@ -721,7 +726,7 @@ public sealed class ReportingLineRepository
     /// </para>
     /// </summary>
     /// <param name="persistedRoot">The immutable revoke-authority anchor (the persisted
-    /// <c>manager_vikar.tree_root_org_id</c>); always locked.</param>
+    /// <c>manager_vikar.organisation_id</c>); always locked.</param>
     /// <param name="subjectId">The revoke subject (the absent approver / manager) whose CURRENT tree
     /// root is additionally locked when derivable.</param>
     /// <exception cref="TreeRootDriftException">If the subject's CURRENT root drifted under the advisory
@@ -1143,18 +1148,18 @@ public sealed class ReportingLineRepository
         await using var insertCmd = new NpgsqlCommand(
             """
             INSERT INTO reporting_lines (
-                reporting_line_id, employee_id, manager_id, tree_root_org_id,
+                reporting_line_id, employee_id, manager_id, organisation_id,
                 relationship, effective_from, effective_to,
                 source, version, scheduled_expiry, created_by, created_at)
             VALUES (
-                @reportingLineId, @employeeId, @managerId, @treeRootOrgId,
+                @reportingLineId, @employeeId, @managerId, @organisationId,
                 @relationship, @effectiveFrom, NULL,
                 @source, @version, @scheduledExpiry, @createdBy, @createdAt)
             """, conn, tx);
         insertCmd.Parameters.AddWithValue("reportingLineId", newId);
         insertCmd.Parameters.AddWithValue("employeeId", newLine.EmployeeId);
         insertCmd.Parameters.AddWithValue("managerId", newLine.ManagerId);
-        insertCmd.Parameters.AddWithValue("treeRootOrgId", newLine.TreeRootOrgId);
+        insertCmd.Parameters.AddWithValue("organisationId", newLine.OrganisationId);
         insertCmd.Parameters.AddWithValue("relationship", newLine.Relationship);
         insertCmd.Parameters.AddWithValue("effectiveFrom", newLine.EffectiveFrom);
         insertCmd.Parameters.AddWithValue("source", newLine.Source);
@@ -1183,7 +1188,7 @@ public sealed class ReportingLineRepository
         ReportingLineId = reader.GetGuid(reader.GetOrdinal("reporting_line_id")),
         EmployeeId = reader.GetString(reader.GetOrdinal("employee_id")),
         ManagerId = reader.GetString(reader.GetOrdinal("manager_id")),
-        TreeRootOrgId = reader.GetString(reader.GetOrdinal("tree_root_org_id")),
+        OrganisationId = reader.GetString(reader.GetOrdinal("organisation_id")),
         Relationship = reader.GetString(reader.GetOrdinal("relationship")),
         EffectiveFrom = DateOnly.FromDateTime(reader.GetDateTime(reader.GetOrdinal("effective_from"))),
         EffectiveTo = reader.IsDBNull(reader.GetOrdinal("effective_to"))
@@ -1278,23 +1283,23 @@ public sealed class ReportingCycleException : Exception
 /// </summary>
 public sealed class RootInvariantViolationException : Exception
 {
-    public string TreeRootOrgId { get; }
+    public string OrganisationId { get; }
 
-    public RootInvariantViolationException(string treeRootOrgId)
-        : base($"Operation would create a second root in tree '{treeRootOrgId}'.")
+    public RootInvariantViolationException(string organisationId)
+        : base($"Operation would create a second root in tree '{organisationId}'.")
     {
-        TreeRootOrgId = treeRootOrgId;
+        OrganisationId = organisationId;
     }
 
-    public RootInvariantViolationException(string treeRootOrgId, string message)
+    public RootInvariantViolationException(string organisationId, string message)
         : base(message)
     {
-        TreeRootOrgId = treeRootOrgId;
+        OrganisationId = organisationId;
     }
 
-    public RootInvariantViolationException(string treeRootOrgId, string message, Exception innerException)
+    public RootInvariantViolationException(string organisationId, string message, Exception innerException)
         : base(message, innerException)
     {
-        TreeRootOrgId = treeRootOrgId;
+        OrganisationId = organisationId;
     }
 }

@@ -28,6 +28,6 @@ public sealed class ManagerVikarCreated : DomainEventBase
     /// <summary>FERIE / SYGDOM / ORLOV / TJENESTEREJSE / ANDET (CHECK-constrained).</summary>
     public required string Reason { get; init; }
     /// <summary>The styrelse/ministry tree boundary (ADR-027); the audit target org.</summary>
-    public required string TreeRootOrgId { get; init; }
+    public required string OrganisationId { get; init; }
     public required long RowVersion { get; init; }
 }

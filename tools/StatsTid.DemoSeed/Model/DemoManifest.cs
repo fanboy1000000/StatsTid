@@ -53,7 +53,7 @@ public sealed class DemoManifest
 
 public sealed class DemoTree
 {
-    public string TreeRootOrgId { get; set; } = "";
+    public string OrganisationId { get; set; } = "";
     public string RootEmployeeId { get; set; } = "";
     public int OrgCount { get; set; }
     public int UserCount { get; set; }
@@ -65,7 +65,7 @@ public sealed class DemoReportingEdge
 {
     public string EmployeeId { get; set; } = "";
     public string ManagerId { get; set; } = "";
-    public string TreeRootOrgId { get; set; } = "";
+    public string OrganisationId { get; set; } = "";
 
     /// <summary>Always "PRIMARY" for the structural tree (vikar/ACTING is separate, see <see cref="DemoVikar"/>).</summary>
     public string Relationship { get; set; } = "PRIMARY";

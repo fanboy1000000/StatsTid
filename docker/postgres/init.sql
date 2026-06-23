@@ -2384,7 +2384,7 @@ $$;
 -- =========================================================================
 -- S48 / ADR-027 — Reporting-Line Hierarchy (Migration Phase 1)
 --   Temporal reporting_lines table complementing ADR-008 org hierarchy.
---   Tree boundary: per MINISTRY/STYRELSE (tree_root_org_id).
+--   Tree boundary: per MINISTRY/STYRELSE (organisation_id).
 --   Relationships: PRIMARY (one per employee) + ACTING (vikarierende leder).
 --   Pattern: follows local_agreement_profiles (ADR-017 D1) temporal model.
 -- =========================================================================
@@ -2393,7 +2393,7 @@ CREATE TABLE IF NOT EXISTS reporting_lines (
     reporting_line_id   UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     employee_id         TEXT        NOT NULL REFERENCES users(user_id),
     manager_id          TEXT        NOT NULL REFERENCES users(user_id),
-    tree_root_org_id    TEXT        NOT NULL REFERENCES organizations(org_id),
+    organisation_id     TEXT        NOT NULL REFERENCES organizations(org_id),
     relationship        TEXT        NOT NULL DEFAULT 'PRIMARY'
                         CHECK (relationship IN ('PRIMARY', 'ACTING')),
     effective_from      DATE        NOT NULL,
@@ -2427,7 +2427,7 @@ CREATE INDEX IF NOT EXISTS idx_reporting_lines_employee_history
 
 -- Tree-scoped queries (per styrelse/ministry).
 CREATE INDEX IF NOT EXISTS idx_reporting_lines_tree_root
-    ON reporting_lines (tree_root_org_id)
+    ON reporting_lines (organisation_id)
     WHERE effective_to IS NULL;
 
 -- Audit trail for reporting-line lifecycle events.
@@ -2450,10 +2450,10 @@ CREATE INDEX IF NOT EXISTS idx_reporting_line_audit_line
 
 -- ── Seed reporting lines (12 PRIMARY + 1 ACTING = 13 rows across the Organisation trees) ──
 -- Tree roots have NO reporting line (they are root by absence of a row).
--- tree_root_org_id derivation: nearest MAO or ORGANISATION ancestor (S92 flatten;
+-- organisation_id derivation: nearest MAO or ORGANISATION ancestor (S92 flatten;
 -- the STY0x roots below are now ORGANISATION rows — transitional tree machinery,
 -- re-pointed not removed, per ADR-035).
-INSERT INTO reporting_lines (employee_id, manager_id, tree_root_org_id, relationship, effective_from, source, created_by) VALUES
+INSERT INTO reporting_lines (employee_id, manager_id, organisation_id, relationship, effective_from, source, created_by) VALUES
     -- Tree STY01 (Medarbejder- og Kompetencestyrelsen): root = mgr03
     ('emp001', 'mgr03',  'STY01', 'PRIMARY', '2024-01-01', 'MANUAL', 'SYSTEM'),
     -- Tree STY02 (Statens IT): root = ladm01
@@ -2541,7 +2541,7 @@ $$;
 -- (emp002, emp005) with scheduled_expiry.
 -- Note: emp002 already has a MANUAL ACTING line to ladm01 — skip (admin takes precedence).
 -- emp005 gets the SELF_DELEGATION ACTING line.
-INSERT INTO reporting_lines (employee_id, manager_id, tree_root_org_id, relationship, effective_from, source, created_by, scheduled_expiry)
+INSERT INTO reporting_lines (employee_id, manager_id, organisation_id, relationship, effective_from, source, created_by, scheduled_expiry)
 VALUES ('emp005', 'ladm01', 'STY02', 'ACTING', '2026-06-01', 'SELF_DELEGATION', 'mgr01', '2026-07-01')
 ON CONFLICT DO NOTHING;
 
@@ -3977,8 +3977,8 @@ ALTER TABLE employee_profiles ADD COLUMN IF NOT EXISTS enhed_label TEXT NULL;
 --                       owned by TASK-7401's DelegationExpiryService cutover).
 --   reason:             FERIE / SYGDOM / ORLOV / TJENESTEREJSE / ANDET (by-construction
 --                       CHECK, not by-seed — the S68-B1 lesson).
---   tree_root_org_id:   the styrelse/ministry tree boundary (ADR-027), mirrors
---                       reporting_lines.tree_root_org_id.
+--   organisation_id:   the styrelse/ministry tree boundary (ADR-027), mirrors
+--                       reporting_lines.organisation_id.
 --   effective_to:       close marker; NULL = active. Partial-unique below enforces
 --                       AT MOST ONE active vikar per absent_approver_id by construction.
 --   CHECK (absent_approver_id <> vikar_user_id): an approver cannot vikar for themselves.
@@ -3988,7 +3988,7 @@ CREATE TABLE IF NOT EXISTS manager_vikar (
     vikar_user_id       TEXT        NOT NULL REFERENCES users(user_id),
     until_date          DATE        NOT NULL,   -- INCLUSIVE "til og med"
     reason              TEXT        NOT NULL CHECK (reason IN ('FERIE','SYGDOM','ORLOV','TJENESTEREJSE','ANDET')),
-    tree_root_org_id    TEXT        NOT NULL REFERENCES organizations(org_id),
+    organisation_id     TEXT        NOT NULL REFERENCES organizations(org_id),
     version             BIGINT      NOT NULL DEFAULT 1,
     created_by          TEXT        NOT NULL,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -4021,7 +4021,7 @@ CREATE INDEX IF NOT EXISTS idx_manager_vikar_vikar
 DO $$
 BEGIN
     INSERT INTO schema_migrations (migration_id, notes)
-    VALUES ('s74-medarbejder-admin-foundations', 'ADR-027 Phase 5 (SPRINT-74 TASK-7400): employee_profiles.enhed_label TEXT NULL (additive display-only label; rides ADR-022 temporal profile versioning, no new event family, inert for rules/payroll) + manager_vikar table (approver-owned vikar: vikar_id PK, absent_approver_id/vikar_user_id -> users, until_date INCLUSIVE, reason CHECK {FERIE,SYGDOM,ORLOV,TJENESTEREJSE,ANDET}, tree_root_org_id -> organizations, version, created_by, created_at, effective_to close-marker; partial-unique uq_manager_vikar_active one-active-per-approver; idx_manager_vikar_vikar reverse lookup; CHECK absent<>vikar) + one-time SELF_DELEGATION ACTING -> manager_vikar projection/close migration (no-op greenfield, idempotent legacy remediation). Table DDL + column only this task; repo/events/resolver = TASK-7401.')
+    VALUES ('s74-medarbejder-admin-foundations', 'ADR-027 Phase 5 (SPRINT-74 TASK-7400): employee_profiles.enhed_label TEXT NULL (additive display-only label; rides ADR-022 temporal profile versioning, no new event family, inert for rules/payroll) + manager_vikar table (approver-owned vikar: vikar_id PK, absent_approver_id/vikar_user_id -> users, until_date INCLUSIVE, reason CHECK {FERIE,SYGDOM,ORLOV,TJENESTEREJSE,ANDET}, organisation_id -> organizations, version, created_by, created_at, effective_to close-marker; partial-unique uq_manager_vikar_active one-active-per-approver; idx_manager_vikar_vikar reverse lookup; CHECK absent<>vikar) + one-time SELF_DELEGATION ACTING -> manager_vikar projection/close migration (no-op greenfield, idempotent legacy remediation). Table DDL + column only this task; repo/events/resolver = TASK-7401.')
     ON CONFLICT (migration_id) DO NOTHING;
 
     IF NOT FOUND THEN
@@ -4041,10 +4041,10 @@ BEGIN
     -- guard makes a partial re-run idempotent even if the ledger row were ever cleared.
     INSERT INTO manager_vikar (
         absent_approver_id, vikar_user_id, until_date, reason,
-        tree_root_org_id, version, created_by, effective_to)
+        organisation_id, version, created_by, effective_to)
     SELECT DISTINCT ON (rl.created_by)
         rl.created_by, rl.manager_id, rl.scheduled_expiry, 'ANDET',
-        rl.tree_root_org_id, 1, rl.created_by, NULL
+        rl.organisation_id, 1, rl.created_by, NULL
     FROM reporting_lines rl
     WHERE rl.source = 'SELF_DELEGATION'
       AND rl.relationship = 'ACTING'

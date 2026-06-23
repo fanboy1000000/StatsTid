@@ -15,13 +15,13 @@ namespace StatsTid.Tests.Regression.ReportingLine;
 
 /// <summary>
 /// S95 / TASK-9506 (ADR-035 slice 4) — the FLAT-ORG lock + guard suite. Proves that retiring the
-/// recursive tree-WALK (<c>ResolveTreeRootOrgIdAsync</c> / <c>GetDescendantsAsync</c>) and replacing
+/// recursive tree-WALK (<c>ResolveOrganisationIdAsync</c> / <c>GetDescendantsAsync</c>) and replacing
 /// the same-tree abstraction with a DIRECT <c>primary_org</c> equality
 /// (<c>ValidateSameTreeAsync</c> → <c>ValidateSameOrganisationAsync</c>;
 /// <c>CrossTreeAssignmentException</c> → <c>CrossOrganisationAssignmentException</c>) preserves the
 /// EXACT serialization the tree-root advisory provided. The advisory DOMAIN is unchanged — it stays
 /// the Organisation — and is now re-derived from <c>primary_org_id</c> directly; the
-/// <c>reporting-tree-{org}</c> lock prefix + the <c>tree_root_org_id</c> columns are KEPT (deliberate).
+/// <c>reporting-org-{org}</c> lock prefix + the <c>organisation_id</c> columns are KEPT (deliberate).
 ///
 /// <para><b>Coverage (the TASK-9506 interleave matrix):</b></para>
 /// <list type="bullet">
@@ -31,11 +31,11 @@ namespace StatsTid.Tests.Regression.ReportingLine;
 ///         retired <c>ValidateSameTreeAsync</c>/<c>CrossTreeAssignmentException</c> no longer exist.</item>
 ///   <item>(b) the Organisation advisory (re-derived from <c>primary_org</c>) SERIALIZES a concurrent
 ///         first-assign 2-cycle: a held-lock interleave parks one leg on the
-///         <c>reporting-tree-{org}</c> key, and the reciprocal leg is then rejected by the cycle guard
+///         <c>reporting-org-{org}</c> key, and the reciprocal leg is then rejected by the cycle guard
 ///         under the SAME single Organisation lock (exactly one leg can ever be active). This is the
 ///         KEY equivalence claim — the lock is not weaker.</item>
 ///   <item>(e) the vikar REVOKE keys on the PERSISTED Organisation anchor
-///         (<c>manager_vikar.tree_root_org_id</c>) after the owning manager TRANSFERS to a different
+///         (<c>manager_vikar.organisation_id</c>) after the owning manager TRANSFERS to a different
 ///         Organisation — proven by holding the persisted-anchor advisory and showing the revoke
 ///         BLOCKS on it (S83 D19 revoke-safety, preserved verbatim under the re-keyed derivation).</item>
 ///   <item>(f) the ORGANISATION-HOME GUARD via the ENDPOINT (not raw SQL): user create POST + transfer
@@ -69,13 +69,17 @@ public sealed class S95FlatOrgLockTests : IAsyncLifetime
     private const string CycY = "s95_cyc_y";     // STY02 — no edges; 2-cycle leg Y
     // ── STY05 Organisation (under a DIFFERENT MAO MIN02) ──
     private const string EmpCross = "s95_emp_cross"; // STY05 — a different Organisation
+    // ── STY99 — an INACTIVE Organisation (S96 / TASK-9601), raw-seeded (no app path deactivates an org) ──
+    private const string InactEmp = "s95_inact_emp"; // homed on the INACTIVE STY99
+    private const string InactMgr = "s95_inact_mgr"; // same INACTIVE STY99 home — so the ONLY reject reason is the inactive org
 
     private const string OrgSty02 = "STY02";   // an ORGANISATION
     private const string OrgSty05 = "STY05";   // a DIFFERENT ORGANISATION
     private const string MaoMin01 = "MIN01";   // a MAO (NOT an employee home)
+    private const string OrgInact = "STY99";   // an INACTIVE ORGANISATION (is_active = FALSE)
 
     private static readonly string[] AllUsers =
-        { Admin, Mgr, Emp, Vik, CycX, CycY, EmpCross };
+        { Admin, Mgr, Emp, Vik, CycX, CycY, EmpCross, InactEmp, InactMgr };
 
     public async Task InitializeAsync()
     {
@@ -111,6 +115,20 @@ public sealed class S95FlatOrgLockTests : IAsyncLifetime
 
     private async Task SeedAsync(NpgsqlConnection conn)
     {
+        // S96 / TASK-9601: a raw-seeded INACTIVE ORGANISATION (STY99 under MIN01, is_active = FALSE).
+        // No application path deactivates an Organisation (no org-deactivation endpoint; the home guard
+        // keeps users on ACTIVE Organisations), so the inactive-home pair MUST be seeded directly,
+        // bypassing the guarded endpoints, to exercise the S96 is_active join guard.
+        await using (var cmd = new NpgsqlCommand(
+            """
+            INSERT INTO organizations (org_id, org_name, org_type, parent_org_id, materialized_path, agreement_code, ok_version, is_active)
+            VALUES ('STY99', 'S95/S96 Inactive Org', 'ORGANISATION', 'MIN01', '/MIN01/STY99/', 'HK', 'OK24', FALSE)
+            ON CONFLICT (org_id) DO UPDATE SET is_active = FALSE
+            """, conn))
+        {
+            await cmd.ExecuteNonQueryAsync();
+        }
+
         await using (var cmd = new NpgsqlCommand(
             """
             INSERT INTO users (user_id, username, password_hash, display_name, email, primary_org_id, agreement_code, ok_version, is_active)
@@ -121,7 +139,11 @@ public sealed class S95FlatOrgLockTests : IAsyncLifetime
                 (@vik,   @vik,   '$2a$11$fake', 'S95 Vik',   's95_vik@test.dk',   'STY02', 'HK', 'OK24', TRUE),
                 (@cycx,  @cycx,  '$2a$11$fake', 'S95 CycX',  's95_cyc_x@test.dk', 'STY02', 'HK', 'OK24', TRUE),
                 (@cycy,  @cycy,  '$2a$11$fake', 'S95 CycY',  's95_cyc_y@test.dk', 'STY02', 'HK', 'OK24', TRUE),
-                (@cross, @cross, '$2a$11$fake', 'S95 Cross', 's95_cross@test.dk', 'STY05', 'HK', 'OK24', TRUE)
+                (@cross, @cross, '$2a$11$fake', 'S95 Cross', 's95_cross@test.dk', 'STY05', 'HK', 'OK24', TRUE),
+                -- Both inactive-home users sit on the INACTIVE STY99 (the user rows themselves are
+                -- is_active = TRUE — the ONLY reason to reject the assign is the inactive HOME org).
+                (@inactEmp, @inactEmp, '$2a$11$fake', 'S95 InactEmp', 's95_inact_emp@test.dk', 'STY99', 'HK', 'OK24', TRUE),
+                (@inactMgr, @inactMgr, '$2a$11$fake', 'S95 InactMgr', 's95_inact_mgr@test.dk', 'STY99', 'HK', 'OK24', TRUE)
             ON CONFLICT DO NOTHING
             """, conn))
         {
@@ -159,15 +181,17 @@ public sealed class S95FlatOrgLockTests : IAsyncLifetime
         cmd.Parameters.AddWithValue("cycx", CycX);
         cmd.Parameters.AddWithValue("cycy", CycY);
         cmd.Parameters.AddWithValue("cross", EmpCross);
+        cmd.Parameters.AddWithValue("inactEmp", InactEmp);
+        cmd.Parameters.AddWithValue("inactMgr", InactMgr);
     }
 
     private static ReportingLineModel MakeLine(
-        string employeeId, string managerId, string treeRootOrgId = OrgSty02) => new()
+        string employeeId, string managerId, string organisationId = OrgSty02) => new()
     {
         ReportingLineId = Guid.Empty,
         EmployeeId = employeeId,
         ManagerId = managerId,
-        TreeRootOrgId = treeRootOrgId,
+        OrganisationId = organisationId,
         Relationship = "PRIMARY",
         EffectiveFrom = new DateOnly(2026, 1, 1),
         Source = "MANUAL",
@@ -196,6 +220,12 @@ public sealed class S95FlatOrgLockTests : IAsyncLifetime
         await ExecAsync(conn, "DELETE FROM employee_profiles WHERE employee_id = ANY(@ids)");
         await ExecAsync(conn, "DELETE FROM user_agreement_codes WHERE user_id = ANY(@ids)");
         await ExecAsync(conn, "DELETE FROM users WHERE user_id = ANY(@ids)");
+        // S96 — drop the raw-seeded inactive Organisation (after the homed users are gone; users FK it).
+        await using (var orgCmd = new NpgsqlCommand("DELETE FROM organizations WHERE org_id = @org", conn))
+        {
+            orgCmd.Parameters.AddWithValue("org", OrgInact);
+            await orgCmd.ExecuteNonQueryAsync();
+        }
 
         async Task ExecAsync(NpgsqlConnection c, string sql)
         {
@@ -231,7 +261,7 @@ public sealed class S95FlatOrgLockTests : IAsyncLifetime
     }
 
     /// <summary>Repository: a SAME-Organisation pair (Emp + Mgr, both STY02) returns the common
-    /// Organisation (= STY02, the value persisted into reporting_lines.tree_root_org_id).</summary>
+    /// Organisation (= STY02, the value persisted into reporting_lines.organisation_id).</summary>
     [Fact]
     public async Task ValidateSameOrganisation_SameOrganisation_ReturnsTheOrganisation()
     {
@@ -365,7 +395,7 @@ public sealed class S95FlatOrgLockTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
-    //  (e) The vikar REVOKE keys on the PERSISTED Organisation anchor (manager_vikar.tree_root_org_id)
+    //  (e) The vikar REVOKE keys on the PERSISTED Organisation anchor (manager_vikar.organisation_id)
     //      after the owning manager TRANSFERS to a different Organisation (S83 D19). With persisted
     //      STY02 ≠ the manager's current STY05, hold the PERSISTED-anchor (STY02) advisory and show
     //      the admin-revoke BLOCKS on it (it locks the persisted root + the current root). RED on a
@@ -531,6 +561,71 @@ public sealed class S95FlatOrgLockTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
+    //  (g) S96 / TASK-9601 — the INACTIVE-ORG-HOME GUARD. S96 added
+    //      "JOIN organizations o ON o.org_id = u.primary_org_id AND o.is_active = TRUE" to BOTH
+    //      ValidateSameOrganisationAsync AND DeriveEmployeeTreeRootInTxAsync. So a user whose HOME
+    //      Organisation is DEACTIVATED (organizations.is_active = FALSE) resolves to NOTHING — the
+    //      method throws InvalidOperationException("...home Organisation inactive."), and the PRIMARY
+    //      assign endpoint maps that to 400 (NO edge created). This state is UNREACHABLE via the app
+    //      (no org-deactivation endpoint; the home guard keeps users on active Organisations), so the
+    //      inactive org + its homed users are raw-SQL-seeded (bypassing the guarded endpoints).
+    //
+    //      RED-on-old: pre-S96 the JOIN did not exist — the inactive-home user resolved normally from
+    //      users.primary_org_id alone, so InactEmp + InactMgr (same STY99 home, both is_active = TRUE
+    //      user rows) would pass the same-Organisation check and the FIRST assign would COMMIT (201),
+    //      failing BOTH assertions below (the throw expectation and the 400/no-edge expectation).
+    // ════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>Repository (unit-level pin, no endpoint exception-mapping dependency): an inactive-home
+    /// pair (InactEmp + InactMgr, both homed on the DEACTIVATED STY99) throws
+    /// <see cref="InvalidOperationException"/> — the S96 <c>is_active = TRUE</c> join on
+    /// <c>organizations</c> filters the inactive-home row out, so it resolves to nothing.</summary>
+    [Fact]
+    public async Task ValidateSameOrganisation_InactiveHomeOrg_ThrowsInvalidOperation()
+    {
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => _rlRepo.ValidateSameOrganisationAsync(InactEmp, InactMgr));
+        Assert.Contains("home Organisation inactive", ex.Message);
+    }
+
+    /// <summary>Endpoint: a FIRST PRIMARY assign for a user whose HOME Organisation is INACTIVE
+    /// (InactEmp@STY99 under InactMgr@STY99) is REJECTED and NO edge created.
+    ///
+    /// <para><b>Observed status = 403 Forbidden, NOT the S96 in-tx 400.</b> The PRIMARY-assign endpoint
+    /// runs the org-scope gate (<c>OrgScopeValidator.ValidateEmployeeAccessAsync</c>) FIRST, and that
+    /// gate resolves the employee's org via <c>OrganizationRepository.GetByIdAsync</c>, which already
+    /// filters <c>is_active = TRUE</c> (a PRE-EXISTING filter, NOT the S96 change). So the inactive
+    /// STY99 home resolves to null → "Target organization not found" → 403, BEFORE the request ever
+    /// reaches the S96 same-Organisation / tree-root lock guard. This is still a faithful
+    /// "rejected, no edge" proof at the endpoint layer; the S96-SPECIFIC repository guard is pinned by
+    /// the sibling <see cref="ValidateSameOrganisation_InactiveHomeOrg_ThrowsInvalidOperation"/> (the
+    /// unit-level test that exercises exactly the changed method).</para>
+    ///
+    /// <para>The actual status is ASSERTED (not assumed): the endpoint maps the pre-gate org-resolution
+    /// miss to 403 — both pre- and post-S96. The S96 RED-on-old proof lives in the repository test.</para></summary>
+    [Fact]
+    public async Task AdminAssign_InactiveHomeOrg_Rejected_NoEdge()
+    {
+        // A GlobalAdmin so the actor's SCOPE cannot be the reject reason (GLOBAL covers every org).
+        var client = GlobalAdminClient();
+
+        // InactEmp has NO active PRIMARY edge → a FIRST assign (If-None-Match: *).
+        var rsp = await PostAssignAsync(client, "/api/admin/reporting-lines", new
+        {
+            employeeId = InactEmp,
+            managerId = InactMgr,
+            effectiveFrom = "2026-06-01",
+        });
+
+        // The ACTUAL observed status: the org-scope gate's GetByIdAsync(is_active = TRUE) resolves the
+        // inactive STY99 home to null → "Target organization not found" → 403 (a pre-S96 filter, fired
+        // BEFORE the S96 in-tx guard). A faithful "rejected" outcome; the assert reflects reality.
+        Assert.Equal(HttpStatusCode.Forbidden, rsp.StatusCode);
+        // No edge was created for the inactive-home user.
+        Assert.Null(await _rlRepo.GetActiveByEmployeeAndRelationshipAsync(InactEmp, "PRIMARY"));
+    }
+
+    // ════════════════════════════════════════════════════════════════════════════════
     //  Helpers — clients / tokens
     // ════════════════════════════════════════════════════════════════════════════════
 
@@ -624,7 +719,7 @@ public sealed class S95FlatOrgLockTests : IAsyncLifetime
             VikarUserId = vikarUser,
             UntilDate = untilDate,
             Reason = "ANDET",
-            TreeRootOrgId = treeRoot,
+            OrganisationId = treeRoot,
             Version = 1,
             CreatedBy = "TEST",
         });
@@ -737,11 +832,11 @@ public sealed class S95FlatOrgLockTests : IAsyncLifetime
     }
 
     // ── Held-lock interleave harness (mirrors ReportingLineWriteLifecycleTests / AdminVikarOnBehalfTests).
-    //    The advisory key prefix is the KEPT 'reporting-tree-' (S95: the prefix is unchanged; only the
+    //    The advisory key prefix is the KEPT 'reporting-org-' (S95: the prefix is unchanged; only the
     //    DERIVATION changed — read from primary_org instead of the recursive walk). The key is the
     //    Organisation (= the user's primary_org). ──
 
-    /// <summary>Holds the <c>reporting-tree-{org}</c> xact advisory key (the Organisation lock) on a SIDE
+    /// <summary>Holds the <c>reporting-org-{org}</c> xact advisory key (the Organisation lock) on a SIDE
     /// connection so a test can deterministically BLOCK any in-Organisation mutator that takes the same
     /// key, until the returned tx is rolled back. The caller owns disposal.</summary>
     private async Task<(NpgsqlConnection conn, NpgsqlTransaction tx)> AcquireOrgLockOnSideConnAsync(string organisationId)
@@ -750,7 +845,7 @@ public sealed class S95FlatOrgLockTests : IAsyncLifetime
         await conn.OpenAsync();
         var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
         await using (var cmd = new NpgsqlCommand(
-            "SELECT pg_advisory_xact_lock(hashtext('reporting-tree-' || @org))", conn, tx))
+            "SELECT pg_advisory_xact_lock(hashtext('reporting-org-' || @org))", conn, tx))
         {
             cmd.Parameters.AddWithValue("org", organisationId);
             await cmd.ExecuteScalarAsync();
@@ -759,7 +854,7 @@ public sealed class S95FlatOrgLockTests : IAsyncLifetime
     }
 
     /// <summary>Polls <c>pg_locks</c> (joined to <c>pg_stat_activity</c> to exclude this session) until at
-    /// least one OTHER backend is WAITING (<c>granted = false</c>) on the <c>reporting-tree-{org}</c>
+    /// least one OTHER backend is WAITING (<c>granted = false</c>) on the <c>reporting-org-{org}</c>
     /// advisory key — proving a request actually REACHED and BLOCKED ON THE LOCK. Returns <c>true</c> once
     /// a waiter is seen; <c>false</c> on timeout.</summary>
     private async Task<bool> WaitForAdvisoryLockWaiterAsync(string organisationId, int timeoutMs = 5000)
@@ -779,7 +874,7 @@ public sealed class S95FlatOrgLockTests : IAsyncLifetime
                       AND pl.granted = FALSE
                       AND pl.pid <> pg_backend_pid()
                       AND ((pl.classid::bigint << 32) | pl.objid::bigint)
-                          = hashtext('reporting-tree-' || @org)::bigint
+                          = hashtext('reporting-org-' || @org)::bigint
                 )
                 """, conn))
             {

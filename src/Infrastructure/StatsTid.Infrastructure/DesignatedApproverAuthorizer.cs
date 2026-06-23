@@ -40,7 +40,7 @@ namespace StatsTid.Infrastructure;
 /// directly-planted cross-tree vikar row is denied. (S92/ADR-035 flatten: a tree root is
 /// now a MAO/ORGANISATION row; the former afdelinger are collapsed into their parent
 /// ORGANISATION, so an intra-Organisation edge naturally shares the same
-/// <c>tree_root_org_id</c>. Transitional machinery — retired in S95.)
+/// <c>organisation_id</c>. Transitional machinery — retired in S95.)
 /// </para>
 ///
 /// <para>

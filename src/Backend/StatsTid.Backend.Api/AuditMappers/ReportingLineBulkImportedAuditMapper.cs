@@ -7,7 +7,7 @@ namespace StatsTid.Backend.Api.AuditMappers;
 /// <summary>
 /// S49 / TASK-4908. <see cref="IAuditProjectionMapper{TEvent}"/> for
 /// <see cref="ReportingLineBulkImported"/>. TENANT_TARGETED; target_org_id =
-/// tree_root_org_id from the event; details = batch metadata.
+/// organisation_id from the event; details = batch metadata.
 /// </summary>
 public sealed class ReportingLineBulkImportedAuditMapper : IAuditProjectionMapper<ReportingLineBulkImported>
 {
@@ -16,13 +16,13 @@ public sealed class ReportingLineBulkImportedAuditMapper : IAuditProjectionMappe
         var details = new
         {
             batchId = @event.BatchId,
-            treeRootOrgId = @event.TreeRootOrgId,
+            organisationId = @event.OrganisationId,
             lineCount = @event.LineCount,
             source = @event.Source,
         };
         return new AuditProjectionRowData(
             VisibilityScope: AuditVisibilityScope.TenantTargeted,
-            TargetOrgId: @event.TreeRootOrgId,
+            TargetOrgId: @event.OrganisationId,
             TargetResourceId: @event.BatchId.ToString(),
             DetailsJson: JsonSerializer.Serialize(details, AuditMapperJsonOptions.Default));
     }

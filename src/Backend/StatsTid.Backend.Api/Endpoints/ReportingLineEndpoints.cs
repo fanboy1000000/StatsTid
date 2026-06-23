@@ -94,7 +94,7 @@ public static class ReportingLineEndpoints
                     // cross-tree-edge race, ADR-027 D2). Sees the current committed user state, so a
                     // concurrent R10 that deactivated the manager (committed before us) makes it read
                     // inactive here → 400, no orphan. Returns the AUTHORITATIVE common tree root.
-                    var treeRootOrgId = await repo.ValidateSameOrganisationAsync(conn, tx, request.EmployeeId, request.ManagerId, ct);
+                    var organisationId = await repo.ValidateSameOrganisationAsync(conn, tx, request.EmployeeId, request.ManagerId, ct);
 
                     // S78 R9 — the S74-7403 stale-key residual is now CLOSED. The advisory key is no
                     // longer taken from an unguarded unlocked read: AcquireTreeLockForEmployeeAsync (Step 1)
@@ -116,7 +116,7 @@ public static class ReportingLineEndpoints
                         ReportingLineId = Guid.NewGuid(),
                         EmployeeId = request.EmployeeId,
                         ManagerId = request.ManagerId,
-                        TreeRootOrgId = treeRootOrgId,
+                        OrganisationId = organisationId,
                         Relationship = relationship,
                         EffectiveFrom = request.EffectiveFrom,
                         EffectiveTo = null,
@@ -156,7 +156,7 @@ public static class ReportingLineEndpoints
                         ReportingLineId = persisted.ReportingLineId,
                         EmployeeId = persisted.EmployeeId,
                         ManagerId = persisted.ManagerId,
-                        TreeRootOrgId = persisted.TreeRootOrgId,
+                        OrganisationId = persisted.OrganisationId,
                         Relationship = persisted.Relationship,
                         EffectiveFrom = persisted.EffectiveFrom,
                         Source = persisted.Source,
@@ -176,7 +176,7 @@ public static class ReportingLineEndpoints
                             EmployeeId = predecessor.EmployeeId,
                             PreviousManagerId = predecessor.ManagerId,
                             NewManagerId = persisted.ManagerId,
-                            TreeRootOrgId = predecessor.TreeRootOrgId,
+                            OrganisationId = predecessor.OrganisationId,
                             EffectiveFrom = predecessor.EffectiveFrom,
                             EffectiveTo = persisted.EffectiveFrom,
                             RowVersion = predecessor.Version + 1, // closed predecessor got version bumped
@@ -287,13 +287,13 @@ public static class ReportingLineEndpoints
                     closed = await repo.RemoveAsync(conn, tx, expectedVersion, employeeId, "PRIMARY", ct);
 
                     // Root invariant: reject if this creates a second root (Codex S48 W2, scoped to tree per cycle 2 W1).
-                    var treeRoot = closed.TreeRootOrgId;
+                    var treeRoot = closed.OrganisationId;
                     await using var rootCheckCmd = new NpgsqlCommand(
                         """
                         SELECT COUNT(*) FROM (
                             SELECT rl_all.employee_id
                             FROM reporting_lines rl_all
-                            WHERE rl_all.tree_root_org_id = @treeRoot
+                            WHERE rl_all.organisation_id = @treeRoot
                               AND rl_all.effective_to IS NULL
                               AND rl_all.relationship = 'PRIMARY'
                         ) active_subordinates
@@ -310,13 +310,13 @@ public static class ReportingLineEndpoints
                             SELECT COUNT(*) FROM (
                                 SELECT DISTINCT rl.manager_id
                                 FROM reporting_lines rl
-                                WHERE rl.tree_root_org_id = @treeRoot
+                                WHERE rl.organisation_id = @treeRoot
                                   AND rl.effective_to IS NULL
                                   AND rl.relationship = 'PRIMARY'
                                   AND rl.manager_id NOT IN (
                                       SELECT rl2.employee_id
                                       FROM reporting_lines rl2
-                                      WHERE rl2.tree_root_org_id = @treeRoot
+                                      WHERE rl2.organisation_id = @treeRoot
                                         AND rl2.effective_to IS NULL
                                         AND rl2.relationship = 'PRIMARY'
                                   )
@@ -356,7 +356,7 @@ public static class ReportingLineEndpoints
                         EmployeeId = closed.EmployeeId,
                         PreviousManagerId = closed.ManagerId,
                         NewManagerId = null,
-                        TreeRootOrgId = closed.TreeRootOrgId,
+                        OrganisationId = closed.OrganisationId,
                         EffectiveFrom = closed.EffectiveFrom,
                         EffectiveTo = closed.EffectiveTo!.Value,
                         RowVersion = closed.Version,
@@ -393,11 +393,11 @@ public static class ReportingLineEndpoints
         })).RequireAuthorization("HROrAbove"); // S91 TASK-9102: tree-page surface opened to LocalHR. S78 R9: extra ) closes TreeRootDriftRetry.RunAsync
 
         // ═══════════════════════════════════════════
-        // Endpoint 3: GET /api/admin/reporting-lines/tree/{treeRootOrgId} — Get tree
+        // Endpoint 3: GET /api/admin/reporting-lines/tree/{organisationId} — Get tree
         // ═══════════════════════════════════════════
 
-        app.MapGet("/api/admin/reporting-lines/tree/{treeRootOrgId}", async (
-            string treeRootOrgId,
+        app.MapGet("/api/admin/reporting-lines/tree/{organisationId}", async (
+            string organisationId,
             ReportingLineRepository repo,
             UserRepository userRepo,
             OrgScopeValidator scopeValidator,
@@ -408,11 +408,11 @@ public static class ReportingLineEndpoints
             var actor = context.GetActorContext();
 
             // Validate scope covers tree root org. S76 B1: LocalAdminOrAbove policy → LocalAdmin floor.
-            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, treeRootOrgId, StatsTidRoles.LocalAdmin, ct);
+            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, organisationId, StatsTidRoles.LocalAdmin, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
-            var lines = await repo.GetTreeAsync(treeRootOrgId, ct);
+            var lines = await repo.GetTreeAsync(organisationId, ct);
 
             // Enrich with display names: collect unique user IDs (employees + managers),
             // look them up, build a display-name map.
@@ -432,7 +432,7 @@ public static class ReportingLineEndpoints
                 employeeDisplayName = displayNames.GetValueOrDefault(l.EmployeeId),
                 managerId = l.ManagerId,
                 managerDisplayName = displayNames.GetValueOrDefault(l.ManagerId),
-                treeRootOrgId = l.TreeRootOrgId,
+                organisationId = l.OrganisationId,
                 relationship = l.Relationship,
                 effectiveFrom = l.EffectiveFrom,
                 source = l.Source,
@@ -506,7 +506,7 @@ public static class ReportingLineEndpoints
                 employeeId = r.EmployeeId,
                 employeeDisplayName = displayNames.GetValueOrDefault(r.EmployeeId),
                 managerId = r.ManagerId,
-                treeRootOrgId = r.TreeRootOrgId,
+                organisationId = r.OrganisationId,
                 relationship = r.Relationship,
                 effectiveFrom = r.EffectiveFrom,
                 source = r.Source,
@@ -575,7 +575,7 @@ public static class ReportingLineEndpoints
 
                     // Step 2: same-tree + manager-active in-tx UNDER the lock; pins BOTH user rows
                     // FOR UPDATE in id-order (B1). Returns the authoritative common tree root.
-                    var treeRootOrgId = await repo.ValidateSameOrganisationAsync(conn, tx, employeeId, request.ManagerId, ct);
+                    var organisationId = await repo.ValidateSameOrganisationAsync(conn, tx, employeeId, request.ManagerId, ct);
 
                     // S78 R9 — the S74-7403 stale-key residual is CLOSED on this path too (identical to
                     // the PRIMARY assign): AcquireTreeLockForEmployeeAsync (Step 1) holds the employee's
@@ -593,7 +593,7 @@ public static class ReportingLineEndpoints
                         ReportingLineId = Guid.NewGuid(),
                         EmployeeId = employeeId,
                         ManagerId = request.ManagerId,
-                        TreeRootOrgId = treeRootOrgId,
+                        OrganisationId = organisationId,
                         Relationship = "ACTING",
                         EffectiveFrom = request.EffectiveFrom,
                         EffectiveTo = null,
@@ -632,7 +632,7 @@ public static class ReportingLineEndpoints
                         ReportingLineId = persisted.ReportingLineId,
                         EmployeeId = persisted.EmployeeId,
                         ManagerId = persisted.ManagerId,
-                        TreeRootOrgId = persisted.TreeRootOrgId,
+                        OrganisationId = persisted.OrganisationId,
                         Relationship = persisted.Relationship,
                         EffectiveFrom = persisted.EffectiveFrom,
                         Source = persisted.Source,
@@ -652,7 +652,7 @@ public static class ReportingLineEndpoints
                             EmployeeId = predecessor.EmployeeId,
                             PreviousManagerId = predecessor.ManagerId,
                             NewManagerId = persisted.ManagerId,
-                            TreeRootOrgId = predecessor.TreeRootOrgId,
+                            OrganisationId = predecessor.OrganisationId,
                             EffectiveFrom = predecessor.EffectiveFrom,
                             EffectiveTo = persisted.EffectiveFrom,
                             RowVersion = predecessor.Version + 1,
@@ -765,7 +765,7 @@ public static class ReportingLineEndpoints
                         EmployeeId = closed.EmployeeId,
                         PreviousManagerId = closed.ManagerId,
                         NewManagerId = null,
-                        TreeRootOrgId = closed.TreeRootOrgId,
+                        OrganisationId = closed.OrganisationId,
                         EffectiveFrom = closed.EffectiveFrom,
                         EffectiveTo = closed.EffectiveTo!.Value,
                         RowVersion = closed.Version,
@@ -817,8 +817,8 @@ public static class ReportingLineEndpoints
             var actor = context.GetActorContext();
 
             // 1. Basic payload validation.
-            if (string.IsNullOrWhiteSpace(request.TreeRootOrgId))
-                return Results.BadRequest(new { error = "treeRootOrgId is required" });
+            if (string.IsNullOrWhiteSpace(request.OrganisationId))
+                return Results.BadRequest(new { error = "organisationId is required" });
             if (request.Rows is null || request.Rows.Count == 0)
                 return Results.BadRequest(new { error = "rows must not be empty" });
 
@@ -826,9 +826,9 @@ public static class ReportingLineEndpoints
             // this endpoint previously called NEITHER scope validator, so the actor's scope was
             // never bound to the declared tree root. Require that an ADMIN-grade scope
             // (LocalAdmin floor — a GlobalAdmin's GLOBAL scope clears it; a mixed-role non-admin
-            // scope does not) actually covers request.TreeRootOrgId before any write.
+            // scope does not) actually covers request.OrganisationId before any write.
             var (treeAllowed, treeReason) = await scopeValidator.ValidateOrgAccessAsync(
-                actor, request.TreeRootOrgId, StatsTidRoles.LocalAdmin, ct);
+                actor, request.OrganisationId, StatsTidRoles.LocalAdmin, ct);
             if (!treeAllowed)
                 return Results.Json(new { error = "Access denied", reason = treeReason }, statusCode: 403);
 
@@ -881,12 +881,12 @@ public static class ReportingLineEndpoints
                 }
             }
 
-            // Resolve unique org IDs to their Organisation (the advisory key + tree_root_org_id).
+            // Resolve unique org IDs to their Organisation (the advisory key + organisation_id).
             // S95 / ADR-035 slice 4: the tree-WALK is RETIRED — post-S92 a user's Organisation IS their
-            // primary_org_id (the former ResolveTreeRootOrgIdAsync always returned the input org), so the
+            // primary_org_id (the former ResolveOrganisationIdAsync always returned the input org), so the
             // mapping is the identity. Every primary_org_id read from an active user above is a real org,
             // so all rows resolve; the per-row "cannot resolve" guard below is now defensively unreachable
-            // (kept for shape parity with the single-assign path). The batch request.TreeRootOrgId field
+            // (kept for shape parity with the single-assign path). The batch request.OrganisationId field
             // stays — by construction every row is single-Organisation.
             var uniqueOrgIds = new HashSet<string>(userLookup.Values.Select(v => v.PrimaryOrgId), StringComparer.Ordinal);
             var orgToTreeRoot = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -924,15 +924,15 @@ public static class ReportingLineEndpoints
                     continue;
                 }
 
-                // Both resolve to the same tree root as treeRootOrgId?
+                // Both resolve to the same tree root as organisationId?
                 if (!orgToTreeRoot.TryGetValue(empInfo.PrimaryOrgId, out var empTreeRoot))
                 {
                     errors.Add(new { row = i, employeeId = row.EmployeeId, managerId = row.ManagerId, reason = $"Cannot resolve tree root for employee '{row.EmployeeId}'" });
                     continue;
                 }
-                if (empTreeRoot != request.TreeRootOrgId)
+                if (empTreeRoot != request.OrganisationId)
                 {
-                    errors.Add(new { row = i, employeeId = row.EmployeeId, managerId = row.ManagerId, reason = $"Employee '{row.EmployeeId}' belongs to tree '{empTreeRoot}', not '{request.TreeRootOrgId}'" });
+                    errors.Add(new { row = i, employeeId = row.EmployeeId, managerId = row.ManagerId, reason = $"Employee '{row.EmployeeId}' belongs to tree '{empTreeRoot}', not '{request.OrganisationId}'" });
                     continue;
                 }
 
@@ -941,9 +941,9 @@ public static class ReportingLineEndpoints
                     errors.Add(new { row = i, employeeId = row.EmployeeId, managerId = row.ManagerId, reason = $"Cannot resolve tree root for manager '{row.ManagerId}'" });
                     continue;
                 }
-                if (mgrTreeRoot != request.TreeRootOrgId)
+                if (mgrTreeRoot != request.OrganisationId)
                 {
-                    errors.Add(new { row = i, employeeId = row.EmployeeId, managerId = row.ManagerId, reason = $"Manager '{row.ManagerId}' belongs to tree '{mgrTreeRoot}', not '{request.TreeRootOrgId}'" });
+                    errors.Add(new { row = i, employeeId = row.EmployeeId, managerId = row.ManagerId, reason = $"Manager '{row.ManagerId}' belongs to tree '{mgrTreeRoot}', not '{request.OrganisationId}'" });
                     continue;
                 }
             }
@@ -962,13 +962,13 @@ public static class ReportingLineEndpoints
                 {
                     // S74-7403 B1 total lock order, step 1: take the tree advisory lock ONCE upfront on
                     // the batch's declared tree root, BEFORE any user row is pinned. All rows were
-                    // pre-validated to resolve to request.TreeRootOrgId, so the whole import belongs to
+                    // pre-validated to resolve to request.OrganisationId, so the whole import belongs to
                     // one tree and serializes through this one lock — bringing the bulk path to parity
                     // with the guarded single assigns under the SAME global order (advisory → user rows
                     // id-ordered FOR UPDATE → cycle guard → slot): the per-row ValidateSameOrganisationAsync
                     // below pins each edge's user pair AFTER this advisory, so a concurrent same-tree
                     // assign (also advisory-first) cannot deadlock against the import.
-                    await ReportingLineRepository.AcquireTreeLockAsync(conn, tx, request.TreeRootOrgId, ct);
+                    await ReportingLineRepository.AcquireTreeLockAsync(conn, tx, request.OrganisationId, ct);
 
                     foreach (var row in request.Rows)
                     {
@@ -1006,13 +1006,13 @@ public static class ReportingLineEndpoints
                         //    (CrossOrganisationAssignmentException otherwise), AND pins BOTH rows FOR UPDATE in
                         //    id-order (B1 — no cross-tree-edge race; under the held advisory, step 2 of the
                         //    order); either exception propagates and rolls the WHOLE batch back. We
-                        //    additionally pin the resolved root to the import's declared TreeRootOrgId (a
+                        //    additionally pin the resolved root to the import's declared OrganisationId (a
                         //    same-tree pair that drifted to ANOTHER tree must not be silently imported).
                         var rowTreeRoot = await repo.ValidateSameOrganisationAsync(conn, tx, row.EmployeeId, row.ManagerId, ct);
-                        if (!string.Equals(rowTreeRoot, request.TreeRootOrgId, StringComparison.Ordinal))
+                        if (!string.Equals(rowTreeRoot, request.OrganisationId, StringComparison.Ordinal))
                             throw new CrossOrganisationAssignmentException(
                                 $"Row employee '{row.EmployeeId}'/manager '{row.ManagerId}' now resolves to tree " +
-                                $"'{rowTreeRoot}', not the import's declared tree '{request.TreeRootOrgId}'.");
+                                $"'{rowTreeRoot}', not the import's declared tree '{request.OrganisationId}'.");
 
                         if (current is not null && current.ManagerId == row.ManagerId)
                         {
@@ -1033,7 +1033,7 @@ public static class ReportingLineEndpoints
                             ReportingLineId = Guid.NewGuid(),
                             EmployeeId = row.EmployeeId,
                             ManagerId = row.ManagerId,
-                            TreeRootOrgId = request.TreeRootOrgId,
+                            OrganisationId = request.OrganisationId,
                             Relationship = "PRIMARY",
                             EffectiveFrom = effectiveFrom,
                             EffectiveTo = null,
@@ -1078,14 +1078,14 @@ public static class ReportingLineEndpoints
                     var batchEvent = new ReportingLineBulkImported
                     {
                         BatchId = Guid.NewGuid(),
-                        TreeRootOrgId = request.TreeRootOrgId,
+                        OrganisationId = request.OrganisationId,
                         LineCount = imported + superseded,
                         Source = "HR_IMPORT",
                         ActorId = actor.ActorId,
                         ActorRole = actor.ActorRole,
                         CorrelationId = actor.CorrelationId,
                     };
-                    await outbox.EnqueueAsync(conn, tx, $"reporting-line-import-{request.TreeRootOrgId}", batchEvent, ct);
+                    await outbox.EnqueueAsync(conn, tx, $"reporting-line-import-{request.OrganisationId}", batchEvent, ct);
 
                     await tx.CommitAsync(ct);
                 }
@@ -1335,7 +1335,7 @@ public static class ReportingLineEndpoints
                             ReportingLineId = Guid.NewGuid(),
                             EmployeeId = rep.EmployeeId,
                             ManagerId = replacement,
-                            TreeRootOrgId = repTreeRoot,
+                            OrganisationId = repTreeRoot,
                             Relationship = "PRIMARY",
                             EffectiveFrom = today,
                             EffectiveTo = null,
@@ -1361,7 +1361,7 @@ public static class ReportingLineEndpoints
                             EmployeeId = rep.EmployeeId,
                             PreviousManagerId = rep.ManagerId,
                             NewManagerId = persisted.ManagerId,
-                            TreeRootOrgId = rep.TreeRootOrgId,
+                            OrganisationId = rep.OrganisationId,
                             EffectiveFrom = rep.EffectiveFrom,
                             EffectiveTo = persisted.EffectiveFrom,
                             RowVersion = rep.Version + 1,
@@ -1374,7 +1374,7 @@ public static class ReportingLineEndpoints
                             ReportingLineId = persisted.ReportingLineId,
                             EmployeeId = persisted.EmployeeId,
                             ManagerId = persisted.ManagerId,
-                            TreeRootOrgId = persisted.TreeRootOrgId,
+                            OrganisationId = persisted.OrganisationId,
                             Relationship = persisted.Relationship,
                             EffectiveFrom = persisted.EffectiveFrom,
                             Source = persisted.Source,
@@ -1400,7 +1400,7 @@ public static class ReportingLineEndpoints
                             EmployeeId = closed.EmployeeId,
                             PreviousManagerId = closed.ManagerId,
                             NewManagerId = null,
-                            TreeRootOrgId = closed.TreeRootOrgId,
+                            OrganisationId = closed.OrganisationId,
                             EffectiveFrom = closed.EffectiveFrom,
                             EffectiveTo = closed.EffectiveTo!.Value,
                             RowVersion = closed.Version,
@@ -1426,7 +1426,7 @@ public static class ReportingLineEndpoints
                             EmployeeId = closed.EmployeeId,
                             PreviousManagerId = closed.ManagerId,
                             NewManagerId = null,
-                            TreeRootOrgId = closed.TreeRootOrgId,
+                            OrganisationId = closed.OrganisationId,
                             EffectiveFrom = closed.EffectiveFrom,
                             EffectiveTo = closed.EffectiveTo!.Value,
                             RowVersion = closed.Version,
@@ -1452,7 +1452,7 @@ public static class ReportingLineEndpoints
                             VikarUserId = closed.VikarUserId,
                             UntilDate = closed.UntilDate,
                             Reason = closed.Reason,
-                            TreeRootOrgId = closed.TreeRootOrgId,
+                            OrganisationId = closed.OrganisationId,
                             EffectiveTo = closed.EffectiveTo!.Value,
                             EndReason = "APPROVER_REMOVED",
                             RowVersion = closed.Version,
@@ -1467,7 +1467,7 @@ public static class ReportingLineEndpoints
                             ActorPrimaryOrgId: actor.OrgId,
                             CorrelationId: actor.CorrelationId,
                             OccurredAt: new DateTimeOffset(endedEvent.OccurredAt),
-                            ResolvedTargetOrgId: endedEvent.TreeRootOrgId);
+                            ResolvedTargetOrgId: endedEvent.OrganisationId);
                         var endedAuditRow = vikarEndedAuditMapper.Map(endedEvent, endedAuditCtx);
                         await auditRepo.InsertAsync(conn, tx, endedEvent.EventId, endedOutboxId,
                             endedEvent.EventType, endedAuditRow, endedAuditCtx, ct);
@@ -1596,7 +1596,7 @@ public static class ReportingLineEndpoints
 
         // ═══════════════════════════════════════════
         // S94 / TASK-9402 (ADR-035 OQ6): the enforcement-mode admin surface (GET + PUT
-        // /api/admin/reporting-lines/tree/{treeRootOrgId}/settings) was RETIRED here — the
+        // /api/admin/reporting-lines/tree/{organisationId}/settings) was RETIRED here — the
         // REQUIRED-mode enforcement machinery is gone end-to-end (table + repo + 428 gate). The
         // flat-authority model (CanApprove = edge OR HR/Admin-over-emp-Org) needs no per-tree toggle.
         // ═══════════════════════════════════════════
@@ -1705,7 +1705,7 @@ public static class ReportingLineEndpoints
         // (Step 1b below) detects a concurrent cross-styrelse transfer drifted the advisory key, the
         // attempt rolls back (no side effects — the drift check precedes every FOR UPDATE/mutation) and
         // re-runs on a fresh tx re-keyed on the manager's NEW root. (The /delegate DELETE/revoke keys on
-        // the PERSISTED tree_root_org_id for revoke-safety and is deliberately NOT re-keyed.)
+        // the PERSISTED organisation_id for revoke-safety and is deliberately NOT re-keyed.)
         await TreeRootDriftRetry.RunAsync(async () =>
         {
             var actor = context.GetActorContext();
@@ -1752,7 +1752,7 @@ public static class ReportingLineEndpoints
             //    vikar effectively covers now (no admin ACTING superseding them); skipped =
             //    reports already held by an admin (non-self) ACTING — matching the old skip at
             //    the per-report fan-out (Codex W3).
-            // tree_root_org_id: the actor's reporting tree. The AUTHORITATIVE root comes from the
+            // organisation_id: the actor's reporting tree. The AUTHORITATIVE root comes from the
             // in-tx ValidateSameOrganisationAsync below (S76 / TASK-7601 D15 hardening) — NOT a pre-tx read.
             int delegated = 0, skipped = 0;
             ManagerVikar createdVikar;
@@ -1796,7 +1796,7 @@ public static class ReportingLineEndpoints
                     // advisory, pinning BOTH user rows FOR UPDATE so neither party can be transferred
                     // between the check and the INSERT (the cross-tree-edge race). Returns the
                     // AUTHORITATIVE common tree root used for the row + event.
-                    var treeRootOrgId = await repo.ValidateSameOrganisationAsync(conn, tx, actorId, request.ActingManagerId, ct);
+                    var organisationId = await repo.ValidateSameOrganisationAsync(conn, tx, actorId, request.ActingManagerId, ct);
 
                     // Step 3: cycle guard (D15) — a report/descendant of the actor cannot be the vikar
                     // (it would let a subordinate gain approve-authority over the actor's own reports
@@ -1884,7 +1884,7 @@ public static class ReportingLineEndpoints
                         VikarUserId = request.ActingManagerId,
                         UntilDate = effectiveTo,               // INCLUSIVE "til og med" (R4a)
                         Reason = "ANDET",                       // DelegateRequest carries no reason → default
-                        TreeRootOrgId = treeRootOrgId,
+                        OrganisationId = organisationId,
                         Version = 1,
                         CreatedBy = actorId,
                         CreatedAt = DateTime.UtcNow,
@@ -1899,7 +1899,7 @@ public static class ReportingLineEndpoints
                         VikarUserId = createdVikar.VikarUserId,
                         UntilDate = createdVikar.UntilDate,
                         Reason = createdVikar.Reason,
-                        TreeRootOrgId = createdVikar.TreeRootOrgId,
+                        OrganisationId = createdVikar.OrganisationId,
                         RowVersion = createdVikar.Version,
                         ActorId = actor.ActorId,
                         ActorRole = actor.ActorRole,
@@ -1908,14 +1908,14 @@ public static class ReportingLineEndpoints
                     // ADR-018 D3 + ADR-026 D2: event + audit-projection row + state in ONE tx.
                     // EnqueueAndReturnIdAsync captures the outbox_id so audit_projection.outbox_id
                     // aligns with the global outbox sequence; the mapper derives target_org_id from
-                    // the event's tree_root_org_id (TENANT_TARGETED).
+                    // the event's organisation_id (TENANT_TARGETED).
                     var createdOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"reporting-line-{actorId}", createdEvent, ct);
                     var createdAuditCtx = new AuditProjectionContext(
                         ActorId: actor.ActorId,
                         ActorPrimaryOrgId: actor.OrgId,
                         CorrelationId: actor.CorrelationId,
                         OccurredAt: new DateTimeOffset(createdEvent.OccurredAt),
-                        ResolvedTargetOrgId: createdEvent.TreeRootOrgId);
+                        ResolvedTargetOrgId: createdEvent.OrganisationId);
                     var createdAuditRow = vikarCreatedAuditMapper.Map(createdEvent, createdAuditCtx);
                     await auditRepo.InsertAsync(conn, tx, createdEvent.EventId, createdOutboxId, createdEvent.EventType, createdAuditRow, createdAuditCtx, ct);
 
@@ -1976,7 +1976,7 @@ public static class ReportingLineEndpoints
         // took NO advisory at all (just a RepeatableRead snapshot), so a concurrent cross-styrelse
         // transfer of the self-delegating manager, or a key-sharing in-tree mutator, could proceed with
         // no mutual exclusion against the revoke. It now ALWAYS locks the PERSISTED
-        // manager_vikar.tree_root_org_id (the immutable revoke-authority anchor — survives an
+        // manager_vikar.organisation_id (the immutable revoke-authority anchor — survives an
         // inactive/transferred subject) and, when derivable, the subject's CURRENT root too (drift-
         // guarded). The drift guard wraps the body in TreeRootDriftRetry.RunAsync (a concurrent transfer
         // committing mid-acquire → rollback + retry on a fresh tx). The cheap existence probe is taken
@@ -2023,7 +2023,7 @@ public static class ReportingLineEndpoints
                     // (1) Take the revoke-safe tree advisories FIRST (before any read/mutation): the
                     //     persisted root ALWAYS + the subject's current root when derivable (drift-
                     //     guarded). Serializes this revoke against in-tree mutators / a transfer.
-                    await repo.AcquireRevokeTreeLocksAsync(conn, tx, probe.TreeRootOrgId, actorId, ct);
+                    await repo.AcquireRevokeTreeLocksAsync(conn, tx, probe.OrganisationId, actorId, ct);
 
                     // S74 storage cutover: close the actor's single active manager_vikar row + emit
                     // ManagerVikarEnded, one atomic tx (ADR-018 D3). revokedCount stays in the response
@@ -2068,7 +2068,7 @@ public static class ReportingLineEndpoints
                         VikarUserId = closed.VikarUserId,
                         UntilDate = closed.UntilDate,
                         Reason = closed.Reason,
-                        TreeRootOrgId = closed.TreeRootOrgId,
+                        OrganisationId = closed.OrganisationId,
                         EffectiveTo = closed.EffectiveTo!.Value,
                         EndReason = "REVOKED",
                         RowVersion = closed.Version,
@@ -2083,7 +2083,7 @@ public static class ReportingLineEndpoints
                         ActorPrimaryOrgId: actor.OrgId,
                         CorrelationId: actor.CorrelationId,
                         OccurredAt: new DateTimeOffset(endedEvent.OccurredAt),
-                        ResolvedTargetOrgId: endedEvent.TreeRootOrgId);
+                        ResolvedTargetOrgId: endedEvent.OrganisationId);
                     var endedAuditRow = vikarEndedAuditMapper.Map(endedEvent, endedAuditCtx);
                     await auditRepo.InsertAsync(conn, tx, endedEvent.EventId, endedOutboxId, endedEvent.EventType, endedAuditRow, endedAuditCtx, ct);
 
@@ -2176,7 +2176,7 @@ public static class ReportingLineEndpoints
         // S78 R9 — bounded drift-retry wrapper (see Endpoint 1). The vikar-CREATE keys on the absent
         // manager's CURRENT tree root (an employee-current derivation, like the assigns) — so it carries
         // the same S74-7403 stale-key risk and gets the drift guard. (The vikar-REVOKE deliberately keys
-        // on the PERSISTED tree_root_org_id for revoke-safety and is NOT re-keyed — see that endpoint.)
+        // on the PERSISTED organisation_id for revoke-safety and is NOT re-keyed — see that endpoint.)
         await TreeRootDriftRetry.RunAsync(async () =>
         {
             var actor = context.GetActorContext();
@@ -2294,7 +2294,7 @@ public static class ReportingLineEndpoints
                     //      the advisory, pinning BOTH user rows FOR UPDATE (the cross-tree-edge race).
                     //      Returns the AUTHORITATIVE common tree root for the row + event. A cross-tree
                     //      vikar → CrossOrganisationAssignmentException → 400.
-                    var treeRootOrgId = await repo.ValidateSameOrganisationAsync(conn, tx, managerId, request.VikarUserId, ct);
+                    var organisationId = await repo.ValidateSameOrganisationAsync(conn, tx, managerId, request.VikarUserId, ct);
 
                     // (iv) Step 3: cycle guard — a report/descendant of the manager cannot be the vikar
                     //      (a subordinate must not gain approve-authority over their own manager's
@@ -2309,7 +2309,7 @@ public static class ReportingLineEndpoints
                         VikarUserId = request.VikarUserId,         // the stand-in
                         UntilDate = effectiveTo,                   // INCLUSIVE "til og med" (R4a)
                         Reason = reason,
-                        TreeRootOrgId = treeRootOrgId,
+                        OrganisationId = organisationId,
                         Version = 1,
                         CreatedBy = actor.ActorId,                 // the ADMIN created it (audit trail)
                         CreatedAt = DateTime.UtcNow,
@@ -2326,7 +2326,7 @@ public static class ReportingLineEndpoints
                         VikarUserId = createdVikar.VikarUserId,
                         UntilDate = createdVikar.UntilDate,
                         Reason = createdVikar.Reason,
-                        TreeRootOrgId = createdVikar.TreeRootOrgId,
+                        OrganisationId = createdVikar.OrganisationId,
                         RowVersion = createdVikar.Version,
                         ActorId = actor.ActorId,                   // the ADMIN, not the manager
                         ActorRole = actor.ActorRole,
@@ -2335,14 +2335,14 @@ public static class ReportingLineEndpoints
                     // (vi) ADR-018 D3 + ADR-026 D2: event + audit row + state in ONE tx. The audit
                     //      context actor = the ADMIN (actor.ActorId / actor.OrgId), NOT {managerId} —
                     //      the S71 lesson (the audit row attributes the operator's org, while the
-                    //      TARGET org stays the manager's tree via the event's TreeRootOrgId).
+                    //      TARGET org stays the manager's tree via the event's OrganisationId).
                     var createdOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"reporting-line-{managerId}", createdEvent, ct);
                     var createdAuditCtx = new AuditProjectionContext(
                         ActorId: actor.ActorId,
                         ActorPrimaryOrgId: actor.OrgId,
                         CorrelationId: actor.CorrelationId,
                         OccurredAt: new DateTimeOffset(createdEvent.OccurredAt),
-                        ResolvedTargetOrgId: createdEvent.TreeRootOrgId);
+                        ResolvedTargetOrgId: createdEvent.OrganisationId);
                     var createdAuditRow = vikarCreatedAuditMapper.Map(createdEvent, createdAuditCtx);
                     await auditRepo.InsertAsync(conn, tx, createdEvent.EventId, createdOutboxId, createdEvent.EventType, createdAuditRow, createdAuditCtx, ct);
 
@@ -2387,13 +2387,13 @@ public static class ReportingLineEndpoints
         // Endpoint 15: DELETE /api/admin/reporting-lines/{managerId}/vikar — admin revokes the
         // manager's active vikar (S76 / TASK-7601, Deliverable A). REVOKE-SAFE: it must stay
         // possible to revoke even after the manager or the vikar has gone INACTIVE — so the
-        // revoke-authority anchor is the PERSISTED manager_vikar.tree_root_org_id (NOT
+        // revoke-authority anchor is the PERSISTED manager_vikar.organisation_id (NOT
         // ValidateSameOrganisationAsync, which requires ACTIVE users).
         //
         // S76 / TASK-7601 fix-forward (Step-5a c1 B3 + WARNING): the authorize→close pair is now
         // ATOMIC and in-lock. The active row is read FOR UPDATE INSIDE the tx under the tree
         // advisory lock, the actor is authorized against THAT EXACT row's persisted
-        // tree_root_org_id (the SOLE anchor — the old "current-manager-org OR persisted-root"
+        // organisation_id (the SOLE anchor — the old "current-manager-org OR persisted-root"
         // fallback is REMOVED; it widened authority across two domains), and only then is the same
         // pinned row closed. A concurrent close/recreate cannot swap the row between authorize and
         // close. Required: (a) the actor's admin scope covers the persisted tree root + (b) an
@@ -2451,7 +2451,7 @@ public static class ReportingLineEndpoints
                     //     revoke-safe anchor; survives an inactive manager/vikar) ALWAYS + the manager's
                     //     CURRENT root when derivable (drift-guarded). Serializes the revoke against
                     //     concurrent tree mutations (assigns / recreates) AND a live transfer.
-                    await repo.AcquireRevokeTreeLocksAsync(conn, tx, probe.TreeRootOrgId, managerId, ct);
+                    await repo.AcquireRevokeTreeLocksAsync(conn, tx, probe.OrganisationId, managerId, ct);
 
                     // (2) Re-read the active row FOR UPDATE under the lock — THE authoritative row. A
                     //     concurrent close/recreate that committed before this tx took the lock is seen;
@@ -2464,13 +2464,13 @@ public static class ReportingLineEndpoints
                         return Results.NotFound(new { error = "No active vikar to revoke for this manager" });
                     }
 
-                    // (3) Authorize against the PINNED row's PERSISTED tree_root_org_id — the SOLE
+                    // (3) Authorize against the PINNED row's PERSISTED organisation_id — the SOLE
                     //     revoke-authority anchor (WARNING: the prior "current-org OR persisted-root"
                     //     fallback is removed). The actor's scope must cover this exact tree root
                     //     (FLOORED at LocalHR — S91 TASK-9102, tree-page surface opened to LocalHR: a
                     //     below-HR scope covering the styrelse cannot revoke. Containment unchanged).
                     var (treeAllowed, treeReason) = await scopeValidator.ValidateOrgAccessAsync(
-                        actor, activeVikar.TreeRootOrgId, StatsTidRoles.LocalHR, ct);
+                        actor, activeVikar.OrganisationId, StatsTidRoles.LocalHR, ct);
                     if (!treeAllowed)
                     {
                         await tx.RollbackAsync(ct);
@@ -2496,7 +2496,7 @@ public static class ReportingLineEndpoints
                         VikarUserId = closed.VikarUserId,
                         UntilDate = closed.UntilDate,
                         Reason = closed.Reason,
-                        TreeRootOrgId = closed.TreeRootOrgId,        // the PINNED row's persisted root
+                        OrganisationId = closed.OrganisationId,        // the PINNED row's persisted root
                         EffectiveTo = closed.EffectiveTo!.Value,
                         EndReason = "REVOKED",
                         RowVersion = closed.Version,
@@ -2510,7 +2510,7 @@ public static class ReportingLineEndpoints
                         ActorPrimaryOrgId: actor.OrgId,                // the ADMIN's org (S71 lesson)
                         CorrelationId: actor.CorrelationId,
                         OccurredAt: new DateTimeOffset(endedEvent.OccurredAt),
-                        ResolvedTargetOrgId: endedEvent.TreeRootOrgId);
+                        ResolvedTargetOrgId: endedEvent.OrganisationId);
                     var endedAuditRow = vikarEndedAuditMapper.Map(endedEvent, endedAuditCtx);
                     await auditRepo.InsertAsync(conn, tx, endedEvent.EventId, endedOutboxId, endedEvent.EventType, endedAuditRow, endedAuditCtx, ct);
 
@@ -2548,7 +2548,7 @@ public static class ReportingLineEndpoints
         ReportingLineId = reader.GetGuid(reader.GetOrdinal("reporting_line_id")),
         EmployeeId = reader.GetString(reader.GetOrdinal("employee_id")),
         ManagerId = reader.GetString(reader.GetOrdinal("manager_id")),
-        TreeRootOrgId = reader.GetString(reader.GetOrdinal("tree_root_org_id")),
+        OrganisationId = reader.GetString(reader.GetOrdinal("organisation_id")),
         Relationship = reader.GetString(reader.GetOrdinal("relationship")),
         EffectiveFrom = DateOnly.FromDateTime(reader.GetDateTime(reader.GetOrdinal("effective_from"))),
         EffectiveTo = reader.IsDBNull(reader.GetOrdinal("effective_to"))
@@ -2804,7 +2804,7 @@ public static class ReportingLineEndpoints
         reportingLineId = line.ReportingLineId,
         employeeId = line.EmployeeId,
         managerId = line.ManagerId,
-        treeRootOrgId = line.TreeRootOrgId,
+        organisationId = line.OrganisationId,
         relationship = line.Relationship,
         effectiveFrom = line.EffectiveFrom,
         effectiveTo = line.EffectiveTo,
@@ -2832,7 +2832,7 @@ public static class ReportingLineEndpoints
 
     // ── Import DTOs ──
 
-    private sealed record ImportReportingLinesRequest(string TreeRootOrgId, List<ImportRow> Rows);
+    private sealed record ImportReportingLinesRequest(string OrganisationId, List<ImportRow> Rows);
     private sealed record ImportRow(string EmployeeId, string ManagerId, string EffectiveFrom);
 
     // ── Self-service delegation DTOs ──

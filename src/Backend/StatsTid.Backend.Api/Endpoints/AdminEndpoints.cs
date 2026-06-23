@@ -785,7 +785,7 @@ public static class AdminEndpoints
                         ReportingLineId = Guid.NewGuid(),
                         EmployeeId = request.UserId,
                         ManagerId = request.ApproverId!,
-                        TreeRootOrgId = rlTreeRoot,
+                        OrganisationId = rlTreeRoot,
                         Relationship = "PRIMARY",
                         EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow),
                         EffectiveTo = null,
@@ -817,7 +817,7 @@ public static class AdminEndpoints
                         ReportingLineId = persistedLine.ReportingLineId,
                         EmployeeId = persistedLine.EmployeeId,
                         ManagerId = persistedLine.ManagerId,
-                        TreeRootOrgId = persistedLine.TreeRootOrgId,
+                        OrganisationId = persistedLine.OrganisationId,
                         Relationship = persistedLine.Relationship,
                         EffectiveFrom = persistedLine.EffectiveFrom,
                         Source = persistedLine.Source,
@@ -1522,7 +1522,7 @@ public static class AdminEndpoints
                             ReportingLineId = line.ReportingLineId,
                             EmployeeId = line.EmployeeId,
                             ManagerId = line.ManagerId,
-                            TreeRootOrgId = line.TreeRootOrgId,
+                            OrganisationId = line.OrganisationId,
                             ActorId = actor.ActorId,
                             ActorRole = actor.ActorRole,
                             CorrelationId = actor.CorrelationId,
@@ -1986,15 +1986,15 @@ public static class AdminEndpoints
         }).RequireAuthorization("LocalAdminOrAbove");
 
         // ═══════════════════════════════════════════
-        // S74-7404 R11a — GET /api/admin/reporting-lines/tree/{treeRootOrgId}/period-status
+        // S74-7404 R11a — GET /api/admin/reporting-lines/tree/{organisationId}/period-status
         //   Per-styrelse period-status projection for the redesigned Medarbejder-administration
         //   tree (FE Phases 2-3): each employee's last-closed-month status (OPEN/SUBMITTED/
         //   APPROVED) for the status badge + the per-manager pending count for the filter tiles.
         //   Read-only / additive. Scope: LocalAdminOrAbove + org-scope covers the tree root
-        //   (mirrors the sibling GET .../tree/{treeRootOrgId}).
+        //   (mirrors the sibling GET .../tree/{organisationId}).
         // ═══════════════════════════════════════════
-        app.MapGet("/api/admin/reporting-lines/tree/{treeRootOrgId}/period-status", async (
-            string treeRootOrgId,
+        app.MapGet("/api/admin/reporting-lines/tree/{organisationId}/period-status", async (
+            string organisationId,
             ApprovalPeriodRepository approvalRepo,
             OrganizationRepository orgRepo,
             OrgScopeValidator scopeValidator,
@@ -2005,15 +2005,15 @@ public static class AdminEndpoints
 
             // Scope must cover the tree-root org (same gate as the tree read). S76 B1:
             // LocalAdminOrAbove policy → LocalAdmin floor.
-            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, treeRootOrgId, StatsTidRoles.LocalAdmin, ct);
+            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, organisationId, StatsTidRoles.LocalAdmin, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
             // Resolve the tree-root org → its materialized_path prefix (the styrelse subtree the
             // projection is scoped over).
-            var treeRootOrg = await orgRepo.GetByIdAsync(treeRootOrgId, ct);
+            var treeRootOrg = await orgRepo.GetByIdAsync(organisationId, ct);
             if (treeRootOrg is null)
-                return Results.NotFound(new { error = $"Organization {treeRootOrgId} not found" });
+                return Results.NotFound(new { error = $"Organization {organisationId} not found" });
 
             var projection = await approvalRepo.GetPeriodStatusProjectionForTreeAsync(
                 treeRootOrg.MaterializedPath, ct);
@@ -2031,7 +2031,7 @@ public static class AdminEndpoints
         }).RequireAuthorization("LocalAdminOrAbove");
 
         // ═══════════════════════════════════════════
-        // S75-7500 (R1-R3) — GET /api/admin/reporting-lines/tree/{treeRootOrgId}/medarbejdere
+        // S75-7500 (R1-R3) — GET /api/admin/reporting-lines/tree/{organisationId}/medarbejdere
         //   The consolidated medarbejder-roster read backing the redesigned Medarbejder-
         //   administration STRUCTURAL tree (FE Phase 2, tasks 7501/7502 consume this contract).
         //   Per active styrelse user: { employeeId, displayName, enhedLabel (?? primaryOrgName),
@@ -2041,10 +2041,10 @@ public static class AdminEndpoints
         //   null), isRoot, isOrphan (the R3 deterministic rule) } + the styrelse
         //   pendingCountByManager (the existing S74 gated tally, reused as-is). Read-only /
         //   additive. Scope: LocalAdminOrAbove + org-scope covers the tree root (mirrors the
-        //   sibling GET .../tree/{treeRootOrgId} + .../period-status).
+        //   sibling GET .../tree/{organisationId} + .../period-status).
         // ═══════════════════════════════════════════
-        app.MapGet("/api/admin/reporting-lines/tree/{treeRootOrgId}/medarbejdere", async (
-            string treeRootOrgId,
+        app.MapGet("/api/admin/reporting-lines/tree/{organisationId}/medarbejdere", async (
+            string organisationId,
             ApprovalPeriodRepository approvalRepo,
             OrganizationRepository orgRepo,
             OrgScopeValidator scopeValidator,
@@ -2056,15 +2056,15 @@ public static class AdminEndpoints
             // Scope must cover the tree-root org (same gate as the tree + period-status reads).
             // S91 TASK-9102: tree-page roster opened to LocalHR — HROrAbove policy → LocalHR floor.
             // Org-scope containment unchanged (HR sees only its own org subtree's roster).
-            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, treeRootOrgId, StatsTidRoles.LocalHR, ct);
+            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, organisationId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
             // Resolve the tree-root org → its materialized_path prefix (the styrelse subtree the
             // roster is scoped over).
-            var treeRootOrg = await orgRepo.GetByIdAsync(treeRootOrgId, ct);
+            var treeRootOrg = await orgRepo.GetByIdAsync(organisationId, ct);
             if (treeRootOrg is null)
-                return Results.NotFound(new { error = $"Organization {treeRootOrgId} not found" });
+                return Results.NotFound(new { error = $"Organization {organisationId} not found" });
 
             var roster = await approvalRepo.GetMedarbejderRosterForTreeAsync(
                 treeRootOrg.MaterializedPath, ct);

@@ -7,7 +7,7 @@ import { apiClient, type ApiResult } from '../lib/api'
 // locally, the call wrapped in a useCallback'd fetcher returning ApiResult<T>.
 //
 // The served contract is shipped by 7500 (auth handled server-side):
-//   GET /api/admin/reporting-lines/tree/{treeRootOrgId}/medarbejdere
+//   GET /api/admin/reporting-lines/tree/{organisationId}/medarbejdere
 //
 // The tree is STRUCTURAL: each person sits under their assigned PRIMARY manager
 // (`structuralApproverId`, a raw edge — NOT a resolver projection). `outgoingVikar`
@@ -53,9 +53,9 @@ export interface MedarbejderRosterResponse {
 
 export function useMedarbejderRoster() {
   const fetchRoster = useCallback(
-    async (treeRootOrgId: string): Promise<ApiResult<MedarbejderRosterResponse>> => {
+    async (organisationId: string): Promise<ApiResult<MedarbejderRosterResponse>> => {
       return apiClient.get<MedarbejderRosterResponse>(
-        `/api/admin/reporting-lines/tree/${encodeURIComponent(treeRootOrgId)}/medarbejdere`,
+        `/api/admin/reporting-lines/tree/${encodeURIComponent(organisationId)}/medarbejdere`,
       )
     },
     [],

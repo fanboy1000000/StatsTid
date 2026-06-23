@@ -9,7 +9,7 @@ export interface ReportingLineEntry {
   reportingLineId: string
   employeeId: string
   managerId: string
-  treeRootOrgId: string
+  organisationId: string
   relationship: string  // 'PRIMARY' | 'ACTING'
   effectiveFrom: string
   effectiveTo: string | null

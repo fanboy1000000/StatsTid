@@ -15,7 +15,7 @@ namespace StatsTid.Tests.Regression.Approval;
 /// <summary>
 /// S75-7500 (R1-R3) — the consolidated medarbejder-roster read the redesigned Medarbejder-
 /// administration STRUCTURAL tree (FE Phase 2) consumes:
-/// <c>GET /api/admin/reporting-lines/tree/{treeRootOrgId}/medarbejdere</c>
+/// <c>GET /api/admin/reporting-lines/tree/{organisationId}/medarbejdere</c>
 /// (<see cref="ApprovalPeriodRepository.GetMedarbejderRosterForTreeAsync"/>).
 ///
 /// <para>
@@ -157,7 +157,7 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
         ReportingLineId = Guid.Empty,
         EmployeeId = employeeId,
         ManagerId = managerId,
-        TreeRootOrgId = TreeRootSty02,
+        OrganisationId = TreeRootSty02,
         Relationship = "PRIMARY",
         EffectiveFrom = new DateOnly(2026, 1, 1),
         Source = "MANUAL",
@@ -239,7 +239,7 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
         await using var cmd = new NpgsqlCommand(
             """
             INSERT INTO manager_vikar
-                (absent_approver_id, vikar_user_id, until_date, reason, tree_root_org_id, version, created_by, effective_to)
+                (absent_approver_id, vikar_user_id, until_date, reason, organisation_id, version, created_by, effective_to)
             VALUES (@absent, @vikar, @until, @reason, @root, 1, 'TEST', NULL)
             """, conn);
         cmd.Parameters.AddWithValue("absent", absentApproverId);

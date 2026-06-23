@@ -19,7 +19,7 @@ public sealed class ManagerVikarEnded : DomainEventBase
     public required string VikarUserId { get; init; }
     public required DateOnly UntilDate { get; init; }
     public required string Reason { get; init; }
-    public required string TreeRootOrgId { get; init; }
+    public required string OrganisationId { get; init; }
     /// <summary>The date the vikar was closed (effective_to).</summary>
     public required DateOnly EffectiveTo { get; init; }
     /// <summary>

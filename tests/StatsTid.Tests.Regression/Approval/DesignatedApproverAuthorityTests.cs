@@ -17,7 +17,7 @@ namespace StatsTid.Tests.Regression.Approval;
 /// S74 / ADR-027 D4 amendment (SPRINT-74 R5/R6/R7, TASK-7402) — the A3 approve-authority
 /// expansion: the effective designated-approver edge now GRANTS approve / reject / reopen
 /// authority and my-reports VISIBILITY for an employee anywhere in the same
-/// <c>tree_root_org_id</c> (OQ-3a, a P7 privilege expansion). The load-bearing invariant proven
+/// <c>organisation_id</c> (OQ-3a, a P7 privilege expansion). The load-bearing invariant proven
 /// here is <b>see == act</b>: every period the my-reports dashboard surfaces is
 /// approvable/reopenable via the SAME canonical predicate, and ADR-027 D2 (cross-tree forbidden)
 /// still holds because the resolving edge is intra-tree by construction.
@@ -178,7 +178,7 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
         ReportingLineId = Guid.Empty,
         EmployeeId = employeeId,
         ManagerId = managerId,
-        TreeRootOrgId = treeRoot,
+        OrganisationId = treeRoot,
         Relationship = "PRIMARY",
         EffectiveFrom = new DateOnly(2026, 1, 1),
         Source = "MANUAL",
@@ -198,7 +198,7 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
         ReportingLineId = Guid.Empty,
         EmployeeId = employeeId,
         ManagerId = managerId,
-        TreeRootOrgId = treeRoot,
+        OrganisationId = treeRoot,
         Relationship = "ACTING",
         EffectiveFrom = new DateOnly(2026, 1, 1),
         Source = "MANUAL",
@@ -280,7 +280,7 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
             VikarUserId = vikarUser,
             UntilDate = untilDate,
             Reason = "FERIE",
-            TreeRootOrgId = treeRoot,
+            OrganisationId = treeRoot,
             Version = 1,
             CreatedBy = "TEST",
         });

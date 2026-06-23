@@ -267,7 +267,7 @@ public sealed class EndDateLifecycleWriterEffectTests : IAsyncLifetime
         await using var cmd = new NpgsqlCommand(
             """
             INSERT INTO reporting_lines
-                (employee_id, manager_id, tree_root_org_id, relationship,
+                (employee_id, manager_id, organisation_id, relationship,
                  effective_from, effective_to, created_by)
             VALUES (@employeeId, @managerId, @treeRoot, 'PRIMARY', @from, @to, 'test_s71_wfx')
             """, conn);

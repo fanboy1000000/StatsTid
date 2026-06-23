@@ -10,7 +10,7 @@ namespace StatsTid.Tests.Unit.AuditMappers;
 /// new manager_vikar ADR-026 audit mappers (<see cref="ManagerVikarCreated"/> /
 /// <see cref="ManagerVikarEnded"/>). Each mapper is pinned on:
 /// <list type="bullet">
-///   <item>TENANT_TARGETED scope with target_org_id = the event's <c>tree_root_org_id</c>
+///   <item>TENANT_TARGETED scope with target_org_id = the event's <c>organisation_id</c>
 ///         (carried on the event — mirrors the S48 ReportingLineAssigned mapper, no
 ///         context lookup needed) and target_resource_id = vikar_id;</item>
 ///   <item>the details-JSON field set;</item>
@@ -43,7 +43,7 @@ public class S74ManagerVikarAuditMapperTests
             VikarUserId = "mgr02",
             UntilDate = new DateOnly(2026, 7, 1),
             Reason = "ANDET",
-            TreeRootOrgId = "STY02",
+            OrganisationId = "STY02",
             RowVersion = 1,
         };
 
@@ -60,7 +60,7 @@ public class S74ManagerVikarAuditMapperTests
         Assert.Equal("mgr02", root.GetProperty("vikarUserId").GetString());
         Assert.Equal("2026-07-01", root.GetProperty("untilDate").GetString());
         Assert.Equal("ANDET", root.GetProperty("reason").GetString());
-        Assert.Equal("STY02", root.GetProperty("treeRootOrgId").GetString());
+        Assert.Equal("STY02", root.GetProperty("organisationId").GetString());
     }
 
     [Fact]
@@ -92,7 +92,7 @@ public class S74ManagerVikarAuditMapperTests
             VikarUserId = "mgr02",
             UntilDate = new DateOnly(2026, 7, 1),
             Reason = "ANDET",
-            TreeRootOrgId = "STY02",
+            OrganisationId = "STY02",
             EffectiveTo = new DateOnly(2026, 7, 2),
             EndReason = "REVOKED",
             RowVersion = 2,

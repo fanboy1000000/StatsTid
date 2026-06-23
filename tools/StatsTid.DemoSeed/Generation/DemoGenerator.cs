@@ -81,7 +81,7 @@ public sealed class DemoGenerator
             MaterializedPath = $"/{_config.MinistryId}/",
             AgreementCode = "AC",
             OkVersion = "OK24",
-            TreeRootOrgId = _config.MinistryId,
+            OrganisationId = _config.MinistryId,
             Depth = 0,
         };
         orgs.Add(mao);
@@ -120,7 +120,7 @@ public sealed class DemoGenerator
         List<DemoRoleRow> privilegedRoles,
         DemoManifest manifest)
     {
-        var root = profile.TreeRootOrgId;
+        var root = profile.OrganisationId;
         var lower = root.ToLowerInvariant();
 
         // ── 2a. Org hierarchy (S92 / ADR-035 flatten): ONE ORGANISATION (depth 1) under the
@@ -136,7 +136,7 @@ public sealed class DemoGenerator
             MaterializedPath = $"/{mao.OrgId}/{root}/",
             AgreementCode = profile.RootAgreement,
             OkVersion = "OK24",
-            TreeRootOrgId = root,
+            OrganisationId = root,
             Depth = 1,
         };
         orgs.Add(organisation);
@@ -213,7 +213,7 @@ public sealed class DemoGenerator
         var managerCount = treeUsers.Count(u => u.IsManager);
         manifest.Trees.Add(new DemoTree
         {
-            TreeRootOrgId = root,
+            OrganisationId = root,
             RootEmployeeId = topManager.UserId,
             OrgCount = treeOrgs.Count,
             UserCount = treeUsers.Count,
@@ -256,7 +256,7 @@ public sealed class DemoGenerator
         {
             EmployeeId = emp.UserId,
             ManagerId = mgr.UserId,
-            TreeRootOrgId = profile.TreeRootOrgId,
+            OrganisationId = profile.OrganisationId,
             Relationship = "PRIMARY",
             EffectiveFrom = effFrom,
         });
@@ -329,7 +329,7 @@ public sealed class DemoGenerator
             EmploymentStartDate = startDate.ToString("yyyy-MM-dd"),
             EmploymentEndDate = endDate,
             IsActive = isActive,
-            TreeRootOrgId = treeRoot,
+            OrganisationId = treeRoot,
             EnhedLabel = enhedLabel,
         };
     }
@@ -459,10 +459,10 @@ public sealed class DemoGenerator
             // A mid-level manager = an employee that has BOTH an outgoing edge (reports to someone)
             // AND is itself a manager (appears as a manager_id). Pick the first such, deterministically.
             var managerIds = manifest.ReportingEdges
-                .Where(e => e.TreeRootOrgId == tree.TreeRootOrgId)
+                .Where(e => e.OrganisationId == tree.OrganisationId)
                 .Select(e => e.ManagerId).ToHashSet();
             var midManager = manifest.ReportingEdges
-                .Where(e => e.TreeRootOrgId == tree.TreeRootOrgId
+                .Where(e => e.OrganisationId == tree.OrganisationId
                             && e.ManagerId == tree.RootEmployeeId          // reports directly to root
                             && managerIds.Contains(e.EmployeeId))           // and is itself a manager
                 .Select(e => e.EmployeeId)
@@ -529,13 +529,13 @@ public sealed class DemoGenerator
                 case "CROSS_STYRELSE_TRANSFER":
                     // Related = the top manager of a DIFFERENT Organisation tree (post-S92 flatten
                     // the tree root IS the Organisation; "cross-styrelse" == cross-Organisation).
-                    var otherTree = manifest.Trees.FirstOrDefault(t => t.TreeRootOrgId != u.TreeRootOrgId);
+                    var otherTree = manifest.Trees.FirstOrDefault(t => t.OrganisationId != u.OrganisationId);
                     manifest.MessyCases.Add(new DemoMessyCase
                     {
                         Kind = kind, EmployeeId = u.UserId,
                         Note = "Cross-Organisation transfer candidate (a stale-key drift / edge-auth surface).",
                         RelatedId = otherTree?.RootEmployeeId,
-                        Value = otherTree?.TreeRootOrgId,
+                        Value = otherTree?.OrganisationId,
                     });
                     break;
                 case "ODD_PART_TIME":

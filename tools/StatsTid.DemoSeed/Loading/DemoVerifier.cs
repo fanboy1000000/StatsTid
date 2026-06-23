@@ -55,27 +55,27 @@ public sealed class DemoVerifier
             "SELECT COUNT(*) FROM role_assignments WHERE assigned_by='DEMO_SEED' AND role_id='GLOBAL_ADMIN'", ct);
         ok &= Check("demo GLOBAL_ADMIN present", demoGlobalAdmin == 1, $"found {demoGlobalAdmin}");
 
-        // 3. Tree invariant: exactly ONE root per tree_root_org_id among DEMO reporting rows.
+        // 3. Tree invariant: exactly ONE root per organisation_id among DEMO reporting rows.
         //    A "root" = an employee in the tree that has NO active PRIMARY outgoing edge but is a
         //    manager of someone. We derive it as: managers that never appear as an employee_id.
         await using (var cmd = new NpgsqlCommand(
             """
             WITH demo AS (
-                SELECT employee_id, manager_id, tree_root_org_id
+                SELECT employee_id, manager_id, organisation_id
                 FROM reporting_lines
                 WHERE relationship = 'PRIMARY' AND effective_to IS NULL
                   AND created_by <> 'SYSTEM'
-                  AND tree_root_org_id LIKE 'STYX%'
+                  AND organisation_id LIKE 'STYX%'
             ),
             roots AS (
-                SELECT DISTINCT tree_root_org_id, manager_id
+                SELECT DISTINCT organisation_id, manager_id
                 FROM demo d
                 WHERE NOT EXISTS (SELECT 1 FROM demo e WHERE e.employee_id = d.manager_id)
             )
-            SELECT tree_root_org_id, COUNT(*) AS root_count
+            SELECT organisation_id, COUNT(*) AS root_count
             FROM roots
-            GROUP BY tree_root_org_id
-            ORDER BY tree_root_org_id
+            GROUP BY organisation_id
+            ORDER BY organisation_id
             """, conn))
         {
             await using var rdr = await cmd.ExecuteReaderAsync(ct);
@@ -97,12 +97,12 @@ public sealed class DemoVerifier
             "AND employee_id = manager_id AND created_by <> 'SYSTEM'", ct);
         ok &= Check("no demo self-edges", selfEdges == 0, $"found {selfEdges}");
 
-        // 5. tree_root parity: every demo edge's tree_root_org_id is a STYX root, which is an
+        // 5. tree_root parity: every demo edge's organisation_id is a STYX root, which is an
         //    ORGANISATION post-S92 flatten (ADR-035 — STYRELSE→ORGANISATION; no AFDELING/TEAM).
         var badTreeRoots = await ScalarLongAsync(conn,
             "SELECT COUNT(*) FROM reporting_lines r WHERE r.created_by <> 'SYSTEM' " +
-            "AND r.tree_root_org_id LIKE 'STYX%' " +
-            "AND NOT EXISTS (SELECT 1 FROM organizations o WHERE o.org_id = r.tree_root_org_id AND o.org_type='ORGANISATION')", ct);
+            "AND r.organisation_id LIKE 'STYX%' " +
+            "AND NOT EXISTS (SELECT 1 FROM organizations o WHERE o.org_id = r.organisation_id AND o.org_type='ORGANISATION')", ct);
         ok &= Check("demo edges' tree_root is an ORGANISATION", badTreeRoots == 0, $"found {badTreeRoots} bad");
 
         // 6. Flatten parity (S92 / ADR-035): every demo user's primary_org is an ORGANISATION

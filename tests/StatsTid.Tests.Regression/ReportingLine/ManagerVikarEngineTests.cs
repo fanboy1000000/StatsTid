@@ -81,7 +81,7 @@ public sealed class ManagerVikarEngineTests : IAsyncLifetime
             ReportingLineId = Guid.Empty,
             EmployeeId = Emp,
             ManagerId = Mgr,
-            TreeRootOrgId = TreeRoot,
+            OrganisationId = TreeRoot,
             Relationship = "PRIMARY",
             EffectiveFrom = new DateOnly(2026, 1, 1),
             Source = "MANUAL",
@@ -160,7 +160,7 @@ public sealed class ManagerVikarEngineTests : IAsyncLifetime
             VikarUserId = vikarUser,
             UntilDate = untilDate,
             Reason = "ANDET",
-            TreeRootOrgId = TreeRoot,
+            OrganisationId = TreeRoot,
             Version = 1,
             CreatedBy = "TEST",
         });
@@ -187,7 +187,7 @@ public sealed class ManagerVikarEngineTests : IAsyncLifetime
             ReportingLineId = Guid.Empty,
             EmployeeId = employeeId,
             ManagerId = managerId,
-            TreeRootOrgId = TreeRoot,
+            OrganisationId = TreeRoot,
             Relationship = "ACTING",
             EffectiveFrom = new DateOnly(2026, 1, 1),
             Source = "MANUAL",
@@ -432,7 +432,7 @@ public sealed class ManagerVikarEngineTests : IAsyncLifetime
                 VikarUserId = closed.VikarUserId,
                 UntilDate = closed.UntilDate,
                 Reason = closed.Reason,
-                TreeRootOrgId = closed.TreeRootOrgId,
+                OrganisationId = closed.OrganisationId,
                 EffectiveTo = closed.EffectiveTo!.Value,
                 EndReason = "REVOKED",
                 RowVersion = closed.Version,
@@ -445,7 +445,7 @@ public sealed class ManagerVikarEngineTests : IAsyncLifetime
                 ActorPrimaryOrgId: TreeRoot,
                 CorrelationId: endedEvent.CorrelationId,
                 OccurredAt: new DateTimeOffset(DateTime.SpecifyKind(endedEvent.OccurredAt, DateTimeKind.Utc)),
-                ResolvedTargetOrgId: endedEvent.TreeRootOrgId);
+                ResolvedTargetOrgId: endedEvent.OrganisationId);
             var rowData = _endedMapper.Map(endedEvent, ctx);
             await _auditRepo.InsertAsync(conn, tx, endedEvent.EventId, outboxId, endedEvent.EventType, rowData, ctx);
             await tx.CommitAsync();
@@ -476,7 +476,7 @@ public sealed class ManagerVikarEngineTests : IAsyncLifetime
                 VikarUserId = Vik,
                 UntilDate = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(5),
                 Reason = "ANDET",
-                TreeRootOrgId = TreeRoot,
+                OrganisationId = TreeRoot,
                 Version = 1,
                 CreatedBy = "TEST",
             });
@@ -488,7 +488,7 @@ public sealed class ManagerVikarEngineTests : IAsyncLifetime
                 VikarUserId = created.VikarUserId,
                 UntilDate = created.UntilDate,
                 Reason = created.Reason,
-                TreeRootOrgId = created.TreeRootOrgId,
+                OrganisationId = created.OrganisationId,
                 RowVersion = created.Version,
                 ActorId = Mgr,
                 ActorRole = "LOCAL_LEADER",
@@ -499,7 +499,7 @@ public sealed class ManagerVikarEngineTests : IAsyncLifetime
                 ActorPrimaryOrgId: TreeRoot,
                 CorrelationId: createdEvent.CorrelationId,
                 OccurredAt: new DateTimeOffset(DateTime.SpecifyKind(createdEvent.OccurredAt, DateTimeKind.Utc)),
-                ResolvedTargetOrgId: createdEvent.TreeRootOrgId);
+                ResolvedTargetOrgId: createdEvent.OrganisationId);
             var rowData = _createdMapper.Map(createdEvent, ctx);
             await _auditRepo.InsertAsync(conn, tx, createdEvent.EventId, outboxId, createdEvent.EventType, rowData, ctx);
 
@@ -538,7 +538,7 @@ public sealed class ManagerVikarEngineTests : IAsyncLifetime
             VikarUserId = vikarUser,
             UntilDate = untilDate,
             Reason = "ANDET",
-            TreeRootOrgId = TreeRoot,
+            OrganisationId = TreeRoot,
             Version = 1,
             CreatedBy = "TEST",
         });
@@ -549,7 +549,7 @@ public sealed class ManagerVikarEngineTests : IAsyncLifetime
             VikarUserId = created.VikarUserId,
             UntilDate = created.UntilDate,
             Reason = created.Reason,
-            TreeRootOrgId = created.TreeRootOrgId,
+            OrganisationId = created.OrganisationId,
             RowVersion = created.Version,
             ActorId = absentApprover,
             ActorRole = "LOCAL_LEADER",
@@ -560,7 +560,7 @@ public sealed class ManagerVikarEngineTests : IAsyncLifetime
             ActorPrimaryOrgId: TreeRoot,
             CorrelationId: createdEvent.CorrelationId,
             OccurredAt: new DateTimeOffset(DateTime.SpecifyKind(createdEvent.OccurredAt, DateTimeKind.Utc)),
-            ResolvedTargetOrgId: createdEvent.TreeRootOrgId);
+            ResolvedTargetOrgId: createdEvent.OrganisationId);
         var rowData = _createdMapper.Map(createdEvent, ctx);
         await _auditRepo.InsertAsync(conn, tx, createdEvent.EventId, outboxId, createdEvent.EventType, rowData, ctx);
         await tx.CommitAsync();

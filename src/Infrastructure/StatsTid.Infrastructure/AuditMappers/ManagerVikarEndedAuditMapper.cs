@@ -9,7 +9,7 @@ namespace StatsTid.Infrastructure.AuditMappers;
 /// for <see cref="ManagerVikarEnded"/> — the approver-owned vikar closed either by the
 /// explicit <c>DELETE /api/reporting-lines/delegate</c> revoke (<c>EndReason=REVOKED</c>)
 /// or by the <c>DelegationExpiryService</c> the day AFTER its inclusive UntilDate
-/// (<c>EndReason=EXPIRED</c>, R4a). TENANT_TARGETED; target_org_id = <c>tree_root_org_id</c>
+/// (<c>EndReason=EXPIRED</c>, R4a). TENANT_TARGETED; target_org_id = <c>organisation_id</c>
 /// carried on the event; target_resource_id = the vikar_id. Mirrors the S48
 /// <see cref="ReportingLineSuperseded"/> mapper precedent.
 ///
@@ -38,12 +38,12 @@ public sealed class ManagerVikarEndedAuditMapper : IAuditProjectionMapper<Manage
             effectiveTo = @event.EffectiveTo.ToString("yyyy-MM-dd"),
             endReason = @event.EndReason,
             reason = @event.Reason,
-            treeRootOrgId = @event.TreeRootOrgId,
+            organisationId = @event.OrganisationId,
             rowVersion = @event.RowVersion,
         };
         return new AuditProjectionRowData(
             VisibilityScope: AuditVisibilityScope.TenantTargeted,
-            TargetOrgId: @event.TreeRootOrgId ?? context.ResolvedTargetOrgId,
+            TargetOrgId: @event.OrganisationId ?? context.ResolvedTargetOrgId,
             TargetResourceId: @event.VikarId.ToString(),
             DetailsJson: JsonSerializer.Serialize(details, JsonOptions));
     }

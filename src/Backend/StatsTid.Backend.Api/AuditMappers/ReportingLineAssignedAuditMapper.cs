@@ -7,7 +7,7 @@ namespace StatsTid.Backend.Api.AuditMappers;
 /// <summary>
 /// S48 / TASK-4807. <see cref="IAuditProjectionMapper{TEvent}"/> for
 /// <see cref="ReportingLineAssigned"/>. TENANT_TARGETED; target_org_id =
-/// tree_root_org_id from the event; details = key reporting-line fields.
+/// organisation_id from the event; details = key reporting-line fields.
 /// </summary>
 public sealed class ReportingLineAssignedAuditMapper : IAuditProjectionMapper<ReportingLineAssigned>
 {
@@ -18,14 +18,14 @@ public sealed class ReportingLineAssignedAuditMapper : IAuditProjectionMapper<Re
             reportingLineId = @event.ReportingLineId,
             employeeId = @event.EmployeeId,
             managerId = @event.ManagerId,
-            treeRootOrgId = @event.TreeRootOrgId,
+            organisationId = @event.OrganisationId,
             relationship = @event.Relationship,
             effectiveFrom = @event.EffectiveFrom.ToString("yyyy-MM-dd"),
             source = @event.Source,
         };
         return new AuditProjectionRowData(
             VisibilityScope: AuditVisibilityScope.TenantTargeted,
-            TargetOrgId: @event.TreeRootOrgId,
+            TargetOrgId: @event.OrganisationId,
             TargetResourceId: @event.ReportingLineId.ToString(),
             DetailsJson: JsonSerializer.Serialize(details, AuditMapperJsonOptions.Default));
     }

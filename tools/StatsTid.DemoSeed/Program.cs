@@ -91,7 +91,7 @@ static async Task<int> RunGenerateAsync(Dictionary<string, string> opts)
     Console.WriteLine($"  reportingEdges={dataset.Manifest.ReportingEdges.Count} apiRoleGrants={dataset.Manifest.RoleGrants.Count} (privileged roles are SQL-seeded — grant API has a product bug)");
     Console.WriteLine($"  profileEdits={dataset.Manifest.ProfileEdits.Count} activity={dataset.Manifest.Activity.Count} vikars={dataset.Manifest.Vikars.Count} messyCases={dataset.Manifest.MessyCases.Count}");
     foreach (var t in dataset.Manifest.Trees)
-        Console.WriteLine($"  tree {t.TreeRootOrgId}: orgs={t.OrgCount} users={t.UserCount} managers={t.ManagerCount} maxDepth={t.MaxDepth} root={t.RootEmployeeId}");
+        Console.WriteLine($"  tree {t.OrganisationId}: orgs={t.OrgCount} users={t.UserCount} managers={t.ManagerCount} maxDepth={t.MaxDepth} root={t.RootEmployeeId}");
     Console.WriteLine($"  wrote SQL → {outSql}");
     Console.WriteLine($"  wrote manifest → {manifestPath}");
     return 0;

@@ -139,7 +139,7 @@ public sealed class EmploymentEndDateLifecycleWriter
                     ReportingLineId = line.ReportingLineId,
                     EmployeeId = line.EmployeeId,
                     ManagerId = line.ManagerId,
-                    TreeRootOrgId = line.TreeRootOrgId,
+                    OrganisationId = line.OrganisationId,
                     ActorId = actorId,
                     ActorRole = actorRole,
                     CorrelationId = correlationId,

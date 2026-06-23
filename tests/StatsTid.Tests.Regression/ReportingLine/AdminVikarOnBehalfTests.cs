@@ -168,7 +168,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
         ReportingLineId = Guid.Empty,
         EmployeeId = employeeId,
         ManagerId = managerId,
-        TreeRootOrgId = TreeRootSty02,
+        OrganisationId = TreeRootSty02,
         Relationship = "PRIMARY",
         EffectiveFrom = new DateOnly(2026, 1, 1),
         Source = "MANUAL",
@@ -241,7 +241,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
         var row = await _vikarRepo.GetActiveByApproverAnyDateAsync(Mgr);
         Assert.NotNull(row);
         Assert.Equal(Vik, row!.VikarUserId);
-        Assert.Equal(TreeRootSty02, row.TreeRootOrgId);
+        Assert.Equal(TreeRootSty02, row.OrganisationId);
         Assert.Equal("FERIE", row.Reason);
         Assert.Equal(body.vikarId, row.VikarId.ToString());
 
@@ -374,12 +374,12 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
         // succeeded (Vik holds the covering STY02 LOCAL_LEADER role at POST time).
         //
         // Interleave:
-        //   T_block: take pg_advisory_xact_lock('reporting-tree-STY02') + DELETE Vik's only
+        //   T_block: take pg_advisory_xact_lock('reporting-org-STY02') + DELETE Vik's only
         //            qualifying role assignment — held UNCOMMITTED.
         //   POST   : fired async; blocks inside AcquireTreeLockAsync on the same advisory key.
         //   commit : T_block commits → Vik now has NO qualifying role.
         //   POST   : acquires the lock, the in-lock census reads Vik's (now empty) roles → 400.
-        var advisoryKey = "reporting-tree-" + TreeRootSty02;
+        var advisoryKey = "reporting-org-" + TreeRootSty02;
 
         await using var blockConn = _dbFactory.Create();
         await blockConn.OpenAsync();
@@ -456,7 +456,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
     {
         var vikar = await PlantVikarAsync(Mgr, Vik, Today().AddDays(30), TreeRootSty02);
         // Deactivate BOTH the manager and the vikar — ValidateSameOrganisationAsync would now fail, but the
-        // revoke must still succeed via the persisted manager_vikar.tree_root_org_id.
+        // revoke must still succeed via the persisted manager_vikar.organisation_id.
         await DeactivateUserAsync(Mgr);
         await DeactivateUserAsync(Vik);
 
@@ -1023,7 +1023,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
             VikarUserId = vikarUser,
             UntilDate = untilDate,
             Reason = "ANDET",
-            TreeRootOrgId = treeRoot,
+            OrganisationId = treeRoot,
             Version = 1,
             CreatedBy = "TEST",
         });
@@ -1093,7 +1093,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
     // ── S78 R9 (BLOCKER 1) held-lock interleave harness (mirrors ReportingLineWriteLifecycleTests) ──
 
     /// <summary>
-    /// Holds the <c>reporting-tree-{treeRoot}</c> xact advisory key on a SIDE connection so a test can
+    /// Holds the <c>reporting-org-{treeRoot}</c> xact advisory key on a SIDE connection so a test can
     /// deterministically BLOCK any in-tree mutator (assign / remove / acting / vikar-create / transfer)
     /// that takes the same key, until the returned tx is rolled back. The caller owns disposal.
     /// </summary>
@@ -1103,7 +1103,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
         await conn.OpenAsync();
         var tx = await conn.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted);
         await using (var cmd = new NpgsqlCommand(
-            "SELECT pg_advisory_xact_lock(hashtext('reporting-tree-' || @root))", conn, tx))
+            "SELECT pg_advisory_xact_lock(hashtext('reporting-org-' || @root))", conn, tx))
         {
             cmd.Parameters.AddWithValue("root", treeRoot);
             await cmd.ExecuteScalarAsync();
@@ -1113,7 +1113,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
 
     /// <summary>
     /// Polls <c>pg_locks</c> (joined to <c>pg_stat_activity</c> to exclude this session) until at least
-    /// one OTHER backend is WAITING (<c>granted = false</c>) on the <c>reporting-tree-{treeRoot}</c>
+    /// one OTHER backend is WAITING (<c>granted = false</c>) on the <c>reporting-org-{treeRoot}</c>
     /// advisory key — proving a request actually REACHED and BLOCKED ON THE LOCK (a merely-slow or
     /// sequentially-run request cannot satisfy it). For a single-arg <c>pg_advisory_xact_lock(bigint)</c>
     /// the key is split classid=high32 / objid=low32, so it is rebuilt as
@@ -1137,7 +1137,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
                       AND pl.granted = FALSE
                       AND pl.pid <> pg_backend_pid()
                       AND ((pl.classid::bigint << 32) | pl.objid::bigint)
-                          = hashtext('reporting-tree-' || @root)::bigint
+                          = hashtext('reporting-org-' || @root)::bigint
                 )
                 """, conn))
             {
