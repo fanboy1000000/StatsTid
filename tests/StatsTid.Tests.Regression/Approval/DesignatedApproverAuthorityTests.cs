@@ -701,16 +701,16 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
         Assert.False(await authorizer.IsEffectiveDesignatedApproverAsync(Mgr, Emp, asOf: today));
 
         // The HTTP path agrees that Mgr is NOT the designated approver: the edge now resolves to Vik,
-        // not Mgr, so Mgr is no longer a DESIGNATED_MANAGER for Emp. S92 flatten: Mgr (STY02) DOES
-        // org-scope-cover Emp (STY02) now, so the approve is admitted as an ORG_SCOPE_FALLBACK in
-        // REQUIRED mode → 428 (confirmFallback required), NOT a designated 200 and NOT 403. (Pre-flatten
-        // Mgr's sub-Organisation scope did not cover Emp, so the same case was a 403; the edge-supersession
-        // proof now lives in the predicate + my-reports assertions, with the HTTP outcome a fallback 428.)
+        // not Mgr, so Mgr is no longer a DESIGNATED_MANAGER for Emp. S94/ADR-035 flat authority:
+        // CanApprove = edge OR HR/Admin-over-emp-Org. Mgr is a LEADER (not HR/Admin), so even though
+        // Mgr (STY02) org-scope-covers Emp (STY02), a non-designated LEADER is NO LONGER admitted via
+        // org-scope → the approve is DENIED (403). (Pre-S94 the org-scope arm was unfloored, so this
+        // case was an ORG_SCOPE_FALLBACK 428; the leader-org-scope branch is now retired.)
         var mgrClient = _factory.CreateClient();
         mgrClient.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "STY02"));
         var approveRsp = await mgrClient.PostAsync($"/api/approval/{periodId}/approve", null);
-        Assert.Equal((HttpStatusCode)428, approveRsp.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, approveRsp.StatusCode);
 
         // And Mgr does not SEE it on my-reports (see == act): the designated edge resolves to Vik.
         var mgrPending = await GetMyReportsAsync(mgrClient);
@@ -744,31 +744,32 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
-    //  D4 regression case (5) — existing pure-org-scope path UNCHANGED (default /pending)
+    //  S94 / ADR-035 OQ4 (INVERTED) — a non-designated LEADER on org-scope is now DENIED
+    //
+    //  Pre-S94 this test (`OrgScopeManager_StillApproves_ViaOrgScope_NoEdgeNeeded`) asserted that a
+    //  non-designated LEADER scoped over the employee's org could approve PURELY on org-scope (a
+    //  428→confirmFallback→200 round-trip). S94 retires the unfloored leader-org-scope branch:
+    //  CanApprove = edge OR HR/Admin-over-emp-Org. A LEADER is neither designated (no edge) nor
+    //  HR/Admin → DENIED (403). RED-on-old: pre-S94 this was a 200.
     // ════════════════════════════════════════════════════════════════════════════════
 
     [Fact]
-    public async Task OrgScopeManager_StillApproves_ViaOrgScope_NoEdgeNeeded()
+    public async Task OrgScopeLeader_NoEdge_IsNowDenied_NotApprovableViaOrgScope()
     {
         // Mgr's scope covers STY02. A period FOR a STY02 employee (Vik, with no reporting edge to
-        // Mgr) is approvable by Mgr purely on org-scope. STY02 is seeded REQUIRED, so an
-        // org-scope-FALLBACK approval first 428s for confirmation (the unchanged S50 flow) —
-        // confirmFallback=true then completes it. This proves the pure org-scope path is
-        // UNAFFECTED by the A3 edge expansion.
+        // Mgr) was approvable by Mgr purely on org-scope pre-S94 (the 428→confirmFallback flow). S94
+        // floors the org-scope fallback at LocalHR: Mgr is a LEADER (not HR/Admin) and holds no edge
+        // over Vik → DENIED. There is no 428 gate any more.
         var periodId = await InsertPeriodAsync(Vik, "STY02", "SUBMITTED");
 
         var client = _factory.CreateClient();
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "STY02"));
 
-        // Without confirmation: the S50 REQUIRED-mode 428 (org-scope fallback), preserved.
-        var unconfirmed = await client.PostAsync($"/api/approval/{periodId}/approve", null);
-        Assert.Equal((HttpStatusCode)428, unconfirmed.StatusCode);
-
-        // With confirmation: the org-scope manager completes the approval → 200.
-        var confirmed = await client.PostAsync($"/api/approval/{periodId}/approve?confirmFallback=true", null);
-        Assert.Equal(HttpStatusCode.OK, confirmed.StatusCode);
-        Assert.Equal("APPROVED", await ReadStatusAsync(periodId));
+        // The non-designated leader is DENIED (403) — no edge, and the leader-org-scope branch is retired.
+        var rsp = await client.PostAsync($"/api/approval/{periodId}/approve", null);
+        Assert.Equal(HttpStatusCode.Forbidden, rsp.StatusCode);
+        Assert.Equal("SUBMITTED", await ReadStatusAsync(periodId));
     }
 
     [Fact]

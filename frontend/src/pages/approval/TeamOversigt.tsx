@@ -69,15 +69,15 @@ type SortKey = 'navn' | 'status' | 'norm' | 'flex'
 type SortDir = 'asc' | 'desc'
 
 /** Per-row bulk outcome surfaced after a bulk-approve loop. */
-type BulkOutcome = 'approved' | 'conflict' | 'enforcement'
+type BulkOutcome = 'approved' | 'conflict'
 
 // ── TeamRowDetail (the S88 expandable detail panel) ──────────────────────────
 // Lazy by construction: this only mounts when its row is expanded, so the
 // breakdown + compliance fetches fire on expand. NO SECOND SAVE PATH: the footer
 // calls the PARENT's onApprove/onReject/onReopen props (= the page's status-aware
 // handleApprove/openReject/handleReopen) — it never re-implements a mutation, never
-// calls apiClient for writes, never uses useApprovals. The enforcement-confirm +
-// reject Dialog state lives in the parent TeamOversigt.
+// calls apiClient for writes. The reject Dialog state lives in the parent
+// TeamOversigt.
 interface TeamRowDetailProps {
   id: string
   row: TeamOverviewRow
@@ -317,15 +317,6 @@ export function TeamOversigt() {
   const [rejectReason, setRejectReason] = useState('')
   const [rejecting, setRejecting] = useState(false)
 
-  // Enforcement (428) confirmation dialog state
-  const [enforcement, setEnforcement] = useState<{
-    row: TeamOverviewRow
-    action: 'approve' | 'reject'
-    designatedApproverId: string | null
-    reason?: string
-  } | null>(null)
-  const [enforcementConfirming, setEnforcementConfirming] = useState(false)
-
   // Per-action busy + toast
   const [busyId, setBusyId] = useState<string | null>(null)
   const [toast, setToast] = useState<{ message: string; variant: 'success' | 'error' } | null>(null)
@@ -428,24 +419,14 @@ export function TeamOversigt() {
   }, [expanded])
 
   // ── Status-aware single approve (mirrors ApprovalDashboard.tsx:230) ─────────
-  // Distinguishes 200 (ok) / 428 (enforcement fallback → confirm) / 409 (lost
-  // race) / other. Returns the outcome so the bulk loop can aggregate.
+  // Single-shot: distinguishes 200 (ok) / 409 (lost race) / other. Returns the
+  // outcome so the bulk loop can aggregate.
   const approveOne = useCallback(async (
     row: TeamOverviewRow,
-    confirmFallback?: boolean,
-  ): Promise<'approved' | 'enforcement' | 'conflict' | 'error'> => {
+  ): Promise<'approved' | 'conflict' | 'error'> => {
     if (!row.periodId) return 'error'
-    const url = confirmFallback
-      ? `/api/approval/${row.periodId}/approve?confirmFallback=true`
-      : `/api/approval/${row.periodId}/approve`
-    const result = await apiClient.post<unknown>(url)
+    const result = await apiClient.post<unknown>(`/api/approval/${row.periodId}/approve`)
     if (result.ok) return 'approved'
-    if (result.status === 428) {
-      let body: { designatedApproverId?: string | null } = {}
-      try { body = JSON.parse(result.error) as typeof body } catch { /* ignore */ }
-      setEnforcement({ row, action: 'approve', designatedApproverId: body.designatedApproverId ?? null })
-      return 'enforcement'
-    }
     if (result.status === 409) return 'conflict'
     return 'error'
   }, [])
@@ -465,7 +446,6 @@ export function TeamOversigt() {
       } else if (outcome === 'error') {
         showToast(`Kunne ikke godkende ${row.displayName}.`, 'error')
       }
-      // 'enforcement' → dialog opened; resolved via handleEnforcementConfirm.
     } finally {
       setBusyId(null)
     }
@@ -495,18 +475,6 @@ export function TeamOversigt() {
       showToast(`${rejectTarget.displayName} afvist.`, 'success')
       closeReject()
       await refetch()
-      return
-    }
-    if (result.status === 428) {
-      let body: { designatedApproverId?: string | null } = {}
-      try { body = JSON.parse(result.error) as typeof body } catch { /* ignore */ }
-      setEnforcement({
-        row: rejectTarget,
-        action: 'reject',
-        designatedApproverId: body.designatedApproverId ?? null,
-        reason,
-      })
-      closeReject()
       return
     }
     if (result.status === 409) {
@@ -539,30 +507,6 @@ export function TeamOversigt() {
     }
   }
 
-  // ── Enforcement (428) confirm ──────────────────────────────────────────────
-  const closeEnforcement = () => {
-    setEnforcement(null)
-    setEnforcementConfirming(false)
-  }
-  const handleEnforcementConfirm = async () => {
-    if (!enforcement) return
-    setEnforcementConfirming(true)
-    const { row, action, reason } = enforcement
-    const url = action === 'approve'
-      ? `/api/approval/${row.periodId}/approve?confirmFallback=true`
-      : `/api/approval/${row.periodId}/reject?confirmFallback=true`
-    const result = await apiClient.post<unknown>(url, action === 'reject' ? { reason } : undefined)
-    if (result.ok) {
-      clearSelection(row.employeeId)
-      showToast(`${row.displayName} ${action === 'approve' ? 'godkendt' : 'afvist'}.`, 'success')
-      closeEnforcement()
-      await refetch()
-    } else {
-      showToast(`Handlingen mislykkedes for ${row.displayName}.`, 'error')
-      setEnforcementConfirming(false)
-    }
-  }
-
   // ── Bulk approve (FE loop of the hardened single-approve, sequential) ───────
   const handleBulkApprove = async () => {
     const targets = rows.filter(r => selected[r.employeeId] && statusMeta(r.status).isPending && r.periodId)
@@ -571,7 +515,6 @@ export function TeamOversigt() {
     setBulkResults({})
     const results: Record<string, BulkOutcome> = {}
     const succeeded: string[] = []
-    let enforcementHit = false
     for (const row of targets) {
       // Sequential by design (same tree advisory lock) — do NOT parallelize.
       const outcome = await approveOne(row)
@@ -580,10 +523,6 @@ export function TeamOversigt() {
         succeeded.push(row.employeeId)
       } else if (outcome === 'conflict') {
         results[row.employeeId] = 'conflict'
-      } else if (outcome === 'enforcement') {
-        // approveOne already opened the enforcement dialog for the first such row.
-        results[row.employeeId] = 'enforcement'
-        enforcementHit = true
       }
       // 'error' → leave it out of results (transient); the row stays selected.
     }
@@ -600,9 +539,8 @@ export function TeamOversigt() {
     const parts: string[] = []
     if (okCount > 0) parts.push(`${okCount} godkendt`)
     if (conflictCount > 0) parts.push(`${conflictCount} sprang over (ændret)`)
-    if (enforcementHit) parts.push('1 kræver bekræftelse')
     if (parts.length > 0) {
-      showToast(parts.join(' · '), conflictCount > 0 || enforcementHit ? 'error' : 'success')
+      showToast(parts.join(' · '), conflictCount > 0 ? 'error' : 'success')
     }
     await refetch()
   }
@@ -906,43 +844,6 @@ export function TeamOversigt() {
                 disabled={rejecting}
               >
                 {rejecting ? 'Afviser…' : 'Afvis måned'}
-              </button>
-            </div>
-          </>
-        )}
-      </Dialog>
-
-      {/* Enforcement (428) confirmation dialog */}
-      <Dialog
-        open={enforcement !== null}
-        onOpenChange={next => { if (!next) closeEnforcement() }}
-        title="Håndhævelse aktiv"
-        description={
-          enforcement
-            ? `Du er ikke den udpegede leder for ${enforcement.row.displayName}. Vil du ${enforcement.action === 'approve' ? 'godkende' : 'afvise'} alligevel med organisationsskopet?`
-            : undefined
-        }
-      >
-        {enforcement && (
-          <>
-            {enforcement.designatedApproverId && (
-              <p className={styles.dialogDescription}>
-                Udpeget leder: {enforcement.designatedApproverId}
-              </p>
-            )}
-            <div className={styles.dialogActions}>
-              <button type="button" className={styles.cancelBtn} onClick={closeEnforcement}>
-                Annullér
-              </button>
-              <button
-                type="button"
-                className={styles.approveBtn}
-                onClick={handleEnforcementConfirm}
-                disabled={enforcementConfirming}
-              >
-                {enforcementConfirming
-                  ? (enforcement.action === 'approve' ? 'Godkender…' : 'Afviser…')
-                  : (enforcement.action === 'approve' ? 'Godkend alligevel' : 'Afvis alligevel')}
               </button>
             </div>
           </>

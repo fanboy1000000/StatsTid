@@ -3,8 +3,8 @@
 //
 // Coverage: contract-row render; the 4-status display mapping; KPI band;
 // filter chips + full-team counts; live search; column sort; bulk-select +
-// "Godkend N valgte" (sequential approve loop with a 428→confirm→retry row and
-// a 409 lost-race row); the reject dialog (kit Radix Dialog, optional reason);
+// "Godkend N valgte" (sequential single-shot approve loop with a 409 lost-race
+// row); the reject dialog (kit Radix Dialog, optional reason);
 // reopen visibility (S89 Phase 1: shown to leader+, was LocalHR+); and the nav
 // redirect (godkend/godkendelser → godkend/oversigt).
 //
@@ -282,43 +282,6 @@ describe('TeamOversigt — bulk approve (sequential, status-aware)', () => {
     await waitFor(() => expect(approveUrls.length).toBe(2))
     expect(approveUrls.some(u => u.includes('/api/approval/p-1/approve'))).toBe(true)
     expect(approveUrls.some(u => u.includes('/api/approval/p-5/approve'))).toBe(true)
-  })
-
-  it('a 428 row opens the enforcement dialog; confirming retries with confirmFallback=true', async () => {
-    const user = userEvent.setup()
-    const approveCalls: string[] = []
-    mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
-      if (typeof url === 'string' && url.includes('/approve') && init?.method === 'POST') {
-        approveCalls.push(url)
-        if (!url.includes('confirmFallback=true')) {
-          return {
-            ok: false, status: 428, headers: new Headers(),
-            json: async () => ({ designatedApproverId: 'MGR99' }),
-            text: async () => JSON.stringify({ designatedApproverId: 'MGR99' }),
-          }
-        }
-        return jsonResponse({ status: 'APPROVED' })
-      }
-      if (typeof url === 'string' && url.includes('/api/approval/team-overview')) {
-        return jsonResponse({ employees: [team[0]] }) // single pending row
-      }
-      return jsonResponse({})
-    })
-    renderPage()
-    await waitFor(() => expect(screen.getByText('Anna Berg')).toBeInTheDocument())
-
-    // Single-row bulk: select it, bulk-approve → 428 → enforcement dialog.
-    await user.click(screen.getByRole('checkbox', { name: 'Vælg Anna Berg' }))
-    await user.click(await screen.findByRole('button', { name: /Godkend 1 valgte/ }))
-
-    const dialog = await screen.findByRole('dialog')
-    expect(within(dialog).getByText(/Håndhævelse aktiv/)).toBeInTheDocument()
-    expect(within(dialog).getByText(/MGR99/)).toBeInTheDocument()
-
-    // Confirm → retries with confirmFallback=true.
-    await user.click(within(dialog).getByRole('button', { name: 'Godkend alligevel' }))
-    await waitFor(() =>
-      expect(approveCalls.some(u => u.includes('confirmFallback=true'))).toBe(true))
   })
 
   it('a 409 lost-race row is surfaced (not silently dropped)', async () => {

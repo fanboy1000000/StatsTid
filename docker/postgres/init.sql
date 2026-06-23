@@ -2495,30 +2495,14 @@ END
 $$;
 
 -- =========================================================================
--- S50 / ADR-027 Phase 4 — Enforcement Toggle
---   Per-tree settings: PREFERRED (default) or REQUIRED (soft enforcement).
---   explicit_fallback_confirmation tracks when a non-designated approver
---   explicitly confirmed the org-scope fallback under REQUIRED mode.
+-- S50 / ADR-027 Phase 4 — Enforcement Toggle  [RETIRED in S94 / ADR-035 OQ6]
+--   The per-tree enforcement toggle (reporting_line_tree_settings) and the
+--   approval_periods.explicit_fallback_confirmation column were REMOVED when the
+--   flat-authority model (CanApprove = edge OR HR/Admin-over-emp-Org) retired
+--   REQUIRED-mode end-to-end. approval_method / designated_approver_id (the S49
+--   audit columns above) are KEPT — ORG_SCOPE_FALLBACK stays a valid classification.
+--   Greenfield reseed: no migration; the objects are simply gone from init.sql.
 -- =========================================================================
-
-CREATE TABLE IF NOT EXISTS reporting_line_tree_settings (
-    tree_root_org_id    TEXT        PRIMARY KEY REFERENCES organizations(org_id),
-    enforcement_mode    TEXT        NOT NULL DEFAULT 'PREFERRED'
-                        CHECK (enforcement_mode IN ('PREFERRED', 'REQUIRED')),
-    version             BIGINT      NOT NULL DEFAULT 1,
-    updated_by          TEXT        NOT NULL,
-    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-ALTER TABLE approval_periods ADD COLUMN IF NOT EXISTS explicit_fallback_confirmation BOOLEAN DEFAULT FALSE;
-
-DO $$
-BEGIN
-    INSERT INTO schema_migrations (migration_id, notes)
-    VALUES ('s50-d1-enforcement-toggle', 'ADR-027 Phase 4: reporting_line_tree_settings table + explicit_fallback_confirmation on approval_periods')
-    ON CONFLICT (migration_id) DO NOTHING;
-END
-$$;
 
 -- =========================================================================
 -- S51 — Self-Service Acting-Manager Delegation
@@ -2541,10 +2525,8 @@ $$;
 
 -- ── S52 seed data for S49-S51 features ──
 
--- Enforcement: STY02 (Statens IT) uses REQUIRED mode — all employees have PRIMARY lines.
-INSERT INTO reporting_line_tree_settings (tree_root_org_id, enforcement_mode, version, updated_by, updated_at)
-VALUES ('STY02', 'REQUIRED', 1, 'SYSTEM', NOW())
-ON CONFLICT DO NOTHING;
+-- S94 / ADR-035 OQ6: the STY02 REQUIRED-mode enforcement seed was REMOVED with the
+-- reporting_line_tree_settings table (the flat-authority model has no enforcement toggle).
 
 -- Self-delegation example: mgr01 (Gitte Holm) delegated to ladm01 (Christine Dahl)
 -- for vacation until 2026-07-01. Creates ACTING lines for mgr01's PRIMARY reports

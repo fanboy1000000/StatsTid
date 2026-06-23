@@ -8,9 +8,9 @@
 // case (underAllocated=0, overAllocated>0, hasAllocationImbalance=true) renders
 // the "Ikke fordelt" amber + the Overfordeling alert; the Merarbejde(AC) /
 // Overarbejde(non-AC) label switch; compliance fault-isolation (error → soft
-// message, rest renders); the footer REUSES the parent handlers (a 428 opens the
-// enforcement dialog, a 409 surfaces the conflict/refetch); Escape collapses +
-// returns focus to the toggle; the rejection-reason display.
+// message, rest renders); the footer REUSES the parent handlers (a 409 surfaces
+// the conflict/refetch); Escape collapses + returns focus to the toggle; the
+// rejection-reason display.
 //
 // PAT-007: the useAuth mock returns a referentially-stable object. fetch is
 // mocked at the network boundary; the breakdown + compliance endpoints route by
@@ -402,33 +402,23 @@ describe('TeamRowDetail — rejection reason', () => {
 })
 
 describe('TeamRowDetail — footer reuses the parent handlers (no second save path)', () => {
-  it('"Godkend måned" goes through the status-aware path: a 428 opens the enforcement dialog', async () => {
+  it('"Godkend måned" goes through the status-aware path: a 200 approves single-shot (no dialog)', async () => {
     const user = userEvent.setup()
     const approveCalls: string[] = []
     mockRoutes({
       onApprove: (url: string) => {
         approveCalls.push(url)
-        if (!url.includes('confirmFallback=true')) {
-          return {
-            ok: false, status: 428, headers: new Headers(),
-            json: async () => ({ designatedApproverId: 'MGR99' }),
-            text: async () => JSON.stringify({ designatedApproverId: 'MGR99' }),
-          }
-        }
         return jsonResponse({ status: 'APPROVED' })
       },
     })
     renderPage()
     await expandFirstRow(user)
-    // The detail footer's "Godkend måned" button.
+    // The detail footer's "Godkend måned" button reuses the parent handleApprove.
     await user.click(await screen.findByRole('button', { name: 'Godkend måned' }))
-    // The PARENT enforcement dialog opens (the footer reused handleApprove → approveOne).
-    const dialog = await screen.findByRole('dialog')
-    expect(within(dialog).getByText(/Håndhævelse aktiv/)).toBeInTheDocument()
-    expect(within(dialog).getByText(/MGR99/)).toBeInTheDocument()
-    // Confirming retries with confirmFallback=true.
-    await user.click(within(dialog).getByRole('button', { name: 'Godkend alligevel' }))
-    await waitFor(() => expect(approveCalls.some(u => u.includes('confirmFallback=true'))).toBe(true))
+    // A single-shot approve POST fires (no confirm dialog, no second request).
+    await waitFor(() => expect(approveCalls.length).toBe(1))
+    expect(approveCalls[0]).toContain('/api/approval/p-1/approve')
+    expect(screen.queryByRole('dialog')).toBeNull()
   })
 
   it('"Godkend måned" surfaces a 409 lost-race (refetch path), not a silent drop', async () => {

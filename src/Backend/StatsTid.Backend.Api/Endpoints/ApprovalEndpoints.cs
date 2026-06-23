@@ -227,7 +227,6 @@ public static class ApprovalEndpoints
             ApprovalPeriodRepository approvalRepo,
             ReportingLineRepository reportingLineRepo,
             DesignatedApproverAuthorizer designatedAuthorizer,
-            TreeSettingsRepository treeSettingsRepo,
             OrgScopeValidator scopeValidator,
             OrganizationRepository orgRepo,
             DbConnectionFactory connectionFactory,
@@ -253,14 +252,18 @@ public static class ApprovalEndpoints
             if (period.Status is not ("SUBMITTED" or "EMPLOYEE_APPROVED"))
                 return Results.Conflict(new { error = $"Cannot approve period with status {period.Status}. Only SUBMITTED or EMPLOYEE_APPROVED periods can be approved." });
 
-            // Authorize: EITHER the actor's RBAC org-scope covers the period's org (existing
-            // path) OR the actor holds the effective designated-approver edge for this employee
-            // RIGHT NOW (S74 / ADR-027 D4 A3 expansion — the edge grants cross-afdeling
-            // authority within the styrelse; asOf = today = "who may act NOW"). The edge is
-            // intra-tree by construction, so ADR-027 D2 (cross-styrelse forbidden) holds.
-            // S78 R1: orgScopeAllowed is hoisted so the in-tx re-eval knows whether the actor was
-            // admitted by org-scope (JWT-claim-based, not re-checked in-tx) or purely by the edge.
-            var (orgScopeAllowed, orgScopeReason) = await scopeValidator.ValidateOrgAccessAsync(actor, period.OrgId, ct);
+            // Authorize (S94 / ADR-035 OQ4/OQ5 — the flat-authority model): EITHER the actor holds
+            // HR/Admin scope over the employee's CURRENT Organisation (the org-scope FALLBACK, now
+            // FLOORED at LocalHR and bound to the employee's current primary_org via
+            // ValidateEmployeeAccessAsync — exactly HasHrAdminScopeOverEmpOrg) OR the actor holds the
+            // effective designated-approver edge for this employee RIGHT NOW (S74 / ADR-027 D4 A3 —
+            // the edge grants cross-afdeling authority; asOf = today = "who may act NOW"). The
+            // unfloored leader-by-org-scope branch is RETIRED: a non-designated in-scope LEADER must
+            // now hold the edge. S78 R1: orgScopeAllowed is hoisted so the in-tx re-eval knows whether
+            // the actor was admitted by the HR/Admin fallback (JWT-/scope-based, not re-checked in-tx)
+            // or purely by the edge.
+            var (orgScopeAllowed, orgScopeReason) =
+                await scopeValidator.ValidateEmployeeAccessAsync(actor, period.EmployeeId, StatsTidRoles.LocalHR, ct);
             if (!orgScopeAllowed)
             {
                 var today = DateOnly.FromDateTime(DateTime.UtcNow);
@@ -275,28 +278,13 @@ public static class ApprovalEndpoints
             var (preDesignatedManagerId, preResolvedMethod, _) =
                 await reportingLineRepo.ResolveDesignatedApproverAsync(period.EmployeeId, ct);
 
-            // S50 TASK-5007: Enforcement check (pre-tx fast path). The treeRoot is request-stable
-            // (resolved from period.OrgId); the designated-approver classification is re-derived in-tx.
+            // The treeRoot is request-stable (resolved from period.OrgId) and is still needed for the
+            // FallbackTraversalWarning.TreeRootOrgId (depth>3) payload below. S94 / TASK-9402: the
+            // REQUIRED-mode enforcement read + the pre-tx fallback-confirm fast path were RETIRED here —
+            // ORG_SCOPE_FALLBACK remains a valid approval_method classification (DeriveApprovalMethod
+            // below), but it no longer gates the approval. (ResolveTreeRootOrgIdAsync itself stays —
+            // S95 owns its deletion.)
             var treeRoot = await reportingLineRepo.ResolveTreeRootOrgIdAsync(period.OrgId, ct);
-            var enforcementMode = await treeSettingsRepo.GetEnforcementModeAsync(treeRoot, ct);
-            var confirmFallbackRequested =
-                context.Request.Query.ContainsKey("confirmFallback") &&
-                context.Request.Query["confirmFallback"] == "true";
-
-            // Pre-tx 428 fast path: if the pre-tx classification is already a REQUIRED-mode fallback without
-            // confirmation, 428 now (no need to take the lock). The in-tx re-derivation re-checks this under
-            // the advisory so a concurrent edge reassignment cannot BYPASS the gate (BLOCKER 2).
-            var preApprovalMethod = DeriveApprovalMethod(actor.ActorId, preDesignatedManagerId, preResolvedMethod);
-            if (enforcementMode == "REQUIRED" && preApprovalMethod == "ORG_SCOPE_FALLBACK" && !confirmFallbackRequested)
-            {
-                return Results.Json(new
-                {
-                    error = "Enforcement enabled — designated manager required",
-                    enforcementMode,
-                    designatedApproverId = preDesignatedManagerId,
-                    treeRootOrgId = treeRoot,
-                }, statusCode: 428);
-            }
 
             // Atomic state-change + audit + outbox enqueue (ADR-018 D3).
             await using var conn = connectionFactory.Create();
@@ -335,39 +323,16 @@ public static class ApprovalEndpoints
                     return Results.Json(new { error = "Access denied", reason = orgScopeReason }, statusCode: 403);
             }
 
-            // S78 BLOCKER 2 — re-resolve the designated approver + re-derive the enforcement classification
-            // UNDER the held advisory (the AUTHORITATIVE values for the persisted metadata + the gate). The
-            // resolver opens its own connection, but ReadCommitted + the held advisory mean it observes the
-            // FROZEN committed edge state (a concurrent reassignment is blocked from committing until we
-            // release), so this re-derivation reflects the locked tree. This is INDEPENDENT of org-scope
-            // admission: org-scope admits AUTHORITY, but the confirmFallback gate is about WHICH approver.
+            // S78 BLOCKER 2 — re-resolve the designated approver + re-derive the approval-method
+            // classification UNDER the held advisory (the AUTHORITATIVE values for the persisted audit
+            // metadata). The resolver opens its own connection, but ReadCommitted + the held advisory mean
+            // it observes the FROZEN committed edge state (a concurrent reassignment is blocked from
+            // committing until we release), so this re-derivation reflects the locked tree. S94 / TASK-9402:
+            // the REQUIRED-mode 428 re-eval is GONE — ORG_SCOPE_FALLBACK is recorded as the approval_method
+            // (audit) but never gates the approval.
             var (designatedManagerId, resolvedMethod, depth) =
                 await reportingLineRepo.ResolveDesignatedApproverAsync(period.EmployeeId, ct, asOf: asOf);
             var approvalMethod = DeriveApprovalMethod(actor.ActorId, designatedManagerId, resolvedMethod);
-            var explicitFallback = false;
-
-            // Re-evaluate the REQUIRED-mode gate IN-TX: if the locked state now makes this a fallback
-            // approval in REQUIRED mode WITHOUT confirmFallback, return the same 428 — do NOT silently
-            // approve. A concurrent edge reassignment that turned the actor into a fallback approver cannot
-            // bypass the gate. We do NOT over-deny a legitimately-unchanged approval: when the actor is
-            // still the designated/acting manager the method is NOT a fallback, so no 428 fires.
-            if (enforcementMode == "REQUIRED" && approvalMethod == "ORG_SCOPE_FALLBACK")
-            {
-                if (confirmFallbackRequested)
-                {
-                    explicitFallback = true;
-                }
-                else
-                {
-                    return Results.Json(new
-                    {
-                        error = "Enforcement enabled — designated manager required",
-                        enforcementMode,
-                        designatedApproverId = designatedManagerId,
-                        treeRootOrgId = treeRoot,
-                    }, statusCode: 428);
-                }
-            }
 
             // S78 R2 — the CONDITIONAL status transition is the FIRST mutation in the tx (BEFORE the
             // FallbackTraversalWarning enqueue, audit insert, and action outbox), so a concurrent
@@ -381,7 +346,6 @@ public static class ApprovalEndpoints
                 rejectionReason: null,
                 designatedApproverId: designatedManagerId,
                 approvalMethod: approvalMethod,
-                explicitFallbackConfirmation: explicitFallback,
                 ct: ct);
             if (oldStatus is null)
                 return Results.Conflict(new { error = "Period status changed concurrently; refresh and retry." });
@@ -417,7 +381,6 @@ public static class ApprovalEndpoints
                 PeriodStart = period.PeriodStart,
                 PeriodEnd = period.PeriodEnd,
                 ApprovedBy = actor.ActorId ?? "unknown",
-                ExplicitFallbackConfirmation = explicitFallback,
                 ActorId = actor.ActorId,
                 ActorRole = actor.ActorRole,
                 CorrelationId = actor.CorrelationId
@@ -450,7 +413,6 @@ public static class ApprovalEndpoints
             ApprovalPeriodRepository approvalRepo,
             ReportingLineRepository reportingLineRepo,
             DesignatedApproverAuthorizer designatedAuthorizer,
-            TreeSettingsRepository treeSettingsRepo,
             OrgScopeValidator scopeValidator,
             OrganizationRepository orgRepo,
             DbConnectionFactory connectionFactory,
@@ -473,10 +435,13 @@ public static class ApprovalEndpoints
             if (period.Status is not ("SUBMITTED" or "EMPLOYEE_APPROVED"))
                 return Results.Conflict(new { error = $"Cannot reject period with status {period.Status}. Only SUBMITTED or EMPLOYEE_APPROVED periods can be rejected." });
 
-            // Authorize: org-scope (existing) OR the effective designated-approver edge at
-            // today (S74 / ADR-027 D4 A3 — same as approve; tree-bound is structural).
-            // S78 R1: orgScopeAllowed hoisted for the in-tx edge re-eval (same as approve).
-            var (orgScopeAllowed, orgScopeReason) = await scopeValidator.ValidateOrgAccessAsync(actor, period.OrgId, ct);
+            // Authorize (S94 / ADR-035 OQ4/OQ5 — same flat-authority model as approve): the HR/Admin
+            // fallback (floored at LocalHR, bound to the employee's CURRENT Organisation via
+            // ValidateEmployeeAccessAsync) OR the effective designated-approver edge at today (S74 /
+            // ADR-027 D4 A3). The unfloored leader-by-org-scope branch is RETIRED. S78 R1: orgScopeAllowed
+            // hoisted for the in-tx edge re-eval (same as approve).
+            var (orgScopeAllowed, orgScopeReason) =
+                await scopeValidator.ValidateEmployeeAccessAsync(actor, period.EmployeeId, StatsTidRoles.LocalHR, ct);
             if (!orgScopeAllowed)
             {
                 var today = DateOnly.FromDateTime(DateTime.UtcNow);
@@ -491,25 +456,9 @@ public static class ApprovalEndpoints
             var (preDesignatedManagerId, preResolvedMethod, _) =
                 await reportingLineRepo.ResolveDesignatedApproverAsync(period.EmployeeId, ct);
 
-            // S50 TASK-5007: Enforcement check (pre-tx fast path). treeRoot is request-stable.
+            // treeRoot is request-stable and still needed for the FallbackTraversalWarning (depth>3)
+            // below. S94 / TASK-9402: the REQUIRED-mode 428 enforcement gate was RETIRED (same as approve).
             var treeRoot = await reportingLineRepo.ResolveTreeRootOrgIdAsync(period.OrgId, ct);
-            var enforcementMode = await treeSettingsRepo.GetEnforcementModeAsync(treeRoot, ct);
-            var confirmFallbackRequested =
-                context.Request.Query.ContainsKey("confirmFallback") &&
-                context.Request.Query["confirmFallback"] == "true";
-
-            // Pre-tx 428 fast path (re-checked in-tx under the advisory — BLOCKER 2).
-            var preApprovalMethod = DeriveApprovalMethod(actor.ActorId, preDesignatedManagerId, preResolvedMethod);
-            if (enforcementMode == "REQUIRED" && preApprovalMethod == "ORG_SCOPE_FALLBACK" && !confirmFallbackRequested)
-            {
-                return Results.Json(new
-                {
-                    error = "Enforcement enabled — designated manager required",
-                    enforcementMode,
-                    designatedApproverId = preDesignatedManagerId,
-                    treeRootOrgId = treeRoot,
-                }, statusCode: 428);
-            }
 
             // Atomic state-change + audit + outbox enqueue (ADR-018 D3).
             await using var conn = connectionFactory.Create();
@@ -529,33 +478,12 @@ public static class ApprovalEndpoints
             }
 
             // S78 BLOCKER 2 — re-resolve + re-classify UNDER the held advisory (the authoritative values for
-            // the persisted metadata + the 428 gate). Same rationale as approve: a concurrent reassignment
-            // is blocked from committing, so the resolver observes the frozen locked tree. Independent of
-            // org-scope admission — the confirmFallback gate is about WHICH approver, not authority.
+            // the persisted audit metadata). Same rationale as approve: a concurrent reassignment is blocked
+            // from committing, so the resolver observes the frozen locked tree. S94 / TASK-9402: the
+            // REQUIRED-mode 428 re-eval is GONE — ORG_SCOPE_FALLBACK is recorded but never gates.
             var (designatedManagerId, resolvedMethod, depth) =
                 await reportingLineRepo.ResolveDesignatedApproverAsync(period.EmployeeId, ct, asOf: asOf);
             var approvalMethod = DeriveApprovalMethod(actor.ActorId, designatedManagerId, resolvedMethod);
-            var explicitFallback = false;
-
-            // Re-evaluate the REQUIRED-mode gate IN-TX (no over-denial: an unchanged designated/acting
-            // approver is not a fallback, so no 428 fires).
-            if (enforcementMode == "REQUIRED" && approvalMethod == "ORG_SCOPE_FALLBACK")
-            {
-                if (confirmFallbackRequested)
-                {
-                    explicitFallback = true;
-                }
-                else
-                {
-                    return Results.Json(new
-                    {
-                        error = "Enforcement enabled — designated manager required",
-                        enforcementMode,
-                        designatedApproverId = designatedManagerId,
-                        treeRootOrgId = treeRoot,
-                    }, statusCode: 428);
-                }
-            }
 
             // S78 R2 — the CONDITIONAL status transition is the FIRST mutation (BEFORE the warning, audit,
             // and outbox), so a null (0-row) double-transition loser short-circuits to a clean 409, no side
@@ -567,7 +495,6 @@ public static class ApprovalEndpoints
                 rejectionReason: request.Reason,
                 designatedApproverId: designatedManagerId,
                 approvalMethod: approvalMethod,
-                explicitFallbackConfirmation: explicitFallback,
                 ct: ct);
             if (oldStatus is null)
                 return Results.Conflict(new { error = "Period status changed concurrently; refresh and retry." });
@@ -603,7 +530,6 @@ public static class ApprovalEndpoints
                 PeriodEnd = period.PeriodEnd,
                 RejectedBy = actor.ActorId ?? "unknown",
                 RejectionReason = request.Reason,
-                ExplicitFallbackConfirmation = explicitFallback,
                 ActorId = actor.ActorId,
                 ActorRole = actor.ActorRole,
                 CorrelationId = actor.CorrelationId
@@ -1622,11 +1548,13 @@ public static class ApprovalEndpoints
             }
             else
             {
-                // Leader+: authorize via org scope (existing) OR the effective designated-approver
-                // edge at today (S74 / ADR-027 D4 A3 — the edge grants cross-afdeling authority
-                // within the styrelse; tree-bound is structural). This OR-branch lives ONLY in
-                // the Leader+ arm.
-                var (allowed2, reason2) = await scopeValidator.ValidateOrgAccessAsync(actor, period.OrgId, ct);
+                // Leader+: authorize (S94 / ADR-035 OQ4/OQ5 — the same flat-authority model as
+                // approve/reject) via the HR/Admin fallback (floored at LocalHR, bound to the
+                // employee's CURRENT Organisation via ValidateEmployeeAccessAsync) OR the effective
+                // designated-approver edge at today (S74 / ADR-027 D4 A3). The unfloored
+                // leader-by-org-scope branch is RETIRED. This OR-branch lives ONLY in the Leader+ arm.
+                var (allowed2, reason2) =
+                    await scopeValidator.ValidateEmployeeAccessAsync(actor, period.EmployeeId, StatsTidRoles.LocalHR, ct);
                 orgScopeAdmittedLeaderArm = allowed2;
                 orgScopeReason = reason2;
                 if (!allowed2)

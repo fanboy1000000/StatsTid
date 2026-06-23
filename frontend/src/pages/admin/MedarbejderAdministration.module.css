@@ -66,65 +66,6 @@
   outline-offset: 2px;
 }
 
-/* ---- Enforcement-mode toggle row (ported from ReportingLineTree) ---- */
-.enforceRow {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
-  padding: 12px 16px;
-  margin-bottom: 20px;
-  border: 1px solid var(--color-border);
-  background: var(--color-gray-50);
-  font-size: 14px;
-}
-
-.enforceBtn {
-  appearance: none;
-  font-family: var(--font-family);
-  font-size: 13px;
-  font-weight: 600;
-  padding: 6px 14px;
-  border: 1px solid var(--color-primary);
-  background: #fff;
-  color: var(--color-primary);
-  cursor: pointer;
-  border-radius: 0px;
-  white-space: nowrap;
-  transition: background 0.12s, color 0.12s;
-}
-
-.enforceBtn:hover {
-  background: var(--color-primary);
-  color: #fff;
-}
-
-.enforceBtnOn {
-  border-color: var(--color-warning);
-  color: var(--color-warning);
-}
-
-.enforceBtnOn:hover {
-  background: var(--color-warning);
-  color: #fff;
-}
-
-.enforceBtn:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-
-.enforceBtn:focus-visible {
-  outline: var(--focus-outline);
-  outline-offset: 2px;
-}
-
-.enforceErr {
-  flex-basis: 100%;
-  color: var(--color-danger);
-  font-size: 13px;
-}
-
 /* ---- Clickable person name (opens the edit drawer) ---- */
 .nameBtn {
   appearance: none;

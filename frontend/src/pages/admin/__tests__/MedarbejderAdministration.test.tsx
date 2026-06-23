@@ -63,10 +63,8 @@ vi.mock('../../../hooks/useMedarbejderRoster', () => ({
   useMedarbejderRoster: () => ({ fetchRoster }),
 }))
 
-// useReportingLines — the enforcement toggle (fetch/update settings) + the
-// lifecycle sections (resolve approver / reports) consume it.
-const fetchTreeSettings = vi.fn()
-const updateTreeSettings = vi.fn()
+// useReportingLines — the lifecycle sections (resolve approver / reports) +
+// the inline affordances consume it.
 const fetchEmployeeLines = vi.fn()
 const fetchDirectReports = vi.fn()
 // S86 — the inline affordances drive the SHARED mutation cores (assign/remove/
@@ -80,8 +78,6 @@ const endVikar = vi.fn()
 const searchPeople = vi.fn()
 vi.mock('../../../hooks/useReportingLines', () => ({
   useReportingLines: () => ({
-    fetchTreeSettings,
-    updateTreeSettings,
     fetchEmployeeLines,
     fetchDirectReports,
     searchPeople,
@@ -187,10 +183,6 @@ beforeEach(() => {
   createUser.mockResolvedValue({ userId: 'EMP010', version: 1, etag: '"1"' })
   updateUser.mockReset()
   fetchUsers.mockReset()
-  fetchTreeSettings.mockReset()
-  fetchTreeSettings.mockResolvedValue({ ok: true, status: 200, data: { enforcementMode: 'PREFERRED', version: 3 } })
-  updateTreeSettings.mockReset()
-  updateTreeSettings.mockResolvedValue({ ok: true, status: 200, data: { enforcementMode: 'REQUIRED', version: 4 } })
   fetchEmployeeLines.mockReset()
   fetchEmployeeLines.mockResolvedValue({ ok: true, status: 200, data: { active: [], history: [] } })
   fetchDirectReports.mockReset()
@@ -352,8 +344,8 @@ describe('MedarbejderAdministration', () => {
   })
 })
 
-// S76b/7604 — page integration: the drawer wiring (create + edit), the
-// enforcement toggle, and roster-refetch-on-write.
+// S76b/7604 — page integration: the drawer wiring (create + edit) and
+// roster-refetch-on-write.
 describe('MedarbejderAdministration — drawer integration (7604)', () => {
   it('"Tilføj medarbejder" opens the EditPersonDrawer in CREATE mode', async () => {
     renderPage()
@@ -384,49 +376,6 @@ describe('MedarbejderAdministration — drawer integration (7604)', () => {
       expect(screen.getByTestId('ep-title').textContent).toMatch(/Redigér Anders Andersen/)
     })
     expect(screen.queryByTestId('ep-create-user-id')).toBeNull()
-  })
-
-  it('toggling enforcement PREFERRED→REQUIRED calls updateTreeSettings with If-Match', async () => {
-    renderPage()
-    await waitFor(() => {
-      expect(screen.getByTestId('enforcement-toggle')).toBeDefined()
-    })
-    // The current mode renders (PREFERRED → "Aktivér håndhævelse").
-    expect(screen.getByTestId('enforcement-toggle').textContent).toMatch(/Aktivér/)
-    fireEvent.click(screen.getByTestId('enforcement-toggle'))
-    await waitFor(() => {
-      expect(updateTreeSettings).toHaveBeenCalledWith(
-        'MIN1',
-        { enforcementMode: 'REQUIRED' },
-        '"3"',
-      )
-    })
-    // The server's new mode is reflected after the success.
-    await waitFor(() => {
-      expect(screen.getByTestId('enforcement-toggle').textContent).toMatch(/Deaktivér/)
-    })
-  })
-
-  it('surfaces the population-gate 409 with the unassigned employee IDs (honest message)', async () => {
-    updateTreeSettings.mockResolvedValue({
-      ok: false,
-      status: 409,
-      error: 'population gate',
-      body: { unassignedEmployeeIds: ['EMP7', 'EMP8'] },
-    })
-    renderPage()
-    await waitFor(() => {
-      expect(screen.getByTestId('enforcement-toggle')).toBeDefined()
-    })
-    fireEvent.click(screen.getByTestId('enforcement-toggle'))
-    await waitFor(() => {
-      const err = screen.getByTestId('enforcement-error')
-      expect(err.textContent).toMatch(/mangler en udpeget godkender/)
-      expect(err.textContent).toContain('EMP7')
-      expect(err.textContent).toContain('EMP8')
-    })
-    // The mode stays PREFERRED (the toggle did not flip).
-    expect(screen.getByTestId('enforcement-toggle').textContent).toMatch(/Aktivér/)
   })
 
   it('refetches the roster after a drawer save (onSaved → fetchRoster), preserving view state', async () => {

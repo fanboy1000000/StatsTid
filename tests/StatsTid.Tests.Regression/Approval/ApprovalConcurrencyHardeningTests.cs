@@ -619,120 +619,27 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
         }
     }
 
-    /// <summary>
-    /// BLOCKER 2 — the IN-TX enforcement re-classification catches a designated-approver REASSIGNMENT that
-    /// commits while the approve is blocked on the advisory, FIRING the confirmFallback 428 gate that the
-    /// pre-tx classification would have BYPASSED. This isolates the gate from the edge-auth re-eval by
-    /// keeping the actor org-scope-AUTHORIZED throughout — only WHICH approver is designated changes.
-    ///
-    /// <para>Topology (Vik is the approver-under-test's period owner this time):</para>
-    /// <list type="bullet">
-    /// <item><description>Vik (STY02) reports PRIMARY to Mgr (STY02). Mgr's scope is STY02 → Mgr's
-    /// org-scope COVERS Vik's period (authority via org-scope holds regardless of the edge).</description></item>
-    /// <item><description>Pre-tx, Mgr IS Vik's single resolved designated approver (the PRIMARY edge) →
-    /// approval_method = DESIGNATED_MANAGER (NOT a fallback) → Mgr passes the pre-tx 428 fast path and
-    /// proceeds.</description></item>
-    /// </list>
-    /// <para>The interleave:</para>
-    /// <list type="number">
-    /// <item><description>HOLD the STY02 advisory; fire Mgr's approve of Vik's period WITHOUT
-    /// confirmFallback. It passes the pre-tx 428 fast path (designated), then BLOCKS on the held key.</description></item>
-    /// <item><description>WHILE parked, COMMIT an ACTING reassignment (Vik → Emp, admin-ACTING takes
-    /// resolver precedence) — now EMP, not Mgr, is Vik's designated approver. Mgr is still org-scope
-    /// authorized over STY02, but is now an ORG_SCOPE_FALLBACK approver.</description></item>
-    /// <item><description>RELEASE → the in-tx EDGE re-eval is SKIPPED (org-scope admits), but the in-tx
-    /// RE-CLASSIFICATION makes approval_method = ORG_SCOPE_FALLBACK in REQUIRED mode WITHOUT
-    /// confirmFallback → the 428 gate FIRES in-tx. Had the gate used the STALE pre-tx classification, this
-    /// would have silently approved as DESIGNATED_MANAGER — the BLOCKER-2 bypass. The status stays
-    /// SUBMITTED; no stale metadata is persisted.</description></item>
-    /// </list>
-    /// </summary>
-    [Fact]
-    public async Task R1_ReassignmentWhileApproveBlocked_InTxReclassify_FiresConfirmFallback428()
-    {
-        // Vik reports PRIMARY to Mgr (both STY02 — org-scope ALSO covers, so authority never lapses).
-        await new ReportingLineRepository(_dbFactory).AssignAsync(null, MakeLine(Vik, Mgr, TreeRootSty02));
-        var periodId = await InsertPeriodAsync(Vik, "STY02", "SUBMITTED");
-        var mgrClient = LeaderClient(Mgr, "STY02");
-
-        var (holdConn, holdTx) = await AcquireTreeLockOnSideConnAsync(TreeRootSty02);
-        try
-        {
-            // Pre-tx: Mgr is Vik's DESIGNATED_MANAGER (NOT a fallback) → passes the pre-tx 428 fast path
-            // and parks on our held key.
-            var approveLeg = mgrClient.PostAsync($"/api/approval/{periodId}/approve", null);
-
-            Assert.True(await WaitForAdvisoryLockWaiterAsync(TreeRootSty02),
-                "The designated-manager approve did not block on the STY02 tree advisory after its pre-tx classification.");
-
-            // WHILE parked, COMMIT the reassignment: an ACTING edge Vik → Emp (admin-ACTING wins resolver
-            // precedence). Emp is now Vik's designated approver; Mgr becomes an ORG_SCOPE_FALLBACK approver
-            // (but org-scope STY02 still authorizes Mgr → the edge re-eval is skipped, only the gate rejects).
-            await InsertActingLineDirectAsync(Vik, Emp, TreeRootSty02);
-
-            // Release → the in-tx re-classification: Mgr = ORG_SCOPE_FALLBACK in REQUIRED mode WITHOUT
-            // confirmFallback → the 428 gate FIRES in-tx (the pre-tx path would have silently approved).
-            await holdTx.RollbackAsync();
-            await holdConn.DisposeAsync();
-
-            var approveRsp = await approveLeg;
-            Assert.Equal((HttpStatusCode)428, approveRsp.StatusCode);
-            // The stale (DESIGNATED_MANAGER) metadata was NOT persisted — the period never transitioned.
-            Assert.Equal("SUBMITTED", await ReadStatusAsync(periodId));
-            Assert.Equal(0, await CountAsync(
-                "SELECT COUNT(*) FROM approval_audit WHERE period_id = @id AND action = 'APPROVED'",
-                ("id", periodId)));
-        }
-        finally
-        {
-            await holdConn.DisposeAsync();
-        }
-    }
-
-    // NOTE (BLOCKER 2): there is intentionally NO "pure org-scope-fallback gate behind a held lock" test.
-    // A plain org-scope-fallback in REQUIRED mode WITHOUT confirmFallback is rejected by the PRE-TX 428
-    // fast path, so it never reaches AcquireTreeLockForEmployeeAsync (it cannot block on the advisory) —
-    // making such a held-lock interleave unreachable by construction. The in-tx 428 gate is only reachable
-    // via a RACE that turns a non-fallback approval into a fallback after the pre-tx classification, which
-    // is exactly what R1_ReassignmentWhileApproveBlocked_InTxReclassify_FiresConfirmFallback428 proves.
+    // S94 (TASK-9406): two REQUIRED-mode enforcement tests were DELETED here —
+    // `R1_ReassignmentWhileApproveBlocked_InTxReclassify_FiresConfirmFallback428` (the in-tx 428
+    // re-classification gate) and `R1_OrgScopeAdmitted_NotDeniedBy_InTxEdgeReeval` (the confirmFallback
+    // round-trip). REQUIRED-mode enforcement is retired (ADR-035 OQ6): there is no 428 gate, no
+    // `confirmFallback`, and no `explicit_fallback_confirmation` column. The org-scope arm is now the
+    // HR/Admin fallback floored at LocalHR (covered by S94FlatApprovalTests in
+    // DesignatedApproverAuthorityTests). The genuine S78 advisory-lock + in-tx edge re-eval coverage
+    // (R1 mutual exclusion / serialization-catches-revoke / real-revoker co-location / unchanged
+    // designated metadata below) is KEPT.
 
     /// <summary>
-    /// The complement of the revoke test: an org-scope-admitted approval is NOT denied by a missing edge.
-    /// Mgr's scope covers STY02; a STY02 employee period (Vik's own, no edge to Mgr) is approvable purely
-    /// on org-scope. The in-tx re-eval is SKIPPED when org-scope admitted (orgScopeAllowed), so the lack
-    /// of any designated edge does not flip it to 403. STY02 is REQUIRED-mode, so the org-scope fallback
-    /// first 428s → confirmFallback completes it (the unchanged S50 flow). This guards against the R1
-    /// re-eval over-denying an org-scope-only approver.
-    /// </summary>
-    [Fact]
-    public async Task R1_OrgScopeAdmitted_NotDeniedBy_InTxEdgeReeval()
-    {
-        var periodId = await InsertPeriodAsync(Vik, "STY02", "SUBMITTED"); // STY02 employee, in Mgr's scope
-        var client = LeaderClient(Mgr, "STY02");
-
-        // REQUIRED-mode org-scope fallback → 428 without confirmation (unchanged S50), then 200 with it.
-        var unconfirmed = await client.PostAsync($"/api/approval/{periodId}/approve", null);
-        Assert.Equal((HttpStatusCode)428, unconfirmed.StatusCode);
-
-        var confirmed = await client.PostAsync($"/api/approval/{periodId}/approve?confirmFallback=true", null);
-        Assert.Equal(HttpStatusCode.OK, confirmed.StatusCode);
-        Assert.Equal("APPROVED", await ReadStatusAsync(periodId));
-        // The persisted metadata reflects the org-scope fallback path with explicit confirmation.
-        Assert.Equal("ORG_SCOPE_FALLBACK", await ReadColumnAsync(periodId, "approval_method"));
-        Assert.True((bool)(await ReadRawColumnAsync(periodId, "explicit_fallback_confirmation"))!);
-    }
-
-    /// <summary>
-    /// BLOCKER 2 — NO OVER-DENIAL + correct LOCKED metadata for a legitimately-unchanged designated
+    /// S78 BLOCKER 2 — NO OVER-DENIAL + correct LOCKED metadata for a legitimately-unchanged designated
     /// approval. Mgr is Emp's seeded PRIMARY designated manager (same STY02 Organisation; the edge
     /// classifies the approve as DESIGNATED even though org-scope also covers). We run the approve behind
-    /// a held advisory (so the in-tx re-resolution + the
-    /// in-tx 428 re-evaluation both execute), with nothing changing while it is parked. The in-tx
-    /// re-derivation must NOT over-deny (Mgr is still the designated manager — NOT a fallback, so no 428
-    /// fires even in REQUIRED mode) and MUST persist the IN-TX-resolved metadata
-    /// (<c>approval_method = DESIGNATED_MANAGER</c>, <c>designated_approver_id = Mgr</c>,
-    /// <c>explicit_fallback_confirmation = FALSE</c>) — proving the authoritative metadata matches the
-    /// locked edge state, not a stale snapshot.
+    /// a held advisory (so the in-tx re-resolution executes), with nothing changing while it is parked.
+    /// The in-tx re-derivation must NOT over-deny (Mgr is still the designated manager) and MUST persist
+    /// the IN-TX-resolved metadata (<c>approval_method = DESIGNATED_MANAGER</c>,
+    /// <c>designated_approver_id = Mgr</c>) — proving the authoritative metadata matches the locked edge
+    /// state, not a stale snapshot. (S94: the REQUIRED-mode <c>explicit_fallback_confirmation</c>
+    /// assertion was removed with the column; the kept <c>approval_method</c>/<c>designated_approver_id</c>
+    /// audit metadata is the surviving classification.)
     /// </summary>
     [Fact]
     public async Task R1_UnchangedDesignatedApproval_BehindHeldLock_NotOverDenied_PersistsLockedMetadata()
@@ -759,7 +666,6 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
             // The IN-TX-resolved metadata is persisted (matches the locked edge state).
             Assert.Equal("DESIGNATED_MANAGER", await ReadColumnAsync(periodId, "approval_method"));
             Assert.Equal(Mgr, await ReadColumnAsync(periodId, "designated_approver_id"));
-            Assert.False((bool)(await ReadRawColumnAsync(periodId, "explicit_fallback_confirmation"))!);
         }
         finally
         {
@@ -964,27 +870,8 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
         await cmd.ExecuteNonQueryAsync();
     }
 
-    /// <summary>
-    /// COMMITS an ACTING reporting-line edge directly (no advisory) — the committed reassignment the
-    /// in-tx re-classification must observe. Admin-assigned ACTING takes resolver precedence over the
-    /// PRIMARY edge, so this flips the employee's single designated approver to <paramref name="managerId"/>.
-    /// </summary>
-    private async Task InsertActingLineDirectAsync(string employeeId, string managerId, string treeRoot)
-    {
-        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
-        await conn.OpenAsync();
-        await using var cmd = new NpgsqlCommand(
-            """
-            INSERT INTO reporting_lines
-                (reporting_line_id, employee_id, manager_id, tree_root_org_id, relationship, effective_from, source, version, created_by)
-            VALUES
-                (gen_random_uuid(), @emp, @mgr, @root, 'ACTING', '2026-01-01', 'MANUAL', 1, 'TEST')
-            """, conn);
-        cmd.Parameters.AddWithValue("emp", employeeId);
-        cmd.Parameters.AddWithValue("mgr", managerId);
-        cmd.Parameters.AddWithValue("root", treeRoot);
-        await cmd.ExecuteNonQueryAsync();
-    }
+    // S94 (TASK-9406): InsertActingLineDirectAsync was REMOVED — it only served the deleted in-tx 428
+    // re-classification test (REQUIRED-mode enforcement retired, ADR-035 OQ6).
 
     private async Task<int> CountAsync(string sql, params (string name, object value)[] ps)
     {

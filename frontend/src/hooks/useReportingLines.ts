@@ -159,37 +159,6 @@ export function useReportingLines() {
     [],
   )
 
-  const fetchTreeSettings = useCallback(
-    async (treeRootOrgId: string): Promise<ApiResult<{ enforcementMode: string; version: number }>> => {
-      return apiClient.get<{ enforcementMode: string; version: number }>(
-        `/api/admin/reporting-lines/tree/${encodeURIComponent(treeRootOrgId)}/settings`,
-      )
-    },
-    [],
-  )
-
-  const updateTreeSettings = useCallback(
-    async (
-      treeRootOrgId: string,
-      body: { enforcementMode: string },
-      ifMatch: string,
-    ): Promise<ApiResult<{ enforcementMode: string; version: number }>> => {
-      const result = await apiFetchWithEtag<{ enforcementMode: string; version: number }>(
-        `/api/admin/reporting-lines/tree/${encodeURIComponent(treeRootOrgId)}/settings`,
-        {
-          method: 'PUT',
-          body: JSON.stringify(body),
-          headers: { 'If-Match': ifMatch },
-        },
-      )
-      if (!result.ok) {
-        return { ok: false, error: result.error, status: result.status, body: result.body }
-      }
-      return { ok: true, data: result.data.data }
-    },
-    [],
-  )
-
   // S76b / TASK-7603 — server person-search for the approver/vikar pickers.
   // Scope-filtered + self/descendant-excluded server-side (scales to 2000+).
   const searchPeople = useCallback(
@@ -316,8 +285,6 @@ export function useReportingLines() {
     fetchDirectReports,
     assignManager,
     removeManager,
-    fetchTreeSettings,
-    updateTreeSettings,
     searchPeople,
     createVikar,
     fetchActiveVikar,

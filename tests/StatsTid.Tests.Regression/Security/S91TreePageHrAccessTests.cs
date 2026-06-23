@@ -82,31 +82,9 @@ public sealed class S91TreePageHrAccessTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
     }
 
-    /// <summary>Tree-settings (enforcement) READ (now HROrAbove / LocalHR floor): HR@MIN01 → 200
-    /// (returns the PREFERRED default when no row exists). RED-on-old.</summary>
-    [Fact]
-    public async Task TreeSettingsRead_HrInScope_Returns200()
-    {
-        var client = ClientWith(AdminToken(StatsTidRoles.LocalHR, CoveringOrg, "s91_setget_hr"));
-        var rsp = await client.GetAsync($"/api/admin/reporting-lines/tree/{TargetOrg}/settings");
-        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
-    }
-
-    /// <summary>Tree-settings (enforcement) WRITE (now HROrAbove / LocalHR floor): HR@MIN01 PUTs the
-    /// enforcement mode (PREFERRED) on STY01 → 200. Carries If-Match: "0" (no existing row = version
-    /// 0). The enforcement toggle is a structural tree mutation, now an HR affordance. RED-on-old.</summary>
-    [Fact]
-    public async Task TreeSettingsWrite_HrInScope_Returns200()
-    {
-        var client = ClientWith(AdminToken(StatsTidRoles.LocalHR, CoveringOrg, "s91_setput_hr"));
-        var req = new HttpRequestMessage(HttpMethod.Put, $"/api/admin/reporting-lines/tree/{TargetOrg}/settings")
-        {
-            Content = JsonContent.Create(new { enforcementMode = "PREFERRED" }),
-        };
-        req.Headers.TryAddWithoutValidation("If-Match", "\"0\"");
-        var rsp = await client.SendAsync(req);
-        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
-    }
+    // S94 (TASK-9406): the tree-settings (enforcement) READ + WRITE in-scope HR cases were DELETED —
+    // the GET/PUT /api/admin/reporting-lines/tree/{org}/settings endpoints are retired (ADR-035 OQ6).
+    // The S91 HR-access lower is still proven by the surviving roster / picker / vikar / user-create cases.
 
     /// <summary>Person-search picker (now HROrAbove / LocalHR floor): HR@MIN01 → 200, and the STY01
     /// user IS returned (the floored accessible-org union now contributes the MIN01 subtree at the
@@ -180,20 +158,9 @@ public sealed class S91TreePageHrAccessTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.Forbidden, rsp.StatusCode);
     }
 
-    /// <summary>Tree-settings WRITE: the mixed HR@STY05 + Leader@MIN01 JWT → 403 on a STY01
-    /// enforcement write (containment preserved at the LocalHR floor).</summary>
-    [Fact]
-    public async Task TreeSettingsWrite_OutOfScopeHr_Returns403()
-    {
-        var client = ClientWith(MixedHrLeaderToken("s91_setput_oos"));
-        var req = new HttpRequestMessage(HttpMethod.Put, $"/api/admin/reporting-lines/tree/{TargetOrg}/settings")
-        {
-            Content = JsonContent.Create(new { enforcementMode = "PREFERRED" }),
-        };
-        req.Headers.TryAddWithoutValidation("If-Match", "\"0\"");
-        var rsp = await client.SendAsync(req);
-        Assert.Equal(HttpStatusCode.Forbidden, rsp.StatusCode);
-    }
+    // S94 (TASK-9406): the out-of-scope tree-settings WRITE containment case was DELETED — the
+    // PUT /settings endpoint is retired (ADR-035 OQ6). Containment is still proven by the surviving
+    // out-of-scope roster / picker / vikar / user-create cases.
 
     /// <summary>Person-search picker: the mixed HR@STY05 + Leader@MIN01 JWT's floored accessible-org
     /// union must NOT include STY01, so a STY01 user does NOT appear (containment preserved — the
@@ -263,19 +230,9 @@ public sealed class S91TreePageHrAccessTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.Forbidden, rsp.StatusCode);
     }
 
-    /// <summary>Tree-settings WRITE: a LocalLeader@MIN01 → 403 (below the HROrAbove policy).</summary>
-    [Fact]
-    public async Task TreeSettingsWrite_BelowHrLeader_Returns403()
-    {
-        var client = ClientWith(AdminToken(StatsTidRoles.LocalLeader, CoveringOrg, "s91_setput_leader"));
-        var req = new HttpRequestMessage(HttpMethod.Put, $"/api/admin/reporting-lines/tree/{TargetOrg}/settings")
-        {
-            Content = JsonContent.Create(new { enforcementMode = "PREFERRED" }),
-        };
-        req.Headers.TryAddWithoutValidation("If-Match", "\"0\"");
-        var rsp = await client.SendAsync(req);
-        Assert.Equal(HttpStatusCode.Forbidden, rsp.StatusCode);
-    }
+    // S94 (TASK-9406): the below-HR tree-settings WRITE case was DELETED — the PUT /settings endpoint
+    // is retired (ADR-035 OQ6). The policy-tier boundary is still pinned by the surviving below-HR
+    // roster / user-create / picker cases.
 
     /// <summary>User CREATE: a LocalLeader@MIN01 → 403 (below the HROrAbove policy). A leader cannot
     /// create users even within their own covering scope.</summary>

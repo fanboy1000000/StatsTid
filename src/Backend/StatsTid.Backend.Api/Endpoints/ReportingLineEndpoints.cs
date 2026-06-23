@@ -1599,120 +1599,11 @@ public static class ReportingLineEndpoints
         })).RequireAuthorization("HROrAbove"); // S91 TASK-9102: tree-page surface opened to LocalHR. S78 R9: extra ) closes TreeRootDriftRetry.RunAsync
 
         // ═══════════════════════════════════════════
-        // Endpoint 9: GET /api/admin/reporting-lines/tree/{treeRootOrgId}/settings — Get tree settings
+        // S94 / TASK-9402 (ADR-035 OQ6): the enforcement-mode admin surface (GET + PUT
+        // /api/admin/reporting-lines/tree/{treeRootOrgId}/settings) was RETIRED here — the
+        // REQUIRED-mode enforcement machinery is gone end-to-end (table + repo + 428 gate). The
+        // flat-authority model (CanApprove = edge OR HR/Admin-over-emp-Org) needs no per-tree toggle.
         // ═══════════════════════════════════════════
-
-        app.MapGet("/api/admin/reporting-lines/tree/{treeRootOrgId}/settings", async (
-            string treeRootOrgId,
-            TreeSettingsRepository settingsRepo,
-            OrgScopeValidator scopeValidator,
-            HttpContext context,
-            CancellationToken ct) =>
-        {
-            var actor = context.GetActorContext();
-            // S91 TASK-9102: tree-page surface opened to LocalHR — HROrAbove policy → LocalHR floor
-            // (org-scope containment unchanged; HR stays org-bounded).
-            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, treeRootOrgId, StatsTidRoles.LocalHR, ct);
-            if (!allowed)
-                return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
-
-            var settings = await settingsRepo.GetAsync(treeRootOrgId, ct);
-            if (settings is null)
-            {
-                // Default: PREFERRED, version 0 (no row exists)
-                context.Response.Headers.ETag = "\"0\"";
-                return Results.Ok(new { enforcementMode = "PREFERRED", version = 0 });
-            }
-
-            context.Response.Headers.ETag = $"\"{settings.Version}\"";
-            return Results.Ok(new { enforcementMode = settings.EnforcementMode, version = settings.Version });
-        }).RequireAuthorization("HROrAbove"); // S91 TASK-9102: tree-page surface opened to LocalHR
-
-        // ═══════════════════════════════════════════
-        // Endpoint 10: PUT /api/admin/reporting-lines/tree/{treeRootOrgId}/settings — Update tree settings
-        // ═══════════════════════════════════════════
-
-        app.MapPut("/api/admin/reporting-lines/tree/{treeRootOrgId}/settings", async (
-            string treeRootOrgId,
-            UpdateTreeSettingsRequest request,
-            TreeSettingsRepository settingsRepo,
-            OrganizationRepository orgRepo,
-            OrgScopeValidator scopeValidator,
-            DbConnectionFactory connectionFactory,
-            IOutboxEnqueue outbox,
-            HttpContext context,
-            CancellationToken ct) =>
-        {
-            var actor = context.GetActorContext();
-            // S91 TASK-9102: tree-page surface opened to LocalHR — HROrAbove policy → LocalHR floor
-            // (org-scope containment unchanged; HR stays org-bounded).
-            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, treeRootOrgId, StatsTidRoles.LocalHR, ct);
-            if (!allowed)
-                return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
-
-            // Validate treeRootOrgId is actually a MAO or ORGANISATION (Codex S50 W2;
-            // S92/ADR-035 re-point — a tree root is now a MAO or ORGANISATION row).
-            var treeRootOrg = await orgRepo.GetByIdAsync(treeRootOrgId, ct);
-            if (treeRootOrg is null)
-                return Results.NotFound(new { error = $"Organization {treeRootOrgId} not found" });
-            if (treeRootOrg.OrgType is not ("MAO" or "ORGANISATION"))
-                return Results.BadRequest(new { error = $"Organization {treeRootOrgId} is type {treeRootOrg.OrgType}, not a tree root (must be MAO or ORGANISATION)" });
-
-            // Parse If-Match
-            if (!EtagHeaderHelper.TryParseIfMatch(context.Request, out var expectedVersion, out var headerError))
-            {
-                return Results.Json(new { error = headerError }, statusCode: 428);
-            }
-
-            // Validate enforcement mode
-            if (request.EnforcementMode is not ("PREFERRED" or "REQUIRED"))
-                return Results.BadRequest(new { error = "enforcementMode must be PREFERRED or REQUIRED" });
-
-            // Population gate: cannot enable REQUIRED unless tree is fully populated
-            if (request.EnforcementMode == "REQUIRED")
-            {
-                var (isPopulated, unassigned) = await settingsRepo.ValidateTreePopulatedAsync(treeRootOrgId, ct);
-                if (!isPopulated)
-                {
-                    return Results.Json(new
-                    {
-                        error = "Cannot enable enforcement: some employees have no designated manager",
-                        unassignedEmployeeIds = unassigned,
-                        unassignedCount = unassigned.Count,
-                    }, statusCode: 409);
-                }
-            }
-
-            // Atomic tx: upsert + outbox event
-            try
-            {
-                await using var conn = connectionFactory.Create();
-                await conn.OpenAsync(ct);
-                await using var tx = await conn.BeginTransactionAsync(IsolationLevel.RepeatableRead, ct);
-                try
-                {
-                    var settings = await settingsRepo.UpsertAsync(conn, tx, treeRootOrgId, request.EnforcementMode, expectedVersion, actor.ActorId ?? "system", ct);
-
-                    await tx.CommitAsync(ct);
-                    context.Response.Headers.ETag = $"\"{settings.Version}\"";
-                    return Results.Ok(new { enforcementMode = settings.EnforcementMode, version = settings.Version });
-                }
-                catch
-                {
-                    await tx.RollbackAsync(ct);
-                    throw;
-                }
-            }
-            catch (OptimisticConcurrencyException ex)
-            {
-                return Results.Json(new
-                {
-                    error = "Stale version",
-                    expectedVersion = ex.ExpectedVersion,
-                    actualVersion = ex.ActualVersion,
-                }, statusCode: 412);
-            }
-        }).RequireAuthorization("HROrAbove"); // S91 TASK-9102: tree-page surface opened to LocalHR
 
         // ═══════════════════════════════════════════
         // Endpoint 11: GET /api/reporting-lines/delegate — Get active self-delegation status
@@ -3001,10 +2892,6 @@ public static class ReportingLineEndpoints
 
     private sealed record ImportReportingLinesRequest(string TreeRootOrgId, List<ImportRow> Rows);
     private sealed record ImportRow(string EmployeeId, string ManagerId, string EffectiveFrom);
-
-    // ── Settings DTOs ──
-
-    private sealed record UpdateTreeSettingsRequest(string EnforcementMode);
 
     // ── Self-service delegation DTOs ──
 

@@ -1,6 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useOrganizations, useOrgUsers, type User } from '../../hooks/useAdmin'
-import { useReportingLines } from '../../hooks/useReportingLines'
 import {
   useMedarbejderRoster,
   type MedarbejderRosterRow,
@@ -18,7 +17,6 @@ import {
 } from './medarbejderTree'
 import { Card, Badge, Input, Spinner } from '../../components/ui'
 import { useToast } from '../../components/ui/Toast'
-import { formatVersionAsIfMatch } from '../../lib/etag'
 import { EditPersonDrawer } from './EditPersonDrawer'
 import type { LifecycleContext } from './editPerson/LifecycleSections'
 import { InlineApproverControl } from './editPerson/InlineApproverControl'
@@ -39,8 +37,7 @@ import styles from './MedarbejderAdministration.module.css'
 // SHARED drawer section components (ApproverSection / VikarSection) — the single
 // mutation cores — so the row and the drawer hit ONE save path (no second writer).
 // The approver-block shows the info-blue "· pt. <vikar> (vikar)" annotation when
-// the assigned approver is currently away. The enforcement-mode toggle (ADR-027
-// D11) sits unobtrusively above the tiles.
+// the assigned approver is currently away.
 
 // The prototype's period copy is not served this phase — hardcode the literals
 // (ledelseslinjer-data.jsx PERIOD_LABEL / PERIOD_DEADLINE).
@@ -335,7 +332,6 @@ export function MedarbejderAdministration() {
   // `fetchUser` is org-independent — pass '' as the placeholder orgId (the hook
   // only uses it for the auto-list fetch, which we don't consume here).
   const { fetchUser } = useOrgUsers('')
-  const { fetchTreeSettings, updateTreeSettings } = useReportingLines()
   const { toast } = useToast()
 
   const treeRootOrgs = useMemo(
@@ -365,12 +361,6 @@ export function MedarbejderAdministration() {
   const [drawerUser, setDrawerUser] = useState<User | null>(null)
   const [drawerContext, setDrawerContext] = useState<LifecycleContext | undefined>(undefined)
   const [drawerLoading, setDrawerLoading] = useState(false)
-
-  // S76b/7604 — enforcement-mode toggle (ported from ReportingLineTree).
-  const [enforcementMode, setEnforcementMode] = useState<string>('PREFERRED')
-  const [enforcementVersion, setEnforcementVersion] = useState<number>(0)
-  const [enforcementError, setEnforcementError] = useState<string | null>(null)
-  const [enforcementLoading, setEnforcementLoading] = useState(false)
 
   // Default to the first tree root org once loaded
   useEffect(() => {
@@ -434,29 +424,6 @@ export function MedarbejderAdministration() {
       cancelled = true
     }
   }, [selectedTreeRoot, fetchRoster])
-
-  // Load enforcement settings whenever the tree root changes (404 → PREFERRED).
-  const loadEnforcementSettings = useCallback(
-    async (treeRoot: string) => {
-      if (!treeRoot) return
-      setEnforcementError(null)
-      const result = await fetchTreeSettings(treeRoot)
-      if (result.ok) {
-        setEnforcementMode(result.data.enforcementMode)
-        setEnforcementVersion(result.data.version)
-      } else if (result.status === 404) {
-        setEnforcementMode('PREFERRED')
-        setEnforcementVersion(0)
-      } else {
-        setEnforcementError(result.error)
-      }
-    },
-    [fetchTreeSettings],
-  )
-
-  useEffect(() => {
-    void loadEnforcementSettings(selectedTreeRoot)
-  }, [selectedTreeRoot, loadEnforcementSettings])
 
   const byId = useMemo(() => indexBy(people), [people])
 
@@ -607,46 +574,6 @@ export function MedarbejderAdministration() {
     void loadRoster(selectedTreeRoot, false)
   }, [loadRoster, selectedTreeRoot])
 
-  const handleToggleEnforcement = async () => {
-    if (!selectedTreeRoot) return
-    setEnforcementLoading(true)
-    setEnforcementError(null)
-    const newMode = enforcementMode === 'REQUIRED' ? 'PREFERRED' : 'REQUIRED'
-    const ifMatch = formatVersionAsIfMatch(enforcementVersion)
-    const result = await updateTreeSettings(
-      selectedTreeRoot,
-      { enforcementMode: newMode },
-      ifMatch,
-    )
-    if (result.ok) {
-      setEnforcementMode(result.data.enforcementMode)
-      setEnforcementVersion(result.data.version)
-      toast({
-        title: 'Opdateret',
-        description: `Håndhævelse sat til ${newMode === 'REQUIRED' ? 'Påkrævet' : 'Foretrukket'}`,
-        variant: 'success',
-      })
-    } else if (result.status === 409) {
-      // Population gate — surface the unassigned employee IDs honestly.
-      const body = result.body as { unassignedEmployeeIds?: string[] } | undefined
-      const ids = body?.unassignedEmployeeIds ?? []
-      setEnforcementError(
-        `Kan ikke aktivere håndhævelse: følgende medarbejdere mangler en udpeget godkender: ${ids.join(', ') || '(se serverloggen)'}`,
-      )
-    } else if (result.status === 412) {
-      toast({
-        title: 'Fejl',
-        description:
-          'Indstillingerne er ændret af en anden bruger. Genindlæser...',
-        variant: 'error',
-      })
-      await loadEnforcementSettings(selectedTreeRoot)
-    } else {
-      setEnforcementError(result.error)
-    }
-    setEnforcementLoading(false)
-  }
-
   // ---- Level segmented control options ----
   const totalLevels = useMemo(() => {
     const depths = Object.values(depthMap(people))
@@ -768,37 +695,6 @@ export function MedarbejderAdministration() {
           </button>
         </div>
       </div>
-
-      {/* S76b/7604 — enforcement-mode toggle (PREFERRED ↔ REQUIRED). Ported from
-          ReportingLineTree; the population-gate 409 surfaces the unassigned IDs. */}
-      {selectedTreeRoot && (
-        <div className={styles.enforceRow}>
-          <span>
-            Håndhævelse af godkendelseslinjer:{' '}
-            <strong>
-              {enforcementMode === 'REQUIRED' ? 'Påkrævet' : 'Foretrukket'}
-            </strong>
-          </span>
-          <button
-            type="button"
-            className={`${styles.enforceBtn} ${enforcementMode === 'REQUIRED' ? styles.enforceBtnOn : ''}`}
-            onClick={handleToggleEnforcement}
-            disabled={enforcementLoading}
-            data-testid="enforcement-toggle"
-          >
-            {enforcementLoading
-              ? 'Opdaterer...'
-              : enforcementMode === 'REQUIRED'
-                ? 'Deaktivér håndhævelse'
-                : 'Aktivér håndhævelse'}
-          </button>
-          {enforcementError && (
-            <div className={styles.enforceErr} role="alert" data-testid="enforcement-error">
-              {enforcementError}
-            </div>
-          )}
-        </div>
-      )}
 
       {/* Filter tiles */}
       <div className={styles.stats}>

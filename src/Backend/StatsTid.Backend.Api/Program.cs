@@ -90,7 +90,6 @@ builder.Services.AddSingleton<AuditProjectionRepository>();
 builder.Services.AddSingleton<ReportingLineRepository>();
 builder.Services.AddSingleton<ManagerVikarRepository>(); // S74 ADR-027 Phase 5 — approver-owned vikar storage
 builder.Services.AddSingleton<DesignatedApproverAuthorizer>(); // S74 / TASK-7402 — the ONE R5 canonical approve-authority predicate (A3, ADR-027 D4)
-builder.Services.AddSingleton<TreeSettingsRepository>();
 builder.Services.AddSingleton<EmployeeEntitlementEligibilityRepository>(); // S59
 builder.Services.AddSingleton<VacationTransferAgreementRepository>(); // S68 ADR-033 slice 1a
 builder.Services.AddSingleton<VacationSettlementRepository>(); // S68 ADR-033 slice 1a

@@ -5,7 +5,7 @@
 > Update the schema in `init.sql`, then run `python tools/generate_db_schema.py`.
 > CI fails (`tools/check_docs.py`) if this file drifts from init.sql.
 
-**Total: 66 tables** (49 primary, 17 audit).
+**Total: 65 tables** (48 primary, 17 audit).
 
 ---
 
@@ -503,7 +503,6 @@
 | manager_deadline | DATE | Yes |  |  |
 | designated_approver_id | TEXT | Yes |  |  |
 | approval_method | TEXT | Yes |  | 'PRE_REPORTING_LINE' |
-| explicit_fallback_confirmation | BOOLEAN | Yes |  | FALSE |
 
 **Table constraints:**
 - UNIQUE (employee_id, period_start, period_end)
@@ -1071,16 +1070,6 @@
 **Indexes:**
 - `idx_reporting_line_audit_line` on (reporting_line_id)
 
-## reporting_line_tree_settings
-
-| Column | Type | Null | Key | Default |
-|--------|------|------|-----|---------|
-| tree_root_org_id | TEXT | No | PK, FK→organizations |  |
-| enforcement_mode | TEXT | No |  | 'PREFERRED' |
-| version | BIGINT | No |  | 1 |
-| updated_by | TEXT | No |  |  |
-| updated_at | TIMESTAMPTZ | No |  | NOW() |
-
 ## employee_entitlement_eligibility
 
 | Column | Type | Null | Key | Default |
@@ -1427,18 +1416,17 @@
 | 50 | audit_projection | -- |
 | 51 | reporting_lines | -- |
 | 52 | reporting_line_audit | audit |
-| 53 | reporting_line_tree_settings | -- |
-| 54 | employee_entitlement_eligibility | -- |
-| 55 | employee_entitlement_eligibility_audit | audit |
-| 56 | vacation_settlements | -- |
-| 57 | vacation_transfer_agreements | -- |
-| 58 | vacation_settlement_audit | audit |
-| 59 | vacation_transfer_agreement_audit | audit |
-| 60 | settlement_payroll_inbox | -- |
-| 61 | settlement_export_lines | -- |
-| 62 | termination_payout_requests | -- |
-| 63 | user_skema_preferences | -- |
-| 64 | user_absence_selections | -- |
-| 65 | manager_vikar | -- |
-| 66 | payroll_export_records | -- |
+| 53 | employee_entitlement_eligibility | -- |
+| 54 | employee_entitlement_eligibility_audit | audit |
+| 55 | vacation_settlements | -- |
+| 56 | vacation_transfer_agreements | -- |
+| 57 | vacation_settlement_audit | audit |
+| 58 | vacation_transfer_agreement_audit | audit |
+| 59 | settlement_payroll_inbox | -- |
+| 60 | settlement_export_lines | -- |
+| 61 | termination_payout_requests | -- |
+| 62 | user_skema_preferences | -- |
+| 63 | user_absence_selections | -- |
+| 64 | manager_vikar | -- |
+| 65 | payroll_export_records | -- |
 

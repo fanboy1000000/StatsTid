@@ -1001,33 +1001,31 @@ public sealed class ApprovalPeriodRepository
         Guid periodId, string status, string? actorId = null,
         string? rejectionReason = null,
         string? designatedApproverId = null, string? approvalMethod = null,
-        bool explicitFallbackConfirmation = false,
         CancellationToken ct = default)
     {
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
-        await using var cmd = BuildUpdateStatusCommand(conn, null, periodId, status, actorId, rejectionReason, designatedApproverId, approvalMethod, explicitFallbackConfirmation);
+        await using var cmd = BuildUpdateStatusCommand(conn, null, periodId, status, actorId, rejectionReason, designatedApproverId, approvalMethod);
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
     /// <summary>
-    /// In-transaction sibling overload of <see cref="UpdateStatusAsync(Guid, string, string?, string?, string?, string?, bool, CancellationToken)"/>.
+    /// In-transaction sibling overload of <see cref="UpdateStatusAsync(Guid, string, string?, string?, string?, string?, CancellationToken)"/>.
     /// </summary>
     public async Task UpdateStatusAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
         Guid periodId, string status, string? actorId = null,
         string? rejectionReason = null,
         string? designatedApproverId = null, string? approvalMethod = null,
-        bool explicitFallbackConfirmation = false,
         CancellationToken ct = default)
     {
-        await using var cmd = BuildUpdateStatusCommand(conn, tx, periodId, status, actorId, rejectionReason, designatedApproverId, approvalMethod, explicitFallbackConfirmation);
+        await using var cmd = BuildUpdateStatusCommand(conn, tx, periodId, status, actorId, rejectionReason, designatedApproverId, approvalMethod);
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
     /// <summary>
     /// S78 R2 — the CONDITIONAL in-tx status transition. Identical to the in-tx
-    /// <see cref="UpdateStatusAsync(NpgsqlConnection, NpgsqlTransaction, Guid, string, string?, string?, string?, string?, bool, CancellationToken)"/>
+    /// <see cref="UpdateStatusAsync(NpgsqlConnection, NpgsqlTransaction, Guid, string, string?, string?, string?, string?, CancellationToken)"/>
     /// overload but the UPDATE additionally guards <c>status = ANY(allowedSourceStates)</c>, so it ONLY
     /// transitions a row that is still in an expected source state.
     ///
@@ -1054,12 +1052,11 @@ public sealed class ApprovalPeriodRepository
         Guid periodId, string status, IReadOnlyList<string> allowedSourceStates, string? actorId = null,
         string? rejectionReason = null,
         string? designatedApproverId = null, string? approvalMethod = null,
-        bool explicitFallbackConfirmation = false,
         CancellationToken ct = default)
     {
         await using var cmd = BuildUpdateStatusCommand(
             conn, tx, periodId, status, actorId, rejectionReason, designatedApproverId, approvalMethod,
-            explicitFallbackConfirmation, allowedSourceStates);
+            allowedSourceStates);
         // The conditional form RETURNs the captured pre-update status (BLOCKER 1). A NULL/absent scalar
         // means 0 rows matched the allowed source set → the caller returns a clean 409.
         var result = await cmd.ExecuteScalarAsync(ct);
@@ -1070,7 +1067,6 @@ public sealed class ApprovalPeriodRepository
         NpgsqlConnection conn, NpgsqlTransaction? tx,
         Guid periodId, string status, string? actorId, string? rejectionReason,
         string? designatedApproverId = null, string? approvalMethod = null,
-        bool explicitFallbackConfirmation = false,
         IReadOnlyList<string>? allowedSourceStates = null)
     {
         var conditional = allowedSourceStates is { Count: > 0 };
@@ -1084,9 +1080,9 @@ public sealed class ApprovalPeriodRepository
         {
             "SUBMITTED" => "status = 'SUBMITTED', submitted_at = NOW(), submitted_by = @actorId",
             "EMPLOYEE_APPROVED" => "status = 'EMPLOYEE_APPROVED', employee_approved_at = NOW(), employee_approved_by = @actorId",
-            "APPROVED" => "status = 'APPROVED', approved_by = @actorId, approved_at = NOW(), designated_approver_id = @designatedApproverId, approval_method = @approvalMethod, explicit_fallback_confirmation = @explicitFallback",
-            "REJECTED" => "status = 'REJECTED', approved_by = @actorId, approved_at = NOW(), rejection_reason = @rejectionReason, designated_approver_id = @designatedApproverId, approval_method = @approvalMethod, explicit_fallback_confirmation = @explicitFallback",
-            "DRAFT" => "status = 'DRAFT', submitted_at = NULL, submitted_by = NULL, approved_by = NULL, approved_at = NULL, rejection_reason = NULL, employee_approved_at = NULL, employee_approved_by = NULL, explicit_fallback_confirmation = FALSE",
+            "APPROVED" => "status = 'APPROVED', approved_by = @actorId, approved_at = NOW(), designated_approver_id = @designatedApproverId, approval_method = @approvalMethod",
+            "REJECTED" => "status = 'REJECTED', approved_by = @actorId, approved_at = NOW(), rejection_reason = @rejectionReason, designated_approver_id = @designatedApproverId, approval_method = @approvalMethod",
+            "DRAFT" => "status = 'DRAFT', submitted_at = NULL, submitted_by = NULL, approved_by = NULL, approved_at = NULL, rejection_reason = NULL, employee_approved_at = NULL, employee_approved_by = NULL",
             _ => throw new ArgumentException($"Invalid status: {status}")
         };
 
@@ -1122,7 +1118,6 @@ public sealed class ApprovalPeriodRepository
         {
             cmd.Parameters.AddWithValue("designatedApproverId", (object?)designatedApproverId ?? DBNull.Value);
             cmd.Parameters.AddWithValue("approvalMethod", (object?)approvalMethod ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("explicitFallback", explicitFallbackConfirmation);
         }
         if (conditional)
             cmd.Parameters.AddWithValue("allowedSourceStates", allowedSourceStates!.ToArray());
@@ -1229,7 +1224,6 @@ public sealed class ApprovalPeriodRepository
         OkVersion = reader.GetString(reader.GetOrdinal("ok_version")),
         DesignatedApproverId = reader.IsDBNull(reader.GetOrdinal("designated_approver_id")) ? null : reader.GetString(reader.GetOrdinal("designated_approver_id")),
         ApprovalMethod = reader.IsDBNull(reader.GetOrdinal("approval_method")) ? null : reader.GetString(reader.GetOrdinal("approval_method")),
-        ExplicitFallbackConfirmation = !reader.IsDBNull(reader.GetOrdinal("explicit_fallback_confirmation")) && reader.GetBoolean(reader.GetOrdinal("explicit_fallback_confirmation")),
         CreatedAt = reader.GetDateTime(reader.GetOrdinal("created_at"))
     };
 }
