@@ -270,10 +270,15 @@ export function OrganisationPage() {
     if (!moveModal || !moveModal.to) return
     setBusy(true)
     setDialogError(null)
+    const newParent = moveModal.to
     try {
-      await moveOrganization(moveModal.id, moveModal.to)
+      await moveOrganization(moveModal.id, newParent)
       toast({ title: 'Flyttet', description: 'Organisation flyttet', variant: 'success' })
       setMoveModal(null)
+      // Reveal the moved org under its new parent (mirror the create-child reveal) — else a
+      // move into a collapsed MAO hides the org. Manual reveal → clear the active level.
+      setExpanded((s) => new Set(s).add(newParent))
+      setLevel(null)
       await reload()
     } catch (err) {
       // Map 400 (shape) / 422 (semantic) to an inline dialog error.
