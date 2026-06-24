@@ -330,3 +330,11 @@ jobs:
         # and sprints that shipped in git with no SPRINT-<n>.md log. Freshness is report-only.
         # See tools/check_docs.py and the 2026-05-31 doc-health reconciliation.
         run: python tools/check_docs.py
+
+      - name: Run endpoint-contract coverage gate
+        # Hard-fails if a FE-consumed /api/admin/* GET endpoint is in NEITHER the contract
+        # REGISTRY (has a contract test) NOR the EXEMPT-list (consciously deferred, with a
+        # reason), or if a registered endpoint's contract test method is missing. Closes the
+        # recurring "fetchEnheder" bug class (S97→S99→S100). See tools/check_endpoint_contracts.py
+        # + PAT-010. The doc convention alone failed 3×; this is the gate.
+        run: python tools/check_endpoint_contracts.py

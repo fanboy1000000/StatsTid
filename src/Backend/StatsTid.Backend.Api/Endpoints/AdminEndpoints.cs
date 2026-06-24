@@ -2,6 +2,7 @@ using System.Data;
 using System.Text.Json;
 using Npgsql;
 using StatsTid.Auth;
+using StatsTid.Backend.Api.Contracts;
 using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
@@ -627,7 +628,10 @@ public static class AdminEndpoints
                 .GroupBy(o => o.ParentOrgId ?? string.Empty, StringComparer.Ordinal)
                 .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
 
-            var forest = new List<object>();
+            // S101/TASK-10101: the forest nodes are the named OrgTreeMaoNode / OrgTreeOrganisationNode
+            // (were anonymous). The visibility filter, the per-MAO rollup, and the BuildEnhedForest
+            // nesting are UNCHANGED — only the node TYPE moved. BYTE-IDENTICAL wire JSON.
+            var forest = new List<OrgTreeMaoNode>();
             foreach (var mao in allOrgs.Where(o => string.Equals(o.OrgType, "MAO", StringComparison.Ordinal))
                                        .OrderBy(o => o.MaterializedPath, StringComparer.Ordinal))
             {
@@ -636,22 +640,20 @@ public static class AdminEndpoints
                 var visibleChildren = children
                     .Where(c => OrgVisible(c.OrgId))
                     .OrderBy(c => c.MaterializedPath, StringComparer.Ordinal)
-                    .Select(c => new
-                    {
-                        orgId = c.OrgId,
-                        orgName = c.OrgName,
-                        orgType = c.OrgType,
-                        parentOrgId = c.ParentOrgId,
-                        materializedPath = c.MaterializedPath,
-                        agreementCode = c.AgreementCode,
-                        okVersion = c.OkVersion,
-                        employeeCount = empCounts.TryGetValue(c.OrgId, out var n) ? n : 0L,
+                    .Select(c => new OrgTreeOrganisationNode(
+                        OrgId: c.OrgId,
+                        OrgName: c.OrgName,
+                        OrgType: c.OrgType,
+                        ParentOrgId: c.ParentOrgId,
+                        MaterializedPath: c.MaterializedPath,
+                        AgreementCode: c.AgreementCode,
+                        OkVersion: c.OkVersion,
+                        EmployeeCount: empCounts.TryGetValue(c.OrgId, out var n) ? n : 0L,
                         // S100 — NEST the per-Organisation enhed sub-tree via parent_enhed_id +
                         // derive `level` = depth (root enhed = 1). O(enheder), bounded per-org,
                         // no N+1 — the flat rows for ONE Organisation are assembled into a forest
                         // in C#. PURE DISPLAY metadata; parent_enhed_id enters NO authority path.
-                        enheder = BuildEnhedForest(enhederByOrg.TryGetValue(c.OrgId, out var es) ? es : new List<EnhedCountRow>()),
-                    })
+                        Enheder: BuildEnhedForest(enhederByOrg.TryGetValue(c.OrgId, out var es) ? es : new List<EnhedCountRow>())))
                     .ToList();
 
                 // GlobalAdmin sees every MAO (even childless); a scoped role only sees a MAO that
@@ -659,21 +661,19 @@ public static class AdminEndpoints
                 if (visible is not null && visibleChildren.Count == 0)
                     continue;
 
-                forest.Add(new
-                {
-                    orgId = mao.OrgId,
-                    orgName = mao.OrgName,
-                    orgType = mao.OrgType,
-                    parentOrgId = mao.ParentOrgId,
-                    materializedPath = mao.MaterializedPath,
-                    agreementCode = mao.AgreementCode,
-                    okVersion = mao.OkVersion,
-                    employeeCount = visibleChildren.Sum(c => (long)c.employeeCount),
-                    organisations = visibleChildren,
-                });
+                forest.Add(new OrgTreeMaoNode(
+                    OrgId: mao.OrgId,
+                    OrgName: mao.OrgName,
+                    OrgType: mao.OrgType,
+                    ParentOrgId: mao.ParentOrgId,
+                    MaterializedPath: mao.MaterializedPath,
+                    AgreementCode: mao.AgreementCode,
+                    OkVersion: mao.OkVersion,
+                    EmployeeCount: visibleChildren.Sum(c => (long)c.EmployeeCount),
+                    Organisations: visibleChildren));
             }
 
-            return Results.Ok(new { tree = forest });
+            return Results.Ok(new OrgTreeResponse(forest));
         }).RequireAuthorization("HROrAbove");
 
         // ═══════════════════════════════════════════
@@ -2622,18 +2622,17 @@ public static class AdminEndpoints
                 }
                 return depth;
             }
-            return Results.Ok(new
-            {
-                enheder = rows.Select(e => new
-                {
-                    enhedId = e.EnhedId,
-                    organisationId = e.OrganisationId,
-                    name = e.Name,
-                    version = e.Version,
-                    parentEnhedId = e.ParentEnhedId,
-                    level = LevelOf(e.EnhedId),
-                }),
-            });
+            // S101/TASK-10101: named records (EnhedListResponse{ EnhedListItem[] }) — BYTE-IDENTICAL
+            // wire JSON (the `{ enheder: [...] }` envelope + camelCase keys are unchanged).
+            return Results.Ok(new EnhedListResponse(
+                rows.Select(e => new EnhedListItem(
+                    EnhedId: e.EnhedId,
+                    OrganisationId: e.OrganisationId,
+                    Name: e.Name,
+                    Version: e.Version,
+                    ParentEnhedId: e.ParentEnhedId,
+                    Level: LevelOf(e.EnhedId)))
+                .ToList()));
         }).RequireAuthorization("HROrAbove");
 
         // POST /api/admin/enheder { organisationId, name } — create. Floored on the target
@@ -3230,19 +3229,18 @@ public static class AdminEndpoints
         return roleLevel;
     }
 
-    private static object MapOrgResponse(StatsTid.SharedKernel.Models.Organization org) => new
-    {
-        orgId = org.OrgId,
-        orgName = org.OrgName,
-        orgType = org.OrgType,
-        parentOrgId = org.ParentOrgId,
-        materializedPath = org.MaterializedPath,
-        agreementCode = org.AgreementCode,
-        // S76b: serve the org's denormalized okVersion so the unified-editor create
-        // flow can supply the backend-required CreateUserRequest.OkVersion (additive
-        // read field; consumers ignore unknown fields). Declared read-gap fill.
-        okVersion = org.OkVersion
-    };
+    // S101/TASK-10101: named record (OrgListItem) replaces the anonymous shape — BYTE-IDENTICAL
+    // wire JSON (camelCase via JsonSerializerDefaults.Web). The members mirror the prior anonymous
+    // fields exactly. okVersion is the S76b additive read field (the unified-editor create flow
+    // needs CreateUserRequest.OkVersion; consumers ignore unknown fields).
+    private static OrgListItem MapOrgResponse(StatsTid.SharedKernel.Models.Organization org) => new(
+        OrgId: org.OrgId,
+        OrgName: org.OrgName,
+        OrgType: org.OrgType,
+        ParentOrgId: org.ParentOrgId,
+        MaterializedPath: org.MaterializedPath,
+        AgreementCode: org.AgreementCode,
+        OkVersion: org.OkVersion);
 
     // ── S100 (ADR-036 amendment) — nest the per-Organisation enhed sub-tree ──
 
@@ -3254,10 +3252,13 @@ public static class AdminEndpoints
     /// terminates; any node not reachable from a root is appended as a defensive root so it never
     /// silently disappears. PURE DISPLAY metadata — the level/parent enter NO authority path.
     /// </summary>
-    private static List<object> BuildEnhedForest(IReadOnlyList<EnhedCountRow> rows)
+    // S101/TASK-10101: returns the named OrgTreeEnhedNode (was anonymous). The recursion
+    // control-flow + loop guard + defensive-root logic are UNCHANGED — only the node TYPE moved
+    // from anonymous to the named record. BYTE-IDENTICAL wire JSON (camelCase keys unchanged).
+    private static List<OrgTreeEnhedNode> BuildEnhedForest(IReadOnlyList<EnhedCountRow> rows)
     {
         if (rows.Count == 0)
-            return new List<object>();
+            return new List<OrgTreeEnhedNode>();
 
         var childrenByParent = rows
             .Where(e => e.ParentEnhedId is not null)
@@ -3266,7 +3267,7 @@ public static class AdminEndpoints
 
         var visited = new HashSet<Guid>();
 
-        object BuildNode(EnhedCountRow e, int level)
+        OrgTreeEnhedNode BuildNode(EnhedCountRow e, int level)
         {
             visited.Add(e.EnhedId);
             var kids = childrenByParent.TryGetValue(e.EnhedId, out var cs) ? cs : new List<EnhedCountRow>();
@@ -3274,15 +3275,13 @@ public static class AdminEndpoints
                 .Where(k => !visited.Contains(k.EnhedId)) // loop guard (legacy data)
                 .Select(k => BuildNode(k, level + 1))
                 .ToList();
-            return new
-            {
-                enhedId = e.EnhedId,
-                parentEnhedId = e.ParentEnhedId,
-                level,
-                name = e.Name,
-                taggedUserCount = e.TaggedUserCount,
-                children,
-            };
+            return new OrgTreeEnhedNode(
+                EnhedId: e.EnhedId,
+                ParentEnhedId: e.ParentEnhedId,
+                Level: level,
+                Name: e.Name,
+                TaggedUserCount: e.TaggedUserCount,
+                Children: children);
         }
 
         // Roots = parent_enhed_id IS NULL OR a parent absent from THIS org's active set (a
