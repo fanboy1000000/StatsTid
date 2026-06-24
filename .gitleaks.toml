@@ -26,6 +26,13 @@ paths = [
     # Markdown files at repo root carry meta-discussion of secrets handling
     # without containing live secrets.
     '''^(CLAUDE|MEMORY|SYSTEM_TARGET)\.md$''',
+    # The demo-seed SQL is a GENERATED fixture (tools/StatsTid.DemoSeed) of purely
+    # synthetic data — demo users, orgs, and deterministic MD5-derived UUIDs. It
+    # contains no real credentials (the dev bcrypt "password" hash is already
+    # allowlisted below). S97 added enheder/user_enheder UUIDs, some of which by
+    # chance match the `square-access-token` shape — a false positive. The file is
+    # re-emitted each sprint, so allowlist the path rather than chase per-UUID matches.
+    '''^docker/postgres/99-demo-seed\.sql$''',
 ]
 
 # --- Regex-based allowlist ---
