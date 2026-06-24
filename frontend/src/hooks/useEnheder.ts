@@ -71,12 +71,14 @@ export function useEnheder() {
    */
   const fetchEnheder = useCallback(
     async (organisationId: string): Promise<ApiResult<Enhed[]>> => {
-      const result = await apiClient.get<EnhedWire[]>(
+      // The backend serves an OBJECT envelope `{ enheder: [...] }`
+      // (AdminEndpoints.cs `Results.Ok(new { enheder = … })`), NOT a bare array.
+      const result = await apiClient.get<{ enheder: EnhedWire[] }>(
         `/api/admin/enheder?organisationId=${encodeURIComponent(organisationId)}`,
       )
       if (!result.ok) return result
       // No collection ETag — each row carries its own `version`.
-      return { ok: true, data: result.data.map((row) => toEnhed(row, null)) }
+      return { ok: true, data: result.data.enheder.map((row) => toEnhed(row, null)) }
     },
     [],
   )

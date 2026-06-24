@@ -8,7 +8,7 @@
 | **End Date** | 2026-06-24 |
 | **Orchestrator Approved** | yes — 2026-06-24 |
 | **Build Verified** | yes — `dotnet build StatsTid.sln` 0 errors |
-| **Test Verified** | yes (local): 850 unit + 1111 regression (+`S98OrgStructureTests` 17, verified 17/17 in isolation post-fix) + 6 smoke + 29 demoseed + 518 fe; CI-pending (backfilled at close-polish) |
+| **Test Verified** | yes (local): 850 unit + 1111 regression (+`S98OrgStructureTests` 17, verified 17/17 in isolation post-fix) + 6 smoke + 29 demoseed + 518 fe; CI GREEN `28084380708` (all 7 jobs) |
 
 ## Sprint Goal
 The BACKEND half of the redesigned Organisation (Global administration) page (`design_handoff_organisation`) — Phase 1 of 2 (S99 = the hi-fi FE tree-table). Fill the org-structure CRUD gaps the page needs, on the FLAT S97 Enhed model: **org soft-delete** (blocked-if-employees), **org move/re-parent** (path-rewrite in-tx), and a **single aggregated tree-with-employee-counts endpoint**. Reuse the existing create/rename + the S97 enhed CRUD. Refinement: `.claude/refinements/REFINEMENT-organisation-page.md` (owner-resolved 4 forks + Step-4 dual-lens, 3 BLOCKERs resolved).
@@ -44,7 +44,7 @@ The BACKEND half of the redesigned Organisation (Global administration) page (`d
 - [x] P3 — Event sourcing (`OrganizationDeleted`/`OrganizationMoved` + the full 5-point registration + catalog; `OrganizationMoved` carries old+new parent+path for replay; both lenses confirmed complete)
 - [x] P4 — Concurrency (NO version column → no If-Match; the soft-delete does count + flip in ONE tx with `SELECT … FOR UPDATE`; the move locks BOTH the moved org + the new parent in-tx [the move-vs-delete-of-new-parent race, Step-7a — fixed]; the create-vs-delete sub-second residual accepted+documented)
 - [x] P7 — Security (GlobalAdmin floor on move/delete [both lenses confirmed]; the home guards already reject inactive orgs via `GetByIdAsync`'s `is_active` filter [BLOCKER B — no new guard]; blocked-if-employees; the tree visibility-bounded, no cross-org leak)
-- [x] P8 — CI/CD (no schema change [67 tables]; 1111 regression — `S98OrgStructureTests` 17/17 isolation-verified post-fix; CI confirmation pending)
+- [x] P8 — CI/CD (no schema change [67 tables]; 1111 regression — `S98OrgStructureTests` 17/17 isolation-verified post-fix; CI GREEN `28084380708`)
 
 ## Task Log (planned)
 - **TASK-9801 — Org soft-delete** (endpoint + repo: in ONE tx `SELECT … FOR UPDATE` the org → blocked-if-employees predicate [Organisation + MAO-subtree LIKE] → flip `is_active=false`; NO If-Match/version; `OrganizationDeleted` event + the 5-point P3 surface + catalog; GlobalAdmin floor).
@@ -92,7 +92,7 @@ All tasks complete (TASK-9802 DROPPED — already protected; folded into docs + 
 | Smoke | 6 | all passing |
 | DemoSeed | 29 | all passing |
 | Frontend (vitest) | 518 | unchanged (FE is S99) |
-| **Total** | **2514** | CI confirmation pending |
+| **Total** | **2514** | CI GREEN `28084380708` (all 7 jobs) |
 
 ## Sprint Retrospective
 **What went well**: the review machinery corrected real misconceptions before code — Step-0b caught that `organizations` has no `version` column (the If-Match plan was unbuildable) AND that `GetByIdAsync` already filters `is_active` (the home-guard work was redundant) — both *false-green traps* the refinement would have shipped. Step-7a's Codex lens then caught the move-vs-delete-of-new-parent race (a genuine concurrency hole) the internal lens cleared. The move-path-rewrite-as-correctness (not display) framing held — the strengthened both-direction roster test pins it.

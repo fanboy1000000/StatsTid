@@ -43,9 +43,9 @@ function router(overrides: Record<string, (init?: RequestInit) => unknown> = {})
       const [m, frag] = key.split(' ')
       if (url.includes(frag) && (init?.method ?? 'GET') === m) return factory(init)
     }
-    // default list
-    if (url.includes('/api/admin/enheder?organisationId=STY1')) return ok(STY1_ENHEDER)
-    if (url.includes('/api/admin/enheder?organisationId=STY2')) return ok([])
+    // default list — the backend serves `{ enheder: [...] }` (object envelope).
+    if (url.includes('/api/admin/enheder?organisationId=STY1')) return ok({ enheder: STY1_ENHEDER })
+    if (url.includes('/api/admin/enheder?organisationId=STY2')) return ok({ enheder: [] })
     if (url.includes('/api/admin/enheder?organisationId=MIN1')) return err(400, { error: 'MAO' })
     return err(404, { error: 'nf' })
   })
@@ -108,8 +108,8 @@ describe('EnhederPanel', () => {
       },
       'GET /api/admin/enheder?organisationId=STY1': () =>
         created
-          ? ok([...STY1_ENHEDER, { enhedId: 'E9', organisationId: 'STY1', name: 'Sikkerhed', version: 1 }])
-          : ok(STY1_ENHEDER),
+          ? ok({ enheder: [...STY1_ENHEDER, { enhedId: 'E9', organisationId: 'STY1', name: 'Sikkerhed', version: 1 }] })
+          : ok({ enheder: STY1_ENHEDER }),
     })
     renderPanel('STY1')
     await waitFor(() => expect(screen.getByTestId('enheder-list')).toBeDefined())
@@ -152,8 +152,8 @@ describe('EnhederPanel', () => {
       },
       'GET /api/admin/enheder?organisationId=STY1': () =>
         renamed
-          ? ok([{ enhedId: 'E1', organisationId: 'STY1', name: 'Netværk II', version: 2 }, STY1_ENHEDER[1]])
-          : ok(STY1_ENHEDER),
+          ? ok({ enheder: [{ enhedId: 'E1', organisationId: 'STY1', name: 'Netværk II', version: 2 }, STY1_ENHEDER[1]] })
+          : ok({ enheder: STY1_ENHEDER }),
     })
     renderPanel('STY1')
     await waitFor(() => expect(screen.getByTestId('enheder-name-E1')).toBeDefined())
@@ -182,7 +182,7 @@ describe('EnhederPanel', () => {
         return { ok: true, status: 204, headers: new Headers(), text: async () => '' }
       },
       'GET /api/admin/enheder?organisationId=STY1': () =>
-        deleted ? ok([STY1_ENHEDER[0]]) : ok(STY1_ENHEDER),
+        deleted ? ok({ enheder: [STY1_ENHEDER[0]] }) : ok({ enheder: STY1_ENHEDER }),
     })
     renderPanel('STY1')
     await waitFor(() => expect(screen.getByTestId('enheder-name-E2')).toBeDefined())
@@ -202,7 +202,7 @@ describe('EnhederPanel', () => {
   it('switching the panel Organisation selector reloads that org enheder', async () => {
     router({
       'GET /api/admin/enheder?organisationId=STY2': () =>
-        ok([{ enhedId: 'X1', organisationId: 'STY2', name: 'Arkitektur', version: 1 }]),
+        ok({ enheder: [{ enhedId: 'X1', organisationId: 'STY2', name: 'Arkitektur', version: 1 }] }),
     })
     renderPanel('STY1')
     await waitFor(() => expect(screen.getByTestId('enheder-name-E1')).toBeDefined())

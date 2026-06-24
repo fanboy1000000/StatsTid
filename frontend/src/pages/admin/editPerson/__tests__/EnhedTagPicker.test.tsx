@@ -59,7 +59,7 @@ beforeEach(() => {
 
 describe('EnhedTagPicker', () => {
   it('lists the org active enheder as checkboxes', async () => {
-    mockFetch.mockResolvedValue(ok(ENHEDER))
+    mockFetch.mockResolvedValue(ok({ enheder: ENHEDER }))
     render(<Host />)
     await waitFor(() => {
       expect(screen.getByTestId('ep-enheder-picker')).toBeDefined()
@@ -72,7 +72,7 @@ describe('EnhedTagPicker', () => {
   })
 
   it('toggling a tag reports the selected id set up', async () => {
-    mockFetch.mockResolvedValue(ok(ENHEDER))
+    mockFetch.mockResolvedValue(ok({ enheder: ENHEDER }))
     render(<Host />)
     await waitFor(() => expect(screen.getByLabelText('Drift')).toBeDefined())
     fireEvent.click(screen.getByLabelText('Drift'))
@@ -85,7 +85,7 @@ describe('EnhedTagPicker', () => {
   })
 
   it('NAME-seeds the initial selection from currentTagNames (case-insensitive) + fires onSeed', async () => {
-    mockFetch.mockResolvedValue(ok(ENHEDER))
+    mockFetch.mockResolvedValue(ok({ enheder: ENHEDER }))
     const onSeed = vi.fn()
     render(<Host currentTagNames="netværk, Support" onSeed={onSeed} />)
     await waitFor(() => {
@@ -99,7 +99,7 @@ describe('EnhedTagPicker', () => {
   })
 
   it('seeds EMPTY (and fires onSeed with []) when the legacy label matches no enhed name', async () => {
-    mockFetch.mockResolvedValue(ok(ENHEDER))
+    mockFetch.mockResolvedValue(ok({ enheder: ENHEDER }))
     const onSeed = vi.fn()
     // An org-name fallback label (no structured tag) must NOT match any enhed.
     render(<Host currentTagNames="Moderniseringsstyrelsen" onSeed={onSeed} />)

@@ -14,7 +14,7 @@ import { MyPeriods } from './pages/approval/MyPeriods'
 // The old ApprovalDashboard was deleted in S88 (P2 parity reached); /godkend/godkendelser
 // redirects here.
 import { TeamOversigt } from './pages/approval/TeamOversigt'
-import { OrgManagement } from './pages/admin/OrgManagement'
+import { OrganisationPage } from './pages/admin/OrganisationPage'
 import { RoleManagement } from './pages/admin/RoleManagement'
 import { ProjectManagement } from './pages/admin/ProjectManagement'
 import { ConfigManagement } from './pages/config/ConfigManagement'
@@ -97,7 +97,7 @@ function AppRoutes() {
             <Route path="global/overenskomster" element={<AgreementConfigList />} />
             <Route path="global/overenskomster/new" element={<AgreementConfigEditor />} />
             <Route path="global/overenskomster/:configId" element={<AgreementConfigEditor />} />
-            <Route path="global/organisation" element={<OrgManagement />} />
+            <Route path="global/organisation" element={<OrganisationPage />} />
             <Route path="global/loenartstilknytning" element={<WageTypeMappingManagement />} />
             <Route path="global/entitlement-configs" element={<Navigate to="/global/overenskomster" replace />} />
           </Route>

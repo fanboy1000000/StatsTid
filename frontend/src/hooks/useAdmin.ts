@@ -55,6 +55,22 @@ export interface RoleAssignment {
  */
 export type WithEtag<T> = T & { etag: string; version: number }
 
+/**
+ * Status-tagged error thrown by `createOrganization` (S99 Step-7a FIX 2) so the
+ * OrganisationPage create dialog can branch on `status` (409 -> friendly "name
+ * already exists" copy) without re-reading the response. Mirrors the shape of
+ * `EnhedMutationError` / `OrgStructureError`.
+ */
+export interface OrgMutationError extends Error {
+  status: number
+}
+
+function makeOrgMutationError(status: number, message: string): OrgMutationError {
+  const err = new Error(message) as OrgMutationError
+  err.status = status
+  return err
+}
+
 export function useOrganizations() {
   const [organizations, setOrganizations] = useState<Organization[]>([])
   const [loading, setLoading] = useState(false)
@@ -74,17 +90,36 @@ export function useOrganizations() {
 
   useEffect(() => { fetchOrganizations() }, [fetchOrganizations])
 
-  const createOrganization = async (body: { orgId: string; orgName: string; orgType: string; parentOrgId: string | null; agreementCode: string }) => {
+  // S99 / TASK-9901 — name-only create. The S99 backend adaptation lets the
+  // POST accept a NAME-ONLY body (`orgId` generated server-side; `agreementCode`
+  // / `okVersion` defaulted server-side — they are vestigial, NOT a property of
+  // the org tree per the handoff). `orgType` + `parentOrgId` come from the dialog
+  // context (MAO = root, no parent; ORGANISATION needs a MAO parent). The old
+  // explicit-orgId/agreement form still works (backward-compat) — both fields are
+  // optional here.
+  const createOrganization = async (body: {
+    orgName: string
+    orgType: string
+    parentOrgId?: string | null
+    orgId?: string
+    agreementCode?: string
+  }) => {
     const result = await apiClient.post<Organization>('/api/admin/organizations', body)
-    if (!result.ok) throw new Error(result.error)
+    // S99 Step-7a FIX 2 — carry the HTTP status so the OrganisationPage create
+    // dialog's 409 branch (`dupOrMessage`) can fire (mirrors useEnheder /
+    // useOrganizationStructure). For ORGANISATION/MAO a 409 is effectively
+    // unreachable (server-generated orgId + no name-uniqueness) — this is for the
+    // shared create handler's correctness alongside the ENHED path.
+    if (!result.ok) throw makeOrgMutationError(result.status, result.error)
     await fetchOrganizations()
     return result.data
   }
 
-  const updateOrganization = async (
-    orgId: string,
-    body: { orgName: string; agreementCode: string; okVersion: string },
-  ) => {
+  // S99 — name-only rename. The backend COALESCEs null agreement/ok to the
+  // existing values (`AdminEndpoints.cs:254-256`), so a name-only PUT is SAFE
+  // (it keeps the existing agreement/ok) — we deliberately do NOT surface or
+  // re-send overenskomst/OK-version (the handoff forbids them on the org tree).
+  const updateOrganization = async (orgId: string, body: { orgName: string }) => {
     const result = await apiClient.put<Organization>(
       `/api/admin/organizations/${encodeURIComponent(orgId)}`,
       body,

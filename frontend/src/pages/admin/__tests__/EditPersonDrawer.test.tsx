@@ -110,7 +110,8 @@ function setupRouter(overrides: RouterOverrides = {}) {
     // enhed ("Netværk") so the picker renders + name-seeds from the roster label.
     if (url.includes('/api/admin/enheder')) {
       if (method === 'PUT') return ok(undefined)
-      return ok([{ enhedId: 'ENH-NET', organisationId: 'ORG1', name: 'Netværk', version: 1 }])
+      // The list GET serves the object envelope `{ enheder: [...] }`.
+      return ok({ enheder: [{ enhedId: 'ENH-NET', organisationId: 'ORG1', name: 'Netværk', version: 1 }] })
     }
     if (url.includes('/api/admin/users/') && url.includes('/enheder')) {
       return ok(undefined)
@@ -418,7 +419,8 @@ function setupSharedUsersVersionRouter(initialVersion = 1) {
       return ok(undefined)
     }
     if (url.includes('/api/admin/enheder')) {
-      return ok([{ enhedId: 'ENH-NET', organisationId: 'ORG1', name: 'Netværk', version: 1 }])
+      // The list GET serves the object envelope `{ enheder: [...] }`.
+      return ok({ enheder: [{ enhedId: 'ENH-NET', organisationId: 'ORG1', name: 'Netværk', version: 1 }] })
     }
     // employee-profiles — a SEPARATE version (not the shared users row).
     if (url.includes('/api/admin/employee-profiles/')) {
@@ -567,7 +569,7 @@ describe('EditPersonDrawer — 412 staleConflict banner', () => {
     mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
       const method = init?.method ?? 'GET'
       if (url.includes('/api/admin/users/') && url.includes('/enheder')) return ok(undefined)
-      if (url.includes('/api/admin/enheder')) return ok([{ enhedId: 'ENH-NET', organisationId: 'ORG1', name: 'Netværk', version: 1 }])
+      if (url.includes('/api/admin/enheder')) return ok({ enheder: [{ enhedId: 'ENH-NET', organisationId: 'ORG1', name: 'Netværk', version: 1 }] })
       if (url.includes('/api/admin/employee-profiles/')) return ok(profileBody, '"1"')
       if (url.includes('/birth-date')) return ok({ employeeId: 'EMP001', birthDate: null, version: usersVersion }, `"${usersVersion}"`)
       if (url.includes('/employment-start-date')) return ok({ employeeId: 'EMP001', employmentStartDate: null, version: usersVersion }, `"${usersVersion}"`)

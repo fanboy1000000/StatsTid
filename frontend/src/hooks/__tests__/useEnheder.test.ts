@@ -52,11 +52,14 @@ beforeEach(() => {
 
 describe('useEnheder — fetchEnheder (list)', () => {
   it('lists ACTIVE enheder + composes each row If-Match from its own version', async () => {
+    // The backend serves an OBJECT envelope `{ enheder: [...] }`, not a bare array.
     mockFetch.mockResolvedValue(
-      ok([
-        { enhedId: 'E1', organisationId: 'STY1', name: 'Netværk', version: 3 },
-        { enhedId: 'E2', organisationId: 'STY1', name: 'Drift', version: 1 },
-      ]),
+      ok({
+        enheder: [
+          { enhedId: 'E1', organisationId: 'STY1', name: 'Netværk', version: 3 },
+          { enhedId: 'E2', organisationId: 'STY1', name: 'Drift', version: 1 },
+        ],
+      }),
     )
     const result = await hook().fetchEnheder('STY1')
     expect(result.ok).toBe(true)

@@ -90,6 +90,23 @@ public static class AdminEndpoints
 
             var orgType = request.OrgType.ToUpperInvariant();
 
+            // S99/TASK-9900: resolve the optional fields server-side so the name-only
+            // Create dialog works. AgreementCode/OkVersion are VESTIGIAL on the org tree
+            // ("overenskomst is NOT a property of the org tree" per design_handoff_organisation)
+            // — they do not drive employee agreements — so default them to the system
+            // defaults ('AC'/'OK24', see docker/postgres/init.sql) when blank. An explicit
+            // value is honored unchanged (backward-compatible).
+            var agreementCode = string.IsNullOrWhiteSpace(request.AgreementCode) ? "AC" : request.AgreementCode;
+            var okVersion = string.IsNullOrWhiteSpace(request.OkVersion) ? "OK24" : request.OkVersion;
+
+            // S99/TASK-9900: OrgId is OPTIONAL — when blank the BACKEND owns the
+            // id-generation policy (NOT the FE). Format: "ORG" + the first 8 hex chars of
+            // a GUID, uppercased (e.g. "ORG3F9A1C7D"). ~4.3e9 of entropy in 8 hex chars;
+            // a rare PK/partial-unique collision (23505) is handled by a bounded
+            // re-generate retry around the INSERT below. The owner can revisit the format.
+            var explicitOrgId = !string.IsNullOrWhiteSpace(request.OrgId);
+            var orgId = explicitOrgId ? request.OrgId! : GenerateOrgId();
+
             // S92/ADR-035 type-scoped parent rules:
             //   MAO          = root         → MUST NOT have a parent.
             //   ORGANISATION = under a MAO  → MUST have a parent, and that parent MUST be a MAO.
@@ -98,8 +115,11 @@ public static class AdminEndpoints
             if (orgType == "ORGANISATION" && request.ParentOrgId is null)
                 return Results.BadRequest(new { error = "An ORGANISATION must have a MAO parent." });
 
-            // Compute materialized path
+            // Compute materialized path. The path is parameterized on the (possibly
+            // generated) orgId — recomputed inside the retry loop if a collision forces a
+            // re-generate (an explicit orgId never re-generates → its path is stable).
             string materializedPath;
+            string? parentMaterializedPath = null;
             if (request.ParentOrgId is not null)
             {
                 // Validate actor scope covers parent org. S76 B1: LocalAdminOrAbove policy →
@@ -117,7 +137,8 @@ public static class AdminEndpoints
                 if (orgType == "ORGANISATION" && parentOrg.OrgType != "MAO")
                     return Results.BadRequest(new { error = $"An ORGANISATION's parent must be a MAO (got {parentOrg.OrgType})." });
 
-                materializedPath = $"{parentOrg.MaterializedPath}{request.OrgId}/";
+                parentMaterializedPath = parentOrg.MaterializedPath;
+                materializedPath = $"{parentMaterializedPath}{orgId}/";
             }
             else
             {
@@ -125,84 +146,124 @@ public static class AdminEndpoints
                 if (!HasGlobalScope(actor))
                     return Results.Json(new { error = "Access denied", reason = "Only GlobalAdmin can create top-level organizations" }, statusCode: 403);
 
-                materializedPath = $"/{request.OrgId}/";
+                materializedPath = $"/{orgId}/";
             }
 
-            // Check if org already exists
-            var existing = await orgRepo.GetByIdAsync(request.OrgId, ct);
+            // Check if org already exists. For an EXPLICIT orgId this is a hard conflict
+            // (the caller chose the id). For a GENERATED orgId a collision here is vanishingly
+            // rare and the INSERT's 23505 retry below also covers the race; we still
+            // pre-check to surface the explicit-id conflict early.
+            var existing = await orgRepo.GetByIdAsync(orgId, ct);
             if (existing is not null)
-                return Results.Conflict(new { error = $"Organization '{request.OrgId}' already exists" });
+            {
+                if (explicitOrgId)
+                    return Results.Conflict(new { error = $"Organization '{orgId}' already exists" });
+                // Generated id collided on the pre-check — regenerate and recompute the path.
+                orgId = GenerateOrgId();
+                materializedPath = parentMaterializedPath is not null
+                    ? $"{parentMaterializedPath}{orgId}/"
+                    : $"/{orgId}/";
+            }
 
             // Atomic INSERT + outbox-emit per ADR-018 D3 (S26 TASK-2605a prototype):
             // inline organizations INSERT and OrganizationCreated outbox enqueue ride
             // a single explicit transaction; commit at end of try, rollback on throw.
-            var now = DateTime.UtcNow;
-            await using var conn = dbFactory.Create();
-            await conn.OpenAsync(ct);
-            await using var tx = await conn.BeginTransactionAsync(ct);
-
-            try
+            //
+            // S99/TASK-9900: bounded retry around the unique-violation (23505). For a
+            // GENERATED orgId a rare PK / is_active-partial-unique collision re-generates
+            // the id and re-runs against a FRESH transaction (a rolled-back tx is not
+            // reusable). For an EXPLICIT orgId the caller's id is authoritative — a
+            // collision is a hard 409 (the pre-check above already returns it; this
+            // surfaces a race-window collision as the same conflict).
+            const int maxAttempts = 5;
+            for (var attempt = 1; ; attempt++)
             {
-                await using var cmd = new NpgsqlCommand(
-                    """
-                    INSERT INTO organizations (org_id, org_name, org_type, parent_org_id, materialized_path, agreement_code, ok_version, is_active, created_at, updated_at)
-                    VALUES (@orgId, @orgName, @orgType, @parentOrgId, @materializedPath, @agreementCode, @okVersion, TRUE, @now, @now)
-                    """, conn, tx);
-                cmd.Parameters.AddWithValue("orgId", request.OrgId);
-                cmd.Parameters.AddWithValue("orgName", request.OrgName);
-                cmd.Parameters.AddWithValue("orgType", request.OrgType.ToUpperInvariant());
-                cmd.Parameters.AddWithValue("parentOrgId", (object?)request.ParentOrgId ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("materializedPath", materializedPath);
-                cmd.Parameters.AddWithValue("agreementCode", request.AgreementCode);
-                cmd.Parameters.AddWithValue("okVersion", request.OkVersion);
-                cmd.Parameters.AddWithValue("now", now);
-                await cmd.ExecuteNonQueryAsync(ct);
+                var now = DateTime.UtcNow;
+                await using var conn = dbFactory.Create();
+                await conn.OpenAsync(ct);
+                await using var tx = await conn.BeginTransactionAsync(ct);
 
-                // Emit domain event in-tx (BEFORE CommitAsync) so the organizations row
-                // and the outbox row commit atomically per ADR-018 D3.
-                var @event = new OrganizationCreated
+                try
                 {
-                    OrgId = request.OrgId,
-                    OrgName = request.OrgName,
-                    OrgType = request.OrgType.ToUpperInvariant(),
-                    ParentOrgId = request.ParentOrgId,
-                    MaterializedPath = materializedPath,
-                    AgreementCode = request.AgreementCode,
-                    OkVersion = request.OkVersion,
-                    ActorId = actor.ActorId,
-                    ActorRole = actor.ActorRole,
-                    CorrelationId = actor.CorrelationId
-                };
-                // S44 TASK-4413: capture outbox_id for audit_projection insert
-                // (ADR-026 D2 sync-in-tx projection write — atomic with the
-                // organizations row + outbox row per ADR-018 D3/D13).
-                var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"org-{request.OrgId}", @event, ct);
+                    await using var cmd = new NpgsqlCommand(
+                        """
+                        INSERT INTO organizations (org_id, org_name, org_type, parent_org_id, materialized_path, agreement_code, ok_version, is_active, created_at, updated_at)
+                        VALUES (@orgId, @orgName, @orgType, @parentOrgId, @materializedPath, @agreementCode, @okVersion, TRUE, @now, @now)
+                        """, conn, tx);
+                    cmd.Parameters.AddWithValue("orgId", orgId);
+                    cmd.Parameters.AddWithValue("orgName", request.OrgName);
+                    cmd.Parameters.AddWithValue("orgType", orgType);
+                    cmd.Parameters.AddWithValue("parentOrgId", (object?)request.ParentOrgId ?? DBNull.Value);
+                    cmd.Parameters.AddWithValue("materializedPath", materializedPath);
+                    cmd.Parameters.AddWithValue("agreementCode", agreementCode);
+                    cmd.Parameters.AddWithValue("okVersion", okVersion);
+                    cmd.Parameters.AddWithValue("now", now);
+                    await cmd.ExecuteNonQueryAsync(ct);
 
-                var auditCtx = new AuditProjectionContext(
-                    ActorId: actor.ActorId,
-                    ActorPrimaryOrgId: actor.OrgId,
-                    CorrelationId: actor.CorrelationId,
-                    OccurredAt: new DateTimeOffset(@event.OccurredAt));
-                var auditRow = auditMapper.Map(@event, auditCtx);
-                await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
+                    // Emit domain event in-tx (BEFORE CommitAsync) so the organizations row
+                    // and the outbox row commit atomically per ADR-018 D3.
+                    var @event = new OrganizationCreated
+                    {
+                        OrgId = orgId,
+                        OrgName = request.OrgName,
+                        OrgType = orgType,
+                        ParentOrgId = request.ParentOrgId,
+                        MaterializedPath = materializedPath,
+                        AgreementCode = agreementCode,
+                        OkVersion = okVersion,
+                        ActorId = actor.ActorId,
+                        ActorRole = actor.ActorRole,
+                        CorrelationId = actor.CorrelationId
+                    };
+                    // S44 TASK-4413: capture outbox_id for audit_projection insert
+                    // (ADR-026 D2 sync-in-tx projection write — atomic with the
+                    // organizations row + outbox row per ADR-018 D3/D13).
+                    var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"org-{orgId}", @event, ct);
 
-                await tx.CommitAsync(ct);
+                    var auditCtx = new AuditProjectionContext(
+                        ActorId: actor.ActorId,
+                        ActorPrimaryOrgId: actor.OrgId,
+                        CorrelationId: actor.CorrelationId,
+                        OccurredAt: new DateTimeOffset(@event.OccurredAt));
+                    var auditRow = auditMapper.Map(@event, auditCtx);
+                    await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
+
+                    await tx.CommitAsync(ct);
+                    break;
+                }
+                catch (PostgresException pex) when (pex.SqlState == PostgresErrorCodes.UniqueViolation)
+                {
+                    await tx.RollbackAsync(ct);
+
+                    // An explicit caller-chosen id collided → hard conflict (don't re-generate).
+                    if (explicitOrgId)
+                        return Results.Conflict(new { error = $"Organization '{orgId}' already exists" });
+
+                    // A generated id collided (extremely rare) → regenerate, recompute the
+                    // path, and retry against a fresh transaction up to maxAttempts.
+                    if (attempt >= maxAttempts)
+                        throw;
+                    orgId = GenerateOrgId();
+                    materializedPath = parentMaterializedPath is not null
+                        ? $"{parentMaterializedPath}{orgId}/"
+                        : $"/{orgId}/";
+                }
+                catch
+                {
+                    await tx.RollbackAsync(ct);
+                    throw;
+                }
             }
-            catch
-            {
-                await tx.RollbackAsync(ct);
-                throw;
-            }
 
-            return Results.Created($"/api/admin/organizations/{request.OrgId}", new
+            return Results.Created($"/api/admin/organizations/{orgId}", new
             {
-                orgId = request.OrgId,
+                orgId,
                 orgName = request.OrgName,
-                orgType = request.OrgType.ToUpperInvariant(),
+                orgType,
                 parentOrgId = request.ParentOrgId,
                 materializedPath,
-                agreementCode = request.AgreementCode,
-                okVersion = request.OkVersion
+                agreementCode,
+                okVersion
             });
         }).RequireAuthorization("LocalAdminOrAbove");
 
@@ -2914,6 +2975,15 @@ public static class AdminEndpoints
 
     // ── Helper Methods ──
 
+    // S99/TASK-9900: server-side org-id generation for the name-only Create dialog.
+    // Format: "ORG" + the first 8 hex chars of a GUID, uppercased (e.g. "ORG3F9A1C7D").
+    // The id-generation POLICY lives in the backend (NOT the FE). 8 hex chars give ~4.3e9
+    // of entropy → collisions are vanishingly rare; the create handler additionally
+    // pre-checks existence and retries on a 23505 unique-violation. The owner can revisit
+    // this format later (e.g. a sequence or a name-derived slug) without an FE change.
+    private static string GenerateOrgId()
+        => "ORG" + Guid.NewGuid().ToString("N")[..8].ToUpperInvariant();
+
     private static bool HasGlobalScope(ActorContext actor)
     {
         if (actor.Scopes is null || actor.Scopes.Length == 0)
@@ -2969,12 +3039,18 @@ public static class AdminEndpoints
 
     private sealed class CreateOrganizationRequest
     {
-        public required string OrgId { get; init; }
+        // S99/TASK-9900: OrgId/AgreementCode/OkVersion are OPTIONAL so the redesigned
+        // Organisation page's name-only Create dialog (per design_handoff_organisation)
+        // works. The backend generates a stable OrgId and defaults the (vestigial)
+        // agreement/ok when these are null/blank. An explicit value still works
+        // (backward-compatible). OrgName + OrgType remain required; ParentOrgId follows
+        // the existing MAO-root / ORGANISATION-needs-MAO-parent validation.
+        public string? OrgId { get; init; }
         public required string OrgName { get; init; }
         public required string OrgType { get; init; }
         public string? ParentOrgId { get; init; }
-        public required string AgreementCode { get; init; }
-        public required string OkVersion { get; init; }
+        public string? AgreementCode { get; init; }
+        public string? OkVersion { get; init; }
     }
 
     private sealed class UpdateOrganizationRequest
