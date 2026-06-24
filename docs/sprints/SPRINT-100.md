@@ -8,7 +8,7 @@
 | **End Date** | 2026-06-24 |
 | **Orchestrator Approved** | yes — 2026-06-24 |
 | **Build Verified** | yes — `dotnet build StatsTid.sln` 0 errors; `frontend` tsc 0 errors |
-| **Test Verified** | yes (local): 850 unit + 1130 regression (+`S100EnhedHierarchyTests` 13) + 6 smoke + 29 demoseed + 566 fe (+19); CI-pending (backfilled at close-polish) |
+| **Test Verified** | yes (local): 850 unit + 1130 regression (+`S100EnhedHierarchyTests` 13) + 6 smoke + 29 demoseed + 566 fe (+19); CI GREEN `28107661627` (all 7 jobs) |
 
 ## Sprint Goal
 Make Enhed **hierarchical** — `enheder.parent_enhed_id` forms a tree WITHIN each Organisation, with the **level derived as the depth** — while it stays **PURE display metadata with ZERO authority** (ADR-036 invariant unchanged). Owner-resolved: keep S97 MULTI-tag membership; delete re-parents children up; one sprint (backend + FE). Refinement: `.claude/refinements/REFINEMENT-enhed-hierarchy.md` (owner-resolved 3 forks + Step-4 dual-lens, BLOCKERs resolved). Amends ADR-036.
@@ -98,7 +98,7 @@ Enhed is now HIERARCHICAL — a `parent_enhed_id` tree within each Organisation 
 | DemoSeed | 29 | all passing |
 | Frontend (vitest) | 566 | +19 (the nesting, Tilføj/Flyt-on-Enhed, the move-dialog self+descendant exclusion, the level, the inverted dead-button pins) |
 | E2E (Playwright) | unchanged | (no new e2e) |
-| **Total** | **2581** (+ the e2e suite) | CI confirmation pending |
+| **Total** | **2581** (+ the e2e suite) | CI GREEN `28107661627` (all 7 jobs) |
 
 ## Sprint Retrospective
 **What went well**: the Step-4 + Step-0b dual-lens settled the hard parts UP FRONT — the concurrency spine (a per-Organisation advisory lock with the cycle CTE run *under* it, because the enhed tree is genuinely multi-level unlike the org-tree leaves), the delete-as-projection-filter-not-untag correction, and the re-parent-via-events (P3). Implementation then had no design surprises; the internal Step-7a lens confirmed the spine clean by construction. The P7 zero-authority invariant held — a parent pointer can't leak without a reader joining it, and nothing does.
