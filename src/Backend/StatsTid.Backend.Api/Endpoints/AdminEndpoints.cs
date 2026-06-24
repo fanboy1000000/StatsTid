@@ -299,6 +299,325 @@ public static class AdminEndpoints
             });
         }).RequireAuthorization("LocalAdminOrAbove");
 
+        // 2c. DELETE /api/admin/organizations/{orgId} — S98 / ADR-035 GlobalAdmin org SOFT-delete.
+        //
+        // GlobalAdmin-floored (the NEW structural ops are GlobalAdmin-only; the existing
+        // create/rename stay LocalAdmin+ — S98 WARNING 2). NO If-Match: there is NO version column
+        // on organizations (Step-0b BLOCKER A) — these are low-contention GlobalAdmin ops, and the
+        // existing rename PUT is last-writer-wins too. Concurrency safety comes from an in-tx
+        // SELECT … FOR UPDATE on the org row (serializes concurrent structural ops) + the
+        // blocked-if-employees count + the is_active=FALSE flip all in ONE tx.
+        //
+        // Blocked-if-employees (422 + employeeCount): an ORGANISATION blocks if any active user is
+        // homed on it; a MAO blocks if any active user lives anywhere beneath it (the MAO-subtree
+        // LIKE). Empty → allowed. A soft-deleted org disappears from GetByIdAsync/GetAllAsync, so
+        // the create/transfer home guards already reject it (Step-0b BLOCKER B — no new guard).
+        app.MapDelete("/api/admin/organizations/{orgId}", async (
+            string orgId,
+            OrganizationRepository orgRepo,
+            DbConnectionFactory dbFactory,
+            IOutboxEnqueue outbox,
+            IAuditProjectionMapper<OrganizationDeleted> auditMapper,
+            AuditProjectionRepository auditRepo,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            var actor = context.GetActorContext();
+
+            // GlobalAdmin floor — mirror the MAO-create gate (HasGlobalScope). 403 otherwise.
+            if (!HasGlobalScope(actor))
+                return Results.Json(new { error = "Access denied", reason = "Only GlobalAdmin can delete organizations" }, statusCode: 403);
+
+            var now = DateTime.UtcNow;
+            await using var conn = dbFactory.Create();
+            await conn.OpenAsync(ct);
+            await using var tx = await conn.BeginTransactionAsync(ct);
+
+            try
+            {
+                // SELECT … FOR UPDATE the ACTIVE org row — serializes concurrent structural ops;
+                // null → absent or already soft-deleted → 404.
+                var org = await orgRepo.LockActiveByIdAsync(conn, tx, orgId, ct);
+                if (org is null)
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.NotFound(new { error = "Organization not found" });
+                }
+
+                // Blocked-if-employees: consistent count under the held org row.
+                var employeeCount = await orgRepo.CountActiveEmployeesBlockingDeleteAsync(conn, tx, org, ct);
+                if (employeeCount > 0)
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.UnprocessableEntity(new
+                    {
+                        error = $"Kan ikke slette organisationen — den indeholder {employeeCount} medarbejder(e).",
+                        employeeCount,
+                    });
+                }
+
+                // Flip is_active=FALSE in the same tx.
+                await orgRepo.SoftDeleteAsync(conn, tx, orgId, now, ct);
+
+                // Emit OrganizationDeleted + the audit-projection row (ADR-018 D3 + ADR-026 D2).
+                var @event = new OrganizationDeleted
+                {
+                    OrgId = org.OrgId,
+                    OrgName = org.OrgName,
+                    OrgType = org.OrgType,
+                    ActorId = actor.ActorId,
+                    ActorRole = actor.ActorRole,
+                    CorrelationId = actor.CorrelationId,
+                };
+                var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"org-{orgId}", @event, ct);
+                var auditCtx = new AuditProjectionContext(
+                    ActorId: actor.ActorId,
+                    ActorPrimaryOrgId: actor.OrgId,
+                    CorrelationId: actor.CorrelationId,
+                    OccurredAt: new DateTimeOffset(@event.OccurredAt));
+                var auditRow = auditMapper.Map(@event, auditCtx);
+                await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
+
+                await tx.CommitAsync(ct);
+            }
+            catch
+            {
+                await tx.RollbackAsync(ct);
+                throw;
+            }
+
+            return Results.NoContent();
+        }).RequireAuthorization("HROrAbove"); // policy floor; GlobalAdmin enforced in-handler (HasGlobalScope)
+
+        // 2d. PUT /api/admin/organizations/{orgId}/move — S98 / ADR-035 GlobalAdmin org RE-PARENT.
+        //
+        // GlobalAdmin-floored. ORGANISATION only (a MAO is a root → 422). The target newParentOrgId
+        // MUST be an active MAO (else 422). Reject no-op (newParent == current parent → 400) and
+        // self-parent (newParent == orgId → 400). NO If-Match (no version column — BLOCKER A).
+        //
+        // In ONE tx: SELECT … FOR UPDATE the org + read the new parent → set parent_org_id +
+        // RECOMPUTE the moved row's OWN materialized_path = newParent.path || orgId || '/'. NO
+        // descendant cascade (Organisations are leaves). The path rewrite is LOAD-BEARING (BLOCKER
+        // 1): ApprovalPeriodRepository.GetMedarbejderRosterForTreeAsync / GetPeriodStatusProjection-
+        // ForTreeAsync scope by materialized_path LIKE — an unrewritten path silently drops the
+        // org's employees from the tree-roster reads. (The vikar reader is exact-equality → safe.)
+        app.MapPut("/api/admin/organizations/{orgId}/move", async (
+            string orgId,
+            MoveOrganizationRequest request,
+            OrganizationRepository orgRepo,
+            DbConnectionFactory dbFactory,
+            IOutboxEnqueue outbox,
+            IAuditProjectionMapper<OrganizationMoved> auditMapper,
+            AuditProjectionRepository auditRepo,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            var actor = context.GetActorContext();
+
+            if (!HasGlobalScope(actor))
+                return Results.Json(new { error = "Access denied", reason = "Only GlobalAdmin can move organizations" }, statusCode: 403);
+
+            if (request is null || string.IsNullOrWhiteSpace(request.NewParentOrgId))
+                return Results.BadRequest(new { error = "newParentOrgId is required." });
+
+            if (string.Equals(request.NewParentOrgId, orgId, StringComparison.Ordinal))
+                return Results.BadRequest(new { error = "An organization cannot be moved under itself." });
+
+            var now = DateTime.UtcNow;
+            await using var conn = dbFactory.Create();
+            await conn.OpenAsync(ct);
+            await using var tx = await conn.BeginTransactionAsync(ct);
+
+            try
+            {
+                // SELECT … FOR UPDATE the ACTIVE org being moved; null → 404.
+                var org = await orgRepo.LockActiveByIdAsync(conn, tx, orgId, ct);
+                if (org is null)
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.NotFound(new { error = "Organization not found" });
+                }
+
+                // Only an ORGANISATION moves — a MAO is a root.
+                if (!string.Equals(org.OrgType, "ORGANISATION", StringComparison.Ordinal))
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.UnprocessableEntity(new { error = "Ministeransvarsområder kan ikke flyttes (kun organisationer kan flyttes)." });
+                }
+
+                // No-op: already under this parent.
+                if (string.Equals(org.ParentOrgId, request.NewParentOrgId, StringComparison.Ordinal))
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.BadRequest(new { error = "Organization is already under this parent." });
+                }
+
+                // S98 Step-7a FIX 1 (P4 move-vs-delete-of-new-parent race) — LOCK the new parent MAO
+                // IN THE SAME TX (SELECT … FOR UPDATE on the ACTIVE row) rather than reading it on a
+                // separate connection outside the tx. Otherwise a concurrent GlobalAdmin soft-delete of
+                // the target MAO could commit between an out-of-tx read and this move's COMMIT, leaving
+                // an active ORGANISATION parented under (and path-rooted at) an is_active=false MAO.
+                // With the FOR-UPDATE lock the delete serializes behind us: it blocks until we commit,
+                // OR (if it committed first) our LockActiveByIdAsync sees no ACTIVE row → 422.
+                //
+                // Lock order: the MOVED org is locked first (above), the new parent second. The two are
+                // DISTINCT roles (an ORGANISATION can never be its own MAO parent — self-parent already
+                // rejected at :423, and a MAO can't be moved at :442), so this fixed moved→parent order
+                // is consistent and deadlock-free across concurrent moves (cf. the S95 dual-row id-sorted
+                // pin for the symmetric same-Organisation case; here the roles are asymmetric).
+                var newParent = await orgRepo.LockActiveByIdAsync(conn, tx, request.NewParentOrgId, ct);
+                if (newParent is null)
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.UnprocessableEntity(new { error = "New parent organization not found." });
+                }
+                if (!string.Equals(newParent.OrgType, "MAO", StringComparison.Ordinal))
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.UnprocessableEntity(new { error = $"An ORGANISATION's parent must be a MAO (got {newParent.OrgType})." });
+                }
+
+                var oldParentOrgId = org.ParentOrgId;
+                var oldMaterializedPath = org.MaterializedPath;
+
+                // Re-parent + recompute the moved row's own materialized_path in the same tx.
+                var newMaterializedPath = await orgRepo.ReparentAsync(conn, tx, orgId, newParent, now, ct);
+
+                // Emit OrganizationMoved (old+new parent + old+new path for replay) + audit row.
+                var @event = new OrganizationMoved
+                {
+                    OrgId = orgId,
+                    OldParentOrgId = oldParentOrgId,
+                    NewParentOrgId = newParent.OrgId,
+                    OldMaterializedPath = oldMaterializedPath,
+                    NewMaterializedPath = newMaterializedPath,
+                    ActorId = actor.ActorId,
+                    ActorRole = actor.ActorRole,
+                    CorrelationId = actor.CorrelationId,
+                };
+                var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"org-{orgId}", @event, ct);
+                var auditCtx = new AuditProjectionContext(
+                    ActorId: actor.ActorId,
+                    ActorPrimaryOrgId: actor.OrgId,
+                    CorrelationId: actor.CorrelationId,
+                    OccurredAt: new DateTimeOffset(@event.OccurredAt));
+                var auditRow = auditMapper.Map(@event, auditCtx);
+                await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
+
+                await tx.CommitAsync(ct);
+
+                return Results.Ok(new
+                {
+                    orgId,
+                    orgName = org.OrgName,
+                    orgType = org.OrgType,
+                    parentOrgId = newParent.OrgId,
+                    materializedPath = newMaterializedPath,
+                    agreementCode = org.AgreementCode,
+                    okVersion = org.OkVersion,
+                });
+            }
+            catch
+            {
+                await tx.RollbackAsync(ct);
+                throw;
+            }
+        }).RequireAuthorization("HROrAbove"); // policy floor; GlobalAdmin enforced in-handler (HasGlobalScope)
+
+        // 2e. GET /api/admin/organizations/tree — S98 / ADR-035 aggregated MAO→Organisation forest.
+        //
+        // Returns the forest with per-node employeeCount (Organisation = its own active users;
+        // MAO = Σ its Organisations) + each Organisation's active enheder (with tagged-user counts).
+        // SET-BASED — one GROUP BY over users, one GROUP BY over enheder/user_enheder, the orgs
+        // fetched active, the forest assembled in C# (NO N+1). Visibility-bounded: GlobalAdmin → all;
+        // scoped roles → their GetAccessibleOrgsAsync(LocalHR) set (the same per-org floor as the
+        // GET-list endpoint above). HROrAbove read floor.
+        app.MapGet("/api/admin/organizations/tree", async (
+            OrganizationRepository orgRepo,
+            OrgScopeValidator scopeValidator,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            var actor = context.GetActorContext();
+
+            // Visibility set: null → unrestricted (GlobalAdmin); otherwise the exact accessible-org
+            // ids (LocalHR-floored, same gate as the GET-list endpoint). Employees/below-floor → [].
+            var accessible = await scopeValidator.GetAccessibleOrgsAsync(actor, StatsTidRoles.LocalHR, ct);
+            HashSet<string>? visible = accessible is null ? null : new HashSet<string>(accessible, StringComparer.Ordinal);
+
+            // Fetch the active orgs + the two set-based aggregates.
+            var allOrgs = await orgRepo.GetAllAsync(ct);
+            var empCounts = await orgRepo.GetActiveEmployeeCountByOrgAsync(ct);
+            var enhedRows = await orgRepo.GetActiveEnhederWithTagCountsAsync(ct);
+
+            // Group enheder by Organisation for forest assembly.
+            var enhederByOrg = enhedRows
+                .GroupBy(e => e.OrganisationId, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
+
+            // An Organisation is visible if it ∈ the accessible set (or unrestricted). A MAO is
+            // visible if unrestricted OR it has at least one visible child Organisation (a scoped
+            // HR sees the MAO header for the Organisations it can reach). The MAO count sums ONLY
+            // its visible children's counts.
+            bool OrgVisible(string id) => visible is null || visible.Contains(id);
+
+            var organisationsByParent = allOrgs
+                .Where(o => string.Equals(o.OrgType, "ORGANISATION", StringComparison.Ordinal))
+                .GroupBy(o => o.ParentOrgId ?? string.Empty, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
+
+            var forest = new List<object>();
+            foreach (var mao in allOrgs.Where(o => string.Equals(o.OrgType, "MAO", StringComparison.Ordinal))
+                                       .OrderBy(o => o.MaterializedPath, StringComparer.Ordinal))
+            {
+                var children = organisationsByParent.TryGetValue(mao.OrgId, out var kids) ? kids : new List<StatsTid.SharedKernel.Models.Organization>();
+
+                var visibleChildren = children
+                    .Where(c => OrgVisible(c.OrgId))
+                    .OrderBy(c => c.MaterializedPath, StringComparer.Ordinal)
+                    .Select(c => new
+                    {
+                        orgId = c.OrgId,
+                        orgName = c.OrgName,
+                        orgType = c.OrgType,
+                        parentOrgId = c.ParentOrgId,
+                        materializedPath = c.MaterializedPath,
+                        agreementCode = c.AgreementCode,
+                        okVersion = c.OkVersion,
+                        employeeCount = empCounts.TryGetValue(c.OrgId, out var n) ? n : 0L,
+                        enheder = (enhederByOrg.TryGetValue(c.OrgId, out var es) ? es : new List<EnhedCountRow>())
+                            .Select(e => new
+                            {
+                                enhedId = e.EnhedId,
+                                name = e.Name,
+                                taggedUserCount = e.TaggedUserCount,
+                            })
+                            .ToList(),
+                    })
+                    .ToList();
+
+                // GlobalAdmin sees every MAO (even childless); a scoped role only sees a MAO that
+                // has at least one visible child Organisation.
+                if (visible is not null && visibleChildren.Count == 0)
+                    continue;
+
+                forest.Add(new
+                {
+                    orgId = mao.OrgId,
+                    orgName = mao.OrgName,
+                    orgType = mao.OrgType,
+                    parentOrgId = mao.ParentOrgId,
+                    materializedPath = mao.MaterializedPath,
+                    agreementCode = mao.AgreementCode,
+                    okVersion = mao.OkVersion,
+                    employeeCount = visibleChildren.Sum(c => (long)c.employeeCount),
+                    organisations = visibleChildren,
+                });
+            }
+
+            return Results.Ok(new { tree = forest });
+        }).RequireAuthorization("HROrAbove");
+
         // ═══════════════════════════════════════════
         // User Endpoints
         // ═══════════════════════════════════════════
@@ -2663,6 +2982,13 @@ public static class AdminEndpoints
         public string? OrgName { get; init; }
         public string? AgreementCode { get; init; }
         public string? OkVersion { get; init; }
+    }
+
+    // S98 / ADR-035 — org re-parent request. The target MUST be an active MAO (validated in-handler);
+    // the moved org MUST be an ORGANISATION (a MAO is a root). NO version/If-Match (no version column).
+    private sealed class MoveOrganizationRequest
+    {
+        public required string NewParentOrgId { get; init; }
     }
 
     private sealed class CreateUserRequest

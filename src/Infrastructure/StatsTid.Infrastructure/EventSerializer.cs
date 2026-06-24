@@ -32,6 +32,13 @@ public static class EventSerializer
         // Sprint 6: RBAC and organizational hierarchy events
         ["OrganizationCreated"] = typeof(OrganizationCreated),
         ["OrganizationUpdated"] = typeof(OrganizationUpdated),
+        // Sprint 98 (ADR-035): GlobalAdmin org-structure ops — soft-delete + re-parent.
+        // OrganizationDeleted = is_active=FALSE flip (blocked-if-employees, recoverable).
+        // OrganizationMoved = re-parent an ORGANISATION under a different MAO + the moved
+        // row's materialized_path rewrite (old+new parent + old+new path carried for replay).
+        // Both ride org-{orgId}. Name-keyed; round-trips unchanged on replay.
+        ["OrganizationDeleted"] = typeof(OrganizationDeleted),
+        ["OrganizationMoved"] = typeof(OrganizationMoved),
         ["UserCreated"] = typeof(UserCreated),
         ["UserUpdated"] = typeof(UserUpdated),
         ["RoleAssignmentGranted"] = typeof(RoleAssignmentGranted),

@@ -103,6 +103,13 @@ builder.Services.AddSingleton<IAuditProjectionMapper<OrganizationCreated>, Organ
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(OrganizationCreated), nameof(OrganizationCreated)));
 builder.Services.AddSingleton<IAuditProjectionMapper<OrganizationUpdated>, OrganizationUpdatedAuditMapper>();
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(OrganizationUpdated), nameof(OrganizationUpdated)));
+// S98 ADR-035 — GlobalAdmin org-structure ops (soft-delete + re-parent). TENANT_TARGETED;
+// target_org_id = the org being deleted/moved (from event payload). Mapper + marker registered
+// together (the registry's RegisteredEventTypeNames filter matches the wired mappers).
+builder.Services.AddSingleton<IAuditProjectionMapper<OrganizationDeleted>, OrganizationDeletedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(OrganizationDeleted), nameof(OrganizationDeleted)));
+builder.Services.AddSingleton<IAuditProjectionMapper<OrganizationMoved>, OrganizationMovedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(OrganizationMoved), nameof(OrganizationMoved)));
 builder.Services.AddSingleton<IAuditProjectionMapper<UserCreated>, UserCreatedAuditMapper>();
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(UserCreated), nameof(UserCreated)));
 builder.Services.AddSingleton<IAuditProjectionMapper<UserUpdated>, UserUpdatedAuditMapper>();

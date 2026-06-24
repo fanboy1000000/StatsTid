@@ -1,0 +1,24 @@
+# ADR-037 — Organisation-structure lifecycle (soft-delete, move, the aggregated tree)
+
+| Field | Value |
+|-------|-------|
+| **Status** | accepted |
+| **Sprint** | S98 (backend); S99 = the hi-fi FE tree-table |
+| **Builds on** | ADR-035 (flat MAO/Organisation authority) + ADR-036 (flat Enhed). The redesigned Organisation Global-admin page (`design_handoff_organisation`). |
+| **Domains** | Backend API, Infrastructure, SharedKernel (events), Data Model |
+
+## Context
+The org-structure backend had create + rename but NO delete, no move, and no aggregated employee count — the redesigned Organisation page needs all three. The page is built on the **flat S97 Enhed** (the structural tree is MAO→Organisation; Enheder are flat per-Organisation leaves — NOT a hierarchical tree node). No schema change was needed (soft-delete/move use existing columns).
+
+## Decision
+- **D1 — Org soft-delete.** `DELETE /api/admin/organizations/{orgId}` → `is_active=false` (recoverable; NOT hard-delete). **GlobalAdmin-floored** (`HasGlobalScope`). In ONE tx: `SELECT … FOR UPDATE` the active org → **blocked-if-employees** (422 + `employeeCount`): an Organisation blocks if it has active `users.primary_org_id`; a MAO blocks if any active user lives under its `materialized_path` (the subtree, `LIKE @path||'%' ESCAPE '\'`) → flip. A soft-deleted org disappears from `GetByIdAsync`/`GetAllAsync` (both filter `is_active=TRUE`), so the create/transfer **home guards already reject it** (no new guard needed — the `is_active` filter is the enforcement point). `OrganizationDeleted` event + audit. Dangling `role_assignments`/`projects`/`local_configurations`/`enheder` on a soft-deleted org are accepted (recoverable; reads filter the org out) — NOT a widened block.
+- **D2 — Org move / re-parent.** `PUT /api/admin/organizations/{orgId}/move` `{newParentOrgId}`. GlobalAdmin. ORGANISATION-only (a MAO is a root → 422); the target must be an **active MAO** (locked in-tx `FOR UPDATE` → null/non-MAO → 422). In ONE tx: lock the moved org + the new parent (moved-then-parent order; disjoint roles, no cycle), set `parent_org_id` + **RECOMPUTE the moved row's `materialized_path` = newParent.path + orgId + '/'`** — **load-bearing**: `materialized_path` is NOT vestigial — `ApprovalPeriodRepository.GetMedarbejderRosterForTreeAsync`/`GetPeriodStatusProjectionForTreeAsync` scope by `materialized_path LIKE prefix` (the S87/S91 tree pages). No descendant cascade — **Organisations are LEAVES** (the no-cascade correctness depends on this invariant, enforced by the create/move gates, NOT a DB constraint; a future org-nesting change MUST grow a cascade in `ReparentAsync`). `OrganizationMoved` carries OLD+NEW `parent_org_id` + `materialized_path` (replay).
+- **D3 — The aggregated tree.** `GET /api/admin/organizations/tree` → the MAO→Organisation forest + per-node `employeeCount` (Organisation = active users; MAO = Σ visible children) + each Organisation's active enheder with **active-user** `taggedUserCount`. SET-BASED (2-3 `GROUP BY` queries + in-memory forest assembly; NO N+1). **Visibility-bounded** via `GetAccessibleOrgsAsync(actor, LocalHR)` (GlobalAdmin = all; scoped roles = their orgs + the parent MAO chrome) — the global aggregates are filtered in assembly, no cross-org leak.
+- **D4 — Authority.** The NEW consequential ops (move + delete) = **GlobalAdmin**. The EXISTING create (LocalAdmin+) + rename (LocalAdmin+) are **UNCHANGED** (no capability regression). MAO create stays GlobalAdmin (pre-existing).
+- **D5 — Concurrency.** No `version` column on `organizations` (so NO If-Match — GlobalAdmin low-contention; the existing rename PUT is last-writer-wins too). Serialization via in-tx `FOR UPDATE` on the affected org row(s). Two residuals (GlobalAdmin-initiated, sub-second, recoverable, documented in SECURITY): (a) the create/transfer-vs-delete window (a user reads the org active pre-commit, inserts post-delete-commit) — accepted; (b) the move-vs-delete-of-new-parent race — **closed** by locking the new parent in-tx (D2).
+- **D6 — P3.** `OrganizationDeleted` + `OrganizationMoved` each: the event class + `EventSerializer` entry + an `IAuditProjectionMapper<T>` (ADR-026, TENANT_TARGETED, `TargetOrgId=@event.OrgId`) + the `Program.cs` mapper `AddSingleton` + the separate `RegisteredAuditEventType` `AddSingleton` + the audit-projection-catalog entry.
+
+## Consequences
+- The Organisation page can fully manage the structural tree (create/rename/move/delete) on the flat model; the FE (S99) consumes the one aggregated tree endpoint.
+- Step-7a ([[review-lens-complementarity]]): Codex caught the move-vs-delete-of-new-parent race (BLOCKER) + both lenses the inactive-enhed-count (WARNING) — both fixed + pinned.
+- Follow-up: the hi-fi FE tree-table + dialogs (S99); a DB-level "ORGANISATION can't be a parent" guard if org-nesting is ever introduced (then `ReparentAsync` needs a path cascade).
