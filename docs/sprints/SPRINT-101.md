@@ -8,7 +8,7 @@
 | **End Date** | 2026-06-24 |
 | **Orchestrator Approved** | yes — 2026-06-24 |
 | **Build Verified** | yes — `dotnet build StatsTid.sln` 0 errors |
-| **Test Verified** | yes (local): 850 unit + 1133 regression (+`Pass1EndpointContractTests` 3) + 6 smoke + 29 demoseed + 566 fe; the lint + self-test green; CI-pending (backfilled at close-polish) |
+| **Test Verified** | yes (local): 850 unit + 1133 regression (+`Pass1EndpointContractTests` 3) + 6 smoke + 29 demoseed + 566 fe; the lint + self-test green; CI GREEN `28126329332` (all 7 jobs) |
 
 ## Sprint Goal
 Close the recurring "fetchEnheder" bug class (S97 → S99 → S100 — a FE list-hook test mocks the right response envelope [vitest green] while the real endpoint serves a different shape → prod breaks) with a **durable paved-road bundle**, scoped to **Pass 1** (the exact 3-bug surface). Owner-resolved: the FULL bundle (records + tests + lint + convention); Pass 1 only. Refinement: `.claude/refinements/REFINEMENT-endpoint-contract-tests.md` (Step-4 dual-lens — reshaped from a centralized suite to records + co-located tests + a CI lint). Primarily P8 (CI/CD) + quality.
@@ -92,7 +92,7 @@ The recurring "fetchEnheder" bug class (S97 → S99 → S100) is now gated. Pass
 | DemoSeed | 29 | all passing |
 | Frontend (vitest) | 566 | unchanged (no FE change — backend records are byte-identical) |
 | CI lint | — | `check_endpoint_contracts.py` (19 admin GETs covered) + `--selftest` (exit 1, gate live) |
-| **Total** | **2584** | CI confirmation pending |
+| **Total** | **2584** | CI GREEN `28126329332` (all 7 jobs) |
 
 ## Sprint Retrospective
 **What went well**: the Step-4 dual-lens reshaped this from "a centralized contract suite" into a durable bundle (named records + co-located tests + a CI lint) — and the records turned out to be the higher-leverage half (diff-reviewability + the OpenAPI/typed-client prerequisite). The Reviewer EMPIRICALLY verified the byte-identity guarantee (the `JsonSerializerDefaults.Web` camelCase default, proven via the `ComplianceCheckResult` round-trip) BEFORE the code, so the #1 risk was retired up front. The honest framing (pins backend↔itself, not FE↔backend — only a shared type closes that) is preserved end-to-end, so the work doesn't over-claim.
