@@ -8,7 +8,7 @@
 | **End Date** | 2026-06-23 |
 | **Orchestrator Approved** | yes — 2026-06-23 |
 | **Build Verified** | yes — `dotnet build StatsTid.sln` 0 errors |
-| **Test Verified** | yes (local, fresh-greenfield): 850 unit + 1094 regression + 6 smoke + 29 demoseed + 518 fe; CI-pending (backfilled at close-polish) |
+| **Test Verified** | yes (local, fresh-greenfield): 850 unit + 1094 regression + 6 smoke + 29 demoseed + 518 fe; CI GREEN `28078021803` (all 7 jobs) |
 
 ## Sprint Goal
 Replace the single free-text `employee_profiles.enhed_label` with a structured, deduplicated, per-Organisation **`enheder`** entity table + a **`user_enheder`** multi-tag membership link — managed-entities-first, flat/untyped, LocalHR-or-above per-Organisation, **zero authority/scope/approval meaning** (ADR-035). Migrate the existing labels; keep `enhed_label` as a read-only display fallback. The Organisation-PAGE Enhed-tree management is DEFERRED. Refinement: `.claude/refinements/REFINEMENT-enhed-structured-multitag.md` (owner-resolved + Step-4 dual-lens, 2 BLOCKERs resolved).
@@ -104,7 +104,7 @@ All 8 tasks complete (Backend 9701/9702/9703 + read-path, Migration 9704, FE 970
 | Smoke | 6 | all passing |
 | DemoSeed | 29 | all passing |
 | Frontend (vitest) | 518 | all passing (+26 Enhed tests; 8 integration-broken tests fixed) |
-| **Total** | **2497** | CI confirmation pending |
+| **Total** | **2497** | CI GREEN `28078021803` (all 7 jobs) |
 
 ## Sprint Retrospective
 **What went well**: the refinement (owner-resolved 4 forks + Step-4 dual-lens, 2 BLOCKERs) + the plan Step-0b (2 BLOCKERs) + Step-7a (2 BLOCKERs) — **6 BLOCKERs caught across 3 review gates before they reached production**, each a real defect (the transfer-clear cross-domain coupling, the multi-org scope model, the migration baseline-NULL reality, the transfer-clear gating, the set-tags TOCTOU, the rename/delete lost-update). [[review-lens-complementarity]] decisive at every gate — Codex's concurrency-adversarial lens caught the 2 Step-7a optimistic-concurrency BLOCKERs the internal lens cleared. The tests agent caught a live 500-on-every-search defect (untyped `@enhedId`). The P7 no-authority invariant held under hard adversarial probing.
