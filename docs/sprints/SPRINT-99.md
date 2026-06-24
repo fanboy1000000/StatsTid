@@ -8,7 +8,7 @@
 | **End Date** | 2026-06-24 |
 | **Orchestrator Approved** | yes — 2026-06-24 |
 | **Build Verified** | yes — `dotnet build StatsTid.sln` 0 errors; `frontend` tsc 0 errors |
-| **Test Verified** | yes (local): 850 unit + 1117 regression (+`S99NameOnlyCreateTests` 6) + 6 smoke + 29 demoseed + 547 fe (+29) + 1 e2e (CI-gated); CI-pending (backfilled at close-polish) |
+| **Test Verified** | yes (local): 850 unit + 1117 regression (+`S99NameOnlyCreateTests` 6) + 6 smoke + 29 demoseed + 547 fe (+29) + 1 e2e (CI-gated); CI GREEN `28093283287` (all 7 jobs) |
 
 ## Sprint Goal
 The FE half of the redesigned **Global administration → Organisation** page (`design_handoff_organisation`) — Phase 2 of 2 (S98 = the backend gaps). A hi-fi React tree-table of the whole org hierarchy (MAO → Organisation → Enhed) with a level control, search, an aggregated employee count, and guarded create/rename/move/delete flows, built on the FLAT S97 Enhed model + consuming the S98/S97 endpoints. Refinement: `.claude/refinements/REFINEMENT-organisation-page.md` (owner-resolved + Step-4 dual-lens). FE-only (no backend).
@@ -94,7 +94,7 @@ The Organisation page is COMPLETE — the redesigned `design_handoff_organisatio
 | DemoSeed | 29 | all passing |
 | Frontend (vitest) | 547 | +29 (the tree, the no-dead-button matrix, the Enhed-delete-no-underenheder guard, the rename-name-only guard, the status branches, the version-resolve); the latent `fetchEnheder` bug fixed |
 | E2E (Playwright) | +1 | the create→rename→move→delete journey (CI-gated) |
-| **Total** | **2549** | CI confirmation pending |
+| **Total** | **2549** | CI GREEN `28093283287` (all 7 jobs) |
 
 ## Sprint Retrospective
 **What went well**: Step-0b caught that the handoff's clean name-only dialogs hide real contract mismatches (the create needs 4 fields; the tree's enhed nodes lack version) — resolved before code (the thin name-only-create adaptation + the ETag-resolve). Step-7a's Codex lens then caught the `fetchEnheder` data-shape BLOCKER — **a latent S97 bug the S97 vitest masked by mocking the wrong shape**; fixing it repaired the S97 EnhederPanel/EnhedTagPicker listing too. The flat-Enhed adaptation is faithfully dead-button-free (built OUT, not disabled — the S91 lesson, vitest-pinned). **The redesigned Organisation page (S98 backend + S99 FE) is COMPLETE.**
