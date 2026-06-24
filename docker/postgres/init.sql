@@ -560,9 +560,18 @@ INSERT INTO schema_migrations (migration_id, applied_at)
 -- EmployeeProfile* events + audit mappers). Soft-delete (`deleted_at`) keeps the
 -- `user_enheder → enheder` FK valid — memberships to a soft-deleted enhed are
 -- projection-FILTERED at read time, NOT hard-deleted (no fan-out untag race, P4).
+-- Sprint 100 (ADR-036 amendment): `parent_enhed_id` makes enheder HIERARCHICAL — a
+-- self-referential tree WITHIN each Organisation (a root enhed = NULL parent, directly
+-- under the Organisation; a child's parent must be in the SAME Organisation — app-layer
+-- enforced under the per-Organisation advisory lock, a CHECK can't cross-reference
+-- `organisation_id`). The level is DERIVED (the depth in the enhed tree, root = 1),
+-- computed when GET /organizations/tree assembles the forest — NO stored level/path.
+-- The hierarchy is STILL PURE DISPLAY metadata with ZERO authority: `parent_enhed_id`
+-- enters NO scope/approval/payroll path (the same invariant as the rest of the table).
 CREATE TABLE IF NOT EXISTS enheder (
     enhed_id         UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
     organisation_id  TEXT         NOT NULL REFERENCES organizations(org_id),
+    parent_enhed_id  UUID         NULL REFERENCES enheder(enhed_id),
     name             TEXT         NOT NULL,
     deleted_at       TIMESTAMPTZ  NULL,
     version          BIGINT       NOT NULL DEFAULT 1,
@@ -574,6 +583,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_enheder_active_name
     ON enheder (organisation_id, lower(name))
     WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_enheder_org ON enheder (organisation_id);
+-- S100 — index the self-reference for the per-Organisation enhed sub-tree assembly + the
+-- cycle-CTE descendant walk + the delete-reparent child lookup.
+CREATE INDEX IF NOT EXISTS idx_enheder_parent ON enheder (parent_enhed_id);
 
 -- user_enheder — the multi-tag membership link (a user → 0..N enheder, all within the
 -- user's own Organisation; the same-Organisation invariant is enforced at the COMMAND

@@ -180,12 +180,12 @@ public sealed class OrganizationRepository
         await conn.OpenAsync(ct);
         await using var cmd = new NpgsqlCommand(
             """
-            SELECT e.organisation_id, e.enhed_id, e.name, COUNT(u.user_id) AS tagged
+            SELECT e.organisation_id, e.enhed_id, e.parent_enhed_id, e.name, COUNT(u.user_id) AS tagged
             FROM enheder e
             LEFT JOIN user_enheder ue ON ue.enhed_id = e.enhed_id
             LEFT JOIN users u ON u.user_id = ue.user_id AND u.is_active = TRUE
             WHERE e.deleted_at IS NULL
-            GROUP BY e.organisation_id, e.enhed_id, e.name
+            GROUP BY e.organisation_id, e.enhed_id, e.parent_enhed_id, e.name
             ORDER BY e.organisation_id, lower(e.name), e.enhed_id
             """, conn);
         var rows = new List<EnhedCountRow>();
@@ -195,8 +195,9 @@ public sealed class OrganizationRepository
             rows.Add(new EnhedCountRow(
                 OrganisationId: reader.GetString(0),
                 EnhedId: reader.GetGuid(1),
-                Name: reader.GetString(2),
-                TaggedUserCount: reader.GetInt64(3)));
+                ParentEnhedId: reader.IsDBNull(2) ? null : reader.GetGuid(2),
+                Name: reader.GetString(3),
+                TaggedUserCount: reader.GetInt64(4)));
         }
         return rows;
     }
@@ -232,6 +233,8 @@ public sealed class OrganizationRepository
 }
 
 /// <summary>S98 — one row of the aggregated tree's enhed-with-tag-count read: an active enhed,
-/// its owning Organisation, and how many users are tagged into it.</summary>
+/// its owning Organisation, and how many users are tagged into it. S100: <c>ParentEnhedId</c>
+/// (<c>null</c> = a root) lets the GET /tree assembly NEST the per-Organisation enhed sub-tree +
+/// derive the <c>level</c> = depth. PURE DISPLAY metadata — ZERO authority.</summary>
 public sealed record EnhedCountRow(
-    string OrganisationId, Guid EnhedId, string Name, long TaggedUserCount);
+    string OrganisationId, Guid EnhedId, Guid? ParentEnhedId, string Name, long TaggedUserCount);

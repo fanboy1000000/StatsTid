@@ -646,14 +646,11 @@ public static class AdminEndpoints
                         agreementCode = c.AgreementCode,
                         okVersion = c.OkVersion,
                         employeeCount = empCounts.TryGetValue(c.OrgId, out var n) ? n : 0L,
-                        enheder = (enhederByOrg.TryGetValue(c.OrgId, out var es) ? es : new List<EnhedCountRow>())
-                            .Select(e => new
-                            {
-                                enhedId = e.EnhedId,
-                                name = e.Name,
-                                taggedUserCount = e.TaggedUserCount,
-                            })
-                            .ToList(),
+                        // S100 — NEST the per-Organisation enhed sub-tree via parent_enhed_id +
+                        // derive `level` = depth (root enhed = 1). O(enheder), bounded per-org,
+                        // no N+1 — the flat rows for ONE Organisation are assembled into a forest
+                        // in C#. PURE DISPLAY metadata; parent_enhed_id enters NO authority path.
+                        enheder = BuildEnhedForest(enhederByOrg.TryGetValue(c.OrgId, out var es) ? es : new List<EnhedCountRow>()),
                     })
                     .ToList();
 
@@ -2608,6 +2605,23 @@ public static class AdminEndpoints
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
             var rows = await enhedRepo.ListActiveByOrgAsync(organisationId, ct);
+            // S100: the FLAT list carries `parentEnhedId` + the derived `level` (depth,
+            // root = 1) so the EnhederPanel can render the hierarchy + exclude self+
+            // descendants in its move picker. Level is computed in-memory by walking the
+            // parent chain (cycle-guarded) — the org's enheder are all loaded here.
+            var parentById = rows.ToDictionary(r => r.EnhedId, r => r.ParentEnhedId);
+            int LevelOf(Guid id)
+            {
+                var depth = 1;
+                var cur = id;
+                var guard = 0;
+                while (parentById.TryGetValue(cur, out var parent) && parent is Guid pid && guard++ < 10_000)
+                {
+                    depth++;
+                    cur = pid;
+                }
+                return depth;
+            }
             return Results.Ok(new
             {
                 enheder = rows.Select(e => new
@@ -2616,6 +2630,8 @@ public static class AdminEndpoints
                     organisationId = e.OrganisationId,
                     name = e.Name,
                     version = e.Version,
+                    parentEnhedId = e.ParentEnhedId,
+                    level = LevelOf(e.EnhedId),
                 }),
             });
         }).RequireAuthorization("HROrAbove");
@@ -2656,6 +2672,7 @@ public static class AdminEndpoints
                 EnhedId = enhedId,
                 OrganisationId = request.OrganisationId,
                 Name = request.Name.Trim(),
+                ParentEnhedId = request.ParentEnhedId,
                 ActorId = actor.ActorId,
                 ActorRole = actor.ActorRole,
                 CorrelationId = actor.CorrelationId,
@@ -2666,6 +2683,27 @@ public static class AdminEndpoints
             await using var tx = await conn.BeginTransactionAsync(ct);
             try
             {
+                // S100 — acquire the per-Organisation advisory lock FIRST so a concurrent
+                // parent-delete / move serializes before the in-tx parent validation below.
+                await EnhedRepository.AcquireEnhedOrgLockAsync(conn, tx, request.OrganisationId, ct);
+
+                // If a parent is given, it must be an ACTIVE enhed in the SAME Organisation
+                // (re-read in-tx UNDER the lock — a CHECK can't cross-reference organisation_id).
+                if (request.ParentEnhedId is Guid parentId)
+                {
+                    var parentOrg = await enhedRepo.GetActiveEnhedOrgInTxAsync(conn, tx, parentId, ct);
+                    if (parentOrg is null)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.UnprocessableEntity(new { error = "The parent enhed does not exist or is deleted." });
+                    }
+                    if (!string.Equals(parentOrg, request.OrganisationId, StringComparison.Ordinal))
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.UnprocessableEntity(new { error = "The parent enhed belongs to a different Organisation." });
+                    }
+                }
+
                 await enhedRepo.ApplyEnhedCreatedAsync(conn, tx, @event, ct);
                 await outbox.EnqueueAsync(conn, tx, $"enhed-{enhedId}", @event, ct);
                 await tx.CommitAsync(ct);
@@ -2686,6 +2724,7 @@ public static class AdminEndpoints
             {
                 enhedId,
                 organisationId = @event.OrganisationId,
+                parentEnhedId = @event.ParentEnhedId,
                 name = @event.Name,
                 version = 1L,
             });
@@ -2786,6 +2825,140 @@ public static class AdminEndpoints
             });
         }).RequireAuthorization("HROrAbove");
 
+        // PUT /api/admin/enheder/{id}/move { newParentEnhedId|null } (If-Match) — S100 re-parent
+        // WITHIN the same Organisation (organisation_id IMMUTABLE). Floored on the enhed's owning
+        // Organisation (LocalHR). Under the per-Organisation advisory lock: re-read the enhed (for
+        // its org + OLD parent); validate the new parent (null = make root) is ACTIVE + same-org +
+        // NOT self/descendant (the cycle CTE → 422); IN-UPDATE optimistic-concurrency (the version
+        // predicate lives in the UPDATE, a 0-row → in-tx re-read → 404/412, emit nothing). On a
+        // landed move emit EnhedMoved(id, oldParent, newParent). PURE DISPLAY metadata — ZERO
+        // authority; parent_enhed_id enters NO scope/approval path.
+        app.MapPut("/api/admin/enheder/{id}/move", async (
+            string id,
+            MoveEnhedRequest request,
+            EnhedRepository enhedRepo,
+            OrgScopeValidator scopeValidator,
+            DbConnectionFactory dbFactory,
+            IOutboxEnqueue outbox,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            var actor = context.GetActorContext();
+            if (request is null)
+                return Results.BadRequest(new { error = "Request body is required." });
+            if (!Guid.TryParse(id, out var enhedId))
+                return Results.BadRequest(new { error = "Invalid enhed id." });
+
+            if (!EtagHeaderHelper.TryParseIfMatch(context.Request, out var expectedVersion, out var headerError))
+                return Results.Json(new { error = headerError }, statusCode: 428);
+
+            var existing = await enhedRepo.GetByIdAsync(id, ct);
+            if (existing is null || existing.IsDeleted)
+                return Results.NotFound(new { error = "Enhed not found." });
+
+            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, existing.OrganisationId, StatsTidRoles.LocalHR, ct);
+            if (!allowed)
+                return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+
+            if (existing.Version != expectedVersion)
+                return Results.Json(new
+                {
+                    error = "Concurrency precondition failed",
+                    expectedVersion,
+                    actualVersion = existing.Version,
+                }, statusCode: 412);
+
+            await using var conn = dbFactory.Create();
+            await conn.OpenAsync(ct);
+            await using var tx = await conn.BeginTransactionAsync(ct);
+            try
+            {
+                // S100 — acquire the per-Organisation advisory lock FIRST so concurrent moves
+                // serialize through the cycle check (the second move sees the first's committed
+                // parent edge → no phantom cycle).
+                await EnhedRepository.AcquireEnhedOrgLockAsync(conn, tx, existing.OrganisationId, ct);
+
+                // Re-read the enhed UNDER the lock (for its current org + OLD parent + version).
+                var current = await enhedRepo.GetByIdInTxAsync(conn, tx, enhedId, ct);
+                if (current is null || current.IsDeleted)
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.NotFound(new { error = "Enhed not found." });
+                }
+
+                // Validate the new parent (null = make root) is ACTIVE + same-org + not a cycle.
+                if (request.NewParentEnhedId is Guid newParentId)
+                {
+                    var parentOrg = await enhedRepo.GetActiveEnhedOrgInTxAsync(conn, tx, newParentId, ct);
+                    if (parentOrg is null)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.UnprocessableEntity(new { error = "The target parent enhed does not exist or is deleted." });
+                    }
+                    if (!string.Equals(parentOrg, current.OrganisationId, StringComparison.Ordinal))
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.UnprocessableEntity(new { error = "Cannot move an enhed to a different Organisation." });
+                    }
+
+                    // Cycle CTE on the HELD connection (sees committed parent edges): reject
+                    // self / a descendant target.
+                    await enhedRepo.GuardNoEnhedCycleAsync(conn, tx, enhedId, newParentId, ct);
+                }
+
+                // IN-UPDATE optimistic concurrency: the version predicate lives in the UPDATE; a
+                // 0-row → re-read (in-tx) to map 404 (absent/soft-deleted) vs 412 (version drift),
+                // emit NOTHING.
+                var affected = await enhedRepo.ApplyEnhedMovedAsync(conn, tx, enhedId, request.NewParentEnhedId, expectedVersion, ct);
+                if (affected == 0)
+                {
+                    var afterUpdate = await enhedRepo.GetByIdInTxAsync(conn, tx, enhedId, ct);
+                    await tx.RollbackAsync(ct);
+                    if (afterUpdate is null || afterUpdate.IsDeleted)
+                        return Results.NotFound(new { error = "Enhed not found." });
+                    return Results.Json(new
+                    {
+                        error = "Concurrency precondition failed",
+                        expectedVersion,
+                        actualVersion = afterUpdate.Version,
+                    }, statusCode: 412);
+                }
+
+                var movedEvent = new EnhedMoved
+                {
+                    EnhedId = enhedId,
+                    OldParentEnhedId = current.ParentEnhedId,
+                    NewParentEnhedId = request.NewParentEnhedId,
+                    ActorId = actor.ActorId,
+                    ActorRole = actor.ActorRole,
+                    CorrelationId = actor.CorrelationId,
+                };
+                await outbox.EnqueueAsync(conn, tx, $"enhed-{enhedId}", movedEvent, ct);
+                await tx.CommitAsync(ct);
+            }
+            catch (EnhedCycleException cycleEx)
+            {
+                await tx.RollbackAsync(ct);
+                return Results.UnprocessableEntity(new { error = cycleEx.Message });
+            }
+            catch
+            {
+                await tx.RollbackAsync(ct);
+                throw;
+            }
+
+            var newVersion = expectedVersion + 1;
+            context.Response.Headers.ETag = $"\"{newVersion}\"";
+            return Results.Ok(new
+            {
+                enhedId,
+                organisationId = existing.OrganisationId,
+                name = existing.Name,
+                parentEnhedId = request.NewParentEnhedId,
+                version = newVersion,
+            });
+        }).RequireAuthorization("HROrAbove");
+
         // DELETE /api/admin/enheder/{id} (If-Match) — SOFT delete. Floored on the enhed's owning
         // Organisation. NO fan-out untag write — memberships are projection-FILTERED. Emits
         // EnhedDeleted.
@@ -2834,25 +3007,61 @@ public static class AdminEndpoints
             await using var tx = await conn.BeginTransactionAsync(ct);
             try
             {
+                // S100 — acquire the per-Organisation advisory lock FIRST so the re-parent-on-delete
+                // serializes against a concurrent create-child / move under the same parent (no
+                // active child left dangling under a soft-deleted parent; no lost re-parent).
+                await EnhedRepository.AcquireEnhedOrgLockAsync(conn, tx, existing.OrganisationId, ct);
+
+                // Re-read the enhed UNDER the lock to read the AUTHORITATIVE OLD parent (the
+                // grandparent the children are lifted to). A concurrent move of THIS enhed bumps
+                // version → the soft-delete below 0-rows (412), so this snapshot is consistent.
+                var current = await enhedRepo.GetByIdInTxAsync(conn, tx, enhedId, ct);
+                if (current is null || current.IsDeleted)
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.NotFound(new { error = "Enhed not found." });
+                }
+
                 // BLOCKER 2 — IN-UPDATE optimistic concurrency: a stale If-Match or an
                 // already-deleted/absent row matches 0 rows. On 0 rows we re-read (in-tx) to map
                 // 404 (absent/already-deleted) vs 412 (version drift) and emit NOTHING.
                 var affected = await enhedRepo.ApplyEnhedDeletedAsync(conn, tx, @event, expectedVersion, ct);
                 if (affected == 0)
                 {
-                    var current = await enhedRepo.GetByIdInTxAsync(conn, tx, enhedId, ct);
+                    var afterUpdate = await enhedRepo.GetByIdInTxAsync(conn, tx, enhedId, ct);
                     await tx.RollbackAsync(ct);
-                    if (current is null || current.IsDeleted)
+                    if (afterUpdate is null || afterUpdate.IsDeleted)
                         return Results.NotFound(new { error = "Enhed not found." });
                     return Results.Json(new
                     {
                         error = "Concurrency precondition failed",
                         expectedVersion,
-                        actualVersion = current.Version,
+                        actualVersion = afterUpdate.Version,
                     }, statusCode: 412);
                 }
 
                 await outbox.EnqueueAsync(conn, tx, $"enhed-{enhedId}", @event, ct);
+
+                // S100 (P3) — RE-PARENT the surviving active children UP to the deleted enhed's
+                // OWN parent (current.ParentEnhedId; null → the children become roots) IN THE SAME
+                // tx, emitting a per-child EnhedMoved for EACH (a state change, NOT a silent SQL
+                // update). A LEAF (0 children) emits ONLY EnhedDeleted. The children SURVIVE.
+                var movedChildren = await enhedRepo.ReparentChildrenOnDeleteAsync(
+                    conn, tx, enhedId, current.ParentEnhedId, ct);
+                foreach (var childId in movedChildren)
+                {
+                    var childMoved = new EnhedMoved
+                    {
+                        EnhedId = childId,
+                        OldParentEnhedId = enhedId,
+                        NewParentEnhedId = current.ParentEnhedId,
+                        ActorId = actor.ActorId,
+                        ActorRole = actor.ActorRole,
+                        CorrelationId = actor.CorrelationId,
+                    };
+                    await outbox.EnqueueAsync(conn, tx, $"enhed-{childId}", childMoved, ct);
+                }
+
                 await tx.CommitAsync(ct);
             }
             catch
@@ -3035,6 +3244,63 @@ public static class AdminEndpoints
         okVersion = org.OkVersion
     };
 
+    // ── S100 (ADR-036 amendment) — nest the per-Organisation enhed sub-tree ──
+
+    /// <summary>
+    /// Assembles the FLAT enhed rows of ONE Organisation into a NESTED forest, deriving the
+    /// <c>level</c> = depth (a root enhed = 1). O(enheder), bounded per-Organisation — group the
+    /// children by parent once, then walk from the roots. A malformed parent (dangling /
+    /// cross-org / a cycle from legacy data) is defended against by a visited-set so the walk
+    /// terminates; any node not reachable from a root is appended as a defensive root so it never
+    /// silently disappears. PURE DISPLAY metadata — the level/parent enter NO authority path.
+    /// </summary>
+    private static List<object> BuildEnhedForest(IReadOnlyList<EnhedCountRow> rows)
+    {
+        if (rows.Count == 0)
+            return new List<object>();
+
+        var childrenByParent = rows
+            .Where(e => e.ParentEnhedId is not null)
+            .GroupBy(e => e.ParentEnhedId!.Value)
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+        var visited = new HashSet<Guid>();
+
+        object BuildNode(EnhedCountRow e, int level)
+        {
+            visited.Add(e.EnhedId);
+            var kids = childrenByParent.TryGetValue(e.EnhedId, out var cs) ? cs : new List<EnhedCountRow>();
+            var children = kids
+                .Where(k => !visited.Contains(k.EnhedId)) // loop guard (legacy data)
+                .Select(k => BuildNode(k, level + 1))
+                .ToList();
+            return new
+            {
+                enhedId = e.EnhedId,
+                parentEnhedId = e.ParentEnhedId,
+                level,
+                name = e.Name,
+                taggedUserCount = e.TaggedUserCount,
+                children,
+            };
+        }
+
+        // Roots = parent_enhed_id IS NULL OR a parent absent from THIS org's active set (a
+        // dangling/cross-org parent renders the node as a root rather than dropping it).
+        var presentIds = rows.Select(r => r.EnhedId).ToHashSet();
+        var forest = rows
+            .Where(e => e.ParentEnhedId is null || !presentIds.Contains(e.ParentEnhedId.Value))
+            .Select(e => BuildNode(e, 1))
+            .ToList();
+
+        // Defensive: any node not reached from a root (a pure cycle in legacy data) is surfaced
+        // as a root so it never silently disappears from the management view.
+        foreach (var e in rows.Where(e => !visited.Contains(e.EnhedId)))
+            forest.Add(BuildNode(e, 1));
+
+        return forest;
+    }
+
     // ── Request DTOs (co-located) ──
 
     private sealed class CreateOrganizationRequest
@@ -3133,11 +3399,24 @@ public static class AdminEndpoints
     {
         public required string OrganisationId { get; init; }
         public required string Name { get; init; }
+
+        /// <summary>S100 — OPTIONAL parent enhed. <c>null</c> = a root enhed (directly under the
+        /// Organisation). A non-null parent must be an ACTIVE enhed in the SAME Organisation
+        /// (validated in-tx under the per-Organisation advisory lock). PURE DISPLAY metadata.</summary>
+        public Guid? ParentEnhedId { get; init; }
     }
 
     private sealed class RenameEnhedRequest
     {
         public required string Name { get; init; }
+    }
+
+    /// <summary>S100 — the move/re-parent request. <c>NewParentEnhedId</c> <c>null</c> = make the
+    /// enhed a root. The new parent (when set) must be an ACTIVE enhed in the SAME Organisation,
+    /// NOT the enhed itself or any descendant (cycle-guarded). The Organisation is IMMUTABLE.</summary>
+    private sealed class MoveEnhedRequest
+    {
+        public Guid? NewParentEnhedId { get; init; }
     }
 
     private sealed class SetUserEnhederRequest

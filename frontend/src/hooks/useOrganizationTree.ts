@@ -16,16 +16,24 @@
 import { useState, useCallback, useEffect } from 'react'
 import { apiClient } from '../lib/api'
 
-/** One Enhed leaf as served on an Organisation node in the aggregated tree.
-    NOTE: the tree shape carries NO `version` — inline rename/delete must
-    resolve it via `useEnheder.fetchEnheder(orgId)` (S99 Step-0b NOTE 1). */
+/** One Enhed node as served on an Organisation node in the aggregated tree.
+    S100: enheder are now NESTED — each node carries `parentEnhedId`, the derived
+    `level` (depth; root enhed = 1) and its own `children`. NOTE: the tree shape
+    carries NO `version` — inline rename/delete/move must resolve it via
+    `useEnheder.fetchEnheder(orgId)` (S99 Step-0b NOTE 1, kept in S100). */
 export interface TreeEnhedNode {
   enhedId: string
   name: string
   taggedUserCount: number
+  parentEnhedId: string | null
+  /** Derived depth within the Organisation (a root enhed = 1). */
+  level: number
+  children: TreeEnhedNode[]
 }
 
-/** An Organisation node (depth 1) under a MAO. Holds employees + flat enheder. */
+/** An Organisation node (depth 1) under a MAO. Holds employees + a nested enhed
+    sub-tree (the top-level `enheder` array are the ROOT enheder; their `children`
+    continue the depth). */
 export interface TreeOrganisationNode {
   orgId: string
   orgName: string

@@ -13,6 +13,8 @@ import {
   searchRows,
   expandedForLevel,
   moveTargets,
+  findOrganisation,
+  enhedMoveTargets,
   TYPE_LABEL,
   type OrgRow,
   type Level,
@@ -38,6 +40,10 @@ const LEVEL_OPTIONS: { value: Level; label: string }[] = [
   { value: 'ENHED', label: 'Enhed' },
 ]
 
+// The Enhed move dialog's sentinel for "make this a root enhed" (distinct from
+// '' = no choice made yet, so the confirm stays gated until the user picks).
+const ROOT_OPTION = '__ROOT__'
+
 const TYPE_BADGE_VARIANT: Record<NodeType, 'info' | 'success' | 'default'> = {
   MAO: 'info',
   ORGANISATION: 'success',
@@ -45,9 +51,30 @@ const TYPE_BADGE_VARIANT: Record<NodeType, 'info' | 'success' | 'default'> = {
 }
 
 // ── Dialog state shapes ──
-type CreateState = { parentId: string | null; parentName: string | null; type: NodeType; value: string }
+// `organisationId` rides CreateState only for an ENHED child (the POST needs the
+// owning Organisation); `parentEnhedId` is the enhed-child's parent (null = a
+// root enhed). For MAO/Organisation creates, `parentId` is the org-structure
+// parent and these two stay null.
+type CreateState = {
+  parentId: string | null
+  parentName: string | null
+  type: NodeType
+  value: string
+  organisationId?: string
+  parentEnhedId?: string | null
+}
 type RenameState = { id: string; type: 'MAO' | 'ORGANISATION'; value: string }
 type MoveState = { id: string; name: string; parentId: string | null; to: string }
+/** The Enhed move dialog: re-parent `id` within `organisationId`; `to` is the
+    chosen new parent enhed id, or '' = the "→ root" option. `parentEnhedId` is
+    the current parent (excluded from the picker as a no-op). */
+type EnhedMoveState = {
+  id: string
+  name: string
+  organisationId: string
+  parentEnhedId: string | null
+  to: string
+}
 type DeleteState = {
   row: OrgRow
   // resolved branch + data
@@ -79,7 +106,7 @@ export function OrganisationPage() {
   const { tree, loading, error, fetchTree } = useOrganizationTree()
   const { createOrganization, updateOrganization } = useOrganizations()
   const { deleteOrganization, moveOrganization } = useOrganizationStructure()
-  const { fetchEnheder, createEnhed, renameEnhed, deleteEnhed } = useEnheder()
+  const { fetchEnheder, createEnhed, renameEnhed, moveEnhed, deleteEnhed } = useEnheder()
   const { toast } = useToast()
 
   // ── view state ──
@@ -95,6 +122,7 @@ export function OrganisationPage() {
   const [createModal, setCreateModal] = useState<CreateState | null>(null)
   const [renameModal, setRenameModal] = useState<RenameState | null>(null)
   const [moveModal, setMoveModal] = useState<MoveState | null>(null)
+  const [enhedMoveModal, setEnhedMoveModal] = useState<EnhedMoveState | null>(null)
   const [deleteModal, setDeleteModal] = useState<DeleteState | null>(null)
   const [dialogError, setDialogError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -179,28 +207,57 @@ export function OrganisationPage() {
 
   const onTilfoej = (row: OrgRow) => {
     setSelected(row.id)
-    // MAO → create Organisation; Organisation → create Enhed. Enhed has NO Tilføj.
+    // MAO → create Organisation; Organisation → create a ROOT Enhed; Enhed (S100)
+    // → create a CHILD Enhed under it (same Organisation, parentEnhedId = the row).
     if (row.type === 'MAO') {
       setCreateModal({ parentId: row.id, parentName: row.name, type: 'ORGANISATION', value: '' })
     } else if (row.type === 'ORGANISATION') {
-      setCreateModal({ parentId: row.id, parentName: row.name, type: 'ENHED', value: '' })
+      setCreateModal({
+        parentId: row.id,
+        parentName: row.name,
+        type: 'ENHED',
+        value: '',
+        organisationId: row.id,
+        parentEnhedId: null,
+      })
+    } else {
+      // Enhed: a child under this enhed in the same Organisation.
+      setCreateModal({
+        parentId: row.id,
+        parentName: row.name,
+        type: 'ENHED',
+        value: '',
+        organisationId: row.organisationId!,
+        parentEnhedId: row.id,
+      })
     }
     setDialogError(null)
   }
 
   const onFlyt = (row: OrgRow) => {
     setSelected(row.id)
-    // Organisation only (MAO + Enhed hide Flyt).
-    if (row.type !== 'ORGANISATION') return
-    setMoveModal({ id: row.id, name: row.name, parentId: row.parentId, to: '' })
     setDialogError(null)
+    // Organisation → move under another MAO. Enhed (S100) → re-parent within the
+    // same Organisation. MAO hides Flyt.
+    if (row.type === 'ORGANISATION') {
+      setMoveModal({ id: row.id, name: row.name, parentId: row.parentId, to: '' })
+    } else if (row.type === 'ENHED') {
+      setEnhedMoveModal({
+        id: row.id,
+        name: row.name,
+        organisationId: row.organisationId!,
+        parentEnhedId: row.parentEnhedId ?? null,
+        to: '',
+      })
+    }
   }
 
   const onSlet = async (row: OrgRow) => {
     setSelected(row.id)
     setDialogError(null)
     if (row.type === 'ENHED') {
-      // The S97 flat soft-delete = untag; no count probe, no re-parent promise.
+      // The soft-delete keeps users tagged-by-projection; S100: any CHILD enheder
+      // re-parent UP to this enhed's parent (no count probe needed).
       setDeleteModal({ row, branch: 'enhed' })
       return
     }
@@ -220,7 +277,9 @@ export function OrganisationPage() {
     setDialogError(null)
     try {
       if (createModal.type === 'ENHED') {
-        await createEnhed(createModal.parentId!, name)
+        // Create under the owning Organisation; parentEnhedId (when set) makes it
+        // a child enhed, else a root enhed.
+        await createEnhed(createModal.organisationId!, name, createModal.parentEnhedId ?? null)
       } else {
         // MAO (no parent) or ORGANISATION (parentOrgId = the MAO). Name-only.
         await createOrganization({
@@ -295,6 +354,46 @@ export function OrganisationPage() {
     }
   }
 
+  // ── enhed move submit (re-parent within the Organisation) ──
+  const submitEnhedMove = async (e: FormEvent) => {
+    e.preventDefault()
+    if (!enhedMoveModal) return
+    setBusy(true)
+    setDialogError(null)
+    // ROOT_OPTION = the "→ rod (ingen overordnet)" choice (newParentEnhedId = null);
+    // any other value is the chosen parent enhed id.
+    const newParent = enhedMoveModal.to === ROOT_OPTION ? null : enhedMoveModal.to
+    try {
+      // Resolve the enhed's current version (the tree leaf carries none) then move.
+      const list = await fetchEnheder(enhedMoveModal.organisationId)
+      if (!list.ok) throw new Error(list.error)
+      const found = list.data.find((en) => en.enhedId === enhedMoveModal.id)
+      if (!found) throw new Error('Enheden findes ikke længere.')
+      await moveEnhed(enhedMoveModal.id, newParent, found.etag)
+      toast({ title: 'Flyttet', description: 'Enhed flyttet', variant: 'success' })
+      setEnhedMoveModal(null)
+      // Reveal the moved enhed under its new parent (mirror the create-child reveal).
+      if (newParent) {
+        setExpanded((s) => new Set(s).add(newParent))
+        setLevel(null)
+      }
+      await reload()
+    } catch (err) {
+      const e2 = err as EnhedMutationError
+      if (e2.status === 422) {
+        setDialogError(
+          'Flytningen blev afvist: målet må ikke være enheden selv eller en af dens underenheder.',
+        )
+      } else if (e2.status === 412) {
+        setDialogError('Enheden er ændret af en anden administrator. Genindlæs og prøv igen.')
+      } else {
+        setDialogError(messageFor(err))
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
   // ── delete confirm ──
   const confirmDelete = async () => {
     if (!deleteModal) return
@@ -335,6 +434,7 @@ export function OrganisationPage() {
     setCreateModal(null)
     setRenameModal(null)
     setMoveModal(null)
+    setEnhedMoveModal(null)
     setDeleteModal(null)
     setDialogError(null)
   }
@@ -469,6 +569,16 @@ export function OrganisationPage() {
                     <Badge variant={TYPE_BADGE_VARIANT[row.type]}>
                       {TYPE_LABEL[row.type]}
                     </Badge>
+                    {row.type === 'ENHED' && row.level !== undefined && (
+                      <span
+                        className={styles.levelBadge}
+                        title={`Niveau ${row.level}`}
+                        aria-label={`Niveau ${row.level}`}
+                        data-testid={`enhed-level-${row.id}`}
+                      >
+                        N{row.level}
+                      </span>
+                    )}
                   </td>
                   <td className={`${styles.colCount} ${styles.count}`}>{row.count}</td>
                   <td className={styles.colAction}>
@@ -484,20 +594,22 @@ export function OrganisationPage() {
                       >
                         Omdøb
                       </button>
-                      {row.type !== 'ENHED' && (
-                        <button
-                          type="button"
-                          className={styles.ghost}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            onTilfoej(row)
-                          }}
-                          data-testid={`action-tilfoej-${row.id}`}
-                        >
-                          Tilføj
-                        </button>
-                      )}
-                      {row.type === 'ORGANISATION' && (
+                      {/* Tilføj on every tier: MAO→Organisation, Organisation→
+                          root Enhed, Enhed→child Enhed (S100 hierarchy). */}
+                      <button
+                        type="button"
+                        className={styles.ghost}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          onTilfoej(row)
+                        }}
+                        data-testid={`action-tilfoej-${row.id}`}
+                      >
+                        Tilføj
+                      </button>
+                      {/* Flyt on Organisation (re-home under a MAO) + Enhed
+                          (re-parent within the Organisation). MAO hides Flyt. */}
+                      {(row.type === 'ORGANISATION' || row.type === 'ENHED') && (
                         <button
                           type="button"
                           className={styles.ghost}
@@ -645,6 +757,46 @@ export function OrganisationPage() {
         </DialogShell>
       )}
 
+      {enhedMoveModal && (
+        <DialogShell title="Flyt enhed" onClose={closeDialogs}>
+          <form onSubmit={submitEnhedMove}>
+            <p className={styles.dialogText}>
+              Vælg en ny overordnet enhed for <strong>{enhedMoveModal.name}</strong> inden for
+              samme organisation, eller gør den til en rod-enhed.
+            </p>
+            <label className={styles.dialogLabel} htmlFor="enhedMoveTarget">
+              Ny placering
+            </label>
+            <select
+              id="enhedMoveTarget"
+              className={styles.dialogSelect}
+              value={enhedMoveModal.to}
+              onChange={(e) =>
+                setEnhedMoveModal((s) => (s ? { ...s, to: e.target.value } : s))
+              }
+            >
+              <option value="">Vælg ny overordnet enhed…</option>
+              <option value={ROOT_OPTION}>→ Rod (ingen overordnet enhed)</option>
+              {enhedMoveTargets(
+                findOrganisation(tree, enhedMoveModal.organisationId),
+                enhedMoveModal.id,
+                enhedMoveModal.parentEnhedId,
+              ).map((t) => (
+                <option key={t.enhedId} value={t.enhedId}>
+                  {`${'  '.repeat(Math.max(0, t.level - 1))}${t.name}`}
+                </option>
+              ))}
+            </select>
+            {dialogError && <div className={styles.dialogError}>{dialogError}</div>}
+            <DialogFooter
+              onCancel={closeDialogs}
+              confirmLabel="Flyt"
+              confirmDisabled={busy || !enhedMoveModal.to}
+            />
+          </form>
+        </DialogShell>
+      )}
+
       {deleteModal && (
         <DeleteDialog
           state={deleteModal}
@@ -770,10 +922,13 @@ function DeleteDialog({
         Du er ved at slette <strong>{row.name}</strong>. Handlingen kan ikke fortrydes.
       </div>
       {row.type === 'ENHED' && (
-        // Flat model: members keep their organisation home (no re-parent promise,
-        // NO "Underenheder, der slettes" line — the S91 dead-copy guard).
+        // S100 hierarchy: members keep their organisation home (only the enhed
+        // tag is removed), and any UNDERENHEDER are NOT deleted — they re-parent
+        // UP to this enhed's parent (a root enhed's children become roots).
         <p className={styles.dialogText}>
           Medarbejdere beholder deres organisation; kun enhedsmærket fjernes.
+          Eventuelle underenheder slettes ikke — de flyttes op til denne enheds
+          overordnede enhed.
         </p>
       )}
       {error && <div className={styles.dialogError}>{error}</div>}

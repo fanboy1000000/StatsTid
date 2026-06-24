@@ -31,9 +31,10 @@ const orgs: Organization[] = [
   { orgId: 'STY2', orgName: 'Digitaliseringsstyrelsen', orgType: 'ORGANISATION', parentOrgId: 'MIN1', agreementCode: 'AC' },
 ]
 
+// S100: enheder carry parentEnhedId + the derived level. E1 (root) → E2 (child).
 const STY1_ENHEDER = [
-  { enhedId: 'E1', organisationId: 'STY1', name: 'Netværk', version: 1 },
-  { enhedId: 'E2', organisationId: 'STY1', name: 'Drift', version: 2 },
+  { enhedId: 'E1', organisationId: 'STY1', name: 'Netværk', version: 1, parentEnhedId: null, level: 1 },
+  { enhedId: 'E2', organisationId: 'STY1', name: 'Drift', version: 2, parentEnhedId: 'E1', level: 2 },
 ]
 
 /** A fetch router keyed by url+method; defaults to a benign STY1 list. */
@@ -197,6 +198,72 @@ describe('EnhederPanel', () => {
     expect(deletes[0].ifMatch).toBe('"2"')
     // E1 survives.
     expect(screen.getByTestId('enheder-name-E1')).toBeDefined()
+  })
+
+  it('Tilføj on a row creates a CHILD enhed (parentEnhedId = the row) — S100', async () => {
+    const posts: Array<{ body: unknown }> = []
+    router({
+      'POST /api/admin/enheder': (init) => {
+        posts.push({ body: init?.body ? JSON.parse(init.body as string) : undefined })
+        return ok({ enhedId: 'E9', organisationId: 'STY1', name: 'Backup', version: 1, parentEnhedId: 'E1' }, '"1"')
+      },
+    })
+    renderPanel('STY1')
+    await waitFor(() => expect(screen.getByTestId('enheder-name-E1')).toBeDefined())
+
+    fireEvent.click(screen.getByTestId('enheder-add-child-E1'))
+    fireEvent.change(screen.getByTestId('enheder-child-name-E1'), { target: { value: 'Backup' } })
+    fireEvent.click(screen.getByTestId('enheder-child-create-E1'))
+
+    await waitFor(() => {
+      expect(posts.length).toBe(1)
+    })
+    expect(posts[0].body).toEqual({ organisationId: 'STY1', name: 'Backup', parentEnhedId: 'E1' })
+  })
+
+  it('the move select EXCLUDES self + descendants + current parent — S100', async () => {
+    renderPanel('STY1')
+    await waitFor(() => expect(screen.getByTestId('enheder-name-E1')).toBeDefined())
+
+    // Move E1 (root, parent of E2). Valid targets: → root only (E2 is a descendant,
+    // E1 is self). E1's current parent is null so no parent-exclusion applies.
+    fireEvent.click(screen.getByTestId('enheder-move-E1'))
+    const select = screen.getByTestId('enheder-move-select-E1') as HTMLSelectElement
+    const values = Array.from(select.options).map((o) => o.value)
+    expect(values).toContain('__ROOT__')
+    expect(values).not.toContain('E1') // self
+    expect(values).not.toContain('E2') // descendant
+  })
+
+  it('moving an enhed PUTs …/move with the row If-Match then refetches — S100', async () => {
+    const moves: Array<{ ifMatch?: string; body: unknown }> = []
+    let moved = false
+    router({
+      'PUT /api/admin/enheder/E2/move': (init) => {
+        const h = init?.headers as Record<string, string> | undefined
+        moves.push({ ifMatch: h?.['If-Match'], body: init?.body ? JSON.parse(init.body as string) : undefined })
+        moved = true
+        return ok({ enhedId: 'E2', organisationId: 'STY1', name: 'Drift', version: 3, parentEnhedId: null }, '"3"')
+      },
+      'GET /api/admin/enheder?organisationId=STY1': () =>
+        moved
+          ? ok({ enheder: [STY1_ENHEDER[0], { enhedId: 'E2', organisationId: 'STY1', name: 'Drift', version: 3, parentEnhedId: null, level: 1 }] })
+          : ok({ enheder: STY1_ENHEDER }),
+    })
+    renderPanel('STY1')
+    await waitFor(() => expect(screen.getByTestId('enheder-name-E2')).toBeDefined())
+
+    // Move E2 (child of E1) to root.
+    fireEvent.click(screen.getByTestId('enheder-move-E2'))
+    fireEvent.change(screen.getByTestId('enheder-move-select-E2'), { target: { value: '__ROOT__' } })
+    fireEvent.click(screen.getByTestId('enheder-move-save-E2'))
+
+    await waitFor(() => {
+      expect(moves.length).toBe(1)
+    })
+    // E2's version was 2 → If-Match "2"; newParentEnhedId null (→ root).
+    expect(moves[0].ifMatch).toBe('"2"')
+    expect(moves[0].body).toEqual({ newParentEnhedId: null })
   })
 
   it('switching the panel Organisation selector reloads that org enheder', async () => {

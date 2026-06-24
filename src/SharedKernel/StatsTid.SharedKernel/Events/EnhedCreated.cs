@@ -14,4 +14,14 @@ public sealed class EnhedCreated : DomainEventBase
     public required Guid EnhedId { get; init; }
     public required string OrganisationId { get; init; }
     public required string Name { get; init; }
+
+    /// <summary>
+    /// S100 (ADR-036 amendment) — the OPTIONAL parent enhed under which this enhed is created.
+    /// <c>null</c> = a ROOT enhed (directly under the Organisation; the greenfield/backfill
+    /// default). A non-null parent is another ACTIVE enhed in the SAME Organisation (validated
+    /// in-tx under the per-Organisation advisory lock at create time). Replay-safe: a pre-S100
+    /// stream event deserializes with <c>ParentEnhedId == null</c> → a root (so
+    /// <c>EnhedBackfillSeeder</c> needs no change). PURE DISPLAY metadata — ZERO authority.
+    /// </summary>
+    public Guid? ParentEnhedId { get; init; }
 }

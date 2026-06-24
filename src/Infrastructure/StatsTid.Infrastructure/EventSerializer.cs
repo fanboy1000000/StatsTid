@@ -188,6 +188,11 @@ public static class EventSerializer
         ["EnhedRenamed"] = typeof(EnhedRenamed),
         ["EnhedDeleted"] = typeof(EnhedDeleted),
         ["UserEnhederChanged"] = typeof(UserEnhederChanged),
+        // Sprint 100 (ADR-036 amendment): hierarchical Enhed — `parent_enhed_id` re-parent
+        // event. EnhedMoved rides enhed-{enhedId} (UPDATE parent_enhed_id + bump version).
+        // Emitted by the explicit move endpoint AND per-child by the delete-reparent. PURE
+        // DISPLAY metadata — ZERO authority. Plain-outbox; name-keyed; replay-safe.
+        ["EnhedMoved"] = typeof(EnhedMoved),
     };
 
     public static string Serialize(IDomainEvent @event)

@@ -188,6 +188,21 @@
   width: 200px;
 }
 
+/* S100 — Enhed depth badge (a small "N<level>" pill next to the Enhed type). */
+.levelBadge {
+  display: inline-block;
+  margin-left: var(--space-2);
+  padding: 0 6px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+  background: var(--color-surface-subtle, var(--color-bg-subtle, #f0f0f0));
+  border: 1px solid var(--color-border);
+  border-radius: 2px;
+  vertical-align: middle;
+}
+
 .colCount {
   width: 90px;
   text-align: right;

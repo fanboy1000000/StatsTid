@@ -42,7 +42,7 @@ public sealed class EnhedRepository
         await conn.OpenAsync(ct);
         await using var cmd = new NpgsqlCommand(
             """
-            SELECT enhed_id, organisation_id, name, version
+            SELECT enhed_id, organisation_id, parent_enhed_id, name, version
             FROM enheder
             WHERE organisation_id = @org AND deleted_at IS NULL
             ORDER BY lower(name), enhed_id
@@ -56,8 +56,9 @@ public sealed class EnhedRepository
             rows.Add(new EnhedRow(
                 EnhedId: reader.GetGuid(0),
                 OrganisationId: reader.GetString(1),
-                Name: reader.GetString(2),
-                Version: reader.GetInt64(3)));
+                ParentEnhedId: reader.IsDBNull(2) ? null : reader.GetGuid(2),
+                Name: reader.GetString(3),
+                Version: reader.GetInt64(4)));
         }
         return rows;
     }
@@ -71,7 +72,7 @@ public sealed class EnhedRepository
         await conn.OpenAsync(ct);
         await using var cmd = new NpgsqlCommand(
             """
-            SELECT enhed_id, organisation_id, name, version, (deleted_at IS NOT NULL) AS is_deleted
+            SELECT enhed_id, organisation_id, parent_enhed_id, name, version, (deleted_at IS NOT NULL) AS is_deleted
             FROM enheder
             WHERE enhed_id = @id
             """, conn);
@@ -83,9 +84,10 @@ public sealed class EnhedRepository
         return new EnhedFullRow(
             EnhedId: reader.GetGuid(0),
             OrganisationId: reader.GetString(1),
-            Name: reader.GetString(2),
-            Version: reader.GetInt64(3),
-            IsDeleted: reader.GetBoolean(4));
+            ParentEnhedId: reader.IsDBNull(2) ? null : reader.GetGuid(2),
+            Name: reader.GetString(3),
+            Version: reader.GetInt64(4),
+            IsDeleted: reader.GetBoolean(5));
     }
 
     /// <summary>In-tx re-read of a single enhed (active OR soft-deleted) on the HELD connection.
@@ -97,7 +99,7 @@ public sealed class EnhedRepository
     {
         await using var cmd = new NpgsqlCommand(
             """
-            SELECT enhed_id, organisation_id, name, version, (deleted_at IS NOT NULL) AS is_deleted
+            SELECT enhed_id, organisation_id, parent_enhed_id, name, version, (deleted_at IS NOT NULL) AS is_deleted
             FROM enheder
             WHERE enhed_id = @id
             """, conn, tx);
@@ -109,9 +111,10 @@ public sealed class EnhedRepository
         return new EnhedFullRow(
             EnhedId: reader.GetGuid(0),
             OrganisationId: reader.GetString(1),
-            Name: reader.GetString(2),
-            Version: reader.GetInt64(3),
-            IsDeleted: reader.GetBoolean(4));
+            ParentEnhedId: reader.IsDBNull(2) ? null : reader.GetGuid(2),
+            Name: reader.GetString(3),
+            Version: reader.GetInt64(4),
+            IsDeleted: reader.GetBoolean(5));
     }
 
     /// <summary>Reads a user's ACTIVE enhed-id set (for projecting the current tag set into
@@ -145,17 +148,20 @@ public sealed class EnhedRepository
     /// <summary>EnhedCreated projection — INSERT a fresh active enhed at version 1. The
     /// caller generates <paramref name="event"/>.EnhedId so the outbox event body carries it.
     /// A <c>23505</c> on <c>idx_enheder_active_name</c> (active-name dup) surfaces as a
-    /// PostgresException — the endpoint maps it to 409.</summary>
+    /// PostgresException — the endpoint maps it to 409. S100: <c>parent_enhed_id</c> comes
+    /// from <paramref name="event"/>.ParentEnhedId (<c>null</c> = a root; validated active +
+    /// same-Organisation by the caller IN-TX under the per-Organisation advisory lock).</summary>
     public async Task ApplyEnhedCreatedAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx, EnhedCreated @event, CancellationToken ct = default)
     {
         await using var cmd = new NpgsqlCommand(
             """
-            INSERT INTO enheder (enhed_id, organisation_id, name, deleted_at, version, created_at)
-            VALUES (@id, @org, @name, NULL, 1, NOW())
+            INSERT INTO enheder (enhed_id, organisation_id, parent_enhed_id, name, deleted_at, version, created_at)
+            VALUES (@id, @org, @parent, @name, NULL, 1, NOW())
             """, conn, tx);
         cmd.Parameters.AddWithValue("id", @event.EnhedId);
         cmd.Parameters.AddWithValue("org", @event.OrganisationId);
+        cmd.Parameters.AddWithValue("parent", (object?)@event.ParentEnhedId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("name", @event.Name);
         await cmd.ExecuteNonQueryAsync(ct);
     }
@@ -204,6 +210,164 @@ public sealed class EnhedRepository
         cmd.Parameters.AddWithValue("id", @event.EnhedId);
         cmd.Parameters.AddWithValue("expectedVersion", expectedVersion);
         return await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    //  S100 (ADR-036 amendment) — the hierarchical-Enhed concurrency spine
+    //  (the per-Organisation advisory lock + the cycle CTE under it + the
+    //  re-parent writer). PURE DISPLAY metadata — these mutate parent_enhed_id
+    //  ONLY; ZERO authority/scope/approval meaning.
+    // ──────────────────────────────────────────────────────────────────────
+
+    /// <summary>Effectively-unbounded safety ceiling for the enhed-cycle descendant walk; the
+    /// path-array visited-set guard is the real termination guarantee (mirrors
+    /// <c>ReportingLineRepository.CycleWalkMaxDepth</c>).</summary>
+    private const int EnhedCycleWalkMaxDepth = 10_000;
+
+    /// <summary>
+    /// S100 — takes a STABLE, per-Organisation advisory lock keyed on the enhed's
+    /// <paramref name="organisationId"/> (the enhed tree is WHOLLY within one Organisation — the
+    /// S95 "advisory domain = the Organisation" pattern). xact-scoped (auto-released at
+    /// COMMIT/ROLLBACK; no manual unlock). Acquired FIRST — before the cycle CTE — on EVERY
+    /// enhed-tree mutator (create-child / move / delete-reparent) so concurrent moves serialize:
+    /// the cycle walk of the second move sees the first's committed parent edge (or blocks until
+    /// it commits/rolls back), closing the phantom-cycle gap where two stale snapshots each pass.
+    ///
+    /// <para>A DISTINCT prefix (<c>enhed-org-</c>) from the S95 reporting <c>reporting-org-</c>
+    /// key — enhed mutations never touch reporting_lines and vice-versa, so the two advisory
+    /// domains can never alias into false contention or a cross-domain deadlock.</para>
+    /// </summary>
+    public static async Task AcquireEnhedOrgLockAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, string organisationId, CancellationToken ct = default)
+    {
+        await using var cmd = new NpgsqlCommand(
+            "SELECT pg_advisory_xact_lock(hashtext('enhed-org-' || @organisationId))", conn, tx);
+        cmd.Parameters.AddWithValue("organisationId", organisationId);
+        await cmd.ExecuteScalarAsync(ct);
+    }
+
+    /// <summary>
+    /// S100 — the enhed-tree cycle guard. REJECTS (via <see cref="EnhedCycleException"/>) a move
+    /// whose chosen <paramref name="newParentEnhedId"/> is the <paramref name="enhedId"/> itself
+    /// OR any active descendant of the enhed (which would detach a sub-tree into a cycle). Run
+    /// inside the caller's transaction AFTER <see cref="AcquireEnhedOrgLockAsync"/>, on the HELD
+    /// connection (so the descendant walk sees the committed parent edges).
+    ///
+    /// <para>A NEW recursive CTE over <c>enheder.parent_enhed_id</c> (filtered
+    /// <c>deleted_at IS NULL</c>) — NOT a reuse of <c>ReportingLineRepository.GuardNoCycleAsync</c>
+    /// (that walks <c>reporting_lines</c> edges, structurally unusable here), but mirroring its
+    /// discipline: a path-array visited-set guard terminates even on a pre-existing loop, with
+    /// <see cref="EnhedCycleWalkMaxDepth"/> as the effectively-unbounded backstop. The walk goes
+    /// DOWN (<c>parent_enhed_id = @enhedId</c>) from the moved enhed; if
+    /// <paramref name="newParentEnhedId"/> is reached, the move is a self-into-descendant cycle.</para>
+    /// </summary>
+    /// <exception cref="EnhedCycleException">If the new parent is the enhed itself or a descendant.</exception>
+    public async Task GuardNoEnhedCycleAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        Guid enhedId, Guid newParentEnhedId, CancellationToken ct = default)
+    {
+        // Self-cycle: an enhed cannot be its own parent.
+        if (enhedId == newParentEnhedId)
+            throw new EnhedCycleException(enhedId, newParentEnhedId,
+                $"Cannot move enhed '{enhedId}' under itself.");
+
+        // Descendant-cycle: if the chosen parent is somewhere BELOW the enhed in the tree, the
+        // re-parent would close a loop. Walk downward (parent_enhed_id → enhed_id) from the enhed
+        // and reject if we reach the new parent. The path-array visited-set guard + the depth
+        // backstop guarantee termination even if the data already contains a loop.
+        await using var cmd = new NpgsqlCommand(
+            """
+            WITH RECURSIVE descendants AS (
+                SELECT e.enhed_id, 1 AS depth, ARRAY[e.parent_enhed_id, e.enhed_id] AS path
+                FROM enheder e
+                WHERE e.parent_enhed_id = @enhedId
+                  AND e.deleted_at IS NULL
+                UNION ALL
+                SELECT e.enhed_id, d.depth + 1, d.path || e.enhed_id
+                FROM enheder e
+                INNER JOIN descendants d ON e.parent_enhed_id = d.enhed_id
+                WHERE e.deleted_at IS NULL
+                  AND d.depth < @maxDepth
+                  AND NOT (e.enhed_id = ANY(d.path))   -- guard against a pre-existing loop
+            )
+            SELECT 1 FROM descendants WHERE enhed_id = @newParentEnhedId LIMIT 1
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("enhedId", enhedId);
+        cmd.Parameters.AddWithValue("newParentEnhedId", newParentEnhedId);
+        cmd.Parameters.AddWithValue("maxDepth", EnhedCycleWalkMaxDepth);
+
+        var hit = await cmd.ExecuteScalarAsync(ct);
+        if (hit is not null)
+            throw new EnhedCycleException(enhedId, newParentEnhedId,
+                $"Cannot move enhed '{enhedId}' under '{newParentEnhedId}': the target is a " +
+                "descendant of the enhed, which would create a cycle.");
+    }
+
+    /// <summary>In-tx re-read of an enhed's <c>(organisation_id, is_active-as-non-deleted)</c> for
+    /// VALIDATING a candidate parent on the HELD connection: returns the parent's
+    /// <c>organisation_id</c> iff the row exists AND is ACTIVE (<c>deleted_at IS NULL</c>),
+    /// otherwise <c>null</c> (absent or soft-deleted). The create/move endpoints compare it
+    /// against the child's Organisation (same-Organisation invariant; cross-org parent rejected)
+    /// — run under the <c>enhed-org-</c> lock so a concurrent parent-delete serializes.</summary>
+    public async Task<string?> GetActiveEnhedOrgInTxAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, Guid enhedId, CancellationToken ct = default)
+    {
+        await using var cmd = new NpgsqlCommand(
+            "SELECT organisation_id FROM enheder WHERE enhed_id = @id AND deleted_at IS NULL",
+            conn, tx);
+        cmd.Parameters.AddWithValue("id", enhedId);
+        var result = await cmd.ExecuteScalarAsync(ct);
+        return result is null or DBNull ? null : (string)result;
+    }
+
+    /// <summary>EnhedMoved projection — UPDATE <c>parent_enhed_id</c> + bump <c>version</c> on the
+    /// active row, IN-UPDATE optimistic-concurrency: the <c>version = @expectedVersion AND
+    /// deleted_at IS NULL</c> predicate runs INSIDE the write tx so a stale If-Match or a
+    /// concurrently-soft-deleted row matches 0 rows (the caller re-reads to map 412 vs 404 and
+    /// emits NOTHING). Returns the affected-row count. <paramref name="newParentEnhedId"/>
+    /// <c>null</c> = make the enhed a root.</summary>
+    public async Task<int> ApplyEnhedMovedAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        Guid enhedId, Guid? newParentEnhedId, long expectedVersion, CancellationToken ct = default)
+    {
+        await using var cmd = new NpgsqlCommand(
+            """
+            UPDATE enheder
+            SET parent_enhed_id = @parent, version = version + 1
+            WHERE enhed_id = @id AND version = @expectedVersion AND deleted_at IS NULL
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("parent", (object?)newParentEnhedId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("id", enhedId);
+        cmd.Parameters.AddWithValue("expectedVersion", expectedVersion);
+        return await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>Re-parent-on-delete writer — lifts EVERY active direct child of
+    /// <paramref name="deletedEnhedId"/> UP to <paramref name="grandparentEnhedId"/> (the deleted
+    /// enhed's own parent; <c>null</c> = the children become roots) + bumps each child's
+    /// <c>version</c>. Returns the moved children's ids (the caller emits a per-child
+    /// <see cref="EnhedMoved"/> in the SAME tx — P3, NOT a silent SQL update). Run under the
+    /// <c>enhed-org-</c> lock, in the same tx as the <c>EnhedDeleted</c>. A LEAF (0 children)
+    /// returns an empty list → the caller emits ONLY <c>EnhedDeleted</c>.</summary>
+    public async Task<IReadOnlyList<Guid>> ReparentChildrenOnDeleteAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        Guid deletedEnhedId, Guid? grandparentEnhedId, CancellationToken ct = default)
+    {
+        await using var cmd = new NpgsqlCommand(
+            """
+            UPDATE enheder
+            SET parent_enhed_id = @grandparent, version = version + 1
+            WHERE parent_enhed_id = @deletedId AND deleted_at IS NULL
+            RETURNING enhed_id
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("grandparent", (object?)grandparentEnhedId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("deletedId", deletedEnhedId);
+
+        var movedChildren = new List<Guid>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            movedChildren.Add(reader.GetGuid(0));
+        return movedChildren;
     }
 
     /// <summary>UserEnhederChanged projection — delete-all-then-insert the FULL set for the
@@ -283,9 +447,34 @@ public sealed class EnhedRepository
     }
 }
 
-/// <summary>An active enhed list row (for the managed-list GET + the tag picker).</summary>
-public sealed record EnhedRow(Guid EnhedId, string OrganisationId, string Name, long Version);
+/// <summary>An active enhed list row (for the managed-list GET + the tag picker). S100:
+/// <c>ParentEnhedId</c> is carried FLAT (<c>null</c> = a root) — the list reads stay flat (the
+/// tag picker is set-membership); only the GET /tree assembly + the management panels NEST.</summary>
+public sealed record EnhedRow(
+    Guid EnhedId, string OrganisationId, Guid? ParentEnhedId, string Name, long Version);
 
-/// <summary>A full enhed row incl. soft-delete state (for rename/delete resolution).</summary>
+/// <summary>A full enhed row incl. soft-delete state (for rename/delete/move resolution). S100:
+/// <c>ParentEnhedId</c> is on the in-tx read path — the move needs the OLD parent (for the
+/// <c>EnhedMoved</c> event), the delete-reparent reads the deleted enhed's parent.</summary>
 public sealed record EnhedFullRow(
-    Guid EnhedId, string OrganisationId, string Name, long Version, bool IsDeleted);
+    Guid EnhedId, string OrganisationId, Guid? ParentEnhedId, string Name, long Version, bool IsDeleted);
+
+/// <summary>
+/// S100 (ADR-036 amendment) — thrown by <see cref="EnhedRepository.GuardNoEnhedCycleAsync"/> when
+/// a move would create a cycle in the enhed tree: the chosen new parent is the enhed itself, or
+/// one of the enhed's descendants. The endpoint maps this to <c>422 Unprocessable Entity</c> (the
+/// move is well-formed but conflicts with the acyclic-tree invariant). PURE DISPLAY metadata —
+/// this guards tree shape only, NOT any authority decision.
+/// </summary>
+public sealed class EnhedCycleException : Exception
+{
+    public Guid EnhedId { get; }
+    public Guid NewParentEnhedId { get; }
+
+    public EnhedCycleException(Guid enhedId, Guid newParentEnhedId, string message)
+        : base(message)
+    {
+        EnhedId = enhedId;
+        NewParentEnhedId = newParentEnhedId;
+    }
+}

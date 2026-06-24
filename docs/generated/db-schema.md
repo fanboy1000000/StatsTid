@@ -297,6 +297,7 @@
 |--------|------|------|-----|---------|
 | enhed_id | UUID | No | PK | gen_random_uuid() |
 | organisation_id | TEXT | No | FK→organizations |  |
+| parent_enhed_id | UUID | Yes | FK→enheder |  |
 | name | TEXT | No |  |  |
 | deleted_at | TIMESTAMPTZ | Yes |  |  |
 | version | BIGINT | No |  | 1 |
@@ -305,6 +306,7 @@
 **Indexes:**
 - `idx_enheder_active_name` (UNIQUE) on (organisation_id, lower(name) WHERE deleted_at IS NULL
 - `idx_enheder_org` on (organisation_id)
+- `idx_enheder_parent` on (parent_enhed_id)
 
 ## user_enheder
 
