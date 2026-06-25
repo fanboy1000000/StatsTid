@@ -338,3 +338,13 @@ jobs:
         # recurring "fetchEnheder" bug class (S97→S99→S100). See tools/check_endpoint_contracts.py
         # + PAT-010. The doc convention alone failed 3×; this is the gate.
         run: python tools/check_endpoint_contracts.py
+
+      - name: Run design-sync drift gate
+        # Hard-fails if the design system (frontend/src/components/ui/** + tokens.css +
+        # .design-sync/config.json) changed since the last Claude Design sync — i.e. the
+        # committed .design-sync/.synced-fingerprint.json no longer matches the source.
+        # Keeps the shipped code and the claude.ai/design "StatsTid UI Kit" project from
+        # drifting. Recovery: re-run /design-sync, then `--update` + commit the fingerprint.
+        # See tools/check_design_sync.py + PAT-011 (LF-normalized; CI can't auth to claude.ai,
+        # so it checks fingerprint==source, not that the upload happened).
+        run: python tools/check_design_sync.py
