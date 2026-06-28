@@ -8,7 +8,7 @@
 | **End Date** | 2026-06-28 |
 | **Orchestrator Approved** | yes — 2026-06-28 |
 | **Build Verified** | yes — `dotnet build` 0 warnings / 0 errors (incl. the Step-7a fix) |
-| **Test Verified** | yes (local) — 852 unit passing; the 15 new `S104UnitManagementTests` + the unit contract test compile + are discoverable; Docker-gated regression **CI-pending** (Docker unavailable locally → verified by CI on push) |
+| **Test Verified** | **yes — CI GREEN `28336028912` (all 7 jobs)**: 852 unit + 1116 regression (34m41s, incl. the 15 `S104UnitManagementTests` + the unit contract test) + 6 smoke + 517 FE + e2e; 0 failures. (The first push CI [`28334317748`] caught 4 Docker-tier failures the local no-Docker run couldn't — 1 stale assertion [R9] + 3 fixture self-FK cleanup orderings — all test-only, fixed in `57dd160`, re-run green.) |
 
 ## Sprint Goal
 Land the **units management layer** (Enhedsspor Phase 1b — the heavier half of the owner-split Phase 1): a `UnitRepository` + admin endpoints for unit create/rename/move/delete + leader designate/remove + a person's unit-change, on the **two-regime concurrency** (within-Organisation `unit-org-` advisory + recursive-CTE cycle guard [the S100 spine]; the cross-Organisation person unit-change **extending the existing users-transfer path** — Codex's S103-plan BLOCKER-2), with the new `Unit*`/leader/membership event WRITERS (registered in S103) now EMITTING, and the runtime **derived `primary_org_id`** on unit-assign. **Backend-only** — no FE (the merged Enhedsspor page is Phase 3); the new **approval paths (D4 secondary unit-leader + see==act) are Phase 2 (S105)** and are NOT in this sprint. Implements ADR-038 D3 (leader designation + write floor + member-invariant) + D8 (concurrency).
@@ -215,13 +215,14 @@ Artifacts: `.claude/reviews/SPRINT-104-step7a-{codex,reviewer}.md`.
 
 | Suite | Count | Status |
 |-------|-------|--------|
-| Unit | 852 | all passing (local) |
-| Regression (Docker-gated) | ~1115 (1100 + 15 `S104UnitManagementTests`) | **CI-pending** (Docker unavailable locally) |
-| Smoke | 6 | CI-pending (Docker) |
+| Unit | 852 | all passing (CI + local) |
+| Regression (Docker-gated) | 1116 | **all passing (CI GREEN, 34m41s)** — incl. the 15 `S104UnitManagementTests` + the unit contract test (+16 vs S103's 1100) |
+| Smoke | 6 | all passing (CI GREEN) |
 | DemoSeed | 29 | (unchanged; local-green at S103) |
 | Frontend (vitest) | 517 | (unchanged — no FE change in S104) |
+| E2E (Playwright) | — | all passing (CI GREEN) |
 
-Local tiers green (852 unit + build 0/0); the Docker tier (incl. the 15 new tests) is CI-pending → backfill on push. Projected pyramid ~2519.
+**Pyramid: 852u + 1116r + 6s + 29demoseed + 517fe = 2520 — CI GREEN `28336028912`, all 7 jobs.** The 1st push CI (`28334317748`) caught 4 Docker-tier failures (R9 stale assertion + 3 fixture self-FK cleanup orderings) — all TEST-ONLY (production code untouched), fixed in `57dd160`, re-run fully green. The Docker tier earning its keep: a behaviour-correct change (the transfer re-anchor) updated a stale test, and 3 fixture-teardown FK-ordering bugs surfaced only against a real DB.
 
 ## Sprint Retrospective
 
