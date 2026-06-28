@@ -1301,9 +1301,13 @@ public static class AdminEndpoints
             DbConnectionFactory dbFactory,
             UserAgreementCodeRepository userAgreementCodeRepo,
             ReportingLineRepository reportingLineRepo,
+            UnitRepository unitRepo,
+            ManagerVikarRepository vikarRepo,
             IAuditProjectionMapper<UserUpdated> auditMapper,
             IAuditProjectionMapper<UserAgreementCodeChanged> uacChangedMapper,
             IAuditProjectionMapper<UserAgreementCodeSuperseded> uacSupersededMapper,
+            IAuditProjectionMapper<UserUnitChanged> userUnitMapper,
+            IAuditProjectionMapper<UnitLeaderRemoved> leaderRemovedMapper,
             AuditProjectionRepository auditRepo,
             ILoggerFactory loggerFactory,
             HttpContext context,
@@ -1444,6 +1448,19 @@ public static class AdminEndpoints
                     !string.Equals(request.PrimaryOrgId, existingUser.PrimaryOrgId, StringComparison.Ordinal))
                 {
                     await reportingLineRepo.AcquireTreeLocksForTransferAsync(conn, tx, userId, request.PrimaryOrgId, ct);
+
+                    // S104 / ADR-038 D8 — the TOTAL lock order is all `reporting-org-` advisories (above,
+                    // id-sorted) → all `unit-org-` advisories (here, id-sorted) → the users-row FOR UPDATE
+                    // (below). The transfer takes BOTH the OLD + NEW Organisations' `unit-org-` advisories
+                    // so it serializes with structural unit-moves / leader-designations / same-Org member
+                    // moves in EITHER Organisation (the moved user is leaving the OLD unit tree + may land
+                    // in the NEW one). Distinct + id-sorted (deadlock-safe across concurrent transfers).
+                    foreach (var unitOrg in new[] { existingUser.PrimaryOrgId, request.PrimaryOrgId }
+                                 .Distinct(StringComparer.Ordinal)
+                                 .OrderBy(o => o, StringComparer.Ordinal))
+                    {
+                        await UnitRepository.AcquireUnitOrgLockAsync(conn, tx, unitOrg, ct);
+                    }
                 }
 
                 // S35 / TASK-3506 — in-tx FOR-UPDATE re-read of the users row.
@@ -1479,6 +1496,50 @@ public static class AdminEndpoints
                         $"User '{userId}' version is {lockedVersion}, but If-Match: \"{expectedVersion}\"; refresh and retry.",
                         expectedVersion: expectedVersion,
                         actualVersion: lockedVersion);
+
+                // ═══ S104 / ADR-038 D8 — CROSS-ORGANISATION TRANSFER pre-checks (canonical, post-lock) ═══
+                // A transfer is a unit-change that crosses Organisations. Decided against the FOR-UPDATE'd
+                // lockedUser (the version-matched canonical home). The unit-org advisories for both the
+                // OLD + NEW Organisations are already held (acquired above, after the reporting-org pair).
+                var isTransfer = request.PrimaryOrgId is not null &&
+                    !string.Equals(request.PrimaryOrgId, lockedUser.PrimaryOrgId, StringComparison.Ordinal);
+                var currentUnitId = await unitRepo.GetUserUnitIdInTxAsync(conn, tx, userId, ct);
+                var newUnitId = currentUnitId; // non-transfer PUT: unit_id is untouched (no-op write).
+                if (isTransfer)
+                {
+                    // (c) the manager-side fan-out — BLOCK (422) the transfer of a user who still
+                    // MANAGES active reports (owner-decided: re-assign the reports first rather than
+                    // silently orphan them cross-Organisation).
+                    var activeReports = await reportingLineRepo.GetDirectReportsAsync(conn, tx, userId, ct);
+                    if (activeReports.Count > 0)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.UnprocessableEntity(new
+                        {
+                            error = "Cannot transfer a user who still manages active reports; re-assign their reports first.",
+                            activeReportCount = activeReports.Count,
+                        });
+                    }
+
+                    // The new home unit (null = home directly at the new Organisation). A non-null unit
+                    // MUST be ACTIVE + belong to the NEW Organisation (request.PrimaryOrgId). The old
+                    // unit_id (in the OLD Organisation) is ALWAYS reset on a transfer.
+                    if (request.UnitId is Guid targetUnitId)
+                    {
+                        var targetUnit = await unitRepo.GetActiveUnitInTxAsync(conn, tx, targetUnitId, ct);
+                        if (targetUnit is null)
+                        {
+                            await tx.RollbackAsync(ct);
+                            return Results.UnprocessableEntity(new { error = "The target unit does not exist or is deleted." });
+                        }
+                        if (!string.Equals(targetUnit.OrganisationId, request.PrimaryOrgId, StringComparison.Ordinal))
+                        {
+                            await tx.RollbackAsync(ct);
+                            return Results.UnprocessableEntity(new { error = "The target unit must belong to the new Organisation." });
+                        }
+                    }
+                    newUnitId = request.UnitId;
+                }
 
                 // S34 / TASK-3407 — predecessor snapshot read in-tx (only when
                 // agreement_code mutated). Captures the full row state for the
@@ -1579,6 +1640,7 @@ public static class AdminEndpoints
                     SET display_name = @displayName,
                         email = @email,
                         primary_org_id = @primaryOrgId,
+                        unit_id = @unitId,
                         agreement_code = @agreementCode,
                         is_active = @isActive,
                         version = version + 1,
@@ -1588,6 +1650,9 @@ public static class AdminEndpoints
                 cmd.Parameters.AddWithValue("displayName", newDisplayName);
                 cmd.Parameters.AddWithValue("email", (object?)newEmail ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("primaryOrgId", newPrimaryOrgId);
+                // S104 / ADR-038 D8 — on a TRANSFER newUnitId = request.UnitId (the old-Organisation
+                // unit_id is reset); on a non-transfer PUT newUnitId = currentUnitId (an untouched no-op).
+                cmd.Parameters.AddWithValue("unitId", (object?)newUnitId ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("agreementCode", newAgreementCode);
                 cmd.Parameters.AddWithValue("isActive", newIsActive);
                 cmd.Parameters.AddWithValue("now", now);
@@ -1891,9 +1956,110 @@ public static class AdminEndpoints
                     }
                 }
 
-                // S103 / TASK-10304 — the S97 "transfer-clears-Enhed-tags" block is retired with the
-                // legacy Enhed tag tables (dropped in init.sql; the unit model replaces them in a
-                // later Enhedsspor phase). Nothing to clear on a cross-Organisation transfer.
+                // ═══ S104 / ADR-038 D8 — CROSS-ORGANISATION TRANSFER re-sync (the unit + edge fan-out) ═══
+                // Runs AFTER the users UPDATE + UserUpdated emit, BEFORE COMMIT. All under the held
+                // reporting-org + unit-org advisories for both Organisations (acquired at the top).
+                if (isTransfer)
+                {
+                    var today = DateOnly.FromDateTime(now);
+
+                    // (a) Clear the moved user's OLD-unit `unit_leaders` rows + emit UnitLeaderRemoved per
+                    // row (a transferred leader must lose the old-unit designation — the D3 member-invariant
+                    // across Organisations). The leadership org is the OLD Organisation (lockedUser's home).
+                    var lostLeadership = await unitRepo.RemoveAllLeadershipForUserAsync(conn, tx, userId, ct);
+                    foreach (var ledUnitId in lostLeadership)
+                    {
+                        var leaderRemoved = new UnitLeaderRemoved
+                        {
+                            UnitId = ledUnitId,
+                            UserId = userId,
+                            OrganisationId = lockedUser.PrimaryOrgId,
+                            ActorId = actor.ActorId,
+                            ActorRole = actor.ActorRole,
+                            CorrelationId = actor.CorrelationId,
+                        };
+                        var lrOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"unit-{ledUnitId}", leaderRemoved, ct);
+                        var lrCtx = new AuditProjectionContext(
+                            ActorId: actor.ActorId,
+                            ActorPrimaryOrgId: actor.OrgId,
+                            CorrelationId: actor.CorrelationId,
+                            OccurredAt: new DateTimeOffset(leaderRemoved.OccurredAt));
+                        var lrRow = leaderRemovedMapper.Map(leaderRemoved, lrCtx);
+                        await auditRepo.InsertAsync(conn, tx, leaderRemoved.EventId, lrOutboxId, leaderRemoved.EventType, lrRow, lrCtx, ct);
+                    }
+
+                    // (b) Re-anchor the user's OWN employee-side reporting edges: a cross-Organisation
+                    // PRIMARY/ACTING edge is FORBIDDEN (the ADR-027/S95 same-Organisation reporting
+                    // invariant), so close each with NO successor (ReportingLineSuperseded, NewManagerId
+                    // null). Plain outbox — reporting lifecycle events carry no audit_projection row
+                    // (the ReportingLineManagerDeactivated precedent). The manager-SIDE fan-out is already
+                    // blocked (422 with-reports above), so only the user's incoming edges remain.
+                    var ownEdges = await reportingLineRepo.GetActiveByEmployeeInTxAsync(conn, tx, userId, ct);
+                    foreach (var edge in ownEdges)
+                    {
+                        var closed = await reportingLineRepo.RemoveAsync(conn, tx, edge.Version, userId, edge.Relationship, ct);
+                        var superseded = new ReportingLineSuperseded
+                        {
+                            ReportingLineId = closed.ReportingLineId,
+                            EmployeeId = userId,
+                            PreviousManagerId = closed.ManagerId,
+                            NewManagerId = null,
+                            OrganisationId = closed.OrganisationId,
+                            EffectiveFrom = closed.EffectiveFrom,
+                            EffectiveTo = closed.EffectiveTo ?? today,
+                            RowVersion = closed.Version,
+                            ActorId = actor.ActorId,
+                            ActorRole = actor.ActorRole,
+                            CorrelationId = actor.CorrelationId,
+                        };
+                        await outbox.EnqueueAsync(conn, tx, $"reporting-line-{userId}", superseded, ct);
+                    }
+
+                    // (b') Re-anchor the user's vikar rows (as absent approver OR as stand-in): vikar is
+                    // same-Organisation-bound (D12), so a transfer closes them (ManagerVikarEnded,
+                    // APPROVER_REMOVED). Plain outbox.
+                    var closedVikars = await vikarRepo.CloseAllInvolvingUserAsync(conn, tx, userId, today, ct);
+                    foreach (var vikar in closedVikars)
+                    {
+                        var vikarEnded = new ManagerVikarEnded
+                        {
+                            VikarId = vikar.VikarId,
+                            AbsentApproverId = vikar.AbsentApproverId,
+                            VikarUserId = vikar.VikarUserId,
+                            UntilDate = vikar.UntilDate,
+                            Reason = vikar.Reason,
+                            OrganisationId = vikar.OrganisationId,
+                            EffectiveTo = vikar.EffectiveTo ?? today,
+                            EndReason = "APPROVER_REMOVED",
+                            RowVersion = vikar.Version,
+                            ActorId = actor.ActorId,
+                            ActorRole = actor.ActorRole,
+                            CorrelationId = actor.CorrelationId,
+                        };
+                        await outbox.EnqueueAsync(conn, tx, $"manager-vikar-{vikar.VikarId}", vikarEnded, ct);
+                    }
+
+                    // (d) Emit UserUnitChanged (the structural membership move) + its audit row. The derived
+                    // OrganisationId is the NEW Organisation (= the recomputed primary_org_id, newPrimaryOrgId).
+                    var userUnitChanged = new UserUnitChanged
+                    {
+                        UserId = userId,
+                        OldUnitId = currentUnitId,
+                        NewUnitId = newUnitId,
+                        OrganisationId = newPrimaryOrgId,
+                        ActorId = actor.ActorId,
+                        ActorRole = actor.ActorRole,
+                        CorrelationId = actor.CorrelationId,
+                    };
+                    var uucOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"user-{userId}", userUnitChanged, ct);
+                    var uucCtx = new AuditProjectionContext(
+                        ActorId: actor.ActorId,
+                        ActorPrimaryOrgId: actor.OrgId,
+                        CorrelationId: actor.CorrelationId,
+                        OccurredAt: new DateTimeOffset(userUnitChanged.OccurredAt));
+                    var uucRow = userUnitMapper.Map(userUnitChanged, uucCtx);
+                    await auditRepo.InsertAsync(conn, tx, userUnitChanged.EventId, uucOutboxId, userUnitChanged.EventType, uucRow, uucCtx, ct);
+                }
 
                 await tx.CommitAsync(ct);
             }
@@ -2659,6 +2825,17 @@ public static class AdminEndpoints
         /// reporting line where the user is the manager.
         /// </summary>
         public bool? IsActive { get; init; }
+
+        /// <summary>
+        /// S104 / ADR-038 D8 (Enhedsspor) — the target structural unit on a CROSS-Organisation
+        /// transfer (interpreted ONLY when <see cref="PrimaryOrgId"/> changes — a same-Organisation
+        /// unit-change goes through <c>PUT /api/admin/users/{id}/unit</c>, TASK-10403). On a transfer
+        /// the user's old <c>unit_id</c> (in the OLD Organisation) is always reset: <c>null</c> homes
+        /// them directly at the new Organisation; a non-null unit must be ACTIVE + belong to the NEW
+        /// <see cref="PrimaryOrgId"/>. The derived <c>primary_org_id</c> equals the new Organisation
+        /// either way.
+        /// </summary>
+        public Guid? UnitId { get; init; }
     }
 
     private sealed class GrantRoleRequest

@@ -88,6 +88,7 @@ builder.Services.AddSingleton<OvertimeBalanceRepository>();
 builder.Services.AddSingleton<OvertimePreApprovalRepository>();
 builder.Services.AddSingleton<AuditProjectionRepository>();
 builder.Services.AddSingleton<ReportingLineRepository>();
+builder.Services.AddSingleton<UnitRepository>(); // S104 ADR-038 D3/D8 — typed units hierarchy + leaders (structure-only, ZERO scope per D5)
 builder.Services.AddSingleton<ManagerVikarRepository>(); // S74 ADR-027 Phase 5 — approver-owned vikar storage
 builder.Services.AddSingleton<DesignatedApproverAuthorizer>(); // S74 / TASK-7402 — the ONE R5 canonical approve-authority predicate (A3, ADR-027 D4)
 builder.Services.AddSingleton<EmployeeEntitlementEligibilityRepository>(); // S59
@@ -439,6 +440,7 @@ app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "back
 app.MapAuthEndpoints(useDbAuth);
 app.MapTimeEndpoints();
 app.MapAdminEndpoints();
+app.MapUnitEndpoints(); // S104 ADR-038 D3 — units CRUD + leader designate/remove + same-Org person unit-assign
 app.MapApprovalEndpoints();
 app.MapConfigEndpoints();
 app.MapSkemaEndpoints();

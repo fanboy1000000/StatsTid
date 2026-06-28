@@ -33,11 +33,13 @@ public sealed class UnitAuthorityAbsenceTests
     };
 
     /// <summary>The unit-tree identifiers that must NOT appear anywhere in the authority path: the
-    /// column (<c>unit_id</c>), the leadership table (<c>unit_leaders</c>), and the structure table
-    /// (<c>units</c>). Matched as whole-identifier tokens so a benign substring (e.g. "community")
-    /// never trips the guard.</summary>
+    /// column (<c>unit_id</c>), the leadership table (<c>unit_leaders</c>), the structure table
+    /// (<c>units</c>), and — S104 widen — the PascalCase property/type reads (<c>UnitId</c>,
+    /// <c>UnitLeaders</c>) that the snake_case tokens miss (a <c>.UnitId</c> read in an authority
+    /// file would otherwise evade the guard). IgnoreCase covers the rest. Matched as whole-identifier
+    /// tokens so a benign substring (e.g. "community", "unittest") never trips the guard.</summary>
     private static readonly Regex UnitTokenPattern =
-        new(@"\b(unit_id|unit_leaders|units)\b",
+        new(@"\b(unit_id|unit_leaders|units|UnitId|UnitLeaders)\b",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     [Fact]

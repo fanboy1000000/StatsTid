@@ -305,6 +305,36 @@ public sealed class ManagerVikarRepository
         return await reader.ReadAsync(ct) ? MapReader(reader) : null;
     }
 
+    /// <summary>
+    /// S104 / ADR-038 D8 (Enhedsspor cross-Organisation transfer) — closes EVERY active
+    /// <c>manager_vikar</c> row that INVOLVES <paramref name="userId"/> (as the absent approver OR as
+    /// the stand-in), setting <c>effective_to = @effectiveTo</c> + bumping version, and RETURNS the
+    /// closed rows so the caller emits a per-row <c>ManagerVikarEnded</c> (P3) in the SAME tx. Vikar
+    /// is same-Organisation-bound (D12), so a transfer of either party leaves the row cross-Organisation
+    /// → it must be closed. In-tx overload (ADR-018 D3): the caller commits/rolls back.
+    /// </summary>
+    public async Task<IReadOnlyList<ManagerVikar>> CloseAllInvolvingUserAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string userId, DateOnly effectiveTo, CancellationToken ct = default)
+    {
+        await using var cmd = new NpgsqlCommand(
+            """
+            UPDATE manager_vikar
+            SET effective_to = @effectiveTo, version = version + 1
+            WHERE effective_to IS NULL
+              AND (absent_approver_id = @userId OR vikar_user_id = @userId)
+            RETURNING *
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("userId", userId);
+        cmd.Parameters.AddWithValue("effectiveTo", effectiveTo);
+
+        var rows = new List<ManagerVikar>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            rows.Add(MapReader(reader));
+        return rows;
+    }
+
     // ──────────────────────────────────────────────────────────────────────
     //  Mapper
     // ──────────────────────────────────────────────────────────────────────
