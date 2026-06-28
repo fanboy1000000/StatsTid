@@ -1,0 +1,882 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="_ds/statstid-ui-kit-e0905347-e83e-4fe4-8363-ae956da5d5e1/styles.css">
+  <script>
+    (function loadDS(){
+      if (window.React && window.ReactDOM) {
+        var s = document.createElement('script');
+        s.src = '_ds/statstid-ui-kit-e0905347-e83e-4fe4-8363-ae956da5d5e1/_ds_bundle.js';
+        document.head.appendChild(s);
+      } else { setTimeout(loadDS, 0); }
+    })();
+  </script>
+  <script src="org-data.js"></script>
+  <style>
+    html,body{margin:0;height:100%;background:#fff;}
+    *{box-sizing:border-box;}
+    body{font-family:var(--font-family);color:#343536;}
+    ::-webkit-scrollbar{width:10px;height:10px;}
+    ::-webkit-scrollbar-thumb{background:#cac8c8;}
+    ::-webkit-scrollbar-track{background:#f3f2f2;}
+    a{text-decoration:none;color:inherit;}
+  </style>
+</helmet>
+
+<div style="height:100vh;display:flex;flex-direction:column;font-family:var(--font-family);color:#343536;overflow:hidden">
+
+  <header style="display:flex;align-items:center;justify-content:space-between;gap:18px;padding:11px 24px;border-bottom:1px solid #e8e6e6;background:#fff;flex-shrink:0">
+    <div style="display:flex;align-items:center;gap:13px;min-width:0">
+      <div style="width:32px;height:32px;background:#066b43;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex-shrink:0">St</div>
+      <div style="min-width:0">
+        <div style="font-size:15.5px;font-weight:600;line-height:1.2">Organisation &amp; medarbejdere</div>
+        <div style="font-size:11.5px;color:#6b6b6e;line-height:1.3">Enhedsspor — organisationen er rygraden</div>
+      </div>
+      <div style="position:relative;margin-left:8px">
+        <div onClick="{{ toggleAfgOpen }}" style="display:flex;align-items:center;gap:10px;padding:7px 12px;border:1px solid #e8e6e6;background:#fff;cursor:pointer;min-width:210px" style-hover="border-color:#066b43">
+          <div style="min-width:0">
+            <div style="font-size:9.5px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#a7a6a8;line-height:1.2">Afgrænsning</div>
+            <div style="font-size:13px;font-weight:600;color:#343536;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ afgSummary }}</div>
+          </div>
+          <span style="flex:1"></span>
+          <span style="color:#6b6b6e;font-size:11px;flex-shrink:0">▾</span>
+        </div>
+        <sc-if value="{{ afgOpen }}">
+          <div style="position:absolute;top:calc(100% + 6px);left:0;z-index:200;width:340px;max-height:420px;display:flex;flex-direction:column;background:#fff;border:1px solid #d9d7d7;box-shadow:0 8px 28px rgba(0,0,0,0.14)">
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid #f3f2f2">
+              <span style="font-size:13px;font-weight:700">Vælg afgrænsning</span>
+              <div style="display:flex;gap:14px">
+                <span onClick="{{ afgSelectAll }}" style="font-size:12px;color:#066b43;cursor:pointer">Vælg alle</span>
+                <span onClick="{{ afgClear }}" style="font-size:12px;color:#6b6b6e;cursor:pointer">Ryd</span>
+              </div>
+            </div>
+            <div style="flex:1;overflow-y:auto;padding:4px 0">
+              <sc-for list="{{ afgRows }}" as="m" hint-placeholder-count="1">
+                <div onClick="{{ m.toggle }}" style="display:flex;align-items:center;gap:11px;padding:9px 16px;cursor:pointer" style-hover="background:#faf9f9">
+                  <span style="{{ m.boxStyle }}">{{ m.mark }}</span>
+                  <span style="width:8px;height:8px;flex-shrink:0;background:#55565a"></span>
+                  <span style="font-size:13.5px;font-weight:600">{{ m.name }}</span>
+                </div>
+                <sc-for list="{{ m.orgs }}" as="o" hint-placeholder-count="3">
+                  <div onClick="{{ o.toggle }}" style="display:flex;align-items:center;gap:11px;padding:7px 16px 7px 40px;cursor:pointer" style-hover="background:#faf9f9">
+                    <span style="{{ o.boxStyle }}">{{ o.mark }}</span>
+                    <span style="width:7px;height:7px;flex-shrink:0;background:#066b43"></span>
+                    <span style="font-size:13px;color:#343536">{{ o.name }}</span>
+                  </div>
+                </sc-for>
+              </sc-for>
+            </div>
+            <div style="padding:10px 16px;border-top:1px solid #f3f2f2;display:flex;justify-content:flex-end">
+              <x-import component-from-global-scope="StatsTidUI.Button" variant="primary" size="sm" onClick="{{ closeAfg }}" hint-size="80px,32px">Anvend</x-import>
+            </div>
+          </div>
+        </sc-if>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:12px;flex-shrink:0">
+      <x-import component-from-global-scope="StatsTidUI.Button" variant="primary" size="md" onClick="{{ openSearch }}" hint-size="150px,40px">⌕  Søg</x-import>
+    </div>
+  </header>
+
+  <sc-if value="{{ loading }}" hint-placeholder-val="{{ true }}">
+    <div style="flex:1;display:flex;align-items:center;justify-content:center;color:#6b6b6e;font-size:14px">Indlæser organisation…</div>
+  </sc-if>
+
+  <sc-if value="{{ ready }}">
+  <div style="flex:1;display:flex;min-height:0">
+
+    <!-- UNIT TREE -->
+    <aside style="width:330px;flex-shrink:0;border-right:1px solid #e8e6e6;display:flex;flex-direction:column;background:#fff;min-height:0">
+      <div style="padding:12px 16px 10px;border-bottom:1px solid #f3f2f2;flex-shrink:0">
+        <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:#6b6b6e">ORGANISATIONSSTRUKTUR</div>
+      </div>
+      <div style="flex:1;overflow-y:auto;padding:6px 0">
+        <sc-for list="{{ treeRows }}" as="row" hint-placeholder-count="9">
+          <div onClick="{{ row.select }}" style="{{ row.rowStyle }}">
+            <span onClick="{{ row.toggle }}" style="width:16px;flex-shrink:0;text-align:center;color:#a7a6a8;font-size:11px">{{ row.caret }}</span>
+            <span style="width:8px;height:8px;flex-shrink:0;background:{{ row.dot }}"></span>
+            <span style="{{ row.nameStyle }}">{{ row.name }}</span>
+            <span style="{{ row.chipStyle }}">{{ row.typeLabel }}</span>
+            <span style="flex:1"></span>
+            <span style="font-size:11px;color:#6b6b6e;background:#f3f2f2;padding:1px 7px;flex-shrink:0">{{ row.count }}</span>
+          </div>
+        </sc-for>
+      </div>
+    </aside>
+
+    <!-- DETAIL -->
+    <main style="flex:1;overflow-y:auto;background:#faf9f9;min-height:0">
+      <div style="max-width:1060px;margin:0 auto;padding:18px 28px 64px">
+
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+          <x-import component-from-global-scope="StatsTidUI.Button" variant="ghost" size="sm" onClick="{{ goBack }}" disabled="{{ backDisabled }}" hint-size="92px,32px">‹ Tilbage</x-import>
+          <x-import component-from-global-scope="StatsTidUI.Button" variant="ghost" size="sm" onClick="{{ goForward }}" disabled="{{ forwardDisabled }}" hint-size="80px,32px">Frem ›</x-import>
+        </div>
+
+        <div style="font-size:12.5px;color:#6b6b6e;margin-bottom:8px">{{ selPath }}</div>
+        <div style="margin-bottom:18px">
+          <div style="display:flex;align-items:center;gap:10px;min-width:0;margin-bottom:12px">
+            <span style="{{ selChipStyle }}">{{ selTypeLabel }}</span>
+            <h1 style="margin:0;font-size:25px;font-weight:600;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ selName }}</h1>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <x-import component-from-global-scope="StatsTidUI.Button" variant="secondary" size="sm" onClick="{{ openAddChild }}" disabled="{{ addChildDisabled }}" hint-size="110px,34px"><span style="white-space:nowrap">{{ addChildLabel }}</span></x-import>
+            <x-import component-from-global-scope="StatsTidUI.Button" variant="primary" size="sm" onClick="{{ openAddPerson }}" disabled="{{ addPersonDisabled }}" hint-size="140px,34px"><span style="white-space:nowrap">+ Medarbejder</span></x-import>
+            <span style="width:1px;height:22px;background:#e8e6e6;margin:0 3px"></span>
+            <x-import component-from-global-scope="StatsTidUI.Button" variant="secondary" size="sm" onClick="{{ openEditUnit }}" hint-size="90px,34px">Rediger</x-import>
+            <sc-if value="{{ canDelete }}" hint-placeholder-val="{{ true }}">
+              <x-import component-from-global-scope="StatsTidUI.Button" variant="ghost" size="sm" onClick="{{ askDeleteUnit }}" hint-size="64px,34px">Slet</x-import>
+            </sc-if>
+          </div>
+        </div>
+
+        <!-- DERIVED UPWARD REFERENCE -->
+        <sc-if value="{{ hasUpRef }}" hint-placeholder-val="{{ true }}">
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:11px 16px;background:#eef4f1;border:1px solid #d6e6dd;margin-bottom:18px">
+            <span style="font-size:11.5px;font-weight:700;color:#066b43;text-transform:uppercase;letter-spacing:0.05em">Refererer opad til</span>
+            <sc-for list="{{ upRefs }}" as="r" hint-placeholder-count="1">
+              <div onClick="{{ r.go }}" style="display:flex;align-items:center;gap:8px;padding:5px 11px;background:#fff;border:1px solid #d6e6dd;cursor:pointer" style-hover="border-color:#066b43">
+                <span style="width:24px;height:24px;background:#066b43;color:#fff;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;flex-shrink:0">{{ r.initials }}</span>
+                <div>
+                  <div style="font-size:13px;font-weight:600;line-height:1.15">{{ r.name }}</div>
+                  <div style="font-size:11.5px;color:#6b6b6e;line-height:1.2">{{ r.where }}</div>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+        </sc-if>
+
+        <!-- UNIFIED STRUCTURE TREE -->
+        <sc-if value="{{ showStruktur }}" hint-placeholder-val="{{ true }}">
+        <section style="background:#fff;border:1px solid #e8e6e6">
+          <div style="position:sticky;top:0;z-index:5;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 16px;border-bottom:1px solid #e8e6e6;flex-wrap:wrap;background:#fff;box-shadow:0 2px 4px rgba(0,0,0,0.04)">
+            <div style="display:flex;align-items:baseline;gap:10px">
+              <span style="font-size:15px;font-weight:600">{{ strTitle }}</span>
+              <span style="font-size:12.5px;color:#6b6b6e">{{ strCountLabel }}</span>
+            </div>
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+              <x-import component-from-global-scope="StatsTidUI.Button" variant="ghost" size="sm" onClick="{{ toggleExpandAll }}" disabled="{{ expandDisabled }}" hint-size="100px,32px">{{ expandLabel }}</x-import>
+              <x-import component-from-global-scope="StatsTidUI.Button" variant="ghost" size="sm" onClick="{{ togglePeople }}" disabled="{{ peopleDisabled }}" hint-size="150px,32px">{{ peopleLabel }}</x-import>
+            </div>
+          </div>
+          <div style="padding:4px 0">
+            <sc-for list="{{ treeNodes }}" as="n" hint-placeholder-count="6">
+              <sc-if value="{{ n.isUnit }}">
+                <div onClick="{{ n.toggle }}" style="{{ n.rowStyle }}" style-hover="background:#faf9f9">
+                  <span style="width:16px;flex-shrink:0;text-align:center;color:#a7a6a8;font-size:11px">{{ n.caret }}</span>
+                  <span style="width:8px;height:8px;flex-shrink:0;background:{{ n.dot }}"></span>
+                  <span style="font-size:13.5px;font-weight:600;line-height:1.2;flex-shrink:0">{{ n.name }}</span>
+                  <span style="{{ n.chipStyle }}">{{ n.typeLabel }}</span>
+                  <span style="flex:1;font-size:12px;color:#a7a6a8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ n.leaderNames }}</span>
+                  <span style="font-size:11px;color:#6b6b6e;background:#f3f2f2;padding:1px 7px;flex-shrink:0">{{ n.count }}</span>
+                  <span onClick="{{ n.open }}" style="font-size:11.5px;color:#066b43;flex-shrink:0;cursor:pointer;width:46px;text-align:right">Åbn ›</span>
+                </div>
+              </sc-if>
+              <sc-if value="{{ n.isMedGroup }}">
+                <div onClick="{{ n.toggle }}" style="{{ n.rowStyle }}" style-hover="background:#f3f2f2">
+                  <span style="width:16px;flex-shrink:0;text-align:center;color:#a7a6a8;font-size:11px">{{ n.caret }}</span>
+                  <span style="font-size:11px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;color:#6b6b6e">{{ n.name }}</span>
+                  <span style="font-size:11px;color:#6b6b6e;background:#f3f2f2;padding:1px 7px">{{ n.count }}</span>
+                </div>
+              </sc-if>
+              <sc-if value="{{ n.isLeader }}">
+                <div style="{{ n.rowStyle }}" style-hover="background:#f3f8f5">
+                  <span onClick="{{ n.toggle }}" style="width:16px;flex-shrink:0;text-align:center;color:#9bbfae;font-size:11px;cursor:pointer">{{ n.caret }}</span>
+                  <span style="width:30px;height:30px;background:#066b43;color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;flex-shrink:0">{{ n.initials }}</span>
+                  <div onClick="{{ n.edit }}" style="min-width:0;flex:1;cursor:pointer">
+                    <div style="display:flex;align-items:center;gap:8px">
+                      <span style="font-size:13.5px;font-weight:600;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ n.name }}</span>
+                      <sc-if value="{{ n.vikarAbsent }}"><span style="font-size:9px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;color:#fff;background:#c0791a;padding:2px 6px;flex-shrink:0">Fraværende</span></sc-if>
+                    </div>
+                    <div style="font-size:11.5px;color:#6b6b6e;line-height:1.25">{{ n.title }}</div>
+                    <sc-if value="{{ n.hasVikar }}"><div style="font-size:11px;color:#8a6a00;line-height:1.3;margin-top:1px">{{ n.vikarText }}</div></sc-if>
+                  </div>
+                  <span style="background:#066b43;color:#fff;font-size:9px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;padding:3px 7px;flex-shrink:0">Leder</span>
+                  <sc-if value="{{ n.isCovering }}"><span style="font-size:11px;color:#1a6a86;background:#e3eef2;padding:2px 7px;flex-shrink:0">{{ n.covering }}</span></sc-if>
+                  <span style="font-size:11.5px;color:#6b6b6e;flex-shrink:0">{{ n.reportCountLabel }}</span>
+                  <span onClick="{{ n.edit }}" style="font-size:11.5px;color:#066b43;flex-shrink:0;cursor:pointer;width:56px;text-align:right">Rediger ›</span>
+                </div>
+              </sc-if>
+              <sc-if value="{{ n.isEmployee }}">
+                <div onClick="{{ n.edit }}" style="{{ n.rowStyle }}" style-hover="background:#f3f8f5" title="Rediger medarbejder">
+                  <span style="width:26px;height:26px;background:#f3f2f2;color:#55565a;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;flex-shrink:0">{{ n.initials }}</span>
+                  <div style="min-width:0;flex:1">
+                    <div style="font-size:13px;font-weight:500;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ n.name }}</div>
+                    <div style="font-size:11px;color:#6b6b6e;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ n.title }}</div>
+                  </div>
+                  <sc-if value="{{ n.external }}"><span style="font-size:11px;color:#8a6a00;background:#fef3c7;padding:1px 7px;flex-shrink:0">Leder uden for enheden: {{ n.leaderName }}</span></sc-if>
+                  <sc-if value="{{ n.isCovering }}"><span style="font-size:11px;color:#1a6a86;background:#e3eef2;padding:1px 7px;flex-shrink:0">{{ n.covering }}</span></sc-if>
+                  <sc-if value="{{ n.canFix }}"><span onClick="{{ n.fix }}" style="font-size:11px;color:#8a6a00;flex-shrink:0;cursor:pointer;text-decoration:underline">Ret</span></sc-if>
+                  <span style="font-size:11px;color:#066b43;opacity:0.85;flex-shrink:0">Rediger ›</span>
+                </div>
+              </sc-if>
+              <sc-if value="{{ n.isNote }}">
+                <div style="{{ n.rowStyle }}">
+                  <span style="font-size:12.5px;color:#7a5b00;flex:1">{{ n.text }}</span>
+                  <sc-if value="{{ n.hasAction }}"><span onClick="{{ n.action }}" style="font-size:12px;color:#066b43;cursor:pointer;font-weight:600;flex-shrink:0">{{ n.actionLabel }}</span></sc-if>
+                </div>
+              </sc-if>
+            </sc-for>
+            <sc-if value="{{ strEmpty }}">
+              <div style="padding:18px;font-size:13.5px;color:#6b6b6e">{{ strEmptyText }}</div>
+            </sc-if>
+          </div>
+        </section>
+        </sc-if>
+
+      </div>
+    </main>
+  </div>
+  </sc-if>
+
+  <!-- UNIT DRAWER -->
+  <x-import component-from-global-scope="StatsTidUI.Drawer" open="{{ unitDrawerOpen }}" onClose="{{ closeDrawer }}" ariaLabel="Rediger enhed" hint-size="0,0">
+    <div style="display:flex;flex-direction:column;height:100%;font-family:var(--font-family)">
+      <div style="padding:20px 22px 16px;border-bottom:1px solid #e8e6e6">
+        <div style="font-size:11px;font-weight:700;letter-spacing:0.07em;text-transform:uppercase;color:#6b6b6e;margin-bottom:4px">{{ uTypeLabel }}</div>
+        <h2 style="margin:0;font-size:20px;font-weight:600">{{ uTitle }}</h2>
+      </div>
+      <div style="flex:1;overflow-y:auto;padding:20px 22px">
+        <div style="margin-bottom:20px">
+          <label style="display:block;font-size:14px;font-weight:600;margin-bottom:6px">Navn<span style="color:#b3261e"> *</span></label>
+          <input value="{{ uForm.name }}" onInput="{{ onUName }}" placeholder="F.eks. Borgervejledning" style="width:100%;padding:8px 12px;font-family:inherit;font-size:16px;color:#343536;background:#fff;border:1px solid #e8e6e6;border-radius:0;outline:none" style-focus="border-color:#066b43;box-shadow:0 0 0 3px rgba(6,107,67,0.12)">
+          <sc-if value="{{ uErrName }}"><div style="color:#b3261e;font-size:13px;margin-top:4px">{{ uErrName }}</div></sc-if>
+        </div>
+        <div>
+          <label style="display:block;font-size:14px;font-weight:600;margin-bottom:2px">Ledere</label>
+          <div style="font-size:12.5px;color:#6b6b6e;margin-bottom:10px">En leder skal være placeret i denne enhed. Vælg en eller flere blandt enhedens egne medarbejdere — de bliver sideordnede.</div>
+          <sc-if value="{{ uHasCandidates }}" hint-placeholder-val="{{ true }}">
+            <div style="border:1px solid #e8e6e6;max-height:320px;overflow-y:auto">
+              <sc-for list="{{ uLeaderRows }}" as="c" hint-placeholder-count="4">
+                <div onClick="{{ c.toggle }}" style="display:flex;align-items:center;gap:11px;padding:9px 12px;border-bottom:1px solid #f3f2f2;cursor:pointer" style-hover="background:#faf9f9">
+                  <span style="{{ c.boxStyle }}">{{ c.check }}</span>
+                  <span style="width:28px;height:28px;background:#f3f2f2;color:#55565a;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;flex-shrink:0">{{ c.initials }}</span>
+                  <div style="min-width:0">
+                    <div style="font-size:14px;font-weight:500;line-height:1.2">{{ c.name }}</div>
+                    <div style="font-size:12px;color:#6b6b6e;line-height:1.2">{{ c.title }}</div>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+          <sc-if value="{{ uNoCandidates }}">
+            <div style="padding:12px 14px;background:#f3f2f2;font-size:13px;color:#6b6b6e">Der er endnu ingen medarbejdere placeret i denne enhed. Tilføj medarbejdere først, og vælg derefter en leder iblandt dem.</div>
+          </sc-if>
+        </div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:10px;padding:16px 22px;border-top:1px solid #e8e6e6">
+        <x-import component-from-global-scope="StatsTidUI.Button" variant="ghost" size="md" onClick="{{ closeDrawer }}" hint-size="90px,40px">Annuller</x-import>
+        <x-import component-from-global-scope="StatsTidUI.Button" variant="primary" size="md" onClick="{{ saveUnit }}" hint-size="90px,40px">Gem</x-import>
+      </div>
+    </div>
+  </x-import>
+
+  <!-- PERSON DRAWER -->
+  <x-import component-from-global-scope="StatsTidUI.Drawer" open="{{ personDrawerOpen }}" onClose="{{ closeDrawer }}" ariaLabel="Rediger medarbejder" hint-size="0,0">
+    <div style="display:flex;flex-direction:column;height:100%;font-family:var(--font-family)">
+      <div style="padding:20px 22px 16px;border-bottom:1px solid #e8e6e6;display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+        <div>
+          <div style="font-size:11px;font-weight:700;letter-spacing:0.07em;text-transform:uppercase;color:#6b6b6e;margin-bottom:4px">Medarbejder</div>
+          <h2 style="margin:0;font-size:20px;font-weight:600">{{ pTitle }}</h2>
+        </div>
+        <sc-if value="{{ pIsLeaderBadge }}"><span style="background:#066b43;color:#fff;font-size:9.5px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;padding:5px 9px;flex-shrink:0">Leder</span></sc-if>
+      </div>
+      <div style="flex:1;overflow-y:auto;padding:20px 22px;display:flex;flex-direction:column;gap:18px">
+        <div>
+          <label style="display:block;font-size:14px;font-weight:600;margin-bottom:6px">Navn<span style="color:#b3261e"> *</span></label>
+          <input value="{{ pForm.name }}" onInput="{{ onPName }}" placeholder="Fulde navn" style="width:100%;padding:8px 12px;font-family:inherit;font-size:16px;color:#343536;background:#fff;border:1px solid #e8e6e6;border-radius:0;outline:none" style-focus="border-color:#066b43;box-shadow:0 0 0 3px rgba(6,107,67,0.12)">
+          <sc-if value="{{ pErrName }}"><div style="color:#b3261e;font-size:13px;margin-top:4px">{{ pErrName }}</div></sc-if>
+        </div>
+        <div style="display:flex;gap:14px">
+          <div style="flex:1">
+            <label style="display:block;font-size:14px;font-weight:600;margin-bottom:6px">Titel</label>
+            <input value="{{ pForm.title }}" onInput="{{ onPTitle }}" placeholder="F.eks. Sagsbehandler" style="width:100%;padding:8px 12px;font-family:inherit;font-size:16px;color:#343536;background:#fff;border:1px solid #e8e6e6;border-radius:0;outline:none" style-focus="border-color:#066b43;box-shadow:0 0 0 3px rgba(6,107,67,0.12)">
+          </div>
+          <div style="flex:1">
+            <label style="display:block;font-size:14px;font-weight:600;margin-bottom:6px">E-mail</label>
+            <input value="{{ pForm.email }}" onInput="{{ onPEmail }}" placeholder="navn@org.dk" style="width:100%;padding:8px 12px;font-family:inherit;font-size:16px;color:#343536;background:#fff;border:1px solid #e8e6e6;border-radius:0;outline:none" style-focus="border-color:#066b43;box-shadow:0 0 0 3px rgba(6,107,67,0.12)">
+          </div>
+        </div>
+        <div>
+          <label style="display:block;font-size:14px;font-weight:600;margin-bottom:6px">Organisation<span style="color:#b3261e"> *</span></label>
+          <x-import component-from-global-scope="StatsTidUI.Select" options="{{ orgOptions }}" value="{{ pForm.orgId }}" on-value-change="{{ setOrg }}" placeholder="Vælg organisation" hint-size="100%,42px"></x-import>
+          <sc-if value="{{ pErrOrg }}"><div style="color:#b3261e;font-size:13px;margin-top:4px">{{ pErrOrg }}</div></sc-if>
+        </div>
+        <div>
+          <label style="display:block;font-size:14px;font-weight:600;margin-bottom:6px">Placering<span style="color:#b3261e"> *</span></label>
+          <x-import component-from-global-scope="StatsTidUI.Select" options="{{ unitOptions }}" value="{{ pForm.unitId }}" on-value-change="{{ setUnit }}" placeholder="Vælg enhed" disabled="{{ unitSelectDisabled }}" hint-size="100%,42px"></x-import>
+          <div style="font-size:12px;color:#6b6b6e;margin-top:5px">Skift enhed for at flytte medarbejderen.</div>
+          <sc-if value="{{ pErrUnit }}"><div style="color:#b3261e;font-size:13px;margin-top:4px">{{ pErrUnit }}</div></sc-if>
+        </div>
+        <div style="border-top:1px solid #f3f2f2;padding-top:16px">
+          <label style="display:block;font-size:14px;font-weight:600;margin-bottom:6px">Nærmeste leder<span style="color:#b3261e"> *</span></label>
+          <x-import component-from-global-scope="StatsTidUI.Select" options="{{ leaderOptions }}" value="{{ pForm.leaderId }}" on-value-change="{{ setLeaderSel }}" placeholder="Vælg leder" disabled="{{ leaderSelectDisabled }}" hint-size="100%,42px"></x-import>
+          <div style="font-size:12px;color:#6b6b6e;margin-top:5px">{{ leaderHelpText }}</div>
+          <sc-if value="{{ pErrLeader }}"><div style="color:#b3261e;font-size:13px;margin-top:4px">{{ pErrLeader }}</div></sc-if>
+          <div onClick="{{ toggleWideLeaders }}" style="display:flex;align-items:center;gap:10px;margin-top:12px;cursor:pointer">
+            <span style="{{ wideBoxStyle }}">{{ wideCheck }}</span>
+            <span style="font-size:13.5px;color:#343536">Vis ledere uden for enheden</span>
+          </div>
+          <div onClick="{{ toggleApex }}" style="display:flex;align-items:center;gap:10px;margin-top:12px;cursor:pointer">
+            <span style="{{ apexBoxStyle }}">{{ apexCheck }}</span>
+            <span style="font-size:13.5px;color:#343536">Øverste leder — ingen overordnet</span>
+          </div>
+        </div>
+        <div style="border-top:1px solid #f3f2f2;padding-top:16px">
+          <div onClick="{{ togglePromote }}" style="display:flex;align-items:flex-start;gap:10px;cursor:pointer">
+            <span style="{{ promoteBoxStyle }}">{{ promoteCheck }}</span>
+            <div>
+              <div style="font-size:13.5px;font-weight:500;color:#343536">{{ promoteLabel }}</div>
+              <div style="font-size:12px;color:#6b6b6e;margin-top:2px">Gør medarbejderen til (sideordnet) leder af sin egen enhed.</div>
+            </div>
+          </div>
+        </div>
+        <sc-if value="{{ showVikar }}" hint-placeholder-val="{{ true }}">
+          <div style="border-top:1px solid #f3f2f2;padding-top:16px">
+            <label style="display:block;font-size:14px;font-weight:600;margin-bottom:2px">Vikar ved fravær</label>
+            <div style="font-size:12px;color:#6b6b6e;margin-bottom:10px">Sæt en midlertidig vikar, mens lederen er fraværende. Medarbejderne beholder deres faste leder — det er kun et synligt flag.</div>
+            <x-import component-from-global-scope="StatsTidUI.Select" options="{{ vikarOptions }}" value="{{ vikarValue }}" on-value-change="{{ setVikar }}" placeholder="Ingen vikar" hint-size="100%,42px"></x-import>
+            <sc-if value="{{ hasVikar }}" hint-placeholder-val="{{ true }}">
+              <div style="display:flex;gap:12px;margin-top:12px">
+                <div style="flex:1">
+                  <label style="display:block;font-size:12.5px;font-weight:600;margin-bottom:4px;color:#6b6b6e">Fra</label>
+                  <input type="date" value="{{ pForm.vikarFrom }}" onInput="{{ onVikarFrom }}" style="width:100%;padding:7px 10px;font-family:inherit;font-size:14px;color:#343536;background:#fff;border:1px solid #e8e6e6;border-radius:0;outline:none" style-focus="border-color:#066b43">
+                </div>
+                <div style="flex:1">
+                  <label style="display:block;font-size:12.5px;font-weight:600;margin-bottom:4px;color:#6b6b6e">Til</label>
+                  <input type="date" value="{{ pForm.vikarTo }}" onInput="{{ onVikarTo }}" style="width:100%;padding:7px 10px;font-family:inherit;font-size:14px;color:#343536;background:#fff;border:1px solid #e8e6e6;border-radius:0;outline:none" style-focus="border-color:#066b43">
+                </div>
+              </div>
+              <div onClick="{{ clearVikar }}" style="margin-top:10px;font-size:12.5px;color:#066b43;cursor:pointer">Fjern vikar</div>
+            </sc-if>
+          </div>
+        </sc-if>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:16px 22px;border-top:1px solid #e8e6e6">
+        <sc-if value="{{ pCanDelete }}" hint-placeholder-val="{{ true }}">
+          <x-import component-from-global-scope="StatsTidUI.Button" variant="danger" size="md" onClick="{{ askDeletePerson }}" hint-size="70px,40px">Slet</x-import>
+        </sc-if>
+        <span style="flex:1"></span>
+        <x-import component-from-global-scope="StatsTidUI.Button" variant="ghost" size="md" onClick="{{ closeDrawer }}" hint-size="90px,40px">Annuller</x-import>
+        <x-import component-from-global-scope="StatsTidUI.Button" variant="primary" size="md" onClick="{{ savePerson }}" hint-size="90px,40px">Gem</x-import>
+      </div>
+    </div>
+  </x-import>
+
+  <!-- SEARCH OVERLAY -->
+  <sc-if value="{{ searchOpen }}">
+    <div onClick="{{ closeSearch }}" style="position:fixed;inset:0;z-index:9000;background:rgba(31,32,33,0.32);display:flex;justify-content:center;align-items:flex-start;padding:84px 20px 40px">
+      <div onClick="{{ stop }}" style="width:100%;max-width:680px;max-height:100%;display:flex;flex-direction:column;background:#fff;border:1px solid #d9d7d7;box-shadow:0 18px 50px rgba(0,0,0,0.24)">
+        <div style="display:flex;align-items:center;gap:12px;padding:14px 18px;border-bottom:1px solid #e8e6e6;flex-shrink:0">
+          <span style="color:#066b43;font-size:18px">⌕</span>
+          <input onInput="{{ onSearch }}" data-search-input="1" autofocus="autofocus" placeholder="Søg efter enhed eller medarbejder…" style="flex:1;border:none;outline:none;font-family:inherit;font-size:18px;color:#343536;background:transparent">
+          <span onClick="{{ closeSearch }}" style="font-size:10.5px;color:#8a8a8a;border:1px solid #e8e6e6;padding:2px 7px;cursor:pointer;flex-shrink:0">Esc</span>
+        </div>
+        <div style="flex:1;overflow-y:auto;min-height:120px">
+          <sc-if value="{{ searchHasResults }}" hint-placeholder-val="{{ true }}">
+            <sc-if value="{{ searchUnitCount }}" hint-placeholder-val="{{ true }}">
+              <div onClick="{{ toggleFoldUnits }}" style="display:flex;align-items:center;gap:8px;padding:12px 18px 10px;background:#f3f2f2;border-bottom:1px solid #e3e1e1;position:sticky;top:0;cursor:pointer" style-hover="background:#eceaea">
+                <span style="width:14px;text-align:center;color:#066b43;font-size:13px;font-weight:700">{{ foldUnitsCaret }}</span>
+                <span style="font-size:13px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:#1f2021">Enheder</span>
+                <span style="font-size:11px;font-weight:600;color:#fff;background:#066b43;padding:1px 7px">{{ searchUnitCount }}</span>
+              </div>
+              <sc-if value="{{ showSearchUnits }}" hint-placeholder-val="{{ true }}">
+                <sc-for list="{{ searchUnits }}" as="u" hint-placeholder-count="3">
+                  <div onClick="{{ u.go }}" style="display:flex;align-items:center;gap:11px;padding:10px 18px 10px 32px;border-bottom:1px solid #f6f5f5;cursor:pointer" style-hover="background:#f3f8f5">
+                    <span style="width:9px;height:9px;flex-shrink:0;background:{{ u.dot }}"></span>
+                    <div style="min-width:0;flex:1">
+                      <div style="display:flex;align-items:center;gap:8px">
+                        <span style="font-size:14px;font-weight:600;line-height:1.2">{{ u.name }}</span>
+                        <span style="{{ u.chipStyle }}">{{ u.typeLabel }}</span>
+                      </div>
+                      <div style="font-size:11.5px;color:#a7a6a8;line-height:1.3;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ u.path }}</div>
+                    </div>
+                    <span style="font-size:11px;color:#6b6b6e;background:#f3f2f2;padding:1px 7px;flex-shrink:0">{{ u.count }}</span>
+                    <span style="color:#cac8c8;font-size:14px;flex-shrink:0">›</span>
+                  </div>
+                </sc-for>
+              </sc-if>
+            </sc-if>
+            <sc-if value="{{ searchPeopleCount }}" hint-placeholder-val="{{ true }}">
+              <div onClick="{{ toggleFoldPeople }}" style="display:flex;align-items:center;gap:8px;padding:12px 18px 10px;background:#f3f2f2;border-bottom:1px solid #e3e1e1;border-top:1px solid #e3e1e1;position:sticky;top:0;cursor:pointer" style-hover="background:#eceaea">
+                <span style="width:14px;text-align:center;color:#066b43;font-size:13px;font-weight:700">{{ foldPeopleCaret }}</span>
+                <span style="font-size:13px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:#1f2021">Medarbejdere</span>
+                <span style="font-size:11px;font-weight:600;color:#fff;background:#066b43;padding:1px 7px">{{ searchPeopleCount }}</span>
+              </div>
+              <sc-if value="{{ showSearchPeople }}" hint-placeholder-val="{{ true }}">
+                <sc-for list="{{ searchPeople }}" as="p" hint-placeholder-count="3">
+                  <div onClick="{{ p.go }}" style="display:flex;align-items:center;gap:11px;padding:10px 18px 10px 32px;border-bottom:1px solid #f6f5f5;cursor:pointer" style-hover="background:#f3f8f5">
+                    <span style="width:30px;height:30px;background:{{ p.avatarBg }};color:{{ p.avatarFg }};display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;flex-shrink:0">{{ p.initials }}</span>
+                    <div style="min-width:0;flex:1">
+                      <div style="display:flex;align-items:center;gap:8px">
+                        <span style="font-size:14px;font-weight:600;line-height:1.2">{{ p.name }}</span>
+                        <sc-if value="{{ p.isLeader }}"><span style="background:#066b43;color:#fff;font-size:9px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;padding:2px 6px">Leder</span></sc-if>
+                      </div>
+                      <div style="font-size:11.5px;color:#6b6b6e;line-height:1.3;margin-top:1px">{{ p.title }}</div>
+                      <div style="font-size:11px;color:#a7a6a8;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ p.where }}</div>
+                    </div>
+                    <span style="color:#cac8c8;font-size:14px;flex-shrink:0">›</span>
+                  </div>
+                </sc-for>
+              </sc-if>
+            </sc-if>
+          </sc-if>
+          <sc-if value="{{ searchNoResults }}">
+            <div style="padding:40px 18px;text-align:center;color:#6b6b6e;font-size:13.5px">Ingen enheder eller medarbejdere matcher “{{ search }}”.</div>
+          </sc-if>
+          <sc-if value="{{ searchIdle }}">
+            <div style="padding:40px 18px;text-align:center;color:#a7a6a8;font-size:13.5px">Skriv for at søge i enheder og medarbejdere på tværs af hele organisationen.</div>
+          </sc-if>
+        </div>
+        <sc-if value="{{ searchScopeNote }}">
+          <div style="padding:8px 18px;border-top:1px solid #f3f2f2;background:#faf9f9;font-size:11.5px;color:#a7a6a8;flex-shrink:0">Søgningen er begrænset til den valgte afgrænsning.</div>
+        </sc-if>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- DELETE CONFIRM -->
+  <x-import component-from-global-scope="StatsTidUI.Dialog" open="{{ confirmOpen }}" onOpenChange="{{ onConfirmOpenChange }}" title="{{ confirmTitle }}" description="{{ confirmDesc }}" hint-size="0,0">
+    <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:8px;font-family:var(--font-family)">
+      <x-import component-from-global-scope="StatsTidUI.Button" variant="ghost" size="md" onClick="{{ closeConfirm }}" hint-size="90px,40px">Annuller</x-import>
+      <x-import component-from-global-scope="StatsTidUI.Button" variant="danger" size="md" onClick="{{ confirmDelete }}" hint-size="90px,40px">Slet</x-import>
+    </div>
+  </x-import>
+
+  <sc-if value="{{ toastOpen }}">
+    <div style="position:fixed;top:18px;left:50%;transform:translateX(-50%);z-index:9999;min-width:280px;max-width:440px">
+      <x-import component-from-global-scope="StatsTidUI.Alert" variant="{{ toastVariant }}" onDismiss="{{ clearToast }}" hint-size="300px,52px">{{ toastMsg }}</x-import>
+    </div>
+  </sc-if>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { ready: false, units: {}, users: {}, expanded: {}, selectedId: 'k1', history: ['k1'], histIndex: 0, search: '', searchOpen: false, drawer: null, confirm: null, toast: null, scope: [], afgOpen: false, seq: 100, treeOpen: {}, showPeople: true, lCollapse: {}, medClosed: {}, foldUnits: false, foldPeople: false };
+  }
+  componentDidMount() { this._init(); this._onKey = (e) => { if (e.key === 'Escape' && this.state.searchOpen) this.setState({ searchOpen: false }); else if (e.key === '/' && !this.state.searchOpen && !this.state.drawer && !/^(INPUT|TEXTAREA)$/.test((e.target.tagName || ''))) { e.preventDefault(); this.openSearch(); } }; window.addEventListener('keydown', this._onKey); }
+  _focusSearch(tries) { tries = tries || 0; const el = document.querySelector('input[data-search-input]'); if (el) { try { el.focus(); el.select && el.select(); } catch (e) {} if (document.activeElement === el) return; } if (tries < 40) setTimeout(() => this._focusSearch(tries + 1), 25); }
+  componentDidUpdate(pp, ps) { if (this.state.searchOpen && !ps.searchOpen) this._focusSearch(0); }
+  _init() { if (window.OrgData) { this._load(); return; } this._iv = setInterval(() => { if (window.OrgData) { clearInterval(this._iv); this._load(); } }, 30); }
+  _load() {
+    const d = window.OrgData.clone();
+    const units = {}; d.units.forEach(u => units[u.id] = u);
+    const users = {}; d.users.forEach(u => users[u.id] = u);
+    this.M = window.OrgData;
+    const scope = Object.values(units).filter(u => u.type === 'organisation').map(u => u.id);
+    this.setState({ ready: true, units, users, scope, expanded: { m1: true, o1: true, d1: true, a1: true, k1: true, a2: true, k3: true } });
+  }
+  componentWillUnmount() { clearTimeout(this._t); clearInterval(this._iv); if (this._onKey) window.removeEventListener('keydown', this._onKey); }
+
+  // helpers
+  orgOf(id) { let u = this.state.units[id]; while (u) { if (u.type === 'organisation') return u.id; u = this.state.units[u.parentId]; } return null; }
+  isAncestor(aId, bId) { let u = this.state.units[bId]; u = u ? this.state.units[u.parentId] : null; while (u) { if (u.id === aId) return true; u = this.state.units[u.parentId]; } return false; }
+  childrenSorted(id) { return Object.values(this.state.units).filter(u => u.parentId === id).sort((a, b) => (this.M.ORD[a.type] - this.M.ORD[b.type]) || a.name.localeCompare(b.name, 'da')); }
+  membersDirect(id) { return Object.values(this.state.users).filter(u => u.unitId === id).sort((a, b) => a.name.localeCompare(b.name, 'da')); }
+  membersDeep(id) { return Object.values(this.state.users).filter(u => u.unitId === id || this.isAncestor(id, u.unitId)).length; }
+  pathOf(id) { const a = []; let u = this.state.units[id]; while (u) { a.unshift(u); u = this.state.units[u.parentId]; } return a; }
+  leadersOf(id) { const u = this.state.units[id]; if (!u) return []; return u.leaderIds.map(i => this.state.users[i]).filter(p => p && p.unitId === id); }
+  orgsOfMinister(mid) { return this.childrenSorted(mid).filter(u => u.type === 'organisation').map(u => u.id); }
+  ministerList() { return Object.values(this.state.units).filter(u => u.type === 'ministeromrade').sort((a, b) => a.name.localeCompare(b.name, 'da')); }
+  initials(n) { const p = (n || '').trim().split(/\s+/); return (((p[0] || '')[0] || '') + ((p[p.length - 1] || '')[0] || '')).toUpperCase(); }
+  unitName(id) { const u = this.state.units[id]; return u ? u.name : '—'; }
+  shortName(n) { const p = (n || '').trim().split(/\s+/); return p.length > 1 ? (p[0] + ' ' + p[p.length - 1]) : n; }
+
+  // nav
+  toggleExpand(id) { this.setState(s => ({ expanded: { ...s.expanded, [id]: !s.expanded[id] } })); }
+  histPush(s, id) { const h = s.history.slice(0, s.histIndex + 1); h.push(id); return { history: h, histIndex: h.length - 1 }; }
+  select(id) { this.setState(s => { if (s.selectedId === id) return null; return { selectedId: id, ...this.histPush(s, id) }; }); }
+  goBack() { this.setState(s => s.histIndex > 0 ? { histIndex: s.histIndex - 1, selectedId: s.history[s.histIndex - 1] } : null); }
+  goForward() { this.setState(s => s.histIndex < s.history.length - 1 ? { histIndex: s.histIndex + 1, selectedId: s.history[s.histIndex + 1] } : null); }
+  onSearch(e) { this.setState({ search: e.target.value }); }
+  openSearch() { this.setState({ searchOpen: true, search: '', foldUnits: false, foldPeople: false }); this._focusSearch(0); }
+  closeSearch() { this.setState({ searchOpen: false }); }
+  toggleFoldUnits() { this.setState(s => ({ foldUnits: !s.foldUnits })); }
+  toggleFoldPeople() { this.setState(s => ({ foldPeople: !s.foldPeople })); }
+  gotoSearchUnit(id) { this.setState({ searchOpen: false }); this.select(id); }
+  gotoSearchPerson(pid) {
+    const p = this.state.users[pid]; if (!p) return;
+    this.setState({ searchOpen: false });
+    this.select(p.unitId);
+    this.openEditPerson(pid);
+  }
+  collectDescendants(id) { const out = []; const rec = (x) => this.childrenSorted(x).forEach(c => { out.push(c.id); rec(c.id); }); rec(id); return out; }
+  toggleTreeUnit(id) { this.setState(s => ({ treeOpen: { ...s.treeOpen, [id]: !s.treeOpen[id] } })); }
+  toggleLeader(id) { this.setState(s => ({ lCollapse: { ...s.lCollapse, [id]: !s.lCollapse[id] } })); }
+  toggleMed(id) { this.setState(s => ({ medClosed: { ...s.medClosed, [id]: !s.medClosed[id] } })); }
+  togglePeople() { this.setState(s => ({ showPeople: !s.showPeople })); }
+  toggleExpandAll() { const desc = this.collectDescendants(this.state.selectedId).filter(id => this.childrenSorted(id).length > 0 || this.membersDirect(id).length > 0); const anyOpen = desc.some(id => this.state.treeOpen[id]); this.setState(s => { const m = { ...s.treeOpen }; desc.forEach(id => { if (anyOpen) delete m[id]; else m[id] = true; }); return { treeOpen: m }; }); }
+
+  // scope
+  toggleAfgOpen() { this.setState(s => ({ afgOpen: !s.afgOpen })); }
+  closeAfg() { this.setState({ afgOpen: false }); }
+  toggleAfgOrg(oid) { this.setState(s => { const set = new Set(s.scope); if (set.has(oid)) set.delete(oid); else set.add(oid); return { scope: [...set] }; }); }
+  toggleAfgMinister(mid) { this.setState(s => { const orgs = this.orgsOfMinister(mid); const set = new Set(s.scope); const allIn = orgs.every(o => set.has(o)); orgs.forEach(o => { if (allIn) set.delete(o); else set.add(o); }); return { scope: [...set] }; }); }
+  afgSelectAll() { this.setState(s => ({ scope: Object.values(s.units).filter(u => u.type === 'organisation').map(u => u.id) })); }
+  afgClear() { this.setState({ scope: [] }); }
+
+  // drawers
+  openEditUnit() { const u = this.state.units[this.state.selectedId]; this.setState({ drawer: { kind: 'unit', mode: 'edit', id: u.id, form: { name: u.name, leaderIds: [...u.leaderIds] }, errors: {} } }); }
+  openAddChild() { const p = this.state.units[this.state.selectedId]; const ct = this.M.CHILD[p.type]; if (!ct) return; this.setState({ drawer: { kind: 'unit', mode: 'add', parentId: p.id, childType: ct, form: { name: '', leaderIds: [] }, errors: {} } }); }
+  openAddPerson() { const unitId = this.state.selectedId; const org = this.orgOf(unitId); this.setState({ drawer: { kind: 'person', mode: 'add', form: { name: '', title: '', email: '', orgId: org || '', unitId, leaderId: '', isApex: false, isLeader: false, vikarId: '', vikarFrom: '', vikarTo: '' }, errors: {} } }); }
+  openEditPerson(id) { const u = this.state.users[id]; const ownLeaders = (this.state.units[u.unitId] || { leaderIds: [] }).leaderIds; const isLeader = ownLeaders.includes(id); const wideLeaders = !!(u.leaderId && !ownLeaders.includes(u.leaderId)); const v = u.vikar || {}; this.setState({ drawer: { kind: 'person', mode: 'edit', id, form: { name: u.name, title: u.title, email: u.email, orgId: this.orgOf(u.unitId) || '', unitId: u.unitId, leaderId: u.leaderId || '', isApex: !u.leaderId, isLeader, wideLeaders, vikarId: v.leaderId || '', vikarFrom: v.from || '', vikarTo: v.to || '' }, errors: {} } }); }
+  closeDrawer() { this.setState({ drawer: null }); }
+  setField(k, v) { this.setState(s => ({ drawer: { ...s.drawer, form: { ...s.drawer.form, [k]: v }, errors: { ...s.drawer.errors, [k]: undefined } } })); }
+  setOrg(v) { this.setState(s => ({ drawer: { ...s.drawer, form: { ...s.drawer.form, orgId: v, unitId: '', leaderId: '', isLeader: false }, errors: {} } })); }
+  setUnit(v) { this.setState(s => ({ drawer: { ...s.drawer, form: { ...s.drawer.form, unitId: v, leaderId: '', isLeader: false }, errors: { ...s.drawer.errors, unitId: undefined, leaderId: undefined } } })); }
+  toggleApex() { this.setState(s => { const a = !s.drawer.form.isApex; return { drawer: { ...s.drawer, form: { ...s.drawer.form, isApex: a, leaderId: a ? '' : s.drawer.form.leaderId }, errors: { ...s.drawer.errors, leaderId: undefined } } }; }); }
+  toggleWideLeaders() { this.setState(s => ({ drawer: { ...s.drawer, form: { ...s.drawer.form, wideLeaders: !s.drawer.form.wideLeaders } } })); }
+  setVikar(v) { this.setState(s => ({ drawer: { ...s.drawer, form: { ...s.drawer.form, vikarId: v === '__none__' ? '' : v } } })); }
+  clearVikar() { this.setState(s => ({ drawer: { ...s.drawer, form: { ...s.drawer.form, vikarId: '', vikarFrom: '', vikarTo: '' } } })); }
+  depthOf(unitId) { let n = 0, u = this.state.units[unitId]; while (u && u.parentId) { n++; u = this.state.units[u.parentId]; } return n; }
+  fmtDate(iso) { if (!iso) return ''; const p = iso.split('-'); if (p.length !== 3) return iso; const mo = ['jan', 'feb', 'mar', 'apr', 'maj', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec']; return parseInt(p[2], 10) + '. ' + (mo[parseInt(p[1], 10) - 1] || ''); }
+  fmtRange(from, to) { if (from && to) return this.fmtDate(from) + ' – ' + this.fmtDate(to); if (from) return 'fra ' + this.fmtDate(from); if (to) return 'til ' + this.fmtDate(to); return ''; }
+  todayISO() { const d = new Date(); const p = (n) => (n < 10 ? '0' : '') + n; return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()); }
+  absentNow(v) { if (!v) return false; const t = this.todayISO(); return (!v.from || v.from <= t) && (!v.to || t <= v.to); }
+  allLeaderPeople() { const ids = new Set(); Object.values(this.state.units).forEach(u => u.leaderIds.forEach(id => ids.add(id))); return [...ids].map(id => this.state.users[id]).filter(Boolean); }
+  coveringMap() { const m = {}; Object.values(this.state.users).forEach(u => { if (u.vikar && u.vikar.leaderId) (m[u.vikar.leaderId] = m[u.vikar.leaderId] || []).push(u); }); return m; }
+  togglePromote() { this.setState(s => ({ drawer: { ...s.drawer, form: { ...s.drawer.form, isLeader: !s.drawer.form.isLeader } } })); }
+  toggleUnitLeader(uid) { this.setState(s => { const cur = s.drawer.form.leaderIds; const next = cur.includes(uid) ? cur.filter(x => x !== uid) : [...cur, uid]; return { drawer: { ...s.drawer, form: { ...s.drawer.form, leaderIds: next } } }; }); }
+
+  flash(msg, variant) { this.setState({ toast: { msg, variant: variant || 'success' } }); clearTimeout(this._t); this._t = setTimeout(() => this.setState({ toast: null }), 2800); }
+  clearToast() { this.setState({ toast: null }); }
+
+  fixExternal(pid) {
+    const p = this.state.users[pid]; const leaders = this.leadersOf(p.unitId).filter(l => l.id !== pid);
+    if (!leaders.length) { this.flash('Ingen leder i enheden at vælge — tildel først en leder', 'error'); return; }
+    this.setState(s => { const users = { ...s.users }; users[pid] = { ...users[pid], leaderId: leaders[0].id }; return { users }; });
+    this.flash(p.name + ' refererer nu til ' + leaders[0].name);
+  }
+
+  saveUnit() {
+    const d = this.state.drawer; const f = d.form; const errors = {};
+    if (!f.name.trim()) errors.name = 'Navn er påkrævet';
+    if (Object.keys(errors).length) { this.setState(s => ({ drawer: { ...s.drawer, errors } })); return; }
+    this.setState(s => {
+      const units = { ...s.units };
+      if (d.mode === 'add') {
+        const id = 'n' + s.seq;
+        units[id] = { id, type: d.childType, name: f.name.trim(), parentId: d.parentId, leaderIds: [...f.leaderIds] };
+        return { units, drawer: null, seq: s.seq + 1, expanded: { ...s.expanded, [d.parentId]: true }, selectedId: id, ...this.histPush(s, id), toast: { msg: this.M.LABEL[d.childType] + ' oprettet', variant: 'success' } };
+      }
+      units[d.id] = { ...units[d.id], name: f.name.trim(), leaderIds: [...f.leaderIds] };
+      return { units, drawer: null, toast: { msg: 'Ændringer gemt', variant: 'success' } };
+    });
+    clearTimeout(this._t); this._t = setTimeout(() => this.setState({ toast: null }), 2800);
+  }
+
+  savePerson() {
+    const d = this.state.drawer; const f = d.form; const errors = {};
+    if (!f.name.trim()) errors.name = 'Navn er påkrævet';
+    if (!f.orgId) errors.orgId = 'Organisation er påkrævet';
+    if (!f.unitId) errors.unitId = 'Placering er påkrævet';
+    if (!f.isApex && !f.leaderId) errors.leaderId = 'Leder er påkrævet';
+    if (Object.keys(errors).length) { this.setState(s => ({ drawer: { ...s.drawer, errors } })); return; }
+    this.setState(s => {
+      const users = { ...s.users }; const units = { ...s.units };
+      const payload = { name: f.name.trim(), title: f.title.trim() || 'Medarbejder', email: f.email.trim(), unitId: f.unitId, leaderId: f.isApex ? null : f.leaderId, vikar: (f.isLeader && f.vikarId) ? { leaderId: f.vikarId, from: f.vikarFrom || '', to: f.vikarTo || '' } : null };
+      let id;
+      if (d.mode === 'add') { id = 'p' + s.seq; users[id] = { id, ...payload }; }
+      else { id = d.id; users[id] = { ...users[id], ...payload }; }
+      // sync leader membership across units (promote / move)
+      Object.keys(units).forEach(uid => { if (units[uid].leaderIds.includes(id)) units[uid] = { ...units[uid], leaderIds: units[uid].leaderIds.filter(x => x !== id) }; });
+      if (f.isLeader && units[f.unitId] && !units[f.unitId].leaderIds.includes(id)) units[f.unitId] = { ...units[f.unitId], leaderIds: [...units[f.unitId].leaderIds, id] };
+      const seq = d.mode === 'add' ? s.seq + 1 : s.seq;
+      return { users, units, drawer: null, seq, selectedId: f.unitId, ...this.histPush(s, f.unitId), toast: { msg: d.mode === 'add' ? 'Medarbejder oprettet' : 'Ændringer gemt', variant: 'success' } };
+    });
+    clearTimeout(this._t); this._t = setTimeout(() => this.setState({ toast: null }), 2800);
+  }
+
+  askDeleteUnit() {
+    const id = this.state.selectedId; const u = this.state.units[id];
+    if (u.type === 'ministeromrade') { this.flash('Ministerområdet kan ikke slettes', 'error'); return; }
+    if (this.childrenSorted(id).length) { this.flash('Flyt eller slet underenheder først', 'error'); return; }
+    if (this.membersDirect(id).length) { this.flash('Flyt medarbejderne væk først', 'error'); return; }
+    this.setState({ confirm: { kind: 'unit', id, name: u.name } });
+  }
+  askDeletePerson() {
+    const d = this.state.drawer; if (!d || d.kind !== 'person' || d.mode !== 'edit') return;
+    const id = d.id; const u = this.state.users[id];
+    const hasReports = Object.values(this.state.users).some(p => p.leaderId === id);
+    if (hasReports) { this.flash(u.name + ' er leder for andre — flyt dem først', 'error'); return; }
+    this.setState({ confirm: { kind: 'person', id, name: u.name } });
+  }
+  closeConfirm() { this.setState({ confirm: null }); }
+  onConfirmOpenChange(o) { if (!o) this.setState({ confirm: null }); }
+  confirmDelete() {
+    const c = this.state.confirm; if (!c) return;
+    this.setState(s => {
+      if (c.kind === 'unit') { const units = { ...s.units }; const parent = units[c.id].parentId; delete units[c.id]; return { units, confirm: null, drawer: null, selectedId: parent || 'm1', ...this.histPush(s, parent || 'm1'), toast: { msg: 'Enhed slettet', variant: 'success' } }; }
+      const users = { ...s.users }; const units = { ...s.units }; delete users[c.id];
+      Object.keys(units).forEach(uid => { if (units[uid].leaderIds.includes(c.id)) units[uid] = { ...units[uid], leaderIds: units[uid].leaderIds.filter(x => x !== c.id) }; });
+      return { users, units, confirm: null, drawer: null, toast: { msg: 'Medarbejder slettet', variant: 'success' } };
+    });
+    clearTimeout(this._t); this._t = setTimeout(() => this.setState({ toast: null }), 2800);
+  }
+
+  renderVals() {
+    const out = {
+      ready: false, loading: true, treeRows: [], noResults: false,
+      afgOpen: false, afgSummary: '', afgRows: [], toggleAfgOpen: () => this.toggleAfgOpen(), closeAfg: () => this.closeAfg(), afgSelectAll: () => this.afgSelectAll(), afgClear: () => this.afgClear(),
+      search: '', onSearch: (e) => this.onSearch(e),
+      openSearch: () => this.openSearch(), closeSearch: () => this.closeSearch(),
+      searchOpen: false, searchUnits: [], searchPeople: [], searchUnitCount: 0, searchPeopleCount: 0, searchHasQuery: false, searchHasResults: false, searchNoResults: false, searchIdle: true, searchScopeNote: false,
+      foldUnits: false, foldPeople: false, foldUnitsCaret: '▾', foldPeopleCaret: '▾', showSearchUnits: true, showSearchPeople: true, toggleFoldUnits: () => this.toggleFoldUnits(), toggleFoldPeople: () => this.toggleFoldPeople(),
+      stop: (e) => { if (e && e.stopPropagation) e.stopPropagation(); }, searchRef: (el) => { this._searchEl = el; },
+      selPath: '', selName: '', selTypeLabel: '', selTypeLabelLower: '', selChipStyle: {}, isMinister: false, canDelete: false,
+      backDisabled: true, forwardDisabled: true, goBack: () => this.goBack(), goForward: () => this.goForward(),
+      hasUpRef: false, upRefs: [], showLeaderSection: false, sectionCountLabel: '', leaderHint: '',
+      hasLeaders: false, leaderColumns: [], leaderless: false, leaderlessMembers: [], leaderlessSummary: '', emptyUnit: false,
+      hasExternal: false, externalMembers: [], externalNote: '',
+      hasSubArea: false, subRows: [], subEmpty: false, subCountLabel: '', canAddChild: false, addChildLabel: '',
+      showStruktur: false, strTitle: '', strCountLabel: '', strHasUnits: false, treeNodes: [], strEmpty: false, strEmptyText: '', showAddPerson: false, showLeaderEdit: false, expandDisabled: true, addChildDisabled: true, peopleDisabled: false, leaderEditDisabled: true, addPersonDisabled: true,
+      expandLabel: 'Udvid alle', toggleExpandAll: () => this.toggleExpandAll(), peopleLabel: 'Skjul medarbejdere', togglePeople: () => this.togglePeople(),
+      openEditUnit: () => this.openEditUnit(), askDeleteUnit: () => this.askDeleteUnit(), openAddPerson: () => this.openAddPerson(), openAddChild: () => this.openAddChild(),
+      unitDrawerOpen: false, uForm: { name: '', leaderIds: [] }, uErrName: '', uTypeLabel: '', uTitle: '', uLeaderRows: [], uHasCandidates: false, uNoCandidates: false, onUName: (e) => this.setField('name', e.target.value), saveUnit: () => this.saveUnit(),
+      personDrawerOpen: false, pForm: { name: '', title: '', email: '', orgId: '', unitId: '', leaderId: '', isApex: false, isLeader: false }, pTitle: '', pIsLeaderBadge: false, orgOptions: [], unitOptions: [], leaderOptions: [],
+      pErrName: '', pErrOrg: '', pErrUnit: '', pErrLeader: '', unitSelectDisabled: true, leaderSelectDisabled: true, apexCheck: '', apexBoxStyle: {}, promoteCheck: '', promoteBoxStyle: {}, promoteLabel: 'Er leder af enheden', pCanDelete: false,
+      onPName: (e) => this.setField('name', e.target.value), onPTitle: (e) => this.setField('title', e.target.value), onPEmail: (e) => this.setField('email', e.target.value),
+      setOrg: (v) => this.setOrg(v), setUnit: (v) => this.setUnit(v), setLeaderSel: (v) => this.setField('leaderId', v), toggleApex: () => this.toggleApex(), togglePromote: () => this.togglePromote(), toggleWideLeaders: () => this.toggleWideLeaders(),
+      wideOn: false, wideCheck: '', wideBoxStyle: {}, leaderHelpText: 'Vælges blandt de sideordnede ledere i medarbejderens egen enhed.',
+      showVikar: false, hasVikar: false, vikarOptions: [], vikarValue: '__none__', setVikar: (v) => this.setVikar(v), clearVikar: () => this.clearVikar(), onVikarFrom: (e) => this.setField('vikarFrom', e.target.value), onVikarTo: (e) => this.setField('vikarTo', e.target.value), savePerson: () => this.savePerson(), askDeletePerson: () => this.askDeletePerson(),
+      closeDrawer: () => this.closeDrawer(),
+      confirmOpen: false, confirmTitle: '', confirmDesc: '', confirmDelete: () => this.confirmDelete(), closeConfirm: () => this.closeConfirm(), onConfirmOpenChange: (o) => this.onConfirmOpenChange(o),
+      toastOpen: false, toastVariant: 'success', toastMsg: '', clearToast: () => this.clearToast()
+    };
+    if (!this.state.ready) return out;
+    const S = this.state, U = S.units, M = this.M;
+    out.ready = true; out.loading = false; out.search = S.search; out.afgOpen = S.afgOpen;
+    out.toastOpen = !!S.toast; out.toastVariant = S.toast ? S.toast.variant : 'success'; out.toastMsg = S.toast ? S.toast.msg : '';
+
+    const chip = (t) => ({ display: 'inline-block', fontSize: '10px', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', lineHeight: 1.5, color: M.ACCENT[t], background: M.TINT[t], padding: '1px 7px', marginTop: '3px', flexShrink: 0 });
+    const scopeSet = new Set(S.scope);
+    const ministerList = this.ministerList();
+
+    // Afgrænsning
+    const allOrgs = Object.values(U).filter(u => u.type === 'organisation');
+    const selOrgs = allOrgs.filter(o => scopeSet.has(o.id));
+    out.afgSummary = selOrgs.length === allOrgs.length ? 'Alle organisationer' : (selOrgs.length === 0 ? 'Intet valgt' : selOrgs.length + (selOrgs.length === 1 ? ' organisation' : ' organisationer'));
+    out.afgRows = ministerList.map(m => {
+      const orgs = this.orgsOfMinister(m.id); const cc = orgs.filter(o => scopeSet.has(o)).length; const all = orgs.length > 0 && cc === orgs.length; const some = cc > 0 && !all;
+      return { id: m.id, name: m.name, mark: all ? '✓' : (some ? '–' : ''), toggle: () => this.toggleAfgMinister(m.id),
+        boxStyle: { width: '17px', height: '17px', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700, color: '#fff', border: '1px solid ' + ((all || some) ? '#066b43' : '#cac8c8'), background: (all || some) ? '#066b43' : '#fff' },
+        orgs: orgs.map(oid => ({ id: oid, name: U[oid].name, mark: scopeSet.has(oid) ? '✓' : '', toggle: () => this.toggleAfgOrg(oid), boxStyle: { width: '16px', height: '16px', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', color: '#fff', border: '1px solid ' + (scopeSet.has(oid) ? '#066b43' : '#cac8c8'), background: scopeSet.has(oid) ? '#066b43' : '#fff' } })) };
+    });
+
+    // search overlay
+    const q = S.search.trim().toLowerCase();
+    const inScope = (oid) => scopeSet.has(oid);
+    out.searchOpen = S.searchOpen; out.search = S.search;
+    if (S.searchOpen) {
+      const tokens = q.split(/\s+/).filter(Boolean);
+      const match = (txt) => { const t = txt.toLowerCase(); return tokens.every(tk => t.includes(tk)); };
+      const orgInScopeOf = (unitId) => { const o = this.orgOf(unitId); return o ? scopeSet.has(o) : (U[unitId] && U[unitId].type === 'ministeromrade'); };
+      let unitHits = [], peopleHits = [];
+      if (tokens.length) {
+        unitHits = Object.values(U).filter(u => u.type !== 'ministeromrade' && orgInScopeOf(u.id) && match(u.name))
+          .sort((a, b) => (M.ORD[a.type] - M.ORD[b.type]) || a.name.localeCompare(b.name, 'da')).slice(0, 40)
+          .map(u => ({ id: u.id, name: u.name, typeLabel: M.LABEL[u.type], dot: M.ACCENT[u.type], chipStyle: chip(u.type),
+            path: this.pathOf(u.id).slice(0, -1).map(n => n.name).join(' › '), count: this.membersDeep(u.id),
+            go: () => this.gotoSearchUnit(u.id) }));
+        peopleHits = Object.values(S.users).filter(p => orgInScopeOf(p.unitId) && match(p.name + ' ' + p.title + ' ' + (p.email || '')))
+          .sort((a, b) => a.name.localeCompare(b.name, 'da')).slice(0, 40)
+          .map(p => { const isLeader = (U[p.unitId] || { leaderIds: [] }).leaderIds.includes(p.id); const un = U[p.unitId];
+            return { id: p.id, name: p.name, title: p.title, initials: this.initials(p.name), isLeader,
+              avatarBg: isLeader ? '#066b43' : '#eef1ef', avatarFg: isLeader ? '#fff' : '#55565a',
+              where: this.pathOf(p.unitId).map(n => n.name).join(' › '), unitName: un ? un.name : '—',
+              go: () => this.gotoSearchPerson(p.id) }; });
+      }
+      out.searchUnits = unitHits; out.searchPeople = peopleHits;
+      out.searchUnitCount = unitHits.length; out.searchPeopleCount = peopleHits.length;
+      out.searchHasQuery = tokens.length > 0;
+      out.searchHasResults = unitHits.length + peopleHits.length > 0;
+      out.searchNoResults = tokens.length > 0 && unitHits.length + peopleHits.length === 0;
+      out.searchIdle = tokens.length === 0;
+      out.searchScopeNote = scopeSet.size < allOrgs.length;
+      out.foldUnitsCaret = S.foldUnits ? '▸' : '▾'; out.foldPeopleCaret = S.foldPeople ? '▸' : '▾';
+      out.showSearchUnits = !S.foldUnits; out.showSearchPeople = !S.foldPeople;
+    }
+
+    // tree
+    const rows = [];
+    const walk = (id, depth) => {
+      const n = U[id]; let kids = this.childrenSorted(id);
+      if (n.type === 'ministeromrade') kids = kids.filter(k => k.type !== 'organisation' || inScope(k.id));
+      const isExp = !!S.expanded[id]; const sel = S.selectedId === id;
+      rows.push({ id, name: n.name, typeLabel: M.LABEL[n.type], dot: M.ACCENT[n.type], chipStyle: { display: 'none' }, count: this.membersDeep(id),
+        caret: kids.length ? (isExp ? '▾' : '▸') : '',
+        rowStyle: { display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 12px 6px ' + (8 + depth * 15) + 'px', cursor: 'pointer', borderLeft: '3px solid ' + (sel ? '#066b43' : 'transparent'), background: sel ? 'rgba(6,107,67,0.08)' : 'transparent', userSelect: 'none' },
+        nameStyle: { fontSize: '13.5px', fontWeight: sel ? 600 : 500, color: '#343536', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '180px' },
+        toggle: (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.toggleExpand(id); }, select: () => this.select(id) });
+      if (isExp) kids.forEach(k => walk(k.id, depth + 1));
+    };
+    ministerList.forEach(m => { const has = this.orgsOfMinister(m.id).some(o => inScope(o)); if (has) walk(m.id, 0); });
+    out.treeRows = rows;
+
+    // selected
+    const sel = U[S.selectedId] || U.o1;
+    const isMinister = sel.type === 'ministeromrade';
+    out.isMinister = isMinister; out.canDelete = !isMinister;
+    out.selName = sel.name; out.selTypeLabel = M.LABEL[sel.type]; out.selTypeLabelLower = M.LABEL[sel.type].toLowerCase();
+    out.selChipStyle = { display: 'inline-block', fontSize: '11px', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: M.ACCENT[sel.type], background: M.TINT[sel.type], padding: '3px 9px' };
+    out.selPath = this.pathOf(sel.id).map(n => n.name).join('   ›   ');
+    out.backDisabled = S.histIndex <= 0; out.forwardDisabled = S.histIndex >= S.history.length - 1;
+
+    const leaders = this.leadersOf(sel.id); const leaderIdSet = new Set(leaders.map(l => l.id));
+    const direct = this.membersDirect(sel.id); const nonLeader = direct.filter(m => !leaderIdSet.has(m.id));
+
+    // upward reference
+    const upMap = {}; leaders.forEach(L => { if (L.leaderId && S.users[L.leaderId]) { const p = S.users[L.leaderId]; if (!upMap[p.id]) upMap[p.id] = p; } });
+    out.upRefs = Object.values(upMap).map(p => ({ id: p.id, name: p.name, initials: this.initials(p.name), where: p.title + ' · ' + this.unitName(p.unitId), go: () => this.select(p.unitId) }));
+    out.hasUpRef = out.upRefs.length > 0 && !isMinister;
+
+    // --- unified structure tree (units → leaders → employees, recursive) ---
+    out.showStruktur = true;
+    out.strTitle = isMinister ? 'Organisationer' : 'Struktur';
+    const childTypeRoot = M.CHILD[sel.type];
+    out.canAddChild = !!childTypeRoot; out.addChildDisabled = !childTypeRoot; out.addChildLabel = childTypeRoot ? ('+ ' + M.LABEL[childTypeRoot]) : '+ Enhed';
+    out.showAddPerson = !isMinister; out.showLeaderEdit = !isMinister;
+    out.peopleDisabled = false; out.leaderEditDisabled = isMinister; out.addPersonDisabled = isMinister;
+    const indent = (dp, extra) => (14 + dp * 20 + (extra || 0)) + 'px';
+    const nodes = [];
+    const covMap = this.coveringMap();
+    const covLabel = (pid) => { const arr = covMap[pid]; return arr && arr.length ? ('Vikar for ' + arr.map(x => x.name).join(', ')) : ''; };
+    const empNode = (e, dp, opts) => {
+      opts = opts || {}; const L = e.leaderId ? S.users[e.leaderId] : null;
+      nodes.push({ key: 'e' + e.id, isUnit: false, isLeader: false, isEmployee: true, isNote: false, name: e.name, title: e.title, initials: this.initials(e.name),
+        external: !!opts.external, leaderName: L ? L.name : '—', canFix: !!opts.canFix, covering: covLabel(e.id), isCovering: !!covLabel(e.id),
+        fix: (ev) => { if (ev && ev.stopPropagation) ev.stopPropagation(); this.fixExternal(e.id); },
+        edit: (ev) => { if (ev && ev.stopPropagation) ev.stopPropagation(); this.openEditPerson(e.id); },
+        rowStyle: { display: 'flex', alignItems: 'center', gap: '10px', padding: '7px 16px 7px 10px', marginLeft: indent(dp, opts.external ? 6 : 34), borderLeft: '2px solid ' + (opts.external ? '#f0d98a' : '#e9ece9'), borderBottom: '1px solid #f6f5f5', cursor: 'pointer', background: opts.external ? '#fffdf5' : '#fff' } });
+    };
+    const noteNode = (unitId, dp, text, withAction) => nodes.push({ key: 'n' + unitId, isUnit: false, isLeader: false, isEmployee: false, isNote: true, text,
+      hasAction: !!withAction, actionLabel: 'Tildel leder', action: (ev) => { if (ev && ev.stopPropagation) ev.stopPropagation(); this.select(unitId); this.openEditUnit(); },
+      rowStyle: { display: 'flex', alignItems: 'center', gap: '12px', padding: '9px 16px 9px ' + indent(dp, 6), background: '#fef9c3', borderBottom: '1px solid #f3e8a0' } });
+    const walkUnit = (unitId, dp) => {
+      const lds = this.leadersOf(unitId); const lset = new Set(lds.map(l => l.id));
+      const dir = this.membersDirect(unitId); const nonL = dir.filter(m => !lset.has(m.id));
+      if (S.showPeople && dir.length) {
+        const medClosed = !!S.medClosed[unitId]; const pdp = dp + 1;
+        nodes.push({ key: 'med' + unitId, isUnit: false, isLeader: false, isEmployee: false, isNote: false, isMedGroup: true,
+          name: 'Medarbejdere', count: dir.length, caret: medClosed ? '▸' : '▾',
+          toggle: (ev) => { if (ev && ev.stopPropagation) ev.stopPropagation(); this.toggleMed(unitId); },
+          rowStyle: { display: 'flex', alignItems: 'center', gap: '9px', padding: '7px 16px 7px ' + indent(dp, 6), borderBottom: '1px solid #f3f2f2', cursor: 'pointer', background: '#fcfcfb' } });
+        if (!medClosed) {
+          lds.forEach(L => {
+            const reps = nonL.filter(m => m.leaderId === L.id); const collapsed = !!S.lCollapse[L.id];
+            const v = L.vikar && L.vikar.leaderId && S.users[L.vikar.leaderId] ? L.vikar : null;
+            const vName = v ? S.users[v.leaderId].name : ''; const vAbsent = this.absentNow(v);
+            nodes.push({ key: 'l' + L.id, isUnit: false, isLeader: true, isEmployee: false, isNote: false, name: L.name, title: L.title, initials: this.initials(L.name),
+              caret: reps.length ? (collapsed ? '▸' : '▾') : '', reportCountLabel: reps.length + ' medarb.',
+              hasVikar: !!v, vikarName: vName, vikarPeriod: v ? this.fmtRange(v.from, v.to) : '', vikarAbsent: vAbsent,
+              vikarText: v ? ('Vikar: ' + vName + (this.fmtRange(v.from, v.to) ? ' · ' + this.fmtRange(v.from, v.to) : '')) : '',
+              covering: covLabel(L.id), isCovering: !!covLabel(L.id),
+              toggle: (ev) => { if (ev && ev.stopPropagation) ev.stopPropagation(); if (reps.length) this.toggleLeader(L.id); },
+              edit: (ev) => { if (ev && ev.stopPropagation) ev.stopPropagation(); this.openEditPerson(L.id); },
+              rowStyle: { display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 16px 9px ' + indent(pdp, 6), borderBottom: '1px solid #f3f2f2', background: '#fbfdfb', borderLeft: '3px solid #066b43' } });
+            if (!collapsed) reps.forEach(r => empNode(r, pdp));
+          });
+          if (lds.length === 0) {
+            const ups = [...new Set(nonL.map(m => S.users[m.leaderId]).filter(Boolean).map(p => p.name))];
+            noteNode(unitId, pdp, 'Ingen leder i enheden — ' + nonL.length + (nonL.length === 1 ? ' medarbejder refererer' : ' medarbejdere refererer') + ' opad' + (ups.length ? ' til ' + ups.join(', ') : '') + '.', true);
+            nonL.forEach(r => empNode(r, pdp));
+          } else {
+            nonL.filter(m => m.leaderId && !lset.has(m.leaderId)).forEach(r => empNode(r, pdp, { external: true, canFix: lds.length > 0 }));
+          }
+        }
+      }
+      let kids = this.childrenSorted(unitId);
+      if (U[unitId].type === 'ministeromrade') kids = kids.filter(k => k.type !== 'organisation' || scopeSet.has(k.id));
+      kids.forEach(c => {
+        const hasContent = this.childrenSorted(c.id).length > 0 || this.membersDirect(c.id).length > 0;
+        const open = !!S.treeOpen[c.id];
+        nodes.push({ key: 'u' + c.id, isUnit: true, isLeader: false, isEmployee: false, isNote: false, name: c.name, typeLabel: M.LABEL[c.type], dot: M.ACCENT[c.type], chipStyle: chip(c.type),
+          leaderNames: this.leadersOf(c.id).map(l => this.shortName(l.name)).join(', ') || '—', count: this.membersDeep(c.id),
+          caret: hasContent ? (open ? '▾' : '▸') : '',
+          toggle: (ev) => { if (ev && ev.stopPropagation) ev.stopPropagation(); if (hasContent) this.toggleTreeUnit(c.id); },
+          open: (ev) => { if (ev && ev.stopPropagation) ev.stopPropagation(); this.select(c.id); },
+          rowStyle: { display: 'flex', alignItems: 'center', gap: '9px', padding: '9px 16px 9px ' + indent(dp), borderBottom: '1px solid #f3f2f2', cursor: 'pointer', background: '#fff' } });
+        if (open) walkUnit(c.id, dp + 1);
+      });
+    };
+    walkUnit(sel.id, 0);
+    out.treeNodes = nodes; out.strEmpty = nodes.length === 0;
+    out.strEmptyText = isMinister ? 'Ingen organisationer i afgrænsningen.' : 'Ingen medarbejdere eller underenheder endnu.';
+    const subCount = this.childrenSorted(sel.id).filter(n => sel.type !== 'ministeromrade' || n.type !== 'organisation' || scopeSet.has(n.id)).length;
+    out.strCountLabel = isMinister ? (subCount + (subCount === 1 ? ' organisation' : ' organisationer')) : (this.membersDeep(sel.id) + ' medarbejdere · ' + subCount + (subCount === 1 ? ' underenhed' : ' underenheder'));
+    const desc = this.collectDescendants(sel.id).filter(id => this.childrenSorted(id).length > 0 || this.membersDirect(id).length > 0);
+    out.strHasUnits = desc.length > 0; out.expandDisabled = desc.length === 0;
+    const anyOpen = desc.some(id => S.treeOpen[id]);
+    out.expandLabel = anyOpen ? 'Skjul org.' : 'Vis org.'; out.toggleExpandAll = () => this.toggleExpandAll();
+    out.peopleLabel = S.showPeople ? 'Skjul medarbejdere' : 'Vis medarbejdere'; out.togglePeople = () => this.togglePeople();
+
+    // unit drawer
+    const d = S.drawer;
+    if (d && d.kind === 'unit') {
+      out.unitDrawerOpen = true; out.uForm = d.form; out.uErrName = (d.errors || {}).name || '';
+      const t = d.mode === 'add' ? d.childType : U[d.id].type; out.uTypeLabel = M.LABEL[t];
+      out.uTitle = d.mode === 'add' ? ('Ny ' + M.LABEL[t].toLowerCase()) : ('Rediger ' + M.LABEL[t].toLowerCase());
+      let cands = d.mode === 'add' ? [] : this.membersDirect(d.id);
+      out.uHasCandidates = cands.length > 0; out.uNoCandidates = cands.length === 0;
+      out.uLeaderRows = cands.map(u => { const chk = d.form.leaderIds.includes(u.id); return { id: u.id, name: u.name, title: u.title, initials: this.initials(u.name), check: chk ? '✓' : '', toggle: () => this.toggleUnitLeader(u.id), boxStyle: { width: '18px', height: '18px', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', color: '#fff', border: '1px solid ' + (chk ? '#066b43' : '#cac8c8'), background: chk ? '#066b43' : '#fff' } }; });
+    }
+
+    // person drawer
+    if (d && d.kind === 'person') {
+      const f = d.form; const pErr = d.errors || {};
+      out.personDrawerOpen = true; out.pForm = f; out.pTitle = d.mode === 'add' ? 'Ny medarbejder' : 'Rediger medarbejder';
+      out.pIsLeaderBadge = f.isLeader; out.pCanDelete = d.mode === 'edit';
+      out.pErrName = pErr.name || ''; out.pErrOrg = pErr.orgId || ''; out.pErrUnit = pErr.unitId || ''; out.pErrLeader = pErr.leaderId || '';
+      out.orgOptions = allOrgs.slice().sort((a, b) => a.name.localeCompare(b.name, 'da')).map(o => ({ value: o.id, label: o.name }));
+      if (f.orgId) { const opts = []; const walkO = (id, dep) => { const n = U[id]; opts.push({ value: id, label: '\u00A0\u00A0\u00A0'.repeat(dep) + n.name + '  ·  ' + M.LABEL[n.type] }); this.childrenSorted(id).forEach(c => walkO(c.id, dep + 1)); }; walkO(f.orgId, 0); out.unitOptions = opts; }
+      out.unitSelectDisabled = !f.orgId; out.leaderSelectDisabled = !f.unitId || f.isApex;
+      const wideOn = !!f.wideLeaders;
+      out.wideOn = wideOn; out.wideCheck = wideOn ? '✓' : '';
+      out.wideBoxStyle = { width: '18px', height: '18px', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', color: '#fff', border: '1px solid ' + (wideOn ? '#066b43' : '#cac8c8'), background: wideOn ? '#066b43' : '#fff' };
+      out.leaderHelpText = wideOn ? 'Alle ledere i organisationen — primær leder uden for enheden er en undtagelse.' : 'Vælges blandt de sideordnede ledere i medarbejderens egen enhed.';
+      if (f.unitId) {
+        const exclude = d.mode === 'edit' ? d.id : null;
+        if (wideOn) {
+          const own = U[f.unitId] ? U[f.unitId].leaderIds : [];
+          const ownSet = new Set(own);
+          const here = own.filter(id => id !== exclude && S.users[id]).map(id => S.users[id]);
+          const elsewhere = Object.values(S.users).filter(p => p.id !== exclude && !ownSet.has(p.id) && Object.values(U).some(u => u.leaderIds.includes(p.id)))
+            .sort((a, b) => (this.depthOf(a.unitId) - this.depthOf(b.unitId)) || a.name.localeCompare(b.name, 'da'));
+          out.leaderOptions = here.map(u => ({ value: u.id, label: u.name + '  ·  ' + u.title + ' (' + this.unitName(u.unitId) + ')' }))
+            .concat(elsewhere.map(u => ({ value: u.id, label: u.name + '  ·  ' + u.title + ' — ' + this.unitName(u.unitId) })));
+        } else {
+          let cand = (U[f.unitId] ? U[f.unitId].leaderIds : []).filter(id => id !== exclude && S.users[id]).map(id => S.users[id]);
+          if (!cand.length) { let cu = U[f.unitId] ? U[U[f.unitId].parentId] : null; const seen = new Set(); while (cu) { cu.leaderIds.forEach(id => { if (id !== exclude && !seen.has(id) && S.users[id]) { seen.add(id); cand.push(S.users[id]); } }); cu = U[cu.parentId]; } }
+          out.leaderOptions = cand.map(u => ({ value: u.id, label: u.name + '  ·  ' + u.title }));
+        }
+      }
+      out.apexCheck = f.isApex ? '✓' : ''; out.apexBoxStyle = { width: '18px', height: '18px', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', color: '#fff', border: '1px solid ' + (f.isApex ? '#066b43' : '#cac8c8'), background: f.isApex ? '#066b43' : '#fff' };
+      // vikar
+      out.showVikar = !!f.isLeader;
+      out.hasVikar = !!f.vikarId;
+      out.vikarOptions = [{ value: '__none__', label: 'Ingen vikar' }].concat(this.allLeaderPeople().filter(p => p.id !== d.id).sort((a, b) => (this.depthOf(a.unitId) - this.depthOf(b.unitId)) || a.name.localeCompare(b.name, 'da')).map(p => ({ value: p.id, label: p.name + '  ·  ' + p.title + ' — ' + this.unitName(p.unitId) })));
+      out.vikarValue = f.vikarId || '__none__';
+      out.promoteCheck = f.isLeader ? '✓' : ''; out.promoteBoxStyle = { width: '18px', height: '18px', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', color: '#fff', border: '1px solid ' + (f.isLeader ? '#066b43' : '#cac8c8'), background: f.isLeader ? '#066b43' : '#fff', marginTop: '1px' };
+      out.promoteLabel = f.unitId && U[f.unitId] ? ('Er leder af ' + U[f.unitId].name) : 'Er leder af enheden';
+    }
+
+    // confirm
+    const cf = S.confirm;
+    out.confirmOpen = !!cf; out.confirmTitle = cf ? (cf.kind === 'unit' ? 'Slet enhed' : 'Slet medarbejder') : '';
+    out.confirmDesc = cf ? ('Er du sikker på at du vil slette “' + cf.name + '”? Handlingen kan ikke fortrydes.') : '';
+    return out;
+  }
+}
+</script>
+</body>
+</html>

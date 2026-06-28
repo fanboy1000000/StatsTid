@@ -1,5 +1,7 @@
 # ADR-037 — Organisation-structure lifecycle (soft-delete, move, the aggregated tree)
 
+> **Amended by [ADR-038](ADR-038-enhedsspor-unit-hierarchy-model.md) (S102, Enhedsspor).** The MAO/Organisation lifecycle here is RETAINED (the Organisation stays the authority anchor); ADR-038 D8 generalises the deep-structure lifecycle onto the new `units` table (the `unit-org-` advisory + recursive-CTE cycle guard; cross-Org person moves compose the both-`reporting-org-`-advisory transfer regime). The aggregated tree (D3) extends to surface the deep units.
+
 | Field | Value |
 |-------|-------|
 | **Status** | accepted |

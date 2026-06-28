@@ -1,5 +1,7 @@
 # ADR-036 — Structured Enhed metadata + multi-tag membership
 
+> **Superseded by [ADR-038](ADR-038-enhedsspor-unit-hierarchy-model.md) (S102, Enhedsspor).** The zero-authority multi-tag Enhed model (D3 + the `enheder`/`user_enheder` tables) is replaced by a typed, leader-bearing `units` hierarchy with single-unit membership (`users.unit_id`): a unit's designated leaders carry an exception-approval path over the unit's members (ADR-038 D3/D4) — Enhed is no longer pure metadata. Greenfield reseed (ADR-038 D9), so the tables are dropped, not migrated.
+
 | Field | Value |
 |-------|-------|
 | **Status** | accepted |

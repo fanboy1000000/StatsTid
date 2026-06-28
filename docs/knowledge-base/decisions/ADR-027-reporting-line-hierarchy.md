@@ -1,5 +1,7 @@
 # ADR-027 — Reporting-Line Hierarchy (Complementing ADR-008 Org Hierarchy)
 
+> **Amended (not demolished) by [ADR-038](ADR-038-enhedsspor-unit-hierarchy-model.md) (S102, Enhedsspor).** `reporting_lines`/`manager_vikar` are RETAINED as the single canonical stored edge (ADR-038 D6 — the D13/D15/D18/D19 lock/revoke/`version` substrate survives intact); `CanApprove` is EXTENDED with a secondary-unit-leader exception path + same-Organisation vikar (ADR-038 D4), with the see==act dashboard reads extended in lockstep. Same-Organisation vikar bound unchanged (D12).
+
 | Field | Value |
 |-------|-------|
 | **Status** | ACCEPTED |

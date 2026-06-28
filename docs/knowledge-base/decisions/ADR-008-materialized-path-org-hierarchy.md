@@ -1,5 +1,7 @@
 # ADR-008: Materialized Path for Organizational Hierarchy
 
+> **Amended by [ADR-038](ADR-038-enhedsspor-unit-hierarchy-model.md) (S102, Enhedsspor).** The `materialized_path` stays at the **Organisation level only** (its 19 consumers are unchanged — they scope by the Organisation subtree); the new deep `units` table derives its level by depth (no path primitive, S100 precedent). ADR-038 D11.
+
 | Field | Value |
 |-------|-------|
 | **Status** | approved |

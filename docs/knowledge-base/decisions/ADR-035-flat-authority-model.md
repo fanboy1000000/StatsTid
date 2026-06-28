@@ -1,5 +1,7 @@
 # ADR-035 — Flat authority model (org-tree inheritance removed from role-scope + approval authority)
 
+> **Superseded in part by [ADR-038](ADR-038-enhedsspor-unit-hierarchy-model.md) (S102, Enhedsspor).** The flat-authority *scope* model is PRESERVED (ADR-038 D5: scope stays anchored at the Organisation, no subtree inheritance) — but D2's 2-level taxonomy + Enhed-as-pure-metadata are superseded by the 7-level unit hierarchy (the Organisation stays the authority anchor; deep `units` carry leaders + an exception-approval path but grant no scope).
+
 | Field | Value |
 |-------|-------|
 | **Status** | accepted (umbrella; implementation sliced S92→S95) |
