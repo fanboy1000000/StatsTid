@@ -175,9 +175,9 @@ public sealed class DemoLoader
                 effectiveFrom = today,
                 partTimeFraction = p.PartTimeFraction,
                 position = p.Position,
-                // S92 / ADR-035 — preserve the SQL-pre-seeded enhed_label across the
-                // supersession (the PUT replaces the full live row; omitting it NULLs it out).
-                enhedLabel = p.EnhedLabel,
+                // S103 / TASK-10305 (Enhedsspor Phase 1a): the enhed_label display column was dropped
+                // with the legacy Enhed model, so the profile PUT no longer carries it (unit-based
+                // display returns in S104+).
             }, version.Value, ct);
 
             if (putStatus == HttpStatusCode.OK)

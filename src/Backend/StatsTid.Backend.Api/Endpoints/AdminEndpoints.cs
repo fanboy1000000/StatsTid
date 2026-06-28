@@ -589,8 +589,7 @@ public static class AdminEndpoints
         // 2e. GET /api/admin/organizations/tree — S98 / ADR-035 aggregated MAO→Organisation forest.
         //
         // Returns the forest with per-node employeeCount (Organisation = its own active users;
-        // MAO = Σ its Organisations) + each Organisation's active enheder (with tagged-user counts).
-        // SET-BASED — one GROUP BY over users, one GROUP BY over enheder/user_enheder, the orgs
+        // MAO = Σ its Organisations). SET-BASED — one GROUP BY over users, the orgs
         // fetched active, the forest assembled in C# (NO N+1). Visibility-bounded: GlobalAdmin → all;
         // scoped roles → their GetAccessibleOrgsAsync(LocalHR) set (the same per-org floor as the
         // GET-list endpoint above). HROrAbove read floor.
@@ -607,15 +606,9 @@ public static class AdminEndpoints
             var accessible = await scopeValidator.GetAccessibleOrgsAsync(actor, StatsTidRoles.LocalHR, ct);
             HashSet<string>? visible = accessible is null ? null : new HashSet<string>(accessible, StringComparer.Ordinal);
 
-            // Fetch the active orgs + the two set-based aggregates.
+            // Fetch the active orgs + the set-based employee-count aggregate.
             var allOrgs = await orgRepo.GetAllAsync(ct);
             var empCounts = await orgRepo.GetActiveEmployeeCountByOrgAsync(ct);
-            var enhedRows = await orgRepo.GetActiveEnhederWithTagCountsAsync(ct);
-
-            // Group enheder by Organisation for forest assembly.
-            var enhederByOrg = enhedRows
-                .GroupBy(e => e.OrganisationId, StringComparer.Ordinal)
-                .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
 
             // An Organisation is visible if it ∈ the accessible set (or unrestricted). A MAO is
             // visible if unrestricted OR it has at least one visible child Organisation (a scoped
@@ -628,9 +621,10 @@ public static class AdminEndpoints
                 .GroupBy(o => o.ParentOrgId ?? string.Empty, StringComparer.Ordinal)
                 .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
 
-            // S101/TASK-10101: the forest nodes are the named OrgTreeMaoNode / OrgTreeOrganisationNode
-            // (were anonymous). The visibility filter, the per-MAO rollup, and the BuildEnhedForest
-            // nesting are UNCHANGED — only the node TYPE moved. BYTE-IDENTICAL wire JSON.
+            // S101/TASK-10101: the forest nodes are the named OrgTreeMaoNode / OrgTreeOrganisationNode.
+            // The visibility filter + the per-MAO rollup are UNCHANGED. S103/TASK-10304: the per-
+            // Organisation enhed nesting is retired with the legacy Enhed tables (unit display returns
+            // in Enhedsspor Phase 3).
             var forest = new List<OrgTreeMaoNode>();
             foreach (var mao in allOrgs.Where(o => string.Equals(o.OrgType, "MAO", StringComparison.Ordinal))
                                        .OrderBy(o => o.MaterializedPath, StringComparer.Ordinal))
@@ -648,12 +642,7 @@ public static class AdminEndpoints
                         MaterializedPath: c.MaterializedPath,
                         AgreementCode: c.AgreementCode,
                         OkVersion: c.OkVersion,
-                        EmployeeCount: empCounts.TryGetValue(c.OrgId, out var n) ? n : 0L,
-                        // S100 — NEST the per-Organisation enhed sub-tree via parent_enhed_id +
-                        // derive `level` = depth (root enhed = 1). O(enheder), bounded per-org,
-                        // no N+1 — the flat rows for ONE Organisation are assembled into a forest
-                        // in C#. PURE DISPLAY metadata; parent_enhed_id enters NO authority path.
-                        Enheder: BuildEnhedForest(enhederByOrg.TryGetValue(c.OrgId, out var es) ? es : new List<EnhedCountRow>())))
+                        EmployeeCount: empCounts.TryGetValue(c.OrgId, out var n) ? n : 0L))
                     .ToList();
 
                 // GlobalAdmin sees every MAO (even childless); a scoped role only sees a MAO that
@@ -931,10 +920,6 @@ public static class AdminEndpoints
                 {
                     partTimeFraction = 1.000m,
                     position = (string?)null,
-                    // S74 / TASK-7400 — admin-create profiles carry a null enhed_label
-                    // (the column defaults NULL; the FE falls back to the primary_org
-                    // name). The PUT path is the primary write surface for the label.
-                    enhedLabel = (string?)null,
                 });
                 await using (var profileAuditCmd = new NpgsqlCommand(
                     """
@@ -1056,8 +1041,6 @@ public static class AdminEndpoints
                     EmployeeId = request.UserId,
                     PartTimeFraction = 1.000m,
                     Position = null,
-                    // S74 / TASK-7400 — null at create; the PUT path sets the label.
-                    EnhedLabel = null,
                     EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow),
                     ActorId = actor.ActorId,
                     ActorRole = actor.ActorRole,
@@ -1318,11 +1301,9 @@ public static class AdminEndpoints
             DbConnectionFactory dbFactory,
             UserAgreementCodeRepository userAgreementCodeRepo,
             ReportingLineRepository reportingLineRepo,
-            EnhedRepository enhedRepo,
             IAuditProjectionMapper<UserUpdated> auditMapper,
             IAuditProjectionMapper<UserAgreementCodeChanged> uacChangedMapper,
             IAuditProjectionMapper<UserAgreementCodeSuperseded> uacSupersededMapper,
-            IAuditProjectionMapper<UserEnhederChanged> enhederChangedMapper,
             AuditProjectionRepository auditRepo,
             ILoggerFactory loggerFactory,
             HttpContext context,
@@ -1910,39 +1891,9 @@ public static class AdminEndpoints
                     }
                 }
 
-                // S97 / ADR-035 (BLOCKER B) — TRANSFER-CLEARS-TAGS. An Enhed tag never crosses
-                // Organisations (the same-Organisation invariant). When this PUT moves the user to
-                // a different Organisation, CLEAR the user's enhed tags IN THIS SAME TX (Enhed is
-                // throwaway display metadata — CLEAR, not block). GATED on the EXISTING org-change
-                // predicate (reused verbatim from the transfer-lock decision at L1083-1084) so a
-                // NON-transfer PUT (display_name/email/agreement-only edit) does NOT touch
-                // user_enheder. DELETE the rows + enqueue UserEnhederChanged(empty) + the
-                // audit-projection row, atomically with the UserUpdated above (mirrors the
-                // L1304-1312 outbox+audit pattern). ResolvedTargetOrgId = newPrimaryOrgId (the
-                // POST-transfer org).
-                if (request.PrimaryOrgId is not null &&
-                    !string.Equals(request.PrimaryOrgId, existingUser.PrimaryOrgId, StringComparison.Ordinal))
-                {
-                    var enhederClearedEvent = new UserEnhederChanged
-                    {
-                        UserId = userId,
-                        EnhedIds = Array.Empty<Guid>(),
-                        ActorId = actor.ActorId,
-                        ActorRole = actor.ActorRole,
-                        CorrelationId = actor.CorrelationId,
-                    };
-                    await enhedRepo.ApplyUserEnhederChangedAsync(conn, tx, enhederClearedEvent, ct);
-
-                    var enhederClearedOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"user-{userId}", enhederClearedEvent, ct);
-                    var enhederClearedCtx = new AuditProjectionContext(
-                        ActorId: actor.ActorId,
-                        ActorPrimaryOrgId: actor.OrgId,
-                        CorrelationId: actor.CorrelationId,
-                        OccurredAt: new DateTimeOffset(enhederClearedEvent.OccurredAt),
-                        ResolvedTargetOrgId: newPrimaryOrgId);
-                    var enhederClearedRow = enhederChangedMapper.Map(enhederClearedEvent, enhederClearedCtx);
-                    await auditRepo.InsertAsync(conn, tx, enhederClearedEvent.EventId, enhederClearedOutboxId, enhederClearedEvent.EventType, enhederClearedRow, enhederClearedCtx, ct);
-                }
+                // S103 / TASK-10304 — the S97 "transfer-clears-Enhed-tags" block is retired with the
+                // legacy Enhed tag tables (dropped in init.sql; the unit model replaces them in a
+                // later Enhedsspor phase). Nothing to clear on a cross-Organisation transfer.
 
                 await tx.CommitAsync(ct);
             }
@@ -2517,7 +2468,6 @@ public static class AdminEndpoints
         app.MapGet("/api/admin/users/search", async (
             string? q,
             string? excludeEmployeeId,
-            string? enhedId,
             int? limit,
             int? offset,
             ApprovalPeriodRepository approvalRepo,
@@ -2548,18 +2498,10 @@ public static class AdminEndpoints
                     excluded.Add(d);
             }
 
-            // S97 / WARNING E — optional enhed-id filter (still org-bounded inside SearchPeopleAsync;
-            // a name-equal enhed in another org cannot widen results). A malformed value 400s.
-            Guid? enhedFilter = null;
-            if (!string.IsNullOrWhiteSpace(enhedId))
-            {
-                if (!Guid.TryParse(enhedId, out var parsedEnhedId))
-                    return Results.BadRequest(new { error = "Invalid enhedId." });
-                enhedFilter = parsedEnhedId;
-            }
-
+            // S103 / TASK-10304 — the S97 optional enhed-id filter is retired with the legacy Enhed
+            // tag tables (the search no longer joins them; the unit model returns in a later phase).
             var (items, total) = await approvalRepo.SearchPeopleAsync(
-                q ?? string.Empty, accessibleOrgs, excluded, pageLimit, pageOffset, ct, enhedFilter);
+                q ?? string.Empty, accessibleOrgs, excluded, pageLimit, pageOffset, ct);
 
             return Results.Ok(new
             {
@@ -2568,6 +2510,7 @@ public static class AdminEndpoints
                     userId = i.UserId,
                     displayName = i.DisplayName,
                     primaryOrgName = i.PrimaryOrgName,
+                    // S103 — the structured-Enhed display column is retired; now always null.
                     enhedLabel = i.EnhedLabel,
                 }),
                 total,
@@ -2575,608 +2518,6 @@ public static class AdminEndpoints
                 offset = pageOffset,
             });
         }).RequireAuthorization("HROrAbove"); // S91 TASK-9102: tree-page picker opened to LocalHR
-
-        // ═══════════════════════════════════════════
-        // S97 / ADR-035 (TASK-9703) — structured Enhed CRUD + set-user-tags.
-        //   Enhed is PURE DISPLAY metadata: ZERO authority/scope/approval meaning. Every
-        //   endpoint is org-scope-FLOORED via ValidateOrgAccessAsync(actor, org, LocalHR)
-        //   (the S76/S91 per-scope floor — org-scope containment preserved; cross-org blocked).
-        //   The Enhed surface is ABSENT from OrgScopeValidator/RoleScope.CoversOrg/
-        //   DesignatedApproverAuthorizer — tagging two users the same enhed grants neither any
-        //   authority over the other (an explicit RED test in TASK-9707 pins this).
-        // ═══════════════════════════════════════════
-
-        // GET /api/admin/enheder?organisationId=… — list ACTIVE enheder for ONE Organisation.
-        // The Organisation must be ∈ the actor's accessible orgs (ValidateOrgAccessAsync LocalHR
-        // is the exact containment check; GLOBAL admits any existing org).
-        app.MapGet("/api/admin/enheder", async (
-            string? organisationId,
-            EnhedRepository enhedRepo,
-            OrgScopeValidator scopeValidator,
-            HttpContext context,
-            CancellationToken ct) =>
-        {
-            var actor = context.GetActorContext();
-            if (string.IsNullOrWhiteSpace(organisationId))
-                return Results.BadRequest(new { error = "organisationId is required." });
-
-            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, organisationId, StatsTidRoles.LocalHR, ct);
-            if (!allowed)
-                return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
-
-            var rows = await enhedRepo.ListActiveByOrgAsync(organisationId, ct);
-            // S100: the FLAT list carries `parentEnhedId` + the derived `level` (depth,
-            // root = 1) so the EnhederPanel can render the hierarchy + exclude self+
-            // descendants in its move picker. Level is computed in-memory by walking the
-            // parent chain (cycle-guarded) — the org's enheder are all loaded here.
-            var parentById = rows.ToDictionary(r => r.EnhedId, r => r.ParentEnhedId);
-            int LevelOf(Guid id)
-            {
-                var depth = 1;
-                var cur = id;
-                var guard = 0;
-                while (parentById.TryGetValue(cur, out var parent) && parent is Guid pid && guard++ < 10_000)
-                {
-                    depth++;
-                    cur = pid;
-                }
-                return depth;
-            }
-            // S101/TASK-10101: named records (EnhedListResponse{ EnhedListItem[] }) — BYTE-IDENTICAL
-            // wire JSON (the `{ enheder: [...] }` envelope + camelCase keys are unchanged).
-            return Results.Ok(new EnhedListResponse(
-                rows.Select(e => new EnhedListItem(
-                    EnhedId: e.EnhedId,
-                    OrganisationId: e.OrganisationId,
-                    Name: e.Name,
-                    Version: e.Version,
-                    ParentEnhedId: e.ParentEnhedId,
-                    Level: LevelOf(e.EnhedId)))
-                .ToList()));
-        }).RequireAuthorization("HROrAbove");
-
-        // POST /api/admin/enheder { organisationId, name } — create. Floored on the target
-        // Organisation. Rejects (400) a non-ORGANISATION org_type (mirrors the primary_org guard
-        // at the users POST — an Enhed belongs to an ORGANISATION, not a MAO). 409 on active-name
-        // dup (23505 on idx_enheder_active_name). Emits EnhedCreated (plain outbox — display
-        // metadata, no audit-projection row, mirroring ReportingLineManagerDeactivated).
-        app.MapPost("/api/admin/enheder", async (
-            CreateEnhedRequest request,
-            EnhedRepository enhedRepo,
-            OrganizationRepository orgRepo,
-            OrgScopeValidator scopeValidator,
-            DbConnectionFactory dbFactory,
-            IOutboxEnqueue outbox,
-            HttpContext context,
-            CancellationToken ct) =>
-        {
-            var actor = context.GetActorContext();
-            if (request is null || string.IsNullOrWhiteSpace(request.OrganisationId) || string.IsNullOrWhiteSpace(request.Name))
-                return Results.BadRequest(new { error = "organisationId and name are required." });
-
-            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, request.OrganisationId, StatsTidRoles.LocalHR, ct);
-            if (!allowed)
-                return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
-
-            // ORGANISATION-typed guard (mirror the users POST primary_org guard, same 400 shape).
-            var org = await orgRepo.GetByIdAsync(request.OrganisationId, ct);
-            if (org is null)
-                return Results.BadRequest(new { error = "Organisation not found." });
-            if (!string.Equals(org.OrgType, "ORGANISATION", StringComparison.Ordinal))
-                return Results.BadRequest(new { error = "An Enhed must belong to an Organisation (a MAO holds no enheder)." });
-
-            var enhedId = Guid.NewGuid();
-            var @event = new EnhedCreated
-            {
-                EnhedId = enhedId,
-                OrganisationId = request.OrganisationId,
-                Name = request.Name.Trim(),
-                ParentEnhedId = request.ParentEnhedId,
-                ActorId = actor.ActorId,
-                ActorRole = actor.ActorRole,
-                CorrelationId = actor.CorrelationId,
-            };
-
-            await using var conn = dbFactory.Create();
-            await conn.OpenAsync(ct);
-            await using var tx = await conn.BeginTransactionAsync(ct);
-            try
-            {
-                // S100 — acquire the per-Organisation advisory lock FIRST so a concurrent
-                // parent-delete / move serializes before the in-tx parent validation below.
-                await EnhedRepository.AcquireEnhedOrgLockAsync(conn, tx, request.OrganisationId, ct);
-
-                // If a parent is given, it must be an ACTIVE enhed in the SAME Organisation
-                // (re-read in-tx UNDER the lock — a CHECK can't cross-reference organisation_id).
-                if (request.ParentEnhedId is Guid parentId)
-                {
-                    var parentOrg = await enhedRepo.GetActiveEnhedOrgInTxAsync(conn, tx, parentId, ct);
-                    if (parentOrg is null)
-                    {
-                        await tx.RollbackAsync(ct);
-                        return Results.UnprocessableEntity(new { error = "The parent enhed does not exist or is deleted." });
-                    }
-                    if (!string.Equals(parentOrg, request.OrganisationId, StringComparison.Ordinal))
-                    {
-                        await tx.RollbackAsync(ct);
-                        return Results.UnprocessableEntity(new { error = "The parent enhed belongs to a different Organisation." });
-                    }
-                }
-
-                await enhedRepo.ApplyEnhedCreatedAsync(conn, tx, @event, ct);
-                await outbox.EnqueueAsync(conn, tx, $"enhed-{enhedId}", @event, ct);
-                await tx.CommitAsync(ct);
-            }
-            catch (PostgresException pgEx) when (pgEx.SqlState == "23505")
-            {
-                await tx.RollbackAsync(ct);
-                return Results.Conflict(new { error = "An active enhed with this name already exists in this Organisation." });
-            }
-            catch
-            {
-                await tx.RollbackAsync(ct);
-                throw;
-            }
-
-            context.Response.Headers.ETag = "\"1\"";
-            return Results.Created($"/api/admin/enheder/{enhedId}", new
-            {
-                enhedId,
-                organisationId = @event.OrganisationId,
-                parentEnhedId = @event.ParentEnhedId,
-                name = @event.Name,
-                version = 1L,
-            });
-        }).RequireAuthorization("HROrAbove");
-
-        // PUT /api/admin/enheder/{id} { name } (If-Match) — rename. Floored on the enhed's
-        // owning Organisation. 409 on active-name dup. Emits EnhedRenamed.
-        app.MapPut("/api/admin/enheder/{id}", async (
-            string id,
-            RenameEnhedRequest request,
-            EnhedRepository enhedRepo,
-            OrgScopeValidator scopeValidator,
-            DbConnectionFactory dbFactory,
-            IOutboxEnqueue outbox,
-            HttpContext context,
-            CancellationToken ct) =>
-        {
-            var actor = context.GetActorContext();
-            if (request is null || string.IsNullOrWhiteSpace(request.Name))
-                return Results.BadRequest(new { error = "name is required." });
-            if (!Guid.TryParse(id, out var enhedId))
-                return Results.BadRequest(new { error = "Invalid enhed id." });
-
-            if (!EtagHeaderHelper.TryParseIfMatch(context.Request, out var expectedVersion, out var headerError))
-                return Results.Json(new { error = headerError }, statusCode: 428);
-
-            var existing = await enhedRepo.GetByIdAsync(id, ct);
-            if (existing is null || existing.IsDeleted)
-                return Results.NotFound(new { error = "Enhed not found." });
-
-            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, existing.OrganisationId, StatsTidRoles.LocalHR, ct);
-            if (!allowed)
-                return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
-
-            if (existing.Version != expectedVersion)
-                return Results.Json(new
-                {
-                    error = "Concurrency precondition failed",
-                    expectedVersion,
-                    actualVersion = existing.Version,
-                }, statusCode: 412);
-
-            var @event = new EnhedRenamed
-            {
-                EnhedId = enhedId,
-                Name = request.Name.Trim(),
-                ActorId = actor.ActorId,
-                ActorRole = actor.ActorRole,
-                CorrelationId = actor.CorrelationId,
-            };
-
-            await using var conn = dbFactory.Create();
-            await conn.OpenAsync(ct);
-            await using var tx = await conn.BeginTransactionAsync(ct);
-            try
-            {
-                // BLOCKER 2 — IN-UPDATE optimistic concurrency: the version predicate lives in the
-                // UPDATE itself, so two concurrent If-Match:"N" renames cannot both commit. On a
-                // 0-row update we re-read (in-tx) to distinguish 404 (absent/soft-deleted) from 412
-                // (version drift) and emit NOTHING (no event on a no-op write).
-                var affected = await enhedRepo.ApplyEnhedRenamedAsync(conn, tx, @event, expectedVersion, ct);
-                if (affected == 0)
-                {
-                    var current = await enhedRepo.GetByIdInTxAsync(conn, tx, enhedId, ct);
-                    await tx.RollbackAsync(ct);
-                    if (current is null || current.IsDeleted)
-                        return Results.NotFound(new { error = "Enhed not found." });
-                    return Results.Json(new
-                    {
-                        error = "Concurrency precondition failed",
-                        expectedVersion,
-                        actualVersion = current.Version,
-                    }, statusCode: 412);
-                }
-
-                await outbox.EnqueueAsync(conn, tx, $"enhed-{enhedId}", @event, ct);
-                await tx.CommitAsync(ct);
-            }
-            catch (PostgresException pgEx) when (pgEx.SqlState == "23505")
-            {
-                await tx.RollbackAsync(ct);
-                return Results.Conflict(new { error = "An active enhed with this name already exists in this Organisation." });
-            }
-            catch
-            {
-                await tx.RollbackAsync(ct);
-                throw;
-            }
-
-            var newVersion = expectedVersion + 1;
-            context.Response.Headers.ETag = $"\"{newVersion}\"";
-            return Results.Ok(new
-            {
-                enhedId,
-                organisationId = existing.OrganisationId,
-                name = @event.Name,
-                version = newVersion,
-            });
-        }).RequireAuthorization("HROrAbove");
-
-        // PUT /api/admin/enheder/{id}/move { newParentEnhedId|null } (If-Match) — S100 re-parent
-        // WITHIN the same Organisation (organisation_id IMMUTABLE). Floored on the enhed's owning
-        // Organisation (LocalHR). Under the per-Organisation advisory lock: re-read the enhed (for
-        // its org + OLD parent); validate the new parent (null = make root) is ACTIVE + same-org +
-        // NOT self/descendant (the cycle CTE → 422); IN-UPDATE optimistic-concurrency (the version
-        // predicate lives in the UPDATE, a 0-row → in-tx re-read → 404/412, emit nothing). On a
-        // landed move emit EnhedMoved(id, oldParent, newParent). PURE DISPLAY metadata — ZERO
-        // authority; parent_enhed_id enters NO scope/approval path.
-        app.MapPut("/api/admin/enheder/{id}/move", async (
-            string id,
-            MoveEnhedRequest request,
-            EnhedRepository enhedRepo,
-            OrgScopeValidator scopeValidator,
-            DbConnectionFactory dbFactory,
-            IOutboxEnqueue outbox,
-            HttpContext context,
-            CancellationToken ct) =>
-        {
-            var actor = context.GetActorContext();
-            if (request is null)
-                return Results.BadRequest(new { error = "Request body is required." });
-            if (!Guid.TryParse(id, out var enhedId))
-                return Results.BadRequest(new { error = "Invalid enhed id." });
-
-            if (!EtagHeaderHelper.TryParseIfMatch(context.Request, out var expectedVersion, out var headerError))
-                return Results.Json(new { error = headerError }, statusCode: 428);
-
-            var existing = await enhedRepo.GetByIdAsync(id, ct);
-            if (existing is null || existing.IsDeleted)
-                return Results.NotFound(new { error = "Enhed not found." });
-
-            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, existing.OrganisationId, StatsTidRoles.LocalHR, ct);
-            if (!allowed)
-                return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
-
-            if (existing.Version != expectedVersion)
-                return Results.Json(new
-                {
-                    error = "Concurrency precondition failed",
-                    expectedVersion,
-                    actualVersion = existing.Version,
-                }, statusCode: 412);
-
-            await using var conn = dbFactory.Create();
-            await conn.OpenAsync(ct);
-            await using var tx = await conn.BeginTransactionAsync(ct);
-            try
-            {
-                // S100 — acquire the per-Organisation advisory lock FIRST so concurrent moves
-                // serialize through the cycle check (the second move sees the first's committed
-                // parent edge → no phantom cycle).
-                await EnhedRepository.AcquireEnhedOrgLockAsync(conn, tx, existing.OrganisationId, ct);
-
-                // Re-read the enhed UNDER the lock (for its current org + OLD parent + version).
-                var current = await enhedRepo.GetByIdInTxAsync(conn, tx, enhedId, ct);
-                if (current is null || current.IsDeleted)
-                {
-                    await tx.RollbackAsync(ct);
-                    return Results.NotFound(new { error = "Enhed not found." });
-                }
-
-                // Validate the new parent (null = make root) is ACTIVE + same-org + not a cycle.
-                if (request.NewParentEnhedId is Guid newParentId)
-                {
-                    var parentOrg = await enhedRepo.GetActiveEnhedOrgInTxAsync(conn, tx, newParentId, ct);
-                    if (parentOrg is null)
-                    {
-                        await tx.RollbackAsync(ct);
-                        return Results.UnprocessableEntity(new { error = "The target parent enhed does not exist or is deleted." });
-                    }
-                    if (!string.Equals(parentOrg, current.OrganisationId, StringComparison.Ordinal))
-                    {
-                        await tx.RollbackAsync(ct);
-                        return Results.UnprocessableEntity(new { error = "Cannot move an enhed to a different Organisation." });
-                    }
-
-                    // Cycle CTE on the HELD connection (sees committed parent edges): reject
-                    // self / a descendant target.
-                    await enhedRepo.GuardNoEnhedCycleAsync(conn, tx, enhedId, newParentId, ct);
-                }
-
-                // IN-UPDATE optimistic concurrency: the version predicate lives in the UPDATE; a
-                // 0-row → re-read (in-tx) to map 404 (absent/soft-deleted) vs 412 (version drift),
-                // emit NOTHING.
-                var affected = await enhedRepo.ApplyEnhedMovedAsync(conn, tx, enhedId, request.NewParentEnhedId, expectedVersion, ct);
-                if (affected == 0)
-                {
-                    var afterUpdate = await enhedRepo.GetByIdInTxAsync(conn, tx, enhedId, ct);
-                    await tx.RollbackAsync(ct);
-                    if (afterUpdate is null || afterUpdate.IsDeleted)
-                        return Results.NotFound(new { error = "Enhed not found." });
-                    return Results.Json(new
-                    {
-                        error = "Concurrency precondition failed",
-                        expectedVersion,
-                        actualVersion = afterUpdate.Version,
-                    }, statusCode: 412);
-                }
-
-                var movedEvent = new EnhedMoved
-                {
-                    EnhedId = enhedId,
-                    OldParentEnhedId = current.ParentEnhedId,
-                    NewParentEnhedId = request.NewParentEnhedId,
-                    ActorId = actor.ActorId,
-                    ActorRole = actor.ActorRole,
-                    CorrelationId = actor.CorrelationId,
-                };
-                await outbox.EnqueueAsync(conn, tx, $"enhed-{enhedId}", movedEvent, ct);
-                await tx.CommitAsync(ct);
-            }
-            catch (EnhedCycleException cycleEx)
-            {
-                await tx.RollbackAsync(ct);
-                return Results.UnprocessableEntity(new { error = cycleEx.Message });
-            }
-            catch
-            {
-                await tx.RollbackAsync(ct);
-                throw;
-            }
-
-            var newVersion = expectedVersion + 1;
-            context.Response.Headers.ETag = $"\"{newVersion}\"";
-            return Results.Ok(new
-            {
-                enhedId,
-                organisationId = existing.OrganisationId,
-                name = existing.Name,
-                parentEnhedId = request.NewParentEnhedId,
-                version = newVersion,
-            });
-        }).RequireAuthorization("HROrAbove");
-
-        // DELETE /api/admin/enheder/{id} (If-Match) — SOFT delete. Floored on the enhed's owning
-        // Organisation. NO fan-out untag write — memberships are projection-FILTERED. Emits
-        // EnhedDeleted.
-        app.MapDelete("/api/admin/enheder/{id}", async (
-            string id,
-            EnhedRepository enhedRepo,
-            OrgScopeValidator scopeValidator,
-            DbConnectionFactory dbFactory,
-            IOutboxEnqueue outbox,
-            HttpContext context,
-            CancellationToken ct) =>
-        {
-            var actor = context.GetActorContext();
-            if (!Guid.TryParse(id, out var enhedId))
-                return Results.BadRequest(new { error = "Invalid enhed id." });
-
-            if (!EtagHeaderHelper.TryParseIfMatch(context.Request, out var expectedVersion, out var headerError))
-                return Results.Json(new { error = headerError }, statusCode: 428);
-
-            var existing = await enhedRepo.GetByIdAsync(id, ct);
-            if (existing is null || existing.IsDeleted)
-                return Results.NotFound(new { error = "Enhed not found." });
-
-            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, existing.OrganisationId, StatsTidRoles.LocalHR, ct);
-            if (!allowed)
-                return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
-
-            if (existing.Version != expectedVersion)
-                return Results.Json(new
-                {
-                    error = "Concurrency precondition failed",
-                    expectedVersion,
-                    actualVersion = existing.Version,
-                }, statusCode: 412);
-
-            var @event = new EnhedDeleted
-            {
-                EnhedId = enhedId,
-                ActorId = actor.ActorId,
-                ActorRole = actor.ActorRole,
-                CorrelationId = actor.CorrelationId,
-            };
-
-            await using var conn = dbFactory.Create();
-            await conn.OpenAsync(ct);
-            await using var tx = await conn.BeginTransactionAsync(ct);
-            try
-            {
-                // S100 — acquire the per-Organisation advisory lock FIRST so the re-parent-on-delete
-                // serializes against a concurrent create-child / move under the same parent (no
-                // active child left dangling under a soft-deleted parent; no lost re-parent).
-                await EnhedRepository.AcquireEnhedOrgLockAsync(conn, tx, existing.OrganisationId, ct);
-
-                // Re-read the enhed UNDER the lock to read the AUTHORITATIVE OLD parent (the
-                // grandparent the children are lifted to). A concurrent move of THIS enhed bumps
-                // version → the soft-delete below 0-rows (412), so this snapshot is consistent.
-                var current = await enhedRepo.GetByIdInTxAsync(conn, tx, enhedId, ct);
-                if (current is null || current.IsDeleted)
-                {
-                    await tx.RollbackAsync(ct);
-                    return Results.NotFound(new { error = "Enhed not found." });
-                }
-
-                // BLOCKER 2 — IN-UPDATE optimistic concurrency: a stale If-Match or an
-                // already-deleted/absent row matches 0 rows. On 0 rows we re-read (in-tx) to map
-                // 404 (absent/already-deleted) vs 412 (version drift) and emit NOTHING.
-                var affected = await enhedRepo.ApplyEnhedDeletedAsync(conn, tx, @event, expectedVersion, ct);
-                if (affected == 0)
-                {
-                    var afterUpdate = await enhedRepo.GetByIdInTxAsync(conn, tx, enhedId, ct);
-                    await tx.RollbackAsync(ct);
-                    if (afterUpdate is null || afterUpdate.IsDeleted)
-                        return Results.NotFound(new { error = "Enhed not found." });
-                    return Results.Json(new
-                    {
-                        error = "Concurrency precondition failed",
-                        expectedVersion,
-                        actualVersion = afterUpdate.Version,
-                    }, statusCode: 412);
-                }
-
-                await outbox.EnqueueAsync(conn, tx, $"enhed-{enhedId}", @event, ct);
-
-                // S100 (P3) — RE-PARENT the surviving active children UP to the deleted enhed's
-                // OWN parent (current.ParentEnhedId; null → the children become roots) IN THE SAME
-                // tx, emitting a per-child EnhedMoved for EACH (a state change, NOT a silent SQL
-                // update). A LEAF (0 children) emits ONLY EnhedDeleted. The children SURVIVE.
-                var movedChildren = await enhedRepo.ReparentChildrenOnDeleteAsync(
-                    conn, tx, enhedId, current.ParentEnhedId, ct);
-                foreach (var childId in movedChildren)
-                {
-                    var childMoved = new EnhedMoved
-                    {
-                        EnhedId = childId,
-                        OldParentEnhedId = enhedId,
-                        NewParentEnhedId = current.ParentEnhedId,
-                        ActorId = actor.ActorId,
-                        ActorRole = actor.ActorRole,
-                        CorrelationId = actor.CorrelationId,
-                    };
-                    await outbox.EnqueueAsync(conn, tx, $"enhed-{childId}", childMoved, ct);
-                }
-
-                await tx.CommitAsync(ct);
-            }
-            catch
-            {
-                await tx.RollbackAsync(ct);
-                throw;
-            }
-
-            return Results.NoContent();
-        }).RequireAuthorization("HROrAbove");
-
-        // PUT /api/admin/users/{userId}/enheder { enhedIds: [] } — set the user's full tag set.
-        // Floored via ValidateEmployeeAccessAsync(actor, userId, LocalHR) (org-scope over the
-        // user's CURRENT org). TOCTOU-safe (WARNING C): in the tx, SELECT primary_org_id ...
-        // FOR UPDATE (lock the user row); validate EACH enhedId ∈ {active enheder WHERE
-        // organisation_id = the-locked-org AND deleted_at IS NULL} (a dead/foreign enhed → 400);
-        // overwrite user_enheder; emit UserEnhederChanged (+ audit-projection). A concurrent
-        // transfer serializes before (the new org's enheder fail validation) or after (the
-        // transfer's clear wins).
-        app.MapPut("/api/admin/users/{userId}/enheder", async (
-            string userId,
-            SetUserEnhederRequest request,
-            EnhedRepository enhedRepo,
-            OrgScopeValidator scopeValidator,
-            DbConnectionFactory dbFactory,
-            IOutboxEnqueue outbox,
-            IAuditProjectionMapper<UserEnhederChanged> auditMapper,
-            AuditProjectionRepository auditRepo,
-            HttpContext context,
-            CancellationToken ct) =>
-        {
-            var actor = context.GetActorContext();
-            var requestedIds = (request?.EnhedIds ?? Array.Empty<Guid>()).Distinct().ToArray();
-
-            // Floor: org-scope (LocalHR) over the user's CURRENT org (ValidateEmployeeAccessAsync
-            // resolves the target's primary_org and checks containment).
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, userId, StatsTidRoles.LocalHR, ct);
-            if (!allowed)
-                return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
-
-            await using var conn = dbFactory.Create();
-            await conn.OpenAsync(ct);
-            await using var tx = await conn.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
-            try
-            {
-                // WARNING C — lock the user row; the locked primary_org is the authoritative
-                // validation org (a concurrent transfer either committed before this lock — then
-                // the new org's enheder fail validation — or blocks until after — then its
-                // empty-set clear wins on commit).
-                var lockedOrg = await enhedRepo.LockUserPrimaryOrgAsync(conn, tx, userId, ct);
-                if (lockedOrg is null)
-                {
-                    await tx.RollbackAsync(ct);
-                    return Results.NotFound(new { error = "User not found." });
-                }
-
-                // BLOCKER 1 — TOCTOU floor re-check UNDER the lock. The pre-lock
-                // ValidateEmployeeAccessAsync floored against the user's PRE-LOCK org; if the user
-                // was transferred between that check and this FOR UPDATE, an actor scoped only to
-                // the OLD org could set/clear tags on a user now in a NEW org they don't cover.
-                // Re-validate the floor against the LOCKED (current) org — mirrors the in-lock
-                // re-eval discipline in the reporting-line write paths. 403 if the actor does not
-                // cover the user's current Organisation.
-                var (lockedAllowed, lockedReason) =
-                    await scopeValidator.ValidateOrgAccessAsync(actor, lockedOrg, StatsTidRoles.LocalHR, ct);
-                if (!lockedAllowed)
-                {
-                    await tx.RollbackAsync(ct);
-                    return Results.Json(new { error = "Access denied", reason = lockedReason }, statusCode: 403);
-                }
-
-                // Validate EACH requested enhed_id ∈ the locked org's ACTIVE enheder. Any
-                // missing id is a dead/foreign enhed → 400 (the same-Organisation invariant).
-                var valid = await enhedRepo.FilterValidActiveEnhedIdsForOrgAsync(conn, tx, lockedOrg, requestedIds, ct);
-                if (valid.Count != requestedIds.Length)
-                {
-                    await tx.RollbackAsync(ct);
-                    var validSet = new HashSet<Guid>(valid);
-                    var rejected = requestedIds.Where(x => !validSet.Contains(x)).ToArray();
-                    return Results.BadRequest(new
-                    {
-                        error = "One or more enheder are not active enheder of the user's Organisation.",
-                        rejected,
-                    });
-                }
-
-                var @event = new UserEnhederChanged
-                {
-                    UserId = userId,
-                    EnhedIds = requestedIds,
-                    ActorId = actor.ActorId,
-                    ActorRole = actor.ActorRole,
-                    CorrelationId = actor.CorrelationId,
-                };
-                await enhedRepo.ApplyUserEnhederChangedAsync(conn, tx, @event, ct);
-
-                var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"user-{userId}", @event, ct);
-                var auditCtx = new AuditProjectionContext(
-                    ActorId: actor.ActorId,
-                    ActorPrimaryOrgId: actor.OrgId,
-                    CorrelationId: actor.CorrelationId,
-                    OccurredAt: new DateTimeOffset(@event.OccurredAt),
-                    ResolvedTargetOrgId: lockedOrg);
-                var auditRow = auditMapper.Map(@event, auditCtx);
-                await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
-
-                await tx.CommitAsync(ct);
-            }
-            catch
-            {
-                await tx.RollbackAsync(ct);
-                throw;
-            }
-
-            return Results.Ok(new { userId, enhedIds = requestedIds });
-        }).RequireAuthorization("HROrAbove");
 
         return app;
     }
@@ -3241,64 +2582,6 @@ public static class AdminEndpoints
         MaterializedPath: org.MaterializedPath,
         AgreementCode: org.AgreementCode,
         OkVersion: org.OkVersion);
-
-    // ── S100 (ADR-036 amendment) — nest the per-Organisation enhed sub-tree ──
-
-    /// <summary>
-    /// Assembles the FLAT enhed rows of ONE Organisation into a NESTED forest, deriving the
-    /// <c>level</c> = depth (a root enhed = 1). O(enheder), bounded per-Organisation — group the
-    /// children by parent once, then walk from the roots. A malformed parent (dangling /
-    /// cross-org / a cycle from legacy data) is defended against by a visited-set so the walk
-    /// terminates; any node not reachable from a root is appended as a defensive root so it never
-    /// silently disappears. PURE DISPLAY metadata — the level/parent enter NO authority path.
-    /// </summary>
-    // S101/TASK-10101: returns the named OrgTreeEnhedNode (was anonymous). The recursion
-    // control-flow + loop guard + defensive-root logic are UNCHANGED — only the node TYPE moved
-    // from anonymous to the named record. BYTE-IDENTICAL wire JSON (camelCase keys unchanged).
-    private static List<OrgTreeEnhedNode> BuildEnhedForest(IReadOnlyList<EnhedCountRow> rows)
-    {
-        if (rows.Count == 0)
-            return new List<OrgTreeEnhedNode>();
-
-        var childrenByParent = rows
-            .Where(e => e.ParentEnhedId is not null)
-            .GroupBy(e => e.ParentEnhedId!.Value)
-            .ToDictionary(g => g.Key, g => g.ToList());
-
-        var visited = new HashSet<Guid>();
-
-        OrgTreeEnhedNode BuildNode(EnhedCountRow e, int level)
-        {
-            visited.Add(e.EnhedId);
-            var kids = childrenByParent.TryGetValue(e.EnhedId, out var cs) ? cs : new List<EnhedCountRow>();
-            var children = kids
-                .Where(k => !visited.Contains(k.EnhedId)) // loop guard (legacy data)
-                .Select(k => BuildNode(k, level + 1))
-                .ToList();
-            return new OrgTreeEnhedNode(
-                EnhedId: e.EnhedId,
-                ParentEnhedId: e.ParentEnhedId,
-                Level: level,
-                Name: e.Name,
-                TaggedUserCount: e.TaggedUserCount,
-                Children: children);
-        }
-
-        // Roots = parent_enhed_id IS NULL OR a parent absent from THIS org's active set (a
-        // dangling/cross-org parent renders the node as a root rather than dropping it).
-        var presentIds = rows.Select(r => r.EnhedId).ToHashSet();
-        var forest = rows
-            .Where(e => e.ParentEnhedId is null || !presentIds.Contains(e.ParentEnhedId.Value))
-            .Select(e => BuildNode(e, 1))
-            .ToList();
-
-        // Defensive: any node not reached from a root (a pure cycle in legacy data) is surfaced
-        // as a root so it never silently disappears from the management view.
-        foreach (var e in rows.Where(e => !visited.Contains(e.EnhedId)))
-            forest.Add(BuildNode(e, 1));
-
-        return forest;
-    }
 
     // ── Request DTOs (co-located) ──
 
@@ -3391,39 +2674,6 @@ public static class AdminEndpoints
     {
         public required Guid AssignmentId { get; init; }
         public string? Reason { get; init; }
-    }
-
-    // ── S97 / ADR-035 — structured Enhed request DTOs ──
-    private sealed class CreateEnhedRequest
-    {
-        public required string OrganisationId { get; init; }
-        public required string Name { get; init; }
-
-        /// <summary>S100 — OPTIONAL parent enhed. <c>null</c> = a root enhed (directly under the
-        /// Organisation). A non-null parent must be an ACTIVE enhed in the SAME Organisation
-        /// (validated in-tx under the per-Organisation advisory lock). PURE DISPLAY metadata.</summary>
-        public Guid? ParentEnhedId { get; init; }
-    }
-
-    private sealed class RenameEnhedRequest
-    {
-        public required string Name { get; init; }
-    }
-
-    /// <summary>S100 — the move/re-parent request. <c>NewParentEnhedId</c> <c>null</c> = make the
-    /// enhed a root. The new parent (when set) must be an ACTIVE enhed in the SAME Organisation,
-    /// NOT the enhed itself or any descendant (cycle-guarded). The Organisation is IMMUTABLE.</summary>
-    private sealed class MoveEnhedRequest
-    {
-        public Guid? NewParentEnhedId { get; init; }
-    }
-
-    private sealed class SetUserEnhederRequest
-    {
-        /// <summary>The FULL active Enhed-id set the user should be tagged with (an empty /
-        /// omitted array clears all tags). Idempotent overwrite — validated against the user's
-        /// locked primary_org's active enheder before the projection write.</summary>
-        public IReadOnlyList<Guid>? EnhedIds { get; init; }
     }
 
     /// <summary>

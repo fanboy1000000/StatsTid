@@ -29,16 +29,6 @@ public sealed record class EmploymentProfile
     public string? Position { get; init; }
 
     /// <summary>
-    /// S74 / TASK-7400 — free-text "enhed" (unit) display label for the medarbejder-
-    /// administration UI. Additive, NULL backfill (the FE falls back to the primary_org
-    /// name when null). It rides the existing ADR-022 temporal profile versioning — a
-    /// label change SUPERSEDES the live profile row exactly like <see cref="Position"/> /
-    /// <see cref="PartTimeFraction"/> do — and is <b>INERT for rules/payroll</b> (display
-    /// only; no rule-engine consumer reads it).
-    /// </summary>
-    public string? EnhedLabel { get; init; }
-
-    /// <summary>
     /// Organization id (matches <c>organizations.org_id</c>). Required by S21's
     /// <c>local_agreement_profiles</c> hydration in <c>BuildPlanForLegacyCallersAsync</c>
     /// (ADR-017 D9c) and by the Phase-4 versioned-history sub-sprints. Null means

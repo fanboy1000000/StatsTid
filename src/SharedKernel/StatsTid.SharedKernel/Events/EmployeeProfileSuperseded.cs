@@ -29,11 +29,6 @@ public sealed class EmployeeProfileSuperseded : DomainEventBase
     public required decimal PartTimeFraction { get; init; }
     public string? Position { get; init; }
 
-    // S74 / TASK-7400 — free-text "enhed" display label of the successor row
-    // (additive, display-only; inert for rules/payroll). Nullable; round-trips
-    // automatically (same event type, no new EventSerializer registration).
-    public string? EnhedLabel { get; init; }
-
     // Optimistic-concurrency row-versions
     public required long PredecessorVersion { get; init; }
     public required long NewVersion { get; init; }

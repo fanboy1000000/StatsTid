@@ -45,22 +45,13 @@ export interface StamdataFields {
   agreementCode: string
 }
 
-/** The employee-profile form fields — HR-gated. */
+/** The employee-profile form fields — HR-gated. S103/TASK-10304: the enhed
+    display label + structured tag set were REMOVED (Enhedsspor Phase 1a). */
 export interface ProfileFields {
   // String-typed for the controlled number input; parsed at save (parseFloat
   // discipline per S31 EmployeeProfileEditor).
   partTimeFraction: string
   position: string
-  // S74 enhed display label (free text). S97/TASK-9705 RETIRES the editable
-  // free-text field in favour of the structured multi-tag picker (`enhedIds`);
-  // this is now READ-ONLY display fallback ONLY (the legacy label shown when a
-  // person has no structured tags). '' → null on the wire (no longer edited).
-  enhedLabel: string
-  // S97 / TASK-9705 — the person's STRUCTURED enhed tag set (the selected
-  // `enhed_id`s of their Organisation's active enheder). Saved via the dedicated
-  // PUT /api/admin/users/{userId}/enheder (NOT the employee-profiles PUT). The
-  // drawer's single-save-path threads it as one save step.
-  enhedIds: string[]
 }
 
 /** The per-employee entitlement form fields — HR-gated. */
@@ -92,15 +83,13 @@ export interface SectionSaveState {
   message?: string
 }
 
-/** The independently-saved sections (stamdata = the users PUT; enheder = the
-    S97 set-user-tags PUT). */
+/** The independently-saved sections (stamdata = the users PUT). */
 export type SaveSectionKey =
   | 'stamdata'
   | 'profile'
   | 'birthDate'
   | 'employmentStart'
   | 'childSick'
-  | 'enheder'
 
 export type SectionSaveMap = Record<SaveSectionKey, SectionSaveState>
 
@@ -113,7 +102,6 @@ export function makeInitialSectionSaveMap(): SectionSaveMap {
     birthDate: { ...INITIAL_SECTION_SAVE },
     employmentStart: { ...INITIAL_SECTION_SAVE },
     childSick: { ...INITIAL_SECTION_SAVE },
-    enheder: { ...INITIAL_SECTION_SAVE },
   }
 }
 

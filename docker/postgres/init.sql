@@ -456,6 +456,40 @@ CREATE INDEX IF NOT EXISTS idx_org_parent ON organizations(parent_org_id);
 CREATE INDEX IF NOT EXISTS idx_org_path ON organizations USING btree (materialized_path text_pattern_ops);
 CREATE INDEX IF NOT EXISTS idx_org_type ON organizations(org_type);
 
+-- ── Sprint 103 (ADR-038 / Enhedsspor Phase 1a): the unit hierarchy ──
+-- The org-unit tree's DEEP levels (direktion → omrade → kontor → team → enhed) live here,
+-- BENEATH each Organisation (ADR-038 D1: `organizations` stays the MAO+Organisation
+-- authority/payroll anchor; `units` is structure-only). A unit belongs to exactly ONE
+-- ORGANISATION-typed org (organisation_id, IMMUTABLE per row) and nests via parent_unit_id
+-- (NULL = a top-level unit directly under the Organisation). The level is DERIVED (depth in
+-- the unit sub-tree) — NO stored level/path (S100 enhed precedent). The strict CHILD
+-- type-ordering (organisation→direktion→omrade→kontor→team→enhed) is APP-enforced under the
+-- per-Organisation `unit-org-` advisory lock (a CHECK can't cross-reference the parent type).
+-- ZERO subtree scope (ADR-038 D5): `units`/`unit_id`/`unit_leaders` enter NO scope path —
+-- role-scope stays anchored at the Organisation (`primary_org_id` / CoversOrg exact-match). A
+-- unit's designated leaders (`unit_leaders`) carry an EXCEPTION approval path over the unit's
+-- OWN direct members (ADR-038 D4), wired in S104 with the units CRUD + the authority extension.
+-- Replaces the S97/S100 `enheder`/`user_enheder` model (greenfield reseed, ADR-038 D9).
+CREATE TABLE IF NOT EXISTS units (
+    unit_id          UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    organisation_id  TEXT         NOT NULL REFERENCES organizations(org_id),
+    parent_unit_id   UUID         NULL REFERENCES units(unit_id),
+    type             TEXT         NOT NULL CHECK (type IN ('direktion','omrade','kontor','team','enhed')),
+    name             TEXT         NOT NULL,
+    deleted_at       TIMESTAMPTZ  NULL,
+    version          BIGINT       NOT NULL DEFAULT 1,
+    created_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+-- Active-name dedup: at most one ACTIVE unit per (Organisation, parent, lower(name)) —
+-- sibling-scoped + case-insensitive (a name may repeat under different parents). COALESCE on
+-- parent_unit_id so top-level (NULL-parent) siblings dedup too (NULLs are distinct otherwise).
+-- Partial: soft-deleted names are recreatable.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_units_active_name
+    ON units (organisation_id, COALESCE(parent_unit_id, '00000000-0000-0000-0000-000000000000'::uuid), lower(name))
+    WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_units_org ON units (organisation_id);
+CREATE INDEX IF NOT EXISTS idx_units_parent ON units (parent_unit_id);
+
 -- Users (replaces hardcoded test users)
 CREATE TABLE IF NOT EXISTS users (
     user_id             TEXT        PRIMARY KEY,
@@ -472,6 +506,14 @@ CREATE TABLE IF NOT EXISTS users (
     -- ORGANISATION-typed STY0x orgs, so they comply. The user's Organisation IS this column
     -- (the reporting "tree root" of every user == primary_org_id — the tree-WALK was retired).
     primary_org_id      TEXT        NOT NULL REFERENCES organizations(org_id),
+    -- S103 / ADR-038 D2 — the deep structural home: the user's single unit at any depth
+    -- (NULL = homed directly at the Organisation, e.g. org-level admins/directors). The
+    -- always-present primary_org_id above is the derived/denormalized Organisation ancestor
+    -- (set directly when unit_id IS NULL, else = the unit's organisation_id) — the authority/
+    -- payroll/config/JWT anchor (ADR-038 D1; ~100 consumers read it unchanged). unit_id itself
+    -- carries NO scope (ADR-038 D5). The Organisation-home invariant on primary_org_id is
+    -- unchanged (app-enforced); the unit-derive logic lands in S104 with the units CRUD.
+    unit_id             UUID        NULL REFERENCES units(unit_id),
     agreement_code      TEXT        NOT NULL DEFAULT 'AC',
     ok_version          TEXT        NOT NULL DEFAULT 'OK24',
     employment_category TEXT        NOT NULL DEFAULT 'Standard',
@@ -487,6 +529,7 @@ CREATE TABLE IF NOT EXISTS users (
 );
 CREATE INDEX IF NOT EXISTS idx_users_org ON users(primary_org_id);
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+CREATE INDEX IF NOT EXISTS idx_users_unit ON users(unit_id);
 
 -- ── Phase 4d-3 Part 1 (Sprint 31): employee_profiles authoritative store ──
 -- Surrogate UUID PK + pre-baked versioning columns (effective_from / effective_to /
@@ -546,71 +589,26 @@ INSERT INTO schema_migrations (migration_id, applied_at)
     VALUES ('s31-d3-employee-profile-store', NOW())
     ON CONFLICT (migration_id) DO NOTHING;
 
--- ── Sprint 97 (ADR-035 / S97): structured Enhed metadata + multi-tag membership ──
--- Replaces the flat free-text `employee_profiles.enhed_label` with a deduplicated,
--- per-Organisation `enheder` entity table + a `user_enheder` multi-tag link. An Enhed
--- is PURE DISPLAY METADATA: it carries ZERO authority/scope/approval/payroll meaning
--- (ADR-035 — the Organisation is the only authority unit; Enhed holds none). It belongs
--- to exactly ONE ORGANISATION-typed org (enforced at the create-endpoint via an org-type
--- guard; the FK below only enforces existence). Non-temporal latest-wins projection
--- (model after work_time_projection / ADR-028 D1, NOT the ADR-022 temporal profile):
--- `enheder` is the EnhedCreated/Renamed/Deleted projection, `user_enheder` is the
--- UserEnheder‌Changed (full-set, idempotent overwrite) projection. `enhed_label` is KEPT
--- (read-only display fallback; the `EnhedLabel` field stays frozen on the
--- EmployeeProfile* events + audit mappers). Soft-delete (`deleted_at`) keeps the
--- `user_enheder → enheder` FK valid — memberships to a soft-deleted enhed are
--- projection-FILTERED at read time, NOT hard-deleted (no fan-out untag race, P4).
--- Sprint 100 (ADR-036 amendment): `parent_enhed_id` makes enheder HIERARCHICAL — a
--- self-referential tree WITHIN each Organisation (a root enhed = NULL parent, directly
--- under the Organisation; a child's parent must be in the SAME Organisation — app-layer
--- enforced under the per-Organisation advisory lock, a CHECK can't cross-reference
--- `organisation_id`). The level is DERIVED (the depth in the enhed tree, root = 1),
--- computed when GET /organizations/tree assembles the forest — NO stored level/path.
--- The hierarchy is STILL PURE DISPLAY metadata with ZERO authority: `parent_enhed_id`
--- enters NO scope/approval/payroll path (the same invariant as the rest of the table).
-CREATE TABLE IF NOT EXISTS enheder (
-    enhed_id         UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
-    organisation_id  TEXT         NOT NULL REFERENCES organizations(org_id),
-    parent_enhed_id  UUID         NULL REFERENCES enheder(enhed_id),
-    name             TEXT         NOT NULL,
-    deleted_at       TIMESTAMPTZ  NULL,
-    version          BIGINT       NOT NULL DEFAULT 1,
-    created_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+-- ── Sprint 103 (ADR-038 / Enhedsspor Phase 1a): unit_leaders ──
+-- Explicitly-designated leaders of a unit (the design's `unit.leaderIds` + "promote to
+-- leader"). A leader MUST be a member of the unit they lead (user.unit_id == unit_id) —
+-- enforced at the COMMAND layer (S104, under the per-Organisation `unit-org-` advisory;
+-- removed in-tx when a member's unit_id changes). Multiple peer ("sideordnede") leaders per
+-- unit. STRUCTURAL designation, DISTINCT from the reporting edge — `reporting_lines` PRIMARY
+-- stays the single canonical edge (ADR-038 D6; NO new pointer column). A designated leader
+-- carries an EXCEPTION approval path over the unit's OWN direct members (ADR-038 D4), wired in
+-- S104. ZERO subtree scope (D5). Replaces S97 `user_enheder` (greenfield reseed, ADR-038 D9).
+CREATE TABLE IF NOT EXISTS unit_leaders (
+    unit_id   UUID  NOT NULL REFERENCES units(unit_id)   ON DELETE CASCADE,
+    user_id   TEXT  NOT NULL REFERENCES users(user_id)   ON DELETE CASCADE,
+    PRIMARY KEY (unit_id, user_id)
 );
--- Active-name dedup: at most one ACTIVE (non-deleted) enhed per (Organisation, lower(name)).
--- Partial — soft-deleted names are recreatable (delete-then-recreate-same-name allowed).
-CREATE UNIQUE INDEX IF NOT EXISTS idx_enheder_active_name
-    ON enheder (organisation_id, lower(name))
-    WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_enheder_org ON enheder (organisation_id);
--- S100 — index the self-reference for the per-Organisation enhed sub-tree assembly + the
--- cycle-CTE descendant walk + the delete-reparent child lookup.
-CREATE INDEX IF NOT EXISTS idx_enheder_parent ON enheder (parent_enhed_id);
+CREATE INDEX IF NOT EXISTS idx_unit_leaders_user ON unit_leaders (user_id);
 
--- user_enheder — the multi-tag membership link (a user → 0..N enheder, all within the
--- user's own Organisation; the same-Organisation invariant is enforced at the COMMAND
--- layer — set-tags validates each enhed.organisation_id == the FOR-UPDATE'd user's
--- primary_org_id, and a transfer CLEARS the rows in-tx — NOT a DB trigger). Soft-delete
--- on `enheder` keeps this FK valid (no hard delete of an enhed). NON-temporal: a user's
--- full tag set is delete-all-then-insert overwritten on UserEnhederChanged.
--- ON DELETE CASCADE on BOTH parents: a tag is a pure membership link owned by both the
--- user and the enhed. Neither parent is ever HARD-deleted in production (users are
--- soft-deactivated via employment_end_date; enheder are soft-deleted via deleted_at), so
--- the cascade never fires at runtime — it only keeps hard-delete cleanups (tests / a
--- legacy DBA purge) FK-safe without an explicit pre-delete of the link. Orthogonal to the
--- transfer-clears-tags path (that is an UPDATE of primary_org_id, not a DELETE).
-CREATE TABLE IF NOT EXISTS user_enheder (
-    user_id   TEXT  NOT NULL REFERENCES users(user_id)     ON DELETE CASCADE,
-    enhed_id  UUID  NOT NULL REFERENCES enheder(enhed_id)  ON DELETE CASCADE,
-    PRIMARY KEY (user_id, enhed_id)
-);
-CREATE INDEX IF NOT EXISTS idx_user_enheder_enhed ON user_enheder (enhed_id);
-
--- schema_migrations ledger entry — documentary for S97 greenfield-only, forward-compat
--- marker if init.sql ever runs against an older database (the CREATE ... IF NOT EXISTS
--- blocks above serve both greenfield + legacy; no guarded ALTER needed — brand-new tables).
+-- schema_migrations ledger — S103 greenfield (units/unit_leaders replace enheder/user_enheder
+-- + the employee_profiles.enhed_label drop; ADR-038 D9 Enhedsspor Phase 1a).
 INSERT INTO schema_migrations (migration_id, applied_at)
-    VALUES ('s97-enhed-structured-multitag', NOW())
+    VALUES ('s103-enhedsspor-units', NOW())
     ON CONFLICT (migration_id) DO NOTHING;
 
 -- ── Phase 4e (Sprint 34): user_agreement_codes versioned-history store ──
@@ -975,6 +973,30 @@ INSERT INTO users (user_id, username, password_hash, display_name, email, primar
     ('emp008', 'emp008', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Rikke Thomsen', 'rikke.thomsen@at.dk', 'STY05', 'HK', 'OK24'),
     ('emp009', 'emp009', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Soeren Jensen', 'soeren.jensen@star.dk', 'STY04', 'AC', 'OK24'),
     ('emp010', 'emp010', '$2a$11$9d/J80pl7VKKjtWsSqJdPuvJqBL/3sYomNGgL.TdUKq2Aw0e6k0Te', 'Tina Christensen', 'tina.christensen@statens-it.dk', 'STY02', 'PROSA', 'OK24')
+ON CONFLICT DO NOTHING;
+
+-- ── Sprint 103 (ADR-038 / Enhedsspor Phase 1a): demo unit tree ──
+-- A modest unit hierarchy under STY02 (Statens IT) exercising the new model: a 4-level
+-- direktion→omrade→kontor→team chain + memberships + a designated unit leader. The rest of
+-- the demo users stay unit_id NULL (homed directly at their Organisation — the ADR-038 D2
+-- NULL case). Fixed UUIDs for reseed determinism. (The full design org tree + the units CRUD
+-- that mutates this live ship in S104 / Phase 3.)
+INSERT INTO units (unit_id, organisation_id, parent_unit_id, type, name) VALUES
+    ('000000d0-0000-0000-0000-000000000001', 'STY02', NULL,                                   'direktion', 'Direktion'),
+    ('000000d0-0000-0000-0000-000000000002', 'STY02', '000000d0-0000-0000-0000-000000000001', 'omrade',    'Driftsomraadet'),
+    ('000000d0-0000-0000-0000-000000000003', 'STY02', '000000d0-0000-0000-0000-000000000002', 'kontor',    'IT-Drift'),
+    ('000000d0-0000-0000-0000-000000000004', 'STY02', '000000d0-0000-0000-0000-000000000003', 'team',      'Team Infrastruktur')
+ON CONFLICT DO NOTHING;
+
+-- Memberships: mgr01 leads IT-Drift (a member of it); emp002 is a direct member of IT-Drift;
+-- emp005 + emp010 sit in the team beneath it. (primary_org_id stays STY02 for all — the
+-- derived anchor; the runtime derive-on-assign logic lands in S104.)
+UPDATE users SET unit_id = '000000d0-0000-0000-0000-000000000003' WHERE user_id IN ('mgr01','emp002');
+UPDATE users SET unit_id = '000000d0-0000-0000-0000-000000000004' WHERE user_id IN ('emp005','emp010');
+
+-- Designated leader: mgr01 leads IT-Drift (the member-invariant holds — mgr01.unit_id = IT-Drift).
+INSERT INTO unit_leaders (unit_id, user_id) VALUES
+    ('000000d0-0000-0000-0000-000000000003', 'mgr01')
 ON CONFLICT DO NOTHING;
 
 -- Seed role assignments
@@ -4032,8 +4054,10 @@ $$;
 --   (init.sql ~485) is NOT touched, so greenfield + legacy both converge here.
 -- =========================================================================
 
--- (1) enhed_label additive column — display-only, NULL backfill (R1).
-ALTER TABLE employee_profiles ADD COLUMN IF NOT EXISTS enhed_label TEXT NULL;
+-- (1) [S103 / ADR-038 D9] enhed_label column REMOVED — the enheder/enhed_label model is
+--     replaced by `units` (greenfield reseed). The base employee_profiles CREATE never had
+--     this column; the additive ALTER is dropped. EmployeeProfile* EnhedLabel cutover = S103
+--     TASK-10304.
 
 -- (2) manager_vikar table (R2) — DDL only (TASK-7400); repo/events/resolver = TASK-7401.
 --   absent_approver_id: the manager who is away (the vikar acts on their behalf).

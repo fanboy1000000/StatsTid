@@ -81,10 +81,10 @@ PASS1_TESTS = CONTRACTS_DIR / "Pass1EndpointContractTests.cs"
 # check enforces the match once the file exists).
 # ---------------------------------------------------------------------------
 REGISTRY: dict[str, list[str]] = {
-    # GET /api/admin/enheder -> { enheder: EnhedListItem[] } (the S97/S99/S100 site)
-    "/api/admin/enheder": ["GetEnheder_IsEnvelope_RowsCarryParentAndLevel"],
-    # GET /api/admin/organizations/tree -> { tree: OrgTreeMaoNode[] } nested (S100 nested-drop site)
-    "/api/admin/organizations/tree": ["GetTree_IsEnvelope_DeepEnhedNodeNestsLevelChildrenParent"],
+    # GET /api/admin/organizations/tree -> { tree: OrgTreeMaoNode[] } envelope.
+    # (S103 / TASK-10305: GET /api/admin/enheder was dropped with the legacy Enhed model — its
+    # registry entry + nested-enhed assertions are retired; units return in S104+.)
+    "/api/admin/organizations/tree": ["GetTree_IsEnvelope_MaoAndOrgNodesCarryFields"],
     # GET /api/admin/organizations -> OrgListItem[] (BARE ARRAY)
     "/api/admin/organizations": ["GetOrganizations_IsBareArray_ItemsCarryOrgFields"],
 }

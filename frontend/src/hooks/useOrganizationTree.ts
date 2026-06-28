@@ -1,10 +1,11 @@
 // S99 / TASK-9901 — the Organisation-page data layer (the FE half of the
 // redesigned Global administration → Organisation screen). Consumes the S98
 // aggregated tree GET + the S98 structural mutations (delete / move) and the
-// S99 name-only create. An Enhed is a FLAT leaf (ADR-035 / S97) — no nesting,
-// no cross-org move; this hook reflects that (the tree's enhed nodes are
-// leaves and carry no `version`, so inline Enhed writes resolve the version
-// via `useEnheder.fetchEnheder` per the S86 ETag-resolve discipline).
+// S99 name-only create.
+//
+// S103 / TASK-10304 (Enhedsspor Phase 1a) — the Enhed surface is REMOVED. The
+// aggregated tree is now MAO → Organisation only; the Organisation nodes no
+// longer carry an `enheder` array.
 //
 // Backend contract (S98 + the S99 name-only create adaptation):
 //   GET    /api/admin/organizations/tree          → { tree: MaoNode[] } (visibility-bounded)
@@ -16,24 +17,8 @@
 import { useState, useCallback, useEffect } from 'react'
 import { apiClient } from '../lib/api'
 
-/** One Enhed node as served on an Organisation node in the aggregated tree.
-    S100: enheder are now NESTED — each node carries `parentEnhedId`, the derived
-    `level` (depth; root enhed = 1) and its own `children`. NOTE: the tree shape
-    carries NO `version` — inline rename/delete/move must resolve it via
-    `useEnheder.fetchEnheder(orgId)` (S99 Step-0b NOTE 1, kept in S100). */
-export interface TreeEnhedNode {
-  enhedId: string
-  name: string
-  taggedUserCount: number
-  parentEnhedId: string | null
-  /** Derived depth within the Organisation (a root enhed = 1). */
-  level: number
-  children: TreeEnhedNode[]
-}
-
-/** An Organisation node (depth 1) under a MAO. Holds employees + a nested enhed
-    sub-tree (the top-level `enheder` array are the ROOT enheder; their `children`
-    continue the depth). */
+/** An Organisation node (depth 1) under a MAO. Holds the rolled-up employee
+    count (Organisations are leaves of the structural tree). */
 export interface TreeOrganisationNode {
   orgId: string
   orgName: string
@@ -41,7 +26,6 @@ export interface TreeOrganisationNode {
   parentOrgId: string
   materializedPath: string
   employeeCount: number
-  enheder: TreeEnhedNode[]
 }
 
 /** A Ministeransvarsområde node (depth 0, root). Groups organisations. */
@@ -59,9 +43,9 @@ interface TreeResponse {
 
 /**
  * The aggregated org tree (GET /tree). Returns the visibility-bounded MAO roots
- * with their organisations + flat enhed leaves and the rolled-up employee counts
- * (never stored — always server-aggregated). `refetch` is exposed so every
- * mutation can re-pull the tree (the counts roll up).
+ * with their organisations and the rolled-up employee counts (never stored —
+ * always server-aggregated). `fetchTree` is exposed so every mutation can
+ * re-pull the tree (the counts roll up).
  */
 export function useOrganizationTree() {
   const [tree, setTree] = useState<TreeMaoNode[]>([])

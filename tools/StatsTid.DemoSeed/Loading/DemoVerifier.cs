@@ -117,12 +117,9 @@ public sealed class DemoVerifier
             "AND org_type NOT IN ('MAO','ORGANISATION')", ct);
         ok &= Check("demo orgs carry only MAO/ORGANISATION types", demoOrgsBadType == 0, $"found {demoOrgsBadType} bad-type");
 
-        // 7. enhed_label presence (S92 / ADR-035): the moved-up rank-and-file carry a display-only
-        //    enhed_label (the former AFDELING/TEAM unit name). At least one such row must exist.
-        var demoEnhedLabels = await ScalarLongAsync(conn,
-            "SELECT COUNT(*) FROM employee_profiles p WHERE p.employee_id LIKE 'demo\\_%' " +
-            "AND p.effective_to IS NULL AND p.enhed_label IS NOT NULL", ct);
-        ok &= Check("demo enhed_label profiles present", demoEnhedLabels > 0, $"found {demoEnhedLabels}");
+        // 7. (RETIRED — S103 / TASK-10305, ADR-038 D9) The enhed_label presence check is gone: the
+        //    employee_profiles.enhed_label column was dropped with the legacy Enhed model (demo users
+        //    now home directly at their Organisation; the unit tree ships in S104 / Phase 3).
 
         // 8. Scope-flatten parity (S93 / ADR-035): ORG_AND_DESCENDANTS is DROPPED. Every demo role
         //    row must be GLOBAL or ORG_ONLY — ZERO ORG_AND_DESCENDANTS. The backend init.sql CHECK
@@ -139,41 +136,10 @@ public sealed class DemoVerifier
             "AND NOT EXISTS (SELECT 1 FROM organizations o WHERE o.org_id = ra.org_id AND o.org_type='ORGANISATION')", ct);
         ok &= Check("demo ORG_ONLY scopes resolve to an ORGANISATION", demoBadScopeOrg == 0, $"found {demoBadScopeOrg} bad");
 
-        // 10. S97 / TASK-9706 — structured enheder present (DISTINCT former-unit names per
-        //     Organisation, promoted from enhed_label). At least one demo enhed row must exist.
-        //     Scoped to the demo orgs (STYX%) so the baseline/CI fixture (where enheder is empty)
-        //     is not asserted against.
-        var demoEnheder = await ScalarLongAsync(conn,
-            "SELECT COUNT(*) FROM enheder WHERE organisation_id LIKE 'STYX%' AND deleted_at IS NULL", ct);
-        ok &= Check("demo enheder present", demoEnheder > 0, $"found {demoEnheder}");
-
-        // 11. S97 — user_enheder membership tags present (each labelled demo user → an enhed).
-        var demoUserEnheder = await ScalarLongAsync(conn,
-            "SELECT COUNT(*) FROM user_enheder ue WHERE ue.user_id LIKE 'demo\\_%'", ct);
-        ok &= Check("demo user_enheder tags present", demoUserEnheder > 0, $"found {demoUserEnheder}");
-
-        // 12. S97 — the same-Organisation invariant: EVERY demo user_enheder tag's enhed lives in
-        //     the SAME Organisation as the tagged user (enhed.organisation_id == users.primary_org_id).
-        //     This is the P7-relevant data invariant the command layer enforces at write time; here
-        //     it is asserted directly over the seeded rows. Zero violations expected.
-        var crossOrgTags = await ScalarLongAsync(conn,
-            "SELECT COUNT(*) FROM user_enheder ue " +
-            "JOIN users u ON u.user_id = ue.user_id " +
-            "JOIN enheder e ON e.enhed_id = ue.enhed_id " +
-            "WHERE ue.user_id LIKE 'demo\\_%' AND e.organisation_id <> u.primary_org_id", ct);
-        ok &= Check("demo user_enheder tags are same-Organisation (enhed.org == user.primary_org)",
-            crossOrgTags == 0, $"found {crossOrgTags} cross-Organisation");
-
-        // 13. S97 — the partial-unique holds: no duplicate ACTIVE (deleted_at IS NULL) name per
-        //     Organisation among demo enheder (the DISTINCT-set emission must not produce a dup).
-        var dupActiveNames = await ScalarLongAsync(conn,
-            "SELECT COUNT(*) FROM (" +
-            "  SELECT organisation_id, lower(name) FROM enheder " +
-            "  WHERE organisation_id LIKE 'STYX%' AND deleted_at IS NULL " +
-            "  GROUP BY organisation_id, lower(name) HAVING COUNT(*) > 1" +
-            ") d", ct);
-        ok &= Check("demo enheder: no duplicate active name per Organisation (partial-unique holds)",
-            dupActiveNames == 0, $"found {dupActiveNames} dup");
+        // 10-13. (RETIRED — S103 / TASK-10305, ADR-038 D9) The structured-enheder / user_enheder
+        //     checks are gone: those tables were dropped (replaced by units / unit_leaders /
+        //     users.unit_id). The unit-tree FK + member-invariant assertions live in the test suite
+        //     (UnitFoundationTests); the units CRUD that the demo would exercise ships in S104 / Phase 3.
 
         return ok;
     }

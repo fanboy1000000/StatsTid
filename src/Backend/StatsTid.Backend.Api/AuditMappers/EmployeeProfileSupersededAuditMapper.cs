@@ -22,7 +22,6 @@ public sealed class EmployeeProfileSupersededAuditMapper : IAuditProjectionMappe
             newEffectiveFrom = @event.NewEffectiveFrom,
             partTimeFraction = @event.PartTimeFraction,
             position = @event.Position,
-            enhedLabel = @event.EnhedLabel,
         };
         return new AuditProjectionRowData(
             VisibilityScope: AuditVisibilityScope.TenantTargeted,

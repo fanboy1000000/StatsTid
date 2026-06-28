@@ -25,8 +25,9 @@ namespace StatsTid.Tests.Regression.Security;
 ///     ORGANISATION-only (MAO → 422); target must be an active MAO (else 422); no-op / self → 400;
 ///     200 returns the moved org with a RECOMPUTED <c>materialized_path</c> = newParent.path + orgId + "/".</item>
 ///   <item><b>Aggregated tree</b> — <c>GET /api/admin/organizations/tree</c>. HROrAbove read; the
-///     MAO→Organisation forest with per-node employeeCount + each Organisation's enheder (taggedUserCount);
-///     visibility-bounded (GlobalAdmin all; scoped roles their accessible orgs).</item>
+///     MAO→Organisation forest with per-node employeeCount; visibility-bounded (GlobalAdmin all;
+///     scoped roles their accessible orgs). (S103 / TASK-10305: the per-Organisation enheder nesting
+///     was retired with the legacy Enhed model — units return in S104+.)</item>
 /// </list>
 ///
 /// <para><b>The BLOCKER-1 pin (move-preserves-roster):</b> a move REWRITES the moved row's
@@ -304,20 +305,16 @@ public sealed class S98OrgStructureTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
-    //  (5) The aggregated tree — counts roll up; enheder taggedUserCount; visibility-bounded.
+    //  (5) The aggregated tree — counts roll up; visibility-bounded.
     // ════════════════════════════════════════════════════════════════════════════════
 
     /// <summary>(5a) The MAO employeeCount = Σ its Organisations' counts; an Organisation's employeeCount =
-    /// its active users; an Organisation's <c>enheder</c> array carries <c>taggedUserCount</c>. We tag the
-    /// seeded employee with an enhed on T98_ORG_EMP and assert the aggregate.</summary>
+    /// its active users. (S103 / TASK-10305: the per-Organisation enheder nesting + taggedUserCount were
+    /// retired with the legacy Enhed model — units return in S104+.)</summary>
     [Fact]
-    public async Task Tree_CountsRollUp_AndEnhederCarryTaggedUserCount()
+    public async Task Tree_CountsRollUp()
     {
         var admin = GlobalAdminClient();
-
-        // Create an enhed on T98_ORG_EMP and tag the employee → taggedUserCount = 1.
-        var enhedId = await CreateEnhedAsync(admin, OrgEmp, "T98 Enhed Alpha");
-        Assert.Equal(HttpStatusCode.OK, (await SetTagsAsync(admin, EmpUser, enhedId)).StatusCode);
 
         var tree = await GetTreeAsync(admin);
 
@@ -334,37 +331,6 @@ public sealed class S98OrgStructureTests : IAsyncLifetime
         var sumChildren = children.Sum(o => o.GetProperty("employeeCount").GetInt64());
         Assert.Equal(sumChildren, maoA.GetProperty("employeeCount").GetInt64());
         Assert.Equal(1, maoA.GetProperty("employeeCount").GetInt64());
-
-        // The enheder array on T98_ORG_EMP carries the tagged-user count.
-        var enheder = orgEmp.GetProperty("enheder").EnumerateArray().ToList();
-        var alpha = enheder.First(e => e.GetProperty("enhedId").GetString() == enhedId.ToString());
-        Assert.Equal("T98 Enhed Alpha", alpha.GetProperty("name").GetString());
-        Assert.Equal(1, alpha.GetProperty("taggedUserCount").GetInt64());
-    }
-
-    /// <summary>(5a-ii) S98 Step-7a FIX 2 (P1/P9) — <c>taggedUserCount</c> EXCLUDES inactive users.
-    /// Tags aren't cleared on deactivation (only on transfer), so a terminated-but-tagged user must
-    /// NOT inflate the tally. We create an enhed, tag the (active) employee → taggedUserCount=1,
-    /// then DEACTIVATE that user (is_active=false, SAME org — no transfer) and re-read the tree: the
-    /// enhed is STILL listed (LEFT JOIN shape kept) but its taggedUserCount is now 0 (active-only).
-    /// RED-on-old: the pre-fix <c>COUNT(ue.user_id)</c> would still report 1.</summary>
-    [Fact]
-    public async Task Tree_TaggedUserCount_ExcludesInactiveUsers()
-    {
-        var admin = GlobalAdminClient();
-
-        // Tag the active employee → taggedUserCount = 1.
-        var enhedId = await CreateEnhedAsync(admin, OrgEmp, "T98 Enhed Beta");
-        Assert.Equal(HttpStatusCode.OK, (await SetTagsAsync(admin, EmpUser, enhedId)).StatusCode);
-
-        Assert.Equal(1, await ReadTaggedUserCountAsync(admin, OrgEmp, enhedId));
-
-        // Deactivate the user IN PLACE (is_active=false, same org — the tag row in user_enheder
-        // survives because deactivation does NOT clear tags).
-        await DeactivateUserAsync(EmpUser);
-
-        // The enhed is STILL listed, but its tally now EXCLUDES the inactive (formerly tagged) user.
-        Assert.Equal(0, await ReadTaggedUserCountAsync(admin, OrgEmp, enhedId));
     }
 
     /// <summary>(5b) Visibility: a scoped HR (covering only T98_ORG_EMP) sees its MAO header + only the
@@ -521,17 +487,13 @@ public sealed class S98OrgStructureTests : IAsyncLifetime
 
     private async Task CleanupAsync(NpgsqlConnection conn)
     {
-        // Users created via the create-user test (and any transferred). Cascades user_enheder.
+        // Users created via the create-user test (and any transferred). S103 / TASK-10305: the legacy
+        // enheder/user_enheder tables were dropped, so there is no tag table to clean up here.
         await ExecAsync(conn, "DELETE FROM approval_periods WHERE employee_id = ANY(@users) OR employee_id = 't98_home_new'");
         await ExecAsync(conn, "DELETE FROM reporting_lines WHERE employee_id = ANY(@users) OR manager_id = ANY(@users)");
         await ExecAsync(conn, "DELETE FROM employee_profiles WHERE employee_id = ANY(@users) OR employee_id = 't98_home_new'");
         await ExecAsync(conn, "DELETE FROM user_agreement_codes WHERE user_id = ANY(@users) OR user_id = 't98_home_new'");
-        await ExecAsync(conn, "DELETE FROM user_enheder WHERE user_id = ANY(@users) OR user_id = 't98_home_new'");
         await ExecAsync(conn, "DELETE FROM users WHERE user_id = ANY(@users) OR user_id = 't98_home_new'");
-
-        // Enheder on the test orgs.
-        await ExecAsync(conn, "DELETE FROM user_enheder WHERE enhed_id IN (SELECT enhed_id FROM enheder WHERE organisation_id = ANY(@orgs))");
-        await ExecAsync(conn, "DELETE FROM enheder WHERE organisation_id = ANY(@orgs)");
 
         // Audit-projection rows referencing the test orgs (FK target_org_id → organizations) MUST go
         // before the orgs.
@@ -590,30 +552,6 @@ public sealed class S98OrgStructureTests : IAsyncLifetime
         return body.GetProperty("tree");
     }
 
-    private static async Task<HttpResponseMessage> SetTagsAsync(HttpClient client, string userId, params Guid[] enhedIds)
-        => await client.PutAsJsonAsync($"/api/admin/users/{userId}/enheder", new { enhedIds });
-
-    private async Task<Guid> CreateEnhedAsync(HttpClient client, string orgId, string name)
-    {
-        var rsp = await client.PostAsJsonAsync("/api/admin/enheder", new { organisationId = orgId, name });
-        Assert.Equal(HttpStatusCode.Created, rsp.StatusCode);
-        var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
-        return Guid.Parse(body.GetProperty("enhedId").GetString()!);
-    }
-
-    /// <summary>Reads the live <c>taggedUserCount</c> for an enhed from <c>GET /tree</c> (the same
-    /// aggregate the FE consumes), locating the org node then the enhed by id.</summary>
-    private async Task<long> ReadTaggedUserCountAsync(HttpClient client, string orgId, Guid enhedId)
-    {
-        var tree = await GetTreeAsync(client);
-        var enhed = tree.EnumerateArray()
-            .SelectMany(m => m.GetProperty("organisations").EnumerateArray())
-            .Where(o => o.GetProperty("orgId").GetString() == orgId)
-            .SelectMany(o => o.GetProperty("enheder").EnumerateArray())
-            .First(e => e.GetProperty("enhedId").GetString() == enhedId.ToString());
-        return enhed.GetProperty("taggedUserCount").GetInt64();
-    }
-
     private async Task<HttpResponseMessage> TransferUserAsync(HttpClient client, string userId, string newOrgId)
     {
         var getRsp = await client.GetAsync($"/api/admin/users/{userId}");
@@ -631,19 +569,6 @@ public sealed class S98OrgStructureTests : IAsyncLifetime
     // ════════════════════════════════════════════════════════════════════════════════
     //  DB reads
     // ════════════════════════════════════════════════════════════════════════════════
-
-    /// <summary>Deactivates a user IN PLACE (is_active=false, same org) via raw SQL — the tag rows
-    /// in user_enheder are deliberately NOT cleared (deactivation ≠ transfer), mirroring production
-    /// where only a transfer clears tags. This is the precondition for the FIX-2 active-only count.</summary>
-    private async Task DeactivateUserAsync(string userId)
-    {
-        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
-        await conn.OpenAsync();
-        await using var cmd = new NpgsqlCommand(
-            "UPDATE users SET is_active = FALSE WHERE user_id = @u", conn);
-        cmd.Parameters.AddWithValue("u", userId);
-        await cmd.ExecuteNonQueryAsync();
-    }
 
     private async Task<bool> IsOrgActiveAsync(string orgId)
     {

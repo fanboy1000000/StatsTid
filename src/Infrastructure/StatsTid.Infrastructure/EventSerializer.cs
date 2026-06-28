@@ -193,6 +193,21 @@ public static class EventSerializer
         // Emitted by the explicit move endpoint AND per-child by the delete-reparent. PURE
         // DISPLAY metadata — ZERO authority. Plain-outbox; name-keyed; replay-safe.
         ["EnhedMoved"] = typeof(EnhedMoved),
+        // Sprint 103 (ADR-038 D10 — Enhedsspor unit-hierarchy model): the typed `units` event
+        // family that EVOLVES the Enhed* events. Unit*-events ride unit-{unitId} (latest-wins
+        // projection into `units` + `unit_leaders`); UserUnitChanged rides user-{userId} (the
+        // single-unit membership move). Unlike the zero-authority Enhed, a unit participates in
+        // structure + reporting (D3/D4), but role-SCOPE stays anchored at the Organisation (D5
+        // LOCKED). NO writer emits these yet — the units CRUD ships in a later sprint; these are
+        // DEFINED + REGISTERED with the model. The retired Enhed*/UserEnhederChanged entries
+        // above STAY name-keyed (D10 — replay-safety convention). Name-keyed; replay-safe.
+        ["UnitCreated"] = typeof(UnitCreated),
+        ["UnitRenamed"] = typeof(UnitRenamed),
+        ["UnitMoved"] = typeof(UnitMoved),
+        ["UnitDeleted"] = typeof(UnitDeleted),
+        ["UnitLeaderDesignated"] = typeof(UnitLeaderDesignated),
+        ["UnitLeaderRemoved"] = typeof(UnitLeaderRemoved),
+        ["UserUnitChanged"] = typeof(UserUnitChanged),
     };
 
     public static string Serialize(IDomainEvent @event)

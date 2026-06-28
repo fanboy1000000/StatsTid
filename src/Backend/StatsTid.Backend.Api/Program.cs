@@ -83,7 +83,6 @@ builder.Services.AddSingleton<EntitlementBalanceRepository>();
 builder.Services.AddSingleton<TimeEntryProjectionRepository>();
 builder.Services.AddSingleton<AbsenceProjectionRepository>();
 builder.Services.AddSingleton<WorkTimeProjectionRepository>();
-builder.Services.AddSingleton<EnhedRepository>(); // S97 ADR-035 — structured Enhed metadata + multi-tag membership (pure display, zero authority)
 builder.Services.AddSingleton<CompensatoryRestRepository>();
 builder.Services.AddSingleton<OvertimeBalanceRepository>();
 builder.Services.AddSingleton<OvertimePreApprovalRepository>();
@@ -234,9 +233,10 @@ builder.Services.AddSingleton<IAuditProjectionMapper<ManagerVikarCreated>, Stats
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(ManagerVikarCreated), nameof(ManagerVikarCreated)));
 builder.Services.AddSingleton<IAuditProjectionMapper<ManagerVikarEnded>, StatsTid.Infrastructure.AuditMappers.ManagerVikarEndedAuditMapper>();
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(ManagerVikarEnded), nameof(ManagerVikarEnded)));
-// S97 ADR-035 — UserEnhederChanged audit mapper (set-user-tags + transfer-clears-tags). TENANT_TARGETED;
-// target org from context.ResolvedTargetOrgId (the user's primary_org). EnhedCreated/Renamed/Deleted ride
-// plain EnqueueAsync (no audit-projection row — display-metadata events, mirroring ReportingLineManagerDeactivated).
+// S97 ADR-035 — UserEnhederChanged audit mapper. TENANT_TARGETED; target org from
+// context.ResolvedTargetOrgId (the user's primary_org). S103 / TASK-10304 (ADR-038 D10): NO writer
+// emits UserEnhederChanged anymore (the legacy tag model is dropped), but the mapper + its
+// registration STAY name-keyed for replay-safety of any historical stream.
 builder.Services.AddSingleton<IAuditProjectionMapper<UserEnhederChanged>, UserEnhederChangedAuditMapper>();
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(UserEnhederChanged), nameof(UserEnhederChanged)));
 // S59 ADR-029 — per-employee entitlement eligibility (mapper lives in Infrastructure, cross-process)
@@ -279,6 +279,26 @@ builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(SettlementReve
 // residual §34 remainder reuses the existing VacationForfeitedToFeriefond mapper (registered above).
 builder.Services.AddSingleton<IAuditProjectionMapper<FeriehindringTransferred>, StatsTid.Infrastructure.AuditMappers.FeriehindringTransferredAuditMapper>();
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(FeriehindringTransferred), nameof(FeriehindringTransferred)));
+// S103 ADR-038 D10 — Enhedsspor typed `units` event family (evolves Enhed*). All TENANT_TARGETED;
+// target_org_id = the unit's owning Organisation (from the event payload), except UnitRenamed
+// (no org id in payload → context.ResolvedTargetOrgId, mirroring UserEnhederChanged). Mapper +
+// marker registered together (the registry's RegisteredEventTypeNames filter matches the wired
+// mappers). NO writer emits these yet — the units CRUD ships in a later sprint; these land with
+// the model so the serializer map + audit catalog are complete (P3 forward-auditability).
+builder.Services.AddSingleton<IAuditProjectionMapper<UnitCreated>, UnitCreatedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(UnitCreated), nameof(UnitCreated)));
+builder.Services.AddSingleton<IAuditProjectionMapper<UnitRenamed>, UnitRenamedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(UnitRenamed), nameof(UnitRenamed)));
+builder.Services.AddSingleton<IAuditProjectionMapper<UnitMoved>, UnitMovedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(UnitMoved), nameof(UnitMoved)));
+builder.Services.AddSingleton<IAuditProjectionMapper<UnitDeleted>, UnitDeletedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(UnitDeleted), nameof(UnitDeleted)));
+builder.Services.AddSingleton<IAuditProjectionMapper<UnitLeaderDesignated>, UnitLeaderDesignatedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(UnitLeaderDesignated), nameof(UnitLeaderDesignated)));
+builder.Services.AddSingleton<IAuditProjectionMapper<UnitLeaderRemoved>, UnitLeaderRemovedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(UnitLeaderRemoved), nameof(UnitLeaderRemoved)));
+builder.Services.AddSingleton<IAuditProjectionMapper<UserUnitChanged>, UserUnitChangedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(UserUnitChanged), nameof(UserUnitChanged)));
 
 // ── Services ──
 builder.Services.AddSingleton<ConfigResolutionService>();
@@ -345,22 +365,11 @@ using (var scope = app.Services.CreateScope())
     await EmployeeProfileSeeder.SeedAsync(dbFactory, outbox, logger);
 }
 
-// ── S97 / TASK-9704 / ADR-035: backfill structured enheder + user_enheder tags ──
-// LEGACY-DB-UPGRADE mechanism (Step-0b BLOCKER A): migrates the legacy free-text
-// employee_profiles.enhed_label PROJECTION column (NOT an event replay — the demo seed
-// never emitted EmployeeProfileCreated.EnhedLabel) into the structured enheder table +
-// user_enheder multi-tag link, via EnhedCreated + UserEnhederChanged events (event-sourced,
-// no raw projection INSERT — the S92 lesson). Runs AFTER the employee-profile seed (it reads
-// the live employee_profiles rows). GREENFIELD NO-OP by design: the init.sql/CI baseline has
-// enhed_label universally NULL → the source query returns zero rows. Idempotent: reuses an
-// existing active enhed per (org, lower(name)) and skips users whose tag set already matches.
-{
-    var dbFactory = app.Services.GetRequiredService<DbConnectionFactory>();
-    var outbox = app.Services.GetRequiredService<IOutboxEnqueue>();
-    var enhedRepo = app.Services.GetRequiredService<EnhedRepository>();
-    var logger = app.Services.GetRequiredService<ILogger<Program>>();
-    await EnhedBackfillSeeder.SeedAsync(dbFactory, outbox, enhedRepo, logger);
-}
+// ── S103 / TASK-10304 / ADR-038 (Enhedsspor Phase 1a): the S97 Enhed backfill seeder is
+// retired with the legacy Enhed tag tables + the free-text display column on employee profiles
+// (dropped in init.sql, greenfield reseed — ADR-038 D9). The `units` model + its CRUD + any unit
+// backfill ship in a later phase. The Enhed* event records + their EventSerializer registrations
+// + audit mappers STAY name-keyed for replay-safety (D10).
 
 // ── S34 / TASK-3403: seed user_agreement_codes for any active user lacking a live row ──
 // Phase 4e (ADR-023 D2 option (b)) bootstrap backfill — reads each user's current

@@ -112,7 +112,7 @@ public sealed class OrganizationRepository
     /// <summary>S98 — re-parents the (FOR-UPDATE'd) ORGANISATION row under <paramref name="newParent"/>
     /// in the caller's tx: sets <c>parent_org_id</c> + RECOMPUTES the moved row's OWN
     /// <c>materialized_path</c> = <c>newParent.materialized_path || orgId || '/'</c>. NO descendant
-    /// cascade — Organisations are org-tree leaves; users/enheder key on org_id, not the path. The
+    /// cascade — Organisations are org-tree leaves; users key on org_id, not the path. The
     /// path rewrite is load-bearing: the tree-roster reads scope by <c>materialized_path LIKE</c>
     /// (ApprovalPeriodRepository), so an unrewritten path silently drops the org's employees.
     /// Returns the NEW materialized_path (for the event payload).</summary>
@@ -163,45 +163,6 @@ public sealed class OrganizationRepository
         return counts;
     }
 
-    /// <summary>S98 — one set-based query over ACTIVE enheder LEFT JOIN user_enheder → per
-    /// (Organisation, enhed) the active-enhed identity + its tagged-user count. Soft-deleted
-    /// enheder (deleted_at IS NOT NULL) are excluded; the LEFT JOIN yields 0 for an untagged
-    /// enhed. Self-managed connection (read-only). Grouped by Organisation in C# by the endpoint.
-    /// <para>S98 Step-7a FIX 2 (P1/P9 active-only count) — the tag count must EXCLUDE inactive
-    /// users: tags aren't cleared on deactivation (only on transfer), so a terminated-but-tagged
-    /// user would inflate <c>taggedUserCount</c> and disagree with the active-only
-    /// <c>employeeCount</c> on the same node. The <c>users u … AND u.is_active = TRUE</c> predicate
-    /// rides INSIDE the LEFT JOIN's ON clause (NOT a WHERE) so a 0-tag active enhed is still listed
-    /// (COUNT counts non-null <c>u.user_id</c> → 0 when no active tagged user).</para></summary>
-    public async Task<IReadOnlyList<EnhedCountRow>> GetActiveEnhederWithTagCountsAsync(
-        CancellationToken ct = default)
-    {
-        await using var conn = _connectionFactory.Create();
-        await conn.OpenAsync(ct);
-        await using var cmd = new NpgsqlCommand(
-            """
-            SELECT e.organisation_id, e.enhed_id, e.parent_enhed_id, e.name, COUNT(u.user_id) AS tagged
-            FROM enheder e
-            LEFT JOIN user_enheder ue ON ue.enhed_id = e.enhed_id
-            LEFT JOIN users u ON u.user_id = ue.user_id AND u.is_active = TRUE
-            WHERE e.deleted_at IS NULL
-            GROUP BY e.organisation_id, e.enhed_id, e.parent_enhed_id, e.name
-            ORDER BY e.organisation_id, lower(e.name), e.enhed_id
-            """, conn);
-        var rows = new List<EnhedCountRow>();
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
-        {
-            rows.Add(new EnhedCountRow(
-                OrganisationId: reader.GetString(0),
-                EnhedId: reader.GetGuid(1),
-                ParentEnhedId: reader.IsDBNull(2) ? null : reader.GetGuid(2),
-                Name: reader.GetString(3),
-                TaggedUserCount: reader.GetInt64(4)));
-        }
-        return rows;
-    }
-
     /// <summary>Escapes LIKE metacharacters in a (system-derived) materialized_path so a literal
     /// '%' or '_' cannot widen the prefix into a wildcard (cross-MAO over-match). Mirrors the
     /// ApprovalPeriodRepository EscapeLike used by the tree-roster reads; the '\' is the ESCAPE.</summary>
@@ -231,10 +192,3 @@ public sealed class OrganizationRepository
         UpdatedAt = reader.GetDateTime(reader.GetOrdinal("updated_at"))
     };
 }
-
-/// <summary>S98 — one row of the aggregated tree's enhed-with-tag-count read: an active enhed,
-/// its owning Organisation, and how many users are tagged into it. S100: <c>ParentEnhedId</c>
-/// (<c>null</c> = a root) lets the GET /tree assembly NEST the per-Organisation enhed sub-tree +
-/// derive the <c>level</c> = depth. PURE DISPLAY metadata — ZERO authority.</summary>
-public sealed record EnhedCountRow(
-    string OrganisationId, Guid EnhedId, Guid? ParentEnhedId, string Name, long TaggedUserCount);

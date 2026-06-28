@@ -252,30 +252,6 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
         await cmd.ExecuteNonQueryAsync();
     }
 
-    private async Task SetEnhedLabelAsync(string employeeId, string label)
-    {
-        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
-        await conn.OpenAsync();
-        // Upsert a live profile row carrying the enhed_label (the host seeder may have created a
-        // null-label live row already; update it, else insert one).
-        await using var upd = new NpgsqlCommand(
-            "UPDATE employee_profiles SET enhed_label = @label WHERE employee_id = @emp AND effective_to IS NULL", conn);
-        upd.Parameters.AddWithValue("label", label);
-        upd.Parameters.AddWithValue("emp", employeeId);
-        var rows = await upd.ExecuteNonQueryAsync();
-        if (rows == 0)
-        {
-            await using var ins = new NpgsqlCommand(
-                """
-                INSERT INTO employee_profiles (employee_id, part_time_fraction, effective_from, effective_to, enhed_label)
-                VALUES (@emp, 1.000, '0001-01-01', NULL, @label)
-                """, conn);
-            ins.Parameters.AddWithValue("emp", employeeId);
-            ins.Parameters.AddWithValue("label", label);
-            await ins.ExecuteNonQueryAsync();
-        }
-    }
-
     // ════════════════════════════════════════════════════════════════════════════════
     //  R11a — period-status projection: status mapping per status (repository-direct)
     // ════════════════════════════════════════════════════════════════════════════════
@@ -461,10 +437,11 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
         // "sara" (lowercase) matches "Sara Searchable" case-insensitively.
         var (items, _) = await SearchAsync(MintGlobalAdminToken("admin_global"), q: "sara");
         Assert.Contains(items, i => i.UserId == SearchAfd02);
-        // And the enhed_label surfaces when set.
-        await SetEnhedLabelAsync(SearchAfd02, "Team Alpha");
-        var (withLabel, _) = await SearchAsync(MintGlobalAdminToken("admin_global"), q: "sara");
-        Assert.Equal("Team Alpha", withLabel.Single(i => i.UserId == SearchAfd02).EnhedLabel);
+
+        // S103 / TASK-10305 (Enhedsspor Phase 1a): the structured-Enhed display column was dropped
+        // with the legacy Enhed model, so person-search's enhedLabel is now ALWAYS null (the FE
+        // falls back to primaryOrgName; unit-based display returns in Phase 3).
+        Assert.Null(items.Single(i => i.UserId == SearchAfd02).EnhedLabel);
     }
 
     [Fact]

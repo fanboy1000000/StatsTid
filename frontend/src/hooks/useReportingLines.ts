@@ -165,17 +165,12 @@ export function useReportingLines() {
     async (params: {
       q?: string
       excludeEmployeeId?: string
-      // S97 / TASK-9705 — optional structured-enhed filter (the server keeps it
-      // org-bounded inside SearchPeopleAsync; a name-equal enhed in another org
-      // cannot widen results). A malformed value 400s server-side.
-      enhedId?: string
       limit?: number
       offset?: number
     }): Promise<ApiResult<PersonSearchResult>> => {
       const qs = new URLSearchParams()
       if (params.q) qs.set('q', params.q)
       if (params.excludeEmployeeId) qs.set('excludeEmployeeId', params.excludeEmployeeId)
-      if (params.enhedId) qs.set('enhedId', params.enhedId)
       if (params.limit != null) qs.set('limit', String(params.limit))
       if (params.offset != null) qs.set('offset', String(params.offset))
       const query = qs.toString()

@@ -615,8 +615,9 @@ public sealed class ApprovalPeriodRepository
     /// <para>
     /// <b>Composition (one styrelse-bounded, set-based query for the roster + joins):</b>
     /// <list type="bullet">
-    /// <item><description><c>enhedLabel</c> = the live <c>employee_profiles.enhed_label</c>
-    /// (<c>effective_to IS NULL</c>) ?? the primary-org name (the Enhed-tag fallback);</description></item>
+    /// <item><description><c>enhedLabel</c> = the primary-org name (S103 / TASK-10304 — the
+    /// structured-Enhed display column is retired with the legacy Enhed tables; unit-based display
+    /// returns in Enhedsspor Phase 3);</description></item>
     /// <item><description><c>position</c> = the live <c>employee_profiles.position</c> (for FE
     /// search; null when no live profile / unset);</description></item>
     /// <item><description><c>structuralApproverId</c> = the active PRIMARY edge's
@@ -668,14 +669,6 @@ public sealed class ApprovalPeriodRepository
                     u.user_id                AS employee_id,
                     u.display_name           AS display_name,
                     o.org_name               AS primary_org_name,
-                    ep.enhed_label           AS enhed_label,
-                    -- S97 / WARNING E — the user's ACTIVE structured-enhed tag names (joined,
-                    -- ordered) or NULL when untagged. Aggregated in a correlated subquery so the
-                    -- multi-tag JOIN does NOT widen the roster row cardinality (P7: one row/user).
-                    (SELECT string_agg(e.name, ', ' ORDER BY lower(e.name))
-                     FROM user_enheder ue
-                     JOIN enheder e ON e.enhed_id = ue.enhed_id
-                     WHERE ue.user_id = u.user_id AND e.deleted_at IS NULL) AS enhed_tags,
                     ep.position              AS position,
                     rl.manager_id            AS structural_approver_id,
                     mv.vikar_user_id         AS vikar_user_id,
@@ -707,8 +700,6 @@ public sealed class ApprovalPeriodRepository
             var empOrd = reader.GetOrdinal("employee_id");
             var nameOrd = reader.GetOrdinal("display_name");
             var orgNameOrd = reader.GetOrdinal("primary_org_name");
-            var enhedOrd = reader.GetOrdinal("enhed_label");
-            var enhedTagsOrd = reader.GetOrdinal("enhed_tags");
             var posOrd = reader.GetOrdinal("position");
             var approverOrd = reader.GetOrdinal("structural_approver_id");
             var vikarIdOrd = reader.GetOrdinal("vikar_user_id");
@@ -717,11 +708,9 @@ public sealed class ApprovalPeriodRepository
             var vikarReasonOrd = reader.GetOrdinal("vikar_reason");
             while (await reader.ReadAsync(ct))
             {
-                // S97 / WARNING E — display text precedence: the joined ACTIVE enhed tag names,
-                // else the frozen free-text enhed_label, else the org name (symmetric with the
-                // pre-S97 NULL-enhed_label fallback).
-                var enhedTags = reader.IsDBNull(enhedTagsOrd) ? null : reader.GetString(enhedTagsOrd);
-                var enhed = reader.IsDBNull(enhedOrd) ? null : reader.GetString(enhedOrd);
+                // S103 / TASK-10304 — the structured-Enhed display column is retired with the
+                // legacy Enhed tables (the unit-based display returns in Enhedsspor Phase 3). The
+                // roster display label falls back to the primary-org name for now.
                 var orgName = reader.GetString(orgNameOrd);
                 OutgoingVikar? vikar = reader.IsDBNull(vikarIdOrd)
                     ? null
@@ -737,9 +726,8 @@ public sealed class ApprovalPeriodRepository
                 rosterRows.Add(new RosterRow(
                     EmployeeId: reader.GetString(empOrd),
                     DisplayName: reader.GetString(nameOrd),
-                    // S97 — enhedTags ?? enhedLabel ?? primaryOrgName (multi-tag display, then the
-                    // frozen free-text fallback, then the org name).
-                    EnhedLabel: enhedTags ?? enhed ?? orgName,
+                    // S103 — the primary-org name (the unit-based display returns in Phase 3).
+                    EnhedLabel: orgName,
                     Position: reader.IsDBNull(posOrd) ? null : reader.GetString(posOrd),
                     StructuralApproverId: reader.IsDBNull(approverOrd) ? null : reader.GetString(approverOrd),
                     OutgoingVikar: vikar));
@@ -818,8 +806,8 @@ public sealed class ApprovalPeriodRepository
     /// the <c>LIMIT/OFFSET</c> page in one round-trip — NOT load-all-then-filter; the scalar count
     /// reports the true total even on a valid EMPTY trailing page, which a <c>COUNT(*) OVER()</c>
     /// window over the page rows would report as <c>0</c>). Each matched user carries their primary-org name
-    /// and the live <c>employee_profiles.enhed_label</c> (or <c>null</c>; the FE falls back to the
-    /// org name). Read-only / additive.
+    /// (the <c>enhedLabel</c> display column is retired with the legacy Enhed tables in S103 /
+    /// TASK-10304 — it is now always <c>null</c>; the FE falls back to the org name). Read-only / additive.
     ///
     /// <list type="bullet">
     /// <item><description><b>Match:</b> case-insensitive substring on <c>display_name</c> OR
@@ -850,8 +838,7 @@ public sealed class ApprovalPeriodRepository
         IReadOnlyCollection<string> excludedUserIds,
         int limit,
         int offset,
-        CancellationToken ct = default,
-        Guid? enhedId = null)
+        CancellationToken ct = default)
     {
         // GLOBAL (null) = no org filter; empty list = admit nobody.
         var unrestricted = accessibleOrgIds is null;
@@ -885,16 +872,6 @@ public sealed class ApprovalPeriodRepository
                   AND (@term = '' OR u.display_name ILIKE @pattern ESCAPE '\' OR u.username ILIKE @pattern ESCAPE '\')
                   AND (@unrestricted OR u.primary_org_id = ANY(@orgIds))
                   AND (cardinality(@excludedIds) = 0 OR u.user_id <> ALL(@excludedIds))
-                  -- S97 / WARNING E — optional enhed-id filter. Sits INSIDE the org-bound
-                  -- `matched` CTE (primary_org_id = ANY(@orgIds) above), so a name-equal enhed in
-                  -- ANOTHER Organisation can never widen this set cross-org (P7): the EXISTS is
-                  -- keyed by enhed_id (not name), and the user is already org-bounded.
-                  AND (@enhedId IS NULL OR EXISTS (
-                      SELECT 1 FROM user_enheder ue
-                      JOIN enheder e ON e.enhed_id = ue.enhed_id
-                      WHERE ue.user_id = u.user_id
-                        AND ue.enhed_id = @enhedId
-                        AND e.deleted_at IS NULL))
             ),
             total AS (
                 SELECT COUNT(*) AS total_count FROM matched
@@ -903,19 +880,9 @@ public sealed class ApprovalPeriodRepository
                 SELECT
                     m.user_id,
                     m.display_name,
-                    o.org_name        AS primary_org_name,
-                    ep.enhed_label    AS enhed_label,
-                    -- S97 — the user's ACTIVE structured-enhed tag names (joined) or NULL.
-                    -- Correlated subquery in `page` only (costs nothing for the count); does NOT
-                    -- widen the page-row cardinality (one row/user).
-                    (SELECT string_agg(e2.name, ', ' ORDER BY lower(e2.name))
-                     FROM user_enheder ue2
-                     JOIN enheder e2 ON e2.enhed_id = ue2.enhed_id
-                     WHERE ue2.user_id = m.user_id AND e2.deleted_at IS NULL) AS enhed_tags
+                    o.org_name        AS primary_org_name
                 FROM matched m
                 JOIN organizations o ON o.org_id = m.primary_org_id
-                LEFT JOIN employee_profiles ep
-                    ON ep.employee_id = m.user_id AND ep.effective_to IS NULL
                 ORDER BY m.display_name, m.user_id
                 LIMIT @limit OFFSET @offset
             )
@@ -923,9 +890,7 @@ public sealed class ApprovalPeriodRepository
                 t.total_count        AS total_count,
                 p.user_id            AS user_id,
                 p.display_name       AS display_name,
-                p.primary_org_name   AS primary_org_name,
-                p.enhed_label        AS enhed_label,
-                p.enhed_tags         AS enhed_tags
+                p.primary_org_name   AS primary_org_name
             FROM total t
             LEFT JOIN page p ON TRUE
             ORDER BY p.display_name, p.user_id
@@ -937,7 +902,6 @@ public sealed class ApprovalPeriodRepository
         cmd.Parameters.AddWithValue("excludedIds", excludedUserIds.ToArray());
         cmd.Parameters.AddWithValue("limit", limit);
         cmd.Parameters.AddWithValue("offset", offset);
-        cmd.Parameters.Add(new NpgsqlParameter("enhedId", NpgsqlDbType.Uuid) { Value = (object?)enhedId ?? DBNull.Value });
 
         // ONE result set: every row carries total_count; a row with a NULL user_id is the
         // empty-page sentinel (the `total LEFT JOIN page ON TRUE` row that survives when the page
@@ -947,22 +911,19 @@ public sealed class ApprovalPeriodRepository
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         var totalOrd = reader.GetOrdinal("total_count");
         var userOrd = reader.GetOrdinal("user_id");
-        var enhedOrd = reader.GetOrdinal("enhed_label");
-        var enhedTagsOrd = reader.GetOrdinal("enhed_tags");
         while (await reader.ReadAsync(ct))
         {
             total = (int)reader.GetInt64(totalOrd); // identical on every row
             if (reader.IsDBNull(userOrd))
                 continue; // the empty-page sentinel row — total only, no item.
-            // S97 / WARNING E — display precedence: active enhed tag names ?? frozen
-            // enhed_label ?? null (the FE falls back to the org name).
-            var enhedTags = reader.IsDBNull(enhedTagsOrd) ? null : reader.GetString(enhedTagsOrd);
-            var enhedLabel = reader.IsDBNull(enhedOrd) ? null : reader.GetString(enhedOrd);
             items.Add(new PersonSearchHit(
                 UserId: reader.GetString(userOrd),
                 DisplayName: reader.GetString(reader.GetOrdinal("display_name")),
                 PrimaryOrgName: reader.GetString(reader.GetOrdinal("primary_org_name")),
-                EnhedLabel: enhedTags ?? enhedLabel));
+                // S103 / TASK-10304 — the structured-Enhed display column is retired with the
+                // legacy Enhed tables (unit-based display returns in Phase 3); the FE falls back
+                // to the primary-org name.
+                EnhedLabel: null));
         }
         return (items, total);
     }
@@ -1308,8 +1269,9 @@ public sealed record MedarbejderRosterProjection(
 /// <summary>
 /// One enriched medarbejder-roster row (S75-7500 R1). The tree keys on
 /// <paramref name="StructuralApproverId"/> (the raw active PRIMARY <c>reporting_lines.manager_id</c>
-/// — NOT a resolver result). <paramref name="EnhedLabel"/> is <c>employee_profiles.enhed_label</c>
-/// or the primary-org name fallback. <paramref name="OutgoingVikar"/> is the person's OWN active
+/// — NOT a resolver result). <paramref name="EnhedLabel"/> is the primary-org name (S103 /
+/// TASK-10304 — the structured-Enhed display column is retired; unit-based display returns in
+/// Phase 3). <paramref name="OutgoingVikar"/> is the person's OWN active
 /// <c>manager_vikar</c> row (present iff they are an away-manager covered by a vikar).
 /// </summary>
 public sealed record MedarbejderRosterRow(
@@ -1338,9 +1300,9 @@ public sealed record OutgoingVikar(
 
 /// <summary>
 /// One person-search hit (S74-7404 R11b,
-/// <see cref="ApprovalPeriodRepository.SearchPeopleAsync"/>). <paramref name="EnhedLabel"/> is the
-/// live <c>employee_profiles.enhed_label</c> or <c>null</c> (the FE falls back to
-/// <paramref name="PrimaryOrgName"/>).
+/// <see cref="ApprovalPeriodRepository.SearchPeopleAsync"/>). <paramref name="EnhedLabel"/> is now
+/// always <c>null</c> (S103 / TASK-10304 — the structured-Enhed display column is retired); the FE
+/// falls back to <paramref name="PrimaryOrgName"/>.
 /// </summary>
 public sealed record PersonSearchHit(
     string UserId,

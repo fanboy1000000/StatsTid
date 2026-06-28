@@ -20,12 +20,6 @@ public sealed class EmployeeProfileCreated : DomainEventBase
     public required decimal PartTimeFraction { get; init; }
     public string? Position { get; init; }
 
-    // S74 / TASK-7400 — free-text "enhed" display label (additive, display-only;
-    // inert for rules/payroll). Nullable; serialized only when non-null (the
-    // EventSerializer's WhenWritingNull policy), so historical events round-trip
-    // unchanged — no new EventSerializer registration needed (same event type).
-    public string? EnhedLabel { get; init; }
-
     // Temporal validity — always today's date in S31 live path;
     // '0001-01-01' for backfill rows.
     public required DateOnly EffectiveFrom { get; init; }

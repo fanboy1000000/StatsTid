@@ -193,7 +193,6 @@ public sealed class EmployeeProfileRepository
             SELECT
                 ep.part_time_fraction,
                 ep.position,
-                ep.enhed_label,
                 ep.version,
                 u.agreement_code,
                 u.ok_version,
@@ -225,11 +224,6 @@ public sealed class EmployeeProfileRepository
             Position = reader.IsDBNull(reader.GetOrdinal("position"))
                 ? null
                 : reader.GetString(reader.GetOrdinal("position")),
-            // S74 / TASK-7400 — free-text display label (display-only, inert for
-            // rules/payroll). Rides the same temporal profile row as position.
-            EnhedLabel = reader.IsDBNull(reader.GetOrdinal("enhed_label"))
-                ? null
-                : reader.GetString(reader.GetOrdinal("enhed_label")),
             OrgId = reader.GetString(reader.GetOrdinal("primary_org_id")),
         };
         var version = reader.GetInt64(reader.GetOrdinal("version"));
@@ -282,10 +276,10 @@ public sealed class EmployeeProfileRepository
         await using var cmd = new NpgsqlCommand(
             """
             INSERT INTO employee_profiles (
-                profile_id, employee_id, part_time_fraction, position, enhed_label,
+                profile_id, employee_id, part_time_fraction, position,
                 effective_from, effective_to, version)
             VALUES (
-                @profileId, @employeeId, @partTimeFraction, @position, @enhedLabel,
+                @profileId, @employeeId, @partTimeFraction, @position,
                 @effectiveFrom, NULL, 1)
             RETURNING profile_id, version
             """, conn, tx);
@@ -293,7 +287,6 @@ public sealed class EmployeeProfileRepository
         cmd.Parameters.AddWithValue("employeeId", req.EmployeeId);
         cmd.Parameters.AddWithValue("partTimeFraction", req.PartTimeFraction);
         cmd.Parameters.AddWithValue("position", (object?)req.Position ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("enhedLabel", (object?)req.EnhedLabel ?? DBNull.Value);
         cmd.Parameters.AddWithValue("effectiveFrom", DateOnly.FromDateTime(DateTime.UtcNow));
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct))
@@ -503,8 +496,7 @@ public sealed class EmployeeProfileRepository
             EmployeeId: req.EmployeeId,
             PartTimeFraction: req.PartTimeFraction,
             Position: req.Position,
-            EffectiveFrom: DateOnly.FromDateTime(DateTime.UtcNow),
-            EnhedLabel: req.EnhedLabel);
+            EffectiveFrom: DateOnly.FromDateTime(DateTime.UtcNow));
         try
         {
             var result = await SupersedeAndCreateAsync(conn, tx, supersedeRequest, expectedVersion, ct);
@@ -746,10 +738,10 @@ public sealed class EmployeeProfileRepository
         await using var cmd = new NpgsqlCommand(
             """
             INSERT INTO employee_profiles (
-                profile_id, employee_id, part_time_fraction, position, enhed_label,
+                profile_id, employee_id, part_time_fraction, position,
                 effective_from, effective_to, version)
             VALUES (
-                @profileId, @employeeId, @partTimeFraction, @position, @enhedLabel,
+                @profileId, @employeeId, @partTimeFraction, @position,
                 @effectiveFrom, NULL, @version)
             RETURNING profile_id, version
             """, conn, tx);
@@ -757,7 +749,6 @@ public sealed class EmployeeProfileRepository
         cmd.Parameters.AddWithValue("employeeId", req.EmployeeId);
         cmd.Parameters.AddWithValue("partTimeFraction", req.PartTimeFraction);
         cmd.Parameters.AddWithValue("position", (object?)req.Position ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("enhedLabel", (object?)req.EnhedLabel ?? DBNull.Value);
         cmd.Parameters.AddWithValue("effectiveFrom", req.EffectiveFrom);
         cmd.Parameters.AddWithValue("version", nextVersion);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -788,7 +779,6 @@ public sealed class EmployeeProfileRepository
             UPDATE employee_profiles SET
                 part_time_fraction = @partTimeFraction,
                 position = @position,
-                enhed_label = @enhedLabel,
                 version = version + 1,
                 updated_at = NOW()
             WHERE profile_id = @profileId
@@ -797,7 +787,6 @@ public sealed class EmployeeProfileRepository
         cmd.Parameters.AddWithValue("profileId", profileId);
         cmd.Parameters.AddWithValue("partTimeFraction", req.PartTimeFraction);
         cmd.Parameters.AddWithValue("position", (object?)req.Position ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("enhedLabel", (object?)req.EnhedLabel ?? DBNull.Value);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct))
         {
@@ -844,8 +833,7 @@ public sealed class EmployeeProfileRepository
 public sealed record EmployeeProfileUpsertRequest(
     string EmployeeId,
     decimal PartTimeFraction,
-    string? Position,
-    string? EnhedLabel = null);
+    string? Position);
 
 /// <summary>
 /// S31 / TASK-3102 — payload for <see cref="EmployeeProfileRepository.CreateAsync"/>.
@@ -856,8 +844,7 @@ public sealed record EmployeeProfileUpsertRequest(
 public sealed record EmployeeProfileCreateRequest(
     string EmployeeId,
     decimal PartTimeFraction,
-    string? Position,
-    string? EnhedLabel = null);
+    string? Position);
 
 /// <summary>
 /// S33 / TASK-3302 — payload for <see cref="EmployeeProfileRepository.SupersedeAndCreateAsync"/>.
@@ -873,8 +860,7 @@ public sealed record EmployeeProfileSupersedeRequest(
     string EmployeeId,
     decimal PartTimeFraction,
     string? Position,
-    DateOnly EffectiveFrom,
-    string? EnhedLabel = null);
+    DateOnly EffectiveFrom);
 
 /// <summary>
 /// S33 / TASK-3302 — result of <see cref="EmployeeProfileRepository.SupersedeAndCreateAsync"/>.

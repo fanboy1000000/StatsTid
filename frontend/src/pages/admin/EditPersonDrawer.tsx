@@ -54,11 +54,6 @@ interface EditPersonDrawerProps {
   extraSections?: ReactNode
   /** 7604 — tree-derived display context for the lifecycle sections (optional). */
   lifecycleContext?: LifecycleContext
-  /** S97 / TASK-9705 — the editing person's current enhed tag NAMES (the roster
-      `enhedLabel`, a comma-joined display label) used to seed the tag picker's
-      initial selection. Optional (a non-tree entry point passes nothing → the
-      picker seeds empty). */
-  currentEnhedTagNames?: string | null
   /** True to suppress the internal lifecycle sections (e.g. a host that renders
       its own). Defaults to false → the drawer renders them. */
   hideLifecycleSections?: boolean
@@ -73,8 +68,6 @@ const EMPTY_STAMDATA: StamdataFields = {
 const EMPTY_PROFILE: ProfileFields = {
   partTimeFraction: '1.000',
   position: '',
-  enhedLabel: '',
-  enhedIds: [],
 }
 const EMPTY_ENTITLEMENT: EntitlementFields = {
   birthDate: '',
@@ -92,7 +85,6 @@ export function EditPersonDrawer({
   onSaved,
   extraSections,
   lifecycleContext,
-  currentEnhedTagNames,
   hideLifecycleSections = false,
 }: EditPersonDrawerProps) {
   const isNew = !user
@@ -182,10 +174,6 @@ export function EditPersonDrawer({
           setProfile({
             partTimeFraction: profileSnap.partTimeFraction.toFixed(3),
             position: profileSnap.position ?? '',
-            enhedLabel: profileSnap.enhedLabel ?? '',
-            // S97 — the structured tags are seeded by the picker (from the tag
-            // names) once the org's enheder resolve; start empty here.
-            enhedIds: [],
           })
         }
         setEntitlement({
@@ -203,9 +191,6 @@ export function EditPersonDrawer({
           employmentStartInitial: employmentStart?.employmentStartDate ?? '',
           childSickRowExists: elig?.rowExists ?? false,
           childSickVersion: elig?.version ?? null,
-          // S97 — the dirtiness baseline; the picker seeds the form to the current
-          // tags and re-syncs this via onSeed so an un-touched save is a no-op.
-          enhedIdsInitial: [],
         })
       } catch (err) {
         if (!cancelled) setFormError(err instanceof Error ? err.message : String(err))
@@ -232,11 +217,6 @@ export function EditPersonDrawer({
   const onChildSickToggle = useCallback((next: boolean) => {
     setEntitlement((e) => ({ ...e, childSickEligible: next }))
     setChildSickDirty(true)
-  }, [])
-  // S97 — the picker seeded the tag selection from the current tag names; sync the
-  // save-dirtiness baseline so an un-touched save does NOT re-PUT the seeded tags.
-  const onEnhederSeed = useCallback((ids: string[]) => {
-    setLive((cur) => (cur ? { ...cur, enhedIdsInitial: [...ids] } : cur))
   }, [])
 
   const handleSubmit = async (e: FormEvent) => {
@@ -309,14 +289,10 @@ export function EditPersonDrawer({
       const freshUser = await fetchUser(live.user.userId)
       const profileSnap = isHr ? await fetchEmployeeProfile(live.user.userId) : null
       if (profileSnap) {
-        setProfile((cur) => ({
+        setProfile({
           partTimeFraction: profileSnap.partTimeFraction.toFixed(3),
           position: profileSnap.position ?? '',
-          enhedLabel: profileSnap.enhedLabel ?? '',
-          // Preserve the user's in-flight tag selection across a stale-refresh of
-          // the (separate) profile row — the tags are not part of this re-read.
-          enhedIds: cur.enhedIds,
-        }))
+        })
       }
       // Re-bind the form's stamdata to the fresh server row (a concurrent edit may
       // have changed displayName/email/org/agreement), so the retried users PUT
@@ -463,10 +439,6 @@ export function EditPersonDrawer({
                 onChange={patchProfile}
                 hasProfile={live?.profile != null}
                 saveState={sections.profile}
-                organisationId={stamdata.primaryOrgId}
-                currentTagNames={currentEnhedTagNames}
-                onEnhederSeed={onEnhederSeed}
-                enhederSaveState={sections.enheder}
                 disabled={saving}
               />
               <EntitlementSection

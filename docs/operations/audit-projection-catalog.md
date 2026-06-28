@@ -81,6 +81,13 @@ The future Test #1 (catalog ↔ DI registrations ↔ EventSerializer parity) par
 | `UserUpdated` | TENANT_TARGETED | `user → users.primary_org_id` | `user_id` | `{user_id, before, after}` | interface | S44 `bba76aa` |
 | `RoleAssignmentGranted` | TENANT_TARGETED | `user → users.primary_org_id` | `user_id` | `{user_id, role, scope}` | interface | S44 `bba76aa` |
 | `RoleAssignmentRevoked` | TENANT_TARGETED | `user → users.primary_org_id` | `user_id` | `{user_id, role, scope}` | interface | S44 `bba76aa` |
+| `UnitCreated` | TENANT_TARGETED | event `OrganisationId` | `unit_id` | `{unitId, organisationId, parentUnitId?, type, name}` | interface (no emit site yet — writers land S104; ADR-038 D10 Enhedsspor) | S103 |
+| `UnitRenamed` | TENANT_TARGETED | `context.ResolvedTargetOrgId` (no org in payload) | `unit_id` | `{unitId, newName}` | interface (no emit site yet — S104) | S103 |
+| `UnitMoved` | TENANT_TARGETED | event `OrganisationId` | `unit_id` | `{unitId, organisationId, oldParentUnitId?, newParentUnitId?}` | interface (no emit site yet — S104) | S103 |
+| `UnitDeleted` | TENANT_TARGETED | event `OrganisationId` | `unit_id` | `{unitId, organisationId}` | interface (no emit site yet — S104) | S103 |
+| `UnitLeaderDesignated` | TENANT_TARGETED | event `OrganisationId` | `user_id` | `{unitId, userId, organisationId}` | interface (no emit site yet — S104) | S103 |
+| `UnitLeaderRemoved` | TENANT_TARGETED | event `OrganisationId` | `user_id` | `{unitId, userId, organisationId}` | interface (no emit site yet — S104) | S103 |
+| `UserUnitChanged` | TENANT_TARGETED | event `OrganisationId` | `user_id` | `{userId, oldUnitId?, newUnitId?, organisationId}` | interface (no emit site yet — S104) | S103 |
 | `AgreementConfigCreated` | GLOBAL_TENANT_VISIBLE | NULL | `config_id` | `{config_id, agreement_code, ok_version}` | interface | S44b |
 | `AgreementConfigUpdated` | GLOBAL_TENANT_VISIBLE | NULL | `config_id` | `{config_id, agreement_code, ok_version}` | interface | S44b |
 | `AgreementConfigPublished` | GLOBAL_TENANT_VISIBLE | NULL | `config_id` | `{config_id, agreement_code, ok_version, archived_config_id?}` | interface | S44b |

@@ -226,6 +226,24 @@
 - `idx_org_path` on (materialized_path text_pattern_ops)
 - `idx_org_type` on (org_type)
 
+## units
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| unit_id | UUID | No | PK | gen_random_uuid() |
+| organisation_id | TEXT | No | FK→organizations |  |
+| parent_unit_id | UUID | Yes | FK→units |  |
+| type | TEXT | No |  |  |
+| name | TEXT | No |  |  |
+| deleted_at | TIMESTAMPTZ | Yes |  |  |
+| version | BIGINT | No |  | 1 |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+
+**Indexes:**
+- `idx_units_active_name` (UNIQUE) on (organisation_id, COALESCE(parent_unit_id, '00000000-0000-0000-0000-000000000000'::uuid) WHERE deleted_at IS NULL
+- `idx_units_org` on (organisation_id)
+- `idx_units_parent` on (parent_unit_id)
+
 ## users
 
 | Column | Type | Null | Key | Default |
@@ -236,6 +254,7 @@
 | display_name | TEXT | No |  |  |
 | email | TEXT | Yes |  |  |
 | primary_org_id | TEXT | No | FK→organizations |  |
+| unit_id | UUID | Yes | FK→units |  |
 | agreement_code | TEXT | No |  | 'AC' |
 | ok_version | TEXT | No |  | 'OK24' |
 | employment_category | TEXT | No |  | 'Standard' |
@@ -251,6 +270,7 @@
 **Indexes:**
 - `idx_users_org` on (primary_org_id)
 - `idx_users_username` on (username)
+- `idx_users_unit` on (unit_id)
 
 ## employee_profiles
 
@@ -265,7 +285,6 @@
 | version | BIGINT | No |  | 1 |
 | created_at | TIMESTAMPTZ | No |  | NOW() |
 | updated_at | TIMESTAMPTZ | No |  | NOW() |
-| enhed_label | TEXT | Yes |  |  |
 
 **Indexes:**
 - `idx_employee_profiles_live` (UNIQUE) on (employee_id) WHERE effective_to IS NULL
@@ -291,35 +310,18 @@
 - `idx_employee_profile_audit_profile_id` on (profile_id)
 - `idx_employee_profile_audit_employee_id` on (employee_id)
 
-## enheder
+## unit_leaders
 
 | Column | Type | Null | Key | Default |
 |--------|------|------|-----|---------|
-| enhed_id | UUID | No | PK | gen_random_uuid() |
-| organisation_id | TEXT | No | FK→organizations |  |
-| parent_enhed_id | UUID | Yes | FK→enheder |  |
-| name | TEXT | No |  |  |
-| deleted_at | TIMESTAMPTZ | Yes |  |  |
-| version | BIGINT | No |  | 1 |
-| created_at | TIMESTAMPTZ | No |  | NOW() |
-
-**Indexes:**
-- `idx_enheder_active_name` (UNIQUE) on (organisation_id, lower(name) WHERE deleted_at IS NULL
-- `idx_enheder_org` on (organisation_id)
-- `idx_enheder_parent` on (parent_enhed_id)
-
-## user_enheder
-
-| Column | Type | Null | Key | Default |
-|--------|------|------|-----|---------|
+| unit_id | UUID | No | FK→units |  |
 | user_id | TEXT | No | FK→users |  |
-| enhed_id | UUID | No | FK→enheder |  |
 
 **Table constraints:**
-- PRIMARY KEY (user_id, enhed_id)
+- PRIMARY KEY (unit_id, user_id)
 
 **Indexes:**
-- `idx_user_enheder_enhed` on (enhed_id)
+- `idx_unit_leaders_user` on (user_id)
 
 ## user_agreement_codes
 
@@ -1406,11 +1408,11 @@
 | 10 | danish_public_holidays | -- |
 | 11 | audit_log | -- |
 | 12 | organizations | -- |
-| 13 | users | -- |
-| 14 | employee_profiles | -- |
-| 15 | employee_profile_audit | audit |
-| 16 | enheder | -- |
-| 17 | user_enheder | -- |
+| 13 | units | -- |
+| 14 | users | -- |
+| 15 | employee_profiles | -- |
+| 16 | employee_profile_audit | audit |
+| 17 | unit_leaders | -- |
 | 18 | user_agreement_codes | -- |
 | 19 | user_agreement_codes_audit | audit |
 | 20 | users_audit | audit |

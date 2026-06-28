@@ -12,10 +12,12 @@ namespace StatsTid.Tools.DemoSeed.Generation;
 /// SQL-seeded rather than issued via the API because <c>POST /api/admin/roles/grant</c> has a
 /// pre-existing production defect — see SPRINT-84 Discovered Defects.)
 ///
-/// S97 / TASK-9706 also emits the structured <c>enheder</c> + <c>user_enheder</c> tables
-/// (ADR-035 display metadata, promoted from the per-user <c>enhed_label</c>): the DISTINCT
-/// (organisation, name) labels with deterministic-per-run UUIDs + one membership tag per
-/// labelled user. The <c>enhed_label</c> pre-seed stays as the transitional display fallback.
+/// S103 / TASK-10305 (Enhedsspor Phase 1a, ADR-038 D9): the legacy <c>enhed_label</c> column and the
+/// <c>enheder</c> / <c>user_enheder</c> tables were dropped (replaced by <c>units</c> /
+/// <c>unit_leaders</c> / <c>users.unit_id</c>), so this emitter no longer produces any Enhed SQL.
+/// Demo users home directly at their ORGANISATION (<c>users.unit_id</c> stays NULL); the structural
+/// unit tree + the units CRUD ship in S104 / Phase 3 (the modest demo unit tree under STY02 lives in
+/// init.sql).
 ///
 /// Only the reporting TREE + activity are LOADED POST-BOOT via the API (event-emitting; OQ-4)
 /// and so are NOT in this file.
@@ -37,7 +39,7 @@ public static class SqlEmitter
 
         // ── 1. Organisations ──
         sb.AppendLine("-- ── Organisations (S92 / ADR-035 flatten: 1 demo MAO root + N ORGANISATIONs under it; ──");
-        sb.AppendLine("--    no AFDELING/TEAM org rows — the former leaf-unit names ride employee_profiles.enhed_label) ──");
+        sb.AppendLine("--    no AFDELING/TEAM org rows — deep structure lives in `units` from S104 / Phase 3) ──");
         sb.AppendLine("INSERT INTO organizations (org_id, org_name, org_type, parent_org_id, materialized_path, agreement_code, ok_version, is_active) VALUES");
         AppendRows(sb, dataset.Orgs, (rb, o) =>
         {
@@ -94,85 +96,14 @@ public static class SqlEmitter
         sb.AppendLine("ON CONFLICT DO NOTHING;");
         sb.AppendLine();
 
-        // ── 3b. Demo employee_profiles enhed_label pre-seed (S92 / ADR-035) ──
-        //    Every rank-and-file demo user used to sit on an AFDELING/TEAM leaf org; the flatten
-        //    moves them UP to their ORGANISATION and carries the former unit name as the
-        //    display-only employee_profiles.enhed_label. We pre-seed ONE live profile row (+ a
-        //    matching CREATED audit row) per such user so the label survives first boot. The
-        //    EmployeeProfileSeeder is idempotent (it only creates rows for users lacking a live
-        //    effective_to IS NULL row), so it SKIPS these and backfills the rest (the org-root
-        //    managers, who carry no enhed_label) with a NULL-enhed_label profile as before.
-        //    Display-only, inert for rules/payroll; no outbox event (a SQL-side outbox INSERT would
-        //    bypass the EventSerializer registry — the EmployeeProfileSeeder's documented constraint).
-        //    NOTE: this runs as zz-demo-seed.sql AFTER init.sql, which adds the enhed_label column.
-        var enhedUsers = dataset.Users.Where(u => u.IsActive && u.EnhedLabel is not null).ToList();
-        if (enhedUsers.Count > 0)
-        {
-            sb.AppendLine("-- ── Demo employee_profiles enhed_label pre-seed (former AFDELING/TEAM unit name, display-only) ──");
-            sb.AppendLine("INSERT INTO employee_profiles (employee_id, part_time_fraction, position, enhed_label)");
-            sb.AppendLine("SELECT m.employee_id, 1.000, NULL, m.enhed_label");
-            sb.AppendLine("FROM (VALUES");
-            AppendRows(sb, enhedUsers, (rb, u) =>
-                rb.Append('(').Append(Lit(u.UserId)).Append(", ").Append(Lit(u.EnhedLabel!)).Append(')'));
-            sb.AppendLine(") AS m(employee_id, enhed_label)");
-            sb.AppendLine("WHERE NOT EXISTS (");
-            sb.AppendLine("    SELECT 1 FROM employee_profiles p");
-            sb.AppendLine("    WHERE p.employee_id = m.employee_id AND p.effective_to IS NULL");
-            sb.AppendLine(");");
-            sb.AppendLine();
-
-            sb.AppendLine("INSERT INTO employee_profile_audit (");
-            sb.AppendLine("    profile_id, employee_id, action,");
-            sb.AppendLine("    previous_data, new_data,");
-            sb.AppendLine("    version_before, version_after,");
-            sb.AppendLine("    actor_id, actor_role)");
-            sb.AppendLine("SELECT p.profile_id, p.employee_id, 'CREATED',");
-            sb.AppendLine("       NULL,");
-            sb.AppendLine("       jsonb_build_object('partTimeFraction', 1.000, 'position', NULL, 'enhedLabel', p.enhed_label),");
-            sb.AppendLine("       NULL, 1,");
-            sb.AppendLine("       'DEMO_SEED', 'SYSTEM'");
-            sb.AppendLine("FROM employee_profiles p");
-            sb.AppendLine("WHERE p.employee_id LIKE 'demo\\_%'");
-            sb.AppendLine("  AND p.effective_to IS NULL");
-            sb.AppendLine("  AND p.enhed_label IS NOT NULL");
-            sb.AppendLine("  AND NOT EXISTS (");
-            sb.AppendLine("      SELECT 1 FROM employee_profile_audit a");
-            sb.AppendLine("      WHERE a.profile_id = p.profile_id AND a.action = 'CREATED'");
-            sb.AppendLine("  );");
-            sb.AppendLine();
-        }
-
-        // ── 3c. S97 / TASK-9706 — structured enheder + user_enheder tags (ADR-035) ──
-        //     Promote the per-user enhed_label (above) into the S97 structured model: the DISTINCT
-        //     (organisation_id, name) labels become enheder rows (deterministic-per-run UUID id),
-        //     and each labelled user gets a user_enheder tag (label → their org's matching enhed).
-        //     PURE DISPLAY METADATA — zero authority/scope/approval meaning. The enhed_label pre-seed
-        //     above STAYS (the transitional read-only display fallback). The DISTINCT set satisfies the
-        //     partial-unique (organisation_id, lower(name)) WHERE deleted_at IS NULL; the
-        //     user_enheder FK resolves to the row emitted just above. ON CONFLICT DO NOTHING (re-run-safe;
-        //     a fresh volume is empty so nothing is dropped). Runs as zz-demo-seed.sql AFTER init.sql,
-        //     which creates the enheder / user_enheder tables.
-        if (dataset.Enheder.Count > 0)
-        {
-            sb.AppendLine("-- ── Demo enheder (DISTINCT former-unit display names per Organisation; ADR-035 metadata) ──");
-            sb.AppendLine("INSERT INTO enheder (enhed_id, organisation_id, name) VALUES");
-            AppendRows(sb, dataset.Enheder, (rb, e) =>
-                rb.Append('(')
-                  .Append("UUID ").Append(Lit(e.EnhedId)).Append(", ")
-                  .Append(Lit(e.OrganisationId)).Append(", ")
-                  .Append(Lit(e.Name)).Append(')'));
-            sb.AppendLine("ON CONFLICT DO NOTHING;");
-            sb.AppendLine();
-
-            sb.AppendLine("-- ── Demo user_enheder tags (one per labelled user; same-Organisation invariant) ──");
-            sb.AppendLine("INSERT INTO user_enheder (user_id, enhed_id) VALUES");
-            AppendRows(sb, dataset.UserEnheder, (rb, t) =>
-                rb.Append('(')
-                  .Append(Lit(t.UserId)).Append(", ")
-                  .Append("UUID ").Append(Lit(t.EnhedId)).Append(')'));
-            sb.AppendLine("ON CONFLICT DO NOTHING;");
-            sb.AppendLine();
-        }
+        // ── 3b. (RETIRED) Demo enhed_label / structured enheder pre-seed ──
+        //    S103 / TASK-10305 (Enhedsspor Phase 1a, ADR-038 D9): the legacy
+        //    employee_profiles.enhed_label COLUMN and the enheder / user_enheder TABLES were dropped
+        //    (replaced by units / unit_leaders / users.unit_id). The demo no longer emits any of
+        //    those — every demo user simply homes at its ORGANISATION (users.unit_id stays NULL; the
+        //    EmployeeProfileSeeder backfills a plain profile on boot). The structural unit tree + the
+        //    units CRUD that populates it ship in S104 / Phase 3; the modest demo unit tree under
+        //    STY02 lives directly in init.sql.
 
         // ── 4. Demo GLOBAL_ADMIN role row (GLOBAL scope; login derives the JWT scopes from this) ──
         sb.AppendLine("-- ── Demo GLOBAL_ADMIN role assignment (GLOBAL scope) ──");
@@ -227,7 +158,6 @@ public static class SqlEmitter
             $"-- scale={m.Scale}  seed={m.Seed}  referenceDate={m.ReferenceDate}\n" +
             $"-- orgs={dataset.Orgs.Count}  users={dataset.Users.Count} (+1 demo_admin)  " +
             $"employeeRoles={dataset.EmployeeRoles.Count}  privilegedRoles={dataset.PrivilegedRoles.Count}\n" +
-            $"-- enheder={dataset.Enheder.Count}  userEnheder={dataset.UserEnheder.Count} (S97 / ADR-035 structured Enhed metadata)\n" +
             "-- ============================================================================\n\n";
     }
 

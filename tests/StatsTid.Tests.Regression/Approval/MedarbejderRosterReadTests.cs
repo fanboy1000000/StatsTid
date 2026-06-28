@@ -22,7 +22,9 @@ namespace StatsTid.Tests.Regression.Approval;
 /// The tree is STRUCTURAL: each row's <c>structuralApproverId</c> is the person's RAW active
 /// PRIMARY <c>reporting_lines.manager_id</c> (a left-join edge, NOT a resolver result); the vikar
 /// is a per-away-manager annotation (the person's OWN active <c>manager_vikar</c> row). The read
-/// enriches the Organisation roster with <c>enhedLabel ?? primaryOrgName</c> + <c>position</c> +
+/// enriches the Organisation roster with <c>enhedLabel</c> (= the primary-org name post-S103, the
+/// legacy Enhed display column having been dropped — unit-based display returns in Phase 3) +
+/// <c>position</c> +
 /// last-closed-month <c>periodStatus</c> + <c>outgoingVikar</c> + the deterministic
 /// <c>isRoot</c>/<c>isOrphan</c> flags, and reuses the existing S74 <c>pendingCountByManager</c>
 /// tally unchanged. Reads only — no events, no writes.
@@ -208,13 +210,16 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
         await cmd.ExecuteNonQueryAsync();
     }
 
-    private async Task SetProfileAsync(string employeeId, string? enhedLabel, string? position)
+    /// <summary>Sets the live profile's position. S103 / TASK-10305 (Enhedsspor Phase 1a): the
+    /// <c>employee_profiles.enhed_label</c> display column was dropped with the legacy Enhed model,
+    /// so there is no label to set — the roster's <c>enhedLabel</c> field is now always the
+    /// primary-org name (unit-based display returns in Phase 3).</summary>
+    private async Task SetProfileAsync(string employeeId, string? position)
     {
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
         await conn.OpenAsync();
         await using var upd = new NpgsqlCommand(
-            "UPDATE employee_profiles SET enhed_label = @label, position = @pos WHERE employee_id = @emp AND effective_to IS NULL", conn);
-        upd.Parameters.AddWithValue("label", (object?)enhedLabel ?? DBNull.Value);
+            "UPDATE employee_profiles SET position = @pos WHERE employee_id = @emp AND effective_to IS NULL", conn);
         upd.Parameters.AddWithValue("pos", (object?)position ?? DBNull.Value);
         upd.Parameters.AddWithValue("emp", employeeId);
         var rows = await upd.ExecuteNonQueryAsync();
@@ -222,12 +227,11 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
         {
             await using var ins = new NpgsqlCommand(
                 """
-                INSERT INTO employee_profiles (employee_id, part_time_fraction, position, effective_from, effective_to, enhed_label)
-                VALUES (@emp, 1.000, @pos, '0001-01-01', NULL, @label)
+                INSERT INTO employee_profiles (employee_id, part_time_fraction, position, effective_from, effective_to)
+                VALUES (@emp, 1.000, @pos, '0001-01-01', NULL)
                 """, conn);
             ins.Parameters.AddWithValue("emp", employeeId);
             ins.Parameters.AddWithValue("pos", (object?)position ?? DBNull.Value);
-            ins.Parameters.AddWithValue("label", (object?)enhedLabel ?? DBNull.Value);
             await ins.ExecuteNonQueryAsync();
         }
     }
@@ -252,7 +256,7 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
 
     // ════════════════════════════════════════════════════════════════════════════════
     //  Repository-direct: composition (structuralApproverId, status, isRoot/isOrphan,
-    //  enhedLabel fallback, position, outgoingVikar, pendingCountByManager passthrough)
+    //  enhedLabel = primary-org name (S103), position, outgoingVikar, pendingCountByManager passthrough)
     // ════════════════════════════════════════════════════════════════════════════════
 
     [Fact]
@@ -368,28 +372,29 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Roster_EnhedLabel_FallsBackToOrgName_WhenNull_AndPositionServed()
+    public async Task Roster_EnhedLabel_IsPrimaryOrgName_AndPositionServed()
     {
-        // EmpA: explicit enhed_label + position. EmpB: position but NO label → enhedLabel falls
-        // back to the primary-org name (STY02).
-        await SetProfileAsync(EmpA, enhedLabel: "Team Alpha", position: "Sagsbehandler");
-        await SetProfileAsync(EmpB, enhedLabel: null, position: "Fuldmægtig");
+        // S103 / TASK-10305 (Enhedsspor Phase 1a): the structured-Enhed display column was dropped
+        // with the legacy Enhed model, so the roster's enhedLabel is now ALWAYS the primary-org name
+        // (STY02's org_name = "Statens IT"); only position is still per-profile. Unit-based display
+        // returns in Phase 3.
+        await SetProfileAsync(EmpA, position: "Sagsbehandler");
+        await SetProfileAsync(EmpB, position: "Fuldmægtig");
 
         var repo = NewApprovalRepo();
         var roster = await repo.GetMedarbejderRosterForTreeAsync("/MIN01/STY02/");
 
         MedarbejderRosterRow Row(string id) => roster.Employees.Single(e => e.EmployeeId == id);
 
-        // Explicit label wins; position served.
-        Assert.Equal("Team Alpha", Row(EmpA).EnhedLabel);
+        // enhedLabel == the primary-org name ("Statens IT", the human-readable org_name, NOT the org
+        // id) for EVERY row now; position still served per live profile.
+        Assert.Equal("Statens IT", Row(EmpA).EnhedLabel);
         Assert.Equal("Sagsbehandler", Row(EmpA).Position);
 
-        // Null label → org-NAME fallback (STY02's org_name = "Statens IT", the human-readable name,
-        // NOT the org id); position still served.
         Assert.Equal("Statens IT", Row(EmpB).EnhedLabel);
         Assert.Equal("Fuldmægtig", Row(EmpB).Position);
 
-        // No profile at all (Orphan) → org-name fallback + null position.
+        // No profile at all (Orphan) → org-name still served + null position.
         Assert.Equal("Statens IT", Row(Orphan).EnhedLabel);
         Assert.Null(Row(Orphan).Position);
     }
@@ -421,7 +426,7 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
     public async Task RosterEndpoint_ScopedAdmin_GetsRoster_AndCrossStyrelseDenied()
     {
         await InsertClosedPeriodAsync(EmpA, "STY02", "APPROVED");
-        await SetProfileAsync(EmpA, enhedLabel: "Team Alpha", position: "Sagsbehandler");
+        await SetProfileAsync(EmpA, position: "Sagsbehandler");
         await InsertActiveVikarAsync(AwayMgr, Vikar, new DateOnly(2099, 12, 31), "SYGDOM");
 
         // STY02-scoped LocalAdmin → 200 with the full served shape.
@@ -434,11 +439,12 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
         var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
         var employees = body.GetProperty("employees");
 
-        // EmpA: structuralApproverId + status + enhedLabel + position served.
+        // EmpA: structuralApproverId + status + enhedLabel (= the primary-org name post-S103) +
+        // position served.
         var empA = employees.EnumerateArray().First(e => e.GetProperty("employeeId").GetString() == EmpA);
         Assert.Equal(RootMgr, empA.GetProperty("structuralApproverId").GetString());
         Assert.Equal("APPROVED", empA.GetProperty("periodStatus").GetString());
-        Assert.Equal("Team Alpha", empA.GetProperty("enhedLabel").GetString());
+        Assert.Equal("Statens IT", empA.GetProperty("enhedLabel").GetString());
         Assert.Equal("Sagsbehandler", empA.GetProperty("position").GetString());
         Assert.Equal(JsonValueKind.Null, empA.GetProperty("outgoingVikar").ValueKind);
         Assert.False(empA.GetProperty("isRoot").GetBoolean());
