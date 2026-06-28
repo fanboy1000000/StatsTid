@@ -8,7 +8,7 @@
 | **End Date** | 2026-06-28 |
 | **Orchestrator Approved** | yes — 2026-06-28 |
 | **Build Verified** | yes — `dotnet build` 0 errors (110 pre-existing warnings); frontend build 0 errors |
-| **Test Verified** | yes (local) — 852 unit + 29 demoseed + 517 FE passing; Docker-gated regression + `UnitFoundationTests` **CI-pending** (Docker unavailable locally; verified by CI on push) |
+| **Test Verified** | **yes — CI GREEN `28329542219` (all 7 jobs)**: 852 unit + 1100 regression (incl. `UnitFoundationTests`, 33m21s) + 6 smoke + 517 FE + e2e; 0 failures. (Initial close was CI-pending — Docker unavailable locally + an account-billing block; resolved by making the repo public, re-run green.) |
 
 ## Sprint Goal
 Land the **data + event foundation** for the Enhedsspor model (ADR-038 Phase 1a — the owner-chosen split of the Phase-1 plan): the `units` + `unit_leaders` + `users.unit_id` schema (greenfield, **replacing** `enheder`/`user_enheder`/`employee_profiles.enhed_label`), the new `Unit*`/leader/membership events, the greenfield demo reseed into the new shape, and the **complete enhed/EmployeeProfile consumer cutover** — leaving the build + the existing approval/roster path GREEN (on the retained `reporting_lines` + the Organisation-direct `primary_org_id`). **No units CRUD/endpoints, no runtime unit-move concurrency, no cross-Org transfer, no new approval paths, no FE redesign** — those are S104 (Phase 1b) + later.
@@ -202,13 +202,16 @@ Artifacts: `.claude/reviews/SPRINT-103-step7a-{codex,reviewer}.md`.
 
 | Suite | Count | Status |
 |-------|-------|--------|
-| Unit | 852 | all passing (local; +2 `UnitAuthorityAbsenceTests`) |
-| Regression (Docker-gated) | — | **CI-pending** (Docker unavailable locally; incl. the new `UnitFoundationTests` — reseed-FK / derived-anchor / retained-approval-no-500 / shared-unit-grants-nothing) |
-| Smoke | — | CI-pending (Docker) |
+| Unit | 852 | all passing (CI + local; +2 `UnitAuthorityAbsenceTests`) |
+| Regression (Docker-gated) | 1100 | **all passing (CI GREEN, 33m21s)** — incl. the new `UnitFoundationTests` (reseed-FK / derived-anchor / retained-approval-no-500 / shared-unit-grants-nothing) |
+| Smoke | 6 | all passing (CI GREEN, docker-compose) |
 | DemoSeed | 29 | all passing (local) |
-| Frontend (vitest) | 517 | all passing (local; −49 vs S101 — removed enhed panel/picker/hook tests) |
+| Frontend (vitest) | 517 | all passing (CI + local; −49 vs S101 — removed enhed panel/picker/hook tests) |
+| E2E (Playwright) | — | all passing (CI GREEN, docker-compose stack) |
 
-Pyramid is CI-pending on the Docker tier; the local tiers (852 unit + 29 demoseed + 517 FE) are green. Final counts confirmed at CI backfill.
+**Pyramid: 852u + 1100r + 6s + 29demoseed + 517fe = 2504** — **CI GREEN `28329542219`, all 7 jobs.** (Regression went 1133→1100: −33 from the removed enhed test files net of +`UnitFoundationTests`/`UnitAuthorityAbsenceTests`; FE 566→517 from the removed enhed panels.)
+
+**CI history note (resolved):** the initial push CI (and S102's) failed in ~4s — every job "not started: recent account payments have failed / spending limit". This was a GitHub Actions **account-billing suspension** on the (then) private repo, independent of S103. Resolved by making the repo **public** (Actions free on standard runners); the re-run (`28329542219`) is fully green.
 
 ## Sprint Retrospective
 
