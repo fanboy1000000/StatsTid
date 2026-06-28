@@ -222,20 +222,29 @@ public sealed class S104UnitManagementTests : IAsyncLifetime
         await ExecUsersAsync(conn, "DELETE FROM role_assignments WHERE user_id = ANY(@ids)");
         await ExecUsersAsync(conn, "DELETE FROM user_agreement_codes WHERE user_id = ANY(@ids)");
         await ExecUsersAsync(conn, "DELETE FROM users WHERE user_id = ANY(@ids)");
-        // unit_leaders rows still attached to the isolated units cascade on the units delete; remove
-        // them explicitly first (in case a user above was already gone), then drop the units bottom-up.
-        await using (var leaderCmd = new NpgsqlCommand(
-            "DELETE FROM unit_leaders WHERE unit_id = ANY(@uids)", conn))
+        // Drop EVERY non-demo unit in the test Organisations (the isolated A/B fixtures AND any units
+        // the test itself created via the API) — not just the fixed fixture ids: a test-created CHILD of
+        // a fixture unit would otherwise block the fixture parent's delete on the `parent_unit_id`
+        // self-FK (the bug this replaces; production DELETE is a soft-delete, so a hard cascade only
+        // ever runs here). Fresh container per test → the demo `000000d0-…` tree is the only thing that
+        // must survive (the cleanup also runs PRE-seed in InitializeAsync). Detach users + leaders +
+        // break the self-FK first, then delete (one batched command).
+        await using (var nuke = new NpgsqlCommand(
+            """
+            UPDATE users SET unit_id = NULL
+             WHERE unit_id IN (SELECT unit_id FROM units
+                                WHERE organisation_id = ANY(@orgs) AND unit_id::text NOT LIKE '000000d0-%');
+            DELETE FROM unit_leaders
+             WHERE unit_id IN (SELECT unit_id FROM units
+                                WHERE organisation_id = ANY(@orgs) AND unit_id::text NOT LIKE '000000d0-%');
+            UPDATE units SET parent_unit_id = NULL
+             WHERE organisation_id = ANY(@orgs) AND unit_id::text NOT LIKE '000000d0-%';
+            DELETE FROM units
+             WHERE organisation_id = ANY(@orgs) AND unit_id::text NOT LIKE '000000d0-%';
+            """, conn))
         {
-            leaderCmd.Parameters.AddWithValue("uids", AllUnits);
-            await leaderCmd.ExecuteNonQueryAsync();
-        }
-        // Children before parents (parent_unit_id FK): UA3 → UA2 → UA1; UATop + UB1 are independent.
-        foreach (var unit in new[] { UA3, UA2, UA1, UATop, UB1 })
-        {
-            await using var cmd = new NpgsqlCommand("DELETE FROM units WHERE unit_id = @id", conn);
-            cmd.Parameters.AddWithValue("id", unit);
-            await cmd.ExecuteNonQueryAsync();
+            nuke.Parameters.AddWithValue("orgs", new[] { OrgA, OrgB });
+            await nuke.ExecuteNonQueryAsync();
         }
 
         async Task ExecUsersAsync(NpgsqlConnection c, string sql)

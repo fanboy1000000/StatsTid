@@ -1340,30 +1340,18 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
                     cmd.Parameters.AddWithValue("id", Dl);
                     Assert.Equal("STY05", (string?)await cmd.ExecuteScalarAsync());
                 }
-                //   (b) no SURVIVING cross-tree edge: if the assign committed an edge it must have been
-                //       same-tree-valid (Dl in STY02) at the time — but since the transfer always moves Dl
-                //       to STY05, a non-serialized assign-then-no-revalidation would leave a cross-tree row.
-                //       The serialization guarantee is: the assign either (i) was rejected cross-tree (no
-                //       edge), or (ii) committed an edge while Dl was STILL in STY02 AND the transfer was
-                //       serialized AFTER it. Case (ii) would leave a row whose organisation_id = STY02 even
-                //       though Dl now resolves to STY05 — which IS the accepted "transfer does not re-close
-                //       existing edges" residual. To keep this shake test deterministic we assert the
-                //       SAFETY property that always holds: no edge exists that points Dl at Mgr ACROSS the
-                //       current trees — i.e. either no edge, or (if one exists) it was committed pre-transfer
-                //       and the assign therefore won the race, which a 201 on assignTask confirms.
+                //   (b) NO surviving Dl→Mgr edge — unconditionally (the S104/ADR-038 D8 update). The
+                //       transfer now RE-ANCHORS (closes) the moved user's PRIMARY/ACTING reporting edges,
+                //       because a cross-Organisation primary edge is forbidden (the ADR-027/S95 same-Org
+                //       reporting invariant). So after the serialized pair settles there is no Dl→Mgr edge,
+                //       whichever way the race went: (i) the assign was rejected cross-tree (400, no edge),
+                //       OR (ii) the assign won while Dl was still STY02 (201) and the transfer — serialized
+                //       after — then closed that edge. This SUPERSEDES the pre-S104 "transfer does not
+                //       re-close existing edges" residual (which used to leave a dangling STY02-org edge).
+                //       The assign's status code is now incidental; the durable safety property is the
+                //       absence of the cross-tree edge.
                 var dlEdge = await _rlRepo.GetActiveByEmployeeAndRelationshipAsync(Dl, "PRIMARY");
-                if (dlEdge is not null)
-                {
-                    // The only way an edge survives is the assign-won-first ordering → assign returned 201
-                    // (same-tree at creation). Anything else is a non-serialized torn state.
-                    Assert.Equal(HttpStatusCode.Created, assignTask.Result.StatusCode);
-                    Assert.Equal(Mgr, dlEdge.ManagerId);
-                }
-                else
-                {
-                    // No edge → the assign was serialized behind the transfer and rejected cross-tree (400).
-                    Assert.Equal(HttpStatusCode.BadRequest, assignTask.Result.StatusCode);
-                }
+                Assert.Null(dlEdge);
             }
         }
         finally
