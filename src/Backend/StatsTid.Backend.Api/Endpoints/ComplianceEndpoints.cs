@@ -46,10 +46,13 @@ public static class ComplianceEndpoints
                 var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, ct);
                 if (!allowed)
                 {
+                    // S105 / ADR-038 D4 — the edge OR the secondary-unit-leader path (the same centralized
+                    // predicate the team-overview roster + allocation-breakdown gate use, so a unit leader
+                    // who can ACT can also lazy-fetch the Advarsel detail). org-scope stays the primary gate.
                     var today = DateOnly.FromDateTime(DateTime.UtcNow);
-                    var hasEdge = await designatedAuthorizer.IsEffectiveDesignatedApproverAsync(
+                    var hasEdgeOrUnit = await designatedAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(
                         actor.ActorId!, employeeId, asOf: today, ct: ct);
-                    if (!hasEdge)
+                    if (!hasEdgeOrUnit)
                         return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
                 }
             }

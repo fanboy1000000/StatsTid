@@ -7,19 +7,9 @@ for manual testing and demos: 1 demo MAO with 5 Organisations (1×~2,000, 1×~60
 
 > **Org model (S92 / ADR-035 flatten):** the tree is 2 levels — **MAO** (`MINX`, root) →
 > **Organisation** (`STYX1…STYX5`). There are NO AFDELING/TEAM org rows; every user sits
-> directly on their Organisation and carries the former leaf-unit name as a display-only
-> `employee_profiles.enhed_label`. The REPORTING tree keeps its realistic depth (it is a
-> people-graph, independent of the now-flat org graph).
-
-> **Structured Enheder (S97 / ADR-035):** the seed also promotes the per-user `enhed_label`
-> into the structured `enheder` entity table + `user_enheder` multi-tag link. Per Organisation
-> the DISTINCT labels become `enheder` rows (deterministic-per-run UUID id), and each labelled
-> user gets ONE `user_enheder` tag (label → their org's matching enhed; the link supports N tags
-> but the demo models one label per user). The enhed's `organisation_id` always equals the user's
-> `primary_org_id` (the same-Organisation invariant). The `enhed_label` pre-seed STAYS as the
-> transitional read-only display fallback. Enheder are PURE DISPLAY METADATA — zero
-> authority/scope/approval meaning. `load --verify` asserts enheder + tags exist, the
-> same-Organisation invariant, and the partial-unique (no dup active name per org).
+> directly on their Organisation (S103 / ADR-038 retired the legacy `enhed_label` model; the
+> structural `units` tree returns in S104+). The REPORTING tree keeps its realistic depth (it
+> is a people-graph, independent of the now-flat org graph).
 
 > **This is DEMO data, fully isolated from the test fixture.** It is **opt-in** (a separate
 > compose overlay), uses distinct ids (`MINX` / `STYX1…STYX5` / `demo_*`) and `DEMO_SEED`

@@ -89,19 +89,40 @@ public static class ApprovalEndpoints
     }
 
     /// <summary>
-    /// Derives the persisted <c>approval_method</c> for an approve/reject from the resolved
-    /// designated approver: <c>ORG_SCOPE_FALLBACK</c> when no designated approver exists OR the actor is
-    /// NOT that designated approver; otherwise the resolver's method (<c>ACTING_MANAGER</c> /
-    /// <c>DESIGNATED_MANAGER</c>). Used at BOTH the pre-tx fast path and the in-tx authoritative
-    /// re-derivation (S78 BLOCKER 2) so the two cannot drift.
+    /// Derives the persisted <c>approval_method</c> for an approve/reject from the resolved designated
+    /// approver AND the S105 / ADR-038 D4 unit-leader classification. Precedence (mirrors the D4
+    /// CanApprove order): the EDGE first — when the actor IS the resolved designated approver, the
+    /// resolver's method (<c>ACTING_MANAGER</c> / <c>DESIGNATED_MANAGER</c>, incl. the edge-manager's
+    /// vikar). Otherwise the SECONDARY unit-leader paths — a direct unit-leader of the employee's own
+    /// unit → <c>UNIT_LEADER</c>; an active vikar of such a leader → <c>UNIT_LEADER_VIKAR</c>. Else
+    /// <c>ORG_SCOPE_FALLBACK</c> (the HR/Admin org-scope fallback, or no designated approver). Run UNDER
+    /// the held advisories at the in-tx authoritative re-derivation (S78 BLOCKER 2), so the unit-leader
+    /// resolution observes the frozen committed state (a concurrent <c>UnitLeaderRemoved</c>/member-move
+    /// is blocked from committing by the held <c>unit-org-</c> advisory).
     /// </summary>
-    private static string DeriveApprovalMethod(string? actorId, string? designatedManagerId, string? resolvedMethod)
+    private static async Task<string> DeriveApprovalMethodAsync(
+        DesignatedApproverAuthorizer designatedAuthorizer,
+        string? actorId, string employeeId, string? designatedManagerId, string? resolvedMethod,
+        DateOnly asOf, CancellationToken ct)
     {
-        if (designatedManagerId is null)
-            return "ORG_SCOPE_FALLBACK";
-        if (actorId == designatedManagerId)
+        // (1) The EDGE path — the actor is the single resolved effective approver.
+        if (designatedManagerId is not null && actorId == designatedManagerId)
             return resolvedMethod!; // "ACTING_MANAGER" or "DESIGNATED_MANAGER"
-        return "ORG_SCOPE_FALLBACK"; // Actor is not the designated approver.
+
+        // (2) The SECONDARY unit-leader paths (D4 path-2/3) — classify for an honest audit (NOT the
+        //     misleading ORG_SCOPE_FALLBACK, which is HR/Admin scope, not unit-leader authority).
+        if (!string.IsNullOrEmpty(actorId))
+        {
+            var unitKind = await designatedAuthorizer.ResolveUnitLeaderApprovalKindAsync(
+                actorId, employeeId, asOf: asOf, ct: ct);
+            if (unitKind == UnitLeaderApprovalKind.Direct)
+                return "UNIT_LEADER";
+            if (unitKind == UnitLeaderApprovalKind.Vikar)
+                return "UNIT_LEADER_VIKAR";
+        }
+
+        // (3) The HR/Admin org-scope fallback, or no designated approver.
+        return "ORG_SCOPE_FALLBACK";
     }
 
     public static WebApplication MapApprovalEndpoints(this WebApplication app)
@@ -266,10 +287,12 @@ public static class ApprovalEndpoints
                 await scopeValidator.ValidateEmployeeAccessAsync(actor, period.EmployeeId, StatsTidRoles.LocalHR, ct);
             if (!orgScopeAllowed)
             {
+                // S105 / ADR-038 D4 — the edge OR the NEW secondary-unit-leader path (incl. a unit
+                // leader's vikar), via the centralized predicate. asOf = today = "who may act NOW".
                 var today = DateOnly.FromDateTime(DateTime.UtcNow);
-                var hasEdge = await designatedAuthorizer.IsEffectiveDesignatedApproverAsync(
+                var hasEdgeOrUnit = await designatedAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(
                     actor.ActorId!, period.EmployeeId, asOf: today, ct: ct);
-                if (!hasEdge)
+                if (!hasEdgeOrUnit)
                     return Results.Json(new { error = "Access denied", reason = orgScopeReason }, statusCode: 403);
             }
 
@@ -304,35 +327,49 @@ public static class ApprovalEndpoints
             // tree than this approve — the approve-vs-vikar-revoke post-transfer key-mismatch residual.
             // That residual is non-corrupting: the revoke only ENDS an existing edge, and this in-tx
             // re-eval re-reads the committed manager_vikar state under ReadCommitted regardless of which key
-            // either side held.) We re-check ONLY the designated edge for AUTHORITY (not org-scope:
-            // ValidateOrgAccessAsync is JWT-claim-based and cannot be serialized by a DB lock — its pre-tx
-            // check remains the gate). If the actor passed the pre-tx check PURELY via the edge (org-scope
-            // denied), a revoke that committed before we got the lock now flips the re-eval to DENY → 403.
-            await reportingLineRepo.AcquireTreeLockForEmployeeAsync(conn, tx, period.EmployeeId, ct);
+            // either side held.) We re-check ONLY the designated edge / unit-leader path for AUTHORITY (not
+            // org-scope: ValidateOrgAccessAsync is JWT-claim-based and cannot be serialized by a DB lock —
+            // its pre-tx check remains the gate). If the actor passed the pre-tx check PURELY via the edge /
+            // unit-leader path (org-scope denied), a revoke that committed before we got the lock now flips
+            // the re-eval to DENY → 403.
+            var empCurrentOrg = await reportingLineRepo.AcquireTreeLockForEmployeeAsync(conn, tx, period.EmployeeId, ct);
+
+            // S105 / ADR-038 D4/D8 (BLOCKER fix) — ALSO acquire the employee's current `unit-org-`
+            // advisory (keyed on the employee's current Organisation = the verified tree root above), in
+            // the D8 total order `reporting-org-` → `unit-org-` → row FOR UPDATE. The NEW path-2 revokers
+            // (`UnitLeaderRemoved` / same-Org member-move) serialize on `unit-org-`, a DIFFERENT key from
+            // `reporting-org-`; without this, a just-de-designated unit-leader's approve would NOT
+            // serialize against the concurrent removal (a stale-authority window). Taken BEFORE the in-lock
+            // re-eval of the extended CanApprove so the revoke either commits-first (re-eval denies) or
+            // blocks until we release.
+            await UnitRepository.AcquireUnitOrgLockAsync(conn, tx, empCurrentOrg, ct);
 
             var asOf = DateOnly.FromDateTime(DateTime.UtcNow);
 
-            // Compute asOf at action-time. Only re-check the edge for AUTHORITY when the pre-tx ORG-scope
-            // gate did NOT already admit the actor (orgScopeAllowed): an org-scope-admitted approval does
-            // not depend on the edge, so a revoked edge must not flip it to 403 (not the authorizing surface).
+            // Compute asOf at action-time. Only re-check the edge / unit-leader path for AUTHORITY when the
+            // pre-tx ORG-scope gate did NOT already admit the actor (orgScopeAllowed): an org-scope-admitted
+            // approval does not depend on the edge, so a revoked edge must not flip it to 403 (not the
+            // authorizing surface).
             if (!orgScopeAllowed)
             {
-                var stillHasEdge = await designatedAuthorizer.IsEffectiveDesignatedApproverAsync(
+                var stillAuthorized = await designatedAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(
                     actor.ActorId!, period.EmployeeId, asOf: asOf, ct: ct);
-                if (!stillHasEdge)
+                if (!stillAuthorized)
                     return Results.Json(new { error = "Access denied", reason = orgScopeReason }, statusCode: 403);
             }
 
             // S78 BLOCKER 2 — re-resolve the designated approver + re-derive the approval-method
-            // classification UNDER the held advisory (the AUTHORITATIVE values for the persisted audit
-            // metadata). The resolver opens its own connection, but ReadCommitted + the held advisory mean
-            // it observes the FROZEN committed edge state (a concurrent reassignment is blocked from
-            // committing until we release), so this re-derivation reflects the locked tree. S94 / TASK-9402:
-            // the REQUIRED-mode 428 re-eval is GONE — ORG_SCOPE_FALLBACK is recorded as the approval_method
-            // (audit) but never gates the approval.
+            // classification UNDER the held advisories (the AUTHORITATIVE values for the persisted audit
+            // metadata). The resolver opens its own connection, but ReadCommitted + the held advisories mean
+            // it observes the FROZEN committed edge/unit-leader state (a concurrent reassignment /
+            // UnitLeaderRemoved is blocked from committing until we release), so this re-derivation reflects
+            // the locked tree. S94 / TASK-9402: the REQUIRED-mode 428 re-eval is GONE. S105 / ADR-038 D4:
+            // a secondary-unit-leader approval now records UNIT_LEADER / UNIT_LEADER_VIKAR (not the
+            // misleading ORG_SCOPE_FALLBACK).
             var (designatedManagerId, resolvedMethod, depth) =
                 await reportingLineRepo.ResolveDesignatedApproverAsync(period.EmployeeId, ct, asOf: asOf);
-            var approvalMethod = DeriveApprovalMethod(actor.ActorId, designatedManagerId, resolvedMethod);
+            var approvalMethod = await DeriveApprovalMethodAsync(
+                designatedAuthorizer, actor.ActorId, period.EmployeeId, designatedManagerId, resolvedMethod, asOf, ct);
 
             // S78 R2 — the CONDITIONAL status transition is the FIRST mutation in the tx (BEFORE the
             // FallbackTraversalWarning enqueue, audit insert, and action outbox), so a concurrent
@@ -444,10 +481,11 @@ public static class ApprovalEndpoints
                 await scopeValidator.ValidateEmployeeAccessAsync(actor, period.EmployeeId, StatsTidRoles.LocalHR, ct);
             if (!orgScopeAllowed)
             {
+                // S105 / ADR-038 D4 — the edge OR the NEW secondary-unit-leader path, centralized predicate.
                 var today = DateOnly.FromDateTime(DateTime.UtcNow);
-                var hasEdge = await designatedAuthorizer.IsEffectiveDesignatedApproverAsync(
+                var hasEdgeOrUnit = await designatedAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(
                     actor.ActorId!, period.EmployeeId, asOf: today, ct: ct);
-                if (!hasEdge)
+                if (!hasEdgeOrUnit)
                     return Results.Json(new { error = "Access denied", reason = orgScopeReason }, statusCode: 403);
             }
 
@@ -468,24 +506,30 @@ public static class ApprovalEndpoints
             await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
 
             // S78 R1 — in-lock edge-auth re-evaluation (same shape as approve): advisory FIRST, then
-            // re-check the designated edge under the held lock; org-scope stays a pre-tx-only gate.
-            await reportingLineRepo.AcquireTreeLockForEmployeeAsync(conn, tx, period.EmployeeId, ct);
+            // re-check the designated edge / unit-leader path under the held lock; org-scope stays a
+            // pre-tx-only gate. S105 / ADR-038 D4/D8 — ALSO acquire the employee's current `unit-org-`
+            // advisory (D8 order `reporting-org-` → `unit-org-` → row FOR UPDATE) so a concurrent
+            // `UnitLeaderRemoved`/member-move serializes against this reject.
+            var empCurrentOrg = await reportingLineRepo.AcquireTreeLockForEmployeeAsync(conn, tx, period.EmployeeId, ct);
+            await UnitRepository.AcquireUnitOrgLockAsync(conn, tx, empCurrentOrg, ct);
             var asOf = DateOnly.FromDateTime(DateTime.UtcNow);
             if (!orgScopeAllowed)
             {
-                var stillHasEdge = await designatedAuthorizer.IsEffectiveDesignatedApproverAsync(
+                var stillAuthorized = await designatedAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(
                     actor.ActorId!, period.EmployeeId, asOf: asOf, ct: ct);
-                if (!stillHasEdge)
+                if (!stillAuthorized)
                     return Results.Json(new { error = "Access denied", reason = orgScopeReason }, statusCode: 403);
             }
 
-            // S78 BLOCKER 2 — re-resolve + re-classify UNDER the held advisory (the authoritative values for
-            // the persisted audit metadata). Same rationale as approve: a concurrent reassignment is blocked
-            // from committing, so the resolver observes the frozen locked tree. S94 / TASK-9402: the
-            // REQUIRED-mode 428 re-eval is GONE — ORG_SCOPE_FALLBACK is recorded but never gates.
+            // S78 BLOCKER 2 — re-resolve + re-classify UNDER the held advisories (the authoritative values
+            // for the persisted audit metadata). Same rationale as approve: a concurrent reassignment /
+            // UnitLeaderRemoved is blocked from committing, so the resolver observes the frozen locked tree.
+            // S94 / TASK-9402: the REQUIRED-mode 428 re-eval is GONE. S105 / ADR-038 D4: a
+            // secondary-unit-leader reject records UNIT_LEADER / UNIT_LEADER_VIKAR.
             var (designatedManagerId, resolvedMethod, depth) =
                 await reportingLineRepo.ResolveDesignatedApproverAsync(period.EmployeeId, ct, asOf: asOf);
-            var approvalMethod = DeriveApprovalMethod(actor.ActorId, designatedManagerId, resolvedMethod);
+            var approvalMethod = await DeriveApprovalMethodAsync(
+                designatedAuthorizer, actor.ActorId, period.EmployeeId, designatedManagerId, resolvedMethod, asOf, ct);
 
             // S78 R2 — the CONDITIONAL status transition is the FIRST mutation (BEFORE the warning, audit,
             // and outbox), so a null (0-row) double-transition loser short-circuits to a clean 409, no side
@@ -1123,10 +1167,11 @@ public static class ApprovalEndpoints
             if (string.IsNullOrEmpty(actor.ActorId))
                 return Results.Json(new { error = "Access denied", reason = "No actor identity" }, statusCode: 403);
 
-            // AUTH (B1): the designated-approver edge — exactly the predicate the team-overview roster
-            // filters through, so a row the leader can see is always breakdown-authorized (no org-scope leak).
+            // AUTH (B1): the designated-approver edge OR the S105 / ADR-038 D4 secondary-unit-leader path
+            // — exactly the centralized predicate the team-overview roster filters through, so a row the
+            // leader can see (incl. a unit-led member) is always breakdown-authorized (no org-scope leak).
             var today = DateOnly.FromDateTime(DateTime.UtcNow);
-            var authorized = await designatedAuthorizer.IsEffectiveDesignatedApproverAsync(
+            var authorized = await designatedAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(
                 actor.ActorId!, employeeId, asOf: today, ct: ct);
             if (!authorized)
                 return Results.Json(new { error = "Access denied" }, statusCode: 403);
@@ -1561,10 +1606,11 @@ public static class ApprovalEndpoints
                 orgScopeReason = reason2;
                 if (!allowed2)
                 {
+                    // S105 / ADR-038 D4 — the edge OR the NEW secondary-unit-leader path (Leader arm only).
                     var today = DateOnly.FromDateTime(DateTime.UtcNow);
-                    var hasEdge = await designatedAuthorizer.IsEffectiveDesignatedApproverAsync(
+                    var hasEdgeOrUnit = await designatedAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(
                         actor.ActorId!, period.EmployeeId, asOf: today, ct: ct);
-                    if (!hasEdge)
+                    if (!hasEdgeOrUnit)
                         return Results.Json(new { error = "Access denied", reason = reason2 }, statusCode: 403);
                 }
 
@@ -1585,13 +1631,17 @@ public static class ApprovalEndpoints
             // gated by ValidateEmployeeAccessAsync), so it takes NEITHER the advisory nor the re-eval.
             if (!isEmployee)
             {
-                await reportingLineRepo.AcquireTreeLockForEmployeeAsync(conn, tx, period.EmployeeId, ct);
+                // S105 / ADR-038 D4/D8 — advisory order `reporting-org-` → `unit-org-` → row FOR UPDATE
+                // (the payroll-export FOR UPDATE below). The NEW `unit-org-` advisory serializes the
+                // reopen against a concurrent `UnitLeaderRemoved`/member-move on the employee's unit tree.
+                var empCurrentOrg = await reportingLineRepo.AcquireTreeLockForEmployeeAsync(conn, tx, period.EmployeeId, ct);
+                await UnitRepository.AcquireUnitOrgLockAsync(conn, tx, empCurrentOrg, ct);
                 if (!orgScopeAdmittedLeaderArm)
                 {
                     var asOf = DateOnly.FromDateTime(DateTime.UtcNow);
-                    var stillHasEdge = await designatedAuthorizer.IsEffectiveDesignatedApproverAsync(
+                    var stillAuthorized = await designatedAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(
                         actor.ActorId!, period.EmployeeId, asOf: asOf, ct: ct);
-                    if (!stillHasEdge)
+                    if (!stillAuthorized)
                         return Results.Json(new { error = "Access denied", reason = orgScopeReason }, statusCode: 403);
                 }
             }

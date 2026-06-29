@@ -269,6 +269,20 @@ public sealed class ApprovalPeriodRepository
     /// invariant), so it is tree-root bounded; <c>depth &lt; 10</c> mirrors the resolver's bound
     /// and stops any pre-existing cycle.
     /// </para>
+    ///
+    /// <para>
+    /// <b>S105 / ADR-038 D4 — the SECONDARY unit-leader seed (see == act, stage a).</b> A unit member
+    /// whose primary reporting edge does NOT descend from the actor never enters the reporting walk
+    /// above, so a secondary unit-leader would ACT on them (D4 path-2/3) without SEEING them. The
+    /// <c>unit_led_members</c> CTE adds the candidate superset for that path: the DIRECT members of units
+    /// the actor leads (<c>unit_leaders.user_id = @actorId</c> on <c>E.unit_id</c>), plus the direct
+    /// members of units led by a manager the actor is an active vikar for. STRICTLY <c>E.unit_id</c>-bounded
+    /// (a single-table <c>unit_leaders</c> join — NO ancestor walk over <c>units.parent_unit_id</c>; the
+    /// LOCKED D5 boundary). A SUPERSET only — the shared "edge OR unit-leader" predicate
+    /// (<see cref="DesignatedApproverAuthorizer.IsEffectiveApproverOrUnitLeaderAsync"/>) applies the FULL
+    /// floors (active actor + LeaderOrAbove + same-Organisation + active-vikar) in stage b, so a
+    /// bare/expired/Employee-role row never becomes see-without-act.
+    /// </para>
     /// </summary>
     private const string DesignatedCandidateEmployeesCte = """
         WITH RECURSIVE seeds AS (
@@ -301,8 +315,33 @@ public sealed class ApprovalPeriodRepository
               AND ux.is_active = FALSE
               AND cw.depth < 10
         ),
+        unit_led_members AS (
+            -- S105 / ADR-038 D4 path-2: the DIRECT members of units the actor leads (single-table
+            -- unit_leaders join on E.unit_id — NEVER an ancestor walk; the LOCKED D5 boundary).
+            SELECT e.user_id AS employee_id
+            FROM users e
+            JOIN unit_leaders ul ON ul.unit_id = e.unit_id AND ul.user_id = @actorId
+            WHERE e.unit_id IS NOT NULL
+              AND e.is_active = TRUE
+              AND e.user_id <> @actorId   -- segregation of duties: a leader never sees/acts on their OWN period via the unit-leader edge (S105 Step-7a BLOCKER)
+            UNION
+            -- S105 / ADR-038 D4 path-3: the direct members of units led by a manager the actor is an
+            -- active vikar (manager_vikar) for, covering @today (the same single-table E.unit_id bound).
+            SELECT e.user_id AS employee_id
+            FROM users e
+            JOIN unit_leaders ul ON ul.unit_id = e.unit_id
+            JOIN manager_vikar mv ON mv.absent_approver_id = ul.user_id
+              AND mv.vikar_user_id = @actorId
+              AND mv.effective_to IS NULL
+              AND mv.until_date >= @today
+            WHERE e.unit_id IS NOT NULL
+              AND e.is_active = TRUE
+              AND e.user_id <> @actorId   -- segregation of duties (S105 Step-7a BLOCKER): no self-period via the vikar-of-unit-leader edge
+        ),
         candidate_employees AS (
-            SELECT DISTINCT employee_id FROM candidate_walk
+            SELECT employee_id FROM candidate_walk
+            UNION
+            SELECT employee_id FROM unit_led_members
         )
         """;
 
@@ -325,7 +364,11 @@ public sealed class ApprovalPeriodRepository
         {
             if (!decisionByEmployee.TryGetValue(period.EmployeeId, out var isApprover))
             {
-                isApprover = await _designatedAuthorizer.IsEffectiveDesignatedApproverAsync(
+                // S105 / ADR-038 D4 — the CENTRALIZED "edge OR unit-leader" predicate (stage b). The
+                // candidate CTE (stage a) now over-includes the actor's unit-led members, so this filter
+                // MUST authorize through the SAME edge-OR-unit-leader code the action endpoints use, else
+                // a unit-led member would be filtered OUT (the two-stage half-wire). Full floors apply.
+                isApprover = await _designatedAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(
                     actorId, period.EmployeeId, asOf: asOf, ct: ct);
                 decisionByEmployee[period.EmployeeId] = isApprover;
             }
@@ -436,7 +479,10 @@ public sealed class ApprovalPeriodRepository
         var result = new List<TeamOverviewRosterRow>(candidateRows.Count);
         foreach (var row in candidateRows)
         {
-            var isApprover = await _designatedAuthorizer.IsEffectiveDesignatedApproverAsync(
+            // S105 / ADR-038 D4 — the SAME centralized "edge OR unit-leader" predicate (see == act on
+            // the team-overview surface too — the candidate CTE now includes the actor's unit-led
+            // members, so the filter must match it through the shared helper, full floors applied).
+            var isApprover = await _designatedAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(
                 actorId, row.EmployeeId, asOf: today, ct: ct);
             if (!isApprover)
                 continue;
@@ -563,9 +609,14 @@ public sealed class ApprovalPeriodRepository
         //     inconsistency. We resolve the candidate, then tally ONLY when
         //     IsEffectiveDesignatedApproverAsync(candidate, employee, today) is true; otherwise the
         //     employee is NOT counted for that manager (consistent with the dashboard showing zero
-        //     for a revoked/inactive approver). The predicate is the SAME code the dashboard +
-        //     action endpoints authorize through → the tile count cannot drift from my-reports.
-        //     Distinct employee → one tally.
+        //     for a revoked/inactive approver). Distinct employee → one tally.
+        //     S105 / ADR-038 D4 SCOPE-OUT (Step-7a): this medarbejder-tree tile is EDGE-ONLY by
+        //     conscious choice — it tallies the PRIMARY-edge approval workload and does NOT add the
+        //     new unit-leader secondary path (an HR roster aggregate, not the leader's my-reports
+        //     surface; the unit-leader tile is a Phase-3 FE concern). So for a SECONDARY unit-leader
+        //     the tile may UNDER-count vs their my-reports dashboard — a documented, fail-closed
+        //     limitation (never an over-count, never a leak; each period is still tallied EXACTLY
+        //     once, attributed to its primary-edge manager).
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         var pendingCountByManager = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (var employeeId in pendingEmployeeIds)

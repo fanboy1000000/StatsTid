@@ -14,11 +14,11 @@ namespace StatsTid.Tools.DemoSeed.Generation;
 ///
 /// Structural realism (S92 / ADR-035 flatten): the org tree is 2 LEVELS — MAO (root) →
 /// ORGANISATION (the smallest authority unit). The former AFDELING/TEAM leaf orgs are gone;
-/// every user sits directly on their Organisation and carries the former leaf-unit name as a
-/// display-only <c>employee_profiles.enhed_label</c>. The REPORTING tree keeps its realistic
-/// depth (span ~TargetSpan, 12–18% managers, EXACTLY ONE root per Organisation, NO cycles —
-/// the manager of an employee is always strictly closer to the root); reporting depth is a
-/// people-graph property, independent of the now-flat ORG graph.
+/// every user sits directly on their Organisation (S103 / ADR-038 retired the legacy
+/// <c>enhed_label</c> model). The REPORTING tree keeps its realistic depth (span ~TargetSpan,
+/// 12–18% managers, EXACTLY ONE root per Organisation, NO cycles — the manager of an employee
+/// is always strictly closer to the root); reporting depth is a people-graph property,
+/// independent of the now-flat ORG graph.
 /// </summary>
 public sealed class DemoGenerator
 {
@@ -60,8 +60,6 @@ public sealed class DemoGenerator
         var users = new List<DemoUser>();
         var employeeRoles = new List<DemoRoleRow>();
         var privilegedRoles = new List<DemoRoleRow>();
-        var enheder = new List<DemoEnhed>();
-        var userEnheder = new List<DemoUserEnhed>();
 
         var manifest = new DemoManifest
         {
@@ -100,11 +98,6 @@ public sealed class DemoGenerator
         GenerateVikars(users, manifest);
         GenerateMessyCases(users, manifest);
 
-        // 3b. S97 / TASK-9706 — promote the per-user enhed_label into the structured enheder
-        //     entity table + per-user user_enheder tags (derived from the final user list, so the
-        //     DISTINCT-per-Organisation set + the FK-resolving tags are computed once over all users).
-        GenerateEnheder(users, enheder, userEnheder);
-
         // 4. Disjointness assertion (NOTE-1 — ON CONFLICT silently drops collisions).
         AssertDisjointFromBaseline(orgs, users, manifest);
 
@@ -114,73 +107,8 @@ public sealed class DemoGenerator
             Users = users,
             EmployeeRoles = employeeRoles,
             PrivilegedRoles = privilegedRoles,
-            Enheder = enheder,
-            UserEnheder = userEnheder,
             Manifest = manifest,
         };
-    }
-
-    // ── S97 / TASK-9706 — structured enheder + user_enheder tags ──────────────────────────────
-    //
-    // The demo today carries ONE display label per rank-and-file user (a former AFDELING/TEAM unit
-    // name, round-robin from DanishPools.EnhedFragments within their Organisation). This promotes
-    // that flat label into the S97 structured model:
-    //   1. enheder    — the DISTINCT (organisation_id, name) labels, one row per distinct pair,
-    //                   each with a DETERMINISTIC-PER-RUN UUID (so the user_enheder FK resolves and
-    //                   the artifact is byte-stable for a fixed seed/scale).
-    //   2. user_enheder — one tag per labelled user (label → their org's matching enhed). The link
-    //                   table supports N tags/user; the demo's one-label-per-user model yields one
-    //                   tag each (NOTE). The top manager (NULL label) gets no tag.
-    //
-    // Same-Organisation invariant: a user's enhed is looked up by (PrimaryOrgId, EnhedLabel), so the
-    // tagged enhed's organisation_id is ALWAYS the user's primary_org_id by construction. The
-    // partial-unique (organisation_id, lower(name)) WHERE deleted_at IS NULL holds because we emit
-    // the DISTINCT set (no active-name dup per org).
-    private static void GenerateEnheder(
-        List<DemoUser> users,
-        List<DemoEnhed> enheder,
-        List<DemoUserEnhed> userEnheder)
-    {
-        // (org, name) → enhed_id. Deterministic-per-run UUID derived from the (org|name) key so it
-        // is stable across the whole generation pass (the Guid.NewGuid/Math.random caveat in
-        // workflow scripts does NOT apply to the demo tool, but FK resolution + byte-stability DO
-        // require the tag and its enhed to agree on the id — hence a derived, key-stable UUID).
-        var enhedIds = new Dictionary<(string Org, string Name), string>();
-
-        foreach (var u in users)
-        {
-            if (u.EnhedLabel is null) continue; // org-root manager: no sub-unit, no tag.
-
-            var key = (u.PrimaryOrgId, u.EnhedLabel);
-            if (!enhedIds.TryGetValue(key, out var enhedId))
-            {
-                enhedId = DeterministicEnhedId(u.PrimaryOrgId, u.EnhedLabel);
-                enhedIds[key] = enhedId;
-                enheder.Add(new DemoEnhed
-                {
-                    EnhedId = enhedId,
-                    OrganisationId = u.PrimaryOrgId,
-                    Name = u.EnhedLabel,
-                });
-            }
-
-            userEnheder.Add(new DemoUserEnhed { UserId = u.UserId, EnhedId = enhedId });
-        }
-    }
-
-    /// <summary>
-    /// A deterministic-per-run UUID for an enhed, derived from its (organisation, name) key via a
-    /// stable MD5 hash (RFC-4122 variant/version bits stamped). Byte-identical for a fixed
-    /// (seed, scale, reference-date) — the determinism contract — and varies by org + name so two
-    /// orgs sharing a name get distinct ids and the user_enheder FK resolves to the right row.
-    /// </summary>
-    private static string DeterministicEnhedId(string organisationId, string name)
-    {
-        var key = $"enhed|{organisationId}|{name}";
-        var bytes = System.Security.Cryptography.MD5.HashData(System.Text.Encoding.UTF8.GetBytes(key));
-        bytes[6] = (byte)((bytes[6] & 0x0F) | 0x40); // version 4
-        bytes[8] = (byte)((bytes[8] & 0x3F) | 0x80); // RFC-4122 variant
-        return new Guid(bytes).ToString();
     }
 
     private void GenerateTree(
@@ -196,9 +124,8 @@ public sealed class DemoGenerator
         var lower = root.ToLowerInvariant();
 
         // ── 2a. Org hierarchy (S92 / ADR-035 flatten): ONE ORGANISATION (depth 1) under the
-        //        MAO (depth 0). NO AFDELING/TEAM org rows — the former leaf-unit names become
-        //        display-only enhed_label metadata on the users (see the Enhed pool below).
-        //        The Organisation is BOTH the user-home org AND the reporting-tree root. ──
+        //        MAO (depth 0). NO AFDELING/TEAM org rows — every user sits directly on the
+        //        Organisation, which is BOTH the user-home org AND the reporting-tree root. ──
         var organisation = new DemoOrg
         {
             OrgId = root,
@@ -215,38 +142,25 @@ public sealed class DemoGenerator
 
         var treeOrgs = new List<DemoOrg> { organisation };
 
-        // The set of Enhed (former leaf-unit) display labels this Organisation's rank-and-file
-        // are distributed across. Sized like the old leaf-org fan-out (~TargetSpan users per
-        // enhed) so the demo keeps realistic per-unit grouping — purely as a display label now.
-        var leafTarget = Math.Max(1, profile.TargetUsers / Math.Max(1, _config.TargetSpan));
-        var enhedCount = Math.Clamp(leafTarget, 1, DanishPools.EnhedFragments.Length);
-        var enheder = new List<string>(enhedCount);
-        for (var e = 0; e < enhedCount; e++)
-            enheder.Add(DanishPools.EnhedFragments[e % DanishPools.EnhedFragments.Length]);
-
         // ── 2b. Users. EVERY user sits directly on the ORGANISATION (primary_org = the
-        //        Organisation, tree_root = the Organisation). The top manager (the SINGLE
-        //        reporting-tree root) sits on the Organisation with NO enhed_label; the
-        //        rank-and-file carry a round-robin enhed_label (their former leaf unit). ──
+        //        Organisation, tree_root = the Organisation). The top manager is the SINGLE
+        //        reporting-tree root. ──
         int userSeq = 0;
         string NextUserId() => $"demo_{lower}_{(++userSeq):D4}";
 
         var treeUsers = new List<DemoUser>();
 
-        // The top manager (reporting-tree root). primary_org = the Organisation; no enhed_label
-        // (it sits at the Organisation level, not in a sub-unit).
-        var topManager = MakeUser(NextUserId(), organisation.OrgId, root, profile, isSenior: true, leaverAllowed: false, enhedLabel: null);
+        // The top manager (reporting-tree root). primary_org = the Organisation.
+        var topManager = MakeUser(NextUserId(), organisation.OrgId, root, profile, isSenior: true, leaverAllowed: false);
         topManager.IsManager = true;
         users.Add(topManager);
         treeUsers.Add(topManager);
 
-        // Remaining users: all on the Organisation, round-robin across the Enhed labels
-        // (deterministic — same index walk as the old leaf-org distribution).
+        // Remaining users: all on the Organisation.
         var remaining = profile.TargetUsers - 1;
         for (var i = 0; i < remaining; i++)
         {
-            var enhed = enheder[i % enheder.Count];
-            var u = MakeUser(NextUserId(), organisation.OrgId, root, profile, isSenior: false, leaverAllowed: true, enhedLabel: enhed);
+            var u = MakeUser(NextUserId(), organisation.OrgId, root, profile, isSenior: false, leaverAllowed: true);
             users.Add(u);
             treeUsers.Add(u);
         }
@@ -350,7 +264,7 @@ public sealed class DemoGenerator
         }
     }
 
-    private DemoUser MakeUser(string userId, string orgId, string treeRoot, TreeProfile profile, bool isSenior, bool leaverAllowed, string? enhedLabel)
+    private DemoUser MakeUser(string userId, string orgId, string treeRoot, TreeProfile profile, bool isSenior, bool leaverAllowed)
     {
         var first = DanishPools.FirstNames[_rng.Next(DanishPools.FirstNames.Length)];
         var last = DanishPools.LastNames[_rng.Next(DanishPools.LastNames.Length)];
@@ -402,7 +316,6 @@ public sealed class DemoGenerator
             EmploymentEndDate = endDate,
             IsActive = isActive,
             OrganisationId = treeRoot,
-            EnhedLabel = enhedLabel,
         };
     }
 
@@ -431,9 +344,6 @@ public sealed class DemoGenerator
                 EmployeeId = u.UserId,
                 PartTimeFraction = fraction,
                 Position = position,
-                // S92 / ADR-035 — carry the user's enhed_label so the profile PUT (which
-                // supersedes the full live row) preserves the SQL-pre-seeded display label.
-                EnhedLabel = u.EnhedLabel,
             });
         }
     }

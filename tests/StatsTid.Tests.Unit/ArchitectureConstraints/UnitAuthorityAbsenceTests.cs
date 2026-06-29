@@ -4,32 +4,44 @@ namespace StatsTid.Tests.Unit.ArchitectureConstraints;
 
 /// <summary>
 /// SPRINT-103 / TASK-10305 (Enhedsspor Phase 1a) — the by-construction authority-absence guard
-/// (ADR-038 D5 / P7): <c>units</c> / <c>users.unit_id</c> / <c>unit_leaders</c> carry ZERO authority,
-/// scope, approval or payroll meaning. Role-scope stays anchored at the Organisation
-/// (<c>primary_org_id</c> + exact <c>CoversOrg</c> match); the unit dimension is structure/display only
-/// (the unit-leader EXCEPTION approval path is wired LATER, in S104).
+/// (ADR-038 D5 / P7): <c>units</c> / <c>users.unit_id</c> / <c>unit_leaders</c> carry NO <b>SCOPE</b>.
+/// Role-scope stays anchored at the Organisation (<c>primary_org_id</c> + exact <c>CoversOrg</c> match);
+/// the unit dimension grants no deep-tree / subtree scope.
+///
+/// <para>
+/// <b>S105 / ADR-038 D4 SPLIT.</b> The SCOPE guard below (this test) KEEPS
+/// <c>OrgScopeValidator</c> / <c>RoleScope.CoversOrg</c> / the <c>ValidateEmployeeAccess</c> path
+/// strictly unit-free — the surviving keystone assertion (units grant NO scope; a parent/ancestor-unit
+/// leader gets NOTHING beyond the D4 direct-member edge). <c>DesignatedApproverAuthorizer</c> has been
+/// REMOVED from the scanned set because S105 LEGITIMATELY wires the unit-leader EXCEPTION approval EDGE
+/// there (D4: <c>unit_leaders(E.unit_id)</c> is now an authority-bearing, direct-member-bounded path).
+/// The replacement for that file's coverage is the behavioural boundedness RED test (TASK-10503/10504:
+/// a grandparent/parent/sibling-unit leader grants no <c>CanApprove</c> and appears in no dashboard
+/// read for an <c>E.unit_id</c> member), NOT a text scan.
+/// </para>
 ///
 /// <para>
 /// This is the structural, no-Docker proof (mirrors the S100 / ADR-036 "Enhed shares no authority"
-/// guard): the canonical authority/scope source files must contain NO reference to the unit-tree
-/// identifiers. If a future change joins <c>units</c> / <c>unit_leaders</c> into (or reads
-/// <c>unit_id</c> within) the scope path, this test goes RED — forcing a deliberate ADR-038 decision
-/// rather than a silent authority leak. File-text scan, the same technique as
-/// <c>PlannerBypassGuardTests</c> (anchored on path + token, robust to signature churn).
+/// guard): the canonical scope source files must contain NO reference to the unit-tree identifiers. If
+/// a future change joins <c>units</c> / <c>unit_leaders</c> into (or reads <c>unit_id</c> within) the
+/// SCOPE path, this test goes RED — forcing a deliberate ADR-038 decision rather than a silent
+/// authority leak. File-text scan, the same technique as <c>PlannerBypassGuardTests</c> (anchored on
+/// path + token, robust to signature churn).
 /// </para>
 /// </summary>
 public sealed class UnitAuthorityAbsenceTests
 {
-    /// <summary>The canonical authority / org-scope / approval-authorization source files. These
-    /// decide WHO may see/act on WHOSE data — the exact surface ADR-038 D5 keeps unit-free.</summary>
+    /// <summary>The canonical org-SCOPE source files. These decide WHO may see/act on WHOSE data by
+    /// the Organisation boundary — the exact surface ADR-038 D5 keeps unit-free. NOTE (S105 / ADR-038
+    /// D4): <c>DesignatedApproverAuthorizer</c> is DELIBERATELY NOT in this set — units legitimately
+    /// enter the approval EDGE there (the direct-member unit-leader path), bounded by the behavioural
+    /// boundedness RED test, not this scan. The SCOPE path stays unit-free.</summary>
     private static readonly string[] AuthorityPathFiles =
     {
         // OrgScopeValidator: ValidateEmployeeAccessAsync + ValidateOrgAccessAsync + the CoversOrg loop.
         "src/Infrastructure/StatsTid.Infrastructure/Security/OrgScopeValidator.cs",
         // RoleScope.CoversOrg: the exact-Organisation coverage predicate.
         "src/SharedKernel/StatsTid.SharedKernel/Security/RoleScope.cs",
-        // DesignatedApproverAuthorizer: the single canonical approve-authority predicate.
-        "src/Infrastructure/StatsTid.Infrastructure/DesignatedApproverAuthorizer.cs",
     };
 
     /// <summary>The unit-tree identifiers that must NOT appear anywhere in the authority path: the

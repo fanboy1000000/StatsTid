@@ -2580,8 +2580,26 @@ $$;
 -- =========================================================================
 
 ALTER TABLE approval_periods ADD COLUMN IF NOT EXISTS designated_approver_id TEXT;
+-- S105 / ADR-038 D4 (Enhedsspor Phase 2) — the secondary unit-leader approval path adds two audit
+-- classifications: UNIT_LEADER (a designated leader of the employee's OWN unit approved) and
+-- UNIT_LEADER_VIKAR (an active vikar of such a leader approved). They record the unit-leader
+-- authority honestly instead of the misleading ORG_SCOPE_FALLBACK (which is HR/Admin scope). The
+-- existing DESIGNATED_MANAGER / ACTING_MANAGER (edge) + ORG_SCOPE_FALLBACK (HR/Admin) classifications
+-- are unchanged. Greenfield reseed (ADR-038 D9) — the inline CHECK applies on a fresh DB.
 ALTER TABLE approval_periods ADD COLUMN IF NOT EXISTS approval_method TEXT DEFAULT 'PRE_REPORTING_LINE'
-    CHECK (approval_method IN ('DESIGNATED_MANAGER', 'ORG_SCOPE_FALLBACK', 'ACTING_MANAGER', 'PRE_REPORTING_LINE'));
+    CHECK (approval_method IN ('DESIGNATED_MANAGER', 'ORG_SCOPE_FALLBACK', 'ACTING_MANAGER', 'PRE_REPORTING_LINE', 'UNIT_LEADER', 'UNIT_LEADER_VIKAR'));
+
+-- S105 / ADR-038 D4 (Step-7a BLOCKER) — LEGACY-DB guard: when `approval_method` ALREADY exists, the
+-- `ADD COLUMN IF NOT EXISTS` above is SKIPPED, leaving the pre-S105 CHECK that REJECTS the new
+-- `UNIT_LEADER` / `UNIT_LEADER_VIKAR` values → the unit-leader approve/reject would fail at the status
+-- UPDATE. Drop the auto-named column CHECK (if present) + re-add the full set. Idempotent on a fresh DB
+-- (the inline CHECK above created the same-named constraint; this drops+re-adds it identically).
+DO $$
+BEGIN
+    ALTER TABLE approval_periods DROP CONSTRAINT IF EXISTS approval_periods_approval_method_check;
+    ALTER TABLE approval_periods ADD CONSTRAINT approval_periods_approval_method_check
+        CHECK (approval_method IN ('DESIGNATED_MANAGER', 'ORG_SCOPE_FALLBACK', 'ACTING_MANAGER', 'PRE_REPORTING_LINE', 'UNIT_LEADER', 'UNIT_LEADER_VIKAR'));
+END $$;
 
 DO $$
 BEGIN

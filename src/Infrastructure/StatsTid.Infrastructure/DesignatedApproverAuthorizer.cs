@@ -127,6 +127,136 @@ public sealed class DesignatedApproverAuthorizer
     }
 
     /// <summary>
+    /// S105 / ADR-038 D4 (the keystone) — the SECONDARY/peer unit-leader approval path, the FIRST
+    /// time <c>unit_leaders</c> legitimately enters authority. Returns <c>true</c> iff
+    /// <see cref="ResolveUnitLeaderApprovalKindAsync"/> classifies the actor as a Direct unit-leader OR
+    /// an active vikar of a unit-leader of the employee's OWN unit, same Organisation. STRICTLY
+    /// <c>E.unit_id</c>-bounded (the employee's own unit's direct members) — NOT an ancestor/recursive
+    /// walk: a leader of a PARENT / GRANDPARENT / SIBLING unit holds no <c>unit_leaders</c> row for
+    /// <c>E.unit_id</c> and so grants NOTHING (the LOCKED D5 boundary; the S76/S85/S91 subtree-
+    /// inheritance bug class stays closed). A NULL <c>E.unit_id</c> → no match.
+    /// </summary>
+    public async Task<bool> IsUnitLeaderApproverAsync(
+        string actorId, string employeeId, DateOnly? asOf = null, CancellationToken ct = default)
+        => await ResolveUnitLeaderApprovalKindAsync(actorId, employeeId, asOf, ct)
+            != UnitLeaderApprovalKind.None;
+
+    /// <summary>
+    /// S105 / ADR-038 D4 — the CENTRALIZED "edge OR unit-leader" approval predicate (the ONE shared
+    /// helper every read-filter + the action endpoints' in-lock re-eval route through, so the two
+    /// stages of the my-reports pipeline + the team-overview filter + the allocation-breakdown gate +
+    /// the compliance gate can never drift apart). Returns <c>true</c> iff the actor holds the effective
+    /// designated-approver EDGE (<see cref="IsEffectiveDesignatedApproverAsync"/>) OR the secondary
+    /// unit-leader path (<see cref="IsUnitLeaderApproverAsync"/>). This is the my-reports "edge OR
+    /// unit-leader visibility" set — it does NOT include the HR/Admin org-scope branch (TASK-10502: the
+    /// action endpoints compose that separately as a pre-tx JWT gate).
+    /// </summary>
+    public async Task<bool> IsEffectiveApproverOrUnitLeaderAsync(
+        string actorId, string employeeId, DateOnly? asOf = null, CancellationToken ct = default)
+    {
+        if (await IsEffectiveDesignatedApproverAsync(actorId, employeeId, asOf, ct))
+            return true;
+        return await IsUnitLeaderApproverAsync(actorId, employeeId, asOf, ct);
+    }
+
+    /// <summary>
+    /// S105 / ADR-038 D4 — classifies HOW (if at all) the actor holds the secondary unit-leader
+    /// approval authority over <paramref name="employeeId"/> at <paramref name="asOf"/>, for the audit
+    /// <c>approval_method</c> (Direct → <c>UNIT_LEADER</c>, Vikar → <c>UNIT_LEADER_VIKAR</c>). All the
+    /// floors of the predicate apply: the actor must be an active LeaderOrAbove (the SAME gate the edge
+    /// path applies, even to a vikar stand-in), the membership/vikar check is the SINGLE-TABLE
+    /// <c>unit_leaders(E.unit_id)</c> lookup (NO ancestor walk), and the same-Organisation re-check
+    /// holds. Direct membership takes precedence over the vikar classification.
+    /// </summary>
+    public async Task<UnitLeaderApprovalKind> ResolveUnitLeaderApprovalKindAsync(
+        string actorId, string employeeId, DateOnly? asOf = null, CancellationToken ct = default)
+    {
+        if (string.IsNullOrEmpty(actorId) || string.IsNullOrEmpty(employeeId))
+            return UnitLeaderApprovalKind.None;
+
+        var effectiveAsOf = asOf ?? DateOnly.FromDateTime(DateTime.UtcNow);
+
+        // (1) The actor must be an active LeaderOrAbove — the SAME role floor the edge path applies
+        //     (a unit_leaders row for an Employee-role / inactive user grants nothing; D3 role-coupling).
+        if (!await IsActiveLeaderOrAboveAsync(actorId, ct))
+            return UnitLeaderApprovalKind.None;
+
+        // (2) The SINGLE-TABLE membership/vikar lookup over the employee's OWN unit's leaders
+        //     (unit_leaders.unit_id = E.unit_id) — NEVER an ancestor/recursive walk (the LOCKED D5
+        //     boundary). NULL E.unit_id → zero rows → (false, false) → None.
+        var rawKind = await QueryUnitLeaderKindAsync(actorId, employeeId, effectiveAsOf, ct);
+        if (rawKind == UnitLeaderApprovalKind.None)
+            return UnitLeaderApprovalKind.None;
+
+        // (3) SECURITY — re-verify STRUCTURALLY that the actor and the employee share an Organisation
+        //     (the same primary_org_id), the SAME re-check the edge path applies. Same-Org binds the
+        //     vikar path transitively (D12). A throw ⇒ deny (fail-closed).
+        try
+        {
+            await _reportingLineRepo.ValidateSameOrganisationAsync(employeeId, actorId, ct);
+        }
+        catch (CrossOrganisationAssignmentException)
+        {
+            return UnitLeaderApprovalKind.None;
+        }
+        catch (InvalidOperationException)
+        {
+            // Either user not found / inactive — cannot affirm same-Organisation, so deny.
+            return UnitLeaderApprovalKind.None;
+        }
+
+        return rawKind;
+    }
+
+    /// <summary>
+    /// The SINGLE-TABLE structural lookup behind <see cref="ResolveUnitLeaderApprovalKindAsync"/> (no
+    /// active/role/same-Org floors — those are applied by the caller). Over the leaders of the
+    /// employee's OWN unit (<c>unit_leaders.unit_id = users.unit_id</c>), reports whether the actor is a
+    /// Direct leader and/or an active vikar (covering <paramref name="asOf"/>) of one of those leaders.
+    /// Direct membership wins. NO recursive walk over <c>units.parent_unit_id</c> (the D5 keystone).
+    /// </summary>
+    private async Task<UnitLeaderApprovalKind> QueryUnitLeaderKindAsync(
+        string actorId, string employeeId, DateOnly asOf, CancellationToken ct)
+    {
+        await using var conn = _connectionFactory.Create();
+        await conn.OpenAsync(ct);
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT
+                COALESCE(bool_or(ul.user_id = @actorId), FALSE)       AS is_direct,
+                COALESCE(bool_or(mv.vikar_user_id = @actorId), FALSE) AS is_vikar
+            FROM users e
+            JOIN unit_leaders ul ON ul.unit_id = e.unit_id
+            LEFT JOIN manager_vikar mv
+                   ON mv.absent_approver_id = ul.user_id
+                  AND mv.vikar_user_id = @actorId
+                  AND mv.effective_to IS NULL
+                  AND mv.until_date >= @asOf
+            WHERE e.user_id = @employeeId
+              AND e.unit_id IS NOT NULL
+              -- SEGREGATION OF DUTIES (S105 Step-7a BLOCKER): a unit leader IS a member of the unit
+              -- they lead (the D3 member-invariant), so without this a leader would match as the
+              -- approver of their OWN period. The unit-leader edge covers OTHER direct members only;
+              -- a leader's own period routes to their primary edge / HR-Admin (never self-approval).
+              AND e.user_id <> @actorId
+            """, conn);
+        cmd.Parameters.AddWithValue("actorId", actorId);
+        cmd.Parameters.AddWithValue("employeeId", employeeId);
+        cmd.Parameters.AddWithValue("asOf", asOf);
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+            return UnitLeaderApprovalKind.None; // defensive — the aggregate always returns one row.
+        var isDirect = reader.GetBoolean(0);
+        var isVikar = reader.GetBoolean(1);
+        if (isDirect)
+            return UnitLeaderApprovalKind.Direct;
+        if (isVikar)
+            return UnitLeaderApprovalKind.Vikar;
+        return UnitLeaderApprovalKind.None;
+    }
+
+    /// <summary>
     /// Returns <c>true</c> iff <paramref name="userId"/> is an active user holding at least
     /// one active role assignment with <c>hierarchy_level &lt;= 4</c> (LOCAL_LEADER or above).
     /// Single query against <c>users</c> + <c>role_assignments</c> + <c>roles</c>; mirrors the
@@ -153,4 +283,19 @@ public sealed class DesignatedApproverAuthorizer
         var result = await cmd.ExecuteScalarAsync(ct);
         return result is not null && result is not DBNull;
     }
+}
+
+/// <summary>
+/// S105 / ADR-038 D4 — how the actor holds the secondary unit-leader approval authority over an
+/// employee (drives the persisted <c>approval_method</c> audit classification). <see cref="Direct"/>
+/// = the actor is a designated leader of the employee's OWN unit (→ <c>UNIT_LEADER</c>);
+/// <see cref="Vikar"/> = the actor is an active stand-in (<c>manager_vikar</c>) for such a leader
+/// (→ <c>UNIT_LEADER_VIKAR</c>); <see cref="None"/> = neither (the actor was admitted via the edge or
+/// HR/Admin scope, or not at all). Direct membership takes precedence over Vikar.
+/// </summary>
+public enum UnitLeaderApprovalKind
+{
+    None = 0,
+    Direct = 1,
+    Vikar = 2,
 }

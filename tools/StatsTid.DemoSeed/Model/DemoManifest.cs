@@ -87,13 +87,6 @@ public sealed class DemoProfileEdit
     public string EmployeeId { get; set; } = "";
     public decimal PartTimeFraction { get; set; }
     public string Position { get; set; } = "";
-
-    /// <summary>
-    /// S92 / ADR-035 — the user's former-unit display label (Enhed). Threaded into the
-    /// profile PUT so a part-time edit does NOT clobber the SQL-pre-seeded enhed_label
-    /// (the PUT supersedes the full live row; omitting this would NULL it out).
-    /// </summary>
-    public string? EnhedLabel { get; set; }
 }
 
 /// <summary>One activity script for one employee: a set of absences + an optional period transition.</summary>

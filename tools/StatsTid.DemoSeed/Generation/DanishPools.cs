@@ -29,31 +29,6 @@ internal static class DanishPools
         "Kjaer", "Bruun", "Vestergaard", "Soendergaard", "Noergaard", "Bak",
     };
 
-    /// <summary>
-    /// S92 / ADR-035 — Enhed (former-unit) display-label fragments. Post-flatten these are NO
-    /// longer org rows: the AFDELING/TEAM tree is collapsed, so each fragment becomes the
-    /// display-only <c>employee_profiles.enhed_label</c> of a user who now sits directly on the
-    /// parent Organisation. The pool is deliberately broad (centre + kontor + team style names)
-    /// so the demo shows realistic Enhed variety within a single flat Organisation.
-    /// </summary>
-    internal static readonly string[] EnhedFragments =
-    {
-        // Centre-style enheder
-        "Center for Drift", "Center for Udvikling", "Center for Tilsyn", "Center for Analyse",
-        "Center for Jura", "Center for Oekonomi", "Center for Digitalisering", "Center for HR",
-        "Direktionssekretariatet", "Center for Kommunikation", "Center for Sagsbehandling",
-        "Center for Borgerservice",
-        // Kontor-style enheder
-        "Driftskontoret", "Udviklingskontoret", "Tilsynskontoret", "Analysekontoret",
-        "Juridisk Kontor", "Oekonomikontoret", "IT-Kontoret", "HR-Kontoret",
-        "Planlaegningskontoret", "Sekretariatet", "Sagskontoret", "Servicekontoret",
-        "Kvalitetskontoret", "Projektkontoret", "Statistikkontoret", "Indkoebskontoret",
-        // Team-style enheder
-        "Team Alfa", "Team Beta", "Team Gamma", "Team Delta", "Team Epsilon", "Team Zeta",
-        "Team Nord", "Team Syd", "Team Oest", "Team Vest", "Team Blaa", "Team Groen",
-        "Team Roed", "Team Gul", "Team 1", "Team 2", "Team 3", "Team 4",
-    };
-
     internal static readonly string[] EmploymentCategories =
     {
         "Fuldmaegtig", "Specialkonsulent", "Chefkonsulent", "Kontorchef", "Standard",
