@@ -3,12 +3,12 @@
 | Field | Value |
 |-------|-------|
 | **Sprint** | 107 |
-| **Status** | complete (pending push + CI-verify) |
+| **Status** | complete — CI GREEN `28397136776` |
 | **Start Date** | 2026-06-29 |
 | **End Date** | 2026-06-29 |
 | **Orchestrator Approved** | yes |
 | **Build Verified** | yes — `dotnet build` + `npm run build` 0/0 |
-| **Test Verified** | yes — 852u + 1149r + 569fe green locally (Docker; 3 sheds isolation-cleared); 6s/e2e CI-verify on push |
+| **Test Verified** | yes — **CI GREEN `28397136776` (all 7 jobs; regression 1149/1149, 57m; frontend-build + e2e + smoke green)**; matched the local run exactly |
 
 ## Sprint Goal
 Build the merged "Organisation & medarbejdere" admin page (`design_handoff_org_medarbejdere` "Model A") — the **VIEW/navigate half** (owner-chosen view-first split): the 3-region layout (Afgrænsning scope header + left org-structure tree + the recursive right "Struktur") that RENDERS the unit structure + people from the S106 reads, plus search. **NO mutations / NO dead buttons** (the S91 discipline — drawers, create/edit/delete, cross-unit "Ret", vikar-edit are S108). The new page ships on a **new route, ALONGSIDE the two old pages** (the redirect + retire is the S108 cutover). Capability context is read at LocalHR floor; the page is scope-bounded via Afgrænsning. Consumes the S106 forest/roster/search reads; registers them in the contract-lint + adds FE hook tests on the real shape (the 3a carry-over). **FE + ONE small backend read-field** (`organisationId` on the search person result, for the Afgrænsning filter) + the lint registry — no schema/authority/mutation change.
