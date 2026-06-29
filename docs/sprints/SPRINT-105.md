@@ -3,12 +3,12 @@
 | Field | Value |
 |-------|-------|
 | **Sprint** | 105 |
-| **Status** | complete (pending push + CI-verify) |
+| **Status** | complete — CI GREEN `28355633850` |
 | **Start Date** | 2026-06-29 |
 | **End Date** | 2026-06-29 |
 | **Orchestrator Approved** | yes |
 | **Build Verified** | yes — 0/0 |
-| **Test Verified** | yes — 852u + 1129r green locally (Docker up); 6s/e2e CI-verify on push |
+| **Test Verified** | yes — **CI GREEN `28355633850` (all 7 jobs; regression 1129/1129, 56m)**; matched the local run exactly |
 
 ## Sprint Goal
 Wire the **D4 unit-leader approval authority** into the approval path — the FIRST time `unit_leaders` legitimately enters authority — while holding the **LOCKED D5 Organisation boundary** (units grant the direct-member approval EDGE, never SCOPE, never deep-tree inheritance). `CanApprove(actor, E)` gains a **secondary-unit-leader exception path** (+ the same-Org vikar of a unit leader), STRICTLY bounded to `E.unit_id`'s own direct members; the **see==act dashboard reads** gain the same branch in lockstep; the absence guard is **split** (scope files stay unit-free; the approval files legitimately gain `unit_leaders`) and a new **boundedness RED test** pins that a parent-unit leader grants NOTHING over a child-unit member. Backend-only (the merged Enhedsspor FE is Phase 3). Implements ADR-038 D4; amends ADR-038's "S104"/"S105" wiring notes.
