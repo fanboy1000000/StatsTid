@@ -42,15 +42,20 @@ public sealed record UnitSearchResult(
     string Name,
     IReadOnlyList<string> Path);
 
-/// <summary>A matching ACTIVE person (MEDARBEJDERE section). <paramref name="Position"/> is the live
-/// <c>employee_profiles.position</c> (nullable), <paramref name="UnitName"/> is the person's home-unit
-/// name (<c>null</c> = homed directly at the Organisation). <paramref name="Path"/> is the breadcrumb
-/// from the Organisation (root) DOWN to and INCLUDING the home unit (the unit chain is the person's
-/// container context; their <paramref name="DisplayName"/> is the leaf). An Organisation-homed person's
-/// path is just <c>[OrganisationName]</c>. The chain stays within the person's (accessible) primary
-/// Organisation — no cross-Organisation leak.</summary>
+/// <summary>A matching ACTIVE person (MEDARBEJDERE section). <paramref name="OrganisationId"/> is the
+/// person's immutable primary Organisation (<c>primary_org_id</c>) — the SAME id the search scope admits
+/// by (D5: a person is admitted by their Organisation, never by a unit). The merged-admin FE (S107)
+/// filters the search people by the Afgrænsning scope SET against this id, NOT against the fragile
+/// <paramref name="Path"/> text. <paramref name="Position"/> is the live <c>employee_profiles.position</c>
+/// (nullable), <paramref name="UnitName"/> is the person's home-unit name (<c>null</c> = homed directly
+/// at the Organisation). <paramref name="Path"/> is the breadcrumb from the Organisation (root) DOWN to
+/// and INCLUDING the home unit (the unit chain is the person's container context; their
+/// <paramref name="DisplayName"/> is the leaf). An Organisation-homed person's path is just
+/// <c>[OrganisationName]</c>. The chain stays within the person's (accessible) primary Organisation —
+/// no cross-Organisation leak.</summary>
 public sealed record PersonSearchResult(
     string UserId,
+    string OrganisationId,
     string DisplayName,
     string? Position,
     string? UnitName,

@@ -35,6 +35,11 @@ const tabGroups: TabGroup[] = [
     prefix: '/admin',
     items: [
       { label: 'Medarbejder administration', to: '/admin/ledelseslinjer', minRole: 'LocalHR' },
+      // S107 / TASK-10701: temporary LocalHR entry so the merged "Organisation &
+      // medarbejdere" page (Enhedsspor VIEW half) is reachable during the
+      // S107→S108 interim. The two old entries (Medarbejder administration above,
+      // Global → Organisation) stay until the S108 cutover collapses to one.
+      { label: 'Organisation & medarbejdere', to: '/admin/organisation-medarbejdere', minRole: 'LocalHR' },
       { label: 'Audit log', to: '/admin/auditlog', minRole: 'LocalHR' },
       { label: 'Projekter', to: '/admin/projekter', minRole: 'LocalAdmin' },
       { label: 'Brugerrettigheder', to: '/admin/brugerrettigheder', minRole: 'LocalAdmin' },

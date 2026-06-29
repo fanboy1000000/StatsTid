@@ -87,6 +87,21 @@ REGISTRY: dict[str, list[str]] = {
     "/api/admin/organizations/tree": ["GetTree_IsEnvelope_MaoAndOrgNodesCarryFields"],
     # GET /api/admin/organizations -> OrgListItem[] (BARE ARRAY)
     "/api/admin/organizations": ["GetOrganizations_IsBareArray_ItemsCarryOrgFields"],
+    # ── S107 / TASK-10705 — the S106 merged-admin reads gained FE consumers (useForest,
+    #    useRoster, useSearch), so the forest/roster/search reads MUST now carry a registered
+    #    contract test (PAT-010). Each maps to a method in tests/.../Contracts/ (the liveness
+    #    check scans CONTRACTS_DIR only — so the roster pin had to MOVE from Approval/ into a
+    #    dedicated Contracts/RosterEndpointContractTests.cs, not just be registered in place). ──
+    # GET /api/admin/units/forest -> { forest: ForestMaoNode[] } envelope (the scoped forest).
+    "/api/admin/units/forest": ["GetForest_IsEnvelope_MaoOrgAndDeepUnitNodesCarryFields"],
+    # GET /api/admin/search -> { units: [...], people: [...] } two-section envelope.
+    "/api/admin/search": ["GetSearch_IsTwoSectionEnvelope_UnitAndPersonRowsCarryFieldsAndPath"],
+    # GET /api/admin/reporting-lines/tree/{}/medarbejdere -> { employees, pendingCountByManager,
+    #   nameResolution } envelope. MOVED EXEMPT(pass-2) -> REGISTRY now that useRoster consumes it;
+    #   the contract pin lives in the NEW Contracts/RosterEndpointContractTests.cs (NOT the
+    #   seed-heavy Approval/S106RosterUnitTagTests, which the liveness scan can't see + which stays
+    #   as the behavioral suite).
+    "/api/admin/reporting-lines/tree/{}/medarbejdere": ["GetRoster_IsEnvelope_RowsCarryUnitTagFieldSet"],
 }
 
 # ---------------------------------------------------------------------------
@@ -112,7 +127,9 @@ EXEMPT: dict[str, str] = {
     "/api/admin/organizations/{}/users": "pass-2",
     "/api/admin/users/{}/roles": "pass-2",
     "/api/admin/reporting-lines/{}/reports": "pass-2",
-    "/api/admin/reporting-lines/tree/{}/medarbejdere": "pass-2",
+    # NOTE (S107 / TASK-10705): /api/admin/reporting-lines/tree/{}/medarbejdere MOVED from here
+    # (EXEMPT pass-2) to the REGISTRY above — useRoster now consumes it, so it carries a dedicated
+    # Contracts/RosterEndpointContractTests pin.
     "/api/admin/audit": "pass-2",
     # --- by-id single-object reads (not list/envelope drift surface) ---
     "/api/admin/users/{}": "single-object",

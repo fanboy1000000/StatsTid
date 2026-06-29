@@ -24,6 +24,7 @@ import { PositionOverrideManagement } from './pages/admin/PositionOverrideManage
 import { WageTypeMappingManagement } from './pages/admin/WageTypeMappingManagement'
 import { AuditLogView } from './pages/admin/AuditLogView'
 import { MedarbejderAdministration } from './pages/admin/MedarbejderAdministration'
+import { OrganisationOgMedarbejdere } from './pages/admin/OrganisationOgMedarbejdere'
 import { DelegationPage } from './pages/delegation/DelegationPage'
 import './styles/tokens.css'
 
@@ -78,6 +79,12 @@ function AppRoutes() {
                 removed; HR keeps employee management on the surviving tree page,
                 opened to LocalHR here (a deliberate P7 expansion). */}
             <Route path="admin/ledelseslinjer" element={<MedarbejderAdministration />} />
+            {/* S107 / TASK-10701 (Enhedsspor Phase 3b): the merged
+                "Organisation & medarbejdere" page (VIEW half) ships on a NEW
+                route ALONGSIDE the two old pages (admin/ledelseslinjer +
+                global/organisation). The redirect + retire is the S108 cutover —
+                do NOT touch the old routes here. */}
+            <Route path="admin/organisation-medarbejdere" element={<OrganisationOgMedarbejdere />} />
             <Route path="admin/auditlog" element={<AuditLogView />} />
           </Route>
           {/* LocalAdmin routes within Administration */}

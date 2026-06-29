@@ -1,0 +1,119 @@
+// SPRINT-107 / TASK-10703 (Enhedsspor Phase 3b-1) — the data layer for the
+// recursive right "Struktur" of the merged "Organisation & medarbejdere" admin
+// page.
+//
+// Consumes the S106 unit-tagged per-Organisation roster read:
+//   GET /api/admin/reporting-lines/tree/{organisationId}/medarbejdere
+//     → { employees: Row[], pendingCountByManager: {...}, nameResolution: {...} }
+//
+// LAZY + CACHED PER ORGANISATION. The Struktur recurses a unit and its child
+// units — which all live in ONE Organisation — so a single roster fetch covers
+// the whole sub-tree. The hook fetches a roster the first time an Organisation is
+// needed and caches it; clicking through sibling/child units of the same
+// Organisation re-uses the cached roster (no refetch). Selecting a unit in a
+// DIFFERENT Organisation fetches (and caches) that one.
+//
+// The named interfaces mirror the backend's serialized (camelCase) wire shape
+// VERBATIM, pinned by the S106 roster contract test (RosterEndpoint /
+// S106RosterUnitTagTests) — the S97→S99→S100 "fetchEnheder" drift-class fix: the
+// FE type must NOT diverge from the backend's actual JSON.
+//
+// LINT (PAT-010): the URL is passed INLINE as a literal to apiClient.get so the
+// contract-coverage lint (tools/check_endpoint_contracts.py) can enumerate it —
+// a path-helper const would evade the gate (the documented blind spot). The
+// existing useMedarbejderRoster is already inline; this mirrors it.
+
+import { useState, useCallback, useRef } from 'react'
+import { apiClient } from '../lib/api'
+
+/** Per-away-manager vikar annotation — present IFF this person is an away-manager
+    currently covered by an active vikar (the absent leader's own row). The
+    inverse "Vikar for X" tag on the stand-in is derived by INVERTING this within
+    the loaded set (no separate field). */
+export interface RosterOutgoingVikar {
+  vikarUserId: string
+  vikarDisplayName: string
+  untilDate: string // ISO 'YYYY-MM-DD'
+  reason: string
+}
+
+/** One employee row in the unit-tagged structural roster (field names are the
+    S106 contract, verbatim camelCase). */
+export interface RosterRow {
+  employeeId: string
+  displayName: string
+  /** server already applied `?? primaryOrgName` — ALWAYS a string. */
+  enhedLabel: string
+  position: string | null
+  /** the person's assigned active PRIMARY manager — THE TREE KEY (raw edge). */
+  structuralApproverId: string | null
+  periodStatus: 'OPEN' | 'SUBMITTED' | 'APPROVED'
+  outgoingVikar: RosterOutgoingVikar | null
+  isRoot: boolean
+  isOrphan: boolean
+  /** the unit the person belongs to (null = Organisation-homed, unit-less). */
+  unitId: string | null
+  unitName: string | null
+  /** the aggregated designated leaders of THIS row's unit (every member of a unit
+      carries the same set; an empty array — never null — for a unit-less row). */
+  leaderIds: string[]
+  /** the active PRIMARY reporting_lines.version etag; null for a root/orphan. */
+  primaryReportingLineVersion: number | null
+}
+
+/** A DISPLAY-ONLY by-id resolution entry — labels an upward-reference / cross-unit
+    leader chip even for an id NOT in the active roster body (e.g. an inactive
+    leader). It admits nobody into scope. */
+export interface RosterNameResolutionEntry {
+  userId: string
+  displayName: string
+  position: string | null
+  unitName: string | null
+}
+
+/** The GET …/medarbejdere envelope — `{ employees, pendingCountByManager,
+    nameResolution }` (NOT a bare array — the S97/S99 envelope distinction). */
+export interface RosterResponse {
+  employees: RosterRow[]
+  pendingCountByManager: Record<string, number>
+  nameResolution: Record<string, RosterNameResolutionEntry>
+}
+
+/**
+ * The lazy, per-Organisation roster cache. `loadRoster(organisationId)` fetches
+ * (once) and caches; `byOrg[organisationId]` exposes the cached response. Calling
+ * `loadRoster` for an already-loaded / in-flight Organisation is a no-op, so the
+ * panel can call it on every selection without refetching the same Organisation.
+ */
+export function useRoster() {
+  const [byOrg, setByOrg] = useState<Record<string, RosterResponse>>({})
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  // Refs (not state) so loadRoster stays a STABLE callback — the panel keys an
+  // effect on it without re-running on every cache update.
+  const loadedRef = useRef<Set<string>>(new Set())
+  const loadingRef = useRef<Set<string>>(new Set())
+
+  const loadRoster = useCallback(async (organisationId: string) => {
+    if (loadedRef.current.has(organisationId) || loadingRef.current.has(organisationId)) return
+    loadingRef.current.add(organisationId)
+    setLoading(true)
+    setError(null)
+    const result = await apiClient.get<RosterResponse>(
+      `/api/admin/reporting-lines/tree/${encodeURIComponent(organisationId)}/medarbejdere`,
+    )
+    loadingRef.current.delete(organisationId)
+    if (result.ok) {
+      loadedRef.current.add(organisationId)
+      setByOrg((prev) => ({ ...prev, [organisationId]: result.data }))
+    } else {
+      setError(result.error)
+    }
+    // S107 Step-7a (Codex P2): keep `loading` true while ANY Organisation is still
+    // in flight (an in-flight count), so fast A→B cross-Org navigation does NOT flash
+    // the empty-state for B when A's request completes first.
+    setLoading(loadingRef.current.size > 0)
+  }, [])
+
+  return { byOrg, loading, error, loadRoster }
+}

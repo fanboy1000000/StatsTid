@@ -2797,6 +2797,10 @@ public static class AdminEndpoints
                 var unitName = pp.UnitId is Guid uid && unitsById.TryGetValue(uid, out var hu) ? hu.Name : null;
                 return new PersonSearchResult(
                     UserId: pp.UserId,
+                    // S107 / TASK-10704 — surface the person's primary Organisation id so the merged-admin
+                    // FE filters search people by the Afgrænsning scope SET (NOT fragile path text). Already
+                    // carried on OverlayPersonRow.PrimaryOrgId (the PATH build uses it); just propagate.
+                    OrganisationId: pp.PrimaryOrgId,
                     DisplayName: pp.DisplayName,
                     Position: pp.Position,
                     UnitName: unitName,

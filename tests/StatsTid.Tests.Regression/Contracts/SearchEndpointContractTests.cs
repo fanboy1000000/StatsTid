@@ -28,8 +28,9 @@ namespace StatsTid.Tests.Regression.Contracts;
 ///     array, the S97/S99 distinction).</item>
 ///   <item>A unit element carries <c>unitId</c>/<c>organisationId</c>/<c>type</c>/<c>name</c>/
 ///     <c>path</c> (camelCase, literally); <c>path</c> is an Array.</item>
-///   <item>A person element carries <c>userId</c>/<c>displayName</c>/<c>position</c>/<c>unitName</c>/
-///     <c>path</c> (camelCase, literally); <c>path</c> is an Array.</item>
+///   <item>A person element carries <c>userId</c>/<c>organisationId</c>/<c>displayName</c>/
+///     <c>position</c>/<c>unitName</c>/<c>path</c> (camelCase, literally); <c>organisationId</c> is the
+///     person's primary Organisation (the S107 Afgrænsning scope-filter key); <c>path</c> is an Array.</item>
 /// </list>
 ///
 /// <para>RED-on-old: the records are PascalCase; a dropped field, a renamed key, an envelope↔bare-array
@@ -173,8 +174,10 @@ public sealed class SearchEndpointContractTests : IAsyncLifetime
         // ── 3) the person row — fields + the Array path (camelCase, literally). ──
         var person = FindByProp(people, "userId", PersonId)
             ?? throw new XunitException("The seeded Zeta person is missing from the people section.");
-        ContractAssert.HasFields(person, "userId", "displayName", "position", "unitName", "path");
+        ContractAssert.HasFields(person, "userId", "organisationId", "displayName", "position", "unitName", "path");
         Assert.Equal("Zeta Person", person.GetProperty("displayName").GetString());
+        // organisationId == the person's Organisation (the S107 Afgrænsning scope-filter key — camelCase, literally).
+        Assert.Equal(Org, person.GetProperty("organisationId").GetString());
         Assert.Equal("Kontorchef", person.GetProperty("position").GetString());
         Assert.Equal("Zeta Enhed", person.GetProperty("unitName").GetString());
         ContractAssert.FieldKind(person, "path", JsonValueKind.Array);

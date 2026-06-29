@@ -1,0 +1,98 @@
+/* SPRINT-107 / TASK-10702 — the LEFT org-structure tree (the design's
+   "ORGANISATIONSSTRUKTUR" sidebar). Square corners, hairline borders, IBM Plex
+   Sans — values map to tokens.css. The per-type dot colours come from the
+   --unit-accent-<type> CSS custom properties on the page root (`.app`); the
+   selected-row tint is the --tree-selected-bg token declared there too. */
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  /* paddingLeft is set inline per depth (8 + depth·15 px); the rest is fixed. */
+  padding-top: 6px;
+  padding-bottom: 6px;
+  padding-right: 12px;
+  cursor: pointer;
+  border-left: 3px solid transparent;
+  user-select: none;
+  background: transparent;
+}
+
+.row:hover {
+  background: var(--surface-detail);
+}
+
+.rowSelected {
+  border-left-color: var(--color-primary);
+  background: var(--tree-selected-bg);
+}
+
+.rowSelected:hover {
+  background: var(--tree-selected-bg);
+}
+
+.caret {
+  width: 16px;
+  flex-shrink: 0;
+  text-align: center;
+  color: var(--color-gray-400);
+  font-size: 11px;
+  line-height: 1;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-family: var(--font-family);
+}
+
+.caretSpacer {
+  width: 16px;
+  flex-shrink: 0;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: var(--border-radius);
+}
+
+.name {
+  font-size: 13.5px;
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
+}
+
+.nameSelected {
+  font-weight: var(--font-weight-semibold);
+}
+
+.spacer {
+  flex: 1;
+}
+
+.count {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  background: var(--color-gray-100);
+  padding: 1px 7px;
+  flex-shrink: 0;
+  border-radius: var(--border-radius);
+}
+
+/* ── status states (loading / empty / error) ── */
+.status {
+  padding: 14px 16px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.statusError {
+  padding: 14px 16px;
+  font-size: 13px;
+  color: var(--color-error);
+}

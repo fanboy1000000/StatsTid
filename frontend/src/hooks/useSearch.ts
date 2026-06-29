@@ -1,0 +1,112 @@
+// SPRINT-107 / TASK-10704 (Enhedsspor Phase 3b-1) — the data layer for the merged
+// "Organisation & medarbejdere" admin page's SEARCH overlay.
+//
+// Consumes the S106 unified scoped units+people SEARCH read:
+//   GET /api/admin/search?q=... → { units: UnitSearchResult[], people: PersonSearchResult[] }
+//
+// The search is SERVER-side (the FE lazy-loads the roster per Organisation, so a
+// pure client filter could never see un-loaded people). It is ALREADY
+// scope-bounded server-side (ADR-038 D5 / P7): a scoped HR gets NO
+// cross-Organisation results — units AND people are admitted SOLELY by the
+// actor's accessible-org set. The Afgrænsning is a pure VIEW narrowing the FE
+// applies ON TOP of that admitted set (never a widening).
+//
+// The named interfaces below mirror the backend's serialized (camelCase) wire
+// shape VERBATIM (src/Backend/.../Contracts/SearchContracts.cs), pinned by
+// SearchEndpointContractTests — the S97→S99→S100 "fetchEnheder" drift-class fix:
+// the FE type must NOT diverge from the backend's actual JSON. Note
+// `organisationId` on BOTH result kinds — the key the S107 Afgrænsning filters by
+// (an id, never the fragile path text).
+//
+// LINT (PAT-010): the URL is passed INLINE as a literal template to
+// apiClient.get so the contract-coverage lint (tools/check_endpoint_contracts.py)
+// can enumerate it — a path-helper const would evade the gate (the documented
+// blind spot). The static prefix `/api/admin/search` is what the lint normalizes
+// (the `?q=${...}` query is stripped). TASK-10705 registers it in the lint.
+
+import { useState, useEffect } from 'react'
+import { apiClient } from '../lib/api'
+import type { UnitType } from '../pages/admin/enhedsspor/typeMaps'
+
+/** A matching ACTIVE unit (ENHEDER section). `path` is the breadcrumb the overlay
+    shows — the chain of names from the Organisation (root) down to the unit's
+    immediate parent, EXCLUSIVE of the unit's own `name` (a top-level unit's path
+    is just `[OrganisationName]`). `organisationId` is the unit's immutable
+    Organisation (the Afgrænsning scope-filter key). */
+export interface UnitSearchResult {
+  unitId: string
+  organisationId: string
+  type: UnitType
+  name: string
+  path: string[]
+}
+
+/** A matching ACTIVE person (MEDARBEJDERE section). `organisationId` is the
+    person's immutable primary Organisation — the SAME id the search scope admits
+    by, and the key the S107 Afgrænsning filters the people by (NOT the fragile
+    `path` text). `path` is the breadcrumb from the Organisation (root) down to and
+    INCLUDING the home unit. `unitName` is null for an Organisation-homed person. */
+export interface PersonSearchResult {
+  userId: string
+  organisationId: string
+  displayName: string
+  position: string | null
+  unitName: string | null
+  path: string[]
+}
+
+/** The GET /api/admin/search envelope — `{ units, people }` (the design's TWO
+    -section overlay shape; NOT a bare array — the S97/S99 envelope distinction). */
+export interface SearchResponse {
+  units: UnitSearchResult[]
+  people: PersonSearchResult[]
+}
+
+const EMPTY: SearchResponse = { units: [], people: [] }
+const DEBOUNCE_MS = 250
+
+/**
+ * The debounced scoped search (GET /api/admin/search) for the overlay. `setQuery`
+ * is wired to the overlay input; the fetch fires DEBOUNCE_MS after the last
+ * keystroke (a stale in-flight request is superseded by clearing its timer + a
+ * `cancelled` guard, so a late response never clobbers a newer query). An
+ * empty/blank query resets to the idle empty result without a request.
+ */
+export function useSearch() {
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState<SearchResponse>(EMPTY)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    const q = query.trim()
+    if (!q) {
+      setResults(EMPTY)
+      setLoading(false)
+      setError(null)
+      return
+    }
+
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    const handle = setTimeout(async () => {
+      const result = await apiClient.get<SearchResponse>(`/api/admin/search?q=${encodeURIComponent(q)}`)
+      if (cancelled) return
+      if (result.ok) {
+        setResults({ units: result.data.units ?? [], people: result.data.people ?? [] })
+      } else {
+        setError(result.error)
+        setResults(EMPTY)
+      }
+      setLoading(false)
+    }, DEBOUNCE_MS)
+
+    return () => {
+      cancelled = true
+      clearTimeout(handle)
+    }
+  }, [query])
+
+  return { query, setQuery, results, loading, error }
+}
