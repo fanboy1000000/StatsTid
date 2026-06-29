@@ -18,11 +18,23 @@ const h = vi.hoisted(() => ({
   search: { query: '', results: { units: [], people: [] } as SearchResponse, loading: false },
 }))
 
+// SPRINT-108 / TASK-10803 — the page + StrukturPanel now consume useAuth (the
+// capability spine) + useToast; both throw outside their providers. A parametrized
+// role mock (default LocalHR = permitting) + a no-op toast keep the suite offline.
+const auth = vi.hoisted(() => ({ role: 'LocalHR' as string | null }))
+vi.mock('../../../contexts/AuthContext', () => ({
+  useAuth: () => ({ role: auth.role }),
+}))
+vi.mock('../../../components/ui', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../components/ui')>()
+  return { ...actual, useToast: () => ({ toast: vi.fn() }) }
+})
+
 vi.mock('../../../hooks/useForest', () => ({
   useForest: () => ({ forest: h.forest, loading: false, error: null, fetchForest: vi.fn() }),
 }))
 vi.mock('../../../hooks/useRoster', () => ({
-  useRoster: () => ({ byOrg: {}, loading: false, error: null, loadRoster: vi.fn() }),
+  useRoster: () => ({ byOrg: {}, loading: false, error: null, loadRoster: vi.fn(), refetchRoster: vi.fn() }),
 }))
 vi.mock('../../../hooks/useSearch', () => ({
   useSearch: () => ({ query: h.search.query, setQuery: vi.fn(), results: h.search.results, loading: h.search.loading, error: null }),
@@ -59,6 +71,7 @@ function twoOrgForest(): ForestMaoNode[] {
 beforeEach(() => {
   h.forest = twoOrgForest()
   h.search = { query: '', results: { units: [], people: [] }, loading: false }
+  auth.role = 'LocalHR'
 })
 
 describe('OrganisationOgMedarbejdere — page (shell + Afgrænsning + search)', () => {
@@ -85,19 +98,43 @@ describe('OrganisationOgMedarbejdere — page (shell + Afgrænsning + search)', 
     expect(screen.getByTestId('afgraensning-summary').textContent).toBe('Alle organisationer')
   })
 
-  it('carries NO mutation affordances anywhere (S91 dead-button discipline — those are S108)', () => {
+  it('reveals the gated UNIT structure affordance on select; the PEOPLE surface stays absent (S109)', () => {
     render(<OrganisationOgMedarbejdere />)
-    // S107 Step-7a (Reviewer): an EXHAUSTIVE denylist of the S108 mutation surface — any
-    // one re-introduced under any of these labels (incl. the +<ChildType> variants) → RED.
-    const forbidden: RegExp[] = [
-      /\+\s*Medarbejder/, /\+\s*(Direktion|Område|Kontor|Team|Enhed)/,
-      /^Rediger/, /Slet/, /Tildel leder/, /^Ret$/, /Omdøb/, /Flyt/, /Skift/, /Afslut/, /^Gem$/,
-    ]
-    for (const re of forbidden) {
+    // S108 inversion: with nothing selected there is no action row…
+    expect(screen.queryByTestId('unit-action-row')).toBeNull()
+    // …selecting the Organisation STY02 reveals "+ Direktion" (create a top-level
+    // unit) under the permitting LocalHR role.
+    fireEvent.click(screen.getByTestId('tree-row-STY02'))
+    expect(screen.getByTestId('unit-action-create').textContent).toContain('Direktion')
+    // the PEOPLE-mutation surface stays absent (those are S109).
+    for (const re of [/\+\s*Medarbejder/, /Tildel leder/, /^Ret$/, /Skift/, /Afslut/]) {
       expect(screen.queryAllByText(re)).toHaveLength(0)
     }
-    // No drawer/dialog is ever mounted in the view-only S107 page.
-    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('gates the structure affordances: a below-floor role sees none', () => {
+    auth.role = 'Employee'
+    render(<OrganisationOgMedarbejdere />)
+    fireEvent.click(screen.getByTestId('tree-row-STY02'))
+    expect(screen.queryByTestId('unit-action-row')).toBeNull()
+    expect(screen.queryByTestId('unit-action-create')).toBeNull()
+  })
+
+  it('the top-level "+ Ministerområde" is GlobalAdmin-gated (TASK-10802)', () => {
+    // GlobalAdmin sees it in the tree header…
+    auth.role = 'GlobalAdmin'
+    const { unmount } = render(<OrganisationOgMedarbejdere />)
+    expect(screen.getByTestId('mao-create-button')).toBeDefined()
+    unmount()
+    // …a LocalAdmin does NOT (MAO-create is GlobalAdmin-only)…
+    auth.role = 'LocalAdmin'
+    const second = render(<OrganisationOgMedarbejdere />)
+    expect(screen.queryByTestId('mao-create-button')).toBeNull()
+    second.unmount()
+    // …nor does a LocalHR.
+    auth.role = 'LocalHR'
+    render(<OrganisationOgMedarbejdere />)
+    expect(screen.queryByTestId('mao-create-button')).toBeNull()
   })
 
   it('the Afgrænsning narrows the tree AND recomputes the MAO roll-up count', () => {

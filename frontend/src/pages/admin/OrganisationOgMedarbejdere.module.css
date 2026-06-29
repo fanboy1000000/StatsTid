@@ -121,6 +121,10 @@
 }
 
 .sidebarHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   padding: 12px 16px 10px;
   border-bottom: var(--border-width) solid var(--color-gray-100);
   flex-shrink: 0;

@@ -14,13 +14,30 @@
 // / Ret / Tildel leder / Skift / Afslut / vikar-edit / per-row Rediger › / drawer
 // (all S108). Person & leader rows render but are NOT clickable-to-edit.
 
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { useState, type ComponentProps } from 'react'
 import { render, screen, fireEvent, within } from '@testing-library/react'
+
+// SPRINT-108 / TASK-10803 — StrukturPanel now consumes useAuth (the capability
+// spine) + useToast; both THROW outside their providers. A parametrized role mock
+// (default LocalHR = permitting) drives the gating; useToast is a no-op spy.
+const auth = vi.hoisted(() => ({ role: 'LocalHR' as string | null }))
+vi.mock('../../../../contexts/AuthContext', () => ({
+  useAuth: () => ({ role: auth.role }),
+}))
+vi.mock('../../../../components/ui', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../../components/ui')>()
+  return { ...actual, useToast: () => ({ toast: vi.fn() }) }
+})
+
 import { StrukturPanel } from '../StrukturPanel'
 import type { SelectedNode } from '../OrgStructureTree'
 import type { ForestMaoNode } from '../../../../hooks/useForest'
 import type { RosterResponse } from '../../../../hooks/useRoster'
+
+beforeEach(() => {
+  auth.role = 'LocalHR'
+})
 
 const VEJL = '000000d0-0000-0000-0000-0000000000a1'
 const KONTROL = '000000d0-0000-0000-0000-0000000000a2'
@@ -294,17 +311,23 @@ describe('StrukturPanel — the recursive read-only Struktur', () => {
     expect(onBack).toHaveBeenCalled()
   })
 
-  // ── the keystone: the NO-MUTATION-AFFORDANCE allowlist ──────────────────────
-  it('exposes ONLY the allowed interactive affordances (no mutation buttons/links)', () => {
-    renderPanel()
-    fireEvent.click(screen.getByTestId(`caret-unit-${KONTROL}`)) // expand to surface every node type
+  // ── the keystone: the RE-ARCHITECTED allowlist (S108 inversion) ─────────────
+  // The S107 allowlist asserted EVERY button was a caret/toggle/breadcrumb/open.
+  // S108 adds the gated UNIT structure buttons (+ChildType / Rediger / Flyt / Slet)
+  // to the allowed set, while the PEOPLE-mutation guard SURVIVES (no + Medarbejder
+  // / Ret / Tildel leder / Skift / Afslut / Rediger › — those are S109).
+  it('exposes the gated STRUCTURE affordances but NOT the people-mutation surface', () => {
+    renderPanel() // default role LocalHR (permitting)
+    fireEvent.click(screen.getByTestId(`caret-unit-${KONTROL}`)) // surface every node type
 
-    // (a) ALLOWLIST: every button is a caret / view-toggle / breadcrumb /
-    //     back-forward / "Åbn ›" — identified by its data-testid. A stray
-    //     mutation button (which would carry none of these) fails this.
+    // (a) ALLOWLIST: caret / view-toggle / breadcrumb / back-forward / "Åbn ›" PLUS
+    //     the four UNIT structure actions. Any OTHER stray button (a people
+    //     mutation) carries none of these testids → fails.
+    const STRUCTURE = ['unit-action-create', 'unit-action-edit', 'unit-action-move', 'unit-action-delete']
     const allowed = (tid: string | null): boolean =>
       !!tid &&
       (['nav-back', 'nav-forward', 'toggle-expand-all', 'toggle-people'].includes(tid) ||
+        STRUCTURE.includes(tid) ||
         tid.startsWith('crumb-') ||
         tid.startsWith('caret-') ||
         tid.startsWith('open-unit-'))
@@ -312,32 +335,34 @@ describe('StrukturPanel — the recursive read-only Struktur', () => {
       expect(allowed(btn.getAttribute('data-testid'))).toBe(true)
     }
 
-    // (b) NO anchor links at all.
-    expect(screen.queryAllByRole('link')).toHaveLength(0)
+    // (b) the STRUCTURE surface is PRESENT (the inversion) — a kontor's child is a team.
+    expect(screen.getByTestId('unit-action-create').textContent).toContain('Team')
+    expect(screen.getByTestId('unit-action-edit')).toBeDefined()
+    expect(screen.getByTestId('unit-action-move')).toBeDefined()
+    expect(screen.getByTestId('unit-action-delete')).toBeDefined()
 
-    // (c) the exhaustive denylist — none of the S108 mutation affordances render.
-    for (const label of [
-      '+ Medarbejder',
-      '+ Kontor',
-      '+ Team',
-      'Rediger',
-      'Rediger ›',
-      'Slet',
-      'Ret',
-      'Tildel leder',
-      'Skift',
-      'Afslut',
-      'Omdøb',
-      'Flyt',
-      'Gem',
-    ]) {
+    // (c) the PEOPLE-mutation surface STILL absent (S109) — the guard survives.
+    for (const label of ['+ Medarbejder', 'Ret', 'Tildel leder', 'Skift', 'Afslut', 'Rediger ›']) {
       expect(screen.queryByText(label)).toBeNull()
     }
+    expect(screen.queryAllByRole('link')).toHaveLength(0)
 
-    // (d) person & leader rows render but are NOT clickable-to-edit (no drawer).
+    // (d) person & leader rows render but are NOT clickable-to-edit (no person drawer).
     expect(screen.getByText('Jens Kofoed').closest('button')).toBeNull()
     expect(screen.getByText('Anna Andersen').closest('button')).toBeNull()
     expect(screen.getByText('Carl Storm').closest('button')).toBeNull()
+  })
+
+  // ── the gating spine: a non-permitting role sees NO unit affordances ─────────
+  it('hides the unit affordances for a below-floor role (Employee)', () => {
+    auth.role = 'Employee'
+    renderPanel()
+    expect(screen.queryByTestId('unit-action-row')).toBeNull()
+    expect(screen.queryByTestId('unit-action-create')).toBeNull()
+    expect(screen.queryByTestId('unit-action-edit')).toBeNull()
+    // …but the READ-ONLY view still renders.
+    expect(screen.getByTestId('title-name').textContent).toBe('Vejledning')
+    expect(screen.getByTestId('leader-jens')).toBeDefined()
   })
 
   it('renders the empty prompt when nothing is selected', () => {

@@ -94,8 +94,10 @@ export function useRoster() {
   const loadedRef = useRef<Set<string>>(new Set())
   const loadingRef = useRef<Set<string>>(new Set())
 
-  const loadRoster = useCallback(async (organisationId: string) => {
-    if (loadedRef.current.has(organisationId) || loadingRef.current.has(organisationId)) return
+  // The single fetch+cache body; `loadRoster` and `refetchRoster` share it. The
+  // in-flight guard prevents a duplicate fetch for the same Organisation.
+  const fetchInto = useCallback(async (organisationId: string) => {
+    if (loadingRef.current.has(organisationId)) return
     loadingRef.current.add(organisationId)
     setLoading(true)
     setError(null)
@@ -115,5 +117,18 @@ export function useRoster() {
     setLoading(loadingRef.current.size > 0)
   }, [])
 
-  return { byOrg, loading, error, loadRoster }
+  const loadRoster = useCallback(async (organisationId: string) => {
+    if (loadedRef.current.has(organisationId)) return
+    await fetchInto(organisationId)
+  }, [fetchInto])
+
+  // SPRINT-108 / TASK-10801 — force a re-pull after a structure mutation (the
+  // cached roster is now stale: a re-homed member, a leader change). Drops the
+  // loaded flag and re-fetches even when already cached.
+  const refetchRoster = useCallback(async (organisationId: string) => {
+    loadedRef.current.delete(organisationId)
+    await fetchInto(organisationId)
+  }, [fetchInto])
+
+  return { byOrg, loading, error, loadRoster, refetchRoster }
 }

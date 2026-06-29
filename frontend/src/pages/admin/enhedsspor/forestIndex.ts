@@ -23,6 +23,10 @@ export interface StrukturNode {
   /** The Organisation this node belongs to (→ which roster to load). null for a
       MAO (a MAO spans multiple Organisations, each its own roster). */
   organisationId: string | null
+  /** The unit's optimistic-concurrency version (the If-Match etag source for
+      rename / move / delete). Units only — null for MAO / Organisation (their
+      structure mutations are a separate task with their own concurrency token). */
+  version: number | null
   /** The deep (rolled-up) member count from the forest. */
   memberCount: number
   /** Child UNITS for recursion: a MAO's Organisations, an Organisation's
@@ -48,6 +52,7 @@ function unitNode(
     name: u.name,
     parentId,
     organisationId,
+    version: u.version,
     memberCount: u.memberCount,
     childUnits,
   }
@@ -69,6 +74,7 @@ export function buildForestIndex(forest: ForestMaoNode[]): ForestIndex {
         name: org.orgName,
         parentId: mao.orgId,
         organisationId: org.orgId,
+        version: null,
         memberCount: org.memberCount,
         childUnits: topUnits,
       }
@@ -83,6 +89,7 @@ export function buildForestIndex(forest: ForestMaoNode[]): ForestIndex {
       name: mao.orgName,
       parentId: null,
       organisationId: null,
+      version: null,
       memberCount: mao.memberCount,
       childUnits: orgNodes,
     }
@@ -113,5 +120,16 @@ export function descendantUnitIds(node: StrukturNode): string[] {
     }
   }
   rec(node)
+  return out
+}
+
+/** Every UNIT node within one Organisation (TASK-10801 — the move-target source).
+    A unit's `organisationId` is immutable, so this enumerates the candidate
+    re-parent targets before the self / descendant / type-rank filtering. */
+export function unitsInOrg(index: ForestIndex, organisationId: string): StrukturNode[] {
+  const out: StrukturNode[] = []
+  for (const node of index.byId.values()) {
+    if (node.kind === 'unit' && node.organisationId === organisationId) out.push(node)
+  }
   return out
 }

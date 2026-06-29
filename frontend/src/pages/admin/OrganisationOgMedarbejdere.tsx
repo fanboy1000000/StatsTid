@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Button } from '../../components/ui'
+import { useAuth } from '../../contexts/AuthContext'
+import { hasMinRole } from '../../lib/roles'
 import { useForest } from '../../hooks/useForest'
 import { useRoster } from '../../hooks/useRoster'
 import { AfgraensningControl } from './enhedsspor/AfgraensningControl'
@@ -7,6 +9,7 @@ import { SearchOverlay } from './enhedsspor/SearchOverlay'
 import { applyAfgraensning, collectOrgIds } from './enhedsspor/afgraensning'
 import { OrgStructureTree, type SelectedNode } from './enhedsspor/OrgStructureTree'
 import { StrukturPanel } from './enhedsspor/StrukturPanel'
+import { MaoCreateAction } from './enhedsspor/OrgStructureDialogs'
 import styles from './OrganisationOgMedarbejdere.module.css'
 
 // SPRINT-107 — the merged "Organisation & medarbejdere" admin page
@@ -35,8 +38,30 @@ import styles from './OrganisationOgMedarbejdere.module.css'
 // S106 forest/roster/search reads — the Afgrænsning is a client-side NARROWING
 // only, never a widening).
 export function OrganisationOgMedarbejdere() {
-  const { forest, loading, error } = useForest()
-  const { byOrg, loading: rosterLoading, loadRoster } = useRoster()
+  const { forest, loading, error, fetchForest } = useForest()
+  const { byOrg, loading: rosterLoading, loadRoster, refetchRoster } = useRoster()
+
+  // SPRINT-108 / TASK-10803 — the capability-gating spine. The unit-structure
+  // affordances (in the StrukturPanel title block) gate on LocalHR (the live S104
+  // floor); the org/MAO structure mutations (LocalAdmin / GlobalAdmin) are a
+  // separate task. The FE gate is UX — the backend re-checks every mutation.
+  const { role } = useAuth()
+  const canEditUnits = hasMinRole(role, 'LocalHR')
+  // SPRINT-108 / TASK-10802 — the top-level "+ Ministerområde" affordance (a MAO is
+  // parent-less, so it lives in the tree header, not the node action row).
+  // GlobalAdmin-gated; the backend re-checks HasGlobalScope on the create POST.
+  const canCreateMao = hasMinRole(role, 'GlobalAdmin')
+
+  // After a successful unit mutation, re-pull the forest (tree + Struktur) and the
+  // affected Organisation's roster (people). Wired to the panel ONLY for a
+  // permitted actor — a read-only actor never reaches a mutation.
+  const onUnitMutated = useCallback(
+    async (organisationId: string | null) => {
+      await fetchForest()
+      if (organisationId) await refetchRoster(organisationId)
+    },
+    [fetchForest, refetchRoster],
+  )
 
   // The Afgrænsning scope selection (null = all visible orgs). The option source
   // + the "all" reference size derive from the unfiltered (server-admitted)
@@ -124,6 +149,7 @@ export function OrganisationOgMedarbejdere() {
         <aside className={styles.sidebar} aria-label="Organisationsstruktur">
           <div className={styles.sidebarHeader}>
             <div className={styles.sidebarLabel}>ORGANISATIONSSTRUKTUR</div>
+            {canCreateMao && <MaoCreateAction onCreated={fetchForest} />}
           </div>
           <div className={styles.treeContainer} data-testid="tree-placeholder">
             <OrgStructureTree
@@ -150,6 +176,7 @@ export function OrganisationOgMedarbejdere() {
               canForward={nav.index < nav.stack.length - 1}
               onBack={goBack}
               onForward={goForward}
+              onMutated={canEditUnits ? onUnitMutated : undefined}
             />
           </div>
         </main>

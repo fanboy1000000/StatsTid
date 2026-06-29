@@ -106,6 +106,22 @@
   text-overflow: ellipsis;
 }
 
+/* ── c2. action row (the gated unit-mutation affordances) ── */
+.actionRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: -8px 0 18px;
+}
+
+.actionDivider {
+  width: 1px;
+  height: 20px;
+  background: var(--color-border);
+  margin: 0 2px;
+}
+
 /* ── d. "Refererer opad til" strip ── */
 .upRef {
   display: flex;

@@ -10,21 +10,24 @@
 // leader); cross-unit exceptions, leaderless units and vikar are surfaced
 // READ-ONLY.
 //
-// READ + NAVIGATE ONLY (S91 dead-button discipline). The ONLY interactive
-// affordances here are: expansion carets (child unit / MEDARBEJDERE group / a
-// leader's reports), the two VIEW toggles (Vis org. / Vis medarbejdere),
-// breadcrumb + back/forward navigation, and "Åbn ›" unit navigation. There is NO
-// mutation affordance — no + Medarbejder / + <ChildType> / Rediger / Slet /
-// per-row Rediger › / person-name edit link / cross-unit "Ret" / leaderless
-// "Tildel leder" / vikar-edit / drawer mount (all S108). Person & leader rows
-// render but are NOT clickable-to-edit.
+// S108 (Enhedsspor Phase 3b-2a) added the STRUCTURE-editing surface here, gated by
+// role (the S91 discipline IN REVERSE — wire-before-render): the title-block action
+// row hosts the UNIT mutations (+ <ChildType> / Rediger / Flyt / Slet → LocalHR) and
+// the ORG/MAO mutations (Omdøb / Flyt / Slet / + Organisation / + Ministerområde →
+// LocalAdmin/GlobalAdmin per the live floors; the FE gate is UX, the backend
+// re-checks). The PEOPLE-mutation surface stays READ-ONLY (S109): NO + Medarbejder /
+// cross-unit "Ret" / leaderless "Tildel leder" / vikar-edit / per-row Rediger › /
+// person-name edit link — person & leader rows render but are NOT clickable-to-edit.
 //
 // Styling is tokens-not-hardcoded: per-type accent/tint come from the inherited
 // --unit-accent-<type> / --unit-tint-<type> page-root vars; the design's amber /
 // vikar status colours are declared as scoped CSS vars on .panel.
 
 import { useEffect, useMemo, useState } from 'react'
-import { Button } from '../../../components/ui'
+import { Button, useToast } from '../../../components/ui'
+import { useAuth } from '../../../contexts/AuthContext'
+import { hasMinRole } from '../../../lib/roles'
+import { useUnitMutations } from '../../../hooks/useUnitMutations'
 import type { ForestMaoNode } from '../../../hooks/useForest'
 import type {
   RosterResponse,
@@ -35,11 +38,40 @@ import {
   buildForestIndex,
   descendantUnitIds,
   pathOf,
+  unitsInOrg,
   type StrukturNode,
 } from './forestIndex'
 import type { SelectedNode } from './OrgStructureTree'
-import { LABEL, type UnitType } from './typeMaps'
+import { UnitDeleteConfirm, UnitDrawer, UnitMoveDialog } from './UnitDrawer'
+import { useOrgMutations } from '../../../hooks/useOrgMutations'
+import { OrgCreateDialog, OrgDeleteDialog, OrgMoveDialog, OrgRenameDialog } from './OrgStructureDialogs'
+import { CHILD, LABEL, ORD, type UnitType } from './typeMaps'
 import styles from './StrukturPanel.module.css'
+
+// SPRINT-108 / TASK-10801 — the unit-mutation action the title-block action row
+// opens. `create` captures the parent (the selected org/unit) + the derived child
+// type; the rest carry the target unit (rename / move / delete operate on the
+// selected unit). All four are gated to LocalHR (the action row only renders for a
+// permitted actor); the backend re-checks the floor + guards on every call.
+type UnitAction =
+  | { kind: 'create'; parentNode: StrukturNode; childType: UnitType }
+  | { kind: 'edit'; unit: StrukturNode }
+  | { kind: 'move'; unit: StrukturNode }
+  | { kind: 'delete'; unit: StrukturNode }
+  | null
+
+// SPRINT-108 / TASK-10802 — the ORG / MAO structure mutation the title-block action
+// row opens (a separate concern from the unit mutations above). `create` captures
+// the parent MAO (an Organisation is created beneath it); rename / move / delete
+// operate on the selected MAO or Organisation. The role gates differ from the unit
+// floor: org create/rename = LocalAdmin; org move/delete = GlobalAdmin. The backend
+// re-checks the floor + the structural guards on every call.
+type OrgAction =
+  | { kind: 'create'; parent: StrukturNode }
+  | { kind: 'rename'; node: StrukturNode }
+  | { kind: 'move'; node: StrukturNode }
+  | { kind: 'delete'; node: StrukturNode; branch: 'blocked' | 'empty'; employeeCount: number }
+  | null
 
 interface StrukturPanelProps {
   forest: ForestMaoNode[]
@@ -55,6 +87,11 @@ interface StrukturPanelProps {
   canForward: boolean
   onBack: () => void
   onForward: () => void
+  /** SPRINT-108 / TASK-10801 — invoked after a successful unit mutation so the
+      page can re-pull the forest (+ the affected Organisation's roster). The page
+      wires it only for a permitted actor (the gate is also re-checked here via
+      useAuth); a read-only actor never reaches a mutation. */
+  onMutated?: (organisationId: string | null) => void | Promise<void>
 }
 
 const MONTHS_DA = ['jan', 'feb', 'mar', 'apr', 'maj', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec']
@@ -142,6 +179,7 @@ export function StrukturPanel({
   canForward,
   onBack,
   onForward,
+  onMutated,
 }: StrukturPanelProps) {
   const index = useMemo(() => buildForestIndex(forest), [forest])
   const selectedNode = selected ? index.byId.get(selected.id) ?? null : null
@@ -153,6 +191,32 @@ export function StrukturPanel({
   const [medClosed, setMedClosed] = useState<Record<string, boolean>>({})
   const [lCollapse, setLCollapse] = useState<Record<string, boolean>>({})
   const [showPeople, setShowPeople] = useState(true)
+
+  // ── SPRINT-108 / TASK-10803 — the capability-gating spine. The unit
+  // affordances render ONLY for LocalHR+ (the LIVE S104 floor); the backend is
+  // the enforcer, this gate is UX. useAuth throws outside an AuthProvider — the
+  // S107 suites that render this panel now mock contexts/AuthContext.
+  const { role } = useAuth()
+  const canEditUnits = hasMinRole(role, 'LocalHR')
+  const { toast } = useToast()
+  const mutations = useUnitMutations()
+  const [action, setAction] = useState<UnitAction>(null)
+  const [busy, setBusy] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
+
+  // ── SPRINT-108 / TASK-10802 — the ORG / MAO mutation gates + state. The floors
+  // differ from the unit floor (LocalHR): org create/rename = LocalAdmin; org
+  // move/delete = GlobalAdmin. Any actor at these floors is by definition also
+  // ≥ LocalHR, so they ride inside the canEditUnits action row. The FE gate is UX —
+  // the backend re-checks the floor on every call (AdminEndpoints org mutations).
+  const canCreateOrg = hasMinRole(role, 'LocalAdmin')
+  const canRenameOrg = hasMinRole(role, 'LocalAdmin')
+  const canMoveOrg = hasMinRole(role, 'GlobalAdmin')
+  const canDeleteOrg = hasMinRole(role, 'GlobalAdmin')
+  const orgMutations = useOrgMutations()
+  const [orgAction, setOrgAction] = useState<OrgAction>(null)
+  const [orgBusy, setOrgBusy] = useState(false)
+  const [orgError, setOrgError] = useState<string | null>(null)
 
   // Lazily ensure the selected node's Organisation roster is loaded.
   useEffect(() => {
@@ -202,6 +266,275 @@ export function StrukturPanel({
     name: node.name,
     type: node.type,
   })
+
+  // ── SPRINT-108 / TASK-10801 — the gated unit-mutation surface ─────────────────
+  // The "+ <ChildType>" derivation: an Organisation creates a top-level `direktion`
+  // (parent_unit_id NULL); a unit creates CHILD[type]; a MAO (would create an
+  // Organisation — an ORG mutation, a later task) and a leaf `enhed` (no child) are
+  // DISABLED. The label always shows so the row keeps its shape.
+  const createInfo: { type: UnitType | null; label: string; canCreate: boolean } =
+    selectedNode.kind === 'mao'
+      ? { type: 'organisation', label: LABEL.organisation, canCreate: false }
+      : selectedNode.kind === 'organisation'
+        ? { type: 'direktion', label: LABEL.direktion, canCreate: true }
+        : (() => {
+            const child = CHILD[selectedNode.type]
+            return {
+              type: child,
+              label: child ? LABEL[child] : LABEL[selectedNode.type],
+              canCreate: child !== null,
+            }
+          })()
+
+  const closeAction = () => {
+    setAction(null)
+    setActionError(null)
+  }
+
+  const afterMutation = async (successTitle: string, successBody: string) => {
+    setBusy(false)
+    setAction(null)
+    setActionError(null)
+    toast({ title: successTitle, description: successBody, variant: 'success' })
+    await onMutated?.(organisationId)
+  }
+
+  const openCreate = () => {
+    if (!createInfo.canCreate || !createInfo.type) return
+    setActionError(null)
+    setAction({ kind: 'create', parentNode: selectedNode, childType: createInfo.type })
+  }
+  const openEdit = () => {
+    setActionError(null)
+    setAction({ kind: 'edit', unit: selectedNode })
+  }
+  const openMove = () => {
+    setActionError(null)
+    setAction({ kind: 'move', unit: selectedNode })
+  }
+  const openDelete = () => {
+    setActionError(null)
+    setAction({ kind: 'delete', unit: selectedNode })
+  }
+
+  const submitCreate = async (name: string) => {
+    if (action?.kind !== 'create' || !action.parentNode.organisationId) return
+    setBusy(true)
+    setActionError(null)
+    const res = await mutations.createUnit({
+      organisationId: action.parentNode.organisationId,
+      parentUnitId: action.parentNode.kind === 'unit' ? action.parentNode.id : null,
+      type: action.childType,
+      name,
+    })
+    if (res.ok) await afterMutation('Oprettet', 'Enheden er oprettet')
+    else {
+      setBusy(false)
+      setActionError(res.error)
+    }
+  }
+
+  const submitEdit = async (name: string, addLeaderIds: string[], removeLeaderIds: string[]) => {
+    if (action?.kind !== 'edit') return
+    const unit = action.unit
+    setBusy(true)
+    setActionError(null)
+    // S108 Step-7a (Reviewer): these are separate non-atomic calls. To avoid a
+    // committed-rename-then-stale-version-retry-412 trap, do the leader ops FIRST
+    // (they write `unit_leaders`, NOT `units` → they never bump `units.version`, so
+    // they cannot invalidate the rename's If-Match) and the version-bumping rename
+    // LAST. On ANY mid-sequence failure, if something already committed, refetch so
+    // the committed change is reflected and a retry re-derives against fresh state.
+    let committed = false
+    const failWith = async (msg: string) => {
+      setBusy(false)
+      if (committed) await onMutated?.(organisationId)
+      setActionError(msg)
+    }
+    // 1) leader designations (the diff of the checkboxes; path-param remove).
+    for (const userId of addLeaderIds) {
+      const res = await mutations.designateLeader(unit.id, userId)
+      if (!res.ok) return failWith(res.error)
+      committed = true
+    }
+    for (const userId of removeLeaderIds) {
+      const res = await mutations.removeLeader(unit.id, userId)
+      if (!res.ok) return failWith(res.error)
+      committed = true
+    }
+    // 2) rename LAST (If-Match) only if the name actually changed.
+    if (name !== unit.name) {
+      if (unit.version == null) return failWith('Kan ikke omdøbe enheden. Genindlæs siden.')
+      const res = await mutations.renameUnit(unit.id, name, unit.version)
+      if (!res.ok) return failWith(res.error)
+    }
+    await afterMutation('Gemt', 'Enheden er opdateret')
+  }
+
+  const submitMove = async (newParentUnitId: string | null) => {
+    if (action?.kind !== 'move') return
+    const unit = action.unit
+    if (unit.version == null) {
+      setActionError('Kan ikke flytte enheden. Genindlæs siden.')
+      return
+    }
+    setBusy(true)
+    setActionError(null)
+    const res = await mutations.moveUnit(unit.id, newParentUnitId, unit.version)
+    if (res.ok) await afterMutation('Flyttet', 'Enheden er flyttet')
+    else {
+      setBusy(false)
+      setActionError(res.error)
+    }
+  }
+
+  const submitDelete = async () => {
+    if (action?.kind !== 'delete') return
+    const unit = action.unit
+    if (unit.version == null) {
+      setActionError('Kan ikke slette enheden. Genindlæs siden.')
+      return
+    }
+    setBusy(true)
+    setActionError(null)
+    const res = await mutations.deleteUnit(unit.id, unit.version)
+    if (res.ok) await afterMutation('Slettet', 'Enheden er slettet')
+    else {
+      setBusy(false)
+      setActionError(res.error)
+    }
+  }
+
+  // The move-picker candidates: every unit in the SAME Organisation, minus self,
+  // minus descendants, minus same-or-deeper TYPE-RANK targets (a valid parent must
+  // be strictly shallower — the S104 partial-rank rule). "→ Rod" is added in the
+  // dialog itself.
+  const moveTargets = (() => {
+    if (action?.kind !== 'move') return []
+    const movingUnit = action.unit
+    const orgId = movingUnit.organisationId
+    if (!orgId) return []
+    const movingOrd = ORD[movingUnit.type]
+    const excluded = new Set([movingUnit.id, ...descendantUnitIds(movingUnit)])
+    return unitsInOrg(index, orgId)
+      .filter((u) => !excluded.has(u.id) && ORD[u.type] < movingOrd)
+      .map((u) => ({ id: u.id, name: u.name, type: u.type }))
+  })()
+
+  // ── SPRINT-108 / TASK-10802 — the gated ORG / MAO mutation surface ────────────
+  const closeOrgAction = () => {
+    setOrgAction(null)
+    setOrgError(null)
+  }
+
+  const afterOrgMutation = async (successTitle: string, successBody: string) => {
+    setOrgBusy(false)
+    setOrgAction(null)
+    setOrgError(null)
+    toast({ title: successTitle, description: successBody, variant: 'success' })
+    // Org structure changes the forest (placement + roll-up counts), not roster
+    // membership → refetch the forest only (null skips the per-org roster re-pull).
+    await onMutated?.(null)
+  }
+
+  const openOrgCreate = () => {
+    setOrgError(null)
+    // Only reachable on a MAO node (the "+ Organisation" create button) — a MAO's
+    // child is always an Organisation.
+    setOrgAction({ kind: 'create', parent: selectedNode })
+  }
+  const openOrgRename = () => {
+    setOrgError(null)
+    setOrgAction({ kind: 'rename', node: selectedNode })
+  }
+  const openOrgMove = () => {
+    setOrgError(null)
+    setOrgAction({ kind: 'move', node: selectedNode })
+  }
+  const openOrgDelete = () => {
+    setOrgError(null)
+    // Open optimistically on the forest roll-up count; the DELETE is the gate — a
+    // 422 flips the dialog to its BLOCKED branch with the authoritative count.
+    setOrgAction({
+      kind: 'delete',
+      node: selectedNode,
+      branch: selectedNode.memberCount > 0 ? 'blocked' : 'empty',
+      employeeCount: selectedNode.memberCount,
+    })
+  }
+
+  // The org move-target candidates: every visible MAO except the org's current
+  // parent (the target must be an active MAO — the backend re-checks).
+  const orgMoveTargets =
+    orgAction?.kind === 'move'
+      ? forest
+          .filter((m) => m.orgId !== orgAction.node.parentId)
+          .map((m) => ({ orgId: m.orgId, orgName: m.orgName }))
+      : []
+
+  const submitOrgCreate = async (name: string) => {
+    if (orgAction?.kind !== 'create') return
+    setOrgBusy(true)
+    setOrgError(null)
+    const res = await orgMutations.createOrg({
+      orgName: name,
+      orgType: 'ORGANISATION',
+      parentOrgId: orgAction.parent.id,
+    })
+    if (res.ok) await afterOrgMutation('Oprettet', 'Organisation oprettet')
+    else {
+      setOrgBusy(false)
+      setOrgError(res.error)
+    }
+  }
+
+  const submitOrgRename = async (name: string) => {
+    if (orgAction?.kind !== 'rename') return
+    setOrgBusy(true)
+    setOrgError(null)
+    const res = await orgMutations.renameOrg(orgAction.node.id, name)
+    if (res.ok) await afterOrgMutation('Gemt', 'Navn opdateret')
+    else {
+      setOrgBusy(false)
+      setOrgError(res.error)
+    }
+  }
+
+  const submitOrgMove = async (newParentOrgId: string) => {
+    if (orgAction?.kind !== 'move') return
+    setOrgBusy(true)
+    setOrgError(null)
+    const res = await orgMutations.moveOrg(orgAction.node.id, newParentOrgId)
+    if (res.ok) await afterOrgMutation('Flyttet', 'Organisation flyttet')
+    else {
+      setOrgBusy(false)
+      setOrgError(res.error)
+    }
+  }
+
+  const submitOrgDelete = async () => {
+    if (orgAction?.kind !== 'delete') return
+    const node = orgAction.node
+    setOrgBusy(true)
+    setOrgError(null)
+    const res = await orgMutations.deleteOrg(node.id)
+    if (res.ok) {
+      await afterOrgMutation('Slettet', node.kind === 'mao' ? 'Ministerområde slettet' : 'Organisation slettet')
+    } else if (res.status === 422) {
+      // The server is the gate: a 422 flips to the BLOCKED branch with the
+      // authoritative count (the optimistic forest count may have been stale).
+      setOrgBusy(false)
+      setOrgAction({
+        kind: 'delete',
+        node,
+        branch: 'blocked',
+        employeeCount: res.employeeCount ?? node.memberCount,
+      })
+    } else {
+      setOrgBusy(false)
+      setOrgError(res.error)
+    }
+  }
 
   // ── the recursive node list ──────────────────────────────────────────────────
   const nodes: RenderNode[] = []
@@ -397,13 +730,76 @@ export function StrukturPanel({
         })}
       </nav>
 
-      {/* c. title block (type chip + name) — NO Rediger/Slet/+ actions (S108) */}
+      {/* c. title block (type chip + name) */}
       <div className={styles.titleBlock}>
         <span className={styles.typeChip} style={chipStyle(selectedNode.type)} data-testid="title-type-chip">
           {LABEL[selectedNode.type]}
         </span>
         <h1 className={styles.title} data-testid="title-name">{selectedNode.name}</h1>
       </div>
+
+      {/* c2. action row — the gated UNIT structure mutations (TASK-10801/10803).
+          Rendered ONLY for LocalHR+. "+ <ChildType>" creates a child unit (an
+          Organisation seeds a top-level direktion); Rediger / Flyt / Slet operate
+          on the selected unit. People mutations (+ Medarbejder / Ret / …) are S109.
+          The org/MAO structure mutations (rename/move/delete) are a separate task. */}
+      {canEditUnits && (
+        <div className={styles.actionRow} data-testid="unit-action-row">
+          {/* The create button. On an Organisation / unit it is the UNIT create
+              (createInfo, LocalHR — TASK-10801). On a MAO it becomes the ORG create
+              ("+ Organisation", LocalAdmin — TASK-10802): disabled below that floor,
+              so a LocalHR sees the same disabled placeholder as before. */}
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={isMao ? !canCreateOrg : !createInfo.canCreate}
+            onClick={isMao ? openOrgCreate : openCreate}
+            data-testid="unit-action-create"
+          >
+            + {createInfo.label}
+          </Button>
+          {selectedNode.kind === 'unit' && (
+            <>
+              <span className={styles.actionDivider} aria-hidden="true" />
+              <Button variant="secondary" size="sm" onClick={openEdit} data-testid="unit-action-edit">
+                Rediger
+              </Button>
+              <Button variant="secondary" size="sm" onClick={openMove} data-testid="unit-action-move">
+                Flyt
+              </Button>
+              <Button variant="ghost" size="sm" onClick={openDelete} data-testid="unit-action-delete">
+                Slet
+              </Button>
+            </>
+          )}
+          {/* TASK-10802 — the gated ORG / MAO structure mutations. On a MAO: Omdøb
+              (LocalAdmin) + Slet (GlobalAdmin) — a MAO is a root → no Flyt; the
+              create above is the org-create. On an Organisation: Omdøb (LocalAdmin)
+              + Flyt (GlobalAdmin) + Slet (GlobalAdmin); the create above stays the
+              UNIT "+ Direktion". */}
+          {(selectedNode.kind === 'mao' || selectedNode.kind === 'organisation') &&
+            (canRenameOrg || canMoveOrg || canDeleteOrg) && (
+              <>
+                <span className={styles.actionDivider} aria-hidden="true" />
+                {canRenameOrg && (
+                  <Button variant="secondary" size="sm" onClick={openOrgRename} data-testid="org-action-rename">
+                    Omdøb
+                  </Button>
+                )}
+                {selectedNode.kind === 'organisation' && canMoveOrg && (
+                  <Button variant="secondary" size="sm" onClick={openOrgMove} data-testid="org-action-move">
+                    Flyt
+                  </Button>
+                )}
+                {canDeleteOrg && (
+                  <Button variant="ghost" size="sm" onClick={openOrgDelete} data-testid="org-action-delete">
+                    Slet
+                  </Button>
+                )}
+              </>
+            )}
+        </div>
+      )}
 
       {/* d. "Refererer opad til" — READ-ONLY chips */}
       {upRefIds.length > 0 && (
@@ -602,6 +998,99 @@ export function StrukturPanel({
           })}
         </div>
       </section>
+
+      {/* ── the gated unit-mutation drawer / dialogs (TASK-10801) ── */}
+      {action?.kind === 'create' && (
+        <UnitDrawer
+          mode="create"
+          typeLabel={LABEL[action.childType]}
+          initialName=""
+          busy={busy}
+          error={actionError}
+          onClose={closeAction}
+          onSubmitCreate={submitCreate}
+        />
+      )}
+      {action?.kind === 'edit' && (
+        <UnitDrawer
+          mode="edit"
+          typeLabel={LABEL[action.unit.type]}
+          initialName={action.unit.name}
+          members={membersOf(action.unit).map((m) => ({
+            employeeId: m.employeeId,
+            displayName: m.displayName,
+            position: m.position,
+          }))}
+          currentLeaderIds={leaderIdsOf(action.unit)}
+          busy={busy}
+          error={actionError}
+          onClose={closeAction}
+          onSubmitEdit={submitEdit}
+        />
+      )}
+      {action?.kind === 'move' && (
+        <UnitMoveDialog
+          unitName={action.unit.name}
+          targets={moveTargets}
+          busy={busy}
+          error={actionError}
+          onClose={closeAction}
+          onSubmit={submitMove}
+        />
+      )}
+      {action?.kind === 'delete' && (
+        <UnitDeleteConfirm
+          unitName={action.unit.name}
+          busy={busy}
+          error={actionError}
+          onClose={closeAction}
+          onConfirm={submitDelete}
+        />
+      )}
+
+      {/* ── the gated ORG / MAO structure dialogs (TASK-10802) ── */}
+      {orgAction?.kind === 'create' && (
+        <OrgCreateDialog
+          orgType="ORGANISATION"
+          parentName={orgAction.parent.name}
+          busy={orgBusy}
+          error={orgError}
+          onClose={closeOrgAction}
+          onSubmit={submitOrgCreate}
+        />
+      )}
+      {orgAction?.kind === 'rename' && (
+        <OrgRenameDialog
+          orgType={orgAction.node.kind === 'mao' ? 'MAO' : 'ORGANISATION'}
+          currentName={orgAction.node.name}
+          busy={orgBusy}
+          error={orgError}
+          onClose={closeOrgAction}
+          onSubmit={submitOrgRename}
+        />
+      )}
+      {orgAction?.kind === 'move' && (
+        <OrgMoveDialog
+          orgName={orgAction.node.name}
+          targets={orgMoveTargets}
+          busy={orgBusy}
+          error={orgError}
+          onClose={closeOrgAction}
+          onSubmit={submitOrgMove}
+        />
+      )}
+      {orgAction?.kind === 'delete' && (
+        <OrgDeleteDialog
+          orgType={orgAction.node.kind === 'mao' ? 'MAO' : 'ORGANISATION'}
+          name={orgAction.node.name}
+          branch={orgAction.branch}
+          employeeCount={orgAction.employeeCount}
+          busy={orgBusy}
+          error={orgError}
+          onClose={closeOrgAction}
+          onConfirm={submitOrgDelete}
+        />
+      )}
     </div>
   )
 }
