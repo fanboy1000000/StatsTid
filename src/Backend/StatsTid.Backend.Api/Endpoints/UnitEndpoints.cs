@@ -7,6 +7,7 @@ using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Audit;
 using StatsTid.SharedKernel.Events;
+using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Security;
 
 namespace StatsTid.Backend.Api.Endpoints;
@@ -70,6 +71,106 @@ public static class UnitEndpoints
                 .Select(r => new UnitListItem(r.UnitId, r.OrganisationId, r.ParentUnitId, r.Type, r.Name, r.Version))
                 .ToList();
             return Results.Ok(new UnitListResponse(items));
+        }).RequireAuthorization("HROrAbove");
+
+        // ═══════════════════════════════════════════════════════════════════
+        //  GET /api/admin/units/forest — S106 / TASK-10601 (ADR-038 D1/D5) the unified scoped FOREST:
+        //  MAO → Organisation (from `organizations`) → direktion…enhed (from `units` beneath each
+        //  visible Organisation), with per-unit + rolled-up active-member counts.
+        //
+        //  THE KEYSTONE (D5 / P7): units carry NO scope. The visibility set is the EXACT accessible-org
+        //  ids (LocalHR-floored) from GetAccessibleOrgsAsync — null = unrestricted (GlobalAdmin). A unit
+        //  node is admitted SOLELY because its parent Organisation ∈ that set; there is NO per-unit
+        //  visibility predicate and NO descendant/sibling widening. MAO ancestors render as read-only
+        //  context (a scoped HR sees the MAO header only for the Organisations it can reach — exactly
+        //  the S98 /organizations/tree behaviour). The MAO/Organisation counts sum ONLY visible
+        //  children, so a scoped HR's totals never leak a sibling Organisation's members (count
+        //  non-leakage). Set-based reads (1 org list + 1 unit list + 2 GROUP BY counts) → the forest +
+        //  roll-up assembled in memory (units ≪ people → no recursive CTE). HROrAbove read floor.
+        // ═══════════════════════════════════════════════════════════════════
+        app.MapGet("/api/admin/units/forest", async (
+            OrganizationRepository orgRepo,
+            UnitRepository unitRepo,
+            OrgScopeValidator scopeValidator,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            var actor = context.GetActorContext();
+
+            // D5 admission: the exact accessible-org ids (LocalHR floor). null → GlobalAdmin (all);
+            // an empty set (Employee/below-floor) → an empty forest.
+            var accessible = await scopeValidator.GetAccessibleOrgsAsync(actor, StatsTidRoles.LocalHR, ct);
+            HashSet<string>? visible = accessible is null ? null : new HashSet<string>(accessible, StringComparer.Ordinal);
+            bool OrgVisible(string id) => visible is null || visible.Contains(id);
+
+            var allOrgs = await orgRepo.GetAllAsync(ct);
+            var allUnits = await unitRepo.ListAllActiveAsync(ct);
+            // S106 Step-7a (Codex P2): the user-table count GROUP BYs are bounded to the accessible
+            // org set (scoped HR) so the forest read does not scan the whole population; `accessible`
+            // is null for GlobalAdmin (unrestricted).
+            var memberByUnit = await unitRepo.GetActiveMemberCountByUnitAsync(accessible, ct);
+            var homedByOrg = await unitRepo.GetActiveOrgHomedCountByOrgAsync(accessible, ct);
+
+            // Units bucketed by their (immutable) Organisation. We only ever assemble the sub-forest
+            // for a VISIBLE Organisation — units in a non-visible Organisation are never touched.
+            var unitsByOrg = allUnits
+                .GroupBy(u => u.OrganisationId, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
+
+            // Organisations bucketed by parent MAO.
+            var organisationsByParent = allOrgs
+                .Where(o => string.Equals(o.OrgType, "ORGANISATION", StringComparison.Ordinal))
+                .GroupBy(o => o.ParentOrgId ?? string.Empty, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
+
+            var forest = new List<ForestMaoNode>();
+            foreach (var mao in allOrgs.Where(o => string.Equals(o.OrgType, "MAO", StringComparison.Ordinal))
+                                       .OrderBy(o => o.MaterializedPath, StringComparer.Ordinal))
+            {
+                var children = organisationsByParent.TryGetValue(mao.OrgId, out var kids)
+                    ? kids
+                    : new List<Organization>();
+
+                var visibleOrgs = new List<ForestOrganisationNode>();
+                foreach (var org in children.Where(c => OrgVisible(c.OrgId))
+                                            .OrderBy(c => c.MaterializedPath, StringComparer.Ordinal))
+                {
+                    var orgUnits = unitsByOrg.TryGetValue(org.OrgId, out var us) ? us : new List<UnitRow>();
+                    var (topUnits, unitTotal) = BuildUnitForest(orgUnits, memberByUnit);
+                    var homed = homedByOrg.TryGetValue(org.OrgId, out var h) ? h : 0L;
+
+                    visibleOrgs.Add(new ForestOrganisationNode(
+                        OrgId: org.OrgId,
+                        OrgName: org.OrgName,
+                        OrgType: org.OrgType,
+                        ParentOrgId: org.ParentOrgId,
+                        MaterializedPath: org.MaterializedPath,
+                        AgreementCode: org.AgreementCode,
+                        OkVersion: org.OkVersion,
+                        // Reconciles to the S98 employeeCount by primary_org_id: every unit member's
+                        // unit lives in THIS Organisation (units.organisation_id is the derived
+                        // primary_org_id), so Σ rolled-up units + org-homed-NULL == COUNT(primary_org).
+                        MemberCount: unitTotal + homed,
+                        DirectMemberCount: homed,
+                        Units: topUnits));
+                }
+
+                // GlobalAdmin (unrestricted) sees every MAO (even childless); a scoped role only sees a
+                // MAO that has ≥1 visible child Organisation. The MAO count sums ONLY visible children.
+                if (visible is not null && visibleOrgs.Count == 0)
+                    continue;
+
+                forest.Add(new ForestMaoNode(
+                    OrgId: mao.OrgId,
+                    OrgName: mao.OrgName,
+                    OrgType: mao.OrgType,
+                    ParentOrgId: mao.ParentOrgId,
+                    MaterializedPath: mao.MaterializedPath,
+                    MemberCount: visibleOrgs.Sum(o => o.MemberCount),
+                    Organisations: visibleOrgs));
+            }
+
+            return Results.Ok(new ForestResponse(forest));
         }).RequireAuthorization("HROrAbove");
 
         // ═══════════════════════════════════════════════════════════════════
@@ -777,6 +878,88 @@ public static class UnitEndpoints
     // ──────────────────────────────────────────────────────────────────────
     //  Helpers
     // ──────────────────────────────────────────────────────────────────────
+
+    /// <summary>S106 / TASK-10601 — assembles ONE Organisation's nested unit forest with rolled-up
+    /// member counts, IN MEMORY (units ≪ people → no recursive SQL CTE). Returns the TOP-LEVEL unit
+    /// nodes (parent_unit_id NULL) + the Organisation's total rolled-up unit-member count (Σ the
+    /// top-level nodes' rolled-up counts = Σ every unit's direct members). The depth-≤5 partial-rank
+    /// ordering + the move-time cycle guard keep the tree acyclic; a defensive visited-set still
+    /// bounds the walk so a (hypothetically) malformed edge can never loop.</summary>
+    private static (IReadOnlyList<ForestUnitNode> Roots, long Total) BuildUnitForest(
+        List<UnitRow> orgUnits, IReadOnlyDictionary<Guid, long> memberByUnit)
+    {
+        if (orgUnits.Count == 0)
+            return (Array.Empty<ForestUnitNode>(), 0L);
+
+        // Split top-level units (parent_unit_id NULL = directly under the Organisation) from the rest,
+        // and index the children by their non-null parent id (a nullable key can't be a dictionary
+        // key). Name-ordered so siblings render deterministically.
+        var topLevel = new List<UnitRow>();
+        var childrenByParent = new Dictionary<Guid, List<UnitRow>>();
+        foreach (var u in orgUnits.OrderBy(u => u.Name, StringComparer.Ordinal))
+        {
+            if (u.ParentUnitId is Guid parentId)
+            {
+                if (!childrenByParent.TryGetValue(parentId, out var siblings))
+                    childrenByParent[parentId] = siblings = new List<UnitRow>();
+                siblings.Add(u);
+            }
+            else
+            {
+                topLevel.Add(u);
+            }
+        }
+
+        var visited = new HashSet<Guid>();
+        var roots = new List<ForestUnitNode>();
+        long total = 0;
+        foreach (var top in topLevel)
+        {
+            var node = BuildUnitNode(top, level: 1, childrenByParent, memberByUnit, visited);
+            total += node.MemberCount;
+            roots.Add(node);
+        }
+        return (roots, total);
+    }
+
+    /// <summary>S106 — recursively builds one unit node + its descendants, deriving <c>level</c>
+    /// (depth, top-level unit = 1) and the rolled-up <c>MemberCount</c> (this unit's direct members +
+    /// Σ descendants). The <paramref name="visited"/> set is a defensive cycle backstop only.</summary>
+    private static ForestUnitNode BuildUnitNode(
+        UnitRow unit, int level,
+        IReadOnlyDictionary<Guid, List<UnitRow>> childrenByParent,
+        IReadOnlyDictionary<Guid, long> memberByUnit,
+        HashSet<Guid> visited)
+    {
+        visited.Add(unit.UnitId);
+        var direct = memberByUnit.TryGetValue(unit.UnitId, out var d) ? d : 0L;
+
+        var childNodes = new List<ForestUnitNode>();
+        long childTotal = 0;
+        if (childrenByParent.TryGetValue(unit.UnitId, out var kids))
+        {
+            foreach (var kid in kids)
+            {
+                if (!visited.Add(kid.UnitId)) // defensive: skip an already-seen unit (no real cycle exists)
+                    continue;
+                var childNode = BuildUnitNode(kid, level + 1, childrenByParent, memberByUnit, visited);
+                childTotal += childNode.MemberCount;
+                childNodes.Add(childNode);
+            }
+        }
+
+        return new ForestUnitNode(
+            UnitId: unit.UnitId,
+            OrganisationId: unit.OrganisationId,
+            ParentUnitId: unit.ParentUnitId,
+            Type: unit.Type,
+            Name: unit.Name,
+            Level: level,
+            Version: unit.Version,
+            DirectMemberCount: direct,
+            MemberCount: direct + childTotal,
+            Children: childNodes);
+    }
 
     private static IResult PreconditionFailed(long expectedVersion, long actualVersion) =>
         Results.Json(new

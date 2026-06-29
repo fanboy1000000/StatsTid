@@ -22,10 +22,11 @@ public sealed class ApprovalPeriodRepository
     ///
     /// <para>
     /// The <paramref name="reportingLineRepo"/> is the vikar-aware resolver
-    /// (<see cref="ReportingLineRepository.ResolveDesignatedApproverAsync"/>) the S74-7404 R11a
-    /// period-status projection (<see cref="GetPeriodStatusProjectionForTreeAsync"/>) tallies the
-    /// per-manager pending count through — the SAME single-effective-approver resolution the
-    /// dashboard predicate uses, so the tile counts are consistent with the my-reports semantics.
+    /// (<see cref="ReportingLineRepository.ResolveDesignatedApproverAsync"/>) the period-status
+    /// projection (<see cref="GetPeriodStatusProjectionForTreeAsync"/>) uses to resolve the EDGE
+    /// candidate of the per-authorized-approver pending tally (S106 / TASK-10604 expanded that tally
+    /// to ALSO enumerate the ADR-038 D4 unit-leader path) — the SAME resolution the dashboard
+    /// predicate uses, so each tile count is consistent with that manager's my-reports semantics.
     /// Also OPTIONAL/derived from the same factory for test-construction compatibility.
     /// </para>
     /// </summary>
@@ -510,17 +511,22 @@ public sealed class ApprovalPeriodRepository
     /// <c>approval_periods</c> row with the greatest <c>period_end &lt; CURRENT_DATE</c>,
     /// projected to the FE's 3-state badge (OPEN / SUBMITTED / APPROVED) — or OPEN when the
     /// employee has no closed period at all;</description></item>
-    /// <item><description>a <b>per-manager pending count</b>: for each employee who currently
-    /// holds a SUBMITTED/EMPLOYEE_APPROVED (any-period) row awaiting a manager, the employee is
-    /// tallied to their <em>single resolved effective approver</em> at today (the SAME
-    /// vikar-aware R3 resolution the dashboard / R5 predicate uses) <b>only when that resolved
-    /// approver passes the canonical R5 predicate</b>
-    /// (<see cref="DesignatedApproverAuthorizer.IsEffectiveDesignatedApproverAsync"/> — active +
-    /// LeaderOrAbove + single-effective == self + same-tree), so the tile counts MATCH the
-    /// manager's my-reports dashboard exactly: a role-revoked or inactive resolved approver is NOT
-    /// tallied (their dashboard would show zero too). An employee whose pending period resolves to
-    /// no designated approver (org-scope-only) — or to one who fails the predicate — is not
-    /// tallied to any manager.</description></item>
+    /// <item><description>a <b>per-authorized-approver pending count</b> (S106 / TASK-10604 — the
+    /// S105 EDGE-ONLY scope-out is CLOSED): for each employee who currently holds a
+    /// SUBMITTED/EMPLOYEE_APPROVED (any-period) row awaiting a manager, the employee is tallied to
+    /// EVERY user who may act on the period — the <em>resolved effective EDGE manager</em> at today
+    /// (the vikar-aware R3 resolution) AND each designated leader of the employee's OWN unit + that
+    /// leader's active vikar (the ADR-038 D4 secondary unit-leader path, single-table
+    /// <c>E.unit_id</c>-bounded, NO ancestor walk). Each DISTINCT candidate is tallied <b>only when
+    /// it passes the canonical edge-OR-unit-leader predicate</b>
+    /// (<see cref="DesignatedApproverAuthorizer.IsEffectiveApproverOrUnitLeaderAsync"/> — active +
+    /// LeaderOrAbove + (single-effective-edge OR direct-unit-leader) + same-Organisation), so each
+    /// tile count MATCHES that manager's my-reports dashboard exactly: a role-revoked / inactive /
+    /// bare-row candidate is NOT tallied (their dashboard would show zero too). <b>Semantic shift:</b>
+    /// a pending employee now counts toward MULTIPLE managers' tiles (edge + each unit-leader/vikar),
+    /// so Σ(tiles) ≥ pending count — NO LONGER "tallied exactly once" — which is correct (each
+    /// approver who CAN act sees it). An employee whose pending period resolves to NO authorized
+    /// approver at all (org-scope-only, no unit-leader) is not tallied to any manager.</description></item>
     /// </list>
     ///
     /// <para>
@@ -599,46 +605,108 @@ public sealed class ApprovalPeriodRepository
             }
         }
 
-        // (2) Per-manager pending count: tally each pending employee to their single resolved
-        //     effective approver at today (the vikar-aware R3 precedence — admin-ACTING → vikar →
-        //     PRIMARY → inactive escalation), GATED by the SAME canonical R5 predicate the
-        //     my-reports dashboard filters through (active + LeaderOrAbove + single-effective ==
-        //     self + same-tree). The bare resolver does NOT apply that gate, so a role-revoked or
-        //     inactive manager/vikar could otherwise receive a non-zero tile count while their
-        //     actual dashboard (GetPendingForDesignatedReportsAsync) shows ZERO — a tile↔dashboard
-        //     inconsistency. We resolve the candidate, then tally ONLY when
-        //     IsEffectiveDesignatedApproverAsync(candidate, employee, today) is true; otherwise the
-        //     employee is NOT counted for that manager (consistent with the dashboard showing zero
-        //     for a revoked/inactive approver). Distinct employee → one tally.
-        //     S105 / ADR-038 D4 SCOPE-OUT (Step-7a): this medarbejder-tree tile is EDGE-ONLY by
-        //     conscious choice — it tallies the PRIMARY-edge approval workload and does NOT add the
-        //     new unit-leader secondary path (an HR roster aggregate, not the leader's my-reports
-        //     surface; the unit-leader tile is a Phase-3 FE concern). So for a SECONDARY unit-leader
-        //     the tile may UNDER-count vs their my-reports dashboard — a documented, fail-closed
-        //     limitation (never an over-count, never a leak; each period is still tallied EXACTLY
-        //     once, attributed to its primary-edge manager).
+        // (2) Per-authorized-approver pending count (S106 / TASK-10604 — the S105 EDGE-ONLY scope-out
+        //     CLOSED). For each pending employee we ENUMERATE the full set of users who may act on
+        //     that period — NOT a single edge manager — and tally EACH authorized approver:
+        //       (a) the single resolved EDGE manager at today (the vikar-aware R3 precedence —
+        //           admin-ACTING → vikar → PRIMARY → inactive escalation); AND
+        //       (b) the employee's OWN unit's designated leaders (unit_leaders on E.unit_id) + the
+        //           ACTIVE vikars-of-those-leaders covering today — the INVERSE of the S105
+        //           `unit_led_members` CTE (a single-table E.unit_id lookup, NO ancestor walk; the
+        //           LOCKED D5 boundary). Self-excluded (a leader never tallies their OWN period).
+        //     Each DISTINCT candidate is then GATED by the SAME centralized "edge OR unit-leader"
+        //     predicate the action endpoints + the my-reports dashboard authorize through
+        //     (IsEffectiveApproverOrUnitLeaderAsync — active + LeaderOrAbove + single-effective-edge
+        //     OR direct-unit-leader + same-Organisation), so a role-revoked / inactive / bare-row
+        //     candidate is NOT tallied (their dashboard would be empty too) and the tile counts MATCH
+        //     each manager's my-reports surface EXACTLY (no tile↔dashboard drift).
+        //
+        //     SEMANTIC SHIFT (vs S105): a pending employee now counts toward MULTIPLE managers' tiles
+        //     — the edge manager AND each authorized unit-leader / their vikar — so Σ(tiles) ≥ pending
+        //     count (NO LONGER "tallied EXACTLY once"). This is correct: every approver who CAN act on
+        //     the period sees it on their tile. This is candidate ENUMERATION, not a gate swap: gating
+        //     the single edge manager through the unit-leader predicate would add NOTHING (he is not a
+        //     unit-leader of the employee unless he holds the row). It propagates to the roster read's
+        //     reused pendingCountByManager → the medarbejder-page tiles shift accordingly (intended).
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         var pendingCountByManager = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (var employeeId in pendingEmployeeIds)
         {
-            var (managerId, _, _) = await _reportingLineRepo.ResolveDesignatedApproverAsync(
+            // Build the DISTINCT candidate-approver set for this pending employee.
+            var candidates = new HashSet<string>(StringComparer.Ordinal);
+
+            var (edgeManagerId, _, _) = await _reportingLineRepo.ResolveDesignatedApproverAsync(
                 employeeId, ct, asOf: today);
-            if (managerId is null)
-                continue; // org-scope-only — no designated approver to tally.
+            if (edgeManagerId is not null)
+                candidates.Add(edgeManagerId);
 
-            // Gate with the canonical predicate so the tile count MATCHES the manager's dashboard:
-            // a role-revoked / inactive resolved approver is NOT an effective approver and is not
-            // tallied (their my-reports view would be empty too).
-            var isEffectiveApprover = await _designatedAuthorizer.IsEffectiveDesignatedApproverAsync(
-                managerId, employeeId, asOf: today, ct: ct);
-            if (!isEffectiveApprover)
-                continue;
+            foreach (var unitApprover in await QueryUnitLeaderApproverCandidatesAsync(employeeId, today, ct))
+                candidates.Add(unitApprover);
 
-            pendingCountByManager.TryGetValue(managerId, out var n);
-            pendingCountByManager[managerId] = n + 1;
+            // Tally each candidate who is an AUTHORIZED approver (edge OR unit-leader, full floors).
+            foreach (var candidate in candidates)
+            {
+                var authorized = await _designatedAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(
+                    candidate, employeeId, asOf: today, ct: ct);
+                if (!authorized)
+                    continue;
+
+                pendingCountByManager.TryGetValue(candidate, out var n);
+                pendingCountByManager[candidate] = n + 1;
+            }
         }
 
         return new TreePeriodStatusProjection(employees, pendingCountByManager);
+    }
+
+    /// <summary>
+    /// S106 / TASK-10604 — the candidate unit-leader approvers of <paramref name="employeeId"/> at
+    /// <paramref name="today"/>: the designated leaders of the employee's OWN unit
+    /// (<c>unit_leaders.unit_id = users.unit_id</c>) PLUS the active <c>manager_vikar</c> stand-ins of
+    /// those leaders (covering <paramref name="today"/>). This is the INVERSE of the S105
+    /// <c>unit_led_members</c> CTE (there: leader → members; here: member → its unit's leaders/vikars),
+    /// STRICTLY single-table <c>E.unit_id</c>-bounded — NO ancestor walk over
+    /// <c>units.parent_unit_id</c> (the LOCKED D5 boundary). The employee themselves is excluded
+    /// (a leader never tallies their OWN period — the S105 segregation-of-duties rule). A NULL
+    /// <c>E.unit_id</c> yields the empty set. The returned ids are a SUPERSET candidate list — the
+    /// caller applies the full floors via the shared edge-OR-unit-leader predicate.
+    /// </summary>
+    private async Task<List<string>> QueryUnitLeaderApproverCandidatesAsync(
+        string employeeId, DateOnly today, CancellationToken ct)
+    {
+        await using var conn = _connectionFactory.Create();
+        await conn.OpenAsync(ct);
+        await using var cmd = new NpgsqlCommand(
+            """
+            -- (a) the employee's OWN unit's designated leaders (single-table unit_leaders on
+            --     E.unit_id — NO ancestor walk; the LOCKED D5 boundary), self-excluded.
+            SELECT ul.user_id AS approver_id
+            FROM users e
+            JOIN unit_leaders ul ON ul.unit_id = e.unit_id
+            WHERE e.user_id = @employeeId
+              AND e.unit_id IS NOT NULL
+              AND ul.user_id <> @employeeId
+            UNION
+            -- (b) the ACTIVE vikars of those leaders, covering @today (the INVERSE of the S105
+            --     unit_led_members path-3), self-excluded.
+            SELECT mv.vikar_user_id AS approver_id
+            FROM users e
+            JOIN unit_leaders ul ON ul.unit_id = e.unit_id
+            JOIN manager_vikar mv ON mv.absent_approver_id = ul.user_id
+                 AND mv.effective_to IS NULL
+                 AND mv.until_date >= @today
+            WHERE e.user_id = @employeeId
+              AND e.unit_id IS NOT NULL
+              AND mv.vikar_user_id <> @employeeId
+            """, conn);
+        cmd.Parameters.AddWithValue("employeeId", employeeId);
+        cmd.Parameters.AddWithValue("today", today);
+
+        var result = new List<string>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            result.Add(reader.GetString(0));
+        return result;
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -722,6 +790,10 @@ public sealed class ApprovalPeriodRepository
                     o.org_name               AS primary_org_name,
                     ep.position              AS position,
                     rl.manager_id            AS structural_approver_id,
+                    rl.version               AS primary_reporting_line_version,
+                    u.unit_id                AS unit_id,
+                    un.name                  AS unit_name,
+                    lead.leader_ids          AS leader_ids,
                     mv.vikar_user_id         AS vikar_user_id,
                     vu.display_name          AS vikar_display_name,
                     mv.until_date            AS vikar_until_date,
@@ -735,6 +807,17 @@ public sealed class ApprovalPeriodRepository
                 LEFT JOIN employee_profiles ep
                     ON ep.employee_id = u.user_id
                     AND ep.effective_to IS NULL
+                LEFT JOIN units un ON un.unit_id = u.unit_id
+                -- S106 / TASK-10602 (Reviewer WARNING — avoid the multi-peer-leader fan-out): a unit
+                -- has MULTIPLE "sideordnede" leaders, so a naive LEFT JOIN unit_leaders would yield one
+                -- row per (employee × leader) and silently MULTIPLY the deliberately fan-out-free roster.
+                -- The LATERAL AGGREGATES the leader ids into a single array, preserving ONE row per
+                -- employee. NULL u.unit_id → no matching unit_leaders → array_agg returns NULL (→ []).
+                LEFT JOIN LATERAL (
+                    SELECT array_agg(ul.user_id ORDER BY ul.user_id) AS leader_ids
+                    FROM unit_leaders ul
+                    WHERE ul.unit_id = u.unit_id
+                ) lead ON TRUE
                 LEFT JOIN manager_vikar mv
                     ON mv.absent_approver_id = u.user_id
                     AND mv.effective_to IS NULL
@@ -753,6 +836,10 @@ public sealed class ApprovalPeriodRepository
             var orgNameOrd = reader.GetOrdinal("primary_org_name");
             var posOrd = reader.GetOrdinal("position");
             var approverOrd = reader.GetOrdinal("structural_approver_id");
+            var rlVersionOrd = reader.GetOrdinal("primary_reporting_line_version");
+            var unitIdOrd = reader.GetOrdinal("unit_id");
+            var unitNameOrd = reader.GetOrdinal("unit_name");
+            var leaderIdsOrd = reader.GetOrdinal("leader_ids");
             var vikarIdOrd = reader.GetOrdinal("vikar_user_id");
             var vikarNameOrd = reader.GetOrdinal("vikar_display_name");
             var vikarUntilOrd = reader.GetOrdinal("vikar_until_date");
@@ -774,6 +861,12 @@ public sealed class ApprovalPeriodRepository
                         UntilDate: reader.GetFieldValue<DateOnly>(vikarUntilOrd),
                         Reason: reader.GetString(vikarReasonOrd));
 
+                // S106 / TASK-10602 — the unit tag + the etag. leader_ids is a Postgres text[]
+                // (NULL → no unit / no leaders → an EMPTY list, never null, for a clean wire array).
+                var leaderIds = reader.IsDBNull(leaderIdsOrd)
+                    ? (IReadOnlyList<string>)Array.Empty<string>()
+                    : reader.GetFieldValue<string[]>(leaderIdsOrd);
+
                 rosterRows.Add(new RosterRow(
                     EmployeeId: reader.GetString(empOrd),
                     DisplayName: reader.GetString(nameOrd),
@@ -781,12 +874,20 @@ public sealed class ApprovalPeriodRepository
                     EnhedLabel: orgName,
                     Position: reader.IsDBNull(posOrd) ? null : reader.GetString(posOrd),
                     StructuralApproverId: reader.IsDBNull(approverOrd) ? null : reader.GetString(approverOrd),
-                    OutgoingVikar: vikar));
+                    OutgoingVikar: vikar,
+                    UnitId: reader.IsDBNull(unitIdOrd) ? null : reader.GetGuid(unitIdOrd),
+                    UnitName: reader.IsDBNull(unitNameOrd) ? null : reader.GetString(unitNameOrd),
+                    LeaderIds: leaderIds,
+                    // The etag = the active PRIMARY reporting_lines.version (NULL when no active
+                    // PRIMARY edge → root/orphan → the FE's "Ret" creates vs supersedes, S99).
+                    PrimaryReportingLineVersion: reader.IsDBNull(rlVersionOrd) ? null : reader.GetInt64(rlVersionOrd)));
             }
         }
 
         // (2) periodStatus + pendingCountByManager: REUSE the existing S74 projection (same roster
-        //     scope + same last-closed-month rule + the existing bounded gated tally) unchanged.
+        //     scope + same last-closed-month rule). S106 / TASK-10604: that tally now expands to the
+        //     per-authorized-approver cardinality (edge manager + each unit-leader / their vikar) — the
+        //     roster reuses it unchanged, so the medarbejder-page tiles shift accordingly (intended).
         var statusProjection = await GetPeriodStatusProjectionForTreeAsync(treeRootPathPrefix, ct);
         var statusByEmployee = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var e in statusProjection.Employees)
@@ -818,21 +919,96 @@ public sealed class ApprovalPeriodRepository
                 PeriodStatus: statusByEmployee.GetValueOrDefault(r.EmployeeId, "OPEN"),
                 OutgoingVikar: r.OutgoingVikar,
                 IsRoot: isRoot,
-                IsOrphan: isOrphan));
+                IsOrphan: isOrphan,
+                UnitId: r.UnitId,
+                UnitName: r.UnitName,
+                LeaderIds: r.LeaderIds,
+                PrimaryReportingLineVersion: r.PrimaryReportingLineVersion));
         }
 
-        return new MedarbejderRosterProjection(employees, statusProjection.PendingCountByManager);
+        // (4) S106 / TASK-10602 — the DISPLAY-ONLY name resolution. Collect every id the roster
+        //     REFERENCES (each row's structuralApproverId = the "Refererer opad til" upward-ref ∪ all
+        //     unit leaderIds = the cross-unit-leader chips) and resolve their name/title/unit by id.
+        //     This covers a referenced person who is NOT an active in-roster row — an inactive
+        //     manager/leader, or (defensively) a leader homed outside the loaded subtree. It is a
+        //     by-id name fetch ONLY (no org-scope predicate, no is_active filter) and therefore admits
+        //     NObody into scope: it resolves ONLY ids already referenced by the in-scope roster rows.
+        var referencedIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var r in rosterRows)
+        {
+            if (r.StructuralApproverId is not null)
+                referencedIds.Add(r.StructuralApproverId);
+            foreach (var leaderId in r.LeaderIds)
+                referencedIds.Add(leaderId);
+        }
+        var nameResolution = await ResolvePersonRefsByIdAsync(referencedIds, ct);
+
+        return new MedarbejderRosterProjection(employees, statusProjection.PendingCountByManager, nameResolution);
     }
 
-    /// <summary>Internal pre-classification roster row (S75-7500). Holds the joined fields before
-    /// the R3 root/orphan pass folds in <c>isRoot</c>/<c>isOrphan</c>.</summary>
+    /// <summary>
+    /// S106 / TASK-10602 — the DISPLAY-ONLY by-id name resolver behind
+    /// <see cref="MedarbejderRosterProjection.NameResolution"/>. Given the set of ids the roster
+    /// REFERENCES (managers + unit leaders), returns each one's display name + live position + unit
+    /// name. A pure <c>user_id = ANY(@ids)</c> lookup — NO org-scope predicate and NO
+    /// <c>is_active</c> filter (so it resolves an inactive / out-of-subtree referenced person too).
+    /// This admits NObody into scope: it only labels ids the in-scope roster already references.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<string, ResolvedPersonRef>> ResolvePersonRefsByIdAsync(
+        IReadOnlyCollection<string> ids, CancellationToken ct)
+    {
+        var result = new Dictionary<string, ResolvedPersonRef>(StringComparer.Ordinal);
+        if (ids.Count == 0)
+            return result;
+
+        await using var conn = _connectionFactory.Create();
+        await conn.OpenAsync(ct);
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT
+                u.user_id       AS user_id,
+                u.display_name  AS display_name,
+                ep.position     AS position,
+                un.name         AS unit_name
+            FROM users u
+            LEFT JOIN employee_profiles ep
+                ON ep.employee_id = u.user_id
+                AND ep.effective_to IS NULL
+            LEFT JOIN units un ON un.unit_id = u.unit_id
+            WHERE u.user_id = ANY(@ids)
+            """, conn);
+        cmd.Parameters.AddWithValue("ids", ids.ToArray());
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        var idOrd = reader.GetOrdinal("user_id");
+        var nameOrd = reader.GetOrdinal("display_name");
+        var posOrd = reader.GetOrdinal("position");
+        var unitOrd = reader.GetOrdinal("unit_name");
+        while (await reader.ReadAsync(ct))
+        {
+            var userId = reader.GetString(idOrd);
+            result[userId] = new ResolvedPersonRef(
+                UserId: userId,
+                DisplayName: reader.GetString(nameOrd),
+                Position: reader.IsDBNull(posOrd) ? null : reader.GetString(posOrd),
+                UnitName: reader.IsDBNull(unitOrd) ? null : reader.GetString(unitOrd));
+        }
+        return result;
+    }
+
+    /// <summary>Internal pre-classification roster row (S75-7500; S106 unit tag). Holds the joined
+    /// fields before the R3 root/orphan pass folds in <c>isRoot</c>/<c>isOrphan</c>.</summary>
     private sealed record RosterRow(
         string EmployeeId,
         string DisplayName,
         string EnhedLabel,
         string? Position,
         string? StructuralApproverId,
-        OutgoingVikar? OutgoingVikar);
+        OutgoingVikar? OutgoingVikar,
+        Guid? UnitId,
+        string? UnitName,
+        IReadOnlyList<string> LeaderIds,
+        long? PrimaryReportingLineVersion);
 
     /// <summary>
     /// Maps a raw <c>approval_periods.status</c> (or <c>null</c> = no closed period) to the
@@ -975,6 +1151,113 @@ public sealed class ApprovalPeriodRepository
                 // legacy Enhed tables (unit-based display returns in Phase 3); the FE falls back
                 // to the primary-org name.
                 EnhedLabel: null));
+        }
+        return (items, total);
+    }
+
+    /// <summary>
+    /// S106 / TASK-10603 — the scope-bounded people SEARCH for the merged-admin overlay's MEDARBEJDERE
+    /// section. A SIBLING of <see cref="SearchPeopleAsync"/> (NEW method — the existing roster/picker
+    /// reads are untouched) that ADDS (a) an <c>email</c> match arm and (b) the live
+    /// <c>employee_profiles.position</c> + the person's <c>unit_id</c> + <c>primary_org_id</c> so the
+    /// endpoint can build the overlay's unit/Organisation PATH + the home-unit name. Case-insensitive
+    /// substring (ILIKE <c>%q%</c>) on <c>display_name</c> OR <c>username</c> OR <c>email</c>; an
+    /// empty/whitespace <paramref name="q"/> matches ALL in-scope people (mirrors
+    /// <see cref="SearchPeopleAsync"/>). ACTIVE users only.
+    ///
+    /// <para><b>Scope (the SAME admission as SearchPeopleAsync + the forest):</b>
+    /// <paramref name="accessibleOrgIds"/> is the actor's accessible-org set —
+    /// <c>null</c> = GLOBAL/unrestricted, EMPTY = admit nobody, otherwise
+    /// <c>primary_org_id = ANY(...)</c>. A scoped HR gets NO cross-Organisation people (D5: the person
+    /// is admitted by their Organisation, never by a unit).</para>
+    ///
+    /// <para>One round-trip / one statement / three CTEs (matched → total → page) so the count is exact
+    /// even on an empty trailing page (the SearchPeopleAsync pattern — a NULL <c>user_id</c> row is the
+    /// count-only sentinel).</para>
+    /// </summary>
+    public async Task<(IReadOnlyList<OverlayPersonRow> Items, int Total)> SearchPeopleForOverlayAsync(
+        string q,
+        IReadOnlyList<string>? accessibleOrgIds,
+        int limit,
+        int offset,
+        CancellationToken ct = default)
+    {
+        var unrestricted = accessibleOrgIds is null;
+        if (!unrestricted && accessibleOrgIds!.Count == 0)
+            return (Array.Empty<OverlayPersonRow>(), 0);
+
+        await using var conn = _connectionFactory.Create();
+        await conn.OpenAsync(ct);
+
+        var term = (q ?? string.Empty).Trim();
+        var pattern = "%" + EscapeLike(term) + "%";
+
+        await using var cmd = new NpgsqlCommand(
+            """
+            WITH matched AS (
+                SELECT u.user_id, u.display_name, u.unit_id, u.primary_org_id
+                FROM users u
+                WHERE u.is_active = TRUE
+                  AND (@term = ''
+                       OR u.display_name ILIKE @pattern ESCAPE '\'
+                       OR u.username ILIKE @pattern ESCAPE '\'
+                       OR (u.email IS NOT NULL AND u.email ILIKE @pattern ESCAPE '\'))
+                  AND (@unrestricted OR u.primary_org_id = ANY(@orgIds))
+            ),
+            total AS (
+                SELECT COUNT(*) AS total_count FROM matched
+            ),
+            page AS (
+                SELECT
+                    m.user_id,
+                    m.display_name,
+                    m.unit_id,
+                    m.primary_org_id,
+                    ep.position AS position
+                FROM matched m
+                LEFT JOIN employee_profiles ep
+                    ON ep.employee_id = m.user_id
+                    AND ep.effective_to IS NULL
+                ORDER BY m.display_name, m.user_id
+                LIMIT @limit OFFSET @offset
+            )
+            SELECT
+                t.total_count        AS total_count,
+                p.user_id            AS user_id,
+                p.display_name       AS display_name,
+                p.position           AS position,
+                p.unit_id            AS unit_id,
+                p.primary_org_id     AS primary_org_id
+            FROM total t
+            LEFT JOIN page p ON TRUE
+            ORDER BY p.display_name, p.user_id
+            """, conn);
+        cmd.Parameters.AddWithValue("term", term);
+        cmd.Parameters.AddWithValue("pattern", pattern);
+        cmd.Parameters.AddWithValue("unrestricted", unrestricted);
+        cmd.Parameters.AddWithValue("orgIds", (object?)accessibleOrgIds?.ToArray() ?? Array.Empty<string>());
+        cmd.Parameters.AddWithValue("limit", limit);
+        cmd.Parameters.AddWithValue("offset", offset);
+
+        var items = new List<OverlayPersonRow>();
+        var total = 0;
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        var totalOrd = reader.GetOrdinal("total_count");
+        var userOrd = reader.GetOrdinal("user_id");
+        var posOrd = reader.GetOrdinal("position");
+        var unitOrd = reader.GetOrdinal("unit_id");
+        var orgOrd = reader.GetOrdinal("primary_org_id");
+        while (await reader.ReadAsync(ct))
+        {
+            total = (int)reader.GetInt64(totalOrd); // identical on every row
+            if (reader.IsDBNull(userOrd))
+                continue; // the empty-page sentinel row — total only, no item.
+            items.Add(new OverlayPersonRow(
+                UserId: reader.GetString(userOrd),
+                DisplayName: reader.GetString(reader.GetOrdinal("display_name")),
+                Position: reader.IsDBNull(posOrd) ? null : reader.GetString(posOrd),
+                UnitId: reader.IsDBNull(unitOrd) ? null : reader.GetGuid(unitOrd),
+                PrimaryOrgId: reader.GetString(orgOrd)));
         }
         return (items, total);
     }
@@ -1310,20 +1593,40 @@ public sealed record EmployeePeriodStatus(
 /// </summary>
 /// <param name="Employees">The full styrelse roster, each enriched with the structural approver
 /// (raw PRIMARY edge), enhedLabel/position, last-closed-month status, the outgoing-vikar marker,
-/// and the deterministic root/orphan flags (R3).</param>
+/// the deterministic root/orphan flags (R3), and the S106 unit tag (unit id/name + the unit's
+/// leaders + the nullable primary-reporting-line etag).</param>
 /// <param name="PendingCountByManager">manager user_id → number of that manager's effective reports
-/// currently holding a pending period — the EXISTING S74 bounded gated tally, reused as-is.</param>
+/// currently holding a pending period — the EXISTING S74 tally, now (S106 / TASK-10604) expanded
+/// to the per-authorized-approver cardinality (edge manager + each unit-leader / their vikar).</param>
+/// <param name="NameResolution">S106 / TASK-10602 — a DISPLAY-ONLY by-id name lookup over the ids
+/// the roster REFERENCES (every row's <c>structuralApproverId</c> ∪ all <c>leaderIds</c>), so the FE
+/// can render the "Refererer opad til" upward-reference + the cross-unit-leader chips even when the
+/// referenced person is NOT an active in-roster row (an inactive manager/leader, or — defensively —
+/// a person outside the loaded subtree). Keyed by user_id. This is a by-id name fetch ONLY — it
+/// admits NObody into scope (no widening); the roster's <c>materialized_path</c> bound is unchanged.</param>
 public sealed record MedarbejderRosterProjection(
     IReadOnlyList<MedarbejderRosterRow> Employees,
-    IReadOnlyDictionary<string, int> PendingCountByManager);
+    IReadOnlyDictionary<string, int> PendingCountByManager,
+    IReadOnlyDictionary<string, ResolvedPersonRef> NameResolution);
 
 /// <summary>
-/// One enriched medarbejder-roster row (S75-7500 R1). The tree keys on
+/// One enriched medarbejder-roster row (S75-7500 R1; S106 unit tag). The tree keys on
 /// <paramref name="StructuralApproverId"/> (the raw active PRIMARY <c>reporting_lines.manager_id</c>
 /// — NOT a resolver result). <paramref name="EnhedLabel"/> is the primary-org name (S103 /
 /// TASK-10304 — the structured-Enhed display column is retired; unit-based display returns in
 /// Phase 3). <paramref name="OutgoingVikar"/> is the person's OWN active
 /// <c>manager_vikar</c> row (present iff they are an away-manager covered by a vikar).
+///
+/// <para>S106 / TASK-10602 (Enhedsspor Phase 3a, ADR-038 D2/D4/D6): <paramref name="UnitId"/> /
+/// <paramref name="UnitName"/> are the person's single structural unit (NULL when homed directly at
+/// the Organisation); <paramref name="LeaderIds"/> are that unit's designated leaders (the
+/// <c>unit_leaders</c> rows, AGGREGATED so the multi-peer-leader join never fans the roster out —
+/// EMPTY when the person has no unit / the unit has no leaders), so the FE can group people under
+/// their unit's leaders and flag a cross-unit exception (the person's reporting manager ∉ their
+/// unit's leaders). <paramref name="PrimaryReportingLineVersion"/> is the active PRIMARY
+/// <c>reporting_lines.version</c> (the SAME row that surfaces <paramref name="StructuralApproverId"/>)
+/// — the FE etag: NULLABLE (a root/orphan has no active PRIMARY edge → null → the FE's "Ret" CREATES
+/// vs SUPERSEDES, the S99 distinction). It changes only with the reporting-line row.</para>
 /// </summary>
 public sealed record MedarbejderRosterRow(
     string EmployeeId,
@@ -1334,7 +1637,24 @@ public sealed record MedarbejderRosterRow(
     string PeriodStatus,
     OutgoingVikar? OutgoingVikar,
     bool IsRoot,
-    bool IsOrphan);
+    bool IsOrphan,
+    Guid? UnitId,
+    string? UnitName,
+    IReadOnlyList<string> LeaderIds,
+    long? PrimaryReportingLineVersion);
+
+/// <summary>
+/// S106 / TASK-10602 — one DISPLAY-ONLY resolved person reference for the roster's
+/// <see cref="MedarbejderRosterProjection.NameResolution"/> map. Carries the <paramref name="DisplayName"/>
+/// + <paramref name="Position"/> (live <c>employee_profiles.position</c>) + <paramref name="UnitName"/>
+/// of an id the roster references (a manager / unit-leader) so the FE can label the upward-reference +
+/// cross-unit-leader chips without a blank. A pure by-id projection — NO scope is admitted by it.
+/// </summary>
+public sealed record ResolvedPersonRef(
+    string UserId,
+    string DisplayName,
+    string? Position,
+    string? UnitName);
 
 /// <summary>
 /// S75-7500 (R1) — the per-away-manager outgoing-vikar marker: the active
@@ -1360,6 +1680,20 @@ public sealed record PersonSearchHit(
     string DisplayName,
     string PrimaryOrgName,
     string? EnhedLabel);
+
+/// <summary>
+/// S106 / TASK-10603 — one matched person from the merged-admin overlay SEARCH
+/// (<see cref="ApprovalPeriodRepository.SearchPeopleForOverlayAsync"/>). Carries the live
+/// <paramref name="Position"/> (nullable) + the person's <paramref name="UnitId"/> (nullable =
+/// Organisation-homed) + <paramref name="PrimaryOrgId"/> so the endpoint builds the overlay's
+/// home-unit name + the Organisation/unit PATH in memory from the cheap unit/org maps (units ≪ people).
+/// </summary>
+public sealed record OverlayPersonRow(
+    string UserId,
+    string DisplayName,
+    string? Position,
+    Guid? UnitId,
+    string PrimaryOrgId);
 
 /// <summary>
 /// S87-8701 — one roster entry for the leader Teamoversigt aggregate

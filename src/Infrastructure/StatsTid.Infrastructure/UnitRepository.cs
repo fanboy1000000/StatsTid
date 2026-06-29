@@ -63,6 +63,206 @@ public sealed class UnitRepository
         return rows;
     }
 
+    /// <summary>
+    /// S106 / TASK-10601 — lists EVERY ACTIVE (non-soft-deleted) unit across ALL Organisations,
+    /// ordered by <c>organisation_id, lower(name)</c>. Self-managed read connection. The forest read
+    /// (<c>GET /api/admin/units/forest</c>) filters these rows to the visibility-admitted Organisations
+    /// IN MEMORY — the D5 admission is the parent Organisation's accessible-org set
+    /// (<c>OrgScopeValidator.GetAccessibleOrgsAsync</c>), NEVER a <c>units</c> column. There is NO
+    /// per-unit visibility predicate here (units ≪ people → the in-memory filter + roll-up is cheap;
+    /// a unit carries no scope — the LOCKED D5 boundary).
+    /// </summary>
+    public async Task<IReadOnlyList<UnitRow>> ListAllActiveAsync(CancellationToken ct = default)
+    {
+        await using var conn = _connectionFactory.Create();
+        await conn.OpenAsync(ct);
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT unit_id, organisation_id, parent_unit_id, type, name, version
+            FROM units
+            WHERE deleted_at IS NULL
+            ORDER BY organisation_id, lower(name), unit_id
+            """, conn);
+
+        var rows = new List<UnitRow>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            rows.Add(new UnitRow(
+                UnitId: reader.GetGuid(0),
+                OrganisationId: reader.GetString(1),
+                ParentUnitId: reader.IsDBNull(2) ? null : reader.GetGuid(2),
+                Type: reader.GetString(3),
+                Name: reader.GetString(4),
+                Version: reader.GetInt64(5)));
+        }
+        return rows;
+    }
+
+    /// <summary>
+    /// S106 / TASK-10601 — one set-based <c>GROUP BY unit_id</c> over ACTIVE users with a non-null
+    /// <c>unit_id</c> → the per-unit DIRECT active-member count. The forest rolls these up the
+    /// depth-≤5 unit tree IN MEMORY (units ≪ people → no recursive SQL CTE). Self-managed read
+    /// connection.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<Guid, long>> GetActiveMemberCountByUnitAsync(
+        IReadOnlyCollection<string>? accessibleOrgIds = null,
+        CancellationToken ct = default)
+    {
+        // S106 Step-7a (Codex P2): bound the GROUP BY to the actor's accessible orgs so a scoped HR's
+        // forest count does NOT scan the whole users table (a unit member's primary_org_id == their
+        // unit's organisation_id by the S104 derive-on-assign invariant). null = GlobalAdmin → no filter.
+        var scoped = accessibleOrgIds is not null;
+        await using var conn = _connectionFactory.Create();
+        await conn.OpenAsync(ct);
+        await using var cmd = new NpgsqlCommand(
+            $"""
+            SELECT unit_id, COUNT(*) AS cnt
+            FROM users
+            WHERE is_active = TRUE AND unit_id IS NOT NULL
+              {(scoped ? "AND primary_org_id = ANY(@orgIds)" : "")}
+            GROUP BY unit_id
+            """, conn);
+        if (scoped)
+            cmd.Parameters.AddWithValue("orgIds", accessibleOrgIds!.ToArray());
+        var counts = new Dictionary<Guid, long>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            counts[reader.GetGuid(0)] = reader.GetInt64(1);
+        return counts;
+    }
+
+    /// <summary>
+    /// S106 / TASK-10601 — one set-based <c>GROUP BY primary_org_id</c> over ACTIVE users with
+    /// <c>unit_id IS NULL</c> → the per-Organisation ORG-HOMED (no unit) active-member count. The
+    /// forest adds this to the Organisation's rolled-up unit counts for the reconciled total
+    /// (= the S98 <c>primary_org_id</c> employeeCount). Self-managed read connection.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<string, long>> GetActiveOrgHomedCountByOrgAsync(
+        IReadOnlyCollection<string>? accessibleOrgIds = null,
+        CancellationToken ct = default)
+    {
+        // S106 Step-7a (Codex P2): bound the GROUP BY to the actor's accessible orgs (null = GlobalAdmin).
+        var scoped = accessibleOrgIds is not null;
+        await using var conn = _connectionFactory.Create();
+        await conn.OpenAsync(ct);
+        await using var cmd = new NpgsqlCommand(
+            $"""
+            SELECT primary_org_id, COUNT(*) AS cnt
+            FROM users
+            WHERE is_active = TRUE AND unit_id IS NULL
+              {(scoped ? "AND primary_org_id = ANY(@orgIds)" : "")}
+            GROUP BY primary_org_id
+            """, conn);
+        if (scoped)
+            cmd.Parameters.AddWithValue("orgIds", accessibleOrgIds!.ToArray());
+        var counts = new Dictionary<string, long>(StringComparer.Ordinal);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            counts[reader.GetString(0)] = reader.GetInt64(1);
+        return counts;
+    }
+
+    /// <summary>
+    /// S106 / TASK-10603 — the scope-bounded units SEARCH (the merged-admin overlay's ENHEDER
+    /// section). Case-insensitive substring on <c>name</c> (ILIKE <c>%q%</c>); an empty/whitespace
+    /// <paramref name="q"/> matches ALL in-scope units (mirrors
+    /// <c>ApprovalPeriodRepository.SearchPeopleAsync</c>). The visibility filter is the actor's
+    /// accessible-org set (<paramref name="accessibleOrgIds"/>): <c>null</c> = the GLOBAL/GlobalAdmin
+    /// "no filter" sentinel (unrestricted), an EMPTY list admits nobody, otherwise only units whose
+    /// <c>organisation_id = ANY(...)</c> are returned — the LOCKED D5 admission (a unit is searchable
+    /// ONLY because its Organisation is admitted; NO per-unit visibility predicate). ACTIVE units only
+    /// (<c>deleted_at IS NULL</c>). One round-trip / one statement / three CTEs (matched → total → page)
+    /// so the count is exact even on an empty trailing page (the SearchPeopleAsync pattern). The caller
+    /// builds each unit's ancestor PATH in memory from the cheap unit map (units ≪ people).
+    /// </summary>
+    public async Task<(IReadOnlyList<UnitSearchRow> Items, int Total)> SearchUnitsAsync(
+        string q,
+        IReadOnlyList<string>? accessibleOrgIds,
+        int limit,
+        int offset,
+        CancellationToken ct = default)
+    {
+        // GLOBAL (null) = no org filter; empty list = admit nobody (the no-scope/Employee case the
+        // endpoint already floors).
+        var unrestricted = accessibleOrgIds is null;
+        if (!unrestricted && accessibleOrgIds!.Count == 0)
+            return (Array.Empty<UnitSearchRow>(), 0);
+
+        await using var conn = _connectionFactory.Create();
+        await conn.OpenAsync(ct);
+
+        var term = (q ?? string.Empty).Trim();
+        var pattern = "%" + EscapeLike(term) + "%";
+
+        // matched → total → page (the SearchPeopleAsync shape): `total LEFT JOIN page ON TRUE` keeps the
+        // exact count even when the page slice is empty (a NULL unit_id row is the count-only sentinel).
+        await using var cmd = new NpgsqlCommand(
+            """
+            WITH matched AS (
+                SELECT u.unit_id, u.organisation_id, u.parent_unit_id, u.type, u.name
+                FROM units u
+                WHERE u.deleted_at IS NULL
+                  AND (@term = '' OR u.name ILIKE @pattern ESCAPE '\')
+                  AND (@unrestricted OR u.organisation_id = ANY(@orgIds))
+            ),
+            total AS (
+                SELECT COUNT(*) AS total_count FROM matched
+            ),
+            page AS (
+                SELECT m.unit_id, m.organisation_id, m.parent_unit_id, m.type, m.name
+                FROM matched m
+                ORDER BY lower(m.name), m.unit_id
+                LIMIT @limit OFFSET @offset
+            )
+            SELECT
+                t.total_count        AS total_count,
+                p.unit_id            AS unit_id,
+                p.organisation_id    AS organisation_id,
+                p.parent_unit_id     AS parent_unit_id,
+                p.type               AS type,
+                p.name               AS name
+            FROM total t
+            LEFT JOIN page p ON TRUE
+            ORDER BY lower(p.name), p.unit_id
+            """, conn);
+        cmd.Parameters.AddWithValue("term", term);
+        cmd.Parameters.AddWithValue("pattern", pattern);
+        cmd.Parameters.AddWithValue("unrestricted", unrestricted);
+        cmd.Parameters.AddWithValue("orgIds", (object?)accessibleOrgIds?.ToArray() ?? Array.Empty<string>());
+        cmd.Parameters.AddWithValue("limit", limit);
+        cmd.Parameters.AddWithValue("offset", offset);
+
+        var items = new List<UnitSearchRow>();
+        var total = 0;
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        var totalOrd = reader.GetOrdinal("total_count");
+        var unitOrd = reader.GetOrdinal("unit_id");
+        while (await reader.ReadAsync(ct))
+        {
+            total = (int)reader.GetInt64(totalOrd); // identical on every row
+            if (reader.IsDBNull(unitOrd))
+                continue; // the empty-page sentinel row — total only, no item.
+            items.Add(new UnitSearchRow(
+                UnitId: reader.GetGuid(unitOrd),
+                OrganisationId: reader.GetString(reader.GetOrdinal("organisation_id")),
+                ParentUnitId: reader.IsDBNull(reader.GetOrdinal("parent_unit_id")) ? null : reader.GetGuid(reader.GetOrdinal("parent_unit_id")),
+                Type: reader.GetString(reader.GetOrdinal("type")),
+                Name: reader.GetString(reader.GetOrdinal("name"))));
+        }
+        return (items, total);
+    }
+
+    /// <summary>
+    /// Escapes the LIKE/ILIKE wildcard metacharacters (<c>\</c>, <c>%</c>, <c>_</c>) in a raw
+    /// user-supplied search term so they are matched literally (the query uses <c>ESCAPE '\'</c>).
+    /// Mirrors <c>ApprovalPeriodRepository.EscapeLike</c> (the search reads share the convention).
+    /// </summary>
+    private static string EscapeLike(string raw) => raw
+        .Replace("\\", "\\\\")
+        .Replace("%", "\\%")
+        .Replace("_", "\\_");
+
     /// <summary>Reads a single unit (active OR soft-deleted) by id, or <c>null</c>. Used by the
     /// rename/move/delete endpoints to resolve the owning Organisation (for the org-scope floor)
     /// + the current version (for the If-Match check).</summary>
@@ -481,6 +681,12 @@ public sealed class UnitRepository
 /// typed <c>Type</c>.</summary>
 public sealed record UnitRow(
     Guid UnitId, string OrganisationId, Guid? ParentUnitId, string Type, string Name, long Version);
+
+/// <summary>S106 / TASK-10603 — a matched unit row from the scope-bounded SEARCH (the overlay's ENHEDER
+/// section). <c>ParentUnitId</c> is carried FLAT so the endpoint can build the ancestor PATH in memory
+/// (units ≪ people). Active-only by construction (<c>deleted_at IS NULL</c> in the query).</summary>
+public sealed record UnitSearchRow(
+    Guid UnitId, string OrganisationId, Guid? ParentUnitId, string Type, string Name);
 
 /// <summary>A full unit row incl. soft-delete state (for rename/move/delete resolution).</summary>
 public sealed record UnitFullRow(

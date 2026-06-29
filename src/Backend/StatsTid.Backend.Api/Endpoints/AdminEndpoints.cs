@@ -2618,8 +2618,24 @@ public static class AdminEndpoints
                     },
                     isRoot = e.IsRoot,
                     isOrphan = e.IsOrphan,
+                    // S106 / TASK-10602 — the unit tag + the nullable reporting-line etag.
+                    unitId = e.UnitId,
+                    unitName = e.UnitName,
+                    leaderIds = e.LeaderIds,
+                    primaryReportingLineVersion = e.PrimaryReportingLineVersion,
                 }),
                 pendingCountByManager = roster.PendingCountByManager,
+                // S106 / TASK-10602 — the DISPLAY-ONLY by-id name resolution (upward-ref +
+                // cross-unit-leader chips), keyed by user_id.
+                nameResolution = roster.NameResolution.ToDictionary(
+                    kv => kv.Key,
+                    kv => new
+                    {
+                        userId = kv.Value.UserId,
+                        displayName = kv.Value.DisplayName,
+                        position = kv.Value.Position,
+                        unitName = kv.Value.UnitName,
+                    }),
             });
         }).RequireAuthorization("HROrAbove"); // S91 TASK-9102: tree-page roster opened to LocalHR
 
@@ -2684,6 +2700,111 @@ public static class AdminEndpoints
                 offset = pageOffset,
             });
         }).RequireAuthorization("HROrAbove"); // S91 TASK-9102: tree-page picker opened to LocalHR
+
+        // ═══════════════════════════════════════════
+        // S106 / TASK-10603 — GET /api/admin/search — the scoped units + people SEARCH read for the
+        //   merged-admin overlay. Returns the design's TWO-section shape ({ units, people }) — each
+        //   row carrying the node's full PATH (the breadcrumb). Server-side because the FE lazy-loads
+        //   per Organisation and a client filter cannot see un-loaded people.
+        //
+        //   SCOPE (ADR-038 D5 / P7) — the SAME admission the existing users/search + the forest read
+        //   use: the accessible-org set via GetAccessibleOrgsAsync(LocalHR) (null = GLOBAL/unrestricted,
+        //   [] = nobody). UNITS are bounded by their immutable organisation_id ∈ that set — NO per-unit
+        //   visibility predicate (a unit is searchable ONLY because its Organisation is admitted). PEOPLE
+        //   are bounded by primary_org_id ∈ that set. A scoped HR gets NO cross-Organisation results.
+        //   Both a matched unit's ancestor chain and a matched person's home-unit chain stay WITHIN that
+        //   one accessible Organisation (units belong to exactly one org), so the in-memory PATH build
+        //   leaks nothing. Paginated/capped per section (default 50 / cap 200), mirroring users/search.
+        //   HROrAbove read floor (LocalHR floor enforced via the role-floored accessible-org set).
+        // ═══════════════════════════════════════════
+        app.MapGet("/api/admin/search", async (
+            string? q,
+            int? limit,
+            int? offset,
+            UnitRepository unitRepo,
+            ApprovalPeriodRepository approvalRepo,
+            OrganizationRepository orgRepo,
+            OrgScopeValidator scopeValidator,
+            CancellationToken ct,
+            HttpContext context) =>
+        {
+            var actor = context.GetActorContext();
+
+            // Pagination: default 50, cap 200 per section; offset >= 0 (the users/search convention).
+            var pageLimit = Math.Clamp(limit ?? 50, 1, 200);
+            var pageOffset = Math.Max(offset ?? 0, 0);
+
+            // Scope: the accessible-org set (null = GLOBAL/unrestricted, [] = nobody). HROrAbove policy
+            // → LocalHR floor (the SAME role-floored admission as users/search + the forest read) — a
+            // mixed-role actor's below-HR scope covering org B must NOT widen the search into B.
+            var accessibleOrgs = await scopeValidator.GetAccessibleOrgsAsync(actor, StatsTidRoles.LocalHR, ct);
+
+            var term = q ?? string.Empty;
+
+            // The two scope-bounded SQL reads (each capped + paginated; exact totals computed but the
+            // overlay's two-section shape carries the capped lists only).
+            var (unitHits, _) = await unitRepo.SearchUnitsAsync(term, accessibleOrgs, pageLimit, pageOffset, ct);
+            var (peopleHits, _) = await approvalRepo.SearchPeopleForOverlayAsync(term, accessibleOrgs, pageLimit, pageOffset, ct);
+
+            // Cheap in-memory lookups for the PATH build (units ≪ people; orgs are few) — exactly the
+            // forest read's approach. The matched rows are ALREADY scope-filtered; a matched unit's
+            // ancestors + a matched person's home-unit chain are in the SAME (accessible) Organisation,
+            // so these global maps leak nothing (we only ever index by an admitted org/unit).
+            var orgNames = (await orgRepo.GetAllAsync(ct))
+                .ToDictionary(o => o.OrgId, o => o.OrgName, StringComparer.Ordinal);
+            var unitsById = (await unitRepo.ListAllActiveAsync(ct))
+                .ToDictionary(u => u.UnitId, u => u);
+
+            string OrgName(string orgId) => orgNames.TryGetValue(orgId, out var n) ? n : orgId;
+
+            // The ancestor chain of unit names from the unit identified by `startUnitId` UP to a
+            // top-level unit, returned ROOT-first (top-level → … → the start unit). A depth backstop
+            // guards against a malformed cycle (the cycle guard prevents real ones).
+            List<string> UnitNameChain(Guid? startUnitId)
+            {
+                var chain = new List<string>();
+                var pid = startUnitId;
+                var guard = 0;
+                while (pid is Guid p && unitsById.TryGetValue(p, out var u) && guard++ < 64)
+                {
+                    chain.Add(u.Name);
+                    pid = u.ParentUnitId;
+                }
+                chain.Reverse();
+                return chain;
+            }
+
+            // A unit's PATH excludes its OWN name (shown separately): [OrgName, ...ancestor unit names].
+            var units = unitHits.Select(u =>
+            {
+                var path = new List<string> { OrgName(u.OrganisationId) };
+                path.AddRange(UnitNameChain(u.ParentUnitId)); // ancestors above the unit
+                return new UnitSearchResult(
+                    UnitId: u.UnitId,
+                    OrganisationId: u.OrganisationId,
+                    Type: u.Type,
+                    Name: u.Name,
+                    Path: path);
+            }).ToList();
+
+            // A person's PATH is [OrgName, ...home-unit chain down to + including the home unit] (the
+            // unit chain is their container; their displayName is the leaf). UnitName = the home-unit leaf.
+            var people = peopleHits.Select(pp =>
+            {
+                var unitChain = UnitNameChain(pp.UnitId); // includes the home unit (if any)
+                var path = new List<string> { OrgName(pp.PrimaryOrgId) };
+                path.AddRange(unitChain);
+                var unitName = pp.UnitId is Guid uid && unitsById.TryGetValue(uid, out var hu) ? hu.Name : null;
+                return new PersonSearchResult(
+                    UserId: pp.UserId,
+                    DisplayName: pp.DisplayName,
+                    Position: pp.Position,
+                    UnitName: unitName,
+                    Path: path);
+            }).ToList();
+
+            return Results.Ok(new SearchResponse(units, people));
+        }).RequireAuthorization("HROrAbove");
 
         return app;
     }
