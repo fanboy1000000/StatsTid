@@ -3,12 +3,12 @@
 | Field | Value |
 |-------|-------|
 | **Sprint** | 106 |
-| **Status** | complete (pending push + CI-verify) |
+| **Status** | complete — CI GREEN `28372165094` |
 | **Start Date** | 2026-06-29 |
 | **End Date** | 2026-06-29 |
 | **Orchestrator Approved** | yes |
 | **Build Verified** | yes — 0/0 |
-| **Test Verified** | yes — 852u + 1148r green locally (Docker; 3 sheds isolation-cleared); 6s/e2e CI-verify on push |
+| **Test Verified** | yes — **CI GREEN `28372165094` (all 7 jobs; regression 1148/1148, 57m)**; matched the local run exactly |
 
 ## Sprint Goal
 Build the READS the merged Enhedsspor admin page (Phase 3b) needs — without touching schema, authority, events, or mutations. Three new/changed reads + the closing of one S105 scope-out, each shipped with the FULL PAT-010 contract bundle (named records + co-located contract tests + lint-registry registration + FE hook tests on the real shape). The owner chose the **3a→3b split** and **redirect+retire in 3b**. The keystone discipline: the unified forest read must NOT let units imply scope — unit nodes are admitted **solely** by the parent Organisation's `GetAccessibleOrgsAsync` (ADR-038 D5; the S76/S85/S91 guard), pinned by a discriminating RED test. Backend-only.
