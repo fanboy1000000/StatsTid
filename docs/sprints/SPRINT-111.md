@@ -3,12 +3,12 @@
 | Field | Value |
 |-------|-------|
 | **Sprint** | 111 |
-| **Status** | complete (pending push + CI-verify) |
+| **Status** | complete — CI GREEN `28473854257` (all 7 jobs) |
 | **Start Date** | 2026-06-30 |
 | **End Date** | 2026-06-30 |
 | **Orchestrator Approved** | yes |
 | **Build Verified** | yes — `dotnet build` + `npm run build` 0/0 |
-| **Test Verified** | yes — 21 Contracts + 6 matcher + 531 vitest; the 4 gates + lint green locally; PAT-010 byte-identity held; Step-7a dual-lens BOTH 0 BLOCKER (closure-critical W's FIXED); CI-verify on push |
+| **Test Verified** | yes — **CI GREEN `28473854257` (all 7 jobs; the 4 NEW gates [drift→build-and-test, freshness+lint→frontend-build, convention→docs] all ran in CI + passed; + 21 Contracts + 6 matcher + 531 vitest + regression + smoke + e2e)**; PAT-010 byte-identity held; Step-7a dual-lens BOTH 0 BLOCKER (closure-critical W's FIXED in Phase 0) |
 
 ## Sprint Goal
 Phase 0 of the long-term commitment to OpenAPI as the durable FE↔backend contract — **the foundation: the generate→spec→types→FE pipeline + the gates that make the commitment self-sustaining + an end-to-end proof on a tiny surface.** This structurally closes the recurring "fetchEnheder" shape-mismatch bug class (S97→S99→S100) for the proof surface AND installs the **convention gate** that forces every *future* endpoint to ship typed (the durability keystone — the lesson recurred 3× *with* the lesson written down because nothing CI-enforced it). The bulk **retrofit of existing endpoints is explicitly DEFERRED** to subsequent phases (lazy / risk-prioritized). Decisions locked (owner + Step-4 dual-lens-clean refinement `REFINEMENT-fork-b-typed-client.md`): **single typed client** (evolve the existing `apiClient`, NOT a second client — via the STRUCTURED `get(pathKey, {params,query})` call shape so templated/query paths bind, Step-0b); **proof surface (Step-0b-corrected) = 4 CONSUMABLE registry reads typed end-to-end** (`organizations`, `units/forest` [literal], `search` [query], `roster` [templated]) + **`organizations/tree` typed backend-only** (FE-orphaned post-S109) + **1 admin mutation** request DTO; **OpenAPI/Swashbuckle** as the long-term spec source. **The closure is the PER-ROUTE spec≡runtime gate** (`.Produces<T>` is a convention that can lie about array-ness); the no-DB spec gen is a guarded **`--openapi` entrypoint**; the convention gate rides **`openapi.json`** (empty-schema detection), not the FE-call lint.
