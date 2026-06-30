@@ -7,6 +7,10 @@
 
   <ItemGroup>
     <PackageReference Include="BCrypt.Net-Next" Version="4.1.0" />
+    <!-- S111 / TASK-11101 — OpenAPI document generation (Fork B typed-client pipeline). Used ONLY
+         for the spec source-of-truth + the doc-only openapi entrypoint; NO Swagger UI is exposed
+         in prod (Program.cs never calls UseSwagger/UseSwaggerUI). -->
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="6.6.2" />
   </ItemGroup>
 
   <PropertyGroup>

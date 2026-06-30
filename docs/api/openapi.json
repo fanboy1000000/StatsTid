@@ -1,0 +1,5813 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "StatsTid Backend API",
+    "version": "v1"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/auth/login": {
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/time-entries": {
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.RegisterTimeEntryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/time-entries/{employeeId}": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/absences/{employeeId}": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/flex-balance/{employeeId}": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/organizations": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.OrgListItem"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.AdminEndpoints.CreateOrganizationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/organizations/{orgId}": {
+      "put": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "orgId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.AdminEndpoints.UpdateOrganizationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "orgId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/organizations/{orgId}/move": {
+      "put": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "orgId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.AdminEndpoints.MoveOrganizationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/organizations/tree": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.OrgTreeResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/organizations/{orgId}/users": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "orgId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/users/{userId}": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.AdminEndpoints.UpdateUserRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/users": {
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.AdminEndpoints.CreateUserRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/users/{userId}/roles": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/roles/grant": {
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.AdminEndpoints.GrantRoleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/roles/revoke": {
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.AdminEndpoints.RevokeRoleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/reporting-lines/tree/{organisationId}/period-status": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "organisationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/reporting-lines/tree/{organisationId}/medarbejdere": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "organisationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.RosterResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/users/search": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "excludeEmployeeId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/search": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.SearchResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/units": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "organisationId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.CreateUnitRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.UnitResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/units/forest": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.ForestResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/units/{id}": {
+      "put": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.RenameUnitRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/units/{id}/move": {
+      "put": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.MoveUnitRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/units/{id}/leaders": {
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.DesignateLeaderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/units/{id}/leaders/{userId}": {
+      "delete": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/users/{userId}/unit": {
+      "put": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.AssignUserUnitRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/approval/submit": {
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.ApprovalEndpoints.SubmitPeriodRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/approval/{periodId}/approve": {
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "periodId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/approval/{periodId}/reject": {
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "periodId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.ApprovalEndpoints.RejectPeriodRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/approval/pending": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "my-reports",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/approval/by-month": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "year",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "month",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "my-reports",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/approval/team-overview": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "year",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "month",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/approval/{employeeId}/allocation-breakdown": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "year",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "month",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/approval/{employeeId}": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/approval/{periodId}/employee-approve": {
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "periodId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/approval/{periodId}/reopen": {
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "periodId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.ApprovalEndpoints.ReopenPeriodRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/config/constraints": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/config/{orgId}": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "orgId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/config/{orgId}/profile/{agreementCode}/{okVersion}": {
+      "put": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "orgId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agreementCode",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "okVersion",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.ConfigEndpoints.ProfileSaveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "orgId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agreementCode",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "okVersion",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/config/{orgId}/profile/{agreementCode}/{okVersion}/history": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "orgId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agreementCode",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "okVersion",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/config/{orgId}/absence-types": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "orgId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agreementCode",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "okVersion",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/config/{orgId}/absence-types/visibility": {
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "orgId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.ConfigEndpoints.AbsenceTypeVisibilityRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/skema/{employeeId}/month": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "year",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "month",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/skema/{employeeId}/save": {
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SaveSkemaRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/skema/{employeeId}/row-preferences": {
+      "put": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.SkemaEndpoints.RowPreferencesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/projects/{orgId}": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "orgId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "orgId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.ProjectEndpoints.CreateProjectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/projects/{orgId}/available": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "orgId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/projects/{orgId}/select/{projectId}": {
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "orgId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "orgId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/projects/{orgId}/{projectId}": {
+      "put": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "orgId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.ProjectEndpoints.UpdateProjectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "orgId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/agreement-configs": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.AgreementConfigEndpoints.AgreementConfigRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/agreement-configs/{configId}": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "configId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "configId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.AgreementConfigEndpoints.AgreementConfigRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/agreement-configs/{agreementCode}/{okVersion}": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "agreementCode",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "okVersion",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/agreement-configs/{configId}/clone": {
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "configId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "agreementCode",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "okVersion",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/agreement-configs/{configId}/publish": {
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "configId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/agreement-configs/{configId}/archive": {
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "configId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/position-overrides": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.PositionOverrideEndpoints.CreatePositionOverrideRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/position-overrides/{overrideId}": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "overrideId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "overrideId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.PositionOverrideEndpoints.UpdatePositionOverrideRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/position-overrides/agreement/{agreementCode}/{okVersion}": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "agreementCode",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "okVersion",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/position-overrides/{overrideId}/deactivate": {
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "overrideId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/position-overrides/{overrideId}/activate": {
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "overrideId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/wage-type-mappings": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.WageTypeMappingEndpoints.CreateWageTypeMappingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.WageTypeMappingEndpoints.UpdateWageTypeMappingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "timeType",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "okVersion",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agreementCode",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "position",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/wage-type-mappings/agreement/{agreementCode}/{okVersion}": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "agreementCode",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "okVersion",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/entitlement-configs": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.EntitlementConfigEndpoints.CreateEntitlementConfigRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/entitlement-configs/{configId}": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "configId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "configId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.EntitlementConfigEndpoints.UpdateEntitlementConfigRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "configId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/agreement-configs/{configId}/entitlements": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "configId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "configId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.AgreementEntitlementEndpoints.CreateChildEntitlementRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/agreement-configs/{configId}/entitlements/{entitlementConfigId}": {
+      "put": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "configId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "entitlementConfigId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.AgreementEntitlementEndpoints.UpdateChildEntitlementRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "configId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "entitlementConfigId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/employee-profiles/{employeeId}": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.EmployeeProfileEndpoints.UpdateEmployeeProfileRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/employees/{employeeId}/entitlement-eligibility/{entitlementType}": {
+      "put": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entitlementType",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.EntitlementEligibilityEndpoints.SetEntitlementEligibilityRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entitlementType",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/employees/{employeeId}/birth-date": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.EntitlementEligibilityEndpoints.SetBirthDateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/employees/{employeeId}/employment-start-date": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.EmploymentDateEndpoints.SetEmploymentStartDateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/employees/{employeeId}/employment-end-date": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.EmploymentDateEndpoints.SetEmploymentEndDateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/balance/{employeeId}/summary": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "year",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "month",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/balance/{employeeId}/series": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "year",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "month",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/balance/{employeeId}/year-overview": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "year",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/compliance/{employeeId}/period": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "year",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "month",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/compliance/{employeeId}/compensatory-rest": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/overtime/{employeeId}/balance": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "year",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/overtime/{employeeId}/governance": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "periodStart",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "periodEnd",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "overtimeHours",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          {
+            "name": "hasPreApproval",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/overtime/pre-approval": {
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.OvertimeEndpoints.OvertimePreApprovalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/overtime/{employeeId}/pre-approvals": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "periodStart",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "periodEnd",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/overtime/pre-approval/{id}/approve": {
+      "put": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.OvertimeEndpoints.OvertimeApprovalRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/overtime/pre-approval/{id}/reject": {
+      "put": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.OvertimeEndpoints.OvertimeApprovalRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/overtime/{employeeId}/compensate": {
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.OvertimeEndpoints.OvertimeCompensateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/overtime/{employeeId}/compensation-choice": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "periodYear",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.OvertimeEndpoints.CompensationChoiceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/audit": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "eventTypes",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "targetOrgId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "actorId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 1
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/reporting-lines": {
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.ReportingLineEndpoints.AssignReportingLineRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/reporting-lines/{employeeId}": {
+      "delete": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/reporting-lines/tree/{organisationId}": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "organisationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/reporting-lines/{managerId}/reports": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "managerId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/reporting-lines/{employeeId}/acting": {
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.ReportingLineEndpoints.AssignActingManagerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/reporting-lines/import": {
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.ReportingLineEndpoints.ImportReportingLinesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/reporting-lines/{employeeId}/remove": {
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.ReportingLineEndpoints.RemoveWithReassignmentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/reporting-lines/delegate": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.ReportingLineEndpoints.DelegateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/reporting-lines/{managerId}/vikar": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "managerId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "managerId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.ReportingLineEndpoints.AdminVikarRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "managerId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/vacation-transfer-agreements/{employeeId}": {
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.VacationSettlementEndpoints.SetTransferAgreementRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.VacationSettlementEndpoints.SetTransferAgreementRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/vacation-settlements/{employeeId}/{entitlementType}/{entitlementYear}/resolve": {
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entitlementType",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entitlementYear",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.VacationSettlementEndpoints.ResolveSettlementRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/vacation-settlements/payout-pending": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/vacation-settlements/{employeeId}/{entitlementType}/{entitlementYear}/reconcile-payout": {
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entitlementType",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entitlementYear",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/employees/{employeeId}/termination-payout-request": {
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.TerminationPayoutRequestEndpoints.CreateTerminationPayoutRequestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/employees/{employeeId}/settlement-reversal": {
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.SettlementReversalEndpoints.SettlementReversalRequestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "StatsTid.Backend.Api.Contracts.CreateUnitRequest": {
+        "type": "object",
+        "properties": {
+          "organisationId": {
+            "type": "string"
+          },
+          "parentUnitId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "type": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.ForestMaoNode": {
+        "type": "object",
+        "properties": {
+          "orgId": {
+            "type": "string"
+          },
+          "orgName": {
+            "type": "string"
+          },
+          "orgType": {
+            "type": "string"
+          },
+          "parentOrgId": {
+            "type": "string",
+            "nullable": true
+          },
+          "materializedPath": {
+            "type": "string"
+          },
+          "memberCount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "organisations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.ForestOrganisationNode"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.ForestOrganisationNode": {
+        "type": "object",
+        "properties": {
+          "orgId": {
+            "type": "string"
+          },
+          "orgName": {
+            "type": "string"
+          },
+          "orgType": {
+            "type": "string"
+          },
+          "parentOrgId": {
+            "type": "string",
+            "nullable": true
+          },
+          "materializedPath": {
+            "type": "string"
+          },
+          "agreementCode": {
+            "type": "string"
+          },
+          "okVersion": {
+            "type": "string"
+          },
+          "memberCount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "directMemberCount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "units": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.ForestUnitNode"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.ForestResponse": {
+        "type": "object",
+        "properties": {
+          "forest": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.ForestMaoNode"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.ForestUnitNode": {
+        "type": "object",
+        "properties": {
+          "unitId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "organisationId": {
+            "type": "string"
+          },
+          "parentUnitId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "type": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "level": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "directMemberCount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "memberCount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.ForestUnitNode"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.LoginRequest": {
+        "required": [
+          "password",
+          "username"
+        ],
+        "type": "object",
+        "properties": {
+          "username": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.OrgListItem": {
+        "type": "object",
+        "properties": {
+          "orgId": {
+            "type": "string"
+          },
+          "orgName": {
+            "type": "string"
+          },
+          "orgType": {
+            "type": "string"
+          },
+          "parentOrgId": {
+            "type": "string",
+            "nullable": true
+          },
+          "materializedPath": {
+            "type": "string"
+          },
+          "agreementCode": {
+            "type": "string"
+          },
+          "okVersion": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.OrgTreeMaoNode": {
+        "type": "object",
+        "properties": {
+          "orgId": {
+            "type": "string"
+          },
+          "orgName": {
+            "type": "string"
+          },
+          "orgType": {
+            "type": "string"
+          },
+          "parentOrgId": {
+            "type": "string",
+            "nullable": true
+          },
+          "materializedPath": {
+            "type": "string"
+          },
+          "agreementCode": {
+            "type": "string"
+          },
+          "okVersion": {
+            "type": "string"
+          },
+          "employeeCount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "organisations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.OrgTreeOrganisationNode"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.OrgTreeOrganisationNode": {
+        "type": "object",
+        "properties": {
+          "orgId": {
+            "type": "string"
+          },
+          "orgName": {
+            "type": "string"
+          },
+          "orgType": {
+            "type": "string"
+          },
+          "parentOrgId": {
+            "type": "string",
+            "nullable": true
+          },
+          "materializedPath": {
+            "type": "string"
+          },
+          "agreementCode": {
+            "type": "string"
+          },
+          "okVersion": {
+            "type": "string"
+          },
+          "employeeCount": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.OrgTreeResponse": {
+        "type": "object",
+        "properties": {
+          "tree": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.OrgTreeMaoNode"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.PersonSearchResult": {
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "string"
+          },
+          "organisationId": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "position": {
+            "type": "string",
+            "nullable": true
+          },
+          "unitName": {
+            "type": "string",
+            "nullable": true
+          },
+          "path": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.RegisterTimeEntryRequest": {
+        "required": [
+          "agreementCode",
+          "date",
+          "employeeId",
+          "hours"
+        ],
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string"
+          },
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "hours": {
+            "type": "number",
+            "format": "double"
+          },
+          "startTime": {
+            "type": "string",
+            "format": "time",
+            "nullable": true
+          },
+          "endTime": {
+            "type": "string",
+            "format": "time",
+            "nullable": true
+          },
+          "taskId": {
+            "type": "string",
+            "nullable": true
+          },
+          "activityType": {
+            "type": "string",
+            "nullable": true
+          },
+          "agreementCode": {
+            "type": "string"
+          },
+          "okVersion": {
+            "type": "string",
+            "deprecated": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.RosterEmployeeRow": {
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "position": {
+            "type": "string",
+            "nullable": true
+          },
+          "structuralApproverId": {
+            "type": "string",
+            "nullable": true
+          },
+          "periodStatus": {
+            "type": "string"
+          },
+          "outgoingVikar": {
+            "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.RosterOutgoingVikar"
+          },
+          "isRoot": {
+            "type": "boolean"
+          },
+          "isOrphan": {
+            "type": "boolean"
+          },
+          "unitId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "unitName": {
+            "type": "string",
+            "nullable": true
+          },
+          "leaderIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "primaryReportingLineVersion": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.RosterNameRef": {
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "position": {
+            "type": "string",
+            "nullable": true
+          },
+          "unitName": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.RosterOutgoingVikar": {
+        "type": "object",
+        "properties": {
+          "vikarUserId": {
+            "type": "string"
+          },
+          "vikarDisplayName": {
+            "type": "string"
+          },
+          "untilDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.RosterResponse": {
+        "type": "object",
+        "properties": {
+          "employees": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.RosterEmployeeRow"
+            }
+          },
+          "pendingCountByManager": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          "nameResolution": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.RosterNameRef"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.SearchResponse": {
+        "type": "object",
+        "properties": {
+          "units": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.UnitSearchResult"
+            }
+          },
+          "people": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.PersonSearchResult"
+            }
+          },
+          "unitsTotal": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "peopleTotal": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.UnitResponse": {
+        "type": "object",
+        "properties": {
+          "unitId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "organisationId": {
+            "type": "string"
+          },
+          "parentUnitId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "type": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.UnitSearchResult": {
+        "type": "object",
+        "properties": {
+          "unitId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "organisationId": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.AdminEndpoints.CreateOrganizationRequest": {
+        "required": [
+          "orgName",
+          "orgType"
+        ],
+        "type": "object",
+        "properties": {
+          "orgId": {
+            "type": "string",
+            "nullable": true
+          },
+          "orgName": {
+            "type": "string"
+          },
+          "orgType": {
+            "type": "string"
+          },
+          "parentOrgId": {
+            "type": "string",
+            "nullable": true
+          },
+          "agreementCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "okVersion": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.AdminEndpoints.CreateUserRequest": {
+        "required": [
+          "agreementCode",
+          "displayName",
+          "okVersion",
+          "password",
+          "primaryOrgId",
+          "userId",
+          "username"
+        ],
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "nullable": true
+          },
+          "primaryOrgId": {
+            "type": "string"
+          },
+          "agreementCode": {
+            "type": "string"
+          },
+          "okVersion": {
+            "type": "string"
+          },
+          "approverId": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.AdminEndpoints.GrantRoleRequest": {
+        "required": [
+          "roleId",
+          "scopeType",
+          "userId"
+        ],
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "string"
+          },
+          "roleId": {
+            "type": "string"
+          },
+          "orgId": {
+            "type": "string",
+            "nullable": true
+          },
+          "scopeType": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.AdminEndpoints.MoveOrganizationRequest": {
+        "required": [
+          "newParentOrgId"
+        ],
+        "type": "object",
+        "properties": {
+          "newParentOrgId": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.AdminEndpoints.RevokeRoleRequest": {
+        "required": [
+          "assignmentId"
+        ],
+        "type": "object",
+        "properties": {
+          "assignmentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.AdminEndpoints.UpdateOrganizationRequest": {
+        "type": "object",
+        "properties": {
+          "orgName": {
+            "type": "string",
+            "nullable": true
+          },
+          "agreementCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "okVersion": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.AdminEndpoints.UpdateUserRequest": {
+        "type": "object",
+        "properties": {
+          "displayName": {
+            "type": "string",
+            "nullable": true
+          },
+          "email": {
+            "type": "string",
+            "nullable": true
+          },
+          "primaryOrgId": {
+            "type": "string",
+            "nullable": true
+          },
+          "agreementCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "effectiveFrom": {
+            "type": "string",
+            "format": "date"
+          },
+          "isActive": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "unitId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.AgreementConfigEndpoints.AgreementConfigRequest": {
+        "required": [
+          "agreementCode",
+          "annualNormHours",
+          "callInMinimumHours",
+          "callInRate",
+          "callInWorkEnabled",
+          "eveningEnd",
+          "eveningRate",
+          "eveningStart",
+          "eveningSupplementEnabled",
+          "flexCarryoverMax",
+          "hasMerarbejde",
+          "hasOvertime",
+          "holidayRate",
+          "holidaySupplementEnabled",
+          "maxFlexBalance",
+          "nightEnd",
+          "nightRate",
+          "nightStart",
+          "nightSupplementEnabled",
+          "nonWorkingTravelRate",
+          "normModel",
+          "normPeriodWeeks",
+          "okVersion",
+          "onCallDutyEnabled",
+          "onCallDutyRate",
+          "overtimeThreshold100",
+          "overtimeThreshold50",
+          "travelTimeEnabled",
+          "weekendSaturdayRate",
+          "weekendSundayRate",
+          "weekendSupplementEnabled",
+          "weeklyNormHours",
+          "workingTravelRate"
+        ],
+        "type": "object",
+        "properties": {
+          "agreementCode": {
+            "type": "string"
+          },
+          "okVersion": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "normModel": {
+            "type": "string"
+          },
+          "weeklyNormHours": {
+            "type": "number",
+            "format": "double"
+          },
+          "normPeriodWeeks": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "annualNormHours": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxFlexBalance": {
+            "type": "number",
+            "format": "double"
+          },
+          "flexCarryoverMax": {
+            "type": "number",
+            "format": "double"
+          },
+          "hasOvertime": {
+            "type": "boolean"
+          },
+          "hasMerarbejde": {
+            "type": "boolean"
+          },
+          "overtimeThreshold50": {
+            "type": "number",
+            "format": "double"
+          },
+          "overtimeThreshold100": {
+            "type": "number",
+            "format": "double"
+          },
+          "eveningSupplementEnabled": {
+            "type": "boolean"
+          },
+          "nightSupplementEnabled": {
+            "type": "boolean"
+          },
+          "weekendSupplementEnabled": {
+            "type": "boolean"
+          },
+          "holidaySupplementEnabled": {
+            "type": "boolean"
+          },
+          "eveningStart": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "eveningEnd": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "nightStart": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "nightEnd": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "eveningRate": {
+            "type": "number",
+            "format": "double"
+          },
+          "nightRate": {
+            "type": "number",
+            "format": "double"
+          },
+          "weekendSaturdayRate": {
+            "type": "number",
+            "format": "double"
+          },
+          "weekendSundayRate": {
+            "type": "number",
+            "format": "double"
+          },
+          "holidayRate": {
+            "type": "number",
+            "format": "double"
+          },
+          "onCallDutyEnabled": {
+            "type": "boolean"
+          },
+          "onCallDutyRate": {
+            "type": "number",
+            "format": "double"
+          },
+          "callInWorkEnabled": {
+            "type": "boolean"
+          },
+          "callInMinimumHours": {
+            "type": "number",
+            "format": "double"
+          },
+          "callInRate": {
+            "type": "number",
+            "format": "double"
+          },
+          "travelTimeEnabled": {
+            "type": "boolean"
+          },
+          "workingTravelRate": {
+            "type": "number",
+            "format": "double"
+          },
+          "nonWorkingTravelRate": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxDailyHours": {
+            "type": "number",
+            "format": "double"
+          },
+          "minimumRestHours": {
+            "type": "number",
+            "format": "double"
+          },
+          "restPeriodDerogationAllowed": {
+            "type": "boolean"
+          },
+          "weeklyMaxHoursReferencePeriod": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "voluntaryUnsocialHoursAllowed": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.AgreementEntitlementEndpoints.CreateChildEntitlementRequest": {
+        "required": [
+          "accrualModel",
+          "annualQuota",
+          "carryoverMax",
+          "entitlementType",
+          "isPerEpisode",
+          "proRateByPartTime",
+          "resetMonth"
+        ],
+        "type": "object",
+        "properties": {
+          "entitlementType": {
+            "type": "string"
+          },
+          "annualQuota": {
+            "type": "number",
+            "format": "double"
+          },
+          "accrualModel": {
+            "type": "string"
+          },
+          "resetMonth": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "carryoverMax": {
+            "type": "number",
+            "format": "double"
+          },
+          "proRateByPartTime": {
+            "type": "boolean"
+          },
+          "isPerEpisode": {
+            "type": "boolean"
+          },
+          "minAge": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "fullDayOnly": {
+            "type": "boolean"
+          },
+          "effectiveFrom": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.AgreementEntitlementEndpoints.UpdateChildEntitlementRequest": {
+        "required": [
+          "accrualModel",
+          "annualQuota",
+          "carryoverMax",
+          "effectiveFrom",
+          "entitlementType",
+          "isPerEpisode",
+          "proRateByPartTime",
+          "resetMonth"
+        ],
+        "type": "object",
+        "properties": {
+          "entitlementType": {
+            "type": "string"
+          },
+          "annualQuota": {
+            "type": "number",
+            "format": "double"
+          },
+          "accrualModel": {
+            "type": "string"
+          },
+          "resetMonth": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "carryoverMax": {
+            "type": "number",
+            "format": "double"
+          },
+          "proRateByPartTime": {
+            "type": "boolean"
+          },
+          "isPerEpisode": {
+            "type": "boolean"
+          },
+          "minAge": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "fullDayOnly": {
+            "type": "boolean"
+          },
+          "effectiveFrom": {
+            "type": "string",
+            "format": "date"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.ApprovalEndpoints.RejectPeriodRequest": {
+        "required": [
+          "reason"
+        ],
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.ApprovalEndpoints.ReopenPeriodRequest": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.ApprovalEndpoints.SubmitPeriodRequest": {
+        "required": [
+          "agreementCode",
+          "employeeId",
+          "okVersion",
+          "orgId",
+          "periodEnd",
+          "periodStart",
+          "periodType"
+        ],
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string"
+          },
+          "orgId": {
+            "type": "string"
+          },
+          "periodStart": {
+            "type": "string",
+            "format": "date"
+          },
+          "periodEnd": {
+            "type": "string",
+            "format": "date"
+          },
+          "periodType": {
+            "type": "string"
+          },
+          "agreementCode": {
+            "type": "string"
+          },
+          "okVersion": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.AssignUserUnitRequest": {
+        "type": "object",
+        "properties": {
+          "unitId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.ConfigEndpoints.AbsenceTypeVisibilityRequest": {
+        "required": [
+          "absenceType"
+        ],
+        "type": "object",
+        "properties": {
+          "absenceType": {
+            "type": "string"
+          },
+          "isHidden": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.ConfigEndpoints.ProfileSaveRequest": {
+        "required": [
+          "effectiveFrom"
+        ],
+        "type": "object",
+        "properties": {
+          "effectiveFrom": {
+            "type": "string",
+            "format": "date"
+          },
+          "weeklyNormHours": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "maxFlexBalance": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "flexCarryoverMax": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "maxOvertimeHoursPerPeriod": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "overtimeRequiresPreApproval": {
+            "type": "boolean",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.DesignateLeaderRequest": {
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.EmployeeProfileEndpoints.UpdateEmployeeProfileRequest": {
+        "type": "object",
+        "properties": {
+          "effectiveFrom": {
+            "type": "string",
+            "format": "date"
+          },
+          "partTimeFraction": {
+            "type": "number",
+            "format": "double"
+          },
+          "position": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.EmploymentDateEndpoints.SetEmploymentEndDateRequest": {
+        "type": "object",
+        "properties": {
+          "employmentEndDate": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.EmploymentDateEndpoints.SetEmploymentStartDateRequest": {
+        "type": "object",
+        "properties": {
+          "employmentStartDate": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.EntitlementConfigEndpoints.CreateEntitlementConfigRequest": {
+        "required": [
+          "accrualModel",
+          "agreementCode",
+          "annualQuota",
+          "carryoverMax",
+          "entitlementType",
+          "isPerEpisode",
+          "okVersion",
+          "proRateByPartTime",
+          "resetMonth"
+        ],
+        "type": "object",
+        "properties": {
+          "entitlementType": {
+            "type": "string"
+          },
+          "agreementCode": {
+            "type": "string"
+          },
+          "okVersion": {
+            "type": "string"
+          },
+          "annualQuota": {
+            "type": "number",
+            "format": "double"
+          },
+          "accrualModel": {
+            "type": "string"
+          },
+          "resetMonth": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "carryoverMax": {
+            "type": "number",
+            "format": "double"
+          },
+          "proRateByPartTime": {
+            "type": "boolean"
+          },
+          "isPerEpisode": {
+            "type": "boolean"
+          },
+          "minAge": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "fullDayOnly": {
+            "type": "boolean"
+          },
+          "effectiveFrom": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.EntitlementConfigEndpoints.UpdateEntitlementConfigRequest": {
+        "required": [
+          "accrualModel",
+          "agreementCode",
+          "annualQuota",
+          "carryoverMax",
+          "effectiveFrom",
+          "entitlementType",
+          "isPerEpisode",
+          "okVersion",
+          "proRateByPartTime",
+          "resetMonth"
+        ],
+        "type": "object",
+        "properties": {
+          "entitlementType": {
+            "type": "string"
+          },
+          "agreementCode": {
+            "type": "string"
+          },
+          "okVersion": {
+            "type": "string"
+          },
+          "annualQuota": {
+            "type": "number",
+            "format": "double"
+          },
+          "accrualModel": {
+            "type": "string"
+          },
+          "resetMonth": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "carryoverMax": {
+            "type": "number",
+            "format": "double"
+          },
+          "proRateByPartTime": {
+            "type": "boolean"
+          },
+          "isPerEpisode": {
+            "type": "boolean"
+          },
+          "minAge": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "fullDayOnly": {
+            "type": "boolean"
+          },
+          "effectiveFrom": {
+            "type": "string",
+            "format": "date"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.EntitlementEligibilityEndpoints.SetBirthDateRequest": {
+        "type": "object",
+        "properties": {
+          "birthDate": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.EntitlementEligibilityEndpoints.SetEntitlementEligibilityRequest": {
+        "type": "object",
+        "properties": {
+          "eligible": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.MoveUnitRequest": {
+        "type": "object",
+        "properties": {
+          "newParentUnitId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.OvertimeEndpoints.CompensationChoiceRequest": {
+        "type": "object",
+        "properties": {
+          "periodYear": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "compensationModel": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.OvertimeEndpoints.OvertimeApprovalRequest": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.OvertimeEndpoints.OvertimeCompensateRequest": {
+        "type": "object",
+        "properties": {
+          "periodYear": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "hours": {
+            "type": "number",
+            "format": "double"
+          },
+          "compensationType": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.OvertimeEndpoints.OvertimePreApprovalRequest": {
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string"
+          },
+          "periodStart": {
+            "type": "string",
+            "format": "date"
+          },
+          "periodEnd": {
+            "type": "string",
+            "format": "date"
+          },
+          "maxHours": {
+            "type": "number",
+            "format": "double"
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.PositionOverrideEndpoints.CreatePositionOverrideRequest": {
+        "required": [
+          "agreementCode",
+          "okVersion",
+          "positionCode"
+        ],
+        "type": "object",
+        "properties": {
+          "agreementCode": {
+            "type": "string"
+          },
+          "okVersion": {
+            "type": "string"
+          },
+          "positionCode": {
+            "type": "string"
+          },
+          "maxFlexBalance": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "flexCarryoverMax": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "normPeriodWeeks": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "weeklyNormHours": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.PositionOverrideEndpoints.UpdatePositionOverrideRequest": {
+        "required": [
+          "agreementCode",
+          "okVersion",
+          "positionCode"
+        ],
+        "type": "object",
+        "properties": {
+          "agreementCode": {
+            "type": "string"
+          },
+          "okVersion": {
+            "type": "string"
+          },
+          "positionCode": {
+            "type": "string"
+          },
+          "maxFlexBalance": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "flexCarryoverMax": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "normPeriodWeeks": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "weeklyNormHours": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.ProjectEndpoints.CreateProjectRequest": {
+        "required": [
+          "projectCode",
+          "projectName"
+        ],
+        "type": "object",
+        "properties": {
+          "projectCode": {
+            "type": "string"
+          },
+          "projectName": {
+            "type": "string"
+          },
+          "sortOrder": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.ProjectEndpoints.UpdateProjectRequest": {
+        "required": [
+          "projectName"
+        ],
+        "type": "object",
+        "properties": {
+          "projectName": {
+            "type": "string"
+          },
+          "sortOrder": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.RenameUnitRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.ReportingLineEndpoints.AdminVikarRequest": {
+        "type": "object",
+        "properties": {
+          "vikarUserId": {
+            "type": "string"
+          },
+          "effectiveTo": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.ReportingLineEndpoints.AssignActingManagerRequest": {
+        "required": [
+          "effectiveFrom",
+          "managerId"
+        ],
+        "type": "object",
+        "properties": {
+          "managerId": {
+            "type": "string"
+          },
+          "effectiveFrom": {
+            "type": "string",
+            "format": "date"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.ReportingLineEndpoints.AssignReportingLineRequest": {
+        "required": [
+          "effectiveFrom",
+          "employeeId",
+          "managerId"
+        ],
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string"
+          },
+          "managerId": {
+            "type": "string"
+          },
+          "effectiveFrom": {
+            "type": "string",
+            "format": "date"
+          },
+          "relationship": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.ReportingLineEndpoints.DelegateRequest": {
+        "type": "object",
+        "properties": {
+          "actingManagerId": {
+            "type": "string"
+          },
+          "effectiveTo": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.ReportingLineEndpoints.ImportReportingLinesRequest": {
+        "type": "object",
+        "properties": {
+          "organisationId": {
+            "type": "string"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.ReportingLineEndpoints.ImportRow"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.ReportingLineEndpoints.ImportRow": {
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string"
+          },
+          "managerId": {
+            "type": "string"
+          },
+          "effectiveFrom": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.ReportingLineEndpoints.RemoveWithReassignmentRequest": {
+        "type": "object",
+        "properties": {
+          "replacements": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.SettlementReversalEndpoints.SettlementReversalRequestBody": {
+        "type": "object",
+        "properties": {
+          "entitlementType": {
+            "type": "string",
+            "nullable": true
+          },
+          "entitlementYear": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "expectedSettlementSequence": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "mode": {
+            "type": "string",
+            "nullable": true
+          },
+          "hasEndDateCorrection": {
+            "type": "boolean"
+          },
+          "correctedEndDate": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "expectedUserVersion": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.SkemaEndpoints.RowPreferenceAbsenceItem": {
+        "required": [
+          "absenceType"
+        ],
+        "type": "object",
+        "properties": {
+          "absenceType": {
+            "type": "string"
+          },
+          "sortOrder": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.SkemaEndpoints.RowPreferenceProjectItem": {
+        "required": [
+          "projectId"
+        ],
+        "type": "object",
+        "properties": {
+          "projectId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sortOrder": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.SkemaEndpoints.RowPreferencesRequest": {
+        "type": "object",
+        "properties": {
+          "projects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.SkemaEndpoints.RowPreferenceProjectItem"
+            },
+            "nullable": true
+          },
+          "absenceTypes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.SkemaEndpoints.RowPreferenceAbsenceItem"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SaveSkemaRequest": {
+        "required": [
+          "month",
+          "year"
+        ],
+        "type": "object",
+        "properties": {
+          "year": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "month": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaEntry"
+            },
+            "nullable": true
+          },
+          "absences": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaAbsence"
+            },
+            "nullable": true
+          },
+          "workTime": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaWorkTimeDay"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaAbsence": {
+        "required": [
+          "absenceType",
+          "date",
+          "hours"
+        ],
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "absenceType": {
+            "type": "string"
+          },
+          "hours": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaEntry": {
+        "required": [
+          "date",
+          "hours",
+          "projectCode"
+        ],
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "projectCode": {
+            "type": "string"
+          },
+          "hours": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaWorkInterval": {
+        "required": [
+          "end",
+          "start"
+        ],
+        "type": "object",
+        "properties": {
+          "start": {
+            "type": "string"
+          },
+          "end": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaWorkTimeDay": {
+        "required": [
+          "date"
+        ],
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "intervals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaWorkInterval"
+            },
+            "nullable": true
+          },
+          "manualHours": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.TerminationPayoutRequestEndpoints.CreateTerminationPayoutRequestBody": {
+        "type": "object",
+        "properties": {
+          "entitlementType": {
+            "type": "string",
+            "nullable": true
+          },
+          "entitlementYear": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "expectedSettlementSequence": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "requestDate": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "evidenceNote": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.VacationSettlementEndpoints.ResolveSettlementRequest": {
+        "required": [
+          "disposition"
+        ],
+        "type": "object",
+        "properties": {
+          "disposition": {
+            "type": "string"
+          },
+          "forfeitDays": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "impededDays": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.VacationSettlementEndpoints.SetTransferAgreementRequest": {
+        "required": [
+          "agreementDate",
+          "entitlementType",
+          "entitlementYear",
+          "transferDays"
+        ],
+        "type": "object",
+        "properties": {
+          "entitlementYear": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "entitlementType": {
+            "type": "string"
+          },
+          "transferDays": {
+            "type": "number",
+            "format": "double"
+          },
+          "agreementDate": {
+            "type": "string",
+            "format": "date"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.WageTypeMappingEndpoints.CreateWageTypeMappingRequest": {
+        "required": [
+          "agreementCode",
+          "okVersion",
+          "timeType",
+          "wageType"
+        ],
+        "type": "object",
+        "properties": {
+          "timeType": {
+            "type": "string"
+          },
+          "wageType": {
+            "type": "string"
+          },
+          "okVersion": {
+            "type": "string"
+          },
+          "agreementCode": {
+            "type": "string"
+          },
+          "position": {
+            "type": "string",
+            "nullable": true
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "effectiveFrom": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.WageTypeMappingEndpoints.UpdateWageTypeMappingRequest": {
+        "required": [
+          "agreementCode",
+          "effectiveFrom",
+          "okVersion",
+          "timeType",
+          "wageType"
+        ],
+        "type": "object",
+        "properties": {
+          "timeType": {
+            "type": "string"
+          },
+          "wageType": {
+            "type": "string"
+          },
+          "okVersion": {
+            "type": "string"
+          },
+          "agreementCode": {
+            "type": "string"
+          },
+          "position": {
+            "type": "string",
+            "nullable": true
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "effectiveFrom": {
+            "type": "string",
+            "format": "date"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  }
+}

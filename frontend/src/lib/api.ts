@@ -3,6 +3,12 @@ import type {
   SkemaRowPreferenceProject,
   SkemaRowPreferences,
 } from '../types'
+// S111 / TASK-11102 — the generated OpenAPI path map (committed; run `npm run
+// gen:api` to regenerate from ../docs/api/openapi.json). This is the single
+// source the typed `apiClient.get(pathKey, …)` overload derives response shapes
+// from, structurally closing the S97→S99→S100 "fetchEnheder" shape-mismatch class
+// for the wired reads.
+import type { paths } from './api-types'
 
 const TOKEN_KEY = 'statstid_token'
 const USER_KEY = 'statstid_user'
@@ -84,10 +90,120 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   }
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// S111 / TASK-11102 — the STRUCTURED typed `get` call shape (the single typed
+// client; NO second HTTP client). The response type is DERIVED from the OpenAPI
+// path key, so a stale FE field-access on a wired read is a `tsc` error rather
+// than a silent prod break. A raw `keyof paths` key cannot type a templated or
+// query path (Step-0b BLOCKER), so the call shape is
+// `get(pathKey, { params?: { path }, query? })`: `apiClient` interpolates
+// `params.path` into the URL and appends `query`, both type-bound to `pathKey`.
+//
+// OVERLOAD ORDERING (Step-0b CRITICAL): the typed overload is declared FIRST and
+// is constrained to `GetPath` (the union of literal GET path keys). The ~130
+// existing `get<ExplicitT>(stringPath)` callers supply an explicit type argument
+// that is NOT assignable to `GetPath`, so that overload is not a candidate and
+// they fall through to the plain-string fallback overload — no mass retrofit.
+// ════════════════════════════════════════════════════════════════════════════
+
+/** The union of path keys in the generated spec that expose a GET with a JSON 200. */
+type GetPath = {
+  [P in keyof paths]: paths[P] extends {
+    get: { responses: { 200: { content: { 'application/json': unknown } } } }
+  }
+    ? P
+    : never
+}[keyof paths]
+
+/** The JSON 200 body type for a GET path key. */
+type GetResponse<P extends GetPath> = paths[P] extends {
+  get: { responses: { 200: { content: { 'application/json': infer R } } } }
+}
+  ? R
+  : never
+
+type GetParameters<P extends GetPath> = paths[P] extends { get: { parameters: infer Pa } }
+  ? Pa
+  : never
+
+/** The `path` params object for a GET key (`undefined` when the route is literal —
+    the generated shape is `path?: never`, which normalizes to `undefined`). */
+type GetPathParams<P extends GetPath> = GetParameters<P> extends { path?: infer X }
+  ? [X] extends [never]
+    ? undefined
+    : X
+  : undefined
+
+/** The `query` params object for a GET key (`undefined` when there is no query). */
+type GetQueryParams<P extends GetPath> = GetParameters<P> extends { query?: infer X }
+  ? [X] extends [never]
+    ? undefined
+    : X
+  : undefined
+
+/** The structured options for a typed GET: `params.path` is REQUIRED for a
+    templated route, FORBIDDEN for a literal one; `query` is optional when present. */
+type GetOptions<P extends GetPath> = (GetPathParams<P> extends undefined
+  ? { params?: undefined }
+  : { params: { path: GetPathParams<P> } }) &
+  (GetQueryParams<P> extends undefined ? { query?: undefined } : { query?: GetQueryParams<P> })
+
+/** Whether a type has at least one required (non-`undefined`) property — used to
+    make the `options` argument required for templated routes, optional otherwise. */
+type HasRequiredKey<T> = {
+  [K in keyof T]-?: undefined extends T[K] ? never : K
+}[keyof T] extends never
+  ? false
+  : true
+
+/** The loose runtime shape the implementation consumes (hidden from callers). */
+type GetCallOptions = {
+  params?: { path?: Record<string, unknown> }
+  query?: Record<string, unknown>
+}
+
+/** Build the request URL: interpolate `{token}` path params, then append the query. */
+function buildGetUrl(pathKey: string, options?: GetCallOptions): string {
+  let url = pathKey
+  const pathParams = options?.params?.path
+  if (pathParams) {
+    url = url.replace(/\{([^}]+)\}/g, (_match, key: string) => {
+      const value = pathParams[key]
+      if (value === undefined || value === null) {
+        throw new Error(`apiClient.get: missing path param '${key}' for '${pathKey}'`)
+      }
+      return encodeURIComponent(String(value))
+    })
+  }
+  const query = options?.query
+  if (query) {
+    const search = new URLSearchParams()
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined && value !== null) search.append(key, String(value))
+    }
+    const qs = search.toString()
+    if (qs) url += (url.includes('?') ? '&' : '?') + qs
+  }
+  return url
+}
+
+// Typed overload (FIRST): binds the response type from a spec path key. The
+// `options` argument is required only when the route has required path params.
+function apiGet<P extends GetPath>(
+  pathKey: P,
+  ...args: HasRequiredKey<GetOptions<P>> extends true
+    ? [options: GetOptions<P>]
+    : [options?: GetOptions<P>]
+): Promise<ApiResult<GetResponse<P>>>
+// Fallback overload (SECOND): the plain string path for non-retrofitted callers,
+// who supply an explicit `T` not assignable to `GetPath`.
+function apiGet<T = unknown>(path: string): Promise<ApiResult<T>>
+function apiGet(pathKey: string, options?: GetCallOptions): Promise<ApiResult<unknown>> {
+  return request<unknown>('GET', buildGetUrl(pathKey, options))
+}
+
 export const apiClient = {
-  get<T>(path: string): Promise<ApiResult<T>> {
-    return request<T>('GET', path)
-  },
+  get: apiGet,
   post<T>(path: string, body?: unknown): Promise<ApiResult<T>> {
     return request<T>('POST', path, body)
   },

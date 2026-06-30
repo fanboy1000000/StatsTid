@@ -171,7 +171,8 @@ public static class UnitEndpoints
             }
 
             return Results.Ok(new ForestResponse(forest));
-        }).RequireAuthorization("HROrAbove");
+        }).RequireAuthorization("HROrAbove")
+        .Produces<ForestResponse>(StatusCodes.Status200OK); // S111 / TASK-11101 — envelope { forest: [...] }
 
         // ═══════════════════════════════════════════════════════════════════
         //  POST /api/admin/units { organisationId, parentUnitId?, type, name } — create.
@@ -271,7 +272,11 @@ public static class UnitEndpoints
             context.Response.Headers.ETag = "\"1\"";
             return Results.Created($"/api/admin/units/{unitId}",
                 new UnitResponse(unitId, @event.OrganisationId, @event.ParentUnitId, @event.Type, @event.Name, 1L));
-        }).RequireAuthorization("HROrAbove");
+        }).RequireAuthorization("HROrAbove")
+        // S111 / TASK-11101 — the request-side convention proof: a named Contracts/ DTO + .Accepts<T>
+        // (spec≡DTO; weaker than the response-side spec≡runtime gate — web JSON is case-insensitive on input).
+        .Accepts<CreateUnitRequest>("application/json")
+        .Produces<UnitResponse>(StatusCodes.Status201Created);
 
         // ═══════════════════════════════════════════════════════════════════
         //  PUT /api/admin/units/{id} { name } (If-Match) — rename.
@@ -1002,8 +1007,9 @@ public static class UnitEndpoints
 //  Request DTOs
 // ──────────────────────────────────────────────────────────────────────────
 
-/// <summary>POST /api/admin/units body. <c>ParentUnitId</c> null = a top-level unit.</summary>
-public sealed record CreateUnitRequest(string OrganisationId, Guid? ParentUnitId, string Type, string Name);
+// S111 / TASK-11101 — CreateUnitRequest moved to StatsTid.Backend.Api.Contracts (the named request-DTO
+// convention for the proof mutation + .Accepts<CreateUnitRequest>). It binds here via the file's
+// `using StatsTid.Backend.Api.Contracts;`.
 
 /// <summary>PUT /api/admin/units/{id} (rename) body.</summary>
 public sealed record RenameUnitRequest(string Name);

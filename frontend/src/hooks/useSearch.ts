@@ -26,6 +26,7 @@
 
 import { useState, useEffect } from 'react'
 import { apiClient } from '../lib/api'
+import { coerceApiResponse, type Assert, type AssertFieldsInSpec } from '../lib/apiNarrow'
 import type { UnitType } from '../pages/admin/enhedsspor/typeMaps'
 
 /** A matching ACTIVE unit (ENHEDER section). `path` is the breadcrumb the overlay
@@ -73,6 +74,14 @@ export interface SearchResponse {
   peopleTotal: number
 }
 
+// S111 / TASK-11102 — compile-time drift guards (see apiNarrow.ts): each FE field
+// read must exist in the matching spec schema, else `tsc` fails here.
+export type _SearchDrift = [
+  Assert<AssertFieldsInSpec<SearchResponse, 'StatsTid.Backend.Api.Contracts.SearchResponse'>>,
+  Assert<AssertFieldsInSpec<UnitSearchResult, 'StatsTid.Backend.Api.Contracts.UnitSearchResult'>>,
+  Assert<AssertFieldsInSpec<PersonSearchResult, 'StatsTid.Backend.Api.Contracts.PersonSearchResult'>>,
+]
+
 const EMPTY: SearchResponse = { units: [], people: [], unitsTotal: 0, peopleTotal: 0 }
 const DEBOUNCE_MS = 250
 
@@ -102,12 +111,16 @@ export function useSearch() {
     setLoading(true)
     setError(null)
     const handle = setTimeout(async () => {
-      const result = await apiClient.get<SearchResponse>(`/api/admin/search?q=${encodeURIComponent(q)}`)
+      // S111 / TASK-11102 — typed via the OpenAPI path key with the structured
+      // `query` shape ({ q }); `apiClient` appends `?q=…` (URL-encoded). The
+      // envelope keys are type-checked against the spec; `coerceApiResponse`
+      // re-narrows the spec-loose element types to the FE-strict unions.
+      const result = await apiClient.get('/api/admin/search', { query: { q } })
       if (cancelled) return
       if (result.ok) {
         setResults({
-          units: result.data.units ?? [],
-          people: result.data.people ?? [],
+          units: coerceApiResponse<UnitSearchResult[]>(result.data.units ?? []),
+          people: coerceApiResponse<PersonSearchResult[]>(result.data.people ?? []),
           unitsTotal: result.data.unitsTotal ?? 0,
           peopleTotal: result.data.peopleTotal ?? 0,
         })

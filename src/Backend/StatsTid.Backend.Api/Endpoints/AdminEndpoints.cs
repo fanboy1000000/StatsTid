@@ -69,7 +69,11 @@ public static class AdminEndpoints
             }
 
             return Results.Ok(visibleOrgs);
-        }).RequireAuthorization("HROrAbove");
+        }).RequireAuthorization("HROrAbove")
+        // S111 / TASK-11101 — BARE ARRAY: the response is an array whose ELEMENT is OrgListItem, so the
+        // collection-ness must be IEnumerable<OrgListItem> (NOT OrgListItem). The per-route spec≡runtime
+        // gate fails RED if this lies about array-ness.
+        .Produces<IEnumerable<OrgListItem>>(StatusCodes.Status200OK);
 
         // 2. POST /api/admin/organizations — Create organization
         app.MapPost("/api/admin/organizations", async (
@@ -709,7 +713,8 @@ public static class AdminEndpoints
             }
 
             return Results.Ok(new OrgTreeResponse(forest));
-        }).RequireAuthorization("HROrAbove");
+        }).RequireAuthorization("HROrAbove")
+        .Produces<OrgTreeResponse>(StatusCodes.Status200OK); // S111 / TASK-11101 — envelope { tree: [...] }
 
         // ═══════════════════════════════════════════
         // User Endpoints
@@ -2645,44 +2650,40 @@ public static class AdminEndpoints
             var roster = await approvalRepo.GetMedarbejderRosterForTreeAsync(
                 treeRootOrg.MaterializedPath, ct);
 
-            return Results.Ok(new
-            {
-                employees = roster.Employees.Select(e => new
-                {
-                    employeeId = e.EmployeeId,
-                    displayName = e.DisplayName,
-                    position = e.Position,
-                    structuralApproverId = e.StructuralApproverId,
-                    periodStatus = e.PeriodStatus,
-                    outgoingVikar = e.OutgoingVikar is null ? null : new
-                    {
-                        vikarUserId = e.OutgoingVikar.VikarUserId,
-                        vikarDisplayName = e.OutgoingVikar.VikarDisplayName,
-                        untilDate = e.OutgoingVikar.UntilDate,
-                        reason = e.OutgoingVikar.Reason,
-                    },
-                    isRoot = e.IsRoot,
-                    isOrphan = e.IsOrphan,
+            // S111 / TASK-11101 — the prior anonymous shape is now the named RosterResponse record
+            // (BYTE-IDENTICAL wire JSON: member order + nullability preserved), so .Produces<RosterResponse>
+            // carries a real schema. The serialized response is unchanged (RosterEndpointContractTests pin it).
+            return Results.Ok(new RosterResponse(
+                Employees: roster.Employees.Select(e => new RosterEmployeeRow(
+                    EmployeeId: e.EmployeeId,
+                    DisplayName: e.DisplayName,
+                    Position: e.Position,
+                    StructuralApproverId: e.StructuralApproverId,
+                    PeriodStatus: e.PeriodStatus,
+                    OutgoingVikar: e.OutgoingVikar is null ? null : new RosterOutgoingVikar(
+                        VikarUserId: e.OutgoingVikar.VikarUserId,
+                        VikarDisplayName: e.OutgoingVikar.VikarDisplayName,
+                        UntilDate: e.OutgoingVikar.UntilDate,
+                        Reason: e.OutgoingVikar.Reason),
+                    IsRoot: e.IsRoot,
+                    IsOrphan: e.IsOrphan,
                     // S106 / TASK-10602 — the unit tag + the nullable reporting-line etag.
-                    unitId = e.UnitId,
-                    unitName = e.UnitName,
-                    leaderIds = e.LeaderIds,
-                    primaryReportingLineVersion = e.PrimaryReportingLineVersion,
-                }),
-                pendingCountByManager = roster.PendingCountByManager,
+                    UnitId: e.UnitId,
+                    UnitName: e.UnitName,
+                    LeaderIds: e.LeaderIds,
+                    PrimaryReportingLineVersion: e.PrimaryReportingLineVersion)).ToList(),
+                PendingCountByManager: roster.PendingCountByManager,
                 // S106 / TASK-10602 — the DISPLAY-ONLY by-id name resolution (upward-ref +
                 // cross-unit-leader chips), keyed by user_id.
-                nameResolution = roster.NameResolution.ToDictionary(
+                NameResolution: roster.NameResolution.ToDictionary(
                     kv => kv.Key,
-                    kv => new
-                    {
-                        userId = kv.Value.UserId,
-                        displayName = kv.Value.DisplayName,
-                        position = kv.Value.Position,
-                        unitName = kv.Value.UnitName,
-                    }),
-            });
-        }).RequireAuthorization("HROrAbove"); // S91 TASK-9102: tree-page roster opened to LocalHR
+                    kv => new RosterNameRef(
+                        UserId: kv.Value.UserId,
+                        DisplayName: kv.Value.DisplayName,
+                        Position: kv.Value.Position,
+                        UnitName: kv.Value.UnitName))));
+        }).RequireAuthorization("HROrAbove") // S91 TASK-9102: tree-page roster opened to LocalHR
+        .Produces<RosterResponse>(StatusCodes.Status200OK); // S111 / TASK-11101
 
         // ═══════════════════════════════════════════
         // S74-7404 R11b — GET /api/admin/users/search — server-side person-search (the 2000+
@@ -2853,7 +2854,8 @@ public static class AdminEndpoints
             }).ToList();
 
             return Results.Ok(new SearchResponse(units, people, unitsTotal, peopleTotal));
-        }).RequireAuthorization("HROrAbove");
+        }).RequireAuthorization("HROrAbove")
+        .Produces<SearchResponse>(StatusCodes.Status200OK); // S111 / TASK-11101 — two-section envelope
 
         return app;
     }

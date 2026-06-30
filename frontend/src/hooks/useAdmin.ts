@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { apiClient, apiFetchWithEtag } from '../lib/api'
+import { coerceApiResponse, type Assert, type AssertFieldsInSpec } from '../lib/apiNarrow'
 import { formatVersionAsIfMatch, resolveEtag } from '../lib/etag'
 
 // S35 TASK-3507 (Phase 4d ETag propagation). Admin user-management hooks
@@ -20,6 +21,13 @@ export interface Organization {
   agreementCode: string
   okVersion?: string
 }
+
+// S111 / TASK-11102 — compile-time drift guard: every field `Organization` reads
+// must exist in the spec's `OrgListItem` (the `GET /api/admin/organizations`
+// element). A renamed/removed backend field → `tsc` error here.
+export type _OrgDrift = Assert<
+  AssertFieldsInSpec<Organization, 'StatsTid.Backend.Api.Contracts.OrgListItem'>
+>
 
 export interface User {
   userId: string
@@ -79,9 +87,14 @@ export function useOrganizations() {
   const fetchOrganizations = useCallback(async () => {
     setLoading(true)
     setError(null)
-    const result = await apiClient.get<Organization[]>('/api/admin/organizations')
+    // S111 / TASK-11102 — typed via the OpenAPI path key (response type DERIVED
+    // from the spec; no hand-written `T`). `result.data` is the spec `OrgListItem[]`;
+    // `coerceApiResponse` re-narrows it to the FE-strict `Organization[]` (the spec
+    // is all-optional). `_OrgDrift` fails `tsc` if a field the FE reads is dropped
+    // from the spec (the S97→S100 drift class).
+    const result = await apiClient.get('/api/admin/organizations')
     if (result.ok) {
-      setOrganizations(result.data)
+      setOrganizations(coerceApiResponse<Organization[]>(result.data))
     } else {
       setError(result.error)
     }

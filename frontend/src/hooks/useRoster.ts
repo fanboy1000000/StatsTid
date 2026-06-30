@@ -24,6 +24,7 @@
 
 import { useState, useCallback, useRef } from 'react'
 import { apiClient } from '../lib/api'
+import { coerceApiResponse, type Assert, type AssertFieldsInSpec } from '../lib/apiNarrow'
 
 /** Per-away-manager vikar annotation — present IFF this person is an away-manager
     currently covered by an active vikar (the absent leader's own row). The
@@ -76,6 +77,19 @@ export interface RosterResponse {
   nameResolution: Record<string, RosterNameResolutionEntry>
 }
 
+// S111 / TASK-11102 — compile-time drift guards (see apiNarrow.ts). The backend
+// names the row schema `RosterEmployeeRow` and the resolution entry `RosterNameRef`
+// (the FE keeps its own names); the asserts map each FE-strict interface to its
+// spec schema so a renamed/removed backend field fails `tsc` here.
+export type _RosterDrift = [
+  Assert<AssertFieldsInSpec<RosterResponse, 'StatsTid.Backend.Api.Contracts.RosterResponse'>>,
+  Assert<AssertFieldsInSpec<RosterRow, 'StatsTid.Backend.Api.Contracts.RosterEmployeeRow'>>,
+  Assert<AssertFieldsInSpec<RosterOutgoingVikar, 'StatsTid.Backend.Api.Contracts.RosterOutgoingVikar'>>,
+  Assert<
+    AssertFieldsInSpec<RosterNameResolutionEntry, 'StatsTid.Backend.Api.Contracts.RosterNameRef'>
+  >,
+]
+
 /**
  * The lazy, per-Organisation roster cache. `loadRoster(organisationId)` fetches
  * (once) and caches; `byOrg[organisationId]` exposes the cached response. Calling
@@ -98,13 +112,18 @@ export function useRoster() {
     loadingRef.current.add(organisationId)
     setLoading(true)
     setError(null)
-    const result = await apiClient.get<RosterResponse>(
-      `/api/admin/reporting-lines/tree/${encodeURIComponent(organisationId)}/medarbejdere`,
+    // S111 / TASK-11102 — typed via the OpenAPI TEMPLATED path key with the
+    // structured `params.path` shape; `apiClient` interpolates `{organisationId}`
+    // (URL-encoded). `coerceApiResponse` re-narrows the spec-loose response to the
+    // FE-strict `RosterResponse` (drift caught by `_RosterDrift` above).
+    const result = await apiClient.get(
+      '/api/admin/reporting-lines/tree/{organisationId}/medarbejdere',
+      { params: { path: { organisationId } } },
     )
     loadingRef.current.delete(organisationId)
     if (result.ok) {
       loadedRef.current.add(organisationId)
-      setByOrg((prev) => ({ ...prev, [organisationId]: result.data }))
+      setByOrg((prev) => ({ ...prev, [organisationId]: coerceApiResponse<RosterResponse>(result.data) }))
     } else {
       setError(result.error)
     }

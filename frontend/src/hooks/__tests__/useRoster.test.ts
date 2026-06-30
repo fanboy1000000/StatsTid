@@ -89,8 +89,12 @@ describe('useRoster', () => {
       await result.current.loadRoster('STY02')
     })
 
-    // The URL MUST be the inline literal (lint-enumerable) — the encoded organisationId path.
-    expect(mockGet).toHaveBeenCalledWith('/api/admin/reporting-lines/tree/STY02/medarbejdere')
+    // S111 / TASK-11102 — typed call: the TEMPLATED path KEY + the structured
+    // `params.path` shape (apiClient interpolates `{organisationId}`, URL-encoding).
+    expect(mockGet).toHaveBeenCalledWith(
+      '/api/admin/reporting-lines/tree/{organisationId}/medarbejdere',
+      { params: { path: { organisationId: 'STY02' } } },
+    )
 
     const roster = result.current.byOrg['STY02']
     expect(roster).toBeDefined()

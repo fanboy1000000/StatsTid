@@ -1,4 +1,8 @@
+using System.Text.Json;
+using Microsoft.OpenApi.Models;
+using Swashbuckle.AspNetCore.SwaggerGen;
 using StatsTid.Auth;
+using StatsTid.Backend.Api;
 using StatsTid.Backend.Api.AuditMappers;
 using StatsTid.Backend.Api.Endpoints;
 using StatsTid.Backend.Api.Http;
@@ -36,6 +40,27 @@ builder.Services.AddHostedService<DelegationExpiryService>();
 builder.Services.AddHostedService<SettlementCloseService>(); // S68 ADR-033 slice 1a — period-close poller
 
 builder.Services.AddHttpClient();
+
+// ── OpenAPI (S111 / TASK-11101) — DOCUMENT GENERATION ONLY (no Swagger UI exposed in prod —
+//    Program.cs never calls UseSwagger/UseSwaggerUI). The schema source for the Fork-B typed client. ──
+// Swashbuckle's schema generator reads Microsoft.AspNetCore.Mvc.JsonOptions, NOT the minimal-API
+// Http.Json options — so it would emit PascalCase property names unless told otherwise. We set the
+// camelCase naming policy HERE (Swashbuckle-only; the minimal-API runtime serialization is untouched —
+// it already uses the JsonSerializerDefaults.Web camelCase default). A missed config = PascalCase
+// schemas that mismatch the runtime bytes → a loud downstream tsc failure (the gotcha this prevents).
+builder.Services.Configure<Microsoft.AspNetCore.Mvc.JsonOptions>(o =>
+    o.JsonSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase);
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen(options =>
+{
+    options.SwaggerDoc("v1", new OpenApiInfo { Title = "StatsTid Backend API", Version = "v1" });
+    // Non-nullable record members → required + nullable:false; `string?`/`T?` → nullable:true, not
+    // required. The spec≡runtime gate's nullable-required fidelity check rides this.
+    options.SupportNonNullableReferenceTypes();
+    // Full-name schema ids — unique across the ~90-endpoint surface (private nested request DTOs in
+    // different files share simple names; a collision would crash GetSwagger).
+    options.CustomSchemaIds(t => t.FullName!.Replace("+", "."));
+});
 
 // ── S73 / TASK-7300 (R1 + R1a) — the NAMED rule-engine client ──
 // ONE mechanism for backend→rule-engine auth carriage: all four call families
@@ -337,6 +362,20 @@ var useDbAuth = builder.Configuration.GetValue<bool>("Auth:UseDatabase", false);
 
 var app = builder.Build();
 
+// ── S111 / TASK-11101 — the no-DB OpenAPI doc-only entrypoint (a Step-0b BLOCKER, both lenses). ──
+// `swagger tofile` against the normal host FAILS: the seeders/backfills below + the 3 hosted services
+// all need the EventStore DB. Instead we MAP the endpoints (which needs the services REGISTERED, not a
+// DB CONNECTION — minimal-API handlers resolve their dependencies PER-REQUEST, and GetSwagger never
+// invokes a handler) and write the spec, then RETURN — BEFORE any seeder/backfill runs and before
+// app.Run() (so the registered hosted services are never STARTED). Net: `dotnet run -- --openapi`
+// generates docs/api/openapi.json with NO database running.
+if (args.Contains("--openapi"))
+{
+    ApiEndpoints.MapAll(app, useDbAuth);
+    await OpenApiSpecGenerator.WriteAsync(app, args);
+    return;
+}
+
 // ── Seed agreement configs from static data if DB is empty (ADR-014) ──
 using (var scope = app.Services.CreateScope())
 {
@@ -433,34 +472,9 @@ app.UseAuthentication();
 app.UseAuthorization();
 app.UseMiddleware<AuditLoggingMiddleware>();
 
-// ── Health ──
-app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "backend-api" }));
-
-// ── Endpoint Groups ──
-app.MapAuthEndpoints(useDbAuth);
-app.MapTimeEndpoints();
-app.MapAdminEndpoints();
-app.MapUnitEndpoints(); // S104 ADR-038 D3 — units CRUD + leader designate/remove + same-Org person unit-assign
-app.MapApprovalEndpoints();
-app.MapConfigEndpoints();
-app.MapSkemaEndpoints();
-app.MapProjectEndpoints();
-app.MapAgreementConfigEndpoints();
-app.MapPositionOverrideEndpoints();
-app.MapWageTypeMappingEndpoints();
-app.MapEntitlementConfigEndpoints();
-app.MapAgreementEntitlementEndpoints();
-app.MapEmployeeProfileEndpoints();
-app.MapEntitlementEligibilityEndpoints(); // S59 / TASK-5906 — CHILD_SICK eligibility + DOB (HR-only)
-app.MapEmploymentDateEndpoints(); // S60 / TASK-6006 — employment_start_date set/read (HR-only)
-app.MapBalanceEndpoints();
-app.MapComplianceEndpoints();
-app.MapOvertimeEndpoints();
-app.MapAuditEndpoints();
-app.MapReportingLineEndpoints();
-app.MapVacationSettlementEndpoints(); // S68 ADR-033 slice 1a — §21 agreement + D10 resolve + §24 payout-pending
-app.MapTerminationPayoutRequestEndpoints(); // S71 / TASK-7102 — the §26 anmodning record + event (ADR-033 slice 3b, SPRINT-71 R6)
-app.MapSettlementReversalEndpoints();       // S71 / TASK-7102 — operator-authorized settlement reversal (ADR-033 D4/D5, SPRINT-71 R4)
+// ── Health + Endpoint Groups (S111 / TASK-11101: the SAME mapping the --openapi entrypoint uses, so
+//    the generated spec always reflects the exact runtime surface — they can never drift). ──
+ApiEndpoints.MapAll(app, useDbAuth);
 
 app.Run();
 

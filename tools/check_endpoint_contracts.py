@@ -203,6 +203,13 @@ def _normalize(url: str) -> str | None:
     url = re.sub(r"\$\{[^}]*\}", "{}", url)
     # A remaining (unbalanced) `${` is a truncated interpolation prefix -> drop it.
     url = url.split("${", 1)[0]
+    # S111 / TASK-11102 — collapse OpenAPI-style `{name}` path params -> `{}`. The
+    # typed `apiClient.get(pathKey, {params})` call shape passes the SPEC path key
+    # verbatim (e.g. `/reporting-lines/tree/{organisationId}/medarbejdere`), so the
+    # brace form is a literal `{name}`, not a JS `${name}` interpolation. Normalize
+    # it to the same `{}` placeholder the registry uses. (Runs AFTER the `${...}`
+    # collapse, so an already-collapsed `{}` is idempotent.)
+    url = re.sub(r"\{[^}]*\}", "{}", url)
     # Drop a query string (literal `?...`, e.g. `/enheder?organisationId=...`).
     url = url.split("?", 1)[0]
     if not url.startswith("/api/admin/"):
@@ -214,7 +221,11 @@ def _normalize(url: str) -> str | None:
 
 
 def _iter_fe_source_files():
-    """Yield FE .ts/.tsx files, EXCLUDING __tests__/ dirs and *.test.ts(x)."""
+    """Yield FE .ts/.tsx files, EXCLUDING __tests__/ dirs, *.test.ts(x), and the
+    generated OpenAPI types (S111 / TASK-11102 — `src/lib/api-types.ts` holds the
+    spec's path strings as type keys, NOT `apiClient.get` call sites; including it
+    would only pollute the soft `/api/admin/` fragment scan)."""
+    generated_types = FE_SRC / "lib" / "api-types.ts"
     for ext in ("*.ts", "*.tsx"):
         for p in FE_SRC.rglob(ext):
             parts = set(p.parts)
@@ -222,6 +233,8 @@ def _iter_fe_source_files():
                 continue
             name = p.name
             if name.endswith(".test.ts") or name.endswith(".test.tsx"):
+                continue
+            if p == generated_types:
                 continue
             yield p
 

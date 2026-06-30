@@ -22,6 +22,7 @@
 
 import { useState, useCallback, useEffect } from 'react'
 import { apiClient } from '../lib/api'
+import { coerceApiResponse, type Assert, type AssertFieldsInSpec } from '../lib/apiNarrow'
 import type { UnitType } from '../pages/admin/enhedsspor/typeMaps'
 
 /** A unit node (direktion…enhed) beneath an Organisation. `level` is the DERIVED
@@ -79,6 +80,18 @@ export interface ForestResponse {
   forest: ForestMaoNode[]
 }
 
+// S111 / TASK-11102 — compile-time drift guards: every field these FE-strict
+// interfaces read must exist in the matching spec schema. A renamed/removed
+// backend field → `tsc` error here (the S97→S100 "fetchEnheder" drift class).
+export type _ForestDrift = [
+  Assert<AssertFieldsInSpec<ForestResponse, 'StatsTid.Backend.Api.Contracts.ForestResponse'>>,
+  Assert<AssertFieldsInSpec<ForestMaoNode, 'StatsTid.Backend.Api.Contracts.ForestMaoNode'>>,
+  Assert<
+    AssertFieldsInSpec<ForestOrganisationNode, 'StatsTid.Backend.Api.Contracts.ForestOrganisationNode'>
+  >,
+  Assert<AssertFieldsInSpec<ForestUnitNode, 'StatsTid.Backend.Api.Contracts.ForestUnitNode'>>,
+]
+
 /**
  * The unified scoped forest (GET /api/admin/units/forest) for the left
  * org-structure tree. Returns the visibility-bounded MAO roots with their
@@ -94,9 +107,13 @@ export function useForest() {
   const fetchForest = useCallback(async () => {
     setLoading(true)
     setError(null)
-    const result = await apiClient.get<ForestResponse>('/api/admin/units/forest')
+    // S111 / TASK-11102 — typed via the OpenAPI literal path key (no hand-written
+    // `T`). `result.data.forest` is type-checked against the spec envelope (a
+    // renamed `forest` key → `tsc` error here); `coerceApiResponse` re-narrows the
+    // spec-loose element type to the FE-strict `ForestMaoNode[]`.
+    const result = await apiClient.get('/api/admin/units/forest')
     if (result.ok) {
-      setForest(result.data.forest ?? [])
+      setForest(coerceApiResponse<ForestMaoNode[]>(result.data.forest ?? []))
     } else {
       setError(result.error)
     }

@@ -113,6 +113,14 @@ jobs:
       - name: Build
         run: dotnet build StatsTid.sln --no-restore --configuration Release
 
+      - name: Run OpenAPI drift gate (typed-contract — fork B / Phase 0)
+        # Regenerates the OpenAPI spec via the no-DB `--openapi` entrypoint and fails if it
+        # differs from the committed docs/api/openapi.json (parsed-JSON compare). Runs HERE
+        # (not the Python `docs` job) because regeneration needs the .NET SDK, already set up
+        # above. Recovery: `dotnet run --project src/Backend/StatsTid.Backend.Api -- --openapi`
+        # then commit docs/api/openapi.json. The Python convention gate runs in docs-consistency.
+        run: python tools/check_openapi_sync.py
+
       - name: Run unit tests
         run: dotnet test tests/StatsTid.Tests.Unit --no-build -c Release --logger "trx"
 
@@ -227,6 +235,23 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+        working-directory: frontend
+
+      - name: OpenAPI types freshness gate (typed-contract — fork B / Phase 0)
+        # Closes the SECOND drift surface (Step-7a): the spec→TS step. The .NET drift gate
+        # (check_openapi_sync.py, build-and-test) forces the committed openapi.json to match the
+        # backend; THIS forces the committed api-types.ts to match openapi.json. Without it, a dev
+        # who regens the spec but not the types leaves api-types.ts stale → AssertFieldsInSpec
+        # passes against the stale spec while the backend serves the new shape = the S97→S100 bug
+        # class reintroduced one level up. Regenerate in place + fail if it changed.
+        # Recovery: `npm run gen:api` then commit src/lib/api-types.ts.
+        run: npm run gen:api && git diff --exit-code src/lib/api-types.ts
+        working-directory: frontend
+
+      - name: No-`as` / typed-client lint (typed-contract paved road)
+        # Enforces the typed-read hooks (useForest/useSearch/useRoster) carry no `as` cast and no
+        # hand-written `apiClient.get<T>` type arg — the binding must derive from the spec path.
+        run: npm run lint
         working-directory: frontend
 
       - name: Build frontend
@@ -348,3 +373,14 @@ jobs:
         # See tools/check_design_sync.py + PAT-011 (LF-normalized; CI can't auth to claude.ai,
         # so it checks fingerprint==source, not that the upload happened).
         run: python tools/check_design_sync.py
+
+      - name: Run OpenAPI convention gate (typed-contract — fork B / Phase 0)
+        # Hard-fails if a NEW/changed backend operation in the committed docs/api/openapi.json
+        # carries an EMPTY response schema (an untyped Results.Ok(new {...})) or — for a body
+        # verb — no requestBody schema, AND it is not on the grandfather manifest
+        # (tools/openapi-convention-exempt.txt, which only SHRINKS as the retrofit types ops).
+        # The durability keystone: forces every NEW endpoint typed. Pure-Python (reads the
+        # committed spec — no .NET); the .NET drift gate (check_openapi_sync.py) runs in
+        # build-and-test. Complements check_endpoint_contracts.py (FE coverage). See the
+        # typed-API-contract program + the spec≡runtime xUnit gate.
+        run: python tools/check_openapi_convention.py

@@ -1,0 +1,145 @@
+# openapi-convention-exempt.txt — the typed-contract convention grandfather manifest.
+#
+# Each line is an operation ("METHOD /path") that PRE-DATES the S111 typed-contract
+# commitment and is allowed to ship with an empty response/requestBody schema. The gate
+# tools/check_openapi_convention.py reads this list: a NEW or renamed operation that is NOT
+# here and has an empty schema FAILS CI — forcing it to ship typed.
+#
+# THIS LIST SHRINKS, NEVER GROWS. As the retrofit (subsequent phases) types an endpoint,
+# delete its line — removing a line only makes the gate STRICTER (that operation is now
+# enforced). Do NOT add a line to silence a new failure; type the endpoint instead.
+# Regenerate ONLY via `python tools/check_openapi_convention.py --bootstrap` for the one-time
+# creation / an audited re-baseline. Generated from docs/api/openapi.json. See PAT (S111).
+#
+# Lines starting with '#' and blank lines are ignored.
+
+DELETE /api/admin/employee-profiles/{employeeId}
+DELETE /api/admin/entitlement-configs/{configId}
+DELETE /api/admin/organizations/{orgId}
+DELETE /api/admin/reporting-lines/{employeeId}
+DELETE /api/admin/reporting-lines/{employeeId}/acting
+DELETE /api/admin/reporting-lines/{managerId}/vikar
+DELETE /api/admin/units/{id}
+DELETE /api/admin/units/{id}/leaders/{userId}
+DELETE /api/admin/wage-type-mappings
+DELETE /api/agreement-configs/{configId}/entitlements/{entitlementConfigId}
+DELETE /api/projects/{orgId}/select/{projectId}
+DELETE /api/projects/{orgId}/{projectId}
+DELETE /api/reporting-lines/delegate
+GET /api/absences/{employeeId}
+GET /api/admin/audit
+GET /api/admin/employee-profiles/{employeeId}
+GET /api/admin/employees/{employeeId}/birth-date
+GET /api/admin/employees/{employeeId}/employment-end-date
+GET /api/admin/employees/{employeeId}/employment-start-date
+GET /api/admin/employees/{employeeId}/entitlement-eligibility/{entitlementType}
+GET /api/admin/entitlement-configs
+GET /api/admin/entitlement-configs/{configId}
+GET /api/admin/organizations/{orgId}/users
+GET /api/admin/position-overrides
+GET /api/admin/position-overrides/agreement/{agreementCode}/{okVersion}
+GET /api/admin/position-overrides/{overrideId}
+GET /api/admin/reporting-lines/tree/{organisationId}
+GET /api/admin/reporting-lines/tree/{organisationId}/period-status
+GET /api/admin/reporting-lines/{employeeId}
+GET /api/admin/reporting-lines/{managerId}/reports
+GET /api/admin/reporting-lines/{managerId}/vikar
+GET /api/admin/units
+GET /api/admin/users/search
+GET /api/admin/users/{userId}
+GET /api/admin/users/{userId}/roles
+GET /api/admin/wage-type-mappings
+GET /api/admin/wage-type-mappings/agreement/{agreementCode}/{okVersion}
+GET /api/agreement-configs
+GET /api/agreement-configs/{agreementCode}/{okVersion}
+GET /api/agreement-configs/{configId}
+GET /api/agreement-configs/{configId}/entitlements
+GET /api/approval/by-month
+GET /api/approval/pending
+GET /api/approval/team-overview
+GET /api/approval/{employeeId}
+GET /api/approval/{employeeId}/allocation-breakdown
+GET /api/balance/{employeeId}/series
+GET /api/balance/{employeeId}/summary
+GET /api/balance/{employeeId}/year-overview
+GET /api/compliance/{employeeId}/compensatory-rest
+GET /api/compliance/{employeeId}/period
+GET /api/config/constraints
+GET /api/config/{orgId}
+GET /api/config/{orgId}/absence-types
+GET /api/config/{orgId}/profile/{agreementCode}/{okVersion}
+GET /api/config/{orgId}/profile/{agreementCode}/{okVersion}/history
+GET /api/flex-balance/{employeeId}
+GET /api/overtime/{employeeId}/balance
+GET /api/overtime/{employeeId}/compensation-choice
+GET /api/overtime/{employeeId}/governance
+GET /api/overtime/{employeeId}/pre-approvals
+GET /api/projects/{orgId}
+GET /api/projects/{orgId}/available
+GET /api/reporting-lines/delegate
+GET /api/skema/{employeeId}/month
+GET /api/time-entries/{employeeId}
+GET /api/vacation-settlements/payout-pending
+GET /health
+POST /api/admin/employees/{employeeId}/settlement-reversal
+POST /api/admin/employees/{employeeId}/termination-payout-request
+POST /api/admin/entitlement-configs
+POST /api/admin/organizations
+POST /api/admin/position-overrides
+POST /api/admin/position-overrides/{overrideId}/activate
+POST /api/admin/position-overrides/{overrideId}/deactivate
+POST /api/admin/reporting-lines
+POST /api/admin/reporting-lines/import
+POST /api/admin/reporting-lines/{employeeId}/acting
+POST /api/admin/reporting-lines/{employeeId}/remove
+POST /api/admin/reporting-lines/{managerId}/vikar
+POST /api/admin/roles/grant
+POST /api/admin/roles/revoke
+POST /api/admin/units/{id}/leaders
+POST /api/admin/users
+POST /api/admin/wage-type-mappings
+POST /api/agreement-configs
+POST /api/agreement-configs/{configId}/archive
+POST /api/agreement-configs/{configId}/clone
+POST /api/agreement-configs/{configId}/entitlements
+POST /api/agreement-configs/{configId}/publish
+POST /api/approval/submit
+POST /api/approval/{periodId}/approve
+POST /api/approval/{periodId}/employee-approve
+POST /api/approval/{periodId}/reject
+POST /api/approval/{periodId}/reopen
+POST /api/auth/login
+POST /api/config/{orgId}/absence-types/visibility
+POST /api/overtime/pre-approval
+POST /api/overtime/{employeeId}/compensate
+POST /api/projects/{orgId}
+POST /api/projects/{orgId}/select/{projectId}
+POST /api/reporting-lines/delegate
+POST /api/skema/{employeeId}/save
+POST /api/time-entries
+POST /api/vacation-settlements/{employeeId}/{entitlementType}/{entitlementYear}/reconcile-payout
+POST /api/vacation-settlements/{employeeId}/{entitlementType}/{entitlementYear}/resolve
+POST /api/vacation-transfer-agreements/{employeeId}
+PUT /api/admin/employee-profiles/{employeeId}
+PUT /api/admin/employees/{employeeId}/birth-date
+PUT /api/admin/employees/{employeeId}/employment-end-date
+PUT /api/admin/employees/{employeeId}/employment-start-date
+PUT /api/admin/employees/{employeeId}/entitlement-eligibility/{entitlementType}
+PUT /api/admin/entitlement-configs/{configId}
+PUT /api/admin/organizations/{orgId}
+PUT /api/admin/organizations/{orgId}/move
+PUT /api/admin/position-overrides/{overrideId}
+PUT /api/admin/units/{id}
+PUT /api/admin/units/{id}/move
+PUT /api/admin/users/{userId}
+PUT /api/admin/users/{userId}/unit
+PUT /api/admin/wage-type-mappings
+PUT /api/agreement-configs/{configId}
+PUT /api/agreement-configs/{configId}/entitlements/{entitlementConfigId}
+PUT /api/config/{orgId}/profile/{agreementCode}/{okVersion}
+PUT /api/overtime/pre-approval/{id}/approve
+PUT /api/overtime/pre-approval/{id}/reject
+PUT /api/overtime/{employeeId}/compensation-choice
+PUT /api/projects/{orgId}/{projectId}
+PUT /api/skema/{employeeId}/row-preferences
+PUT /api/vacation-transfer-agreements/{employeeId}

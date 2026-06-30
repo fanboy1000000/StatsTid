@@ -48,8 +48,9 @@ describe('useSearch', () => {
       await vi.runAllTimersAsync()
     })
 
-    // The URL is the inline literal prefix with q interpolated (lint normalizes the query off).
-    expect(mockGet).toHaveBeenCalledWith('/api/admin/search?q=vej')
+    // S111 / TASK-11102 — typed call: the path KEY + the structured `query` shape
+    // (apiClient appends `?q=…`, URL-encoding internally).
+    expect(mockGet).toHaveBeenCalledWith('/api/admin/search', { query: { q: 'vej' } })
     expect(result.current.results.units).toHaveLength(1)
     expect(result.current.results.people).toHaveLength(1)
     expect(result.current.results.units[0].organisationId).toBe('STY02')
@@ -71,7 +72,7 @@ describe('useSearch', () => {
     expect(result.current.results.people).toHaveLength(0)
   })
 
-  it('url-encodes the query token in the inline URL', async () => {
+  it('passes the raw query token in the structured query (apiClient url-encodes)', async () => {
     mockGet.mockResolvedValue({ ok: true, data: { units: [], people: [], unitsTotal: 0, peopleTotal: 0 } } satisfies ApiResult<SearchResponse>)
     const { result } = renderHook(() => useSearch())
 
@@ -79,6 +80,7 @@ describe('useSearch', () => {
     await act(async () => {
       await vi.runAllTimersAsync()
     })
-    expect(mockGet).toHaveBeenCalledWith('/api/admin/search?q=a%20b')
+    // The hook passes the RAW token; URL-encoding (`a b` → `a%20b`) is apiClient's job.
+    expect(mockGet).toHaveBeenCalledWith('/api/admin/search', { query: { q: 'a b' } })
   })
 })
