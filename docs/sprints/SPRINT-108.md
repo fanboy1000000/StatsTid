@@ -3,12 +3,12 @@
 | Field | Value |
 |-------|-------|
 | **Sprint** | 108 |
-| **Status** | complete (pending push + CI-verify) |
+| **Status** | complete — CI GREEN `28408033942` |
 | **Start Date** | 2026-06-29 |
 | **End Date** | 2026-06-30 |
 | **Orchestrator Approved** | yes |
 | **Build Verified** | yes — `dotnet build` + `npm run build` 0/0 |
-| **Test Verified** | yes — FE 601 vitest green (FE-only; backend regression 1149 unchanged → CI-carried); 6s/e2e CI-verify on push |
+| **Test Verified** | yes — **CI GREEN `28408033942` (all 7 jobs; frontend-build + e2e + smoke + the unchanged regression 1149)**; FE 601 vitest local |
 
 ## Sprint Goal
 Make the S107 merged page's STRUCTURE editable (owner-chosen structure-then-people split): the **Unit drawer** (create child unit / rename / move / delete + leader designate-remove) + the **org/MAO mutations** (Organisation create/rename, MAO-create, Organisation move/delete) — wired to the EXISTING endpoints (S104 `UnitEndpoints` + S98/S99 org mutations in `AdminEndpoints`), **capability-gated to the LIVE floors** (unit CRUD/leaders = LocalHR; Organisation create/rename = LocalAdmin; MAO-create + Organisation move/delete = GlobalAdmin), the backend re-checking every mutation. This is the **S91 dead-button discipline IN REVERSE** (wire-before-render — like S100 inverted S99): the structure-mutation affordances S107 asserted ABSENT now render (gated), and the S107 no-mutation vitests for the STRUCTURE surface INVERT (RED-on-old). **People mutations (the Person drawer, person-unit-assign, cross-unit "Ret", vikar-edit) + the CUTOVER stay S109.** FE-only (no new backend — the mutations exist).
