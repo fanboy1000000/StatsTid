@@ -3,12 +3,12 @@
 | Field | Value |
 |-------|-------|
 | **Sprint** | 109 |
-| **Status** | complete (pending push + CI-verify) |
+| **Status** | complete — CI GREEN `28447245606` |
 | **Start Date** | 2026-06-30 |
 | **End Date** | 2026-06-30 |
 | **Orchestrator Approved** | yes |
 | **Build Verified** | yes — `dotnet build` + `npm run build` 0/0 |
-| **Test Verified** | yes — FE 528 vitest + the merged-page e2e green (FE-only; backend regression 1149 unchanged → CI-carried); 6s/e2e CI-verify on push |
+| **Test Verified** | yes — **CI GREEN `28447245606` (all 7 jobs incl. the merged-page E2E)**; FE 528 vitest + regression 1149 + e2e. (The 1st push CI [`28447…`'s predecessor] caught 2 ambiguous merged-page Playwright locators — test-only, fixed `b813628` after a LOCAL e2e run [the page itself was correct], re-run green.) |
 
 ## Sprint Goal
 The FINAL feature sprint of the Enhedsspor program (owner chose one sprint: people editing + cutover). Make the merged page's PEOPLE editable + RETIRE the two old pages: the **Person drawer** (create/edit — porting the existing `EditPersonDrawer`/`useEditPerson` + the `editPerson/` ApproverSection/VikarSection cores onto the merged page, + the unit `Placering` field + apex/promote) with the **two-endpoint Organisation-change routing** (the load-bearing watch-item), the **Nærmeste-leder** (reporting/approver) + **vikar-edit**, cross-unit **"Ret"** + leaderless **"Tildel leder"**; then the **CUTOVER** — redirect + retire `/admin/ledelseslinjer` + `/global/organisation`, collapse to ONE sidebar entry, a **capability-parity audit**, and resolve the deferred S108 **MAO scope-gate**. This INVERTS the S107/S108 people-mutation no-button assertions (the S91 discipline in reverse, completing it). FE-only (the mutations exist). On close the merged "Organisation & medarbejdere" page is the single admin surface — the program's goal.
