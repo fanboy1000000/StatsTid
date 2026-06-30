@@ -33,7 +33,14 @@ export interface UnitMutationResult {
   error: string
 }
 
-type MutationContext = 'create' | 'rename' | 'move' | 'delete' | 'leader'
+/** S109 / TASK-10902 — the same-Organisation person unit-assign result, carrying
+    the new `users.version` (the `/unit` endpoint bumps it) so the caller can thread
+    read-your-write into a follow-up edit. `version` is null on failure. */
+export interface AssignUnitResult extends UnitMutationResult {
+  version: number | null
+}
+
+type MutationContext = 'create' | 'rename' | 'move' | 'delete' | 'leader' | 'assign'
 
 const success = (): UnitMutationResult => ({ ok: true, status: 0, error: '' })
 
@@ -54,7 +61,9 @@ function messageFor(status: number, context: MutationContext): string {
     case 422:
       return context === 'leader'
         ? 'En leder skal være medarbejder i den enhed, vedkommende leder.'
-        : 'Ugyldig placering for enheden.'
+        : context === 'assign'
+          ? 'Den valgte placering er ugyldig (enheden er slettet eller hører til en anden organisation).'
+          : 'Ugyldig placering for enheden.'
     case 400:
       return 'Ugyldige oplysninger. Tjek felterne og prøv igen.'
     default:
@@ -139,5 +148,29 @@ export function useUnitMutations() {
     [],
   )
 
-  return { createUnit, renameUnit, moveUnit, deleteUnit, designateLeader, removeLeader }
+  // S109 / TASK-10902 — the SAME-Organisation person unit-assign (PUT
+  // /api/admin/users/{userId}/unit, If-Match on users.version). `unitId` null =
+  // home directly at the Organisation. A target unit in a DIFFERENT Organisation
+  // is a transfer and is 422'd here by design (it must go through PUT
+  // /users/{id} with primaryOrgId — the placement router never sends a cross-Org
+  // unit here). Returns the new users.version for read-your-write threading.
+  const assignUserUnit = useCallback(
+    async (userId: string, unitId: string | null, version: number): Promise<AssignUnitResult> => {
+      const result = await apiFetchWithEtag<{ userId: string; unitId: string | null; primaryOrgId: string; version: number }>(
+        `/api/admin/users/${encodeURIComponent(userId)}/unit`,
+        {
+          method: 'PUT',
+          headers: { 'If-Match': formatVersionAsIfMatch(version) },
+          body: JSON.stringify({ unitId }),
+        },
+      )
+      if (result.ok) {
+        return { ok: true, status: result.data.status, error: '', version: result.data.data.version }
+      }
+      return { ...fail(result.status, 'assign'), version: null }
+    },
+    [],
+  )
+
+  return { createUnit, renameUnit, moveUnit, deleteUnit, designateLeader, removeLeader, assignUserUnit }
 }

@@ -325,6 +325,30 @@
   color: var(--amber-text);
 }
 
+/* SPRINT-109 / TASK-10903 — the leaderless-note action ("Tildel leder"). */
+.noteText {
+  flex: 1;
+  min-width: 0;
+}
+
+.noteAction {
+  flex-shrink: 0;
+  font-size: 11.5px;
+  font-weight: var(--font-weight-semibold);
+  color: var(--amber-text-strong);
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  font-family: var(--font-family);
+  text-decoration: underline;
+  white-space: nowrap;
+}
+
+.noteAction:hover {
+  color: var(--amber-text);
+}
+
 /* ── shared row bits ── */
 .caret {
   width: 16px;
@@ -402,6 +426,24 @@
 }
 
 .openLink:hover {
+  text-decoration: underline;
+}
+
+/* SPRINT-109 — the per-row people-edit affordance ("Rediger ›"). */
+.personEdit {
+  font-size: 11.5px;
+  color: var(--color-primary);
+  flex-shrink: 0;
+  border: none;
+  background: none;
+  padding: 0;
+  margin-left: 8px;
+  cursor: pointer;
+  font-family: var(--font-family);
+  white-space: nowrap;
+}
+
+.personEdit:hover {
   text-decoration: underline;
 }
 
@@ -504,8 +546,143 @@
   padding: 1px 7px;
 }
 
+/* SPRINT-109 / TASK-10903 — the cross-unit "Ret" inline action (amber, underlined). */
+.retLink {
+  flex-shrink: 0;
+  font-size: 11.5px;
+  font-weight: var(--font-weight-semibold);
+  color: var(--amber-text-strong);
+  border: none;
+  background: none;
+  padding: 0;
+  margin-left: 2px;
+  cursor: pointer;
+  font-family: var(--font-family);
+  text-decoration: underline;
+  white-space: nowrap;
+}
+
+.retLink:hover {
+  color: var(--amber-text);
+}
+
 .reportCount {
   flex-shrink: 0;
   font-size: 11.5px;
   color: var(--color-text-secondary);
+}
+
+/* ── SPRINT-109 / TASK-10904 — the ported period-settlement overview ── */
+.settlement {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.settleTiles {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.settleTile {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 150px;
+  padding: 11px 16px;
+  border: var(--border-width) solid var(--color-border);
+  border-left-width: 3px;
+  border-radius: var(--border-radius);
+  background: var(--color-white);
+  cursor: pointer;
+  font-family: var(--font-family);
+  text-align: left;
+}
+
+.settleTile:hover {
+  background: var(--surface-detail);
+}
+
+.settleTileWarn {
+  border-left-color: var(--color-warning);
+}
+
+.settleTileAlert {
+  border-left-color: var(--color-error);
+}
+
+.settleTileOn {
+  background: var(--color-gray-100);
+  border-color: var(--color-border-strong);
+}
+
+.settleLabel {
+  font-size: 11.5px;
+  font-weight: var(--font-weight-bold);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--color-text-secondary);
+}
+
+.settleValue {
+  font-size: 22px;
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.1;
+}
+
+.settleDetail {
+  font-size: 11.5px;
+  color: var(--color-text-secondary);
+}
+
+.orphanCard {
+  border: var(--border-width) solid var(--amber-border-row);
+  border-radius: var(--border-radius);
+  background: var(--amber-bg-row);
+  overflow: hidden;
+}
+
+.orphanHead {
+  padding: 9px 16px;
+  font-size: 12.5px;
+  font-weight: var(--font-weight-semibold);
+  color: var(--amber-text-strong);
+  border-bottom: var(--border-width) solid var(--amber-border-row);
+}
+
+.orphanList {
+  display: flex;
+  flex-direction: column;
+}
+
+.orphanRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  border-bottom: var(--border-width) solid var(--amber-border-note);
+}
+
+.orphanRow:last-child {
+  border-bottom: none;
+}
+
+.orphanAssign {
+  flex-shrink: 0;
+  font-size: 11.5px;
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-primary);
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  font-family: var(--font-family);
+  text-decoration: underline;
+  white-space: nowrap;
+}
+
+.orphanAssign:hover {
+  color: var(--color-primary-hover);
 }

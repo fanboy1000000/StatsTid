@@ -14,7 +14,6 @@ import { MyPeriods } from './pages/approval/MyPeriods'
 // The old ApprovalDashboard was deleted in S88 (P2 parity reached); /godkend/godkendelser
 // redirects here.
 import { TeamOversigt } from './pages/approval/TeamOversigt'
-import { OrganisationPage } from './pages/admin/OrganisationPage'
 import { RoleManagement } from './pages/admin/RoleManagement'
 import { ProjectManagement } from './pages/admin/ProjectManagement'
 import { ConfigManagement } from './pages/config/ConfigManagement'
@@ -23,7 +22,6 @@ import { AgreementConfigEditor } from './pages/admin/AgreementConfigEditor'
 import { PositionOverrideManagement } from './pages/admin/PositionOverrideManagement'
 import { WageTypeMappingManagement } from './pages/admin/WageTypeMappingManagement'
 import { AuditLogView } from './pages/admin/AuditLogView'
-import { MedarbejderAdministration } from './pages/admin/MedarbejderAdministration'
 import { OrganisationOgMedarbejdere } from './pages/admin/OrganisationOgMedarbejdere'
 import { DelegationPage } from './pages/delegation/DelegationPage'
 import './styles/tokens.css'
@@ -75,16 +73,17 @@ function AppRoutes() {
           {/* === Administration (mixed: LocalHR and LocalAdmin) === */}
           {/* LocalHR routes */}
           <Route element={<RequireRole minRole="LocalHR" />}>
-            {/* S91 / TASK-9103: the old UserManagement list ("Medarbejdere") was
-                removed; HR keeps employee management on the surviving tree page,
-                opened to LocalHR here (a deliberate P7 expansion). */}
-            <Route path="admin/ledelseslinjer" element={<MedarbejderAdministration />} />
-            {/* S107 / TASK-10701 (Enhedsspor Phase 3b): the merged
-                "Organisation & medarbejdere" page (VIEW half) ships on a NEW
-                route ALONGSIDE the two old pages (admin/ledelseslinjer +
-                global/organisation). The redirect + retire is the S108 cutover —
-                do NOT touch the old routes here. */}
+            {/* S109 / TASK-10904 (Enhedsspor cutover): the merged
+                "Organisation & medarbejdere" page is now THE single admin surface.
+                It is feature-complete (people editing + structure + settlement
+                overview), so the two old pages are retired and their routes redirect
+                here: admin/ledelseslinjer (the old "Medarbejder administration") and
+                global/organisation (the old Global → Organisation). */}
             <Route path="admin/organisation-medarbejdere" element={<OrganisationOgMedarbejdere />} />
+            <Route
+              path="admin/ledelseslinjer"
+              element={<Navigate to="/admin/organisation-medarbejdere" replace />}
+            />
             <Route path="admin/auditlog" element={<AuditLogView />} />
           </Route>
           {/* LocalAdmin routes within Administration */}
@@ -104,7 +103,12 @@ function AppRoutes() {
             <Route path="global/overenskomster" element={<AgreementConfigList />} />
             <Route path="global/overenskomster/new" element={<AgreementConfigEditor />} />
             <Route path="global/overenskomster/:configId" element={<AgreementConfigEditor />} />
-            <Route path="global/organisation" element={<OrganisationPage />} />
+            {/* S109 / TASK-10904 (Enhedsspor cutover): the Global → Organisation page
+                is retired; its route redirects to the merged admin surface. */}
+            <Route
+              path="global/organisation"
+              element={<Navigate to="/admin/organisation-medarbejdere" replace />}
+            />
             <Route path="global/loenartstilknytning" element={<WageTypeMappingManagement />} />
             <Route path="global/entitlement-configs" element={<Navigate to="/global/overenskomster" replace />} />
           </Route>

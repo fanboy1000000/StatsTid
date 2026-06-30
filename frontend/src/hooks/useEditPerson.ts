@@ -75,6 +75,14 @@ export interface EditSaveInput {
   childSickDirty: boolean
   /** True when the actor may write the HR sections (LocalHR+). */
   isHr: boolean
+  /**
+   * S109 / TASK-10902 — the CROSS-Organisation TRANSFER's landing unit, threaded
+   * into the stamdata `PUT /users/{id}` body. Present (incl. `null` = home at the
+   * new Organisation) ONLY on a transfer; the placement router (usePlacement)
+   * leaves it `undefined` on a same-Organisation save so the unit is changed via
+   * `PUT /users/{id}/unit` instead. On a non-transfer PUT the backend ignores it.
+   */
+  unitId?: string | null
 }
 
 export interface StaleConflict {
@@ -90,6 +98,11 @@ export interface SaveEditResult {
   // Populated when the users/profile PUT hit a 412 stale-version — drives the
   // "Genindlæs" banner.
   staleConflict: StaleConflict | null
+  // S109 / TASK-10902 — the FIRST failed section's server message (e.g. the 422
+  // cross-Organisation manager-with-active-reports transfer block on the stamdata
+  // PUT). null when ok. The placement router surfaces it as the drawer's error so
+  // the real backend reason reaches the user.
+  error: string | null
 }
 
 export function useEditPerson() {
@@ -128,6 +141,7 @@ export function useEditPerson() {
       resetSections()
       let live: EditLiveState = startLive
       let staleConflict: StaleConflict | null = null
+      let firstError: string | null = null
       let ok = true
 
       // (1) users PUT — admin-strict If-Match.
@@ -140,6 +154,10 @@ export function useEditPerson() {
             email: input.stamdata.email || undefined,
             primaryOrgId: input.stamdata.primaryOrgId,
             agreementCode: input.stamdata.agreementCode,
+            // S109 / TASK-10902 — thread the transfer's landing unit ONLY when the
+            // caller supplied it (a cross-Organisation transfer); omitted on a
+            // same-Organisation save (the unit is changed via PUT /users/{id}/unit).
+            ...(input.unitId !== undefined ? { unitId: input.unitId } : {}),
           },
           live.user.etag,
         )
@@ -154,13 +172,15 @@ export function useEditPerson() {
             actual: e.body?.actualVersion,
           }
         }
-        mark('stamdata', 'failed', e instanceof Error ? e.message : String(e))
+        const msg = e instanceof Error ? e.message : String(e)
+        if (firstError === null) firstError = msg
+        mark('stamdata', 'failed', msg)
         // A 412 stale on the primary row means every later If-Match is also
         // stale — stop and surface the banner so HR re-reads. (Matches the
         // UserManagement short-circuit: the catch fell through to the banner.)
         if (e.status === 412) {
           setSaving(false)
-          return { ok, live, staleConflict }
+          return { ok, live, staleConflict, error: firstError }
         }
       }
 
@@ -189,7 +209,9 @@ export function useEditPerson() {
               actual: e.body?.actualVersion,
             }
           }
-          mark('profile', 'failed', e instanceof Error ? e.message : String(e))
+          const msg = e instanceof Error ? e.message : String(e)
+          if (firstError === null) firstError = msg
+          mark('profile', 'failed', msg)
         }
       }
 
@@ -240,7 +262,9 @@ export function useEditPerson() {
           mark('birthDate', 'committed')
         } catch (err) {
           ok = false
-          mark('birthDate', 'failed', err instanceof Error ? err.message : String(err))
+          const msg = err instanceof Error ? err.message : String(err)
+          if (firstError === null) firstError = msg
+          mark('birthDate', 'failed', msg)
         }
       }
 
@@ -267,7 +291,9 @@ export function useEditPerson() {
           mark('employmentStart', 'committed')
         } catch (err) {
           ok = false
-          mark('employmentStart', 'failed', err instanceof Error ? err.message : String(err))
+          const msg = err instanceof Error ? err.message : String(err)
+          if (firstError === null) firstError = msg
+          mark('employmentStart', 'failed', msg)
         }
       }
 
@@ -308,12 +334,14 @@ export function useEditPerson() {
               // Re-read failed too; the recorded message still tells HR to retry.
             }
           }
-          mark('childSick', 'failed', e instanceof Error ? e.message : String(e))
+          const msg = e instanceof Error ? e.message : String(e)
+          if (firstError === null) firstError = msg
+          mark('childSick', 'failed', msg)
         }
       }
 
       setSaving(false)
-      return { ok, live, staleConflict }
+      return { ok, live, staleConflict, error: firstError }
     },
     [
       updateUser,

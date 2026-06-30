@@ -225,7 +225,8 @@ describe('Capability-gating per role (TASK-10803) — the live floors', () => {
   // LocalHR: UNIT affordances only; NO org mutations.
   it('LocalHR sees the unit create but NO org rename/move/delete', () => {
     auth.role = 'LocalHR'
-    // On a MAO: the "+ Organisation" create is DISABLED (below the LocalAdmin floor)…
+    // On a MAO: the "+ Organisation" create is DISABLED (below the GlobalAdmin floor —
+    // the MAO-node create scopes the MAO; S109 per-node gate)…
     const { unmount } = renderPanel(MAO)
     expect((screen.getByTestId('unit-action-create') as HTMLButtonElement).disabled).toBe(true)
     expect(screen.queryByTestId('org-action-rename')).toBeNull()
@@ -239,14 +240,18 @@ describe('Capability-gating per role (TASK-10803) — the live floors', () => {
     expect(screen.queryByTestId('org-action-delete')).toBeNull()
   })
 
-  // LocalAdmin: + org create/rename; NOT move/delete (those are GlobalAdmin).
-  it('LocalAdmin adds org create + rename, but NOT move/delete', () => {
+  // LocalAdmin: owns the Organisation-node "Omdøb" (their scope); the MAO-node
+  // create + rename scope the MAO → GlobalAdmin (S109 per-node gate; no dead button).
+  it('LocalAdmin owns the Org-node rename, but NOT the MAO-node create/rename or move/delete', () => {
     auth.role = 'LocalAdmin'
     const { unmount } = renderPanel(MAO)
-    expect((screen.getByTestId('unit-action-create') as HTMLButtonElement).disabled).toBe(false) // org-create enabled
-    expect(screen.getByTestId('org-action-rename')).toBeDefined()
+    // The MAO-node "+ Organisation" create scopes the MAO → DISABLED for a scoped
+    // LocalAdmin; the MAO-node "Omdøb" is GlobalAdmin → ABSENT (no dead button).
+    expect((screen.getByTestId('unit-action-create') as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.queryByTestId('org-action-rename')).toBeNull() // MAO rename = GlobalAdmin
     expect(screen.queryByTestId('org-action-delete')).toBeNull() // GlobalAdmin-only
     unmount()
+    // On an Organisation the LocalAdmin DOES own "Omdøb" (it is their scope).
     renderPanel(ORG)
     expect(screen.getByTestId('org-action-rename')).toBeDefined()
     expect(screen.queryByTestId('org-action-move')).toBeNull() // GlobalAdmin-only

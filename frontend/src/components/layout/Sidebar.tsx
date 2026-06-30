@@ -34,11 +34,10 @@ const tabGroups: TabGroup[] = [
   {
     prefix: '/admin',
     items: [
-      { label: 'Medarbejder administration', to: '/admin/ledelseslinjer', minRole: 'LocalHR' },
-      // S107 / TASK-10701: temporary LocalHR entry so the merged "Organisation &
-      // medarbejdere" page (Enhedsspor VIEW half) is reachable during the
-      // S107→S108 interim. The two old entries (Medarbejder administration above,
-      // Global → Organisation) stay until the S108 cutover collapses to one.
+      // S109 / TASK-10904 (Enhedsspor cutover): the merged "Organisation &
+      // medarbejdere" page is now THE single admin surface (it replaced both the old
+      // "Medarbejder administration" [/admin/ledelseslinjer] and the Global →
+      // Organisation [/global/organisation] entries, which now redirect here).
       { label: 'Organisation & medarbejdere', to: '/admin/organisation-medarbejdere', minRole: 'LocalHR' },
       { label: 'Audit log', to: '/admin/auditlog', minRole: 'LocalHR' },
       { label: 'Projekter', to: '/admin/projekter', minRole: 'LocalAdmin' },
@@ -56,7 +55,9 @@ const tabGroups: TabGroup[] = [
     prefix: '/global',
     items: [
       { label: 'Overenskomster', to: '/global/overenskomster', minRole: 'GlobalAdmin' },
-      { label: 'Organisation', to: '/global/organisation', minRole: 'GlobalAdmin' },
+      // S109 / TASK-10904 (Enhedsspor cutover): the Global → Organisation entry is
+      // retired; org management now lives on "Organisation & medarbejdere" under
+      // Administration (the /global/organisation route redirects there).
       { label: 'Lønartstilknytning', to: '/global/loenartstilknytning', minRole: 'GlobalAdmin' },
     ],
   },

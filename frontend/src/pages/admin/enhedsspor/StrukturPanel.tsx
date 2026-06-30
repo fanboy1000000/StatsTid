@@ -28,6 +28,7 @@ import { Button, useToast } from '../../../components/ui'
 import { useAuth } from '../../../contexts/AuthContext'
 import { hasMinRole } from '../../../lib/roles'
 import { useUnitMutations } from '../../../hooks/useUnitMutations'
+import { useOrgUsers, type WithEtag, type User } from '../../../hooks/useAdmin'
 import type { ForestMaoNode } from '../../../hooks/useForest'
 import type {
   RosterResponse,
@@ -45,6 +46,13 @@ import type { SelectedNode } from './OrgStructureTree'
 import { UnitDeleteConfirm, UnitDrawer, UnitMoveDialog } from './UnitDrawer'
 import { useOrgMutations } from '../../../hooks/useOrgMutations'
 import { OrgCreateDialog, OrgDeleteDialog, OrgMoveDialog, OrgRenameDialog } from './OrgStructureDialogs'
+import { PersonDrawer } from './PersonDrawer'
+import { RetLeaderPicker, type RetLeaderOption } from './RetLeaderPicker'
+import { orgsFromForest } from './personDrawerData'
+import { useReportingLines } from '../../../hooks/useReportingLines'
+import { formatVersionAsIfMatch } from '../../../lib/etag'
+import type { LifecycleContext } from '../editPerson/LifecycleSections'
+import { InlineApproverControl } from '../editPerson/InlineApproverControl'
 import { CHILD, LABEL, ORD, type UnitType } from './typeMaps'
 import styles from './StrukturPanel.module.css'
 
@@ -95,6 +103,11 @@ interface StrukturPanelProps {
 }
 
 const MONTHS_DA = ['jan', 'feb', 'mar', 'apr', 'maj', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec']
+
+// SPRINT-109 / TASK-10904 — the ported period-settlement copy (verbatim from the
+// retired MedarbejderAdministration). The reporting period is not served this
+// phase, so the label is the same hard-coded literal it carried there.
+const PERIOD_LABEL = 'Maj 2026'
 
 function formatDate(iso: string | null): string {
   if (!iso) return ''
@@ -162,10 +175,33 @@ type RenderNode =
   | { t: 'medHeader'; key: string; unitId: string; depth: number; count: number; closed: boolean }
   | { t: 'leader'; key: string; row: RosterRow; depth: number; reportCount: number; collapsed: boolean; hasReports: boolean; coveringNames: string[] }
   | { t: 'employee'; key: string; row: RosterRow; depth: number; variant: 'report' | 'flat' | 'external'; externalLeaderName?: string; coveringNames: string[] }
-  | { t: 'note'; key: string; depth: number; text: string }
+  | { t: 'note'; key: string; depth: number; text: string; unit: StrukturNode }
 
 function indent(depth: number, extra = 0): number {
   return 14 + depth * 20 + extra
+}
+
+// SPRINT-109 / TASK-10903 — the cross-unit "Ret" failure messages. The reassign
+// hits POST /api/admin/reporting-lines (the same endpoint the drawer's
+// ApproverSection uses); the backend re-checks the scope/cycle/concurrency, so we
+// map the honest statuses (412 stale edge / 409 already-assigned / 422+400
+// scope-or-cycle) to user-facing Danish.
+function retMessageFor(status: number): string {
+  switch (status) {
+    case 412:
+      return 'Ledelseslinjen er ændret af en anden. Genindlæs og prøv igen.'
+    case 409:
+      return 'Der findes allerede en godkender. Genindlæs og prøv igen.'
+    case 400:
+    case 422:
+      return 'Godkenderen skal være i samme organisation og må ikke skabe en cyklus.'
+    case 403:
+      return 'Du har ikke rettigheder til denne handling.'
+    case 404:
+      return 'Medarbejderen findes ikke længere. Genindlæs siden.'
+    default:
+      return 'Noget gik galt. Prøv igen.'
+  }
 }
 
 export function StrukturPanel({
@@ -191,6 +227,12 @@ export function StrukturPanel({
   const [medClosed, setMedClosed] = useState<Record<string, boolean>>({})
   const [lCollapse, setLCollapse] = useState<Record<string, boolean>>({})
   const [showPeople, setShowPeople] = useState(true)
+  // SPRINT-109 / TASK-10904 — the ported period-settlement filter (the
+  // MedarbejderAdministration status tiles). 'none' = no filter; 'indsend' = OPEN
+  // (not-submitted, non-orphan) people; 'godkend' = managers with a pending
+  // (SUBMITTED-awaiting-approval) period. Scoped to the selected Organisation's
+  // loaded roster; click-to-filter narrows the Struktur people.
+  const [settlementFilter, setSettlementFilter] = useState<'none' | 'indsend' | 'godkend'>('none')
 
   // ── SPRINT-108 / TASK-10803 — the capability-gating spine. The unit
   // affordances render ONLY for LocalHR+ (the LIVE S104 floor); the backend is
@@ -204,24 +246,58 @@ export function StrukturPanel({
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
 
-  // ── SPRINT-108 / TASK-10802 — the ORG / MAO mutation gates + state. The floors
-  // differ from the unit floor (LocalHR): org create/rename = LocalAdmin; org
-  // move/delete = GlobalAdmin. Any actor at these floors is by definition also
-  // ≥ LocalHR, so they ride inside the canEditUnits action row. The FE gate is UX —
-  // the backend re-checks the floor on every call (AdminEndpoints org mutations).
-  const canCreateOrg = hasMinRole(role, 'LocalAdmin')
-  const canRenameOrg = hasMinRole(role, 'LocalAdmin')
-  const canMoveOrg = hasMinRole(role, 'GlobalAdmin')
-  const canDeleteOrg = hasMinRole(role, 'GlobalAdmin')
+  // ── SPRINT-108/109 — the ORG / MAO mutation gates + state. PER-NODE-KIND
+  // (S109 / TASK-10904): the MAO-node "+ Organisation" create + the MAO-node "Omdøb"
+  // both scope-check the MAO on the backend (ValidateOrgAccessAsync(MAO)) → a scoped
+  // LocalAdmin has NO MAO scope → those would be DEAD buttons. So they gate by
+  // GlobalAdmin. The Organisation-node "Omdøb" stays LocalAdmin (a scoped LocalAdmin
+  // owns their Organisation); org move/delete = GlobalAdmin. The node-aware split
+  // (canCreateOrg / canRenameOrg) is finalised once selectedNode is known (below,
+  // after `isMao`). The FE gate is UX — the backend re-checks the floor on every call.
+  const isGlobalAdminRole = hasMinRole(role, 'GlobalAdmin')
+  const isLocalAdminRole = hasMinRole(role, 'LocalAdmin')
+  const canMoveOrg = isGlobalAdminRole
+  const canDeleteOrg = isGlobalAdminRole
   const orgMutations = useOrgMutations()
   const [orgAction, setOrgAction] = useState<OrgAction>(null)
   const [orgBusy, setOrgBusy] = useState(false)
   const [orgError, setOrgError] = useState<string | null>(null)
 
+  // ── SPRINT-109 / TASK-10901/10902 — the PEOPLE-mutation surface (the S107/S108
+  // inversion completes here). The people-edit floor is LocalHR (== canEditUnits);
+  // the backend re-checks every person mutation. The drawer routes its save through
+  // the 4-case usePlacement wrapper. The org list + Placering options derive from
+  // the forest; a RosterRow is not a full User → fetchUser supplies the edit etag.
+  const organizations = useMemo(() => orgsFromForest(forest), [forest])
+  const { fetchUser } = useOrgUsers('')
+  const { assignManager } = useReportingLines()
+  const [personDrawer, setPersonDrawer] = useState<
+    | { mode: 'create'; orgId: string; unitId: string | null }
+    | { mode: 'edit'; row: RosterRow }
+    | null
+  >(null)
+  const [editUser, setEditUser] = useState<WithEtag<User> | null>(null)
+  const [personLoading, setPersonLoading] = useState(false)
+
+  // ── SPRINT-109 / TASK-10903 — cross-unit "Ret" picker state. Opened only when a
+  // cross-unit-exception member's OWN unit has MORE THAN ONE peer leader (the
+  // one-leader case is one-click; the picker NEVER auto-picks an arbitrary first).
+  const [retPicker, setRetPicker] = useState<
+    { row: RosterRow; unitName: string | null; leaders: RetLeaderOption[] } | null
+  >(null)
+  const [retBusy, setRetBusy] = useState(false)
+  const [retError, setRetError] = useState<string | null>(null)
+
   // Lazily ensure the selected node's Organisation roster is loaded.
   useEffect(() => {
     if (organisationId) onLoadRoster(organisationId)
   }, [organisationId, onLoadRoster])
+
+  // SPRINT-109 / TASK-10904 — reset the settlement filter when the Organisation
+  // changes (a stale filter from another org could otherwise hide every row).
+  useEffect(() => {
+    setSettlementFilter('none')
+  }, [organisationId])
 
   const roster = organisationId ? rosterByOrg[organisationId] : undefined
   const rosterIndex = useMemo(() => buildRosterIndex(roster), [roster])
@@ -304,10 +380,14 @@ export function StrukturPanel({
     setActionError(null)
     setAction({ kind: 'create', parentNode: selectedNode, childType: createInfo.type })
   }
-  const openEdit = () => {
+  // Open the unit edit drawer (rename + Ledere checkboxes) for ANY unit node — the
+  // title-block "Rediger" targets the selected unit; the leaderless "Tildel leder"
+  // targets the child unit that has no leader (TASK-10903).
+  const openEditUnit = (unit: StrukturNode) => {
     setActionError(null)
-    setAction({ kind: 'edit', unit: selectedNode })
+    setAction({ kind: 'edit', unit })
   }
+  const openEdit = () => openEditUnit(selectedNode)
   const openMove = () => {
     setActionError(null)
     setAction({ kind: 'move', unit: selectedNode })
@@ -536,10 +616,169 @@ export function StrukturPanel({
     }
   }
 
+  // ── SPRINT-109 — the gated PEOPLE-mutation surface ────────────────────────────
+  // Self + descendants (the cycle-prevention forbidden set), derived from the
+  // loaded roster's structuralApproverId graph (mirrors the old page's
+  // descendantsOf; the server ALSO enforces cycle prevention via excludeEmployeeId).
+  const descendantsOfPerson = (employeeId: string): Set<string> => {
+    const out = new Set<string>([employeeId])
+    const all = roster?.employees ?? []
+    let frontier = [employeeId]
+    while (frontier.length) {
+      const next: string[] = []
+      for (const r of all) {
+        if (r.structuralApproverId && frontier.includes(r.structuralApproverId) && !out.has(r.employeeId)) {
+          out.add(r.employeeId)
+          next.push(r.employeeId)
+        }
+      }
+      frontier = next
+    }
+    return out
+  }
+
+  const buildLifecycleContext = (row: RosterRow): LifecycleContext => {
+    const approverRow = row.structuralApproverId ? rosterIndex.rowById.get(row.structuralApproverId) : null
+    const approvesOthers = (roster?.employees ?? []).some((r) => r.structuralApproverId === row.employeeId)
+    return {
+      isRoot: row.isRoot,
+      currentApproverId: row.structuralApproverId,
+      currentApproverName: row.structuralApproverId ? resolveName(row.structuralApproverId) : null,
+      currentApproverAwayVikarName: approverRow?.outgoingVikar?.vikarDisplayName ?? null,
+      approvesOthers,
+      activeVikar: row.outgoingVikar
+        ? {
+            vikarUserId: row.outgoingVikar.vikarUserId,
+            vikarDisplayName: row.outgoingVikar.vikarDisplayName,
+            untilDate: row.outgoingVikar.untilDate,
+            reason: row.outgoingVikar.reason,
+          }
+        : null,
+      descendantIds: descendantsOfPerson(row.employeeId),
+    }
+  }
+
+  const openCreatePerson = () => {
+    if (selectedNode.kind !== 'unit' || !selectedNode.organisationId) return
+    setEditUser(null)
+    setPersonDrawer({ mode: 'create', orgId: selectedNode.organisationId, unitId: selectedNode.id })
+  }
+
+  const openEditPerson = async (row: RosterRow) => {
+    setEditUser(null)
+    setPersonLoading(true)
+    setPersonDrawer({ mode: 'edit', row })
+    try {
+      const fresh = await fetchUser(row.employeeId)
+      setEditUser(fresh)
+    } catch (err) {
+      toast({ title: 'Fejl', description: err instanceof Error ? err.message : String(err), variant: 'error' })
+      setPersonDrawer(null)
+    } finally {
+      setPersonLoading(false)
+    }
+  }
+
+  const closePersonDrawer = () => {
+    setPersonDrawer(null)
+    setEditUser(null)
+  }
+
+  const onPersonSaved = async (orgId: string | null) => {
+    await onMutated?.(orgId)
+  }
+
+  // ── SPRINT-109 / TASK-10903 — cross-unit "Ret" + leaderless "Tildel leder" ─────
+  // "Ret" reassigns a cross-unit-exception member's PRIMARY reporting edge to a
+  // leader of THEIR OWN unit (the roster row carries that unit's leaderIds + the
+  // active edge's version). EXACTLY ONE own-unit leader → one-click; several peer
+  // leaders → the pre-filtered picker (NEVER an arbitrary first pick). The
+  // create-vs-supersede etag (S99): a non-null primaryReportingLineVersion →
+  // If-Match (supersede the active edge); null → If-None-Match:* (create — a
+  // root/orphan with no active PRIMARY edge). This hits the SAME
+  // POST /api/admin/reporting-lines the drawer's ApproverSection uses (P7).
+  const todayIso = new Date().toISOString().slice(0, 10)
+
+  const submitRet = async (row: RosterRow, managerId: string) => {
+    setRetBusy(true)
+    setRetError(null)
+    const ifMatch =
+      row.primaryReportingLineVersion != null
+        ? formatVersionAsIfMatch(row.primaryReportingLineVersion)
+        : undefined
+    const result = await assignManager(
+      { employeeId: row.employeeId, managerId, effectiveFrom: todayIso },
+      ifMatch,
+    )
+    setRetBusy(false)
+    if (result.ok) {
+      setRetPicker(null)
+      setRetError(null)
+      toast({
+        title: 'Leder rettet',
+        description: 'Medarbejderen refererer nu til en leder i egen enhed.',
+        variant: 'success',
+      })
+      await onMutated?.(organisationId)
+    } else {
+      const msg = retMessageFor(result.status)
+      setRetError(msg)
+      // The one-click path has no inline surface → surface via toast; the picker
+      // shows the message inline (and stays open for a retry).
+      if (!retPicker) toast({ title: 'Handlingen mislykkedes', description: msg, variant: 'error' })
+    }
+  }
+
+  const onRetClick = (row: RosterRow) => {
+    setRetError(null)
+    const leaders: RetLeaderOption[] = row.leaderIds.map((id) => ({ id, name: resolveName(id) }))
+    if (leaders.length === 1) {
+      void submitRet(row, leaders[0].id)
+    } else {
+      setRetPicker({ row, unitName: row.unitName, leaders })
+    }
+  }
+
+  const closeRetPicker = () => {
+    setRetPicker(null)
+    setRetError(null)
+  }
+
+  // ── SPRINT-109 / TASK-10904 — the ported period-settlement overview (status
+  // tiles + the "mangler godkender" orphan card), scoped to THIS Organisation's
+  // loaded roster. Shown on an Organisation node (the design's per-Organisation
+  // settlement view); the tiles click-to-filter the Struktur people. ──────────────
+  const showSettlement = selectedNode.kind === 'organisation' && !!roster && roster.employees.length > 0
+  const settlementPending = roster?.pendingCountByManager ?? {}
+  const indsendCount = (roster?.employees ?? []).filter((p) => p.periodStatus === 'OPEN' && !p.isOrphan).length
+  const godkendCount = Object.keys(settlementPending).length
+  const orphanPeople = (roster?.employees ?? []).filter((p) => p.isOrphan)
+
+  // The active filter's per-person predicate (narrows the Struktur people in walkUnit).
+  const matchesSettlement = (row: RosterRow): boolean => {
+    if (settlementFilter === 'indsend') return row.periodStatus === 'OPEN' && !row.isOrphan
+    if (settlementFilter === 'godkend') return Object.prototype.hasOwnProperty.call(settlementPending, row.employeeId)
+    return true
+  }
+
+  const toggleSettlement = (f: 'indsend' | 'godkend') => {
+    const next = settlementFilter === f ? 'none' : f
+    setSettlementFilter(next)
+    if (next !== 'none') {
+      // Reveal nested people so the filter is visible across the whole Struktur.
+      setShowPeople(true)
+      setTreeOpen((prev) => {
+        const out = { ...prev }
+        for (const id of descendantUnitIds(selectedNode)) out[id] = true
+        return out
+      })
+    }
+  }
+
   // ── the recursive node list ──────────────────────────────────────────────────
   const nodes: RenderNode[] = []
   const walkUnit = (node: StrukturNode, depth: number) => {
-    const members = membersOf(node)
+    const members = settlementFilter === 'none' ? membersOf(node) : membersOf(node).filter(matchesSettlement)
     const leaderIdSet = new Set(leaderIdsOf(node))
     const leaderRows = members.filter((m) => leaderIdSet.has(m.employeeId))
     const nonLeaders = members.filter((m) => !leaderIdSet.has(m.employeeId))
@@ -600,6 +839,7 @@ export function StrukturPanel({
               key: `note:${node.id}`,
               depth: depth + 1,
               text: `Ingen leder i enheden — ${n} ${refers} opad${til}.`,
+              unit: node,
             })
           }
           remaining.forEach((r) =>
@@ -650,6 +890,12 @@ export function StrukturPanel({
   // ── derived header bits ──────────────────────────────────────────────────────
   const path = pathOf(index, selectedNode.id)
   const isMao = selectedNode.kind === 'mao'
+
+  // PER-NODE-KIND org gates (S109 / TASK-10904): the MAO-node create ("+ Organisation")
+  // + rename ("Omdøb") scope the MAO → GlobalAdmin; the Organisation-node rename is
+  // owned by the scoped LocalAdmin → LocalAdmin.
+  const canCreateOrg = isGlobalAdminRole
+  const canRenameOrg = isMao ? isGlobalAdminRole : isLocalAdminRole
 
   // "Refererer opad til" — the selected unit's leaders' distinct upward refs.
   const selLeaderIdSet = new Set(leaderIdsOf(selectedNode))
@@ -760,6 +1006,12 @@ export function StrukturPanel({
           </Button>
           {selectedNode.kind === 'unit' && (
             <>
+              {/* TASK-10901 — the people-create entry (a person homes at the unit's
+                  Organisation with this unit as the default Placering). LocalHR floor
+                  (== canEditUnits); the backend re-checks. */}
+              <Button variant="primary" size="sm" onClick={openCreatePerson} data-testid="person-action-create">
+                + Medarbejder
+              </Button>
               <span className={styles.actionDivider} aria-hidden="true" />
               <Button variant="secondary" size="sm" onClick={openEdit} data-testid="unit-action-edit">
                 Rediger
@@ -798,6 +1050,78 @@ export function StrukturPanel({
                 )}
               </>
             )}
+        </div>
+      )}
+
+      {/* c3. SPRINT-109 / TASK-10904 — the ported period-settlement overview: the
+          "Ikke indsendt" / "Ikke godkendt" status tiles (click-to-filter the
+          Struktur people) + the aggregated "mangler godkender" orphan card with an
+          inline approver-assign (the SAME POST /reporting-lines the drawer / "Ret"
+          use, via the shared InlineApproverControl / ApproverSection core). Shown on
+          an Organisation node, scoped to its loaded roster. */}
+      {showSettlement && (
+        <div className={styles.settlement} data-testid="settlement-overview">
+          <div className={styles.settleTiles}>
+            <button
+              type="button"
+              className={`${styles.settleTile} ${styles.settleTileWarn} ${settlementFilter === 'indsend' ? styles.settleTileOn : ''}`}
+              data-testid="settle-tile-indsend"
+              aria-pressed={settlementFilter === 'indsend'}
+              onClick={() => toggleSettlement('indsend')}
+            >
+              <span className={styles.settleLabel}>Ikke indsendt</span>
+              <span className={styles.settleValue} data-testid="settle-count-indsend">{indsendCount}</span>
+              <span className={styles.settleDetail}>{PERIOD_LABEL}</span>
+            </button>
+            <button
+              type="button"
+              className={`${styles.settleTile} ${styles.settleTileAlert} ${settlementFilter === 'godkend' ? styles.settleTileOn : ''}`}
+              data-testid="settle-tile-godkend"
+              aria-pressed={settlementFilter === 'godkend'}
+              onClick={() => toggleSettlement('godkend')}
+            >
+              <span className={styles.settleLabel}>Ikke godkendt</span>
+              <span className={styles.settleValue} data-testid="settle-count-godkend">{godkendCount}</span>
+              <span className={styles.settleDetail}>godkendere efter frist</span>
+            </button>
+          </div>
+
+          {orphanPeople.length > 0 && (
+            <div className={styles.orphanCard} data-testid="orphan-overview">
+              <div className={styles.orphanHead} data-testid="orphan-count">
+                ⚠ {orphanPeople.length} mangler godkender
+              </div>
+              <div className={styles.orphanList}>
+                {orphanPeople.map((p) => (
+                  <div key={p.employeeId} className={styles.orphanRow} data-testid={`orphan-${p.employeeId}`}>
+                    <span className={styles.employeeAvatar} aria-hidden="true">{initials(p.displayName)}</span>
+                    <span className={styles.personBody}>
+                      <span className={styles.personName}>{p.displayName}</span>
+                      {(p.position || p.unitName) && (
+                        <span className={styles.personTitle}>
+                          {[p.position, p.unitName].filter(Boolean).join(' · ')}
+                        </span>
+                      )}
+                    </span>
+                    {canEditUnits && (
+                      <InlineApproverControl
+                        employeeId={p.employeeId}
+                        personName={p.displayName}
+                        currentApproverId={null}
+                        currentApproverName={null}
+                        computeForbidden={() => descendantsOfPerson(p.employeeId)}
+                        trigger="assign"
+                        onChanged={() => {
+                          void onMutated?.(organisationId)
+                        }}
+                        className={styles.orphanAssign}
+                      />
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -953,6 +1277,16 @@ export function StrukturPanel({
                     </span>
                   )}
                   <span className={styles.reportCount}>{n.reportCount} medarb.</span>
+                  {canEditUnits && (
+                    <button
+                      type="button"
+                      className={styles.personEdit}
+                      data-testid={`person-edit-${n.row.employeeId}`}
+                      onClick={() => openEditPerson(n.row)}
+                    >
+                      Rediger ›
+                    </button>
+                  )}
                 </div>
               )
             }
@@ -975,16 +1309,41 @@ export function StrukturPanel({
                       Leder uden for enheden: {n.externalLeaderName}
                     </span>
                   )}
+                  {/* TASK-10903 — the cross-unit "Ret": reassign the PRIMARY edge to
+                      a leader in the member's OWN unit (one-click for a single
+                      leader; the pre-filtered picker for several). LocalHR floor. */}
+                  {n.variant === 'external' && canEditUnits && (
+                    <button
+                      type="button"
+                      className={styles.retLink}
+                      data-testid={`ret-${n.row.employeeId}`}
+                      onClick={() => onRetClick(n.row)}
+                    >
+                      Ret
+                    </button>
+                  )}
                   {n.coveringNames.length > 0 && (
                     <span className={styles.vikarForTag} data-testid={`vikar-for-${n.row.employeeId}`}>
                       Vikar for {n.coveringNames.join(', ')}
                     </span>
                   )}
+                  {canEditUnits && (
+                    <button
+                      type="button"
+                      className={styles.personEdit}
+                      data-testid={`person-edit-${n.row.employeeId}`}
+                      onClick={() => openEditPerson(n.row)}
+                    >
+                      Rediger ›
+                    </button>
+                  )}
                 </div>
               )
             }
 
-            // note (leaderless)
+            // note (leaderless) — TASK-10903: the amber note re-enables as an
+            // action ("Tildel leder" → the S108 UnitDrawer edit, focused on the
+            // Ledere checkboxes for THIS unit). LocalHR floor.
             return (
               <div
                 key={n.key}
@@ -992,7 +1351,17 @@ export function StrukturPanel({
                 style={{ paddingLeft: `${indent(n.depth, 6)}px` }}
                 data-testid="leaderless-note"
               >
-                {n.text}
+                <span className={styles.noteText}>{n.text}</span>
+                {canEditUnits && (
+                  <button
+                    type="button"
+                    className={styles.noteAction}
+                    data-testid={`assign-leader-${n.unit.id}`}
+                    onClick={() => openEditUnit(n.unit)}
+                  >
+                    Tildel leder
+                  </button>
+                )}
               </div>
             )
           })}
@@ -1089,6 +1458,48 @@ export function StrukturPanel({
           error={orgError}
           onClose={closeOrgAction}
           onConfirm={submitOrgDelete}
+        />
+      )}
+
+      {/* ── the gated Person create/edit drawer (TASK-10901/10902) ── */}
+      {personDrawer?.mode === 'create' && (
+        <PersonDrawer
+          open
+          organizations={organizations}
+          forest={forest}
+          defaultOrgId={personDrawer.orgId}
+          defaultUnitId={personDrawer.unitId}
+          onClose={closePersonDrawer}
+          onSaved={onPersonSaved}
+        />
+      )}
+      {personDrawer?.mode === 'edit' && (
+        <PersonDrawer
+          open
+          user={editUser}
+          loading={personLoading}
+          organizations={organizations}
+          forest={forest}
+          currentUnitId={personDrawer.row.unitId}
+          isLeaderOfCurrentUnit={
+            !!personDrawer.row.unitId && personDrawer.row.leaderIds.includes(personDrawer.row.employeeId)
+          }
+          lifecycleContext={buildLifecycleContext(personDrawer.row)}
+          onClose={closePersonDrawer}
+          onSaved={onPersonSaved}
+        />
+      )}
+
+      {/* ── the cross-unit "Ret" leader picker (TASK-10903; multiple peer leaders) ── */}
+      {retPicker && (
+        <RetLeaderPicker
+          personName={retPicker.row.displayName}
+          unitName={retPicker.unitName}
+          leaders={retPicker.leaders}
+          busy={retBusy}
+          error={retError}
+          onClose={closeRetPicker}
+          onSubmit={(managerId) => submitRet(retPicker.row, managerId)}
         />
       )}
     </div>

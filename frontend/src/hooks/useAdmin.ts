@@ -234,7 +234,14 @@ export function useOrgUsers(orgId: string) {
    */
   const updateUser = async (
     userId: string,
-    body: { effectiveFrom: string; displayName?: string; email?: string; primaryOrgId?: string; agreementCode?: string },
+    // S109 / TASK-10902 — `unitId` is the CROSS-Organisation TRANSFER's atomic
+    // landing unit (the backend `UpdateUserRequest.UnitId`, applied IFF the PUT is
+    // a transfer = `primaryOrgId` changed; ignored on a non-transfer PUT). The
+    // placement router (usePlacement) sets it ONLY on a transfer so the move
+    // re-anchors edges + applies the unit in ONE call; a same-Organisation unit
+    // change goes through `PUT /users/{id}/unit` instead (never here). Omitted ⇒
+    // not serialized (the same-Org path).
+    body: { effectiveFrom: string; displayName?: string; email?: string; primaryOrgId?: string; agreementCode?: string; unitId?: string | null },
     ifMatch: string,
   ): Promise<WithEtag<User>> => {
     const result = await apiFetchWithEtag<User>(
