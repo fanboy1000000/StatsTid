@@ -438,10 +438,10 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
         var (items, _) = await SearchAsync(MintGlobalAdminToken("admin_global"), q: "sara");
         Assert.Contains(items, i => i.UserId == SearchAfd02);
 
-        // S103 / TASK-10305 (Enhedsspor Phase 1a): the structured-Enhed display column was dropped
-        // with the legacy Enhed model, so person-search's enhedLabel is now ALWAYS null (the FE
-        // falls back to primaryOrgName; unit-based display returns in Phase 3).
-        Assert.Null(items.Single(i => i.UserId == SearchAfd02).EnhedLabel);
+        // S110 / TASK-11001 (Enhedsspor Phase 4): the vestigial enhedLabel display field was REMOVED
+        // from the person-search response (the column was dropped in S103 and the field duplicated
+        // primaryOrgName). The hit must NOT carry the dropped field.
+        Assert.False(items.Single(i => i.UserId == SearchAfd02).HasEnhedLabel);
     }
 
     [Fact]
@@ -701,7 +701,9 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
         return new ApprovalPeriodRepository(_dbFactory, authorizer, reportingRepo);
     }
 
-    private sealed record SearchItem(string UserId, string DisplayName, string PrimaryOrgName, string? EnhedLabel);
+    // S110 / TASK-11001: HasEnhedLabel captures whether the (now-removed) enhedLabel field is present
+    // on the wire — it must be false (a regression that re-adds the field would flip it RED).
+    private sealed record SearchItem(string UserId, string DisplayName, string PrimaryOrgName, bool HasEnhedLabel);
     private sealed record SearchPage(IReadOnlyList<SearchItem> Items, int Total, int Limit, int Offset);
 
     private Task<(IReadOnlyList<SearchItem> Items, int Total)> SearchAsync(
@@ -724,7 +726,7 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
             e.GetProperty("userId").GetString()!,
             e.GetProperty("displayName").GetString()!,
             e.GetProperty("primaryOrgName").GetString()!,
-            e.TryGetProperty("enhedLabel", out var l) && l.ValueKind != JsonValueKind.Null ? l.GetString() : null))
+            e.TryGetProperty("enhedLabel", out _)))
             .ToList();
         return new SearchPage(
             items,

@@ -213,6 +213,16 @@
   flex-shrink: 0;
 }
 
+/* ── per-section truncation signal (S110) ── */
+.sectionMore {
+  padding: 8px 18px 8px 32px;
+  border-bottom: var(--border-width) solid var(--color-gray-50);
+  background: var(--color-white);
+  font-size: 11.5px;
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-secondary);
+}
+
 /* ── idle / no-results / scope note ── */
 .message,
 .hint {

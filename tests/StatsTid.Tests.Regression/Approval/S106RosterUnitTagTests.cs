@@ -459,9 +459,10 @@ public sealed class S106RosterUnitTagTests : IAsyncLifetime
         ContractAssert.HasFields(body, "employees", "pendingCountByManager", "nameResolution");
 
         var member1 = employees.EnumerateArray().First(e => e.GetProperty("employeeId").GetString() == Member1);
-        // The full row field-set (camelCase, literally) — a dropped/renamed field is RED here.
+        // The full row field-set (camelCase, literally) — a dropped/renamed field is RED here. (S110 /
+        // TASK-11001: the vestigial enhedLabel display field was removed; the unit tag carries display.)
         ContractAssert.HasFields(member1,
-            "employeeId", "displayName", "enhedLabel", "position", "structuralApproverId", "periodStatus",
+            "employeeId", "displayName", "position", "structuralApproverId", "periodStatus",
             "outgoingVikar", "isRoot", "isOrphan", "unitId", "unitName", "leaderIds", "primaryReportingLineVersion");
         Assert.Equal(UnitMulti.ToString(), member1.GetProperty("unitId").GetString());
         Assert.Equal("S106 Multi-Leader Unit", member1.GetProperty("unitName").GetString());

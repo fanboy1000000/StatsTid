@@ -22,9 +22,8 @@ namespace StatsTid.Tests.Regression.Approval;
 /// The tree is STRUCTURAL: each row's <c>structuralApproverId</c> is the person's RAW active
 /// PRIMARY <c>reporting_lines.manager_id</c> (a left-join edge, NOT a resolver result); the vikar
 /// is a per-away-manager annotation (the person's OWN active <c>manager_vikar</c> row). The read
-/// enriches the Organisation roster with <c>enhedLabel</c> (= the primary-org name post-S103, the
-/// legacy Enhed display column having been dropped — unit-based display returns in Phase 3) +
-/// <c>position</c> +
+/// enriches the Organisation roster with <c>position</c> (S110 / TASK-11001 removed the vestigial
+/// <c>enhedLabel</c> display field — unit-based display is served by the merged-admin unit tag) +
 /// last-closed-month <c>periodStatus</c> + <c>outgoingVikar</c> + the deterministic
 /// <c>isRoot</c>/<c>isOrphan</c> flags, and reuses the existing S74 <c>pendingCountByManager</c>
 /// tally unchanged. Reads only — no events, no writes.
@@ -210,10 +209,9 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
         await cmd.ExecuteNonQueryAsync();
     }
 
-    /// <summary>Sets the live profile's position. S103 / TASK-10305 (Enhedsspor Phase 1a): the
-    /// <c>employee_profiles.enhed_label</c> display column was dropped with the legacy Enhed model,
-    /// so there is no label to set — the roster's <c>enhedLabel</c> field is now always the
-    /// primary-org name (unit-based display returns in Phase 3).</summary>
+    /// <summary>Sets the live profile's position. The <c>employee_profiles.enhed_label</c> display
+    /// column was dropped with the legacy Enhed model (S103), and S110 / TASK-11001 removed the
+    /// vestigial <c>enhedLabel</c> response field — only <c>position</c> is per-profile now.</summary>
     private async Task SetProfileAsync(string employeeId, string? position)
     {
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
@@ -256,7 +254,7 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
 
     // ════════════════════════════════════════════════════════════════════════════════
     //  Repository-direct: composition (structuralApproverId, status, isRoot/isOrphan,
-    //  enhedLabel = primary-org name (S103), position, outgoingVikar, pendingCountByManager passthrough)
+    //  position, outgoingVikar, pendingCountByManager passthrough)
     // ════════════════════════════════════════════════════════════════════════════════
 
     [Fact]
@@ -372,12 +370,12 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Roster_EnhedLabel_IsPrimaryOrgName_AndPositionServed()
+    public async Task Roster_Position_ServedPerLiveProfile()
     {
-        // S103 / TASK-10305 (Enhedsspor Phase 1a): the structured-Enhed display column was dropped
-        // with the legacy Enhed model, so the roster's enhedLabel is now ALWAYS the primary-org name
-        // (STY02's org_name = "Statens IT"); only position is still per-profile. Unit-based display
-        // returns in Phase 3.
+        // S110 / TASK-11001 (Enhedsspor Phase 4): the vestigial enhedLabel display field was REMOVED
+        // (the employee_profiles.enhed_label column was dropped in S103 and the field duplicated the
+        // primary-org name). Only the live position is still per-profile; unit-based display is served
+        // by the merged-admin unit tag (unitName + the forest), not a per-row org label.
         await SetProfileAsync(EmpA, position: "Sagsbehandler");
         await SetProfileAsync(EmpB, position: "Fuldmægtig");
 
@@ -386,16 +384,11 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
 
         MedarbejderRosterRow Row(string id) => roster.Employees.Single(e => e.EmployeeId == id);
 
-        // enhedLabel == the primary-org name ("Statens IT", the human-readable org_name, NOT the org
-        // id) for EVERY row now; position still served per live profile.
-        Assert.Equal("Statens IT", Row(EmpA).EnhedLabel);
+        // position is served per live profile.
         Assert.Equal("Sagsbehandler", Row(EmpA).Position);
-
-        Assert.Equal("Statens IT", Row(EmpB).EnhedLabel);
         Assert.Equal("Fuldmægtig", Row(EmpB).Position);
 
-        // No profile at all (Orphan) → org-name still served + null position.
-        Assert.Equal("Statens IT", Row(Orphan).EnhedLabel);
+        // No profile at all (Orphan) → null position (and the row is still served).
         Assert.Null(Row(Orphan).Position);
     }
 
@@ -439,12 +432,12 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
         var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
         var employees = body.GetProperty("employees");
 
-        // EmpA: structuralApproverId + status + enhedLabel (= the primary-org name post-S103) +
-        // position served.
+        // EmpA: structuralApproverId + status + position served. (S110 / TASK-11001: the vestigial
+        // enhedLabel display field was removed from the roster response.)
         var empA = employees.EnumerateArray().First(e => e.GetProperty("employeeId").GetString() == EmpA);
         Assert.Equal(RootMgr, empA.GetProperty("structuralApproverId").GetString());
         Assert.Equal("APPROVED", empA.GetProperty("periodStatus").GetString());
-        Assert.Equal("Statens IT", empA.GetProperty("enhedLabel").GetString());
+        Assert.False(empA.TryGetProperty("enhedLabel", out _)); // removed — must not reappear.
         Assert.Equal("Sagsbehandler", empA.GetProperty("position").GetString());
         Assert.Equal(JsonValueKind.Null, empA.GetProperty("outgoingVikar").ValueKind);
         Assert.False(empA.GetProperty("isRoot").GetBoolean());

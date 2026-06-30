@@ -83,7 +83,7 @@ function makeForest(): ForestMaoNode[] {
 const LEADERS = ['jens', 'trine']
 function rrow(p: Partial<RosterResponse['employees'][number]> & { employeeId: string; displayName: string }) {
   return {
-    enhedLabel: 'Vejledning', position: null, structuralApproverId: null, periodStatus: 'OPEN' as const,
+    position: null, structuralApproverId: null, periodStatus: 'OPEN' as const,
     outgoingVikar: null, isRoot: false, isOrphan: false, unitId: VEJL, unitName: 'Vejledning',
     leaderIds: LEADERS, primaryReportingLineVersion: null, ...p,
   }

@@ -55,14 +55,25 @@ export interface PersonSearchResult {
   path: string[]
 }
 
-/** The GET /api/admin/search envelope — `{ units, people }` (the design's TWO
-    -section overlay shape; NOT a bare array — the S97/S99 envelope distinction). */
+/** The GET /api/admin/search envelope — `{ units, people, unitsTotal, peopleTotal }`
+    (the design's TWO-section overlay shape; NOT a bare array — the S97/S99 envelope
+    distinction).
+
+    S110 / TASK-11002 — `unitsTotal` / `peopleTotal` are the EXACT per-section match
+    counts BEFORE the server's page cap (200/section). They are >= the returned
+    `units.length` / `people.length`; a section whose returned list is shorter than its
+    total was TRUNCATED by the cap. The overlay surfaces this as an honest "N flere"
+    signal so a capped section is not mistaken for complete (the count compares the
+    SERVER total against the SERVER-returned count — independent of the client-side
+    Afgrænsning narrowing, which can only ever shrink the displayed set further). */
 export interface SearchResponse {
   units: UnitSearchResult[]
   people: PersonSearchResult[]
+  unitsTotal: number
+  peopleTotal: number
 }
 
-const EMPTY: SearchResponse = { units: [], people: [] }
+const EMPTY: SearchResponse = { units: [], people: [], unitsTotal: 0, peopleTotal: 0 }
 const DEBOUNCE_MS = 250
 
 /**
@@ -94,7 +105,12 @@ export function useSearch() {
       const result = await apiClient.get<SearchResponse>(`/api/admin/search?q=${encodeURIComponent(q)}`)
       if (cancelled) return
       if (result.ok) {
-        setResults({ units: result.data.units ?? [], people: result.data.people ?? [] })
+        setResults({
+          units: result.data.units ?? [],
+          people: result.data.people ?? [],
+          unitsTotal: result.data.unitsTotal ?? 0,
+          peopleTotal: result.data.peopleTotal ?? 0,
+        })
       } else {
         setError(result.error)
         setResults(EMPTY)

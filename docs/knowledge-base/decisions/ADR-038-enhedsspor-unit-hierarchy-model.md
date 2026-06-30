@@ -2,13 +2,15 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | ACCEPTED (S102 Phase-0 design sprint; dual-lens reviewed — Codex + Reviewer, 2 cycles, 4 BLOCKERs absorbed, 0 residual) |
+| **Status** | ACCEPTED (S102 Phase-0 design) → **AS-BUILT COMPLETE (S110, 2026-06-30)** — the program shipped S102→S110, CI-green; the design is realized (see the as-built note below) |
 | **Date** | 2026-06-28 |
 | **Supersedes/Amends** | Supersedes ADR-035 (flat authority), ADR-036 (zero-authority Enhed); amends ADR-037 (org lifecycle), ADR-008 (materialized path), ADR-027 (reporting/approval/vikar). Preserve+migrate: ADR-026 (audit projection). Preserve: ADR-010/014 (config). |
 | **Refinement** | `.claude/refinements/REFINEMENT-merged-admin-page.md` |
 | **Design source** | `design_handoff_org_medarbejdere/` ("Model A — Enhedsspor") |
 
 > Projection note (WORKFLOW.md § Binding to Architectural Events): sprint numbers below are non-binding projections. Binding constraint: **no implementation lands before this ADR is ACCEPTED**; the LOCKED Organisation authority boundary (D5) holds across all phases.
+
+> **AS-BUILT — PROGRAM COMPLETE (S110, 2026-06-30).** The Enhedsspor program shipped across **S102 (this ADR) → S103 (the `units`/`unit_leaders`/`users.unit_id` schema + events) → S104 (UnitEndpoints CRUD + two-regime concurrency) → S105 (the D4 unit-leader approval authority) → S106 (the merged-admin backend reads) → S107 (the merged page, read-only) → S108 (structure editing) → S109 (people editing + the CUTOVER) → S110 (close-out)**, all CI-green (S109 `28447245606`). The design is REALIZED: the merged "Organisation & medarbejdere" page is the single admin surface (the two old pages redirected + deleted, S109); the 2+5 Organisation/`units` split (D1), single-unit membership, explicit leaders, and derived reporting are live; **the D5 Organisation authority boundary held by construction across every phase** (units grant no scope — `UnitAuthorityAbsenceTests` + the per-read scope RED tests). The per-phase amendment notes below (D4 wired S105, etc.) are the binding as-built record. No open design decisions remain.
 
 ## Context
 The owner redesigned org + employee administration ("Enhedsspor": the org-unit tree as the single spine, reporting derived from it) and chose **Strategy A — adopt the model fully**. The design's model: a 7-level typed ordered hierarchy (`ministeromrade → organisation → direktion → omrade → kontor → team → enhed`), each person has one structural unit, units carry explicitly-designated leaders, and reporting is presented as derived from unit membership + a primary-leader pointer. This reverses the flat-authority reform (ADR-035) and zero-authority-Enhed (ADR-036) and re-presents the reporting edge. Two consumer censuses (S102 grounding) frame the blast radius: **~100 consumers key on the Organisation home (`primary_org_id`/`org_id`)** for payroll/settlement/audit/config/JWT/scope; **19 consumers key on `materialized_path`** (4 LIKE-scoped roster reads + the delete-guard + `RoleScope.CoversOrg` [already exact-match post-S93] + the `ReparentAsync` recompute + the move event).

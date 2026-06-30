@@ -52,7 +52,7 @@ vi.mock('../../../../hooks/useRoster', () => ({
   useRoster: () => ({ byOrg: h.roster, loading: false, error: null, loadRoster: vi.fn(), refetchRoster: vi.fn() }),
 }))
 vi.mock('../../../../hooks/useSearch', () => ({
-  useSearch: () => ({ query: '', setQuery: vi.fn(), results: { units: [], people: [] } as SearchResponse, loading: false, error: null }),
+  useSearch: () => ({ query: '', setQuery: vi.fn(), results: { units: [], people: [], unitsTotal: 0, peopleTotal: 0 } as SearchResponse, loading: false, error: null }),
 }))
 
 import { OrganisationOgMedarbejdere } from '../../OrganisationOgMedarbejdere'
@@ -102,7 +102,6 @@ function makeForest(): ForestMaoNode[] {
 /** A roster row in the real S106 wire shape. */
 function row(p: Partial<RosterResponse['employees'][number]> & { employeeId: string; displayName: string }) {
   return {
-    enhedLabel: 'Vejledning',
     position: null,
     structuralApproverId: null,
     periodStatus: 'OPEN' as const,

@@ -13,6 +13,8 @@ const { mockGet, RESULTS } = vi.hoisted(() => {
   const results: SearchResponse = {
     units: [{ unitId: 'u1', organisationId: 'STY02', type: 'kontor', name: 'Vejledning', path: ['Statens IT'] }],
     people: [{ userId: 'p1', organisationId: 'STY02', displayName: 'Jens Vej', position: 'Kontorchef', unitName: 'Vejledning', path: ['Statens IT', 'Vejledning'] }],
+    unitsTotal: 1,
+    peopleTotal: 1,
   }
   return { mockGet: vi.fn(), RESULTS: results }
 })
@@ -51,6 +53,9 @@ describe('useSearch', () => {
     expect(result.current.results.units).toHaveLength(1)
     expect(result.current.results.people).toHaveLength(1)
     expect(result.current.results.units[0].organisationId).toBe('STY02')
+    // S110 — the per-section totals surface for the truncation signal.
+    expect(result.current.results.unitsTotal).toBe(1)
+    expect(result.current.results.peopleTotal).toBe(1)
   })
 
   it('an empty/blank query resets to the idle empty result without a request', async () => {
@@ -67,7 +72,7 @@ describe('useSearch', () => {
   })
 
   it('url-encodes the query token in the inline URL', async () => {
-    mockGet.mockResolvedValue({ ok: true, data: { units: [], people: [] } } satisfies ApiResult<SearchResponse>)
+    mockGet.mockResolvedValue({ ok: true, data: { units: [], people: [], unitsTotal: 0, peopleTotal: 0 } } satisfies ApiResult<SearchResponse>)
     const { result } = renderHook(() => useSearch())
 
     act(() => result.current.setQuery('a b'))

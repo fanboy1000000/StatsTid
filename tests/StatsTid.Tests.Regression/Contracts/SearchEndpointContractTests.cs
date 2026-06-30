@@ -147,9 +147,19 @@ public sealed class SearchEndpointContractTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
         var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
 
-        // ── 1) the { units: [...], people: [...] } two-section ENVELOPE (NOT a bare array). ──
+        // ── 1) the { units: [...], people: [...], unitsTotal, peopleTotal } two-section ENVELOPE
+        //    (NOT a bare array). ──
         var units = ContractAssert.IsEnvelope(body, "units");
         var people = ContractAssert.IsEnvelope(body, "people");
+
+        // ── 1b) S110 / TASK-11002 — the additive per-section totals (the honest "N flere" truncation
+        //    signal). camelCase, literally; Number kind; each total >= its section's returned count
+        //    (the Zeta fixture: 2 matching units + 1 matching person, well under the cap). ──
+        ContractAssert.HasFields(body, "unitsTotal", "peopleTotal");
+        ContractAssert.FieldKind(body, "unitsTotal", JsonValueKind.Number);
+        ContractAssert.FieldKind(body, "peopleTotal", JsonValueKind.Number);
+        Assert.True(body.GetProperty("unitsTotal").GetInt32() >= units.GetArrayLength());
+        Assert.True(body.GetProperty("peopleTotal").GetInt32() >= people.GetArrayLength());
 
         // ── 2) the unit row — fields + the Array path (camelCase, literally). ──
         var unit = FindByProp(units, "unitId", UnitId.ToString())

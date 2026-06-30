@@ -15,7 +15,7 @@ import type { SearchResponse } from '../../../../hooks/useSearch'
 // Mutable holder the mocked useSearch reads — each test sets query/results/loading.
 const h = vi.hoisted(() => ({
   query: 'vej',
-  results: { units: [], people: [] } as SearchResponse,
+  results: { units: [], people: [], unitsTotal: 0, peopleTotal: 0 } as SearchResponse,
   loading: false,
   setQuery: undefined as unknown as ReturnType<typeof vi.fn>,
 }))
@@ -37,6 +37,9 @@ function realResults(): SearchResponse {
       { userId: 'p1', organisationId: 'STY02', displayName: 'Jens Vej', position: 'Kontorchef', unitName: 'Vejledning', path: ['Statens IT', 'Vejledning'] },
       { userId: 'p2', organisationId: 'STY03', displayName: 'Per Vester', position: 'Konsulent', unitName: null, path: ['Statens Indkøb'] },
     ],
+    // Not truncated: the server total equals the returned count for both sections.
+    unitsTotal: 2,
+    peopleTotal: 2,
   }
 }
 
@@ -143,15 +146,46 @@ describe('SearchOverlay — the read-only search palette', () => {
 
   it('renders the idle hint for an empty query and the no-results message otherwise', () => {
     h.query = ''
-    h.results = { units: [], people: [] }
+    h.results = { units: [], people: [], unitsTotal: 0, peopleTotal: 0 }
     const { onClose } = renderOverlay()
     expect(screen.getByTestId('search-idle')).toBeDefined()
     expect(screen.queryByTestId('search-section-enheder')).toBeNull()
     onClose.mockClear()
 
     h.query = 'zzz'
-    h.results = { units: [], people: [] }
+    h.results = { units: [], people: [], unitsTotal: 0, peopleTotal: 0 }
     renderOverlay()
     expect(screen.getByTestId('search-no-results').textContent).toContain('Ingen enheder eller medarbejdere matcher')
+  })
+
+  // S110 / TASK-11002 — the honest "N flere" truncation signal.
+  it('shows the "N flere" signal ONLY for a section the server capped (total > returned)', () => {
+    // ENHEDER: 2 returned but 7 total → truncated by 5. MEDARBEJDERE: 2 of 2 → complete.
+    h.results = { ...realResults(), unitsTotal: 7, peopleTotal: 2 }
+    renderOverlay()
+    expect(screen.getByTestId('search-section-enheder-more').textContent).toContain('5 flere')
+    expect(screen.getByTestId('search-section-enheder-more').textContent).toContain('forfin søgningen')
+    // The non-truncated MEDARBEJDERE section shows no signal.
+    expect(screen.queryByTestId('search-section-medarbejdere-more')).toBeNull()
+  })
+
+  it('the "N flere" signal is based on the SERVER total vs SERVER-returned count, not the Afgrænsning-narrowed view', () => {
+    // Server returned 2 units / 2 people but holds 9 / 8 total (both capped). The
+    // Afgrænsning narrows the DISPLAYED set to STY02 only — the signal still fires,
+    // computed from the server numbers, so completeness is never falsely claimed.
+    h.results = { ...realResults(), unitsTotal: 9, peopleTotal: 8 }
+    renderOverlay({ selected: new Set(['STY02']), allOrgIds: ALL_ORGS })
+    // Only the STY02 rows are displayed (1 each), but the cap-hit signal still shows.
+    expect(screen.getByTestId('search-section-enheder-count').textContent).toBe('1')
+    expect(screen.getByTestId('search-section-enheder-more').textContent).toContain('7 flere') // 9 - 2 returned
+    expect(screen.getByTestId('search-section-medarbejdere-more').textContent).toContain('6 flere') // 8 - 2 returned
+  })
+
+  it('a folded section hides its "N flere" footer', () => {
+    h.results = { ...realResults(), unitsTotal: 7, peopleTotal: 2 }
+    renderOverlay()
+    expect(screen.getByTestId('search-section-enheder-more')).toBeDefined()
+    fireEvent.click(screen.getByTestId('search-section-enheder'))
+    expect(screen.queryByTestId('search-section-enheder-more')).toBeNull()
   })
 })

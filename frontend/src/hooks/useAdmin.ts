@@ -57,9 +57,9 @@ export type WithEtag<T> = T & { etag: string; version: number }
 
 /**
  * Status-tagged error thrown by `createOrganization` (S99 Step-7a FIX 2) so the
- * OrganisationPage create dialog can branch on `status` (409 -> friendly "name
- * already exists" copy) without re-reading the response. Mirrors the shape of
- * `OrgStructureError`.
+ * merged "Organisation & medarbejdere" admin page's create dialog can branch on
+ * `status` (409 -> friendly "name already exists" copy) without re-reading the
+ * response. Mirrors the shape of `OrgStructureError`.
  */
 export interface OrgMutationError extends Error {
   status: number
@@ -105,7 +105,7 @@ export function useOrganizations() {
     agreementCode?: string
   }) => {
     const result = await apiClient.post<Organization>('/api/admin/organizations', body)
-    // S99 Step-7a FIX 2 — carry the HTTP status so the OrganisationPage create
+    // S99 Step-7a FIX 2 — carry the HTTP status so the merged-admin page's create
     // dialog's 409 branch (`dupOrMessage`) can fire (mirrors
     // useOrganizationStructure). For ORGANISATION/MAO a 409 is effectively
     // unreachable (server-generated orgId + no name-uniqueness).

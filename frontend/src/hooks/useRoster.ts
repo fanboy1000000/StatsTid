@@ -20,8 +20,7 @@
 //
 // LINT (PAT-010): the URL is passed INLINE as a literal to apiClient.get so the
 // contract-coverage lint (tools/check_endpoint_contracts.py) can enumerate it —
-// a path-helper const would evade the gate (the documented blind spot). The
-// existing useMedarbejderRoster is already inline; this mirrors it.
+// a path-helper const would evade the gate (the documented blind spot).
 
 import { useState, useCallback, useRef } from 'react'
 import { apiClient } from '../lib/api'
@@ -42,8 +41,6 @@ export interface RosterOutgoingVikar {
 export interface RosterRow {
   employeeId: string
   displayName: string
-  /** server already applied `?? primaryOrgName` — ALWAYS a string. */
-  enhedLabel: string
   position: string | null
   /** the person's assigned active PRIMARY manager — THE TREE KEY (raw edge). */
   structuralApproverId: string | null

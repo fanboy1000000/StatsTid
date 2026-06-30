@@ -110,7 +110,6 @@ function makeForest(): ForestMaoNode[] {
 /** Helper to spell out a roster row in the real S106 wire shape. */
 function row(p: Partial<RosterResponse['employees'][number]> & { employeeId: string; displayName: string }) {
   return {
-    enhedLabel: 'Vejledning',
     position: null,
     structuralApproverId: null,
     periodStatus: 'OPEN' as const,

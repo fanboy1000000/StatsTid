@@ -170,7 +170,7 @@ export function PersonPickerDialog({
             <span className={styles.rowText}>
               <strong>{p.displayName}</strong>
               <span className={styles.rowSub}>
-                {[p.enhedLabel, p.primaryOrgName].filter(Boolean).join(' · ') || p.userId}
+                {p.primaryOrgName || p.userId}
               </span>
             </span>
             {p.userId === currentId && <span className={styles.current}>Nuværende</span>}

@@ -86,8 +86,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   hookMock.searchPeople.mockResolvedValue(
     searchResult([
-      { userId: 'MGR9', displayName: 'Mette Holm', primaryOrgName: 'Direktion', enhedLabel: null },
-      { userId: 'BO1', displayName: 'Bo Dahl', primaryOrgName: 'Drift', enhedLabel: 'Drift' },
+      { userId: 'MGR9', displayName: 'Mette Holm', primaryOrgName: 'Direktion' },
+      { userId: 'BO1', displayName: 'Bo Dahl', primaryOrgName: 'Drift' },
     ]),
   )
   // BLOCKER 3 defaults: the person has a PRIMARY approver and approves one report
@@ -210,9 +210,9 @@ describe('PersonPickerDialog — forbidden set excludes self + descendants', () 
   it('filters out forbidden ids from the rendered rows', async () => {
     hookMock.searchPeople.mockResolvedValue(
       searchResult([
-        { userId: 'EMP001', displayName: 'Self', primaryOrgName: null, enhedLabel: null },
-        { userId: 'CHILD1', displayName: 'A Report', primaryOrgName: null, enhedLabel: null },
-        { userId: 'OK1', displayName: 'Allowed', primaryOrgName: null, enhedLabel: null },
+        { userId: 'EMP001', displayName: 'Self', primaryOrgName: null },
+        { userId: 'CHILD1', displayName: 'A Report', primaryOrgName: null },
+        { userId: 'OK1', displayName: 'Allowed', primaryOrgName: null },
       ]),
     )
     wrap(
@@ -361,8 +361,8 @@ describe('DangerSection — delete-with-reassignment (BOTH 409s)', () => {
 
     hookMock.searchPeople.mockResolvedValue(
       searchResult([
-        { userId: 'R1', displayName: 'Replacement One', primaryOrgName: null, enhedLabel: null },
-        { userId: 'R2', displayName: 'Replacement Two', primaryOrgName: null, enhedLabel: null },
+        { userId: 'R1', displayName: 'Replacement One', primaryOrgName: null },
+        { userId: 'R2', displayName: 'Replacement Two', primaryOrgName: null },
       ]),
     )
 

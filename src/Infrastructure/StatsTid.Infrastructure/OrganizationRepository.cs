@@ -62,6 +62,27 @@ public sealed class OrganizationRepository
         return await reader.ReadAsync(ct) ? ReadOrg(reader) : null;
     }
 
+    /// <summary>S110 / TASK-11003 — the create-side TOCTOU close. Takes a SHARED row lock
+    /// (<c>SELECT … WHERE org_id=@id AND is_active=TRUE FOR SHARE</c>) on the ACTIVE parent MAO inside
+    /// the org-CREATE tx, BEFORE the child INSERT, and returns the locked row (or <c>null</c> when the
+    /// parent is absent / already soft-deleted). <c>FOR SHARE</c> CONFLICTS with the delete's
+    /// <c>FOR UPDATE</c>, so create-vs-delete serialize: if the create takes this lock first the delete
+    /// blocks behind it (a valid child lands under a still-active MAO); if the delete commits its
+    /// soft-delete first, this re-read no longer sees an ACTIVE row → <c>null</c> → the endpoint 422s
+    /// ("Ministerområdet er slettet"). Multiple concurrent creates under the same MAO DON'T block each
+    /// other (FOR SHARE is shared). Without this, the FK's <c>FOR KEY SHARE</c> only proves the parent
+    /// EXISTS (not that it is active), so an active org could be inserted under a just-deleted MAO.</summary>
+    public async Task<Organization?> LockActiveByIdForShareAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, string orgId, CancellationToken ct = default)
+    {
+        await using var cmd = new NpgsqlCommand(
+            "SELECT * FROM organizations WHERE org_id = @orgId AND is_active = TRUE FOR SHARE",
+            conn, tx);
+        cmd.Parameters.AddWithValue("orgId", orgId);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct) ? ReadOrg(reader) : null;
+    }
+
     /// <summary>S98 — counts the ACTIVE users that block a soft-delete of <paramref name="org"/>.
     /// An ORGANISATION blocks if any active user's <c>primary_org_id</c> equals it; a MAO blocks
     /// if any active user lives anywhere beneath it (their Organisation's <c>materialized_path</c>
@@ -92,6 +113,35 @@ public sealed class OrganizationRepository
             conn, tx);
         orgCmd.Parameters.AddWithValue("orgId", org.OrgId);
         return (long)(await orgCmd.ExecuteScalarAsync(ct))!;
+    }
+
+    /// <summary>S110 / TASK-11003 — counts the ACTIVE child Organisations that block a MAO soft-delete.
+    /// The S98 delete blocked only on active USERS in the subtree, so an "empty" MAO (no direct users)
+    /// with active child Organisations could be soft-deleted, leaving them path-rooted under an inactive
+    /// MAO. This counts active <c>organizations</c> strictly BENEATH the MAO via the SAME
+    /// <c>materialized_path LIKE … ESCAPE</c> idiom as the active-user block (the MAO's own row is
+    /// excluded by <c>org_id &lt;&gt; @maoId</c>).
+    ///
+    /// <para><b>2-LEVEL ASSUMPTION (pinned):</b> the org tree is exactly two levels — a MAO is a root,
+    /// an ORGANISATION's parent is a MAO (see <c>AdminEndpoints</c> create rules). So today "direct
+    /// child" == "subtree", and the LIKE form counts precisely the MAO's direct child Organisations.
+    /// The LIKE-prefix form is deliberately subtree-wide so that IF a future model nests deeper, this
+    /// block keeps catching every active descendant (it cannot silently UNDER-block).</para>
+    /// Runs on the caller's tx so the count is consistent with the FOR-UPDATE'd MAO row.</summary>
+    public async Task<long> CountActiveChildOrganisationsAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, Organization mao, CancellationToken ct = default)
+    {
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT COUNT(*)
+            FROM organizations o
+            WHERE o.is_active = TRUE
+              AND o.org_id <> @maoId
+              AND o.materialized_path LIKE @pathPrefix ESCAPE '\'
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("maoId", mao.OrgId);
+        cmd.Parameters.AddWithValue("pathPrefix", EscapeLike(mao.MaterializedPath) + "%");
+        return (long)(await cmd.ExecuteScalarAsync(ct))!;
     }
 
     /// <summary>S98 — flips the (FOR-UPDATE'd) org row to <c>is_active = FALSE</c> in the caller's

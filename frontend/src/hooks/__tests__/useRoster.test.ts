@@ -24,7 +24,6 @@ const { mockGet, ROSTER } = vi.hoisted(() => {
       {
         employeeId: 'roster_member',
         displayName: 'Roster Member',
-        enhedLabel: 'Roster Styrelse',
         position: 'Kontorchef',
         structuralApproverId: 'roster_leader',
         periodStatus: 'OPEN',
@@ -39,7 +38,6 @@ const { mockGet, ROSTER } = vi.hoisted(() => {
       {
         employeeId: 'roster_leader',
         displayName: 'Roster Leader',
-        enhedLabel: 'Roster Styrelse',
         position: null,
         structuralApproverId: null,
         periodStatus: 'OPEN',

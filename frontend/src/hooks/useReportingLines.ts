@@ -32,7 +32,6 @@ export interface PersonSearchHit {
   userId: string
   displayName: string
   primaryOrgName: string | null
-  enhedLabel: string | null
 }
 
 export interface PersonSearchResult {

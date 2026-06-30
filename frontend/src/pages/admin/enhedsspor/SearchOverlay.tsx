@@ -71,6 +71,16 @@ export function SearchOverlay({ open, onClose, onNavigate, selected, allOrgIds }
   const units = useMemo(() => results.units.filter((u) => inScope(u.organisationId)), [results, scoped, selected])
   const people = useMemo(() => results.people.filter((p) => inScope(p.organisationId)), [results, scoped, selected])
 
+  // S110 / TASK-11002 — the honest per-section truncation signal. The server caps each
+  // section at 200; `unitsTotal`/`peopleTotal` are the EXACT match counts before that
+  // cap. A section is truncated iff the SERVER total exceeds the SERVER-returned count
+  // (`results.units.length`, NOT the Afgrænsning-narrowed `units.length`) — the cap is a
+  // property of the server read, so the signal reports "the cap was hit" regardless of
+  // how the client filter narrows the view. We never claim the displayed (filtered) set
+  // is complete: when scoped, "N flere" still warns the cap may have hidden in-scope rows.
+  const unitsMore = Math.max(0, results.unitsTotal - results.units.length)
+  const peopleMore = Math.max(0, results.peopleTotal - results.people.length)
+
   if (!open) return null
 
   const trimmed = query.trim()
@@ -123,6 +133,7 @@ export function SearchOverlay({ open, onClose, onNavigate, selected, allOrgIds }
                   testid="search-section-enheder"
                   label="Enheder"
                   count={units.length}
+                  more={unitsMore}
                 >
                   {units.map((u) => (
                     <button
@@ -151,6 +162,7 @@ export function SearchOverlay({ open, onClose, onNavigate, selected, allOrgIds }
                   testid="search-section-medarbejdere"
                   label="Medarbejdere"
                   count={people.length}
+                  more={peopleMore}
                 >
                   {people.map((p) => (
                     <button
@@ -200,12 +212,16 @@ interface SearchSectionProps {
   testid: string
   label: string
   count: number
+  /** S110 — how many MORE matches the server holds beyond the returned page (0 = not
+      truncated). Drives the honest "N flere — forfin søgningen" footer. */
+  more: number
   children: ReactNode
 }
 
 /** A collapsible search section (bold header + green fold caret + green count
-    pill). Folding is local UI state; the body is hidden while folded. */
-function SearchSection({ testid, label, count, children }: SearchSectionProps) {
+    pill). Folding is local UI state; the body is hidden while folded. A truncated
+    section (more > 0) shows an honest "N flere" footer while unfolded. */
+function SearchSection({ testid, label, count, more, children }: SearchSectionProps) {
   const [folded, setFolded] = useState(false)
   return (
     <>
@@ -220,6 +236,11 @@ function SearchSection({ testid, label, count, children }: SearchSectionProps) {
         <span className={styles.countPill} data-testid={`${testid}-count`}>{count}</span>
       </button>
       {!folded && children}
+      {!folded && more > 0 && (
+        <div className={styles.sectionMore} data-testid={`${testid}-more`}>
+          {more} flere — forfin søgningen
+        </div>
+      )}
     </>
   )
 }

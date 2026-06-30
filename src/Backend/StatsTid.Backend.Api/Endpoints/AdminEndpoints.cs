@@ -186,6 +186,26 @@ public static class AdminEndpoints
 
                 try
                 {
+                    // S110 / TASK-11003 — close the create-side TOCTOU against a concurrent MAO soft-delete.
+                    // The out-of-tx GetByIdAsync(parent) above proved the MAO was active at READ time, but a
+                    // concurrent DELETE could lock + count(0 children) + soft-delete + commit between that read
+                    // and this INSERT. The child INSERT's FK takes only FOR KEY SHARE, which proves the parent
+                    // MAO EXISTS — NOT that it is active — so an active ORGANISATION could land under a
+                    // just-deleted MAO (orphaned). Re-check the parent's is_active UNDER A SHARED ROW LOCK
+                    // (FOR SHARE) inside THIS tx: FOR SHARE conflicts with the delete's FOR UPDATE, so the two
+                    // serialize. If the delete committed first, the parent is no longer an ACTIVE row here →
+                    // null → 422; otherwise we hold the parent shared and the delete blocks behind us until we
+                    // commit a valid child. (MAO-create has no parent → no re-check; a MAO is a root.)
+                    if (request.ParentOrgId is not null)
+                    {
+                        var activeParent = await orgRepo.LockActiveByIdForShareAsync(conn, tx, request.ParentOrgId, ct);
+                        if (activeParent is null)
+                        {
+                            await tx.RollbackAsync(ct);
+                            return Results.UnprocessableEntity(new { error = "Ministerområdet er slettet." });
+                        }
+                    }
+
                     await using var cmd = new NpgsqlCommand(
                         """
                         INSERT INTO organizations (org_id, org_name, org_type, parent_org_id, materialized_path, agreement_code, ok_version, is_active, created_at, updated_at)
@@ -374,6 +394,11 @@ public static class AdminEndpoints
         // homed on it; a MAO blocks if any active user lives anywhere beneath it (the MAO-subtree
         // LIKE). Empty → allowed. A soft-deleted org disappears from GetByIdAsync/GetAllAsync, so
         // the create/transfer home guards already reject it (Step-0b BLOCKER B — no new guard).
+        //
+        // S110 / TASK-11003 — additionally, a MAO blocks (422 + organisationCount) when it has active
+        // CHILD Organisations (an "empty" MAO with no direct users would otherwise orphan them under an
+        // inactive root). The symmetric create-side TOCTOU (an active org inserted under a MAO being
+        // deleted) is closed by the org-create FOR-SHARE active-parent re-check.
         app.MapDelete("/api/admin/organizations/{orgId}", async (
             string orgId,
             OrganizationRepository orgRepo,
@@ -416,6 +441,27 @@ public static class AdminEndpoints
                         error = $"Kan ikke slette organisationen — den indeholder {employeeCount} medarbejder(e).",
                         employeeCount,
                     });
+                }
+
+                // S110 / TASK-11003 — the MAO-vs-child-orgs lifecycle guard (the pre-existing S98 gap).
+                // An "empty" MAO (no direct active users → the block above passes) could still have active
+                // CHILD Organisations; soft-deleting it would orphan them under an inactive MAO. Block the
+                // delete (422) when the MAO has any active child Organisation. The count runs under the
+                // FOR-UPDATE'd MAO row (consistent); the existing active-user block is unchanged. The
+                // CREATE-side TOCTOU (an active org inserted under a MAO being deleted) is closed
+                // symmetrically by the org-create FOR-SHARE active-parent re-check.
+                if (string.Equals(org.OrgType, "MAO", StringComparison.Ordinal))
+                {
+                    var childOrgCount = await orgRepo.CountActiveChildOrganisationsAsync(conn, tx, org, ct);
+                    if (childOrgCount > 0)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.UnprocessableEntity(new
+                        {
+                            error = "Ministerområdet har aktive organisationer — flyt eller slet dem først.",
+                            organisationCount = childOrgCount,
+                        });
+                    }
                 }
 
                 // Flip is_active=FALSE in the same tx.
@@ -2564,8 +2610,8 @@ public static class AdminEndpoints
         // S75-7500 (R1-R3) — GET /api/admin/reporting-lines/tree/{organisationId}/medarbejdere
         //   The consolidated medarbejder-roster read backing the redesigned Medarbejder-
         //   administration STRUCTURAL tree (FE Phase 2, tasks 7501/7502 consume this contract).
-        //   Per active styrelse user: { employeeId, displayName, enhedLabel (?? primaryOrgName),
-        //   position, structuralApproverId (the RAW active PRIMARY edge — the TREE KEY, NO
+        //   Per active styrelse user: { employeeId, displayName, position,
+        //   structuralApproverId (the RAW active PRIMARY edge — the TREE KEY, NO
         //   resolver), periodStatus (OPEN/SUBMITTED/APPROVED — the same last-closed-month rule as
         //   the period-status read), outgoingVikar (the person's OWN active manager_vikar row |
         //   null), isRoot, isOrphan (the R3 deterministic rule) } + the styrelse
@@ -2605,7 +2651,6 @@ public static class AdminEndpoints
                 {
                     employeeId = e.EmployeeId,
                     displayName = e.DisplayName,
-                    enhedLabel = e.EnhedLabel,
                     position = e.Position,
                     structuralApproverId = e.StructuralApproverId,
                     periodStatus = e.PeriodStatus,
@@ -2692,8 +2737,6 @@ public static class AdminEndpoints
                     userId = i.UserId,
                     displayName = i.DisplayName,
                     primaryOrgName = i.PrimaryOrgName,
-                    // S103 — the structured-Enhed display column is retired; now always null.
-                    enhedLabel = i.EnhedLabel,
                 }),
                 total,
                 limit = pageLimit,
@@ -2741,10 +2784,12 @@ public static class AdminEndpoints
 
             var term = q ?? string.Empty;
 
-            // The two scope-bounded SQL reads (each capped + paginated; exact totals computed but the
-            // overlay's two-section shape carries the capped lists only).
-            var (unitHits, _) = await unitRepo.SearchUnitsAsync(term, accessibleOrgs, pageLimit, pageOffset, ct);
-            var (peopleHits, _) = await approvalRepo.SearchPeopleForOverlayAsync(term, accessibleOrgs, pageLimit, pageOffset, ct);
+            // The two scope-bounded SQL reads (each capped + paginated). S110 / TASK-11002: the EXACT
+            // per-section totals (computed by the matched→total→page CTE) are now SURFACED into the
+            // response (unitsTotal/peopleTotal) so the overlay can show an honest "N flere" truncation
+            // signal — a capped section is no longer mistaken for complete.
+            var (unitHits, unitsTotal) = await unitRepo.SearchUnitsAsync(term, accessibleOrgs, pageLimit, pageOffset, ct);
+            var (peopleHits, peopleTotal) = await approvalRepo.SearchPeopleForOverlayAsync(term, accessibleOrgs, pageLimit, pageOffset, ct);
 
             // Cheap in-memory lookups for the PATH build (units ≪ people; orgs are few) — exactly the
             // forest read's approach. The matched rows are ALREADY scope-filtered; a matched unit's
@@ -2807,7 +2852,7 @@ public static class AdminEndpoints
                     Path: path);
             }).ToList();
 
-            return Results.Ok(new SearchResponse(units, people));
+            return Results.Ok(new SearchResponse(units, people, unitsTotal, peopleTotal));
         }).RequireAuthorization("HROrAbove");
 
         return app;

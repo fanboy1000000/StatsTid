@@ -332,10 +332,11 @@ public sealed class UnitFoundationTests : IAsyncLifetime
         var rosterIds = rosterBody.GetProperty("employees").EnumerateArray()
             .Select(e => e.GetProperty("employeeId").GetString()).ToList();
         Assert.Contains(Emp, rosterIds);
-        // enhedLabel is now the primary-org name (the column was dropped) — present, never a 500.
+        // S110 / TASK-11001: the vestigial enhedLabel display field was removed from the roster
+        // response — the row is still served (never a 500) and must NOT carry the dropped field.
         var empRow = rosterBody.GetProperty("employees").EnumerateArray()
             .First(e => e.GetProperty("employeeId").GetString() == Emp);
-        Assert.Equal("Statens IT", empRow.GetProperty("enhedLabel").GetString());
+        Assert.False(empRow.TryGetProperty("enhedLabel", out _));
     }
 
     // ════════════════════════════════════════════════════════════════════════════════

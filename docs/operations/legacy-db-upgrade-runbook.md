@@ -60,6 +60,8 @@ Apply the guarded ALTER blocks from init.sql in order. Each sprint's additions a
 
 ## S97 — Enhed structured-metadata backfill (TASK-9704)
 
+> **LEGACY / RETIRED (S103 + S110, ADR-038).** This whole section describes the now-superseded `enheder`/`user_enheder`/`enhed_label` model. The Enhedsspor re-architecture (ADR-038) replaced it with the `units`/`unit_leaders`/`users.unit_id` model in S103 (greenfield reseed, D9 — the `enhed_label` COLUMN was removed then), and S110 removed the last vestigial `enhedLabel` display field from the read responses. Retained below for historical context only; it does NOT apply to the current schema.
+
 S97 replaces the free-text `employee_profiles.enhed_label` with a structured `enheder`
 entity table + a `user_enheder` multi-tag membership link (ADR-035; pure display metadata,
 zero authority/scope/approval meaning). `enhed_label` is **kept read-only** as a display

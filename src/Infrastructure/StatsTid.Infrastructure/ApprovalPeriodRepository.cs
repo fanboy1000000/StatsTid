@@ -734,9 +734,6 @@ public sealed class ApprovalPeriodRepository
     /// <para>
     /// <b>Composition (one styrelse-bounded, set-based query for the roster + joins):</b>
     /// <list type="bullet">
-    /// <item><description><c>enhedLabel</c> = the primary-org name (S103 / TASK-10304 — the
-    /// structured-Enhed display column is retired with the legacy Enhed tables; unit-based display
-    /// returns in Enhedsspor Phase 3);</description></item>
     /// <item><description><c>position</c> = the live <c>employee_profiles.position</c> (for FE
     /// search; null when no live profile / unset);</description></item>
     /// <item><description><c>structuralApproverId</c> = the active PRIMARY edge's
@@ -775,9 +772,9 @@ public sealed class ApprovalPeriodRepository
     {
         // (1) The structural roster + all joins in ONE styrelse-bounded, set-based query:
         //     every active styrelse user LEFT-JOINed to their active PRIMARY edge (the raw
-        //     structuralApproverId — NO resolver), their live employee_profiles (enhedLabel/
-        //     position), their primary-org name (the enhedLabel fallback), and their OWN active
-        //     manager_vikar row (outgoingVikar) with the vikar's display name.
+        //     structuralApproverId — NO resolver), their live employee_profiles (position), and
+        //     their OWN active manager_vikar row (outgoingVikar) with the vikar's display name.
+        //     (S110 / TASK-11001: the vestigial enhedLabel/primary-org-name display field is gone.)
         var rosterRows = new List<RosterRow>();
         await using (var conn = _connectionFactory.Create())
         {
@@ -787,7 +784,6 @@ public sealed class ApprovalPeriodRepository
                 SELECT
                     u.user_id                AS employee_id,
                     u.display_name           AS display_name,
-                    o.org_name               AS primary_org_name,
                     ep.position              AS position,
                     rl.manager_id            AS structural_approver_id,
                     rl.version               AS primary_reporting_line_version,
@@ -833,7 +829,6 @@ public sealed class ApprovalPeriodRepository
             await using var reader = await cmd.ExecuteReaderAsync(ct);
             var empOrd = reader.GetOrdinal("employee_id");
             var nameOrd = reader.GetOrdinal("display_name");
-            var orgNameOrd = reader.GetOrdinal("primary_org_name");
             var posOrd = reader.GetOrdinal("position");
             var approverOrd = reader.GetOrdinal("structural_approver_id");
             var rlVersionOrd = reader.GetOrdinal("primary_reporting_line_version");
@@ -846,10 +841,6 @@ public sealed class ApprovalPeriodRepository
             var vikarReasonOrd = reader.GetOrdinal("vikar_reason");
             while (await reader.ReadAsync(ct))
             {
-                // S103 / TASK-10304 — the structured-Enhed display column is retired with the
-                // legacy Enhed tables (the unit-based display returns in Enhedsspor Phase 3). The
-                // roster display label falls back to the primary-org name for now.
-                var orgName = reader.GetString(orgNameOrd);
                 OutgoingVikar? vikar = reader.IsDBNull(vikarIdOrd)
                     ? null
                     : new OutgoingVikar(
@@ -870,8 +861,6 @@ public sealed class ApprovalPeriodRepository
                 rosterRows.Add(new RosterRow(
                     EmployeeId: reader.GetString(empOrd),
                     DisplayName: reader.GetString(nameOrd),
-                    // S103 — the primary-org name (the unit-based display returns in Phase 3).
-                    EnhedLabel: orgName,
                     Position: reader.IsDBNull(posOrd) ? null : reader.GetString(posOrd),
                     StructuralApproverId: reader.IsDBNull(approverOrd) ? null : reader.GetString(approverOrd),
                     OutgoingVikar: vikar,
@@ -911,7 +900,6 @@ public sealed class ApprovalPeriodRepository
             employees.Add(new MedarbejderRosterRow(
                 EmployeeId: r.EmployeeId,
                 DisplayName: r.DisplayName,
-                EnhedLabel: r.EnhedLabel,
                 Position: r.Position,
                 StructuralApproverId: r.StructuralApproverId,
                 // Defensive fallback to OPEN if a roster row has no projected status (rosters are
@@ -1001,7 +989,6 @@ public sealed class ApprovalPeriodRepository
     private sealed record RosterRow(
         string EmployeeId,
         string DisplayName,
-        string EnhedLabel,
         string? Position,
         string? StructuralApproverId,
         OutgoingVikar? OutgoingVikar,
@@ -1032,9 +1019,10 @@ public sealed class ApprovalPeriodRepository
     /// paginated DB query (a shared <c>matched</c> CTE feeding a scalar <c>COUNT(*)</c> total +
     /// the <c>LIMIT/OFFSET</c> page in one round-trip — NOT load-all-then-filter; the scalar count
     /// reports the true total even on a valid EMPTY trailing page, which a <c>COUNT(*) OVER()</c>
-    /// window over the page rows would report as <c>0</c>). Each matched user carries their primary-org name
-    /// (the <c>enhedLabel</c> display column is retired with the legacy Enhed tables in S103 /
-    /// TASK-10304 — it is now always <c>null</c>; the FE falls back to the org name). Read-only / additive.
+    /// window over the page rows would report as <c>0</c>). Each matched user carries their primary-org
+    /// name (S110 / TASK-11001 removed the vestigial <c>enhedLabel</c> display field — the
+    /// <c>employee_profiles.enhed_label</c> column was dropped in S103 and the field duplicated the org
+    /// name). Read-only / additive.
     ///
     /// <list type="bullet">
     /// <item><description><b>Match:</b> case-insensitive substring on <c>display_name</c> OR
@@ -1146,11 +1134,7 @@ public sealed class ApprovalPeriodRepository
             items.Add(new PersonSearchHit(
                 UserId: reader.GetString(userOrd),
                 DisplayName: reader.GetString(reader.GetOrdinal("display_name")),
-                PrimaryOrgName: reader.GetString(reader.GetOrdinal("primary_org_name")),
-                // S103 / TASK-10304 — the structured-Enhed display column is retired with the
-                // legacy Enhed tables (unit-based display returns in Phase 3); the FE falls back
-                // to the primary-org name.
-                EnhedLabel: null));
+                PrimaryOrgName: reader.GetString(reader.GetOrdinal("primary_org_name"))));
         }
         return (items, total);
     }
@@ -1592,9 +1576,10 @@ public sealed record EmployeePeriodStatus(
 /// REUSED from <see cref="TreePeriodStatusProjection"/> unchanged. Read-only / additive.
 /// </summary>
 /// <param name="Employees">The full styrelse roster, each enriched with the structural approver
-/// (raw PRIMARY edge), enhedLabel/position, last-closed-month status, the outgoing-vikar marker,
+/// (raw PRIMARY edge), position, last-closed-month status, the outgoing-vikar marker,
 /// the deterministic root/orphan flags (R3), and the S106 unit tag (unit id/name + the unit's
-/// leaders + the nullable primary-reporting-line etag).</param>
+/// leaders + the nullable primary-reporting-line etag). (S110 / TASK-11001 removed the vestigial
+/// enhedLabel display field.)</param>
 /// <param name="PendingCountByManager">manager user_id → number of that manager's effective reports
 /// currently holding a pending period — the EXISTING S74 tally, now (S106 / TASK-10604) expanded
 /// to the per-authorized-approver cardinality (edge manager + each unit-leader / their vikar).</param>
@@ -1612,10 +1597,13 @@ public sealed record MedarbejderRosterProjection(
 /// <summary>
 /// One enriched medarbejder-roster row (S75-7500 R1; S106 unit tag). The tree keys on
 /// <paramref name="StructuralApproverId"/> (the raw active PRIMARY <c>reporting_lines.manager_id</c>
-/// — NOT a resolver result). <paramref name="EnhedLabel"/> is the primary-org name (S103 /
-/// TASK-10304 — the structured-Enhed display column is retired; unit-based display returns in
-/// Phase 3). <paramref name="OutgoingVikar"/> is the person's OWN active
+/// — NOT a resolver result). <paramref name="OutgoingVikar"/> is the person's OWN active
 /// <c>manager_vikar</c> row (present iff they are an away-manager covered by a vikar).
+///
+/// <para>S110 / TASK-11001: the vestigial <c>enhedLabel</c> display field (= the primary-org name,
+/// the <c>employee_profiles.enhed_label</c> column dropped in S103) is REMOVED — unit-based display
+/// is served by the merged-admin unit tag (<paramref name="UnitName"/> + the forest), not a per-row
+/// org label.</para>
 ///
 /// <para>S106 / TASK-10602 (Enhedsspor Phase 3a, ADR-038 D2/D4/D6): <paramref name="UnitId"/> /
 /// <paramref name="UnitName"/> are the person's single structural unit (NULL when homed directly at
@@ -1631,7 +1619,6 @@ public sealed record MedarbejderRosterProjection(
 public sealed record MedarbejderRosterRow(
     string EmployeeId,
     string DisplayName,
-    string EnhedLabel,
     string? Position,
     string? StructuralApproverId,
     string PeriodStatus,
@@ -1671,15 +1658,15 @@ public sealed record OutgoingVikar(
 
 /// <summary>
 /// One person-search hit (S74-7404 R11b,
-/// <see cref="ApprovalPeriodRepository.SearchPeopleAsync"/>). <paramref name="EnhedLabel"/> is now
-/// always <c>null</c> (S103 / TASK-10304 — the structured-Enhed display column is retired); the FE
-/// falls back to <paramref name="PrimaryOrgName"/>.
+/// <see cref="ApprovalPeriodRepository.SearchPeopleAsync"/>). The picker displays
+/// <paramref name="PrimaryOrgName"/> (S110 / TASK-11001 removed the vestigial <c>enhedLabel</c>
+/// field — the <c>employee_profiles.enhed_label</c> column was dropped in S103 and the field was a
+/// redundant duplicate of the org name).
 /// </summary>
 public sealed record PersonSearchHit(
     string UserId,
     string DisplayName,
-    string PrimaryOrgName,
-    string? EnhedLabel);
+    string PrimaryOrgName);
 
 /// <summary>
 /// S106 / TASK-10603 — one matched person from the merged-admin overlay SEARCH

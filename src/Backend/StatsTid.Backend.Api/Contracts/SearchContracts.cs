@@ -21,12 +21,21 @@ namespace StatsTid.Backend.Api.Contracts;
 // (SearchEndpointContractTests), closing the recurring "fetchEnheder" false-green bug class (S97 →
 // S99 → S100) for the search surface BEFORE a FE consumer exists.
 
-/// <summary>The GET /api/admin/search envelope — <c>{ units: [...], people: [...] }</c> (the design's
-/// TWO-section overlay shape; NOT a bare array). Both sections are scope-bounded + capped per section
-/// (default 50 / cap 200), matching the GET /api/admin/users/search pagination convention.</summary>
+/// <summary>The GET /api/admin/search envelope — <c>{ units: [...], people: [...], unitsTotal, peopleTotal }</c>
+/// (the design's TWO-section overlay shape; NOT a bare array). Both sections are scope-bounded + capped
+/// per section (default 50 / cap 200), matching the GET /api/admin/users/search pagination convention.
+///
+/// <para>S110 / TASK-11002 — <paramref name="UnitsTotal"/> / <paramref name="PeopleTotal"/> are the EXACT
+/// per-section match counts BEFORE the page slice (the <c>matched → total → page</c> CTE already computes
+/// them; they were previously discarded). They drive the overlay's honest "viser X af Y" / "N flere —
+/// forfin søgningen" truncation signal — a section whose capped list is shorter than its total is
+/// truncated. NOT an <c>items.length == cap</c> heuristic (which false-positives at exactly <c>cap</c>
+/// real hits). Each total is >= its section's returned-item count.</para></summary>
 public sealed record SearchResponse(
     IReadOnlyList<UnitSearchResult> Units,
-    IReadOnlyList<PersonSearchResult> People);
+    IReadOnlyList<PersonSearchResult> People,
+    int UnitsTotal,
+    int PeopleTotal);
 
 /// <summary>A matching ACTIVE unit (ENHEDER section). <paramref name="Path"/> is the full breadcrumb
 /// the overlay displays — the chain of names from the Organisation (root) DOWN to the unit's immediate

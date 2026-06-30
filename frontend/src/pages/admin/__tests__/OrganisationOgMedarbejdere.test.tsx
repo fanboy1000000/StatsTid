@@ -15,7 +15,7 @@ import type { SearchResponse } from '../../../hooks/useSearch'
 // ── mocks (mutable holders the mocked hooks read) ──────────────────────────────
 const h = vi.hoisted(() => ({
   forest: [] as ForestMaoNode[],
-  search: { query: '', results: { units: [], people: [] } as SearchResponse, loading: false },
+  search: { query: '', results: { units: [], people: [], unitsTotal: 0, peopleTotal: 0 } as SearchResponse, loading: false },
 }))
 
 // SPRINT-108 / TASK-10803 — the page + StrukturPanel now consume useAuth (the
@@ -70,7 +70,7 @@ function twoOrgForest(): ForestMaoNode[] {
 
 beforeEach(() => {
   h.forest = twoOrgForest()
-  h.search = { query: '', results: { units: [], people: [] }, loading: false }
+  h.search = { query: '', results: { units: [], people: [], unitsTotal: 0, peopleTotal: 0 }, loading: false }
   auth.role = 'LocalHR'
 })
 
@@ -182,6 +182,8 @@ describe('OrganisationOgMedarbejdere — page (shell + Afgrænsning + search)', 
         people: [
           { userId: 'p1', organisationId: 'STY02', displayName: 'Jens Vej', position: 'Kontorchef', unitName: 'Vejledning', path: ['Statens IT', 'Vejledning'] },
         ],
+        unitsTotal: 0,
+        peopleTotal: 1,
       },
     }
     render(<OrganisationOgMedarbejdere />)
