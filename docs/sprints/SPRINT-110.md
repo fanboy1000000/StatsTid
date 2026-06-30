@@ -3,12 +3,12 @@
 | Field | Value |
 |-------|-------|
 | **Sprint** | 110 |
-| **Status** | complete (pending push + CI-verify) |
+| **Status** | complete — CI GREEN `28467209457` (all 7 jobs) |
 | **Start Date** | 2026-06-30 |
 | **End Date** | 2026-06-30 |
 | **Orchestrator Approved** | yes |
 | **Build Verified** | yes — `dotnet build` + `npm run build` 0/0 |
-| **Test Verified** | yes — full pyramid green locally (852u + 1155r [1 FAIL-002 shed isolation-cleared] + 29demoseed + 531fe); Step-7a dual-lens BOTH CLEAN; CI-verify on push |
+| **Test Verified** | yes — **CI GREEN `28467209457` (all 7 jobs incl. regression + smoke + e2e)**; full pyramid 852u + 1155r + 6s + 29demoseed + 531fe; Step-7a dual-lens BOTH CLEAN |
 
 ## Sprint Goal
 The FINAL Enhedsspor sprint — cleanup + program close-out (owner chose all 3 candidates + the core cleanup + a best-practice close-out). Four work-streams: (1) **remove the vestigial `enhedLabel` RESPONSE field** (the `employee_profiles.enhed_label` COLUMN was ALREADY dropped in S103 — Step-0b BLOCKER; this is purely the dead response field [= `orgName`, redundant with `primaryOrgName`] + its FE consumers + the contract tests; **NO schema/event change**); (2) the **search "N flere" truncation signal** (surface the per-section total the backend already computes-then-discards); (3) the **MAO-delete-vs-child-orgs guard** (the pre-existing S98 lifecycle gap — block a MAO soft-delete with active child Organisations, AND close the create-side TOCTOU; **the real P7 keystone of this sprint**); (4) the **close-out** — prune the actionable stale comments, reconcile the docs (FRONTEND.md + SYSTEM_DOCUMENTATION.md + SECURITY.md → the single merged-admin surface), mark **ADR-038 as-built COMPLETE**, update the QUALITY grades. On close, the Enhedsspor program (S102→S110) is DONE.
