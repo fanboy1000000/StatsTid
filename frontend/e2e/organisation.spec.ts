@@ -49,7 +49,9 @@ const STY02 = 'STY02' // Statens IT — the seeded Organisation carrying the uni
 /** Open the merged page (post-login) and wait for the org-structure tree to render. */
 async function openMergedPage(page: Page): Promise<void> {
   await page.goto(MERGED_URL)
-  await expect(page.getByText('Organisation & medarbejdere')).toBeVisible()
+  // The page-specific tree testid confirms the merged page rendered (the title text
+  // "Organisation & medarbejdere" appears in BOTH the sidebar nav link and the page
+  // header → an ambiguous getByText strict-mode violation; the tree testid is unique).
   await expect(page.getByTestId('org-structure-tree')).toBeVisible()
 }
 
@@ -117,11 +119,14 @@ test('admin01 creates, renames and deletes a unit on the merged page', async ({ 
   await createDrawer.getByTestId('unit-drawer-name').fill(unitName)
   await createDrawer.getByTestId('unit-drawer-submit').click()
   await expect(page.getByTestId('unit-drawer-title')).toBeHidden()
-  // The forest refetched → the new unit appears in the left tree under STY02.
-  await expect(page.getByText(unitName, { exact: true })).toBeVisible()
+  // The forest refetched → the new unit appears in the left tree under STY02. (Scope to the
+  // tree container — the name also appears in the right "Struktur", so a bare getByText is an
+  // ambiguous strict-mode match.)
+  const leftTree = page.getByTestId('org-structure-tree')
+  await expect(leftTree.getByText(unitName, { exact: true })).toBeVisible()
 
-  // ── SELECT the new unit (left tree row, located by its unique name) ──
-  await page.getByRole('treeitem').filter({ hasText: unitName }).click()
+  // ── SELECT the new unit (its unique name in the left tree) ──
+  await leftTree.getByText(unitName, { exact: true }).click()
   await expect(page.getByTestId('title-name')).toHaveText(unitName)
 
   // ── RENAME: via the unit "Rediger" action ──
@@ -140,6 +145,6 @@ test('admin01 creates, renames and deletes a unit on the merged page', async ({ 
   await page.getByTestId('unit-delete-confirm').click()
   await expect(page.getByTestId('unit-delete-warning')).toBeHidden()
   // The unit is gone from the tree (no row carries either name any longer).
-  await expect(page.getByText(unitName, { exact: true })).toBeHidden()
-  await expect(page.getByText(unitRenamed, { exact: true })).toBeHidden()
+  await expect(leftTree.getByText(unitName, { exact: true })).toBeHidden()
+  await expect(leftTree.getByText(unitRenamed, { exact: true })).toBeHidden()
 })
