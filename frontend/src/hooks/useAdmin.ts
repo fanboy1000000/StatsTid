@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { apiClient, apiFetchWithEtag } from '../lib/api'
+import type { components } from '../lib/api-types'
 import { coerceApiResponse, type Assert, type AssertFieldsInSpec } from '../lib/apiNarrow'
 import { formatVersionAsIfMatch, resolveEtag } from '../lib/etag'
 
@@ -11,6 +12,16 @@ import { formatVersionAsIfMatch, resolveEtag } from '../lib/etag'
 // previous `import { Organization, User, RoleAssignment } from '../types'`
 // pointed at non-existent exports (the project's `types.ts` does not define
 // admin entities) — this fixes the pre-existing baseline compile error.
+//
+// S112 / TASK-11203 — the user/org/role slice call-sites switched to the TYPED
+// structured forms (PAT-012): reads via the spec-keyed `apiClient.get` /
+// `apiFetchWithEtag(pathKey, { method: 'GET', params })`, mutations via the
+// typed `apiClient.post/put` and the typed etag overload (`ifMatch` takes the
+// ready RFC 7232 string). Responses are DERIVED from the spec and re-narrowed to
+// the FE-strict interfaces via `coerceApiResponse`, each guarded by an
+// `AssertFieldsInSpec` drift assert. ONE read stays on the explicit-`T`
+// fallback: `GET /api/admin/organizations/{orgId}/users` is still undeclared in
+// the spec (`content?: never`, grandfathered) — see `fetchUsers`.
 
 export interface Organization {
   orgId: string
@@ -28,6 +39,10 @@ export interface Organization {
 export type _OrgDrift = Assert<
   AssertFieldsInSpec<Organization, 'StatsTid.Backend.Api.Contracts.OrgListItem'>
 >
+// S112 — the org create/rename responses serve the spec `OrganizationResponse`.
+export type _OrgResponseDrift = Assert<
+  AssertFieldsInSpec<Organization, 'StatsTid.Backend.Api.Contracts.OrganizationResponse'>
+>
 
 export interface User {
   userId: string
@@ -44,16 +59,61 @@ export interface User {
   version: number
 }
 
+// S112 — drift guards: `User` is read from BOTH the per-user GET
+// (`UserDetailResponse`) and the create POST (`UserCreatedResponse`); every FE
+// field must exist in both spec schemas.
+export type _UserDetailDrift = Assert<
+  AssertFieldsInSpec<User, 'StatsTid.Backend.Api.Contracts.UserDetailResponse'>
+>
+export type _UserCreatedDrift = Assert<
+  AssertFieldsInSpec<User, 'StatsTid.Backend.Api.Contracts.UserCreatedResponse'>
+>
+
+/**
+ * S112 / TASK-11203 — the honest PUT `/api/admin/users/{userId}` response shape
+ * (the spec `UserUpdatedResponse`): unlike the GET/POST shapes it carries NO
+ * `username`. The previous hand-written `apiFetchWithEtag<User>` claimed it did —
+ * a silent lie the typed switch surfaced (consumers merge over the previous user
+ * snapshot to retain `username`; see `useEditPerson.saveEdit`).
+ */
+export interface UserUpdated {
+  userId: string
+  displayName: string
+  email: string | null
+  primaryOrgId: string
+  agreementCode: string
+  version: number
+}
+
+export type _UserUpdatedDrift = Assert<
+  AssertFieldsInSpec<UserUpdated, 'StatsTid.Backend.Api.Contracts.UserUpdatedResponse'>
+>
+
+// S112 / TASK-11203 — CORRECTED to the REAL wire shape (the spec
+// `UserRoleAssignmentItem`). The previous hand-written interface claimed
+// `userId` / `grantedAt` / `grantedBy` — fields the backend NEVER served (it
+// serves `assignedAt` / `assignedBy` and no per-item `userId`), so the roles
+// table rendered blank cells (the S97→S100 wrong-expectation class, caught by
+// the typed switch + drift guard).
 export interface RoleAssignment {
   assignmentId: string
-  userId: string
   roleId: string
   orgId: string | null
   scopeType: string
   expiresAt: string | null
-  grantedAt: string
-  grantedBy: string
+  assignedAt: string
+  assignedBy: string
 }
+
+export type _RoleAssignmentDrift = Assert<
+  AssertFieldsInSpec<RoleAssignment, 'StatsTid.Backend.Api.Contracts.UserRoleAssignmentItem'>
+>
+// The grant POST returns the spec `RoleGrantResponse`, a superset carrying the
+// same field names (`assignedBy` nullable there) — guarded so the shared FE
+// interface stays readable from both.
+export type _RoleGrantDrift = Assert<
+  AssertFieldsInSpec<RoleAssignment, 'StatsTid.Backend.Api.Contracts.RoleGrantResponse'>
+>
 
 /**
  * Standard wrapper for response entities that carry a row-version concurrency
@@ -74,9 +134,8 @@ export interface OrgMutationError extends Error {
 }
 
 function makeOrgMutationError(status: number, message: string): OrgMutationError {
-  const err = new Error(message) as OrgMutationError
-  err.status = status
-  return err
+  // Object.assign (not an `as` cast) — this file is on the S112 no-`as` surface.
+  return Object.assign(new Error(message), { status })
 }
 
 export function useOrganizations() {
@@ -117,14 +176,16 @@ export function useOrganizations() {
     orgId?: string
     agreementCode?: string
   }) => {
-    const result = await apiClient.post<Organization>('/api/admin/organizations', body)
+    // S112 — typed structured POST (201 → the spec `OrganizationResponse`,
+    // re-narrowed to the FE-strict `Organization`; `_OrgResponseDrift`).
+    const result = await apiClient.post('/api/admin/organizations', { body })
     // S99 Step-7a FIX 2 — carry the HTTP status so the merged-admin page's create
     // dialog's 409 branch (`dupOrMessage`) can fire (mirrors
     // useOrganizationStructure). For ORGANISATION/MAO a 409 is effectively
     // unreachable (server-generated orgId + no name-uniqueness).
     if (!result.ok) throw makeOrgMutationError(result.status, result.error)
     await fetchOrganizations()
-    return result.data
+    return coerceApiResponse<Organization>(result.data)
   }
 
   // S99 — name-only rename. The backend COALESCEs null agreement/ok to the
@@ -132,13 +193,13 @@ export function useOrganizations() {
   // (it keeps the existing agreement/ok) — we deliberately do NOT surface or
   // re-send overenskomst/OK-version (the handoff forbids them on the org tree).
   const updateOrganization = async (orgId: string, body: { orgName: string }) => {
-    const result = await apiClient.put<Organization>(
-      `/api/admin/organizations/${encodeURIComponent(orgId)}`,
+    const result = await apiClient.put('/api/admin/organizations/{orgId}', {
+      params: { path: { orgId } },
       body,
-    )
+    })
     if (!result.ok) throw new Error(result.error)
     await fetchOrganizations()
-    return result.data
+    return coerceApiResponse<Organization>(result.data)
   }
 
   return { organizations, loading, error, fetchOrganizations, createOrganization, updateOrganization }
@@ -164,13 +225,13 @@ function makeUserMutationError(
   errorMsg: string,
   body: UserMutationError['body'],
 ): UserMutationError {
-  const err = new Error(errorMsg) as UserMutationError
-  err.status = status
-  err.body = body
-  return err
+  // Object.assign (not an `as` cast) — this file is on the S112 no-`as` surface.
+  return Object.assign(new Error(errorMsg), { status, body })
 }
 
-function withResponseEtag(data: User, etag: string | null): WithEtag<User> {
+// S112 — generalized over the response entity (the PUT response is the narrower
+// `UserUpdated`, the GET/POST responses are the full `User`).
+function withResponseEtag<T extends { version: number }>(data: T, etag: string | null): WithEtag<T> {
   const { etag: resolvedEtag } = resolveEtag(etag, data)
   return {
     ...data,
@@ -188,6 +249,10 @@ export function useOrgUsers(orgId: string) {
     if (!orgId) return
     setLoading(true)
     setError(null)
+    // NOT switched (S112): this GET is still UNDECLARED in the OpenAPI spec
+    // (`content?: never`, one of the ~130 grandfathered ops) — typing it here
+    // would relocate the false-green rather than close it. It stays on the
+    // explicit-`T` fallback until its backend response is spec-typed.
     const result = await apiClient.get<User[]>(`/api/admin/organizations/${orgId}/users`)
     if (result.ok) {
       setUsers(result.data)
@@ -207,12 +272,14 @@ export function useOrgUsers(orgId: string) {
    * both an `ETag` header and a `version` body field.
    */
   const fetchUser = async (userId: string): Promise<WithEtag<User>> => {
-    const result = await apiFetchWithEtag<User>(
-      `/api/admin/users/${encodeURIComponent(userId)}`,
-    )
+    // S112 — typed etag GET (the spec `UserDetailResponse`; `_UserDetailDrift`).
+    const result = await apiFetchWithEtag('/api/admin/users/{userId}', {
+      method: 'GET',
+      params: { path: { userId } },
+    })
     if (!result.ok) throw new Error(result.error)
     const { data, etag } = result.data
-    return withResponseEtag(data, etag)
+    return withResponseEtag(coerceApiResponse<User>(data), etag)
   }
 
   /**
@@ -220,16 +287,24 @@ export function useOrgUsers(orgId: string) {
    * `ETag: "1"` for the newly-minted row plus `version: 1` in the body so
    * a follow-up edit can compose `If-Match` against version 1 without an
    * intermediate GET.
+   *
+   * S112 — the body is the spec `CreateUserRequest` verbatim (it REQUIRES
+   * `userId` / `okVersion`, which the previous hand-written signature falsely
+   * marked optional — every live caller already supplied both; the create
+   * would 400 without them). Response = the spec `UserCreatedResponse`
+   * (`_UserCreatedDrift`).
    */
-  const createUser = async (body: { userId?: string; username: string; displayName: string; email?: string; primaryOrgId: string; agreementCode: string; okVersion?: string; password: string; approverId?: string }): Promise<WithEtag<User>> => {
-    const result = await apiFetchWithEtag<User>('/api/admin/users', {
+  const createUser = async (
+    body: components['schemas']['StatsTid.Backend.Api.Endpoints.AdminEndpoints.CreateUserRequest'],
+  ): Promise<WithEtag<User>> => {
+    const result = await apiFetchWithEtag('/api/admin/users', {
       method: 'POST',
-      body: JSON.stringify(body),
+      body,
     })
     if (!result.ok) throw new Error(result.error)
     await fetchUsers()
     const { data, etag } = result.data
-    return withResponseEtag(data, etag)
+    return withResponseEtag(coerceApiResponse<User>(data), etag)
   }
 
   /**
@@ -256,25 +331,27 @@ export function useOrgUsers(orgId: string) {
     // not serialized (the same-Org path).
     body: { effectiveFrom: string; displayName?: string; email?: string; primaryOrgId?: string; agreementCode?: string; unitId?: string | null },
     ifMatch: string,
-  ): Promise<WithEtag<User>> => {
-    const result = await apiFetchWithEtag<User>(
-      `/api/admin/users/${encodeURIComponent(userId)}`,
-      {
-        method: 'PUT',
-        body: JSON.stringify(body),
-        headers: { 'If-Match': ifMatch },
-      },
-    )
+  ): Promise<WithEtag<UserUpdated>> => {
+    // S112 — typed etag PUT. NOTE the honest return type: the PUT response is
+    // the spec `UserUpdatedResponse` (NO `username`) — see `UserUpdated`.
+    const result = await apiFetchWithEtag('/api/admin/users/{userId}', {
+      method: 'PUT',
+      params: { path: { userId } },
+      ifMatch,
+      body,
+    })
     if (!result.ok) {
       throw makeUserMutationError(
         result.status,
         result.error,
-        result.body as UserMutationError['body'],
+        // The 412 body is an (undeclared) error payload — re-narrowed at the
+        // same trust boundary as the response coercions.
+        coerceApiResponse<UserMutationError['body']>(result.body),
       )
     }
     await fetchUsers()
     const { data, etag } = result.data
-    return withResponseEtag(data, etag)
+    return withResponseEtag(coerceApiResponse<UserUpdated>(data), etag)
   }
 
   return { users, loading, error, fetchUsers, fetchUser, createUser, updateUser }
@@ -289,9 +366,13 @@ export function useUserRoles(userId: string) {
     if (!userId) return
     setLoading(true)
     setError(null)
-    const result = await apiClient.get<RoleAssignment[]>(`/api/admin/users/${userId}/roles`)
+    // S112 — typed via the spec path key (bare `UserRoleAssignmentItem[]`;
+    // `_RoleAssignmentDrift` pins the FE field-set).
+    const result = await apiClient.get('/api/admin/users/{userId}/roles', {
+      params: { path: { userId } },
+    })
     if (result.ok) {
-      setRoles(result.data)
+      setRoles(coerceApiResponse<RoleAssignment[]>(result.data))
     } else {
       setError(result.error)
     }
@@ -301,14 +382,21 @@ export function useUserRoles(userId: string) {
   useEffect(() => { fetchRoles() }, [fetchRoles])
 
   const grantRole = async (body: { userId: string; roleId: string; orgId?: string; scopeType: string; expiresAt?: string }) => {
-    const result = await apiClient.post<RoleAssignment>('/api/admin/roles/grant', body)
+    // S112 — typed structured POST (201 → the spec `RoleGrantResponse`).
+    const result = await apiClient.post('/api/admin/roles/grant', { body })
     if (!result.ok) throw new Error(result.error)
     await fetchRoles()
-    return result.data
+    return coerceApiResponse<RoleAssignment>(result.data)
   }
 
   const revokeRole = async (body: { userId: string; assignmentId: string }) => {
-    const result = await apiClient.post<void>('/api/admin/roles/revoke', body)
+    // S112 — the spec `RevokeRoleRequest` carries ONLY { assignmentId, reason? }.
+    // The previously-sent `userId` was never part of the backend contract
+    // (ignored server-side) and is no longer serialized; the hook signature
+    // keeps it so callers stay untouched.
+    const result = await apiClient.post('/api/admin/roles/revoke', {
+      body: { assignmentId: body.assignmentId },
+    })
     if (!result.ok) throw new Error(result.error)
     await fetchRoles()
   }

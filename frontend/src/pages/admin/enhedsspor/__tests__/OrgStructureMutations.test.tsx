@@ -2,7 +2,11 @@
 // flows driven through StrukturPanel (the title-block action row hosts the
 // affordances; OrgCreateDialog / OrgRenameDialog / OrgMoveDialog / OrgDeleteDialog
 // are mounted by it) + the top-level MaoCreateAction. lib/api is mocked so the
-// assertions pin the REAL S98/S99 org endpoints (URL + body):
+// assertions pin the REAL S98/S99 org endpoints. S112 / TASK-11203: the hook now
+// uses the TYPED structured call forms (spec path key + { params, body }); the
+// (pathKey, options)→wire translation is pinned by
+// src/lib/__tests__/api-typed-overloads.test.ts, so these assertions pin the
+// STRUCTURED call shape:
 //
 //   • org create (under a MAO): POST /api/admin/organizations
 //     { orgName, orgType:'ORGANISATION', parentOrgId } — LocalAdmin.
@@ -134,9 +138,11 @@ describe('Org/MAO structure mutations (TASK-10802)', () => {
     fireEvent.click(screen.getByTestId('org-create-submit'))
     await waitFor(() =>
       expect(api.post).toHaveBeenCalledWith('/api/admin/organizations', {
-        orgName: 'Statens Nye Styrelse',
-        orgType: 'ORGANISATION',
-        parentOrgId: 'MIN01',
+        body: {
+          orgName: 'Statens Nye Styrelse',
+          orgType: 'ORGANISATION',
+          parentOrgId: 'MIN01',
+        },
       }),
     )
   })
@@ -149,7 +155,10 @@ describe('Org/MAO structure mutations (TASK-10802)', () => {
     fireEvent.change(screen.getByTestId('org-rename-name'), { target: { value: 'Statens IT Vest' } })
     fireEvent.click(screen.getByTestId('org-rename-submit'))
     await waitFor(() =>
-      expect(api.put).toHaveBeenCalledWith('/api/admin/organizations/STY02', { orgName: 'Statens IT Vest' }),
+      expect(api.put).toHaveBeenCalledWith('/api/admin/organizations/{orgId}', {
+        params: { path: { orgId: 'STY02' } },
+        body: { orgName: 'Statens IT Vest' },
+      }),
     )
     await waitFor(() => expect(onMutated).toHaveBeenCalledWith(null))
   })
@@ -161,7 +170,10 @@ describe('Org/MAO structure mutations (TASK-10802)', () => {
     fireEvent.change(screen.getByTestId('org-rename-name'), { target: { value: 'Finansmin. (nyt)' } })
     fireEvent.click(screen.getByTestId('org-rename-submit'))
     await waitFor(() =>
-      expect(api.put).toHaveBeenCalledWith('/api/admin/organizations/MIN01', { orgName: 'Finansmin. (nyt)' }),
+      expect(api.put).toHaveBeenCalledWith('/api/admin/organizations/{orgId}', {
+        params: { path: { orgId: 'MIN01' } },
+        body: { orgName: 'Finansmin. (nyt)' },
+      }),
     )
   })
 
@@ -175,7 +187,10 @@ describe('Org/MAO structure mutations (TASK-10802)', () => {
     fireEvent.change(screen.getByTestId('org-move-target'), { target: { value: 'MIN02' } })
     fireEvent.click(screen.getByTestId('org-move-submit'))
     await waitFor(() =>
-      expect(api.put).toHaveBeenCalledWith('/api/admin/organizations/STY02/move', { newParentOrgId: 'MIN02' }),
+      expect(api.put).toHaveBeenCalledWith('/api/admin/organizations/{orgId}/move', {
+        params: { path: { orgId: 'STY02' } },
+        body: { newParentOrgId: 'MIN02' },
+      }),
     )
   })
 
@@ -186,7 +201,11 @@ describe('Org/MAO structure mutations (TASK-10802)', () => {
     expect(screen.getByTestId('org-delete-warning')).toBeDefined()
     expect(screen.queryByTestId('org-delete-blocked')).toBeNull()
     fireEvent.click(screen.getByTestId('org-delete-confirm'))
-    await waitFor(() => expect(api.del).toHaveBeenCalledWith('/api/admin/organizations/STY03'))
+    await waitFor(() =>
+      expect(api.del).toHaveBeenCalledWith('/api/admin/organizations/{orgId}', {
+        params: { path: { orgId: 'STY03' } },
+      }),
+    )
     await waitFor(() => expect(onMutated).toHaveBeenCalledWith(null))
   })
 
@@ -291,9 +310,11 @@ describe('MaoCreateAction (TASK-10802) — the top-level MAO-create', () => {
     fireEvent.click(screen.getByTestId('org-create-submit'))
     await waitFor(() =>
       expect(api.post).toHaveBeenCalledWith('/api/admin/organizations', {
-        orgName: 'Klimaministeriet',
-        orgType: 'MAO',
-        parentOrgId: null,
+        body: {
+          orgName: 'Klimaministeriet',
+          orgType: 'MAO',
+          parentOrgId: null,
+        },
       }),
     )
     await waitFor(() => expect(onCreated).toHaveBeenCalled())

@@ -240,8 +240,11 @@ export function RoleManagement() {
                       {scopeDanishLabel(assignment.scopeType)}
                     </Badge>
                   </td>
-                  <td>{assignment.grantedBy}</td>
-                  <td>{formatDate(assignment.grantedAt)}</td>
+                  {/* S112 / TASK-11203 — the backend serves assignedBy/assignedAt
+                      (the previous grantedBy/grantedAt were never on the wire —
+                      these cells rendered blank). */}
+                  <td>{assignment.assignedBy}</td>
+                  <td>{formatDate(assignment.assignedAt)}</td>
                   <td>{formatDate(assignment.expiresAt)}</td>
                   <td>
                     <Button

@@ -9,8 +9,11 @@ shape-mismatch bug class (S97 -> S99 -> S100) just resumes on the next untyped e
 (the lesson recurred 3x WITH the lesson written down because nothing CI-enforced it).
 
 This gate forces it. It asserts that every operation in the committed docs/api/openapi.json
-carries a NON-EMPTY response schema for its success (2xx) code, and — for body verbs
-(POST/PUT/PATCH) — a NON-EMPTY requestBody schema. An untyped `Results.Ok(new {...})` lands
+carries a NON-EMPTY response schema for its success (2xx) code — or, per the S112
+owner-ratified "declared-204" amendment, declares `204` as its ONLY success response with no
+content (`.Produces(204)` replaces Swashbuckle's inferred empty `200`, so a declared-204-only
+op is the typed statement "this intentionally has no body") — and, for body verbs
+(POST/PUT/PATCH), a NON-EMPTY requestBody schema. An untyped `Results.Ok(new {...})` lands
 in the spec with an EMPTY `200` content (no schema) — that empty-schema-in-the-spec IS the
 detection signal. A new POST that binds no request DTO lands with no requestBody schema —
 also caught.
@@ -97,14 +100,26 @@ def _content_has_schema(content: dict | None) -> bool:
 def operation_reasons(method: str, op: dict) -> list[str]:
     """Return the list of convention violations for one operation (empty = it PASSES).
 
-    response : no 2xx response code carries a non-empty schema  (the untyped-Ok signal).
+    response : PASSES when EITHER some 2xx response carries a non-empty content schema (the
+               untyped-Ok signal, inverted), OR the operation's ONLY success (2xx) response is
+               a DECLARED `204` with no content — the S112 owner-ratified "declared-204"
+               amendment: `.Produces(204)` replaces Swashbuckle's inferred empty `200`, so a
+               declared-204-only op is the typed statement "this intentionally has no body".
+               A body-less endpoint therefore no longer belongs on the grandfather manifest —
+               declare the 204 instead (supersedes the S111 guidance). STRICTNESS preserved:
+               an op with NO success code at all still FAILS, and a MIXED op (an inferred
+               empty `200` PLUS the `204`) still FAILS — "only success is 204" is load-bearing.
     reqbody  : a body verb (POST/PUT/PATCH) with no non-empty requestBody schema
-               (a handler binding no request DTO). A genuinely body-less action endpoint is
-               the exception that belongs on the grandfather manifest."""
+               (a handler binding no request DTO)."""
     reasons: list[str] = []
     responses = op.get("responses", {})
     success_codes = [c for c in responses if _is_success(c)]
-    if not any(_content_has_schema(responses[c].get("content")) for c in success_codes):
+    typed_body = any(_content_has_schema(responses[c].get("content")) for c in success_codes)
+    declared_204_only = (
+        success_codes == ["204"]
+        and not _content_has_schema(responses["204"].get("content"))
+    )
+    if not (typed_body or declared_204_only):
         reasons.append("empty success-response schema")
     if method in BODY_VERBS:
         rb = op.get("requestBody")
@@ -319,6 +334,34 @@ def do_selftest() -> int:
           f"[{'; '.join(reasons[get_key])}]")
     print(f"[ok] selftest: a new POST lacking a DTO was flagged -> {post_key}  "
           f"[{'; '.join(reasons[post_key])}]")
+
+    # (3) the S112 declared-204 amendment: a declared-204-ONLY op must be ACCEPTED (typed —
+    # `.Produces(204)` is the "intentionally no body" statement), and an op with NO declared
+    # success code at all must still be REJECTED.
+    fake_del = "/api/admin/__selftest_declared_204_only_delete__"
+    fake_nosuccess = "/api/admin/__selftest_no_success_code__"
+    perturbed["paths"][fake_del] = {
+        "delete": {"responses": {"204": {"description": "No Content"}}}  # only-success=204 -> typed
+    }
+    perturbed["paths"][fake_nosuccess] = {
+        "get": {"responses": {"404": {"description": "Not Found"}}}  # no 2xx at all -> untyped
+    }
+    f3, _g3, _t3, _s3 = evaluate(perturbed, manifest)
+    flagged3 = {k for k, _ in f3}
+    del_key = f"DELETE {fake_del}"
+    nosuccess_key = f"GET {fake_nosuccess}"
+    if del_key in flagged3:
+        reasons3 = {k: r for k, r in f3}
+        print("[FAIL] selftest: a declared-204-only operation WAS flagged -- the S112 "
+              f"declared-204 amendment is broken.  [{'; '.join(reasons3[del_key])}]")
+        return 1
+    if nosuccess_key not in flagged3:
+        print("[FAIL] selftest: an operation with NO success code was NOT flagged -- "
+              "the gate is broken.")
+        return 1
+    print(f"[ok] selftest: a declared-204-only DELETE was ACCEPTED -> {del_key}")
+    print(f"[ok] selftest: an op with NO success code was flagged  -> {nosuccess_key}  "
+          f"[{'; '.join(dict(f3)[nosuccess_key])}]")
     print("[ok] selftest exits 1 by design -- the gate is live.")
     return 1
 

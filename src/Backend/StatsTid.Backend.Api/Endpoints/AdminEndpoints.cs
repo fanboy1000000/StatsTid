@@ -280,17 +280,12 @@ public static class AdminEndpoints
                 }
             }
 
-            return Results.Created($"/api/admin/organizations/{orgId}", new
-            {
-                orgId,
-                orgName = request.OrgName,
-                orgType,
-                parentOrgId = request.ParentOrgId,
-                materializedPath,
-                agreementCode,
-                okVersion
-            });
-        }).RequireAuthorization("LocalAdminOrAbove");
+            // S112 / TASK-11201 — named record (OrganizationResponse) replaces the anonymous shape;
+            // BYTE-IDENTICAL wire JSON (same member names/order/nullability, camelCase Web default).
+            return Results.Created($"/api/admin/organizations/{orgId}", new OrganizationResponse(
+                orgId, request.OrgName, orgType, request.ParentOrgId, materializedPath, agreementCode, okVersion));
+        }).RequireAuthorization("LocalAdminOrAbove")
+        .Produces<OrganizationResponse>(StatusCodes.Status201Created);
 
         // 2b. PUT /api/admin/organizations/{orgId} — Update organization
         app.MapPut("/api/admin/organizations/{orgId}", async (
@@ -373,17 +368,18 @@ public static class AdminEndpoints
                 throw;
             }
 
-            return Results.Ok(new
-            {
+            // S112 / TASK-11201 — named record (OrganizationResponse) replaces the anonymous shape;
+            // BYTE-IDENTICAL wire JSON (same member names/order/nullability, camelCase Web default).
+            return Results.Ok(new OrganizationResponse(
                 orgId,
-                orgName = request.OrgName ?? existingOrg.OrgName,
-                orgType = existingOrg.OrgType,
-                parentOrgId = existingOrg.ParentOrgId,
-                materializedPath = existingOrg.MaterializedPath,
-                agreementCode = request.AgreementCode ?? existingOrg.AgreementCode,
-                okVersion = request.OkVersion ?? existingOrg.OkVersion
-            });
-        }).RequireAuthorization("LocalAdminOrAbove");
+                request.OrgName ?? existingOrg.OrgName,
+                existingOrg.OrgType,
+                existingOrg.ParentOrgId,
+                existingOrg.MaterializedPath,
+                request.AgreementCode ?? existingOrg.AgreementCode,
+                request.OkVersion ?? existingOrg.OkVersion));
+        }).RequireAuthorization("LocalAdminOrAbove")
+        .Produces<OrganizationResponse>(StatusCodes.Status200OK);
 
         // 2c. DELETE /api/admin/organizations/{orgId} — S98 / ADR-035 GlobalAdmin org SOFT-delete.
         //
@@ -499,7 +495,8 @@ public static class AdminEndpoints
             }
 
             return Results.NoContent();
-        }).RequireAuthorization("HROrAbove"); // policy floor; GlobalAdmin enforced in-handler (HasGlobalScope)
+        }).RequireAuthorization("HROrAbove") // policy floor; GlobalAdmin enforced in-handler (HasGlobalScope)
+        .Produces(StatusCodes.Status204NoContent); // S112 / TASK-11201 — declared-204 (no body, intentionally)
 
         // 2d. PUT /api/admin/organizations/{orgId}/move — S98 / ADR-035 GlobalAdmin org RE-PARENT.
         //
@@ -618,23 +615,24 @@ public static class AdminEndpoints
 
                 await tx.CommitAsync(ct);
 
-                return Results.Ok(new
-                {
+                // S112 / TASK-11201 — named record (OrganizationResponse) replaces the anonymous shape;
+                // BYTE-IDENTICAL wire JSON (same member names/order/nullability, camelCase Web default).
+                return Results.Ok(new OrganizationResponse(
                     orgId,
-                    orgName = org.OrgName,
-                    orgType = org.OrgType,
-                    parentOrgId = newParent.OrgId,
-                    materializedPath = newMaterializedPath,
-                    agreementCode = org.AgreementCode,
-                    okVersion = org.OkVersion,
-                });
+                    org.OrgName,
+                    org.OrgType,
+                    newParent.OrgId,
+                    newMaterializedPath,
+                    org.AgreementCode,
+                    org.OkVersion));
             }
             catch
             {
                 await tx.RollbackAsync(ct);
                 throw;
             }
-        }).RequireAuthorization("HROrAbove"); // policy floor; GlobalAdmin enforced in-handler (HasGlobalScope)
+        }).RequireAuthorization("HROrAbove") // policy floor; GlobalAdmin enforced in-handler (HasGlobalScope)
+        .Produces<OrganizationResponse>(StatusCodes.Status200OK); // S112 / TASK-11201
 
         // 2e. GET /api/admin/organizations/tree — S98 / ADR-035 aggregated MAO→Organisation forest.
         //
@@ -795,19 +793,20 @@ public static class AdminEndpoints
 
             context.Response.Headers.ETag = $"\"{version}\"";
 
-            return Results.Ok(new
-            {
-                userId = user.UserId,
-                username = user.Username,
-                displayName = user.DisplayName,
-                email = user.Email,
-                primaryOrgId = user.PrimaryOrgId,
-                agreementCode = user.AgreementCode,
-                okVersion = user.OkVersion,
-                employmentCategory = user.EmploymentCategory,
-                version,
-            });
-        }).RequireAuthorization("HROrAbove");
+            // S112 / TASK-11201 — named record (UserDetailResponse) replaces the anonymous shape;
+            // BYTE-IDENTICAL wire JSON (same member names/order/nullability, camelCase Web default).
+            return Results.Ok(new UserDetailResponse(
+                user.UserId,
+                user.Username,
+                user.DisplayName,
+                user.Email,
+                user.PrimaryOrgId,
+                user.AgreementCode,
+                user.OkVersion,
+                user.EmploymentCategory,
+                version));
+        }).RequireAuthorization("HROrAbove")
+        .Produces<UserDetailResponse>(StatusCodes.Status200OK);
 
         // 4. POST /api/admin/users — Create user
         app.MapPost("/api/admin/users", async (
@@ -1311,18 +1310,19 @@ public static class AdminEndpoints
             // TASK-3501. Precedents: S25 AgreementConfigEndpoints L78/104/143 +
             // PositionOverrideEndpoints L64.
             context.Response.Headers.ETag = "\"1\"";
-            return Results.Created($"/api/admin/users/{request.UserId}", new
-            {
-                userId = request.UserId,
-                username = request.Username,
-                displayName = request.DisplayName,
-                email = request.Email,
-                primaryOrgId = request.PrimaryOrgId,
-                agreementCode = request.AgreementCode,
-                okVersion = request.OkVersion,
-                version = 1L,
-            });
-        }).RequireAuthorization("HROrAbove"); // S91 TASK-9102: tree-page surface opened to LocalHR
+            // S112 / TASK-11201 — named record (UserCreatedResponse) replaces the anonymous shape;
+            // BYTE-IDENTICAL wire JSON (same member names/order/nullability, camelCase Web default).
+            return Results.Created($"/api/admin/users/{request.UserId}", new UserCreatedResponse(
+                request.UserId,
+                request.Username,
+                request.DisplayName,
+                request.Email,
+                request.PrimaryOrgId,
+                request.AgreementCode,
+                request.OkVersion,
+                1L));
+        }).RequireAuthorization("HROrAbove") // S91 TASK-9102: tree-page surface opened to LocalHR
+        .Produces<UserCreatedResponse>(StatusCodes.Status201Created); // S112 / TASK-11201
 
         // 5. PUT /api/admin/users/{userId} — Update user
         //
@@ -2183,16 +2183,17 @@ public static class AdminEndpoints
             // EmployeeProfileEndpoints PUT precedent (builds response inside tx).
             var newUserVersion = expectedVersion + 1;
             context.Response.Headers.ETag = $"\"{newUserVersion}\"";
-            return Results.Ok(new
-            {
+            // S112 / TASK-11201 — named record (UserUpdatedResponse) replaces the anonymous shape;
+            // BYTE-IDENTICAL wire JSON (same member names/order/nullability, camelCase Web default).
+            return Results.Ok(new UserUpdatedResponse(
                 userId,
-                displayName = newDisplayName,
-                email = newEmail,
-                primaryOrgId = newPrimaryOrgId,
-                agreementCode = newAgreementCode,
-                version = newUserVersion,
-            });
-        })).RequireAuthorization("HROrAbove"); // S91 TASK-9102: tree-page surface opened to LocalHR. S78 R9: extra ) closes TreeRootDriftRetry.RunAsync
+                newDisplayName,
+                newEmail,
+                newPrimaryOrgId,
+                newAgreementCode,
+                newUserVersion));
+        })).RequireAuthorization("HROrAbove") // S91 TASK-9102: tree-page surface opened to LocalHR. S78 R9: extra ) closes TreeRootDriftRetry.RunAsync
+        .Produces<UserUpdatedResponse>(StatusCodes.Status200OK); // S112 / TASK-11201
 
         // ═══════════════════════════════════════════
         // Role Assignment Endpoints
@@ -2221,19 +2222,21 @@ public static class AdminEndpoints
 
             var assignments = await roleRepo.GetByUserIdAsync(userId, ct);
 
-            var response = assignments.Select(a => new
-            {
-                assignmentId = a.AssignmentId,
-                roleId = a.RoleId,
-                orgId = a.OrgId,
-                scopeType = a.ScopeType,
-                assignedBy = a.AssignedBy,
-                assignedAt = a.AssignedAt,
-                expiresAt = a.ExpiresAt
-            });
+            // S112 / TASK-11201 — named record (UserRoleAssignmentItem) replaces the anonymous
+            // element shape; the response stays a BARE ARRAY (Produces<IEnumerable<T>> — the
+            // collection-ness is load-bearing). BYTE-IDENTICAL wire JSON.
+            var response = assignments.Select(a => new UserRoleAssignmentItem(
+                a.AssignmentId,
+                a.RoleId,
+                a.OrgId,
+                a.ScopeType,
+                a.AssignedBy,
+                a.AssignedAt,
+                a.ExpiresAt));
 
             return Results.Ok(response);
-        }).RequireAuthorization("HROrAbove");
+        }).RequireAuthorization("HROrAbove")
+        .Produces<IEnumerable<UserRoleAssignmentItem>>(StatusCodes.Status200OK); // BARE array — NOT an envelope
 
         // 7. POST /api/admin/roles/grant — Grant role assignment
         app.MapPost("/api/admin/roles/grant", async (
@@ -2404,18 +2407,19 @@ public static class AdminEndpoints
                 throw;
             }
 
-            return Results.Created($"/api/admin/users/{request.UserId}/roles", new
-            {
+            // S112 / TASK-11201 — named record (RoleGrantResponse) replaces the anonymous shape;
+            // BYTE-IDENTICAL wire JSON (same member names/order/nullability, camelCase Web default).
+            return Results.Created($"/api/admin/users/{request.UserId}/roles", new RoleGrantResponse(
                 assignmentId,
-                userId = request.UserId,
-                roleId = request.RoleId,
-                orgId = request.OrgId,
-                scopeType = request.ScopeType,
-                assignedBy = actor.ActorId,
-                assignedAt = now,
-                expiresAt = request.ExpiresAt
-            });
-        }).RequireAuthorization("LocalAdminOrAbove");
+                request.UserId,
+                request.RoleId,
+                request.OrgId,
+                request.ScopeType,
+                actor.ActorId,
+                now,
+                request.ExpiresAt));
+        }).RequireAuthorization("LocalAdminOrAbove")
+        .Produces<RoleGrantResponse>(StatusCodes.Status201Created);
 
         // 8. POST /api/admin/roles/revoke — Revoke role assignment
         app.MapPost("/api/admin/roles/revoke", async (
@@ -2554,17 +2558,18 @@ public static class AdminEndpoints
                 throw;
             }
 
-            return Results.Ok(new
-            {
-                assignmentId = request.AssignmentId,
-                userId = assignmentUserId,
-                roleId = assignmentRoleId,
-                revoked = true,
-                revokedBy = actor.ActorId,
-                revokedAt = now,
-                reason = request.Reason
-            });
-        }).RequireAuthorization("LocalAdminOrAbove");
+            // S112 / TASK-11201 — named record (RoleRevokeResponse) replaces the anonymous shape;
+            // BYTE-IDENTICAL wire JSON (same member names/order/nullability, camelCase Web default).
+            return Results.Ok(new RoleRevokeResponse(
+                request.AssignmentId,
+                assignmentUserId,
+                assignmentRoleId,
+                true,
+                actor.ActorId,
+                now,
+                request.Reason));
+        }).RequireAuthorization("LocalAdminOrAbove")
+        .Produces<RoleRevokeResponse>(StatusCodes.Status200OK);
 
         // ═══════════════════════════════════════════
         // S74-7404 R11a — GET /api/admin/reporting-lines/tree/{organisationId}/period-status
@@ -2731,19 +2736,19 @@ public static class AdminEndpoints
             var (items, total) = await approvalRepo.SearchPeopleAsync(
                 q ?? string.Empty, accessibleOrgs, excluded, pageLimit, pageOffset, ct);
 
-            return Results.Ok(new
-            {
-                items = items.Select(i => new
-                {
-                    userId = i.UserId,
-                    displayName = i.DisplayName,
-                    primaryOrgName = i.PrimaryOrgName,
-                }),
+            // S112 / TASK-11201 — named records (UserSearchResponse envelope + UserSearchItem rows)
+            // replace the anonymous shapes; BYTE-IDENTICAL wire JSON (same member names/order,
+            // camelCase Web default; { items, total, limit, offset } stays an ENVELOPE).
+            return Results.Ok(new UserSearchResponse(
+                items.Select(i => new UserSearchItem(
+                    i.UserId,
+                    i.DisplayName,
+                    i.PrimaryOrgName)).ToList(),
                 total,
-                limit = pageLimit,
-                offset = pageOffset,
-            });
-        }).RequireAuthorization("HROrAbove"); // S91 TASK-9102: tree-page picker opened to LocalHR
+                pageLimit,
+                pageOffset));
+        }).RequireAuthorization("HROrAbove") // S91 TASK-9102: tree-page picker opened to LocalHR
+        .Produces<UserSearchResponse>(StatusCodes.Status200OK); // S112 / TASK-11201
 
         // ═══════════════════════════════════════════
         // S106 / TASK-10603 — GET /api/admin/search — the scoped units + people SEARCH read for the

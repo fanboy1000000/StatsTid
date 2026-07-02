@@ -5,9 +5,19 @@
 // S103 / TASK-10304 (Enhedsspor Phase 1a) — the `enhedLabel` field was REMOVED
 // from the employee-profile GET/PUT DTO; this module no longer reads or sends it.
 //
-// `UserManagement.tsx` keeps its own private copies (7604 retires that surface);
-// this module is the single source of truth for the drawer.
+// S112 / TASK-11203 — both calls switched to the TYPED `apiFetchWithEtag(pathKey,
+// { method, params, ifMatch?, body? })` overload (PAT-012): the response type is
+// the spec `EmployeeProfileResponse` (re-narrowed via `coerceApiResponse`, drift-
+// guarded below) and the PUT body is compile-checked against the spec
+// `UpdateEmployeeProfileRequest`. Two hand-written-type lies fell out of the
+// switch: the wire interface claimed a `weeklyNormHours` response field the
+// backend does not serve, and the PUT sent a `weeklyNormHours: 0` placeholder the
+// backend request DTO no longer declares — both dropped.
+//
+// `UserManagement.tsx` was retired (S109); this module is the single source of
+// truth for the drawer.
 import { apiFetchWithEtag } from '../../../lib/api'
+import { coerceApiResponse, type Assert, type AssertFieldsInSpec } from '../../../lib/apiNarrow'
 import { formatVersionAsIfMatch, resolveEtag } from '../../../lib/etag'
 
 /** Snapshot of an employee_profiles row + the row-version concurrency token. */
@@ -22,12 +32,17 @@ export interface EmployeeProfileSnapshot {
 
 interface EmployeeProfileWire {
   employeeId: string
-  weeklyNormHours: number
   partTimeFraction: number
   position: string | null
   isPartTime: boolean
   version: number
 }
+
+// S112 — compile-time drift guard: every field the FE reads must exist in the
+// spec `EmployeeProfileResponse` (the S97→S100 drift class, caught at build).
+export type _EmployeeProfileDrift = Assert<
+  AssertFieldsInSpec<EmployeeProfileWire, 'StatsTid.Backend.Api.Contracts.EmployeeProfileResponse'>
+>
 
 function toSnapshot(data: EmployeeProfileWire, etag: string | null): EmployeeProfileSnapshot {
   const { etag: resolvedEtag } = resolveEtag(etag, data)
@@ -45,19 +60,19 @@ function toSnapshot(data: EmployeeProfileWire, etag: string | null): EmployeePro
 export async function fetchEmployeeProfile(
   employeeId: string,
 ): Promise<EmployeeProfileSnapshot | null> {
-  const result = await apiFetchWithEtag<EmployeeProfileWire>(
-    `/api/admin/employee-profiles/${encodeURIComponent(employeeId)}`,
-  )
+  const result = await apiFetchWithEtag('/api/admin/employee-profiles/{employeeId}', {
+    method: 'GET',
+    params: { path: { employeeId } },
+  })
   if (!result.ok) return null
   const { data, etag } = result.data
-  return toSnapshot(data, etag)
+  return toSnapshot(coerceApiResponse<EmployeeProfileWire>(data), etag)
 }
 
 /**
- * HR-only PUT (admin-strict If-Match → 412 stale / 428 missing). The backend
- * DTO still requires `weeklyNormHours` (being phased out) — send 0 as a
- * placeholder; the backend ignores it for domain logic. Throws a status-tagged
- * Error on failure so the save orchestrator can branch on 412 vs other.
+ * HR-only PUT (admin-strict If-Match → 412 stale / 428 missing). Throws a
+ * status-tagged Error on failure so the save orchestrator can branch on 412 vs
+ * other.
  */
 export async function saveEmployeeProfile(
   employeeId: string,
@@ -68,26 +83,16 @@ export async function saveEmployeeProfile(
     position: string | null
   },
 ): Promise<EmployeeProfileSnapshot> {
-  const wireBody = {
-    effectiveFrom: body.effectiveFrom,
-    weeklyNormHours: 0,
-    partTimeFraction: body.partTimeFraction,
-    position: body.position,
-  }
-  const result = await apiFetchWithEtag<EmployeeProfileWire>(
-    `/api/admin/employee-profiles/${encodeURIComponent(employeeId)}`,
-    {
-      method: 'PUT',
-      headers: { 'If-Match': ifMatch },
-      body: JSON.stringify(wireBody),
-    },
-  )
+  const result = await apiFetchWithEtag('/api/admin/employee-profiles/{employeeId}', {
+    method: 'PUT',
+    params: { path: { employeeId } },
+    ifMatch,
+    body,
+  })
   if (!result.ok) {
-    const err = new Error(result.error) as Error & { status: number; body?: unknown }
-    err.status = result.status
-    err.body = result.body
-    throw err
+    // Object.assign (not an `as` cast) — this file is on the S112 no-`as` surface.
+    throw Object.assign(new Error(result.error), { status: result.status, body: result.body })
   }
   const { data, etag } = result.data
-  return toSnapshot(data, etag)
+  return toSnapshot(coerceApiResponse<EmployeeProfileWire>(data), etag)
 }

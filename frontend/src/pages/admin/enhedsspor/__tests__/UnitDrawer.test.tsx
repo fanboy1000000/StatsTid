@@ -1,7 +1,11 @@
 // SPRINT-108 / TASK-10801 + TASK-10803 — the gated UNIT structure-mutation flows
 // driven through StrukturPanel (the action row hosts the affordances; UnitDrawer /
 // UnitMoveDialog / UnitDeleteConfirm are mounted by it). lib/api is mocked so the
-// assertions pin the REAL S104 UnitEndpoints contracts (URL + body + If-Match):
+// assertions pin the REAL S104 UnitEndpoints contracts. S112 / TASK-11203: the
+// hooks now use the TYPED structured call forms (spec path key + { method,
+// params, ifMatch, body }); the (pathKey, options)→wire translation is pinned by
+// src/lib/__tests__/api-typed-overloads.test.ts, so these assertions pin the
+// STRUCTURED call shape (path params + ready If-Match string + object body):
 //
 //   • create-child: type derived from CHILD[parentType] (Organisation → top-level
 //     direktion); leaf `enhed` + `ministeromrade` disabled.
@@ -141,10 +145,12 @@ describe('Unit structure mutations (TASK-10801) + gating (TASK-10803)', () => {
     fireEvent.click(screen.getByTestId('unit-drawer-submit'))
     await waitFor(() =>
       expect(api.post).toHaveBeenCalledWith('/api/admin/units', {
-        organisationId: 'STY02',
-        parentUnitId: VEJL,
-        type: 'team',
-        name: 'Drift',
+        body: {
+          organisationId: 'STY02',
+          parentUnitId: VEJL,
+          type: 'team',
+          name: 'Drift',
+        },
       }),
     )
   })
@@ -160,10 +166,12 @@ describe('Unit structure mutations (TASK-10801) + gating (TASK-10803)', () => {
     fireEvent.click(screen.getByTestId('unit-drawer-submit'))
     await waitFor(() =>
       expect(api.post).toHaveBeenCalledWith('/api/admin/units', {
-        organisationId: 'STY02',
-        parentUnitId: null,
-        type: 'direktion',
-        name: 'Direktion Nord',
+        body: {
+          organisationId: 'STY02',
+          parentUnitId: null,
+          type: 'direktion',
+          name: 'Direktion Nord',
+        },
       }),
     )
   })
@@ -186,11 +194,12 @@ describe('Unit structure mutations (TASK-10801) + gating (TASK-10803)', () => {
     fireEvent.click(screen.getByTestId('unit-drawer-submit'))
     await waitFor(() =>
       expect(api.etag).toHaveBeenCalledWith(
-        `/api/admin/units/${VEJL}`,
+        '/api/admin/units/{id}',
         expect.objectContaining({
           method: 'PUT',
-          headers: { 'If-Match': '"1"' },
-          body: JSON.stringify({ name: 'Vejledning Vest' }),
+          params: { path: { id: VEJL } },
+          ifMatch: '"1"',
+          body: { name: 'Vejledning Vest' },
         }),
       ),
     )
@@ -204,9 +213,14 @@ describe('Unit structure mutations (TASK-10801) + gating (TASK-10803)', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: /Trine Toft/ }))
     fireEvent.click(screen.getByTestId('unit-drawer-submit'))
     await waitFor(() =>
-      expect(api.post).toHaveBeenCalledWith(`/api/admin/units/${VEJL}/leaders`, { userId: 'anna' }),
+      expect(api.post).toHaveBeenCalledWith('/api/admin/units/{id}/leaders', {
+        params: { path: { id: VEJL } },
+        body: { userId: 'anna' },
+      }),
     )
-    expect(api.del).toHaveBeenCalledWith(`/api/admin/units/${VEJL}/leaders/trine`)
+    expect(api.del).toHaveBeenCalledWith('/api/admin/units/{id}/leaders/{userId}', {
+      params: { path: { id: VEJL, userId: 'trine' } },
+    })
     // the name was untouched → NO rename PUT.
     expect(api.etag).not.toHaveBeenCalled()
   })
@@ -241,11 +255,12 @@ describe('Unit structure mutations (TASK-10801) + gating (TASK-10803)', () => {
     fireEvent.click(screen.getByTestId('unit-move-submit'))
     await waitFor(() =>
       expect(api.etag).toHaveBeenCalledWith(
-        `/api/admin/units/${KONTROL}/move`,
+        '/api/admin/units/{id}/move',
         expect.objectContaining({
           method: 'PUT',
-          headers: { 'If-Match': '"2"' },
-          body: JSON.stringify({ newParentUnitId: DIR }),
+          params: { path: { id: KONTROL } },
+          ifMatch: '"2"',
+          body: { newParentUnitId: DIR },
         }),
       ),
     )
@@ -258,8 +273,11 @@ describe('Unit structure mutations (TASK-10801) + gating (TASK-10803)', () => {
     fireEvent.click(screen.getByTestId('unit-move-submit'))
     await waitFor(() =>
       expect(api.etag).toHaveBeenCalledWith(
-        `/api/admin/units/${KONTROL}/move`,
-        expect.objectContaining({ body: JSON.stringify({ newParentUnitId: null }) }),
+        '/api/admin/units/{id}/move',
+        expect.objectContaining({
+          params: { path: { id: KONTROL } },
+          body: { newParentUnitId: null },
+        }),
       ),
     )
   })
@@ -274,8 +292,12 @@ describe('Unit structure mutations (TASK-10801) + gating (TASK-10803)', () => {
     fireEvent.click(screen.getByTestId('unit-delete-confirm'))
     await waitFor(() =>
       expect(api.etag).toHaveBeenCalledWith(
-        `/api/admin/units/${KONTROL}`,
-        expect.objectContaining({ method: 'DELETE', headers: { 'If-Match': '"2"' } }),
+        '/api/admin/units/{id}',
+        expect.objectContaining({
+          method: 'DELETE',
+          params: { path: { id: KONTROL } },
+          ifMatch: '"2"',
+        }),
       ),
     )
     // success → the page refetch is triggered for the affected Organisation.

@@ -16,6 +16,11 @@
 // 422'd server-side. These are non-GET mutators, so they are NOT subject to the
 // GET-only contract-coverage lint (PAT-010); the URLs are still passed INLINE.
 //
+// S112 / TASK-11203 — every call switched to the TYPED structured
+// `apiClient.post/put/delete(pathKey, { params?, body? })` forms (PAT-012):
+// request bodies + responses are DERIVED from the OpenAPI path key — no
+// hand-written `<T>` and no `as` (lint-enforced).
+//
 // Each call resolves a non-throwing `OrgMutationResult` (mirrors useUnitMutations)
 // carrying a Danish, user-facing message for the real failure statuses + the
 // parsed `employeeCount` from a 422 delete-blocked body so the delete dialog can
@@ -74,7 +79,9 @@ const fail = (status: number, context: OrgMutationContext): OrgMutationResult =>
     apiClient's error text). Falls back to undefined for a non-JSON body. */
 function parseBlockedCount(error: string): number | undefined {
   try {
-    const parsed = JSON.parse(error) as { employeeCount?: number }
+    // `JSON.parse` returns `any`; the annotation narrows it without an `as`
+    // (this file is on the S112 no-`as` lint surface).
+    const parsed: { employeeCount?: unknown } | null = JSON.parse(error)
     return typeof parsed?.employeeCount === 'number' ? parsed.employeeCount : undefined
   } catch {
     return undefined
@@ -91,19 +98,21 @@ export interface CreateOrgInput {
 export function useOrgMutations() {
   const createOrg = useCallback(async (input: CreateOrgInput): Promise<OrgMutationResult> => {
     const result = await apiClient.post('/api/admin/organizations', {
-      orgName: input.orgName,
-      orgType: input.orgType,
-      parentOrgId: input.parentOrgId,
+      body: {
+        orgName: input.orgName,
+        orgType: input.orgType,
+        parentOrgId: input.parentOrgId,
+      },
     })
     return result.ok ? success() : fail(result.status, 'create')
   }, [])
 
   const renameOrg = useCallback(
     async (orgId: string, orgName: string): Promise<OrgMutationResult> => {
-      const result = await apiClient.put(
-        `/api/admin/organizations/${encodeURIComponent(orgId)}`,
-        { orgName },
-      )
+      const result = await apiClient.put('/api/admin/organizations/{orgId}', {
+        params: { path: { orgId } },
+        body: { orgName },
+      })
       return result.ok ? success() : fail(result.status, 'rename')
     },
     [],
@@ -111,19 +120,19 @@ export function useOrgMutations() {
 
   const moveOrg = useCallback(
     async (orgId: string, newParentOrgId: string): Promise<OrgMutationResult> => {
-      const result = await apiClient.put(
-        `/api/admin/organizations/${encodeURIComponent(orgId)}/move`,
-        { newParentOrgId },
-      )
+      const result = await apiClient.put('/api/admin/organizations/{orgId}/move', {
+        params: { path: { orgId } },
+        body: { newParentOrgId },
+      })
       return result.ok ? success() : fail(result.status, 'move')
     },
     [],
   )
 
   const deleteOrg = useCallback(async (orgId: string): Promise<OrgMutationResult> => {
-    const result = await apiClient.delete(
-      `/api/admin/organizations/${encodeURIComponent(orgId)}`,
-    )
+    const result = await apiClient.delete('/api/admin/organizations/{orgId}', {
+      params: { path: { orgId } },
+    })
     if (result.ok) return success()
     const employeeCount = result.status === 422 ? parseBlockedCount(result.error) : undefined
     return { ...fail(result.status, 'delete'), employeeCount }

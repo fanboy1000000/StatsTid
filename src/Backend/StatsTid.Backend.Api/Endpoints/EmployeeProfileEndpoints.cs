@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Npgsql;
 using StatsTid.Auth;
+using StatsTid.Backend.Api.Contracts;
 using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
@@ -136,15 +137,16 @@ public static class EmployeeProfileEndpoints
             var (profile, version) = hit.Value;
 
             context.Response.Headers.ETag = $"\"{version}\"";
-            return Results.Ok(new
-            {
-                employeeId = profile.EmployeeId,
-                partTimeFraction = profile.PartTimeFraction,
-                position = profile.Position,
-                isPartTime = profile.IsPartTime,
-                version,
-            });
-        }).RequireAuthorization("HROrAbove");
+            // S112 / TASK-11201 — named record (EmployeeProfileResponse) replaces the anonymous shape;
+            // BYTE-IDENTICAL wire JSON (same member names/order/nullability, camelCase Web default).
+            return Results.Ok(new EmployeeProfileResponse(
+                profile.EmployeeId,
+                profile.PartTimeFraction,
+                profile.Position,
+                profile.IsPartTime,
+                version));
+        }).RequireAuthorization("HROrAbove")
+        .Produces<EmployeeProfileResponse>(StatusCodes.Status200OK);
 
         // ═══════════════════════════════════════════
         // 2. PUT /api/admin/employee-profiles/{employeeId}
@@ -498,14 +500,15 @@ public static class EmployeeProfileEndpoints
 
                 context.Response.Headers.ETag = $"\"{newVersion}\"";
                 var isPartTime = body.PartTimeFraction < 1.0m;
-                return Results.Ok(new
-                {
+                // S112 / TASK-11201 — named record (EmployeeProfileResponse) replaces the anonymous
+                // shape; BYTE-IDENTICAL wire JSON (same member names/order/nullability, camelCase
+                // Web default; the SAME record as the GET — both handlers emitted the same 5 fields).
+                return Results.Ok(new EmployeeProfileResponse(
                     employeeId,
-                    partTimeFraction = body.PartTimeFraction,
-                    position = body.Position,
+                    body.PartTimeFraction,
+                    body.Position,
                     isPartTime,
-                    version = newVersion,
-                });
+                    newVersion));
             }
             catch
             {
@@ -513,7 +516,8 @@ public static class EmployeeProfileEndpoints
                     await tx.RollbackAsync(ct);
                 throw;
             }
-        }).RequireAuthorization("HROrAbove");
+        }).RequireAuthorization("HROrAbove")
+        .Produces<EmployeeProfileResponse>(StatusCodes.Status200OK); // S112 / TASK-11201
 
         // ═══════════════════════════════════════════
         // 3. DELETE /api/admin/employee-profiles/{employeeId}
@@ -699,7 +703,8 @@ public static class EmployeeProfileEndpoints
                     await tx.RollbackAsync(ct);
                 throw;
             }
-        }).RequireAuthorization("HROrAbove");
+        }).RequireAuthorization("HROrAbove")
+        .Produces(StatusCodes.Status204NoContent); // S112 / TASK-11201 — declared-204 (no body, intentionally)
 
         return app;
     }

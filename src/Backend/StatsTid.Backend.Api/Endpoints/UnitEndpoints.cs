@@ -357,7 +357,8 @@ public static class UnitEndpoints
             context.Response.Headers.ETag = $"\"{newVersion}\"";
             return Results.Ok(new UnitResponse(
                 unitId, existing.OrganisationId, existing.ParentUnitId, existing.Type, @event.NewName, newVersion));
-        }).RequireAuthorization("HROrAbove");
+        }).RequireAuthorization("HROrAbove")
+        .Produces<UnitResponse>(StatusCodes.Status200OK); // S112 / TASK-11201 — already the S104 named record; declared for the spec
 
         // ═══════════════════════════════════════════════════════════════════
         //  PUT /api/admin/units/{id}/move { newParentUnitId|null } (If-Match) — re-parent within
@@ -469,7 +470,8 @@ public static class UnitEndpoints
             context.Response.Headers.ETag = $"\"{newVersion}\"";
             return Results.Ok(new UnitResponse(
                 unitId, existing.OrganisationId, request.NewParentUnitId, existing.Type, existing.Name, newVersion));
-        }).RequireAuthorization("HROrAbove");
+        }).RequireAuthorization("HROrAbove")
+        .Produces<UnitResponse>(StatusCodes.Status200OK); // S112 / TASK-11201 — already the S104 named record; declared for the spec
 
         // ═══════════════════════════════════════════════════════════════════
         //  DELETE /api/admin/units/{id} (If-Match) — SOFT delete + re-parent surviving children UP
@@ -600,7 +602,8 @@ public static class UnitEndpoints
             }
 
             return Results.NoContent();
-        }).RequireAuthorization("HROrAbove");
+        }).RequireAuthorization("HROrAbove")
+        .Produces(StatusCodes.Status204NoContent); // S112 / TASK-11201 — declared-204 (no body, intentionally)
 
         // ═══════════════════════════════════════════════════════════════════
         //  POST /api/admin/units/{id}/leaders { userId } — designate a unit leader (D3).
@@ -683,8 +686,11 @@ public static class UnitEndpoints
                 throw;
             }
 
-            return Results.Ok(new { unitId, userId = request.UserId, organisationId = existing.OrganisationId });
-        }).RequireAuthorization("HROrAbove");
+            // S112 / TASK-11201 — named record (UnitLeaderResponse) replaces the anonymous shape;
+            // BYTE-IDENTICAL wire JSON (same member names/order, camelCase Web default).
+            return Results.Ok(new UnitLeaderResponse(unitId, request.UserId, existing.OrganisationId));
+        }).RequireAuthorization("HROrAbove")
+        .Produces<UnitLeaderResponse>(StatusCodes.Status200OK);
 
         // ═══════════════════════════════════════════════════════════════════
         //  DELETE /api/admin/units/{id}/leaders/{userId} — remove a unit-leader designation.
@@ -746,7 +752,8 @@ public static class UnitEndpoints
             }
 
             return Results.NoContent();
-        }).RequireAuthorization("HROrAbove");
+        }).RequireAuthorization("HROrAbove")
+        .Produces(StatusCodes.Status204NoContent); // S112 / TASK-11201 — declared-204 (no body, intentionally)
 
         // ═══════════════════════════════════════════════════════════════════
         //  PUT /api/admin/users/{userId}/unit { unitId|null } (If-Match) — the SAME-Organisation
@@ -874,8 +881,11 @@ public static class UnitEndpoints
             }
 
             context.Response.Headers.ETag = $"\"{newVersion}\"";
-            return Results.Ok(new { userId, unitId = request.UnitId, primaryOrgId = user.PrimaryOrgId, version = newVersion });
-        }).RequireAuthorization("HROrAbove");
+            // S112 / TASK-11201 — named record (UserUnitResponse) replaces the anonymous shape;
+            // BYTE-IDENTICAL wire JSON (same member names/order/nullability, camelCase Web default).
+            return Results.Ok(new UserUnitResponse(userId, request.UnitId, user.PrimaryOrgId, newVersion));
+        }).RequireAuthorization("HROrAbove")
+        .Produces<UserUnitResponse>(StatusCodes.Status200OK);
 
         return app;
     }

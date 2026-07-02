@@ -161,7 +161,11 @@ export function useEditPerson() {
           },
           live.user.etag,
         )
-        live = { ...live, user: updated }
+        // S112 / TASK-11203 — the PUT response is the spec `UserUpdatedResponse`
+        // (NO `username`), so MERGE over the previous snapshot rather than
+        // replace it. (Previously the hand-written type claimed `username` came
+        // back and the replace silently dropped it from live state at runtime.)
+        live = { ...live, user: { ...live.user, ...updated } }
         mark('stamdata', 'committed')
       } catch (err) {
         const e = err as UserMutationError

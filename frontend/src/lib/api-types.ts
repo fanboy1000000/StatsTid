@@ -257,12 +257,14 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description OK */
-                200: {
+                /** @description Created */
+                201: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.OrganizationResponse"];
+                    };
                 };
             };
         };
@@ -300,7 +302,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.OrganizationResponse"];
+                    };
                 };
             };
         };
@@ -316,8 +320,8 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description OK */
-                200: {
+                /** @description No Content */
+                204: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -358,7 +362,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.OrganizationResponse"];
+                    };
                 };
             };
         };
@@ -462,7 +468,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.UserDetailResponse"];
+                    };
                 };
             };
         };
@@ -486,7 +494,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.UserUpdatedResponse"];
+                    };
                 };
             };
         };
@@ -519,12 +529,14 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description OK */
-                200: {
+                /** @description Created */
+                201: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.UserCreatedResponse"];
+                    };
                 };
             };
         };
@@ -557,7 +569,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.UserRoleAssignmentItem"][];
+                    };
                 };
             };
         };
@@ -591,12 +605,14 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description OK */
-                200: {
+                /** @description Created */
+                201: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.RoleGrantResponse"];
+                    };
                 };
             };
         };
@@ -633,7 +649,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.RoleRevokeResponse"];
+                    };
                 };
             };
         };
@@ -741,7 +759,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.UserSearchResponse"];
+                    };
                 };
             };
         };
@@ -913,7 +933,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.UnitResponse"];
+                    };
                 };
             };
         };
@@ -929,8 +951,8 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description OK */
-                200: {
+                /** @description No Content */
+                204: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -971,7 +993,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.UnitResponse"];
+                    };
                 };
             };
         };
@@ -1011,7 +1035,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.UnitLeaderResponse"];
+                    };
                 };
             };
         };
@@ -1043,8 +1069,8 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description OK */
-                200: {
+                /** @description No Content */
+                204: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -1085,7 +1111,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.UserUnitResponse"];
+                    };
                 };
             };
         };
@@ -2912,7 +2940,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.EmployeeProfileResponse"];
+                    };
                 };
             };
         };
@@ -2936,7 +2966,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.EmployeeProfileResponse"];
+                    };
                 };
             };
         };
@@ -2952,8 +2984,8 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description OK */
-                200: {
+                /** @description No Content */
+                204: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -4461,6 +4493,15 @@ export interface components {
             type?: string;
             name?: string;
         };
+        "StatsTid.Backend.Api.Contracts.EmployeeProfileResponse": {
+            employeeId?: string;
+            /** Format: double */
+            partTimeFraction?: number;
+            position?: string | null;
+            isPartTime?: boolean;
+            /** Format: int64 */
+            version?: number;
+        };
         "StatsTid.Backend.Api.Contracts.ForestMaoNode": {
             orgId?: string;
             orgName?: string;
@@ -4545,6 +4586,15 @@ export interface components {
         "StatsTid.Backend.Api.Contracts.OrgTreeResponse": {
             tree?: components["schemas"]["StatsTid.Backend.Api.Contracts.OrgTreeMaoNode"][];
         };
+        "StatsTid.Backend.Api.Contracts.OrganizationResponse": {
+            orgId?: string;
+            orgName?: string;
+            orgType?: string;
+            parentOrgId?: string | null;
+            materializedPath?: string;
+            agreementCode?: string;
+            okVersion?: string;
+        };
         "StatsTid.Backend.Api.Contracts.PersonSearchResult": {
             userId?: string;
             organisationId?: string;
@@ -4568,6 +4618,30 @@ export interface components {
             agreementCode: string;
             /** @deprecated */
             okVersion?: string;
+        };
+        "StatsTid.Backend.Api.Contracts.RoleGrantResponse": {
+            /** Format: uuid */
+            assignmentId?: string;
+            userId?: string;
+            roleId?: string;
+            orgId?: string | null;
+            scopeType?: string;
+            assignedBy?: string | null;
+            /** Format: date-time */
+            assignedAt?: string;
+            /** Format: date-time */
+            expiresAt?: string | null;
+        };
+        "StatsTid.Backend.Api.Contracts.RoleRevokeResponse": {
+            /** Format: uuid */
+            assignmentId?: string;
+            userId?: string;
+            roleId?: string;
+            revoked?: boolean;
+            revokedBy?: string | null;
+            /** Format: date-time */
+            revokedAt?: string;
+            reason?: string | null;
         };
         "StatsTid.Backend.Api.Contracts.RosterEmployeeRow": {
             employeeId?: string;
@@ -4615,6 +4689,12 @@ export interface components {
             /** Format: int32 */
             peopleTotal?: number;
         };
+        "StatsTid.Backend.Api.Contracts.UnitLeaderResponse": {
+            /** Format: uuid */
+            unitId?: string;
+            userId?: string;
+            organisationId?: string;
+        };
         "StatsTid.Backend.Api.Contracts.UnitResponse": {
             /** Format: uuid */
             unitId?: string;
@@ -4633,6 +4713,72 @@ export interface components {
             type?: string;
             name?: string;
             path?: string[];
+        };
+        "StatsTid.Backend.Api.Contracts.UserCreatedResponse": {
+            userId?: string;
+            username?: string;
+            displayName?: string;
+            email?: string | null;
+            primaryOrgId?: string;
+            agreementCode?: string;
+            okVersion?: string;
+            /** Format: int64 */
+            version?: number;
+        };
+        "StatsTid.Backend.Api.Contracts.UserDetailResponse": {
+            userId?: string;
+            username?: string;
+            displayName?: string;
+            email?: string | null;
+            primaryOrgId?: string;
+            agreementCode?: string;
+            okVersion?: string;
+            employmentCategory?: string;
+            /** Format: int64 */
+            version?: number;
+        };
+        "StatsTid.Backend.Api.Contracts.UserRoleAssignmentItem": {
+            /** Format: uuid */
+            assignmentId?: string;
+            roleId?: string;
+            orgId?: string | null;
+            scopeType?: string;
+            assignedBy?: string;
+            /** Format: date-time */
+            assignedAt?: string;
+            /** Format: date-time */
+            expiresAt?: string | null;
+        };
+        "StatsTid.Backend.Api.Contracts.UserSearchItem": {
+            userId?: string;
+            displayName?: string;
+            primaryOrgName?: string;
+        };
+        "StatsTid.Backend.Api.Contracts.UserSearchResponse": {
+            items?: components["schemas"]["StatsTid.Backend.Api.Contracts.UserSearchItem"][];
+            /** Format: int32 */
+            total?: number;
+            /** Format: int32 */
+            limit?: number;
+            /** Format: int32 */
+            offset?: number;
+        };
+        "StatsTid.Backend.Api.Contracts.UserUnitResponse": {
+            userId?: string;
+            /** Format: uuid */
+            unitId?: string | null;
+            primaryOrgId?: string;
+            /** Format: int64 */
+            version?: number;
+        };
+        "StatsTid.Backend.Api.Contracts.UserUpdatedResponse": {
+            userId?: string;
+            displayName?: string;
+            email?: string | null;
+            primaryOrgId?: string;
+            agreementCode?: string;
+            /** Format: int64 */
+            version?: number;
         };
         "StatsTid.Backend.Api.Endpoints.AdminEndpoints.CreateOrganizationRequest": {
             orgId?: string | null;

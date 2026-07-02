@@ -149,8 +149,9 @@ type GetOptions<P extends GetPath> = (GetPathParams<P> extends undefined
   (GetQueryParams<P> extends undefined ? { query?: undefined } : { query?: GetQueryParams<P> })
 
 /** Whether a type has at least one required (non-`undefined`) property — used to
-    make the `options` argument required for templated routes, optional otherwise. */
-type HasRequiredKey<T> = {
+    make the `options` argument required for templated routes, optional otherwise.
+    (Exported S112 so the fixture harness can mirror the overload shape.) */
+export type HasRequiredKey<T> = {
   [K in keyof T]-?: undefined extends T[K] ? never : K
 }[keyof T] extends never
   ? false
@@ -162,15 +163,21 @@ type GetCallOptions = {
   query?: Record<string, unknown>
 }
 
-/** Build the request URL: interpolate `{token}` path params, then append the query. */
-function buildGetUrl(pathKey: string, options?: GetCallOptions): string {
+/** Build the request URL: interpolate `{token}` path params, then append the
+    query. (S112: generalized from the S111 GET-only helper — `caller` labels
+    the error message for whichever typed entry point interpolated the URL.) */
+function buildUrl(
+  caller: string,
+  pathKey: string,
+  options?: { params?: { path?: Record<string, unknown> }; query?: Record<string, unknown> },
+): string {
   let url = pathKey
   const pathParams = options?.params?.path
   if (pathParams) {
     url = url.replace(/\{([^}]+)\}/g, (_match, key: string) => {
       const value = pathParams[key]
       if (value === undefined || value === null) {
-        throw new Error(`apiClient.get: missing path param '${key}' for '${pathKey}'`)
+        throw new Error(`${caller}: missing path param '${key}' for '${pathKey}'`)
       }
       return encodeURIComponent(String(value))
     })
@@ -199,20 +206,182 @@ function apiGet<P extends GetPath>(
 // who supply an explicit `T` not assignable to `GetPath`.
 function apiGet<T = unknown>(path: string): Promise<ApiResult<T>>
 function apiGet(pathKey: string, options?: GetCallOptions): Promise<ApiResult<unknown>> {
-  return request<unknown>('GET', buildGetUrl(pathKey, options))
+  return request<unknown>('GET', buildUrl('apiClient.get', pathKey, options))
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// S112 / TASK-11202 — typed structured overloads for the BODY verbs
+// (`post`/`put`/`delete`) and `apiFetchWithEtag`, extending the S111 typed-`get`
+// pattern (PAT-012). The derivation is GENERIC over a `paths`-shaped map so the
+// same type logic is provable against synthetic compile-time fixtures (see
+// `__tests__/api-typed-overloads.test.ts`). Against the CURRENT committed spec
+// the `put`/`delete` unions are `never` (no PUT/DELETE declares a typed success
+// yet) — the retrofit phases populate them with NO further client changes.
+//
+// ADMISSION RULE (success-status-aware): an operation joins a typed union only
+// when it declares a JSON 200, a JSON 201, or a 204. The 204 (and only the 204)
+// types as `undefined` data — matching `request`'s runtime 204 branch. A
+// grandfathered `content?: never` 200 (the ~130 undeclared ops) is EXCLUDED:
+// its wire shape is undeclared, so typing it as anything would relocate the
+// S97→S100 false-green rather than close it.
+// ════════════════════════════════════════════════════════════════════════════
+
+type MethodKey = 'get' | 'post' | 'put' | 'delete'
+
+/** Success-status-aware response data for an operation: JSON 200/201 → that
+    JSON type; a declared 204 (no content) → `undefined`; anything else →
+    `never` (the op is untyped and stays on the plain-string fallback). */
+export type SuccessDataOf<Op> = Op extends {
+  responses: { 200: { content: { 'application/json': infer R } } }
+}
+  ? R
+  : Op extends { responses: { 201: { content: { 'application/json': infer R } } } }
+    ? R
+    : Op extends { responses: { 204: unknown } }
+      ? undefined
+      : never
+
+/** The union of path keys in `Paths` whose `M` operation passes the admission
+    rule above — the body-verb generalization of the S111 `GetPath`. */
+export type TypedPathIn<Paths, M extends MethodKey> = {
+  [P in keyof Paths]: Paths[P] extends Record<M, infer Op>
+    ? [SuccessDataOf<Op>] extends [never]
+      ? never
+      : P
+    : never
+}[keyof Paths]
+
+/** The `M` operation object at path `P` (feeds the option/response derivers). */
+export type OperationIn<Paths, M extends MethodKey, P extends keyof Paths> = Paths[P] extends Record<
+  M,
+  infer Op
+>
+  ? Op
+  : never
+
+/** The declared JSON request-body type of an operation; `undefined` when the
+    operation takes no body (the generated `requestBody?: never`). */
+export type RequestBodyOf<Op> = Op extends {
+  requestBody: { content: { 'application/json': infer B } }
+}
+  ? B
+  : undefined
+
+type ParametersOf<Op> = Op extends { parameters: infer Pa } ? Pa : never
+
+/** The `path` params object of an operation (`undefined` when the route is
+    literal — the generated `path?: never` normalizes to `undefined`). */
+export type PathParamsOf<Op> = ParametersOf<Op> extends { path?: infer X }
+  ? [X] extends [never]
+    ? undefined
+    : X
+  : undefined
+
+/** The `query` params object of an operation (`undefined` when absent). */
+export type QueryParamsOf<Op> = ParametersOf<Op> extends { query?: infer X }
+  ? [X] extends [never]
+    ? undefined
+    : X
+  : undefined
+
+/** The structured options for a typed body-verb call: `params.path` REQUIRED
+    for a templated route, FORBIDDEN for a literal one; `query` optional when
+    declared; `body` REQUIRED when the operation declares a JSON request body,
+    FORBIDDEN otherwise. */
+export type StructuredOptionsForOp<Op> = (PathParamsOf<Op> extends undefined
+  ? { params?: undefined }
+  : { params: { path: PathParamsOf<Op> } }) &
+  (QueryParamsOf<Op> extends undefined ? { query?: undefined } : { query?: QueryParamsOf<Op> }) &
+  (RequestBodyOf<Op> extends undefined ? { body?: undefined } : { body: RequestBodyOf<Op> })
+
+// The real-spec bindings (fully evaluated literal-key unions).
+type PostPath = TypedPathIn<paths, 'post'>
+type PutPath = TypedPathIn<paths, 'put'>
+type DeletePath = TypedPathIn<paths, 'delete'>
+type PostOptions<P extends PostPath> = StructuredOptionsForOp<OperationIn<paths, 'post', P>>
+type PostData<P extends PostPath> = SuccessDataOf<OperationIn<paths, 'post', P>>
+type PutOptions<P extends PutPath> = StructuredOptionsForOp<OperationIn<paths, 'put', P>>
+type PutData<P extends PutPath> = SuccessDataOf<OperationIn<paths, 'put', P>>
+type DeleteOptions<P extends DeletePath> = StructuredOptionsForOp<OperationIn<paths, 'delete', P>>
+type DeleteData<P extends DeletePath> = SuccessDataOf<OperationIn<paths, 'delete', P>>
+
+/** The loose runtime shape of a structured body-verb call (hidden from callers). */
+type BodyCallOptions = {
+  params?: { path?: Record<string, unknown> }
+  query?: Record<string, unknown>
+  body?: unknown
+}
+
+// Runtime discrimination between a STRUCTURED options object and a legacy RAW
+// JSON body: an object whose own keys form a NON-EMPTY subset of
+// {params, query, body} is structured. `{}` stays a raw body (the existing
+// `post(url, {})` employee-approve callers), and every raw domain body in the
+// codebase carries at least one domain key outside the set.
+// DOCUMENTED RESIDUAL: an untyped call whose raw body consists SOLELY of those
+// keys (e.g. `post(path, { body: x })`) would be misread as structured — no
+// such caller exists today; new callers should use the typed structured form
+// (the S111 convention gate forces every NEW endpoint typed anyway).
+const STRUCTURED_BODY_KEYS = new Set(['params', 'query', 'body'])
+
+function isStructuredCall(arg: unknown): arg is BodyCallOptions {
+  if (arg === null || typeof arg !== 'object' || Array.isArray(arg)) return false
+  const keys = Object.keys(arg)
+  return keys.length > 0 && keys.every((k) => STRUCTURED_BODY_KEYS.has(k))
+}
+
+// OVERLOAD ORDERING (same rationale as `apiGet`, S111): the typed overload is
+// declared FIRST and constrained to the literal path-key union. Every existing
+// caller either supplies an explicit `T` (not assignable to the key union → the
+// typed overload is not a candidate) or a template-literal/computed URL (not in
+// the finite union) — both fall through to the plain-string fallback with ZERO
+// call-site edits. KNOWN+ACCEPTED: a no-explicit-T LITERAL-path RAW-body call
+// on a typed path (`post('/api/admin/units', rawBody)`) also falls through —
+// the raw body does not match the structured options shape — and stays silently
+// untyped; a later retrofit task sweeps those call sites.
+function apiPost<P extends PostPath>(
+  pathKey: P,
+  ...args: HasRequiredKey<PostOptions<P>> extends true
+    ? [options: PostOptions<P>]
+    : [options?: PostOptions<P>]
+): Promise<ApiResult<PostData<P>>>
+function apiPost<T = unknown>(path: string, body?: unknown): Promise<ApiResult<T>>
+function apiPost(pathKey: string, arg?: unknown): Promise<ApiResult<unknown>> {
+  return isStructuredCall(arg)
+    ? request<unknown>('POST', buildUrl('apiClient.post', pathKey, arg), arg.body)
+    : request<unknown>('POST', pathKey, arg)
+}
+
+function apiPut<P extends PutPath>(
+  pathKey: P,
+  ...args: HasRequiredKey<PutOptions<P>> extends true
+    ? [options: PutOptions<P>]
+    : [options?: PutOptions<P>]
+): Promise<ApiResult<PutData<P>>>
+function apiPut<T = unknown>(path: string, body?: unknown): Promise<ApiResult<T>>
+function apiPut(pathKey: string, arg?: unknown): Promise<ApiResult<unknown>> {
+  return isStructuredCall(arg)
+    ? request<unknown>('PUT', buildUrl('apiClient.put', pathKey, arg), arg.body)
+    : request<unknown>('PUT', pathKey, arg)
+}
+
+function apiDelete<P extends DeletePath>(
+  pathKey: P,
+  ...args: HasRequiredKey<DeleteOptions<P>> extends true
+    ? [options: DeleteOptions<P>]
+    : [options?: DeleteOptions<P>]
+): Promise<ApiResult<DeleteData<P>>>
+function apiDelete<T = unknown>(path: string): Promise<ApiResult<T>>
+function apiDelete(pathKey: string, arg?: unknown): Promise<ApiResult<unknown>> {
+  return isStructuredCall(arg)
+    ? request<unknown>('DELETE', buildUrl('apiClient.delete', pathKey, arg), arg.body)
+    : request<unknown>('DELETE', pathKey)
 }
 
 export const apiClient = {
   get: apiGet,
-  post<T>(path: string, body?: unknown): Promise<ApiResult<T>> {
-    return request<T>('POST', path, body)
-  },
-  put<T>(path: string, body?: unknown): Promise<ApiResult<T>> {
-    return request<T>('PUT', path, body)
-  },
-  delete<T>(path: string): Promise<ApiResult<T>> {
-    return request<T>('DELETE', path)
-  },
+  post: apiPost,
+  put: apiPut,
+  delete: apiDelete,
 }
 
 /**
@@ -234,11 +403,113 @@ export const apiClient = {
  *
  * 204 No Content returns `{ data: undefined as T, etag: null, status: 204 }`
  * — the WageTypeMapping DELETE shape per S25 endpoint contract sets no ETag.
+ *
+ * S112 / TASK-11202 — typed structured overload: one path key can host
+ * MULTIPLE verbs (`/api/admin/units/{id}` = PUT and DELETE), so the structured
+ * call carries an explicit uppercase METHOD DISCRIMINANT:
+ * `apiFetchWithEtag(pathKey, { method, params?, query?, ifMatch?, body? })`.
+ * `ifMatch` takes the READY RFC 7232 wire string (compose via `lib/etag.ts`)
+ * and is threaded as the `If-Match` header. The ETag/412 protocol (ADR-019)
+ * is UNTOUCHED — the structured form merely normalizes into the same
+ * (url, init) pair the legacy path consumes.
  */
-export async function apiFetchWithEtag<T>(
+
+type EtagVerb = 'GET' | 'POST' | 'PUT' | 'DELETE'
+
+/** Path keys in `Paths` exposing at least one typed operation on any verb. */
+export type EtagPathIn<Paths> =
+  | TypedPathIn<Paths, 'get'>
+  | TypedPathIn<Paths, 'post'>
+  | TypedPathIn<Paths, 'put'>
+  | TypedPathIn<Paths, 'delete'>
+
+/** The uppercase method discriminants valid for a path key (multi-verb aware). */
+export type EtagMethodsIn<Paths, P> =
+  | (P extends TypedPathIn<Paths, 'get'> ? 'GET' : never)
+  | (P extends TypedPathIn<Paths, 'post'> ? 'POST' : never)
+  | (P extends TypedPathIn<Paths, 'put'> ? 'PUT' : never)
+  | (P extends TypedPathIn<Paths, 'delete'> ? 'DELETE' : never)
+
+/** The structured options for a typed etag call — the method discriminant
+    selects WHICH operation on the path key binds `params`/`query`/`body`. */
+export type EtagOptionsIn<Paths, P extends keyof Paths, M extends EtagVerb> = {
+  method: M
+  ifMatch?: string
+} & StructuredOptionsForOp<OperationIn<Paths, Lowercase<M> & MethodKey, P>>
+
+/** The success data for a typed etag call (same admission rule as the verbs). */
+export type EtagDataIn<Paths, P extends keyof Paths, M extends EtagVerb> = SuccessDataOf<
+  OperationIn<Paths, Lowercase<M> & MethodKey, P>
+>
+
+type EtagPath = EtagPathIn<paths>
+
+/** The loose runtime shape of a structured etag call (hidden from callers). */
+type EtagCallOptions = {
+  method: string
+  params?: { path?: Record<string, unknown> }
+  query?: Record<string, unknown>
+  ifMatch?: string
+  body?: unknown
+}
+
+// Runtime discrimination between the structured options and a legacy
+// `RequestInit`. Behavior-preserving for every existing caller:
+//  - any key outside {method, params, query, ifMatch, body} (e.g. `headers`)
+//    → legacy RequestInit;
+//  - `params`/`query`/`ifMatch` present → structured (RequestInit has none);
+//  - otherwise a plain-OBJECT `body` → structured (a RequestInit body is a
+//    BodyInit — every existing caller pre-`JSON.stringify`s, so a STRING body
+//    routes legacy and is sent exactly once, never double-stringified);
+//  - `{ method }` alone routes legacy, where the two paths coincide (nothing
+//    to interpolate, no body, no If-Match).
+// LIMITATION (documented): a typed operation whose declared JSON body is a
+// BARE STRING would misroute to the legacy path — no such op exists in the spec.
+function isStructuredEtagCall(
+  arg: RequestInit | EtagCallOptions | undefined,
+): arg is EtagCallOptions {
+  if (!arg || typeof arg !== 'object') return false
+  const candidate = arg as EtagCallOptions
+  if (typeof candidate.method !== 'string') return false
+  const allowed = new Set(['method', 'params', 'query', 'ifMatch', 'body'])
+  if (!Object.keys(arg).every((k) => allowed.has(k))) return false
+  if ('params' in arg || 'query' in arg || 'ifMatch' in arg) return true
+  return typeof candidate.body === 'object' && candidate.body !== null
+}
+
+// Typed structured overload (FIRST — same fallback-preservation rationale as
+// the body verbs; additionally, every existing explicit-`T` caller supplies ONE
+// type argument against this overload's TWO type parameters, which eliminates
+// it as a candidate outright).
+export function apiFetchWithEtag<P extends EtagPath, M extends EtagMethodsIn<paths, P>>(
+  pathKey: P,
+  options: EtagOptionsIn<paths, P, M>,
+): Promise<ApiResult<ApiResponseWithEtag<EtagDataIn<paths, P, M>>>>
+// Legacy overload (SECOND): the plain URL + RequestInit shape, byte-compatible.
+export function apiFetchWithEtag<T>(
   url: string,
   init?: RequestInit,
-): Promise<ApiResult<ApiResponseWithEtag<T>>> {
+): Promise<ApiResult<ApiResponseWithEtag<T>>>
+export async function apiFetchWithEtag(
+  urlOrKey: string,
+  initOrOptions?: RequestInit | EtagCallOptions,
+): Promise<ApiResult<ApiResponseWithEtag<unknown>>> {
+  let url = urlOrKey
+  let init: RequestInit | undefined
+  if (isStructuredEtagCall(initOrOptions)) {
+    // Normalize the structured form into the SAME (url, init) the legacy path
+    // consumes — everything below this branch is protocol-identical (ADR-019).
+    url = buildUrl('apiFetchWithEtag', urlOrKey, initOrOptions)
+    init = {
+      method: initOrOptions.method,
+      headers:
+        initOrOptions.ifMatch !== undefined ? { 'If-Match': initOrOptions.ifMatch } : undefined,
+      body: initOrOptions.body !== undefined ? JSON.stringify(initOrOptions.body) : undefined,
+    }
+  } else {
+    init = initOrOptions as RequestInit | undefined
+  }
+
   const token = getToken()
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -296,12 +567,12 @@ export async function apiFetchWithEtag<T>(
     if (res.status === 204) {
       return {
         ok: true,
-        data: { data: undefined as T, etag: null, status: 204 },
+        data: { data: undefined, etag: null, status: 204 },
       }
     }
 
     const etag = res.headers.get('ETag')
-    const data = (await res.json()) as T
+    const data = (await res.json()) as unknown
     return {
       ok: true,
       data: { data, etag, status: res.status },

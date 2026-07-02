@@ -15,6 +15,12 @@
 // to the GET-only contract-coverage lint (PAT-010); the URLs are still passed
 // INLINE (no path-helper const) for consistency with the read hooks.
 //
+// S112 / TASK-11203 — every call switched to the TYPED structured forms (PAT-012):
+// If-Match mutations ride the typed `apiFetchWithEtag(pathKey, { method, params,
+// ifMatch, body })` overload; plain mutations ride the typed `apiClient.post/
+// delete(pathKey, { params?, body? })`. Request/response types are DERIVED from
+// the OpenAPI path key — no hand-written `<T>` and no `as` (lint-enforced).
+//
 // Each call resolves a non-throwing `UnitMutationResult` carrying a Danish,
 // user-facing message for the real failure statuses (412 stale / 409 dup-name /
 // 422 parent- or member-validation / 403 / 404) so the drawer/dialog can surface
@@ -85,22 +91,28 @@ export interface CreateUnitInput {
 }
 
 export function useUnitMutations() {
+  // S112 — the SWEEP target: this call rode the untyped raw-body fallback since
+  // S111 (no explicit T, raw body). Now the typed structured form — the body is
+  // compile-checked against the spec `CreateUnitRequest`.
   const createUnit = useCallback(async (input: CreateUnitInput): Promise<UnitMutationResult> => {
     const result = await apiClient.post('/api/admin/units', {
-      organisationId: input.organisationId,
-      parentUnitId: input.parentUnitId,
-      type: input.type,
-      name: input.name,
+      body: {
+        organisationId: input.organisationId,
+        parentUnitId: input.parentUnitId,
+        type: input.type,
+        name: input.name,
+      },
     })
     return result.ok ? success() : fail(result.status, 'create')
   }, [])
 
   const renameUnit = useCallback(
     async (unitId: string, name: string, version: number): Promise<UnitMutationResult> => {
-      const result = await apiFetchWithEtag(`/api/admin/units/${encodeURIComponent(unitId)}`, {
+      const result = await apiFetchWithEtag('/api/admin/units/{id}', {
         method: 'PUT',
-        headers: { 'If-Match': formatVersionAsIfMatch(version) },
-        body: JSON.stringify({ name }),
+        params: { path: { id: unitId } },
+        ifMatch: formatVersionAsIfMatch(version),
+        body: { name },
       })
       return result.ok ? success() : fail(result.status, 'rename')
     },
@@ -109,10 +121,11 @@ export function useUnitMutations() {
 
   const moveUnit = useCallback(
     async (unitId: string, newParentUnitId: string | null, version: number): Promise<UnitMutationResult> => {
-      const result = await apiFetchWithEtag(`/api/admin/units/${encodeURIComponent(unitId)}/move`, {
+      const result = await apiFetchWithEtag('/api/admin/units/{id}/move', {
         method: 'PUT',
-        headers: { 'If-Match': formatVersionAsIfMatch(version) },
-        body: JSON.stringify({ newParentUnitId }),
+        params: { path: { id: unitId } },
+        ifMatch: formatVersionAsIfMatch(version),
+        body: { newParentUnitId },
       })
       return result.ok ? success() : fail(result.status, 'move')
     },
@@ -121,9 +134,10 @@ export function useUnitMutations() {
 
   const deleteUnit = useCallback(
     async (unitId: string, version: number): Promise<UnitMutationResult> => {
-      const result = await apiFetchWithEtag(`/api/admin/units/${encodeURIComponent(unitId)}`, {
+      const result = await apiFetchWithEtag('/api/admin/units/{id}', {
         method: 'DELETE',
-        headers: { 'If-Match': formatVersionAsIfMatch(version) },
+        params: { path: { id: unitId } },
+        ifMatch: formatVersionAsIfMatch(version),
       })
       return result.ok ? success() : fail(result.status, 'delete')
     },
@@ -132,7 +146,10 @@ export function useUnitMutations() {
 
   const designateLeader = useCallback(
     async (unitId: string, userId: string): Promise<UnitMutationResult> => {
-      const result = await apiClient.post(`/api/admin/units/${encodeURIComponent(unitId)}/leaders`, { userId })
+      const result = await apiClient.post('/api/admin/units/{id}/leaders', {
+        params: { path: { id: unitId } },
+        body: { userId },
+      })
       return result.ok ? success() : fail(result.status, 'leader')
     },
     [],
@@ -140,9 +157,9 @@ export function useUnitMutations() {
 
   const removeLeader = useCallback(
     async (unitId: string, userId: string): Promise<UnitMutationResult> => {
-      const result = await apiClient.delete(
-        `/api/admin/units/${encodeURIComponent(unitId)}/leaders/${encodeURIComponent(userId)}`,
-      )
+      const result = await apiClient.delete('/api/admin/units/{id}/leaders/{userId}', {
+        params: { path: { id: unitId, userId } },
+      })
       return result.ok ? success() : fail(result.status, 'leader')
     },
     [],
@@ -156,16 +173,16 @@ export function useUnitMutations() {
   // unit here). Returns the new users.version for read-your-write threading.
   const assignUserUnit = useCallback(
     async (userId: string, unitId: string | null, version: number): Promise<AssignUnitResult> => {
-      const result = await apiFetchWithEtag<{ userId: string; unitId: string | null; primaryOrgId: string; version: number }>(
-        `/api/admin/users/${encodeURIComponent(userId)}/unit`,
-        {
-          method: 'PUT',
-          headers: { 'If-Match': formatVersionAsIfMatch(version) },
-          body: JSON.stringify({ unitId }),
-        },
-      )
+      // Typed response = the spec `UserUnitResponse` (all-optional per the current
+      // spec strictness phase) — hence the `?? null` on the threaded version.
+      const result = await apiFetchWithEtag('/api/admin/users/{userId}/unit', {
+        method: 'PUT',
+        params: { path: { userId } },
+        ifMatch: formatVersionAsIfMatch(version),
+        body: { unitId },
+      })
       if (result.ok) {
-        return { ok: true, status: result.data.status, error: '', version: result.data.data.version }
+        return { ok: true, status: result.data.status, error: '', version: result.data.data.version ?? null }
       }
       return { ...fail(result.status, 'assign'), version: null }
     },

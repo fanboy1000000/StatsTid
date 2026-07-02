@@ -13,14 +13,10 @@
 #
 # Lines starting with '#' and blank lines are ignored.
 
-DELETE /api/admin/employee-profiles/{employeeId}
 DELETE /api/admin/entitlement-configs/{configId}
-DELETE /api/admin/organizations/{orgId}
 DELETE /api/admin/reporting-lines/{employeeId}
 DELETE /api/admin/reporting-lines/{employeeId}/acting
 DELETE /api/admin/reporting-lines/{managerId}/vikar
-DELETE /api/admin/units/{id}
-DELETE /api/admin/units/{id}/leaders/{userId}
 DELETE /api/admin/wage-type-mappings
 DELETE /api/agreement-configs/{configId}/entitlements/{entitlementConfigId}
 DELETE /api/projects/{orgId}/select/{projectId}
@@ -28,7 +24,6 @@ DELETE /api/projects/{orgId}/{projectId}
 DELETE /api/reporting-lines/delegate
 GET /api/absences/{employeeId}
 GET /api/admin/audit
-GET /api/admin/employee-profiles/{employeeId}
 GET /api/admin/employees/{employeeId}/birth-date
 GET /api/admin/employees/{employeeId}/employment-end-date
 GET /api/admin/employees/{employeeId}/employment-start-date
@@ -45,9 +40,6 @@ GET /api/admin/reporting-lines/{employeeId}
 GET /api/admin/reporting-lines/{managerId}/reports
 GET /api/admin/reporting-lines/{managerId}/vikar
 GET /api/admin/units
-GET /api/admin/users/search
-GET /api/admin/users/{userId}
-GET /api/admin/users/{userId}/roles
 GET /api/admin/wage-type-mappings
 GET /api/admin/wage-type-mappings/agreement/{agreementCode}/{okVersion}
 GET /api/agreement-configs
@@ -84,7 +76,6 @@ GET /health
 POST /api/admin/employees/{employeeId}/settlement-reversal
 POST /api/admin/employees/{employeeId}/termination-payout-request
 POST /api/admin/entitlement-configs
-POST /api/admin/organizations
 POST /api/admin/position-overrides
 POST /api/admin/position-overrides/{overrideId}/activate
 POST /api/admin/position-overrides/{overrideId}/deactivate
@@ -93,10 +84,6 @@ POST /api/admin/reporting-lines/import
 POST /api/admin/reporting-lines/{employeeId}/acting
 POST /api/admin/reporting-lines/{employeeId}/remove
 POST /api/admin/reporting-lines/{managerId}/vikar
-POST /api/admin/roles/grant
-POST /api/admin/roles/revoke
-POST /api/admin/units/{id}/leaders
-POST /api/admin/users
 POST /api/admin/wage-type-mappings
 POST /api/agreement-configs
 POST /api/agreement-configs/{configId}/archive
@@ -120,19 +107,12 @@ POST /api/time-entries
 POST /api/vacation-settlements/{employeeId}/{entitlementType}/{entitlementYear}/reconcile-payout
 POST /api/vacation-settlements/{employeeId}/{entitlementType}/{entitlementYear}/resolve
 POST /api/vacation-transfer-agreements/{employeeId}
-PUT /api/admin/employee-profiles/{employeeId}
 PUT /api/admin/employees/{employeeId}/birth-date
 PUT /api/admin/employees/{employeeId}/employment-end-date
 PUT /api/admin/employees/{employeeId}/employment-start-date
 PUT /api/admin/employees/{employeeId}/entitlement-eligibility/{entitlementType}
 PUT /api/admin/entitlement-configs/{configId}
-PUT /api/admin/organizations/{orgId}
-PUT /api/admin/organizations/{orgId}/move
 PUT /api/admin/position-overrides/{overrideId}
-PUT /api/admin/units/{id}
-PUT /api/admin/units/{id}/move
-PUT /api/admin/users/{userId}
-PUT /api/admin/users/{userId}/unit
 PUT /api/admin/wage-type-mappings
 PUT /api/agreement-configs/{configId}
 PUT /api/agreement-configs/{configId}/entitlements/{entitlementConfigId}

@@ -1,5 +1,6 @@
 import { useCallback } from 'react'
 import { apiClient, apiFetchWithEtag, type ApiResult } from '../lib/api'
+import { coerceApiResponse, type Assert, type AssertFieldsInSpec } from '../lib/apiNarrow'
 
 // S48 TASK-4808. Reporting-line admin hooks following the useAdmin.ts pattern.
 // Reads go through apiClient; writes that carry If-Match / return ETag use
@@ -40,6 +41,15 @@ export interface PersonSearchResult {
   limit: number
   offset: number
 }
+
+// S112 / TASK-11203 — compile-time drift guards for the typed users-search read:
+// every field the FE reads must exist in the spec schemas (envelope + item).
+export type _PersonSearchEnvelopeDrift = Assert<
+  AssertFieldsInSpec<PersonSearchResult, 'StatsTid.Backend.Api.Contracts.UserSearchResponse'>
+>
+export type _PersonSearchItemDrift = Assert<
+  AssertFieldsInSpec<PersonSearchHit, 'StatsTid.Backend.Api.Contracts.UserSearchItem'>
+>
 
 /** The admin-on-behalf vikar create body (`POST .../{managerId}/vikar`). No
     If-Match; the manager id is the path segment. `effectiveTo` is the INCLUSIVE
@@ -167,15 +177,20 @@ export function useReportingLines() {
       limit?: number
       offset?: number
     }): Promise<ApiResult<PersonSearchResult>> => {
-      const qs = new URLSearchParams()
-      if (params.q) qs.set('q', params.q)
-      if (params.excludeEmployeeId) qs.set('excludeEmployeeId', params.excludeEmployeeId)
-      if (params.limit != null) qs.set('limit', String(params.limit))
-      if (params.offset != null) qs.set('offset', String(params.offset))
-      const query = qs.toString()
-      return apiClient.get<PersonSearchResult>(
-        `/api/admin/users/search${query ? `?${query}` : ''}`,
-      )
+      // S112 / TASK-11203 — the typed spec-keyed GET (the `{items,total,limit,
+      // offset}` envelope is DERIVED from `UserSearchResponse`, drift-guarded
+      // above); `buildUrl` skips undefined query params, matching the previous
+      // hand-built query string byte-for-byte.
+      const result = await apiClient.get('/api/admin/users/search', {
+        query: {
+          q: params.q || undefined,
+          excludeEmployeeId: params.excludeEmployeeId || undefined,
+          limit: params.limit ?? undefined,
+          offset: params.offset ?? undefined,
+        },
+      })
+      if (!result.ok) return result
+      return { ok: true, data: coerceApiResponse<PersonSearchResult>(result.data) }
     },
     [],
   )
