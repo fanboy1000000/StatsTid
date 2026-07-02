@@ -83,6 +83,7 @@
 |----|-------|--------|--------|---------|------|
 | [FAIL-001](failures/FAIL-001-jwt-claim-remapping-dotnet8.md) | .NET 8 JWT claim remapping silently breaks custom claims | resolved | S9 | Security, Infrastructure | jwt, claims, dotnet8, authentication, debugging |
 | [FAIL-002](failures/FAIL-002-docker-desktop-testcontainer-churn-flakes.md) | Docker Desktop sheds testcontainer starts under sustained churn | resolved | S65 | Test, CI/Tooling | docker-desktop, testcontainers, regression-suite, flake, consecutive-runs, close-protocol |
+| [FAIL-003](failures/FAIL-003-untracked-source-files-local-green-ci-blind.md) | Untracked source files pass local verification but are invisible to CI | resolved | S111 | Test, CI/Tooling | git-untracked, false-green, ci-verification, close-protocol, sprint-close-guard |
 
 ---
 

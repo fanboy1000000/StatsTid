@@ -12,6 +12,7 @@
 #   .claude/reviews/SPRINT-{N}-step7a-WAIVED.md   -> bypasses ALL close gates
 #   .claude/reviews/SPRINT-{N}-ci-health-WAIVED.md -> bypasses the CI-health gate only
 #   .claude/reviews/SPRINT-{N}-ci-pending-WAIVED.md -> bypasses the consecutive-CI-pending gate only
+#   .claude/reviews/SPRINT-{N}-untracked-WAIVED.md -> bypasses the untracked-source gate only
 #
 # Why this exists: post-S35 governance change (commit a094630) requires
 # Codex + Reviewer dual-lens at every sprint-end. Advisory memory + WORKFLOW.md
@@ -364,6 +365,62 @@ if ((Test-CiPendingTestVerifiedLine $curSprintLog) -and (Test-CiPendingTestVerif
         [Console]::Error.WriteLine('     Verified line accordingly, and re-attempt, OR')
         [Console]::Error.WriteLine('  3. Create an explicit waiver (document reason + when the debt clears):')
         [Console]::Error.WriteLine("     $ciPendingWaiver")
+        exit 2
+    }
+}
+
+# --- Untracked-source gate (FAIL-003, post-S111 governance) ------------------
+# The S111 close commit (35bcdf4) claimed the spec≡runtime gate while its three
+# test files sat UNTRACKED: local build/test globs everything on disk, so every
+# local run was green, but CI built the committed tree without them (regression
+# 1155 = S110's, unnoticed). `git commit -a` stages modifications, never
+# untracked files — new test files are exactly the class that gets missed.
+# This gate blocks a close while `??` entries exist under a source root, so the
+# tree that passed locally is provably the tree being committed.
+# Fail-open on git errors per this hook's best-effort convention.
+# Test seam: $env:STATSTID_UNTRACKED_MOCK (newline-separated paths, or 'clean')
+# skips git — honored ONLY for the harness-reserved S99, same hardening as the
+# other seams (a leaked env var must not blind the gate for a real close).
+
+$untrackedWaiver = Join-Path $reviewsDir "SPRINT-$sprintNum-untracked-WAIVED.md"
+if (Test-Path $untrackedWaiver) {
+    [Console]::Error.WriteLine("sprint-close-guard: S$sprintNum has an untracked-source waiver at $untrackedWaiver -- skipping the untracked-source gate")
+} else {
+    $untrackedSource = @()
+    if ($env:STATSTID_UNTRACKED_MOCK -and $sprintNum -eq '99') {
+        [Console]::Error.WriteLine("sprint-close-guard: untracked-source gate using MOCKED status (test seam, S99 only)")
+        if ($env:STATSTID_UNTRACKED_MOCK -ne 'clean') {
+            $untrackedSource = @($env:STATSTID_UNTRACKED_MOCK -split "`n" | Where-Object { $_.Trim() })
+        }
+    } else {
+        try {
+            $porcelain = git status --porcelain -- src tests tools frontend 2>$null
+            if ($LASTEXITCODE -eq 0 -and $porcelain) {
+                $untrackedSource = @($porcelain | Where-Object { $_ -match '^\?\?' } | ForEach-Object { $_.Substring(3) })
+            }
+        } catch {
+            [Console]::Error.WriteLine("sprint-close-guard: untracked-source check could not run ($_); allowing (fail-open)")
+        }
+    }
+
+    if ($untrackedSource.Count -gt 0) {
+        [Console]::Error.WriteLine("sprint-close-guard: BLOCKING sprint S$sprintNum close commit.")
+        [Console]::Error.WriteLine('')
+        [Console]::Error.WriteLine('UNTRACKED files exist under a source root (src/tests/tools/frontend):')
+        foreach ($f in $untrackedSource) {
+            [Console]::Error.WriteLine("  ?? $f")
+        }
+        [Console]::Error.WriteLine('')
+        [Console]::Error.WriteLine('Local build/test globs everything on disk, so local green does NOT prove')
+        [Console]::Error.WriteLine('these files are in the commit — CI builds only the committed tree. This is')
+        [Console]::Error.WriteLine('FAIL-003: the S111 spec≡runtime gate files were verified locally, claimed')
+        [Console]::Error.WriteLine('in the close commit, and absent from CI for two days.')
+        [Console]::Error.WriteLine('')
+        [Console]::Error.WriteLine('Remediation:')
+        [Console]::Error.WriteLine('  1. git add the files into the close commit (the usual case), OR')
+        [Console]::Error.WriteLine('  2. delete/relocate files that do not belong in the repo, OR')
+        [Console]::Error.WriteLine('  3. create an explicit waiver documenting why they legitimately stay uncommitted:')
+        [Console]::Error.WriteLine("     $untrackedWaiver")
         exit 2
     }
 }

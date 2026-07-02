@@ -40,6 +40,7 @@ $reviewer = Join-Path $reviewsDir "SPRINT-99-step7a-reviewer.md"
 $waiver   = Join-Path $reviewsDir "SPRINT-99-step7a-WAIVED.md"
 $ciHealthWaiver  = Join-Path $reviewsDir "SPRINT-99-ci-health-WAIVED.md"
 $ciPendingWaiver = Join-Path $reviewsDir "SPRINT-99-ci-pending-WAIVED.md"
+$untrackedWaiver = Join-Path $reviewsDir "SPRINT-99-untracked-WAIVED.md"
 $mock = 'git commit -m "S99 TASK-9999: sprint close -- test"'
 
 # Deterministic seams (S63 post-close gates): default the CI-health mock to
@@ -51,6 +52,7 @@ Remove-Item $tmpSprints -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $tmpSprints | Out-Null
 $env:STATSTID_CI_HEALTH_MOCK = 'success'
 $env:STATSTID_SPRINTS_DIR = $tmpSprints
+$env:STATSTID_UNTRACKED_MOCK = 'clean'
 
 $ciPendingLine = '| **Test Verified** | yes (unit) -- Docker-gated Regression/Smoke CI-pending (engine down) |'
 $cleanLine     = '| **Test Verified** | yes -- all suites green |'
@@ -153,14 +155,31 @@ $ok = ($r.Exit -eq 0)
 $results += "T12 (1x ci-pending allows): exit=$($r.Exit) expect=0 $(if($ok){'PASS'}else{'FAIL'})"
 if (-not $ok) { $results += $r.Stderr }
 
+# ── FAIL-003 untracked-source gate ──────────────────────────────────────────
+# T13: untracked source files (mocked) block
+$env:STATSTID_UNTRACKED_MOCK = "tests/Fake.Tests/NewGateTests.cs`nsrc/Fake/NewThing.cs"
+$r = Invoke-Hook $mock
+$ok = ($r.Exit -eq 2)
+$results += "T13 (untracked blocks): exit=$($r.Exit) expect=2 $(if($ok){'PASS'}else{'FAIL'})"
+
+# T14: untracked source files + waiver allows
+Set-Content -Path $untrackedWaiver -Value "waiver rationale: files X/Y stay uncommitted because Z" -Encoding UTF8
+$r = Invoke-Hook $mock
+$ok = ($r.Exit -eq 0)
+$results += "T14 (untracked + waiver): exit=$($r.Exit) expect=0 $(if($ok){'PASS'}else{'FAIL'})"
+if (-not $ok) { $results += $r.Stderr }
+Remove-Item $untrackedWaiver -ErrorAction SilentlyContinue
+$env:STATSTID_UNTRACKED_MOCK = 'clean'
+
 # Cleanup
-Remove-Item $codex,$reviewer,$waiver,$ciHealthWaiver,$ciPendingWaiver -ErrorAction SilentlyContinue
+Remove-Item $codex,$reviewer,$waiver,$ciHealthWaiver,$ciPendingWaiver,$untrackedWaiver -ErrorAction SilentlyContinue
 Remove-Item $tmpSprints -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item Env:\STATSTID_CI_HEALTH_MOCK -ErrorAction SilentlyContinue
 Remove-Item Env:\STATSTID_SPRINTS_DIR -ErrorAction SilentlyContinue
+Remove-Item Env:\STATSTID_UNTRACKED_MOCK -ErrorAction SilentlyContinue
 
 Write-Output $results
 $failed = $results | Where-Object { $_ -match 'FAIL' }
 if ($failed) { Write-Output ""; Write-Output "FAILURES PRESENT"; exit 1 }
 Write-Output ""
-Write-Output "ALL 12 TESTS PASSED"
+Write-Output "ALL 14 TESTS PASSED"

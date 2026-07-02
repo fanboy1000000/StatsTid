@@ -3,12 +3,12 @@
 | Field | Value |
 |-------|-------|
 | **Sprint** | 111 |
-| **Status** | complete — CI GREEN `28473854257` (all 7 jobs) |
+| **Status** | complete — CI GREEN `28473854257` (all 7 jobs); **post-close fix-forward `2571550`** (gate #1's test files were OMITTED from the close commit — untracked; CI GREEN `28567810051` 2026-07-02; see the post-close correction section + FAIL-003) |
 | **Start Date** | 2026-06-30 |
 | **End Date** | 2026-06-30 |
 | **Orchestrator Approved** | yes |
 | **Build Verified** | yes — `dotnet build` + `npm run build` 0/0 |
-| **Test Verified** | yes — **CI GREEN `28473854257` (all 7 jobs; the 4 NEW gates [drift→build-and-test, freshness+lint→frontend-build, convention→docs] all ran in CI + passed; + 21 Contracts + 6 matcher + 531 vitest + regression + smoke + e2e)**; PAT-010 byte-identity held; Step-7a dual-lens BOTH 0 BLOCKER (closure-critical W's FIXED in Phase 0) |
+| **Test Verified** | yes — **CI GREEN `28567810051` (fix-forward `2571550` 2026-07-02; all 7 jobs; regression 1155→1167 — the +12 spec≡runtime/matcher cases, so gate #1 is now verified IN CI)**. The original close run `28473854257` was green but ran WITHOUT gate #1's test files (omitted from `35bcdf4` — untracked; gates 2-4 [drift→build-and-test, freshness+lint→frontend-build, convention→docs] did run + pass there; 21 Contracts + 6 matcher + 531 vitest were LOCAL-green at close); PAT-010 byte-identity held; Step-7a dual-lens BOTH 0 BLOCKER (closure-critical W's FIXED in Phase 0) |
 
 ## Sprint Goal
 Phase 0 of the long-term commitment to OpenAPI as the durable FE↔backend contract — **the foundation: the generate→spec→types→FE pipeline + the gates that make the commitment self-sustaining + an end-to-end proof on a tiny surface.** This structurally closes the recurring "fetchEnheder" shape-mismatch bug class (S97→S99→S100) for the proof surface AND installs the **convention gate** that forces every *future* endpoint to ship typed (the durability keystone — the lesson recurred 3× *with* the lesson written down because nothing CI-enforced it). The bulk **retrofit of existing endpoints is explicitly DEFERRED** to subsequent phases (lazy / risk-prioritized). Decisions locked (owner + Step-4 dual-lens-clean refinement `REFINEMENT-fork-b-typed-client.md`): **single typed client** (evolve the existing `apiClient`, NOT a second client — via the STRUCTURED `get(pathKey, {params,query})` call shape so templated/query paths bind, Step-0b); **proof surface (Step-0b-corrected) = 4 CONSUMABLE registry reads typed end-to-end** (`organizations`, `units/forest` [literal], `search` [query], `roster` [templated]) + **`organizations/tree` typed backend-only** (FE-orphaned post-S109) + **1 admin mutation** request DTO; **OpenAPI/Swashbuckle** as the long-term spec source. **The closure is the PER-ROUTE spec≡runtime gate** (`.Produces<T>` is a convention that can lie about array-ness); the no-DB spec gen is a guarded **`--openapi` entrypoint**; the convention gate rides **`openapi.json`** (empty-schema detection), not the FE-call lint.
@@ -130,6 +130,16 @@ The 4 convergent BLOCKERs + the WARNINGs + the NOTEs absorbed into the Goal + TA
 | **Agent** | Test & QA + Orchestrator |
 
 **Description**: The full-pipeline proof + close.
+
+---
+
+## Post-close correction (2026-07-02) — gate #1's test files were omitted from the close commit (fix-forward `2571550`)
+
+The close commit `35bcdf4` claimed gate #1 — the PER-ROUTE spec≡runtime gate (`OpenApiSpecRuntimeTests` + `SpecRuntimeMatcher` + `SpecRuntimeMatcherTests`) — but the three files were never staged: they sat **untracked** in the working tree. Local verification was honestly green (the SDK-style csproj compiles untracked sources), but CI run `28473854257` built without them — its regression count was **1155, identical to S110** (the tell) — so "the 4 NEW gates all ran in CI" was FALSE for gate #1. The exact false-green shape this sprint exists to kill, one level up: the artifact enforcing spec≡runtime never entered the enforced tree.
+
+- **Fix-forward `2571550` (2026-07-02):** the three reviewed S111 files committed verbatim (575 lines, zero changes; regression project rebuilds 0-error, the 6 matcher tests re-verified locally). **CI GREEN `28567810051`** (all 7 jobs; regression 1155→**1167** = +12, matching the 6 spec≡runtime + 6 matcher test methods — delta-verified against both runs' runner summaries). Gate #1 now demonstrably runs in CI.
+- **Root cause:** local `dotnet build`/`dotnet test` sees untracked sources; `git commit -a`/selective staging picks up modifications but never untracked files; and no close gate compared the verified local tree against the committed tree.
+- **Durable fix:** [FAIL-003](../knowledge-base/failures/FAIL-003-untracked-source-files-local-green-ci-blind.md) + a new **UNTRACKED-SOURCE gate** in `sprint-close-guard.ps1` (a close commit is blocked while `git status --porcelain` reports `??` files under `src/`/`tests/`/`tools/`/`frontend/`; waiver: `SPRINT-<N>-untracked-WAIVED.md`).
 - **Proof A (response agreement — the strong closure):** change a backend record field → regenerate spec+types → the stale FE field-access FAILS `tsc` (via the REAL pipeline, not a hand-edit of `api-types.ts`).
 - **Proof B (drift):** change a backend record field WITHOUT committing the regen → `check_openapi_sync.py` FAILS.
 - **Honest framing [Step-0b NOTE]:** the RESPONSE side is spec≡runtime (anchored to real bytes — the strong closure); the REQUEST side is spec≡DTO (no "real response" to anchor to; `JsonSerializerDefaults.Web` is case-insensitive on input → a request-casing mismatch breaks only the generated TS, not deserialization). Don't claim symmetric strength.
