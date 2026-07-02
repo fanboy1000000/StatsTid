@@ -112,7 +112,7 @@ export function OrganisationOgMedarbejdere() {
   }, [searchOpen])
 
   return (
-    <div className={styles.app}>
+    <div className={styles.app} data-page-width="full">
       {/* ── Header: logo + title + Afgrænsning popover + Søg overlay trigger ── */}
       <header className={styles.header}>
         <div className={styles.headerLeft}>

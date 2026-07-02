@@ -22,3 +22,11 @@
   max-width: 1200px;
   margin: 0 auto;
 }
+
+/* Data-dense pages (e.g. the 3-region Organisation & medarbejdere admin surface)
+   opt OUT of the centered 1200px column by setting data-page-width="full" on
+   their root element. :has() — supported by all evergreen browsers since 2023. */
+.mainInner:has(> [data-page-width='full']) {
+  max-width: none;
+  height: 100%;
+}
