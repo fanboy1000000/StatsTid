@@ -5,11 +5,23 @@ for manual testing and demos: 1 demo MAO with 5 Organisations (1×~2,000, 1×~60
 **3,350 employees**) with agreement/category/age/tenure spread, a light activity slice, and
 ~20–30 hand-curated "messy" cases.
 
-> **Org model (S92 / ADR-035 flatten):** the tree is 2 levels — **MAO** (`MINX`, root) →
+> **Org model (S92 / ADR-035 flatten):** the ORG tree is 2 levels — **MAO** (`MINX`, root) →
 > **Organisation** (`STYX1…STYX5`). There are NO AFDELING/TEAM org rows; every user sits
-> directly on their Organisation (S103 / ADR-038 retired the legacy `enhed_label` model; the
-> structural `units` tree returns in S104+). The REPORTING tree keeps its realistic depth (it
-> is a people-graph, independent of the now-flat org graph).
+> directly on their Organisation (S103 / ADR-038 retired the legacy `enhed_label` model).
+> The REPORTING tree keeps its realistic depth (a people-graph, independent of the org graph).
+
+> **Unit spine (S114 / TASK-11400, ADR-038):** each demo Organisation additionally carries a
+> DERIVED `units` tree exercising **all 5 types** (direktion › område › kontor › team › enhed):
+> manager *m* at reporting-depth *d* anchors a unit of type `[d]`; *m* is HOMED in the unit it
+> leads; the unit's members are *m* + *m*'s NON-manager reports; *m*'s manager-reports appear as
+> CHILD units. The generated manager trees are DEPTH-FORCED to depths 0–4 exactly (per-org
+> `UnitSpanOverride` in `ScaleConfig`; a generation-time assertion fails LOUDLY if any depth 0–4
+> is unpopulated). Deliberate, counted messiness per org: ~2 leaderless units + ~3–5 cross-unit
+> sideways-homed NON-manager members (disjoint units; the manifest ledger is verifier-asserted
+> EXACTLY). The loader drives the REAL units admin APIs in the canonical order **units
+> parent-first → home ALL members probe-first (fetched ETag) → appoint leaders LAST** (the D3
+> re-home leadership strip + the leaders-422-non-members invariant make any other order wrong);
+> re-runs are probe-first idempotent with ZERO expected 4xx.
 
 > **This is DEMO data, fully isolated from the test fixture.** It is **opt-in** (a separate
 > compose overlay), uses distinct ids (`MINX` / `STYX1…STYX5` / `demo_*`) and `DEMO_SEED`
@@ -68,6 +80,12 @@ Same `--seed` (default 42) + `--scale` ⇒ byte-identical `99-demo-seed.sql` + m
 derive from a fixed `--reference-date`, not wall-clock. The **structural** layer is reproducible;
 the **activity** layer (API-driven) is **idempotent** (skip-if-present, no duplicates on re-run)
 but not byte-reproducible (server-stamped event ids/timestamps reflect generation wall-clock).
+
+The S114 unit post-pass consumes a **second derived** `Random(seed ^ salt)` — it never touches
+the primary `_rng` stream, so the people/edges/activity/roles/profiles output for a NO-override
+config is **byte-identical to the pre-S114 generator**, pinned by
+`tests/StatsTid.Tests.DemoSeed/Golden/` (captured from the pre-change generator) +
+`GoldenLegacyPinTests`. The unit spine itself is fully deterministic per (seed, scale).
 
 ## Known limitation (S84)
 

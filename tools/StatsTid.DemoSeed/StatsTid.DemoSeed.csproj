@@ -29,4 +29,12 @@
     <PackageReference Include="Npgsql" Version="8.0.3" />
   </ItemGroup>
 
+  <!-- S114 / TASK-11400: the DemoSeed test suite constructs INTERNAL ScaleConfig/TreeProfile
+       instances directly — (a) the golden-legacy pin rebuilds TODAY's no-override smoke config
+       to prove override-absence is the byte-exact legacy path, and (b) the generation-time
+       depth-assertion RED case needs a config that CANNOT reach manager depth 4. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="StatsTid.Tests.DemoSeed" />
+  </ItemGroup>
+
 </Project>

@@ -42,6 +42,41 @@ internal static class DanishPools
         "IT-specialist", "Analytiker",
     };
 
+    // ── S114 / TASK-11400 — unit-name pools for the derived unit spine. ASCII-transliterated
+    //    like every other pool (repo convention: "Driftsomraadet", "Klagenaevnet"). The depth-0
+    //    direktion is always named "Direktionen" (one per org); depths 1–4 draw from these via
+    //    the DERIVED unit RNG with per-parent used-name tracking + a numbered suffix fallback
+    //    (sibling ACTIVE-name uniqueness is a DB constraint — the API 409s duplicates). ──
+
+    /// <summary>Depth-1 <c>omrade</c> base names.</summary>
+    internal static readonly string[] OmraadeNames =
+    {
+        "Driftsomraadet", "Politikomraadet", "Digitaliseringsomraadet", "Oekonomiomraadet",
+        "HR-omraadet", "Tilsynsomraadet", "Analyseomraadet", "Juraomraadet",
+    };
+
+    /// <summary>Depth-2 <c>kontor</c> base names.</summary>
+    internal static readonly string[] KontorNames =
+    {
+        "Oekonomikontoret", "Personalekontoret", "IT-kontoret", "Juridisk Kontor",
+        "Analysekontoret", "Tilsynskontoret", "Sekretariatet", "Driftskontoret",
+        "Udviklingskontoret", "Planlaegningskontoret", "Kommunikationskontoret", "Indkoebskontoret",
+    };
+
+    /// <summary>Depth-3 <c>team</c> base names.</summary>
+    internal static readonly string[] TeamNames =
+    {
+        "Team Nord", "Team Syd", "Team Oest", "Team Vest", "Team Midt",
+        "Team Alfa", "Team Beta", "Team Gamma", "Team Delta", "Team Omega",
+    };
+
+    /// <summary>Depth-4 <c>enhed</c> base names.</summary>
+    internal static readonly string[] EnhedNames =
+    {
+        "Driftsenheden", "Supportenheden", "Sagsenheden", "Kontrolenheden", "Dataenheden",
+        "Serviceenheden", "Arkivenheden", "Vagtenheden", "Kvalitetsenheden", "Registerenheden",
+    };
+
     /// <summary>
     /// ASCII-transliterate Danish letters so generated emails are valid. Names keep their
     /// pool spelling (already ASCII-safe in the pools above — oe/aa/ae used in place of

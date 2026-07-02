@@ -141,6 +141,11 @@ static async Task<int> RunLoadAsync(Dictionary<string, string> opts)
     Console.WriteLine($"  activity: absences={result.AbsencesSaved} submitted={result.PeriodsSubmitted} approved={result.PeriodsApproved} rejected={result.PeriodsRejected}");
     Console.WriteLine($"  vikars: created={result.VikarsCreated} skipped={result.VikarsSkipped}");
     Console.WriteLine($"  messyCases: {result.MessyApplied}");
+    // S114 — the unit-spine stages (units → homing → leaders); ZERO 4xx expected on any run.
+    Console.WriteLine($"  units: created={result.UnitsCreated} matched-existing={result.UnitsSkipped}");
+    Console.WriteLine($"  homing: homed={result.MembersHomed} skipped(already-correct)={result.MembersHomedSkipped}");
+    Console.WriteLine($"  leaders: appointed={result.LeadersAppointed}");
+    Console.WriteLine($"  unit-stage 4xx: {result.UnitStageClientErrors}{(result.UnitStageClientErrors == 0 ? "" : "  ← UNEXPECTED (probe-first should make this zero)")}");
     if (result.Warnings.Count > 0)
     {
         Console.WriteLine($"  WARNINGS ({result.Warnings.Count}):");
@@ -155,7 +160,8 @@ static async Task<int> RunLoadAsync(Dictionary<string, string> opts)
     {
         connStr ??= "Host=localhost;Port=5432;Database=statstid;Username=statstid;Password=statstid_dev";
         Console.WriteLine("── post-load verification ──");
-        var verifier = new DemoVerifier(connStr, Console.WriteLine);
+        // S114: the manifest supplies the unit-spine expected counts (the deliberate-messiness ledger).
+        var verifier = new DemoVerifier(connStr, manifest, Console.WriteLine);
         var verifyOk = await verifier.VerifyAsync(cts.Token);
         if (!verifyOk)
         {

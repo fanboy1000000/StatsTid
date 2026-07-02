@@ -14,6 +14,24 @@ internal sealed class TreeProfile
 
     /// <summary>The styrelse root org's own agreement_code (display anchor).</summary>
     public required string RootAgreement { get; init; }
+
+    /// <summary>
+    /// S114 / TASK-11400 — optional per-tree span override that switches THIS tree's manager
+    /// spine to the DEPTH-FORCED layered layout (layers 1..3 sized by this span, layer 4 = the
+    /// remainder; generation-time assertion: max manager depth == 4 AND ≥1 manager at every
+    /// depth 0–4 — fail generation loudly, never the load). It also enables the unit-derivation
+    /// post-pass (manager m at depth d anchors a unit of type [direktion,omrade,kontor,team,
+    /// enhed][d]). ABSENCE ⇒ the byte-exact legacy BFS path (<c>parentIndex=(i-1)/span</c> at
+    /// <see cref="ScaleConfig.TargetSpan"/>) and NO unit plans — golden-pinned.
+    /// </summary>
+    public int? UnitSpanOverride { get; init; }
+
+    /// <summary>
+    /// S114 — optional manager-count override (replaces the generator-internal
+    /// <c>round(n×0.14)</c>). Needed only where 14% of the headcount cannot fill 5 manager
+    /// layers (the smoke tree: 30 users ⇒ 4 managers &lt; the 5-layer minimum of 5).
+    /// </summary>
+    public int? ManagerCountOverride { get; init; }
 }
 
 /// <summary>
@@ -69,6 +87,11 @@ internal sealed class ScaleConfig
                 TargetUsers = 30,
                 AgreementMix = (55, 35, 10),
                 RootAgreement = "AC",
+                // S114: smoke ALSO reaches all 5 unit levels. 14% of 30 = 4 managers < the
+                // 5-layer minimum, so smoke needs the manager-count knob too: 6 managers at
+                // span 2 layer as 1+2+1+1+1 (ratio 6/30 = 0.20, inside the 8–25% pin band).
+                UnitSpanOverride = 2,
+                ManagerCountOverride = 6,
             },
         },
     };
@@ -83,6 +106,12 @@ internal sealed class ScaleConfig
         ActivityFraction = 0.15,
         PartTimeFraction = 0.10,
         MessyCaseCount = 26,
+        // S114: every full-scale styrelse adopts a per-org span override so its manager tree has
+        // depths 0–4 EXACTLY (⇒ the unit derivation yields all 5 types). Manager COUNTS stay the
+        // generator-internal round(activeN×0.14) — headcounts and the positional manager SET are
+        // UNCHANGED, so the SQL artifact stays byte-identical (only edge PARENTAGE moves).
+        // Span choices (M ≈ active managers): STYX1 ~272 @ span 4 → 1+4+16+64+rest; STYX2 ~82
+        // @ span 3 → 1+3+9+27+rest; STYX3–5 ~34 @ span 2 → 1+2+4+8+rest.
         Trees = new[]
         {
             // Big mixed operational agency
@@ -93,6 +122,7 @@ internal sealed class ScaleConfig
                 TargetUsers = 2000,
                 AgreementMix = (55, 35, 10),
                 RootAgreement = "AC",
+                UnitSpanOverride = 4,
             },
             // Mid-size policy styrelse, AC-heavy
             new TreeProfile
@@ -102,6 +132,7 @@ internal sealed class ScaleConfig
                 TargetUsers = 600,
                 AgreementMix = (85, 12, 3),
                 RootAgreement = "AC",
+                UnitSpanOverride = 3,
             },
             // Small board/naevn — AC
             new TreeProfile
@@ -111,6 +142,7 @@ internal sealed class ScaleConfig
                 TargetUsers = 250,
                 AgreementMix = (80, 18, 2),
                 RootAgreement = "AC",
+                UnitSpanOverride = 2,
             },
             // Small inspection agency — HK-heavy
             new TreeProfile
@@ -120,6 +152,7 @@ internal sealed class ScaleConfig
                 TargetUsers = 250,
                 AgreementMix = (25, 70, 5),
                 RootAgreement = "HK",
+                UnitSpanOverride = 2,
             },
             // Small IT unit — PROSA-present
             new TreeProfile
@@ -129,6 +162,7 @@ internal sealed class ScaleConfig
                 TargetUsers = 250,
                 AgreementMix = (30, 25, 45),
                 RootAgreement = "PROSA",
+                UnitSpanOverride = 2,
             },
         },
     };

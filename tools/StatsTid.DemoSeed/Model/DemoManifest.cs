@@ -49,6 +49,18 @@ public sealed class DemoManifest
 
     /// <summary>The ~20-30 hand-curated "messy" cases (scripted steps over the API).</summary>
     public List<DemoMessyCase> MessyCases { get; set; } = new();
+
+    /// <summary>
+    /// S114 / TASK-11400 — the per-Organisation derived unit spines (ADR-038: direktion › omrade ›
+    /// kontor › team › enhed), loaded via the REAL units admin APIs in the canonical stage order
+    /// (units parent-first → home ALL members probe-first → appoint leaders LAST — the D3
+    /// re-home-strips-leadership invariant makes any other order self-corrupting).
+    /// NULL (and hence ABSENT from the JSON — <see cref="JsonIgnoreCondition.WhenWritingNull"/>)
+    /// when no tree carries a unit-spine override: the legacy no-override manifest stays
+    /// byte-identical to the pre-S114 golden artifact, and old manifests deserialize fine.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<DemoUnitPlan>? UnitPlans { get; set; }
 }
 
 public sealed class DemoTree
@@ -147,6 +159,68 @@ public sealed class DemoMessyCase
 
     /// <summary>Optional scalar payload (e.g. odd part-time fraction, new agreement code).</summary>
     public string? Value { get; set; }
+}
+
+/// <summary>
+/// S114 — ONE Organisation's derived unit-spine plan: the units (keyed by their ANCHOR manager's
+/// user id — server GUIDs are assigned at load time and resolved by (org, parent-chain, name)),
+/// the manager-depth histogram, and the DELIBERATE messiness ledger the verifier asserts EXACTLY.
+/// </summary>
+public sealed class DemoUnitPlan
+{
+    public string OrganisationId { get; set; } = "";
+
+    /// <summary>Managers per depth, index = depth 0..4 (the generation-time assertion guarantees
+    /// length 5 with every entry ≥ 1 — the manifest depth spot-proof).</summary>
+    public List<int> ManagersPerDepth { get; set; } = new();
+
+    /// <summary>Every unit, parent-first-orderable via <see cref="DemoUnit.Depth"/>.</summary>
+    public List<DemoUnit> Units { get; set; } = new();
+
+    /// <summary>The deliberately-LEADERLESS units (the loader SKIPS their leader appointment).
+    /// The verifier asserts the live leaderless count equals this count EXACTLY (catching any
+    /// accidental decapitation via the D3 re-home leadership strip).</summary>
+    public List<string> LeaderlessUnitKeys { get; set; } = new();
+
+    /// <summary>The deliberate cross-unit sideways-homed members (NON-manager leaves ONLY — the
+    /// D3 hard rule; disjoint from each other and from the leaderless units).</summary>
+    public List<DemoSidewaysCase> SidewaysCases { get; set; } = new();
+}
+
+/// <summary>S114 — one derived unit. <see cref="UnitKey"/> = the anchor manager's user id (stable,
+/// manifest-local); <see cref="MemberUserIds"/> = the anchor + their NON-manager reports (a
+/// single-unit-membership PARTITION of the org's active users — manager-reports appear as CHILD
+/// units, not member rows), post-messiness (sideways members appear in their TARGET unit's list).</summary>
+public sealed class DemoUnit
+{
+    public string UnitKey { get; set; } = "";
+
+    /// <summary>The parent unit's key (the anchor's manager) — null for the depth-0 direktion.</summary>
+    public string? ParentUnitKey { get; set; }
+
+    /// <summary>direktion | omrade | kontor | team | enhed — [depth].</summary>
+    public string Type { get; set; } = "";
+
+    public string Name { get; set; } = "";
+
+    /// <summary>Manager/unit depth 0..4 (== the type's rank position; PARTIAL-RANK-valid by
+    /// construction: every child is exactly one rank deeper).</summary>
+    public int Depth { get; set; }
+
+    /// <summary>The unit's leader (the anchor manager) — null ⇒ deliberately leaderless.</summary>
+    public string? LeaderUserId { get; set; }
+
+    public List<string> MemberUserIds { get; set; } = new();
+}
+
+/// <summary>S114 — one deliberate cross-unit case: a NON-manager leaf of <see cref="FromUnitKey"/>
+/// homed sideways into <see cref="ToUnitKey"/> (which keeps a leader — the amber "Ret" flow has a
+/// valid in-unit target).</summary>
+public sealed class DemoSidewaysCase
+{
+    public string UserId { get; set; } = "";
+    public string FromUnitKey { get; set; } = "";
+    public string ToUnitKey { get; set; } = "";
 }
 
 /// <summary>

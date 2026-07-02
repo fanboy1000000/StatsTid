@@ -1,4 +1,5 @@
 using Npgsql;
+using StatsTid.Tools.DemoSeed.Model;
 
 namespace StatsTid.Tools.DemoSeed.Loading;
 
@@ -7,15 +8,22 @@ namespace StatsTid.Tools.DemoSeed.Loading;
 /// landed correctly AND that the baseline 19-user fixture is untouched. Used by <c>load --verify</c>
 /// and the smoke self-validation. NOT relied on for one-root enforcement at write time (the import
 /// API does not enforce root-count) — this is the explicit invariant pass the plan requires.
+///
+/// <para>S114 / TASK-11400 — extended with the unit-spine checks (all-5-types-per-org,
+/// leader-is-member, homing totality, the EXACT deliberate-messiness ledger). These need the
+/// manifest's expected counts, so the verifier now optionally takes the loaded manifest; the
+/// unit checks are skipped when it (or its <c>unitPlans</c> section) is absent.</para>
 /// </summary>
 public sealed class DemoVerifier
 {
     private readonly string _connStr;
+    private readonly DemoManifest? _manifest;
     private readonly Action<string> _log;
 
-    public DemoVerifier(string connStr, Action<string> log)
+    public DemoVerifier(string connStr, DemoManifest? manifest, Action<string> log)
     {
         _connStr = connStr;
+        _manifest = manifest;
         _log = log;
     }
 
@@ -140,6 +148,87 @@ public sealed class DemoVerifier
         //     checks are gone: those tables were dropped (replaced by units / unit_leaders /
         //     users.unit_id). The unit-tree FK + member-invariant assertions live in the test suite
         //     (UnitFoundationTests); the units CRUD that the demo would exercise ships in S104 / Phase 3.
+
+        // 14-19. S114 / TASK-11400 — the unit-spine checks (require the manifest's unit plans).
+        ok &= await VerifyUnitSpineAsync(conn, ct);
+
+        return ok;
+    }
+
+    /// <summary>S114 — unit-spine verification: per plan org — all 5 unit types present, unit count
+    /// exact, the leaderless count EXACTLY the deliberate ledger count, the sideways count EXACTLY
+    /// the ledger count; globally — every unit leader is a member of their unit and every active
+    /// demo person is unit-homed.</summary>
+    private async Task<bool> VerifyUnitSpineAsync(NpgsqlConnection conn, CancellationToken ct)
+    {
+        if (_manifest?.UnitPlans is not { Count: > 0 } plans)
+        {
+            _log("  [SKIP] unit-spine checks (no unitPlans in the manifest)");
+            return true;
+        }
+
+        var ok = true;
+
+        foreach (var plan in plans)
+        {
+            var org = plan.OrganisationId;
+
+            // 14. All 5 unit types present (ADR-038 spine: direktion…enhed).
+            var typeCount = await ScalarLongAsync(conn,
+                $"SELECT COUNT(DISTINCT type) FROM units WHERE organisation_id = '{org}' AND deleted_at IS NULL", ct);
+            ok &= Check($"org {org}: all 5 unit types present", typeCount == 5, $"distinct types={typeCount}");
+
+            // 15. Unit count EXACT (catches duplicate creates / partial loads).
+            var unitCount = await ScalarLongAsync(conn,
+                $"SELECT COUNT(*) FROM units WHERE organisation_id = '{org}' AND deleted_at IS NULL", ct);
+            ok &= Check($"org {org}: unit count exact", unitCount == plan.Units.Count,
+                $"found {unitCount}, expected {plan.Units.Count}");
+
+            // 18. Leaderless-unit count == the DELIBERATE ledger count EXACTLY (catches accidental
+            //     decapitation via the D3 re-home leadership strip).
+            var leaderless = await ScalarLongAsync(conn,
+                $"SELECT COUNT(*) FROM units un WHERE un.organisation_id = '{org}' AND un.deleted_at IS NULL " +
+                "AND NOT EXISTS (SELECT 1 FROM unit_leaders ul WHERE ul.unit_id = un.unit_id)", ct);
+            ok &= Check($"org {org}: leaderless units == deliberate count", leaderless == plan.LeaderlessUnitKeys.Count,
+                $"found {leaderless}, ledger {plan.LeaderlessUnitKeys.Count}");
+
+            // 19. Sideways (cross-unit) member count == the ledger EXACTLY: active NON-manager
+            //     demo members whose unit differs from their PRIMARY manager's unit. (A normal
+            //     leaf is homed in its manager's unit; managers are excluded — their unit differs
+            //     from their parent's by design.)
+            var sideways = await ScalarLongAsync(conn,
+                $"""
+                WITH demo AS (
+                    SELECT employee_id, manager_id FROM reporting_lines
+                    WHERE relationship = 'PRIMARY' AND effective_to IS NULL
+                      AND created_by <> 'SYSTEM' AND organisation_id = '{org}'
+                )
+                SELECT COUNT(*)
+                FROM demo d
+                JOIN users e ON e.user_id = d.employee_id
+                JOIN users m ON m.user_id = d.manager_id
+                WHERE e.is_active
+                  AND NOT EXISTS (SELECT 1 FROM demo x WHERE x.manager_id = d.employee_id)
+                  AND e.unit_id IS DISTINCT FROM m.unit_id
+                """, ct);
+            ok &= Check($"org {org}: sideways cross-unit members == ledger", sideways == plan.SidewaysCases.Count,
+                $"found {sideways}, ledger {plan.SidewaysCases.Count}");
+        }
+
+        // 16. Leader-is-member (D3): every unit_leaders row's user is homed in that very unit.
+        var badLeaders = await ScalarLongAsync(conn,
+            "SELECT COUNT(*) FROM unit_leaders ul " +
+            "JOIN units un ON un.unit_id = ul.unit_id " +
+            "JOIN users u ON u.user_id = ul.user_id " +
+            "WHERE un.organisation_id LIKE 'STYX%' AND u.unit_id IS DISTINCT FROM ul.unit_id", ct);
+        ok &= Check("every demo unit leader is a member of their unit", badLeaders == 0, $"found {badLeaders} violations");
+
+        // 17. Homing totality: every ACTIVE demo person is unit-homed. Scoped to the styrelse
+        //     orgs — demo_admin homes at the MAO (MINX) and deliberately has no unit.
+        var unhomed = await ScalarLongAsync(conn,
+            "SELECT COUNT(*) FROM users WHERE user_id LIKE 'demo\\_%' AND is_active AND unit_id IS NULL " +
+            "AND primary_org_id LIKE 'STYX%'", ct);
+        ok &= Check("every active demo person is unit-homed", unhomed == 0, $"found {unhomed} unhomed");
 
         return ok;
     }

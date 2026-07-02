@@ -28,4 +28,11 @@
     <ProjectReference Include="..\..\tools\StatsTid.DemoSeed\StatsTid.DemoSeed.csproj" />
   </ItemGroup>
 
+  <!-- S114 / TASK-11400: the GOLDEN artifact — captured from the PRE-S114 generator (no-override
+       smoke, seed 42, referenceDate 2026-06-15) BEFORE any generator change. The golden pin
+       asserts the post-change no-override output equals THESE bytes. -->
+  <ItemGroup>
+    <None Include="Golden\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

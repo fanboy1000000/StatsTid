@@ -121,6 +121,54 @@ public sealed class ApiClient : IDisposable
     public Task<(HttpStatusCode Status, string Body)> CreateVikarAsync(string managerId, object payload, CancellationToken ct)
         => SendAsync(HttpMethod.Post, $"/api/admin/reporting-lines/{managerId}/vikar", payload, null, ct);
 
+    // ── S114 / TASK-11400 — the unit-spine surface (units → homing → leaders, canonical order) ──
+
+    /// <summary>GET /api/admin/units/forest — the stage-(a) existence probe (envelope { forest: [...] }).</summary>
+    public async Task<(HttpStatusCode Status, string Body)> GetUnitsForestAsync(CancellationToken ct)
+    {
+        var req = new HttpRequestMessage(HttpMethod.Get, "/api/admin/units/forest");
+        var resp = await _http.SendAsync(req, ct);
+        var body = await resp.Content.ReadAsStringAsync(ct);
+        return (resp.StatusCode, body);
+    }
+
+    /// <summary>POST /api/admin/units — create one unit (201 body carries the SERVER GUID).</summary>
+    public Task<(HttpStatusCode Status, string Body)> CreateUnitAsync(object payload, CancellationToken ct)
+        => SendAsync(HttpMethod.Post, "/api/admin/units", payload, null, ct);
+
+    /// <summary>GET /api/admin/reporting-lines/tree/{organisationId}/medarbejdere — the unit-tagged
+    /// roster (per-person <c>unitId</c>): the stage-(b) already-homed probe.</summary>
+    public async Task<(HttpStatusCode Status, string Body)> GetRosterAsync(string organisationId, CancellationToken ct)
+    {
+        var req = new HttpRequestMessage(HttpMethod.Get, $"/api/admin/reporting-lines/tree/{organisationId}/medarbejdere");
+        var resp = await _http.SendAsync(req, ct);
+        var body = await resp.Content.ReadAsStringAsync(ct);
+        return (resp.StatusCode, body);
+    }
+
+    /// <summary>GET /api/admin/users/{userId} → (status, users-row version FROM THE ETag, body).
+    /// The FETCHED version feeds the homing PUT's If-Match (never a blanket "1").</summary>
+    public async Task<(HttpStatusCode Status, long? Version, string Body)> GetUserAsync(string userId, CancellationToken ct)
+    {
+        var req = new HttpRequestMessage(HttpMethod.Get, $"/api/admin/users/{userId}");
+        var resp = await _http.SendAsync(req, ct);
+        var body = await resp.Content.ReadAsStringAsync(ct);
+        long? version = null;
+        if (resp.Headers.ETag is { Tag: { } tag } && long.TryParse(tag.Trim('"'), out var v))
+            version = v;
+        return (resp.StatusCode, version, body);
+    }
+
+    /// <summary>PUT /api/admin/users/{userId}/unit with If-Match: "version" — the SAME-Organisation
+    /// unit-assign (homing).</summary>
+    public Task<(HttpStatusCode Status, string Body)> PutUserUnitAsync(string userId, object payload, long ifMatchVersion, CancellationToken ct)
+        => SendAsync(HttpMethod.Put, $"/api/admin/users/{userId}/unit", payload, $"\"{ifMatchVersion}\"", ct);
+
+    /// <summary>POST /api/admin/units/{unitId}/leaders — designate (200 whether fresh or already
+    /// designated; 422s a NON-member, which is why homing must fully precede).</summary>
+    public Task<(HttpStatusCode Status, string Body)> DesignateUnitLeaderAsync(Guid unitId, object payload, CancellationToken ct)
+        => SendAsync(HttpMethod.Post, $"/api/admin/units/{unitId}/leaders", payload, null, ct);
+
     private async Task<(HttpStatusCode, string)> SendAsync(HttpMethod method, string path, object? payload, string? ifMatch, CancellationToken ct)
     {
         var req = new HttpRequestMessage(method, path);

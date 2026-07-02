@@ -47,8 +47,16 @@ public sealed class DemoGenerator
     private readonly DateOnly _referenceDate;
 
     public DemoGenerator(string scale, int seed, DateOnly referenceDate)
+        : this(ScaleConfig.For(scale), seed, referenceDate)
     {
-        _config = ScaleConfig.For(scale);
+    }
+
+    /// <summary>S114 — internal config-injection ctor (InternalsVisibleTo: the golden-legacy pin
+    /// rebuilds today's no-override smoke config; the depth-assertion RED case injects a config
+    /// that cannot reach manager depth 4).</summary>
+    internal DemoGenerator(ScaleConfig config, int seed, DateOnly referenceDate)
+    {
+        _config = config;
         _seed = seed;
         _rng = new Random(seed);
         _referenceDate = referenceDate;
@@ -97,6 +105,13 @@ public sealed class DemoGenerator
         GenerateActivity(users, manifest);
         GenerateVikars(users, manifest);
         GenerateMessyCases(users, manifest);
+
+        // 3b. S114 — the unit-derivation POST-PASS (Enhedsspor spine). A SEPARATE pass on a
+        //     SECOND derived Random (seed ^ salt) — it NEVER touches _rng and never interleaves
+        //     into the loops above, so every pre-existing draw is untouched (golden-pinned).
+        //     Runs only for trees carrying a UnitSpanOverride; a no-override config emits NO
+        //     unitPlans section at all.
+        DeriveUnitPlans(users, manifest);
 
         // 4. Disjointness assertion (NOTE-1 — ON CONFLICT silently drops collisions).
         AssertDisjointFromBaseline(orgs, users, manifest);
@@ -230,7 +245,10 @@ public sealed class DemoGenerator
         var n = treeUsers.Count;
 
         // 1. Manager count ≈ 14% of headcount (at least the root + a couple for small trees).
-        var managerCount = Math.Max(2, (int)Math.Round(n * 0.14));
+        //    S114: an explicit ManagerCountOverride replaces the ratio (smoke needs ≥5 managers
+        //    to fill 5 layers); absent, the legacy computation is byte-exact.
+        var managerCount = profile.ManagerCountOverride
+                           ?? Math.Max(2, (int)Math.Round(n * 0.14));
         managerCount = Math.Min(managerCount, n - 1); // always leave ≥1 leaf
         var managers = treeUsers.Take(managerCount).ToList();
         var leaves = treeUsers.Skip(managerCount).ToList();
@@ -247,13 +265,40 @@ public sealed class DemoGenerator
             EffectiveFrom = effFrom,
         });
 
-        // 2. Spine: managers[0] is the root; lay the rest into BFS layers under it (≤ span children
-        //    per manager). This is a pure index walk (deterministic). manager i (i≥1) reports to
-        //    manager (i-1)/span — a strictly smaller index ⇒ always closer to the root ⇒ no cycle.
-        for (var i = 1; i < managers.Count; i++)
+        if (profile.UnitSpanOverride is int forcedSpan)
         {
-            var parentIndex = (i - 1) / span;
-            AddEdge(managers[i], managers[parentIndex]);
+            // 2-alt. S114 DEPTH-FORCED layered spine: layers 1..3 sized by the override span
+            //    (reserving ≥1 manager for every deeper layer), layer 4 = ALL the rest — so max
+            //    manager depth == 4 with every depth 0–4 populated, for ANY M ≥ 5 (asserted;
+            //    fail GENERATION loudly, never the load). Pure index math — NO RNG draw, so the
+            //    _rng stream is identical to the legacy path's.
+            var layers = ComputeForcedLayers(profile.OrganisationId, managers.Count, forcedSpan);
+
+            // Parent assignment: layer d's managers round-robin over layer d-1 (even spread —
+            //    every edge points strictly closer to the root ⇒ no cycle).
+            var offset = 1; // managers[0] is the root (layer 0)
+            var prevLayerStart = 0;
+            var prevLayerCount = 1;
+            for (var d = 1; d <= 4; d++)
+            {
+                for (var j = 0; j < layers[d]; j++)
+                    AddEdge(managers[offset + j], managers[prevLayerStart + (j % prevLayerCount)]);
+                prevLayerStart = offset;
+                prevLayerCount = layers[d];
+                offset += layers[d];
+            }
+        }
+        else
+        {
+            // 2. LEGACY spine (byte-exact when no override): managers[0] is the root; lay the rest
+            //    into BFS layers under it (≤ span children per manager). This is a pure index walk
+            //    (deterministic). manager i (i≥1) reports to manager (i-1)/span — a strictly
+            //    smaller index ⇒ always closer to the root ⇒ no cycle.
+            for (var i = 1; i < managers.Count; i++)
+            {
+                var parentIndex = (i - 1) / span;
+                AddEdge(managers[i], managers[parentIndex]);
+            }
         }
 
         // 3. Leaves: round-robin across ALL managers (balanced load; the root also carries a few).
@@ -262,6 +307,44 @@ public sealed class DemoGenerator
             var mgr = managers[i % managers.Count];
             AddEdge(leaves[i], mgr);
         }
+    }
+
+    /// <summary>
+    /// S114 — layer sizes for the depth-forced spine: index = depth 0..4. l0 = 1 (the root);
+    /// l1..l3 = min(prevLayer × span, remaining − reserve) where reserve keeps ≥1 manager for
+    /// every deeper layer; l4 = the remainder. Throws (generation-time, LOUD) when the tree
+    /// cannot populate every depth 0–4 (M &lt; 5 or a squeezed middle layer).
+    /// </summary>
+    private static int[] ComputeForcedLayers(string organisationId, int managerCount, int forcedSpan)
+    {
+        if (forcedSpan < 1)
+            throw new InvalidOperationException(
+                $"[S114 unit-spine] org {organisationId}: UnitSpanOverride must be ≥ 1 (got {forcedSpan}).");
+        if (managerCount < 5)
+            throw new InvalidOperationException(
+                $"[S114 unit-spine] org {organisationId}: {managerCount} managers cannot populate manager depths 0–4 " +
+                "(need ≥ 5 — raise the tree's headcount or set ManagerCountOverride). Generation FAILED (never the load).");
+
+        var layers = new int[5];
+        layers[0] = 1;
+        var remaining = managerCount - 1;
+        for (var d = 1; d <= 3; d++)
+        {
+            var cap = layers[d - 1] * forcedSpan;
+            var reserve = 4 - d; // ≥1 manager for each deeper layer (d+1 .. 4)
+            layers[d] = Math.Min(cap, remaining - reserve);
+            if (layers[d] < 1)
+                throw new InvalidOperationException(
+                    $"[S114 unit-spine] org {organisationId}: layer {d} would be empty at span {forcedSpan} " +
+                    $"with {managerCount} managers. Generation FAILED (never the load).");
+            remaining -= layers[d];
+        }
+        layers[4] = remaining;
+        if (layers[4] < 1)
+            throw new InvalidOperationException(
+                $"[S114 unit-spine] org {organisationId}: no manager left for depth 4 at span {forcedSpan} " +
+                $"with {managerCount} managers (max manager depth must be EXACTLY 4). Generation FAILED (never the load).");
+        return layers;
     }
 
     private DemoUser MakeUser(string userId, string orgId, string treeRoot, TreeProfile profile, bool isSenior, bool leaverAllowed)
@@ -531,6 +614,320 @@ public sealed class DemoGenerator
                     });
                     break;
             }
+        }
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════════════════════
+    //  S114 / TASK-11400 — the unit-derivation post-pass (ADR-038 Enhedsspor spine).
+    //
+    //  Derives each override-tree's unit spine FROM its reporting-edge manager tree: manager m at
+    //  depth d anchors unit U(m) of type [direktion,omrade,kontor,team,enhed][d]; unit parentage
+    //  follows manager parentage; m is HOMED in U(m); U(m)'s members = m + m's NON-manager
+    //  reports; m's manager-reports appear as CHILD UNITS, not member rows (single-unit
+    //  membership + leader-is-member BY CONSTRUCTION). Deliberate, counted messiness: ~2
+    //  leaderless units + ~3-5 sideways-homed NON-manager leaves per org, in DISJOINT units.
+    //
+    //  Determinism: consumes ONLY a derived Random(seed ^ salt) — NEVER _rng.
+    // ═════════════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>Seed salt for the SECOND derived RNG stream (the unit post-pass).</summary>
+    private const int UnitRngSalt = 0x0114_5EED;
+
+    private static readonly string[] UnitTypeByDepth = { "direktion", "omrade", "kontor", "team", "enhed" };
+
+    private void DeriveUnitPlans(List<DemoUser> users, DemoManifest manifest)
+    {
+        var overrideProfiles = _config.Trees.Where(t => t.UnitSpanOverride is not null).ToList();
+        if (overrideProfiles.Count == 0)
+            return; // legacy config: NO unitPlans section (byte-exact manifest — golden-pinned)
+
+        var unitRng = new Random(unchecked(_seed ^ UnitRngSalt));
+        var userById = users.ToDictionary(u => u.UserId, StringComparer.Ordinal);
+        manifest.UnitPlans = new List<DemoUnitPlan>();
+
+        foreach (var profile in overrideProfiles)
+            manifest.UnitPlans.Add(DeriveOrgUnitPlan(profile, userById, manifest, unitRng));
+    }
+
+    private static DemoUnitPlan DeriveOrgUnitPlan(
+        TreeProfile profile,
+        IReadOnlyDictionary<string, DemoUser> userById,
+        DemoManifest manifest,
+        Random unitRng)
+    {
+        var org = profile.OrganisationId;
+        var edges = manifest.ReportingEdges.Where(e => e.OrganisationId == org).ToList();
+        var tree = manifest.Trees.Single(t => t.OrganisationId == org);
+
+        // Manager set + parentage from the edges (first-appearance order is deterministic).
+        var managerIds = new List<string>();
+        var managerSet = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var e in edges)
+            if (managerSet.Add(e.ManagerId))
+                managerIds.Add(e.ManagerId);
+
+        var managerOf = edges.ToDictionary(e => e.EmployeeId, e => e.ManagerId, StringComparer.Ordinal);
+
+        // Depth of every manager (walk up the manager spine to the root).
+        var depthOf = new Dictionary<string, int>(StringComparer.Ordinal);
+        int DepthOf(string managerId)
+        {
+            if (depthOf.TryGetValue(managerId, out var d)) return d;
+            d = managerOf.TryGetValue(managerId, out var parent) ? DepthOf(parent) + 1 : 0;
+            depthOf[managerId] = d;
+            return d;
+        }
+        foreach (var m in managerIds)
+            _ = DepthOf(m);
+
+        // ── The generation-time assertion: max manager depth == 4 AND ≥1 manager at EVERY
+        //    depth 0–4. Fail GENERATION loudly, never the load. ──
+        var managersPerDepth = new int[5];
+        foreach (var m in managerIds)
+        {
+            var d = depthOf[m];
+            if (d is < 0 or > 4)
+                throw new InvalidOperationException(
+                    $"[S114 unit-spine] org {org}: manager {m} sits at depth {d} — the unit spine is CAPPED at " +
+                    "depth 4 (an 'enhed' under an 'enhed' would 422 on PARTIAL-RANK at load). Generation FAILED.");
+            managersPerDepth[d]++;
+        }
+        for (var d = 0; d <= 4; d++)
+            if (managersPerDepth[d] == 0)
+                throw new InvalidOperationException(
+                    $"[S114 unit-spine] org {org}: NO manager at depth {d} — every depth 0–4 must be populated " +
+                    "(all 5 unit types per org). Generation FAILED (never the load).");
+
+        // ── Units: one per manager, parent-first (depth, then user id — both deterministic). ──
+        var orderedManagers = managerIds
+            .OrderBy(m => depthOf[m])
+            .ThenBy(m => m, StringComparer.Ordinal)
+            .ToList();
+
+        var unitByKey = new Dictionary<string, DemoUnit>(StringComparer.Ordinal);
+        var usedNamesByParent = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        var units = new List<DemoUnit>();
+
+        foreach (var m in orderedManagers)
+        {
+            var depth = depthOf[m];
+            var parentKey = managerOf.TryGetValue(m, out var pm) ? pm : null;
+            var name = DrawUnitName(unitRng, depth, parentKey ?? "", usedNamesByParent);
+
+            var unit = new DemoUnit
+            {
+                UnitKey = m,
+                ParentUnitKey = parentKey,
+                Type = UnitTypeByDepth[depth],
+                Name = name,
+                Depth = depth,
+                LeaderUserId = m, // the anchor leads U(m) — leaderless messiness clears this below
+                MemberUserIds = new List<string> { m },
+            };
+            unitByKey[m] = unit;
+            units.Add(unit);
+        }
+
+        // Members: every NON-manager report joins its manager's unit (managers are already the
+        // sole member of their OWN unit — their manager-reports are child units, not members).
+        foreach (var e in edges)
+            if (!managerSet.Contains(e.EmployeeId))
+                unitByKey[e.ManagerId].MemberUserIds.Add(e.EmployeeId);
+
+        // ── Messiness: small, deliberate, counted, DISJOINT units (each messy unit hosts exactly
+        //    ONE kind). Sizes adapt to small trees (smoke) but the LEDGER records actuals and the
+        //    verifier asserts the ledger EXACTLY. ──
+        var messyUnits = new HashSet<string>(StringComparer.Ordinal);
+
+        // (a) ~2 leaderless units: skip the leader appointment (the anchor STAYS a member — the
+        //     designed "Ingen leder i enheden" banner; its refererer-opad list may include the
+        //     anchor, the accepted cosmetic quirk). The depth-0 direktion is excluded (keep the
+        //     org head intact) and ≥2 pairable units are left for the sideways cases.
+        var leaderlessEligible = units.Where(u => u.Depth >= 1).Select(u => u.UnitKey).ToList();
+        var leaderlessTarget = Math.Min(2, Math.Max(0, leaderlessEligible.Count - 2));
+        var leaderlessKeys = new List<string>();
+        for (var i = 0; i < leaderlessTarget; i++)
+        {
+            var pick = leaderlessEligible[unitRng.Next(leaderlessEligible.Count)];
+            if (!messyUnits.Add(pick)) { i--; continue; } // re-draw an already-picked unit
+            unitByKey[pick].LeaderUserId = null;
+            leaderlessKeys.Add(pick);
+        }
+
+        // (b) ~3-5 sideways-homed members — NON-manager leaves ONLY (re-homing a MANAGER silently
+        //     strips their leaderships [D3] and would decapitate their unit, corrupting the
+        //     ledger — the hard rule). Source keeps ≥1 leaf; target has a leader; source, target
+        //     and leaderless units are pairwise DISJOINT.
+        var sidewaysCases = new List<DemoSidewaysCase>();
+        var sidewaysTarget = 3 + unitRng.Next(3); // 3..5
+        for (var i = 0; i < sidewaysTarget; i++)
+        {
+            var sources = units
+                .Where(u => !messyUnits.Contains(u.UnitKey) && u.Depth >= 1 && u.MemberUserIds.Count >= 3)
+                .ToList();
+            if (sources.Count == 0) break;
+            var source = sources[unitRng.Next(sources.Count)];
+
+            // Prefer a same-parent sibling target; fall back to any same-depth unit. Both keep
+            // the amber "Ret" flow honest (a real in-unit leader target exists).
+            var targets = units
+                .Where(u => !messyUnits.Contains(u.UnitKey) && u.UnitKey != source.UnitKey
+                            && u.LeaderUserId is not null
+                            && string.Equals(u.ParentUnitKey, source.ParentUnitKey, StringComparison.Ordinal))
+                .ToList();
+            if (targets.Count == 0)
+                targets = units
+                    .Where(u => !messyUnits.Contains(u.UnitKey) && u.UnitKey != source.UnitKey
+                                && u.LeaderUserId is not null && u.Depth == source.Depth)
+                    .ToList();
+            if (targets.Count == 0) break;
+            var target = targets[unitRng.Next(targets.Count)];
+
+            // A NON-manager leaf of the source (index 0 is the anchor manager — never eligible).
+            var leaves = source.MemberUserIds.Where(id => !managerSet.Contains(id)).ToList();
+            var mover = leaves[unitRng.Next(leaves.Count)];
+
+            source.MemberUserIds.Remove(mover);
+            target.MemberUserIds.Add(mover);
+            messyUnits.Add(source.UnitKey);
+            messyUnits.Add(target.UnitKey);
+            sidewaysCases.Add(new DemoSidewaysCase { UserId = mover, FromUnitKey = source.UnitKey, ToUnitKey = target.UnitKey });
+        }
+
+        // ── Post-derivation invariants (fail generation loudly). ──
+        AssertUnitPlanInvariants(org, tree.RootEmployeeId, units, leaderlessKeys, sidewaysCases,
+            managerSet, userById);
+
+        return new DemoUnitPlan
+        {
+            OrganisationId = org,
+            ManagersPerDepth = managersPerDepth.ToList(),
+            Units = units,
+            LeaderlessUnitKeys = leaderlessKeys,
+            SidewaysCases = sidewaysCases,
+        };
+    }
+
+    /// <summary>Deterministic Danish unit name, unique per parent (case-insensitive — the DB
+    /// active-name index is lower(name)-scoped). ONE rng draw per unit regardless of collisions
+    /// (collisions resolve by pool probing, then a numbered suffix).</summary>
+    private static string DrawUnitName(
+        Random unitRng, int depth, string parentKey, Dictionary<string, HashSet<string>> usedNamesByParent)
+    {
+        if (!usedNamesByParent.TryGetValue(parentKey, out var used))
+            usedNamesByParent[parentKey] = used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        if (depth == 0)
+        {
+            var direktion = "Direktionen";
+            used.Add(direktion);
+            return direktion;
+        }
+
+        var pool = depth switch
+        {
+            1 => DanishPools.OmraadeNames,
+            2 => DanishPools.KontorNames,
+            3 => DanishPools.TeamNames,
+            _ => DanishPools.EnhedNames,
+        };
+
+        var start = unitRng.Next(pool.Length);
+        for (var k = 0; k < pool.Length; k++)
+        {
+            var candidate = pool[(start + k) % pool.Length];
+            if (used.Add(candidate))
+                return candidate;
+        }
+        for (var n = 2; ; n++)
+        {
+            var candidate = $"{pool[start]} {n}";
+            if (used.Add(candidate))
+                return candidate;
+        }
+    }
+
+    /// <summary>S114 — the post-derivation generation-time invariants: single-unit-membership
+    /// PARTITION over the org's active users, leader-is-member, PARTIAL-RANK validity (child =
+    /// parent depth + 1), per-parent name uniqueness (tracked-set parity), non-manager sideways
+    /// movers, and messy-unit disjointness.</summary>
+    private static void AssertUnitPlanInvariants(
+        string org,
+        string rootEmployeeId,
+        List<DemoUnit> units,
+        List<string> leaderlessKeys,
+        List<DemoSidewaysCase> sidewaysCases,
+        HashSet<string> managerSet,
+        IReadOnlyDictionary<string, DemoUser> userById)
+    {
+        var unitByKey = units.ToDictionary(u => u.UnitKey, StringComparer.Ordinal);
+
+        // Partition: every ACTIVE user of the org in EXACTLY one member list.
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var u in units)
+            foreach (var member in u.MemberUserIds)
+                if (!seen.Add(member))
+                    throw new InvalidOperationException(
+                        $"[S114 unit-spine] org {org}: user {member} is a member of MORE THAN ONE unit (single-unit membership violated).");
+        var activeOrgUsers = userById.Values.Where(u => u.OrganisationId == org && u.IsActive).Select(u => u.UserId).ToList();
+        foreach (var id in activeOrgUsers)
+            if (!seen.Contains(id))
+                throw new InvalidOperationException(
+                    $"[S114 unit-spine] org {org}: active user {id} is NOT homed in any unit (homing totality violated).");
+        if (seen.Count != activeOrgUsers.Count)
+            throw new InvalidOperationException(
+                $"[S114 unit-spine] org {org}: unit member lists carry {seen.Count} users but the org has {activeOrgUsers.Count} active users.");
+
+        foreach (var u in units)
+        {
+            // Leader-is-member (when a leader exists) + the anchor is always homed in its own unit.
+            if (u.LeaderUserId is not null && !u.MemberUserIds.Contains(u.LeaderUserId))
+                throw new InvalidOperationException(
+                    $"[S114 unit-spine] org {org}: unit {u.Name} ({u.UnitKey}) leader {u.LeaderUserId} is not a member.");
+            if (!u.MemberUserIds.Contains(u.UnitKey))
+                throw new InvalidOperationException(
+                    $"[S114 unit-spine] org {org}: unit {u.Name} anchor {u.UnitKey} is not homed in its own unit.");
+
+            // PARTIAL-RANK: the root unit is the direktion; every child is exactly one rank deeper.
+            if (u.ParentUnitKey is null)
+            {
+                if (u.Depth != 0 || u.UnitKey != rootEmployeeId)
+                    throw new InvalidOperationException(
+                        $"[S114 unit-spine] org {org}: top-level unit {u.Name} is not the root direktion.");
+            }
+            else if (u.Depth != unitByKey[u.ParentUnitKey].Depth + 1)
+            {
+                throw new InvalidOperationException(
+                    $"[S114 unit-spine] org {org}: unit {u.Name} depth {u.Depth} is not parent depth + 1.");
+            }
+        }
+
+        // Per-parent name uniqueness (paranoia parity with the tracked sets).
+        foreach (var group in units.GroupBy(u => u.ParentUnitKey ?? ""))
+        {
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var u in group)
+                if (!names.Add(u.Name))
+                    throw new InvalidOperationException(
+                        $"[S114 unit-spine] org {org}: duplicate sibling unit name '{u.Name}' (the API 409s it at load).");
+        }
+
+        // Messiness ledger sanity: sideways movers are NON-managers; messy units pairwise disjoint.
+        var messy = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var key in leaderlessKeys)
+            if (!messy.Add(key))
+                throw new InvalidOperationException($"[S114 unit-spine] org {org}: leaderless unit {key} listed twice.");
+        foreach (var c in sidewaysCases)
+        {
+            if (managerSet.Contains(c.UserId))
+                throw new InvalidOperationException(
+                    $"[S114 unit-spine] org {org}: sideways case {c.UserId} is a MANAGER (D3 decapitation hazard — hard rule).");
+            if (!messy.Add(c.FromUnitKey) || !messy.Add(c.ToUnitKey))
+                throw new InvalidOperationException(
+                    $"[S114 unit-spine] org {org}: sideways case {c.UserId} reuses a messy unit (disjointness violated).");
+            if (unitByKey[c.ToUnitKey].LeaderUserId is null)
+                throw new InvalidOperationException(
+                    $"[S114 unit-spine] org {org}: sideways target {c.ToUnitKey} has no leader (the 'Ret' flow needs one).");
         }
     }
 

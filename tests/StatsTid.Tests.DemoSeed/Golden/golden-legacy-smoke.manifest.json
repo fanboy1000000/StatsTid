@@ -1,0 +1,321 @@
+{
+  "scale": "smoke",
+  "seed": 42,
+  "referenceDate": "2026-06-15",
+  "adminUserId": "demo_admin",
+  "password": "password",
+  "trees": [
+    {
+      "organisationId": "STYX1",
+      "rootEmployeeId": "demo_styx1_0001",
+      "orgCount": 1,
+      "userCount": 30,
+      "managerCount": 4,
+      "maxDepth": 1
+    }
+  ],
+  "reportingEdges": [
+    {
+      "employeeId": "demo_styx1_0002",
+      "managerId": "demo_styx1_0001",
+      "organisationId": "STYX1",
+      "relationship": "PRIMARY",
+      "effectiveFrom": "2025-12-15"
+    },
+    {
+      "employeeId": "demo_styx1_0003",
+      "managerId": "demo_styx1_0001",
+      "organisationId": "STYX1",
+      "relationship": "PRIMARY",
+      "effectiveFrom": "2025-12-15"
+    },
+    {
+      "employeeId": "demo_styx1_0004",
+      "managerId": "demo_styx1_0001",
+      "organisationId": "STYX1",
+      "relationship": "PRIMARY",
+      "effectiveFrom": "2025-12-15"
+    },
+    {
+      "employeeId": "demo_styx1_0005",
+      "managerId": "demo_styx1_0001",
+      "organisationId": "STYX1",
+      "relationship": "PRIMARY",
+      "effectiveFrom": "2025-12-15"
+    },
+    {
+      "employeeId": "demo_styx1_0006",
+      "managerId": "demo_styx1_0002",
+      "organisationId": "STYX1",
+      "relationship": "PRIMARY",
+      "effectiveFrom": "2025-12-15"
+    },
+    {
+      "employeeId": "demo_styx1_0008",
+      "managerId": "demo_styx1_0003",
+      "organisationId": "STYX1",
+      "relationship": "PRIMARY",
+      "effectiveFrom": "2025-12-15"
+    },
+    {
+      "employeeId": "demo_styx1_0010",
+      "managerId": "demo_styx1_0004",
+      "organisationId": "STYX1",
+      "relationship": "PRIMARY",
+      "effectiveFrom": "2025-12-15"
+    },
+    {
+      "employeeId": "demo_styx1_0012",
+      "managerId": "demo_styx1_0001",
+      "organisationId": "STYX1",
+      "relationship": "PRIMARY",
+      "effectiveFrom": "2025-12-15"
+    },
+    {
+      "employeeId": "demo_styx1_0013",
+      "managerId": "demo_styx1_0002",
+      "organisationId": "STYX1",
+      "relationship": "PRIMARY",
+      "effectiveFrom": "2025-12-15"
+    },
+    {
+      "employeeId": "demo_styx1_0014",
+      "managerId": "demo_styx1_0003",
+      "organisationId": "STYX1",
+      "relationship": "PRIMARY",
+      "effectiveFrom": "2025-12-15"
+    },
+    {
+      "employeeId": "demo_styx1_0015",
+      "managerId": "demo_styx1_0004",
+      "organisationId": "STYX1",
+      "relationship": "PRIMARY",
+      "effectiveFrom": "2025-12-15"
+    },
+    {
+      "employeeId": "demo_styx1_0016",
+      "managerId": "demo_styx1_0001",
+      "organisationId": "STYX1",
+      "relationship": "PRIMARY",
+      "effectiveFrom": "2025-12-15"
+    },
+    {
+      "employeeId": "demo_styx1_0017",
+      "managerId": "demo_styx1_0002",
+      "organisationId": "STYX1",
+      "relationship": "PRIMARY",
+      "effectiveFrom": "2025-12-15"
+    },
+    {
+      "employeeId": "demo_styx1_0018",
+      "managerId": "demo_styx1_0003",
+      "organisationId": "STYX1",
+      "relationship": "PRIMARY",
+      "effectiveFrom": "2025-12-15"
+    },
+    {
+      "employeeId": "demo_styx1_0019",
+      "managerId": "demo_styx1_0004",
+      "organisationId": "STYX1",
+      "relationship": "PRIMARY",
+      "effectiveFrom": "2025-12-15"
+    },
+    {
+      "employeeId": "demo_styx1_0020",
+      "managerId": "demo_styx1_0001",
+      "organisationId": "STYX1",
+      "relationship": "PRIMARY",
+      "effectiveFrom": "2025-12-15"
+    },
+    {
+      "employeeId": "demo_styx1_0021",
+      "managerId": "demo_styx1_0002",
+      "organisationId": "STYX1",
+      "relationship": "PRIMARY",
+      "effectiveFrom": "2025-12-15"
+    },
+    {
+      "employeeId": "demo_styx1_0022",
+      "managerId": "demo_styx1_0003",
+      "organisationId": "STYX1",
+      "relationship": "PRIMARY",
+      "effectiveFrom": "2025-12-15"
+    },
+    {
+      "employeeId": "demo_styx1_0023",
+      "managerId": "demo_styx1_0004",
+      "organisationId": "STYX1",
+      "relationship": "PRIMARY",
+      "effectiveFrom": "2025-12-15"
+    },
+    {
+      "employeeId": "demo_styx1_0025",
+      "managerId": "demo_styx1_0001",
+      "organisationId": "STYX1",
+      "relationship": "PRIMARY",
+      "effectiveFrom": "2025-12-15"
+    },
+    {
+      "employeeId": "demo_styx1_0026",
+      "managerId": "demo_styx1_0002",
+      "organisationId": "STYX1",
+      "relationship": "PRIMARY",
+      "effectiveFrom": "2025-12-15"
+    },
+    {
+      "employeeId": "demo_styx1_0027",
+      "managerId": "demo_styx1_0003",
+      "organisationId": "STYX1",
+      "relationship": "PRIMARY",
+      "effectiveFrom": "2025-12-15"
+    },
+    {
+      "employeeId": "demo_styx1_0028",
+      "managerId": "demo_styx1_0004",
+      "organisationId": "STYX1",
+      "relationship": "PRIMARY",
+      "effectiveFrom": "2025-12-15"
+    },
+    {
+      "employeeId": "demo_styx1_0029",
+      "managerId": "demo_styx1_0001",
+      "organisationId": "STYX1",
+      "relationship": "PRIMARY",
+      "effectiveFrom": "2025-12-15"
+    },
+    {
+      "employeeId": "demo_styx1_0030",
+      "managerId": "demo_styx1_0002",
+      "organisationId": "STYX1",
+      "relationship": "PRIMARY",
+      "effectiveFrom": "2025-12-15"
+    }
+  ],
+  "roleGrants": [],
+  "profileEdits": [
+    {
+      "employeeId": "demo_styx1_0004",
+      "partTimeFraction": 0.589,
+      "position": "Kontorfunktionaer"
+    },
+    {
+      "employeeId": "demo_styx1_0010",
+      "partTimeFraction": 0.967,
+      "position": "Kontorfunktionaer"
+    },
+    {
+      "employeeId": "demo_styx1_0016",
+      "partTimeFraction": 0.432,
+      "position": "Studentermedhjaelper"
+    },
+    {
+      "employeeId": "demo_styx1_0030",
+      "partTimeFraction": 0.376,
+      "position": "Analytiker"
+    }
+  ],
+  "activity": [
+    {
+      "employeeId": "demo_styx1_0004",
+      "orgId": "STYX1",
+      "agreementCode": "AC",
+      "okVersion": "OK26",
+      "year": 2026,
+      "month": 5,
+      "absences": [
+        {
+          "date": "2026-05-12",
+          "absenceType": "SICK_DAY",
+          "hours": 7.4
+        }
+      ],
+      "periodOutcome": "NONE"
+    },
+    {
+      "employeeId": "demo_styx1_0005",
+      "orgId": "STYX1",
+      "agreementCode": "AC",
+      "okVersion": "OK26",
+      "year": 2026,
+      "month": 5,
+      "absences": [
+        {
+          "date": "2026-05-08",
+          "absenceType": "SICK_DAY",
+          "hours": 7.4
+        }
+      ],
+      "periodOutcome": "REJECTED"
+    },
+    {
+      "employeeId": "demo_styx1_0013",
+      "orgId": "STYX1",
+      "agreementCode": "AC",
+      "okVersion": "OK24",
+      "year": 2026,
+      "month": 5,
+      "absences": [
+        {
+          "date": "2026-05-20",
+          "absenceType": "CARE_DAY",
+          "hours": 7.4
+        }
+      ],
+      "periodOutcome": "NONE"
+    },
+    {
+      "employeeId": "demo_styx1_0030",
+      "orgId": "STYX1",
+      "agreementCode": "AC",
+      "okVersion": "OK24",
+      "year": 2026,
+      "month": 5,
+      "absences": [
+        {
+          "date": "2026-05-29",
+          "absenceType": "CARE_DAY",
+          "hours": 7.4
+        }
+      ],
+      "periodOutcome": "REJECTED"
+    }
+  ],
+  "vikars": [
+    {
+      "managerId": "demo_styx1_0002",
+      "vikarUserId": "demo_styx1_0001",
+      "effectiveTo": "2026-08-15",
+      "reason": "FERIE"
+    }
+  ],
+  "messyCases": [
+    {
+      "kind": "OK_TRANSITION",
+      "employeeId": "demo_styx1_0001",
+      "note": "OK24 user flagged for OK24-\u003EOK26 transition exercise (version-correctness surface).",
+      "relatedId": null,
+      "value": "OK26"
+    },
+    {
+      "kind": "AGREEMENT_CHANGE",
+      "employeeId": "demo_styx1_0002",
+      "note": "Agreement-change candidate (AC-\u003EHK); exercises user_agreement_codes supersession.",
+      "relatedId": null,
+      "value": "HK"
+    },
+    {
+      "kind": "CROSS_STYRELSE_TRANSFER",
+      "employeeId": "demo_styx1_0003",
+      "note": "Cross-Organisation transfer candidate (a stale-key drift / edge-auth surface).",
+      "relatedId": null,
+      "value": null
+    },
+    {
+      "kind": "ODD_PART_TIME",
+      "employeeId": "demo_styx1_0004",
+      "note": "Odd part-time fraction candidate (pro-rated accrual surface).",
+      "relatedId": null,
+      "value": "0.363"
+    }
+  ]
+}
