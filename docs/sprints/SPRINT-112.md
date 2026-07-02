@@ -3,12 +3,12 @@
 | Field | Value |
 |-------|-------|
 | **Sprint** | 112 |
-| **Status** | complete — closed 2026-07-02; CI verification pending push (backfill on green) |
+| **Status** | complete — CI GREEN `28589103053` (all 7 jobs, 2026-07-02) |
 | **Start Date** | 2026-07-02 |
 | **End Date** | 2026-07-02 |
 | **Orchestrator Approved** | yes — 2026-07-02 (Step 7a BOTH lenses cycle-1 converged: Codex CLEAN, Reviewer APPROVED 0B/0W/7N) |
 | **Build Verified** | yes — `dotnet build` 0 errors; `npm run build` 0 errors; `tsc --noEmit` clean; `npm run lint` clean (extended no-`as` surface) |
-| **Test Verified** | yes (local): 852 unit + **1196 regression** (central 1148 + the 42 fixed-port tests 42/42 vs a FRESH compose Postgres [the compose DB was DOWN during the central run — environmental, per the S105 fixed-port protocol] + 6 FAIL-002 sheds isolation-cleared 43/43 with classmates) + 29 demoseed + **553 fe** (531+22); 6 smoke + e2e ride CI per the S107+ protocol; all 4 OpenAPI gates + `check_endpoint_contracts.py` green locally; **pyramid 852u+1196r+6s+29demoseed+553fe = 2636 (+51 vs S111: +29 regression [7 matcher + 22 per-route] +22 fe)**; CI verification pending close |
+| **Test Verified** | yes (local): 852 unit + **1196 regression** (central 1148 + the 42 fixed-port tests 42/42 vs a FRESH compose Postgres [the compose DB was DOWN during the central run — environmental, per the S105 fixed-port protocol] + 6 FAIL-002 sheds isolation-cleared 43/43 with classmates) + 29 demoseed + **553 fe** (531+22); 6 smoke + e2e ride CI per the S107+ protocol; all 4 OpenAPI gates + `check_endpoint_contracts.py` green locally; **pyramid 852u+1196r+6s+29demoseed+553fe = 2636 (+51 vs S111: +29 regression [7 matcher + 22 per-route] +22 fe)**; **CI GREEN `28589103053` (all 7 jobs — the full regression, smoke, e2e, and all 4 OpenAPI gates on the drained manifest verified in CI)** |
 
 ## Sprint Goal
 Pass 1 of the retrofit (PAT-012, [[typed-api-contract-program]]): drain the **20-op merged-admin mutation surface** from the convention-gate grandfather manifest (130→110) end-to-end — named response records + `.Produces`, spec + generated-types regen, FE call-sites switched to typed forms, per-route spec≡runtime assertions — plus the two enablers the slice needs (typed `post`/`put`/`delete` overloads on `apiClient`; a typed If-Match overload on `apiFetchWithEtag`) and the owner-ratified **declared-204 gate amendment**. PAT-010 byte-identity holds throughout: metadata + types only, zero wire-JSON change.
