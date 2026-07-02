@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { apiClient, apiFetchWithEtag } from '../lib/api'
 import type { components } from '../lib/api-types'
-import { coerceApiResponse, type Assert, type AssertFieldsInSpec } from '../lib/apiNarrow'
 import { formatVersionAsIfMatch, resolveEtag } from '../lib/etag'
 
 // S35 TASK-3507 (Phase 4d ETag propagation). Admin user-management hooks
@@ -17,12 +16,21 @@ import { formatVersionAsIfMatch, resolveEtag } from '../lib/etag'
 // structured forms (PAT-012): reads via the spec-keyed `apiClient.get` /
 // `apiFetchWithEtag(pathKey, { method: 'GET', params })`, mutations via the
 // typed `apiClient.post/put` and the typed etag overload (`ifMatch` takes the
-// ready RFC 7232 string). Responses are DERIVED from the spec and re-narrowed to
-// the FE-strict interfaces via `coerceApiResponse`, each guarded by an
-// `AssertFieldsInSpec` drift assert. ONE read stays on the explicit-`T`
-// fallback: `GET /api/admin/organizations/{orgId}/users` is still undeclared in
-// the spec (`content?: never`, grandfathered) — see `fetchUsers`.
+// ready RFC 7232 string). ONE read stays on the explicit-`T` fallback:
+// `GET /api/admin/organizations/{orgId}/users` is still undeclared in the spec
+// (`content?: never`, grandfathered) — see `fetchUsers`.
+//
+// S113 / TASK-11301 — the generated spec types are STRICT (required members,
+// `T | null`, literal unions), so the S111/S112 coercion + field-name
+// drift-guard scaffolding (the deleted apiNarrow module) is gone: the spec
+// responses now assign DIRECTLY to the local view-interfaces below, and any
+// backend field rename/removal or type change is a `tsc` error at the
+// assignment site.
 
+/** Local VIEW type — the intersection read from BOTH the spec `OrgListItem`
+    (`GET /api/admin/organizations` element) and the spec `OrganizationResponse`
+    (create/rename); both assign directly (`orgType` deliberately kept the wide
+    `string` so callers may construct values without the spec literal union). */
 export interface Organization {
   orgId: string
   orgName: string
@@ -33,17 +41,10 @@ export interface Organization {
   okVersion?: string
 }
 
-// S111 / TASK-11102 — compile-time drift guard: every field `Organization` reads
-// must exist in the spec's `OrgListItem` (the `GET /api/admin/organizations`
-// element). A renamed/removed backend field → `tsc` error here.
-export type _OrgDrift = Assert<
-  AssertFieldsInSpec<Organization, 'StatsTid.Backend.Api.Contracts.OrgListItem'>
->
-// S112 — the org create/rename responses serve the spec `OrganizationResponse`.
-export type _OrgResponseDrift = Assert<
-  AssertFieldsInSpec<Organization, 'StatsTid.Backend.Api.Contracts.OrganizationResponse'>
->
-
+/** Local VIEW type — the shared subset read from BOTH the per-user GET (the spec
+    `UserDetailResponse`, which additionally carries `okVersion` /
+    `employmentCategory`) and the create POST (the spec `UserCreatedResponse`,
+    which additionally carries `okVersion`); both assign directly. */
 export interface User {
   userId: string
   username: string
@@ -59,35 +60,16 @@ export interface User {
   version: number
 }
 
-// S112 — drift guards: `User` is read from BOTH the per-user GET
-// (`UserDetailResponse`) and the create POST (`UserCreatedResponse`); every FE
-// field must exist in both spec schemas.
-export type _UserDetailDrift = Assert<
-  AssertFieldsInSpec<User, 'StatsTid.Backend.Api.Contracts.UserDetailResponse'>
->
-export type _UserCreatedDrift = Assert<
-  AssertFieldsInSpec<User, 'StatsTid.Backend.Api.Contracts.UserCreatedResponse'>
->
-
 /**
  * S112 / TASK-11203 — the honest PUT `/api/admin/users/{userId}` response shape
  * (the spec `UserUpdatedResponse`): unlike the GET/POST shapes it carries NO
  * `username`. The previous hand-written `apiFetchWithEtag<User>` claimed it did —
  * a silent lie the typed switch surfaced (consumers merge over the previous user
  * snapshot to retain `username`; see `useEditPerson.saveEdit`).
+ *
+ * S113 — the GENERATED spec type verbatim (the hand-written duplicate deleted).
  */
-export interface UserUpdated {
-  userId: string
-  displayName: string
-  email: string | null
-  primaryOrgId: string
-  agreementCode: string
-  version: number
-}
-
-export type _UserUpdatedDrift = Assert<
-  AssertFieldsInSpec<UserUpdated, 'StatsTid.Backend.Api.Contracts.UserUpdatedResponse'>
->
+export type UserUpdated = components['schemas']['StatsTid.Backend.Api.Contracts.UserUpdatedResponse']
 
 // S112 / TASK-11203 — CORRECTED to the REAL wire shape (the spec
 // `UserRoleAssignmentItem`). The previous hand-written interface claimed
@@ -95,6 +77,13 @@ export type _UserUpdatedDrift = Assert<
 // serves `assignedAt` / `assignedBy` and no per-item `userId`), so the roles
 // table rendered blank cells (the S97→S100 wrong-expectation class, caught by
 // the typed switch + drift guard).
+//
+// S113 / TASK-11301 — local VIEW type read from BOTH the list GET (the spec
+// `UserRoleAssignmentItem`, `assignedBy: string`) and the grant POST (the spec
+// `RoleGrantResponse`, `assignedBy: string | null` — the backend declares the
+// actor id nullable there). The strict types SURFACED that the previous
+// `assignedBy: string` claim was a lie for the grant path (invisible to the
+// S111 field-NAME-only guard) — widened to the honest `string | null` union.
 export interface RoleAssignment {
   assignmentId: string
   roleId: string
@@ -102,18 +91,8 @@ export interface RoleAssignment {
   scopeType: string
   expiresAt: string | null
   assignedAt: string
-  assignedBy: string
+  assignedBy: string | null
 }
-
-export type _RoleAssignmentDrift = Assert<
-  AssertFieldsInSpec<RoleAssignment, 'StatsTid.Backend.Api.Contracts.UserRoleAssignmentItem'>
->
-// The grant POST returns the spec `RoleGrantResponse`, a superset carrying the
-// same field names (`assignedBy` nullable there) — guarded so the shared FE
-// interface stays readable from both.
-export type _RoleGrantDrift = Assert<
-  AssertFieldsInSpec<RoleAssignment, 'StatsTid.Backend.Api.Contracts.RoleGrantResponse'>
->
 
 /**
  * Standard wrapper for response entities that carry a row-version concurrency
@@ -147,13 +126,12 @@ export function useOrganizations() {
     setLoading(true)
     setError(null)
     // S111 / TASK-11102 — typed via the OpenAPI path key (response type DERIVED
-    // from the spec; no hand-written `T`). `result.data` is the spec `OrgListItem[]`;
-    // `coerceApiResponse` re-narrows it to the FE-strict `Organization[]` (the spec
-    // is all-optional). `_OrgDrift` fails `tsc` if a field the FE reads is dropped
-    // from the spec (the S97→S100 drift class).
+    // from the spec; no hand-written `T`). `result.data` is the strict spec
+    // `OrgListItem[]`, DIRECTLY assignable to the `Organization[]` view (S113 —
+    // a dropped/renamed spec field is a `tsc` error here).
     const result = await apiClient.get('/api/admin/organizations')
     if (result.ok) {
-      setOrganizations(coerceApiResponse<Organization[]>(result.data))
+      setOrganizations(result.data)
     } else {
       setError(result.error)
     }
@@ -176,8 +154,8 @@ export function useOrganizations() {
     orgId?: string
     agreementCode?: string
   }) => {
-    // S112 — typed structured POST (201 → the spec `OrganizationResponse`,
-    // re-narrowed to the FE-strict `Organization`; `_OrgResponseDrift`).
+    // S112 — typed structured POST (201 → the strict spec `OrganizationResponse`,
+    // directly assignable to the `Organization` view — S113).
     const result = await apiClient.post('/api/admin/organizations', { body })
     // S99 Step-7a FIX 2 — carry the HTTP status so the merged-admin page's create
     // dialog's 409 branch (`dupOrMessage`) can fire (mirrors
@@ -185,7 +163,7 @@ export function useOrganizations() {
     // unreachable (server-generated orgId + no name-uniqueness).
     if (!result.ok) throw makeOrgMutationError(result.status, result.error)
     await fetchOrganizations()
-    return coerceApiResponse<Organization>(result.data)
+    return result.data
   }
 
   // S99 — name-only rename. The backend COALESCEs null agreement/ok to the
@@ -199,7 +177,7 @@ export function useOrganizations() {
     })
     if (!result.ok) throw new Error(result.error)
     await fetchOrganizations()
-    return coerceApiResponse<Organization>(result.data)
+    return result.data
   }
 
   return { organizations, loading, error, fetchOrganizations, createOrganization, updateOrganization }
@@ -227,6 +205,15 @@ function makeUserMutationError(
 ): UserMutationError {
   // Object.assign (not an `as` cast) — this file is on the S112 no-`as` surface.
   return Object.assign(new Error(errorMsg), { status, body })
+}
+
+/** S113 — the 412 error payload is UNDECLARED in the spec (error bodies are not
+    typed), so it arrives as `unknown`. This type guard (not an `as` cast — the
+    file is on the no-`as` surface) passes the SAME runtime object through when it
+    is an object; the target's members are all optional, so the claim is
+    structurally sound (same trust level as the deleted S111 coercion helper). */
+function isUserMutationErrorBody(body: unknown): body is NonNullable<UserMutationError['body']> {
+  return typeof body === 'object' && body !== null
 }
 
 // S112 — generalized over the response entity (the PUT response is the narrower
@@ -272,14 +259,15 @@ export function useOrgUsers(orgId: string) {
    * both an `ETag` header and a `version` body field.
    */
   const fetchUser = async (userId: string): Promise<WithEtag<User>> => {
-    // S112 — typed etag GET (the spec `UserDetailResponse`; `_UserDetailDrift`).
+    // S112 — typed etag GET (the strict spec `UserDetailResponse`, directly
+    // assignable to the `User` view — S113).
     const result = await apiFetchWithEtag('/api/admin/users/{userId}', {
       method: 'GET',
       params: { path: { userId } },
     })
     if (!result.ok) throw new Error(result.error)
     const { data, etag } = result.data
-    return withResponseEtag(coerceApiResponse<User>(data), etag)
+    return withResponseEtag(data, etag)
   }
 
   /**
@@ -304,7 +292,7 @@ export function useOrgUsers(orgId: string) {
     if (!result.ok) throw new Error(result.error)
     await fetchUsers()
     const { data, etag } = result.data
-    return withResponseEtag(coerceApiResponse<User>(data), etag)
+    return withResponseEtag(data, etag)
   }
 
   /**
@@ -344,14 +332,14 @@ export function useOrgUsers(orgId: string) {
       throw makeUserMutationError(
         result.status,
         result.error,
-        // The 412 body is an (undeclared) error payload — re-narrowed at the
-        // same trust boundary as the response coercions.
-        coerceApiResponse<UserMutationError['body']>(result.body),
+        // The 412 body is an (undeclared) error payload — runtime-narrowed at
+        // the same trust boundary (see `isUserMutationErrorBody`).
+        isUserMutationErrorBody(result.body) ? result.body : undefined,
       )
     }
     await fetchUsers()
     const { data, etag } = result.data
-    return withResponseEtag(coerceApiResponse<UserUpdated>(data), etag)
+    return withResponseEtag(data, etag)
   }
 
   return { users, loading, error, fetchUsers, fetchUser, createUser, updateUser }
@@ -366,13 +354,13 @@ export function useUserRoles(userId: string) {
     if (!userId) return
     setLoading(true)
     setError(null)
-    // S112 — typed via the spec path key (bare `UserRoleAssignmentItem[]`;
-    // `_RoleAssignmentDrift` pins the FE field-set).
+    // S112 — typed via the spec path key (the strict bare
+    // `UserRoleAssignmentItem[]`, directly assignable to the view — S113).
     const result = await apiClient.get('/api/admin/users/{userId}/roles', {
       params: { path: { userId } },
     })
     if (result.ok) {
-      setRoles(coerceApiResponse<RoleAssignment[]>(result.data))
+      setRoles(result.data)
     } else {
       setError(result.error)
     }
@@ -382,11 +370,13 @@ export function useUserRoles(userId: string) {
   useEffect(() => { fetchRoles() }, [fetchRoles])
 
   const grantRole = async (body: { userId: string; roleId: string; orgId?: string; scopeType: string; expiresAt?: string }) => {
-    // S112 — typed structured POST (201 → the spec `RoleGrantResponse`).
+    // S112 — typed structured POST (201 → the strict spec `RoleGrantResponse`,
+    // directly assignable to the `RoleAssignment` view — S113; its nullable
+    // `assignedBy` is why the view carries `string | null`).
     const result = await apiClient.post('/api/admin/roles/grant', { body })
     if (!result.ok) throw new Error(result.error)
     await fetchRoles()
-    return coerceApiResponse<RoleAssignment>(result.data)
+    return result.data
   }
 
   const revokeRole = async (body: { userId: string; assignmentId: string }) => {

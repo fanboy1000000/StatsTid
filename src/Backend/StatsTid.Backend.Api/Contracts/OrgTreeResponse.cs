@@ -1,4 +1,10 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace StatsTid.Backend.Api.Contracts;
+
+// S113 / TASK-11300 (PAT-012 strict-types): the [property: AllowedValues] orgType discriminators —
+// the ResponseStrictTypesFilter emits them as spec enums (→ TS literal unions). Domain = the
+// init.sql CHECK (org_type IN ('MAO','ORGANISATION')); uniform DB domain, not narrowed per node kind.
 
 // S101 / TASK-10101 — named response records for GET /api/admin/organizations/tree.
 // S103 / TASK-10304 — the per-Organisation enhed nesting is retired with the legacy Enhed tables
@@ -16,7 +22,7 @@ public sealed record OrgTreeResponse(IReadOnlyList<OrgTreeMaoNode> Tree);
 public sealed record OrgTreeMaoNode(
     string OrgId,
     string OrgName,
-    string OrgType,
+    [property: AllowedValues("MAO", "ORGANISATION")] string OrgType,
     string? ParentOrgId,
     string MaterializedPath,
     string AgreementCode,
@@ -28,7 +34,7 @@ public sealed record OrgTreeMaoNode(
 public sealed record OrgTreeOrganisationNode(
     string OrgId,
     string OrgName,
-    string OrgType,
+    [property: AllowedValues("MAO", "ORGANISATION")] string OrgType,
     string? ParentOrgId,
     string MaterializedPath,
     string AgreementCode,

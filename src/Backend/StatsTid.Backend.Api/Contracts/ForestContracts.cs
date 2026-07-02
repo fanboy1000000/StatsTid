@@ -1,4 +1,13 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace StatsTid.Backend.Api.Contracts;
+
+// S113 / TASK-11300 (PAT-012 strict-types): [property: AllowedValues(...)] declares the closed-set
+// string discriminators — the ResponseStrictTypesFilter reads them and emits `enum: [...]` in the
+// spec (→ TS literal unions). The orgType domain is the init.sql CHECK (org_type IN
+// ('MAO','ORGANISATION')); the unit type domain is the units CHECK / UnitEndpoints.TypeRank set.
+// (A MAO node's orgType is de facto always 'MAO' and an Organisation node's always 'ORGANISATION' —
+// the declared set is the uniform DB domain, deliberately not narrowed per node kind.)
 
 // S106 / TASK-10601 (Enhedsspor Phase 3a, ADR-038 D1/D5, PAT-010) — named response records for the
 // unified scoped FOREST read GET /api/admin/units/forest (the merged-admin left tree).
@@ -27,7 +36,7 @@ public sealed record ForestResponse(IReadOnlyList<ForestMaoNode> Forest);
 public sealed record ForestMaoNode(
     string OrgId,
     string OrgName,
-    string OrgType,
+    [property: AllowedValues("MAO", "ORGANISATION")] string OrgType,
     string? ParentOrgId,
     string MaterializedPath,
     long MemberCount,
@@ -41,7 +50,7 @@ public sealed record ForestMaoNode(
 public sealed record ForestOrganisationNode(
     string OrgId,
     string OrgName,
-    string OrgType,
+    [property: AllowedValues("MAO", "ORGANISATION")] string OrgType,
     string? ParentOrgId,
     string MaterializedPath,
     string AgreementCode,
@@ -61,7 +70,7 @@ public sealed record ForestUnitNode(
     Guid UnitId,
     string OrganisationId,
     Guid? ParentUnitId,
-    string Type,
+    [property: AllowedValues("direktion", "omrade", "kontor", "team", "enhed")] string Type,
     string Name,
     int Level,
     long Version,

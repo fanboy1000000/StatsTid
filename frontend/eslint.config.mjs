@@ -8,9 +8,9 @@
 //   1. an explicit type argument on `apiClient.get/post/put/delete<…>(…)` or
 //      `apiFetchWithEtag<…>(…)` — i.e. a hand-written request/response type that
 //      bypasses the spec-derived binding; and
-//   2. an `as` type assertion — the response must flow through the spec types (the
-//      one legitimate enum-narrowing assertion lives in `src/lib/apiNarrow.ts`,
-//      which is intentionally NOT linted here).
+//   2. an `as` type assertion — the response must flow through the spec types
+//      (S113: the `src/lib/apiNarrow.ts` coercion module was DELETED once the
+//      generated types became strict — no sanctioned assertion site remains).
 //
 // SCOPE NOTE (S112): `useAdmin.ts` is now fully switched EXCEPT ONE read —
 // `GET /api/admin/organizations/{orgId}/users` is still UNDECLARED in the spec
@@ -47,7 +47,7 @@ const TYPED_SLICE_FILES_WITH_LEGACY_GET = ['src/hooks/useAdmin.ts']
 const NO_AS_RULE = {
   selector: 'TSAsExpression',
   message:
-    "SPRINT-111/112: no `as` in a typed slice file — let the spec-derived apiClient/apiFetchWithEtag types flow through (narrowing belongs in src/lib/apiNarrow.ts).",
+    'SPRINT-111/112/113: no `as` in a typed slice file — let the strict spec-derived apiClient/apiFetchWithEtag types flow through (apiNarrow.ts was deleted in S113; use a runtime type guard for undeclared error payloads).',
 }
 
 const NO_GET_TYPEARG_RULE = {

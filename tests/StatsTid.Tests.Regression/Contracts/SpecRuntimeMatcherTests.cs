@@ -239,4 +239,143 @@ public sealed class SpecRuntimeMatcherTests
             SpecRuntimeMatcher.Resolve200Schema(spec, "/things", "post"));
         Assert.Contains("201", ex.Message);
     }
+
+    // ════════════════════════════════════════════════════════════════════════════════
+    //  S113 / TASK-11302 — REQUIRED-fidelity + ENUM-fidelity (the strict-types phase).
+    //  A strict schema shaped like the real closure output of ResponseStrictTypesFilter:
+    //  `required` populated (all members except the nullable-$ref `detail` — the
+    //  RosterEmployeeRow.outgoingVikar analogue) + a string discriminator `enum` (the
+    //  periodStatus analogue) in both a NON-nullable and a nullable flavor.
+    // ════════════════════════════════════════════════════════════════════════════════
+
+    private const string StrictSpecJson = """
+    {
+      "components": {
+        "schemas": {
+          "StrictItem": {
+            "type": "object",
+            "required": [ "id", "status", "maybeStatus", "note" ],
+            "properties": {
+              "id":          { "type": "string" },
+              "status":      { "type": "string", "enum": [ "OPEN", "SUBMITTED", "APPROVED" ] },
+              "maybeStatus": { "type": "string", "enum": [ "A", "B" ], "nullable": true },
+              "note":        { "type": "string", "nullable": true },
+              "detail":      { "$ref": "#/components/schemas/StrictDetail" }
+            }
+          },
+          "StrictDetail": {
+            "type": "object",
+            "required": [ "name" ],
+            "properties": { "name": { "type": "string" } }
+          }
+        }
+      }
+    }
+    """;
+
+    private static JsonElement StrictSpec() => JsonDocument.Parse(StrictSpecJson).RootElement;
+    private static JsonElement StrictSchema() => Json("""{ "$ref": "#/components/schemas/StrictItem" }""");
+
+    [Fact]
+    public void Green_WhenRequiredMembersPresent_AndEnumValuesInSet()
+    {
+        // The faithful case: every required member on the wire (note null-but-PRESENT satisfies
+        // required — "always present, possibly JSON null"), enum values in-set, the nullable-$ref
+        // `detail` absent-from-required so its null is fine when present, and recursed when non-null.
+        var spec = StrictSpec();
+        var response = Json("""{ "id": "1", "status": "OPEN", "maybeStatus": null, "note": null, "detail": { "name": "d" } }""");
+        SpecRuntimeMatcher.AssertMatches(spec, StrictSchema(), response, "GET /strict");
+    }
+
+    [Fact]
+    public void Red_WhenRequiredMemberIsAbsentFromRuntime()
+    {
+        // required lists "note" but the wire omits the KEY entirely (≠ serving null) — the exact
+        // claim `required` makes to the generated TS, lying. RED with the member name.
+        var spec = StrictSpec();
+        var response = Json("""{ "id": "1", "status": "OPEN", "maybeStatus": "A", "detail": null }""");
+        var ex = Assert.Throws<XunitException>(() =>
+            SpecRuntimeMatcher.AssertMatches(spec, StrictSchema(), response, "GET /strict"));
+        Assert.Contains("note", ex.Message);
+        Assert.Contains("REQUIRED", ex.Message);
+    }
+
+    [Fact]
+    public void Red_WhenRequiredListsAMemberOutsideProperties()
+    {
+        // A `required` entry with NO matching `properties` declaration is still enforced (the
+        // required walk is independent of the property-presence walk).
+        var spec = Json("""
+        {
+          "components": { "schemas": { "StrictItem": {
+            "type": "object",
+            "required": [ "ghost" ],
+            "properties": { "id": { "type": "string" } }
+          } } }
+        }
+        """);
+        var response = Json("""{ "id": "1" }""");
+        var ex = Assert.Throws<XunitException>(() =>
+            SpecRuntimeMatcher.AssertMatches(spec, StrictSchema(), response, "GET /strict"));
+        Assert.Contains("ghost", ex.Message);
+        Assert.Contains("REQUIRED", ex.Message);
+    }
+
+    [Fact]
+    public void Red_WhenEnumValueIsOutOfSet()
+    {
+        // A NON-NULL out-of-set discriminator — the generated TS literal union would lie. RED.
+        var spec = StrictSpec();
+        var response = Json("""{ "id": "1", "status": "REJECTED", "maybeStatus": null, "note": null, "detail": null }""");
+        var ex = Assert.Throws<XunitException>(() =>
+            SpecRuntimeMatcher.AssertMatches(spec, StrictSchema(), response, "GET /strict"));
+        Assert.Contains("enum", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("REJECTED", ex.Message);
+    }
+
+    [Fact]
+    public void Red_WhenEnumValueIsOutOfSet_BehindADollarRef()
+    {
+        // The enum check runs AFTER deref — an enum declared on a $ref'd component schema is
+        // enforced the same as an inline one.
+        var spec = Json("""
+        {
+          "components": { "schemas": {
+            "StrictItem": {
+              "type": "object",
+              "properties": { "kind": { "$ref": "#/components/schemas/KindEnum" } }
+            },
+            "KindEnum": { "type": "string", "enum": [ "MAO", "ORGANISATION" ] }
+          } }
+        }
+        """);
+        var response = Json("""{ "kind": "ENHED" }""");
+        var ex = Assert.Throws<XunitException>(() =>
+            SpecRuntimeMatcher.AssertMatches(spec, StrictSchema(), response, "GET /strict"));
+        Assert.Contains("enum", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("ENHED", ex.Message);
+    }
+
+    [Fact]
+    public void Green_WhenNullableEnumMemberIsNull()
+    {
+        // THE null rule: null is admissible IFF the member is nullable — enum membership never
+        // judges null. maybeStatus is nullable:true with enum [A,B] (null NOT in the set) → green.
+        var spec = StrictSpec();
+        var response = Json("""{ "id": "1", "status": "APPROVED", "maybeStatus": null, "note": "n", "detail": null }""");
+        SpecRuntimeMatcher.AssertMatches(spec, StrictSchema(), response, "GET /strict");
+    }
+
+    [Fact]
+    public void Red_WhenNonNullableEnumMemberIsNull()
+    {
+        // The inverse of the null rule: status is a NON-nullable enum scalar — a served null is RED
+        // (via the nullable-required check; the enum set never legitimizes a null).
+        var spec = StrictSpec();
+        var response = Json("""{ "id": "1", "status": null, "maybeStatus": "A", "note": null, "detail": null }""");
+        var ex = Assert.Throws<XunitException>(() =>
+            SpecRuntimeMatcher.AssertMatches(spec, StrictSchema(), response, "GET /strict"));
+        Assert.Contains("NON-nullable", ex.Message);
+        Assert.Contains("status", ex.Message);
+    }
 }

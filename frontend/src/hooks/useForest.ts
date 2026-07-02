@@ -11,10 +11,14 @@
 // predicate and NO client-side scope logic. The FE renders EXACTLY what the read
 // returns; MAO ancestors are read-only context.
 //
-// The named interfaces below mirror the backend's serialized (camelCase) wire
-// shape VERBATIM (src/Backend/.../Contracts/ForestContracts.cs), pinned by
-// ForestEndpointContractTests — the S97→S99→S100 "fetchEnheder" drift-class fix:
-// the FE type must NOT diverge from the backend's actual JSON.
+// S113 / TASK-11301 — the response types are the GENERATED spec types VERBATIM
+// (`api-types.ts`, strict since the S113 `required`-emission): the S111 coercion
+// + drift-guard scaffolding (the deleted apiNarrow module) is gone; a renamed or
+// removed backend field is now a direct `tsc` error at the `setForest` call
+// (the S97→S99→S100 "fetchEnheder" drift class, closed structurally). NOTE the
+// spec models `orgType` as the shared `"MAO" | "ORGANISATION"` union on BOTH
+// node kinds (the per-kind literal cannot be expressed by the generator); the
+// two node kinds stay structurally distinct via `organisations` vs `units`.
 //
 // LINT (PAT-010): the URL is passed INLINE as a literal to apiClient.get so the
 // contract-coverage lint (tools/check_endpoint_contracts.py) can enumerate it —
@@ -22,75 +26,32 @@
 
 import { useState, useCallback, useEffect } from 'react'
 import { apiClient } from '../lib/api'
-import { coerceApiResponse, type Assert, type AssertFieldsInSpec } from '../lib/apiNarrow'
-import type { UnitType } from '../pages/admin/enhedsspor/typeMaps'
+import type { components } from '../lib/api-types'
+
+type Schemas = components['schemas']
 
 /** A unit node (direktion…enhed) beneath an Organisation. `level` is the DERIVED
     depth in the unit sub-tree (a top-level unit directly under the Organisation =
     1). `directMemberCount` = this unit's own direct members; `memberCount` = the
     rolled-up total (this unit + all descendant units). Units carry NO scope. */
-export interface ForestUnitNode {
-  unitId: string
-  organisationId: string
-  parentUnitId: string | null
-  type: UnitType
-  name: string
-  level: number
-  version: number
-  directMemberCount: number
-  memberCount: number
-  children: ForestUnitNode[]
-}
+export type ForestUnitNode = Schemas['StatsTid.Backend.Api.Contracts.ForestUnitNode']
 
 /** An ORGANISATION node (the smallest authority unit — the scope anchor) under a
     MAO. `memberCount` = Σ(top-level units' rolled-up counts) + `directMemberCount`
     (the Organisation-homed, unit-less active users). `units` are its TOP-LEVEL
     units (the unit sub-forest nests beneath them via `children`). */
-export interface ForestOrganisationNode {
-  orgId: string
-  orgName: string
-  orgType: 'ORGANISATION'
-  parentOrgId: string | null
-  materializedPath: string
-  agreementCode: string
-  okVersion: string
-  memberCount: number
-  directMemberCount: number
-  units: ForestUnitNode[]
-}
+export type ForestOrganisationNode = Schemas['StatsTid.Backend.Api.Contracts.ForestOrganisationNode']
 
 /** A MAO (root authority unit) node — read-only display context for a scoped HR.
     `memberCount` sums ONLY the visible child Organisations (the D5 count
     non-leakage invariant — a scoped HR's MAO total never includes a sibling
     Organisation it cannot see). */
-export interface ForestMaoNode {
-  orgId: string
-  orgName: string
-  orgType: 'MAO'
-  parentOrgId: string | null
-  materializedPath: string
-  memberCount: number
-  organisations: ForestOrganisationNode[]
-}
+export type ForestMaoNode = Schemas['StatsTid.Backend.Api.Contracts.ForestMaoNode']
 
 /** The GET /api/admin/units/forest envelope — `{ forest: [...] }` (NOT a bare
     array — the S97/S99 envelope-vs-bare-array distinction). The roots are the
     visible MAOs. */
-export interface ForestResponse {
-  forest: ForestMaoNode[]
-}
-
-// S111 / TASK-11102 — compile-time drift guards: every field these FE-strict
-// interfaces read must exist in the matching spec schema. A renamed/removed
-// backend field → `tsc` error here (the S97→S100 "fetchEnheder" drift class).
-export type _ForestDrift = [
-  Assert<AssertFieldsInSpec<ForestResponse, 'StatsTid.Backend.Api.Contracts.ForestResponse'>>,
-  Assert<AssertFieldsInSpec<ForestMaoNode, 'StatsTid.Backend.Api.Contracts.ForestMaoNode'>>,
-  Assert<
-    AssertFieldsInSpec<ForestOrganisationNode, 'StatsTid.Backend.Api.Contracts.ForestOrganisationNode'>
-  >,
-  Assert<AssertFieldsInSpec<ForestUnitNode, 'StatsTid.Backend.Api.Contracts.ForestUnitNode'>>,
-]
+export type ForestResponse = Schemas['StatsTid.Backend.Api.Contracts.ForestResponse']
 
 /**
  * The unified scoped forest (GET /api/admin/units/forest) for the left
@@ -108,12 +69,11 @@ export function useForest() {
     setLoading(true)
     setError(null)
     // S111 / TASK-11102 — typed via the OpenAPI literal path key (no hand-written
-    // `T`). `result.data.forest` is type-checked against the spec envelope (a
-    // renamed `forest` key → `tsc` error here); `coerceApiResponse` re-narrows the
-    // spec-loose element type to the FE-strict `ForestMaoNode[]`.
+    // `T`). `result.data` IS the strict spec `ForestResponse` (a renamed `forest`
+    // key or node field → `tsc` error here; no coercion — S113).
     const result = await apiClient.get('/api/admin/units/forest')
     if (result.ok) {
-      setForest(coerceApiResponse<ForestMaoNode[]>(result.data.forest ?? []))
+      setForest(result.data.forest)
     } else {
       setError(result.error)
     }

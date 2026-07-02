@@ -11,10 +11,11 @@
 // actor's accessible-org set. The Afgrænsning is a pure VIEW narrowing the FE
 // applies ON TOP of that admitted set (never a widening).
 //
-// The named interfaces below mirror the backend's serialized (camelCase) wire
-// shape VERBATIM (src/Backend/.../Contracts/SearchContracts.cs), pinned by
-// SearchEndpointContractTests — the S97→S99→S100 "fetchEnheder" drift-class fix:
-// the FE type must NOT diverge from the backend's actual JSON. Note
+// S113 / TASK-11301 — the response types are the GENERATED spec types VERBATIM
+// (`api-types.ts`, strict since the S113 `required`-emission): the S111 coercion
+// + drift-guard scaffolding (the deleted apiNarrow module) is gone; a renamed or
+// removed backend field is now a direct `tsc` error at the `setResults` call
+// (the S97→S99→S100 "fetchEnheder" drift class, closed structurally). Note
 // `organisationId` on BOTH result kinds — the key the S107 Afgrænsning filters by
 // (an id, never the fragile path text).
 //
@@ -26,35 +27,23 @@
 
 import { useState, useEffect } from 'react'
 import { apiClient } from '../lib/api'
-import { coerceApiResponse, type Assert, type AssertFieldsInSpec } from '../lib/apiNarrow'
-import type { UnitType } from '../pages/admin/enhedsspor/typeMaps'
+import type { components } from '../lib/api-types'
+
+type Schemas = components['schemas']
 
 /** A matching ACTIVE unit (ENHEDER section). `path` is the breadcrumb the overlay
     shows — the chain of names from the Organisation (root) down to the unit's
     immediate parent, EXCLUSIVE of the unit's own `name` (a top-level unit's path
     is just `[OrganisationName]`). `organisationId` is the unit's immutable
     Organisation (the Afgrænsning scope-filter key). */
-export interface UnitSearchResult {
-  unitId: string
-  organisationId: string
-  type: UnitType
-  name: string
-  path: string[]
-}
+export type UnitSearchResult = Schemas['StatsTid.Backend.Api.Contracts.UnitSearchResult']
 
 /** A matching ACTIVE person (MEDARBEJDERE section). `organisationId` is the
     person's immutable primary Organisation — the SAME id the search scope admits
     by, and the key the S107 Afgrænsning filters the people by (NOT the fragile
     `path` text). `path` is the breadcrumb from the Organisation (root) down to and
     INCLUDING the home unit. `unitName` is null for an Organisation-homed person. */
-export interface PersonSearchResult {
-  userId: string
-  organisationId: string
-  displayName: string
-  position: string | null
-  unitName: string | null
-  path: string[]
-}
+export type PersonSearchResult = Schemas['StatsTid.Backend.Api.Contracts.PersonSearchResult']
 
 /** The GET /api/admin/search envelope — `{ units, people, unitsTotal, peopleTotal }`
     (the design's TWO-section overlay shape; NOT a bare array — the S97/S99 envelope
@@ -67,20 +56,7 @@ export interface PersonSearchResult {
     signal so a capped section is not mistaken for complete (the count compares the
     SERVER total against the SERVER-returned count — independent of the client-side
     Afgrænsning narrowing, which can only ever shrink the displayed set further). */
-export interface SearchResponse {
-  units: UnitSearchResult[]
-  people: PersonSearchResult[]
-  unitsTotal: number
-  peopleTotal: number
-}
-
-// S111 / TASK-11102 — compile-time drift guards (see apiNarrow.ts): each FE field
-// read must exist in the matching spec schema, else `tsc` fails here.
-export type _SearchDrift = [
-  Assert<AssertFieldsInSpec<SearchResponse, 'StatsTid.Backend.Api.Contracts.SearchResponse'>>,
-  Assert<AssertFieldsInSpec<UnitSearchResult, 'StatsTid.Backend.Api.Contracts.UnitSearchResult'>>,
-  Assert<AssertFieldsInSpec<PersonSearchResult, 'StatsTid.Backend.Api.Contracts.PersonSearchResult'>>,
-]
+export type SearchResponse = Schemas['StatsTid.Backend.Api.Contracts.SearchResponse']
 
 const EMPTY: SearchResponse = { units: [], people: [], unitsTotal: 0, peopleTotal: 0 }
 const DEBOUNCE_MS = 250
@@ -112,18 +88,12 @@ export function useSearch() {
     setError(null)
     const handle = setTimeout(async () => {
       // S111 / TASK-11102 — typed via the OpenAPI path key with the structured
-      // `query` shape ({ q }); `apiClient` appends `?q=…` (URL-encoded). The
-      // envelope keys are type-checked against the spec; `coerceApiResponse`
-      // re-narrows the spec-loose element types to the FE-strict unions.
+      // `query` shape ({ q }); `apiClient` appends `?q=…` (URL-encoded).
+      // `result.data` IS the strict spec `SearchResponse` (no coercion — S113).
       const result = await apiClient.get('/api/admin/search', { query: { q } })
       if (cancelled) return
       if (result.ok) {
-        setResults({
-          units: coerceApiResponse<UnitSearchResult[]>(result.data.units ?? []),
-          people: coerceApiResponse<PersonSearchResult[]>(result.data.people ?? []),
-          unitsTotal: result.data.unitsTotal ?? 0,
-          peopleTotal: result.data.peopleTotal ?? 0,
-        })
+        setResults(result.data)
       } else {
         setError(result.error)
         setResults(EMPTY)

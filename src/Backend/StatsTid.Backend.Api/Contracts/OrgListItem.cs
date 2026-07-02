@@ -1,4 +1,10 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace StatsTid.Backend.Api.Contracts;
+
+// S113 / TASK-11300 (PAT-012 strict-types): the [property: AllowedValues] orgType discriminator —
+// emitted as a spec enum by the ResponseStrictTypesFilter. Domain = the init.sql CHECK
+// (org_type IN ('MAO','ORGANISATION')).
 
 // S101 / TASK-10101 — the named element record for GET /api/admin/organizations.
 //
@@ -14,7 +20,7 @@ namespace StatsTid.Backend.Api.Contracts;
 public sealed record OrgListItem(
     string OrgId,
     string OrgName,
-    string OrgType,
+    [property: AllowedValues("MAO", "ORGANISATION")] string OrgType,
     string? ParentOrgId,
     string MaterializedPath,
     string AgreementCode,

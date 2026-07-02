@@ -182,3 +182,9 @@ Regression detail: the central 1h06m run finished 1148/1196 — 42 failures were
 | Agreement rule compliance | N/A — no rule-engine, agreement, or payroll surface touched (metadata + types + tests only) |
 | Wage type mapping correctness | N/A — untouched |
 | Event sourcing / audit | N/A — no event or audit-path changes; endpoints' behavior byte-identical |
+
+---
+
+## S113 correction (2026-07-02) — the "all-optional request bodies" framing was FALSE
+
+The honest-framing sentence this sprint wrote into PAT-012 ("generated request-body types are all-optional — they catch wrong names/shapes, not omitted fields", echoed in TASK-11205 above) was OVERLY BROAD: Swashbuckle DOES emit `required` for C# `required`-keyword members of request classes, and that subset is binder-ENFORCED (absence → 400) — S112's own createUser finding (spec-required fields marked optional in the FE) rode exactly that mechanism, contradicting the sentence in the same sprint. Corrected in PAT-012 at S113: request-side `required` = the C#-`required` subset (binder-enforced); other members stay optional by design. See SPRINT-113.md.

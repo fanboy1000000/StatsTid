@@ -1,4 +1,14 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace StatsTid.Backend.Api.Contracts;
+
+// S113 / TASK-11300 (PAT-012 strict-types): [property: AllowedValues] closed-set discriminators —
+// emitted as spec enums by the ResponseStrictTypesFilter (→ TS literal unions).
+// - periodStatus: the FE 3-state projection ApprovalPeriodRepository.ProjectStatus — a TOTAL
+//   function ("APPROVED"→APPROVED; "SUBMITTED"/"EMPLOYEE_APPROVED"→SUBMITTED; everything else incl.
+//   null/DRAFT/REJECTED→OPEN), so the set is exhaustive by construction (the roster fallback is
+//   also "OPEN").
+// - vikar reason: the init.sql CHECK (reason IN ('FERIE','SYGDOM','ORLOV','TJENESTEREJSE','ANDET')).
 
 // S111 / TASK-11101 (Fork B typed-client, PAT-010) — named response records for the unit-tagged
 // medarbejder ROSTER read GET /api/admin/reporting-lines/tree/{organisationId}/medarbejdere.
@@ -28,7 +38,7 @@ public sealed record RosterEmployeeRow(
     string DisplayName,
     string? Position,
     string? StructuralApproverId,
-    string PeriodStatus,
+    [property: AllowedValues("OPEN", "SUBMITTED", "APPROVED")] string PeriodStatus,
     RosterOutgoingVikar? OutgoingVikar,
     bool IsRoot,
     bool IsOrphan,
@@ -42,7 +52,7 @@ public sealed record RosterOutgoingVikar(
     string VikarUserId,
     string VikarDisplayName,
     DateOnly UntilDate,
-    string Reason);
+    [property: AllowedValues("FERIE", "SYGDOM", "ORLOV", "TJENESTEREJSE", "ANDET")] string Reason);
 
 /// <summary>One DISPLAY-ONLY resolved person reference (a <c>nameResolution</c> map value).</summary>
 public sealed record RosterNameRef(

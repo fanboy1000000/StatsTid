@@ -60,6 +60,16 @@ builder.Services.AddSwaggerGen(options =>
     // Full-name schema ids — unique across the ~90-endpoint surface (private nested request DTOs in
     // different files share simple names; a collision would crash GetSwagger).
     options.CustomSchemaIds(t => t.FullName!.Replace("+", "."));
+    // S113 / TASK-11300 (PAT-012 strict-types) — ONE shared instance registered as BOTH halves:
+    // the ISchemaFilter records schemaId→CLR type while schemas generate; the IDocumentFilter then
+    // applies required-strictness + [AllowedValues] enums over the response-reachable closure ONLY
+    // (request schemas untouched — see the class doc for the truthfulness basis + overlap policy).
+    // This single AddSwaggerGen config serves EVERY generation path by construction: the --openapi
+    // entrypoint (OpenApiSpecGenerator resolves ISwaggerProvider from this same DI container) and
+    // any future UseSwagger — there is no second Swagger configuration anywhere.
+    var strictTypes = new ResponseStrictTypesFilter();
+    options.SchemaGeneratorOptions.SchemaFilters.Add(strictTypes);
+    options.SwaggerGeneratorOptions.DocumentFilters.Add(strictTypes);
 });
 
 // ── S73 / TASK-7300 (R1 + R1a) — the NAMED rule-engine client ──

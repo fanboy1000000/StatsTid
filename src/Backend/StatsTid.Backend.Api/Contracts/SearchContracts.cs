@@ -1,4 +1,10 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace StatsTid.Backend.Api.Contracts;
+
+// S113 / TASK-11300 (PAT-012 strict-types): the [property: AllowedValues] unit-type discriminator —
+// emitted as a spec enum by the ResponseStrictTypesFilter. Domain = the units CHECK /
+// UnitEndpoints.TypeRank set ('direktion','omrade','kontor','team','enhed').
 
 // S106 / TASK-10603 (Enhedsspor Phase 3a, ADR-038 D5, PAT-010) — named response records for the scoped
 // units + people SEARCH read GET /api/admin/search (the merged-admin search overlay).
@@ -47,7 +53,7 @@ public sealed record SearchResponse(
 public sealed record UnitSearchResult(
     Guid UnitId,
     string OrganisationId,
-    string Type,
+    [property: AllowedValues("direktion", "omrade", "kontor", "team", "enhed")] string Type,
     string Name,
     IReadOnlyList<string> Path);
 

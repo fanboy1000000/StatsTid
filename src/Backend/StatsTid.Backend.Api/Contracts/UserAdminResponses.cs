@@ -1,4 +1,13 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace StatsTid.Backend.Api.Contracts;
+
+// S113 / TASK-11300 (PAT-012 strict-types): the [property: AllowedValues] scopeType discriminators —
+// emitted as spec enums by the ResponseStrictTypesFilter. Domain = the init.sql CHECK
+// (scope_type IN ('GLOBAL','ORG_ONLY')) + the grant endpoint's own validation. NOTE deliberately
+// NOT declared: employmentCategory (no DB CHECK; a config-keyed OPEN set — 'Standard' by default,
+// role-config overrides key new categories by data, not schema) and agreementCode/okVersion
+// (agreement data, open by design).
 
 // S112 / TASK-11201 (Fork B retrofit, PAT-010/PAT-012) — named response records for the user +
 // role admin endpoints (AdminEndpoints). Each record is an EXACT shape-copy of the anonymous
@@ -65,7 +74,7 @@ public sealed record UserRoleAssignmentItem(
     Guid AssignmentId,
     string RoleId,
     string? OrgId,
-    string ScopeType,
+    [property: AllowedValues("GLOBAL", "ORG_ONLY")] string ScopeType,
     string AssignedBy,
     DateTime AssignedAt,
     DateTime? ExpiresAt);
@@ -78,7 +87,7 @@ public sealed record RoleGrantResponse(
     string UserId,
     string RoleId,
     string? OrgId,
-    string ScopeType,
+    [property: AllowedValues("GLOBAL", "ORG_ONLY")] string ScopeType,
     string? AssignedBy,
     DateTime AssignedAt,
     DateTime? ExpiresAt);

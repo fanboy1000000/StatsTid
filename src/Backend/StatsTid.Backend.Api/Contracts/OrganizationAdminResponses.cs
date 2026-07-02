@@ -1,4 +1,10 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace StatsTid.Backend.Api.Contracts;
+
+// S113 / TASK-11300 (PAT-012 strict-types): the [property: AllowedValues] orgType discriminator —
+// emitted as a spec enum by the ResponseStrictTypesFilter. Domain = the init.sql CHECK
+// (org_type IN ('MAO','ORGANISATION')).
 
 // S112 / TASK-11201 (Fork B retrofit, PAT-010/PAT-012) — the named response record for the
 // organization admin MUTATIONS (POST create 201 / PUT update 200 / PUT move 200 on
@@ -13,7 +19,7 @@ namespace StatsTid.Backend.Api.Contracts;
 public sealed record OrganizationResponse(
     string OrgId,
     string OrgName,
-    string OrgType,
+    [property: AllowedValues("MAO", "ORGANISATION")] string OrgType,
     string? ParentOrgId,
     string MaterializedPath,
     string AgreementCode,

@@ -14,16 +14,25 @@ namespace StatsTid.Tests.Regression.Contracts;
 /// FE types derived from it) cannot agree with each other while disagreeing with the runtime bytes.
 ///
 /// <para>It asserts, recursively: <b>root kind / array-ness</b> (an object schema vs an array response
-/// is RED), <b>property presence</b> (every schema property is served), <b>camelCase keys</b> (a
+/// is RED), <b>property presence</b> (every schema property is served), <b>required-fidelity</b>
+/// (S113 / TASK-11302 — every member the schema lists in <c>required</c> is PRESENT in the serialized
+/// response; required-but-absent is RED with the member name), <b>camelCase keys</b> (a
 /// serializer-policy regression on either side is RED), <b>nullable-required fidelity</b> (a scalar the
 /// schema marks NON-nullable that the runtime serves <c>null</c> is RED; a <c>nullable:true</c> scalar
-/// may be null), and <b>array item / dictionary value schemas</b> (the nested element shape).</para>
+/// may be null), <b>enum-fidelity</b> (S113 / TASK-11302 — where a schema carries <c>enum</c>, a
+/// NON-NULL serialized value must be IN the set; null admissibility is governed by <c>nullable</c>
+/// alone — null is admissible iff the member is nullable, never by enum membership), and
+/// <b>array item / dictionary value schemas</b> (the nested element shape).</para>
 ///
-/// <para>NOTE: Swashbuckle does not populate <c>required</c> for record positional members, so the
-/// nullable-required check rides the (correctly populated) <c>nullable</c> flag, enforced on SCALAR
-/// leaves. <c>$ref</c>/object/array properties are checked for presence + recursed when non-null (an
-/// OpenAPI-3.0 <c>$ref</c> cannot carry a sibling <c>nullable</c>, so a nullable ref-typed property —
-/// e.g. <c>outgoingVikar</c> — is allowed to be null without a false RED).</para>
+/// <para>NOTE (updated S113 / TASK-11302): the <c>ResponseStrictTypesFilter</c> now POPULATES
+/// <c>required</c> on the response-reachable schema closure (required = every member EXCEPT
+/// conditionally-ignored [<c>JsonIgnore(WhenWritingNull/Default)</c>] and CLR-nullable bare-<c>$ref</c>
+/// members — see that filter's class doc), so required-fidelity is enforced directly off the
+/// <c>required</c> array. The nullable-required check still rides the <c>nullable</c> flag, enforced
+/// on SCALAR leaves. <c>$ref</c>/object/array properties are checked for presence + recursed when
+/// non-null (an OpenAPI-3.0 <c>$ref</c> cannot carry a sibling <c>nullable</c>, so a nullable
+/// ref-typed property — e.g. <c>outgoingVikar</c>, which the filter deliberately EXCLUDES from
+/// <c>required</c> — is allowed to be null or absent without a false RED).</para>
 /// </summary>
 public static class SpecRuntimeMatcher
 {
@@ -149,6 +158,29 @@ public static class SpecRuntimeMatcher
     {
         schema = Deref(spec, schema);
 
+        // S113 / TASK-11302 — ENUM-fidelity: where the (deref'd) schema carries an `enum`, a NON-NULL
+        // serialized value must be IN the declared set (an out-of-set discriminator means the FE's
+        // generated literal union lies). Null NEVER reaches here through the property loop (the null
+        // path is governed by the `nullable` flag alone — null admissible iff the member is nullable),
+        // but a root-level null is guarded anyway.
+        if (json.ValueKind != JsonValueKind.Null
+            && schema.TryGetProperty("enum", out var enumSet) && enumSet.ValueKind == JsonValueKind.Array)
+        {
+            var inSet = false;
+            foreach (var candidate in enumSet.EnumerateArray())
+            {
+                if (JsonValueEquals(candidate, json))
+                {
+                    inSet = true;
+                    break;
+                }
+            }
+            if (!inSet)
+                throw new XunitException(
+                    $"{ctx}: runtime value {json.GetRawText()} is NOT in the schema's enum set {enumSet.GetRawText()} " +
+                    "(an out-of-set discriminator — the generated TS literal union would lie). RED.");
+        }
+
         // An array schema (the bare-array case + any nested list). Array-ness is the headline lie.
         if (IsArray(schema))
         {
@@ -169,6 +201,25 @@ public static class SpecRuntimeMatcher
                 throw new XunitException(
                     $"{ctx}: spec schema is an OBJECT but the runtime response is '{json.ValueKind}' " +
                     "(an array-ness/shape mismatch). RED.");
+
+            // S113 / TASK-11302 — REQUIRED-fidelity: every member the schema lists in `required` must
+            // be PRESENT in the real serialized response. The strict-types filter claims required =
+            // always-on-the-wire to the generated TS (non-optional members) — a required-but-absent
+            // member is that exact claim lying, RED with the member name. Checked FIRST (before the
+            // property-presence walk) so a member both declared and required fails with the
+            // required-specific message; it also covers a `required` entry with no matching
+            // `properties` declaration.
+            if (schema.TryGetProperty("required", out var required) && required.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var requiredName in required.EnumerateArray())
+                {
+                    var name = requiredName.GetString();
+                    if (name is not null && !json.TryGetProperty(name, out _))
+                        throw new XunitException(
+                            $"{ctx}: schema lists '{name}' as REQUIRED but the runtime response omits it " +
+                            "(the generated TS would claim a member the wire does not carry). RED.");
+                }
+            }
 
             if (schema.TryGetProperty("properties", out var props))
             {
@@ -249,6 +300,16 @@ public static class SpecRuntimeMatcher
 
     private static bool IsCamelCase(string name)
         => name.Length > 0 && (char.IsLower(name[0]) || !char.IsLetter(name[0]));
+
+    /// <summary>S113 — enum-member equality: ordinal string compare for the (dominant) string
+    /// discriminator case; kind + raw-text equality otherwise (numeric enums are not used in the
+    /// closure today, so no numeric normalization is attempted).</summary>
+    private static bool JsonValueEquals(JsonElement a, JsonElement b)
+    {
+        if (a.ValueKind == JsonValueKind.String && b.ValueKind == JsonValueKind.String)
+            return string.Equals(a.GetString(), b.GetString(), StringComparison.Ordinal);
+        return a.ValueKind == b.ValueKind && a.GetRawText() == b.GetRawText();
+    }
 
     private static void AssertScalarKind(JsonElement schema, JsonElement json, string ctx)
     {

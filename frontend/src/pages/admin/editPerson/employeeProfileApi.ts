@@ -7,17 +7,20 @@
 //
 // S112 / TASK-11203 — both calls switched to the TYPED `apiFetchWithEtag(pathKey,
 // { method, params, ifMatch?, body? })` overload (PAT-012): the response type is
-// the spec `EmployeeProfileResponse` (re-narrowed via `coerceApiResponse`, drift-
-// guarded below) and the PUT body is compile-checked against the spec
-// `UpdateEmployeeProfileRequest`. Two hand-written-type lies fell out of the
-// switch: the wire interface claimed a `weeklyNormHours` response field the
+// the spec `EmployeeProfileResponse` and the PUT body is compile-checked against
+// the spec `UpdateEmployeeProfileRequest`. Two hand-written-type lies fell out of
+// the switch: the wire interface claimed a `weeklyNormHours` response field the
 // backend does not serve, and the PUT sent a `weeklyNormHours: 0` placeholder the
 // backend request DTO no longer declares — both dropped.
+//
+// S113 / TASK-11301 — the generated spec type is STRICT, so the hand-written wire
+// interface + the S111 coercion re-narrowing (the deleted apiNarrow module) are
+// gone: `toSnapshot` consumes the spec `EmployeeProfileResponse` directly.
 //
 // `UserManagement.tsx` was retired (S109); this module is the single source of
 // truth for the drawer.
 import { apiFetchWithEtag } from '../../../lib/api'
-import { coerceApiResponse, type Assert, type AssertFieldsInSpec } from '../../../lib/apiNarrow'
+import type { components } from '../../../lib/api-types'
 import { formatVersionAsIfMatch, resolveEtag } from '../../../lib/etag'
 
 /** Snapshot of an employee_profiles row + the row-version concurrency token. */
@@ -30,19 +33,8 @@ export interface EmployeeProfileSnapshot {
   etag: string
 }
 
-interface EmployeeProfileWire {
-  employeeId: string
-  partTimeFraction: number
-  position: string | null
-  isPartTime: boolean
-  version: number
-}
-
-// S112 — compile-time drift guard: every field the FE reads must exist in the
-// spec `EmployeeProfileResponse` (the S97→S100 drift class, caught at build).
-export type _EmployeeProfileDrift = Assert<
-  AssertFieldsInSpec<EmployeeProfileWire, 'StatsTid.Backend.Api.Contracts.EmployeeProfileResponse'>
->
+/** The GET/PUT response — the GENERATED spec type verbatim (S113). */
+type EmployeeProfileWire = components['schemas']['StatsTid.Backend.Api.Contracts.EmployeeProfileResponse']
 
 function toSnapshot(data: EmployeeProfileWire, etag: string | null): EmployeeProfileSnapshot {
   const { etag: resolvedEtag } = resolveEtag(etag, data)
@@ -66,7 +58,7 @@ export async function fetchEmployeeProfile(
   })
   if (!result.ok) return null
   const { data, etag } = result.data
-  return toSnapshot(coerceApiResponse<EmployeeProfileWire>(data), etag)
+  return toSnapshot(data, etag)
 }
 
 /**
@@ -94,5 +86,5 @@ export async function saveEmployeeProfile(
     throw Object.assign(new Error(result.error), { status: result.status, body: result.body })
   }
   const { data, etag } = result.data
-  return toSnapshot(coerceApiResponse<EmployeeProfileWire>(data), etag)
+  return toSnapshot(data, etag)
 }

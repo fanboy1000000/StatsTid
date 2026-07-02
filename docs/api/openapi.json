@@ -3901,6 +3901,13 @@
         "additionalProperties": false
       },
       "StatsTid.Backend.Api.Contracts.EmployeeProfileResponse": {
+        "required": [
+          "employeeId",
+          "isPartTime",
+          "partTimeFraction",
+          "position",
+          "version"
+        ],
         "type": "object",
         "properties": {
           "employeeId": {
@@ -3925,6 +3932,15 @@
         "additionalProperties": false
       },
       "StatsTid.Backend.Api.Contracts.ForestMaoNode": {
+        "required": [
+          "materializedPath",
+          "memberCount",
+          "orgId",
+          "orgName",
+          "orgType",
+          "organisations",
+          "parentOrgId"
+        ],
         "type": "object",
         "properties": {
           "orgId": {
@@ -3934,6 +3950,10 @@
             "type": "string"
           },
           "orgType": {
+            "enum": [
+              "MAO",
+              "ORGANISATION"
+            ],
             "type": "string"
           },
           "parentOrgId": {
@@ -3957,6 +3977,18 @@
         "additionalProperties": false
       },
       "StatsTid.Backend.Api.Contracts.ForestOrganisationNode": {
+        "required": [
+          "agreementCode",
+          "directMemberCount",
+          "materializedPath",
+          "memberCount",
+          "okVersion",
+          "orgId",
+          "orgName",
+          "orgType",
+          "parentOrgId",
+          "units"
+        ],
         "type": "object",
         "properties": {
           "orgId": {
@@ -3966,6 +3998,10 @@
             "type": "string"
           },
           "orgType": {
+            "enum": [
+              "MAO",
+              "ORGANISATION"
+            ],
             "type": "string"
           },
           "parentOrgId": {
@@ -3999,6 +4035,9 @@
         "additionalProperties": false
       },
       "StatsTid.Backend.Api.Contracts.ForestResponse": {
+        "required": [
+          "forest"
+        ],
         "type": "object",
         "properties": {
           "forest": {
@@ -4011,6 +4050,18 @@
         "additionalProperties": false
       },
       "StatsTid.Backend.Api.Contracts.ForestUnitNode": {
+        "required": [
+          "children",
+          "directMemberCount",
+          "level",
+          "memberCount",
+          "name",
+          "organisationId",
+          "parentUnitId",
+          "type",
+          "unitId",
+          "version"
+        ],
         "type": "object",
         "properties": {
           "unitId": {
@@ -4026,6 +4077,13 @@
             "nullable": true
           },
           "type": {
+            "enum": [
+              "direktion",
+              "omrade",
+              "kontor",
+              "team",
+              "enhed"
+            ],
             "type": "string"
           },
           "name": {
@@ -4073,6 +4131,15 @@
         "additionalProperties": false
       },
       "StatsTid.Backend.Api.Contracts.OrgListItem": {
+        "required": [
+          "agreementCode",
+          "materializedPath",
+          "okVersion",
+          "orgId",
+          "orgName",
+          "orgType",
+          "parentOrgId"
+        ],
         "type": "object",
         "properties": {
           "orgId": {
@@ -4082,6 +4149,10 @@
             "type": "string"
           },
           "orgType": {
+            "enum": [
+              "MAO",
+              "ORGANISATION"
+            ],
             "type": "string"
           },
           "parentOrgId": {
@@ -4101,6 +4172,17 @@
         "additionalProperties": false
       },
       "StatsTid.Backend.Api.Contracts.OrgTreeMaoNode": {
+        "required": [
+          "agreementCode",
+          "employeeCount",
+          "materializedPath",
+          "okVersion",
+          "orgId",
+          "orgName",
+          "orgType",
+          "organisations",
+          "parentOrgId"
+        ],
         "type": "object",
         "properties": {
           "orgId": {
@@ -4110,6 +4192,10 @@
             "type": "string"
           },
           "orgType": {
+            "enum": [
+              "MAO",
+              "ORGANISATION"
+            ],
             "type": "string"
           },
           "parentOrgId": {
@@ -4139,6 +4225,16 @@
         "additionalProperties": false
       },
       "StatsTid.Backend.Api.Contracts.OrgTreeOrganisationNode": {
+        "required": [
+          "agreementCode",
+          "employeeCount",
+          "materializedPath",
+          "okVersion",
+          "orgId",
+          "orgName",
+          "orgType",
+          "parentOrgId"
+        ],
         "type": "object",
         "properties": {
           "orgId": {
@@ -4148,6 +4244,10 @@
             "type": "string"
           },
           "orgType": {
+            "enum": [
+              "MAO",
+              "ORGANISATION"
+            ],
             "type": "string"
           },
           "parentOrgId": {
@@ -4171,6 +4271,9 @@
         "additionalProperties": false
       },
       "StatsTid.Backend.Api.Contracts.OrgTreeResponse": {
+        "required": [
+          "tree"
+        ],
         "type": "object",
         "properties": {
           "tree": {
@@ -4183,6 +4286,15 @@
         "additionalProperties": false
       },
       "StatsTid.Backend.Api.Contracts.OrganizationResponse": {
+        "required": [
+          "agreementCode",
+          "materializedPath",
+          "okVersion",
+          "orgId",
+          "orgName",
+          "orgType",
+          "parentOrgId"
+        ],
         "type": "object",
         "properties": {
           "orgId": {
@@ -4192,6 +4304,10 @@
             "type": "string"
           },
           "orgType": {
+            "enum": [
+              "MAO",
+              "ORGANISATION"
+            ],
             "type": "string"
           },
           "parentOrgId": {
@@ -4211,6 +4327,14 @@
         "additionalProperties": false
       },
       "StatsTid.Backend.Api.Contracts.PersonSearchResult": {
+        "required": [
+          "displayName",
+          "organisationId",
+          "path",
+          "position",
+          "unitName",
+          "userId"
+        ],
         "type": "object",
         "properties": {
           "userId": {
@@ -4288,6 +4412,16 @@
         "additionalProperties": false
       },
       "StatsTid.Backend.Api.Contracts.RoleGrantResponse": {
+        "required": [
+          "assignedAt",
+          "assignedBy",
+          "assignmentId",
+          "expiresAt",
+          "orgId",
+          "roleId",
+          "scopeType",
+          "userId"
+        ],
         "type": "object",
         "properties": {
           "assignmentId": {
@@ -4305,6 +4439,10 @@
             "nullable": true
           },
           "scopeType": {
+            "enum": [
+              "GLOBAL",
+              "ORG_ONLY"
+            ],
             "type": "string"
           },
           "assignedBy": {
@@ -4324,6 +4462,15 @@
         "additionalProperties": false
       },
       "StatsTid.Backend.Api.Contracts.RoleRevokeResponse": {
+        "required": [
+          "assignmentId",
+          "reason",
+          "revoked",
+          "revokedAt",
+          "revokedBy",
+          "roleId",
+          "userId"
+        ],
         "type": "object",
         "properties": {
           "assignmentId": {
@@ -4355,6 +4502,19 @@
         "additionalProperties": false
       },
       "StatsTid.Backend.Api.Contracts.RosterEmployeeRow": {
+        "required": [
+          "displayName",
+          "employeeId",
+          "isOrphan",
+          "isRoot",
+          "leaderIds",
+          "periodStatus",
+          "position",
+          "primaryReportingLineVersion",
+          "structuralApproverId",
+          "unitId",
+          "unitName"
+        ],
         "type": "object",
         "properties": {
           "employeeId": {
@@ -4372,6 +4532,11 @@
             "nullable": true
           },
           "periodStatus": {
+            "enum": [
+              "OPEN",
+              "SUBMITTED",
+              "APPROVED"
+            ],
             "type": "string"
           },
           "outgoingVikar": {
@@ -4407,6 +4572,12 @@
         "additionalProperties": false
       },
       "StatsTid.Backend.Api.Contracts.RosterNameRef": {
+        "required": [
+          "displayName",
+          "position",
+          "unitName",
+          "userId"
+        ],
         "type": "object",
         "properties": {
           "userId": {
@@ -4427,6 +4598,12 @@
         "additionalProperties": false
       },
       "StatsTid.Backend.Api.Contracts.RosterOutgoingVikar": {
+        "required": [
+          "reason",
+          "untilDate",
+          "vikarDisplayName",
+          "vikarUserId"
+        ],
         "type": "object",
         "properties": {
           "vikarUserId": {
@@ -4440,12 +4617,24 @@
             "format": "date"
           },
           "reason": {
+            "enum": [
+              "FERIE",
+              "SYGDOM",
+              "ORLOV",
+              "TJENESTEREJSE",
+              "ANDET"
+            ],
             "type": "string"
           }
         },
         "additionalProperties": false
       },
       "StatsTid.Backend.Api.Contracts.RosterResponse": {
+        "required": [
+          "employees",
+          "nameResolution",
+          "pendingCountByManager"
+        ],
         "type": "object",
         "properties": {
           "employees": {
@@ -4471,6 +4660,12 @@
         "additionalProperties": false
       },
       "StatsTid.Backend.Api.Contracts.SearchResponse": {
+        "required": [
+          "people",
+          "peopleTotal",
+          "units",
+          "unitsTotal"
+        ],
         "type": "object",
         "properties": {
           "units": {
@@ -4497,6 +4692,11 @@
         "additionalProperties": false
       },
       "StatsTid.Backend.Api.Contracts.UnitLeaderResponse": {
+        "required": [
+          "organisationId",
+          "unitId",
+          "userId"
+        ],
         "type": "object",
         "properties": {
           "unitId": {
@@ -4513,6 +4713,14 @@
         "additionalProperties": false
       },
       "StatsTid.Backend.Api.Contracts.UnitResponse": {
+        "required": [
+          "name",
+          "organisationId",
+          "parentUnitId",
+          "type",
+          "unitId",
+          "version"
+        ],
         "type": "object",
         "properties": {
           "unitId": {
@@ -4528,6 +4736,13 @@
             "nullable": true
           },
           "type": {
+            "enum": [
+              "direktion",
+              "omrade",
+              "kontor",
+              "team",
+              "enhed"
+            ],
             "type": "string"
           },
           "name": {
@@ -4541,6 +4756,13 @@
         "additionalProperties": false
       },
       "StatsTid.Backend.Api.Contracts.UnitSearchResult": {
+        "required": [
+          "name",
+          "organisationId",
+          "path",
+          "type",
+          "unitId"
+        ],
         "type": "object",
         "properties": {
           "unitId": {
@@ -4551,6 +4773,13 @@
             "type": "string"
           },
           "type": {
+            "enum": [
+              "direktion",
+              "omrade",
+              "kontor",
+              "team",
+              "enhed"
+            ],
             "type": "string"
           },
           "name": {
@@ -4566,6 +4795,16 @@
         "additionalProperties": false
       },
       "StatsTid.Backend.Api.Contracts.UserCreatedResponse": {
+        "required": [
+          "agreementCode",
+          "displayName",
+          "email",
+          "okVersion",
+          "primaryOrgId",
+          "userId",
+          "username",
+          "version"
+        ],
         "type": "object",
         "properties": {
           "userId": {
@@ -4598,6 +4837,17 @@
         "additionalProperties": false
       },
       "StatsTid.Backend.Api.Contracts.UserDetailResponse": {
+        "required": [
+          "agreementCode",
+          "displayName",
+          "email",
+          "employmentCategory",
+          "okVersion",
+          "primaryOrgId",
+          "userId",
+          "username",
+          "version"
+        ],
         "type": "object",
         "properties": {
           "userId": {
@@ -4633,6 +4883,15 @@
         "additionalProperties": false
       },
       "StatsTid.Backend.Api.Contracts.UserRoleAssignmentItem": {
+        "required": [
+          "assignedAt",
+          "assignedBy",
+          "assignmentId",
+          "expiresAt",
+          "orgId",
+          "roleId",
+          "scopeType"
+        ],
         "type": "object",
         "properties": {
           "assignmentId": {
@@ -4647,6 +4906,10 @@
             "nullable": true
           },
           "scopeType": {
+            "enum": [
+              "GLOBAL",
+              "ORG_ONLY"
+            ],
             "type": "string"
           },
           "assignedBy": {
@@ -4665,6 +4928,11 @@
         "additionalProperties": false
       },
       "StatsTid.Backend.Api.Contracts.UserSearchItem": {
+        "required": [
+          "displayName",
+          "primaryOrgName",
+          "userId"
+        ],
         "type": "object",
         "properties": {
           "userId": {
@@ -4680,6 +4948,12 @@
         "additionalProperties": false
       },
       "StatsTid.Backend.Api.Contracts.UserSearchResponse": {
+        "required": [
+          "items",
+          "limit",
+          "offset",
+          "total"
+        ],
         "type": "object",
         "properties": {
           "items": {
@@ -4704,6 +4978,12 @@
         "additionalProperties": false
       },
       "StatsTid.Backend.Api.Contracts.UserUnitResponse": {
+        "required": [
+          "primaryOrgId",
+          "unitId",
+          "userId",
+          "version"
+        ],
         "type": "object",
         "properties": {
           "userId": {
@@ -4725,6 +5005,14 @@
         "additionalProperties": false
       },
       "StatsTid.Backend.Api.Contracts.UserUpdatedResponse": {
+        "required": [
+          "agreementCode",
+          "displayName",
+          "email",
+          "primaryOrgId",
+          "userId",
+          "version"
+        ],
         "type": "object",
         "properties": {
           "userId": {

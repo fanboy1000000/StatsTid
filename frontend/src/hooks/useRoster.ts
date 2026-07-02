@@ -13,10 +13,19 @@
 // Organisation re-uses the cached roster (no refetch). Selecting a unit in a
 // DIFFERENT Organisation fetches (and caches) that one.
 //
-// The named interfaces mirror the backend's serialized (camelCase) wire shape
-// VERBATIM, pinned by the S106 roster contract test (RosterEndpoint /
-// S106RosterUnitTagTests) — the S97→S99→S100 "fetchEnheder" drift-class fix: the
-// FE type must NOT diverge from the backend's actual JSON.
+// S113 / TASK-11301 — the response types are the GENERATED spec types (the
+// backend names the row schema `RosterEmployeeRow` and the resolution entry
+// `RosterNameRef`; the FE keeps its own names as aliases): the S111 coercion
+// + drift-guard scaffolding (the deleted apiNarrow module) is gone; a renamed or
+// removed backend field is now a direct `tsc` error at the `setByOrg` call (the
+// S97→S99→S100 "fetchEnheder" drift class, closed structurally).
+//
+// THE ONE spec-vs-wire exception (S113, documented): the generator emits a
+// nullable $ref property (`outgoingVikar`) as OPTIONAL (`?: T`) because OpenAPI
+// 3.0 cannot mark a bare `$ref` nullable — but the backend SERIALIZES an explicit
+// `"outgoingVikar": null`. `RosterRow` therefore overrides that single property
+// to `?: RosterOutgoingVikar | null` so the runtime `null` stays typed; every
+// other field is derived VERBATIM from the generated schema.
 //
 // LINT (PAT-010): the URL is passed INLINE as a literal to apiClient.get so the
 // contract-coverage lint (tools/check_endpoint_contracts.py) can enumerate it —
@@ -24,71 +33,45 @@
 
 import { useState, useCallback, useRef } from 'react'
 import { apiClient } from '../lib/api'
-import { coerceApiResponse, type Assert, type AssertFieldsInSpec } from '../lib/apiNarrow'
+import type { components } from '../lib/api-types'
+
+type Schemas = components['schemas']
 
 /** Per-away-manager vikar annotation — present IFF this person is an away-manager
     currently covered by an active vikar (the absent leader's own row). The
     inverse "Vikar for X" tag on the stand-in is derived by INVERTING this within
     the loaded set (no separate field). */
-export interface RosterOutgoingVikar {
-  vikarUserId: string
-  vikarDisplayName: string
-  untilDate: string // ISO 'YYYY-MM-DD'
-  reason: string
-}
+export type RosterOutgoingVikar = Schemas['StatsTid.Backend.Api.Contracts.RosterOutgoingVikar']
 
-/** One employee row in the unit-tagged structural roster (field names are the
-    S106 contract, verbatim camelCase). */
-export interface RosterRow {
-  employeeId: string
-  displayName: string
-  position: string | null
-  /** the person's assigned active PRIMARY manager — THE TREE KEY (raw edge). */
-  structuralApproverId: string | null
-  periodStatus: 'OPEN' | 'SUBMITTED' | 'APPROVED'
-  outgoingVikar: RosterOutgoingVikar | null
-  isRoot: boolean
-  isOrphan: boolean
-  /** the unit the person belongs to (null = Organisation-homed, unit-less). */
-  unitId: string | null
-  unitName: string | null
-  /** the aggregated designated leaders of THIS row's unit (every member of a unit
-      carries the same set; an empty array — never null — for a unit-less row). */
-  leaderIds: string[]
-  /** the active PRIMARY reporting_lines.version etag; null for a root/orphan. */
-  primaryReportingLineVersion: number | null
+/** One employee row in the unit-tagged structural roster (the spec
+    `RosterEmployeeRow` with the single nullable-$ref override — see the module
+    header). `structuralApproverId` is the person's assigned active PRIMARY
+    manager — THE TREE KEY (raw edge); `unitId` null = Organisation-homed;
+    `primaryReportingLineVersion` is the active PRIMARY reporting_lines.version
+    etag (null for a root/orphan). */
+export type RosterRow = Omit<
+  Schemas['StatsTid.Backend.Api.Contracts.RosterEmployeeRow'],
+  'outgoingVikar'
+> & {
+  /** the wire serializes an explicit `null` (nullable-$ref spec exception). */
+  outgoingVikar?: RosterOutgoingVikar | null
 }
 
 /** A DISPLAY-ONLY by-id resolution entry — labels an upward-reference / cross-unit
     leader chip even for an id NOT in the active roster body (e.g. an inactive
     leader). It admits nobody into scope. */
-export interface RosterNameResolutionEntry {
-  userId: string
-  displayName: string
-  position: string | null
-  unitName: string | null
-}
+export type RosterNameResolutionEntry = Schemas['StatsTid.Backend.Api.Contracts.RosterNameRef']
 
 /** The GET …/medarbejdere envelope — `{ employees, pendingCountByManager,
-    nameResolution }` (NOT a bare array — the S97/S99 envelope distinction). */
-export interface RosterResponse {
+    nameResolution }` (NOT a bare array — the S97/S99 envelope distinction).
+    Derived from the spec `RosterResponse` with the `RosterRow` override threaded
+    through `employees`. */
+export type RosterResponse = Omit<
+  Schemas['StatsTid.Backend.Api.Contracts.RosterResponse'],
+  'employees'
+> & {
   employees: RosterRow[]
-  pendingCountByManager: Record<string, number>
-  nameResolution: Record<string, RosterNameResolutionEntry>
 }
-
-// S111 / TASK-11102 — compile-time drift guards (see apiNarrow.ts). The backend
-// names the row schema `RosterEmployeeRow` and the resolution entry `RosterNameRef`
-// (the FE keeps its own names); the asserts map each FE-strict interface to its
-// spec schema so a renamed/removed backend field fails `tsc` here.
-export type _RosterDrift = [
-  Assert<AssertFieldsInSpec<RosterResponse, 'StatsTid.Backend.Api.Contracts.RosterResponse'>>,
-  Assert<AssertFieldsInSpec<RosterRow, 'StatsTid.Backend.Api.Contracts.RosterEmployeeRow'>>,
-  Assert<AssertFieldsInSpec<RosterOutgoingVikar, 'StatsTid.Backend.Api.Contracts.RosterOutgoingVikar'>>,
-  Assert<
-    AssertFieldsInSpec<RosterNameResolutionEntry, 'StatsTid.Backend.Api.Contracts.RosterNameRef'>
-  >,
-]
 
 /**
  * The lazy, per-Organisation roster cache. `loadRoster(organisationId)` fetches
@@ -114,8 +97,8 @@ export function useRoster() {
     setError(null)
     // S111 / TASK-11102 — typed via the OpenAPI TEMPLATED path key with the
     // structured `params.path` shape; `apiClient` interpolates `{organisationId}`
-    // (URL-encoded). `coerceApiResponse` re-narrows the spec-loose response to the
-    // FE-strict `RosterResponse` (drift caught by `_RosterDrift` above).
+    // (URL-encoded). `result.data` IS the strict spec `RosterResponse`, directly
+    // assignable to the FE view (only the nullable-$ref override differs — S113).
     const result = await apiClient.get(
       '/api/admin/reporting-lines/tree/{organisationId}/medarbejdere',
       { params: { path: { organisationId } } },
@@ -123,7 +106,7 @@ export function useRoster() {
     loadingRef.current.delete(organisationId)
     if (result.ok) {
       loadedRef.current.add(organisationId)
-      setByOrg((prev) => ({ ...prev, [organisationId]: coerceApiResponse<RosterResponse>(result.data) }))
+      setByOrg((prev) => ({ ...prev, [organisationId]: result.data }))
     } else {
       setError(result.error)
     }

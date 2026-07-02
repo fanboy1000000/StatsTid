@@ -1,6 +1,5 @@
 import { useCallback } from 'react'
 import { apiClient, apiFetchWithEtag, type ApiResult } from '../lib/api'
-import { coerceApiResponse, type Assert, type AssertFieldsInSpec } from '../lib/apiNarrow'
 
 // S48 TASK-4808. Reporting-line admin hooks following the useAdmin.ts pattern.
 // Reads go through apiClient; writes that carry If-Match / return ETag use
@@ -28,28 +27,26 @@ export interface DirectReport extends ReportingLineEntry {
 
 /** One person row from the server person-search (`GET /api/admin/users/search`).
     The server scope-filters to the caller's RBAC org-scope + excludes self +
-    descendants (the cycle-prevention mirror) when `excludeEmployeeId` is supplied. */
+    descendants (the cycle-prevention mirror) when `excludeEmployeeId` is supplied.
+
+    S113 / TASK-11301 — local VIEW type; the strict spec `UserSearchItem` assigns
+    directly. NOTE `primaryOrgName` stays DELIBERATELY WIDER (`string | null`)
+    than the spec's non-null `string` (benign widening; consumers already
+    null-guard) — flagged, not silently narrowed. */
 export interface PersonSearchHit {
   userId: string
   displayName: string
   primaryOrgName: string | null
 }
 
+/** The users-search envelope view — the strict spec `UserSearchResponse`
+    (`{ items, total, limit, offset }`) assigns directly. */
 export interface PersonSearchResult {
   items: PersonSearchHit[]
   total: number
   limit: number
   offset: number
 }
-
-// S112 / TASK-11203 — compile-time drift guards for the typed users-search read:
-// every field the FE reads must exist in the spec schemas (envelope + item).
-export type _PersonSearchEnvelopeDrift = Assert<
-  AssertFieldsInSpec<PersonSearchResult, 'StatsTid.Backend.Api.Contracts.UserSearchResponse'>
->
-export type _PersonSearchItemDrift = Assert<
-  AssertFieldsInSpec<PersonSearchHit, 'StatsTid.Backend.Api.Contracts.UserSearchItem'>
->
 
 /** The admin-on-behalf vikar create body (`POST .../{managerId}/vikar`). No
     If-Match; the manager id is the path segment. `effectiveTo` is the INCLUSIVE
@@ -178,9 +175,9 @@ export function useReportingLines() {
       offset?: number
     }): Promise<ApiResult<PersonSearchResult>> => {
       // S112 / TASK-11203 — the typed spec-keyed GET (the `{items,total,limit,
-      // offset}` envelope is DERIVED from `UserSearchResponse`, drift-guarded
-      // above); `buildUrl` skips undefined query params, matching the previous
-      // hand-built query string byte-for-byte.
+      // offset}` envelope is the strict spec `UserSearchResponse`, directly
+      // assignable to the view — S113); `buildUrl` skips undefined query params,
+      // matching the previous hand-built query string byte-for-byte.
       const result = await apiClient.get('/api/admin/users/search', {
         query: {
           q: params.q || undefined,
@@ -190,7 +187,7 @@ export function useReportingLines() {
         },
       })
       if (!result.ok) return result
-      return { ok: true, data: coerceApiResponse<PersonSearchResult>(result.data) }
+      return { ok: true, data: result.data }
     },
     [],
   )

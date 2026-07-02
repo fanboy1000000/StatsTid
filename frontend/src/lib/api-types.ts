@@ -4494,114 +4494,121 @@ export interface components {
             name?: string;
         };
         "StatsTid.Backend.Api.Contracts.EmployeeProfileResponse": {
-            employeeId?: string;
+            employeeId: string;
             /** Format: double */
-            partTimeFraction?: number;
-            position?: string | null;
-            isPartTime?: boolean;
+            partTimeFraction: number;
+            position: string | null;
+            isPartTime: boolean;
             /** Format: int64 */
-            version?: number;
+            version: number;
         };
         "StatsTid.Backend.Api.Contracts.ForestMaoNode": {
-            orgId?: string;
-            orgName?: string;
-            orgType?: string;
-            parentOrgId?: string | null;
-            materializedPath?: string;
+            orgId: string;
+            orgName: string;
+            /** @enum {string} */
+            orgType: "MAO" | "ORGANISATION";
+            parentOrgId: string | null;
+            materializedPath: string;
             /** Format: int64 */
-            memberCount?: number;
-            organisations?: components["schemas"]["StatsTid.Backend.Api.Contracts.ForestOrganisationNode"][];
+            memberCount: number;
+            organisations: components["schemas"]["StatsTid.Backend.Api.Contracts.ForestOrganisationNode"][];
         };
         "StatsTid.Backend.Api.Contracts.ForestOrganisationNode": {
-            orgId?: string;
-            orgName?: string;
-            orgType?: string;
-            parentOrgId?: string | null;
-            materializedPath?: string;
-            agreementCode?: string;
-            okVersion?: string;
+            orgId: string;
+            orgName: string;
+            /** @enum {string} */
+            orgType: "MAO" | "ORGANISATION";
+            parentOrgId: string | null;
+            materializedPath: string;
+            agreementCode: string;
+            okVersion: string;
             /** Format: int64 */
-            memberCount?: number;
+            memberCount: number;
             /** Format: int64 */
-            directMemberCount?: number;
-            units?: components["schemas"]["StatsTid.Backend.Api.Contracts.ForestUnitNode"][];
+            directMemberCount: number;
+            units: components["schemas"]["StatsTid.Backend.Api.Contracts.ForestUnitNode"][];
         };
         "StatsTid.Backend.Api.Contracts.ForestResponse": {
-            forest?: components["schemas"]["StatsTid.Backend.Api.Contracts.ForestMaoNode"][];
+            forest: components["schemas"]["StatsTid.Backend.Api.Contracts.ForestMaoNode"][];
         };
         "StatsTid.Backend.Api.Contracts.ForestUnitNode": {
             /** Format: uuid */
-            unitId?: string;
-            organisationId?: string;
+            unitId: string;
+            organisationId: string;
             /** Format: uuid */
-            parentUnitId?: string | null;
-            type?: string;
-            name?: string;
+            parentUnitId: string | null;
+            /** @enum {string} */
+            type: "direktion" | "omrade" | "kontor" | "team" | "enhed";
+            name: string;
             /** Format: int32 */
-            level?: number;
+            level: number;
             /** Format: int64 */
-            version?: number;
+            version: number;
             /** Format: int64 */
-            directMemberCount?: number;
+            directMemberCount: number;
             /** Format: int64 */
-            memberCount?: number;
-            children?: components["schemas"]["StatsTid.Backend.Api.Contracts.ForestUnitNode"][];
+            memberCount: number;
+            children: components["schemas"]["StatsTid.Backend.Api.Contracts.ForestUnitNode"][];
         };
         "StatsTid.Backend.Api.Contracts.LoginRequest": {
             username: string;
             password: string;
         };
         "StatsTid.Backend.Api.Contracts.OrgListItem": {
-            orgId?: string;
-            orgName?: string;
-            orgType?: string;
-            parentOrgId?: string | null;
-            materializedPath?: string;
-            agreementCode?: string;
-            okVersion?: string;
+            orgId: string;
+            orgName: string;
+            /** @enum {string} */
+            orgType: "MAO" | "ORGANISATION";
+            parentOrgId: string | null;
+            materializedPath: string;
+            agreementCode: string;
+            okVersion: string;
         };
         "StatsTid.Backend.Api.Contracts.OrgTreeMaoNode": {
-            orgId?: string;
-            orgName?: string;
-            orgType?: string;
-            parentOrgId?: string | null;
-            materializedPath?: string;
-            agreementCode?: string;
-            okVersion?: string;
+            orgId: string;
+            orgName: string;
+            /** @enum {string} */
+            orgType: "MAO" | "ORGANISATION";
+            parentOrgId: string | null;
+            materializedPath: string;
+            agreementCode: string;
+            okVersion: string;
             /** Format: int64 */
-            employeeCount?: number;
-            organisations?: components["schemas"]["StatsTid.Backend.Api.Contracts.OrgTreeOrganisationNode"][];
+            employeeCount: number;
+            organisations: components["schemas"]["StatsTid.Backend.Api.Contracts.OrgTreeOrganisationNode"][];
         };
         "StatsTid.Backend.Api.Contracts.OrgTreeOrganisationNode": {
-            orgId?: string;
-            orgName?: string;
-            orgType?: string;
-            parentOrgId?: string | null;
-            materializedPath?: string;
-            agreementCode?: string;
-            okVersion?: string;
+            orgId: string;
+            orgName: string;
+            /** @enum {string} */
+            orgType: "MAO" | "ORGANISATION";
+            parentOrgId: string | null;
+            materializedPath: string;
+            agreementCode: string;
+            okVersion: string;
             /** Format: int64 */
-            employeeCount?: number;
+            employeeCount: number;
         };
         "StatsTid.Backend.Api.Contracts.OrgTreeResponse": {
-            tree?: components["schemas"]["StatsTid.Backend.Api.Contracts.OrgTreeMaoNode"][];
+            tree: components["schemas"]["StatsTid.Backend.Api.Contracts.OrgTreeMaoNode"][];
         };
         "StatsTid.Backend.Api.Contracts.OrganizationResponse": {
-            orgId?: string;
-            orgName?: string;
-            orgType?: string;
-            parentOrgId?: string | null;
-            materializedPath?: string;
-            agreementCode?: string;
-            okVersion?: string;
+            orgId: string;
+            orgName: string;
+            /** @enum {string} */
+            orgType: "MAO" | "ORGANISATION";
+            parentOrgId: string | null;
+            materializedPath: string;
+            agreementCode: string;
+            okVersion: string;
         };
         "StatsTid.Backend.Api.Contracts.PersonSearchResult": {
-            userId?: string;
-            organisationId?: string;
-            displayName?: string;
-            position?: string | null;
-            unitName?: string | null;
-            path?: string[];
+            userId: string;
+            organisationId: string;
+            displayName: string;
+            position: string | null;
+            unitName: string | null;
+            path: string[];
         };
         "StatsTid.Backend.Api.Contracts.RegisterTimeEntryRequest": {
             employeeId: string;
@@ -4621,164 +4628,170 @@ export interface components {
         };
         "StatsTid.Backend.Api.Contracts.RoleGrantResponse": {
             /** Format: uuid */
-            assignmentId?: string;
-            userId?: string;
-            roleId?: string;
-            orgId?: string | null;
-            scopeType?: string;
-            assignedBy?: string | null;
+            assignmentId: string;
+            userId: string;
+            roleId: string;
+            orgId: string | null;
+            /** @enum {string} */
+            scopeType: "GLOBAL" | "ORG_ONLY";
+            assignedBy: string | null;
             /** Format: date-time */
-            assignedAt?: string;
+            assignedAt: string;
             /** Format: date-time */
-            expiresAt?: string | null;
+            expiresAt: string | null;
         };
         "StatsTid.Backend.Api.Contracts.RoleRevokeResponse": {
             /** Format: uuid */
-            assignmentId?: string;
-            userId?: string;
-            roleId?: string;
-            revoked?: boolean;
-            revokedBy?: string | null;
+            assignmentId: string;
+            userId: string;
+            roleId: string;
+            revoked: boolean;
+            revokedBy: string | null;
             /** Format: date-time */
-            revokedAt?: string;
-            reason?: string | null;
+            revokedAt: string;
+            reason: string | null;
         };
         "StatsTid.Backend.Api.Contracts.RosterEmployeeRow": {
-            employeeId?: string;
-            displayName?: string;
-            position?: string | null;
-            structuralApproverId?: string | null;
-            periodStatus?: string;
+            employeeId: string;
+            displayName: string;
+            position: string | null;
+            structuralApproverId: string | null;
+            /** @enum {string} */
+            periodStatus: "OPEN" | "SUBMITTED" | "APPROVED";
             outgoingVikar?: components["schemas"]["StatsTid.Backend.Api.Contracts.RosterOutgoingVikar"];
-            isRoot?: boolean;
-            isOrphan?: boolean;
+            isRoot: boolean;
+            isOrphan: boolean;
             /** Format: uuid */
-            unitId?: string | null;
-            unitName?: string | null;
-            leaderIds?: string[];
+            unitId: string | null;
+            unitName: string | null;
+            leaderIds: string[];
             /** Format: int64 */
-            primaryReportingLineVersion?: number | null;
+            primaryReportingLineVersion: number | null;
         };
         "StatsTid.Backend.Api.Contracts.RosterNameRef": {
-            userId?: string;
-            displayName?: string;
-            position?: string | null;
-            unitName?: string | null;
+            userId: string;
+            displayName: string;
+            position: string | null;
+            unitName: string | null;
         };
         "StatsTid.Backend.Api.Contracts.RosterOutgoingVikar": {
-            vikarUserId?: string;
-            vikarDisplayName?: string;
+            vikarUserId: string;
+            vikarDisplayName: string;
             /** Format: date */
-            untilDate?: string;
-            reason?: string;
+            untilDate: string;
+            /** @enum {string} */
+            reason: "FERIE" | "SYGDOM" | "ORLOV" | "TJENESTEREJSE" | "ANDET";
         };
         "StatsTid.Backend.Api.Contracts.RosterResponse": {
-            employees?: components["schemas"]["StatsTid.Backend.Api.Contracts.RosterEmployeeRow"][];
-            pendingCountByManager?: {
+            employees: components["schemas"]["StatsTid.Backend.Api.Contracts.RosterEmployeeRow"][];
+            pendingCountByManager: {
                 [key: string]: number;
             };
-            nameResolution?: {
+            nameResolution: {
                 [key: string]: components["schemas"]["StatsTid.Backend.Api.Contracts.RosterNameRef"];
             };
         };
         "StatsTid.Backend.Api.Contracts.SearchResponse": {
-            units?: components["schemas"]["StatsTid.Backend.Api.Contracts.UnitSearchResult"][];
-            people?: components["schemas"]["StatsTid.Backend.Api.Contracts.PersonSearchResult"][];
+            units: components["schemas"]["StatsTid.Backend.Api.Contracts.UnitSearchResult"][];
+            people: components["schemas"]["StatsTid.Backend.Api.Contracts.PersonSearchResult"][];
             /** Format: int32 */
-            unitsTotal?: number;
+            unitsTotal: number;
             /** Format: int32 */
-            peopleTotal?: number;
+            peopleTotal: number;
         };
         "StatsTid.Backend.Api.Contracts.UnitLeaderResponse": {
             /** Format: uuid */
-            unitId?: string;
-            userId?: string;
-            organisationId?: string;
+            unitId: string;
+            userId: string;
+            organisationId: string;
         };
         "StatsTid.Backend.Api.Contracts.UnitResponse": {
             /** Format: uuid */
-            unitId?: string;
-            organisationId?: string;
+            unitId: string;
+            organisationId: string;
             /** Format: uuid */
-            parentUnitId?: string | null;
-            type?: string;
-            name?: string;
+            parentUnitId: string | null;
+            /** @enum {string} */
+            type: "direktion" | "omrade" | "kontor" | "team" | "enhed";
+            name: string;
             /** Format: int64 */
-            version?: number;
+            version: number;
         };
         "StatsTid.Backend.Api.Contracts.UnitSearchResult": {
             /** Format: uuid */
-            unitId?: string;
-            organisationId?: string;
-            type?: string;
-            name?: string;
-            path?: string[];
+            unitId: string;
+            organisationId: string;
+            /** @enum {string} */
+            type: "direktion" | "omrade" | "kontor" | "team" | "enhed";
+            name: string;
+            path: string[];
         };
         "StatsTid.Backend.Api.Contracts.UserCreatedResponse": {
-            userId?: string;
-            username?: string;
-            displayName?: string;
-            email?: string | null;
-            primaryOrgId?: string;
-            agreementCode?: string;
-            okVersion?: string;
+            userId: string;
+            username: string;
+            displayName: string;
+            email: string | null;
+            primaryOrgId: string;
+            agreementCode: string;
+            okVersion: string;
             /** Format: int64 */
-            version?: number;
+            version: number;
         };
         "StatsTid.Backend.Api.Contracts.UserDetailResponse": {
-            userId?: string;
-            username?: string;
-            displayName?: string;
-            email?: string | null;
-            primaryOrgId?: string;
-            agreementCode?: string;
-            okVersion?: string;
-            employmentCategory?: string;
+            userId: string;
+            username: string;
+            displayName: string;
+            email: string | null;
+            primaryOrgId: string;
+            agreementCode: string;
+            okVersion: string;
+            employmentCategory: string;
             /** Format: int64 */
-            version?: number;
+            version: number;
         };
         "StatsTid.Backend.Api.Contracts.UserRoleAssignmentItem": {
             /** Format: uuid */
-            assignmentId?: string;
-            roleId?: string;
-            orgId?: string | null;
-            scopeType?: string;
-            assignedBy?: string;
+            assignmentId: string;
+            roleId: string;
+            orgId: string | null;
+            /** @enum {string} */
+            scopeType: "GLOBAL" | "ORG_ONLY";
+            assignedBy: string;
             /** Format: date-time */
-            assignedAt?: string;
+            assignedAt: string;
             /** Format: date-time */
-            expiresAt?: string | null;
+            expiresAt: string | null;
         };
         "StatsTid.Backend.Api.Contracts.UserSearchItem": {
-            userId?: string;
-            displayName?: string;
-            primaryOrgName?: string;
+            userId: string;
+            displayName: string;
+            primaryOrgName: string;
         };
         "StatsTid.Backend.Api.Contracts.UserSearchResponse": {
-            items?: components["schemas"]["StatsTid.Backend.Api.Contracts.UserSearchItem"][];
+            items: components["schemas"]["StatsTid.Backend.Api.Contracts.UserSearchItem"][];
             /** Format: int32 */
-            total?: number;
+            total: number;
             /** Format: int32 */
-            limit?: number;
+            limit: number;
             /** Format: int32 */
-            offset?: number;
+            offset: number;
         };
         "StatsTid.Backend.Api.Contracts.UserUnitResponse": {
-            userId?: string;
+            userId: string;
             /** Format: uuid */
-            unitId?: string | null;
-            primaryOrgId?: string;
+            unitId: string | null;
+            primaryOrgId: string;
             /** Format: int64 */
-            version?: number;
+            version: number;
         };
         "StatsTid.Backend.Api.Contracts.UserUpdatedResponse": {
-            userId?: string;
-            displayName?: string;
-            email?: string | null;
-            primaryOrgId?: string;
-            agreementCode?: string;
+            userId: string;
+            displayName: string;
+            email: string | null;
+            primaryOrgId: string;
+            agreementCode: string;
             /** Format: int64 */
-            version?: number;
+            version: number;
         };
         "StatsTid.Backend.Api.Endpoints.AdminEndpoints.CreateOrganizationRequest": {
             orgId?: string | null;
