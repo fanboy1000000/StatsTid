@@ -3,12 +3,12 @@
 | Field | Value |
 |-------|-------|
 | **Sprint** | 113 |
-| **Status** | complete — closed 2026-07-02; CI verification pending push (backfill on green) |
+| **Status** | complete — CI GREEN `28611480203` (all 7 jobs, 2026-07-02) |
 | **Start Date** | 2026-07-02 |
 | **End Date** | 2026-07-02 |
 | **Orchestrator Approved** | yes — 2026-07-02 (Step 7a BOTH lenses cycle-1 converged: Codex CLEAN; Reviewer APPROVED 0B/0W/4N) |
 | **Build Verified** | yes — `dotnet build` 0 errors; `npm run build` 0 errors; `tsc --noEmit` clean (FIRST pass post-deletion); `npm run lint` clean |
-| **Test Verified** | yes (local): **861 unit** (+9 `ResponseStrictTypesFilterTests`) + **1203 regression** (+7 matcher; central 1199 + 4 FAIL-002 sheds isolation-cleared 41/41 — payroll/skema/settlement classes untouched by S113; the 42 fixed-port tests passed CENTRALLY this run, compose Postgres up) + 6 smoke (rides CI) + 29 demoseed + **553 fe**; all 4 OpenAPI gates green on the strict spec; **pyramid 861u+1203r+6s+29demoseed+553fe = 2652 (+16 vs S112)**; CI verification pending close |
+| **Test Verified** | yes (local): **861 unit** (+9 `ResponseStrictTypesFilterTests`) + **1203 regression** (+7 matcher; central 1199 + 4 FAIL-002 sheds isolation-cleared 41/41 — payroll/skema/settlement classes untouched by S113; the 42 fixed-port tests passed CENTRALLY this run, compose Postgres up) + 6 smoke (rides CI) + 29 demoseed + **553 fe**; all 4 OpenAPI gates green on the strict spec; **pyramid 861u+1203r+6s+29demoseed+553fe = 2652 (+16 vs S112)**; **CI GREEN `28611480203` (all 7 jobs — the full regression + smoke + e2e + all 4 gates with required/enum-fidelity live in CI)** |
 
 ## Sprint Goal
 The strict-types phase of the Typed API Contract program (PAT-012, [[typed-api-contract-program]]): make the generated TS types **directly strict** so the FE coercion scaffolding (`apiNarrow.ts` — `coerceApiResponse` + `AssertFieldsInSpec`, 57 occurrences across 7 files) is DELETED and the PAT-012 residuals (required-strictness; same-name-TYPE-change) CLOSE. Two spec-metadata emissions, zero wire-byte change (PAT-010): (1) `required` = all members for every schema in the **response-reachable closure** (the truthfulness rule: the null-emitting serializer always writes every record member — empirically affirmed by the Reviewer against all 26 real S112 per-route responses); (2) **string-literal enums** for the closed-set discriminators (owner-ratified Q1a: `[property: AllowedValues(...)]` on ~4-6 record members → generated TS literal unions → FE exhaustiveness preserved). The spec≡runtime gate gains **required-fidelity** + **enum-fidelity**.
