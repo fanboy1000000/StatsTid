@@ -3,12 +3,12 @@
 | Field | Value |
 |-------|-------|
 | **Sprint** | 114 |
-| **Status** | complete — closed 2026-07-03; CI verification pending push (backfill on green) |
+| **Status** | complete — CI GREEN `28628276455` (all 7 jobs, 2026-07-03; the full regression on CI's clean services-postgres CLOSES the 42 deferred fixed-port tests) |
 | **Start Date** | 2026-07-02 |
 | **End Date** | 2026-07-03 |
 | **Orchestrator Approved** | yes — 2026-07-03 (Step 7a: Codex 1B [the stray pre-S114 layout-polish files — RESOLVED by separate commit `5004eae`] + Reviewer APPROVED-WITH-WARNINGS 0B/1W [same finding, same resolution]; the S114 core CLEAN both lenses) |
 | **Build Verified** | yes — `dotnet build` 0 errors (S114 scope: DemoSeed tool + tests only) |
-| **Test Verified** | yes (local): 861 unit + **1203 regression** (1161 run locally [2 FAIL-002 sheds isolation-cleared 4/4 — `PositionOverrideAtomicTests`, untouched by S114] + **the 42 fixed-port tests CI-DEFERRED with cause**: they require the baseline :5432 postgres, which would tear down the owner's live mid-testing demo stack; S114 touches ZERO regression surface and the 42 ran 42/42 at the S113 close; the push CI re-runs the full suite on a clean services-postgres) + 6 smoke (rides CI) + **55 demoseed** (+26: golden pin + unit derivation + load planner) + 553 fe; **pyramid 861u+1203r+6s+55demoseed+553fe = 2678 (+26)**; LIVE proof: 452 units/3,231 homed/442 leaders/0 4xx + idempotent re-run + UI screenshots; CI verification pending push |
+| **Test Verified** | yes (local): 861 unit + **1203 regression** (1161 run locally [2 FAIL-002 sheds isolation-cleared 4/4 — `PositionOverrideAtomicTests`, untouched by S114] + **the 42 fixed-port tests CI-DEFERRED with cause**: they require the baseline :5432 postgres, which would tear down the owner's live mid-testing demo stack; S114 touches ZERO regression surface and the 42 ran 42/42 at the S113 close; the push CI re-runs the full suite on a clean services-postgres) + 6 smoke (rides CI) + **55 demoseed** (+26: golden pin + unit derivation + load planner) + 553 fe; **pyramid 861u+1203r+6s+55demoseed+553fe = 2678 (+26)**; LIVE proof: 452 units/3,231 homed/442 leaders/0 4xx + idempotent re-run + UI screenshots; **CI GREEN `28628276455` (all 7 jobs — the FULL regression incl. the 42 fixed-port tests on CI's clean services-postgres, closing the deferral)** |
 
 ## Sprint Goal
 Owner ask (mid-UI-testing): "Upgrade the demo seed and make sure the test orgs use all the levels in the org structure." Today the demo world (S84 manifest) has 3,231 people + 3,226 reporting edges but ZERO units — the merged admin page renders demo orgs as one flat name list, and NO `enhed`-type unit exists anywhere in the system. S114 makes the 5 demo styrelser (STYX1–5) exercise the full spine (direktion › område › kontor › team › enhed) with real leaders, grouped reports, and small deliberate messiness — demo tooling only, zero product-code change.
