@@ -319,6 +319,22 @@ describe('StrukturPanel — the recursive read-only Struktur', () => {
     expect(screen.getByTestId('toggle-expand-all').textContent).toContain('Skjul org.')
   })
 
+  it('"Vis medarbejdere" REVEALS people nested in collapsed units (post-S114 every person is unit-homed — the toggle looked dead at Organisation/MAO level)', () => {
+    renderPanel()
+    // kim sits in the COLLAPSED Kontrol unit — invisible at render.
+    expect(screen.queryByTestId('employee-kim')).toBeNull()
+    // Hide people, then show them again with ONE click: the reveal must also
+    // expand the descendant units (the settlement-filter reveal semantics), so
+    // kim appears — under the pre-fix behavior Kontrol stayed collapsed and the
+    // toggle flipped a dead label at unit-homed-only levels.
+    fireEvent.click(screen.getByTestId('toggle-people')) // Skjul
+    fireEvent.click(screen.getByTestId('toggle-people')) // Vis → reveal
+    expect(screen.getByTestId('employee-kim')).toBeDefined()
+    // Skjul hides member rows again but does NOT own unit expansion.
+    fireEvent.click(screen.getByTestId('toggle-people'))
+    expect(screen.queryByTestId('employee-kim')).toBeNull()
+  })
+
   it('"Åbn ›" + breadcrumb + back/forward drive navigation (the only nav affordances)', () => {
     const onNavigate = vi.fn()
     const onBack = vi.fn()

@@ -775,6 +775,24 @@ export function StrukturPanel({
     }
   }
 
+  // "Vis medarbejdere" must REVEAL people, not merely un-hide member rows inside
+  // already-expanded units: since S114 every person is unit-homed, an Organisation/
+  // MAO node has zero direct members, so without the descendant expansion the
+  // toggle appears dead at the top levels (owner report). Same reveal the
+  // settlement filters perform above; "Skjul" only hides member rows and leaves
+  // the unit expansion state alone ("Vis org./Skjul org." owns that).
+  const togglePeople = () => {
+    const next = !showPeople
+    if (next) {
+      setTreeOpen((prev) => {
+        const out = { ...prev }
+        for (const id of descendantUnitIds(selectedNode)) out[id] = true
+        return out
+      })
+    }
+    setShowPeople(next)
+  }
+
   // ── the recursive node list ──────────────────────────────────────────────────
   const nodes: RenderNode[] = []
   const walkUnit = (node: StrukturNode, depth: number) => {
@@ -1161,7 +1179,7 @@ export function StrukturPanel({
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => setShowPeople((v) => !v)}
+              onClick={togglePeople}
               data-testid="toggle-people"
             >
               {peopleLabel}
