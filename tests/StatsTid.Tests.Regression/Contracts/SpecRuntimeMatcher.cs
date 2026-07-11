@@ -8,10 +8,12 @@ namespace StatsTid.Tests.Regression.Contracts;
 /// S111 / TASK-11101 (Fork B typed-client) — the PER-ROUTE spec≡runtime matcher: the load-bearing
 /// closure of the recurring "fetchEnheder" bug class. <c>.Produces&lt;T&gt;</c> is author-chosen
 /// metadata that can LIE (most easily about array-ness — <c>.Produces&lt;OrgListItem&gt;</c> vs the
-/// bare-array runtime). This matcher asserts the committed OpenAPI schema of an operation's SINGLE
-/// DECLARED SUCCESS STATUS (200/201; explicit 204 = status + empty-body assert — S112 / TASK-11204)
-/// STRUCTURALLY matches that operation's REAL serialized response, so the generated spec (and thus the
-/// FE types derived from it) cannot agree with each other while disagreeing with the runtime bytes.
+/// bare-array runtime). This matcher asserts the committed OpenAPI schema of an operation's DECLARED
+/// SUCCESS STATUS (200/201; explicit 204 = status + empty-body assert — S112 / TASK-11204; a
+/// HOMOGENEOUS multi-2xx set sharing ONE schema <c>$ref</c>, e.g. the 201-or-200 conditional assigns —
+/// S115 / TASK-11500) STRUCTURALLY matches that operation's REAL serialized response, so the generated
+/// spec (and thus the FE types derived from it) cannot agree with each other while disagreeing with the
+/// runtime bytes.
 ///
 /// <para>It asserts, recursively: <b>root kind / array-ness</b> (an object schema vs an array response
 /// is RED), <b>property presence</b> (every schema property is served), <b>required-fidelity</b>
@@ -37,20 +39,50 @@ namespace StatsTid.Tests.Regression.Contracts;
 public static class SpecRuntimeMatcher
 {
     /// <summary>
-    /// S112 / TASK-11204 — an operation's DECLARED success contract: its single declared 2xx status
-    /// code and (for 200/201) the <c>application/json</c> schema node. A declared-204 operation has
-    /// <see cref="Schema"/> <c>null</c> — there is no body to match, and
-    /// <see cref="AssertSuccessMatches"/> instead asserts the response status is 204 with an EMPTY body.
+    /// S112 / TASK-11204 (extended S115 / TASK-11500) — an operation's DECLARED success contract:
+    /// its declared 2xx status codes (a SINGLE status for almost every operation; a HOMOGENEOUS
+    /// conditional-status SET — e.g. the 201-or-200 reporting-line assigns — ONLY when every declared
+    /// 2xx carries the SAME schema <c>$ref</c>) and the ONE <c>application/json</c> schema node they
+    /// share. A declared-204 operation has <see cref="Schema"/> <c>null</c> — there is no body to
+    /// match, and <see cref="AssertSuccessMatches"/> instead asserts the response status is 204 with
+    /// an EMPTY body (a 204 can NEVER be a member of a multi-status set — heterogeneous by content).
     /// </summary>
-    public readonly record struct SuccessContract(int StatusCode, JsonElement? Schema);
+    public readonly record struct SuccessContract(IReadOnlyList<int> StatusCodes, JsonElement? Schema)
+    {
+        /// <summary>The S112 single-status shape, kept as a constructor overload so the Docker
+        /// per-route classes that hand-build injected-lie contracts compile UNMODIFIED
+        /// (ripple-containment — the set-shape stays internal to Matcher + Support).</summary>
+        public SuccessContract(int statusCode, JsonElement? schema)
+            : this(new[] { statusCode }, schema)
+        {
+        }
+
+        /// <summary>The single declared status — the S112 surface, kept for the single-status
+        /// consumers (the Docker classes' truth/lie asserts compile UNMODIFIED). Reading it on a
+        /// homogeneous MULTI-status contract is a programming error (use <see cref="StatusCodes"/>).</summary>
+        public int StatusCode => StatusCodes.Count == 1
+            ? StatusCodes[0]
+            : throw new XunitException(
+                $"SuccessContract carries MULTIPLE declared statuses ({DescribeStatuses()}) — read StatusCodes, not StatusCode.");
+
+        /// <summary>Human-readable declared-status set for diagnostics ("200" / "201 or 200").</summary>
+        public string DescribeStatuses() => string.Join(" or ", StatusCodes);
+    }
 
     /// <summary>
-    /// S112 / TASK-11204 — resolve the operation's SINGLE declared 2xx success contract for
-    /// <paramref name="path"/>+<paramref name="method"/> from a parsed OpenAPI <paramref name="spec"/>
-    /// (replaces the S111 hard-coded "200" resolution; mutations declare 201/204 too). Throws when the
-    /// operation is absent, declares NO 2xx (untyped), declares MULTIPLE 2xx (ambiguous — the per-route
-    /// gate needs exactly one declared success), declares a 204 WITH a JSON schema (contradictory), or
-    /// declares 200/201 WITHOUT an <c>application/json</c> schema (empty <c>.Produces</c>).
+    /// S112 / TASK-11204 (extended S115 / TASK-11500) — resolve the operation's declared 2xx success
+    /// contract for <paramref name="path"/>+<paramref name="method"/> from a parsed OpenAPI
+    /// <paramref name="spec"/> (replaces the S111 hard-coded "200" resolution; mutations declare
+    /// 201/204 too). A SINGLE declared 2xx resolves exactly as before. MULTIPLE declared 2xx is
+    /// acceptable IFF every declared 2xx carries the SAME schema <c>$ref</c> (the homogeneous
+    /// conditional-status case: one shared shape behind 201-or-200) — the contract then carries the
+    /// declared-status SET plus the one shared schema. Throws when the operation is absent, declares
+    /// NO 2xx (untyped), declares a 204 WITH a JSON schema (contradictory), declares 200/201 WITHOUT
+    /// an <c>application/json</c> schema (empty <c>.Produces</c>), or declares a HETEROGENEOUS
+    /// multi-2xx set — specifically including a 204-no-content paired with a body-bearing status
+    /// (heterogeneous BY CONTENT), any member with an INLINE (non-<c>$ref</c>) schema (rejected
+    /// conservatively even if structurally identical — records always emit <c>$ref</c>; this is the
+    /// tripwire against inline-schema drift), and members whose <c>$ref</c>s differ.
     /// </summary>
     public static SuccessContract ResolveSuccessContract(JsonElement spec, string path, string method)
     {
@@ -63,58 +95,101 @@ public static class SpecRuntimeMatcher
         if (!op.TryGetProperty("responses", out var responses) || responses.ValueKind != JsonValueKind.Object)
             throw new XunitException($"{method.ToUpperInvariant()} {path} has no 'responses' in the spec — the endpoint is not typed with .Produces.");
 
-        string? successCode = null;
-        JsonElement successResponse = default;
+        var declared = new List<(string Code, JsonElement Response)>();
         foreach (var response in responses.EnumerateObject())
         {
             if (response.Name.Length == 3 && response.Name[0] == '2')
-            {
-                if (successCode is not null)
-                    throw new XunitException(
-                        $"{method.ToUpperInvariant()} {path} declares MULTIPLE 2xx responses ({successCode}, {response.Name}) — " +
-                        "the per-route spec≡runtime gate needs exactly ONE declared success status.");
-                successCode = response.Name;
-                successResponse = response.Value;
-            }
+                declared.Add((response.Name, response.Value));
         }
-        if (successCode is null)
+        if (declared.Count == 0)
             throw new XunitException($"{method.ToUpperInvariant()} {path} declares no 2xx response in the spec — the endpoint is not typed with .Produces.");
 
-        var statusCode = int.Parse(successCode, CultureInfo.InvariantCulture);
-        if (statusCode == StatusCode204)
+        // Single declared 2xx — the S112 behavior, byte-unchanged.
+        if (declared.Count == 1)
         {
-            // A No-Content declaration must not carry a JSON schema — that would be a contract lie.
-            if (successResponse.TryGetProperty("content", out var content204)
-                && content204.TryGetProperty("application/json", out _))
-                throw new XunitException($"{method.ToUpperInvariant()} {path} declares 204 No Content WITH an application/json schema — a 204 has no body.");
-            return new SuccessContract(statusCode, null);
+            var (successCode, successResponse) = declared[0];
+            var statusCode = int.Parse(successCode, CultureInfo.InvariantCulture);
+            if (statusCode == StatusCode204)
+            {
+                // A No-Content declaration must not carry a JSON schema — that would be a contract lie.
+                if (successResponse.TryGetProperty("content", out var content204)
+                    && content204.TryGetProperty("application/json", out _))
+                    throw new XunitException($"{method.ToUpperInvariant()} {path} declares 204 No Content WITH an application/json schema — a 204 has no body.");
+                return new SuccessContract(statusCode, null);
+            }
+
+            if (!successResponse.TryGetProperty("content", out var content) || !content.TryGetProperty("application/json", out var media)
+                || !media.TryGetProperty("schema", out var schema))
+                throw new XunitException($"{method.ToUpperInvariant()} {path} {successCode} has no application/json schema — the endpoint is not typed (empty .Produces).");
+            return new SuccessContract(statusCode, schema);
         }
 
-        if (!successResponse.TryGetProperty("content", out var content) || !content.TryGetProperty("application/json", out var media)
-            || !media.TryGetProperty("schema", out var schema))
-            throw new XunitException($"{method.ToUpperInvariant()} {path} {successCode} has no application/json schema — the endpoint is not typed (empty .Produces).");
-        return new SuccessContract(statusCode, schema);
+        // S115 / TASK-11500 — MULTIPLE declared 2xx: acceptable IFF homogeneous (every declared 2xx
+        // carries the SAME schema $ref — the 201-or-200-from-ONE-shape conditional case). Everything
+        // else stays REJECTED.
+        var codesText = string.Join(", ", declared.Select(d => d.Code));
+        var statusCodes = new List<int>(declared.Count);
+        string? sharedRef = null;
+        JsonElement sharedSchema = default;
+        foreach (var (code, response) in declared)
+        {
+            var statusCode = int.Parse(code, CultureInfo.InvariantCulture);
+            if (statusCode == StatusCode204)
+                throw new XunitException(
+                    $"{method.ToUpperInvariant()} {path} declares MULTIPLE 2xx responses ({codesText}) including 204 No Content — " +
+                    "heterogeneous BY CONTENT (a no-body status cannot share a schema with a body-bearing one); " +
+                    "the per-route spec≡runtime gate accepts multiple 2xx ONLY when every one carries the SAME schema $ref.");
+            if (!response.TryGetProperty("content", out var content) || !content.TryGetProperty("application/json", out var media)
+                || !media.TryGetProperty("schema", out var schema))
+                throw new XunitException(
+                    $"{method.ToUpperInvariant()} {path} declares MULTIPLE 2xx responses ({codesText}) but {code} has no application/json schema — " +
+                    "heterogeneous BY CONTENT; the gate accepts multiple 2xx ONLY when every one carries the SAME schema $ref.");
+            if (schema.ValueKind != JsonValueKind.Object
+                || !schema.TryGetProperty("$ref", out var refEl) || refEl.GetString() is not string refPath)
+                throw new XunitException(
+                    $"{method.ToUpperInvariant()} {path} declares MULTIPLE 2xx responses ({codesText}) where {code} carries an INLINE (non-$ref) schema — " +
+                    "rejected conservatively even if structurally identical (records always emit $ref; an inline schema here is drift). " +
+                    "The gate accepts multiple 2xx ONLY when every one carries the SAME schema $ref.");
+            if (sharedRef is null)
+            {
+                sharedRef = refPath;
+                sharedSchema = schema;
+            }
+            else if (!string.Equals(sharedRef, refPath, StringComparison.Ordinal))
+            {
+                throw new XunitException(
+                    $"{method.ToUpperInvariant()} {path} declares MULTIPLE 2xx responses ({codesText}) with DIFFERENT schemas ('{sharedRef}' vs '{refPath}') — " +
+                    "the per-route spec≡runtime gate accepts multiple 2xx ONLY when every one carries the SAME schema $ref.");
+            }
+            statusCodes.Add(statusCode);
+        }
+        return new SuccessContract(statusCodes, sharedSchema);
     }
 
     /// <summary>
-    /// S112 / TASK-11204 — assert the runtime response (status + raw body) satisfies the operation's
-    /// declared <paramref name="contract"/> (from <see cref="ResolveSuccessContract"/>):
+    /// S112 / TASK-11204 (extended S115 / TASK-11500) — assert the runtime response (status + raw
+    /// body) satisfies the operation's declared <paramref name="contract"/> (from
+    /// <see cref="ResolveSuccessContract"/>):
     /// <list type="bullet">
-    ///   <item><description><b>Status fidelity</b> — the actual status MUST equal the single declared
-    ///     2xx (a spec-declares-200-but-runtime-serves-201 is RED).</description></item>
+    ///   <item><description><b>Status fidelity</b> — the actual status MUST be a MEMBER of the
+    ///     declared 2xx set (single-status: equality, exactly as before; a homogeneous multi-status
+    ///     contract admits any DECLARED member, but an UNDECLARED runtime status stays RED — a
+    ///     spec-declares-200-but-runtime-serves-201 is RED).</description></item>
     ///   <item><description><b>204</b> — the body MUST be empty (there is no schema to match).</description></item>
-    ///   <item><description><b>200/201</b> — the body is parsed and matched structurally against the
-    ///     declared schema via <see cref="AssertMatches"/>.</description></item>
+    ///   <item><description><b>200/201 (and any declared body-bearing member)</b> — the body is parsed
+    ///     and matched structurally against the ONE declared/shared schema via
+    ///     <see cref="AssertMatches"/> (all downstream fidelity — property presence, camelCase,
+    ///     nullable, required, enum — unchanged).</description></item>
     /// </list>
     /// </summary>
     public static void AssertSuccessMatches(JsonElement spec, SuccessContract contract, int actualStatusCode, string? body, string context)
     {
-        if (actualStatusCode != contract.StatusCode)
+        if (!contract.StatusCodes.Contains(actualStatusCode))
             throw new XunitException(
-                $"{context}: spec declares success status {contract.StatusCode} but the runtime returned {actualStatusCode} " +
-                "(a status-code mismatch — the exact lie a mis-declared .Produces status can tell). RED.");
+                $"{context}: spec declares success status {contract.DescribeStatuses()} but the runtime returned {actualStatusCode} " +
+                "(a status-code mismatch — the exact lie a mis-declared .Produces status can tell; an UNDECLARED runtime status is RED even on a multi-2xx operation). RED.");
 
-        if (contract.StatusCode == StatusCode204)
+        if (contract.StatusCodes.Count == 1 && contract.StatusCodes[0] == StatusCode204)
         {
             if (!string.IsNullOrEmpty(body))
                 throw new XunitException($"{context}: spec declares 204 No Content but the runtime response carries a body: {Truncate(body)}. RED.");
@@ -122,9 +197,9 @@ public static class SpecRuntimeMatcher
         }
 
         if (contract.Schema is not JsonElement schema)
-            throw new XunitException($"{context}: contract for {contract.StatusCode} carries no schema (programming error).");
+            throw new XunitException($"{context}: contract for {contract.DescribeStatuses()} carries no schema (programming error).");
         if (string.IsNullOrWhiteSpace(body))
-            throw new XunitException($"{context}: spec declares a {contract.StatusCode} JSON body but the runtime response body is empty. RED.");
+            throw new XunitException($"{context}: spec declares a {contract.DescribeStatuses()} JSON body but the runtime response body is empty. RED.");
 
         var json = JsonDocument.Parse(body).RootElement;
         Match(spec, schema, json, context);
@@ -138,9 +213,9 @@ public static class SpecRuntimeMatcher
     public static JsonElement Resolve200Schema(JsonElement spec, string path, string method)
     {
         var contract = ResolveSuccessContract(spec, path, method);
-        if (contract.StatusCode != 200 || contract.Schema is not JsonElement schema)
+        if (contract.StatusCodes.Count != 1 || contract.StatusCodes[0] != 200 || contract.Schema is not JsonElement schema)
             throw new XunitException(
-                $"{method.ToUpperInvariant()} {path} declares {contract.StatusCode}, not 200 — resolve it via ResolveSuccessContract.");
+                $"{method.ToUpperInvariant()} {path} declares {contract.DescribeStatuses()}, not 200 — resolve it via ResolveSuccessContract.");
         return schema;
     }
 

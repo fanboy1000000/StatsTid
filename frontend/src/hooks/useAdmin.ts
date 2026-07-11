@@ -16,9 +16,12 @@ import { formatVersionAsIfMatch, resolveEtag } from '../lib/etag'
 // structured forms (PAT-012): reads via the spec-keyed `apiClient.get` /
 // `apiFetchWithEtag(pathKey, { method: 'GET', params })`, mutations via the
 // typed `apiClient.post/put` and the typed etag overload (`ifMatch` takes the
-// ready RFC 7232 string). ONE read stays on the explicit-`T` fallback:
-// `GET /api/admin/organizations/{orgId}/users` is still undeclared in the spec
-// (`content?: never`, grandfathered) — see `fetchUsers`.
+// ready RFC 7232 string).
+//
+// S115 / TASK-11502 — the S112 audit's ONE deliberate explicit-`T` survivor
+// (`GET /api/admin/organizations/{orgId}/users`) CLOSED: the backend typed it
+// in TASK-11501 (`OrgUserListItem[]`, strict), so `fetchUsers` now rides the
+// spec-keyed typed GET and this file is on the FULL eslint ban tier.
 //
 // S113 / TASK-11301 — the generated spec types are STRICT (required members,
 // `T | null`, literal unions), so the S111/S112 coercion + field-name
@@ -41,10 +44,12 @@ export interface Organization {
   okVersion?: string
 }
 
-/** Local VIEW type — the shared subset read from BOTH the per-user GET (the spec
+/** Local VIEW type — the shared subset read from the per-user GET (the spec
     `UserDetailResponse`, which additionally carries `okVersion` /
-    `employmentCategory`) and the create POST (the spec `UserCreatedResponse`,
-    which additionally carries `okVersion`); both assign directly. */
+    `employmentCategory`), the create POST (the spec `UserCreatedResponse`,
+    which additionally carries `okVersion`) and — since S115 — the org-users
+    list GET (the spec `OrgUserListItem`, which additionally carries
+    `employmentCategory`); all assign directly. */
 export interface User {
   userId: string
   username: string
@@ -236,11 +241,13 @@ export function useOrgUsers(orgId: string) {
     if (!orgId) return
     setLoading(true)
     setError(null)
-    // NOT switched (S112): this GET is still UNDECLARED in the OpenAPI spec
-    // (`content?: never`, one of the ~130 grandfathered ops) — typing it here
-    // would relocate the false-green rather than close it. It stays on the
-    // explicit-`T` fallback until its backend response is spec-typed.
-    const result = await apiClient.get<User[]>(`/api/admin/organizations/${orgId}/users`)
+    // S115 / TASK-11502 — SWITCHED (the S112 survivor closes): the backend
+    // typed this read in TASK-11501. The strict spec `OrgUserListItem[]`
+    // assigns directly to the `User[]` view (its extra `employmentCategory`
+    // is additive; every `User` member is present and identically typed).
+    const result = await apiClient.get('/api/admin/organizations/{orgId}/users', {
+      params: { path: { orgId } },
+    })
     if (result.ok) {
       setUsers(result.data)
     } else {

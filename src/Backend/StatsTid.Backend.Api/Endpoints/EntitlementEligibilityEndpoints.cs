@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Npgsql;
 using StatsTid.Auth;
+using StatsTid.Backend.Api.Contracts;
 using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
@@ -206,14 +207,16 @@ public static class EntitlementEligibilityEndpoints
                 await tx.CommitAsync(ct);
 
                 context.Response.Headers.ETag = $"\"{result.Version}\"";
-                return Results.Ok(new
-                {
-                    employeeId,
-                    entitlementType,
-                    eligible = body.Eligible,
-                    effectiveFrom,
-                    version = result.Version,
-                });
+                // S115 / TASK-11501 — named record (BYTE-IDENTICAL wire JSON). NOTE: the sibling
+                // GET on this route stays UNTYPED (grandfathered) — its no-row branch OMITS the
+                // effectiveFrom/version keys, so one record cannot describe both branches
+                // (the S112 flag-and-defer rule's first firing).
+                return Results.Ok(new EntitlementEligibilityUpdatedResponse(
+                    EmployeeId: employeeId,
+                    EntitlementType: entitlementType,
+                    Eligible: body.Eligible,
+                    EffectiveFrom: effectiveFrom,
+                    Version: result.Version));
             }
             catch
             {
@@ -221,7 +224,8 @@ public static class EntitlementEligibilityEndpoints
                     await tx.RollbackAsync(ct);
                 throw;
             }
-        }).RequireAuthorization("HROrAbove");
+        }).RequireAuthorization("HROrAbove")
+        .Produces<EntitlementEligibilityUpdatedResponse>(StatusCodes.Status200OK); // S115 / TASK-11501
 
         // ═══════════════════════════════════════════
         // 1b. GET /api/admin/employees/{employeeId}/entitlement-eligibility/{entitlementType}
@@ -322,13 +326,13 @@ public static class EntitlementEligibilityEndpoints
             var (user, version) = hit.Value;
 
             context.Response.Headers.ETag = $"\"{version}\"";
-            return Results.Ok(new
-            {
-                employeeId = user.UserId,
-                birthDate = user.BirthDate,
-                version,
-            });
-        }).RequireAuthorization("HROrAbove");
+            // S115 / TASK-11501 — named record (BYTE-IDENTICAL wire JSON).
+            return Results.Ok(new BirthDateResponse(
+                EmployeeId: user.UserId,
+                BirthDate: user.BirthDate,
+                Version: version));
+        }).RequireAuthorization("HROrAbove")
+        .Produces<BirthDateResponse>(StatusCodes.Status200OK); // S115 / TASK-11501
 
         // ═══════════════════════════════════════════
         // 3. PUT /api/admin/employees/{employeeId}/birth-date
@@ -450,12 +454,11 @@ public static class EntitlementEligibilityEndpoints
                 await tx.CommitAsync(ct);
 
                 context.Response.Headers.ETag = $"\"{newVersion}\"";
-                return Results.Ok(new
-                {
-                    employeeId,
-                    birthDate = body.BirthDate,
-                    version = newVersion,
-                });
+                // S115 / TASK-11501 — named record (BYTE-IDENTICAL wire JSON; the GET's shape).
+                return Results.Ok(new BirthDateResponse(
+                    EmployeeId: employeeId,
+                    BirthDate: body.BirthDate,
+                    Version: newVersion));
             }
             catch
             {
@@ -463,7 +466,8 @@ public static class EntitlementEligibilityEndpoints
                     await tx.RollbackAsync(ct);
                 throw;
             }
-        }).RequireAuthorization("HROrAbove");
+        }).RequireAuthorization("HROrAbove")
+        .Produces<BirthDateResponse>(StatusCodes.Status200OK); // S115 / TASK-11501
 
         return app;
     }

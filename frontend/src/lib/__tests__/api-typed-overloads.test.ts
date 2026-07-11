@@ -191,6 +191,10 @@ const probes = {
       ifMatch: '"3"',
     }),
   etagGet: () => fixtureEtag('/fixture/widgets', { method: 'GET' }),
+  // S115 / TASK-11502 — the ADDITIVE create-only precondition option: the typed
+  // options accept `ifNoneMatch: '*'` (and ONLY the literal '*').
+  etagIfNoneMatch: () =>
+    fixtureEtag('/fixture/widgets', { method: 'POST', ifNoneMatch: '*', body: { name: 'w' } }),
 }
 
 // A valid structured-options VALUE binds against the derived type (runtime-safe).
@@ -217,10 +221,16 @@ const wrongMethod = () => fixtureEtag('/fixture/widgets/{id}', { method: 'POST',
 // @ts-expect-error — a body is FORBIDDEN on the 204 DELETE operation
 const bodyOnDelete = () => fixtureEtag('/fixture/widgets/{id}', { method: 'DELETE', params: { path: { id: 'w1' } }, body: { name: 'n' } })
 // prettier-ignore
+// @ts-expect-error — S115: ifNoneMatch admits ONLY the literal '*', never an entity-tag string
+const ifNoneMatchEtagValue = () => fixtureEtag('/fixture/widgets', { method: 'POST', ifNoneMatch: '"5"', body: { name: 'w' } })
+// prettier-ignore
+// @ts-expect-error — S115 Step-7a: ifMatch and ifNoneMatch are mutually exclusive preconditions
+const bothPreconditions = () => fixtureEtag('/fixture/widgets', { method: 'POST', ifMatch: '"3"', ifNoneMatch: '*', body: { name: 'w' } })
+// prettier-ignore
 // @ts-expect-error — body is forbidden at the options-type level when the op declares none
 const deleteOptionsBad: StructuredOptionsForOp<WidgetDeleteOp> = { params: { path: { id: 'w1' } }, body: { name: 'n' } }
 
-const negativeProbes = [badBody, missingParams, legacyExcluded, wrongMethod, bodyOnDelete]
+const negativeProbes = [badBody, missingParams, legacyExcluded, wrongMethod, bodyOnDelete, ifNoneMatchEtagValue, bothPreconditions]
 
 // ─── real-spec probes (fallback preservation, never invoked) ─────────────────
 
@@ -327,16 +337,24 @@ describe('S112 typed derivation — compile-time fixtures', () => {
   })
 
   it('negative probes stay compile errors (see the @ts-expect-error directives)', () => {
-    expect(negativeProbes).toHaveLength(5)
+    expect(negativeProbes).toHaveLength(7)
     expect(deleteOptionsBad).toBeDefined()
+  })
+
+  it('S115: the ifNoneMatch option is accepted type-level and keeps the derived data type', () => {
+    expectTypeOf<Awaited<ReturnType<typeof probes.etagIfNoneMatch>>>().toEqualTypeOf<
+      ApiResult<ApiResponseWithEtag<Widget>>
+    >()
   })
 })
 
 describe('S112 typed derivation — real committed spec', () => {
-  it('phase pin: the S112 retrofit typed the admin slice — 6 POSTs, 7 PUTs, 4 DELETEs (retrofit updates this)', () => {
+  it('phase pin: after the S115 Pass-2 drain — 11 POSTs, 11 PUTs, 7 DELETEs (retrofit updates this)', () => {
     // S112 / TASK-11203 — the backend typed 20 ops (units / organizations /
-    // users / roles / employee-profiles); the put/delete unions are now
+    // users / roles / employee-profiles); the put/delete unions became
     // NON-EMPTY and the post union grew from exactly '/api/admin/units'.
+    // S115 / TASK-11502 — Pass 2 (TASK-11501) drained the reporting-lines
+    // family + the employee field-endpoints: +5 POSTs, +4 PUTs, +3 DELETEs.
     expectTypeOf<TypedPathIn<paths, 'put'>>().toEqualTypeOf<
       | '/api/admin/organizations/{orgId}'
       | '/api/admin/organizations/{orgId}/move'
@@ -345,12 +363,19 @@ describe('S112 typed derivation — real committed spec', () => {
       | '/api/admin/units/{id}'
       | '/api/admin/units/{id}/move'
       | '/api/admin/employee-profiles/{employeeId}'
+      | '/api/admin/employees/{employeeId}/entitlement-eligibility/{entitlementType}'
+      | '/api/admin/employees/{employeeId}/birth-date'
+      | '/api/admin/employees/{employeeId}/employment-start-date'
+      | '/api/admin/employees/{employeeId}/employment-end-date'
     >()
     expectTypeOf<TypedPathIn<paths, 'delete'>>().toEqualTypeOf<
       | '/api/admin/organizations/{orgId}'
       | '/api/admin/units/{id}'
       | '/api/admin/units/{id}/leaders/{userId}'
       | '/api/admin/employee-profiles/{employeeId}'
+      | '/api/admin/reporting-lines/{employeeId}'
+      | '/api/admin/reporting-lines/{employeeId}/acting'
+      | '/api/admin/reporting-lines/{managerId}/vikar'
     >()
     expectTypeOf<TypedPathIn<paths, 'post'>>().toEqualTypeOf<
       | '/api/admin/organizations'
@@ -359,7 +384,28 @@ describe('S112 typed derivation — real committed spec', () => {
       | '/api/admin/roles/revoke'
       | '/api/admin/units'
       | '/api/admin/units/{id}/leaders'
+      | '/api/admin/reporting-lines'
+      | '/api/admin/reporting-lines/{employeeId}/acting'
+      | '/api/admin/reporting-lines/import'
+      | '/api/admin/reporting-lines/{employeeId}/remove'
+      | '/api/admin/reporting-lines/{managerId}/vikar'
     >()
+  })
+
+  it('S115: SuccessDataOf resolves the homogeneous 201-or-200 conditional POSTs to the ONE shared type', () => {
+    // The 2 conditional POSTs (assign line / assign acting) declare BOTH a 201
+    // and a 200 with the SAME schema $ref — the derivation picks the 200 branch
+    // first, and both branches carry the identical `ReportingLineResponse`, so
+    // the same-T union is naturally a single type (the S115 matcher-extension
+    // counterpart on the client side).
+    type ReportingLineResponse =
+      components['schemas']['StatsTid.Backend.Api.Contracts.ReportingLineResponse']
+    expectTypeOf<
+      SuccessDataOf<OperationIn<paths, 'post', '/api/admin/reporting-lines'>>
+    >().toEqualTypeOf<ReportingLineResponse>()
+    expectTypeOf<
+      SuccessDataOf<OperationIn<paths, 'post', '/api/admin/reporting-lines/{employeeId}/acting'>>
+    >().toEqualTypeOf<ReportingLineResponse>()
   })
 
   it('fallback preservation: existing call shapes keep their exact types', () => {
@@ -570,6 +616,48 @@ describe('S112 apiFetchWithEtag — structured runtime behavior', () => {
       expect(result.data.etag).toBeNull()
       expect(result.data.status).toBe(204)
     }
+  })
+
+  it('S115 ifNoneMatch: emits If-None-Match (and no If-Match) on the wire', async () => {
+    mockStorage['statstid_token'] = 'mytoken'
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 201,
+      headers: new Headers({ ETag: '"1"' }),
+      json: async () => ({ id: 'w9', version: 1 }),
+    })
+    await looseEtag('/fixture/widgets', {
+      method: 'POST',
+      ifNoneMatch: '*',
+      body: { name: 'w' },
+    })
+    expect(mockFetch).toHaveBeenCalledWith(
+      '/fixture/widgets',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ name: 'w' }),
+        headers: expect.objectContaining({
+          'If-None-Match': '*',
+          Authorization: 'Bearer mytoken',
+        }),
+      }),
+    )
+    const init = mockFetch.mock.calls[0][1] as { headers: Record<string, string> }
+    expect(init.headers['If-Match']).toBeUndefined()
+  })
+
+  it('S115 Step-7a: supplying BOTH ifMatch and ifNoneMatch throws (mutually exclusive)', async () => {
+    // The options type rejects the combination (see the negative probes); this
+    // pins the runtime backstop for non-tsc callers. No fetch may be issued.
+    await expect(
+      looseEtag('/fixture/widgets', {
+        method: 'POST',
+        ifMatch: '"3"',
+        ifNoneMatch: '*',
+        body: { name: 'w' },
+      }),
+    ).rejects.toThrow(/mutually exclusive/)
+    expect(mockFetch).not.toHaveBeenCalled()
   })
 
   it('legacy RequestInit with a pre-stringified body and NO headers is NOT double-stringified', async () => {

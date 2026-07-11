@@ -407,11 +407,17 @@ export const apiClient = {
  * S112 / TASK-11202 — typed structured overload: one path key can host
  * MULTIPLE verbs (`/api/admin/units/{id}` = PUT and DELETE), so the structured
  * call carries an explicit uppercase METHOD DISCRIMINANT:
- * `apiFetchWithEtag(pathKey, { method, params?, query?, ifMatch?, body? })`.
+ * `apiFetchWithEtag(pathKey, { method, params?, query?, ifMatch?, ifNoneMatch?, body? })`.
  * `ifMatch` takes the READY RFC 7232 wire string (compose via `lib/etag.ts`)
  * and is threaded as the `If-Match` header. The ETag/412 protocol (ADR-019)
  * is UNTOUCHED — the structured form merely normalizes into the same
  * (url, init) pair the legacy path consumes.
+ *
+ * S115 / TASK-11502 — the ADDITIVE `ifNoneMatch: '*'` option: the create-only
+ * precondition (`If-None-Match: *`) used by the first-assign / create-row
+ * writes (reporting-line assign, CHILD_SICK eligibility create). Verified
+ * additive: no legacy `RequestInit` caller carries an `ifNoneMatch` key, so
+ * the structured-vs-legacy discrimination cannot flip for any existing call.
  */
 
 type EtagVerb = 'GET' | 'POST' | 'PUT' | 'DELETE'
@@ -434,8 +440,15 @@ export type EtagMethodsIn<Paths, P> =
     selects WHICH operation on the path key binds `params`/`query`/`body`. */
 export type EtagOptionsIn<Paths, P extends keyof Paths, M extends EtagVerb> = {
   method: M
-  ifMatch?: string
-} & StructuredOptionsForOp<OperationIn<Paths, Lowercase<M> & MethodKey, P>>
+} & (
+  | { ifMatch?: string; ifNoneMatch?: never }
+  /** S115 — the create-only precondition. ONLY the literal `'*'` is admitted
+      (RFC 7232 `If-None-Match: *` = "succeed only when no representation
+      exists"); an entity-tag value here would be a different protocol.
+      MUTUALLY EXCLUSIVE with `ifMatch` (Step-7a): a request carrying both
+      preconditions has no single create-vs-update semantics. */
+  | { ifMatch?: never; ifNoneMatch?: '*' }
+) & StructuredOptionsForOp<OperationIn<Paths, Lowercase<M> & MethodKey, P>>
 
 /** The success data for a typed etag call (same admission rule as the verbs). */
 export type EtagDataIn<Paths, P extends keyof Paths, M extends EtagVerb> = SuccessDataOf<
@@ -450,14 +463,16 @@ type EtagCallOptions = {
   params?: { path?: Record<string, unknown> }
   query?: Record<string, unknown>
   ifMatch?: string
+  ifNoneMatch?: string
   body?: unknown
 }
 
 // Runtime discrimination between the structured options and a legacy
 // `RequestInit`. Behavior-preserving for every existing caller:
-//  - any key outside {method, params, query, ifMatch, body} (e.g. `headers`)
-//    → legacy RequestInit;
-//  - `params`/`query`/`ifMatch` present → structured (RequestInit has none);
+//  - any key outside {method, params, query, ifMatch, ifNoneMatch, body}
+//    (e.g. `headers`) → legacy RequestInit;
+//  - `params`/`query`/`ifMatch`/`ifNoneMatch` present → structured
+//    (RequestInit has none — S115 grep-verified for `ifNoneMatch`);
 //  - otherwise a plain-OBJECT `body` → structured (a RequestInit body is a
 //    BodyInit — every existing caller pre-`JSON.stringify`s, so a STRING body
 //    routes legacy and is sent exactly once, never double-stringified);
@@ -471,9 +486,9 @@ function isStructuredEtagCall(
   if (!arg || typeof arg !== 'object') return false
   const candidate = arg as EtagCallOptions
   if (typeof candidate.method !== 'string') return false
-  const allowed = new Set(['method', 'params', 'query', 'ifMatch', 'body'])
+  const allowed = new Set(['method', 'params', 'query', 'ifMatch', 'ifNoneMatch', 'body'])
   if (!Object.keys(arg).every((k) => allowed.has(k))) return false
-  if ('params' in arg || 'query' in arg || 'ifMatch' in arg) return true
+  if ('params' in arg || 'query' in arg || 'ifMatch' in arg || 'ifNoneMatch' in arg) return true
   return typeof candidate.body === 'object' && candidate.body !== null
 }
 
@@ -500,10 +515,25 @@ export async function apiFetchWithEtag(
     // Normalize the structured form into the SAME (url, init) the legacy path
     // consumes — everything below this branch is protocol-identical (ADR-019).
     url = buildUrl('apiFetchWithEtag', urlOrKey, initOrOptions)
+    // S115 — normalize the precondition options into the RFC 7232 headers the
+    // legacy path has always consumed via `init.headers`. The two preconditions
+    // are mutually exclusive (create-only vs update-only): the options type
+    // rejects the combination and this guard backstops non-tsc callers.
+    if (initOrOptions.ifMatch !== undefined && initOrOptions.ifNoneMatch !== undefined) {
+      throw new Error(
+        `apiFetchWithEtag: 'ifMatch' and 'ifNoneMatch' are mutually exclusive preconditions for '${urlOrKey}' — pass exactly one`,
+      )
+    }
+    const preconditionHeaders: Record<string, string> = {}
+    if (initOrOptions.ifMatch !== undefined) {
+      preconditionHeaders['If-Match'] = initOrOptions.ifMatch
+    }
+    if (initOrOptions.ifNoneMatch !== undefined) {
+      preconditionHeaders['If-None-Match'] = initOrOptions.ifNoneMatch
+    }
     init = {
       method: initOrOptions.method,
-      headers:
-        initOrOptions.ifMatch !== undefined ? { 'If-Match': initOrOptions.ifMatch } : undefined,
+      headers: Object.keys(preconditionHeaders).length > 0 ? preconditionHeaders : undefined,
       body: initOrOptions.body !== undefined ? JSON.stringify(initOrOptions.body) : undefined,
     }
   } else {

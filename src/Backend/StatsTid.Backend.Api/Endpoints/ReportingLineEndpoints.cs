@@ -1,6 +1,7 @@
 using System.Data;
 using Npgsql;
 using StatsTid.Auth;
+using StatsTid.Backend.Api.Contracts;
 using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
@@ -228,7 +229,12 @@ public static class ReportingLineEndpoints
             return isFirstAssignment
                 ? Results.Created($"/api/admin/reporting-lines/{persisted.EmployeeId}", MapLineResponse(persisted))
                 : Results.Ok(MapLineResponse(persisted));
-        })).RequireAuthorization("HROrAbove"); // S91 TASK-9102: tree-page surface opened to LocalHR. S78 R9: extra ) closes TreeRootDriftRetry.RunAsync
+        })).RequireAuthorization("HROrAbove") // S91 TASK-9102: tree-page surface opened to LocalHR. S78 R9: extra ) closes TreeRootDriftRetry.RunAsync
+        // S115 / TASK-11501 — CONDITIONAL 201-or-200 from ONE shared shape (MapLineResponse):
+        // 201 Created on first assignment, 200 Ok on supersession. BOTH statuses declared with the
+        // SAME schema (the PAT-012 homogeneous multi-2xx set); statuses byte-UNCHANGED.
+        .Produces<ReportingLineResponse>(StatusCodes.Status201Created)
+        .Produces<ReportingLineResponse>(StatusCodes.Status200OK);
 
         // ═══════════════════════════════════════════
         // Endpoint 2: DELETE /api/admin/reporting-lines/{employeeId} — Remove PRIMARY line
@@ -390,7 +396,9 @@ public static class ReportingLineEndpoints
 
             context.Response.Headers.ETag = $"\"{closed.Version}\"";
             return Results.NoContent();
-        })).RequireAuthorization("HROrAbove"); // S91 TASK-9102: tree-page surface opened to LocalHR. S78 R9: extra ) closes TreeRootDriftRetry.RunAsync
+        })).RequireAuthorization("HROrAbove") // S91 TASK-9102: tree-page surface opened to LocalHR. S78 R9: extra ) closes TreeRootDriftRetry.RunAsync
+        // S115 / TASK-11501 — true 204: the declared-204-only statement (S112 convention amendment).
+        .Produces(StatusCodes.Status204NoContent);
 
         // ═══════════════════════════════════════════
         // Endpoint 3: GET /api/admin/reporting-lines/tree/{organisationId} — Get tree
@@ -425,22 +433,23 @@ public static class ReportingLineEndpoints
 
             var displayNames = await LookupDisplayNamesAsync(connectionFactory, userIds, ct);
 
-            var enriched = lines.Select(l => new
-            {
-                reportingLineId = l.ReportingLineId,
-                employeeId = l.EmployeeId,
-                employeeDisplayName = displayNames.GetValueOrDefault(l.EmployeeId),
-                managerId = l.ManagerId,
-                managerDisplayName = displayNames.GetValueOrDefault(l.ManagerId),
-                organisationId = l.OrganisationId,
-                relationship = l.Relationship,
-                effectiveFrom = l.EffectiveFrom,
-                source = l.Source,
-                version = l.Version,
-            });
+            // S115 / TASK-11501 — named record (ReportingLineTreeItem) replaces the anonymous shape;
+            // BYTE-IDENTICAL wire JSON (same member names/order/nullability, camelCase Web default).
+            var enriched = lines.Select(l => new ReportingLineTreeItem(
+                ReportingLineId: l.ReportingLineId,
+                EmployeeId: l.EmployeeId,
+                EmployeeDisplayName: displayNames.GetValueOrDefault(l.EmployeeId),
+                ManagerId: l.ManagerId,
+                ManagerDisplayName: displayNames.GetValueOrDefault(l.ManagerId),
+                OrganisationId: l.OrganisationId,
+                Relationship: l.Relationship,
+                EffectiveFrom: l.EffectiveFrom,
+                Source: l.Source,
+                Version: l.Version));
 
             return Results.Ok(enriched);
-        }).RequireAuthorization("LocalAdminOrAbove");
+        }).RequireAuthorization("LocalAdminOrAbove")
+        .Produces<IEnumerable<ReportingLineTreeItem>>(StatusCodes.Status200OK); // S115 — BARE array (stays bare)
 
         // ═══════════════════════════════════════════
         // Endpoint 4: GET /api/admin/reporting-lines/{employeeId} — Get employee's lines + history
@@ -468,12 +477,13 @@ public static class ReportingLineEndpoints
             if (primaryLine is not null)
                 context.Response.Headers.ETag = $"\"{primaryLine.Version}\"";
 
-            return Results.Ok(new
-            {
-                active = active.Select(MapLineResponse),
-                history = history.Select(MapLineResponse),
-            });
-        }).RequireAuthorization("EmployeeOrAbove");
+            // S115 / TASK-11501 — named envelope record { active, history } (BYTE-IDENTICAL wire JSON;
+            // both element sets serialize the shared MapLineResponse shape).
+            return Results.Ok(new EmployeeReportingLinesResponse(
+                Active: active.Select(MapLineResponse).ToList(),
+                History: history.Select(MapLineResponse).ToList()));
+        }).RequireAuthorization("EmployeeOrAbove")
+        .Produces<EmployeeReportingLinesResponse>(StatusCodes.Status200OK); // S115 / TASK-11501
 
         // ═══════════════════════════════════════════
         // Endpoint 5: GET /api/admin/reporting-lines/{managerId}/reports — Get direct reports
@@ -500,21 +510,22 @@ public static class ReportingLineEndpoints
             var employeeIds = new HashSet<string>(reports.Select(r => r.EmployeeId), StringComparer.Ordinal);
             var displayNames = await LookupDisplayNamesAsync(connectionFactory, employeeIds, ct);
 
-            var enriched = reports.Select(r => new
-            {
-                reportingLineId = r.ReportingLineId,
-                employeeId = r.EmployeeId,
-                employeeDisplayName = displayNames.GetValueOrDefault(r.EmployeeId),
-                managerId = r.ManagerId,
-                organisationId = r.OrganisationId,
-                relationship = r.Relationship,
-                effectiveFrom = r.EffectiveFrom,
-                source = r.Source,
-                version = r.Version,
-            });
+            // S115 / TASK-11501 — named record (DirectReportItem) replaces the anonymous shape;
+            // BYTE-IDENTICAL wire JSON (no managerDisplayName on this row — shape fidelity).
+            var enriched = reports.Select(r => new DirectReportItem(
+                ReportingLineId: r.ReportingLineId,
+                EmployeeId: r.EmployeeId,
+                EmployeeDisplayName: displayNames.GetValueOrDefault(r.EmployeeId),
+                ManagerId: r.ManagerId,
+                OrganisationId: r.OrganisationId,
+                Relationship: r.Relationship,
+                EffectiveFrom: r.EffectiveFrom,
+                Source: r.Source,
+                Version: r.Version));
 
             return Results.Ok(enriched);
-        }).RequireAuthorization("LeaderOrAbove");
+        }).RequireAuthorization("LeaderOrAbove")
+        .Produces<IEnumerable<DirectReportItem>>(StatusCodes.Status200OK); // S115 — BARE array (stays bare)
 
         // ═══════════════════════════════════════════
         // Endpoint 6: POST /api/admin/reporting-lines/{employeeId}/acting — Assign acting manager
@@ -701,7 +712,11 @@ public static class ReportingLineEndpoints
             return isFirstAssignment
                 ? Results.Created($"/api/admin/reporting-lines/{employeeId}/acting", MapLineResponse(persisted))
                 : Results.Ok(MapLineResponse(persisted));
-        })).RequireAuthorization("LocalAdminOrAbove"); // S78 R9: extra ) closes TreeRootDriftRetry.RunAsync
+        })).RequireAuthorization("LocalAdminOrAbove") // S78 R9: extra ) closes TreeRootDriftRetry.RunAsync
+        // S115 / TASK-11501 — CONDITIONAL 201-or-200 from the SAME shared MapLineResponse shape
+        // as the PRIMARY assign (ONE record, both statuses declared; statuses byte-UNCHANGED).
+        .Produces<ReportingLineResponse>(StatusCodes.Status201Created)
+        .Produces<ReportingLineResponse>(StatusCodes.Status200OK);
 
         // ═══════════════════════════════════════════
         // Endpoint 7: DELETE /api/admin/reporting-lines/{employeeId}/acting — Remove acting manager
@@ -799,7 +814,9 @@ public static class ReportingLineEndpoints
 
             context.Response.Headers.ETag = $"\"{closed.Version}\"";
             return Results.NoContent();
-        }).RequireAuthorization("LocalAdminOrAbove");
+        }).RequireAuthorization("LocalAdminOrAbove")
+        // S115 / TASK-11501 — true 204: the declared-204-only statement (S112 convention amendment).
+        .Produces(StatusCodes.Status204NoContent);
 
         // ═══════════════════════════════════════════
         // Endpoint 8: POST /api/admin/reporting-lines/import — Bulk HR import
@@ -1129,8 +1146,14 @@ public static class ReportingLineEndpoints
                 return Results.Json(new { error = "Import failed", detail = ex.Message }, statusCode: 500);
             }
 
-            return Results.Ok(new { imported, superseded, skipped, total = request.Rows.Count });
-        }).RequireAuthorization("GlobalAdminOnly");
+            // S115 / TASK-11501 — named record (BYTE-IDENTICAL wire JSON).
+            return Results.Ok(new ReportingLineImportResponse(
+                Imported: imported,
+                Superseded: superseded,
+                Skipped: skipped,
+                Total: request.Rows.Count));
+        }).RequireAuthorization("GlobalAdminOnly")
+        .Produces<ReportingLineImportResponse>(StatusCodes.Status200OK); // S115 / TASK-11501
 
         // ═══════════════════════════════════════════
         // Endpoint 8b: POST /api/admin/reporting-lines/{employeeId}/remove — Remove person
@@ -1586,13 +1609,13 @@ public static class ReportingLineEndpoints
                 }, statusCode: 412);
             }
 
-            return Results.Ok(new
-            {
-                removed = employeeId,
-                reportsReassigned = reportsReassignedCount,
-                actingEdgesClosed = actingEdgesClosedCount,
-            });
-        })).RequireAuthorization("HROrAbove"); // S91 TASK-9102: tree-page surface opened to LocalHR. S78 R9: extra ) closes TreeRootDriftRetry.RunAsync
+            // S115 / TASK-11501 — named record (BYTE-IDENTICAL wire JSON).
+            return Results.Ok(new RemoveWithReassignmentResponse(
+                Removed: employeeId,
+                ReportsReassigned: reportsReassignedCount,
+                ActingEdgesClosed: actingEdgesClosedCount));
+        })).RequireAuthorization("HROrAbove") // S91 TASK-9102: tree-page surface opened to LocalHR. S78 R9: extra ) closes TreeRootDriftRetry.RunAsync
+        .Produces<RemoveWithReassignmentResponse>(StatusCodes.Status200OK); // S115 / TASK-11501
 
         // ═══════════════════════════════════════════
         // S94 / TASK-9402 (ADR-035 OQ6): the enforcement-mode admin surface (GET + PUT
@@ -2133,22 +2156,21 @@ public static class ReportingLineEndpoints
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
+            // S115 / TASK-11501 — named records: the activeVikar member is ALWAYS emitted
+            // (null-or-object; a STABLE envelope with one nullable-COMPLEX member — the S113
+            // filter auto-excludes it from `required`). BYTE-IDENTICAL wire JSON.
             var active = await vikarRepo.GetActiveByApproverWithVikarNameAsync(managerId, ct);
             if (active is null)
-                return Results.Ok(new { activeVikar = (object?)null });
+                return Results.Ok(new ActiveVikarResponse(null));
 
             var (vikar, vikarDisplayName) = active.Value;
-            return Results.Ok(new
-            {
-                activeVikar = new
-                {
-                    vikarUserId = vikar.VikarUserId,
-                    vikarDisplayName,
-                    untilDate = vikar.UntilDate,
-                    reason = vikar.Reason,
-                },
-            });
-        }).RequireAuthorization("HROrAbove"); // S91 TASK-9102: tree-page surface opened to LocalHR
+            return Results.Ok(new ActiveVikarResponse(new ActiveVikarInfo(
+                VikarUserId: vikar.VikarUserId,
+                VikarDisplayName: vikarDisplayName,
+                UntilDate: vikar.UntilDate,
+                Reason: vikar.Reason)));
+        }).RequireAuthorization("HROrAbove") // S91 TASK-9102: tree-page surface opened to LocalHR
+        .Produces<ActiveVikarResponse>(StatusCodes.Status200OK); // S115 / TASK-11501
 
         // ═══════════════════════════════════════════
         // Endpoint 14: POST /api/admin/reporting-lines/{managerId}/vikar — admin-on-behalf vikar
@@ -2372,16 +2394,16 @@ public static class ReportingLineEndpoints
                 return Results.BadRequest(new { error = "Could not validate the vikar's styrelse (tree); ensure both the manager and the vikar are active users in the same styrelse" });
             }
 
-            return Results.Ok(new
-            {
-                vikarId = createdVikar.VikarId,
-                managerId,
-                vikarUserId = createdVikar.VikarUserId,
-                effectiveFrom,
-                effectiveTo,
-                reason = createdVikar.Reason,
-            });
-        })).RequireAuthorization("HROrAbove"); // S91 TASK-9102: tree-page surface opened to LocalHR. S78 R9: extra ) closes TreeRootDriftRetry.RunAsync
+            // S115 / TASK-11501 — named record (BYTE-IDENTICAL wire JSON).
+            return Results.Ok(new AdminVikarCreatedResponse(
+                VikarId: createdVikar.VikarId,
+                ManagerId: managerId,
+                VikarUserId: createdVikar.VikarUserId,
+                EffectiveFrom: effectiveFrom,
+                EffectiveTo: effectiveTo,
+                Reason: createdVikar.Reason));
+        })).RequireAuthorization("HROrAbove") // S91 TASK-9102: tree-page surface opened to LocalHR. S78 R9: extra ) closes TreeRootDriftRetry.RunAsync
+        .Produces<AdminVikarCreatedResponse>(StatusCodes.Status200OK); // S115 / TASK-11501 — a 200 (not 201) by contract
 
         // ═══════════════════════════════════════════
         // Endpoint 15: DELETE /api/admin/reporting-lines/{managerId}/vikar — admin revokes the
@@ -2516,13 +2538,12 @@ public static class ReportingLineEndpoints
 
                     await tx.CommitAsync(ct);
 
-                    return Results.Ok(new
-                    {
-                        vikarId = closed.VikarId,
-                        managerId,
-                        vikarUserId = closed.VikarUserId,
-                        revoked = true,
-                    });
+                    // S115 / TASK-11501 — named record; a GENUINE 200-with-body (NOT a 204).
+                    return Results.Ok(new AdminVikarRevokedResponse(
+                        VikarId: closed.VikarId,
+                        ManagerId: managerId,
+                        VikarUserId: closed.VikarUserId,
+                        Revoked: true));
                 }
                 catch
                 {
@@ -2530,7 +2551,8 @@ public static class ReportingLineEndpoints
                     throw;
                 }
             });
-        }).RequireAuthorization("HROrAbove"); // S91 TASK-9102: tree-page surface opened to LocalHR
+        }).RequireAuthorization("HROrAbove") // S91 TASK-9102: tree-page surface opened to LocalHR
+        .Produces<AdminVikarRevokedResponse>(StatusCodes.Status200OK); // S115 / TASK-11501
 
         return app;
     }
@@ -2799,20 +2821,22 @@ public static class ReportingLineEndpoints
 
     // ── Response mapper ──
 
-    private static object MapLineResponse(ReportingLine line) => new
-    {
-        reportingLineId = line.ReportingLineId,
-        employeeId = line.EmployeeId,
-        managerId = line.ManagerId,
-        organisationId = line.OrganisationId,
-        relationship = line.Relationship,
-        effectiveFrom = line.EffectiveFrom,
-        effectiveTo = line.EffectiveTo,
-        source = line.Source,
-        version = line.Version,
-        createdBy = line.CreatedBy,
-        createdAt = line.CreatedAt,
-    };
+    // S115 / TASK-11501 — the shared line shape is now the named ReportingLineResponse record
+    // (BYTE-IDENTICAL wire JSON: same member names/order/nullability, camelCase Web default).
+    // Serialized by BOTH branches of the two conditional POSTs (201/200) and by the
+    // active/history elements of EmployeeReportingLinesResponse.
+    private static ReportingLineResponse MapLineResponse(ReportingLine line) => new(
+        ReportingLineId: line.ReportingLineId,
+        EmployeeId: line.EmployeeId,
+        ManagerId: line.ManagerId,
+        OrganisationId: line.OrganisationId,
+        Relationship: line.Relationship,
+        EffectiveFrom: line.EffectiveFrom,
+        EffectiveTo: line.EffectiveTo,
+        Source: line.Source,
+        Version: line.Version,
+        CreatedBy: line.CreatedBy,
+        CreatedAt: line.CreatedAt);
 
     // ── Request DTOs (co-located per codebase convention) ──
 

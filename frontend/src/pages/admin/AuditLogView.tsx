@@ -1,29 +1,14 @@
 import { useState, useEffect, useCallback } from 'react'
 import { apiClient } from '../../lib/api'
+import type { components } from '../../lib/api-types'
 import { Spinner } from '../../components/ui'
 import styles from './AuditLogView.module.css'
 
-interface AuditRow {
-  projectionId: string
-  eventId: string
-  eventType: string
-  visibilityScope: string
-  targetOrgId: string | null
-  targetResourceId: string | null
-  actorId: string | null
-  actorPrimaryOrgId: string | null
-  occurredAt: string
-  correlationId: string | null
-  details: string
-  projectedAt: string
-}
-
-interface AuditResponse {
-  rows: AuditRow[]
-  totalCount: number
-  page: number
-  pageSize: number
-}
+// S115 / TASK-11502 — the hand-written `AuditRow` / `AuditResponse` interfaces
+// matched the newly-typed spec field-for-field and were DELETED in favor of the
+// generated strict types (the `AuditLogResponse` envelope flows straight out of
+// the typed `apiClient.get`; `details` is the raw string passthrough).
+type AuditRow = components['schemas']['StatsTid.Backend.Api.Contracts.AuditLogRow']
 
 const PAGE_SIZE = 50
 
@@ -65,18 +50,21 @@ export function AuditLogView() {
       setLoading(true)
       setError(null)
       try {
-        const params = new URLSearchParams()
-        params.set('page', String(p))
-        params.set('pageSize', String(PAGE_SIZE))
-        if (eventTypes.trim()) params.set('eventTypes', eventTypes.trim())
-        if (dateFrom) params.set('from', dateFrom)
-        if (dateTo) params.set('to', dateTo)
-        if (actorId.trim()) params.set('actorId', actorId.trim())
-        if (targetOrgId.trim()) params.set('targetOrgId', targetOrgId.trim())
-
-        const result = await apiClient.get<AuditResponse>(
-          `/api/admin/audit?${params.toString()}`
-        )
+        // S115 / TASK-11502 — typed spec-keyed GET with the structured `query`
+        // (the S112 users-search precedent): `buildUrl` skips undefined values
+        // and appends in insertion order, so the query string is byte-identical
+        // to the previous hand-built `URLSearchParams` form.
+        const result = await apiClient.get('/api/admin/audit', {
+          query: {
+            page: p,
+            pageSize: PAGE_SIZE,
+            eventTypes: eventTypes.trim() || undefined,
+            from: dateFrom || undefined,
+            to: dateTo || undefined,
+            actorId: actorId.trim() || undefined,
+            targetOrgId: targetOrgId.trim() || undefined,
+          },
+        })
         if (!result.ok) {
           throw new Error(result.error)
         }

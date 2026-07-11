@@ -743,20 +743,21 @@ public static class AdminEndpoints
             var users = await userRepo.GetByOrgWithVersionAsync(orgId, ct);
 
             // NEVER return password hashes
-            var response = users.Select(row => new
-            {
-                userId = row.User.UserId,
-                username = row.User.Username,
-                displayName = row.User.DisplayName,
-                email = row.User.Email,
-                primaryOrgId = row.User.PrimaryOrgId,
-                agreementCode = row.User.AgreementCode,
-                employmentCategory = row.User.EmploymentCategory,
-                version = row.Version,
-            });
+            // S115 / TASK-11501 — named record (OrgUserListItem) replaces the anonymous row;
+            // BYTE-IDENTICAL wire JSON (bare array stays bare).
+            var response = users.Select(row => new OrgUserListItem(
+                UserId: row.User.UserId,
+                Username: row.User.Username,
+                DisplayName: row.User.DisplayName,
+                Email: row.User.Email,
+                PrimaryOrgId: row.User.PrimaryOrgId,
+                AgreementCode: row.User.AgreementCode,
+                EmploymentCategory: row.User.EmploymentCategory,
+                Version: row.Version));
 
             return Results.Ok(response);
-        }).RequireAuthorization("HROrAbove");
+        }).RequireAuthorization("HROrAbove")
+        .Produces<IEnumerable<OrgUserListItem>>(StatusCodes.Status200OK); // S115 — BARE array (stays bare)
 
         // 3b. GET /api/admin/users/{userId} — Read single user with ETag
         //
@@ -2604,17 +2605,16 @@ public static class AdminEndpoints
             var projection = await approvalRepo.GetPeriodStatusProjectionForTreeAsync(
                 treeRootOrg.MaterializedPath, ct);
 
-            return Results.Ok(new
-            {
-                employees = projection.Employees.Select(e => new
-                {
-                    employeeId = e.EmployeeId,
-                    displayName = e.DisplayName,
-                    status = e.Status,
-                }),
-                pendingCountByManager = projection.PendingCountByManager,
-            });
-        }).RequireAuthorization("LocalAdminOrAbove");
+            // S115 / TASK-11501 — named envelope record (BYTE-IDENTICAL wire JSON: same member
+            // names/order, camelCase Web default; dictionary keys pass through verbatim).
+            return Results.Ok(new TreePeriodStatusResponse(
+                Employees: projection.Employees.Select(e => new TreePeriodStatusEmployee(
+                    EmployeeId: e.EmployeeId,
+                    DisplayName: e.DisplayName,
+                    Status: e.Status)).ToList(),
+                PendingCountByManager: projection.PendingCountByManager));
+        }).RequireAuthorization("LocalAdminOrAbove")
+        .Produces<TreePeriodStatusResponse>(StatusCodes.Status200OK); // S115 / TASK-11501
 
         // ═══════════════════════════════════════════
         // S75-7500 (R1-R3) — GET /api/admin/reporting-lines/tree/{organisationId}/medarbejdere

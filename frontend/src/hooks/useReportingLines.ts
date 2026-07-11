@@ -3,8 +3,18 @@ import { apiClient, apiFetchWithEtag, type ApiResult } from '../lib/api'
 
 // S48 TASK-4808. Reporting-line admin hooks following the useAdmin.ts pattern.
 // Reads go through apiClient; writes that carry If-Match / return ETag use
-// apiFetchWithEtag. Types declared locally (same convention as useAdmin.ts).
+// apiFetchWithEtag.
+//
+// S115 / TASK-11502 — the reporting-lines slice switched to the TYPED
+// spec-keyed forms (PAT-012): the backend typed the family in TASK-11501, so
+// every call below binds its response type from the OpenAPI path key. The
+// local view interfaces are KEPT where the strict spec type assigns directly
+// (S113 discipline: a backend field rename/removal is a `tsc` error at the
+// assignment site), and CORRECTED where the typed switch surfaced a lie
+// (see `DirectReport`).
 
+/** Local VIEW type — the strict spec `ReportingLineResponse` assigns directly
+    (field-for-field identical, incl. the nullable `effectiveTo`). */
 export interface ReportingLineEntry {
   reportingLineId: string
   employeeId: string
@@ -19,8 +29,25 @@ export interface ReportingLineEntry {
   createdAt: string
 }
 
-export interface DirectReport extends ReportingLineEntry {
-  employeeDisplayName: string
+/** S115 / TASK-11502 — CORRECTED to the REAL wire shape (the spec
+    `DirectReportItem`). The previous hand-written `DirectReport extends
+    ReportingLineEntry` claimed `effectiveTo` / `createdBy` / `createdAt` —
+    fields the reports endpoint NEVER serves (its row is a handler-level
+    SUBSET of the line shape) — and claimed a non-null `employeeDisplayName`
+    where the backend declares it nullable. No live consumer read the phantom
+    fields (only `relationship` is consumed), so this was a latent contract
+    lie, not a live bug — surfaced by the typed switch (the S97→S100 class),
+    corrected here, not silently. */
+export interface DirectReport {
+  reportingLineId: string
+  employeeId: string
+  employeeDisplayName: string | null
+  managerId: string
+  organisationId: string
+  relationship: string
+  effectiveFrom: string
+  source: string
+  version: number
 }
 
 // S76b / TASK-7603 — the ledelseslinje/vikar/delete lifecycle contracts.
@@ -50,13 +77,18 @@ export interface PersonSearchResult {
 
 /** The admin-on-behalf vikar create body (`POST .../{managerId}/vikar`). No
     If-Match; the manager id is the path segment. `effectiveTo` is the INCLUSIVE
-    "til og med" date; `reason` ∈ FERIE/SYGDOM/ORLOV/TJENESTEREJSE/ANDET. */
+    "til og med" date; `reason` ∈ FERIE/SYGDOM/ORLOV/TJENESTEREJSE/ANDET.
+    S115 — deliberately STRICTER than the spec `AdminVikarRequest` (whose
+    members are all optional): the endpoint 400s without them, so the local
+    body type keeps them required; it assigns to the spec body directly. */
 export interface CreateVikarBody {
   vikarUserId: string
   effectiveTo: string
   reason?: string
 }
 
+/** Local VIEW type — the strict spec `AdminVikarCreatedResponse` assigns
+    directly (S115, field-for-field identical). */
 export interface VikarCreatedResult {
   vikarId: string
   managerId: string
@@ -68,7 +100,9 @@ export interface VikarCreatedResult {
 
 /** S76b / TASK-7603 (BLOCKER 3) — the single-manager active-vikar read shape
     (`GET .../{managerId}/vikar` → `{ activeVikar }`). Mirrors the roster's
-    `outgoingVikar` so it maps 1:1 onto `VikarSection`'s `ActiveVikar`. */
+    `outgoingVikar` so it maps 1:1 onto `VikarSection`'s `ActiveVikar`.
+    S115 — the strict spec `ActiveVikarInfo` assigns directly; the envelope's
+    optional-vs-null mismatch is normalized in `fetchActiveVikar` (see there). */
 export interface ActiveVikarDto {
   vikarUserId: string
   vikarDisplayName: string
@@ -97,23 +131,39 @@ export type DeletePersonResult =
   | { ok: true }
   | { ok: false; status: number; error: string; gap?: ReassignmentGap }
 
+/** S115 — the 409 gap payload is an UNDECLARED error body (error shapes are
+    not spec-typed), so it arrives as `unknown`. Runtime type guard (not an
+    `as` cast — this file is on the S115 no-`as` tier): all target members are
+    optional, so the claim is structurally sound (the same trust level as the
+    previous inline cast; the `Array.isArray` check at the call site stays). */
+function isGapErrorBody(
+  body: unknown,
+): body is { error?: string; reportsNeedingReassignment?: string[] } {
+  return typeof body === 'object' && body !== null
+}
+
 export function useReportingLines() {
   const fetchEmployeeLines = useCallback(
     async (
       employeeId: string,
     ): Promise<ApiResult<{ active: ReportingLineEntry[]; history: ReportingLineEntry[] }>> => {
-      return apiClient.get<{ active: ReportingLineEntry[]; history: ReportingLineEntry[] }>(
-        `/api/admin/reporting-lines/${encodeURIComponent(employeeId)}`,
-      )
+      // S115 — typed spec-keyed GET (the strict `EmployeeReportingLinesResponse`
+      // envelope assigns directly to the view; `buildUrl` encodeURIComponents
+      // the path param exactly as the previous hand-built URL did).
+      return apiClient.get('/api/admin/reporting-lines/{employeeId}', {
+        params: { path: { employeeId } },
+      })
     },
     [],
   )
 
   const fetchDirectReports = useCallback(
     async (managerId: string): Promise<ApiResult<DirectReport[]>> => {
-      return apiClient.get<DirectReport[]>(
-        `/api/admin/reporting-lines/${encodeURIComponent(managerId)}/reports`,
-      )
+      // S115 — typed spec-keyed GET (the bare `DirectReportItem[]` array — see
+      // the corrected `DirectReport` view above).
+      return apiClient.get('/api/admin/reporting-lines/{managerId}/reports', {
+        params: { path: { managerId } },
+      })
     },
     [],
   )
@@ -123,20 +173,20 @@ export function useReportingLines() {
       body: { employeeId: string; managerId: string; effectiveFrom: string },
       ifMatch?: string,
     ): Promise<ApiResult<ReportingLineEntry>> => {
-      const headers: Record<string, string> = {}
-      if (ifMatch) {
-        headers['If-Match'] = ifMatch
-      } else {
-        headers['If-None-Match'] = '*'
-      }
-      const result = await apiFetchWithEtag<ReportingLineEntry>(
-        '/api/admin/reporting-lines',
-        {
-          method: 'POST',
-          body: JSON.stringify(body),
-          headers,
-        },
-      )
+      // S115 — typed etag POST. THE PRECONDITION ROW (vitest-pinned in
+      // __tests__/useReportingLines.test.ts): a FIRST assign sends
+      // `If-None-Match: *` (create-only), a reassign sends the line's
+      // `If-Match` — byte-identical to the previous hand-built headers. The
+      // response is the shared `ReportingLineResponse` for BOTH the 201
+      // (first-assign) and 200 (reassign) branches (the S115 homogeneous
+      // multi-2xx declaration; `SuccessDataOf` resolves the same T).
+      const result = ifMatch
+        ? await apiFetchWithEtag('/api/admin/reporting-lines', { method: 'POST', ifMatch, body })
+        : await apiFetchWithEtag('/api/admin/reporting-lines', {
+            method: 'POST',
+            ifNoneMatch: '*',
+            body,
+          })
       if (!result.ok) {
         return { ok: false, error: result.error, status: result.status, body: result.body }
       }
@@ -150,13 +200,12 @@ export function useReportingLines() {
       employeeId: string,
       ifMatch: string,
     ): Promise<ApiResult<void>> => {
-      const result = await apiFetchWithEtag<void>(
-        `/api/admin/reporting-lines/${encodeURIComponent(employeeId)}`,
-        {
-          method: 'DELETE',
-          headers: { 'If-Match': ifMatch },
-        },
-      )
+      // S115 — typed etag DELETE (declared 204 → `undefined` data), strict If-Match.
+      const result = await apiFetchWithEtag('/api/admin/reporting-lines/{employeeId}', {
+        method: 'DELETE',
+        params: { path: { employeeId } },
+        ifMatch,
+      })
       if (!result.ok) {
         return { ok: false, error: result.error, status: result.status, body: result.body }
       }
@@ -201,13 +250,13 @@ export function useReportingLines() {
       managerId: string,
       body: CreateVikarBody,
     ): Promise<ApiResult<VikarCreatedResult>> => {
-      const result = await apiFetchWithEtag<VikarCreatedResult>(
-        `/api/admin/reporting-lines/${encodeURIComponent(managerId)}/vikar`,
-        {
-          method: 'POST',
-          body: JSON.stringify(body),
-        },
-      )
+      // S115 — typed etag POST, NO precondition (the endpoint takes no If-Match).
+      // The strict `AdminVikarCreatedResponse` assigns directly to the view.
+      const result = await apiFetchWithEtag('/api/admin/reporting-lines/{managerId}/vikar', {
+        method: 'POST',
+        params: { path: { managerId } },
+        body,
+      })
       if (!result.ok) {
         return { ok: false, error: result.error, status: result.status, body: result.body }
       }
@@ -224,9 +273,19 @@ export function useReportingLines() {
   // be revoked. Read-only; LocalAdmin floor. `activeVikar` is null when none.
   const fetchActiveVikar = useCallback(
     async (managerId: string): Promise<ApiResult<{ activeVikar: ActiveVikarDto | null }>> => {
-      return apiClient.get<{ activeVikar: ActiveVikarDto | null }>(
-        `/api/admin/reporting-lines/${encodeURIComponent(managerId)}/vikar`,
-      )
+      // S115 — typed spec-keyed GET. `ActiveVikarResponse.activeVikar` is a
+      // nullable-COMPLEX member: the wire ALWAYS emits the key (null-or-object),
+      // but the S113 nullable-$ref exclusion makes the generated member OPTIONAL
+      // (`activeVikar?: ActiveVikarInfo`, no `| null`). Consumed optional-as-
+      // nullable and normalized `?? null` HERE so the hook's public
+      // `ActiveVikarDto | null` contract (and every consumer's none-sentinel)
+      // is untouched — the deliberate alternative to a RosterRow-style
+      // Omit-override view for a single-member envelope.
+      const result = await apiClient.get('/api/admin/reporting-lines/{managerId}/vikar', {
+        params: { path: { managerId } },
+      })
+      if (!result.ok) return result
+      return { ok: true, data: { activeVikar: result.data.activeVikar ?? null } }
     },
     [],
   )
@@ -235,10 +294,13 @@ export function useReportingLines() {
   // 404 if none). No body, no If-Match.
   const endVikar = useCallback(
     async (managerId: string): Promise<ApiResult<void>> => {
-      const result = await apiFetchWithEtag<unknown>(
-        `/api/admin/reporting-lines/${encodeURIComponent(managerId)}/vikar`,
-        { method: 'DELETE' },
-      )
+      // S115 — typed etag DELETE, NO precondition. This is a genuine
+      // 200-with-body route (`AdminVikarRevokedResponse`); the hook keeps its
+      // `ApiResult<void>` contract and discards the body (no consumer reads it).
+      const result = await apiFetchWithEtag('/api/admin/reporting-lines/{managerId}/vikar', {
+        method: 'DELETE',
+        params: { path: { managerId } },
+      })
       if (!result.ok) {
         return { ok: false, error: result.error, status: result.status, body: result.body }
       }
@@ -258,22 +320,21 @@ export function useReportingLines() {
       employeeId: string,
       replacements: Record<string, string>,
     ): Promise<DeletePersonResult> => {
-      const result = await apiFetchWithEtag<unknown>(
-        `/api/admin/reporting-lines/${encodeURIComponent(employeeId)}/remove`,
-        {
-          method: 'POST',
-          body: JSON.stringify({ replacements }),
-        },
-      )
+      // S115 — typed etag POST, NO precondition (the typed 200 body —
+      // `RemoveWithReassignmentResponse` — is deliberately unused; the 409 gap
+      // protocol below is an ERROR body and stays runtime-narrowed).
+      const result = await apiFetchWithEtag('/api/admin/reporting-lines/{employeeId}/remove', {
+        method: 'POST',
+        params: { path: { employeeId } },
+        body: { replacements },
+      })
       if (result.ok) {
         return { ok: true }
       }
       // 409 → parse the gap list (preflight or in-lock census). The server shape
       // is `{ error, reportsNeedingReassignment: string[], reportsNeedingReassignmentCount }`.
       if (result.status === 409) {
-        const body = result.body as
-          | { error?: string; reportsNeedingReassignment?: string[] }
-          | undefined
+        const body = isGapErrorBody(result.body) ? result.body : undefined
         if (body && Array.isArray(body.reportsNeedingReassignment)) {
           return {
             ok: false,

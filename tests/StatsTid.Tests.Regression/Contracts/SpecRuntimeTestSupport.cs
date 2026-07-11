@@ -91,7 +91,7 @@ internal static class SpecRuntimeTestSupport
         var status = (int)response.StatusCode;
         if (status is < 200 or >= 300)
             throw new XunitException(
-                $"{method.ToUpperInvariant()} {specPath}: expected the declared success {contract.StatusCode} " +
+                $"{method.ToUpperInvariant()} {specPath}: expected the declared success {contract.DescribeStatuses()} " +
                 $"but the endpoint returned {status}. Body: {body}");
         SpecRuntimeMatcher.AssertSuccessMatches(spec, contract, status, body, $"{method.ToUpperInvariant()} {specPath}");
         return body;

@@ -14,32 +14,23 @@
 # Lines starting with '#' and blank lines are ignored.
 
 DELETE /api/admin/entitlement-configs/{configId}
-DELETE /api/admin/reporting-lines/{employeeId}
-DELETE /api/admin/reporting-lines/{employeeId}/acting
-DELETE /api/admin/reporting-lines/{managerId}/vikar
 DELETE /api/admin/wage-type-mappings
 DELETE /api/agreement-configs/{configId}/entitlements/{entitlementConfigId}
 DELETE /api/projects/{orgId}/select/{projectId}
 DELETE /api/projects/{orgId}/{projectId}
 DELETE /api/reporting-lines/delegate
 GET /api/absences/{employeeId}
-GET /api/admin/audit
-GET /api/admin/employees/{employeeId}/birth-date
-GET /api/admin/employees/{employeeId}/employment-end-date
-GET /api/admin/employees/{employeeId}/employment-start-date
+# S115 flag-and-defer (the program's FIRST firing of the S112 rule): the GET below is
+# genuinely POLYMORPHIC — its no-row branch OMITS the effectiveFrom/version KEYS entirely
+# (not null-valued), so ONE response record cannot describe both branches and typing it
+# would be a wire change (PAT-010-forbidden). It STAYS grandfathered until a strict-types /
+# oneOf phase addresses polymorphic reads. See PAT-012.
 GET /api/admin/employees/{employeeId}/entitlement-eligibility/{entitlementType}
 GET /api/admin/entitlement-configs
 GET /api/admin/entitlement-configs/{configId}
-GET /api/admin/organizations/{orgId}/users
 GET /api/admin/position-overrides
 GET /api/admin/position-overrides/agreement/{agreementCode}/{okVersion}
 GET /api/admin/position-overrides/{overrideId}
-GET /api/admin/reporting-lines/tree/{organisationId}
-GET /api/admin/reporting-lines/tree/{organisationId}/period-status
-GET /api/admin/reporting-lines/{employeeId}
-GET /api/admin/reporting-lines/{managerId}/reports
-GET /api/admin/reporting-lines/{managerId}/vikar
-GET /api/admin/units
 GET /api/admin/wage-type-mappings
 GET /api/admin/wage-type-mappings/agreement/{agreementCode}/{okVersion}
 GET /api/agreement-configs
@@ -79,11 +70,6 @@ POST /api/admin/entitlement-configs
 POST /api/admin/position-overrides
 POST /api/admin/position-overrides/{overrideId}/activate
 POST /api/admin/position-overrides/{overrideId}/deactivate
-POST /api/admin/reporting-lines
-POST /api/admin/reporting-lines/import
-POST /api/admin/reporting-lines/{employeeId}/acting
-POST /api/admin/reporting-lines/{employeeId}/remove
-POST /api/admin/reporting-lines/{managerId}/vikar
 POST /api/admin/wage-type-mappings
 POST /api/agreement-configs
 POST /api/agreement-configs/{configId}/archive
@@ -107,10 +93,6 @@ POST /api/time-entries
 POST /api/vacation-settlements/{employeeId}/{entitlementType}/{entitlementYear}/reconcile-payout
 POST /api/vacation-settlements/{employeeId}/{entitlementType}/{entitlementYear}/resolve
 POST /api/vacation-transfer-agreements/{employeeId}
-PUT /api/admin/employees/{employeeId}/birth-date
-PUT /api/admin/employees/{employeeId}/employment-end-date
-PUT /api/admin/employees/{employeeId}/employment-start-date
-PUT /api/admin/employees/{employeeId}/entitlement-eligibility/{entitlementType}
 PUT /api/admin/entitlement-configs/{configId}
 PUT /api/admin/position-overrides/{overrideId}
 PUT /api/admin/wage-type-mappings

@@ -105,8 +105,12 @@ public sealed class SpecRuntimeMatcherTests
 
     // ════════════════════════════════════════════════════════════════════════════════
     //  S112 / TASK-11204 — declared-success-status resolution (200/201/204) + status fidelity.
-    //  A mini spec with one op per declared-success shape: POST /things (201), GET /things (200
-    //  bare array), DELETE /things/{id} (204 no body), PUT /things/{id} (an ILLEGAL double-2xx).
+    //  Extended S115 / TASK-11500 — the homogeneous multi-2xx contract. One op per declared-success
+    //  shape: POST /things (201), GET /things (200 bare array), DELETE /things/{id} (204 no body),
+    //  PUT /things/{id} (a LEGAL homogeneous 200+201 — ONE shared $ref, the reporting-line
+    //  first-assign-201/reassign-200 case), PATCH /things/{id} (an ILLEGAL double-2xx: two DIFFERENT
+    //  $refs), POST /things/{id}/archive (an ILLEGAL 204+200 pair — heterogeneous BY CONTENT),
+    //  PUT /things/{id}/label (an ILLEGAL pair of INLINE schemas — identical, still rejected).
     // ════════════════════════════════════════════════════════════════════════════════
 
     private const string OpsSpecJson = """
@@ -133,6 +137,28 @@ public sealed class SpecRuntimeMatcherTests
               "200": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OrgItem" } } } },
               "201": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OrgItem" } } } }
             }
+          },
+          "patch": {
+            "responses": {
+              "200": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OrgItem" } } } },
+              "201": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OtherItem" } } } }
+            }
+          }
+        },
+        "/things/{id}/archive": {
+          "post": {
+            "responses": {
+              "200": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OrgItem" } } } },
+              "204": { "description": "No Content" }
+            }
+          }
+        },
+        "/things/{id}/label": {
+          "put": {
+            "responses": {
+              "200": { "content": { "application/json": { "schema": { "type": "object", "properties": { "label": { "type": "string" } } } } } },
+              "201": { "content": { "application/json": { "schema": { "type": "object", "properties": { "label": { "type": "string" } } } } } }
+            }
           }
         }
       },
@@ -144,6 +170,12 @@ public sealed class SpecRuntimeMatcherTests
               "orgId":       { "type": "string" },
               "orgName":     { "type": "string" },
               "parentOrgId": { "type": "string", "nullable": true }
+            }
+          },
+          "OtherItem": {
+            "type": "object",
+            "properties": {
+              "otherId": { "type": "string" }
             }
           }
         }
@@ -160,7 +192,7 @@ public sealed class SpecRuntimeMatcherTests
         // response with the declared shape is GREEN.
         var spec = OpsSpec();
         var contract = SpecRuntimeMatcher.ResolveSuccessContract(spec, "/things", "post");
-        Assert.Equal(201, contract.StatusCode);
+        Assert.Equal(new[] { 201 }, contract.StatusCodes);
         Assert.NotNull(contract.Schema);
 
         SpecRuntimeMatcher.AssertSuccessMatches(
@@ -175,7 +207,7 @@ public sealed class SpecRuntimeMatcherTests
         // when the BODY would match the schema perfectly.
         var spec = OpsSpec();
         var contract = SpecRuntimeMatcher.ResolveSuccessContract(spec, "/things", "get");
-        Assert.Equal(200, contract.StatusCode);
+        Assert.Equal(new[] { 200 }, contract.StatusCodes);
 
         var ex = Assert.Throws<XunitException>(() => SpecRuntimeMatcher.AssertSuccessMatches(
             spec, contract, 201, """[ { "orgId": "A", "orgName": "Alpha", "parentOrgId": null } ]""", "GET /things"));
@@ -188,7 +220,7 @@ public sealed class SpecRuntimeMatcherTests
     {
         var spec = OpsSpec();
         var contract = SpecRuntimeMatcher.ResolveSuccessContract(spec, "/things/{id}", "delete");
-        Assert.Equal(204, contract.StatusCode);
+        Assert.Equal(new[] { 204 }, contract.StatusCodes);
         Assert.Null(contract.Schema);
 
         // A real 204 with an empty body is GREEN (both null and "" count as empty).
@@ -218,12 +250,75 @@ public sealed class SpecRuntimeMatcherTests
     }
 
     [Fact]
-    public void Red_WhenOpDeclaresMultiple2xxResponses()
+    public void Red_WhenMulti2xxDeclaresDifferentSchemaRefs()
     {
-        // Ambiguity guard: the gate needs exactly ONE declared success status per operation.
+        // The surviving ambiguity guard (S115 update of the S112 blanket rejection): a multi-2xx set
+        // whose members carry DIFFERENT $refs is heterogeneous — still REJECTED at resolution.
         var ex = Assert.Throws<XunitException>(() =>
-            SpecRuntimeMatcher.ResolveSuccessContract(OpsSpec(), "/things/{id}", "put"));
+            SpecRuntimeMatcher.ResolveSuccessContract(OpsSpec(), "/things/{id}", "patch"));
         Assert.Contains("MULTIPLE", ex.Message);
+        Assert.Contains("DIFFERENT", ex.Message);
+        Assert.Contains("OrgItem", ex.Message);
+        Assert.Contains("OtherItem", ex.Message);
+    }
+
+    // ════════════════════════════════════════════════════════════════════════════════
+    //  S115 / TASK-11500 — the HOMOGENEOUS conditional-status extension: multiple declared 2xx is
+    //  acceptable IFF every declared 2xx carries the SAME schema $ref (the 201-or-200-from-ONE-shape
+    //  reporting-line assigns). Heterogeneous sets stay REJECTED; an undeclared runtime status
+    //  stays RED.
+    // ════════════════════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public void Green_WhenMulti2xxSharesOneSchemaRef_BothDeclaredStatusesMatch()
+    {
+        // The legal case: PUT declares 200 AND 201, both carrying the SAME $ref — the contract
+        // resolves to the declared-status SET + the one shared schema, and a runtime response with
+        // EITHER declared status and the shared shape is GREEN (first-assign 201 / reassign 200).
+        var spec = OpsSpec();
+        var contract = SpecRuntimeMatcher.ResolveSuccessContract(spec, "/things/{id}", "put");
+        Assert.Equal(new[] { 200, 201 }, contract.StatusCodes);
+        Assert.NotNull(contract.Schema);
+
+        var body = """{ "orgId": "A", "orgName": "Alpha", "parentOrgId": null }""";
+        SpecRuntimeMatcher.AssertSuccessMatches(spec, contract, 200, body, "PUT /things/{id}"); // the reassign branch
+        SpecRuntimeMatcher.AssertSuccessMatches(spec, contract, 201, body, "PUT /things/{id}"); // the first-assign branch
+    }
+
+    [Fact]
+    public void Red_WhenMulti2xxPairs204NoContentWithA200Schema()
+    {
+        // Heterogeneous BY CONTENT (not just by $ref): a no-body 204 can never share a schema with a
+        // body-bearing 200 — the pair is REJECTED at resolution.
+        var ex = Assert.Throws<XunitException>(() =>
+            SpecRuntimeMatcher.ResolveSuccessContract(OpsSpec(), "/things/{id}/archive", "post"));
+        Assert.Contains("204", ex.Message);
+        Assert.Contains("MULTIPLE", ex.Message);
+    }
+
+    [Fact]
+    public void Red_WhenMulti2xxSchemasAreInline()
+    {
+        // Two INLINE (non-$ref) schemas — STRUCTURALLY IDENTICAL, still rejected conservatively:
+        // records always emit $ref, so an inline schema on a multi-2xx op is the tripwire against
+        // inline-schema drift.
+        var ex = Assert.Throws<XunitException>(() =>
+            SpecRuntimeMatcher.ResolveSuccessContract(OpsSpec(), "/things/{id}/label", "put"));
+        Assert.Contains("INLINE", ex.Message);
+        Assert.Contains("$ref", ex.Message);
+    }
+
+    [Fact]
+    public void Red_WhenRuntimeStatusIsUndeclaredOnAMulti2xxOp()
+    {
+        // Status fidelity survives the extension: the multi-2xx contract admits ONLY its declared
+        // members — a 202 against a declared {200, 201} is RED even with a perfectly matching body.
+        var spec = OpsSpec();
+        var contract = SpecRuntimeMatcher.ResolveSuccessContract(spec, "/things/{id}", "put");
+        var ex = Assert.Throws<XunitException>(() => SpecRuntimeMatcher.AssertSuccessMatches(
+            spec, contract, 202, """{ "orgId": "A", "orgName": "Alpha", "parentOrgId": null }""", "PUT /things/{id}"));
+        Assert.Contains("status", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("202", ex.Message);
     }
 
     [Fact]

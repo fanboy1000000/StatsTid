@@ -1,4 +1,5 @@
 using StatsTid.Auth;
+using StatsTid.Backend.Api.Contracts;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Audit;
@@ -42,27 +43,27 @@ public static class AuditEndpointsExtension
 
             var (rows, totalCount) = await auditRepo.QueryByOrgScopeAsync(accessibleOrgIds, filter, page, pageSize, ct);
 
-            return Results.Ok(new
-            {
-                rows = rows.Select(r => new
-                {
-                    projectionId = r.ProjectionId,
-                    eventId = r.EventId,
-                    eventType = r.EventType,
-                    visibilityScope = r.VisibilityScope,
-                    targetOrgId = r.TargetOrgId,
-                    targetResourceId = r.TargetResourceId,
-                    actorId = r.ActorId,
-                    actorPrimaryOrgId = r.ActorPrimaryOrgId,
-                    occurredAt = r.OccurredAt,
-                    correlationId = r.CorrelationId,
-                    details = r.DetailsJson,
-                    projectedAt = r.ProjectedAt,
-                }),
-                totalCount,
-                page,
-                pageSize,
-            });
-        }).RequireAuthorization("HROrAbove");
+            // S115 / TASK-11501 — named records (BYTE-IDENTICAL wire JSON). `details` stays the
+            // RAW JSONB text as a plain string passthrough (NO reshaping — the caller
+            // deserializes per the audit-projection catalog).
+            return Results.Ok(new AuditLogResponse(
+                Rows: rows.Select(r => new AuditLogRow(
+                    ProjectionId: r.ProjectionId,
+                    EventId: r.EventId,
+                    EventType: r.EventType,
+                    VisibilityScope: r.VisibilityScope,
+                    TargetOrgId: r.TargetOrgId,
+                    TargetResourceId: r.TargetResourceId,
+                    ActorId: r.ActorId,
+                    ActorPrimaryOrgId: r.ActorPrimaryOrgId,
+                    OccurredAt: r.OccurredAt,
+                    CorrelationId: r.CorrelationId,
+                    Details: r.DetailsJson,
+                    ProjectedAt: r.ProjectedAt)).ToList(),
+                TotalCount: totalCount,
+                Page: page,
+                PageSize: pageSize));
+        }).RequireAuthorization("HROrAbove")
+        .Produces<AuditLogResponse>(StatusCodes.Status200OK); // S115 / TASK-11501
     }
 }

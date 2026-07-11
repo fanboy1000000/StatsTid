@@ -38,6 +38,21 @@ public sealed record UserUpdatedResponse(
     string AgreementCode,
     long Version);
 
+/// <summary>One GET /api/admin/organizations/{orgId}/users row — a BARE ARRAY response
+/// (declared <c>.Produces&lt;IEnumerable&lt;OrgUserListItem&gt;&gt;</c>; S115 / TASK-11501).
+/// NEVER carries password_hash or the GDPR-gated dates. <paramref name="Version"/> is for
+/// type-honesty/forward-compat only — the edit flow re-fetches the per-user GET to bind the
+/// ETag before PUT.</summary>
+public sealed record OrgUserListItem(
+    string UserId,
+    string Username,
+    string DisplayName,
+    string? Email,
+    string PrimaryOrgId,
+    string AgreementCode,
+    string EmploymentCategory,
+    long Version);
+
 /// <summary>The GET /api/admin/users/{userId} 200 body (ETag-stamped read; NEVER carries
 /// password_hash or the GDPR-gated dates).</summary>
 public sealed record UserDetailResponse(

@@ -34,8 +34,21 @@ import { formatVersionAsIfMatch, resolveEtag } from '../lib/etag'
 //       vacation accrual for mid-year hires. HR-only read/write via GET/PUT
 //       /api/admin/employees/{id}/employment-start-date with admin-strict
 //       If-Match, exactly mirroring the (A) DOB surface.
+//
+// S115 / TASK-11502 — every call EXCEPT ONE switched to the typed spec-keyed
+// `apiFetchWithEtag` form (PAT-012; the field-endpoint responses were typed in
+// TASK-11501, and the strict spec shapes match the previous inline types
+// field-for-field). THE ONE EXCEPTION — `fetchChildSickEligibility` — is the
+// program's FIRST flag-and-defer op: `GET …/entitlement-eligibility/{type}`
+// is genuinely POLYMORPHIC (its no-row branch OMITS the `effectiveFrom` /
+// `version` KEYS rather than emitting null), so typing it would require a
+// wire change (PAT-010-forbidden). It stays on the explicit-T legacy GET
+// until a strict-types phase resolves it; the eslint tier for this file
+// sanctions exactly that one-argument form.
 
-const SETTABLE_ENTITLEMENT_TYPE = 'CHILD_SICK' as const
+// S115 — the (redundant) `as const` dropped: a primitive `const` already infers
+// the literal type, and this file is on the no-`as` lint tier.
+const SETTABLE_ENTITLEMENT_TYPE = 'CHILD_SICK'
 
 /** Snapshot of an employee's CHILD_SICK eligibility + the concurrency token. */
 export interface ChildSickEligibilitySnapshot {
@@ -85,10 +98,25 @@ function makeError(
   msg: string,
   body: EligibilityMutationError['body'],
 ): EligibilityMutationError {
-  const err = new Error(msg) as EligibilityMutationError
-  err.status = status
-  err.body = body
-  return err
+  // Object.assign (not an `as` cast) — this file is on the S115 no-`as` tier.
+  return Object.assign(new Error(msg), { status, body })
+}
+
+/** S115 — the error payloads (409/412/422 bodies) are UNDECLARED in the spec,
+    so they arrive as `unknown`. Runtime type guard (not an `as` cast — this
+    file is on the S115 no-`as` tier): passes the SAME runtime object through
+    when it is an object; the target's members are all optional, so the claim
+    is structurally sound (the useAdmin `isUserMutationErrorBody` precedent). */
+function isEligibilityErrorBody(
+  body: unknown,
+): body is NonNullable<EligibilityMutationError['body']> {
+  return typeof body === 'object' && body !== null
+}
+
+/** Narrow an unknown error payload to the optional `body` shape (undefined
+    when the payload is absent or not an object). */
+function toErrorBody(body: unknown): EligibilityMutationError['body'] {
+  return isEligibilityErrorBody(body) ? body : undefined
 }
 
 const ELIGIBILITY_PATH = (employeeId: string) =>
@@ -107,6 +135,9 @@ export function useEntitlementEligibility() {
   const fetchChildSickEligibility = async (
     employeeId: string,
   ): Promise<ChildSickEligibilitySnapshot> => {
+    // S115 — DEFERRED (the polymorphic no-row branch omits keys; see the file
+    // header). This explicit-T one-argument GET is the file's ONE sanctioned
+    // legacy form.
     const result = await apiFetchWithEtag<{
       employeeId: string
       entitlementType: string
@@ -116,7 +147,7 @@ export function useEntitlementEligibility() {
       version?: number
     }>(ELIGIBILITY_PATH(employeeId))
     if (!result.ok) {
-      throw makeError(result.status, result.error, result.body as EligibilityMutationError['body'])
+      throw makeError(result.status, result.error, toErrorBody(result.body))
     }
     const { data, etag } = result.data
     // version is present (and ETag-stamped) ONLY when rowExists; resolveEtag
@@ -146,24 +177,34 @@ export function useEntitlementEligibility() {
     rowExists: boolean,
     currentVersion: number | null,
   ): Promise<ChildSickEligibilitySnapshot> => {
-    const precondition: Record<string, string> =
+    // S115 — typed etag PUT (the strict `EntitlementEligibilityUpdatedResponse`
+    // matches the previous inline type field-for-field). The create-vs-update
+    // precondition branch is UNCHANGED: live row → `If-Match: "<version>"`,
+    // no row → the create-only `If-None-Match: *` (the S115 `ifNoneMatch`
+    // option; byte-identical headers to the previous hand-built form).
+    const params = { path: { employeeId, entitlementType: SETTABLE_ENTITLEMENT_TYPE } }
+    const result =
       rowExists && currentVersion !== null
-        ? { 'If-Match': formatVersionAsIfMatch(currentVersion) }
-        : { 'If-None-Match': '*' }
-
-    const result = await apiFetchWithEtag<{
-      employeeId: string
-      entitlementType: string
-      eligible: boolean
-      effectiveFrom: string
-      version: number
-    }>(ELIGIBILITY_PATH(employeeId), {
-      method: 'PUT',
-      headers: precondition,
-      body: JSON.stringify({ eligible }),
-    })
+        ? await apiFetchWithEtag(
+            '/api/admin/employees/{employeeId}/entitlement-eligibility/{entitlementType}',
+            {
+              method: 'PUT',
+              params,
+              ifMatch: formatVersionAsIfMatch(currentVersion),
+              body: { eligible },
+            },
+          )
+        : await apiFetchWithEtag(
+            '/api/admin/employees/{employeeId}/entitlement-eligibility/{entitlementType}',
+            {
+              method: 'PUT',
+              params,
+              ifNoneMatch: '*',
+              body: { eligible },
+            },
+          )
     if (!result.ok) {
-      const body = result.body as EligibilityMutationError['body']
+      const body = toErrorBody(result.body)
       if (result.status === 409) {
         // Lost update: a live row appeared between our read and this create.
         // Surface a clear, actionable Danish-friendly message; the page layer
@@ -191,13 +232,14 @@ export function useEntitlementEligibility() {
   const fetchBirthDate = async (
     employeeId: string,
   ): Promise<BirthDateSnapshot> => {
-    const result = await apiFetchWithEtag<{
-      employeeId: string
-      birthDate: string | null
-      version: number
-    }>(`/api/admin/employees/${encodeURIComponent(employeeId)}/birth-date`)
+    // S115 — typed etag GET (the strict `BirthDateResponse` matches the
+    // previous inline type field-for-field).
+    const result = await apiFetchWithEtag('/api/admin/employees/{employeeId}/birth-date', {
+      method: 'GET',
+      params: { path: { employeeId } },
+    })
     if (!result.ok) {
-      throw makeError(result.status, result.error, result.body as EligibilityMutationError['body'])
+      throw makeError(result.status, result.error, toErrorBody(result.body))
     }
     const { data, etag } = result.data
     const { version } = resolveEtag(etag, data)
@@ -214,17 +256,15 @@ export function useEntitlementEligibility() {
     birthDate: string | null,
     currentVersion: number,
   ): Promise<BirthDateSnapshot> => {
-    const result = await apiFetchWithEtag<{
-      employeeId: string
-      birthDate: string | null
-      version: number
-    }>(`/api/admin/employees/${encodeURIComponent(employeeId)}/birth-date`, {
+    // S115 — typed etag PUT, admin-strict If-Match unchanged.
+    const result = await apiFetchWithEtag('/api/admin/employees/{employeeId}/birth-date', {
       method: 'PUT',
-      headers: { 'If-Match': formatVersionAsIfMatch(currentVersion) },
-      body: JSON.stringify({ birthDate }),
+      params: { path: { employeeId } },
+      ifMatch: formatVersionAsIfMatch(currentVersion),
+      body: { birthDate },
     })
     if (!result.ok) {
-      throw makeError(result.status, result.error, result.body as EligibilityMutationError['body'])
+      throw makeError(result.status, result.error, toErrorBody(result.body))
     }
     const { data, etag } = result.data
     const { version } = resolveEtag(etag, data)
@@ -242,13 +282,14 @@ export function useEntitlementEligibility() {
   const fetchEmploymentStartDate = async (
     employeeId: string,
   ): Promise<EmploymentStartDateSnapshot> => {
-    const result = await apiFetchWithEtag<{
-      employeeId: string
-      employmentStartDate: string | null
-      version: number
-    }>(`/api/admin/employees/${encodeURIComponent(employeeId)}/employment-start-date`)
+    // S115 — typed etag GET (the strict `EmploymentStartDateResponse` matches
+    // the previous inline type field-for-field).
+    const result = await apiFetchWithEtag(
+      '/api/admin/employees/{employeeId}/employment-start-date',
+      { method: 'GET', params: { path: { employeeId } } },
+    )
     if (!result.ok) {
-      throw makeError(result.status, result.error, result.body as EligibilityMutationError['body'])
+      throw makeError(result.status, result.error, toErrorBody(result.body))
     }
     const { data, etag } = result.data
     const { version } = resolveEtag(etag, data)
@@ -268,17 +309,18 @@ export function useEntitlementEligibility() {
     employmentStartDate: string | null,
     currentVersion: number,
   ): Promise<EmploymentStartDateSnapshot> => {
-    const result = await apiFetchWithEtag<{
-      employeeId: string
-      employmentStartDate: string | null
-      version: number
-    }>(`/api/admin/employees/${encodeURIComponent(employeeId)}/employment-start-date`, {
-      method: 'PUT',
-      headers: { 'If-Match': formatVersionAsIfMatch(currentVersion) },
-      body: JSON.stringify({ employmentStartDate }),
-    })
+    // S115 — typed etag PUT, admin-strict If-Match unchanged.
+    const result = await apiFetchWithEtag(
+      '/api/admin/employees/{employeeId}/employment-start-date',
+      {
+        method: 'PUT',
+        params: { path: { employeeId } },
+        ifMatch: formatVersionAsIfMatch(currentVersion),
+        body: { employmentStartDate },
+      },
+    )
     if (!result.ok) {
-      throw makeError(result.status, result.error, result.body as EligibilityMutationError['body'])
+      throw makeError(result.status, result.error, toErrorBody(result.body))
     }
     const { data, etag } = result.data
     const { version } = resolveEtag(etag, data)

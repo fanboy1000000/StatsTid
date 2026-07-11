@@ -310,7 +310,17 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.OrgUserListItem"
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -517,7 +527,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.TreePeriodStatusResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -662,7 +679,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.UnitListResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -2590,7 +2614,14 @@
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.EntitlementEligibilityUpdatedResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -2640,7 +2671,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.BirthDateResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -2670,7 +2708,14 @@
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.BirthDateResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -2692,7 +2737,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.EmploymentStartDateResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -2722,7 +2774,14 @@
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.EmploymentStartDateResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -2744,7 +2803,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.EmploymentEndDateResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -2774,7 +2840,14 @@
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.EmploymentEndDateResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -3318,7 +3391,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.AuditLogResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -3339,8 +3419,25 @@
           "required": true
         },
         "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.ReportingLineResponse"
+                }
+              }
+            }
+          },
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.ReportingLineResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -3361,8 +3458,8 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "OK"
+          "204": {
+            "description": "No Content"
           }
         }
       },
@@ -3382,7 +3479,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.EmployeeReportingLinesResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -3404,7 +3508,17 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.ReportingLineTreeItem"
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -3426,7 +3540,17 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.DirectReportItem"
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -3457,8 +3581,25 @@
           "required": true
         },
         "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.ReportingLineResponse"
+                }
+              }
+            }
+          },
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.ReportingLineResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -3477,8 +3618,8 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "OK"
+          "204": {
+            "description": "No Content"
           }
         }
       }
@@ -3500,7 +3641,14 @@
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.ReportingLineImportResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -3532,7 +3680,14 @@
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.RemoveWithReassignmentResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -3596,7 +3751,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.ActiveVikarResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -3626,7 +3788,14 @@
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.AdminVikarCreatedResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -3646,7 +3815,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.AdminVikarRevokedResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -3880,6 +4056,219 @@
   },
   "components": {
     "schemas": {
+      "StatsTid.Backend.Api.Contracts.ActiveVikarInfo": {
+        "required": [
+          "reason",
+          "untilDate",
+          "vikarDisplayName",
+          "vikarUserId"
+        ],
+        "type": "object",
+        "properties": {
+          "vikarUserId": {
+            "type": "string"
+          },
+          "vikarDisplayName": {
+            "type": "string"
+          },
+          "untilDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.ActiveVikarResponse": {
+        "type": "object",
+        "properties": {
+          "activeVikar": {
+            "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.ActiveVikarInfo"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.AdminVikarCreatedResponse": {
+        "required": [
+          "effectiveFrom",
+          "effectiveTo",
+          "managerId",
+          "reason",
+          "vikarId",
+          "vikarUserId"
+        ],
+        "type": "object",
+        "properties": {
+          "vikarId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "managerId": {
+            "type": "string"
+          },
+          "vikarUserId": {
+            "type": "string"
+          },
+          "effectiveFrom": {
+            "type": "string",
+            "format": "date"
+          },
+          "effectiveTo": {
+            "type": "string",
+            "format": "date"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.AdminVikarRevokedResponse": {
+        "required": [
+          "managerId",
+          "revoked",
+          "vikarId",
+          "vikarUserId"
+        ],
+        "type": "object",
+        "properties": {
+          "vikarId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "managerId": {
+            "type": "string"
+          },
+          "vikarUserId": {
+            "type": "string"
+          },
+          "revoked": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.AuditLogResponse": {
+        "required": [
+          "page",
+          "pageSize",
+          "rows",
+          "totalCount"
+        ],
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.AuditLogRow"
+            }
+          },
+          "totalCount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "page": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "pageSize": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.AuditLogRow": {
+        "required": [
+          "actorId",
+          "actorPrimaryOrgId",
+          "correlationId",
+          "details",
+          "eventId",
+          "eventType",
+          "occurredAt",
+          "projectedAt",
+          "projectionId",
+          "targetOrgId",
+          "targetResourceId",
+          "visibilityScope"
+        ],
+        "type": "object",
+        "properties": {
+          "projectionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "eventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "eventType": {
+            "type": "string"
+          },
+          "visibilityScope": {
+            "type": "string"
+          },
+          "targetOrgId": {
+            "type": "string",
+            "nullable": true
+          },
+          "targetResourceId": {
+            "type": "string",
+            "nullable": true
+          },
+          "actorId": {
+            "type": "string",
+            "nullable": true
+          },
+          "actorPrimaryOrgId": {
+            "type": "string",
+            "nullable": true
+          },
+          "occurredAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "correlationId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "details": {
+            "type": "string"
+          },
+          "projectedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.BirthDateResponse": {
+        "required": [
+          "birthDate",
+          "employeeId",
+          "version"
+        ],
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string"
+          },
+          "birthDate": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
       "StatsTid.Backend.Api.Contracts.CreateUnitRequest": {
         "type": "object",
         "properties": {
@@ -3896,6 +4285,54 @@
           },
           "name": {
             "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.DirectReportItem": {
+        "required": [
+          "effectiveFrom",
+          "employeeDisplayName",
+          "employeeId",
+          "managerId",
+          "organisationId",
+          "relationship",
+          "reportingLineId",
+          "source",
+          "version"
+        ],
+        "type": "object",
+        "properties": {
+          "reportingLineId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "employeeId": {
+            "type": "string"
+          },
+          "employeeDisplayName": {
+            "type": "string",
+            "nullable": true
+          },
+          "managerId": {
+            "type": "string"
+          },
+          "organisationId": {
+            "type": "string"
+          },
+          "relationship": {
+            "type": "string"
+          },
+          "effectiveFrom": {
+            "type": "string",
+            "format": "date"
+          },
+          "source": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
           }
         },
         "additionalProperties": false
@@ -3923,6 +4360,112 @@
           },
           "isPartTime": {
             "type": "boolean"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.EmployeeReportingLinesResponse": {
+        "required": [
+          "active",
+          "history"
+        ],
+        "type": "object",
+        "properties": {
+          "active": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.ReportingLineResponse"
+            }
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.ReportingLineResponse"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.EmploymentEndDateResponse": {
+        "required": [
+          "employeeId",
+          "employmentEndDate",
+          "endDateDeactivated",
+          "isActive",
+          "version"
+        ],
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string"
+          },
+          "employmentEndDate": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "endDateDeactivated": {
+            "type": "boolean"
+          },
+          "isActive": {
+            "type": "boolean"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.EmploymentStartDateResponse": {
+        "required": [
+          "employeeId",
+          "employmentStartDate",
+          "version"
+        ],
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string"
+          },
+          "employmentStartDate": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.EntitlementEligibilityUpdatedResponse": {
+        "required": [
+          "effectiveFrom",
+          "eligible",
+          "employeeId",
+          "entitlementType",
+          "version"
+        ],
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string"
+          },
+          "entitlementType": {
+            "type": "string"
+          },
+          "eligible": {
+            "type": "boolean"
+          },
+          "effectiveFrom": {
+            "type": "string",
+            "format": "date"
           },
           "version": {
             "type": "integer",
@@ -4285,6 +4828,48 @@
         },
         "additionalProperties": false
       },
+      "StatsTid.Backend.Api.Contracts.OrgUserListItem": {
+        "required": [
+          "agreementCode",
+          "displayName",
+          "email",
+          "employmentCategory",
+          "primaryOrgId",
+          "userId",
+          "username",
+          "version"
+        ],
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "nullable": true
+          },
+          "primaryOrgId": {
+            "type": "string"
+          },
+          "agreementCode": {
+            "type": "string"
+          },
+          "employmentCategory": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
       "StatsTid.Backend.Api.Contracts.OrganizationResponse": {
         "required": [
           "agreementCode",
@@ -4407,6 +4992,167 @@
           "okVersion": {
             "type": "string",
             "deprecated": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.RemoveWithReassignmentResponse": {
+        "required": [
+          "actingEdgesClosed",
+          "removed",
+          "reportsReassigned"
+        ],
+        "type": "object",
+        "properties": {
+          "removed": {
+            "type": "string"
+          },
+          "reportsReassigned": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "actingEdgesClosed": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.ReportingLineImportResponse": {
+        "required": [
+          "imported",
+          "skipped",
+          "superseded",
+          "total"
+        ],
+        "type": "object",
+        "properties": {
+          "imported": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "superseded": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "skipped": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.ReportingLineResponse": {
+        "required": [
+          "createdAt",
+          "createdBy",
+          "effectiveFrom",
+          "effectiveTo",
+          "employeeId",
+          "managerId",
+          "organisationId",
+          "relationship",
+          "reportingLineId",
+          "source",
+          "version"
+        ],
+        "type": "object",
+        "properties": {
+          "reportingLineId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "employeeId": {
+            "type": "string"
+          },
+          "managerId": {
+            "type": "string"
+          },
+          "organisationId": {
+            "type": "string"
+          },
+          "relationship": {
+            "type": "string"
+          },
+          "effectiveFrom": {
+            "type": "string",
+            "format": "date"
+          },
+          "effectiveTo": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "source": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "createdBy": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.ReportingLineTreeItem": {
+        "required": [
+          "effectiveFrom",
+          "employeeDisplayName",
+          "employeeId",
+          "managerDisplayName",
+          "managerId",
+          "organisationId",
+          "relationship",
+          "reportingLineId",
+          "source",
+          "version"
+        ],
+        "type": "object",
+        "properties": {
+          "reportingLineId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "employeeId": {
+            "type": "string"
+          },
+          "employeeDisplayName": {
+            "type": "string",
+            "nullable": true
+          },
+          "managerId": {
+            "type": "string"
+          },
+          "managerDisplayName": {
+            "type": "string",
+            "nullable": true
+          },
+          "organisationId": {
+            "type": "string"
+          },
+          "relationship": {
+            "type": "string"
+          },
+          "effectiveFrom": {
+            "type": "string",
+            "format": "date"
+          },
+          "source": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
           }
         },
         "additionalProperties": false
@@ -4691,6 +5437,49 @@
         },
         "additionalProperties": false
       },
+      "StatsTid.Backend.Api.Contracts.TreePeriodStatusEmployee": {
+        "required": [
+          "displayName",
+          "employeeId",
+          "status"
+        ],
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.TreePeriodStatusResponse": {
+        "required": [
+          "employees",
+          "pendingCountByManager"
+        ],
+        "type": "object",
+        "properties": {
+          "employees": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.TreePeriodStatusEmployee"
+            }
+          },
+          "pendingCountByManager": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
       "StatsTid.Backend.Api.Contracts.UnitLeaderResponse": {
         "required": [
           "organisationId",
@@ -4708,6 +5497,64 @@
           },
           "organisationId": {
             "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.UnitListItem": {
+        "required": [
+          "name",
+          "organisationId",
+          "parentUnitId",
+          "type",
+          "unitId",
+          "version"
+        ],
+        "type": "object",
+        "properties": {
+          "unitId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "organisationId": {
+            "type": "string"
+          },
+          "parentUnitId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "type": {
+            "enum": [
+              "direktion",
+              "omrade",
+              "kontor",
+              "team",
+              "enhed"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.UnitListResponse": {
+        "required": [
+          "units"
+        ],
+        "type": "object",
+        "properties": {
+          "units": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.UnitListItem"
+            }
           }
         },
         "additionalProperties": false

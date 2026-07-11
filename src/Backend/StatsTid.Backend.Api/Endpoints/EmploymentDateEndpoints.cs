@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Npgsql;
 using StatsTid.Auth;
+using StatsTid.Backend.Api.Contracts;
 using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Backend.Api.Services;
 using StatsTid.Infrastructure;
@@ -80,13 +81,13 @@ public static class EmploymentDateEndpoints
             var (user, version) = hit.Value;
 
             context.Response.Headers.ETag = $"\"{version}\"";
-            return Results.Ok(new
-            {
-                employeeId = user.UserId,
-                employmentStartDate = user.EmploymentStartDate,
-                version,
-            });
-        }).RequireAuthorization("HROrAbove");
+            // S115 / TASK-11501 — named record (BYTE-IDENTICAL wire JSON).
+            return Results.Ok(new EmploymentStartDateResponse(
+                EmployeeId: user.UserId,
+                EmploymentStartDate: user.EmploymentStartDate,
+                Version: version));
+        }).RequireAuthorization("HROrAbove")
+        .Produces<EmploymentStartDateResponse>(StatusCodes.Status200OK); // S115 / TASK-11501
 
         // ═══════════════════════════════════════════
         // 2. PUT /api/admin/employees/{employeeId}/employment-start-date
@@ -208,12 +209,11 @@ public static class EmploymentDateEndpoints
                 await tx.CommitAsync(ct);
 
                 context.Response.Headers.ETag = $"\"{newVersion}\"";
-                return Results.Ok(new
-                {
-                    employeeId,
-                    employmentStartDate = body.EmploymentStartDate,
-                    version = newVersion,
-                });
+                // S115 / TASK-11501 — named record (BYTE-IDENTICAL wire JSON; the GET's shape).
+                return Results.Ok(new EmploymentStartDateResponse(
+                    EmployeeId: employeeId,
+                    EmploymentStartDate: body.EmploymentStartDate,
+                    Version: newVersion));
             }
             catch
             {
@@ -221,7 +221,8 @@ public static class EmploymentDateEndpoints
                     await tx.RollbackAsync(ct);
                 throw;
             }
-        }).RequireAuthorization("HROrAbove");
+        }).RequireAuthorization("HROrAbove")
+        .Produces<EmploymentStartDateResponse>(StatusCodes.Status200OK); // S115 / TASK-11501
 
         // ═══════════════════════════════════════════
         // 3. GET /api/admin/employees/{employeeId}/employment-end-date
@@ -255,15 +256,15 @@ public static class EmploymentDateEndpoints
             var (user, version) = hit.Value;
 
             context.Response.Headers.ETag = $"\"{version}\"";
-            return Results.Ok(new
-            {
-                employeeId = user.UserId,
-                employmentEndDate = user.EmploymentEndDate,
-                endDateDeactivated = user.EndDateDeactivated,
-                isActive = user.IsActive,
-                version,
-            });
-        }).RequireAuthorization("HROrAbove");
+            // S115 / TASK-11501 — named record (BYTE-IDENTICAL wire JSON).
+            return Results.Ok(new EmploymentEndDateResponse(
+                EmployeeId: user.UserId,
+                EmploymentEndDate: user.EmploymentEndDate,
+                EndDateDeactivated: user.EndDateDeactivated,
+                IsActive: user.IsActive,
+                Version: version));
+        }).RequireAuthorization("HROrAbove")
+        .Produces<EmploymentEndDateResponse>(StatusCodes.Status200OK); // S115 / TASK-11501
 
         // ═══════════════════════════════════════════
         // 4. PUT /api/admin/employees/{employeeId}/employment-end-date
@@ -477,14 +478,15 @@ public static class EmploymentDateEndpoints
                 await tx.CommitAsync(ct);
 
                 context.Response.Headers.ETag = $"\"{lifecycle.VersionAfter}\"";
-                return Results.Ok(new
-                {
-                    employeeId,
-                    employmentEndDate = body.EmploymentEndDate,
-                    endDateDeactivated = lifecycle.NewEndDateDeactivated,
-                    isActive = lifecycle.NewIsActive,
-                    version = lifecycle.VersionAfter,
-                });
+                // S115 / TASK-11501 — named record (BYTE-IDENTICAL wire JSON; the GET's shape).
+                // The 409 settlement-conflict body stays UNTYPED (error-shape typing is explicitly
+                // out of the Pass-2 scope).
+                return Results.Ok(new EmploymentEndDateResponse(
+                    EmployeeId: employeeId,
+                    EmploymentEndDate: body.EmploymentEndDate,
+                    EndDateDeactivated: lifecycle.NewEndDateDeactivated,
+                    IsActive: lifecycle.NewIsActive,
+                    Version: lifecycle.VersionAfter));
             }
             catch
             {
@@ -492,7 +494,8 @@ public static class EmploymentDateEndpoints
                     await tx.RollbackAsync(ct);
                 throw;
             }
-        }).RequireAuthorization("HROrAbove");
+        }).RequireAuthorization("HROrAbove")
+        .Produces<EmploymentEndDateResponse>(StatusCodes.Status200OK); // S115 / TASK-11501
 
         return app;
     }

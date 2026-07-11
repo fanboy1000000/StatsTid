@@ -9,7 +9,7 @@
     "test": "vitest run",
     "e2e": "playwright test",
     "gen:api": "openapi-typescript ../docs/api/openapi.json -o src/lib/api-types.ts",
-    "lint": "eslint src/hooks/useForest.ts src/hooks/useSearch.ts src/hooks/useRoster.ts src/hooks/useUnitMutations.ts src/hooks/useOrgMutations.ts src/hooks/useAdmin.ts src/pages/admin/editPerson/employeeProfileApi.ts"
+    "lint": "eslint src/hooks/useForest.ts src/hooks/useSearch.ts src/hooks/useRoster.ts src/hooks/useUnitMutations.ts src/hooks/useOrgMutations.ts src/hooks/useAdmin.ts src/pages/admin/editPerson/employeeProfileApi.ts src/hooks/useReportingLines.ts src/hooks/useEntitlementEligibility.ts"
   },
   "dependencies": {
     "@fontsource/ibm-plex-sans": "^5.2.8",

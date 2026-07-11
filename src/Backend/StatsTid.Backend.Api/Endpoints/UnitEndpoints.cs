@@ -71,7 +71,10 @@ public static class UnitEndpoints
                 .Select(r => new UnitListItem(r.UnitId, r.OrganisationId, r.ParentUnitId, r.Type, r.Name, r.Version))
                 .ToList();
             return Results.Ok(new UnitListResponse(items));
-        }).RequireAuthorization("HROrAbove");
+        }).RequireAuthorization("HROrAbove")
+        // S115 / TASK-11501 — the record was ALREADY named (S104); only this .Produces was missing.
+        // UnitListItem.Type's dormant [AllowedValues] auto-emits as a spec enum on regen (S114).
+        .Produces<UnitListResponse>(StatusCodes.Status200OK);
 
         // ═══════════════════════════════════════════════════════════════════
         //  GET /api/admin/units/forest — S106 / TASK-10601 (ADR-038 D1/D5) the unified scoped FOREST:

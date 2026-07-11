@@ -450,6 +450,9 @@ describe('DangerSection — delete-with-reassignment (BOTH 409s)', () => {
 // manager GET when opened from the UserManagement LIST (no tree context). An
 // away-manager who approves ≥1 report must show their vikar + be able to revoke.
 // ═══════════════════════════════════════════════════════════════════════════
+// S115 / TASK-11502 mock correction: the fixture previously carried
+// `effectiveTo` / `createdBy` / `createdAt` — fields the reports endpoint NEVER
+// serves (the corrected `DirectReport` view matches the spec `DirectReportItem`).
 const report = (id: string): DirectReport => ({
   reportingLineId: `rl-${id}`,
   employeeId: id,
@@ -458,11 +461,8 @@ const report = (id: string): DirectReport => ({
   organisationId: 'ORG1',
   relationship: 'PRIMARY',
   effectiveFrom: '2026-06-15',
-  effectiveTo: null,
   source: 'ADMIN',
   version: 1,
-  createdBy: 'ADMIN1',
-  createdAt: '2026-06-15T00:00:00Z',
 })
 
 describe('LifecycleSections — vikar hydration from the single-manager read (BLOCKER 3)', () => {
