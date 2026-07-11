@@ -3,7 +3,7 @@
 | Field | Value |
 |-------|-------|
 | **Sprint** | 115 |
-| **Status** | complete |
+| **Status** | complete — close `ddede73`; ✅ CI GREEN `29144794028` (all 7 jobs, 2026-07-11) |
 | **Start Date** | 2026-07-03 |
 | **End Date** | 2026-07-11 |
 | **Orchestrator Approved** | yes |
