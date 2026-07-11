@@ -1,0 +1,14 @@
+# openapi-bodyless-declared.txt — the S116 owner-ratified "declared body-less POST" list
+# (the request-side analog of the S112 declared-204 amendment).
+#
+# Each line is a body-verb operation ("METHOD /path") that DELIBERATELY binds no request
+# DTO (a route-param-only action). A listed operation passes the convention gate IFF its
+# response is typed; its missing requestBody is a declared design fact, not an omission.
+#
+# The detection signal is preserved: an UNLISTED body verb with no requestBody schema
+# still FAILS (the "forgot the request DTO" tripwire). A listed operation that later
+# GROWS a requestBody, disappears, or is not a body verb turns this line STALE -> FAIL.
+# Lines starting with '#' and blank lines are ignored.
+
+POST /api/approval/{periodId}/approve
+POST /api/approval/{periodId}/employee-approve

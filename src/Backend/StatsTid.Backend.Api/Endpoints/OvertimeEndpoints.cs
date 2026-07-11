@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using StatsTid.Auth;
+using StatsTid.Backend.Api.Contracts;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
@@ -216,17 +217,17 @@ public static class OvertimeEndpoints
                 }
             }
 
-            return Results.Created($"/api/overtime/pre-approval/{approval.Id}", new
-            {
-                id = approval.Id,
-                employeeId = approval.EmployeeId,
-                periodStart = approval.PeriodStart,
-                periodEnd = approval.PeriodEnd,
-                maxHours = approval.MaxHours,
-                status = approval.Status,
-                reason = approval.Reason,
-            });
-        }).RequireAuthorization("LeaderOrAbove");
+            // S116 / TASK-11600 — named record (BYTE-IDENTICAL wire JSON; a TRUE 201).
+            return Results.Created($"/api/overtime/pre-approval/{approval.Id}", new OvertimePreApprovalCreatedResponse(
+                Id: approval.Id,
+                EmployeeId: approval.EmployeeId,
+                PeriodStart: approval.PeriodStart,
+                PeriodEnd: approval.PeriodEnd,
+                MaxHours: approval.MaxHours,
+                Status: approval.Status,
+                Reason: approval.Reason));
+        }).RequireAuthorization("LeaderOrAbove")
+        .Produces<OvertimePreApprovalCreatedResponse>(StatusCodes.Status201Created); // S116 / TASK-11600
 
         // ── GET /api/overtime/{employeeId}/pre-approvals — List pre-approvals ──
         app.MapGet("/api/overtime/{employeeId}/pre-approvals", async (
@@ -256,20 +257,92 @@ public static class OvertimeEndpoints
                 periodEnd ?? new DateOnly(2100, 12, 31),
                 ct);
 
-            return Results.Ok(approvals.Select(a => new
+            // S116 / TASK-11600 — named record (BYTE-IDENTICAL wire JSON; the 10-field
+            // per-employee element — a SEPARATE record from the S116 admin-list's 11-field one).
+            return Results.Ok(approvals.Select(a => new OvertimePreApprovalListItem(
+                Id: a.Id,
+                EmployeeId: a.EmployeeId,
+                PeriodStart: a.PeriodStart,
+                PeriodEnd: a.PeriodEnd,
+                MaxHours: a.MaxHours,
+                ApprovedBy: a.ApprovedBy,
+                ApprovedAt: a.ApprovedAt,
+                Status: a.Status,
+                Reason: a.Reason,
+                CreatedAt: a.CreatedAt)));
+        }).RequireAuthorization("EmployeeOrAbove")
+        .Produces<IEnumerable<OvertimePreApprovalListItem>>(StatusCodes.Status200OK); // S116 / TASK-11600 — a BARE ARRAY
+
+        // ── GET /api/overtime/pre-approvals — S116 / TASK-11601: the scope-bounded ADMIN list ──
+        //
+        // The NEW admin enumeration the OvertimePreApprovalManagement page's list read points at
+        // (the pre-S116 FE called this route while it did not exist — the L3 404 defect). ADMISSION
+        // mirrors GET /api/approval/pending's scope-aggregate loop VERBATIM in structure: resolve
+        // the actor's scopes (empty → 403), iterate — GLOBAL sees all, ORG_ONLY sees exactly its
+        // org — and dedupe rows across scopes. The ORG DERIVATION lives in the repo's users JOIN
+        // (overtime_pre_approvals has NO org column; users.primary_org_id is the only source), and
+        // that join's is_active = TRUE predicate is the Step-0b CONVERGENT pin: a terminated
+        // employee's rows must NOT appear (see == act — the approve/reject path is fail-closed for
+        // inactive targets, so an unfiltered list would render always-403 Godkend/Afvis buttons).
+        // ALL statuses are enumerable (not PENDING-only). Typed from birth (PAT-012 paved road):
+        // the op NEVER enters the grandfather manifest.
+        app.MapGet("/api/overtime/pre-approvals", async (
+            OvertimePreApprovalRepository preApprovalRepo,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            var actor = context.GetActorContext();
+
+            if (actor.Scopes is null || actor.Scopes.Length == 0)
+                return Results.Json(new { error = "Access denied", reason = "No scopes assigned" }, statusCode: 403);
+
+            var allRows = new List<OvertimePreApprovalAdminRow>();
+            var seenIds = new HashSet<Guid>();
+
+            foreach (var scope in actor.Scopes)
             {
-                id = a.Id,
-                employeeId = a.EmployeeId,
-                periodStart = a.PeriodStart,
-                periodEnd = a.PeriodEnd,
-                maxHours = a.MaxHours,
-                approvedBy = a.ApprovedBy,
-                approvedAt = a.ApprovedAt,
-                status = a.Status,
-                reason = a.Reason,
-                createdAt = a.CreatedAt,
-            }));
-        }).RequireAuthorization("EmployeeOrAbove");
+                IReadOnlyList<OvertimePreApprovalAdminRow> scopeRows;
+
+                if (scope.ScopeType == "GLOBAL")
+                {
+                    // GLOBAL scope: all pre-approvals (the null-org variant).
+                    scopeRows = await preApprovalRepo.GetAllScopedWithEmployeeNamesAsync(null, ct);
+                }
+                else if (scope.ScopeType == "ORG_ONLY" && scope.OrgId is not null)
+                {
+                    // ORG_ONLY: exactly that org (S93/ADR-035: exact membership, no subtree).
+                    scopeRows = await preApprovalRepo.GetAllScopedWithEmployeeNamesAsync(scope.OrgId, ct);
+                }
+                else
+                {
+                    continue;
+                }
+
+                // Deduplicate across scopes
+                foreach (var row in scopeRows)
+                {
+                    if (seenIds.Add(row.Approval.Id))
+                        allRows.Add(row);
+                }
+            }
+
+            // The 11-field admin element = the 10-field per-employee core + the NON-NULL
+            // employeeName from the admission join — a SEPARATE record (an optional shared member
+            // would add employeeName: null to the existing per-employee wire).
+            return Results.Ok(allRows.Select(r => new OvertimePreApprovalAdminListItem(
+                Id: r.Approval.Id,
+                EmployeeId: r.Approval.EmployeeId,
+                PeriodStart: r.Approval.PeriodStart,
+                PeriodEnd: r.Approval.PeriodEnd,
+                MaxHours: r.Approval.MaxHours,
+                ApprovedBy: r.Approval.ApprovedBy,
+                ApprovedAt: r.Approval.ApprovedAt,
+                Status: r.Approval.Status,
+                Reason: r.Approval.Reason,
+                CreatedAt: r.Approval.CreatedAt,
+                EmployeeName: r.EmployeeName)));
+        }).RequireAuthorization("LeaderOrAbove")
+        .Produces<IEnumerable<OvertimePreApprovalAdminListItem>>(StatusCodes.Status200OK); // S116 / TASK-11601 — a BARE ARRAY
 
         // ── PUT /api/overtime/pre-approval/{id}/approve — Approve pre-approval ──
         app.MapPut("/api/overtime/pre-approval/{id}/approve", async (
@@ -344,8 +417,12 @@ public static class OvertimeEndpoints
                 throw;
             }
 
-            return Results.Ok(new { id, status = "APPROVED", approvedBy = actor.ActorId, reason = request?.Reason });
-        }).RequireAuthorization("LeaderOrAbove");
+            // S116 / TASK-11600 — named record (BYTE-IDENTICAL wire JSON; a SEPARATE sibling from
+            // the reject record — the shapes differ by approvedBy).
+            return Results.Ok(new OvertimePreApprovalApproveResponse(
+                Id: id, Status: "APPROVED", ApprovedBy: actor.ActorId, Reason: request?.Reason));
+        }).RequireAuthorization("LeaderOrAbove")
+        .Produces<OvertimePreApprovalApproveResponse>(StatusCodes.Status200OK); // S116 / TASK-11600
 
         // ── PUT /api/overtime/pre-approval/{id}/reject — Reject pre-approval ──
         app.MapPut("/api/overtime/pre-approval/{id}/reject", async (
@@ -414,8 +491,11 @@ public static class OvertimeEndpoints
                 throw;
             }
 
-            return Results.Ok(new { id, status = "REJECTED", reason = request?.Reason });
-        }).RequireAuthorization("LeaderOrAbove");
+            // S116 / TASK-11600 — named record (BYTE-IDENTICAL wire JSON).
+            return Results.Ok(new OvertimePreApprovalRejectResponse(
+                Id: id, Status: "REJECTED", Reason: request?.Reason));
+        }).RequireAuthorization("LeaderOrAbove")
+        .Produces<OvertimePreApprovalRejectResponse>(StatusCodes.Status200OK); // S116 / TASK-11600
 
         // ── POST /api/overtime/{employeeId}/compensate — Apply compensation (payout or afspadsering) ──
         app.MapPost("/api/overtime/{employeeId}/compensate", async (

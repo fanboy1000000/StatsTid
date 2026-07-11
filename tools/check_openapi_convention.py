@@ -68,6 +68,14 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 COMMITTED = REPO / "docs" / "api" / "openapi.json"
 MANIFEST = REPO / "tools" / "openapi-convention-exempt.txt"
+# S116 owner-ratified "declared body-less POST" amendment (the request-side analog of the
+# S112 declared-204 rule): a route-param-only action op (e.g. POST /approve) legitimately
+# binds NO request DTO. Such an op is compliant IFF it is EXPLICITLY listed here AND its
+# response is typed. The detection signal is preserved: an UNLISTED body verb with no
+# requestBody schema still FAILS (the "forgot the request DTO" tripwire), and a listed op
+# whose response is untyped still FAILS (liveness). Stale declarations (op gone, op grew a
+# body, or not a body verb) FAIL like stale manifest lines.
+BODYLESS_DECLARED = REPO / "tools" / "openapi-bodyless-declared.txt"
 
 HTTP_VERBS = ("get", "post", "put", "patch", "delete")
 BODY_VERBS = ("post", "put", "patch")
@@ -178,29 +186,58 @@ def write_manifest(keys: list[str]) -> None:
     MANIFEST.write_text(body, encoding="utf-8")
 
 
+def load_bodyless_declared() -> set[str]:
+    """The S116 declared body-less list — same 'METHOD /path' line format as the manifest."""
+    if not BODYLESS_DECLARED.exists():
+        return set()
+    out: set[str] = set()
+    for line in BODYLESS_DECLARED.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        out.add(line)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # The check
 # ---------------------------------------------------------------------------
 
-def evaluate(spec: dict, manifest: set[str]):
-    """Return (failures, grandfathered_hits, typed_keys, stale_entries).
+def evaluate(spec: dict, manifest: set[str], bodyless_declared: set[str] | None = None):
+    """Return (failures, grandfathered_hits, typed_keys, stale_entries, bodyless_stale).
 
       failures           : [(key, reasons)] for an UNTYPED operation NOT on the manifest -> FAIL.
       grandfathered_hits : keys that are untyped AND on the manifest (allowed, for the count).
       typed_keys         : keys that PASS the convention (and so must NOT be on the manifest).
       stale_entries      : manifest entries that no longer match an untyped operation — either the
                            operation is gone, or it was retrofitted to typed (the entry can be
-                           deleted; report-only WARNING)."""
+                           deleted; report-only WARNING).
+      bodyless_stale     : declared body-less entries that are no longer valid declarations —
+                           the op is gone, is not a body verb, or now HAS a requestBody schema
+                           (the declaration would mask the detection signal) -> FAIL.
+
+    S116 declared-bodyless semantics: for a key in `bodyless_declared`, ONLY the
+    'missing requestBody schema' reason is waived — an untyped RESPONSE on a declared op
+    still fails (liveness), and an UNDECLARED body verb with no requestBody still fails."""
+    bodyless_declared = bodyless_declared or set()
     failures: list[tuple[str, list[str]]] = []
     grandfathered_hits: list[str] = []
     typed_keys: list[str] = []
     live_untyped: set[str] = set()
+    seen_keys: dict[str, tuple[str, dict]] = {}
 
     for key, method, _path, op in iter_operations(spec):
+        seen_keys[key] = (method, op)
         reasons = operation_reasons(method, op)
+        if key in bodyless_declared:
+            reasons = [r for r in reasons if r != "missing requestBody schema (body verb)"]
         if reasons:
             live_untyped.add(key)
-            if key in manifest:
+            # A DECLARED body-less op is never eligible for grandfathering (S116 Step-7a,
+            # Codex): the declaration's liveness rule (untyped response -> RED) must not be
+            # maskable by a retained manifest line — double membership would accept exactly
+            # the declared+untyped case the rule keeps red.
+            if key in manifest and key not in bodyless_declared:
                 grandfathered_hits.append(key)
             else:
                 failures.append((key, reasons))
@@ -208,7 +245,26 @@ def evaluate(spec: dict, manifest: set[str]):
             typed_keys.append(key)
 
     stale_entries = sorted(manifest - live_untyped)
-    return failures, grandfathered_hits, sorted(typed_keys), stale_entries
+
+    bodyless_stale: list[tuple[str, str]] = []
+    for key in sorted(bodyless_declared):
+        if key in manifest:
+            bodyless_stale.append((key, "ALSO on the grandfather manifest — a declared "
+                                        "body-less op cannot be grandfathered; delete one "
+                                        "of the two lines"))
+        if key not in seen_keys:
+            bodyless_stale.append((key, "operation no longer exists in the spec"))
+            continue
+        method, op = seen_keys[key]
+        if method not in BODY_VERBS:
+            bodyless_stale.append((key, "not a body verb — the declaration is meaningless"))
+            continue
+        rb = op.get("requestBody")
+        if _content_has_schema(rb.get("content") if rb else None):
+            bodyless_stale.append((key, "the operation now HAS a requestBody schema — "
+                                        "delete the declaration (it would mask the tripwire)"))
+
+    return failures, grandfathered_hits, sorted(typed_keys), stale_entries, bodyless_stale
 
 
 def do_check() -> int:
@@ -219,10 +275,18 @@ def do_check() -> int:
         return 1
     spec = load_spec()
     manifest = load_manifest()
-    failures, grandfathered, typed, stale = evaluate(spec, manifest)
+    bodyless = load_bodyless_declared()
+    failures, grandfathered, typed, stale, bodyless_stale = evaluate(spec, manifest, bodyless)
 
     print(f"[info] {len(typed)} typed operation(s); {len(grandfathered)} grandfathered "
-          f"(manifest has {len(manifest)} entr(ies)).")
+          f"(manifest has {len(manifest)} entr(ies)); "
+          f"{len(bodyless)} declared body-less.")
+
+    if bodyless_stale:
+        print("\nSTALE BODY-LESS DECLARATIONS (FAIL) — delete/fix the line(s) in "
+              f"{BODYLESS_DECLARED.relative_to(REPO).as_posix()}:")
+        for key, why in bodyless_stale:
+            print(f"  - {key}  [{why}]")
 
     if stale:
         # S111 Step-7a (Codex): a stale entry = a grandfathered op that is now TYPED (retrofitted)
@@ -247,7 +311,7 @@ def do_check() -> int:
         print("  Do NOT add the endpoint to tools/openapi-convention-exempt.txt -- that manifest "
               "only SHRINKS as the retrofit types endpoints.")
 
-    if failures or stale:
+    if failures or stale or bodyless_stale:
         return 1
 
     print(f"\n[ok] every new/non-grandfathered operation is typed "
@@ -258,7 +322,8 @@ def do_check() -> int:
 def do_list() -> int:
     spec = load_spec()
     manifest = load_manifest()
-    failures, grandfathered, typed, stale = evaluate(spec, manifest)
+    failures, grandfathered, typed, stale, _bodyless_stale = evaluate(
+        spec, manifest, load_bodyless_declared())
     failing_keys = {k for k, _ in failures}
     grand = set(grandfathered)
     print("== openapi operation surface ==")
@@ -300,7 +365,8 @@ def do_selftest() -> int:
     manifest = load_manifest()
 
     # (1) the real spec must pass cleanly.
-    failures, grandfathered, typed, _stale = evaluate(spec, manifest)
+    bodyless = load_bodyless_declared()
+    failures, grandfathered, typed, _stale, _bs = evaluate(spec, manifest, bodyless)
     if failures:
         print("[FAIL] selftest: the COMMITTED spec already fails the gate "
               f"({len(failures)} untyped, non-grandfathered) -- the manifest is out of date:")
@@ -320,7 +386,7 @@ def do_selftest() -> int:
     perturbed["paths"][fake_post] = {
         "post": {"responses": {"200": {"description": "OK"}}}  # no requestBody, empty 200
     }
-    f2, _g2, _t2, _s2 = evaluate(perturbed, manifest)
+    f2, _g2, _t2, _s2, _bs2 = evaluate(perturbed, manifest, bodyless)
     flagged = {k for k, _ in f2}
     get_key = f"GET {fake_get}"
     post_key = f"POST {fake_post}"
@@ -346,7 +412,7 @@ def do_selftest() -> int:
     perturbed["paths"][fake_nosuccess] = {
         "get": {"responses": {"404": {"description": "Not Found"}}}  # no 2xx at all -> untyped
     }
-    f3, _g3, _t3, _s3 = evaluate(perturbed, manifest)
+    f3, _g3, _t3, _s3, _bs3 = evaluate(perturbed, manifest, bodyless)
     flagged3 = {k for k, _ in f3}
     del_key = f"DELETE {fake_del}"
     nosuccess_key = f"GET {fake_nosuccess}"
@@ -362,6 +428,66 @@ def do_selftest() -> int:
     print(f"[ok] selftest: a declared-204-only DELETE was ACCEPTED -> {del_key}")
     print(f"[ok] selftest: an op with NO success code was flagged  -> {nosuccess_key}  "
           f"[{'; '.join(dict(f3)[nosuccess_key])}]")
+
+    # (4) the S116 declared body-less POST amendment, all four directions:
+    #     declared + typed response  -> ACCEPTED (the waiver works)
+    #     declared + untyped response -> REJECTED (liveness — the waiver covers ONLY reqbody)
+    #     undeclared body-less POST   -> REJECTED (case (2) above already proves the tripwire)
+    #     stale declaration (op grew a body / op gone) -> bodyless_stale FAIL
+    fake_action = "/api/admin/__selftest_declared_bodyless_action__"
+    fake_action_untyped = "/api/admin/__selftest_declared_bodyless_untyped__"
+    fake_gone = "/api/admin/__selftest_declared_bodyless_gone__"
+    schema_ref = {"application/json": {"schema": {"$ref": "#/components/schemas/__x__"}}}
+    perturbed["paths"][fake_action] = {
+        "post": {"responses": {"200": {"description": "OK", "content": schema_ref}}}
+    }
+    perturbed["paths"][fake_action_untyped] = {
+        "post": {"responses": {"200": {"description": "OK"}}}  # untyped response, no body
+    }
+    synthetic_declared = {
+        f"POST {fake_action}",
+        f"POST {fake_action_untyped}",
+        f"POST {fake_gone}",  # not in the spec -> stale
+    }
+    f4, _g4, t4, _s4, bs4 = evaluate(perturbed, manifest, bodyless | synthetic_declared)
+    flagged4 = {k for k, _ in f4}
+    action_key = f"POST {fake_action}"
+    untyped_key = f"POST {fake_action_untyped}"
+    gone_key = f"POST {fake_gone}"
+    if action_key not in t4:
+        print("[FAIL] selftest: a DECLARED body-less POST with a typed response was NOT "
+              "accepted -- the S116 amendment is broken.")
+        return 1
+    if untyped_key not in flagged4:
+        print("[FAIL] selftest: a DECLARED body-less POST with an UNTYPED response was NOT "
+              "flagged -- the declaration waives too much.")
+        return 1
+    if gone_key not in {k for k, _ in bs4}:
+        print("[FAIL] selftest: a STALE body-less declaration was NOT flagged.")
+        return 1
+    print(f"[ok] selftest: a declared body-less POST (typed response) was ACCEPTED -> {action_key}")
+    print(f"[ok] selftest: a declared body-less POST with an UNTYPED response stays RED -> "
+          f"{untyped_key}  [{'; '.join(dict(f4)[untyped_key])}]")
+    print(f"[ok] selftest: a stale body-less declaration was flagged -> {gone_key}")
+
+    # (5) S116 Step-7a (Codex): DOUBLE MEMBERSHIP must not mask the liveness rule — an op
+    #     that is declared body-less AND on the grandfather manifest, with an UNTYPED
+    #     response, must (a) fail rather than count as grandfathered, and (b) flag the
+    #     double membership as a stale declaration.
+    f5, g5, _t5, _s5, bs5 = evaluate(perturbed, manifest | {untyped_key}, bodyless | synthetic_declared)
+    if untyped_key in g5:
+        print("[FAIL] selftest: a declared+manifest-listed body-less op with an untyped "
+              "response was accepted as GRANDFATHERED -- the manifest masks the liveness rule.")
+        return 1
+    if untyped_key not in {k for k, _ in f5}:
+        print("[FAIL] selftest: the declared+manifest-listed untyped op did not FAIL.")
+        return 1
+    if untyped_key not in {k for k, _ in bs5}:
+        print("[FAIL] selftest: double membership (declared + manifest) was NOT flagged stale.")
+        return 1
+    print(f"[ok] selftest: declared+manifest double membership stays RED (not grandfathered, "
+          f"flagged stale) -> {untyped_key}")
+
     print("[ok] selftest exits 1 by design -- the gate is live.")
     return 1
 

@@ -2,6 +2,7 @@ using System.Data;
 using Microsoft.AspNetCore.Mvc;
 using Npgsql;
 using StatsTid.Auth;
+using StatsTid.Backend.Api.Contracts;
 using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
@@ -238,8 +239,10 @@ public static class ApprovalEndpoints
 
             await tx.CommitAsync(ct);
 
-            return Results.Ok(new { periodId, status = "SUBMITTED" });
-        }).RequireAuthorization("EmployeeOrAbove");
+            // S116 / TASK-11600 — named record (BYTE-IDENTICAL wire JSON).
+            return Results.Ok(new PeriodActionResponse(PeriodId: periodId, Status: "SUBMITTED"));
+        }).RequireAuthorization("EmployeeOrAbove")
+        .Produces<PeriodActionResponse>(StatusCodes.Status200OK); // S116 / TASK-11600
 
         // ── Approve Period ──
 
@@ -439,8 +442,10 @@ public static class ApprovalEndpoints
 
             await tx.CommitAsync(ct);
 
-            return Results.Ok(new { periodId, status = "APPROVED" });
-        })).RequireAuthorization("LeaderOrAbove"); // S78 R1: extra ) closes TreeRootDriftRetry.RunAsync
+            // S116 / TASK-11600 — named record, swapped INSIDE the retry lambda (S115 precedent).
+            return Results.Ok(new PeriodActionResponse(PeriodId: periodId, Status: "APPROVED"));
+        })).RequireAuthorization("LeaderOrAbove") // S78 R1: extra ) closes TreeRootDriftRetry.RunAsync
+        .Produces<PeriodActionResponse>(StatusCodes.Status200OK); // S116 / TASK-11600
 
         // ── Reject Period ──
 
@@ -597,8 +602,10 @@ public static class ApprovalEndpoints
 
             await tx.CommitAsync(ct);
 
-            return Results.Ok(new { periodId, status = "REJECTED", reason = request.Reason });
-        })).RequireAuthorization("LeaderOrAbove"); // S78 R1: extra ) closes TreeRootDriftRetry.RunAsync
+            // S116 / TASK-11600 — named record, swapped INSIDE the retry lambda (S115 precedent).
+            return Results.Ok(new PeriodRejectResponse(PeriodId: periodId, Status: "REJECTED", Reason: request.Reason));
+        })).RequireAuthorization("LeaderOrAbove") // S78 R1: extra ) closes TreeRootDriftRetry.RunAsync
+        .Produces<PeriodRejectResponse>(StatusCodes.Status200OK); // S116 / TASK-11600
 
         // ── Get Pending Periods ──
 
@@ -623,18 +630,18 @@ public static class ApprovalEndpoints
                 var myReportPeriods = await approvalRepo.GetPendingForDesignatedReportsAsync(
                     actor.ActorId!, actor.Scopes, ct);
 
-                var myResult = myReportPeriods.Select(p => new
-                {
-                    periodId = p.PeriodId,
-                    employeeId = p.EmployeeId,
-                    orgId = p.OrgId,
-                    periodStart = p.PeriodStart,
-                    periodEnd = p.PeriodEnd,
-                    periodType = p.PeriodType,
-                    status = p.Status,
-                    submittedAt = p.SubmittedAt,
-                    agreementCode = p.AgreementCode
-                }).ToList();
+                // S116 / TASK-11600 — named record (BYTE-IDENTICAL wire JSON; the shared
+                // pending/by-month 9-field element).
+                var myResult = myReportPeriods.Select(p => new ApprovalPeriodListItem(
+                    PeriodId: p.PeriodId,
+                    EmployeeId: p.EmployeeId,
+                    OrgId: p.OrgId,
+                    PeriodStart: p.PeriodStart,
+                    PeriodEnd: p.PeriodEnd,
+                    PeriodType: p.PeriodType,
+                    Status: p.Status,
+                    SubmittedAt: p.SubmittedAt,
+                    AgreementCode: p.AgreementCode)).ToList();
 
                 return Results.Ok(myResult);
             }
@@ -670,21 +677,21 @@ public static class ApprovalEndpoints
                 }
             }
 
-            var result = allPending.Select(p => new
-            {
-                periodId = p.PeriodId,
-                employeeId = p.EmployeeId,
-                orgId = p.OrgId,
-                periodStart = p.PeriodStart,
-                periodEnd = p.PeriodEnd,
-                periodType = p.PeriodType,
-                status = p.Status,
-                submittedAt = p.SubmittedAt,
-                agreementCode = p.AgreementCode
-            }).ToList();
+            // S116 / TASK-11600 — named record (the SAME shared element as the my-reports branch).
+            var result = allPending.Select(p => new ApprovalPeriodListItem(
+                PeriodId: p.PeriodId,
+                EmployeeId: p.EmployeeId,
+                OrgId: p.OrgId,
+                PeriodStart: p.PeriodStart,
+                PeriodEnd: p.PeriodEnd,
+                PeriodType: p.PeriodType,
+                Status: p.Status,
+                SubmittedAt: p.SubmittedAt,
+                AgreementCode: p.AgreementCode)).ToList();
 
             return Results.Ok(result);
-        }).RequireAuthorization("LeaderOrAbove");
+        }).RequireAuthorization("LeaderOrAbove")
+        .Produces<IEnumerable<ApprovalPeriodListItem>>(StatusCodes.Status200OK); // S116 / TASK-11600 — a BARE ARRAY
 
         // ── Get Periods by Month ──
 
@@ -716,18 +723,18 @@ public static class ApprovalEndpoints
                 var myReportPeriods = await approvalRepo.GetByMonthForDesignatedReportsAsync(
                     actor.ActorId!, actor.Scopes, year, month, ct);
 
-                var myResult = myReportPeriods.Select(p => new
-                {
-                    periodId = p.PeriodId,
-                    employeeId = p.EmployeeId,
-                    orgId = p.OrgId,
-                    periodStart = p.PeriodStart,
-                    periodEnd = p.PeriodEnd,
-                    periodType = p.PeriodType,
-                    status = p.Status,
-                    submittedAt = p.SubmittedAt,
-                    agreementCode = p.AgreementCode
-                }).ToList();
+                // S116 / TASK-11600 — named record (BYTE-IDENTICAL wire JSON; the shared
+                // pending/by-month 9-field element).
+                var myResult = myReportPeriods.Select(p => new ApprovalPeriodListItem(
+                    PeriodId: p.PeriodId,
+                    EmployeeId: p.EmployeeId,
+                    OrgId: p.OrgId,
+                    PeriodStart: p.PeriodStart,
+                    PeriodEnd: p.PeriodEnd,
+                    PeriodType: p.PeriodType,
+                    Status: p.Status,
+                    SubmittedAt: p.SubmittedAt,
+                    AgreementCode: p.AgreementCode)).ToList();
 
                 return Results.Ok(myResult);
             }
@@ -763,21 +770,21 @@ public static class ApprovalEndpoints
                 }
             }
 
-            var result = allPeriods.Select(p => new
-            {
-                periodId = p.PeriodId,
-                employeeId = p.EmployeeId,
-                orgId = p.OrgId,
-                periodStart = p.PeriodStart,
-                periodEnd = p.PeriodEnd,
-                periodType = p.PeriodType,
-                status = p.Status,
-                submittedAt = p.SubmittedAt,
-                agreementCode = p.AgreementCode
-            }).ToList();
+            // S116 / TASK-11600 — named record (the SAME shared element as the my-reports branch).
+            var result = allPeriods.Select(p => new ApprovalPeriodListItem(
+                PeriodId: p.PeriodId,
+                EmployeeId: p.EmployeeId,
+                OrgId: p.OrgId,
+                PeriodStart: p.PeriodStart,
+                PeriodEnd: p.PeriodEnd,
+                PeriodType: p.PeriodType,
+                Status: p.Status,
+                SubmittedAt: p.SubmittedAt,
+                AgreementCode: p.AgreementCode)).ToList();
 
             return Results.Ok(result);
-        }).RequireAuthorization("LeaderOrAbove");
+        }).RequireAuthorization("LeaderOrAbove")
+        .Produces<IEnumerable<ApprovalPeriodListItem>>(StatusCodes.Status200OK); // S116 / TASK-11600 — a BARE ARRAY
 
         // ── S87-8701 — Team Overview aggregate (leader Teamoversigt) ──
         //
@@ -815,7 +822,9 @@ public static class ApprovalEndpoints
             //     non-approver / a leader with no reports gets an empty roster (NOT an org-scope leak).
             var roster = await approvalRepo.GetTeamOverviewRosterAsync(actor.ActorId, year, month, ct);
             if (roster.Count == 0)
-                return Results.Ok(new { employees = Array.Empty<object>() });
+                // S116 / TASK-11600 — named record; the empty-roster early return serializes the
+                // SAME envelope shape ({ employees: [] }) as the assembled site below.
+                return Results.Ok(new TeamOverviewResponse(Array.Empty<TeamOverviewEmployeeRow>()));
 
             var employeeIds = roster.Select(r => r.EmployeeId).Distinct().ToArray();
             var periodIds = roster.Where(r => r.PeriodId is not null).Select(r => r.PeriodId!.Value).ToArray();
@@ -1049,7 +1058,7 @@ public static class ApprovalEndpoints
             }
 
             // (3) Assemble one row per roster employee.
-            var employees = new List<object>(roster.Count);
+            var employees = new List<TeamOverviewEmployeeRow>(roster.Count);
             foreach (var r in roster)
             {
                 ApprovalPeriod? period = r.PeriodId is not null && periodById.TryGetValue(r.PeriodId.Value, out var p) ? p : null;
@@ -1104,31 +1113,32 @@ public static class ApprovalEndpoints
                     }
                 }
 
-                employees.Add(new
-                {
-                    periodId = r.PeriodId,
-                    employeeId = r.EmployeeId,
-                    displayName = r.DisplayName,
-                    agreement,
-                    status,
-                    submittedAt = period?.SubmittedAt,
-                    decisionAt,
-                    rejectionReason,
-                    normExpected,
-                    normRegistered,
-                    flexBalance,
-                    overtime,
-                    ferieUsed,
-                    ferieTotal,
-                    awayToday,
-                    hasWarning,
-                    payrollExported,
-                    payrollExportedAt = payrollExported ? exportedAt : (DateTime?)null,
-                });
+                // S116 / TASK-11600 — named record (BYTE-IDENTICAL wire JSON; the 18-field
+                // handler-assembled Teamoversigt row).
+                employees.Add(new TeamOverviewEmployeeRow(
+                    PeriodId: r.PeriodId,
+                    EmployeeId: r.EmployeeId,
+                    DisplayName: r.DisplayName,
+                    Agreement: agreement,
+                    Status: status,
+                    SubmittedAt: period?.SubmittedAt,
+                    DecisionAt: decisionAt,
+                    RejectionReason: rejectionReason,
+                    NormExpected: normExpected,
+                    NormRegistered: normRegistered,
+                    FlexBalance: flexBalance,
+                    Overtime: overtime,
+                    FerieUsed: ferieUsed,
+                    FerieTotal: ferieTotal,
+                    AwayToday: awayToday,
+                    HasWarning: hasWarning,
+                    PayrollExported: payrollExported,
+                    PayrollExportedAt: payrollExported ? exportedAt : (DateTime?)null));
             }
 
-            return Results.Ok(new { employees });
-        }).RequireAuthorization("LeaderOrAbove");
+            return Results.Ok(new TeamOverviewResponse(employees));
+        }).RequireAuthorization("LeaderOrAbove")
+        .Produces<TeamOverviewResponse>(StatusCodes.Status200OK); // S116 / TASK-11600
 
         // ── S88-8801 — Allocation breakdown (the leder-oversigt expandable detail's Fordeling) ──
         //
@@ -1229,7 +1239,7 @@ public static class ApprovalEndpoints
 
             // (c) allocations[] — month-sum NORMAL+non-null-TaskId hours grouped by TaskId (display bars;
             //     sums to allocated). Stable order by taskId for deterministic rendering.
-            var allocations = new List<object>();
+            var allocations = new List<AllocationBreakdownItem>();
             await using (var cmd = new NpgsqlCommand(
                 """
                 SELECT task_id, COALESCE(SUM(hours), 0) AS hours
@@ -1245,7 +1255,7 @@ public static class ApprovalEndpoints
                 cmd.Parameters.AddWithValue("end", monthEnd);
                 await using var reader = await cmd.ExecuteReaderAsync(ct);
                 while (await reader.ReadAsync(ct))
-                    allocations.Add(new { taskId = reader.GetString(0), hours = reader.GetDecimal(1) });
+                    allocations.Add(new AllocationBreakdownItem(TaskId: reader.GetString(0), Hours: reader.GetDecimal(1)));
             }
 
             // (d) The month totals + the per-day directional sums + the AUTHORITATIVE per-day ANY check.
@@ -1271,16 +1281,16 @@ public static class ApprovalEndpoints
                     hasAllocationImbalance = true;
             }
 
-            return Results.Ok(new
-            {
-                allocations,
-                worked,
-                allocated,
-                underAllocated = Math.Round(underAllocated, 2),
-                overAllocated = Math.Round(overAllocated, 2),
-                hasAllocationImbalance,
-            });
-        }).RequireAuthorization("LeaderOrAbove");
+            // S116 / TASK-11600 — named record (BYTE-IDENTICAL wire JSON).
+            return Results.Ok(new AllocationBreakdownResponse(
+                Allocations: allocations,
+                Worked: worked,
+                Allocated: allocated,
+                UnderAllocated: Math.Round(underAllocated, 2),
+                OverAllocated: Math.Round(overAllocated, 2),
+                HasAllocationImbalance: hasAllocationImbalance));
+        }).RequireAuthorization("LeaderOrAbove")
+        .Produces<AllocationBreakdownResponse>(StatusCodes.Status200OK); // S116 / TASK-11600
 
         // ── Get Employee Periods ──
 
@@ -1307,26 +1317,27 @@ public static class ApprovalEndpoints
 
             var periods = await approvalRepo.GetByEmployeeAsync(employeeId, ct);
 
-            var result = periods.Select(p => new
-            {
-                periodId = p.PeriodId,
-                employeeId = p.EmployeeId,
-                orgId = p.OrgId,
-                periodStart = p.PeriodStart,
-                periodEnd = p.PeriodEnd,
-                periodType = p.PeriodType,
-                status = p.Status,
-                agreementCode = p.AgreementCode,
-                okVersion = p.OkVersion,
-                submittedAt = p.SubmittedAt,
-                approvedBy = p.ApprovedBy,
-                approvedAt = p.ApprovedAt,
-                rejectionReason = p.RejectionReason,
-                createdAt = p.CreatedAt
-            }).ToList();
+            // S116 / TASK-11600 — named record (BYTE-IDENTICAL wire JSON; the WIDER 14-field
+            // per-employee period row — deliberately NOT the shared pending/by-month element).
+            var result = periods.Select(p => new EmployeePeriodItem(
+                PeriodId: p.PeriodId,
+                EmployeeId: p.EmployeeId,
+                OrgId: p.OrgId,
+                PeriodStart: p.PeriodStart,
+                PeriodEnd: p.PeriodEnd,
+                PeriodType: p.PeriodType,
+                Status: p.Status,
+                AgreementCode: p.AgreementCode,
+                OkVersion: p.OkVersion,
+                SubmittedAt: p.SubmittedAt,
+                ApprovedBy: p.ApprovedBy,
+                ApprovedAt: p.ApprovedAt,
+                RejectionReason: p.RejectionReason,
+                CreatedAt: p.CreatedAt)).ToList();
 
             return Results.Ok(result);
-        }).RequireAuthorization("EmployeeOrAbove");
+        }).RequireAuthorization("EmployeeOrAbove")
+        .Produces<IEnumerable<EmployeePeriodItem>>(StatusCodes.Status200OK); // S116 / TASK-11600 — a BARE ARRAY
 
         // ── Employee Approve Period ──
 
@@ -1540,8 +1551,10 @@ public static class ApprovalEndpoints
 
             await tx.CommitAsync(ct);
 
-            return Results.Ok(new { periodId, status = "EMPLOYEE_APPROVED" });
-        }).RequireAuthorization("EmployeeOrAbove");
+            // S116 / TASK-11600 — named record (BYTE-IDENTICAL wire JSON; the shared action receipt).
+            return Results.Ok(new PeriodActionResponse(PeriodId: periodId, Status: "EMPLOYEE_APPROVED"));
+        }).RequireAuthorization("EmployeeOrAbove")
+        .Produces<PeriodActionResponse>(StatusCodes.Status200OK); // S116 / TASK-11600
 
         // ── Reopen Period ──
 
@@ -1748,8 +1761,10 @@ public static class ApprovalEndpoints
 
             await tx.CommitAsync(ct);
 
-            return Results.Ok(new { periodId, status = "DRAFT" });
-        })).RequireAuthorization("EmployeeOrAbove"); // S78 R1: extra ) closes TreeRootDriftRetry.RunAsync
+            // S116 / TASK-11600 — named record, swapped INSIDE the retry lambda (S115 precedent).
+            return Results.Ok(new PeriodActionResponse(PeriodId: periodId, Status: "DRAFT"));
+        })).RequireAuthorization("EmployeeOrAbove") // S78 R1: extra ) closes TreeRootDriftRetry.RunAsync
+        .Produces<PeriodActionResponse>(StatusCodes.Status200OK); // S116 / TASK-11600
 
         return app;
     }

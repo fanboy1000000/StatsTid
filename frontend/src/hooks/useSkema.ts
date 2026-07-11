@@ -110,6 +110,19 @@ function parseApprovalValidationError(raw: string): ApprovalValidationError | nu
   return null
 }
 
+// ── S116 / TASK-11602 — the sanctioned LEGACY skema-family calls ─────────────
+// The skema month GET + save POST are GRANDFATHERED untyped operations (the
+// spec declares no response schema — `content?: never` — so they have NO typed
+// form until the skema family is drained in a later pass). Their explicit-T
+// legacy calls remain, pinned by these ROUTE HELPERS: the eslint tier for this
+// file bans every explicit-T apiClient call EXCEPT one whose first argument is
+// `SKEMA_MONTH_PATH(...)` / `SKEMA_SAVE_PATH(...)` (the S115
+// `ELIGIBILITY_PATH` lint-pin precedent), so a future explicit-T call on any
+// OTHER url in this file stays banned.
+const SKEMA_MONTH_PATH = (employeeId: string, year: number, month: number) =>
+  `/api/skema/${employeeId}/month?year=${year}&month=${month}`
+const SKEMA_SAVE_PATH = (employeeId: string) => `/api/skema/${employeeId}/save`
+
 export function useSkema(employeeId: string, year: number, month: number): UseSkemaResult {
   const [data, setData] = useState<SkemaMonthData | null>(null)
   const [loading, setLoading] = useState(true)
@@ -122,7 +135,7 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
     setLoading(true)
     setError(null)
     const result = await apiClient.get<SkemaMonthData>(
-      `/api/skema/${employeeId}/month?year=${year}&month=${month}`
+      SKEMA_MONTH_PATH(employeeId, year, month)
     )
     if (result.ok) {
       setData(result.data)
@@ -162,7 +175,7 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
         .filter(c => absenceTypeSet.has(c.rowKey) && c.hours != null && c.hours !== 0)
         .map(c => ({ date: c.date, absenceType: c.rowKey, hours: c.hours }))
 
-      const result = await apiClient.post<void>(`/api/skema/${employeeId}/save`, {
+      const result = await apiClient.post<void>(SKEMA_SAVE_PATH(employeeId), {
         year,
         month,
         entries: entries.length > 0 ? entries : null,
@@ -211,7 +224,13 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
 
   const employeeApprove = useCallback(
     async (periodId: string) => {
-      const result = await apiClient.post<void>(`/api/approval/${periodId}/employee-approve`, {})
+      // S116 typed switch — NAMED REQUEST DELTA: the legacy call sent a literal
+      // `{}` body; the op binds NO request DTO (the handler takes only the
+      // periodId route param — verified against ApprovalEndpoints.cs:1344), so
+      // the typed form sends NO body. The backend never read it.
+      const result = await apiClient.post('/api/approval/{periodId}/employee-approve', {
+        params: { path: { periodId } },
+      })
       if (result.ok) {
         setApprovalValidationError(null)
         await fetchData()
@@ -239,23 +258,26 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
       const periodEnd = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
       const okVersion = deriveOkVersion(year, month)
 
-      const submitResult = await apiClient.post<{ periodId: string }>('/api/approval/submit', {
-        employeeId,
-        orgId,
-        periodStart,
-        periodEnd,
-        periodType: 'MONTHLY',
-        agreementCode,
-        okVersion,
+      const submitResult = await apiClient.post('/api/approval/submit', {
+        body: {
+          employeeId,
+          orgId,
+          periodStart,
+          periodEnd,
+          periodType: 'MONTHLY',
+          agreementCode,
+          okVersion,
+        },
       })
       if (!submitResult.ok) {
         setError(submitResult.error)
         return
       }
 
-      const approveResult = await apiClient.post<void>(
-        `/api/approval/${submitResult.data.periodId}/employee-approve`, {}
-      )
+      // S116 typed switch — same NAMED no-body delta as employeeApprove above.
+      const approveResult = await apiClient.post('/api/approval/{periodId}/employee-approve', {
+        params: { path: { periodId: submitResult.data.periodId } },
+      })
       if (approveResult.ok) {
         await fetchData()
       } else {
@@ -278,7 +300,10 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
 
   const reopenPeriod = useCallback(
     async (periodId: string, reason?: string) => {
-      const result = await apiClient.post<void>(`/api/approval/${periodId}/reopen`, { reason: reason ?? 'Genåbnet af medarbejder' })
+      const result = await apiClient.post('/api/approval/{periodId}/reopen', {
+        params: { path: { periodId } },
+        body: { reason: reason ?? 'Genåbnet af medarbejder' },
+      })
       if (result.ok) {
         await fetchData()
       } else {

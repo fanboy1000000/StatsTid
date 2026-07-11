@@ -1645,14 +1645,14 @@ public static class ReportingLineEndpoints
             var vikar = await vikarRepo.GetActiveByApproverAnyDateAsync(actorId, ct);
             if (vikar is null)
             {
-                return Results.Ok(new
-                {
-                    active = false,
-                    actingManagerId = (string?)null,
-                    effectiveFrom = (DateOnly?)null,
-                    effectiveTo = (DateOnly?)null,
-                    delegatedEmployees = Array.Empty<object>(),
-                });
+                // S116 / TASK-11600 — named record (BYTE-IDENTICAL wire JSON). ONE record for
+                // BOTH branches: a STABLE key set, nulls + an empty list on the inactive branch.
+                return Results.Ok(new DelegationStatusResponse(
+                    Active: false,
+                    ActingManagerId: null,
+                    EffectiveFrom: null,
+                    EffectiveTo: null,
+                    DelegatedEmployees: Array.Empty<DelegatedEmployeeItem>()));
             }
 
             // Re-derive delegatedEmployees[] DYNAMICALLY (R4 / Codex W3): the actor's CURRENT
@@ -1692,19 +1692,18 @@ public static class ReportingLineEndpoints
             var employeeIds = new HashSet<string>(delegatedEmployeeIds, StringComparer.Ordinal);
             var displayNames = await LookupDisplayNamesAsync(connectionFactory, employeeIds, ct);
 
-            return Results.Ok(new
-            {
-                active = true,
-                actingManagerId = vikar.VikarUserId,
-                effectiveFrom = (DateOnly?)DateOnly.FromDateTime(vikar.CreatedAt),
-                effectiveTo = (DateOnly?)vikar.UntilDate,
-                delegatedEmployees = delegatedEmployeeIds.Select(empId => new
-                {
-                    employeeId = empId,
-                    displayName = displayNames.GetValueOrDefault(empId),
-                }),
-            });
-        }).RequireAuthorization("LeaderOrAbove");
+            // S116 / TASK-11600 — named record (BYTE-IDENTICAL wire JSON; the SAME record as the
+            // inactive branch above — the stable key set is what makes ONE record possible).
+            return Results.Ok(new DelegationStatusResponse(
+                Active: true,
+                ActingManagerId: vikar.VikarUserId,
+                EffectiveFrom: DateOnly.FromDateTime(vikar.CreatedAt),
+                EffectiveTo: vikar.UntilDate,
+                DelegatedEmployees: delegatedEmployeeIds.Select(empId => new DelegatedEmployeeItem(
+                    EmployeeId: empId,
+                    DisplayName: displayNames.GetValueOrDefault(empId)))));
+        }).RequireAuthorization("LeaderOrAbove")
+        .Produces<DelegationStatusResponse>(StatusCodes.Status200OK); // S116 / TASK-11600
 
         // ═══════════════════════════════════════════
         // Endpoint 12: POST /api/reporting-lines/delegate — Self-service delegation
@@ -1981,15 +1980,15 @@ public static class ReportingLineEndpoints
                 return Results.BadRequest(new { error = "Could not validate the vikar's styrelse (tree); ensure the vikar is an active user in your styrelse" });
             }
 
-            return Results.Ok(new
-            {
-                delegatedCount = delegated,
-                skippedCount = skipped,
-                actingManagerId = request.ActingManagerId,
-                effectiveFrom,
-                effectiveTo,
-            });
-        })).RequireAuthorization("LeaderOrAbove"); // S78 R9: extra ) closes TreeRootDriftRetry.RunAsync
+            // S116 / TASK-11600 — named record, swapped INSIDE the retry lambda (S115 precedent).
+            return Results.Ok(new DelegationCreateResponse(
+                DelegatedCount: delegated,
+                SkippedCount: skipped,
+                ActingManagerId: request.ActingManagerId,
+                EffectiveFrom: effectiveFrom,
+                EffectiveTo: effectiveTo));
+        })).RequireAuthorization("LeaderOrAbove") // S78 R9: extra ) closes TreeRootDriftRetry.RunAsync
+        .Produces<DelegationCreateResponse>(StatusCodes.Status200OK); // S116 / TASK-11600
 
         // ═══════════════════════════════════════════
         // Endpoint 13: DELETE /api/reporting-lines/delegate — Revoke self-delegation
@@ -2112,7 +2111,10 @@ public static class ReportingLineEndpoints
 
                     await tx.CommitAsync(ct);
 
-                    return Results.Ok(new { revokedCount = coveredCount > 0 ? coveredCount : 1 });
+                    // S116 / TASK-11600 — named record, swapped INSIDE the retry lambda (S115
+                    // precedent). A GENUINE 200-with-body — NOT a 204.
+                    return Results.Ok(new DelegationRevokeResponse(
+                        RevokedCount: coveredCount > 0 ? coveredCount : 1));
                 }
                 catch
                 {
@@ -2120,7 +2122,8 @@ public static class ReportingLineEndpoints
                     throw;
                 }
             });
-        }).RequireAuthorization("LeaderOrAbove");
+        }).RequireAuthorization("LeaderOrAbove")
+        .Produces<DelegationRevokeResponse>(StatusCodes.Status200OK); // S116 / TASK-11600
 
         // ═══════════════════════════════════════════
         // Endpoint 13b: GET /api/admin/reporting-lines/{managerId}/vikar — the SINGLE-manager active

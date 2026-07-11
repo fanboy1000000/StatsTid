@@ -53,6 +53,44 @@ public sealed class OvertimePreApprovalRepository
         return await ReadApprovalsAsync(cmd, ct);
     }
 
+    /// <summary>
+    /// S116 / TASK-11601 — the scope-bounded ADMIN enumeration: ALL statuses (NOT the PENDING-only
+    /// cut of <see cref="GetPendingByEmployeesAsync"/>), bounded by the actor's resolved scope.
+    /// The <c>users</c> JOIN is load-bearing three ways: (1) it IS the org derivation —
+    /// <c>overtime_pre_approvals</c> has NO org column (init.sql:1850-1861), so
+    /// <c>users.primary_org_id</c> is the ONLY org source (N2 consequence, accepted: attribution is
+    /// CURRENT-org after a transfer); (2) it carries <c>users.display_name</c> → the non-null
+    /// <c>EmployeeName</c>; (3) its <c>is_active = TRUE</c> predicate is the Step-0b CONVERGENT pin
+    /// (Codex BLOCKER + Reviewer W1) — without it a terminated employee's rows would still derive an
+    /// in-scope org, and the approve/reject act path is fail-closed for inactive targets (see == act),
+    /// so an unfiltered list would render always-403 buttons.
+    /// A null <paramref name="orgId"/> is the GLOBAL variant (all orgs); non-null is the ORG_ONLY
+    /// variant (exactly that org — no subtree, S93/ADR-035 exact membership).
+    /// </summary>
+    public async Task<IReadOnlyList<OvertimePreApprovalAdminRow>> GetAllScopedWithEmployeeNamesAsync(
+        string? orgId, CancellationToken ct = default)
+    {
+        await using var conn = _connectionFactory.Create();
+        await conn.OpenAsync(ct);
+        var sql =
+            @"SELECT opa.*, u.display_name
+              FROM overtime_pre_approvals opa
+              JOIN users u ON u.user_id = opa.employee_id AND u.is_active = TRUE"
+            + (orgId is null ? "" : @"
+              WHERE u.primary_org_id = @orgId") + @"
+              ORDER BY opa.created_at DESC";
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        if (orgId is not null)
+            cmd.Parameters.AddWithValue("orgId", orgId);
+        var rows = new List<OvertimePreApprovalAdminRow>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            rows.Add(new OvertimePreApprovalAdminRow(
+                Approval: ReadApproval(reader),
+                EmployeeName: reader.GetString(reader.GetOrdinal("display_name"))));
+        return rows;
+    }
+
     public async Task CreateAsync(OvertimePreApproval approval, CancellationToken ct = default)
     {
         await using var conn = _connectionFactory.Create();
@@ -156,3 +194,14 @@ public sealed class OvertimePreApprovalRepository
         CreatedAt = reader.GetDateTime(reader.GetOrdinal("created_at"))
     };
 }
+
+/// <summary>
+/// S116 / TASK-11601 — one row of the scope-bounded admin enumeration
+/// (<see cref="OvertimePreApprovalRepository.GetAllScopedWithEmployeeNamesAsync"/>): the
+/// pre-approval entity + the employee's <c>users.display_name</c> from the SAME admission join.
+/// <paramref name="EmployeeName"/> is NON-NULL by construction — the join's
+/// <c>is_active = TRUE</c> predicate guarantees a live users row (display_name is NOT NULL).
+/// </summary>
+public sealed record OvertimePreApprovalAdminRow(
+    OvertimePreApproval Approval,
+    string EmployeeName);

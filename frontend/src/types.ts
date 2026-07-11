@@ -68,26 +68,14 @@ export interface AuthUser {
   role: string
 }
 
-export interface ApprovalPeriod {
-  periodId: string
-  employeeId: string
-  orgId: string
-  periodStart: string
-  periodEnd: string
-  periodType: string
-  status: string
-  submittedAt: string | null
-  approvedBy: string | null
-  approvedAt: string | null
-  rejectionReason: string | null
-  agreementCode: string
-  okVersion: string
-  createdAt: string
-  employeeApprovedAt: string | null
-  employeeApprovedBy: string | null
-  employeeDeadline: string | null
-  managerDeadline: string | null
-}
+// S116 / TASK-11602 (L2) — the hand-written `ApprovalPeriod` interface that
+// lived here was DELETED: it claimed 4 phantom members (employeeApprovedAt/By,
+// employeeDeadline, managerDeadline) no approval endpoint serves. The
+// spec-derived replacements live at the consuming sites:
+// `hooks/useApprovals.ts` re-exports the generated `ApprovalPeriodListItem`
+// (pending/by-month element) and `pages/approval/MyPeriods.tsx` consumes the
+// generated `EmployeePeriodItem` (the wider GET /api/approval/{employeeId}
+// element).
 
 export interface Project {
   projectId: string

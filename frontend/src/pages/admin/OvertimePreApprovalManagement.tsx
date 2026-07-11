@@ -4,17 +4,18 @@ import { useToast } from '../../components/ui/Toast'
 import { Spinner } from '../../components/ui'
 import styles from './OvertimePreApprovalManagement.module.css'
 
-interface PreApproval {
-  id: string
-  employeeId: string
-  employeeName: string
-  periodStart: string
-  periodEnd: string
-  maxHours: number
-  reason: string
-  status: 'PENDING' | 'APPROVED' | 'REJECTED'
-  createdAt: string
-}
+// S116 / TASK-11602 — THE PAGE REPAIR (the S116 L3 pre-existing defect): the
+// list read used to call `GET /api/overtime/pre-approvals`, a route that did
+// NOT exist (every load 404'd — the page never worked). TASK-11601 created it
+// as a typed, scope-bounded admin list op; the read below now rides the typed
+// form. The hand-written `PreApproval` interface (which GUESSED the shape —
+// it invented a non-null `reason`, and omitted `approvedBy`/`approvedAt`) was
+// deleted in favor of the GENERATED spec record (11 fields, incl. the genuinely
+// non-null `employeeName` the admission join carries).
+import type { components } from '../../lib/api-types'
+
+type PreApproval =
+  components['schemas']['StatsTid.Backend.Api.Contracts.OvertimePreApprovalAdminListItem']
 
 function formatDate(dateStr: string): string {
   try {
@@ -46,7 +47,7 @@ export function OvertimePreApprovalManagement() {
   const fetchPreApprovals = useCallback(async () => {
     setLoading(true)
     setError(null)
-    const result = await apiClient.get<PreApproval[]>('/api/overtime/pre-approvals')
+    const result = await apiClient.get('/api/overtime/pre-approvals')
     if (result.ok) {
       setPreApprovals(result.data)
     } else {
@@ -61,7 +62,11 @@ export function OvertimePreApprovalManagement() {
 
   const handleApprove = async (id: string) => {
     setActionLoading(id)
-    const result = await apiClient.put<void>(`/api/overtime/pre-approval/${id}/approve`)
+    // S116 typed switch — no body either side (the optional reason body is not
+    // sent today and the typed no-body form matches); response body discarded.
+    const result = await apiClient.put('/api/overtime/pre-approval/{id}/approve', {
+      params: { path: { id } },
+    })
     setActionLoading(null)
     if (result.ok) {
       toast({ title: 'Godkendt', description: 'Forhåndsgodkendelse godkendt', variant: 'success' })
@@ -73,7 +78,10 @@ export function OvertimePreApprovalManagement() {
 
   const handleReject = async (id: string) => {
     setActionLoading(id)
-    const result = await apiClient.put<void>(`/api/overtime/pre-approval/${id}/reject`)
+    // S116 typed switch — same no-body form; response body discarded.
+    const result = await apiClient.put('/api/overtime/pre-approval/{id}/reject', {
+      params: { path: { id } },
+    })
     setActionLoading(null)
     if (result.ok) {
       toast({ title: 'Afvist', description: 'Forhåndsgodkendelse afvist', variant: 'success' })
@@ -115,7 +123,10 @@ export function OvertimePreApprovalManagement() {
               const isActioning = actionLoading === item.id
               return (
                 <tr key={item.id}>
-                  <td>{item.employeeName || item.employeeId}</td>
+                  {/* S116 — `employeeName` is spec-non-null (the admission join
+                      carries users.display_name), so the old `|| employeeId`
+                      fallback guessed at a shape that cannot occur. */}
+                  <td>{item.employeeName}</td>
                   <td>
                     {formatDate(item.periodStart)} &ndash; {formatDate(item.periodEnd)}
                   </td>

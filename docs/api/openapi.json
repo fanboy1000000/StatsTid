@@ -960,7 +960,14 @@
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.PeriodActionResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -983,7 +990,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.PeriodActionResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -1016,7 +1030,14 @@
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.PeriodRejectResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -1037,7 +1058,17 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.ApprovalPeriodListItem"
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -1076,7 +1107,17 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.ApprovalPeriodListItem"
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -1108,7 +1149,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.TeamOverviewResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -1148,7 +1196,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.AllocationBreakdownResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -1170,7 +1225,17 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.EmployeePeriodItem"
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -1193,7 +1258,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.PeriodActionResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -1226,7 +1298,14 @@
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.PeriodActionResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -3128,8 +3207,15 @@
           "required": true
         },
         "responses": {
-          "200": {
-            "description": "OK"
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.OvertimePreApprovalCreatedResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -3167,7 +3253,39 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.OvertimePreApprovalListItem"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/overtime/pre-approvals": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.OvertimePreApprovalAdminListItem"
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -3199,7 +3317,14 @@
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.OvertimePreApprovalApproveResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -3231,7 +3356,14 @@
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.OvertimePreApprovalRejectResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -3699,7 +3831,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.DelegationStatusResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -3719,7 +3858,14 @@
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.DelegationCreateResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -3729,7 +3875,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.DelegationRevokeResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -4150,6 +4303,122 @@
         },
         "additionalProperties": false
       },
+      "StatsTid.Backend.Api.Contracts.AllocationBreakdownItem": {
+        "required": [
+          "hours",
+          "taskId"
+        ],
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string"
+          },
+          "hours": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.AllocationBreakdownResponse": {
+        "required": [
+          "allocated",
+          "allocations",
+          "hasAllocationImbalance",
+          "overAllocated",
+          "underAllocated",
+          "worked"
+        ],
+        "type": "object",
+        "properties": {
+          "allocations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.AllocationBreakdownItem"
+            }
+          },
+          "worked": {
+            "type": "number",
+            "format": "double"
+          },
+          "allocated": {
+            "type": "number",
+            "format": "double"
+          },
+          "underAllocated": {
+            "type": "number",
+            "format": "double"
+          },
+          "overAllocated": {
+            "type": "number",
+            "format": "double"
+          },
+          "hasAllocationImbalance": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.ApprovalPeriodListItem": {
+        "required": [
+          "agreementCode",
+          "employeeId",
+          "orgId",
+          "periodEnd",
+          "periodId",
+          "periodStart",
+          "periodType",
+          "status",
+          "submittedAt"
+        ],
+        "type": "object",
+        "properties": {
+          "periodId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "employeeId": {
+            "type": "string"
+          },
+          "orgId": {
+            "type": "string"
+          },
+          "periodStart": {
+            "type": "string",
+            "format": "date"
+          },
+          "periodEnd": {
+            "type": "string",
+            "format": "date"
+          },
+          "periodType": {
+            "enum": [
+              "WEEKLY",
+              "MONTHLY"
+            ],
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "DRAFT",
+              "SUBMITTED",
+              "EMPLOYEE_APPROVED",
+              "APPROVED",
+              "REJECTED"
+            ],
+            "type": "string"
+          },
+          "submittedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "agreementCode": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "StatsTid.Backend.Api.Contracts.AuditLogResponse": {
         "required": [
           "page",
@@ -4289,6 +4558,104 @@
         },
         "additionalProperties": false
       },
+      "StatsTid.Backend.Api.Contracts.DelegatedEmployeeItem": {
+        "required": [
+          "displayName",
+          "employeeId"
+        ],
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.DelegationCreateResponse": {
+        "required": [
+          "actingManagerId",
+          "delegatedCount",
+          "effectiveFrom",
+          "effectiveTo",
+          "skippedCount"
+        ],
+        "type": "object",
+        "properties": {
+          "delegatedCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "skippedCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "actingManagerId": {
+            "type": "string"
+          },
+          "effectiveFrom": {
+            "type": "string",
+            "format": "date"
+          },
+          "effectiveTo": {
+            "type": "string",
+            "format": "date"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.DelegationRevokeResponse": {
+        "required": [
+          "revokedCount"
+        ],
+        "type": "object",
+        "properties": {
+          "revokedCount": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.DelegationStatusResponse": {
+        "required": [
+          "actingManagerId",
+          "active",
+          "delegatedEmployees",
+          "effectiveFrom",
+          "effectiveTo"
+        ],
+        "type": "object",
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "actingManagerId": {
+            "type": "string",
+            "nullable": true
+          },
+          "effectiveFrom": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "effectiveTo": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "delegatedEmployees": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.DelegatedEmployeeItem"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
       "StatsTid.Backend.Api.Contracts.DirectReportItem": {
         "required": [
           "effectiveFrom",
@@ -4333,6 +4700,91 @@
           "version": {
             "type": "integer",
             "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.EmployeePeriodItem": {
+        "required": [
+          "agreementCode",
+          "approvedAt",
+          "approvedBy",
+          "createdAt",
+          "employeeId",
+          "okVersion",
+          "orgId",
+          "periodEnd",
+          "periodId",
+          "periodStart",
+          "periodType",
+          "rejectionReason",
+          "status",
+          "submittedAt"
+        ],
+        "type": "object",
+        "properties": {
+          "periodId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "employeeId": {
+            "type": "string"
+          },
+          "orgId": {
+            "type": "string"
+          },
+          "periodStart": {
+            "type": "string",
+            "format": "date"
+          },
+          "periodEnd": {
+            "type": "string",
+            "format": "date"
+          },
+          "periodType": {
+            "enum": [
+              "WEEKLY",
+              "MONTHLY"
+            ],
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "DRAFT",
+              "SUBMITTED",
+              "EMPLOYEE_APPROVED",
+              "APPROVED",
+              "REJECTED"
+            ],
+            "type": "string"
+          },
+          "agreementCode": {
+            "type": "string"
+          },
+          "okVersion": {
+            "type": "string"
+          },
+          "submittedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "approvedBy": {
+            "type": "string",
+            "nullable": true
+          },
+          "approvedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "rejectionReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
           }
         },
         "additionalProperties": false
@@ -4911,6 +5363,291 @@
         },
         "additionalProperties": false
       },
+      "StatsTid.Backend.Api.Contracts.OvertimePreApprovalAdminListItem": {
+        "required": [
+          "approvedAt",
+          "approvedBy",
+          "createdAt",
+          "employeeId",
+          "employeeName",
+          "id",
+          "maxHours",
+          "periodEnd",
+          "periodStart",
+          "reason",
+          "status"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "employeeId": {
+            "type": "string"
+          },
+          "periodStart": {
+            "type": "string",
+            "format": "date"
+          },
+          "periodEnd": {
+            "type": "string",
+            "format": "date"
+          },
+          "maxHours": {
+            "type": "number",
+            "format": "double"
+          },
+          "approvedBy": {
+            "type": "string",
+            "nullable": true
+          },
+          "approvedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "status": {
+            "enum": [
+              "PENDING",
+              "APPROVED",
+              "REJECTED"
+            ],
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "employeeName": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.OvertimePreApprovalApproveResponse": {
+        "required": [
+          "approvedBy",
+          "id",
+          "reason",
+          "status"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "enum": [
+              "PENDING",
+              "APPROVED",
+              "REJECTED"
+            ],
+            "type": "string"
+          },
+          "approvedBy": {
+            "type": "string",
+            "nullable": true
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.OvertimePreApprovalCreatedResponse": {
+        "required": [
+          "employeeId",
+          "id",
+          "maxHours",
+          "periodEnd",
+          "periodStart",
+          "reason",
+          "status"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "employeeId": {
+            "type": "string"
+          },
+          "periodStart": {
+            "type": "string",
+            "format": "date"
+          },
+          "periodEnd": {
+            "type": "string",
+            "format": "date"
+          },
+          "maxHours": {
+            "type": "number",
+            "format": "double"
+          },
+          "status": {
+            "enum": [
+              "PENDING",
+              "APPROVED",
+              "REJECTED"
+            ],
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.OvertimePreApprovalListItem": {
+        "required": [
+          "approvedAt",
+          "approvedBy",
+          "createdAt",
+          "employeeId",
+          "id",
+          "maxHours",
+          "periodEnd",
+          "periodStart",
+          "reason",
+          "status"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "employeeId": {
+            "type": "string"
+          },
+          "periodStart": {
+            "type": "string",
+            "format": "date"
+          },
+          "periodEnd": {
+            "type": "string",
+            "format": "date"
+          },
+          "maxHours": {
+            "type": "number",
+            "format": "double"
+          },
+          "approvedBy": {
+            "type": "string",
+            "nullable": true
+          },
+          "approvedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "status": {
+            "enum": [
+              "PENDING",
+              "APPROVED",
+              "REJECTED"
+            ],
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.OvertimePreApprovalRejectResponse": {
+        "required": [
+          "id",
+          "reason",
+          "status"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "enum": [
+              "PENDING",
+              "APPROVED",
+              "REJECTED"
+            ],
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.PeriodActionResponse": {
+        "required": [
+          "periodId",
+          "status"
+        ],
+        "type": "object",
+        "properties": {
+          "periodId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "enum": [
+              "DRAFT",
+              "SUBMITTED",
+              "EMPLOYEE_APPROVED",
+              "APPROVED",
+              "REJECTED"
+            ],
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.PeriodRejectResponse": {
+        "required": [
+          "periodId",
+          "reason",
+          "status"
+        ],
+        "type": "object",
+        "properties": {
+          "periodId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "enum": [
+              "DRAFT",
+              "SUBMITTED",
+              "EMPLOYEE_APPROVED",
+              "APPROVED",
+              "REJECTED"
+            ],
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "StatsTid.Backend.Api.Contracts.PersonSearchResult": {
         "required": [
           "displayName",
@@ -5433,6 +6170,123 @@
           "peopleTotal": {
             "type": "integer",
             "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.TeamOverviewEmployeeRow": {
+        "required": [
+          "agreement",
+          "awayToday",
+          "decisionAt",
+          "displayName",
+          "employeeId",
+          "ferieTotal",
+          "ferieUsed",
+          "flexBalance",
+          "hasWarning",
+          "normExpected",
+          "normRegistered",
+          "overtime",
+          "payrollExported",
+          "payrollExportedAt",
+          "periodId",
+          "rejectionReason",
+          "status",
+          "submittedAt"
+        ],
+        "type": "object",
+        "properties": {
+          "periodId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "employeeId": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "agreement": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "DRAFT",
+              "SUBMITTED",
+              "EMPLOYEE_APPROVED",
+              "APPROVED",
+              "REJECTED"
+            ],
+            "type": "string"
+          },
+          "submittedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "decisionAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "rejectionReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "normExpected": {
+            "type": "number",
+            "format": "double"
+          },
+          "normRegistered": {
+            "type": "number",
+            "format": "double"
+          },
+          "flexBalance": {
+            "type": "number",
+            "format": "double"
+          },
+          "overtime": {
+            "type": "number",
+            "format": "double"
+          },
+          "ferieUsed": {
+            "type": "number",
+            "format": "double"
+          },
+          "ferieTotal": {
+            "type": "number",
+            "format": "double"
+          },
+          "awayToday": {
+            "type": "boolean"
+          },
+          "hasWarning": {
+            "type": "boolean"
+          },
+          "payrollExported": {
+            "type": "boolean"
+          },
+          "payrollExportedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.TeamOverviewResponse": {
+        "required": [
+          "employees"
+        ],
+        "type": "object",
+        "properties": {
+          "employees": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.TeamOverviewEmployeeRow"
+            }
           }
         },
         "additionalProperties": false

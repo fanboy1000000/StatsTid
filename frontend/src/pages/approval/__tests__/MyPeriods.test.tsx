@@ -191,3 +191,58 @@ describe('MyPeriods — submit wire contract (S82-8202 orgId regression pin)', (
     expect(findSubmitCall()).toBeUndefined()
   })
 })
+
+// ── S116 / TASK-11602 — the typed-switch wire pins ───────────────────────────
+// The mount read + the resubmit (employee-approve) switched to the typed
+// spec-keyed forms; these pins assert the exact URLs and that the resubmit
+// carries NO body (that call never sent one — no request delta; the L1 fix
+// also stripped the `<ApprovalPeriod>` response overclaim, invisible on the
+// wire because the backend serves `{periodId, status}` either way).
+describe('MyPeriods — S116 typed-switch wire pins', () => {
+  it('the mount read hits GET /api/approval/{employeeId} (interpolated, exact)', async () => {
+    mockFetches()
+    render(<MyPeriods />)
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Indsend periode/ })).toBeDefined()
+    })
+    const mountRead = mockFetch.mock.calls.find((call: unknown[]) => {
+      const init = call[1] as RequestInit | undefined
+      return (init?.method ?? 'GET') === 'GET'
+    })
+    expect(mountRead?.[0]).toBe('/api/approval/EMP_SELF')
+  })
+
+  it('resubmit (Indsend on a REJECTED row) → POST /api/approval/{periodId}/employee-approve with NO body', async () => {
+    const user = userEvent.setup()
+    const captured: Array<{ url: string; method: string; body: unknown }> = []
+    mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      captured.push({
+        url,
+        method: init?.method ?? 'GET',
+        body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
+      })
+      if (typeof url === 'string' && url.includes('/employee-approve')) {
+        return jsonResponse({ periodId: 'p-rej-1', status: 'EMPLOYEE_APPROVED' })
+      }
+      if (typeof url === 'string' && /\/api\/approval\/[^/]+$/.test(url)) {
+        return jsonResponse([{ ...submittedPeriod, periodId: 'p-rej-1', status: 'REJECTED', rejectionReason: 'Mangler' }])
+      }
+      return jsonResponse({})
+    })
+
+    render(<MyPeriods />)
+    // The REJECTED row renders an "Indsend" row action.
+    const resubmitBtn = await screen.findByRole('button', { name: 'Indsend' })
+    await user.click(resubmitBtn)
+
+    await waitFor(() => {
+      const post = captured.find(c => c.method === 'POST')
+      expect(post?.url).toBe('/api/approval/p-rej-1/employee-approve')
+      expect(post?.body).toBeUndefined()
+    })
+    // The success banner confirms the 200 path ran end-to-end.
+    await waitFor(() => {
+      expect(screen.getByText('Periode genindsendt.')).toBeDefined()
+    })
+  })
+})

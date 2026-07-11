@@ -453,6 +453,80 @@ describe('TeamOversigt — payroll-export lock (S90)', () => {
   })
 })
 
+// ── S116 / TASK-11602 — the typed-switch WIRE pins for the mutation trio ─────
+// The approve/reject/reopen call sites switched from `post<unknown>(templateUrl)`
+// to the typed spec-keyed forms. These pins assert the EXACT wire behavior of
+// each (URL byte-identical, approve carries NO body — the op binds no request
+// DTO — and reject/reopen carry the identical bodies), so a regression in the
+// typed client's URL interpolation or body threading reds this file. The call
+// FORM itself (typed vs bare-legacy) is additionally audited + lint-tiered —
+// a bare `post(url)` legacy call would pass these wire pins, which is why the
+// call-form audit is a separate acceptance criterion (Reviewer N1).
+describe('TeamOversigt — S116 typed-switch wire pins (approve/reject/reopen)', () => {
+  type Captured = { url: string; method: string; body: unknown }
+
+  function captureAll(roster = team) {
+    const calls: Captured[] = []
+    mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      calls.push({
+        url,
+        method: init?.method ?? 'GET',
+        body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
+      })
+      if (typeof url === 'string' && url.includes('/api/approval/team-overview')) {
+        return jsonResponse({ employees: roster })
+      }
+      return jsonResponse({ periodId: 'p-x', status: 'APPROVED' })
+    })
+    return calls
+  }
+
+  it('approve: POST /api/approval/{periodId}/approve — exact URL, NO body', async () => {
+    const user = userEvent.setup()
+    const calls = captureAll([team[0]]) // Anna, SUBMITTED, p-1
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Anna Berg')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Godkend' }))
+    await waitFor(() => {
+      const post = calls.find(c => c.method === 'POST')
+      expect(post?.url).toBe('/api/approval/p-1/approve')
+      expect(post?.body).toBeUndefined()
+    })
+  })
+
+  it('reject: POST /api/approval/{periodId}/reject — exact URL, {reason} body', async () => {
+    const user = userEvent.setup()
+    const calls = captureAll([team[0]])
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Anna Berg')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Afvis' }))
+    const dialog = await screen.findByRole('dialog')
+    await user.type(
+      within(dialog).getByPlaceholderText('Skriv en kort begrundelse til medarbejderen…'),
+      'Mangler hviletid',
+    )
+    await user.click(within(dialog).getByRole('button', { name: 'Afvis måned' }))
+    await waitFor(() => {
+      const post = calls.find(c => c.method === 'POST')
+      expect(post?.url).toBe('/api/approval/p-1/reject')
+      expect(post?.body).toEqual({ reason: 'Mangler hviletid' })
+    })
+  })
+
+  it('reopen: POST /api/approval/{periodId}/reopen — exact URL, the fixed leader reason body', async () => {
+    const user = userEvent.setup()
+    const calls = captureAll([team[1]]) // Bo, APPROVED, p-2 → Genåbn visible
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Bo Dahl')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Genåbn' }))
+    await waitFor(() => {
+      const post = calls.find(c => c.method === 'POST')
+      expect(post?.url).toBe('/api/approval/p-2/reopen')
+      expect(post?.body).toEqual({ reason: 'Genåbnet af leder' })
+    })
+  })
+})
+
 // ── Nav redirect: godkend/godkendelser → godkend/oversigt (OQ-3) ─────────────
 // A standalone routing check mirroring App.tsx's <Navigate>. The TeamOversigt
 // page must mount under /godkend/oversigt after the redirect.

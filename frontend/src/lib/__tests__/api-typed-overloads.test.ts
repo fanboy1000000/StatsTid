@@ -349,12 +349,16 @@ describe('S112 typed derivation — compile-time fixtures', () => {
 })
 
 describe('S112 typed derivation — real committed spec', () => {
-  it('phase pin: after the S115 Pass-2 drain — 11 POSTs, 11 PUTs, 7 DELETEs (retrofit updates this)', () => {
+  it('phase pin: after the S116 Pass-3 drain — 18 POSTs, 13 PUTs, 8 DELETEs (retrofit updates this)', () => {
     // S112 / TASK-11203 — the backend typed 20 ops (units / organizations /
     // users / roles / employee-profiles); the put/delete unions became
     // NON-EMPTY and the post union grew from exactly '/api/admin/units'.
     // S115 / TASK-11502 — Pass 2 (TASK-11501) drained the reporting-lines
     // family + the employee field-endpoints: +5 POSTs, +4 PUTs, +3 DELETEs.
+    // S116 / TASK-11602 — Pass 3 (TASK-11600/11601) drained the approval
+    // bucket + the delegate trio + the overtime pre-approval quartet:
+    // +7 POSTs (5 approval + delegate + overtime create), +2 PUTs (overtime
+    // approve/reject), +1 DELETE (delegate — genuine 200 {revokedCount}).
     expectTypeOf<TypedPathIn<paths, 'put'>>().toEqualTypeOf<
       | '/api/admin/organizations/{orgId}'
       | '/api/admin/organizations/{orgId}/move'
@@ -367,6 +371,8 @@ describe('S112 typed derivation — real committed spec', () => {
       | '/api/admin/employees/{employeeId}/birth-date'
       | '/api/admin/employees/{employeeId}/employment-start-date'
       | '/api/admin/employees/{employeeId}/employment-end-date'
+      | '/api/overtime/pre-approval/{id}/approve'
+      | '/api/overtime/pre-approval/{id}/reject'
     >()
     expectTypeOf<TypedPathIn<paths, 'delete'>>().toEqualTypeOf<
       | '/api/admin/organizations/{orgId}'
@@ -376,6 +382,7 @@ describe('S112 typed derivation — real committed spec', () => {
       | '/api/admin/reporting-lines/{employeeId}'
       | '/api/admin/reporting-lines/{employeeId}/acting'
       | '/api/admin/reporting-lines/{managerId}/vikar'
+      | '/api/reporting-lines/delegate'
     >()
     expectTypeOf<TypedPathIn<paths, 'post'>>().toEqualTypeOf<
       | '/api/admin/organizations'
@@ -389,6 +396,13 @@ describe('S112 typed derivation — real committed spec', () => {
       | '/api/admin/reporting-lines/import'
       | '/api/admin/reporting-lines/{employeeId}/remove'
       | '/api/admin/reporting-lines/{managerId}/vikar'
+      | '/api/approval/submit'
+      | '/api/approval/{periodId}/approve'
+      | '/api/approval/{periodId}/employee-approve'
+      | '/api/approval/{periodId}/reject'
+      | '/api/approval/{periodId}/reopen'
+      | '/api/overtime/pre-approval'
+      | '/api/reporting-lines/delegate'
     >()
   })
 

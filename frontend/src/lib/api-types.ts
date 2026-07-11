@@ -1157,7 +1157,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.PeriodActionResponse"];
+                    };
                 };
             };
         };
@@ -1192,7 +1194,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.PeriodActionResponse"];
+                    };
                 };
             };
         };
@@ -1231,7 +1235,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.PeriodRejectResponse"];
+                    };
                 };
             };
         };
@@ -1264,7 +1270,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.ApprovalPeriodListItem"][];
+                    };
                 };
             };
         };
@@ -1301,7 +1309,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.ApprovalPeriodListItem"][];
+                    };
                 };
             };
         };
@@ -1337,7 +1347,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.TeamOverviewResponse"];
+                    };
                 };
             };
         };
@@ -1375,7 +1387,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.AllocationBreakdownResponse"];
+                    };
                 };
             };
         };
@@ -1410,7 +1424,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.EmployeePeriodItem"][];
+                    };
                 };
             };
         };
@@ -1447,7 +1463,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.PeriodActionResponse"];
+                    };
                 };
             };
         };
@@ -1486,7 +1504,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.PeriodActionResponse"];
+                    };
                 };
             };
         };
@@ -3537,12 +3557,14 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description OK */
-                200: {
+                /** @description Created */
+                201: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.OvertimePreApprovalCreatedResponse"];
+                    };
                 };
             };
         };
@@ -3578,7 +3600,44 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.OvertimePreApprovalListItem"][];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/overtime/pre-approvals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.OvertimePreApprovalAdminListItem"][];
+                    };
                 };
             };
         };
@@ -3618,7 +3677,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.OvertimePreApprovalApproveResponse"];
+                    };
                 };
             };
         };
@@ -3657,7 +3718,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.OvertimePreApprovalRejectResponse"];
+                    };
                 };
             };
         };
@@ -4158,7 +4221,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.DelegationStatusResponse"];
+                    };
                 };
             };
         };
@@ -4181,7 +4246,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.DelegationCreateResponse"];
+                    };
                 };
             };
         };
@@ -4199,7 +4266,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.DelegationRevokeResponse"];
+                    };
                 };
             };
         };
@@ -4574,6 +4643,40 @@ export interface components {
             vikarUserId: string;
             revoked: boolean;
         };
+        "StatsTid.Backend.Api.Contracts.AllocationBreakdownItem": {
+            taskId: string;
+            /** Format: double */
+            hours: number;
+        };
+        "StatsTid.Backend.Api.Contracts.AllocationBreakdownResponse": {
+            allocations: components["schemas"]["StatsTid.Backend.Api.Contracts.AllocationBreakdownItem"][];
+            /** Format: double */
+            worked: number;
+            /** Format: double */
+            allocated: number;
+            /** Format: double */
+            underAllocated: number;
+            /** Format: double */
+            overAllocated: number;
+            hasAllocationImbalance: boolean;
+        };
+        "StatsTid.Backend.Api.Contracts.ApprovalPeriodListItem": {
+            /** Format: uuid */
+            periodId: string;
+            employeeId: string;
+            orgId: string;
+            /** Format: date */
+            periodStart: string;
+            /** Format: date */
+            periodEnd: string;
+            /** @enum {string} */
+            periodType: "WEEKLY" | "MONTHLY";
+            /** @enum {string} */
+            status: "DRAFT" | "SUBMITTED" | "EMPLOYEE_APPROVED" | "APPROVED" | "REJECTED";
+            /** Format: date-time */
+            submittedAt: string | null;
+            agreementCode: string;
+        };
         "StatsTid.Backend.Api.Contracts.AuditLogResponse": {
             rows: components["schemas"]["StatsTid.Backend.Api.Contracts.AuditLogRow"][];
             /** Format: int64 */
@@ -4616,6 +4719,34 @@ export interface components {
             type?: string;
             name?: string;
         };
+        "StatsTid.Backend.Api.Contracts.DelegatedEmployeeItem": {
+            employeeId: string;
+            displayName: string | null;
+        };
+        "StatsTid.Backend.Api.Contracts.DelegationCreateResponse": {
+            /** Format: int32 */
+            delegatedCount: number;
+            /** Format: int32 */
+            skippedCount: number;
+            actingManagerId: string;
+            /** Format: date */
+            effectiveFrom: string;
+            /** Format: date */
+            effectiveTo: string;
+        };
+        "StatsTid.Backend.Api.Contracts.DelegationRevokeResponse": {
+            /** Format: int32 */
+            revokedCount: number;
+        };
+        "StatsTid.Backend.Api.Contracts.DelegationStatusResponse": {
+            active: boolean;
+            actingManagerId: string | null;
+            /** Format: date */
+            effectiveFrom: string | null;
+            /** Format: date */
+            effectiveTo: string | null;
+            delegatedEmployees: components["schemas"]["StatsTid.Backend.Api.Contracts.DelegatedEmployeeItem"][];
+        };
         "StatsTid.Backend.Api.Contracts.DirectReportItem": {
             /** Format: uuid */
             reportingLineId: string;
@@ -4629,6 +4760,30 @@ export interface components {
             source: string;
             /** Format: int64 */
             version: number;
+        };
+        "StatsTid.Backend.Api.Contracts.EmployeePeriodItem": {
+            /** Format: uuid */
+            periodId: string;
+            employeeId: string;
+            orgId: string;
+            /** Format: date */
+            periodStart: string;
+            /** Format: date */
+            periodEnd: string;
+            /** @enum {string} */
+            periodType: "WEEKLY" | "MONTHLY";
+            /** @enum {string} */
+            status: "DRAFT" | "SUBMITTED" | "EMPLOYEE_APPROVED" | "APPROVED" | "REJECTED";
+            agreementCode: string;
+            okVersion: string;
+            /** Format: date-time */
+            submittedAt: string | null;
+            approvedBy: string | null;
+            /** Format: date-time */
+            approvedAt: string | null;
+            rejectionReason: string | null;
+            /** Format: date-time */
+            createdAt: string;
         };
         "StatsTid.Backend.Api.Contracts.EmployeeProfileResponse": {
             employeeId: string;
@@ -4779,6 +4934,87 @@ export interface components {
             agreementCode: string;
             okVersion: string;
         };
+        "StatsTid.Backend.Api.Contracts.OvertimePreApprovalAdminListItem": {
+            /** Format: uuid */
+            id: string;
+            employeeId: string;
+            /** Format: date */
+            periodStart: string;
+            /** Format: date */
+            periodEnd: string;
+            /** Format: double */
+            maxHours: number;
+            approvedBy: string | null;
+            /** Format: date-time */
+            approvedAt: string | null;
+            /** @enum {string} */
+            status: "PENDING" | "APPROVED" | "REJECTED";
+            reason: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            employeeName: string;
+        };
+        "StatsTid.Backend.Api.Contracts.OvertimePreApprovalApproveResponse": {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            status: "PENDING" | "APPROVED" | "REJECTED";
+            approvedBy: string | null;
+            reason: string | null;
+        };
+        "StatsTid.Backend.Api.Contracts.OvertimePreApprovalCreatedResponse": {
+            /** Format: uuid */
+            id: string;
+            employeeId: string;
+            /** Format: date */
+            periodStart: string;
+            /** Format: date */
+            periodEnd: string;
+            /** Format: double */
+            maxHours: number;
+            /** @enum {string} */
+            status: "PENDING" | "APPROVED" | "REJECTED";
+            reason: string | null;
+        };
+        "StatsTid.Backend.Api.Contracts.OvertimePreApprovalListItem": {
+            /** Format: uuid */
+            id: string;
+            employeeId: string;
+            /** Format: date */
+            periodStart: string;
+            /** Format: date */
+            periodEnd: string;
+            /** Format: double */
+            maxHours: number;
+            approvedBy: string | null;
+            /** Format: date-time */
+            approvedAt: string | null;
+            /** @enum {string} */
+            status: "PENDING" | "APPROVED" | "REJECTED";
+            reason: string | null;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        "StatsTid.Backend.Api.Contracts.OvertimePreApprovalRejectResponse": {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            status: "PENDING" | "APPROVED" | "REJECTED";
+            reason: string | null;
+        };
+        "StatsTid.Backend.Api.Contracts.PeriodActionResponse": {
+            /** Format: uuid */
+            periodId: string;
+            /** @enum {string} */
+            status: "DRAFT" | "SUBMITTED" | "EMPLOYEE_APPROVED" | "APPROVED" | "REJECTED";
+        };
+        "StatsTid.Backend.Api.Contracts.PeriodRejectResponse": {
+            /** Format: uuid */
+            periodId: string;
+            /** @enum {string} */
+            status: "DRAFT" | "SUBMITTED" | "EMPLOYEE_APPROVED" | "APPROVED" | "REJECTED";
+            reason: string;
+        };
         "StatsTid.Backend.Api.Contracts.PersonSearchResult": {
             userId: string;
             organisationId: string;
@@ -4925,6 +5161,40 @@ export interface components {
             unitsTotal: number;
             /** Format: int32 */
             peopleTotal: number;
+        };
+        "StatsTid.Backend.Api.Contracts.TeamOverviewEmployeeRow": {
+            /** Format: uuid */
+            periodId: string | null;
+            employeeId: string;
+            displayName: string;
+            agreement: string;
+            /** @enum {string} */
+            status: "DRAFT" | "SUBMITTED" | "EMPLOYEE_APPROVED" | "APPROVED" | "REJECTED";
+            /** Format: date-time */
+            submittedAt: string | null;
+            /** Format: date-time */
+            decisionAt: string | null;
+            rejectionReason: string | null;
+            /** Format: double */
+            normExpected: number;
+            /** Format: double */
+            normRegistered: number;
+            /** Format: double */
+            flexBalance: number;
+            /** Format: double */
+            overtime: number;
+            /** Format: double */
+            ferieUsed: number;
+            /** Format: double */
+            ferieTotal: number;
+            awayToday: boolean;
+            hasWarning: boolean;
+            payrollExported: boolean;
+            /** Format: date-time */
+            payrollExportedAt: string | null;
+        };
+        "StatsTid.Backend.Api.Contracts.TeamOverviewResponse": {
+            employees: components["schemas"]["StatsTid.Backend.Api.Contracts.TeamOverviewEmployeeRow"][];
         };
         "StatsTid.Backend.Api.Contracts.TreePeriodStatusEmployee": {
             employeeId: string;

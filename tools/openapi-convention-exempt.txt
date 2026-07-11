@@ -18,7 +18,6 @@ DELETE /api/admin/wage-type-mappings
 DELETE /api/agreement-configs/{configId}/entitlements/{entitlementConfigId}
 DELETE /api/projects/{orgId}/select/{projectId}
 DELETE /api/projects/{orgId}/{projectId}
-DELETE /api/reporting-lines/delegate
 GET /api/absences/{employeeId}
 # S115 flag-and-defer (the program's FIRST firing of the S112 rule): the GET below is
 # genuinely POLYMORPHIC — its no-row branch OMITS the effectiveFrom/version KEYS entirely
@@ -37,11 +36,6 @@ GET /api/agreement-configs
 GET /api/agreement-configs/{agreementCode}/{okVersion}
 GET /api/agreement-configs/{configId}
 GET /api/agreement-configs/{configId}/entitlements
-GET /api/approval/by-month
-GET /api/approval/pending
-GET /api/approval/team-overview
-GET /api/approval/{employeeId}
-GET /api/approval/{employeeId}/allocation-breakdown
 GET /api/balance/{employeeId}/series
 GET /api/balance/{employeeId}/summary
 GET /api/balance/{employeeId}/year-overview
@@ -56,10 +50,8 @@ GET /api/flex-balance/{employeeId}
 GET /api/overtime/{employeeId}/balance
 GET /api/overtime/{employeeId}/compensation-choice
 GET /api/overtime/{employeeId}/governance
-GET /api/overtime/{employeeId}/pre-approvals
 GET /api/projects/{orgId}
 GET /api/projects/{orgId}/available
-GET /api/reporting-lines/delegate
 GET /api/skema/{employeeId}/month
 GET /api/time-entries/{employeeId}
 GET /api/vacation-settlements/payout-pending
@@ -76,18 +68,11 @@ POST /api/agreement-configs/{configId}/archive
 POST /api/agreement-configs/{configId}/clone
 POST /api/agreement-configs/{configId}/entitlements
 POST /api/agreement-configs/{configId}/publish
-POST /api/approval/submit
-POST /api/approval/{periodId}/approve
-POST /api/approval/{periodId}/employee-approve
-POST /api/approval/{periodId}/reject
-POST /api/approval/{periodId}/reopen
 POST /api/auth/login
 POST /api/config/{orgId}/absence-types/visibility
-POST /api/overtime/pre-approval
 POST /api/overtime/{employeeId}/compensate
 POST /api/projects/{orgId}
 POST /api/projects/{orgId}/select/{projectId}
-POST /api/reporting-lines/delegate
 POST /api/skema/{employeeId}/save
 POST /api/time-entries
 POST /api/vacation-settlements/{employeeId}/{entitlementType}/{entitlementYear}/reconcile-payout
@@ -99,8 +84,6 @@ PUT /api/admin/wage-type-mappings
 PUT /api/agreement-configs/{configId}
 PUT /api/agreement-configs/{configId}/entitlements/{entitlementConfigId}
 PUT /api/config/{orgId}/profile/{agreementCode}/{okVersion}
-PUT /api/overtime/pre-approval/{id}/approve
-PUT /api/overtime/pre-approval/{id}/reject
 PUT /api/overtime/{employeeId}/compensation-choice
 PUT /api/projects/{orgId}/{projectId}
 PUT /api/skema/{employeeId}/row-preferences

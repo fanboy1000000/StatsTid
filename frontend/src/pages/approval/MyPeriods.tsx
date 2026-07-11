@@ -1,31 +1,24 @@
 import { useState, useEffect, useCallback, type FormEvent } from 'react'
 import { useAuth } from '../../hooks/useAuth'
 import { apiClient } from '../../lib/api'
+import type { components } from '../../lib/api-types'
 import styles from './MyPeriods.module.css'
 
-interface ApprovalPeriod {
-  periodId: string
-  employeeId: string
-  orgId: string
-  periodStart: string
-  periodEnd: string
-  periodType: string
-  status: string
-  agreementCode: string
-  okVersion: string
-  submittedAt: string | null
-  approvedBy: string | null
-  approvedAt: string | null
-  rejectionReason: string | null
-  createdAt: string
-}
+// S116 / TASK-11602 (L2) — the GENERATED spec record for the
+// GET /api/approval/{employeeId} element. The hand-written 14-field interface
+// that lived here exactly matched this shape (it set the consolidation
+// direction) and was deleted in its favor.
+type ApprovalPeriod =
+  components['schemas']['StatsTid.Backend.Api.Contracts.EmployeePeriodItem']
 
 const PERIOD_TYPES = [
   { value: 'WEEKLY', label: 'Ugentlig' },
   { value: 'MONTHLY', label: 'Maanedlig' },
 ]
 
-const AGREEMENT_CODES = ['AC', 'HK', 'PROSA'] as const
+// (S116: `as const` dropped — the lint tier bans every TSAsExpression; the
+// explicit readonly annotation carries the same immutability for this use.)
+const AGREEMENT_CODES: readonly string[] = ['AC', 'HK', 'PROSA']
 
 function statusBadgeClass(status: string): string {
   switch (status) {
@@ -81,7 +74,9 @@ export function MyPeriods() {
     if (!employeeId) return
     setLoading(true)
     setError(null)
-    const result = await apiClient.get<ApprovalPeriod[]>(`/api/approval/${employeeId}`)
+    const result = await apiClient.get('/api/approval/{employeeId}', {
+      params: { path: { employeeId } },
+    })
     if (result.ok) {
       setPeriods(result.data)
     } else {
@@ -101,13 +96,21 @@ export function MyPeriods() {
     agreementCode: string
     okVersion: string
   }) => {
-    const result = await apiClient.post<ApprovalPeriod>('/api/approval/submit', payload)
+    // S116 (L1 fix) — the legacy call overclaimed `<ApprovalPeriod>`; the
+    // backend returns only `{periodId, status}` (the spec PeriodActionResponse,
+    // derived by the typed form). Callers discard the return value, so no
+    // consumer ever read the phantom fields.
+    const result = await apiClient.post('/api/approval/submit', { body: payload })
     if (!result.ok) throw new Error(result.error)
     return result.data
   }
 
   const resubmitPeriod = async (periodId: string) => {
-    const result = await apiClient.post<ApprovalPeriod>(`/api/approval/${periodId}/employee-approve`)
+    // S116 (L1 fix) — same overclaim corrected: the typed form derives the
+    // `{periodId, status}` reality. (This call never sent a body — no delta.)
+    const result = await apiClient.post('/api/approval/{periodId}/employee-approve', {
+      params: { path: { periodId } },
+    })
     if (!result.ok) throw new Error(result.error)
     return result.data
   }

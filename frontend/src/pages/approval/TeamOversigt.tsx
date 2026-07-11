@@ -425,7 +425,11 @@ export function TeamOversigt() {
     row: TeamOverviewRow,
   ): Promise<'approved' | 'conflict' | 'error'> => {
     if (!row.periodId) return 'error'
-    const result = await apiClient.post<unknown>(`/api/approval/${row.periodId}/approve`)
+    // S116 typed switch (call-form verified) — the op binds NO request DTO;
+    // neither form sends a body. Response derives `{periodId, status}`.
+    const result = await apiClient.post('/api/approval/{periodId}/approve', {
+      params: { path: { periodId: row.periodId } },
+    })
     if (result.ok) return 'approved'
     if (result.status === 409) return 'conflict'
     return 'error'
@@ -466,10 +470,11 @@ export function TeamOversigt() {
     if (!rejectTarget || !rejectTarget.periodId) return
     setRejecting(true)
     const reason = rejectReason.trim()
-    const result = await apiClient.post<unknown>(
-      `/api/approval/${rejectTarget.periodId}/reject`,
-      { reason },
-    )
+    // S116 typed switch (call-form verified) — body `{reason}` byte-identical.
+    const result = await apiClient.post('/api/approval/{periodId}/reject', {
+      params: { path: { periodId: rejectTarget.periodId } },
+      body: { reason },
+    })
     if (result.ok) {
       clearSelection(rejectTarget.employeeId)
       showToast(`${rejectTarget.displayName} afvist.`, 'success')
@@ -492,10 +497,11 @@ export function TeamOversigt() {
     if (!row.periodId) return
     setBusyId(row.employeeId)
     try {
-      const result = await apiClient.post<unknown>(
-        `/api/approval/${row.periodId}/reopen`,
-        { reason: 'Genåbnet af leder' },
-      )
+      // S116 typed switch (call-form verified) — body `{reason}` byte-identical.
+      const result = await apiClient.post('/api/approval/{periodId}/reopen', {
+        params: { path: { periodId: row.periodId } },
+        body: { reason: 'Genåbnet af leder' },
+      })
       if (result.ok) {
         showToast(`${row.displayName} genåbnet.`, 'success')
         await refetch()
