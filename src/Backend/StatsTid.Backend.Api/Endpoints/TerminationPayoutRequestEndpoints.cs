@@ -1,5 +1,6 @@
 using System.Text.Json;
 using StatsTid.Auth;
+using StatsTid.Backend.Api.Contracts;
 using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Backend.Api.Services;
 using StatsTid.Infrastructure;
@@ -344,20 +345,22 @@ public static class TerminationPayoutRequestEndpoints
                 await tx.CommitAsync(ct);
 
                 context.Response.Headers.ETag = $"\"{created.Version}\"";
-                return Results.Json(new
-                {
-                    requestId = created.RequestId,
+                // S117 / TASK-11701 — exact shape-copy of the prior anonymous body (PAT-012);
+                // the 201 status is PRESERVED (Results.Json(..., statusCode: 201) + the matching
+                // .Produces<T>(201) declaration). Quantities are snapshot-COPIED scalars only —
+                // the snapshot itself is PROHIBITED from any Contracts type.
+                return Results.Json(new TerminationPayoutRequestResponse(
+                    created.RequestId,
                     employeeId,
                     entitlementType,
                     entitlementYear,
-                    settlementSequence = created.SettlementSequence,
-                    state = created.State,
-                    requestDate = created.RequestDate,
-                    evidenceNote = created.EvidenceNote,
+                    created.SettlementSequence,
+                    created.State,
+                    created.RequestDate,
+                    created.EvidenceNote,
                     crystallizedDays,
-                    settlementBoundaryDate = snapshot.SettlementBoundaryDate,
-                    version = created.Version,
-                }, statusCode: 201);
+                    snapshot.SettlementBoundaryDate,
+                    created.Version), statusCode: 201);
             }
             catch
             {
@@ -365,7 +368,8 @@ public static class TerminationPayoutRequestEndpoints
                     await tx.RollbackAsync(ct);
                 throw;
             }
-        }).RequireAuthorization("HROrAbove");
+        }).RequireAuthorization("HROrAbove")
+        .Produces<TerminationPayoutRequestResponse>(StatusCodes.Status201Created); // S117 / TASK-11701
 
         return app;
     }

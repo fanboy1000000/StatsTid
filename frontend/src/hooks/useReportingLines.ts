@@ -101,8 +101,8 @@ export interface VikarCreatedResult {
 /** S76b / TASK-7603 (BLOCKER 3) — the single-manager active-vikar read shape
     (`GET .../{managerId}/vikar` → `{ activeVikar }`). Mirrors the roster's
     `outgoingVikar` so it maps 1:1 onto `VikarSection`'s `ActiveVikar`.
-    S115 — the strict spec `ActiveVikarInfo` assigns directly; the envelope's
-    optional-vs-null mismatch is normalized in `fetchActiveVikar` (see there). */
+    S115 — the strict spec `ActiveVikarInfo` assigns directly; S117 — the
+    envelope member is generated as required `| null`, no normalization. */
 export interface ActiveVikarDto {
   vikarUserId: string
   vikarDisplayName: string
@@ -273,19 +273,16 @@ export function useReportingLines() {
   // be revoked. Read-only; LocalAdmin floor. `activeVikar` is null when none.
   const fetchActiveVikar = useCallback(
     async (managerId: string): Promise<ApiResult<{ activeVikar: ActiveVikarDto | null }>> => {
-      // S115 — typed spec-keyed GET. `ActiveVikarResponse.activeVikar` is a
-      // nullable-COMPLEX member: the wire ALWAYS emits the key (null-or-object),
-      // but the S113 nullable-$ref exclusion makes the generated member OPTIONAL
-      // (`activeVikar?: ActiveVikarInfo`, no `| null`). Consumed optional-as-
-      // nullable and normalized `?? null` HERE so the hook's public
-      // `ActiveVikarDto | null` contract (and every consumer's none-sentinel)
-      // is untouched — the deliberate alternative to a RosterRow-style
-      // Omit-override view for a single-member envelope.
+      // S115 — typed spec-keyed GET. S117: the allOf wrapper mechanism closed
+      // the S113 nullable-$ref exclusion — the generated member is now REQUIRED
+      // `activeVikar: ActiveVikarInfo | null`, matching the wire (the key is
+      // always emitted, null-or-object), so the former `?? null` normalization
+      // is gone; the hook's public `ActiveVikarDto | null` contract is unchanged.
       const result = await apiClient.get('/api/admin/reporting-lines/{managerId}/vikar', {
         params: { path: { managerId } },
       })
       if (!result.ok) return result
-      return { ok: true, data: { activeVikar: result.data.activeVikar ?? null } }
+      return { ok: true, data: { activeVikar: result.data.activeVikar } }
     },
     [],
   )

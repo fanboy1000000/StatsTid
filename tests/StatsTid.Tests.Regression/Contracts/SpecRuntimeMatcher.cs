@@ -26,15 +26,25 @@ namespace StatsTid.Tests.Regression.Contracts;
 /// alone — null is admissible iff the member is nullable, never by enum membership), and
 /// <b>array item / dictionary value schemas</b> (the nested element shape).</para>
 ///
-/// <para>NOTE (updated S113 / TASK-11302): the <c>ResponseStrictTypesFilter</c> now POPULATES
-/// <c>required</c> on the response-reachable schema closure (required = every member EXCEPT
-/// conditionally-ignored [<c>JsonIgnore(WhenWritingNull/Default)</c>] and CLR-nullable bare-<c>$ref</c>
-/// members — see that filter's class doc), so required-fidelity is enforced directly off the
-/// <c>required</c> array. The nullable-required check still rides the <c>nullable</c> flag, enforced
-/// on SCALAR leaves. <c>$ref</c>/object/array properties are checked for presence + recursed when
-/// non-null (an OpenAPI-3.0 <c>$ref</c> cannot carry a sibling <c>nullable</c>, so a nullable
-/// ref-typed property — e.g. <c>outgoingVikar</c>, which the filter deliberately EXCLUDES from
-/// <c>required</c> — is allowed to be null or absent without a false RED).</para>
+/// <para>NOTE (updated S113 / TASK-11302; S117 / TASK-11700): the <c>ResponseStrictTypesFilter</c>
+/// POPULATES <c>required</c> on the response-reachable schema closure (required = every member
+/// EXCEPT conditionally-ignored [<c>JsonIgnore(WhenWritingNull/Default)</c>] ones — see that
+/// filter's class doc), so required-fidelity is enforced directly off the <c>required</c> array.
+/// S117 fired the S113 nullable-<c>$ref</c> escalation: a CLR-nullable COMPLEX member now emits as
+/// the OAS-3.0.3-legal nullable-complex WRAPPER (<c>type: object</c> + <c>allOf: [$ref]</c> +
+/// <c>nullable: true</c>) AND is required. This matcher resolves THROUGH that wrapper in
+/// <c>Deref</c> (a wrapper member's non-null value recurses into the wrapped schema — inner
+/// required/enum fidelity fully enforced; a wrapper walked as an empty <c>type: object</c> would
+/// be a silent vacuous pass), honors the wrapper-level <c>nullable: true</c> for null admission,
+/// and REDs a bare-<c>$ref</c> member serving null — after S117, truthful nullability on a complex
+/// member ALWAYS carries the wrapper, so a bare <c>$ref</c> is a never-null claim. Two Step-7a
+/// fail-closed tightenings ride the same rule: a WRAPPER-SHAPED member (<c>allOf</c>) WITHOUT
+/// <c>nullable: true</c> serving null is equally RED (a never-null claim in wrapper clothing), and
+/// an IMPURE <c>allOf</c> (multi-element; alongside own <c>properties</c>; non-<c>$ref</c> sole
+/// element; <c>enum</c>/<c>required</c> stamped on the wrapper node itself, which resolution would
+/// silently discard) THROWS at resolution instead of walking as an empty object — the filter only
+/// ever emits the pure wrapper, so an impure composition is drift and must never vacuous-pass. The
+/// nullable-required check on SCALAR leaves is unchanged.</para>
 /// </summary>
 public static class SpecRuntimeMatcher
 {
@@ -312,11 +322,32 @@ public static class SpecRuntimeMatcher
 
                     if (val.ValueKind == JsonValueKind.Null)
                     {
-                        // A NON-nullable SCALAR the runtime serves null is a fidelity break. Structural
-                        // ($ref/object/array) nullable properties cannot carry nullable on a $ref in
-                        // OpenAPI 3.0, so a null there is permitted (no recursion).
-                        if (scalar && !nullable)
-                            throw new XunitException($"{ctx}.{name}: schema marks it NON-nullable but the runtime served null. RED.");
+                        // Null admission is governed by `nullable` ALONE (the S113 rule): a nullable
+                        // scalar OR an S117 nullable-complex WRAPPER member (nullable:true at the
+                        // property level) serving null is admitted. A NON-nullable SCALAR serving
+                        // null is a fidelity break, and — the S117 policy flip — so is a bare-$ref
+                        // member serving null: after the allOf-wrapper emission, truthful
+                        // nullability on a complex member ALWAYS carries the wrapper, so a bare
+                        // $ref claims never-null. S117 Step-7a W1 extends the same rule to a
+                        // WRAPPER-SHAPED member (allOf) LACKING nullable:true — that too is a
+                        // never-null claim and must not ride the permissive structural branch.
+                        // Other structural kinds (arrays, inline objects — no allOf, no $ref) keep
+                        // the permissive pre-S117 behavior (no nullable vocabulary there).
+                        if (!nullable)
+                        {
+                            if (scalar)
+                                throw new XunitException($"{ctx}.{name}: schema marks it NON-nullable but the runtime served null. RED.");
+                            if (prop.Value.ValueKind == JsonValueKind.Object && prop.Value.TryGetProperty("$ref", out _))
+                                throw new XunitException(
+                                    $"{ctx}.{name}: schema declares a bare $ref (a never-null claim — truthful nullability " +
+                                    "on a complex member carries the allOf wrapper with nullable:true, S117) but the " +
+                                    "runtime served null. RED.");
+                            if (prop.Value.ValueKind == JsonValueKind.Object && prop.Value.TryGetProperty("allOf", out _))
+                                throw new XunitException(
+                                    $"{ctx}.{name}: schema declares a wrapper-shaped never-null claim (allOf WITHOUT " +
+                                    "nullable:true) but the runtime served null — a truthfully-nullable wrapped member " +
+                                    "carries nullable:true at the property level (S117). RED.");
+                        }
                     }
                     else
                     {
@@ -348,6 +379,43 @@ public static class SpecRuntimeMatcher
             var name = refPath.Substring(prefix.Length);
             var resolved = spec.GetProperty("components").GetProperty("schemas").GetProperty(name);
             return Deref(spec, resolved);
+        }
+
+        // S117 / TASK-11700 — the nullable-complex WRAPPER (type: object + allOf: [single $ref] +
+        // nullable: true, emitted by the ResponseStrictTypesFilter for CLR-nullable complex
+        // members): resolve THROUGH it to the wrapped schema. Without this the wrapper would walk
+        // as an empty `type: object` and check NOTHING — a silent vacuous pass across every suite
+        // (the Step-0b W1 vacuous-pass hazard). The wrapper-level `nullable: true` is honored by
+        // the CALLER on the RAW property node (null admission), so derefing past it is loss-free.
+        //
+        // S117 Step-7a W2 — any OTHER allOf composition FAILS CLOSED: the filter only ever emits
+        // the PURE wrapper (a single-$ref allOf with no sibling `properties`), so an impure allOf
+        // (multi-element; allOf alongside the schema's own properties; a non-$ref sole element) is
+        // spec drift or a foreign emission. Falling through would walk it as an empty object and
+        // silently skip every inner required/enum check — throw with the named impurity instead.
+        // Step-7a NOTE-1 extension: resolution DISCARDS the wrapper node itself, so a validation
+        // keyword stamped ON the wrapper (`enum`/`required` — e.g. an [AllowedValues] that landed
+        // on a wrapped member ahead of the filter's wrapping) would be silently UNENFORCED —
+        // that too is an impurity, never a resolve.
+        if (schema.ValueKind == JsonValueKind.Object && schema.TryGetProperty("allOf", out var allOf))
+        {
+            var impurity =
+                allOf.ValueKind != JsonValueKind.Array ? "allOf is not an array"
+                : allOf.GetArrayLength() != 1 ? $"a {allOf.GetArrayLength()}-element allOf"
+                : schema.TryGetProperty("properties", out _) ? "allOf alongside the schema's own properties"
+                : allOf[0].ValueKind != JsonValueKind.Object || !allOf[0].TryGetProperty("$ref", out _)
+                    ? "an allOf whose sole element is not a $ref"
+                : schema.TryGetProperty("enum", out _) || schema.TryGetProperty("required", out _)
+                    ? "validation keywords (enum/required) on the wrapper node — they are discarded by " +
+                      "resolution and would go silently unenforced; move them to the inner schema"
+                    : null;
+            if (impurity is not null)
+                throw new XunitException(
+                    $"Unsupported allOf composition ({impurity}) — the ResponseStrictTypesFilter only ever emits the " +
+                    "PURE nullable-complex wrapper (a single-$ref allOf with no sibling properties); an impure allOf " +
+                    "is spec drift or a foreign emission and FAILS CLOSED rather than walking as an empty object " +
+                    "(the vacuous-pass hazard). RED.");
+            return Deref(spec, allOf[0]);
         }
         return schema;
     }

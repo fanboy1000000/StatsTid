@@ -1,5 +1,6 @@
 using System.Globalization;
 using StatsTid.Auth;
+using StatsTid.Backend.Api.Contracts;
 using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Security;
@@ -217,29 +218,30 @@ public static class SettlementReversalEndpoints
                 return MapFailure(result);
 
             var reversed = result.ReversedRow!;
-            return Results.Ok(new
-            {
+            // S117 / TASK-11701 — exact shape-copy of the prior anonymous body (PAT-012 retrofit).
+            // `Successor` (a nullable nested record) is the S117 nullable-complex-wrapper
+            // mechanism's FIRST NEW consumer: spec-emitted as type: object + allOf: [$ref] +
+            // nullable: true, and REQUIRED (always present, null on a BARE reversal).
+            return Results.Ok(new SettlementReversalResponse(
                 employeeId,
                 entitlementType,
-                entitlementYear = body.EntitlementYear.Value,
-                reversalKind = result.SupersedingRow is null ? "BARE" : "SUPERSEDED",
-                reversedSequence = reversed.Sequence,
-                reversedVersion = reversed.Version,
-                bareReversalNotDue = reversed.BareReversalNotDue,
-                successor = result.SupersedingRow is { } successorRow
-                    ? (object)new
-                    {
-                        sequence = successorRow.Sequence,
-                        settlementState = successorRow.SettlementState,
-                        trigger = successorRow.Trigger,
-                        version = successorRow.Version,
-                    }
+                body.EntitlementYear.Value,
+                ReversalKind: result.SupersedingRow is null ? "BARE" : "SUPERSEDED",
+                ReversedSequence: reversed.Sequence,
+                ReversedVersion: reversed.Version,
+                BareReversalNotDue: reversed.BareReversalNotDue,
+                Successor: result.SupersedingRow is { } successorRow
+                    ? new SettlementSuccessor(
+                        successorRow.Sequence,
+                        successorRow.SettlementState,
+                        successorRow.Trigger,
+                        successorRow.Version)
                     : null,
-                voidedRequestIds = result.VoidedRequestIds,
-                userVersionAfter = result.UserVersionAfter,
-                userIsActiveAfter = result.UserIsActiveAfter,
-            });
-        }).RequireAuthorization("HROrAbove");
+                VoidedRequestIds: result.VoidedRequestIds,
+                UserVersionAfter: result.UserVersionAfter,
+                UserIsActiveAfter: result.UserIsActiveAfter));
+        }).RequireAuthorization("HROrAbove")
+        .Produces<SettlementReversalResponse>(StatusCodes.Status200OK); // S117 / TASK-11701
 
         return app;
     }

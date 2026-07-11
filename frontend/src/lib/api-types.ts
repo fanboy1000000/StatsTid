@@ -4388,7 +4388,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.TransferAgreementResponse"];
+                    };
                 };
             };
         };
@@ -4407,12 +4409,14 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description OK */
-                200: {
+                /** @description Created */
+                201: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.TransferAgreementResponse"];
+                    };
                 };
             };
         };
@@ -4484,7 +4488,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.PayoutPendingListResponse"];
+                    };
                 };
             };
         };
@@ -4523,7 +4529,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.ReconcilePayoutResponse"];
+                    };
                 };
             };
         };
@@ -4557,12 +4565,14 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description OK */
-                200: {
+                /** @description Created */
+                201: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.TerminationPayoutRequestResponse"];
+                    };
                 };
             };
         };
@@ -4601,7 +4611,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.SettlementReversalResponse"];
+                    };
                 };
             };
         };
@@ -4623,7 +4635,7 @@ export interface components {
             reason: string;
         };
         "StatsTid.Backend.Api.Contracts.ActiveVikarResponse": {
-            activeVikar?: components["schemas"]["StatsTid.Backend.Api.Contracts.ActiveVikarInfo"];
+            activeVikar: components["schemas"]["StatsTid.Backend.Api.Contracts.ActiveVikarInfo"] | null;
         };
         "StatsTid.Backend.Api.Contracts.AdminVikarCreatedResponse": {
             /** Format: uuid */
@@ -5002,6 +5014,26 @@ export interface components {
             status: "PENDING" | "APPROVED" | "REJECTED";
             reason: string | null;
         };
+        "StatsTid.Backend.Api.Contracts.PayoutPendingItem": {
+            employeeId: string;
+            entitlementType: string;
+            /** Format: int32 */
+            entitlementYear: number;
+            /** Format: int32 */
+            sequence: number;
+            /** Format: double */
+            payoutDays: number;
+            /** Format: int64 */
+            version: number;
+            /** Format: date-time */
+            settledAt: string;
+            primaryOrgId: string;
+        };
+        "StatsTid.Backend.Api.Contracts.PayoutPendingListResponse": {
+            items: components["schemas"]["StatsTid.Backend.Api.Contracts.PayoutPendingItem"][];
+            /** Format: int32 */
+            count: number;
+        };
         "StatsTid.Backend.Api.Contracts.PeriodActionResponse": {
             /** Format: uuid */
             periodId: string;
@@ -5022,6 +5054,19 @@ export interface components {
             position: string | null;
             unitName: string | null;
             path: string[];
+        };
+        "StatsTid.Backend.Api.Contracts.ReconcilePayoutResponse": {
+            employeeId: string;
+            entitlementType: string;
+            /** Format: int32 */
+            entitlementYear: number;
+            /** Format: int32 */
+            sequence: number;
+            /** Format: date-time */
+            payoutReconciledAt: string;
+            payoutReconciledBy: string;
+            /** Format: int64 */
+            version: number;
         };
         "StatsTid.Backend.Api.Contracts.RegisterTimeEntryRequest": {
             employeeId: string;
@@ -5121,7 +5166,7 @@ export interface components {
             structuralApproverId: string | null;
             /** @enum {string} */
             periodStatus: "OPEN" | "SUBMITTED" | "APPROVED";
-            outgoingVikar?: components["schemas"]["StatsTid.Backend.Api.Contracts.RosterOutgoingVikar"];
+            outgoingVikar: components["schemas"]["StatsTid.Backend.Api.Contracts.RosterOutgoingVikar"] | null;
             isRoot: boolean;
             isOrphan: boolean;
             /** Format: uuid */
@@ -5162,6 +5207,34 @@ export interface components {
             /** Format: int32 */
             peopleTotal: number;
         };
+        "StatsTid.Backend.Api.Contracts.SettlementReversalResponse": {
+            employeeId: string;
+            entitlementType: string;
+            /** Format: int32 */
+            entitlementYear: number;
+            /** @enum {string} */
+            reversalKind: "BARE" | "SUPERSEDED";
+            /** Format: int32 */
+            reversedSequence: number;
+            /** Format: int64 */
+            reversedVersion: number;
+            bareReversalNotDue: boolean;
+            successor: components["schemas"]["StatsTid.Backend.Api.Contracts.SettlementSuccessor"] | null;
+            voidedRequestIds: number[];
+            /** Format: int64 */
+            userVersionAfter: number | null;
+            userIsActiveAfter: boolean | null;
+        };
+        "StatsTid.Backend.Api.Contracts.SettlementSuccessor": {
+            /** Format: int32 */
+            sequence: number;
+            /** @enum {string} */
+            settlementState: "PENDING_REVIEW" | "SETTLED" | "REVERSED";
+            /** @enum {string} */
+            trigger: "YEAR_END" | "TERMINATION";
+            /** Format: int64 */
+            version: number;
+        };
         "StatsTid.Backend.Api.Contracts.TeamOverviewEmployeeRow": {
             /** Format: uuid */
             periodId: string | null;
@@ -5195,6 +5268,41 @@ export interface components {
         };
         "StatsTid.Backend.Api.Contracts.TeamOverviewResponse": {
             employees: components["schemas"]["StatsTid.Backend.Api.Contracts.TeamOverviewEmployeeRow"][];
+        };
+        "StatsTid.Backend.Api.Contracts.TerminationPayoutRequestResponse": {
+            /** Format: int64 */
+            requestId: number;
+            employeeId: string;
+            entitlementType: string;
+            /** Format: int32 */
+            entitlementYear: number;
+            /** Format: int32 */
+            settlementSequence: number;
+            /** @enum {string} */
+            state: "OPEN" | "LINE_STAGED" | "VOIDED_BY_REVERSAL";
+            /** Format: date */
+            requestDate: string;
+            evidenceNote: string | null;
+            /** Format: double */
+            crystallizedDays: number;
+            /** Format: date */
+            settlementBoundaryDate: string;
+            /** Format: int64 */
+            version: number;
+        };
+        "StatsTid.Backend.Api.Contracts.TransferAgreementResponse": {
+            employeeId: string;
+            /** Format: int32 */
+            entitlementYear: number;
+            /** @enum {string} */
+            entitlementType: "VACATION";
+            /** Format: double */
+            transferDays: number;
+            /** Format: date */
+            agreementDate: string;
+            recordedBy: string;
+            /** Format: int64 */
+            version: number;
         };
         "StatsTid.Backend.Api.Contracts.TreePeriodStatusEmployee": {
             employeeId: string;

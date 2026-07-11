@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using Npgsql;
 using StatsTid.Auth;
+using StatsTid.Backend.Api.Contracts;
 using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Backend.Api.Services;
 using StatsTid.Infrastructure;
@@ -315,16 +316,16 @@ public static class VacationSettlementEndpoints
                 await tx.CommitAsync(ct);
 
                 context.Response.Headers.ETag = $"\"{persisted.Version}\"";
-                var payload = new
-                {
-                    employeeId = persisted.EmployeeId,
-                    entitlementYear = persisted.EntitlementYear,
-                    entitlementType = persisted.EntitlementType,
-                    transferDays = persisted.TransferDays,
-                    agreementDate = persisted.AgreementDate,
-                    recordedBy = persisted.RecordedBy,
-                    version = persisted.Version,
-                };
+                // S117 / TASK-11701 — exact shape-copy of the prior anonymous payload (PAT-012
+                // retrofit): ONE shared record for both verbs (POST 201 / PUT 200).
+                var payload = new TransferAgreementResponse(
+                    persisted.EmployeeId,
+                    persisted.EntitlementYear,
+                    persisted.EntitlementType,
+                    persisted.TransferDays,
+                    persisted.AgreementDate,
+                    persisted.RecordedBy,
+                    persisted.Version);
                 return isCreate ? Results.Created($"/api/vacation-transfer-agreements/{employeeId}", payload) : Results.Ok(payload);
             }
             catch
@@ -336,9 +337,11 @@ public static class VacationSettlementEndpoints
         };
 
         if (isCreate)
-            app.MapPost("/api/vacation-transfer-agreements/{employeeId}", handler).RequireAuthorization("HROrAbove");
+            app.MapPost("/api/vacation-transfer-agreements/{employeeId}", handler).RequireAuthorization("HROrAbove")
+                .Produces<TransferAgreementResponse>(StatusCodes.Status201Created); // S117 / TASK-11701
         else
-            app.MapPut("/api/vacation-transfer-agreements/{employeeId}", handler).RequireAuthorization("HROrAbove");
+            app.MapPut("/api/vacation-transfer-agreements/{employeeId}", handler).RequireAuthorization("HROrAbove")
+                .Produces<TransferAgreementResponse>(StatusCodes.Status200OK); // S117 / TASK-11701
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -1066,7 +1069,11 @@ public static class VacationSettlementEndpoints
             // unioned in via the non-admin Leader scope (the same picker-leak class 7600 closed).
             var accessibleOrgs = await scopeValidator.GetAccessibleOrgsAsync(actor, StatsTidRoles.LocalHR, ct);
             if (accessibleOrgs is { Count: 0 })
-                return Results.Ok(new { items = Array.Empty<object>(), count = 0 });
+            {
+                // S117 / TASK-11701 — the SAME envelope record as the populated branch (empty via
+                // an empty typed list): one wire contract, two return sites.
+                return Results.Ok(new PayoutPendingListResponse(Array.Empty<PayoutPendingItem>(), 0));
+            }
 
             await using var conn = connectionFactory.Create();
             await conn.OpenAsync(ct);
@@ -1093,25 +1100,26 @@ public static class VacationSettlementEndpoints
                 Value = (object?)(accessibleOrgs?.ToArray()) ?? Array.Empty<string>(),
             });
 
-            var items = new List<object>();
+            // S117 / TASK-11701 — exact shape-copy of the prior anonymous item (PAT-012 retrofit);
+            // payout_days is the NUMERIC(6,2) day-count read verbatim (ADR-033 D1 — no rounding).
+            var items = new List<PayoutPendingItem>();
             await using var reader = await cmd.ExecuteReaderAsync(ct);
             while (await reader.ReadAsync(ct))
             {
-                items.Add(new
-                {
-                    employeeId = reader.GetString(0),
-                    entitlementType = reader.GetString(1),
-                    entitlementYear = reader.GetInt32(2),
-                    sequence = reader.GetInt32(3),
-                    payoutDays = reader.GetDecimal(4),
-                    version = reader.GetInt64(5),
-                    settledAt = reader.GetDateTime(6),
-                    primaryOrgId = reader.GetString(7),
-                });
+                items.Add(new PayoutPendingItem(
+                    EmployeeId: reader.GetString(0),
+                    EntitlementType: reader.GetString(1),
+                    EntitlementYear: reader.GetInt32(2),
+                    Sequence: reader.GetInt32(3),
+                    PayoutDays: reader.GetDecimal(4),
+                    Version: reader.GetInt64(5),
+                    SettledAt: reader.GetDateTime(6),
+                    PrimaryOrgId: reader.GetString(7)));
             }
 
-            return Results.Ok(new { items, count = items.Count });
-        }).RequireAuthorization("HROrAbove");
+            return Results.Ok(new PayoutPendingListResponse(items, items.Count));
+        }).RequireAuthorization("HROrAbove")
+        .Produces<PayoutPendingListResponse>(StatusCodes.Status200OK); // S117 / TASK-11701
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -1321,16 +1329,15 @@ public static class VacationSettlementEndpoints
                 await tx.CommitAsync(ct);
 
                 context.Response.Headers.ETag = $"\"{newVersion}\"";
-                return Results.Ok(new
-                {
+                // S117 / TASK-11701 — exact shape-copy of the prior anonymous receipt (PAT-012).
+                return Results.Ok(new ReconcilePayoutResponse(
                     employeeId,
                     entitlementType,
                     entitlementYear,
-                    sequence = current.Sequence,
-                    payoutReconciledAt = reconciledAt,
-                    payoutReconciledBy = actorId,
-                    version = newVersion,
-                });
+                    current.Sequence,
+                    reconciledAt,
+                    actorId,
+                    newVersion));
             }
             catch
             {
@@ -1338,7 +1345,10 @@ public static class VacationSettlementEndpoints
                     await tx.RollbackAsync(ct);
                 throw;
             }
-        }).RequireAuthorization("HROrAbove");
+        }).RequireAuthorization("HROrAbove")
+        // S117 / TASK-11701 — the op binds NO request DTO (route params + If-Match only): declared
+        // in tools/openapi-bodyless-declared.txt (3rd member, the S116 owner-ratified rule).
+        .Produces<ReconcilePayoutResponse>(StatusCodes.Status200OK);
     }
 
     // ───────────────────────────── helpers ─────────────────────────────

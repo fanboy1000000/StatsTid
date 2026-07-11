@@ -246,9 +246,12 @@ public sealed class S115ReportingLineSpecRuntimeTests : IAsyncLifetime
             "/api/admin/reporting-lines/{employeeId}/remove", "post");
 
     // ════════════════════════════════════════════════════════════════════════════════
-    //  The vikar trio — the GET proven on BOTH branches (object AND the null member: the
-    //  activeVikar nullable-COMPLEX member is EXCLUDED from `required` by the S113 filter,
-    //  so the null branch exercises exactly the matcher's nullable-$ref handling).
+    //  The vikar trio — the GET proven on BOTH branches (object AND the null member: since
+    //  S117 fired the nullable-$ref escalation, activeVikar emits as the nullable-complex
+    //  WRAPPER [type: object + allOf: [$ref] + nullable: true] and IS required — the null
+    //  branch exercises the wrapper's null admission, the object branch the matcher's
+    //  resolve-THROUGH-the-wrapper recursion. These two pins are the mechanism's LIVE
+    //  re-proof on a real route; their assertions are unchanged from S115.
     // ════════════════════════════════════════════════════════════════════════════════
 
     [Fact]

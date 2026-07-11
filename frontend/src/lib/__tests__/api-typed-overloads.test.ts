@@ -349,7 +349,7 @@ describe('S112 typed derivation — compile-time fixtures', () => {
 })
 
 describe('S112 typed derivation — real committed spec', () => {
-  it('phase pin: after the S116 Pass-3 drain — 18 POSTs, 13 PUTs, 8 DELETEs (retrofit updates this)', () => {
+  it('phase pin: after the S117 Pass-4 drain — 22 POSTs, 14 PUTs, 8 DELETEs (retrofit updates this)', () => {
     // S112 / TASK-11203 — the backend typed 20 ops (units / organizations /
     // users / roles / employee-profiles); the put/delete unions became
     // NON-EMPTY and the post union grew from exactly '/api/admin/units'.
@@ -359,6 +359,12 @@ describe('S112 typed derivation — real committed spec', () => {
     // bucket + the delegate trio + the overtime pre-approval quartet:
     // +7 POSTs (5 approval + delegate + overtime create), +2 PUTs (overtime
     // approve/reject), +1 DELETE (delegate — genuine 200 {revokedCount}).
+    // S117 / TASK-11702 — Pass 4 (TASK-11701) drained the settlement bucket:
+    // +1 PUT (transfer-agreement update, JSON 200) + 4 POSTs (transfer-
+    // agreement create, JSON 201; reconcile-payout, JSON 200; termination-
+    // payout-request, JSON 201; settlement-reversal, JSON 200). The resolve
+    // POST is a DECLARED-bodyless 200 (`content?: never`) — the admission
+    // rule excludes it, so it stays off the typed unions by design.
     expectTypeOf<TypedPathIn<paths, 'put'>>().toEqualTypeOf<
       | '/api/admin/organizations/{orgId}'
       | '/api/admin/organizations/{orgId}/move'
@@ -373,6 +379,7 @@ describe('S112 typed derivation — real committed spec', () => {
       | '/api/admin/employees/{employeeId}/employment-end-date'
       | '/api/overtime/pre-approval/{id}/approve'
       | '/api/overtime/pre-approval/{id}/reject'
+      | '/api/vacation-transfer-agreements/{employeeId}'
     >()
     expectTypeOf<TypedPathIn<paths, 'delete'>>().toEqualTypeOf<
       | '/api/admin/organizations/{orgId}'
@@ -403,6 +410,10 @@ describe('S112 typed derivation — real committed spec', () => {
       | '/api/approval/{periodId}/reopen'
       | '/api/overtime/pre-approval'
       | '/api/reporting-lines/delegate'
+      | '/api/vacation-transfer-agreements/{employeeId}'
+      | '/api/vacation-settlements/{employeeId}/{entitlementType}/{entitlementYear}/reconcile-payout'
+      | '/api/admin/employees/{employeeId}/termination-payout-request'
+      | '/api/admin/employees/{employeeId}/settlement-reversal'
     >()
   })
 

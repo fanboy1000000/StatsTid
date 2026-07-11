@@ -36,18 +36,23 @@ namespace StatsTid.Backend.Api;
 /// payroll retrofit pass — a conditionally-ignored member can be ABSENT from the wire and must
 /// never be claimed required.</para>
 ///
-/// <para><b>The nullable-$ref exception (S113 finding, deliberately conservative).</b> A CLR-nullable
-/// COMPLEX member (today exactly one in the closure: <c>RosterEmployeeRow.OutgoingVikar</c>, a
-/// <c>RosterOutgoingVikar?</c> that null-emits) generates as a BARE <c>$ref</c> — OpenAPI 3.0
+/// <para><b>The nullable-complex wrapper (S117 — the S113 nullable-$ref escalation FIRED).</b> A
+/// CLR-nullable COMPLEX member generates from Swashbuckle as a BARE <c>$ref</c> — OpenAPI 3.0
 /// forbids a sibling <c>nullable</c> on <c>$ref</c>, and Swashbuckle 6.6.2 silently DROPS the flag.
-/// Marking such a member <c>required</c> would make the generated TS claim it is NEVER null — a
-/// same-name type LIE in the dangerous direction (an FE null-deref), the exact class this phase
-/// exists to kill. So a nullable ref-typed member is EXCLUDED from <c>required</c>: the generated
-/// TS stays <c>member?: T</c> (today's exact pre-strictness semantics for that member — falsy
-/// checks cover both undefined and null), and the SpecRuntimeMatcher's documented ref-property
-/// policy (presence + recurse-when-non-null) continues to hold unchanged. The truthful fix —
-/// wrapping as <c>allOf: [$ref] + nullable: true</c> — restructures the property shape the
-/// spec≡runtime matcher walks and belongs to a coordinated filter+matcher change, not here.</para>
+/// S113 handled this conservatively by EXCLUDING such members from <c>required</c> (the generated
+/// TS stayed <c>member?: T</c>, consumed via FE Omit/normalization scaffolding), with a numbered
+/// escalation trigger: at 3+ members, do the truthful emission. S117's settlement retrofit would
+/// have created the 3rd member (<c>SettlementReversalResponse.Successor</c>), so the escalation
+/// fired: this filter now REWRITES every CLR-nullable complex member's property schema to the
+/// OAS-3.0.3-legal nullable-complex form — <c>type: object</c> + <c>allOf: [$ref]</c> +
+/// <c>nullable: true</c> — AND includes it in <c>required</c> ("always present, possibly JSON
+/// null", exactly like nullable scalars). <c>openapi-typescript@7.13.0</c> renders the wrapper as
+/// <c>T | null</c>, non-optional (empirically verified, S117 Step-4). The resolution side of the
+/// coordinated change lives in the SpecRuntimeMatcher's <c>Deref</c>: it resolves
+/// THROUGH the wrapper (so inner required/enum fidelity recurses) and REDs a bare-<c>$ref</c>
+/// member serving null — truthful nullability on a complex member ALWAYS carries the wrapper now.
+/// Retro-applied to the 2 pre-existing residual members (<c>RosterEmployeeRow.OutgoingVikar</c>,
+/// <c>ActiveVikarResponse.ActiveVikar</c>) — the nullable-$ref residual class is CLOSED (0 members).</para>
 ///
 /// <para><b>What it does NOT touch.</b> Schemas outside the closure (today: all 58 request DTO
 /// schemas) are byte-UNTOUCHED — their <c>required</c> arrays are the C#-<c>required</c>-keyword
@@ -128,8 +133,17 @@ public sealed class ResponseStrictTypesFilter : ISchemaFilter, IDocumentFilter
                 if (member is null)
                     continue; // fail-conservative: unmappable property → not claimed required
 
-                if (!IsConditionallyIgnored(member) && !IsNullableRef(member, propertySchema, nullability))
+                if (!IsConditionallyIgnored(member))
+                {
+                    // S117 — a CLR-nullable COMPLEX member (a bare $ref, which cannot carry a
+                    // sibling nullable in OpenAPI 3.0) is rewritten to the legal nullable-complex
+                    // WRAPPER (type: object + allOf: [$ref] + nullable: true) so it can be claimed
+                    // required TRUTHFULLY ("always present, possibly JSON null" — the null-emitting
+                    // serializer fact, same as nullable scalars). See the class doc.
+                    if (IsNullableRef(member, propertySchema, nullability))
+                        WrapAsNullableComplex(propertySchema);
                     required.Add(propertyName);
+                }
 
                 // [AllowedValues] → enum. Read explicitly (6.6.2 has no native mapping). Emitted
                 // ONLY inside the closure by construction — a mistakenly-attributed request DTO
@@ -252,9 +266,10 @@ public sealed class ResponseStrictTypesFilter : ISchemaFilter, IDocumentFilter
             is JsonIgnoreCondition.WhenWritingNull or JsonIgnoreCondition.WhenWritingDefault;
 
     /// <summary>TRUE for a CLR-NULLABLE member whose spec schema is a bare $ref (a nullable complex
-    /// type, e.g. RosterEmployeeRow.OutgoingVikar) — excluded from required because the $ref cannot
-    /// carry nullable:true, and required-without-nullable would be a never-null over-claim (see the
-    /// class doc's nullable-$ref exception).</summary>
+    /// type, e.g. RosterEmployeeRow.OutgoingVikar) — S117: such a member is rewritten by
+    /// <see cref="WrapAsNullableComplex"/> to the OAS-3.0.3-legal nullable-complex wrapper AND
+    /// claimed required (a bare $ref cannot carry nullable:true; required-without-nullable would be
+    /// a never-null over-claim — see the class doc's nullable-complex wrapper paragraph).</summary>
     private static bool IsNullableRef(
         PropertyInfo member, OpenApiSchema propertySchema, NullabilityInfoContext nullability)
     {
@@ -262,5 +277,18 @@ public sealed class ResponseStrictTypesFilter : ISchemaFilter, IDocumentFilter
             return false;
         return Nullable.GetUnderlyingType(member.PropertyType) is not null
             || nullability.Create(member).WriteState == NullabilityState.Nullable;
+    }
+
+    /// <summary>S117 — rewrite a CLR-nullable complex member's bare-$ref property schema IN PLACE to
+    /// the OAS-3.0.3-legal nullable-complex form: <c>type: object</c> + <c>allOf: [$ref]</c> +
+    /// <c>nullable: true</c>. (A schema node with <c>Reference</c> set serializes as ONLY the $ref —
+    /// the reference must MOVE into the allOf child for the sibling keywords to survive.)</summary>
+    private static void WrapAsNullableComplex(OpenApiSchema propertySchema)
+    {
+        var innerRef = propertySchema.Reference;
+        propertySchema.Reference = null;
+        propertySchema.Type = "object";
+        propertySchema.Nullable = true;
+        propertySchema.AllOf = new List<OpenApiSchema> { new() { Reference = innerRef } };
     }
 }

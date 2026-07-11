@@ -12,3 +12,6 @@
 
 POST /api/approval/{periodId}/approve
 POST /api/approval/{periodId}/employee-approve
+# S117 / TASK-11701 — the §24 reconcile-payout marker binds NO request DTO (route params +
+# If-Match header only); its response is typed (ReconcilePayoutResponse).
+POST /api/vacation-settlements/{employeeId}/{entitlementType}/{entitlementYear}/reconcile-payout

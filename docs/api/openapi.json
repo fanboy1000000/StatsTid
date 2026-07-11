@@ -4006,8 +4006,15 @@
           "required": true
         },
         "responses": {
-          "200": {
-            "description": "OK"
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.TransferAgreementResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -4037,7 +4044,14 @@
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.TransferAgreementResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -4098,7 +4112,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.PayoutPendingListResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -4137,7 +4158,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.ReconcilePayoutResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -4168,8 +4196,15 @@
           "required": true
         },
         "responses": {
-          "200": {
-            "description": "OK"
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.TerminationPayoutRequestResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -4201,7 +4236,14 @@
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.SettlementReversalResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -4235,10 +4277,19 @@
         "additionalProperties": false
       },
       "StatsTid.Backend.Api.Contracts.ActiveVikarResponse": {
+        "required": [
+          "activeVikar"
+        ],
         "type": "object",
         "properties": {
           "activeVikar": {
-            "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.ActiveVikarInfo"
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.ActiveVikarInfo"
+              }
+            ],
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -5596,6 +5647,71 @@
         },
         "additionalProperties": false
       },
+      "StatsTid.Backend.Api.Contracts.PayoutPendingItem": {
+        "required": [
+          "employeeId",
+          "entitlementType",
+          "entitlementYear",
+          "payoutDays",
+          "primaryOrgId",
+          "sequence",
+          "settledAt",
+          "version"
+        ],
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string"
+          },
+          "entitlementType": {
+            "type": "string"
+          },
+          "entitlementYear": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "sequence": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "payoutDays": {
+            "type": "number",
+            "format": "double"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "settledAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "primaryOrgId": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.PayoutPendingListResponse": {
+        "required": [
+          "count",
+          "items"
+        ],
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.PayoutPendingItem"
+            }
+          },
+          "count": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
       "StatsTid.Backend.Api.Contracts.PeriodActionResponse": {
         "required": [
           "periodId",
@@ -5681,6 +5797,46 @@
             "items": {
               "type": "string"
             }
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.ReconcilePayoutResponse": {
+        "required": [
+          "employeeId",
+          "entitlementType",
+          "entitlementYear",
+          "payoutReconciledAt",
+          "payoutReconciledBy",
+          "sequence",
+          "version"
+        ],
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string"
+          },
+          "entitlementType": {
+            "type": "string"
+          },
+          "entitlementYear": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "sequence": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "payoutReconciledAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "payoutReconciledBy": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
           }
         },
         "additionalProperties": false
@@ -5991,6 +6147,7 @@
           "isOrphan",
           "isRoot",
           "leaderIds",
+          "outgoingVikar",
           "periodStatus",
           "position",
           "primaryReportingLineVersion",
@@ -6023,7 +6180,13 @@
             "type": "string"
           },
           "outgoingVikar": {
-            "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.RosterOutgoingVikar"
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.RosterOutgoingVikar"
+              }
+            ],
+            "nullable": true
           },
           "isRoot": {
             "type": "boolean"
@@ -6174,6 +6337,113 @@
         },
         "additionalProperties": false
       },
+      "StatsTid.Backend.Api.Contracts.SettlementReversalResponse": {
+        "required": [
+          "bareReversalNotDue",
+          "employeeId",
+          "entitlementType",
+          "entitlementYear",
+          "reversalKind",
+          "reversedSequence",
+          "reversedVersion",
+          "successor",
+          "userIsActiveAfter",
+          "userVersionAfter",
+          "voidedRequestIds"
+        ],
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string"
+          },
+          "entitlementType": {
+            "type": "string"
+          },
+          "entitlementYear": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "reversalKind": {
+            "enum": [
+              "BARE",
+              "SUPERSEDED"
+            ],
+            "type": "string"
+          },
+          "reversedSequence": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "reversedVersion": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "bareReversalNotDue": {
+            "type": "boolean"
+          },
+          "successor": {
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.SettlementSuccessor"
+              }
+            ],
+            "nullable": true
+          },
+          "voidedRequestIds": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "userVersionAfter": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "userIsActiveAfter": {
+            "type": "boolean",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.SettlementSuccessor": {
+        "required": [
+          "sequence",
+          "settlementState",
+          "trigger",
+          "version"
+        ],
+        "type": "object",
+        "properties": {
+          "sequence": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "settlementState": {
+            "enum": [
+              "PENDING_REVIEW",
+              "SETTLED",
+              "REVERSED"
+            ],
+            "type": "string"
+          },
+          "trigger": {
+            "enum": [
+              "YEAR_END",
+              "TERMINATION"
+            ],
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
       "StatsTid.Backend.Api.Contracts.TeamOverviewEmployeeRow": {
         "required": [
           "agreement",
@@ -6287,6 +6557,114 @@
             "items": {
               "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.TeamOverviewEmployeeRow"
             }
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.TerminationPayoutRequestResponse": {
+        "required": [
+          "crystallizedDays",
+          "employeeId",
+          "entitlementType",
+          "entitlementYear",
+          "evidenceNote",
+          "requestDate",
+          "requestId",
+          "settlementBoundaryDate",
+          "settlementSequence",
+          "state",
+          "version"
+        ],
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "employeeId": {
+            "type": "string"
+          },
+          "entitlementType": {
+            "type": "string"
+          },
+          "entitlementYear": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "settlementSequence": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "state": {
+            "enum": [
+              "OPEN",
+              "LINE_STAGED",
+              "VOIDED_BY_REVERSAL"
+            ],
+            "type": "string"
+          },
+          "requestDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "evidenceNote": {
+            "type": "string",
+            "nullable": true
+          },
+          "crystallizedDays": {
+            "type": "number",
+            "format": "double"
+          },
+          "settlementBoundaryDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.TransferAgreementResponse": {
+        "required": [
+          "agreementDate",
+          "employeeId",
+          "entitlementType",
+          "entitlementYear",
+          "recordedBy",
+          "transferDays",
+          "version"
+        ],
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string"
+          },
+          "entitlementYear": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "entitlementType": {
+            "enum": [
+              "VACATION"
+            ],
+            "type": "string"
+          },
+          "transferDays": {
+            "type": "number",
+            "format": "double"
+          },
+          "agreementDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "recordedBy": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
           }
         },
         "additionalProperties": false

@@ -88,9 +88,9 @@ public sealed record ActiveVikarInfo(
 
 /// <summary>The GET /api/admin/reporting-lines/{managerId}/vikar 200 body. The
 /// <paramref name="ActiveVikar"/> member is ALWAYS emitted — <c>null</c> when the manager has no
-/// active vikar, the object otherwise (a STABLE envelope with one nullable-COMPLEX member; the
-/// S113 ResponseStrictTypesFilter auto-excludes it from <c>required</c> — the watched
-/// nullable-$ref residual, PAT-012).</summary>
+/// active vikar, the object otherwise (a STABLE envelope with one nullable-COMPLEX member; since
+/// S117 the ResponseStrictTypesFilter emits it as the nullable allOf-wrapper and it IS
+/// <c>required</c> — the nullable-$ref residual is CLOSED, PAT-012).</summary>
 public sealed record ActiveVikarResponse(ActiveVikarInfo? ActiveVikar);
 
 /// <summary>The POST /api/admin/reporting-lines/{managerId}/vikar 200 body — the created

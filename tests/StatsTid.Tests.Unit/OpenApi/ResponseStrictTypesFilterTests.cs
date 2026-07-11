@@ -12,7 +12,8 @@ namespace StatsTid.Tests.Unit.OpenApi;
 // ── Probe records (the synthesized closure) ──────────────────────────────────────────────
 // Deliberate analogues of the real Contracts/ closure shapes:
 //  - FilterProbeResponse.MaybeChild  ≙ RosterEmployeeRow.OutgoingVikar (CLR-nullable complex →
-//    bare $ref → the nullable-$ref exception: NOT required)
+//    S117: the nullable-complex WRAPPER [type: object + allOf: [$ref] + nullable: true] AND
+//    required — the fired S113 nullable-$ref escalation)
 //  - FilterProbeResponse.SometimesAbsent ≙ the VacationSettlementSnapshot future
 //    ([JsonIgnore(WhenWritingNull)] → can be ABSENT from the wire → NOT required)
 //  - FilterProbeResponse.Status ≙ periodStatus ([AllowedValues] → spec enum)
@@ -166,12 +167,14 @@ public sealed class ResponseStrictTypesFilterTests
     [Fact]
     public void ResponseReferencedSchema_GetsRequired_OnEveryUnexceptedMember()
     {
-        // required = ALL members EXCEPT the CLR-nullable $ref (maybeChild) and the
-        // conditionally-ignored member (sometimesAbsent). Alphabetically sorted (SortedSet —
-        // the committed spec's house style). NOTE: the plain-nullable scalar `note` IS required
-        // ("always present, possibly JSON null" → TS `string | null`, non-optional).
+        // required = ALL members EXCEPT the conditionally-ignored one (sometimesAbsent).
+        // S117: the CLR-nullable complex `maybeChild` IS required now (it emits as the
+        // nullable-complex wrapper — the fired escalation; see the dedicated pin below).
+        // Alphabetically sorted (SortedSet — the committed spec's house style). NOTE: the
+        // plain-nullable scalar `note` IS required ("always present, possibly JSON null" →
+        // TS `string | null`, non-optional).
         Assert.Equal(
-            new[] { "child", "name", "note", "status", "tags" },
+            new[] { "child", "maybeChild", "name", "note", "status", "tags" },
             SchemaOf<FilterProbeResponse>().Required);
     }
 
@@ -232,20 +235,30 @@ public sealed class ResponseStrictTypesFilterTests
         Assert.DoesNotContain("sometimesAbsent", schema.Required);  // …but never required.
     }
 
-    // ─────────────────────────── (3) the nullable-$ref exception ────────────────────────────
+    // ──────────────── (3) the nullable-complex wrapper (S117 — escalation FIRED) ─────────────
 
     [Fact]
-    public void ClrNullableComplexMember_EmitsAsBareRef_AndIsNotRequired()
+    public void ClrNullableComplexMember_EmitsAsNullableAllOfWrapper_AndIsRequired()
     {
-        // The RosterEmployeeRow.outgoingVikar analogue: a CLR-nullable complex member emits as a
-        // bare $ref (OpenAPI 3.0 cannot carry nullable on a $ref; Swashbuckle drops the flag) —
-        // marking it required would over-claim never-null to the generated TS. Excluded.
+        // The RosterEmployeeRow.outgoingVikar analogue, POST-escalation (S117): a CLR-nullable
+        // complex member emits as the OAS-3.0.3-legal nullable-complex WRAPPER — type: object +
+        // allOf: [$ref] + nullable: true — AND is required ("always present, possibly JSON null";
+        // openapi-typescript renders it `T | null`, non-optional). A bare $ref here would either
+        // drop the nullable flag (Swashbuckle) or, if required, over-claim never-null — the S113
+        // conservative exclusion this escalation replaced.
         var schema = SchemaOf<FilterProbeResponse>();
-        Assert.NotNull(schema.Properties["maybeChild"].Reference); // a bare $ref, as production emits
-        Assert.DoesNotContain("maybeChild", schema.Required);
+        var maybeChild = schema.Properties["maybeChild"];
+        Assert.Null(maybeChild.Reference); // the $ref MOVED into the allOf child
+        Assert.Equal("object", maybeChild.Type);
+        Assert.True(maybeChild.Nullable);
+        var wrapped = Assert.Single(maybeChild.AllOf);
+        Assert.Equal(Id<FilterProbeChild>(), wrapped.Reference?.Id);
+        Assert.Contains("maybeChild", schema.Required);
 
-        // The NON-nullable complex member is the control: also a bare $ref, but required.
+        // The NON-nullable complex member is the control: a bare $ref (the truthful never-null
+        // claim), required, NOT wrapped.
         Assert.NotNull(schema.Properties["child"].Reference);
+        Assert.True(schema.Properties["child"].AllOf is null || schema.Properties["child"].AllOf.Count == 0);
         Assert.Contains("child", schema.Required);
     }
 

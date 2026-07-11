@@ -54,10 +54,7 @@ GET /api/projects/{orgId}
 GET /api/projects/{orgId}/available
 GET /api/skema/{employeeId}/month
 GET /api/time-entries/{employeeId}
-GET /api/vacation-settlements/payout-pending
 GET /health
-POST /api/admin/employees/{employeeId}/settlement-reversal
-POST /api/admin/employees/{employeeId}/termination-payout-request
 POST /api/admin/entitlement-configs
 POST /api/admin/position-overrides
 POST /api/admin/position-overrides/{overrideId}/activate
@@ -75,9 +72,13 @@ POST /api/projects/{orgId}
 POST /api/projects/{orgId}/select/{projectId}
 POST /api/skema/{employeeId}/save
 POST /api/time-entries
-POST /api/vacation-settlements/{employeeId}/{entitlementType}/{entitlementYear}/reconcile-payout
+# S117 flag-and-defer (the S115 rule's SECOND firing): the /resolve POST below is genuinely
+# POLYMORPHIC — its 4 success branches emit DIFFERENT key sets (`hint` DEFER-only;
+# `claimDispositionDays` WAIVED-only; `feriehindringTransferDays`/`feriehindringReason`/
+# `carryoverIn` FERIEHINDRING-only; `forfeitDays` absent in DEFER), so ONE response record
+# cannot describe them and typing it would be a wire change (PAT-010-forbidden). It STAYS
+# grandfathered until a oneOf phase addresses polymorphic writes. See PAT-012.
 POST /api/vacation-settlements/{employeeId}/{entitlementType}/{entitlementYear}/resolve
-POST /api/vacation-transfer-agreements/{employeeId}
 PUT /api/admin/entitlement-configs/{configId}
 PUT /api/admin/position-overrides/{overrideId}
 PUT /api/admin/wage-type-mappings
@@ -87,4 +88,3 @@ PUT /api/config/{orgId}/profile/{agreementCode}/{okVersion}
 PUT /api/overtime/{employeeId}/compensation-choice
 PUT /api/projects/{orgId}/{projectId}
 PUT /api/skema/{employeeId}/row-preferences
-PUT /api/vacation-transfer-agreements/{employeeId}

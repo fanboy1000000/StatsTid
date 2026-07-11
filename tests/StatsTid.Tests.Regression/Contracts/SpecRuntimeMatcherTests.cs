@@ -338,9 +338,11 @@ public sealed class SpecRuntimeMatcherTests
     // ════════════════════════════════════════════════════════════════════════════════
     //  S113 / TASK-11302 — REQUIRED-fidelity + ENUM-fidelity (the strict-types phase).
     //  A strict schema shaped like the real closure output of ResponseStrictTypesFilter:
-    //  `required` populated (all members except the nullable-$ref `detail` — the
-    //  RosterEmployeeRow.outgoingVikar analogue) + a string discriminator `enum` (the
-    //  periodStatus analogue) in both a NON-nullable and a nullable flavor.
+    //  `required` populated (ALL members — S117 fired the nullable-$ref escalation, so the
+    //  CLR-nullable complex `detail` — the RosterEmployeeRow.outgoingVikar analogue — now
+    //  carries the nullable-complex WRAPPER form [type: object + allOf: [$ref] +
+    //  nullable: true] and IS required) + a string discriminator `enum` (the periodStatus
+    //  analogue) in both a NON-nullable and a nullable flavor.
     // ════════════════════════════════════════════════════════════════════════════════
 
     private const string StrictSpecJson = """
@@ -349,13 +351,13 @@ public sealed class SpecRuntimeMatcherTests
         "schemas": {
           "StrictItem": {
             "type": "object",
-            "required": [ "id", "status", "maybeStatus", "note" ],
+            "required": [ "detail", "id", "status", "maybeStatus", "note" ],
             "properties": {
               "id":          { "type": "string" },
               "status":      { "type": "string", "enum": [ "OPEN", "SUBMITTED", "APPROVED" ] },
               "maybeStatus": { "type": "string", "enum": [ "A", "B" ], "nullable": true },
               "note":        { "type": "string", "nullable": true },
-              "detail":      { "$ref": "#/components/schemas/StrictDetail" }
+              "detail":      { "type": "object", "allOf": [ { "$ref": "#/components/schemas/StrictDetail" } ], "nullable": true }
             }
           },
           "StrictDetail": {
@@ -375,8 +377,10 @@ public sealed class SpecRuntimeMatcherTests
     public void Green_WhenRequiredMembersPresent_AndEnumValuesInSet()
     {
         // The faithful case: every required member on the wire (note null-but-PRESENT satisfies
-        // required — "always present, possibly JSON null"), enum values in-set, the nullable-$ref
-        // `detail` absent-from-required so its null is fine when present, and recursed when non-null.
+        // required — "always present, possibly JSON null"), enum values in-set, and the S117
+        // nullable-complex WRAPPER member `detail` (required, nullable:true at the property level)
+        // serving a non-null object — recursed THROUGH the wrapper into StrictDetail (whose own
+        // `required: [name]` is enforced; the dedicated S117 section below proves both directions).
         var spec = StrictSpec();
         var response = Json("""{ "id": "1", "status": "OPEN", "maybeStatus": null, "note": null, "detail": { "name": "d" } }""");
         SpecRuntimeMatcher.AssertMatches(spec, StrictSchema(), response, "GET /strict");
@@ -472,5 +476,207 @@ public sealed class SpecRuntimeMatcherTests
             SpecRuntimeMatcher.AssertMatches(spec, StrictSchema(), response, "GET /strict"));
         Assert.Contains("NON-nullable", ex.Message);
         Assert.Contains("status", ex.Message);
+    }
+
+    // ════════════════════════════════════════════════════════════════════════════════
+    //  S117 / TASK-11700 — the nullable-complex WRAPPER mechanism (the fired S113
+    //  nullable-$ref escalation). A fixture shaped like the filter's post-S117 output: the
+    //  CLR-nullable complex `maybeInner` = the wrapper form (type: object + allOf: [$ref] +
+    //  nullable: true, REQUIRED); the never-nullable complex `inner` = a bare $ref (also
+    //  required — the never-null claim). The wrapped schema carries its own `required` AND
+    //  an `enum` member so the recursion proof exercises the REAL fidelity path (Step-0b
+    //  Codex pin: a shallow kind check could pass a partial recursion).
+    //
+    //  S117 Step-7a fail-closed additions (W1/W2 + NOTE-1), pinned by the four extra root
+    //  schemas: NeverNullWrapperItem (a wrapper WITHOUT nullable — a never-null claim;
+    //  serving null is RED, serving a valid object is green), TwoElementAllOfItem and
+    //  AllOfWithPropertiesItem (IMPURE allOf compositions — resolution THROWS with the named
+    //  impurity instead of walking as an empty object, the vacuous-pass hazard), and
+    //  EnumOnWrapperItem (a validation keyword ON the wrapper node — resolution would
+    //  discard it silently, so it too FAILS CLOSED).
+    // ════════════════════════════════════════════════════════════════════════════════
+
+    private const string WrapperSpecJson = """
+    {
+      "components": {
+        "schemas": {
+          "WrapperItem": {
+            "type": "object",
+            "required": [ "id", "inner", "maybeInner" ],
+            "properties": {
+              "id":         { "type": "string" },
+              "inner":      { "$ref": "#/components/schemas/InnerDetail" },
+              "maybeInner": { "type": "object", "allOf": [ { "$ref": "#/components/schemas/InnerDetail" } ], "nullable": true }
+            }
+          },
+          "InnerDetail": {
+            "type": "object",
+            "required": [ "name", "kind" ],
+            "properties": {
+              "name": { "type": "string" },
+              "kind": { "type": "string", "enum": [ "ALPHA", "BETA" ] }
+            }
+          },
+          "NeverNullWrapperItem": {
+            "type": "object",
+            "required": [ "wrapped" ],
+            "properties": {
+              "wrapped": { "type": "object", "allOf": [ { "$ref": "#/components/schemas/InnerDetail" } ] }
+            }
+          },
+          "TwoElementAllOfItem": {
+            "type": "object",
+            "properties": {
+              "wrapped": { "allOf": [ { "$ref": "#/components/schemas/InnerDetail" }, { "type": "object" } ], "nullable": true }
+            }
+          },
+          "AllOfWithPropertiesItem": {
+            "type": "object",
+            "properties": {
+              "wrapped": { "type": "object", "allOf": [ { "$ref": "#/components/schemas/InnerDetail" } ], "nullable": true,
+                           "properties": { "extra": { "type": "string" } } }
+            }
+          },
+          "EnumOnWrapperItem": {
+            "type": "object",
+            "properties": {
+              "wrapped": { "type": "object", "allOf": [ { "$ref": "#/components/schemas/InnerDetail" } ], "nullable": true,
+                           "enum": [ "X" ] }
+            }
+          }
+        }
+      }
+    }
+    """;
+
+    private static JsonElement WrapperSpec() => JsonDocument.Parse(WrapperSpecJson).RootElement;
+    private static JsonElement WrapperSchema() => Json("""{ "$ref": "#/components/schemas/WrapperItem" }""");
+
+    [Fact]
+    public void Green_WrappedMemberServingNullAndServingAValidObject_BothPass()
+    {
+        // The green direction: the wrapper's property-level nullable:true admits null, and a
+        // valid object resolves THROUGH the wrapper (both branches of the null-or-object
+        // envelope — the activeVikar/outgoingVikar retro-close semantics).
+        var spec = WrapperSpec();
+        var valid = """{ "name": "n", "kind": "ALPHA" }""";
+        SpecRuntimeMatcher.AssertMatches(spec, WrapperSchema(),
+            Json($$"""{ "id": "1", "inner": {{valid}}, "maybeInner": null }"""), "GET /wrapped");
+        SpecRuntimeMatcher.AssertMatches(spec, WrapperSchema(),
+            Json($$"""{ "id": "1", "inner": {{valid}}, "maybeInner": {{valid}} }"""), "GET /wrapped");
+    }
+
+    [Fact]
+    public void Red_WhenBareRefMemberIsServedNull()
+    {
+        // THE S117 structural-null policy flip: `inner` is a BARE $ref — post-S117 that is a
+        // never-null claim (truthful nullability on a complex member always carries the wrapper),
+        // so the runtime serving null is RED. Pre-S117 this exact case was silently permitted
+        // ("a null there is permitted, no recursion").
+        var spec = WrapperSpec();
+        var response = Json("""{ "id": "1", "inner": null, "maybeInner": null }""");
+        var ex = Assert.Throws<XunitException>(() =>
+            SpecRuntimeMatcher.AssertMatches(spec, WrapperSchema(), response, "GET /wrapped"));
+        Assert.Contains("inner", ex.Message);
+        Assert.Contains("bare $ref", ex.Message);
+    }
+
+    [Fact]
+    public void Red_WhenInnerRequiredMemberIsMissing_ThroughTheWrapper()
+    {
+        // The recursion proof, direction 1 (the W1 vacuous-pass hazard): a MISSING REQUIRED
+        // member INSIDE the wrapped object must be RED — if Deref did not resolve through the
+        // wrapper, the walk would see an empty `type: object`, check nothing, and pass silently.
+        var spec = WrapperSpec();
+        var response = Json("""{ "id": "1", "inner": { "name": "n", "kind": "ALPHA" }, "maybeInner": { "kind": "BETA" } }""");
+        var ex = Assert.Throws<XunitException>(() =>
+            SpecRuntimeMatcher.AssertMatches(spec, WrapperSchema(), response, "GET /wrapped"));
+        Assert.Contains("name", ex.Message);
+        Assert.Contains("REQUIRED", ex.Message);
+        Assert.Contains("maybeInner", ex.Message); // the failure is INSIDE the wrapped member's context
+    }
+
+    [Fact]
+    public void Red_WhenInnerEnumValueIsOutOfSet_ThroughTheWrapper()
+    {
+        // The recursion proof, direction 2: an OUT-OF-SET enum value on a member INSIDE the
+        // wrapped object must be RED — together with the missing-required case this proves the
+        // FULL Match() fidelity path executes behind the wrapper (not a shallow kind check).
+        var spec = WrapperSpec();
+        var response = Json("""{ "id": "1", "inner": { "name": "n", "kind": "ALPHA" }, "maybeInner": { "name": "m", "kind": "GAMMA" } }""");
+        var ex = Assert.Throws<XunitException>(() =>
+            SpecRuntimeMatcher.AssertMatches(spec, WrapperSchema(), response, "GET /wrapped"));
+        Assert.Contains("enum", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("GAMMA", ex.Message);
+    }
+
+    // ─────────────────────────── S117 Step-7a — the fail-closed pair ───────────────────────────
+
+    [Fact]
+    public void Red_WhenNeverNullWrapperMemberIsServedNull_AndGreenOnAValidObject()
+    {
+        // W1: a WRAPPER-SHAPED member (allOf) WITHOUT nullable:true is a never-null claim exactly
+        // like a bare $ref — the runtime serving null must not slide through the permissive
+        // structural branch. RED on null…
+        var spec = WrapperSpec();
+        var schema = Json("""{ "$ref": "#/components/schemas/NeverNullWrapperItem" }""");
+        var ex = Assert.Throws<XunitException>(() =>
+            SpecRuntimeMatcher.AssertMatches(spec, schema, Json("""{ "wrapped": null }"""), "GET /neverNull"));
+        Assert.Contains("wrapped", ex.Message);
+        Assert.Contains("never-null", ex.Message);
+        Assert.Contains("allOf", ex.Message);
+
+        // …and green on a valid object — proving the RED above is the NULL, not the wrapper shape
+        // (the pure non-nullable wrapper still resolves through and recurses normally).
+        SpecRuntimeMatcher.AssertMatches(spec, schema,
+            Json("""{ "wrapped": { "name": "n", "kind": "ALPHA" } }"""), "GET /neverNull");
+    }
+
+    [Fact]
+    public void Throws_WhenAllOfHasTwoElements_TheImpureCompositionFailsClosed()
+    {
+        // W2: a 2-element allOf is NOT the S117 pure wrapper — the filter never emits it, so it is
+        // spec drift or a foreign emission. Resolution must THROW (naming the impurity), never
+        // fall through to the empty-object walk that would vacuous-pass every inner check.
+        var spec = WrapperSpec();
+        var schema = Json("""{ "$ref": "#/components/schemas/TwoElementAllOfItem" }""");
+        var ex = Assert.Throws<XunitException>(() =>
+            SpecRuntimeMatcher.AssertMatches(spec, schema,
+                Json("""{ "wrapped": { "name": "n", "kind": "ALPHA" } }"""), "GET /impure"));
+        Assert.Contains("2-element allOf", ex.Message);
+        Assert.Contains("FAILS CLOSED", ex.Message);
+    }
+
+    [Fact]
+    public void Throws_WhenAllOfCarriesOwnProperties_TheImpureCompositionFailsClosed()
+    {
+        // W2: allOf ALONGSIDE the schema's own `properties` is equally impure — a hybrid the
+        // matcher cannot walk truthfully (which half owns required/enum?). THROW with the named
+        // impurity; never a silent partial walk.
+        var spec = WrapperSpec();
+        var schema = Json("""{ "$ref": "#/components/schemas/AllOfWithPropertiesItem" }""");
+        var ex = Assert.Throws<XunitException>(() =>
+            SpecRuntimeMatcher.AssertMatches(spec, schema,
+                Json("""{ "wrapped": { "name": "n", "kind": "ALPHA", "extra": "e" } }"""), "GET /impure"));
+        Assert.Contains("own properties", ex.Message);
+        Assert.Contains("FAILS CLOSED", ex.Message);
+    }
+
+    [Fact]
+    public void Throws_WhenTheWrapperNodeCarriesAnEnum_TheDiscardedKeywordFailsClosed()
+    {
+        // W2 / NOTE-1: resolution DISCARDS the wrapper node, so an `enum` (or `required`) stamped
+        // ON the wrapper — e.g. an [AllowedValues] that landed on a wrapped member — would be
+        // silently UNENFORCED if the wrapper resolved through. An otherwise-PURE wrapper carrying
+        // a validation keyword must therefore THROW (move the keyword to the inner schema), even
+        // when the served value is a perfectly valid inner object.
+        var spec = WrapperSpec();
+        var schema = Json("""{ "$ref": "#/components/schemas/EnumOnWrapperItem" }""");
+        var ex = Assert.Throws<XunitException>(() =>
+            SpecRuntimeMatcher.AssertMatches(spec, schema,
+                Json("""{ "wrapped": { "name": "n", "kind": "ALPHA" } }"""), "GET /impure"));
+        Assert.Contains("validation keywords", ex.Message);
+        Assert.Contains("inner schema", ex.Message);
+        Assert.Contains("FAILS CLOSED", ex.Message);
     }
 }

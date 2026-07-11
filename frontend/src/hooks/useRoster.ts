@@ -20,12 +20,12 @@
 // removed backend field is now a direct `tsc` error at the `setByOrg` call (the
 // S97→S99→S100 "fetchEnheder" drift class, closed structurally).
 //
-// THE ONE spec-vs-wire exception (S113, documented): the generator emits a
-// nullable $ref property (`outgoingVikar`) as OPTIONAL (`?: T`) because OpenAPI
-// 3.0 cannot mark a bare `$ref` nullable — but the backend SERIALIZES an explicit
-// `"outgoingVikar": null`. `RosterRow` therefore overrides that single property
-// to `?: RosterOutgoingVikar | null` so the runtime `null` stays typed; every
-// other field is derived VERBATIM from the generated schema.
+// S117 / TASK-11702 — the S113 nullable-$ref exception is CLOSED: the backend's
+// allOf wrapper mechanism now emits nullable complex members as REQUIRED
+// (`outgoingVikar: T | null` in the generated types), matching the wire's
+// explicit `"outgoingVikar": null` exactly. The former Omit-override views
+// (`RosterRow`/`RosterResponse`) collapsed to direct spec-type aliases — every
+// field is now VERBATIM the generated schema.
 //
 // LINT (PAT-010): the URL is passed INLINE as a literal to apiClient.get so the
 // contract-coverage lint (tools/check_endpoint_contracts.py) can enumerate it —
@@ -44,18 +44,11 @@ type Schemas = components['schemas']
 export type RosterOutgoingVikar = Schemas['StatsTid.Backend.Api.Contracts.RosterOutgoingVikar']
 
 /** One employee row in the unit-tagged structural roster (the spec
-    `RosterEmployeeRow` with the single nullable-$ref override — see the module
-    header). `structuralApproverId` is the person's assigned active PRIMARY
-    manager — THE TREE KEY (raw edge); `unitId` null = Organisation-homed;
-    `primaryReportingLineVersion` is the active PRIMARY reporting_lines.version
-    etag (null for a root/orphan). */
-export type RosterRow = Omit<
-  Schemas['StatsTid.Backend.Api.Contracts.RosterEmployeeRow'],
-  'outgoingVikar'
-> & {
-  /** the wire serializes an explicit `null` (nullable-$ref spec exception). */
-  outgoingVikar?: RosterOutgoingVikar | null
-}
+    `RosterEmployeeRow`, verbatim). `structuralApproverId` is the person's
+    assigned active PRIMARY manager — THE TREE KEY (raw edge); `unitId` null =
+    Organisation-homed; `primaryReportingLineVersion` is the active PRIMARY
+    reporting_lines.version etag (null for a root/orphan). */
+export type RosterRow = Schemas['StatsTid.Backend.Api.Contracts.RosterEmployeeRow']
 
 /** A DISPLAY-ONLY by-id resolution entry — labels an upward-reference / cross-unit
     leader chip even for an id NOT in the active roster body (e.g. an inactive
@@ -64,14 +57,8 @@ export type RosterNameResolutionEntry = Schemas['StatsTid.Backend.Api.Contracts.
 
 /** The GET …/medarbejdere envelope — `{ employees, pendingCountByManager,
     nameResolution }` (NOT a bare array — the S97/S99 envelope distinction).
-    Derived from the spec `RosterResponse` with the `RosterRow` override threaded
-    through `employees`. */
-export type RosterResponse = Omit<
-  Schemas['StatsTid.Backend.Api.Contracts.RosterResponse'],
-  'employees'
-> & {
-  employees: RosterRow[]
-}
+    The spec `RosterResponse`, verbatim. */
+export type RosterResponse = Schemas['StatsTid.Backend.Api.Contracts.RosterResponse']
 
 /**
  * The lazy, per-Organisation roster cache. `loadRoster(organisationId)` fetches
@@ -97,8 +84,8 @@ export function useRoster() {
     setError(null)
     // S111 / TASK-11102 — typed via the OpenAPI TEMPLATED path key with the
     // structured `params.path` shape; `apiClient` interpolates `{organisationId}`
-    // (URL-encoded). `result.data` IS the strict spec `RosterResponse`, directly
-    // assignable to the FE view (only the nullable-$ref override differs — S113).
+    // (URL-encoded). `result.data` IS the strict spec `RosterResponse` — the FE
+    // view is a direct alias of it (S117: the nullable-$ref override is gone).
     const result = await apiClient.get(
       '/api/admin/reporting-lines/tree/{organisationId}/medarbejdere',
       { params: { path: { organisationId } } },
