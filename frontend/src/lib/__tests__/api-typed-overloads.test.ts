@@ -349,7 +349,7 @@ describe('S112 typed derivation — compile-time fixtures', () => {
 })
 
 describe('S112 typed derivation — real committed spec', () => {
-  it('phase pin: after the S118 Pass-5 bucket-A drain — 33 POSTs, 19 PUTs, 11 DELETEs (retrofit updates this)', () => {
+  it('phase pin: after the S119 Pass-6 bucket-B drain — 36 POSTs, 21 PUTs, 13 DELETEs (retrofit updates this)', () => {
     // S112 / TASK-11203 — the backend typed 20 ops (units / organizations /
     // users / roles / employee-profiles); the put/delete unions became
     // NON-EMPTY and the post union grew from exactly '/api/admin/units'.
@@ -375,6 +375,12 @@ describe('S112 typed derivation — real committed spec', () => {
     // wage-type-mapping; entitlement-config; child entitlement) and
     // +3 DELETEs (wage-type-mapping 204; entitlement-config 204; child
     // entitlement 204).
+    // S119 / TASK-11901 — Pass 6 bucket B (TASK-11900) drained the org-config +
+    // projects families: +3 POSTs (project create 201; project select — a
+    // DECLARED-BODYLESS route-param POST with a JSON 200; absence-type
+    // visibility 200), +2 PUTs (the local-agreement-profile PUT, JSON 200 —
+    // the If-Match/If-None-Match:* flexible-precondition op; project update,
+    // JSON 200) and +2 DELETEs (project delete 204; project deselect 204).
     expectTypeOf<TypedPathIn<paths, 'put'>>().toEqualTypeOf<
       | '/api/admin/organizations/{orgId}'
       | '/api/admin/organizations/{orgId}/move'
@@ -395,6 +401,8 @@ describe('S112 typed derivation — real committed spec', () => {
       | '/api/admin/wage-type-mappings'
       | '/api/admin/entitlement-configs/{configId}'
       | '/api/agreement-configs/{configId}/entitlements/{entitlementConfigId}'
+      | '/api/config/{orgId}/profile/{agreementCode}/{okVersion}'
+      | '/api/projects/{orgId}/{projectId}'
     >()
     expectTypeOf<TypedPathIn<paths, 'delete'>>().toEqualTypeOf<
       | '/api/admin/organizations/{orgId}'
@@ -408,6 +416,8 @@ describe('S112 typed derivation — real committed spec', () => {
       | '/api/admin/wage-type-mappings'
       | '/api/admin/entitlement-configs/{configId}'
       | '/api/agreement-configs/{configId}/entitlements/{entitlementConfigId}'
+      | '/api/projects/{orgId}/{projectId}'
+      | '/api/projects/{orgId}/select/{projectId}'
     >()
     expectTypeOf<TypedPathIn<paths, 'post'>>().toEqualTypeOf<
       | '/api/admin/organizations'
@@ -443,6 +453,9 @@ describe('S112 typed derivation — real committed spec', () => {
       | '/api/admin/wage-type-mappings'
       | '/api/admin/entitlement-configs'
       | '/api/agreement-configs/{configId}/entitlements'
+      | '/api/projects/{orgId}'
+      | '/api/projects/{orgId}/select/{projectId}'
+      | '/api/config/{orgId}/absence-types/visibility'
     >()
   })
 

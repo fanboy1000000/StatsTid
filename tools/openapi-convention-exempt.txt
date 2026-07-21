@@ -13,8 +13,6 @@
 #
 # Lines starting with '#' and blank lines are ignored.
 
-DELETE /api/projects/{orgId}/select/{projectId}
-DELETE /api/projects/{orgId}/{projectId}
 GET /api/absences/{employeeId}
 # S115 flag-and-defer (the program's FIRST firing of the S112 rule): the GET below is
 # genuinely POLYMORPHIC — its no-row branch OMITS the effectiveFrom/version KEYS entirely
@@ -27,17 +25,10 @@ GET /api/balance/{employeeId}/summary
 GET /api/balance/{employeeId}/year-overview
 GET /api/compliance/{employeeId}/compensatory-rest
 GET /api/compliance/{employeeId}/period
-GET /api/config/constraints
-GET /api/config/{orgId}
-GET /api/config/{orgId}/absence-types
-GET /api/config/{orgId}/profile/{agreementCode}/{okVersion}
-GET /api/config/{orgId}/profile/{agreementCode}/{okVersion}/history
 GET /api/flex-balance/{employeeId}
 GET /api/overtime/{employeeId}/balance
 GET /api/overtime/{employeeId}/compensation-choice
 GET /api/overtime/{employeeId}/governance
-GET /api/projects/{orgId}
-GET /api/projects/{orgId}/available
 GET /api/skema/{employeeId}/month
 GET /api/time-entries/{employeeId}
 # S118 defer-with-cause: GET /health is an INFRASTRUCTURE LIVENESS PROBE (docker-compose /
@@ -45,10 +36,7 @@ GET /api/time-entries/{employeeId}
 # It stays grandfathered deliberately; typing it would grant a probe endpoint contract
 # status it does not have. Revisit only if it ever grows a product consumer.
 GET /health
-POST /api/config/{orgId}/absence-types/visibility
 POST /api/overtime/{employeeId}/compensate
-POST /api/projects/{orgId}
-POST /api/projects/{orgId}/select/{projectId}
 POST /api/skema/{employeeId}/save
 POST /api/time-entries
 # S117 flag-and-defer (the S115 rule's SECOND firing): the /resolve POST below is genuinely
@@ -58,7 +46,5 @@ POST /api/time-entries
 # cannot describe them and typing it would be a wire change (PAT-010-forbidden). It STAYS
 # grandfathered until a oneOf phase addresses polymorphic writes. See PAT-012.
 POST /api/vacation-settlements/{employeeId}/{entitlementType}/{entitlementYear}/resolve
-PUT /api/config/{orgId}/profile/{agreementCode}/{okVersion}
 PUT /api/overtime/{employeeId}/compensation-choice
-PUT /api/projects/{orgId}/{projectId}
 PUT /api/skema/{employeeId}/row-preferences

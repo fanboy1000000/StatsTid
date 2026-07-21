@@ -1,4 +1,5 @@
 using StatsTid.Auth;
+using StatsTid.Backend.Api.Contracts;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Models;
@@ -27,14 +28,13 @@ public static class ProjectEndpoints
 
             var projects = await projectRepo.GetByOrgAsync(orgId, ct);
 
-            return Results.Ok(projects.Select(p => new
-            {
-                projectId = p.ProjectId,
-                projectCode = p.ProjectCode,
-                projectName = p.ProjectName,
-                sortOrder = p.SortOrder
-            }));
-        }).RequireAuthorization("EmployeeOrAbove");
+            return Results.Ok(projects.Select(p => new ProjectResponse(
+                ProjectId: p.ProjectId,
+                ProjectCode: p.ProjectCode,
+                ProjectName: p.ProjectName,
+                SortOrder: p.SortOrder)));
+        }).RequireAuthorization("EmployeeOrAbove")
+        .Produces<IEnumerable<ProjectResponse>>(StatusCodes.Status200OK); // S119 / TASK-11900 — BARE array (unmaterialized Select)
 
         // ── POST /api/projects/{orgId} — Create project ──
 
@@ -66,14 +66,13 @@ public static class ProjectEndpoints
 
             var projectId = await projectRepo.CreateAsync(project, ct);
 
-            return Results.Created($"/api/projects/{orgId}/{projectId}", new
-            {
-                projectId,
-                projectCode = project.ProjectCode,
-                projectName = project.ProjectName,
-                sortOrder = project.SortOrder
-            });
-        }).RequireAuthorization("LocalAdminOrAbove");
+            return Results.Created($"/api/projects/{orgId}/{projectId}", new ProjectResponse(
+                ProjectId: projectId,
+                ProjectCode: project.ProjectCode,
+                ProjectName: project.ProjectName,
+                SortOrder: project.SortOrder));
+        }).RequireAuthorization("LocalAdminOrAbove")
+        .Produces<ProjectResponse>(StatusCodes.Status201Created); // S119 / TASK-11900 — the list-row sibling (S112 rule)
 
         // ── GET /api/projects/{orgId}/available — List projects with per-employee selection flag ──
 
@@ -93,22 +92,24 @@ public static class ProjectEndpoints
             var projects = await projectRepo.GetByOrgAsync(orgId, ct);
             var selectedIds = await projectRepo.GetSelectionIdsAsync(actor.ActorId!, ct);
 
-            return Results.Ok(projects.Select(p => new
-            {
-                projectId = p.ProjectId,
-                projectCode = p.ProjectCode,
-                projectName = p.ProjectName,
-                sortOrder = p.SortOrder,
-                selected = selectedIds.Contains(p.ProjectId),
-            }).ToList());
-        }).RequireAuthorization("EmployeeOrAbove");
+            return Results.Ok(projects.Select(p => new AvailableProjectResponse(
+                ProjectId: p.ProjectId,
+                ProjectCode: p.ProjectCode,
+                ProjectName: p.ProjectName,
+                SortOrder: p.SortOrder,
+                Selected: selectedIds.Contains(p.ProjectId))).ToList());
+        }).RequireAuthorization("EmployeeOrAbove")
+        .Produces<IEnumerable<AvailableProjectResponse>>(StatusCodes.Status200OK); // S119 / TASK-11900 — BARE array
 
         // ── POST /api/projects/{orgId}/select/{projectId} — Add project to employee selection ──
         //
-        // DEPRECATED (S72 / TASK-7201, SPRINT-72 R14): superseded by
-        // PUT /api/skema/{employeeId}/row-preferences (the R4 full-replacement write). Kept
-        // ONLY because ProjectPicker still consumes it until TASK-7205's R9 sweep retires
-        // that component; REMOVAL is a recorded Orchestrator small-task after 7205 lands.
+        // DEPRECATED-BUT-LIVE (S72 / TASK-7201, SPRINT-72 R14): superseded by
+        // PUT /api/skema/{employeeId}/row-preferences (the R4 full-replacement write).
+        // S119 comment correction: ProjectPicker (the component this was kept for) was
+        // RETIRED at the S72 TASK-7205 R9 sweep and is absent from the tree — the op has NO
+        // FE consumer today. It stays live (SkemaLegacySelectionAlignmentTests exercises its
+        // semantics); retirement remains a recorded future Orchestrator small-task, NOT the
+        // S119 pass (typed under the S117 zero-caller precedent).
         // R14-ALIGNED to the R4 model: ProjectRepository.AddSelectionAsync now initializes
         // the user_skema_preferences container on first write and maintains DENSE sort_order
         // (append-at-end). The HTTP response contract below is byte-identical to pre-S72.
@@ -134,14 +135,17 @@ public static class ProjectEndpoints
 
             await projectRepo.AddSelectionAsync(actor.ActorId!, projectId, ct);
 
-            return Results.Ok(new { projectId, selected = true });
-        }).RequireAuthorization("EmployeeOrAbove");
+            return Results.Ok(new ProjectSelectionResponse(ProjectId: projectId, Selected: true));
+        }).RequireAuthorization("EmployeeOrAbove")
+        .Produces<ProjectSelectionResponse>(StatusCodes.Status200OK); // S119 / TASK-11900 — declared body-less POST (openapi-bodyless-declared.txt); EmployeeOrAbove write BY DESIGN (self-service)
 
         // ── DELETE /api/projects/{orgId}/select/{projectId} — Remove project from employee selection ──
         //
-        // DEPRECATED (S72 / TASK-7201, SPRINT-72 R14): superseded by
-        // PUT /api/skema/{employeeId}/row-preferences. Kept only for ProjectPicker until the
-        // TASK-7205 R9 sweep; removal recorded post-7205. R14-ALIGNED:
+        // DEPRECATED-BUT-LIVE (S72 / TASK-7201, SPRINT-72 R14): superseded by
+        // PUT /api/skema/{employeeId}/row-preferences. S119 comment correction: ProjectPicker
+        // (the component this was kept for) was RETIRED at the S72 TASK-7205 R9 sweep and is
+        // absent from the tree — no FE consumer today; kept live (the legacy-selection
+        // alignment tests exercise it), removal recorded as a future small-task. R14-ALIGNED:
         // ProjectRepository.RemoveSelectionAsync now initializes the container (a remove IS
         // a preference write — removing the LAST selection deliberately yields ZERO visible
         // rows under R4, not the legacy all-projects fallback) and dense-reindexes the
@@ -164,7 +168,8 @@ public static class ProjectEndpoints
             await projectRepo.RemoveSelectionAsync(actor.ActorId!, projectId, ct);
 
             return Results.NoContent();
-        }).RequireAuthorization("EmployeeOrAbove");
+        }).RequireAuthorization("EmployeeOrAbove")
+        .Produces(StatusCodes.Status204NoContent); // S119 / TASK-11900 — declared-204 body-less; EmployeeOrAbove write BY DESIGN (self-service)
 
         // ── PUT /api/projects/{orgId}/{projectId} — Update project ──
 
@@ -187,8 +192,9 @@ public static class ProjectEndpoints
 
             await projectRepo.UpdateAsync(projectId, request.ProjectName, request.SortOrder, ct);
 
-            return Results.Ok(new { projectId, updated = true });
-        }).RequireAuthorization("LocalAdminOrAbove");
+            return Results.Ok(new ProjectUpdateResponse(ProjectId: projectId, Updated: true));
+        }).RequireAuthorization("LocalAdminOrAbove")
+        .Produces<ProjectUpdateResponse>(StatusCodes.Status200OK); // S119 / TASK-11900
 
         // ── DELETE /api/projects/{orgId}/{projectId} — Soft deactivate project ──
 
@@ -211,7 +217,8 @@ public static class ProjectEndpoints
             await projectRepo.DeactivateAsync(projectId, ct);
 
             return Results.NoContent();
-        }).RequireAuthorization("LocalAdminOrAbove");
+        }).RequireAuthorization("LocalAdminOrAbove")
+        .Produces(StatusCodes.Status204NoContent); // S119 / TASK-11900 — declared-204 body-less
 
         return app;
     }

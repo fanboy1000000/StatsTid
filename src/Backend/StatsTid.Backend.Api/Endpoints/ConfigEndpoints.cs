@@ -2,6 +2,7 @@ using System.Data;
 using System.Text.Json;
 using Npgsql;
 using StatsTid.Auth;
+using StatsTid.Backend.Api.Contracts;
 using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Backend.Api.Validators;
 using StatsTid.Infrastructure;
@@ -30,25 +31,24 @@ public static class ConfigEndpoints
         {
             var activeConfigs = await agreementConfigRepo.GetByStatusAsync("ACTIVE", ct);
 
-            var constraints = activeConfigs.Select(entity => new
-            {
-                agreementCode = entity.AgreementCode,
-                okVersion = entity.OkVersion,
-                weeklyNormHours = entity.WeeklyNormHours,
-                maxFlexBalance = entity.MaxFlexBalance,
-                flexCarryoverMax = entity.FlexCarryoverMax,
-                hasOvertime = entity.HasOvertime,
-                hasMerarbejde = entity.HasMerarbejde,
-                eveningSupplementEnabled = entity.EveningSupplementEnabled,
-                nightSupplementEnabled = entity.NightSupplementEnabled,
-                weekendSupplementEnabled = entity.WeekendSupplementEnabled,
-                holidaySupplementEnabled = entity.HolidaySupplementEnabled,
-                onCallDutyEnabled = entity.OnCallDutyEnabled,
-                onCallDutyRate = entity.OnCallDutyRate,
-            }).ToList();
+            var constraints = activeConfigs.Select(entity => new ConfigConstraintResponse(
+                AgreementCode: entity.AgreementCode,
+                OkVersion: entity.OkVersion,
+                WeeklyNormHours: entity.WeeklyNormHours,
+                MaxFlexBalance: entity.MaxFlexBalance,
+                FlexCarryoverMax: entity.FlexCarryoverMax,
+                HasOvertime: entity.HasOvertime,
+                HasMerarbejde: entity.HasMerarbejde,
+                EveningSupplementEnabled: entity.EveningSupplementEnabled,
+                NightSupplementEnabled: entity.NightSupplementEnabled,
+                WeekendSupplementEnabled: entity.WeekendSupplementEnabled,
+                HolidaySupplementEnabled: entity.HolidaySupplementEnabled,
+                OnCallDutyEnabled: entity.OnCallDutyEnabled,
+                OnCallDutyRate: entity.OnCallDutyRate)).ToList();
 
             return Results.Ok(constraints);
-        }).RequireAuthorization("EmployeeOrAbove");
+        }).RequireAuthorization("EmployeeOrAbove")
+        .Produces<IEnumerable<ConfigConstraintResponse>>(StatusCodes.Status200OK); // S119 / TASK-11900 — BARE array
 
         // ═══════════════════════════════════════════
         // Parameterized org-scoped config endpoints
@@ -78,24 +78,23 @@ public static class ConfigEndpoints
             // Resolve merged config (central + local overrides)
             var mergedConfig = await configService.ResolveAsync(orgId, org.AgreementCode, org.OkVersion, ct: ct);
 
-            return Results.Ok(new
-            {
-                orgId,
-                agreementCode = mergedConfig.AgreementCode,
-                okVersion = mergedConfig.OkVersion,
-                weeklyNormHours = mergedConfig.WeeklyNormHours,
-                maxFlexBalance = mergedConfig.MaxFlexBalance,
-                flexCarryoverMax = mergedConfig.FlexCarryoverMax,
-                hasOvertime = mergedConfig.HasOvertime,
-                hasMerarbejde = mergedConfig.HasMerarbejde,
-                eveningSupplementEnabled = mergedConfig.EveningSupplementEnabled,
-                nightSupplementEnabled = mergedConfig.NightSupplementEnabled,
-                weekendSupplementEnabled = mergedConfig.WeekendSupplementEnabled,
-                holidaySupplementEnabled = mergedConfig.HolidaySupplementEnabled,
-                onCallDutyEnabled = mergedConfig.OnCallDutyEnabled,
-                onCallDutyRate = mergedConfig.OnCallDutyRate,
-            });
-        }).RequireAuthorization("EmployeeOrAbove");
+            return Results.Ok(new EffectiveConfigResponse(
+                OrgId: orgId,
+                AgreementCode: mergedConfig.AgreementCode,
+                OkVersion: mergedConfig.OkVersion,
+                WeeklyNormHours: mergedConfig.WeeklyNormHours,
+                MaxFlexBalance: mergedConfig.MaxFlexBalance,
+                FlexCarryoverMax: mergedConfig.FlexCarryoverMax,
+                HasOvertime: mergedConfig.HasOvertime,
+                HasMerarbejde: mergedConfig.HasMerarbejde,
+                EveningSupplementEnabled: mergedConfig.EveningSupplementEnabled,
+                NightSupplementEnabled: mergedConfig.NightSupplementEnabled,
+                WeekendSupplementEnabled: mergedConfig.WeekendSupplementEnabled,
+                HolidaySupplementEnabled: mergedConfig.HolidaySupplementEnabled,
+                OnCallDutyEnabled: mergedConfig.OnCallDutyEnabled,
+                OnCallDutyRate: mergedConfig.OnCallDutyRate));
+        }).RequireAuthorization("EmployeeOrAbove")
+        .Produces<EffectiveConfigResponse>(StatusCodes.Status200OK); // S119 / TASK-11900
 
         // ═══════════════════════════════════════════
         // S21 ADR-017 D5: profile-shaped endpoints (replace per-row POST/GET-local/DELETE)
@@ -412,8 +411,9 @@ public static class ConfigEndpoints
                 Version = persistedVersion,
             };
             context.Response.Headers.ETag = $"\"{persistedVersion}\"";
-            return Results.Ok(MapProfileResponse(saved));
-        }).RequireAuthorization("LocalAdminOrAbove");
+            return Results.Ok(MapProfile(saved));
+        }).RequireAuthorization("LocalAdminOrAbove")
+        .Produces<LocalAgreementProfileResponse>(StatusCodes.Status200OK); // S119 / TASK-11900 — success only; the 400/412/428 error bodies stay UNDECLARED (the exclusion boundary)
 
         // GET /api/config/{orgId}/profile/{agreementCode}/{okVersion}
         // Returns the current open profile (ADR-017 D5). 404 if none exists. Includes
@@ -438,8 +438,9 @@ public static class ConfigEndpoints
                 return Results.NotFound(new { error = "No active local agreement profile for this org/agreement/OkVersion." });
 
             context.Response.Headers.ETag = $"\"{profile.Version}\"";
-            return Results.Ok(MapProfileResponse(profile));
-        }).RequireAuthorization("EmployeeOrAbove");
+            return Results.Ok(MapProfile(profile));
+        }).RequireAuthorization("EmployeeOrAbove")
+        .Produces<LocalAgreementProfileResponse>(StatusCodes.Status200OK); // S119 / TASK-11900
 
         // GET /api/config/{orgId}/profile/{agreementCode}/{okVersion}/history
         // Returns closed predecessor profiles, most-recently-closed first (ADR-017 D5).
@@ -460,8 +461,9 @@ public static class ConfigEndpoints
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
             var history = await profileRepo.GetHistoryAsync(orgId, agreementCode, okVersion, ct);
-            return Results.Ok(history.Select(MapProfileResponse));
-        }).RequireAuthorization("EmployeeOrAbove");
+            return Results.Ok(history.Select(MapProfile));
+        }).RequireAuthorization("EmployeeOrAbove")
+        .Produces<IEnumerable<LocalAgreementProfileResponse>>(StatusCodes.Status200OK); // S119 / TASK-11900 — BARE array (unmaterialized Select)
 
         // ═══════════════════════════════════════════
         // Sprint 9: Absence type configuration endpoints
@@ -493,11 +495,12 @@ public static class ConfigEndpoints
             // Filter absence types by visibility
             var absenceTypes = AbsenceTypeLabels
                 .Where(kv => !hiddenTypes.Contains(kv.Key))
-                .Select(kv => new { type = kv.Key, label = kv.Value })
+                .Select(kv => new AbsenceTypeResponse(Type: kv.Key, Label: kv.Value))
                 .ToList();
 
             return Results.Ok(absenceTypes);
-        }).RequireAuthorization("EmployeeOrAbove");
+        }).RequireAuthorization("EmployeeOrAbove")
+        .Produces<IEnumerable<AbsenceTypeResponse>>(StatusCodes.Status200OK); // S119 / TASK-11900 — BARE array
 
         // POST /api/config/{orgId}/absence-types/visibility — Toggle absence type visibility
         app.MapPost("/api/config/{orgId}/absence-types/visibility", async (
@@ -519,8 +522,10 @@ public static class ConfigEndpoints
             await visibilityRepo.SetVisibilityAsync(
                 orgId, request.AbsenceType, request.IsHidden, actor.ActorId ?? "system", ct);
 
-            return Results.Ok(new { orgId, absenceType = request.AbsenceType, isHidden = request.IsHidden });
-        }).RequireAuthorization("LocalAdminOrAbove");
+            return Results.Ok(new AbsenceTypeVisibilityResponse(
+                OrgId: orgId, AbsenceType: request.AbsenceType, IsHidden: request.IsHidden));
+        }).RequireAuthorization("LocalAdminOrAbove")
+        .Produces<AbsenceTypeVisibilityResponse>(StatusCodes.Status200OK); // S119 / TASK-11900
 
         return app;
     }
@@ -558,30 +563,39 @@ public static class ConfigEndpoints
             JsonSerializer.SerializeToElement(newValue));
     }
 
-    private static object? MapProfileResponse(LocalAgreementProfile? profile)
-    {
-        if (profile is null) return null;
-        return new
-        {
-            profileId = profile.ProfileId,
-            orgId = profile.OrgId,
-            agreementCode = profile.AgreementCode,
-            okVersion = profile.OkVersion,
-            effectiveFrom = profile.EffectiveFrom,
-            effectiveTo = profile.EffectiveTo,
-            weeklyNormHours = profile.WeeklyNormHours,
-            maxFlexBalance = profile.MaxFlexBalance,
-            flexCarryoverMax = profile.FlexCarryoverMax,
-            maxOvertimeHoursPerPeriod = profile.MaxOvertimeHoursPerPeriod,
-            overtimeRequiresPreApproval = profile.OvertimeRequiresPreApproval,
-            createdBy = profile.CreatedBy,
-            createdAt = profile.CreatedAt,
-            // ADR-018 D7: surface the row-version on the response body so the frontend can
-            // round-trip it as the next If-Match. The wire ETag header carries the same
-            // value quoted (RFC 7232).
-            version = profile.Version,
-        };
-    }
+    /// <summary>
+    /// S119 / TASK-11900: the typed profile mapper — used at the THREE success sites (PUT 200,
+    /// GET 200, history rows). The record is an exact shape-copy of the pre-S119 anonymous
+    /// object (member names, order, casing, nullability — byte-identical wire JSON).
+    /// ADR-018 D7: <c>version</c> is surfaced on the body so the frontend can round-trip it
+    /// as the next If-Match; the wire ETag header carries the same value quoted (RFC 7232).
+    /// </summary>
+    private static LocalAgreementProfileResponse MapProfile(LocalAgreementProfile profile) =>
+        new(
+            ProfileId: profile.ProfileId,
+            OrgId: profile.OrgId,
+            AgreementCode: profile.AgreementCode,
+            OkVersion: profile.OkVersion,
+            EffectiveFrom: profile.EffectiveFrom,
+            EffectiveTo: profile.EffectiveTo,
+            WeeklyNormHours: profile.WeeklyNormHours,
+            MaxFlexBalance: profile.MaxFlexBalance,
+            FlexCarryoverMax: profile.FlexCarryoverMax,
+            MaxOvertimeHoursPerPeriod: profile.MaxOvertimeHoursPerPeriod,
+            OvertimeRequiresPreApproval: profile.OvertimeRequiresPreApproval,
+            CreatedBy: profile.CreatedBy,
+            CreatedAt: profile.CreatedAt,
+            Version: profile.Version);
+
+    /// <summary>
+    /// S119 / TASK-11900 — the 412 ERROR-body-only mapper (the exclusion boundary, P4 hard
+    /// criterion): the 412 <c>currentState</c> envelope stays anonymous/UNDECLARED in the spec
+    /// (no .Produces for any non-2xx). The record's serialization is embedded erased to
+    /// <c>object?</c> — wire-identical to the pre-S119 anonymous projection (same members,
+    /// order, casing), with null preserved for the degraded-recovery path.
+    /// </summary>
+    private static object? MapProfileResponse(LocalAgreementProfile? profile) =>
+        profile is null ? null : MapProfile(profile);
 
     // ── Danish absence type labels ──
     private static readonly Dictionary<string, string> AbsenceTypeLabels = new(StringComparer.Ordinal)

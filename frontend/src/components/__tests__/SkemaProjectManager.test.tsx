@@ -30,11 +30,11 @@ const SELECTED_PROJECTS: SkemaRowPreferenceProject[] = [
 // Catalog = selection-INDEPENDENT (R4): includes the selected three plus two
 // addable entries.
 const CATALOG_PROJECTS: Project[] = [
-  { projectId: 'p-sag', projectCode: 'ØS-1042', projectName: 'Sagsbehandling', isActive: true, sortOrder: 0 },
-  { projectId: 'p-borger', projectCode: 'DIG-2207', projectName: 'Borger.dk', isActive: true, sortOrder: 1 },
-  { projectId: 'p-drift', projectCode: 'IT-6000', projectName: 'Drift & support', isActive: true, sortOrder: 2 },
-  { projectId: 'p-dvh', projectCode: 'DATA-5120', projectName: 'Datavarehus', isActive: true, sortOrder: 3 },
-  { projectId: 'p-gdpr', projectCode: 'JUR-4001', projectName: 'GDPR-tilsyn', isActive: true, sortOrder: 4 },
+  { projectId: 'p-sag', projectCode: 'ØS-1042', projectName: 'Sagsbehandling', sortOrder: 0 },
+  { projectId: 'p-borger', projectCode: 'DIG-2207', projectName: 'Borger.dk', sortOrder: 1 },
+  { projectId: 'p-drift', projectCode: 'IT-6000', projectName: 'Drift & support', sortOrder: 2 },
+  { projectId: 'p-dvh', projectCode: 'DATA-5120', projectName: 'Datavarehus', sortOrder: 3 },
+  { projectId: 'p-gdpr', projectCode: 'JUR-4001', projectName: 'GDPR-tilsyn', sortOrder: 4 },
 ]
 
 const SELECTED_ABSENCE: SkemaRowPreferenceAbsenceType[] = [

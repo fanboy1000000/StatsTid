@@ -270,7 +270,7 @@ describe('deriveSkemaRowBasis — the R3/R12 union basis (Step-7a B1)', () => {
   const data = {
     // The legacy fields = the VISIBLE selection (the 7201 configured-user contract)
     projects: [
-      { projectId: 'p-udv', projectCode: 'UDV', projectName: 'Udvikling', isActive: true, sortOrder: 1 },
+      { projectId: 'p-udv', projectCode: 'UDV', projectName: 'Udvikling', sortOrder: 1 },
     ],
     absenceTypes: [{ type: 'VACATION', label: 'Ferie' }],
     entries: [
@@ -280,8 +280,8 @@ describe('deriveSkemaRowBasis — the R3/R12 union basis (Step-7a B1)', () => {
     absences: [{ date: '2026-03-03', absenceType: 'OLD_TYPE', hours: 7.4 }],
     catalogs: {
       projects: [
-        { projectId: 'p-drift', projectCode: 'DRIFT', projectName: 'Drift & support', isActive: true, sortOrder: 0 },
-        { projectId: 'p-udv', projectCode: 'UDV', projectName: 'Udvikling', isActive: true, sortOrder: 1 },
+        { projectId: 'p-drift', projectCode: 'DRIFT', projectName: 'Drift & support', sortOrder: 0 },
+        { projectId: 'p-udv', projectCode: 'UDV', projectName: 'Udvikling', sortOrder: 1 },
       ],
       absenceTypes: [
         { type: 'VACATION', label: 'Ferie' },

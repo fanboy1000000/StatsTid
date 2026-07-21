@@ -71,11 +71,19 @@ export interface AuthUser {
 // generated `EmployeePeriodItem` (the wider GET /api/approval/{employeeId}
 // element).
 
+// S119 / TASK-11901 — the PHANTOM `isActive` field was REMOVED (prod bug #7,
+// the S112 blank-columns class): NO endpoint emits it — every read path
+// filters `is_active = TRUE` server-side — so `project.isActive` was always
+// `undefined` and the admin table rendered "Inaktiv" for every row. The
+// interface itself is now SKEMA-OWNED BY USAGE (`SkemaCatalogs.projects` /
+// `SkemaMonthData.projects`) until the Pass-7 skema drain; it is deliberately
+// NOT aliased to the bucket-B spec types (the sibling-`extends` smell). The
+// admin project surface consumes the generated `ProjectItem` in
+// `hooks/useProjects.ts` instead.
 export interface Project {
   projectId: string
   projectCode: string
   projectName: string
-  isActive: boolean
   sortOrder: number
 }
 

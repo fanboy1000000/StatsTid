@@ -1539,7 +1539,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.ConfigConstraintResponse"][];
+                    };
                 };
             };
         };
@@ -1574,7 +1576,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.EffectiveConfigResponse"];
+                    };
                 };
             };
         };
@@ -1611,7 +1615,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.LocalAgreementProfileResponse"];
+                    };
                 };
             };
         };
@@ -1637,7 +1643,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.LocalAgreementProfileResponse"];
+                    };
                 };
             };
         };
@@ -1673,7 +1681,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.LocalAgreementProfileResponse"][];
+                    };
                 };
             };
         };
@@ -1711,7 +1721,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.AbsenceTypeResponse"][];
+                    };
                 };
             };
         };
@@ -1752,7 +1764,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.AbsenceTypeVisibilityResponse"];
+                    };
                 };
             };
         };
@@ -1901,7 +1915,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.ProjectResponse"][];
+                    };
                 };
             };
         };
@@ -1921,12 +1937,14 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description OK */
-                200: {
+                /** @description Created */
+                201: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.ProjectResponse"];
+                    };
                 };
             };
         };
@@ -1959,7 +1977,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.AvailableProjectResponse"][];
+                    };
                 };
             };
         };
@@ -1997,7 +2017,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.ProjectSelectionResponse"];
+                    };
                 };
             };
         };
@@ -2013,8 +2035,8 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description OK */
-                200: {
+                /** @description No Content */
+                204: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -2056,7 +2078,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.ProjectUpdateResponse"];
+                    };
                 };
             };
         };
@@ -2073,8 +2097,8 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description OK */
-                200: {
+                /** @description No Content */
+                204: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -4681,6 +4705,15 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        "StatsTid.Backend.Api.Contracts.AbsenceTypeResponse": {
+            type: string;
+            label: string;
+        };
+        "StatsTid.Backend.Api.Contracts.AbsenceTypeVisibilityResponse": {
+            orgId: string;
+            absenceType: string;
+            isHidden: boolean;
+        };
         "StatsTid.Backend.Api.Contracts.ActiveVikarInfo": {
             vikarUserId: string;
             vikarDisplayName: string;
@@ -4957,12 +4990,40 @@ export interface components {
             /** Format: date-time */
             projectedAt: string;
         };
+        "StatsTid.Backend.Api.Contracts.AvailableProjectResponse": {
+            /** Format: uuid */
+            projectId: string;
+            projectCode: string;
+            projectName: string;
+            /** Format: int32 */
+            sortOrder: number;
+            selected: boolean;
+        };
         "StatsTid.Backend.Api.Contracts.BirthDateResponse": {
             employeeId: string;
             /** Format: date */
             birthDate: string | null;
             /** Format: int64 */
             version: number;
+        };
+        "StatsTid.Backend.Api.Contracts.ConfigConstraintResponse": {
+            agreementCode: string;
+            okVersion: string;
+            /** Format: double */
+            weeklyNormHours: number;
+            /** Format: double */
+            maxFlexBalance: number;
+            /** Format: double */
+            flexCarryoverMax: number;
+            hasOvertime: boolean;
+            hasMerarbejde: boolean;
+            eveningSupplementEnabled: boolean;
+            nightSupplementEnabled: boolean;
+            weekendSupplementEnabled: boolean;
+            holidaySupplementEnabled: boolean;
+            onCallDutyEnabled: boolean;
+            /** Format: double */
+            onCallDutyRate: number;
         };
         "StatsTid.Backend.Api.Contracts.CreateUnitRequest": {
             organisationId?: string;
@@ -5012,6 +5073,26 @@ export interface components {
             source: string;
             /** Format: int64 */
             version: number;
+        };
+        "StatsTid.Backend.Api.Contracts.EffectiveConfigResponse": {
+            orgId: string;
+            agreementCode: string;
+            okVersion: string;
+            /** Format: double */
+            weeklyNormHours: number;
+            /** Format: double */
+            maxFlexBalance: number;
+            /** Format: double */
+            flexCarryoverMax: number;
+            hasOvertime: boolean;
+            hasMerarbejde: boolean;
+            eveningSupplementEnabled: boolean;
+            nightSupplementEnabled: boolean;
+            weekendSupplementEnabled: boolean;
+            holidaySupplementEnabled: boolean;
+            onCallDutyEnabled: boolean;
+            /** Format: double */
+            onCallDutyRate: number;
         };
         "StatsTid.Backend.Api.Contracts.EmployeePeriodItem": {
             /** Format: uuid */
@@ -5148,6 +5229,31 @@ export interface components {
             /** Format: int64 */
             memberCount: number;
             children: components["schemas"]["StatsTid.Backend.Api.Contracts.ForestUnitNode"][];
+        };
+        "StatsTid.Backend.Api.Contracts.LocalAgreementProfileResponse": {
+            /** Format: uuid */
+            profileId: string;
+            orgId: string;
+            agreementCode: string;
+            okVersion: string;
+            /** Format: date */
+            effectiveFrom: string;
+            /** Format: date */
+            effectiveTo: string | null;
+            /** Format: double */
+            weeklyNormHours: number | null;
+            /** Format: double */
+            maxFlexBalance: number | null;
+            /** Format: double */
+            flexCarryoverMax: number | null;
+            /** Format: double */
+            maxOvertimeHoursPerPeriod: number | null;
+            overtimeRequiresPreApproval: boolean | null;
+            createdBy: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: int64 */
+            version: number;
         };
         "StatsTid.Backend.Api.Contracts.LoginRequest": {
             username: string;
@@ -5367,6 +5473,24 @@ export interface components {
             /** Format: date-time */
             updatedAt: string;
             description: string | null;
+        };
+        "StatsTid.Backend.Api.Contracts.ProjectResponse": {
+            /** Format: uuid */
+            projectId: string;
+            projectCode: string;
+            projectName: string;
+            /** Format: int32 */
+            sortOrder: number;
+        };
+        "StatsTid.Backend.Api.Contracts.ProjectSelectionResponse": {
+            /** Format: uuid */
+            projectId: string;
+            selected: boolean;
+        };
+        "StatsTid.Backend.Api.Contracts.ProjectUpdateResponse": {
+            /** Format: uuid */
+            projectId: string;
+            updated: boolean;
         };
         "StatsTid.Backend.Api.Contracts.ReconcilePayoutResponse": {
             employeeId: string;

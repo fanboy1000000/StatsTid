@@ -11,6 +11,7 @@
 // "no Phase-5 polish" decision.
 import { useState, useEffect, useCallback } from 'react'
 import { apiClient } from '../lib/api'
+import type { components } from '../lib/api-types'
 import { parseVersionFromETag } from '../lib/etag'
 import {
   getCurrentProfile,
@@ -24,35 +25,23 @@ import {
 // `lib/etag.ts`.
 export { parseVersionFromETag, formatVersionAsIfMatch } from '../lib/etag'
 
-// ── Types (inline; types.ts does not own them — see useAgreementConfigs.ts precedent). ──
+// ── Types ──
+//
+// S119 / TASK-11901 (Typed API Contract retrofit Pass 6, PAT-012): the
+// hand-written `LocalAgreementProfile` (14 members) and `ConfigConstraint`
+// (13 members) interfaces were DELETED in favor of the GENERATED spec types —
+// both audited FAITHFUL member-for-member before deletion. The names are kept
+// as type aliases so consumers (ConfigManagement.tsx, ProfileEditor.tsx) need
+// no import changes.
 
 /**
- * Local agreement profile (S21 / ADR-017 D1, S22 / ADR-018 D7). Shape mirrors
- * the backend's MapProfileResponse output. The five overridable fields are
- * nullable — NULL means "inherit central." createdAt is an ISO-8601 timestamp;
- * effectiveFrom and effectiveTo are ISO yyyy-MM-dd date strings.
- *
- * S22 added the `version` field: a monotonically increasing integer that
- * doubles as the optimistic-concurrency token (replaces profileId-as-ETag).
- * The wire-format ETag header carries this value as a quoted decimal — see
- * `lib/etag.ts`.
+ * Local agreement profile (S21 / ADR-017 D1, S22 / ADR-018 D7) — the GENERATED
+ * spec row. The five overridable fields are nullable — NULL means "inherit
+ * central." `version` doubles as the optimistic-concurrency token; the ETag
+ * wire form is the quoted decimal (see `lib/etag.ts`).
  */
-export interface LocalAgreementProfile {
-  profileId: string
-  orgId: string
-  agreementCode: string
-  okVersion: string
-  effectiveFrom: string
-  effectiveTo: string | null
-  weeklyNormHours: number | null
-  maxFlexBalance: number | null
-  flexCarryoverMax: number | null
-  maxOvertimeHoursPerPeriod: number | null
-  overtimeRequiresPreApproval: boolean | null
-  createdBy: string
-  createdAt: string
-  version: number
-}
+export type LocalAgreementProfile =
+  components['schemas']['StatsTid.Backend.Api.Contracts.LocalAgreementProfileResponse']
 
 /**
  * Per-field validation error inside the 400 payload (ADR-017 D9a).
@@ -86,23 +75,10 @@ export interface ProfileSaveError {
 /**
  * Central constraint reference (one row per active (agreement, OkVersion)).
  * Returned by GET /api/config/constraints — AgreementConfigRepository's ACTIVE
- * configs projected into a flat row. Read-only.
+ * configs projected into a flat row. Read-only. S119: the GENERATED spec row.
  */
-export interface ConfigConstraint {
-  agreementCode: string
-  okVersion: string
-  weeklyNormHours: number
-  maxFlexBalance: number
-  flexCarryoverMax: number
-  hasOvertime: boolean
-  hasMerarbejde: boolean
-  eveningSupplementEnabled: boolean
-  nightSupplementEnabled: boolean
-  weekendSupplementEnabled: boolean
-  holidaySupplementEnabled: boolean
-  onCallDutyEnabled: boolean
-  onCallDutyRate: number
-}
+export type ConfigConstraint =
+  components['schemas']['StatsTid.Backend.Api.Contracts.ConfigConstraintResponse']
 
 // ── Hooks ──
 
@@ -219,13 +195,12 @@ export async function saveProfile(
       newVersion: result.newVersion,
     }
   }
-  const err = new Error(result.error || `HTTP ${result.status}`) as Error & {
-    status?: number
-    body?: ProfileSaveError
-  }
-  err.status = result.status
-  err.body = result.body
-  throw err
+  // S119 — Object.assign (not an `as` cast): this file is on the no-`as`
+  // surface (the useWageTypeMappings makeMutationError precedent).
+  throw Object.assign(new Error(result.error || `HTTP ${result.status}`), {
+    status: result.status,
+    body: result.body,
+  })
 }
 
 // ── Unchanged: central constraint reference. ──
@@ -238,7 +213,9 @@ export function useConfigConstraints() {
   const fetchConstraints = useCallback(async () => {
     setLoading(true)
     setError(null)
-    const result = await apiClient.get<ConfigConstraint[]>('/api/config/constraints')
+    // S119 — the typed spec-keyed read (the response type is DERIVED from the
+    // path key; no hand-written type argument).
+    const result = await apiClient.get('/api/config/constraints')
     if (result.ok) {
       setConstraints(result.data)
     } else {

@@ -31,3 +31,7 @@ POST /api/admin/position-overrides/{overrideId}/deactivate
 # S118 / TASK-11800 — activate is a route-param-only lifecycle action (If-Match header only);
 # response typed (PositionOverrideActivateResponse).
 POST /api/admin/position-overrides/{overrideId}/activate
+# S119 / TASK-11900 — the project-select action binds NO request DTO (route params only:
+# orgId + projectId); response typed (ProjectSelectionResponse). Deprecated-but-live
+# (ProjectPicker retired S72; SkemaLegacySelectionAlignmentTests exercises it).
+POST /api/projects/{orgId}/select/{projectId}

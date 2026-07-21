@@ -1324,7 +1324,17 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.ConfigConstraintResponse"
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -1346,7 +1356,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.EffectiveConfigResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -1394,7 +1411,14 @@
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.LocalAgreementProfileResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -1430,7 +1454,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.LocalAgreementProfileResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -1468,7 +1499,17 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.LocalAgreementProfileResponse"
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -1506,7 +1547,17 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.AbsenceTypeResponse"
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -1538,7 +1589,14 @@
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.AbsenceTypeVisibilityResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -1664,7 +1722,17 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.ProjectResponse"
+                  }
+                }
+              }
+            }
           }
         }
       },
@@ -1693,8 +1761,15 @@
           "required": true
         },
         "responses": {
-          "200": {
-            "description": "OK"
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.ProjectResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -1716,7 +1791,17 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.AvailableProjectResponse"
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -1747,7 +1832,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.ProjectSelectionResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -1775,8 +1867,8 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "OK"
+          "204": {
+            "description": "No Content"
           }
         }
       }
@@ -1817,7 +1909,14 @@
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.ProjectUpdateResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -1845,8 +1944,8 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "OK"
+          "204": {
+            "description": "No Content"
           }
         }
       }
@@ -4464,6 +4563,42 @@
   },
   "components": {
     "schemas": {
+      "StatsTid.Backend.Api.Contracts.AbsenceTypeResponse": {
+        "required": [
+          "label",
+          "type"
+        ],
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.AbsenceTypeVisibilityResponse": {
+        "required": [
+          "absenceType",
+          "isHidden",
+          "orgId"
+        ],
+        "type": "object",
+        "properties": {
+          "orgId": {
+            "type": "string"
+          },
+          "absenceType": {
+            "type": "string"
+          },
+          "isHidden": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
       "StatsTid.Backend.Api.Contracts.ActiveVikarInfo": {
         "required": [
           "reason",
@@ -5340,6 +5475,36 @@
         },
         "additionalProperties": false
       },
+      "StatsTid.Backend.Api.Contracts.AvailableProjectResponse": {
+        "required": [
+          "projectCode",
+          "projectId",
+          "projectName",
+          "selected",
+          "sortOrder"
+        ],
+        "type": "object",
+        "properties": {
+          "projectId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "projectCode": {
+            "type": "string"
+          },
+          "projectName": {
+            "type": "string"
+          },
+          "sortOrder": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "selected": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
       "StatsTid.Backend.Api.Contracts.BirthDateResponse": {
         "required": [
           "birthDate",
@@ -5359,6 +5524,70 @@
           "version": {
             "type": "integer",
             "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.ConfigConstraintResponse": {
+        "required": [
+          "agreementCode",
+          "eveningSupplementEnabled",
+          "flexCarryoverMax",
+          "hasMerarbejde",
+          "hasOvertime",
+          "holidaySupplementEnabled",
+          "maxFlexBalance",
+          "nightSupplementEnabled",
+          "okVersion",
+          "onCallDutyEnabled",
+          "onCallDutyRate",
+          "weekendSupplementEnabled",
+          "weeklyNormHours"
+        ],
+        "type": "object",
+        "properties": {
+          "agreementCode": {
+            "type": "string"
+          },
+          "okVersion": {
+            "type": "string"
+          },
+          "weeklyNormHours": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxFlexBalance": {
+            "type": "number",
+            "format": "double"
+          },
+          "flexCarryoverMax": {
+            "type": "number",
+            "format": "double"
+          },
+          "hasOvertime": {
+            "type": "boolean"
+          },
+          "hasMerarbejde": {
+            "type": "boolean"
+          },
+          "eveningSupplementEnabled": {
+            "type": "boolean"
+          },
+          "nightSupplementEnabled": {
+            "type": "boolean"
+          },
+          "weekendSupplementEnabled": {
+            "type": "boolean"
+          },
+          "holidaySupplementEnabled": {
+            "type": "boolean"
+          },
+          "onCallDutyEnabled": {
+            "type": "boolean"
+          },
+          "onCallDutyRate": {
+            "type": "number",
+            "format": "double"
           }
         },
         "additionalProperties": false
@@ -5525,6 +5754,74 @@
           "version": {
             "type": "integer",
             "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.EffectiveConfigResponse": {
+        "required": [
+          "agreementCode",
+          "eveningSupplementEnabled",
+          "flexCarryoverMax",
+          "hasMerarbejde",
+          "hasOvertime",
+          "holidaySupplementEnabled",
+          "maxFlexBalance",
+          "nightSupplementEnabled",
+          "okVersion",
+          "onCallDutyEnabled",
+          "onCallDutyRate",
+          "orgId",
+          "weekendSupplementEnabled",
+          "weeklyNormHours"
+        ],
+        "type": "object",
+        "properties": {
+          "orgId": {
+            "type": "string"
+          },
+          "agreementCode": {
+            "type": "string"
+          },
+          "okVersion": {
+            "type": "string"
+          },
+          "weeklyNormHours": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxFlexBalance": {
+            "type": "number",
+            "format": "double"
+          },
+          "flexCarryoverMax": {
+            "type": "number",
+            "format": "double"
+          },
+          "hasOvertime": {
+            "type": "boolean"
+          },
+          "hasMerarbejde": {
+            "type": "boolean"
+          },
+          "eveningSupplementEnabled": {
+            "type": "boolean"
+          },
+          "nightSupplementEnabled": {
+            "type": "boolean"
+          },
+          "weekendSupplementEnabled": {
+            "type": "boolean"
+          },
+          "holidaySupplementEnabled": {
+            "type": "boolean"
+          },
+          "onCallDutyEnabled": {
+            "type": "boolean"
+          },
+          "onCallDutyRate": {
+            "type": "number",
+            "format": "double"
           }
         },
         "additionalProperties": false
@@ -6013,6 +6310,85 @@
             "items": {
               "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.ForestUnitNode"
             }
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.LocalAgreementProfileResponse": {
+        "required": [
+          "agreementCode",
+          "createdAt",
+          "createdBy",
+          "effectiveFrom",
+          "effectiveTo",
+          "flexCarryoverMax",
+          "maxFlexBalance",
+          "maxOvertimeHoursPerPeriod",
+          "okVersion",
+          "orgId",
+          "overtimeRequiresPreApproval",
+          "profileId",
+          "version",
+          "weeklyNormHours"
+        ],
+        "type": "object",
+        "properties": {
+          "profileId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "orgId": {
+            "type": "string"
+          },
+          "agreementCode": {
+            "type": "string"
+          },
+          "okVersion": {
+            "type": "string"
+          },
+          "effectiveFrom": {
+            "type": "string",
+            "format": "date"
+          },
+          "effectiveTo": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "weeklyNormHours": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "maxFlexBalance": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "flexCarryoverMax": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "maxOvertimeHoursPerPeriod": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "overtimeRequiresPreApproval": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "createdBy": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
           }
         },
         "additionalProperties": false
@@ -6815,6 +7191,66 @@
           "description": {
             "type": "string",
             "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.ProjectResponse": {
+        "required": [
+          "projectCode",
+          "projectId",
+          "projectName",
+          "sortOrder"
+        ],
+        "type": "object",
+        "properties": {
+          "projectId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "projectCode": {
+            "type": "string"
+          },
+          "projectName": {
+            "type": "string"
+          },
+          "sortOrder": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.ProjectSelectionResponse": {
+        "required": [
+          "projectId",
+          "selected"
+        ],
+        "type": "object",
+        "properties": {
+          "projectId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "selected": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.ProjectUpdateResponse": {
+        "required": [
+          "projectId",
+          "updated"
+        ],
+        "type": "object",
+        "properties": {
+          "projectId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "updated": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false

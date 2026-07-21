@@ -63,7 +63,12 @@ export function ProjectManagement() {
 
     let success: boolean
     if (editingId) {
-      success = await updateProject(editingId, formData)
+      // S119 — the update PUT sends EXACTLY the two bound keys; `projectCode`
+      // was never bound by the backend DTO (the S112 accepted-delta class).
+      success = await updateProject(editingId, {
+        projectName: formData.projectName,
+        sortOrder: formData.sortOrder,
+      })
     } else {
       success = await createProject(formData)
     }
@@ -125,9 +130,13 @@ export function ProjectManagement() {
             <div className={styles.formFields}>
               <div className={styles.formField}>
                 <label className={styles.label}>Projektkode</label>
+                {/* S119 — READ-ONLY in edit mode (the S91 dead-button class):
+                    the backend update DTO never bound `projectCode`, so an
+                    editable field silently discarded every change. */}
                 <Input
                   id="project-code"
                   value={formData.projectCode}
+                  disabled={editingId !== null}
                   onChange={(e) =>
                     setFormData((prev) => ({ ...prev, projectCode: e.target.value }))
                   }
@@ -174,18 +183,20 @@ export function ProjectManagement() {
         {/* Table */}
         <table className={styles.table}>
           <thead>
+            {/* S119 — the Status column was REMOVED (prod bug #7): the list
+                only ever serves active projects, and the phantom `isActive`
+                field rendered "Inaktiv" for every row. */}
             <tr>
               <th>Projektkode</th>
               <th>Projektnavn</th>
               <th>Sortering</th>
-              <th>Status</th>
               <th>Handlinger</th>
             </tr>
           </thead>
           <tbody>
             {projects.length === 0 ? (
               <tr>
-                <td colSpan={5} className={styles.emptyRow}>
+                <td colSpan={4} className={styles.emptyRow}>
                   Ingen projekter oprettet endnu
                 </td>
               </tr>
@@ -195,7 +206,6 @@ export function ProjectManagement() {
                   <td>{project.projectCode}</td>
                   <td>{project.projectName}</td>
                   <td>{project.sortOrder}</td>
-                  <td>{project.isActive ? 'Aktiv' : 'Inaktiv'}</td>
                   <td className={styles.actions}>
                     <Button
                       variant="ghost"

@@ -8,6 +8,10 @@
 // SPRINT-116 / TASK-11602 — Pass 3 (the approval bucket): 7 switched files join
 // the FULL ban tier; `useSkema.ts` joins on a PARTIAL tier (its two legacy
 // skema-family calls ride grandfathered UNTYPED ops — route-helper-pinned).
+// SPRINT-119 / TASK-11901 — Pass 6 bucket B: 4 switched files join the FULL
+// ban tier (useConfig / useProjects hooks, the api/profileApi.ts module and
+// the ProjectManagement page) — no deferred legacy call remains in any of
+// them, so no partial tier is needed this pass.
 // SPRINT-118 / TASK-11801 — Pass 5 bucket A: 5 switched files join the FULL
 // ban tier (useAgreementConfigs / useEntitlementConfig / usePositionOverrides
 // hooks + the AgreementConfigEditor / EntitlementConfigEditor pages);
@@ -81,6 +85,14 @@ const TYPED_SLICE_FILES = [
   'src/hooks/usePositionOverrides.ts',
   'src/pages/admin/AgreementConfigEditor.tsx',
   'src/pages/admin/EntitlementConfigEditor.tsx',
+  // S119 — the Pass-6 bucket-B switched files (TASK-11901): the constraints +
+  // profile + projects surface is FULLY drained (every call typed; the
+  // profile PUT's flexible precondition rides the structured
+  // ifMatch/ifNoneMatch options) — full tier, no carve-outs.
+  'src/hooks/useConfig.ts',
+  'src/api/profileApi.ts',
+  'src/hooks/useProjects.ts',
+  'src/pages/admin/ProjectManagement.tsx',
 ]
 
 // S115 — fully switched EXCEPT the ONE deferred polymorphic explicit-T etag GET

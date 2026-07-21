@@ -89,8 +89,8 @@ function makeMonthData(overrides: Partial<SkemaMonthData> = {}): SkemaMonthData 
     // the un-selected EXTRA) lives in `catalogs.projects` below. Tests that
     // override rowPreferences MUST override `projects` to match the selection.
     projects: [
-      { projectId: 'p-drift', projectCode: 'DRIFT', projectName: 'Drift & support', isActive: true, sortOrder: 0 },
-      { projectId: 'p-udv', projectCode: 'UDV', projectName: 'Udvikling', isActive: true, sortOrder: 1 },
+      { projectId: 'p-drift', projectCode: 'DRIFT', projectName: 'Drift & support', sortOrder: 0 },
+      { projectId: 'p-udv', projectCode: 'UDV', projectName: 'Udvikling', sortOrder: 1 },
     ],
     absenceTypes: [
       { type: 'VACATION', label: 'Ferie' },
@@ -125,9 +125,9 @@ function makeMonthData(overrides: Partial<SkemaMonthData> = {}): SkemaMonthData 
     },
     catalogs: {
       projects: [
-        { projectId: 'p-drift', projectCode: 'DRIFT', projectName: 'Drift & support', isActive: true, sortOrder: 0 },
-        { projectId: 'p-udv', projectCode: 'UDV', projectName: 'Udvikling', isActive: true, sortOrder: 1 },
-        { projectId: 'p-extra', projectCode: 'EXTRA', projectName: 'Ekstra projekt', isActive: true, sortOrder: 2 },
+        { projectId: 'p-drift', projectCode: 'DRIFT', projectName: 'Drift & support', sortOrder: 0 },
+        { projectId: 'p-udv', projectCode: 'UDV', projectName: 'Udvikling', sortOrder: 1 },
+        { projectId: 'p-extra', projectCode: 'EXTRA', projectName: 'Ekstra projekt', sortOrder: 2 },
       ],
       absenceTypes: [
         { type: 'VACATION', label: 'Ferie' },
@@ -778,7 +778,7 @@ describe('SkemaPage — R7/R16 day-panel save paths', () => {
     // selection — Drift reaches the page through `catalogs` ∪ entries (B1).
     monthData = makeMonthData({
       projects: [
-        { projectId: 'p-udv', projectCode: 'UDV', projectName: 'Udvikling', isActive: true, sortOrder: 1 },
+        { projectId: 'p-udv', projectCode: 'UDV', projectName: 'Udvikling', sortOrder: 1 },
       ],
       rowPreferences: {
         configured: true,
