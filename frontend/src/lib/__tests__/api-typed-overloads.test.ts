@@ -349,7 +349,7 @@ describe('S112 typed derivation — compile-time fixtures', () => {
 })
 
 describe('S112 typed derivation — real committed spec', () => {
-  it('phase pin: after the S117 Pass-4 drain — 22 POSTs, 14 PUTs, 8 DELETEs (retrofit updates this)', () => {
+  it('phase pin: after the S118 Pass-5 bucket-A drain — 33 POSTs, 19 PUTs, 11 DELETEs (retrofit updates this)', () => {
     // S112 / TASK-11203 — the backend typed 20 ops (units / organizations /
     // users / roles / employee-profiles); the put/delete unions became
     // NON-EMPTY and the post union grew from exactly '/api/admin/units'.
@@ -365,6 +365,16 @@ describe('S112 typed derivation — real committed spec', () => {
     // payout-request, JSON 201; settlement-reversal, JSON 200). The resolve
     // POST is a DECLARED-bodyless 200 (`content?: never`) — the admission
     // rule excludes it, so it stays off the typed unions by design.
+    // S118 / TASK-11801 — Pass 5 bucket A + login (TASK-11800) drained the
+    // agreement-config / position-override / wage-type-mapping /
+    // entitlement-config (admin + child) families + /api/auth/login:
+    // +11 POSTs (login; agreement-config create 201 / clone 201 / publish /
+    // archive; position-override create 201 / deactivate / activate;
+    // wage-type-mapping create 201; entitlement-config create 201; child
+    // entitlement create 201), +5 PUTs (agreement-config; position-override;
+    // wage-type-mapping; entitlement-config; child entitlement) and
+    // +3 DELETEs (wage-type-mapping 204; entitlement-config 204; child
+    // entitlement 204).
     expectTypeOf<TypedPathIn<paths, 'put'>>().toEqualTypeOf<
       | '/api/admin/organizations/{orgId}'
       | '/api/admin/organizations/{orgId}/move'
@@ -380,6 +390,11 @@ describe('S112 typed derivation — real committed spec', () => {
       | '/api/overtime/pre-approval/{id}/approve'
       | '/api/overtime/pre-approval/{id}/reject'
       | '/api/vacation-transfer-agreements/{employeeId}'
+      | '/api/agreement-configs/{configId}'
+      | '/api/admin/position-overrides/{overrideId}'
+      | '/api/admin/wage-type-mappings'
+      | '/api/admin/entitlement-configs/{configId}'
+      | '/api/agreement-configs/{configId}/entitlements/{entitlementConfigId}'
     >()
     expectTypeOf<TypedPathIn<paths, 'delete'>>().toEqualTypeOf<
       | '/api/admin/organizations/{orgId}'
@@ -390,6 +405,9 @@ describe('S112 typed derivation — real committed spec', () => {
       | '/api/admin/reporting-lines/{employeeId}/acting'
       | '/api/admin/reporting-lines/{managerId}/vikar'
       | '/api/reporting-lines/delegate'
+      | '/api/admin/wage-type-mappings'
+      | '/api/admin/entitlement-configs/{configId}'
+      | '/api/agreement-configs/{configId}/entitlements/{entitlementConfigId}'
     >()
     expectTypeOf<TypedPathIn<paths, 'post'>>().toEqualTypeOf<
       | '/api/admin/organizations'
@@ -414,6 +432,17 @@ describe('S112 typed derivation — real committed spec', () => {
       | '/api/vacation-settlements/{employeeId}/{entitlementType}/{entitlementYear}/reconcile-payout'
       | '/api/admin/employees/{employeeId}/termination-payout-request'
       | '/api/admin/employees/{employeeId}/settlement-reversal'
+      | '/api/auth/login'
+      | '/api/agreement-configs'
+      | '/api/agreement-configs/{configId}/clone'
+      | '/api/agreement-configs/{configId}/publish'
+      | '/api/agreement-configs/{configId}/archive'
+      | '/api/admin/position-overrides'
+      | '/api/admin/position-overrides/{overrideId}/deactivate'
+      | '/api/admin/position-overrides/{overrideId}/activate'
+      | '/api/admin/wage-type-mappings'
+      | '/api/admin/entitlement-configs'
+      | '/api/agreement-configs/{configId}/entitlements'
     >()
   })
 

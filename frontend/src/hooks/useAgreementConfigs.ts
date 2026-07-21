@@ -1,54 +1,38 @@
 import { useState, useEffect, useCallback } from 'react'
 import { apiClient, apiFetchWithEtag } from '../lib/api'
+import type { components } from '../lib/api-types'
 import { formatVersionAsIfMatch, resolveEtag } from '../lib/etag'
 
-export interface AgreementConfig {
-  configId: string
-  agreementCode: string
-  okVersion: string
-  status: 'DRAFT' | 'ACTIVE' | 'ARCHIVED'
-  // S25 / TASK-2506 (ADR-019 pending): row-version optimistic-concurrency token.
-  // Returned by GET list / by-id and every mutating endpoint's response body.
-  version: number
-  weeklyNormHours: number
-  normPeriodWeeks: number
-  normModel: string
-  annualNormHours: number
-  maxFlexBalance: number
-  flexCarryoverMax: number
-  hasOvertime: boolean
-  hasMerarbejde: boolean
-  overtimeThreshold50: number
-  overtimeThreshold100: number
-  eveningSupplementEnabled: boolean
-  nightSupplementEnabled: boolean
-  weekendSupplementEnabled: boolean
-  holidaySupplementEnabled: boolean
-  eveningStart: number
-  eveningEnd: number
-  nightStart: number
-  nightEnd: number
-  eveningRate: number
-  nightRate: number
-  weekendSaturdayRate: number
-  weekendSundayRate: number
-  holidayRate: number
-  onCallDutyEnabled: boolean
-  onCallDutyRate: number
-  callInWorkEnabled: boolean
-  callInMinimumHours: number
-  callInRate: number
-  travelTimeEnabled: boolean
-  workingTravelRate: number
-  nonWorkingTravelRate: number
-  createdBy: string
-  createdAt: string
-  updatedAt: string
-  publishedAt: string | null
-  archivedAt: string | null
-  clonedFromId: string | null
-  description: string | null
-}
+// S118 / TASK-11801 (Typed API Contract retrofit Pass 5, PAT-012) — every call
+// in this hook rides the TYPED structured forms: reads via the spec-keyed
+// `apiClient.get` / `apiFetchWithEtag(pathKey, { method: 'GET', params })`,
+// If-Match mutations via `apiFetchWithEtag(pathKey, { method, params, ifMatch,
+// body })`, the UNCONDITIONED create via the same form with NO precondition
+// option. The hand-written 43-field `AgreementConfig` interface was DELETED —
+// it OMITTED 5 compliance fields the backend emits (`maxDailyHours`,
+// `minimumRestHours`, `restPeriodDerogationAllowed`,
+// `weeklyMaxHoursReferencePeriod`, `voluntaryUnsocialHoursAllowed`); the spec
+// type surfaces them additively.
+
+/** The GENERATED spec row (S118) — replaces the hand-written interface. */
+export type AgreementConfig =
+  components['schemas']['StatsTid.Backend.Api.Contracts.AgreementConfigResponse']
+
+/** The by-id GET shape: the config + inline `entitlements` (each row carries
+    the S73 `fullDayOnly` flag — additive, spec-required) + the shared-key
+    `entitlementsReadOnly` marker. */
+export type AgreementConfigWithEntitlements =
+  components['schemas']['StatsTid.Backend.Api.Contracts.AgreementConfigWithEntitlementsResponse']
+
+/** The create/update request body — the GENERATED spec type (Swashbuckle
+    inference from the backend's `AgreementConfigRequest`). */
+export type AgreementConfigRequest =
+  components['schemas']['StatsTid.Backend.Api.Endpoints.AgreementConfigEndpoints.AgreementConfigRequest']
+
+type PublishResponse =
+  components['schemas']['StatsTid.Backend.Api.Contracts.AgreementConfigPublishResponse']
+type ArchiveResponse =
+  components['schemas']['StatsTid.Backend.Api.Contracts.AgreementConfigArchiveResponse']
 
 /**
  * S25 / TASK-2506: list/by-id rows enriched with the wire-format `etag` so the
@@ -73,6 +57,21 @@ export interface ConfigMutationError extends Error {
   }
 }
 
+/** S118 — the 412/428 error payload is UNDECLARED in the spec (error bodies are
+    not typed), so it arrives as `unknown`. This runtime type guard (not an `as`
+    cast — the file is on the no-`as` surface) passes the SAME runtime object
+    through when it is an object; the target's members are all optional, so the
+    claim is structurally sound (the S113 `useAdmin` precedent). */
+function isMutationErrorBody(body: unknown): body is NonNullable<ConfigMutationError['body']> {
+  return typeof body === 'object' && body !== null
+}
+
+/** S118 — runtime narrowing for thrown mutation errors so page-level handlers
+    can branch on `status`/`body` without an `as` cast. */
+export function isConfigMutationError(err: unknown): err is ConfigMutationError {
+  return err instanceof Error && 'status' in err && typeof err.status === 'number'
+}
+
 function decorateRow(config: AgreementConfig): WithEtag<AgreementConfig> {
   // List rows expose `version` in the body; we synthesize the matching wire
   // form via the helper so the page passes back exactly what the backend's
@@ -83,12 +82,13 @@ function decorateRow(config: AgreementConfig): WithEtag<AgreementConfig> {
 function makeMutationError(
   status: number,
   errorMsg: string,
-  body: ConfigMutationError['body'],
+  body: unknown,
 ): ConfigMutationError {
-  const err = new Error(errorMsg) as ConfigMutationError
-  err.status = status
-  err.body = body
-  return err
+  // Object.assign (not an `as` cast) — this file is on the no-`as` surface.
+  return Object.assign(new Error(errorMsg), {
+    status,
+    body: isMutationErrorBody(body) ? body : undefined,
+  })
 }
 
 export function useAgreementConfigs(statusFilter?: string) {
@@ -99,10 +99,9 @@ export function useAgreementConfigs(statusFilter?: string) {
   const fetchConfigs = useCallback(async () => {
     setLoading(true)
     setError(null)
-    const path = statusFilter
-      ? `/api/agreement-configs?status=${statusFilter}`
-      : '/api/agreement-configs'
-    const result = await apiClient.get<AgreementConfig[]>(path)
+    const result = await apiClient.get('/api/agreement-configs', {
+      query: statusFilter ? { status: statusFilter } : undefined,
+    })
     if (result.ok) {
       setConfigs(result.data.map(decorateRow))
     } else {
@@ -117,7 +116,7 @@ export function useAgreementConfigs(statusFilter?: string) {
 }
 
 export function useAgreementConfig(configId: string) {
-  const [config, setConfig] = useState<WithEtag<AgreementConfig> | null>(null)
+  const [config, setConfig] = useState<WithEtag<AgreementConfigWithEntitlements> | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -128,7 +127,10 @@ export function useAgreementConfig(configId: string) {
     // Use header-aware fetch so we capture the by-id ETag header rather than
     // re-formatting body.version (the endpoint sets ETag: "<version>" — same
     // value, but the header is the canonical source).
-    const result = await apiFetchWithEtag<AgreementConfig>(`/api/agreement-configs/${configId}`)
+    const result = await apiFetchWithEtag('/api/agreement-configs/{configId}', {
+      method: 'GET',
+      params: { path: { configId } },
+    })
     if (result.ok) {
       const { data, etag } = result.data
       const { etag: resolvedEtag } = resolveEtag(etag, data)
@@ -161,15 +163,18 @@ export function useAgreementConfigActions() {
     }
   }
 
+  // UNCONDITIONED create (no If-Match / If-None-Match — S118 demand map).
+  // 201 → the full entity (the S118 backend closed the create fork:
+  // INSERT…RETURNING always returns the row).
   const createConfig = async (
-    body: Partial<AgreementConfig>,
+    body: AgreementConfigRequest,
   ): Promise<WithEtag<AgreementConfig>> => {
-    const result = await apiFetchWithEtag<AgreementConfig>('/api/agreement-configs', {
+    const result = await apiFetchWithEtag('/api/agreement-configs', {
       method: 'POST',
-      body: JSON.stringify(body),
+      body,
     })
     if (!result.ok) {
-      throw makeMutationError(result.status, result.error, result.body as ConfigMutationError['body'])
+      throw makeMutationError(result.status, result.error, result.body)
     }
     return withResponseEtag(result.data.data, result.data.etag)
   }
@@ -177,64 +182,55 @@ export function useAgreementConfigActions() {
   const updateConfig = async (
     configId: string,
     ifMatch: string,
-    body: Partial<AgreementConfig>,
+    body: AgreementConfigRequest,
   ): Promise<WithEtag<AgreementConfig>> => {
-    const result = await apiFetchWithEtag<AgreementConfig>(
-      `/api/agreement-configs/${configId}`,
-      {
-        method: 'PUT',
-        headers: { 'If-Match': ifMatch },
-        body: JSON.stringify(body),
-      },
-    )
+    const result = await apiFetchWithEtag('/api/agreement-configs/{configId}', {
+      method: 'PUT',
+      params: { path: { configId } },
+      ifMatch,
+      body,
+    })
     if (!result.ok) {
-      throw makeMutationError(result.status, result.error, result.body as ConfigMutationError['body'])
+      throw makeMutationError(result.status, result.error, result.body)
     }
     return withResponseEtag(result.data.data, result.data.etag)
   }
 
+  // UNCONDITIONED clone-create (no body, optional query overrides) — 201 → the
+  // full cloned entity (the create fork closed alongside the plain create).
   const cloneConfig = async (
     configId: string,
     agreementCode?: string,
     okVersion?: string,
   ): Promise<WithEtag<AgreementConfig>> => {
-    const params = new URLSearchParams()
-    if (agreementCode) params.set('agreementCode', agreementCode)
-    if (okVersion) params.set('okVersion', okVersion)
-    const query = params.toString() ? `?${params.toString()}` : ''
-    const result = await apiFetchWithEtag<AgreementConfig>(
-      `/api/agreement-configs/${configId}/clone${query}`,
-      { method: 'POST' },
-    )
+    const result = await apiFetchWithEtag('/api/agreement-configs/{configId}/clone', {
+      method: 'POST',
+      params: { path: { configId } },
+      query: { agreementCode, okVersion },
+    })
     if (!result.ok) {
-      throw makeMutationError(result.status, result.error, result.body as ConfigMutationError['body'])
+      throw makeMutationError(result.status, result.error, result.body)
     }
     return withResponseEtag(result.data.data, result.data.etag)
   }
 
-  // Publish/Archive endpoints return a small envelope (configId, status,
-  // archivedConfigId/archivedAt, publishedAt) — NOT the full AgreementConfig.
-  // We surface the response data plus the new version (parsed from ETag) so
-  // the caller can compose the next If-Match if needed (rarely — the row's
-  // status transition usually triggers a full refetch).
-  interface PublishArchiveEnvelope {
-    configId: string
-    status: string
-    archivedConfigId?: string | null
-    archivedAt?: string | null
-    publishedAt?: string | null
-  }
-
+  // Publish/Archive endpoints return a small spec envelope (NOT the full
+  // AgreementConfig): publish → { configId, status, archivedConfigId,
+  // publishedAt }; archive → { configId, status, archivedAt }. We surface the
+  // response data plus the new version (parsed from ETag) so the caller can
+  // compose the next If-Match if needed (rarely — the row's status transition
+  // usually triggers a full refetch).
   const publishConfig = async (
     configId: string,
     ifMatch: string,
-  ): Promise<PublishArchiveEnvelope & { etag: string | null; version: number | null }> => {
-    const result = await apiFetchWithEtag<PublishArchiveEnvelope>(
-      `/api/agreement-configs/${configId}/publish`,
-      { method: 'POST', headers: { 'If-Match': ifMatch } },
-    )
+  ): Promise<PublishResponse & { etag: string | null; version: number | null }> => {
+    const result = await apiFetchWithEtag('/api/agreement-configs/{configId}/publish', {
+      method: 'POST',
+      params: { path: { configId } },
+      ifMatch,
+    })
     if (!result.ok) {
-      throw makeMutationError(result.status, result.error, result.body as ConfigMutationError['body'])
+      throw makeMutationError(result.status, result.error, result.body)
     }
     const { data, etag } = result.data
     const { etag: resolvedEtag, version } = resolveEtag(etag, null)
@@ -244,13 +240,14 @@ export function useAgreementConfigActions() {
   const archiveConfig = async (
     configId: string,
     ifMatch: string,
-  ): Promise<PublishArchiveEnvelope & { etag: string | null; version: number | null }> => {
-    const result = await apiFetchWithEtag<PublishArchiveEnvelope>(
-      `/api/agreement-configs/${configId}/archive`,
-      { method: 'POST', headers: { 'If-Match': ifMatch } },
-    )
+  ): Promise<ArchiveResponse & { etag: string | null; version: number | null }> => {
+    const result = await apiFetchWithEtag('/api/agreement-configs/{configId}/archive', {
+      method: 'POST',
+      params: { path: { configId } },
+      ifMatch,
+    })
     if (!result.ok) {
-      throw makeMutationError(result.status, result.error, result.body as ConfigMutationError['body'])
+      throw makeMutationError(result.status, result.error, result.body)
     }
     const { data, etag } = result.data
     const { etag: resolvedEtag, version } = resolveEtag(etag, null)

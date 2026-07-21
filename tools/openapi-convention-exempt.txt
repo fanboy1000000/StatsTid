@@ -13,9 +13,6 @@
 #
 # Lines starting with '#' and blank lines are ignored.
 
-DELETE /api/admin/entitlement-configs/{configId}
-DELETE /api/admin/wage-type-mappings
-DELETE /api/agreement-configs/{configId}/entitlements/{entitlementConfigId}
 DELETE /api/projects/{orgId}/select/{projectId}
 DELETE /api/projects/{orgId}/{projectId}
 GET /api/absences/{employeeId}
@@ -25,17 +22,6 @@ GET /api/absences/{employeeId}
 # would be a wire change (PAT-010-forbidden). It STAYS grandfathered until a strict-types /
 # oneOf phase addresses polymorphic reads. See PAT-012.
 GET /api/admin/employees/{employeeId}/entitlement-eligibility/{entitlementType}
-GET /api/admin/entitlement-configs
-GET /api/admin/entitlement-configs/{configId}
-GET /api/admin/position-overrides
-GET /api/admin/position-overrides/agreement/{agreementCode}/{okVersion}
-GET /api/admin/position-overrides/{overrideId}
-GET /api/admin/wage-type-mappings
-GET /api/admin/wage-type-mappings/agreement/{agreementCode}/{okVersion}
-GET /api/agreement-configs
-GET /api/agreement-configs/{agreementCode}/{okVersion}
-GET /api/agreement-configs/{configId}
-GET /api/agreement-configs/{configId}/entitlements
 GET /api/balance/{employeeId}/series
 GET /api/balance/{employeeId}/summary
 GET /api/balance/{employeeId}/year-overview
@@ -54,18 +40,11 @@ GET /api/projects/{orgId}
 GET /api/projects/{orgId}/available
 GET /api/skema/{employeeId}/month
 GET /api/time-entries/{employeeId}
+# S118 defer-with-cause: GET /health is an INFRASTRUCTURE LIVENESS PROBE (docker-compose /
+# CI smoke health-check target), not a product contract — no FE consumer, no domain shape.
+# It stays grandfathered deliberately; typing it would grant a probe endpoint contract
+# status it does not have. Revisit only if it ever grows a product consumer.
 GET /health
-POST /api/admin/entitlement-configs
-POST /api/admin/position-overrides
-POST /api/admin/position-overrides/{overrideId}/activate
-POST /api/admin/position-overrides/{overrideId}/deactivate
-POST /api/admin/wage-type-mappings
-POST /api/agreement-configs
-POST /api/agreement-configs/{configId}/archive
-POST /api/agreement-configs/{configId}/clone
-POST /api/agreement-configs/{configId}/entitlements
-POST /api/agreement-configs/{configId}/publish
-POST /api/auth/login
 POST /api/config/{orgId}/absence-types/visibility
 POST /api/overtime/{employeeId}/compensate
 POST /api/projects/{orgId}
@@ -79,11 +58,6 @@ POST /api/time-entries
 # cannot describe them and typing it would be a wire change (PAT-010-forbidden). It STAYS
 # grandfathered until a oneOf phase addresses polymorphic writes. See PAT-012.
 POST /api/vacation-settlements/{employeeId}/{entitlementType}/{entitlementYear}/resolve
-PUT /api/admin/entitlement-configs/{configId}
-PUT /api/admin/position-overrides/{overrideId}
-PUT /api/admin/wage-type-mappings
-PUT /api/agreement-configs/{configId}
-PUT /api/agreement-configs/{configId}/entitlements/{entitlementConfigId}
 PUT /api/config/{orgId}/profile/{agreementCode}/{okVersion}
 PUT /api/overtime/{employeeId}/compensation-choice
 PUT /api/projects/{orgId}/{projectId}

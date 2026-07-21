@@ -1,24 +1,28 @@
 import { useState, useEffect, useCallback } from 'react'
 import { apiClient, apiFetchWithEtag } from '../lib/api'
+import type { components } from '../lib/api-types'
 import { formatVersionAsIfMatch, resolveEtag } from '../lib/etag'
 
-export interface PositionOverrideConfig {
-  overrideId: string
-  agreementCode: string
-  okVersion: string
-  positionCode: string
-  status: string
-  // S25 / TASK-2506 (ADR-019 pending): row-version optimistic-concurrency token.
-  version: number
-  maxFlexBalance: number | null
-  flexCarryoverMax: number | null
-  normPeriodWeeks: number | null
-  weeklyNormHours: number | null
-  createdBy: string
-  createdAt: string
-  updatedAt: string
-  description: string | null
-}
+// S118 / TASK-11801 (Typed API Contract retrofit Pass 5, PAT-012) — every call
+// rides the TYPED structured forms; the hand-written `PositionOverrideConfig`
+// interface (audited FAITHFUL) and the merged deactivate/activate envelope were
+// DELETED in favor of the GENERATED spec types. `status` is now the spec enum
+// ("ACTIVE" | "INACTIVE" — DB CHECK authority).
+
+/** The GENERATED spec row (S118) — replaces the hand-written interface. */
+export type PositionOverrideConfig =
+  components['schemas']['StatsTid.Backend.Api.Contracts.PositionOverrideResponse']
+
+export type PositionOverrideCreateRequest =
+  components['schemas']['StatsTid.Backend.Api.Endpoints.PositionOverrideEndpoints.CreatePositionOverrideRequest']
+
+export type PositionOverrideUpdateRequest =
+  components['schemas']['StatsTid.Backend.Api.Endpoints.PositionOverrideEndpoints.UpdatePositionOverrideRequest']
+
+type DeactivateResponse =
+  components['schemas']['StatsTid.Backend.Api.Contracts.PositionOverrideDeactivateResponse']
+type ActivateResponse =
+  components['schemas']['StatsTid.Backend.Api.Contracts.PositionOverrideActivateResponse']
 
 /**
  * S25 / TASK-2506: row enriched with the wire-format `etag` for next-mutation
@@ -36,6 +40,14 @@ export interface PositionOverrideMutationError extends Error {
   }
 }
 
+/** S118 — undeclared error payloads narrow via a runtime type guard, never a
+    cast (PAT-012 no-`as` surface; all members optional → structurally sound). */
+function isMutationErrorBody(
+  body: unknown,
+): body is NonNullable<PositionOverrideMutationError['body']> {
+  return typeof body === 'object' && body !== null
+}
+
 function decorateRow(row: PositionOverrideConfig): WithEtag<PositionOverrideConfig> {
   return { ...row, etag: formatVersionAsIfMatch(row.version) }
 }
@@ -43,19 +55,13 @@ function decorateRow(row: PositionOverrideConfig): WithEtag<PositionOverrideConf
 function makeMutationError(
   status: number,
   errorMsg: string,
-  body: PositionOverrideMutationError['body'],
+  body: unknown,
 ): PositionOverrideMutationError {
-  const err = new Error(errorMsg) as PositionOverrideMutationError
-  err.status = status
-  err.body = body
-  return err
-}
-
-interface DeactivateActivateEnvelope {
-  overrideId: string
-  status: string
-  deactivated?: boolean
-  activated?: boolean
+  // Object.assign (not an `as` cast) — this file is on the no-`as` surface.
+  return Object.assign(new Error(errorMsg), {
+    status,
+    body: isMutationErrorBody(body) ? body : undefined,
+  })
 }
 
 export function usePositionOverrides() {
@@ -65,7 +71,7 @@ export function usePositionOverrides() {
 
   const fetchAll = useCallback(async () => {
     setLoading(true)
-    const result = await apiClient.get<PositionOverrideConfig[]>('/api/admin/position-overrides')
+    const result = await apiClient.get('/api/admin/position-overrides')
     if (result.ok) {
       setData(result.data.map(decorateRow))
       setError(null)
@@ -77,15 +83,17 @@ export function usePositionOverrides() {
 
   useEffect(() => { fetchAll() }, [fetchAll])
 
+  // UNCONDITIONED create (no precondition — S118 demand map). 201 → the full
+  // entity (the S118 backend closed the create fork: INSERT…RETURNING).
   const create = async (
-    body: Partial<PositionOverrideConfig>,
+    body: PositionOverrideCreateRequest,
   ): Promise<WithEtag<PositionOverrideConfig>> => {
-    const result = await apiFetchWithEtag<PositionOverrideConfig>(
-      '/api/admin/position-overrides',
-      { method: 'POST', body: JSON.stringify(body) },
-    )
+    const result = await apiFetchWithEtag('/api/admin/position-overrides', {
+      method: 'POST',
+      body,
+    })
     if (!result.ok) {
-      throw makeMutationError(result.status, result.error, result.body as PositionOverrideMutationError['body'])
+      throw makeMutationError(result.status, result.error, result.body)
     }
     const { data: row, etag } = result.data
     await fetchAll()
@@ -96,18 +104,16 @@ export function usePositionOverrides() {
   const update = async (
     overrideId: string,
     ifMatch: string,
-    body: Partial<PositionOverrideConfig>,
+    body: PositionOverrideUpdateRequest,
   ): Promise<WithEtag<PositionOverrideConfig>> => {
-    const result = await apiFetchWithEtag<PositionOverrideConfig>(
-      `/api/admin/position-overrides/${overrideId}`,
-      {
-        method: 'PUT',
-        headers: { 'If-Match': ifMatch },
-        body: JSON.stringify(body),
-      },
-    )
+    const result = await apiFetchWithEtag('/api/admin/position-overrides/{overrideId}', {
+      method: 'PUT',
+      params: { path: { overrideId } },
+      ifMatch,
+      body,
+    })
     if (!result.ok) {
-      throw makeMutationError(result.status, result.error, result.body as PositionOverrideMutationError['body'])
+      throw makeMutationError(result.status, result.error, result.body)
     }
     const { data: row, etag } = result.data
     await fetchAll()
@@ -118,13 +124,14 @@ export function usePositionOverrides() {
   const deactivate = async (
     overrideId: string,
     ifMatch: string,
-  ): Promise<DeactivateActivateEnvelope & { etag: string | null; version: number | null }> => {
-    const result = await apiFetchWithEtag<DeactivateActivateEnvelope>(
-      `/api/admin/position-overrides/${overrideId}/deactivate`,
-      { method: 'POST', headers: { 'If-Match': ifMatch } },
-    )
+  ): Promise<DeactivateResponse & { etag: string | null; version: number | null }> => {
+    const result = await apiFetchWithEtag('/api/admin/position-overrides/{overrideId}/deactivate', {
+      method: 'POST',
+      params: { path: { overrideId } },
+      ifMatch,
+    })
     if (!result.ok) {
-      throw makeMutationError(result.status, result.error, result.body as PositionOverrideMutationError['body'])
+      throw makeMutationError(result.status, result.error, result.body)
     }
     const { data: env, etag } = result.data
     await fetchAll()
@@ -135,13 +142,14 @@ export function usePositionOverrides() {
   const activate = async (
     overrideId: string,
     ifMatch: string,
-  ): Promise<DeactivateActivateEnvelope & { etag: string | null; version: number | null }> => {
-    const result = await apiFetchWithEtag<DeactivateActivateEnvelope>(
-      `/api/admin/position-overrides/${overrideId}/activate`,
-      { method: 'POST', headers: { 'If-Match': ifMatch } },
-    )
+  ): Promise<ActivateResponse & { etag: string | null; version: number | null }> => {
+    const result = await apiFetchWithEtag('/api/admin/position-overrides/{overrideId}/activate', {
+      method: 'POST',
+      params: { path: { overrideId } },
+      ifMatch,
+    })
     if (!result.ok) {
-      throw makeMutationError(result.status, result.error, result.body as PositionOverrideMutationError['body'])
+      throw makeMutationError(result.status, result.error, result.body)
     }
     const { data: env, etag } = result.data
     await fetchAll()

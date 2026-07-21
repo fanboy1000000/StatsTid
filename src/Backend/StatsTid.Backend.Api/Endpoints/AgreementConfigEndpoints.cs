@@ -1,5 +1,6 @@
 using System.Text.Json;
 using StatsTid.Auth;
+using StatsTid.Backend.Api.Contracts;
 using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
@@ -39,7 +40,8 @@ public static class AgreementConfigEndpoints
             }
 
             return Results.Ok(configs.Select(MapEntityToResponse).ToList());
-        }).RequireAuthorization("GlobalAdminOnly");
+        }).RequireAuthorization("GlobalAdminOnly")
+        .Produces<IEnumerable<AgreementConfigResponse>>(StatusCodes.Status200OK); // S118 / TASK-11800 — BARE array
 
         // ═══════════════════════════════════════════
         // 2. GET /api/agreement-configs/{configId:guid} — Get single config by ID
@@ -68,7 +70,8 @@ public static class AgreementConfigEndpoints
 
             context.Response.Headers.ETag = $"\"{entity.Version}\"";
             return Results.Ok(MapEntityToResponseWithEntitlements(entity, entitlements, entitlementsReadOnly));
-        }).RequireAuthorization("GlobalAdminOnly");
+        }).RequireAuthorization("GlobalAdminOnly")
+        .Produces<AgreementConfigWithEntitlementsResponse>(StatusCodes.Status200OK); // S118 / TASK-11800 — ruling #2: embedded rows now carry fullDayOnly
 
         // ═══════════════════════════════════════════
         // 3. GET /api/agreement-configs/{agreementCode}/{okVersion} — Get all versions for agreement
@@ -83,7 +86,8 @@ public static class AgreementConfigEndpoints
         {
             var configs = await agreementConfigRepo.GetByAgreementAsync(agreementCode, okVersion, ct);
             return Results.Ok(configs.Select(MapEntityToResponse).ToList());
-        }).RequireAuthorization("GlobalAdminOnly");
+        }).RequireAuthorization("GlobalAdminOnly")
+        .Produces<IEnumerable<AgreementConfigResponse>>(StatusCodes.Status200OK); // S118 / TASK-11800 — BARE array
 
         // ═══════════════════════════════════════════
         // 4. POST /api/agreement-configs — Create new DRAFT config
@@ -113,16 +117,23 @@ public static class AgreementConfigEndpoints
             var entity = BuildEntityFromRequest(request, normModel, actor.ActorId ?? "system");
 
             // Atomic state-change + audit + outbox enqueue (ADR-018 D3 atomic-outbox shape).
-            // Create still uses the v2 CreateAsync + v2 AppendAuditAsync overloads — the
-            // first-create has no prior version-transition to record (version_before is
-            // NULL by design). The 201 response carries ETag: "1" since the DB DEFAULT is 1.
+            // Create uses the v2 AppendAuditAsync overload — the first-create has no prior
+            // version-transition to record (version_before is NULL by design).
+            //
+            // S118 / TASK-11800 (owner ruling #1, the dead-branch class): the INSERT now runs
+            // via CreateReturningAsync (INSERT … RETURNING *) INSIDE this same transaction —
+            // the post-commit re-read and its `created is not null ? … : {configId}` fork are
+            // structurally dead. The audit/outbox/audit-projection appends stay in-tx AFTER
+            // the INSERT, byte-order unchanged (moving them would be a P3 violation).
             Guid configId;
+            AgreementConfigEntity created;
             await using (var conn = connectionFactory.Create())
             {
                 await conn.OpenAsync(ct);
                 await using var tx = await conn.BeginTransactionAsync(ct);
 
-                configId = await agreementConfigRepo.CreateAsync(conn, tx, entity, ct);
+                created = await agreementConfigRepo.CreateReturningAsync(conn, tx, entity, ct);
+                configId = created.ConfigId;
 
                 await agreementConfigRepo.AppendAuditAsync(
                     conn, tx, configId, "CREATED", null, SerializeForAudit(request),
@@ -153,15 +164,13 @@ public static class AgreementConfigEndpoints
                 await tx.CommitAsync(ct);
             }
 
-            // Re-read to get DB-generated timestamps (post-commit; outside the write tx).
-            var created = await agreementConfigRepo.GetByIdAsync(configId, ct);
-
-            // ETag for the 201 response. Sourced from the DB column when re-read succeeds;
-            // falls back to the static "1" (DB DEFAULT) if the re-read returned null.
-            context.Response.Headers.ETag = $"\"{(created?.Version ?? 1L)}\"";
+            // ETag for the 201 response — sourced from the RETURNING-hydrated row (DB DEFAULT 1
+            // on first-create; the `?? 1L` fallback died with the re-read, ruling #1).
+            context.Response.Headers.ETag = $"\"{created.Version}\"";
             return Results.Created($"/api/agreement-configs/{configId}",
-                created is not null ? MapEntityToResponse(created) : new { configId });
-        }).RequireAuthorization("GlobalAdminOnly");
+                MapEntityToResponse(created));
+        }).RequireAuthorization("GlobalAdminOnly")
+        .Produces<AgreementConfigResponse>(StatusCodes.Status201Created); // S118 / TASK-11800 — ruling #1: ALWAYS the full entity
 
         // ═══════════════════════════════════════════
         // 5. POST /api/agreement-configs/{configId:guid}/clone — Clone existing config as new DRAFT
@@ -238,13 +247,19 @@ public static class AgreementConfigEndpoints
             };
 
             // Atomic state-change + audit + outbox enqueue (ADR-018 D3 atomic-outbox shape).
+            // S118 / TASK-11800 (owner ruling #1): clone shares the agreement-config repo
+            // create path — CreateReturningAsync kills the same post-commit re-read fork here.
+            // The audit/outbox/audit-projection appends stay in-tx AFTER the INSERT, byte-order
+            // unchanged.
             Guid newConfigId;
+            AgreementConfigEntity created;
             await using (var conn = connectionFactory.Create())
             {
                 await conn.OpenAsync(ct);
                 await using var tx = await conn.BeginTransactionAsync(ct);
 
-                newConfigId = await agreementConfigRepo.CreateAsync(conn, tx, cloneEntity, ct);
+                created = await agreementConfigRepo.CreateReturningAsync(conn, tx, cloneEntity, ct);
+                newConfigId = created.ConfigId;
 
                 await agreementConfigRepo.AppendAuditAsync(
                     conn, tx, newConfigId, "CLONED", null, $"{{\"sourceConfigId\":\"{configId}\"}}",
@@ -275,14 +290,13 @@ public static class AgreementConfigEndpoints
                 await tx.CommitAsync(ct);
             }
 
-            // Re-read to get DB-generated timestamps (post-commit; outside the write tx).
-            var created = await agreementConfigRepo.GetByIdAsync(newConfigId, ct);
-
-            // ETag for the 201 response. Same fallback shape as POST /create.
-            context.Response.Headers.ETag = $"\"{(created?.Version ?? 1L)}\"";
+            // ETag for the 201 response — sourced from the RETURNING-hydrated row (same
+            // fork-death as POST /create, ruling #1).
+            context.Response.Headers.ETag = $"\"{created.Version}\"";
             return Results.Created($"/api/agreement-configs/{newConfigId}",
-                created is not null ? MapEntityToResponse(created) : new { configId = newConfigId });
-        }).RequireAuthorization("GlobalAdminOnly");
+                MapEntityToResponse(created));
+        }).RequireAuthorization("GlobalAdminOnly")
+        .Produces<AgreementConfigResponse>(StatusCodes.Status201Created); // S118 / TASK-11800 — ruling #1: ALWAYS the full entity
 
         // ═══════════════════════════════════════════
         // 6. PUT /api/agreement-configs/{configId:guid} — Update DRAFT config
@@ -400,7 +414,8 @@ public static class AgreementConfigEndpoints
             // 4. Set ETag for the next If-Match and return the post-write snapshot.
             context.Response.Headers.ETag = $"\"{saveResult.Version}\"";
             return Results.Ok(MapEntityToResponse(saveResult.Config));
-        }).RequireAuthorization("GlobalAdminOnly");
+        }).RequireAuthorization("GlobalAdminOnly")
+        .Produces<AgreementConfigResponse>(StatusCodes.Status200OK); // S118 / TASK-11800
 
         // ═══════════════════════════════════════════
         // 7. POST /api/agreement-configs/{configId:guid}/publish — Publish DRAFT → ACTIVE
@@ -543,15 +558,17 @@ public static class AgreementConfigEndpoints
 
             // 4. Set ETag for the next If-Match (now pointing at the activated row's
             //    post-publish version) and return the publish-result envelope.
+            //    S118 / TASK-11800: the bespoke lifecycle envelope is now a named record —
+            //    ALL keys always emitted, archivedConfigId/publishedAt nullable-valued
+            //    (nullable-always-present, never optional-key).
             context.Response.Headers.ETag = $"\"{saveResult.Version}\"";
-            return Results.Ok(new
-            {
-                configId,
-                status = "ACTIVE",
-                archivedConfigId = saveResult.ArchivedId,
-                publishedAt = saveResult.Config.PublishedAt,
-            });
-        }).RequireAuthorization("GlobalAdminOnly");
+            return Results.Ok(new AgreementConfigPublishResponse(
+                ConfigId: configId,
+                Status: "ACTIVE",
+                ArchivedConfigId: saveResult.ArchivedId,
+                PublishedAt: saveResult.Config.PublishedAt));
+        }).RequireAuthorization("GlobalAdminOnly")
+        .Produces<AgreementConfigPublishResponse>(StatusCodes.Status200OK); // S118 / TASK-11800
 
         // ═══════════════════════════════════════════
         // 8. POST /api/agreement-configs/{configId:guid}/archive — Archive ACTIVE/DRAFT config
@@ -646,85 +663,89 @@ public static class AgreementConfigEndpoints
                 }, statusCode: 412);
             }
 
+            // S118 / TASK-11800: the bespoke lifecycle envelope is now a named record —
+            // ALL keys always emitted, archivedAt nullable-valued (nullable-always-present).
             context.Response.Headers.ETag = $"\"{saveResult.Version}\"";
-            return Results.Ok(new
-            {
-                configId,
-                status = "ARCHIVED",
-                archivedAt = saveResult.Config.ArchivedAt,
-            });
-        }).RequireAuthorization("GlobalAdminOnly");
+            return Results.Ok(new AgreementConfigArchiveResponse(
+                ConfigId: configId,
+                Status: "ARCHIVED",
+                ArchivedAt: saveResult.Config.ArchivedAt));
+        }).RequireAuthorization("GlobalAdminOnly")
+        .Produces<AgreementConfigArchiveResponse>(StatusCodes.Status200OK); // S118 / TASK-11800
 
         return app;
     }
 
     // ── Response Mapping ──
 
-    private static object MapEntityToResponse(AgreementConfigEntity e) => new
-    {
-        configId = e.ConfigId,
-        agreementCode = e.AgreementCode,
-        okVersion = e.OkVersion,
-        status = e.Status.ToString(),
+    // S118 / TASK-11800 (PAT-012 retrofit Pass 5): the anonymous shape became the named
+    // 48-member AgreementConfigResponse record — an EXACT shape-copy (same member names, same
+    // order, same nullability; camelCase via JsonSerializerDefaults.Web — BYTE-IDENTICAL wire
+    // JSON). Also embedded (untyped) in the 412 error-body `currentState` envelopes, which
+    // stay anonymous per the S118 exclusions.
+    private static AgreementConfigResponse MapEntityToResponse(AgreementConfigEntity e) => new(
+        ConfigId: e.ConfigId,
+        AgreementCode: e.AgreementCode,
+        OkVersion: e.OkVersion,
+        Status: e.Status.ToString(),
         // Row-version optimistic-concurrency token (TASK-2501 schema, ADR-019 pending).
         // Surfaced in body for list responses where multiple rows preclude a single ETag
         // header; by-id GET also sets the matching ETag header.
-        version = e.Version,
+        Version: e.Version,
         // Norm settings
-        weeklyNormHours = e.WeeklyNormHours,
-        normPeriodWeeks = e.NormPeriodWeeks,
-        normModel = e.NormModel.ToString(),
-        annualNormHours = e.AnnualNormHours,
+        WeeklyNormHours: e.WeeklyNormHours,
+        NormPeriodWeeks: e.NormPeriodWeeks,
+        NormModel: e.NormModel.ToString(),
+        AnnualNormHours: e.AnnualNormHours,
         // Flex settings
-        maxFlexBalance = e.MaxFlexBalance,
-        flexCarryoverMax = e.FlexCarryoverMax,
+        MaxFlexBalance: e.MaxFlexBalance,
+        FlexCarryoverMax: e.FlexCarryoverMax,
         // Overtime settings
-        hasOvertime = e.HasOvertime,
-        hasMerarbejde = e.HasMerarbejde,
-        overtimeThreshold50 = e.OvertimeThreshold50,
-        overtimeThreshold100 = e.OvertimeThreshold100,
+        HasOvertime: e.HasOvertime,
+        HasMerarbejde: e.HasMerarbejde,
+        OvertimeThreshold50: e.OvertimeThreshold50,
+        OvertimeThreshold100: e.OvertimeThreshold100,
         // Supplement toggles
-        eveningSupplementEnabled = e.EveningSupplementEnabled,
-        nightSupplementEnabled = e.NightSupplementEnabled,
-        weekendSupplementEnabled = e.WeekendSupplementEnabled,
-        holidaySupplementEnabled = e.HolidaySupplementEnabled,
+        EveningSupplementEnabled: e.EveningSupplementEnabled,
+        NightSupplementEnabled: e.NightSupplementEnabled,
+        WeekendSupplementEnabled: e.WeekendSupplementEnabled,
+        HolidaySupplementEnabled: e.HolidaySupplementEnabled,
         // Supplement time windows
-        eveningStart = e.EveningStart,
-        eveningEnd = e.EveningEnd,
-        nightStart = e.NightStart,
-        nightEnd = e.NightEnd,
+        EveningStart: e.EveningStart,
+        EveningEnd: e.EveningEnd,
+        NightStart: e.NightStart,
+        NightEnd: e.NightEnd,
         // Supplement rates
-        eveningRate = e.EveningRate,
-        nightRate = e.NightRate,
-        weekendSaturdayRate = e.WeekendSaturdayRate,
-        weekendSundayRate = e.WeekendSundayRate,
-        holidayRate = e.HolidayRate,
+        EveningRate: e.EveningRate,
+        NightRate: e.NightRate,
+        WeekendSaturdayRate: e.WeekendSaturdayRate,
+        WeekendSundayRate: e.WeekendSundayRate,
+        HolidayRate: e.HolidayRate,
         // On-call duty
-        onCallDutyEnabled = e.OnCallDutyEnabled,
-        onCallDutyRate = e.OnCallDutyRate,
+        OnCallDutyEnabled: e.OnCallDutyEnabled,
+        OnCallDutyRate: e.OnCallDutyRate,
         // Call-in work
-        callInWorkEnabled = e.CallInWorkEnabled,
-        callInMinimumHours = e.CallInMinimumHours,
-        callInRate = e.CallInRate,
+        CallInWorkEnabled: e.CallInWorkEnabled,
+        CallInMinimumHours: e.CallInMinimumHours,
+        CallInRate: e.CallInRate,
         // Travel time
-        travelTimeEnabled = e.TravelTimeEnabled,
-        workingTravelRate = e.WorkingTravelRate,
-        nonWorkingTravelRate = e.NonWorkingTravelRate,
+        TravelTimeEnabled: e.TravelTimeEnabled,
+        WorkingTravelRate: e.WorkingTravelRate,
+        NonWorkingTravelRate: e.NonWorkingTravelRate,
         // Working time compliance
-        maxDailyHours = e.MaxDailyHours,
-        minimumRestHours = e.MinimumRestHours,
-        restPeriodDerogationAllowed = e.RestPeriodDerogationAllowed,
-        weeklyMaxHoursReferencePeriod = e.WeeklyMaxHoursReferencePeriod,
-        voluntaryUnsocialHoursAllowed = e.VoluntaryUnsocialHoursAllowed,
+        MaxDailyHours: e.MaxDailyHours,
+        MinimumRestHours: e.MinimumRestHours,
+        RestPeriodDerogationAllowed: e.RestPeriodDerogationAllowed,
+        WeeklyMaxHoursReferencePeriod: e.WeeklyMaxHoursReferencePeriod,
+        VoluntaryUnsocialHoursAllowed: e.VoluntaryUnsocialHoursAllowed,
         // Metadata
-        createdBy = e.CreatedBy,
-        createdAt = e.CreatedAt,
-        updatedAt = e.UpdatedAt,
-        publishedAt = e.PublishedAt,
-        archivedAt = e.ArchivedAt,
-        clonedFromId = e.ClonedFromId,
-        description = e.Description,
-    };
+        CreatedBy: e.CreatedBy,
+        CreatedAt: e.CreatedAt,
+        UpdatedAt: e.UpdatedAt,
+        PublishedAt: e.PublishedAt,
+        ArchivedAt: e.ArchivedAt,
+        ClonedFromId: e.ClonedFromId,
+        Description: e.Description);
 
     /// <summary>
     /// Extended response mapper for the GET by-ID endpoint — includes inline entitlements and
@@ -732,102 +753,87 @@ public static class AgreementConfigEndpoints
     /// each entitlement's <c>version</c> field is in the body only (for the frontend to compose
     /// child <c>If-Match</c> headers on per-entitlement mutations).
     /// </summary>
-    private static object MapEntityToResponseWithEntitlements(
+    private static AgreementConfigWithEntitlementsResponse MapEntityToResponseWithEntitlements(
         AgreementConfigEntity e,
         IReadOnlyList<EntitlementConfig> entitlements,
-        bool entitlementsReadOnly) => new
-    {
-        configId = e.ConfigId,
-        agreementCode = e.AgreementCode,
-        okVersion = e.OkVersion,
-        status = e.Status.ToString(),
-        version = e.Version,
+        bool entitlementsReadOnly) => new(
+        ConfigId: e.ConfigId,
+        AgreementCode: e.AgreementCode,
+        OkVersion: e.OkVersion,
+        Status: e.Status.ToString(),
+        Version: e.Version,
         // Norm settings
-        weeklyNormHours = e.WeeklyNormHours,
-        normPeriodWeeks = e.NormPeriodWeeks,
-        normModel = e.NormModel.ToString(),
-        annualNormHours = e.AnnualNormHours,
+        WeeklyNormHours: e.WeeklyNormHours,
+        NormPeriodWeeks: e.NormPeriodWeeks,
+        NormModel: e.NormModel.ToString(),
+        AnnualNormHours: e.AnnualNormHours,
         // Flex settings
-        maxFlexBalance = e.MaxFlexBalance,
-        flexCarryoverMax = e.FlexCarryoverMax,
+        MaxFlexBalance: e.MaxFlexBalance,
+        FlexCarryoverMax: e.FlexCarryoverMax,
         // Overtime settings
-        hasOvertime = e.HasOvertime,
-        hasMerarbejde = e.HasMerarbejde,
-        overtimeThreshold50 = e.OvertimeThreshold50,
-        overtimeThreshold100 = e.OvertimeThreshold100,
+        HasOvertime: e.HasOvertime,
+        HasMerarbejde: e.HasMerarbejde,
+        OvertimeThreshold50: e.OvertimeThreshold50,
+        OvertimeThreshold100: e.OvertimeThreshold100,
         // Supplement toggles
-        eveningSupplementEnabled = e.EveningSupplementEnabled,
-        nightSupplementEnabled = e.NightSupplementEnabled,
-        weekendSupplementEnabled = e.WeekendSupplementEnabled,
-        holidaySupplementEnabled = e.HolidaySupplementEnabled,
+        EveningSupplementEnabled: e.EveningSupplementEnabled,
+        NightSupplementEnabled: e.NightSupplementEnabled,
+        WeekendSupplementEnabled: e.WeekendSupplementEnabled,
+        HolidaySupplementEnabled: e.HolidaySupplementEnabled,
         // Supplement time windows
-        eveningStart = e.EveningStart,
-        eveningEnd = e.EveningEnd,
-        nightStart = e.NightStart,
-        nightEnd = e.NightEnd,
+        EveningStart: e.EveningStart,
+        EveningEnd: e.EveningEnd,
+        NightStart: e.NightStart,
+        NightEnd: e.NightEnd,
         // Supplement rates
-        eveningRate = e.EveningRate,
-        nightRate = e.NightRate,
-        weekendSaturdayRate = e.WeekendSaturdayRate,
-        weekendSundayRate = e.WeekendSundayRate,
-        holidayRate = e.HolidayRate,
+        EveningRate: e.EveningRate,
+        NightRate: e.NightRate,
+        WeekendSaturdayRate: e.WeekendSaturdayRate,
+        WeekendSundayRate: e.WeekendSundayRate,
+        HolidayRate: e.HolidayRate,
         // On-call duty
-        onCallDutyEnabled = e.OnCallDutyEnabled,
-        onCallDutyRate = e.OnCallDutyRate,
+        OnCallDutyEnabled: e.OnCallDutyEnabled,
+        OnCallDutyRate: e.OnCallDutyRate,
         // Call-in work
-        callInWorkEnabled = e.CallInWorkEnabled,
-        callInMinimumHours = e.CallInMinimumHours,
-        callInRate = e.CallInRate,
+        CallInWorkEnabled: e.CallInWorkEnabled,
+        CallInMinimumHours: e.CallInMinimumHours,
+        CallInRate: e.CallInRate,
         // Travel time
-        travelTimeEnabled = e.TravelTimeEnabled,
-        workingTravelRate = e.WorkingTravelRate,
-        nonWorkingTravelRate = e.NonWorkingTravelRate,
+        TravelTimeEnabled: e.TravelTimeEnabled,
+        WorkingTravelRate: e.WorkingTravelRate,
+        NonWorkingTravelRate: e.NonWorkingTravelRate,
         // Working time compliance
-        maxDailyHours = e.MaxDailyHours,
-        minimumRestHours = e.MinimumRestHours,
-        restPeriodDerogationAllowed = e.RestPeriodDerogationAllowed,
-        weeklyMaxHoursReferencePeriod = e.WeeklyMaxHoursReferencePeriod,
-        voluntaryUnsocialHoursAllowed = e.VoluntaryUnsocialHoursAllowed,
+        MaxDailyHours: e.MaxDailyHours,
+        MinimumRestHours: e.MinimumRestHours,
+        RestPeriodDerogationAllowed: e.RestPeriodDerogationAllowed,
+        WeeklyMaxHoursReferencePeriod: e.WeeklyMaxHoursReferencePeriod,
+        VoluntaryUnsocialHoursAllowed: e.VoluntaryUnsocialHoursAllowed,
         // Metadata
-        createdBy = e.CreatedBy,
-        createdAt = e.CreatedAt,
-        updatedAt = e.UpdatedAt,
-        publishedAt = e.PublishedAt,
-        archivedAt = e.ArchivedAt,
-        clonedFromId = e.ClonedFromId,
-        description = e.Description,
+        CreatedBy: e.CreatedBy,
+        CreatedAt: e.CreatedAt,
+        UpdatedAt: e.UpdatedAt,
+        PublishedAt: e.PublishedAt,
+        ArchivedAt: e.ArchivedAt,
+        ClonedFromId: e.ClonedFromId,
+        Description: e.Description,
         // Inline entitlements — open rows for this (agreement_code, ok_version) pair.
         // Each entitlement includes its own version for the frontend to compose child If-Match.
-        entitlements = entitlements.Select(MapEntitlementToResponse).ToList(),
+        Entitlements: entitlements.Select(MapEntitlementToResponse).ToList(),
         // True when another agreement_configs row shares this (agreement_code, ok_version),
         // meaning entitlement edits should be disabled on this config's detail page to avoid
         // ambiguity about which config "owns" the entitlements.
-        entitlementsReadOnly,
-    };
+        EntitlementsReadOnly: entitlementsReadOnly);
 
     /// <summary>
     /// Maps an <see cref="EntitlementConfig"/> to the inline response shape used by the
-    /// GET by-ID endpoint's <c>entitlements</c> array. Mirrors the shape from
-    /// <c>EntitlementConfigEndpoints.MapToResponse</c>.
+    /// GET by-ID endpoint's <c>entitlements</c> array.
+    /// S118 / TASK-11800 (owner ruling #2, the drift-repair class): this was the DRIFTED
+    /// 15-member inline copy that OMITTED <c>fullDayOnly</c> — it now delegates to the ONE
+    /// shared <see cref="EntitlementConfigResponse.FromModel"/> shape (the by-id embedded
+    /// rows GAIN <c>fullDayOnly</c>, additive; read-side display-only this pass).
     /// </summary>
-    private static object MapEntitlementToResponse(EntitlementConfig c) => new
-    {
-        configId = c.ConfigId,
-        entitlementType = c.EntitlementType,
-        agreementCode = c.AgreementCode,
-        okVersion = c.OkVersion,
-        annualQuota = c.AnnualQuota,
-        accrualModel = c.AccrualModel,
-        resetMonth = c.ResetMonth,
-        carryoverMax = c.CarryoverMax,
-        proRateByPartTime = c.ProRateByPartTime,
-        isPerEpisode = c.IsPerEpisode,
-        minAge = c.MinAge,
-        description = c.Description,
-        effectiveFrom = c.EffectiveFrom,
-        effectiveTo = c.EffectiveTo,
-        version = c.Version,
-    };
+    private static EntitlementConfigResponse MapEntitlementToResponse(EntitlementConfig c) =>
+        EntitlementConfigResponse.FromModel(c);
 
     // ── Validation ──
 

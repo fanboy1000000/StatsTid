@@ -101,50 +101,58 @@ public sealed class AgreementConfigRepository
         AgreementConfigEntity entity, string status, CancellationToken ct = default)
         => await ExecuteCreateAsync(conn, tx, entity, status, ct);
 
+    /// <summary>
+    /// The shared INSERT statement body (S118 / TASK-11800): both <see cref="ExecuteCreateAsync"/>
+    /// (fire-and-forget, returns the generated id) and <see cref="CreateReturningAsync"/>
+    /// (<c>INSERT … RETURNING *</c>) build from this single const so the two paths can never
+    /// drift column-wise. Timestamps stay DB-computed <c>NOW()</c> literals; <c>version</c> is
+    /// deliberately ABSENT (DB DEFAULT 1) — byte-identical INSERT semantics on both paths.
+    /// </summary>
+    private const string InsertSql =
+        """
+        INSERT INTO agreement_configs (
+            config_id, agreement_code, ok_version, status,
+            weekly_norm_hours, norm_period_weeks, norm_model, annual_norm_hours,
+            max_flex_balance, flex_carryover_max,
+            has_overtime, has_merarbejde, overtime_threshold_50, overtime_threshold_100,
+            evening_supplement_enabled, night_supplement_enabled, weekend_supplement_enabled, holiday_supplement_enabled,
+            evening_start, evening_end, night_start, night_end,
+            evening_rate, night_rate, weekend_saturday_rate, weekend_sunday_rate, holiday_rate,
+            on_call_duty_enabled, on_call_duty_rate,
+            call_in_work_enabled, call_in_minimum_hours, call_in_rate,
+            travel_time_enabled, working_travel_rate, non_working_travel_rate,
+            max_daily_hours, minimum_rest_hours, rest_period_derogation_allowed,
+            weekly_max_hours_reference_period, voluntary_unsocial_hours_allowed,
+            default_compensation_model, employee_compensation_choice,
+            max_overtime_hours_per_period, overtime_requires_pre_approval,
+            created_by, description, cloned_from_id,
+            created_at, updated_at
+        ) VALUES (
+            @configId, @agreementCode, @okVersion, @status,
+            @weeklyNormHours, @normPeriodWeeks, @normModel, @annualNormHours,
+            @maxFlexBalance, @flexCarryoverMax,
+            @hasOvertime, @hasMerarbejde, @overtimeThreshold50, @overtimeThreshold100,
+            @eveningSupplementEnabled, @nightSupplementEnabled, @weekendSupplementEnabled, @holidaySupplementEnabled,
+            @eveningStart, @eveningEnd, @nightStart, @nightEnd,
+            @eveningRate, @nightRate, @weekendSaturdayRate, @weekendSundayRate, @holidayRate,
+            @onCallDutyEnabled, @onCallDutyRate,
+            @callInWorkEnabled, @callInMinimumHours, @callInRate,
+            @travelTimeEnabled, @workingTravelRate, @nonWorkingTravelRate,
+            @maxDailyHours, @minimumRestHours, @restPeriodDerogationAllowed,
+            @weeklyMaxHoursReferencePeriod, @voluntaryUnsocialHoursAllowed,
+            @defaultCompensationModel, @employeeCompensationChoice,
+            @maxOvertimeHoursPerPeriod, @overtimeRequiresPreApproval,
+            @createdBy, @description, @clonedFromId,
+            NOW(), NOW()
+        )
+        """;
+
     private static async Task<Guid> ExecuteCreateAsync(
         NpgsqlConnection conn, NpgsqlTransaction? tx,
         AgreementConfigEntity entity, string status, CancellationToken ct)
     {
         var configId = Guid.NewGuid();
-        var sql =
-            """
-            INSERT INTO agreement_configs (
-                config_id, agreement_code, ok_version, status,
-                weekly_norm_hours, norm_period_weeks, norm_model, annual_norm_hours,
-                max_flex_balance, flex_carryover_max,
-                has_overtime, has_merarbejde, overtime_threshold_50, overtime_threshold_100,
-                evening_supplement_enabled, night_supplement_enabled, weekend_supplement_enabled, holiday_supplement_enabled,
-                evening_start, evening_end, night_start, night_end,
-                evening_rate, night_rate, weekend_saturday_rate, weekend_sunday_rate, holiday_rate,
-                on_call_duty_enabled, on_call_duty_rate,
-                call_in_work_enabled, call_in_minimum_hours, call_in_rate,
-                travel_time_enabled, working_travel_rate, non_working_travel_rate,
-                max_daily_hours, minimum_rest_hours, rest_period_derogation_allowed,
-                weekly_max_hours_reference_period, voluntary_unsocial_hours_allowed,
-                default_compensation_model, employee_compensation_choice,
-                max_overtime_hours_per_period, overtime_requires_pre_approval,
-                created_by, description, cloned_from_id,
-                created_at, updated_at
-            ) VALUES (
-                @configId, @agreementCode, @okVersion, @status,
-                @weeklyNormHours, @normPeriodWeeks, @normModel, @annualNormHours,
-                @maxFlexBalance, @flexCarryoverMax,
-                @hasOvertime, @hasMerarbejde, @overtimeThreshold50, @overtimeThreshold100,
-                @eveningSupplementEnabled, @nightSupplementEnabled, @weekendSupplementEnabled, @holidaySupplementEnabled,
-                @eveningStart, @eveningEnd, @nightStart, @nightEnd,
-                @eveningRate, @nightRate, @weekendSaturdayRate, @weekendSundayRate, @holidayRate,
-                @onCallDutyEnabled, @onCallDutyRate,
-                @callInWorkEnabled, @callInMinimumHours, @callInRate,
-                @travelTimeEnabled, @workingTravelRate, @nonWorkingTravelRate,
-                @maxDailyHours, @minimumRestHours, @restPeriodDerogationAllowed,
-                @weeklyMaxHoursReferencePeriod, @voluntaryUnsocialHoursAllowed,
-                @defaultCompensationModel, @employeeCompensationChoice,
-                @maxOvertimeHoursPerPeriod, @overtimeRequiresPreApproval,
-                @createdBy, @description, @clonedFromId,
-                NOW(), NOW()
-            )
-            """;
-        await using var cmd = tx is null ? new NpgsqlCommand(sql, conn) : new NpgsqlCommand(sql, conn, tx);
+        await using var cmd = tx is null ? new NpgsqlCommand(InsertSql, conn) : new NpgsqlCommand(InsertSql, conn, tx);
         cmd.Parameters.AddWithValue("configId", configId);
         cmd.Parameters.AddWithValue("status", status);
         AddConfigParameters(cmd, entity);
@@ -153,6 +161,46 @@ public sealed class AgreementConfigRepository
         cmd.Parameters.AddWithValue("clonedFromId", (object?)entity.ClonedFromId ?? DBNull.Value);
         await cmd.ExecuteNonQueryAsync(ct);
         return configId;
+    }
+
+    /// <summary>
+    /// S118 / TASK-11800 (SPRINT-118 owner ruling #1, the dead-branch class): in-transaction
+    /// RETURNING-ENTITY SIBLING of <see cref="CreateAsync(NpgsqlConnection, NpgsqlTransaction, AgreementConfigEntity, CancellationToken)"/>.
+    /// Same INSERT (the shared <see cref="InsertSql"/> const — DB-computed <c>NOW()</c>
+    /// timestamps, <c>version</c> via DB DEFAULT 1) with <c>RETURNING *</c> appended, hydrated
+    /// through the existing <see cref="ReadEntity"/> reader mapper. The create endpoints'
+    /// post-commit re-read (and its structurally-fallible <c>created is not null</c> fork)
+    /// ceases to exist: the 201 body is ALWAYS the full entity, sourced inside the same
+    /// transaction, BEFORE the audit/outbox/audit-projection appends (order unchanged —
+    /// ADR-018 D3). Status is DRAFT (the only status the create/clone endpoints write).
+    ///
+    /// <para>
+    /// ALL pre-existing <c>CreateAsync</c> overloads stay SIGNATURE-IDENTICAL (Step-0b Codex
+    /// W1 / Reviewer W1 — TxContractTests, the atomic suites, the seeder, and the concurrency
+    /// suites consume them). The caller commits or rolls back; this method does NOT.
+    /// </para>
+    /// </summary>
+    public async Task<AgreementConfigEntity> CreateReturningAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        AgreementConfigEntity entity, CancellationToken ct = default)
+    {
+        var configId = Guid.NewGuid();
+        await using var cmd = new NpgsqlCommand(InsertSql + "\nRETURNING *", conn, tx);
+        cmd.Parameters.AddWithValue("configId", configId);
+        cmd.Parameters.AddWithValue("status", "DRAFT");
+        AddConfigParameters(cmd, entity);
+        cmd.Parameters.AddWithValue("createdBy", entity.CreatedBy);
+        cmd.Parameters.AddWithValue("description", (object?)entity.Description ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("clonedFromId", (object?)entity.ClonedFromId ?? DBNull.Value);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+        {
+            // Defense-in-depth — an INSERT ... RETURNING that inserted zero rows would have
+            // thrown already; this is structurally unreachable.
+            throw new InvalidOperationException(
+                $"CreateReturningAsync produced no row for config_id={configId}; INSERT ... RETURNING invariant violated.");
+        }
+        return ReadEntity(reader);
     }
 
     public async Task<bool> UpdateDraftAsync(Guid configId, AgreementConfigEntity updated, CancellationToken ct = default)

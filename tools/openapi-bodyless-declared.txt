@@ -15,3 +15,19 @@ POST /api/approval/{periodId}/employee-approve
 # S117 / TASK-11701 — the §24 reconcile-payout marker binds NO request DTO (route params +
 # If-Match header only); its response is typed (ReconcilePayoutResponse).
 POST /api/vacation-settlements/{employeeId}/{entitlementType}/{entitlementYear}/reconcile-payout
+# S118 / TASK-11800 — clone is a create-from-source: route param + OPTIONAL QUERY overrides
+# (agreementCode/okVersion bind from the query string, not a body); response typed
+# (AgreementConfigResponse).
+POST /api/agreement-configs/{configId}/clone
+# S118 / TASK-11800 — publish is a route-param-only lifecycle action (If-Match header only);
+# response typed (AgreementConfigPublishResponse).
+POST /api/agreement-configs/{configId}/publish
+# S118 / TASK-11800 — archive is a route-param-only lifecycle action (If-Match header only);
+# response typed (AgreementConfigArchiveResponse).
+POST /api/agreement-configs/{configId}/archive
+# S118 / TASK-11800 — deactivate is a route-param-only lifecycle action (If-Match header
+# only); response typed (PositionOverrideDeactivateResponse).
+POST /api/admin/position-overrides/{overrideId}/deactivate
+# S118 / TASK-11800 — activate is a route-param-only lifecycle action (If-Match header only);
+# response typed (PositionOverrideActivateResponse).
+POST /api/admin/position-overrides/{overrideId}/activate

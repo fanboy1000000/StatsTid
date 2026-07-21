@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Npgsql;
 using StatsTid.Auth;
+using StatsTid.Backend.Api.Contracts;
 using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
@@ -27,7 +28,8 @@ public static class WageTypeMappingEndpoints
         {
             var mappings = await repo.GetAllAsync(ct);
             return Results.Ok(mappings.Select(MapToResponse).ToList());
-        }).RequireAuthorization("GlobalAdminOnly");
+        }).RequireAuthorization("GlobalAdminOnly")
+        .Produces<IEnumerable<WageTypeMappingResponse>>(StatusCodes.Status200OK); // S118 / TASK-11800 — BARE array
 
         // ═══════════════════════════════════════════
         // 2. GET /api/admin/wage-type-mappings/agreement/{agreementCode}/{okVersion} — Get by agreement
@@ -42,7 +44,8 @@ public static class WageTypeMappingEndpoints
         {
             var mappings = await repo.GetByAgreementAsync(agreementCode, okVersion, ct);
             return Results.Ok(mappings.Select(MapToResponse).ToList());
-        }).RequireAuthorization("GlobalAdminOnly");
+        }).RequireAuthorization("GlobalAdminOnly")
+        .Produces<IEnumerable<WageTypeMappingResponse>>(StatusCodes.Status200OK); // S118 / TASK-11800 — BARE array
 
         // ═══════════════════════════════════════════
         // 3. POST /api/admin/wage-type-mappings — Create mapping
@@ -340,19 +343,19 @@ public static class WageTypeMappingEndpoints
 
                 await tx.CommitAsync(ct);
 
+                // S118 / TASK-11800: the 201 already built this exact shape from request
+                // locals (the fork-free-create precedent) — it now builds the shared record.
                 context.Response.Headers.ETag = $"\"{persistedVersion}\"";
                 return Results.Created(
                     $"/api/admin/wage-type-mappings/agreement/{body.AgreementCode}/{body.OkVersion}",
-                    new
-                    {
-                        timeType = body.TimeType,
-                        wageType = body.WageType,
-                        okVersion = body.OkVersion,
-                        agreementCode = body.AgreementCode,
-                        position,
-                        description = body.Description,
-                        version = persistedVersion,
-                    });
+                    new WageTypeMappingResponse(
+                        TimeType: body.TimeType,
+                        WageType: body.WageType,
+                        OkVersion: body.OkVersion,
+                        AgreementCode: body.AgreementCode,
+                        Position: position,
+                        Description: body.Description,
+                        Version: persistedVersion));
             }
             catch
             {
@@ -360,7 +363,8 @@ public static class WageTypeMappingEndpoints
                     await tx.RollbackAsync(ct);
                 throw;
             }
-        }).RequireAuthorization("GlobalAdminOnly");
+        }).RequireAuthorization("GlobalAdminOnly")
+        .Produces<WageTypeMappingResponse>(StatusCodes.Status201Created); // S118 / TASK-11800
 
         // ═══════════════════════════════════════════
         // 4. PUT /api/admin/wage-type-mappings — Update mapping
@@ -547,7 +551,8 @@ public static class WageTypeMappingEndpoints
             // 5. Set ETag for the next If-Match and return the post-write snapshot.
             context.Response.Headers.ETag = $"\"{saveResult.Version}\"";
             return Results.Ok(MapToResponse(saveResult.Mapping));
-        }).RequireAuthorization("GlobalAdminOnly");
+        }).RequireAuthorization("GlobalAdminOnly")
+        .Produces<WageTypeMappingResponse>(StatusCodes.Status200OK); // S118 / TASK-11800
 
         // ═══════════════════════════════════════════
         // 5. DELETE /api/admin/wage-type-mappings — Soft-delete mapping
@@ -675,7 +680,8 @@ public static class WageTypeMappingEndpoints
 
             // 204 No Content — no body, no ETag header (resource gone).
             return Results.NoContent();
-        }).RequireAuthorization("GlobalAdminOnly");
+        }).RequireAuthorization("GlobalAdminOnly")
+        .Produces(StatusCodes.Status204NoContent); // S118 / TASK-11800 — declared-204 (no body, intentionally)
 
         return app;
     }
@@ -685,17 +691,19 @@ public static class WageTypeMappingEndpoints
     /// <summary>
     /// Map the entity to the admin response shape — surfaces <c>version</c> for the
     /// frontend to compose <c>If-Match</c> on subsequent mutations (ADR-019 pending).
+    /// S118 / TASK-11800: the anonymous shape became the named 7-member
+    /// <see cref="WageTypeMappingResponse"/> record — an EXACT shape-copy (BYTE-IDENTICAL
+    /// wire JSON). Also embedded (untyped) in the 412 error-body `currentState` envelopes,
+    /// which stay anonymous per the S118 exclusions.
     /// </summary>
-    private static object MapToResponse(WageTypeMapping m) => new
-    {
-        timeType = m.TimeType,
-        wageType = m.WageType,
-        okVersion = m.OkVersion,
-        agreementCode = m.AgreementCode,
-        position = m.Position,
-        description = m.Description,
-        version = m.Version,
-    };
+    private static WageTypeMappingResponse MapToResponse(WageTypeMapping m) => new(
+        TimeType: m.TimeType,
+        WageType: m.WageType,
+        OkVersion: m.OkVersion,
+        AgreementCode: m.AgreementCode,
+        Position: m.Position,
+        Description: m.Description,
+        Version: m.Version);
 
     // ── Request DTOs (co-located) ──
 

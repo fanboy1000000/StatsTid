@@ -9,7 +9,7 @@
     "test": "vitest run",
     "e2e": "playwright test",
     "gen:api": "openapi-typescript ../docs/api/openapi.json -o src/lib/api-types.ts",
-    "lint": "eslint src/hooks/useForest.ts src/hooks/useSearch.ts src/hooks/useRoster.ts src/hooks/useUnitMutations.ts src/hooks/useOrgMutations.ts src/hooks/useAdmin.ts src/pages/admin/editPerson/employeeProfileApi.ts src/hooks/useReportingLines.ts src/hooks/useEntitlementEligibility.ts src/hooks/useApprovals.ts src/hooks/useTeamOverview.ts src/hooks/useAllocationBreakdown.ts src/hooks/useDelegation.ts src/hooks/useSkema.ts src/pages/approval/MyPeriods.tsx src/pages/approval/TeamOversigt.tsx src/pages/admin/OvertimePreApprovalManagement.tsx"
+    "lint": "eslint src/hooks/useForest.ts src/hooks/useSearch.ts src/hooks/useRoster.ts src/hooks/useUnitMutations.ts src/hooks/useOrgMutations.ts src/hooks/useAdmin.ts src/pages/admin/editPerson/employeeProfileApi.ts src/hooks/useReportingLines.ts src/hooks/useEntitlementEligibility.ts src/hooks/useApprovals.ts src/hooks/useTeamOverview.ts src/hooks/useAllocationBreakdown.ts src/hooks/useDelegation.ts src/hooks/useSkema.ts src/pages/approval/MyPeriods.tsx src/pages/approval/TeamOversigt.tsx src/pages/admin/OvertimePreApprovalManagement.tsx src/hooks/useAgreementConfigs.ts src/hooks/useEntitlementConfig.ts src/hooks/usePositionOverrides.ts src/hooks/useWageTypeMappings.ts src/pages/admin/AgreementConfigEditor.tsx src/pages/admin/EntitlementConfigEditor.tsx src/components/admin/EntitlementSection.tsx"
   },
   "dependencies": {
     "@fontsource/ibm-plex-sans": "^5.2.8",

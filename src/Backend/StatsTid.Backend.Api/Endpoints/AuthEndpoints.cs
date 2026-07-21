@@ -101,7 +101,8 @@ public static class AuthEndpoints
                     Role = user.Role
                 });
             }
-        });
+        })
+        .Produces<LoginResponse>(StatusCodes.Status200OK); // S118 / TASK-11800 — both success sites already return the named LoginResponse (in-memory branch serializes orgId: null)
 
         return app;
     }

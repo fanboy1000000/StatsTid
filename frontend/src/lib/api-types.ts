@@ -64,7 +64,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.LoginResponse"];
+                    };
                 };
             };
         };
@@ -2108,7 +2110,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.AgreementConfigResponse"][];
+                    };
                 };
             };
         };
@@ -2126,12 +2130,14 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description OK */
-                200: {
+                /** @description Created */
+                201: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.AgreementConfigResponse"];
+                    };
                 };
             };
         };
@@ -2164,7 +2170,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.AgreementConfigWithEntitlementsResponse"];
+                    };
                 };
             };
         };
@@ -2188,7 +2196,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.AgreementConfigResponse"];
+                    };
                 };
             };
         };
@@ -2223,7 +2233,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.AgreementConfigResponse"][];
+                    };
                 };
             };
         };
@@ -2258,12 +2270,14 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description OK */
-                200: {
+                /** @description Created */
+                201: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.AgreementConfigResponse"];
+                    };
                 };
             };
         };
@@ -2298,7 +2312,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.AgreementConfigPublishResponse"];
+                    };
                 };
             };
         };
@@ -2333,7 +2349,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.AgreementConfigArchiveResponse"];
+                    };
                 };
             };
         };
@@ -2364,7 +2382,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.PositionOverrideResponse"][];
+                    };
                 };
             };
         };
@@ -2382,12 +2402,14 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description OK */
-                200: {
+                /** @description Created */
+                201: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.PositionOverrideResponse"];
+                    };
                 };
             };
         };
@@ -2420,7 +2442,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.PositionOverrideResponse"];
+                    };
                 };
             };
         };
@@ -2444,7 +2468,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.PositionOverrideResponse"];
+                    };
                 };
             };
         };
@@ -2479,7 +2505,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.PositionOverrideResponse"][];
+                    };
                 };
             };
         };
@@ -2516,7 +2544,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.PositionOverrideDeactivateResponse"];
+                    };
                 };
             };
         };
@@ -2551,7 +2581,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.PositionOverrideActivateResponse"];
+                    };
                 };
             };
         };
@@ -2582,7 +2614,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.WageTypeMappingResponse"][];
+                    };
                 };
             };
         };
@@ -2604,7 +2638,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.WageTypeMappingResponse"];
+                    };
                 };
             };
         };
@@ -2621,12 +2657,14 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description OK */
-                200: {
+                /** @description Created */
+                201: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.WageTypeMappingResponse"];
+                    };
                 };
             };
         };
@@ -2644,8 +2682,8 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description OK */
-                200: {
+                /** @description No Content */
+                204: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -2682,7 +2720,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.WageTypeMappingResponse"][];
+                    };
                 };
             };
         };
@@ -2715,7 +2755,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.EntitlementConfigResponse"][];
+                    };
                 };
             };
         };
@@ -2733,12 +2775,14 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description OK */
-                200: {
+                /** @description Created */
+                201: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.EntitlementConfigResponse"];
+                    };
                 };
             };
         };
@@ -2771,7 +2815,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.EntitlementConfigResponse"];
+                    };
                 };
             };
         };
@@ -2795,7 +2841,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.EntitlementConfigResponse"];
+                    };
                 };
             };
         };
@@ -2811,8 +2859,8 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description OK */
-                200: {
+                /** @description No Content */
+                204: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -2848,7 +2896,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.EntitlementConfigResponse"][];
+                    };
                 };
             };
         };
@@ -2868,12 +2918,14 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description OK */
-                200: {
+                /** @description Created */
+                201: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.EntitlementConfigResponse"];
+                    };
                 };
             };
         };
@@ -2912,7 +2964,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.EntitlementConfigResponse"];
+                    };
                 };
             };
         };
@@ -2929,8 +2983,8 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description OK */
-                200: {
+                /** @description No Content */
+                204: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -4655,6 +4709,192 @@ export interface components {
             vikarUserId: string;
             revoked: boolean;
         };
+        "StatsTid.Backend.Api.Contracts.AgreementConfigArchiveResponse": {
+            /** Format: uuid */
+            configId: string;
+            /** @enum {string} */
+            status: "DRAFT" | "ACTIVE" | "ARCHIVED";
+            /** Format: date-time */
+            archivedAt: string | null;
+        };
+        "StatsTid.Backend.Api.Contracts.AgreementConfigPublishResponse": {
+            /** Format: uuid */
+            configId: string;
+            /** @enum {string} */
+            status: "DRAFT" | "ACTIVE" | "ARCHIVED";
+            /** Format: uuid */
+            archivedConfigId: string | null;
+            /** Format: date-time */
+            publishedAt: string | null;
+        };
+        "StatsTid.Backend.Api.Contracts.AgreementConfigResponse": {
+            /** Format: uuid */
+            configId: string;
+            agreementCode: string;
+            okVersion: string;
+            /** @enum {string} */
+            status: "DRAFT" | "ACTIVE" | "ARCHIVED";
+            /** Format: int64 */
+            version: number;
+            /** Format: double */
+            weeklyNormHours: number;
+            /** Format: int32 */
+            normPeriodWeeks: number;
+            /** @enum {string} */
+            normModel: "WEEKLY_HOURS" | "ANNUAL_ACTIVITY";
+            /** Format: double */
+            annualNormHours: number;
+            /** Format: double */
+            maxFlexBalance: number;
+            /** Format: double */
+            flexCarryoverMax: number;
+            hasOvertime: boolean;
+            hasMerarbejde: boolean;
+            /** Format: double */
+            overtimeThreshold50: number;
+            /** Format: double */
+            overtimeThreshold100: number;
+            eveningSupplementEnabled: boolean;
+            nightSupplementEnabled: boolean;
+            weekendSupplementEnabled: boolean;
+            holidaySupplementEnabled: boolean;
+            /** Format: int32 */
+            eveningStart: number;
+            /** Format: int32 */
+            eveningEnd: number;
+            /** Format: int32 */
+            nightStart: number;
+            /** Format: int32 */
+            nightEnd: number;
+            /** Format: double */
+            eveningRate: number;
+            /** Format: double */
+            nightRate: number;
+            /** Format: double */
+            weekendSaturdayRate: number;
+            /** Format: double */
+            weekendSundayRate: number;
+            /** Format: double */
+            holidayRate: number;
+            onCallDutyEnabled: boolean;
+            /** Format: double */
+            onCallDutyRate: number;
+            callInWorkEnabled: boolean;
+            /** Format: double */
+            callInMinimumHours: number;
+            /** Format: double */
+            callInRate: number;
+            travelTimeEnabled: boolean;
+            /** Format: double */
+            workingTravelRate: number;
+            /** Format: double */
+            nonWorkingTravelRate: number;
+            /** Format: double */
+            maxDailyHours: number;
+            /** Format: double */
+            minimumRestHours: number;
+            restPeriodDerogationAllowed: boolean;
+            /** Format: int32 */
+            weeklyMaxHoursReferencePeriod: number;
+            voluntaryUnsocialHoursAllowed: boolean;
+            createdBy: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            /** Format: date-time */
+            publishedAt: string | null;
+            /** Format: date-time */
+            archivedAt: string | null;
+            /** Format: uuid */
+            clonedFromId: string | null;
+            description: string | null;
+        };
+        "StatsTid.Backend.Api.Contracts.AgreementConfigWithEntitlementsResponse": {
+            /** Format: uuid */
+            configId: string;
+            agreementCode: string;
+            okVersion: string;
+            /** @enum {string} */
+            status: "DRAFT" | "ACTIVE" | "ARCHIVED";
+            /** Format: int64 */
+            version: number;
+            /** Format: double */
+            weeklyNormHours: number;
+            /** Format: int32 */
+            normPeriodWeeks: number;
+            /** @enum {string} */
+            normModel: "WEEKLY_HOURS" | "ANNUAL_ACTIVITY";
+            /** Format: double */
+            annualNormHours: number;
+            /** Format: double */
+            maxFlexBalance: number;
+            /** Format: double */
+            flexCarryoverMax: number;
+            hasOvertime: boolean;
+            hasMerarbejde: boolean;
+            /** Format: double */
+            overtimeThreshold50: number;
+            /** Format: double */
+            overtimeThreshold100: number;
+            eveningSupplementEnabled: boolean;
+            nightSupplementEnabled: boolean;
+            weekendSupplementEnabled: boolean;
+            holidaySupplementEnabled: boolean;
+            /** Format: int32 */
+            eveningStart: number;
+            /** Format: int32 */
+            eveningEnd: number;
+            /** Format: int32 */
+            nightStart: number;
+            /** Format: int32 */
+            nightEnd: number;
+            /** Format: double */
+            eveningRate: number;
+            /** Format: double */
+            nightRate: number;
+            /** Format: double */
+            weekendSaturdayRate: number;
+            /** Format: double */
+            weekendSundayRate: number;
+            /** Format: double */
+            holidayRate: number;
+            onCallDutyEnabled: boolean;
+            /** Format: double */
+            onCallDutyRate: number;
+            callInWorkEnabled: boolean;
+            /** Format: double */
+            callInMinimumHours: number;
+            /** Format: double */
+            callInRate: number;
+            travelTimeEnabled: boolean;
+            /** Format: double */
+            workingTravelRate: number;
+            /** Format: double */
+            nonWorkingTravelRate: number;
+            /** Format: double */
+            maxDailyHours: number;
+            /** Format: double */
+            minimumRestHours: number;
+            restPeriodDerogationAllowed: boolean;
+            /** Format: int32 */
+            weeklyMaxHoursReferencePeriod: number;
+            voluntaryUnsocialHoursAllowed: boolean;
+            createdBy: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            /** Format: date-time */
+            publishedAt: string | null;
+            /** Format: date-time */
+            archivedAt: string | null;
+            /** Format: uuid */
+            clonedFromId: string | null;
+            description: string | null;
+            entitlements: components["schemas"]["StatsTid.Backend.Api.Contracts.EntitlementConfigResponse"][];
+            entitlementsReadOnly: boolean;
+        };
         "StatsTid.Backend.Api.Contracts.AllocationBreakdownItem": {
             taskId: string;
             /** Format: double */
@@ -4826,6 +5066,32 @@ export interface components {
             /** Format: int64 */
             version: number;
         };
+        "StatsTid.Backend.Api.Contracts.EntitlementConfigResponse": {
+            /** Format: uuid */
+            configId: string;
+            entitlementType: string;
+            agreementCode: string;
+            okVersion: string;
+            /** Format: double */
+            annualQuota: number;
+            accrualModel: string;
+            /** Format: int32 */
+            resetMonth: number;
+            /** Format: double */
+            carryoverMax: number;
+            proRateByPartTime: boolean;
+            isPerEpisode: boolean;
+            /** Format: int32 */
+            minAge: number | null;
+            description: string | null;
+            fullDayOnly: boolean;
+            /** Format: date */
+            effectiveFrom: string;
+            /** Format: date */
+            effectiveTo: string | null;
+            /** Format: int64 */
+            version: number;
+        };
         "StatsTid.Backend.Api.Contracts.EntitlementEligibilityUpdatedResponse": {
             employeeId: string;
             entitlementType: string;
@@ -4886,6 +5152,14 @@ export interface components {
         "StatsTid.Backend.Api.Contracts.LoginRequest": {
             username: string;
             password: string;
+        };
+        "StatsTid.Backend.Api.Contracts.LoginResponse": {
+            token: string;
+            /** Format: date-time */
+            expiresAt: string;
+            employeeId: string;
+            role: string;
+            orgId: string | null;
         };
         "StatsTid.Backend.Api.Contracts.OrgListItem": {
             orgId: string;
@@ -5054,6 +5328,45 @@ export interface components {
             position: string | null;
             unitName: string | null;
             path: string[];
+        };
+        "StatsTid.Backend.Api.Contracts.PositionOverrideActivateResponse": {
+            /** Format: uuid */
+            overrideId: string;
+            /** @enum {string} */
+            status: "ACTIVE" | "INACTIVE";
+            activated: boolean;
+        };
+        "StatsTid.Backend.Api.Contracts.PositionOverrideDeactivateResponse": {
+            /** Format: uuid */
+            overrideId: string;
+            /** @enum {string} */
+            status: "ACTIVE" | "INACTIVE";
+            deactivated: boolean;
+        };
+        "StatsTid.Backend.Api.Contracts.PositionOverrideResponse": {
+            /** Format: uuid */
+            overrideId: string;
+            agreementCode: string;
+            okVersion: string;
+            positionCode: string;
+            /** @enum {string} */
+            status: "ACTIVE" | "INACTIVE";
+            /** Format: int64 */
+            version: number;
+            /** Format: double */
+            maxFlexBalance: number | null;
+            /** Format: double */
+            flexCarryoverMax: number | null;
+            /** Format: int32 */
+            normPeriodWeeks: number | null;
+            /** Format: double */
+            weeklyNormHours: number | null;
+            createdBy: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            description: string | null;
         };
         "StatsTid.Backend.Api.Contracts.ReconcilePayoutResponse": {
             employeeId: string;
@@ -5421,6 +5734,16 @@ export interface components {
             email: string | null;
             primaryOrgId: string;
             agreementCode: string;
+            /** Format: int64 */
+            version: number;
+        };
+        "StatsTid.Backend.Api.Contracts.WageTypeMappingResponse": {
+            timeType: string;
+            wageType: string;
+            okVersion: string;
+            agreementCode: string;
+            position: string;
+            description: string | null;
             /** Format: int64 */
             version: number;
         };

@@ -91,24 +91,74 @@ public sealed class PositionOverrideRepository
         PositionOverrideConfigEntity entity, CancellationToken ct = default)
         => await ExecuteCreateAsync(conn, tx, entity, ct);
 
+    /// <summary>
+    /// The shared INSERT statement body (S118 / TASK-11800): both <see cref="ExecuteCreateAsync"/>
+    /// and <see cref="CreateReturningAsync"/> build from this single const so the two paths can
+    /// never drift column-wise. Timestamps stay DB-computed <c>NOW()</c> literals; <c>version</c>
+    /// is deliberately ABSENT (DB DEFAULT 1) — byte-identical INSERT semantics on both paths.
+    /// </summary>
+    private const string InsertSql =
+        """
+        INSERT INTO position_override_configs (
+            override_id, agreement_code, ok_version, position_code, status,
+            max_flex_balance, flex_carryover_max, norm_period_weeks, weekly_norm_hours,
+            created_by, description, created_at, updated_at
+        ) VALUES (
+            @overrideId, @agreementCode, @okVersion, @positionCode, 'ACTIVE',
+            @maxFlexBalance, @flexCarryoverMax, @normPeriodWeeks, @weeklyNormHours,
+            @createdBy, @description, NOW(), NOW()
+        )
+        """;
+
     private static async Task<Guid> ExecuteCreateAsync(
         NpgsqlConnection conn, NpgsqlTransaction? tx,
         PositionOverrideConfigEntity entity, CancellationToken ct)
     {
         var overrideId = Guid.NewGuid();
-        var sql =
-            """
-            INSERT INTO position_override_configs (
-                override_id, agreement_code, ok_version, position_code, status,
-                max_flex_balance, flex_carryover_max, norm_period_weeks, weekly_norm_hours,
-                created_by, description, created_at, updated_at
-            ) VALUES (
-                @overrideId, @agreementCode, @okVersion, @positionCode, 'ACTIVE',
-                @maxFlexBalance, @flexCarryoverMax, @normPeriodWeeks, @weeklyNormHours,
-                @createdBy, @description, NOW(), NOW()
-            )
-            """;
-        await using var cmd = tx is null ? new NpgsqlCommand(sql, conn) : new NpgsqlCommand(sql, conn, tx);
+        await using var cmd = tx is null ? new NpgsqlCommand(InsertSql, conn) : new NpgsqlCommand(InsertSql, conn, tx);
+        AddCreateParameters(cmd, overrideId, entity);
+        await cmd.ExecuteNonQueryAsync(ct);
+        return overrideId;
+    }
+
+    /// <summary>
+    /// S118 / TASK-11800 (SPRINT-118 owner ruling #1, the dead-branch class): in-transaction
+    /// RETURNING-ENTITY SIBLING of <see cref="CreateAsync(NpgsqlConnection, NpgsqlTransaction, PositionOverrideConfigEntity, CancellationToken)"/>.
+    /// Same INSERT (the shared <see cref="InsertSql"/> const — DB-computed <c>NOW()</c>
+    /// timestamps, <c>version</c> via DB DEFAULT 1, status hard-wired <c>'ACTIVE'</c>) with
+    /// <c>RETURNING *</c> appended, hydrated through the existing <see cref="ReadEntity"/>
+    /// reader mapper. The create endpoint's post-commit re-read (and its structurally-fallible
+    /// <c>created is not null</c> fork) ceases to exist: the 201 body is ALWAYS the full
+    /// entity, sourced inside the same transaction, BEFORE the audit/outbox/audit-projection
+    /// appends (order unchanged — ADR-018 D3).
+    ///
+    /// <para>
+    /// ALL pre-existing <c>CreateAsync</c> overloads stay SIGNATURE-IDENTICAL (Step-0b Codex
+    /// W1 / Reviewer W1 — TxContractTests, the atomic suites, the seeder, and the concurrency
+    /// suites consume them). The caller commits or rolls back; this method does NOT.
+    /// </para>
+    /// </summary>
+    public async Task<PositionOverrideConfigEntity> CreateReturningAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        PositionOverrideConfigEntity entity, CancellationToken ct = default)
+    {
+        var overrideId = Guid.NewGuid();
+        await using var cmd = new NpgsqlCommand(InsertSql + "\nRETURNING *", conn, tx);
+        AddCreateParameters(cmd, overrideId, entity);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+        {
+            // Defense-in-depth — an INSERT ... RETURNING that inserted zero rows would have
+            // thrown already; this is structurally unreachable.
+            throw new InvalidOperationException(
+                $"CreateReturningAsync produced no row for override_id={overrideId}; INSERT ... RETURNING invariant violated.");
+        }
+        return ReadEntity(reader);
+    }
+
+    private static void AddCreateParameters(
+        NpgsqlCommand cmd, Guid overrideId, PositionOverrideConfigEntity entity)
+    {
         cmd.Parameters.AddWithValue("overrideId", overrideId);
         cmd.Parameters.AddWithValue("agreementCode", entity.AgreementCode);
         cmd.Parameters.AddWithValue("okVersion", entity.OkVersion);
@@ -119,8 +169,6 @@ public sealed class PositionOverrideRepository
         cmd.Parameters.AddWithValue("weeklyNormHours", (object?)entity.WeeklyNormHours ?? DBNull.Value);
         cmd.Parameters.AddWithValue("createdBy", entity.CreatedBy);
         cmd.Parameters.AddWithValue("description", (object?)entity.Description ?? DBNull.Value);
-        await cmd.ExecuteNonQueryAsync(ct);
-        return overrideId;
     }
 
     public async Task<bool> UpdateAsync(Guid overrideId, PositionOverrideConfigEntity updated, CancellationToken ct = default)

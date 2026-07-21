@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Npgsql;
 using StatsTid.Auth;
+using StatsTid.Backend.Api.Contracts;
 using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
@@ -25,7 +26,8 @@ public static class PositionOverrideEndpoints
         {
             var overrides = await repo.GetAllAsync(ct);
             return Results.Ok(overrides.Select(MapEntityToResponse).ToList());
-        }).RequireAuthorization("LocalAdminOrAbove");
+        }).RequireAuthorization("LocalAdminOrAbove")
+        .Produces<IEnumerable<PositionOverrideResponse>>(StatusCodes.Status200OK); // S118 / TASK-11800 — BARE array
 
         // ═══════════════════════════════════════════
         // 2. GET /api/admin/position-overrides/{overrideId:guid} — Get single by ID
@@ -43,7 +45,8 @@ public static class PositionOverrideEndpoints
 
             context.Response.Headers.ETag = $"\"{entity.Version}\"";
             return Results.Ok(MapEntityToResponse(entity));
-        }).RequireAuthorization("LocalAdminOrAbove");
+        }).RequireAuthorization("LocalAdminOrAbove")
+        .Produces<PositionOverrideResponse>(StatusCodes.Status200OK); // S118 / TASK-11800
 
         // ═══════════════════════════════════════════
         // 3. GET /api/admin/position-overrides/agreement/{agreementCode}/{okVersion} — Get by agreement
@@ -58,7 +61,8 @@ public static class PositionOverrideEndpoints
         {
             var overrides = await repo.GetByAgreementAsync(agreementCode, okVersion, ct);
             return Results.Ok(overrides.Select(MapEntityToResponse).ToList());
-        }).RequireAuthorization("LocalAdminOrAbove");
+        }).RequireAuthorization("LocalAdminOrAbove")
+        .Produces<IEnumerable<PositionOverrideResponse>>(StatusCodes.Status200OK); // S118 / TASK-11800 — BARE array
 
         // ═══════════════════════════════════════════
         // 4. POST /api/admin/position-overrides — Create new override
@@ -103,13 +107,20 @@ public static class PositionOverrideEndpoints
                 UpdatedAt = DateTime.UtcNow,
             };
 
+            // S118 / TASK-11800 (owner ruling #1, the dead-branch class): the INSERT now runs
+            // via CreateReturningAsync (INSERT … RETURNING *) INSIDE this same transaction —
+            // the post-commit re-read and its `created is not null ? … : {overrideId}` fork
+            // are structurally dead. The audit/outbox/audit-projection appends stay in-tx
+            // AFTER the INSERT, byte-order unchanged (moving them would be a P3 violation).
             Guid overrideId;
+            PositionOverrideConfigEntity created;
             await using (var conn = connectionFactory.Create())
             {
                 await conn.OpenAsync(ct);
                 await using var tx = await conn.BeginTransactionAsync(ct);
 
-                overrideId = await repo.CreateAsync(conn, tx, entity, ct);
+                created = await repo.CreateReturningAsync(conn, tx, entity, ct);
+                overrideId = created.OverrideId;
 
                 // Create still uses the v2 AppendAuditAsync overload — the first-create has
                 // no prior version-transition to record (version_before is NULL by design).
@@ -145,15 +156,13 @@ public static class PositionOverrideEndpoints
                 await tx.CommitAsync(ct);
             }
 
-            // Re-read to get DB-generated timestamps + version (post-commit; outside the write tx).
-            var created = await repo.GetByIdAsync(overrideId, ct);
-
-            // ETag for the 201 response. Sourced from the DB column when re-read succeeds;
-            // falls back to the static "1" (DB DEFAULT) if the re-read returned null.
-            context.Response.Headers.ETag = $"\"{(created?.Version ?? 1L)}\"";
+            // ETag for the 201 response — sourced from the RETURNING-hydrated row (DB DEFAULT 1
+            // on first-create; the `?? 1L` fallback died with the re-read, ruling #1).
+            context.Response.Headers.ETag = $"\"{created.Version}\"";
             return Results.Created($"/api/admin/position-overrides/{overrideId}",
-                created is not null ? MapEntityToResponse(created) : (object)new { overrideId });
-        }).RequireAuthorization("LocalAdminOrAbove");
+                MapEntityToResponse(created));
+        }).RequireAuthorization("LocalAdminOrAbove")
+        .Produces<PositionOverrideResponse>(StatusCodes.Status201Created); // S118 / TASK-11800 — ruling #1: ALWAYS the full entity
 
         // ═══════════════════════════════════════════
         // 5. PUT /api/admin/position-overrides/{overrideId:guid} — Update an active override
@@ -282,7 +291,8 @@ public static class PositionOverrideEndpoints
             // 4. Set ETag for the next If-Match and return the post-write snapshot.
             context.Response.Headers.ETag = $"\"{saveResult.Version}\"";
             return Results.Ok(MapEntityToResponse(saveResult.Override));
-        }).RequireAuthorization("LocalAdminOrAbove");
+        }).RequireAuthorization("LocalAdminOrAbove")
+        .Produces<PositionOverrideResponse>(StatusCodes.Status200OK); // S118 / TASK-11800
 
         // ═══════════════════════════════════════════
         // 6. POST /api/admin/position-overrides/{overrideId:guid}/deactivate — Deactivate
@@ -375,14 +385,14 @@ public static class PositionOverrideEndpoints
                 }, statusCode: 412);
             }
 
+            // S118 / TASK-11800: the bespoke lifecycle envelope is now a named record.
             context.Response.Headers.ETag = $"\"{saveResult.Version}\"";
-            return Results.Ok(new
-            {
-                overrideId,
-                status = saveResult.Status,
-                deactivated = true,
-            });
-        }).RequireAuthorization("LocalAdminOrAbove");
+            return Results.Ok(new PositionOverrideDeactivateResponse(
+                OverrideId: overrideId,
+                Status: saveResult.Status,
+                Deactivated: true));
+        }).RequireAuthorization("LocalAdminOrAbove")
+        .Produces<PositionOverrideDeactivateResponse>(StatusCodes.Status200OK); // S118 / TASK-11800
 
         // ═══════════════════════════════════════════
         // 7. POST /api/admin/position-overrides/{overrideId:guid}/activate — Activate
@@ -504,40 +514,39 @@ public static class PositionOverrideEndpoints
                 });
             }
 
+            // S118 / TASK-11800: the bespoke lifecycle envelope is now a named record.
             context.Response.Headers.ETag = $"\"{saveResult.Version}\"";
-            return Results.Ok(new
-            {
-                overrideId,
-                status = saveResult.Status,
-                activated = true,
-            });
-        }).RequireAuthorization("LocalAdminOrAbove");
+            return Results.Ok(new PositionOverrideActivateResponse(
+                OverrideId: overrideId,
+                Status: saveResult.Status,
+                Activated: true));
+        }).RequireAuthorization("LocalAdminOrAbove")
+        .Produces<PositionOverrideActivateResponse>(StatusCodes.Status200OK); // S118 / TASK-11800
 
         return app;
     }
 
     // ── Response Mapping ──
 
-    private static object MapEntityToResponse(PositionOverrideConfigEntity e) => new
-    {
-        overrideId = e.OverrideId,
-        agreementCode = e.AgreementCode,
-        okVersion = e.OkVersion,
-        positionCode = e.PositionCode,
-        status = e.Status,
-        // Row-version optimistic-concurrency token (TASK-2501 schema, ADR-019 pending).
-        // Surfaced in body for list responses where multiple rows preclude a single ETag
-        // header; by-id GET also sets the matching ETag header.
-        version = e.Version,
-        maxFlexBalance = e.MaxFlexBalance,
-        flexCarryoverMax = e.FlexCarryoverMax,
-        normPeriodWeeks = e.NormPeriodWeeks,
-        weeklyNormHours = e.WeeklyNormHours,
-        createdBy = e.CreatedBy,
-        createdAt = e.CreatedAt,
-        updatedAt = e.UpdatedAt,
-        description = e.Description,
-    };
+    // S118 / TASK-11800 (PAT-012 retrofit Pass 5): the anonymous shape became the named
+    // PositionOverrideResponse record — an EXACT shape-copy (same member names, same order,
+    // same nullability; BYTE-IDENTICAL wire JSON). Also embedded (untyped) in the 412
+    // error-body `currentState` envelopes, which stay anonymous per the S118 exclusions.
+    private static PositionOverrideResponse MapEntityToResponse(PositionOverrideConfigEntity e) => new(
+        OverrideId: e.OverrideId,
+        AgreementCode: e.AgreementCode,
+        OkVersion: e.OkVersion,
+        PositionCode: e.PositionCode,
+        Status: e.Status,
+        Version: e.Version,
+        MaxFlexBalance: e.MaxFlexBalance,
+        FlexCarryoverMax: e.FlexCarryoverMax,
+        NormPeriodWeeks: e.NormPeriodWeeks,
+        WeeklyNormHours: e.WeeklyNormHours,
+        CreatedBy: e.CreatedBy,
+        CreatedAt: e.CreatedAt,
+        UpdatedAt: e.UpdatedAt,
+        Description: e.Description);
 
     // ── Request DTOs (co-located) ──
 

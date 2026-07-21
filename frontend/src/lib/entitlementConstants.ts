@@ -33,6 +33,28 @@ export const ACCRUAL_LABELS: Record<AccrualModel, string> = {
   MONTHLY_ACCRUAL: 'Maanedlig optjening',
 }
 
+// S118 / TASK-11801 — the spec-derived row types carry `entitlementType` /
+// `accrualModel` as OPEN `string` on the wire (deliberately NOT spec-enums —
+// the S113 rule: open config-keyed sets must not be declared closed). These
+// runtime guards narrow a wire string to the UI's known set without an `as`
+// cast (the PAT-012 no-`as` convention), and the label helpers fall back to
+// the raw value for an unknown member (previously rendered `undefined`).
+export function isEntitlementType(value: string): value is EntitlementType {
+  return TYPE_OPTIONS.some((t) => t === value)
+}
+
+export function isAccrualModel(value: string): value is AccrualModel {
+  return ACCRUAL_OPTIONS.some((m) => m === value)
+}
+
+export function entitlementTypeLabel(value: string): string {
+  return isEntitlementType(value) ? TYPE_LABELS[value] : value
+}
+
+export function accrualModelLabel(value: string): string {
+  return isAccrualModel(value) ? ACCRUAL_LABELS[value] : value
+}
+
 export const MONTH_LABELS: Record<number, string> = {
   1: 'Januar',
   2: 'Februar',

@@ -34,7 +34,14 @@
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.LoginResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -1860,7 +1867,17 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.AgreementConfigResponse"
+                  }
+                }
+              }
+            }
           }
         }
       },
@@ -1879,8 +1896,15 @@
           "required": true
         },
         "responses": {
-          "200": {
-            "description": "OK"
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.AgreementConfigResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -1903,7 +1927,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.AgreementConfigWithEntitlementsResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -1934,7 +1965,14 @@
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.AgreementConfigResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -1964,7 +2002,17 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.AgreementConfigResponse"
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -2000,8 +2048,15 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "OK"
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.AgreementConfigResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -2024,7 +2079,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.AgreementConfigPublishResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -2047,7 +2109,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.AgreementConfigArchiveResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -2059,7 +2128,17 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.PositionOverrideResponse"
+                  }
+                }
+              }
+            }
           }
         }
       },
@@ -2078,8 +2157,15 @@
           "required": true
         },
         "responses": {
-          "200": {
-            "description": "OK"
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.PositionOverrideResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -2102,7 +2188,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.PositionOverrideResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -2133,7 +2226,14 @@
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.PositionOverrideResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -2163,7 +2263,17 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.PositionOverrideResponse"
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -2186,7 +2296,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.PositionOverrideDeactivateResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -2209,7 +2326,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.PositionOverrideActivateResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -2221,7 +2345,17 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.WageTypeMappingResponse"
+                  }
+                }
+              }
+            }
           }
         }
       },
@@ -2240,8 +2374,15 @@
           "required": true
         },
         "responses": {
-          "200": {
-            "description": "OK"
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.WageTypeMappingResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -2261,7 +2402,14 @@
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.WageTypeMappingResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -2303,8 +2451,8 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "OK"
+          "204": {
+            "description": "No Content"
           }
         }
       }
@@ -2334,7 +2482,17 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.WageTypeMappingResponse"
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -2346,7 +2504,17 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.EntitlementConfigResponse"
+                  }
+                }
+              }
+            }
           }
         }
       },
@@ -2365,8 +2533,15 @@
           "required": true
         },
         "responses": {
-          "200": {
-            "description": "OK"
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.EntitlementConfigResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -2389,7 +2564,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.EntitlementConfigResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -2420,7 +2602,14 @@
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.EntitlementConfigResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -2440,8 +2629,8 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "OK"
+          "204": {
+            "description": "No Content"
           }
         }
       }
@@ -2464,7 +2653,17 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.EntitlementConfigResponse"
+                  }
+                }
+              }
+            }
           }
         }
       },
@@ -2494,8 +2693,15 @@
           "required": true
         },
         "responses": {
-          "200": {
-            "description": "OK"
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.EntitlementConfigResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -2537,7 +2743,14 @@
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.EntitlementConfigResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -2566,8 +2779,8 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "OK"
+          "204": {
+            "description": "No Content"
           }
         }
       }
@@ -4354,6 +4567,567 @@
         },
         "additionalProperties": false
       },
+      "StatsTid.Backend.Api.Contracts.AgreementConfigArchiveResponse": {
+        "required": [
+          "archivedAt",
+          "configId",
+          "status"
+        ],
+        "type": "object",
+        "properties": {
+          "configId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "enum": [
+              "DRAFT",
+              "ACTIVE",
+              "ARCHIVED"
+            ],
+            "type": "string"
+          },
+          "archivedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.AgreementConfigPublishResponse": {
+        "required": [
+          "archivedConfigId",
+          "configId",
+          "publishedAt",
+          "status"
+        ],
+        "type": "object",
+        "properties": {
+          "configId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "enum": [
+              "DRAFT",
+              "ACTIVE",
+              "ARCHIVED"
+            ],
+            "type": "string"
+          },
+          "archivedConfigId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "publishedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.AgreementConfigResponse": {
+        "required": [
+          "agreementCode",
+          "annualNormHours",
+          "archivedAt",
+          "callInMinimumHours",
+          "callInRate",
+          "callInWorkEnabled",
+          "clonedFromId",
+          "configId",
+          "createdAt",
+          "createdBy",
+          "description",
+          "eveningEnd",
+          "eveningRate",
+          "eveningStart",
+          "eveningSupplementEnabled",
+          "flexCarryoverMax",
+          "hasMerarbejde",
+          "hasOvertime",
+          "holidayRate",
+          "holidaySupplementEnabled",
+          "maxDailyHours",
+          "maxFlexBalance",
+          "minimumRestHours",
+          "nightEnd",
+          "nightRate",
+          "nightStart",
+          "nightSupplementEnabled",
+          "nonWorkingTravelRate",
+          "normModel",
+          "normPeriodWeeks",
+          "okVersion",
+          "onCallDutyEnabled",
+          "onCallDutyRate",
+          "overtimeThreshold100",
+          "overtimeThreshold50",
+          "publishedAt",
+          "restPeriodDerogationAllowed",
+          "status",
+          "travelTimeEnabled",
+          "updatedAt",
+          "version",
+          "voluntaryUnsocialHoursAllowed",
+          "weekendSaturdayRate",
+          "weekendSundayRate",
+          "weekendSupplementEnabled",
+          "weeklyMaxHoursReferencePeriod",
+          "weeklyNormHours",
+          "workingTravelRate"
+        ],
+        "type": "object",
+        "properties": {
+          "configId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "agreementCode": {
+            "type": "string"
+          },
+          "okVersion": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "DRAFT",
+              "ACTIVE",
+              "ARCHIVED"
+            ],
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "weeklyNormHours": {
+            "type": "number",
+            "format": "double"
+          },
+          "normPeriodWeeks": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "normModel": {
+            "enum": [
+              "WEEKLY_HOURS",
+              "ANNUAL_ACTIVITY"
+            ],
+            "type": "string"
+          },
+          "annualNormHours": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxFlexBalance": {
+            "type": "number",
+            "format": "double"
+          },
+          "flexCarryoverMax": {
+            "type": "number",
+            "format": "double"
+          },
+          "hasOvertime": {
+            "type": "boolean"
+          },
+          "hasMerarbejde": {
+            "type": "boolean"
+          },
+          "overtimeThreshold50": {
+            "type": "number",
+            "format": "double"
+          },
+          "overtimeThreshold100": {
+            "type": "number",
+            "format": "double"
+          },
+          "eveningSupplementEnabled": {
+            "type": "boolean"
+          },
+          "nightSupplementEnabled": {
+            "type": "boolean"
+          },
+          "weekendSupplementEnabled": {
+            "type": "boolean"
+          },
+          "holidaySupplementEnabled": {
+            "type": "boolean"
+          },
+          "eveningStart": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "eveningEnd": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "nightStart": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "nightEnd": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "eveningRate": {
+            "type": "number",
+            "format": "double"
+          },
+          "nightRate": {
+            "type": "number",
+            "format": "double"
+          },
+          "weekendSaturdayRate": {
+            "type": "number",
+            "format": "double"
+          },
+          "weekendSundayRate": {
+            "type": "number",
+            "format": "double"
+          },
+          "holidayRate": {
+            "type": "number",
+            "format": "double"
+          },
+          "onCallDutyEnabled": {
+            "type": "boolean"
+          },
+          "onCallDutyRate": {
+            "type": "number",
+            "format": "double"
+          },
+          "callInWorkEnabled": {
+            "type": "boolean"
+          },
+          "callInMinimumHours": {
+            "type": "number",
+            "format": "double"
+          },
+          "callInRate": {
+            "type": "number",
+            "format": "double"
+          },
+          "travelTimeEnabled": {
+            "type": "boolean"
+          },
+          "workingTravelRate": {
+            "type": "number",
+            "format": "double"
+          },
+          "nonWorkingTravelRate": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxDailyHours": {
+            "type": "number",
+            "format": "double"
+          },
+          "minimumRestHours": {
+            "type": "number",
+            "format": "double"
+          },
+          "restPeriodDerogationAllowed": {
+            "type": "boolean"
+          },
+          "weeklyMaxHoursReferencePeriod": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "voluntaryUnsocialHoursAllowed": {
+            "type": "boolean"
+          },
+          "createdBy": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "publishedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "archivedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "clonedFromId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.AgreementConfigWithEntitlementsResponse": {
+        "required": [
+          "agreementCode",
+          "annualNormHours",
+          "archivedAt",
+          "callInMinimumHours",
+          "callInRate",
+          "callInWorkEnabled",
+          "clonedFromId",
+          "configId",
+          "createdAt",
+          "createdBy",
+          "description",
+          "entitlements",
+          "entitlementsReadOnly",
+          "eveningEnd",
+          "eveningRate",
+          "eveningStart",
+          "eveningSupplementEnabled",
+          "flexCarryoverMax",
+          "hasMerarbejde",
+          "hasOvertime",
+          "holidayRate",
+          "holidaySupplementEnabled",
+          "maxDailyHours",
+          "maxFlexBalance",
+          "minimumRestHours",
+          "nightEnd",
+          "nightRate",
+          "nightStart",
+          "nightSupplementEnabled",
+          "nonWorkingTravelRate",
+          "normModel",
+          "normPeriodWeeks",
+          "okVersion",
+          "onCallDutyEnabled",
+          "onCallDutyRate",
+          "overtimeThreshold100",
+          "overtimeThreshold50",
+          "publishedAt",
+          "restPeriodDerogationAllowed",
+          "status",
+          "travelTimeEnabled",
+          "updatedAt",
+          "version",
+          "voluntaryUnsocialHoursAllowed",
+          "weekendSaturdayRate",
+          "weekendSundayRate",
+          "weekendSupplementEnabled",
+          "weeklyMaxHoursReferencePeriod",
+          "weeklyNormHours",
+          "workingTravelRate"
+        ],
+        "type": "object",
+        "properties": {
+          "configId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "agreementCode": {
+            "type": "string"
+          },
+          "okVersion": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "DRAFT",
+              "ACTIVE",
+              "ARCHIVED"
+            ],
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "weeklyNormHours": {
+            "type": "number",
+            "format": "double"
+          },
+          "normPeriodWeeks": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "normModel": {
+            "enum": [
+              "WEEKLY_HOURS",
+              "ANNUAL_ACTIVITY"
+            ],
+            "type": "string"
+          },
+          "annualNormHours": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxFlexBalance": {
+            "type": "number",
+            "format": "double"
+          },
+          "flexCarryoverMax": {
+            "type": "number",
+            "format": "double"
+          },
+          "hasOvertime": {
+            "type": "boolean"
+          },
+          "hasMerarbejde": {
+            "type": "boolean"
+          },
+          "overtimeThreshold50": {
+            "type": "number",
+            "format": "double"
+          },
+          "overtimeThreshold100": {
+            "type": "number",
+            "format": "double"
+          },
+          "eveningSupplementEnabled": {
+            "type": "boolean"
+          },
+          "nightSupplementEnabled": {
+            "type": "boolean"
+          },
+          "weekendSupplementEnabled": {
+            "type": "boolean"
+          },
+          "holidaySupplementEnabled": {
+            "type": "boolean"
+          },
+          "eveningStart": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "eveningEnd": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "nightStart": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "nightEnd": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "eveningRate": {
+            "type": "number",
+            "format": "double"
+          },
+          "nightRate": {
+            "type": "number",
+            "format": "double"
+          },
+          "weekendSaturdayRate": {
+            "type": "number",
+            "format": "double"
+          },
+          "weekendSundayRate": {
+            "type": "number",
+            "format": "double"
+          },
+          "holidayRate": {
+            "type": "number",
+            "format": "double"
+          },
+          "onCallDutyEnabled": {
+            "type": "boolean"
+          },
+          "onCallDutyRate": {
+            "type": "number",
+            "format": "double"
+          },
+          "callInWorkEnabled": {
+            "type": "boolean"
+          },
+          "callInMinimumHours": {
+            "type": "number",
+            "format": "double"
+          },
+          "callInRate": {
+            "type": "number",
+            "format": "double"
+          },
+          "travelTimeEnabled": {
+            "type": "boolean"
+          },
+          "workingTravelRate": {
+            "type": "number",
+            "format": "double"
+          },
+          "nonWorkingTravelRate": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxDailyHours": {
+            "type": "number",
+            "format": "double"
+          },
+          "minimumRestHours": {
+            "type": "number",
+            "format": "double"
+          },
+          "restPeriodDerogationAllowed": {
+            "type": "boolean"
+          },
+          "weeklyMaxHoursReferencePeriod": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "voluntaryUnsocialHoursAllowed": {
+            "type": "boolean"
+          },
+          "createdBy": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "publishedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "archivedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "clonedFromId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "entitlements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.EntitlementConfigResponse"
+            }
+          },
+          "entitlementsReadOnly": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
       "StatsTid.Backend.Api.Contracts.AllocationBreakdownItem": {
         "required": [
           "hours",
@@ -4947,6 +5721,89 @@
         },
         "additionalProperties": false
       },
+      "StatsTid.Backend.Api.Contracts.EntitlementConfigResponse": {
+        "required": [
+          "accrualModel",
+          "agreementCode",
+          "annualQuota",
+          "carryoverMax",
+          "configId",
+          "description",
+          "effectiveFrom",
+          "effectiveTo",
+          "entitlementType",
+          "fullDayOnly",
+          "isPerEpisode",
+          "minAge",
+          "okVersion",
+          "proRateByPartTime",
+          "resetMonth",
+          "version"
+        ],
+        "type": "object",
+        "properties": {
+          "configId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entitlementType": {
+            "type": "string"
+          },
+          "agreementCode": {
+            "type": "string"
+          },
+          "okVersion": {
+            "type": "string"
+          },
+          "annualQuota": {
+            "type": "number",
+            "format": "double"
+          },
+          "accrualModel": {
+            "type": "string"
+          },
+          "resetMonth": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "carryoverMax": {
+            "type": "number",
+            "format": "double"
+          },
+          "proRateByPartTime": {
+            "type": "boolean"
+          },
+          "isPerEpisode": {
+            "type": "boolean"
+          },
+          "minAge": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "fullDayOnly": {
+            "type": "boolean"
+          },
+          "effectiveFrom": {
+            "type": "string",
+            "format": "date"
+          },
+          "effectiveTo": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
       "StatsTid.Backend.Api.Contracts.EntitlementEligibilityUpdatedResponse": {
         "required": [
           "effectiveFrom",
@@ -5172,6 +6029,36 @@
           },
           "password": {
             "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.LoginResponse": {
+        "required": [
+          "employeeId",
+          "expiresAt",
+          "orgId",
+          "role",
+          "token"
+        ],
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "employeeId": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "orgId": {
+            "type": "string",
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -5797,6 +6684,137 @@
             "items": {
               "type": "string"
             }
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.PositionOverrideActivateResponse": {
+        "required": [
+          "activated",
+          "overrideId",
+          "status"
+        ],
+        "type": "object",
+        "properties": {
+          "overrideId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "enum": [
+              "ACTIVE",
+              "INACTIVE"
+            ],
+            "type": "string"
+          },
+          "activated": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.PositionOverrideDeactivateResponse": {
+        "required": [
+          "deactivated",
+          "overrideId",
+          "status"
+        ],
+        "type": "object",
+        "properties": {
+          "overrideId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "enum": [
+              "ACTIVE",
+              "INACTIVE"
+            ],
+            "type": "string"
+          },
+          "deactivated": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.PositionOverrideResponse": {
+        "required": [
+          "agreementCode",
+          "createdAt",
+          "createdBy",
+          "description",
+          "flexCarryoverMax",
+          "maxFlexBalance",
+          "normPeriodWeeks",
+          "okVersion",
+          "overrideId",
+          "positionCode",
+          "status",
+          "updatedAt",
+          "version",
+          "weeklyNormHours"
+        ],
+        "type": "object",
+        "properties": {
+          "overrideId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "agreementCode": {
+            "type": "string"
+          },
+          "okVersion": {
+            "type": "string"
+          },
+          "positionCode": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ACTIVE",
+              "INACTIVE"
+            ],
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "maxFlexBalance": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "flexCarryoverMax": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "normPeriodWeeks": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "weeklyNormHours": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "createdBy": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -7109,6 +8127,44 @@
           },
           "agreementCode": {
             "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.WageTypeMappingResponse": {
+        "required": [
+          "agreementCode",
+          "description",
+          "okVersion",
+          "position",
+          "timeType",
+          "version",
+          "wageType"
+        ],
+        "type": "object",
+        "properties": {
+          "timeType": {
+            "type": "string"
+          },
+          "wageType": {
+            "type": "string"
+          },
+          "okVersion": {
+            "type": "string"
+          },
+          "agreementCode": {
+            "type": "string"
+          },
+          "position": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
           },
           "version": {
             "type": "integer",

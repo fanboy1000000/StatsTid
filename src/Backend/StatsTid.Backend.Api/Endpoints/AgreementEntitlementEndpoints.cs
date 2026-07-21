@@ -1,6 +1,7 @@
 ﻿using System.Text.Json;
 using Npgsql;
 using StatsTid.Auth;
+using StatsTid.Backend.Api.Contracts;
 using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
@@ -55,7 +56,8 @@ public static class AgreementEntitlementEndpoints
                 parent.AgreementCode, parent.OkVersion, ct);
 
             return Results.Ok(entitlements.Select(MapToResponse).ToList());
-        }).RequireAuthorization("GlobalAdminOnly");
+        }).RequireAuthorization("GlobalAdminOnly")
+        .Produces<IEnumerable<EntitlementConfigResponse>>(StatusCodes.Status200OK); // S118 / TASK-11800 — BARE array
 
         // ===================================================================
         // 2. POST /api/agreement-configs/{configId:guid}/entitlements
@@ -257,7 +259,8 @@ public static class AgreementEntitlementEndpoints
                     await tx.RollbackAsync(ct);
                 throw;
             }
-        }).RequireAuthorization("GlobalAdminOnly");
+        }).RequireAuthorization("GlobalAdminOnly")
+        .Produces<EntitlementConfigResponse>(StatusCodes.Status201Created); // S118 / TASK-11800
 
         // ===================================================================
         // 3. PUT /api/agreement-configs/{configId:guid}/entitlements/{entitlementConfigId:guid}
@@ -540,7 +543,8 @@ public static class AgreementEntitlementEndpoints
                     await tx.RollbackAsync(ct);
                 throw;
             }
-        }).RequireAuthorization("GlobalAdminOnly");
+        }).RequireAuthorization("GlobalAdminOnly")
+        .Produces<EntitlementConfigResponse>(StatusCodes.Status200OK); // S118 / TASK-11800
 
         // ===================================================================
         // 4. DELETE /api/agreement-configs/{configId:guid}/entitlements/{entitlementConfigId:guid}
@@ -727,33 +731,19 @@ public static class AgreementEntitlementEndpoints
                     await tx.RollbackAsync(ct);
                 throw;
             }
-        }).RequireAuthorization("GlobalAdminOnly");
+        }).RequireAuthorization("GlobalAdminOnly")
+        .Produces(StatusCodes.Status204NoContent); // S118 / TASK-11800 — declared-204 (no body, intentionally)
 
         return app;
     }
 
     // -- Response Mapping --
 
-    private static object MapToResponse(EntitlementConfig c) => new
-    {
-        configId = c.ConfigId,
-        entitlementType = c.EntitlementType,
-        agreementCode = c.AgreementCode,
-        okVersion = c.OkVersion,
-        annualQuota = c.AnnualQuota,
-        accrualModel = c.AccrualModel,
-        resetMonth = c.ResetMonth,
-        carryoverMax = c.CarryoverMax,
-        proRateByPartTime = c.ProRateByPartTime,
-        isPerEpisode = c.IsPerEpisode,
-        minAge = c.MinAge,
-        description = c.Description,
-        // S73 / TASK-7301 (R2): served so the admin editor (TASK-7302) can round-trip the flag.
-        fullDayOnly = c.FullDayOnly,
-        effectiveFrom = c.EffectiveFrom,
-        effectiveTo = c.EffectiveTo,
-        version = c.Version,
-    };
+    // S118 / TASK-11800 (owner ruling #2): the byte-identical 16-member copy collapsed into
+    // the ONE shared EntitlementConfigResponse shape (BYTE-IDENTICAL wire JSON — this copy
+    // already carried fullDayOnly in the same position).
+    private static EntitlementConfigResponse MapToResponse(EntitlementConfig c) =>
+        EntitlementConfigResponse.FromModel(c);
 
     // -- Request DTOs (co-located) --
 

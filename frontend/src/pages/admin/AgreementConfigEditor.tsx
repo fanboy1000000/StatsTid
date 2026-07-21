@@ -2,20 +2,29 @@ import { useState, useEffect, useCallback, type ChangeEvent } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { apiFetchWithEtag } from '../../lib/api'
 import { formatVersionAsIfMatch, resolveEtag } from '../../lib/etag'
-import { useAgreementConfigActions } from '../../hooks/useAgreementConfigs'
+import { useAgreementConfigActions, isConfigMutationError } from '../../hooks/useAgreementConfigs'
 import type { AgreementConfig } from '../../hooks/useAgreementConfigs'
 import { EntitlementSection, type Entitlement } from '../../components/admin/EntitlementSection'
 import { Spinner } from '../../components/ui'
 import styles from './AgreementConfigEditor.module.css'
 
-/** Extended response shape returned by GET /api/agreement-configs/{configId}
- *  when entitlements are included inline (TASK-1B-3). */
-interface AgreementConfigWithEntitlements extends AgreementConfig {
-  entitlements?: Entitlement[]
-  entitlementsReadOnly?: boolean
-}
-
-type ConfigForm = Omit<AgreementConfig, 'configId' | 'version' | 'createdBy' | 'createdAt' | 'updatedAt' | 'publishedAt' | 'archivedAt' | 'clonedFromId'>
+// S118 / TASK-11801 (PAT-012) — the by-id GET rides the TYPED spec-keyed form;
+// the local hand-written `AgreementConfigWithEntitlements` interface (which
+// falsely marked `entitlements`/`entitlementsReadOnly` optional) was DELETED —
+// the spec `AgreementConfigWithEntitlementsResponse` declares both required.
+//
+// The form deliberately OMITS the 5 additively-surfaced compliance fields
+// (`maxDailyHours` / `minimumRestHours` / `restPeriodDerogationAllowed` /
+// `weeklyMaxHoursReferencePeriod` / `voluntaryUnsocialHoursAllowed`): they are
+// not edited here, and including them would ADD them to the create/update
+// request payload — a request-payload change, barred this pass (W2).
+type ConfigForm = Omit<
+  AgreementConfig,
+  | 'configId' | 'version' | 'createdBy' | 'createdAt' | 'updatedAt'
+  | 'publishedAt' | 'archivedAt' | 'clonedFromId'
+  | 'maxDailyHours' | 'minimumRestHours' | 'restPeriodDerogationAllowed'
+  | 'weeklyMaxHoursReferencePeriod' | 'voluntaryUnsocialHoursAllowed'
+>
 
 const NORM_MODELS = [
   { value: 'WEEKLY_HOURS', label: 'Ugentlige timer' },
@@ -160,16 +169,20 @@ export function AgreementConfigEditor() {
     setError(null)
     // S25 / TASK-2506: capture the by-id ETag header for the next If-Match
     // (header-preferred, body.version fallback for cross-origin deployments).
-    // TASK-1B-3: the by-id response now includes entitlements + entitlementsReadOnly.
-    const result = await apiFetchWithEtag<AgreementConfigWithEntitlements>(`/api/agreement-configs/${configId}`)
+    // TASK-1B-3: the by-id response includes entitlements + entitlementsReadOnly
+    // (S118: spec-required — the typed form derives both, no `??` fallback).
+    const result = await apiFetchWithEtag('/api/agreement-configs/{configId}', {
+      method: 'GET',
+      params: { path: { configId } },
+    })
     if (result.ok) {
       const { data, etag: rawEtag } = result.data
       const { etag: resolvedEtag } = resolveEtag(rawEtag, data)
       setConfig(data)
       setEtag(resolvedEtag ?? formatVersionAsIfMatch(data.version))
       setForm(configToForm(data))
-      setEntitlements(data.entitlements ?? [])
-      setEntitlementsReadOnly(data.entitlementsReadOnly ?? false)
+      setEntitlements(data.entitlements)
+      setEntitlementsReadOnly(data.entitlementsReadOnly)
     } else {
       setError(result.error)
     }
@@ -183,7 +196,7 @@ export function AgreementConfigEditor() {
   }
 
   const handleTextChange = (key: keyof ConfigForm) => (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
-    setField(key, e.target.value as ConfigForm[typeof key])
+    setField(key, e.target.value)
   }
 
   const handleNumberChange = (key: keyof ConfigForm) => (e: ChangeEvent<HTMLInputElement>) => {
@@ -191,15 +204,15 @@ export function AgreementConfigEditor() {
   }
 
   const handleCheckboxChange = (key: keyof ConfigForm) => (e: ChangeEvent<HTMLInputElement>) => {
-    setField(key, e.target.checked as ConfigForm[typeof key])
+    setField(key, e.target.checked)
   }
 
   // S25 / TASK-2506 helper: classify thrown mutation errors and either set the
   // stale-conflict banner (412) or surface a generic error (anything else).
+  // S118: runtime type guard instead of an `as` cast (PAT-012 no-`as` surface).
   const handleMutationError = (err: unknown) => {
-    const e = err as Error & { status?: number; body?: { expectedVersion?: number; actualVersion?: number } }
-    if (e.status === 412) {
-      setStaleConflict({ expected: e.body?.expectedVersion, actual: e.body?.actualVersion })
+    if (isConfigMutationError(err) && err.status === 412) {
+      setStaleConflict({ expected: err.body?.expectedVersion, actual: err.body?.actualVersion })
     } else {
       setError(err instanceof Error ? err.message : String(err))
     }

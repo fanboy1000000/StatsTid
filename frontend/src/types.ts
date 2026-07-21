@@ -51,17 +51,11 @@ export const ABSENCE_TYPES = [
 
 export const AGREEMENT_CODES = ['AC', 'HK', 'PROSA'] as const
 
-export interface LoginRequest {
-  username: string
-  password: string
-}
-
-export interface LoginResponse {
-  token: string
-  expiresAt: string
-  employeeId: string
-  role: string
-}
+// S118 / TASK-11801 — the hand-written `LoginRequest` / `LoginResponse`
+// interfaces that lived here were DELETED (PAT-012 interface-deletion audit):
+// `LoginResponse` OMITTED the `orgId: string | null` member the backend serves.
+// The spec-derived bindings live at the single consuming site
+// (`contexts/AuthContext.tsx`, via the generated `api-types.ts` schemas).
 
 export interface AuthUser {
   employeeId: string

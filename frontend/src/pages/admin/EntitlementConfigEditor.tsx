@@ -2,6 +2,7 @@ import { useState, type ChangeEvent, type FormEvent } from 'react'
 import {
   useEntitlementConfigList,
   useEntitlementConfigActions,
+  isEntitlementConfigMutationError,
   type EntitlementConfig,
   type EntitlementConfigPatch,
   type EntitlementConfigCreateRequest,
@@ -13,6 +14,8 @@ import {
   TYPE_OPTIONS,
   ACCRUAL_OPTIONS,
   MONTH_LABELS,
+  entitlementTypeLabel,
+  accrualModelLabel,
 } from '../../lib/entitlementConstants'
 import { Spinner } from '../../components/ui'
 import styles from './EntitlementConfigEditor.module.css'
@@ -23,6 +26,13 @@ import styles from './EntitlementConfigEditor.module.css'
 // mirrors S29 ProfileEditor for the same-day-only-edit semantics by NOT
 // exposing an effective_from picker (per Q4 + ADR-021 §3, the server stamps
 // effective_from = today and same-day edits in-place vs cross-day supersede).
+//
+// S118 / TASK-11801 (PAT-012) — the row/request types are the GENERATED spec
+// types (via the hook aliases): the wire `entitlementType` / `accrualModel`
+// are OPEN strings, so read-side label lookups go through the runtime-guarded
+// helpers (`entitlementTypeLabel` / `accrualModelLabel`); the CREATE form
+// keeps the narrow UI types (its selects only offer the known sets). No `as`
+// casts remain (this file is on the no-`as` lint surface).
 
 interface EditFormState {
   annualQuota: string
@@ -135,24 +145,16 @@ export function EntitlementConfigEditor() {
     actual?: number
   } | null>(null)
 
+  // S118: runtime type guard instead of an `as` cast (PAT-012 no-`as` surface).
   const handleMutationError = (err: unknown) => {
-    const e = err as Error & {
-      status?: number
-      body?: {
-        expectedVersion?: number
-        actualVersion?: number
-        error?: string
-        immutable?: string[]
-      }
-    }
-    if (e.status === 412) {
+    if (isEntitlementConfigMutationError(err) && err.status === 412) {
       setStaleConflict({
-        expected: e.body?.expectedVersion,
-        actual: e.body?.actualVersion,
+        expected: err.body?.expectedVersion,
+        actual: err.body?.actualVersion,
       })
-    } else if (e.status === 422 && e.body?.immutable) {
+    } else if (isEntitlementConfigMutationError(err) && err.status === 422 && err.body?.immutable) {
       setFormError(
-        `Felterne ${e.body.immutable.join(', ')} er fastlaast og kan ikke aendres via dette administratorbillede. Opret en ny OK-version i stedet.`,
+        `Felterne ${err.body.immutable.join(', ')} er fastlaast og kan ikke aendres via dette administratorbillede. Opret en ny OK-version i stedet.`,
       )
     } else {
       setFormError(err instanceof Error ? err.message : String(err))
@@ -244,7 +246,7 @@ export function EntitlementConfigEditor() {
   }
 
   const handleDelete = async (config: WithEtag<EntitlementConfig>) => {
-    const label = `${TYPE_LABELS[config.entitlementType]} (${config.agreementCode} ${config.okVersion})`
+    const label = `${entitlementTypeLabel(config.entitlementType)} (${config.agreementCode} ${config.okVersion})`
     const ok = window.confirm(
       `Slet konfigurationen for ${label}?\n\nDette markerer raekken som slettet (soft-delete). Administratorer kan oprette en ny effective_from-raekke senere.`,
     )
@@ -261,25 +263,29 @@ export function EntitlementConfigEditor() {
     }
   }
 
+  // S118 — `instanceof` narrowing instead of the previous `as` casts (no-`as`
+  // surface): a checkbox is always an HTMLInputElement; selects/textareas take
+  // the `.value` branch. The computed-key upsert keeps the existing (weakly
+  // typed) form-state pattern unchanged.
   const setCreateField =
-    <K extends keyof CreateFormState>(field: K) =>
+    (field: keyof CreateFormState) =>
     (e: ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
-      const target = e.target as HTMLInputElement
-      const value: CreateFormState[K] =
-        target.type === 'checkbox'
-          ? (target.checked as CreateFormState[K])
-          : (target.value as CreateFormState[K])
+      const target = e.target
+      const value =
+        target instanceof HTMLInputElement && target.type === 'checkbox'
+          ? target.checked
+          : target.value
       setCreateForm((f) => ({ ...f, [field]: value }))
     }
 
   const setEditField =
-    <K extends keyof EditFormState>(field: K) =>
+    (field: keyof EditFormState) =>
     (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-      const target = e.target as HTMLInputElement
-      const value: EditFormState[K] =
-        target.type === 'checkbox'
-          ? (target.checked as EditFormState[K])
-          : (target.value as EditFormState[K])
+      const target = e.target
+      const value =
+        target instanceof HTMLInputElement && target.type === 'checkbox'
+          ? target.checked
+          : target.value
       setEditForm((f) => ({ ...f, [field]: value }))
     }
 
@@ -329,7 +335,7 @@ export function EntitlementConfigEditor() {
           <tbody>
             {configs.map((config) => (
               <tr key={config.configId}>
-                <td>{TYPE_LABELS[config.entitlementType] ?? config.entitlementType}</td>
+                <td>{entitlementTypeLabel(config.entitlementType)}</td>
                 <td>{config.agreementCode}</td>
                 <td>{config.okVersion}</td>
                 <td className={styles.numeric}>{config.annualQuota}</td>
@@ -556,7 +562,7 @@ export function EntitlementConfigEditor() {
           <div className={styles.dialog} onClick={(e) => e.stopPropagation()}>
             <h2 className={styles.dialogTitle}>Rediger berettigelse</h2>
             <div className={styles.dialogInfo}>
-              {TYPE_LABELS[editing.entitlementType]} / {editing.agreementCode} / {editing.okVersion}
+              {entitlementTypeLabel(editing.entitlementType)} / {editing.agreementCode} / {editing.okVersion}
               {' '}— gaeldende fra {formatDate(editing.effectiveFrom)} (version {editing.version}).
               {' '}Naturlige noegle-felter, akkumuleringsmodel og nulstillingsmaaned er fastlaaste per ADR-021.
             </div>
@@ -570,7 +576,7 @@ export function EntitlementConfigEditor() {
                   <input
                     className={`${styles.input} ${styles.readOnly}`}
                     type="text"
-                    value={TYPE_LABELS[editing.entitlementType]}
+                    value={entitlementTypeLabel(editing.entitlementType)}
                     readOnly
                     aria-readonly="true"
                     title="Fastlaast per ADR-021 — opret en ny OK-version for at aendre"
@@ -612,7 +618,7 @@ export function EntitlementConfigEditor() {
                   <input
                     className={`${styles.input} ${styles.readOnly}`}
                     type="text"
-                    value={editing.accrualModel === 'IMMEDIATE' ? 'Straks' : 'Maanedlig optjening'}
+                    value={accrualModelLabel(editing.accrualModel)}
                     readOnly
                     aria-readonly="true"
                     title="Fastlaast per ADR-021 Q1(i) — opret en ny OK-version for at aendre"

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { apiClient, apiFetchWithEtag } from '../lib/api'
+import type { components } from '../lib/api-types'
 import { formatVersionAsIfMatch, resolveEtag } from '../lib/etag'
 
 // TASK-3009 (Phase 4d-2 / ADR-021 pending). Mirrors the S25 admin-strict hook
@@ -7,91 +8,46 @@ import { formatVersionAsIfMatch, resolveEtag } from '../lib/etag'
 // list, by-id GET with ETag header capture, create/update/delete mutations
 // throwing a typed mutation error carrying status + 412 body so the page's
 // banner-with-retry handler can read `expectedVersion` / `actualVersion`.
+//
+// S118 / TASK-11801 (Typed API Contract retrofit Pass 5, PAT-012) — every call
+// rides the TYPED structured forms; the hand-written `EntitlementConfig` row
+// interface and the hand-written create/update request interfaces were DELETED
+// in favor of the GENERATED spec types below (audited FAITHFUL — same field
+// sets). NOTE the wire types carry `entitlementType` / `accrualModel` as OPEN
+// `string` (deliberately not spec-enums); narrow via the runtime guards in
+// `lib/entitlementConstants.ts` where the UI needs the closed set.
 
-// Re-export from shared constants — single source of truth for both the
-// standalone EntitlementConfigEditor page and inline EntitlementSection.
-export type { EntitlementType, AccrualModel } from '../lib/entitlementConstants'
-import type { EntitlementType, AccrualModel } from '../lib/entitlementConstants'
-
-export interface EntitlementConfig {
-  configId: string
-  entitlementType: EntitlementType
-  agreementCode: string
-  okVersion: string
-  annualQuota: number
-  accrualModel: AccrualModel
-  resetMonth: number // 1-12
-  carryoverMax: number
-  proRateByPartTime: boolean
-  isPerEpisode: boolean
-  minAge: number | null
-  description: string | null
-  // S73 / TASK-7301 — the full-day-only rule flag (R2). CARE_DAY/SENIOR_DAY
-  // configs carry TRUE (construction-enforced server-side); additive-nullable on
-  // the wire (pre-S73 rows omit it → treated as false).
-  fullDayOnly: boolean
-  // ADR-019 D7 row-version optimistic-concurrency token.
-  version: number
-  effectiveFrom: string // ISO date
-  effectiveTo: string | null // ISO date, null for live rows
-}
+/** The GENERATED spec row (S118) — replaces the hand-written interface. */
+export type EntitlementConfig =
+  components['schemas']['StatsTid.Backend.Api.Contracts.EntitlementConfigResponse']
 
 /**
- * Editable subset per TASK-3009 spec (Risk R4 scope-trim). Natural-key fields
- * (entitlementType / agreementCode / okVersion), accrualModel + resetMonth
- * (frozen per ADR-021 Q1 sub-fork (i)), and server-managed fields
- * (effectiveFrom / effectiveTo / version / configId) are NOT in this patch.
+ * Create request — the GENERATED spec type. Natural-key fields + accrualModel
+ * + resetMonth must be supplied (frozen post-create); the server stamps
+ * effectiveFrom to today when omitted. The page-level form should never let
+ * the user pick `effectiveFrom` — per Q4 it is implicitly today.
  */
-export interface EntitlementConfigPatch {
-  annualQuota: number
-  carryoverMax: number
-  description: string | null
-  proRateByPartTime: boolean
-  isPerEpisode: boolean
-  minAge: number | null
-}
+export type EntitlementConfigCreateRequest =
+  components['schemas']['StatsTid.Backend.Api.Endpoints.EntitlementConfigEndpoints.CreateEntitlementConfigRequest']
 
 /**
- * Create request — natural-key fields + accrualModel + resetMonth must be
- * supplied (these are frozen post-create). The server stamps effectiveFrom
- * to today and effectiveTo to null. The page-level form should never let the
- * user pick `effectiveFrom` — per Q4 it is implicitly today.
+ * Update request — the GENERATED spec type. Backend requires the full shape:
+ * natural-key fields + frozen fields (accrualModel/resetMonth, validated
+ * against the predecessor per Q1 sub-fork (i)) + the editable patch + explicit
+ * `effectiveFrom` (must equal today per the cycle-3 same-day-only-edit
+ * validator) + the round-tripped S73 `fullDayOnly` flag.
  */
-export interface EntitlementConfigCreateRequest extends EntitlementConfigPatch {
-  entitlementType: EntitlementType
-  agreementCode: string
-  okVersion: string
-  accrualModel: AccrualModel
-  resetMonth: number
-  // S73 / TASK-7301 (R2/Step-0b B2) — the full-day-only flag travels in the
-  // request body. Construction-enforced server-side for CARE_DAY/SENIOR_DAY
-  // (admin POST/PUT 422s a false/absent flag for those types); the editor
-  // sources it (no free toggle) so an unrelated edit can never reset it.
-  fullDayOnly: boolean
-}
+export type EntitlementConfigUpdateRequest =
+  components['schemas']['StatsTid.Backend.Api.Endpoints.EntitlementConfigEndpoints.UpdateEntitlementConfigRequest']
 
 /**
- * Update request — backend `UpdateEntitlementConfigRequest` requires the full
- * shape: natural-key fields + frozen fields (accrualModel/resetMonth) + the
- * editable patch + explicit `effectiveFrom`. The natural-key + frozen fields
- * are validated against the predecessor row (422 if changed per Q1 sub-fork
- * (i)); `effectiveFrom` must equal today per the cycle-3 same-day-only-edit
- * validator. Callers source the frozen fields from the editing row's
- * `WithEtag<EntitlementConfig>` (the page already has them — they're displayed
- * read-only).
+ * Editable subset per TASK-3009 spec (Risk R4 scope-trim) — now DERIVED from
+ * the spec create-request type rather than hand-written.
  */
-export interface EntitlementConfigUpdateRequest extends EntitlementConfigPatch {
-  entitlementType: EntitlementType
-  agreementCode: string
-  okVersion: string
-  accrualModel: AccrualModel
-  resetMonth: number
-  effectiveFrom: string // ISO date — must be today
-  // S73 / TASK-7301 (R2 version-survival) — the flag MUST round-trip on update,
-  // or an unrelated admin edit produces a successor with the flag reset. Sourced
-  // from the predecessor row (the page displays it read-only).
-  fullDayOnly: boolean
-}
+export type EntitlementConfigPatch = Pick<
+  EntitlementConfigCreateRequest,
+  'annualQuota' | 'carryoverMax' | 'description' | 'proRateByPartTime' | 'isPerEpisode' | 'minAge'
+>
 
 export type WithEtag<T> = T & { etag: string; version: number }
 
@@ -107,6 +63,21 @@ export interface EntitlementConfigMutationError extends Error {
   }
 }
 
+/** S118 — undeclared error payloads narrow via a runtime type guard, never a
+    cast (PAT-012 no-`as` surface; all members optional → structurally sound). */
+function isMutationErrorBody(
+  body: unknown,
+): body is NonNullable<EntitlementConfigMutationError['body']> {
+  return typeof body === 'object' && body !== null
+}
+
+/** S118 — runtime narrowing for thrown mutation errors (page-side handlers). */
+export function isEntitlementConfigMutationError(
+  err: unknown,
+): err is EntitlementConfigMutationError {
+  return err instanceof Error && 'status' in err && typeof err.status === 'number'
+}
+
 function decorateRow(row: EntitlementConfig): WithEtag<EntitlementConfig> {
   return { ...row, etag: formatVersionAsIfMatch(row.version) }
 }
@@ -114,12 +85,13 @@ function decorateRow(row: EntitlementConfig): WithEtag<EntitlementConfig> {
 function makeMutationError(
   status: number,
   errorMsg: string,
-  body: EntitlementConfigMutationError['body'],
+  body: unknown,
 ): EntitlementConfigMutationError {
-  const err = new Error(errorMsg) as EntitlementConfigMutationError
-  err.status = status
-  err.body = body
-  return err
+  // Object.assign (not an `as` cast) — this file is on the no-`as` surface.
+  return Object.assign(new Error(errorMsg), {
+    status,
+    body: isMutationErrorBody(body) ? body : undefined,
+  })
 }
 
 /**
@@ -132,7 +104,7 @@ export function useEntitlementConfigList() {
 
   const fetchAll = useCallback(async () => {
     setLoading(true)
-    const result = await apiClient.get<EntitlementConfig[]>('/api/admin/entitlement-configs')
+    const result = await apiClient.get('/api/admin/entitlement-configs')
     if (result.ok) {
       setConfigs(result.data.map(decorateRow))
       setError(null)
@@ -166,9 +138,10 @@ export function useEntitlementConfig(configId: string | null) {
     }
     setLoading(true)
     setError(null)
-    const result = await apiFetchWithEtag<EntitlementConfig>(
-      `/api/admin/entitlement-configs/${configId}`,
-    )
+    const result = await apiFetchWithEtag('/api/admin/entitlement-configs/{configId}', {
+      method: 'GET',
+      params: { path: { configId } },
+    })
     if (result.ok) {
       const { data, etag } = result.data
       const { etag: resolvedEtag } = resolveEtag(etag, data)
@@ -205,19 +178,16 @@ export function useEntitlementConfigActions() {
     }
   }
 
+  // UNCONDITIONED create (no precondition — S118 demand map); 201 → the row.
   const createConfig = async (
     body: EntitlementConfigCreateRequest,
   ): Promise<WithEtag<EntitlementConfig>> => {
-    const result = await apiFetchWithEtag<EntitlementConfig>(
-      '/api/admin/entitlement-configs',
-      { method: 'POST', body: JSON.stringify(body) },
-    )
+    const result = await apiFetchWithEtag('/api/admin/entitlement-configs', {
+      method: 'POST',
+      body,
+    })
     if (!result.ok) {
-      throw makeMutationError(
-        result.status,
-        result.error,
-        result.body as EntitlementConfigMutationError['body'],
-      )
+      throw makeMutationError(result.status, result.error, result.body)
     }
     return withResponseEtag(result.data.data, result.data.etag)
   }
@@ -227,35 +197,27 @@ export function useEntitlementConfigActions() {
     ifMatch: string,
     body: EntitlementConfigUpdateRequest,
   ): Promise<WithEtag<EntitlementConfig>> => {
-    const result = await apiFetchWithEtag<EntitlementConfig>(
-      `/api/admin/entitlement-configs/${configId}`,
-      {
-        method: 'PUT',
-        headers: { 'If-Match': ifMatch },
-        body: JSON.stringify(body),
-      },
-    )
+    const result = await apiFetchWithEtag('/api/admin/entitlement-configs/{configId}', {
+      method: 'PUT',
+      params: { path: { configId } },
+      ifMatch,
+      body,
+    })
     if (!result.ok) {
-      throw makeMutationError(
-        result.status,
-        result.error,
-        result.body as EntitlementConfigMutationError['body'],
-      )
+      throw makeMutationError(result.status, result.error, result.body)
     }
     return withResponseEtag(result.data.data, result.data.etag)
   }
 
+  // If-Match DELETE → declared 204 (typed data = undefined; no ETag stamped).
   const deleteConfig = async (configId: string, ifMatch: string): Promise<void> => {
-    const result = await apiFetchWithEtag<void>(
-      `/api/admin/entitlement-configs/${configId}`,
-      { method: 'DELETE', headers: { 'If-Match': ifMatch } },
-    )
+    const result = await apiFetchWithEtag('/api/admin/entitlement-configs/{configId}', {
+      method: 'DELETE',
+      params: { path: { configId } },
+      ifMatch,
+    })
     if (!result.ok) {
-      throw makeMutationError(
-        result.status,
-        result.error,
-        result.body as EntitlementConfigMutationError['body'],
-      )
+      throw makeMutationError(result.status, result.error, result.body)
     }
   }
 

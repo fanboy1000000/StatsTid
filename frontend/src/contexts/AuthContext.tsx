@@ -1,6 +1,18 @@
 import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react'
-import type { AuthUser, LoginResponse } from '../types'
+import type { AuthUser } from '../types'
+import type { components } from '../lib/api-types'
 import { decodeJwt, parseScopes, isTokenExpired, type RoleScope } from '../lib/jwt'
+
+// S118 / TASK-11801 (PAT-012) — the login op is typed from the GENERATED spec.
+// The hand-written `LoginResponse` in types.ts was DELETED: it OMITTED the
+// `orgId: string | null` member the backend serves (a field-omission lie).
+// The call DELIBERATELY stays on raw `fetch` rather than the typed
+// `apiClient.post` form: `apiClient`'s shared 401 handler clears the token and
+// RELOADS the page — on a wrong-password 401 that would destroy the login
+// form's error display (a behavior change). The request/response BINDINGS are
+// spec-derived below, so a shape drift is still a `tsc` error.
+type LoginRequest = components['schemas']['StatsTid.Backend.Api.Contracts.LoginRequest']
+type LoginResponse = components['schemas']['StatsTid.Backend.Api.Contracts.LoginResponse']
 
 const TOKEN_KEY = 'statstid_token'
 const USER_KEY = 'statstid_user'
@@ -82,10 +94,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const login = useCallback(async (username: string, password: string) => {
+    const body: LoginRequest = { username, password }
     const res = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify(body),
     })
     if (!res.ok) {
       throw new Error(res.status === 401 ? 'Invalid credentials' : `Login failed: HTTP ${res.status}`)

@@ -16,7 +16,9 @@ const centralConfig: AgreementConfig = {
   version: 1,
   weeklyNormHours: 37,
   normPeriodWeeks: 1,
-  normModel: 'WEEKLY',
+  // S118 — was the out-of-enum literal 'WEEKLY' (the spec closed set is
+  // WEEKLY_HOURS | ANNUAL_ACTIVITY); the strict spec type rejected the lie.
+  normModel: 'WEEKLY_HOURS',
   annualNormHours: 1924,
   maxFlexBalance: 37,
   flexCarryoverMax: 37,
@@ -45,6 +47,13 @@ const centralConfig: AgreementConfig = {
   travelTimeEnabled: false,
   workingTravelRate: 0,
   nonWorkingTravelRate: 0,
+  // S118 — the 5 compliance fields the backend has always emitted (the old
+  // hand-written FE interface omitted them; spec-required members now).
+  maxDailyHours: 13,
+  minimumRestHours: 11,
+  restPeriodDerogationAllowed: false,
+  weeklyMaxHoursReferencePeriod: 4,
+  voluntaryUnsocialHoursAllowed: false,
   createdBy: 'system',
   createdAt: '2026-01-01T00:00:00Z',
   updatedAt: '2026-01-01T00:00:00Z',

@@ -63,6 +63,14 @@ const draftConfig = {
   travelTimeEnabled: false,
   workingTravelRate: 1,
   nonWorkingTravelRate: 0.5,
+  // S118 — the 5 compliance fields the backend has always emitted (the old
+  // hand-written FE interface omitted them; the spec type surfaces them
+  // required, so the mock is spec-true).
+  maxDailyHours: 13,
+  minimumRestHours: 11,
+  restPeriodDerogationAllowed: false,
+  weeklyMaxHoursReferencePeriod: 4,
+  voluntaryUnsocialHoursAllowed: false,
   createdBy: 'admin',
   createdAt: '2026-04-01T00:00:00Z',
   updatedAt: '2026-04-01T00:00:00Z',
@@ -70,6 +78,10 @@ const draftConfig = {
   archivedAt: null,
   clonedFromId: null,
   description: null,
+  // S118 — the by-id response's spec-REQUIRED inline-entitlements members
+  // (previously falsely optional in the deleted page-local interface).
+  entitlements: [],
+  entitlementsReadOnly: false,
 }
 
 beforeEach(() => {

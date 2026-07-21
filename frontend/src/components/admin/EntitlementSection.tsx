@@ -1,40 +1,70 @@
 import { useState, type ChangeEvent, type FormEvent } from 'react'
 import { apiFetchWithEtag } from '../../lib/api'
+import type { components } from '../../lib/api-types'
 import { formatVersionAsIfMatch } from '../../lib/etag'
-import type { EntitlementType, AccrualModel } from '../../lib/entitlementConstants'
 import {
   TYPE_LABELS,
   TYPE_OPTIONS,
   ACCRUAL_OPTIONS,
   ACCRUAL_LABELS,
   MONTH_LABELS,
+  entitlementTypeLabel,
+  accrualModelLabel,
 } from '../../lib/entitlementConstants'
 import styles from './EntitlementSection.module.css'
 
 // TASK-1B-3: Inline entitlements section for the agreement config editor.
 // Sub-resource endpoints:
-//   GET    /api/agreement-configs/{configId}/entitlements
 //   POST   /api/agreement-configs/{configId}/entitlements
 //   PUT    /api/agreement-configs/{configId}/entitlements/{eid}  (If-Match required)
 //   DELETE /api/agreement-configs/{configId}/entitlements/{eid}  (If-Match required)
+// (The sibling GET list op has no FE caller — the parent editor receives the
+// rows inline from the by-id agreement-config GET and passes them as props.)
+//
+// S118 / TASK-11801 (Typed API Contract retrofit Pass 5, PAT-012) — the create
+// POST and the delete ride the TYPED structured forms; the hand-written
+// 15-field `Entitlement` interface was DELETED for the GENERATED spec row,
+// which additively surfaces `fullDayOnly` on the READ side (the S73 flag).
+//
+// ── THE DEFERRED PUT (the S118 Step-0b Reviewer W2 ruling, ridden verbatim) ──
+// "THE WRITE-SIDE PIN (Reviewer W2): the drift repair is DISPLAY-ONLY this
+// pass. The sweep found a LIVE 422 DEAD-END today: `formToUpdateBody` omits
+// `fullDayOnly` from the child PUT body → the non-nullable DTO deserializes
+// `false` → the guard 422s every CARE_DAY/SENIOR_DAY edit from the by-id page.
+// Wiring the field into the PUT body would be an FE request-payload change on
+// a RULE-BEARING flag — barred. The dead-end is a NAMED DEFERRED DEFECT."
+// The typed-switch sweep additionally found the dead-end is WIDER than pinned:
+// the spec `UpdateChildEntitlementRequest` also REQUIRES `effectiveFrom` (C#
+// `required DateOnly`, binder-enforced 400 — AgreementEntitlementEndpoints
+// .cs:791), which `formToUpdateBody` ALSO omits — so EVERY child edit 400s at
+// binding before the 422 guard is even reached. Both omissions are barred
+// payload changes this pass, so the PUT stays on the legacy explicit-T form,
+// pinned by `CHILD_ENTITLEMENT_PATH` below (the S115/S116 route-helper-pin
+// precedent). A future deliberate fix wires BOTH fields and graduates the
+// call to the typed form in the same change. ZERO request-payload changes
+// were made in S118.
 
-export interface Entitlement {
-  configId: string
-  entitlementType: EntitlementType
-  agreementCode: string
-  okVersion: string
-  annualQuota: number
-  accrualModel: AccrualModel
-  resetMonth: number
-  carryoverMax: number
-  proRateByPartTime: boolean
-  isPerEpisode: boolean
-  minAge: number | null
-  description: string | null
-  effectiveFrom: string
-  effectiveTo: string | null
-  version: number
-}
+/** The GENERATED spec row (S118) — replaces the hand-written interface. The
+    wire `entitlementType` / `accrualModel` are OPEN strings; the UI narrows
+    via the `lib/entitlementConstants.ts` guards. */
+export type Entitlement =
+  components['schemas']['StatsTid.Backend.Api.Contracts.EntitlementConfigResponse']
+
+type CreateChildEntitlementRequest =
+  components['schemas']['StatsTid.Backend.Api.Endpoints.AgreementEntitlementEndpoints.CreateChildEntitlementRequest']
+
+/** The CURRENT (defective — see the header note) child-update payload: the
+    spec update request MINUS the two members the FE does not send yet
+    (`effectiveFrom`: binder-required; `fullDayOnly`: the W2-pinned flag). */
+type ChildEntitlementUpdateBody = Omit<
+  components['schemas']['StatsTid.Backend.Api.Endpoints.AgreementEntitlementEndpoints.UpdateChildEntitlementRequest'],
+  'effectiveFrom' | 'fullDayOnly'
+>
+
+/** The route-helper PIN for the ONE sanctioned legacy explicit-T call (the
+    deferred PUT). Every other explicit-T call in this file stays lint-banned. */
+const CHILD_ENTITLEMENT_PATH = (configId: string, entitlementConfigId: string) =>
+  `/api/agreement-configs/${configId}/entitlements/${entitlementConfigId}`
 
 interface EntitlementSectionProps {
   configId: string
@@ -44,9 +74,9 @@ interface EntitlementSectionProps {
 }
 
 interface EntitlementFormState {
-  entitlementType: EntitlementType
+  entitlementType: string
   annualQuota: string
-  accrualModel: AccrualModel
+  accrualModel: string
   resetMonth: string
   carryoverMax: string
   proRateByPartTime: boolean
@@ -92,7 +122,7 @@ function parseOptionalInt(value: string): number | null {
   return Number.isFinite(parsed) ? parsed : null
 }
 
-function formToCreateBody(f: EntitlementFormState) {
+function formToCreateBody(f: EntitlementFormState): CreateChildEntitlementRequest {
   return {
     entitlementType: f.entitlementType,
     annualQuota: parseNum(f.annualQuota, 0),
@@ -106,7 +136,7 @@ function formToCreateBody(f: EntitlementFormState) {
   }
 }
 
-function formToUpdateBody(f: EntitlementFormState) {
+function formToUpdateBody(f: EntitlementFormState): ChildEntitlementUpdateBody {
   return {
     entitlementType: f.entitlementType,
     annualQuota: parseNum(f.annualQuota, 0),
@@ -142,8 +172,10 @@ function classifyError(status: number, body: unknown): string {
   if (status === 409) {
     return 'Berettigelser er skrivebeskyttede for denne konfiguration (delt aftale-kode/OK-version).'
   }
+  // Runtime narrowing (no `as` — PAT-012): `'error' in body` narrows the
+  // unknown payload to an object carrying the member.
   if (typeof body === 'object' && body !== null && 'error' in body) {
-    return String((body as { error: string }).error)
+    return String(body.error)
   }
   return `Fejl (HTTP ${status})`
 }
@@ -156,15 +188,13 @@ export function EntitlementSection({ configId, entitlements, readOnly, onRefresh
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
 
-  const basePath = `/api/agreement-configs/${configId}/entitlements`
-
-  const setField = <K extends keyof EntitlementFormState>(key: K) =>
+  const setField = (key: keyof EntitlementFormState) =>
     (e: ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
-      const target = e.target as HTMLInputElement
-      const value: EntitlementFormState[K] =
-        target.type === 'checkbox'
-          ? (target.checked as EntitlementFormState[K])
-          : (target.value as EntitlementFormState[K])
+      const target = e.target
+      const value =
+        target instanceof HTMLInputElement && target.type === 'checkbox'
+          ? target.checked
+          : target.value
       setForm((f) => ({ ...f, [key]: value }))
     }
 
@@ -191,15 +221,19 @@ export function EntitlementSection({ configId, entitlements, readOnly, onRefresh
     setError(null)
   }
 
+  // UNCONDITIONED create (no precondition — S118 demand map); typed 201.
+  // NOTE (W2): `fullDayOnly` is deliberately NOT in the create body either —
+  // zero request-payload changes this pass.
   const handleCreate = async (e: FormEvent) => {
     e.preventDefault()
     setSubmitting(true)
     setError(null)
     setSuccess(null)
     try {
-      const result = await apiFetchWithEtag<Entitlement>(basePath, {
+      const result = await apiFetchWithEtag('/api/agreement-configs/{configId}/entitlements', {
         method: 'POST',
-        body: JSON.stringify(formToCreateBody(form)),
+        params: { path: { configId } },
+        body: formToCreateBody(form),
       })
       if (!result.ok) {
         setError(classifyError(result.status, result.body))
@@ -215,6 +249,10 @@ export function EntitlementSection({ configId, entitlements, readOnly, onRefresh
     }
   }
 
+  // DEFERRED — the legacy explicit-T If-Match PUT (see the header note): the
+  // payload is byte-identical to the pre-S118 call and deliberately NOT the
+  // typed form (the spec body requires `effectiveFrom` + `fullDayOnly` round-
+  // trip, both barred payload changes this pass).
   const handleUpdate = async (e: FormEvent) => {
     e.preventDefault()
     if (!editingId) return
@@ -225,11 +263,14 @@ export function EntitlementSection({ configId, entitlements, readOnly, onRefresh
     setSuccess(null)
     try {
       const ifMatch = formatVersionAsIfMatch(ent.version)
-      const result = await apiFetchWithEtag<Entitlement>(`${basePath}/${editingId}`, {
-        method: 'PUT',
-        headers: { 'If-Match': ifMatch },
-        body: JSON.stringify(formToUpdateBody(form)),
-      })
+      const result = await apiFetchWithEtag<Entitlement>(
+        CHILD_ENTITLEMENT_PATH(configId, editingId),
+        {
+          method: 'PUT',
+          headers: { 'If-Match': ifMatch },
+          body: JSON.stringify(formToUpdateBody(form)),
+        },
+      )
       if (!result.ok) {
         setError(classifyError(result.status, result.body))
       } else {
@@ -244,8 +285,9 @@ export function EntitlementSection({ configId, entitlements, readOnly, onRefresh
     }
   }
 
+  // If-Match DELETE → declared 204 (typed data = undefined; no ETag stamped).
   const handleDelete = async (ent: Entitlement) => {
-    const label = TYPE_LABELS[ent.entitlementType]
+    const label = entitlementTypeLabel(ent.entitlementType)
     const ok = window.confirm(`Slet berettigelsen "${label}"?`)
     if (!ok) return
     setSubmitting(true)
@@ -253,10 +295,14 @@ export function EntitlementSection({ configId, entitlements, readOnly, onRefresh
     setSuccess(null)
     try {
       const ifMatch = formatVersionAsIfMatch(ent.version)
-      const result = await apiFetchWithEtag<void>(`${basePath}/${ent.configId}`, {
-        method: 'DELETE',
-        headers: { 'If-Match': ifMatch },
-      })
+      const result = await apiFetchWithEtag(
+        '/api/agreement-configs/{configId}/entitlements/{entitlementConfigId}',
+        {
+          method: 'DELETE',
+          params: { path: { configId, entitlementConfigId: ent.configId } },
+          ifMatch,
+        },
+      )
       if (!result.ok) {
         setError(classifyError(result.status, result.body))
       } else {
@@ -310,8 +356,8 @@ export function EntitlementSection({ configId, entitlements, readOnly, onRefresh
           <tbody>
             {entitlements.map((ent) => (
               <tr key={ent.configId}>
-                <td>{TYPE_LABELS[ent.entitlementType] ?? ent.entitlementType}</td>
-                <td>{ACCRUAL_LABELS[ent.accrualModel] ?? ent.accrualModel}</td>
+                <td>{entitlementTypeLabel(ent.entitlementType)}</td>
+                <td>{accrualModelLabel(ent.accrualModel)}</td>
                 <td className={styles.numeric}>{ent.annualQuota}</td>
                 <td className={styles.numeric}>{ent.carryoverMax}</td>
                 <td>{MONTH_LABELS[ent.resetMonth] ?? ent.resetMonth}</td>
@@ -490,7 +536,7 @@ export function EntitlementSection({ configId, entitlements, readOnly, onRefresh
           <div className={styles.dialog} onClick={(e) => e.stopPropagation()}>
             <h2 className={styles.dialogTitle}>Rediger berettigelse</h2>
             <div className={styles.dialogInfo}>
-              {TYPE_LABELS[editingEntitlement.entitlementType]} — gaeldende fra {formatDate(editingEntitlement.effectiveFrom)} (version {editingEntitlement.version}).
+              {entitlementTypeLabel(editingEntitlement.entitlementType)} — gaeldende fra {formatDate(editingEntitlement.effectiveFrom)} (version {editingEntitlement.version}).
               Type, akkumuleringsmodel og nulstillingsmaaned er fastlaaste.
             </div>
             <form onSubmit={handleUpdate}>
@@ -503,7 +549,7 @@ export function EntitlementSection({ configId, entitlements, readOnly, onRefresh
                   <input
                     className={`${styles.input} ${styles.readOnly}`}
                     type="text"
-                    value={TYPE_LABELS[editingEntitlement.entitlementType]}
+                    value={entitlementTypeLabel(editingEntitlement.entitlementType)}
                     readOnly
                     aria-readonly="true"
                   />
@@ -516,7 +562,7 @@ export function EntitlementSection({ configId, entitlements, readOnly, onRefresh
                   <input
                     className={`${styles.input} ${styles.readOnly}`}
                     type="text"
-                    value={ACCRUAL_LABELS[editingEntitlement.accrualModel] ?? editingEntitlement.accrualModel}
+                    value={accrualModelLabel(editingEntitlement.accrualModel)}
                     readOnly
                     aria-readonly="true"
                   />
