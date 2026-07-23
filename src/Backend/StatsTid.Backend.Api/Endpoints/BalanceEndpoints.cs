@@ -1,4 +1,5 @@
 using StatsTid.Auth;
+using StatsTid.Backend.Api.Contracts;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Calendar;
@@ -217,7 +218,7 @@ public static class BalanceEndpoints
             // any seeded quota; the earned-to-date figure is fraction-INDEPENDENT (flat day-count,
             // Ferieloven §5) — see the earned computation below.
 
-            var entitlements = new List<object>();
+            var entitlements = new List<BalanceEntitlementRow>(); // S120 / TASK-12000 — typed rows
             decimal? vacationEntitlementFromConfig = null;
 
             foreach (var live in liveConfigs)
@@ -308,7 +309,7 @@ public static class BalanceEndpoints
                     employeeId, ec.EntitlementType, entitlementYear, ct);
 
                 decimal displayedRemaining;
-                object? settlementInfo;
+                SettlementDispositionInfo? settlementInfo; // S120 / TASK-12000 — the shared 7-key record
                 if (settlement is null)
                 {
                     // Unsettled — unchanged.
@@ -329,16 +330,14 @@ public static class BalanceEndpoints
                     // positive pending remainder (remaining stays 0; the SETTLED zero-bucket
                     // rendering for unwaived rows is unchanged: both new fields are null there).
                     displayedRemaining = 0m;
-                    settlementInfo = new
-                    {
-                        state = settlement.SettlementState,
-                        transferDays = settlement.TransferDays,   // §21 — to next-year carryover_in
-                        payoutDays = settlement.PayoutDays,       // §24 — auto-payout (day-count line, S69)
-                        forfeitDays = settlement.ForfeitDays,     // §34 — == the D9 expiring bucket
-                        forfeitPending = false,
-                        reviewDisposition = settlement.ReviewDisposition,           // FORFEIT / WAIVED / null
-                        claimDispositionDays = settlement.ClaimDispositionDays      // non-null iff MODREGNING/WAIVED
-                    };
+                    settlementInfo = new SettlementDispositionInfo(
+                        State: settlement.SettlementState,
+                        TransferDays: settlement.TransferDays,   // §21 — to next-year carryover_in
+                        PayoutDays: settlement.PayoutDays,       // §24 — auto-payout (day-count line, S69)
+                        ForfeitDays: settlement.ForfeitDays,     // §34 — == the D9 expiring bucket
+                        ForfeitPending: false,
+                        ReviewDisposition: settlement.ReviewDisposition,           // FORFEIT / WAIVED / null
+                        ClaimDispositionDays: settlement.ClaimDispositionDays);    // non-null iff MODREGNING/WAIVED
                 }
                 else
                 {
@@ -350,38 +349,34 @@ public static class BalanceEndpoints
                     // PENDING_REVIEW row can carry reviewDisposition only as the DEFER marker, and
                     // claimDispositionDays is always null here by the 7100 pairing CHECK.)
                     displayedRemaining = Math.Round(settlement.ForfeitDays, 2);
-                    settlementInfo = new
-                    {
-                        state = settlement.SettlementState,
-                        transferDays = settlement.TransferDays,
-                        payoutDays = settlement.PayoutDays,
-                        forfeitDays = settlement.ForfeitDays,
-                        forfeitPending = true,
-                        reviewDisposition = settlement.ReviewDisposition,           // DEFER / null
-                        claimDispositionDays = settlement.ClaimDispositionDays      // always null (CHECK)
-                    };
+                    settlementInfo = new SettlementDispositionInfo(
+                        State: settlement.SettlementState,
+                        TransferDays: settlement.TransferDays,
+                        PayoutDays: settlement.PayoutDays,
+                        ForfeitDays: settlement.ForfeitDays,
+                        ForfeitPending: true,
+                        ReviewDisposition: settlement.ReviewDisposition,           // DEFER / null
+                        ClaimDispositionDays: settlement.ClaimDispositionDays);    // always null (CHECK)
                 }
 
                 DanishLabels.TryGetValue(ec.EntitlementType, out var label);
 
-                entitlements.Add(new
-                {
-                    type = ec.EntitlementType,
-                    label = label ?? ec.EntitlementType,
+                entitlements.Add(new BalanceEntitlementRow(
+                    Type: ec.EntitlementType,
+                    Label: label ?? ec.EntitlementType,
                     // totalQuota stays the ANNUAL entitlement (its invariant display meaning, P3) so
                     // the card can show "X af Y" (earned-of-annual). The accrual change surfaces via
                     // the new `earned` field + the now-earned-based `remaining`.
-                    totalQuota,
-                    earned = Math.Round(earned, 2),
-                    used,
-                    planned,
-                    carryoverIn,
-                    remaining = displayedRemaining,
-                    entitlementYear,
+                    TotalQuota: totalQuota,
+                    Earned: Math.Round(earned, 2),
+                    Used: used,
+                    Planned: planned,
+                    CarryoverIn: carryoverIn,
+                    Remaining: displayedRemaining,
+                    EntitlementYear: entitlementYear,
                     // null for unsettled years (every current consumer sees the same shape + a new
                     // optional field); the recorded disposition for a SETTLED/PENDING_REVIEW year.
-                    settlement = settlementInfo
-                });
+                    Settlement: settlementInfo));
 
                 // Derive vacationDaysEntitlement from config instead of hardcoded 25
                 if (ec.EntitlementType == "VACATION")
@@ -397,31 +392,31 @@ public static class BalanceEndpoints
             // unchanged. Carryover semantics are otherwise untouched (ADR-030).
             var vacationDaysEntitlement = vacationEntitlementFromConfig ?? 25m;
 
-            return Results.Ok(new
-            {
-                employeeId,
-                year,
-                month,
-                flexBalance,
-                flexDelta,
-                vacationDaysUsed,
-                vacationDaysEntitlement,
-                normHoursExpected,
-                normHoursActual,
-                overtimeHours,
-                agreementCode,
-                hasMerarbejde,
-                entitlements,
-                overtimeBalance = overtimeBalance is not null ? new
-                {
-                    accumulated = overtimeBalance.Accumulated,
-                    paidOut = overtimeBalance.PaidOut,
-                    afspadseringUsed = overtimeBalance.AfspadseringUsed,
-                    remaining = overtimeBalance.Remaining,
-                    compensationModel = overtimeBalance.CompensationModel
-                } : null
-            });
-        }).RequireAuthorization("EmployeeOrAbove");
+            // S120 / TASK-12000 — named record (BYTE-IDENTICAL wire JSON).
+            return Results.Ok(new BalanceSummaryResponse(
+                EmployeeId: employeeId,
+                Year: year,
+                Month: month,
+                FlexBalance: flexBalance,
+                FlexDelta: flexDelta,
+                VacationDaysUsed: vacationDaysUsed,
+                VacationDaysEntitlement: vacationDaysEntitlement,
+                NormHoursExpected: normHoursExpected,
+                NormHoursActual: normHoursActual,
+                OvertimeHours: overtimeHours,
+                AgreementCode: agreementCode,
+                HasMerarbejde: hasMerarbejde,
+                Entitlements: entitlements,
+                OvertimeBalance: overtimeBalance is not null
+                    ? new BalanceSummaryOvertimeInfo(
+                        Accumulated: overtimeBalance.Accumulated,
+                        PaidOut: overtimeBalance.PaidOut,
+                        AfspadseringUsed: overtimeBalance.AfspadseringUsed,
+                        Remaining: overtimeBalance.Remaining,
+                        CompensationModel: overtimeBalance.CompensationModel)
+                    : null));
+        }).RequireAuthorization("EmployeeOrAbove")
+        .Produces<BalanceSummaryResponse>(StatusCodes.Status200OK); // S120 / TASK-12000
 
         // ── GET /api/balance/{employeeId}/series — per-month earned-to-date accrual curve ──
         //
@@ -511,7 +506,7 @@ public static class BalanceEndpoints
             var datedConfigResolver = datedConfigResolverFactory.Create(
                 employeeId, opDateOkVersion, user.AgreementCode, opDateAgreement);
 
-            var series = new List<object>();
+            var series = new List<BalanceSeriesItem>(); // S120 / TASK-12000 — typed items
 
             foreach (var live in liveConfigs)
             {
@@ -553,7 +548,7 @@ public static class BalanceEndpoints
                 // ferieaarStart (constant across the curve). employmentStart is threaded through
                 // AccrualMath, so a mid-ferieår hire's curve starts at 0 until the accrual start
                 // (ADR-030 D6) and only ever rises.
-                var points = new List<object>();
+                var points = new List<BalanceSeriesPoint>();
                 for (var i = 0; i < 12; i++)
                 {
                     var monthFirst = ferieaarStart.AddMonths(i);
@@ -570,35 +565,31 @@ public static class BalanceEndpoints
                     // EarnedToDate with the same args + Math.Round(.,2); see header).
                     var isSelected = monthFirst.Year == year && monthFirst.Month == month;
 
-                    points.Add(new
-                    {
-                        monthEnd = pointMonthEnd.ToString("yyyy-MM-dd"),
-                        earned = Math.Round(earned, 2),
-                        isSelected
-                    });
+                    points.Add(new BalanceSeriesPoint(
+                        MonthEnd: pointMonthEnd.ToString("yyyy-MM-dd"),
+                        Earned: Math.Round(earned, 2),
+                        IsSelected: isSelected));
                 }
 
                 DanishLabels.TryGetValue(ec.EntitlementType, out var label);
 
-                series.Add(new
-                {
-                    type = ec.EntitlementType,
-                    label = label ?? ec.EntitlementType,
-                    annualQuota = ec.AnnualQuota,
-                    entitlementYear,
-                    ferieaarStart = ferieaarStart.ToString("yyyy-MM-dd"),
-                    points
-                });
+                series.Add(new BalanceSeriesItem(
+                    Type: ec.EntitlementType,
+                    Label: label ?? ec.EntitlementType,
+                    AnnualQuota: ec.AnnualQuota,
+                    EntitlementYear: entitlementYear,
+                    FerieaarStart: ferieaarStart.ToString("yyyy-MM-dd"),
+                    Points: points));
             }
 
-            return Results.Ok(new
-            {
-                employeeId,
-                year,
-                month,
-                series
-            });
-        }).RequireAuthorization("EmployeeOrAbove");
+            // S120 / TASK-12000 — named record (BYTE-IDENTICAL wire JSON).
+            return Results.Ok(new BalanceSeriesResponse(
+                EmployeeId: employeeId,
+                Year: year,
+                Month: month,
+                Series: series));
+        }).RequireAuthorization("EmployeeOrAbove")
+        .Produces<BalanceSeriesResponse>(StatusCodes.Status200OK); // S120 / TASK-12000
 
         // ── GET /api/balance/{employeeId}/year-overview?year=YYYY — S65 / TASK-6502 ──
         //
@@ -778,7 +769,7 @@ public static class BalanceEndpoints
             // workedHours = Σ work_time_projection (intervals + manual) in the calendar month
             // (ADR-028). normHours = Σ DailyNormCalculator per-day norms; null if ANY norm-bearing
             // day resolves null. diff = worked − norm for months ≤ today's month; null for future.
-            var months = new List<object>(12);
+            var months = new List<YearOverviewMonth>(12); // S120 / TASK-12000 — typed rows
             for (var m = 1; m <= 12; m++)
             {
                 var daysInMonth = DateTime.DaysInMonth(year, m);
@@ -806,13 +797,11 @@ public static class BalanceEndpoints
                     ? Math.Round(workedHours - normHours.Value, 2)
                     : null;
 
-                months.Add(new
-                {
-                    month = m,
-                    workedHours,
-                    normHours,
-                    diff
-                });
+                months.Add(new YearOverviewMonth(
+                    Month: m,
+                    WorkedHours: workedHours,
+                    NormHours: normHours,
+                    Diff: diff));
             }
 
             // ── S65 Step-7a fix: per-ferieår dated agreement-code anchoring ──
@@ -832,7 +821,7 @@ public static class BalanceEndpoints
                 employeeId, user.OkVersion, user.AgreementCode, todayAgreementCode);
 
             // ── Categories: saldo[12] + afholdt[12] + expiring + boundaryMonth ──
-            var categories = new List<object>(YearOverviewCategoryTypes.Length);
+            var categories = new List<YearOverviewCategory>(YearOverviewCategoryTypes.Length); // S120 — typed
             foreach (var type in YearOverviewCategoryTypes)
             {
                 // Resolve the live (open) config to discover ResetMonth (immutable per natural key,
@@ -897,15 +886,20 @@ public static class BalanceEndpoints
                     // No config for this type under the employee's agreement/OK (and none under the
                     // selected year's agreement either) — graceful empty row (nulls/zeros, never a
                     // 500; ADR-023 D3).
-                    categories.Add(new
-                    {
-                        type,
-                        label = DanishLabels.TryGetValue(type, out var lbl0) ? lbl0 : type,
-                        saldo = new decimal?[12],
-                        afholdt = new decimal[12],
-                        expiring = 0m,
-                        boundaryMonth = 12
-                    });
+                    //
+                    // S120 / TASK-12000 — OWNER RULING #2 (branch-normalization class, 2nd
+                    // instance, ruled 2026-07-21): this empty-config branch gains
+                    // `settlement: null` (the configured rows below ALWAYS emit the key —
+                    // null-valued when unsettled); every other member is byte-identical. Zero
+                    // consumers read the key today (the FE types omitted it — lie-audit scope).
+                    categories.Add(new YearOverviewCategory(
+                        Type: type,
+                        Label: DanishLabels.TryGetValue(type, out var lbl0) ? lbl0 : type,
+                        Saldo: new decimal?[12],
+                        Afholdt: new decimal[12],
+                        Expiring: 0m,
+                        BoundaryMonth: 12,
+                        Settlement: null));
                     continue;
                 }
                 var resetMonth = liveConfig.ResetMonth;
@@ -1117,43 +1111,39 @@ public static class BalanceEndpoints
                     employeeId, type, closedEntYear, ct);
 
                 decimal displayedExpiring = expiring;
-                object? disposition = null;
+                SettlementDispositionInfo? disposition = null; // S120 — the shared 7-key record
                 if (closedSettlement is not null)
                 {
                     var pending = !string.Equals(
                         closedSettlement.SettlementState, "SETTLED", StringComparison.Ordinal);
                     // Pin the D9 figure to the recorded §34 bucket (deterministic source).
                     displayedExpiring = Math.Round(closedSettlement.ForfeitDays, 2);
-                    disposition = new
-                    {
-                        state = closedSettlement.SettlementState,
-                        transferDays = closedSettlement.TransferDays,   // §21
-                        payoutDays = closedSettlement.PayoutDays,       // §24
-                        forfeitDays = closedSettlement.ForfeitDays,     // §34 — == displayedExpiring
+                    disposition = new SettlementDispositionInfo(
+                        State: closedSettlement.SettlementState,
+                        TransferDays: closedSettlement.TransferDays,   // §21
+                        PayoutDays: closedSettlement.PayoutDays,       // §24
+                        ForfeitDays: closedSettlement.ForfeitDays,     // §34 — == displayedExpiring
                         // PENDING_REVIEW: the §34 remainder is still unresolved (flagged, NOT 0; Codex W).
-                        forfeitPending = pending,
+                        ForfeitPending: pending,
                         // S71 / TASK-7103 (SPRINT-71 R5) — the termination claim disposition renders
                         // DISTINCTLY (same shape as the /summary settled-year reader): a WAIVED row
                         // shows "WAIVED" + the waived quantity with forfeit_days already cleared to 0
                         // by the resolve verb, so `expiring` reads 0 — never §34 forfeiture. Null for
                         // every unwaived row.
-                        reviewDisposition = closedSettlement.ReviewDisposition,
-                        claimDispositionDays = closedSettlement.ClaimDispositionDays
-                    };
+                        ReviewDisposition: closedSettlement.ReviewDisposition,
+                        ClaimDispositionDays: closedSettlement.ClaimDispositionDays);
                 }
 
-                categories.Add(new
-                {
-                    type,
-                    label = DanishLabels.TryGetValue(type, out var lbl) ? lbl : type,
-                    saldo,
-                    afholdt,
-                    expiring = displayedExpiring,
-                    boundaryMonth = 12,
+                categories.Add(new YearOverviewCategory(
+                    Type: type,
+                    Label: DanishLabels.TryGetValue(type, out var lbl) ? lbl : type,
+                    Saldo: saldo,
+                    Afholdt: afholdt,
+                    Expiring: displayedExpiring,
+                    BoundaryMonth: 12,
                     // null for unsettled closed-ferieår; the recorded FULL disposition for a
                     // SETTLED/PENDING_REVIEW closed year (a SUPERSET of `expiring`).
-                    settlement = disposition
-                });
+                    Settlement: disposition));
             }
 
             // ── Tiles (the designed 6 — NO 7th tile for Feriefridage; matrix-only) ──
@@ -1249,33 +1239,30 @@ public static class BalanceEndpoints
                 .Distinct()
                 .Count();
 
-            return Results.Ok(new
-            {
-                employeeId,
-                year,
-                today = today.ToString("yyyy-MM-dd"),
-                header = new
-                {
-                    employeeName = user.DisplayName,
-                    agreementCode = todayAgreementCode,
-                    okVersion = headerOkVersion,
-                    weeklyNormHours
-                },
-                tiles = new
-                {
-                    flexBalance,
-                    ferieRemaining,
-                    careDayRemaining,
-                    seniorDayRemaining,
-                    sickDaysYtd,
-                    childSickRemaining,
-                    childSickEligible,
-                    seniorDayEligible
-                },
-                months,
-                categories
-            });
-        }).RequireAuthorization("EmployeeOrAbove");
+            // S120 / TASK-12000 — named record (BYTE-IDENTICAL wire JSON except the ruled
+            // empty-config `settlement: null` delta above).
+            return Results.Ok(new YearOverviewResponse(
+                EmployeeId: employeeId,
+                Year: year,
+                Today: today.ToString("yyyy-MM-dd"),
+                Header: new YearOverviewHeader(
+                    EmployeeName: user.DisplayName,
+                    AgreementCode: todayAgreementCode,
+                    OkVersion: headerOkVersion,
+                    WeeklyNormHours: weeklyNormHours),
+                Tiles: new YearOverviewTiles(
+                    FlexBalance: flexBalance,
+                    FerieRemaining: ferieRemaining,
+                    CareDayRemaining: careDayRemaining,
+                    SeniorDayRemaining: seniorDayRemaining,
+                    SickDaysYtd: sickDaysYtd,
+                    ChildSickRemaining: childSickRemaining,
+                    ChildSickEligible: childSickEligible,
+                    SeniorDayEligible: seniorDayEligible),
+                Months: months,
+                Categories: categories));
+        }).RequireAuthorization("EmployeeOrAbove")
+        .Produces<YearOverviewResponse>(StatusCodes.Status200OK); // S120 / TASK-12000
     }
 
     /// <summary>

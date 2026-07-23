@@ -35,12 +35,17 @@ export function FlexBalanceCard({ flexBalance, loading }: Props) {
           {isPositive ? 'Positiv' : 'Negativ'}
         </Badge>
       </div>
-      {flexBalance.delta !== undefined && (
+      {/* S120 — THE RULED COMPANION EDIT (owner ruling #1, behavior-preserving):
+          under the flex normalization the no-history branch serves the history
+          members as NULL (never absent), so the presence-guards (!== undefined)
+          became VALUE-guards (!= null). The no-history state renders the zero
+          headline with neither sub-line — exactly as before the ruling. */}
+      {flexBalance.delta != null && (
         <div className={styles.delta}>
           Denne periode: {flexBalance.delta > 0 ? '+' : ''}{flexBalance.delta.toFixed(1)}t
         </div>
       )}
-      {flexBalance.previousBalance !== undefined && (
+      {flexBalance.previousBalance != null && (
         <div className={styles.previous}>
           Forrige: {flexBalance.previousBalance.toFixed(1)}t
         </div>

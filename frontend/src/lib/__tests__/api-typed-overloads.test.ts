@@ -381,6 +381,12 @@ describe('S112 typed derivation — real committed spec', () => {
     // visibility 200), +2 PUTs (the local-agreement-profile PUT, JSON 200 —
     // the If-Match/If-None-Match:* flexible-precondition op; project update,
     // JSON 200) and +2 DELETEs (project delete 204; project deselect 204).
+    // S120 / TASK-12001 — Pass 7 bucket C (TASK-12000) drained the final
+    // employee-facing surface: +3 POSTs (time-entries create, JSON 201 receipt;
+    // skema save, JSON 200 {saved}; overtime compensate, JSON 200 — the
+    // 5-member echo, zero FE callers, typed anyway per the greenfield
+    // precedent) and +2 PUTs (skema row-preferences, JSON 200; overtime
+    // compensation-choice, JSON 200 — both UNCONDITIONED).
     expectTypeOf<TypedPathIn<paths, 'put'>>().toEqualTypeOf<
       | '/api/admin/organizations/{orgId}'
       | '/api/admin/organizations/{orgId}/move'
@@ -403,6 +409,8 @@ describe('S112 typed derivation — real committed spec', () => {
       | '/api/agreement-configs/{configId}/entitlements/{entitlementConfigId}'
       | '/api/config/{orgId}/profile/{agreementCode}/{okVersion}'
       | '/api/projects/{orgId}/{projectId}'
+      | '/api/skema/{employeeId}/row-preferences'
+      | '/api/overtime/{employeeId}/compensation-choice'
     >()
     expectTypeOf<TypedPathIn<paths, 'delete'>>().toEqualTypeOf<
       | '/api/admin/organizations/{orgId}'
@@ -456,6 +464,9 @@ describe('S112 typed derivation — real committed spec', () => {
       | '/api/projects/{orgId}'
       | '/api/projects/{orgId}/select/{projectId}'
       | '/api/config/{orgId}/absence-types/visibility'
+      | '/api/time-entries'
+      | '/api/skema/{employeeId}/save'
+      | '/api/overtime/{employeeId}/compensate'
     >()
   })
 

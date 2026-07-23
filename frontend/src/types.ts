@@ -1,32 +1,33 @@
-export interface TimeEntry {
-  employeeId: string
-  date: string
-  hours: number
-  startTime?: string
-  endTime?: string
-  taskId?: string
-  activityType?: string
-  agreementCode: string
-  okVersion: string
-  registeredAt?: string
-}
+// S120 / TASK-12001 (Typed API Contract retrofit Pass 7, PAT-012) — the
+// employee-facing bucket-C drain. The hand-written wire interfaces that lived
+// here (TimeEntry, AbsenceEntry, FlexBalanceInfo, the S119 skema-owned
+// Project, SkemaRowPreferenceProject/AbsenceType, SkemaRowPreferences,
+// SkemaCatalogs, ConsumptionBasisDay, WorkTimeInterval/Day, DailyNormDay,
+// SkemaMonthData) were DELETED; the names below are ALIASES onto the GENERATED
+// spec types (the S119 keep-names-alive precedent) so the many skema-family
+// consumers keep compiling against the SPEC truth. Lie-audit deltas are noted
+// per alias.
+import type { components } from './lib/api-types'
 
-export interface AbsenceEntry {
-  employeeId: string
-  date: string
-  absenceType: string
-  hours: number
-  agreementCode: string
-  okVersion: string
-}
+type Schemas = components['schemas']
 
-export interface FlexBalanceInfo {
-  employeeId: string
-  balance: number
-  previousBalance?: number
-  delta?: number
-  reason?: string
-}
+/** GET /api/time-entries/{employeeId} row — the GENERATED SharedKernel model.
+    Lie-audit (S120): the deleted hand-written interface OMITTED the served
+    `voluntaryUnsocialHours` member, typed `startTime`/`endTime`/`taskId`/
+    `activityType` as optional-absent where the wire serves them as `null`, and
+    wrongly marked the always-served `registeredAt` optional. */
+export type TimeEntry = Schemas['StatsTid.SharedKernel.Models.TimeEntry']
+
+/** GET /api/absences/{employeeId} row — the GENERATED SharedKernel model
+    (byte-identical to the deleted hand-written interface — faithful). */
+export type AbsenceEntry = Schemas['StatsTid.SharedKernel.Models.AbsenceEntry']
+
+/** GET /api/flex-balance/{employeeId} — the ruled S120 ONE shape (owner ruling
+    #1): all 5 members always present; the 3 history members are `null` (never
+    absent) on the no-history branch; the vestigial `message` member was
+    DROPPED backend-side. The deleted hand-written interface modeled the old
+    polymorphic branch as optional-absent members. */
+export type FlexBalanceInfo = Schemas['StatsTid.Backend.Api.Contracts.FlexBalanceResponse']
 
 export interface WeeklyCalculationResult {
   employeeId: string
@@ -71,21 +72,13 @@ export interface AuthUser {
 // generated `EmployeePeriodItem` (the wider GET /api/approval/{employeeId}
 // element).
 
-// S119 / TASK-11901 — the PHANTOM `isActive` field was REMOVED (prod bug #7,
-// the S112 blank-columns class): NO endpoint emits it — every read path
-// filters `is_active = TRUE` server-side — so `project.isActive` was always
-// `undefined` and the admin table rendered "Inaktiv" for every row. The
-// interface itself is now SKEMA-OWNED BY USAGE (`SkemaCatalogs.projects` /
-// `SkemaMonthData.projects`) until the Pass-7 skema drain; it is deliberately
-// NOT aliased to the bucket-B spec types (the sibling-`extends` smell). The
-// admin project surface consumes the generated `ProjectItem` in
-// `hooks/useProjects.ts` instead.
-export interface Project {
-  projectId: string
-  projectCode: string
-  projectName: string
-  sortOrder: number
-}
+// S120 / TASK-12001 — the S119 skema-owned `Project` interface was DELETED:
+// its 3 serving surfaces (`SkemaMonthData.projects`, `SkemaCatalogs.projects`,
+// the row-preferences project rows) now type onto the spec
+// `ProjectResponse` via the aliases below (the S119 admin surface already
+// consumes it as `hooks/useProjects.ts` `ProjectItem`). It was byte-identical
+// to `ProjectResponse` (projectId/projectCode/projectName/sortOrder) —
+// faithful at deletion.
 
 export interface SkemaRow {
   type: 'project' | 'absence'
@@ -101,111 +94,53 @@ export interface SkemaRow {
   fullDayOnly?: boolean
 }
 
-// ── S72 / TASK-7201 month-GET additive shapes (consumed by the redesigned grid/page) ──
+// ── S120 skema-family spec aliases (the month GET / row-preferences family) ──
 
-/** One VISIBLE project row per the user's row preferences (R4). sortOrder is the
-    server-computed DENSE effective position (0..n-1), not the raw stored value. */
-export interface SkemaRowPreferenceProject {
-  projectId: string
-  projectCode: string
-  projectName: string
-  sortOrder: number
-}
+/** One VISIBLE project row per the user's row preferences (R4) — the ONE spec
+    project record (`ProjectResponse`, shared with the month `projects` and
+    `catalogs` surfaces). sortOrder is the server-computed DENSE effective
+    position (0..n-1) on the row-preferences surface. */
+export type SkemaRowPreferenceProject = Schemas['StatsTid.Backend.Api.Contracts.ProjectResponse']
 
-/** One VISIBLE absence-type row per the user's row preferences (R4). */
-export interface SkemaRowPreferenceAbsenceType {
-  type: string
-  label: string
-  sortOrder: number
-  /** S73 / TASK-7301 — the served full-day-only flag (R3). An entry in a row of a
-      full-day-only type SNAPS to the day's served consumption basis (R5). Optional:
-      pre-S73 fixtures/mocks omit it (treated as false). */
-  fullDayOnly?: boolean
-}
+/** One VISIBLE absence-type row per the user's row preferences (R4).
+    Lie-audit (S120): `fullDayOnly` is REQUIRED on the wire (the backend always
+    emits it) — the deleted hand-written interface marked it optional. */
+export type SkemaRowPreferenceAbsenceType =
+  Schemas['StatsTid.Backend.Api.Contracts.SkemaRowPreferenceAbsenceRow']
 
-/** The month GET's `rowPreferences` field — the VISIBLE row sets (catalog ∩ selections
-    when configured; today's fallback when not). Rendering filter ONLY (R3) — all grid
-    arithmetic stays over the full served data. */
-export interface SkemaRowPreferences {
-  configured: boolean
-  projects: SkemaRowPreferenceProject[]
-  absenceTypes: SkemaRowPreferenceAbsenceType[]
-}
+/** The month GET's `rowPreferences` field — the VISIBLE row sets (catalog ∩
+    selections when configured; today's fallback when not). Rendering filter
+    ONLY (R3) — all grid arithmetic stays over the full served data. */
+export type SkemaRowPreferences =
+  Schemas['StatsTid.Backend.Api.Contracts.SkemaRowPreferencesResponse']
 
-/** The month GET's `catalogs` field — the ADDABLE sets, selection-INDEPENDENT (R4):
-    removed rows stay re-addable; stale selections never resurrect org-hidden types. */
-export interface SkemaCatalogs {
-  projects: Project[]
-  // S73 / TASK-7301 — `fullDayOnly` served on the catalog absence-type DTOs (R3),
-  // additive (pre-S73 fixtures omit it → treated as false).
-  absenceTypes: { type: string; label: string; fullDayOnly?: boolean }[]
-}
+/** The month GET's `catalogs` field — the ADDABLE sets, selection-INDEPENDENT
+    (R4): removed rows stay re-addable; stale selections never resurrect
+    org-hidden types. */
+export type SkemaCatalogs = Schemas['StatsTid.Backend.Api.Contracts.SkemaCatalogs']
 
-/** S73 / TASK-7301 — one per-day ADR-032 consumption-basis entry (R3). The FE
-    full-day snap (R5) reads `consumptionBasis[date].hours`; `hours === null`
-    means no dated profile covers the day → NO snap (the typed entry stands
-    locally; the server rejects via the anchor-422 family — fail-closed). Derived
-    from the SAME ConsumptionCalculator path the backend guard demands (the
-    served==guard identity, R3). */
-export interface ConsumptionBasisDay {
-  date: string         // "yyyy-MM-dd"
-  hours: number | null // null = no dated profile covers the day → no snap (R5)
-}
+/** S73 — one per-day ADR-032 consumption-basis entry (R3). `hours === null`
+    means no dated profile covers the day → NO snap (fail-closed server-side). */
+export type ConsumptionBasisDay = Schemas['StatsTid.Backend.Api.Contracts.SkemaDayHoursRow']
 
-export interface WorkTimeInterval {
-  start: string  // "HH:mm"
-  end: string    // "HH:mm"
-}
+export type WorkTimeInterval = Schemas['StatsTid.Backend.Api.Contracts.SkemaWorkIntervalRow']
 
-export interface WorkTimeDay {
-  date: string  // "YYYY-MM-DD"
-  intervals: WorkTimeInterval[]
-  manualHours: number
-}
+export type WorkTimeDay = Schemas['StatsTid.Backend.Api.Contracts.SkemaWorkTimeDayRow']
 
-export interface DailyNormDay {
-  date: string         // "YYYY-MM-DD"
-  hours: number | null // 0 on weekends; null for academic ANNUAL_ACTIVITY (render blank)
-}
+/** Per-day norm row: 0 on weekends; null for academic ANNUAL_ACTIVITY (render
+    blank). Same spec record as the consumption basis rows. */
+export type DailyNormDay = Schemas['StatsTid.Backend.Api.Contracts.SkemaDayHoursRow']
 
-export interface SkemaMonthData {
-  year: number
-  month: number
-  daysInMonth: number
-  projects: Project[]
-  // S73 / TASK-7301 — `fullDayOnly` served on the month-GET absence-type DTOs (R3),
-  // additive (pre-S73 fixtures omit it → treated as false).
-  absenceTypes: { type: string; label: string; fullDayOnly?: boolean }[]
-  entries: { date: string; projectCode: string; hours: number }[]
-  // S72 / TASK-7201 — `feriedage` is the ADR-032 recorded per-absence day-equivalent,
-  // served verbatim (nullable passthrough: null on zero-norm days / non-entitlement
-  // rows; consumers SKIP null-valued rows when summing — SPRINT-72 R10 / Reviewer N4).
-  absences: { date: string; absenceType: string; hours: number; feriedage?: number | null }[]
-  approval: {
-    periodId: string
-    status: string
-    employeeDeadline: string | null
-    managerDeadline: string | null
-    employeeApprovedAt: string | null
-    rejectionReason: string | null
-  } | null
-  workTime: WorkTimeDay[]
-  dailyNorm: DailyNormDay[]
-  // ── S72 / TASK-7201 additive month-GET fields (optional: pre-S72 fixtures/mocks
-  // omit them; the grid falls back to rendering all served rows — SPRINT-72 R12) ──
-  /** VISIBLE row sets + order (R4). Rendering filter ONLY (R3). */
-  rowPreferences?: SkemaRowPreferences
-  /** ADDABLE catalogs, selection-independent (R4) — the manager modal's right pane. */
-  catalogs?: SkemaCatalogs
-  /** 0..2 boundary-day workTime rows (prev-month last day / next-month first day)
-      for the client-side §J 11-hour rest analysis (SPRINT-72 R6). */
-  boundaryWorkTime?: WorkTimeDay[]
-  /** The employee's weekday full-day norm at the viewed month's LAST day (R10, D-A
-      hours-first cards). Null = fail-soft (no dated profile / ANNUAL_ACTIVITY). */
-  fullDayNormAtMonthEnd?: number | null
-  /** S73 / TASK-7301 — the per-day ADR-032 consumption basis (R3), one entry per
-      day of the viewed month. The full-day snap (R5) reads
-      `consumptionBasis[date].hours`; null = no dated profile → no snap. Optional:
-      pre-S73 fixtures/mocks omit it (no snap data → typed value stands). */
-  consumptionBasis?: ConsumptionBasisDay[]
-}
+/** GET /api/skema/{employeeId}/month — THE skema composite, now the GENERATED
+    spec record (the S120 graduation). Lie-audit (S120) vs the deleted
+    hand-written interface:
+    - `entries[].projectCode` is NULLABLE on the wire (the backend maps it from
+      the nullable time-entry `taskId`) — the hand-written type claimed
+      non-null (a real lie for non-skema-created entries without a task id);
+    - `rowPreferences`/`catalogs`/`boundaryWorkTime`/`consumptionBasis` are
+      REQUIRED (always served) — hand-written optional;
+    - the served top-level `employeeDeadline`/`managerDeadline` members were
+      OMITTED entirely;
+    - `approval.status` is the 5-value spec enum, not a bare string;
+    - absence-type rows' `fullDayOnly` is REQUIRED — hand-written optional. */
+export type SkemaMonthData = Schemas['StatsTid.Backend.Api.Contracts.SkemaMonthResponse']

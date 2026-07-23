@@ -18,6 +18,11 @@ namespace StatsTid.Tests.Unit.OpenApi;
 //    ([JsonIgnore(WhenWritingNull)] → can be ABSENT from the wire → NOT required)
 //  - FilterProbeResponse.Status ≙ periodStatus ([AllowedValues] → spec enum)
 //  - FilterProbeShared ≙ the (today hypothetical) request∩response overlap — response truth applies.
+//  - FilterProbeSeriesResponse.MaybeNumbers ≙ YearOverviewCategory.Saldo (CLR-nullable-ELEMENT
+//    collection → S120: items.nullable: true — the nullable-ITEMS sibling, fixed at first firing
+//    because the S120 ruling-#2 runtime pin REDs on the never-null items claim), with non-nullable /
+//    nested / complex-element siblings pinning the negative control, the Items-chain descent, and
+//    the defensive complex-element wrapper.
 
 internal sealed record FilterProbeGrandChild(string Tag);
 
@@ -39,6 +44,13 @@ internal sealed record FilterProbeRequestOnly(
 internal sealed record FilterProbeErrorShape(string Message);
 
 internal sealed record FilterProbeShared(string Id, string? Label);
+
+internal sealed record FilterProbeSeriesResponse(
+    IReadOnlyList<decimal?> MaybeNumbers,
+    IReadOnlyList<decimal> Numbers,
+    IReadOnlyList<string?> MaybeNames,
+    IReadOnlyList<IReadOnlyList<decimal?>> Grid,
+    IReadOnlyList<FilterProbeChild?> MaybeChildren);
 
 /// <summary>
 /// S113 / TASK-11302 — unit pins on <see cref="ResponseStrictTypesFilter"/> (the strict-types
@@ -89,6 +101,7 @@ public sealed class ResponseStrictTypesFilterTests
         var requestOnlyRef = generator.GenerateSchema(typeof(FilterProbeRequestOnly), repository);
         var errorRef = generator.GenerateSchema(typeof(FilterProbeErrorShape), repository);
         var sharedRef = generator.GenerateSchema(typeof(FilterProbeShared), repository);
+        var seriesRef = generator.GenerateSchema(typeof(FilterProbeSeriesResponse), repository);
 
         var document = new OpenApiDocument
         {
@@ -133,6 +146,19 @@ public sealed class ResponseStrictTypesFilterTests
                                 },
                             },
                             Responses = new OpenApiResponses { ["200"] = JsonResponse(sharedRef) },
+                        },
+                    },
+                },
+                // The S120 nullable-ITEMS probe: a 200-referenced schema whose members are the
+                // collection-element nullability matrix (scalar-nullable / non-nullable control /
+                // nested / complex-element).
+                ["/probe/series"] = new OpenApiPathItem
+                {
+                    Operations = new Dictionary<OperationType, OpenApiOperation>
+                    {
+                        [OperationType.Get] = new OpenApiOperation
+                        {
+                            Responses = new OpenApiResponses { ["200"] = JsonResponse(seriesRef) },
                         },
                     },
                 },
@@ -284,5 +310,78 @@ public sealed class ResponseStrictTypesFilterTests
         // binder-enforced request subset is necessarily contained; over-strict toward SENDING,
         // which fails safe as an FE compile error).
         Assert.Equal(new[] { "id", "label" }, SchemaOf<FilterProbeShared>().Required);
+    }
+
+    // ──────────── (6) the nullable-ITEMS sibling (S120 — fixed at FIRST firing) ──────────────
+
+    [Fact]
+    public void NullableValueTypeElementCollection_EmitsItemsNullable()
+    {
+        // The YearOverviewCategory.Saldo analogue (IReadOnlyList<decimal?>): Swashbuckle 6.6.2
+        // drops items-position nullability, so the spec claims never-null elements while the
+        // empty-config branch serves an ALL-null 12-array — the exact lie the S120 ruling-#2
+        // runtime pin REDs on. The filter must stamp items.nullable: true (the element truth);
+        // the ARRAY member itself stays non-nullable.
+        var maybeNumbers = SchemaOf<FilterProbeSeriesResponse>().Properties["maybeNumbers"];
+        Assert.Equal("array", maybeNumbers.Type);
+        Assert.False(maybeNumbers.Nullable);
+        Assert.Equal("number", maybeNumbers.Items.Type);
+        Assert.True(maybeNumbers.Items.Nullable,
+            "A CLR-nullable-element collection did not gain items.nullable: true (the S120 nullable-ITEMS fix).");
+    }
+
+    [Fact]
+    public void NonNullableElementCollection_DoesNotGainItemsNullable()
+    {
+        // The control (≙ YearOverviewCategory.Afholdt, IReadOnlyList<decimal>): a non-nullable
+        // element must NOT gain the flag — over-emission would claim nulls the wire never serves
+        // (the generated TS would degrade every element access with a phantom `| null`).
+        var numbers = SchemaOf<FilterProbeSeriesResponse>().Properties["numbers"];
+        Assert.Equal("array", numbers.Type);
+        Assert.Equal("number", numbers.Items.Type);
+        Assert.False(numbers.Items.Nullable,
+            "A NON-nullable-element collection gained items.nullable: true (over-emission).");
+    }
+
+    [Fact]
+    public void NullableReferenceScalarElementCollection_EmitsItemsNullable()
+    {
+        // The NRT flavor (IReadOnlyList<string?>): element nullability read via
+        // NullabilityInfoContext generic-argument info, not Nullable.GetUnderlyingType.
+        var maybeNames = SchemaOf<FilterProbeSeriesResponse>().Properties["maybeNames"];
+        Assert.Equal("string", maybeNames.Items.Type);
+        Assert.True(maybeNames.Items.Nullable);
+    }
+
+    [Fact]
+    public void NestedNullableElementCollection_DescendsTheItemsChain()
+    {
+        // IReadOnlyList<IReadOnlyList<decimal?>>: the OUTER element (the inner list) is
+        // non-nullable — no flag on the first Items level — while the descent stamps the inner
+        // Items (decimal?) nullable. Each Items level is decided by its OWN element.
+        var grid = SchemaOf<FilterProbeSeriesResponse>().Properties["grid"];
+        Assert.Equal("array", grid.Type);
+        Assert.Equal("array", grid.Items.Type);
+        Assert.False(grid.Items.Nullable);
+        Assert.Equal("number", grid.Items.Items.Type);
+        Assert.True(grid.Items.Items.Nullable,
+            "The nested-array descent did not reach the inner Items level.");
+    }
+
+    [Fact]
+    public void NullableComplexElementCollection_ItemsGetTheNullableComplexWrapper()
+    {
+        // DEFENSIVE generality (zero such members exist in today's closure — see the class doc):
+        // a CLR-nullable COMPLEX element ($ref items cannot carry a sibling nullable in OAS 3.0)
+        // gets the S117 wrapper applied to the ITEMS schema — type: object + allOf: [$ref] +
+        // nullable: true — exactly like a nullable complex member.
+        var maybeChildren = SchemaOf<FilterProbeSeriesResponse>().Properties["maybeChildren"];
+        Assert.Equal("array", maybeChildren.Type);
+        var items = maybeChildren.Items;
+        Assert.Null(items.Reference); // the $ref MOVED into the allOf child
+        Assert.Equal("object", items.Type);
+        Assert.True(items.Nullable);
+        var wrapped = Assert.Single(items.AllOf);
+        Assert.Equal(Id<FilterProbeChild>(), wrapped.Reference?.Id);
     }
 }

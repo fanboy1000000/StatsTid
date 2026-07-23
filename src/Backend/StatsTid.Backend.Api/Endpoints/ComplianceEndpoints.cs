@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using StatsTid.Auth;
+using StatsTid.Backend.Api.Contracts;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Exceptions;
@@ -117,8 +118,22 @@ public static class ComplianceEndpoints
                 return Results.Json(new { error = "Compliance check service unavailable" }, statusCode: 503);
 
             var result = await response.Content.ReadFromJsonAsync<ComplianceCheckResult>(jsonOptions, ct);
+
+            // S120 / TASK-12000 — OWNER RULING #3 (dead-branch class, the S118-ruling-#1
+            // lineage; ONE ruling, TWO ops — see the governance sibling): a null here means
+            // ReadFromJsonAsync deserialized a literal-null 2xx body from the rule engine —
+            // PROVEN defensive dead code (RestPeriodRule.Evaluate returns a non-nullable
+            // ComplianceCheckResult and the endpoint Results.Ok's it; a garbled body throws →
+            // 500; unavailability is the 503 above). 502 upstream-invalid (the SkemaEndpoints
+            // null-deserialization idiom) makes the declared 200 STRUCTURALLY the full result.
+            if (result is null)
+                return Results.Json(new { error = "Invalid compliance check response" }, statusCode: 502);
+
             return Results.Ok(result);
-        }).RequireAuthorization("EmployeeOrAbove");
+        }).RequireAuthorization("EmployeeOrAbove")
+        // S120 / TASK-12000 — the NAMED SharedKernel model IS the wire shape (the handler
+        // passes the rule-engine result through verbatim; PAT-012 named-model rule).
+        .Produces<ComplianceCheckResult>(StatusCodes.Status200OK);
 
         // ── GET /api/compliance/{employeeId}/compensatory-rest — Get compensatory rest entries ──
         app.MapGet("/api/compliance/{employeeId}/compensatory-rest", async (
@@ -141,17 +156,17 @@ public static class ComplianceEndpoints
             }
 
             var entries = await compensatoryRestRepo.GetByEmployeeAsync(employeeId, ct);
-            return Results.Ok(entries.Select(e => new
-            {
-                id = e.Id,
-                employeeId = e.EmployeeId,
-                sourceDate = e.SourceDate,
-                compensatoryDate = e.CompensatoryDate,
-                hours = e.Hours,
-                status = e.Status,
-                createdAt = e.CreatedAt,
-            }));
-        }).RequireAuthorization("EmployeeOrAbove");
+            // S120 / TASK-12000 — named record (BYTE-IDENTICAL wire JSON; a BARE ARRAY).
+            return Results.Ok(entries.Select(e => new CompensatoryRestItem(
+                Id: e.Id,
+                EmployeeId: e.EmployeeId,
+                SourceDate: e.SourceDate,
+                CompensatoryDate: e.CompensatoryDate,
+                Hours: e.Hours,
+                Status: e.Status,
+                CreatedAt: e.CreatedAt)));
+        }).RequireAuthorization("EmployeeOrAbove")
+        .Produces<IEnumerable<CompensatoryRestItem>>(StatusCodes.Status200OK); // S120 / TASK-12000
 
         return app;
     }

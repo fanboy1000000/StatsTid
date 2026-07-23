@@ -274,8 +274,23 @@ public static class SpecRuntimeMatcher
                     $"{ctx}: spec schema is an ARRAY but the runtime response is '{json.ValueKind}' " +
                     "(an array-ness mismatch — the exact lie .Produces<T> can tell). RED.");
             if (schema.TryGetProperty("items", out var items))
+            {
+                // S120 — element-position null admission, the nullable-ITEMS sibling of the
+                // property-path S113 rule (instance #1: YearOverviewCategory.saldo, decimal?[]):
+                // a null ELEMENT is admitted iff the items schema carries nullable:true (directly,
+                // or through the S117 wrapper via Deref — the same two-site check as the property
+                // path above). The emission side marks nullable-element collections since S120
+                // (ResponseStrictTypesFilter). A null element against NON-nullable items keeps
+                // falling through to the existing kind/shape REDs — null admission stays governed
+                // by `nullable` ALONE.
+                var itemsNullable = IsNullable(items) || IsNullable(Deref(spec, items));
                 foreach (var el in json.EnumerateArray())
+                {
+                    if (el.ValueKind == JsonValueKind.Null && itemsNullable)
+                        continue;
                     Match(spec, items, el, ctx + "[]");
+                }
+            }
             return;
         }
 

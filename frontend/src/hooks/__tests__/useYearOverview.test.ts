@@ -67,8 +67,11 @@ describe('useYearOverview — stale year-switch response guard', () => {
     // Switch to the newer year before the first response lands.
     rerender({ year: 2026 })
     expect(mockGet).toHaveBeenCalledTimes(2)
-    expect(mockGet.mock.calls[0][0]).toContain('year=2025')
-    expect(mockGet.mock.calls[1][0]).toContain('year=2026')
+    // S120 re-anchor: the typed call passes the path TEMPLATE + a query object
+    // (year no longer appears in the URL string argument).
+    expect(mockGet.mock.calls[0][0]).toBe('/api/balance/{employeeId}/year-overview')
+    expect(mockGet.mock.calls[0][1]).toMatchObject({ query: { year: 2025 } })
+    expect(mockGet.mock.calls[1][1]).toMatchObject({ query: { year: 2026 } })
 
     // Resolve the NEWER request first…
     await act(async () => {

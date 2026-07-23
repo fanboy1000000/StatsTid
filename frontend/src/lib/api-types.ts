@@ -98,12 +98,14 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description OK */
-                200: {
+                /** @description Created */
+                201: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.TimeEntryCreatedResponse"];
+                    };
                 };
             };
         };
@@ -136,7 +138,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.SharedKernel.Models.TimeEntry"][];
+                    };
                 };
             };
         };
@@ -171,7 +175,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.SharedKernel.Models.AbsenceEntry"][];
+                    };
                 };
             };
         };
@@ -206,7 +212,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.FlexBalanceResponse"];
+                    };
                 };
             };
         };
@@ -1802,7 +1810,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.SkemaMonthResponse"];
+                    };
                 };
             };
         };
@@ -1843,7 +1853,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.SkemaSaveResponse"];
+                    };
                 };
             };
         };
@@ -1881,7 +1893,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.SkemaRowPreferencesResponse"];
+                    };
                 };
             };
         };
@@ -3376,7 +3390,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.BalanceSummaryResponse"];
+                    };
                 };
             };
         };
@@ -3414,7 +3430,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.BalanceSeriesResponse"];
+                    };
                 };
             };
         };
@@ -3451,7 +3469,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.YearOverviewResponse"];
+                    };
                 };
             };
         };
@@ -3489,7 +3509,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.SharedKernel.Models.ComplianceCheckResult"];
+                    };
                 };
             };
         };
@@ -3524,7 +3546,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.CompensatoryRestItem"][];
+                    };
                 };
             };
         };
@@ -3561,7 +3585,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.OvertimeBalanceResponse"];
+                    };
                 };
             };
         };
@@ -3601,7 +3627,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.SharedKernel.Models.ComplianceCheckResult"];
+                    };
                 };
             };
         };
@@ -3838,7 +3866,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.OvertimeCompensateResponse"];
+                    };
                 };
             };
         };
@@ -3873,7 +3903,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.CompensationChoiceResponse"];
+                    };
                 };
             };
         };
@@ -3897,7 +3929,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.CompensationChoiceUpdateResponse"];
+                    };
                 };
             };
         };
@@ -4999,12 +5033,119 @@ export interface components {
             sortOrder: number;
             selected: boolean;
         };
+        "StatsTid.Backend.Api.Contracts.BalanceEntitlementRow": {
+            type: string;
+            label: string;
+            /** Format: double */
+            totalQuota: number;
+            /** Format: double */
+            earned: number;
+            /** Format: double */
+            used: number;
+            /** Format: double */
+            planned: number;
+            /** Format: double */
+            carryoverIn: number;
+            /** Format: double */
+            remaining: number;
+            /** Format: int32 */
+            entitlementYear: number;
+            settlement: components["schemas"]["StatsTid.Backend.Api.Contracts.SettlementDispositionInfo"] | null;
+        };
+        "StatsTid.Backend.Api.Contracts.BalanceSeriesItem": {
+            type: string;
+            label: string;
+            /** Format: double */
+            annualQuota: number;
+            /** Format: int32 */
+            entitlementYear: number;
+            ferieaarStart: string;
+            points: components["schemas"]["StatsTid.Backend.Api.Contracts.BalanceSeriesPoint"][];
+        };
+        "StatsTid.Backend.Api.Contracts.BalanceSeriesPoint": {
+            monthEnd: string;
+            /** Format: double */
+            earned: number;
+            isSelected: boolean;
+        };
+        "StatsTid.Backend.Api.Contracts.BalanceSeriesResponse": {
+            employeeId: string;
+            /** Format: int32 */
+            year: number;
+            /** Format: int32 */
+            month: number;
+            series: components["schemas"]["StatsTid.Backend.Api.Contracts.BalanceSeriesItem"][];
+        };
+        "StatsTid.Backend.Api.Contracts.BalanceSummaryOvertimeInfo": {
+            /** Format: double */
+            accumulated: number;
+            /** Format: double */
+            paidOut: number;
+            /** Format: double */
+            afspadseringUsed: number;
+            /** Format: double */
+            remaining: number;
+            compensationModel: string;
+        };
+        "StatsTid.Backend.Api.Contracts.BalanceSummaryResponse": {
+            employeeId: string;
+            /** Format: int32 */
+            year: number;
+            /** Format: int32 */
+            month: number;
+            /** Format: double */
+            flexBalance: number;
+            /** Format: double */
+            flexDelta: number;
+            /** Format: int32 */
+            vacationDaysUsed: number;
+            /** Format: double */
+            vacationDaysEntitlement: number;
+            /** Format: double */
+            normHoursExpected: number;
+            /** Format: double */
+            normHoursActual: number;
+            /** Format: double */
+            overtimeHours: number;
+            agreementCode: string;
+            hasMerarbejde: boolean;
+            entitlements: components["schemas"]["StatsTid.Backend.Api.Contracts.BalanceEntitlementRow"][];
+            overtimeBalance: components["schemas"]["StatsTid.Backend.Api.Contracts.BalanceSummaryOvertimeInfo"] | null;
+        };
         "StatsTid.Backend.Api.Contracts.BirthDateResponse": {
             employeeId: string;
             /** Format: date */
             birthDate: string | null;
             /** Format: int64 */
             version: number;
+        };
+        "StatsTid.Backend.Api.Contracts.CompensationChoiceResponse": {
+            employeeId: string;
+            /** Format: int32 */
+            periodYear: number;
+            compensationModel: string;
+            source: string;
+        };
+        "StatsTid.Backend.Api.Contracts.CompensationChoiceUpdateResponse": {
+            employeeId: string;
+            /** Format: int32 */
+            periodYear: number;
+            compensationModel: string;
+        };
+        "StatsTid.Backend.Api.Contracts.CompensatoryRestItem": {
+            /** Format: uuid */
+            id: string;
+            employeeId: string;
+            /** Format: date */
+            sourceDate: string;
+            /** Format: date */
+            compensatoryDate: string | null;
+            /** Format: double */
+            hours: number;
+            /** @enum {string} */
+            status: "PENDING" | "GRANTED" | "EXPIRED";
+            /** Format: date-time */
+            createdAt: string;
         };
         "StatsTid.Backend.Api.Contracts.ConfigConstraintResponse": {
             agreementCode: string;
@@ -5182,6 +5323,16 @@ export interface components {
             /** Format: int64 */
             version: number;
         };
+        "StatsTid.Backend.Api.Contracts.FlexBalanceResponse": {
+            employeeId: string;
+            /** Format: double */
+            balance: number;
+            /** Format: double */
+            previousBalance: number | null;
+            /** Format: double */
+            delta: number | null;
+            reason: string | null;
+        };
         "StatsTid.Backend.Api.Contracts.ForestMaoNode": {
             orgId: string;
             orgName: string;
@@ -5325,6 +5476,34 @@ export interface components {
             materializedPath: string;
             agreementCode: string;
             okVersion: string;
+        };
+        "StatsTid.Backend.Api.Contracts.OvertimeBalanceResponse": {
+            /** Format: uuid */
+            balanceId: string;
+            employeeId: string;
+            agreementCode: string;
+            /** Format: int32 */
+            periodYear: number;
+            /** Format: double */
+            accumulated: number;
+            /** Format: double */
+            paidOut: number;
+            /** Format: double */
+            afspadseringUsed: number;
+            /** Format: double */
+            remaining: number;
+            compensationModel: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        "StatsTid.Backend.Api.Contracts.OvertimeCompensateResponse": {
+            employeeId: string;
+            /** Format: int32 */
+            periodYear: number;
+            /** Format: double */
+            hours: number;
+            compensationType: string;
+            applied: boolean;
         };
         "StatsTid.Backend.Api.Contracts.OvertimePreApprovalAdminListItem": {
             /** Format: uuid */
@@ -5644,6 +5823,21 @@ export interface components {
             /** Format: int32 */
             peopleTotal: number;
         };
+        "StatsTid.Backend.Api.Contracts.SettlementDispositionInfo": {
+            /** @enum {string} */
+            state: "PENDING_REVIEW" | "SETTLED" | "REVERSED";
+            /** Format: double */
+            transferDays: number;
+            /** Format: double */
+            payoutDays: number;
+            /** Format: double */
+            forfeitDays: number;
+            forfeitPending: boolean;
+            /** @enum {string|null} */
+            reviewDisposition: "FORFEIT" | "DEFER" | "MODREGNING" | "WAIVED" | "FERIEHINDRING" | null;
+            /** Format: double */
+            claimDispositionDays: number | null;
+        };
         "StatsTid.Backend.Api.Contracts.SettlementReversalResponse": {
             employeeId: string;
             entitlementType: string;
@@ -5671,6 +5865,102 @@ export interface components {
             trigger: "YEAR_END" | "TERMINATION";
             /** Format: int64 */
             version: number;
+        };
+        "StatsTid.Backend.Api.Contracts.SkemaAbsenceRow": {
+            /** Format: date */
+            date: string;
+            absenceType: string;
+            /** Format: double */
+            hours: number;
+            /** Format: double */
+            feriedage: number | null;
+        };
+        "StatsTid.Backend.Api.Contracts.SkemaAbsenceTypeRow": {
+            type: string;
+            label: string;
+            fullDayOnly: boolean;
+        };
+        "StatsTid.Backend.Api.Contracts.SkemaApprovalInfo": {
+            /** Format: uuid */
+            periodId: string;
+            /** @enum {string} */
+            status: "DRAFT" | "SUBMITTED" | "EMPLOYEE_APPROVED" | "APPROVED" | "REJECTED";
+            /** Format: date */
+            employeeDeadline: string | null;
+            /** Format: date */
+            managerDeadline: string | null;
+            /** Format: date-time */
+            employeeApprovedAt: string | null;
+            rejectionReason: string | null;
+        };
+        "StatsTid.Backend.Api.Contracts.SkemaCatalogs": {
+            projects: components["schemas"]["StatsTid.Backend.Api.Contracts.ProjectResponse"][];
+            absenceTypes: components["schemas"]["StatsTid.Backend.Api.Contracts.SkemaAbsenceTypeRow"][];
+        };
+        "StatsTid.Backend.Api.Contracts.SkemaDayHoursRow": {
+            /** Format: date */
+            date: string;
+            /** Format: double */
+            hours: number | null;
+        };
+        "StatsTid.Backend.Api.Contracts.SkemaEntryRow": {
+            /** Format: date */
+            date: string;
+            projectCode: string | null;
+            /** Format: double */
+            hours: number;
+        };
+        "StatsTid.Backend.Api.Contracts.SkemaMonthResponse": {
+            /** Format: int32 */
+            year: number;
+            /** Format: int32 */
+            month: number;
+            /** Format: int32 */
+            daysInMonth: number;
+            projects: components["schemas"]["StatsTid.Backend.Api.Contracts.ProjectResponse"][];
+            absenceTypes: components["schemas"]["StatsTid.Backend.Api.Contracts.SkemaAbsenceTypeRow"][];
+            entries: components["schemas"]["StatsTid.Backend.Api.Contracts.SkemaEntryRow"][];
+            absences: components["schemas"]["StatsTid.Backend.Api.Contracts.SkemaAbsenceRow"][];
+            workTime: components["schemas"]["StatsTid.Backend.Api.Contracts.SkemaWorkTimeDayRow"][];
+            dailyNorm: components["schemas"]["StatsTid.Backend.Api.Contracts.SkemaDayHoursRow"][];
+            approval: components["schemas"]["StatsTid.Backend.Api.Contracts.SkemaApprovalInfo"] | null;
+            /** Format: date */
+            employeeDeadline: string;
+            /** Format: date */
+            managerDeadline: string;
+            rowPreferences: components["schemas"]["StatsTid.Backend.Api.Contracts.SkemaRowPreferencesResponse"];
+            catalogs: components["schemas"]["StatsTid.Backend.Api.Contracts.SkemaCatalogs"];
+            boundaryWorkTime: components["schemas"]["StatsTid.Backend.Api.Contracts.SkemaWorkTimeDayRow"][];
+            /** Format: double */
+            fullDayNormAtMonthEnd: number | null;
+            consumptionBasis: components["schemas"]["StatsTid.Backend.Api.Contracts.SkemaDayHoursRow"][];
+        };
+        "StatsTid.Backend.Api.Contracts.SkemaRowPreferenceAbsenceRow": {
+            type: string;
+            label: string;
+            fullDayOnly: boolean;
+            /** Format: int32 */
+            sortOrder: number;
+        };
+        "StatsTid.Backend.Api.Contracts.SkemaRowPreferencesResponse": {
+            configured: boolean;
+            projects: components["schemas"]["StatsTid.Backend.Api.Contracts.ProjectResponse"][];
+            absenceTypes: components["schemas"]["StatsTid.Backend.Api.Contracts.SkemaRowPreferenceAbsenceRow"][];
+        };
+        "StatsTid.Backend.Api.Contracts.SkemaSaveResponse": {
+            /** Format: int32 */
+            saved: number;
+        };
+        "StatsTid.Backend.Api.Contracts.SkemaWorkIntervalRow": {
+            start: string;
+            end: string;
+        };
+        "StatsTid.Backend.Api.Contracts.SkemaWorkTimeDayRow": {
+            /** Format: date */
+            date: string;
+            intervals: components["schemas"]["StatsTid.Backend.Api.Contracts.SkemaWorkIntervalRow"][];
+            /** Format: double */
+            manualHours: number;
         };
         "StatsTid.Backend.Api.Contracts.TeamOverviewEmployeeRow": {
             /** Format: uuid */
@@ -5726,6 +6016,11 @@ export interface components {
             settlementBoundaryDate: string;
             /** Format: int64 */
             version: number;
+        };
+        "StatsTid.Backend.Api.Contracts.TimeEntryCreatedResponse": {
+            /** Format: uuid */
+            eventId: string;
+            streamId: string;
         };
         "StatsTid.Backend.Api.Contracts.TransferAgreementResponse": {
             employeeId: string;
@@ -5870,6 +6165,60 @@ export interface components {
             description: string | null;
             /** Format: int64 */
             version: number;
+        };
+        "StatsTid.Backend.Api.Contracts.YearOverviewCategory": {
+            type: string;
+            label: string;
+            saldo: (number | null)[];
+            afholdt: number[];
+            /** Format: double */
+            expiring: number;
+            /** Format: int32 */
+            boundaryMonth: number;
+            settlement: components["schemas"]["StatsTid.Backend.Api.Contracts.SettlementDispositionInfo"] | null;
+        };
+        "StatsTid.Backend.Api.Contracts.YearOverviewHeader": {
+            employeeName: string;
+            agreementCode: string;
+            okVersion: string;
+            /** Format: double */
+            weeklyNormHours: number | null;
+        };
+        "StatsTid.Backend.Api.Contracts.YearOverviewMonth": {
+            /** Format: int32 */
+            month: number;
+            /** Format: double */
+            workedHours: number;
+            /** Format: double */
+            normHours: number | null;
+            /** Format: double */
+            diff: number | null;
+        };
+        "StatsTid.Backend.Api.Contracts.YearOverviewResponse": {
+            employeeId: string;
+            /** Format: int32 */
+            year: number;
+            today: string;
+            header: components["schemas"]["StatsTid.Backend.Api.Contracts.YearOverviewHeader"];
+            tiles: components["schemas"]["StatsTid.Backend.Api.Contracts.YearOverviewTiles"];
+            months: components["schemas"]["StatsTid.Backend.Api.Contracts.YearOverviewMonth"][];
+            categories: components["schemas"]["StatsTid.Backend.Api.Contracts.YearOverviewCategory"][];
+        };
+        "StatsTid.Backend.Api.Contracts.YearOverviewTiles": {
+            /** Format: double */
+            flexBalance: number;
+            /** Format: double */
+            ferieRemaining: number | null;
+            /** Format: double */
+            careDayRemaining: number | null;
+            /** Format: double */
+            seniorDayRemaining: number | null;
+            /** Format: int32 */
+            sickDaysYtd: number;
+            /** Format: double */
+            childSickRemaining: number | null;
+            childSickEligible: boolean;
+            seniorDayEligible: boolean;
         };
         "StatsTid.Backend.Api.Endpoints.AdminEndpoints.CreateOrganizationRequest": {
             orgId?: string | null;
@@ -6340,6 +6689,63 @@ export interface components {
             description?: string | null;
             /** Format: date */
             effectiveFrom: string;
+        };
+        "StatsTid.SharedKernel.Models.AbsenceEntry": {
+            employeeId: string;
+            /** Format: date */
+            date: string;
+            absenceType: string;
+            /** Format: double */
+            hours: number;
+            agreementCode: string;
+            okVersion: string;
+        };
+        "StatsTid.SharedKernel.Models.ComplianceCheckResult": {
+            ruleId: string;
+            employeeId: string;
+            success: boolean;
+            violations: components["schemas"]["StatsTid.SharedKernel.Models.ComplianceViolation"][];
+            warnings: components["schemas"]["StatsTid.SharedKernel.Models.ComplianceViolation"][];
+        };
+        /**
+         * Format: int32
+         * @enum {integer}
+         */
+        "StatsTid.SharedKernel.Models.ComplianceSeverity": 0 | 1;
+        "StatsTid.SharedKernel.Models.ComplianceViolation": {
+            violationType: components["schemas"]["StatsTid.SharedKernel.Models.ComplianceViolationType"];
+            /** Format: date */
+            date: string;
+            /** Format: double */
+            actualValue: number;
+            /** Format: double */
+            thresholdValue: number;
+            severity: components["schemas"]["StatsTid.SharedKernel.Models.ComplianceSeverity"];
+            isVoluntaryExempt: boolean;
+            message: string;
+        };
+        /**
+         * Format: int32
+         * @enum {integer}
+         */
+        "StatsTid.SharedKernel.Models.ComplianceViolationType": 0 | 1 | 2 | 3 | 4 | 5;
+        "StatsTid.SharedKernel.Models.TimeEntry": {
+            employeeId: string;
+            /** Format: date */
+            date: string;
+            /** Format: double */
+            hours: number;
+            /** Format: time */
+            startTime: string | null;
+            /** Format: time */
+            endTime: string | null;
+            taskId: string | null;
+            activityType: string | null;
+            agreementCode: string;
+            okVersion: string;
+            /** Format: date-time */
+            registeredAt: string;
+            voluntaryUnsocialHours: boolean;
         };
     };
     responses: never;

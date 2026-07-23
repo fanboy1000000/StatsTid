@@ -14,7 +14,16 @@ import {
   type MonthAbsenceUsage,
 } from '../../hooks/useBalanceSummary'
 
+// S120 / TASK-12001 mock re-anchoring — the fixture mirrors the SPEC
+// `BalanceSummaryResponse`: the served scalars the deleted hand-written type
+// omitted (employeeId/year/month), the REQUIRED `overtimeBalance` (null-valued
+// when the agreement has none) and each row's REQUIRED nullable `settlement`
+// (null = unsettled — the additive S120 surfacing; display-only). No behavior
+// pin changed — only the mock SHAPE grew to the wire truth.
 const summaryData: BalanceSummaryData = {
+  employeeId: 'emp001',
+  year: 2026,
+  month: 3,
   flexBalance: 4.2,
   // Deliberately DIFFERENT from any month aggregate: /summary's flexDelta is the
   // LAST event's delta (R10/Reviewer W3) — the component must NEVER render it on
@@ -28,13 +37,14 @@ const summaryData: BalanceSummaryData = {
   agreementCode: 'AC',
   hasMerarbejde: true,
   entitlements: [
-    { type: 'VACATION', label: 'Ferie', totalQuota: 25, used: 8, planned: 0, carryoverIn: 3, remaining: 17, earned: 20.8, entitlementYear: 2025 },
-    { type: 'SPECIAL_HOLIDAY', label: 'Særlige feriedage', totalQuota: 5, used: 1, planned: 0, carryoverIn: 0, remaining: 4, earned: 5, entitlementYear: 2025 },
-    { type: 'CARE_DAY', label: 'Omsorgsdage', totalQuota: 2, used: 0, planned: 0, carryoverIn: 0, remaining: 2, earned: 2, entitlementYear: 2026 },
+    { type: 'VACATION', label: 'Ferie', totalQuota: 25, used: 8, planned: 0, carryoverIn: 3, remaining: 17, earned: 20.8, entitlementYear: 2025, settlement: null },
+    { type: 'SPECIAL_HOLIDAY', label: 'Særlige feriedage', totalQuota: 5, used: 1, planned: 0, carryoverIn: 0, remaining: 4, earned: 5, entitlementYear: 2025, settlement: null },
+    { type: 'CARE_DAY', label: 'Omsorgsdage', totalQuota: 2, used: 0, planned: 0, carryoverIn: 0, remaining: 2, earned: 2, entitlementYear: 2026, settlement: null },
     // An age-eligible extra entitlement — must NOT become a 5th card (R10:
     // the dynamic additional-entitlement cards are removed from Skema).
-    { type: 'SENIOR_DAY', label: 'Seniordage', totalQuota: 2, used: 0, planned: 0, carryoverIn: 0, remaining: 2, earned: 2, entitlementYear: 2026 },
+    { type: 'SENIOR_DAY', label: 'Seniordage', totalQuota: 2, used: 0, planned: 0, carryoverIn: 0, remaining: 2, earned: 2, entitlementYear: 2026, settlement: null },
   ],
+  overtimeBalance: null,
 }
 
 const usage = (entries: [string, MonthAbsenceUsage][]) => new Map(entries)

@@ -84,6 +84,10 @@ function makeOverview(overrides: Partial<YearOverview> = {}): YearOverview {
         // Disposition (ADR-030 D9 as amended): amount expiring beyond the cap at Dec. > 0 → "Til udløb".
         expiring: 5,
         boundaryMonth: 12,
+        // S120 mock re-anchoring: the spec category REQUIRES the nullable
+        // `settlement` member (owner ruling #2 made even the empty-config
+        // branch emit it) — null = unsettled; display-only this pass.
+        settlement: null,
       },
       {
         type: 'SPECIAL_HOLIDAY',
@@ -94,6 +98,7 @@ function makeOverview(overrides: Partial<YearOverview> = {}): YearOverview {
         // SHOWS at Dec under the "Til udbetaling" label (inverts the pre-amendment cap-0 ⇒ em-dash).
         expiring: 3,
         boundaryMonth: 12,
+        settlement: null,
       },
       {
         type: 'CARE_DAY',
@@ -102,6 +107,7 @@ function makeOverview(overrides: Partial<YearOverview> = {}): YearOverview {
         afholdt: [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         expiring: 0,
         boundaryMonth: 12,
+        settlement: null,
       },
       {
         type: 'SENIOR_DAY',
@@ -110,6 +116,7 @@ function makeOverview(overrides: Partial<YearOverview> = {}): YearOverview {
         afholdt: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         expiring: 0,
         boundaryMonth: 12,
+        settlement: null,
       },
     ],
     ...overrides,
@@ -314,6 +321,7 @@ describe('ArsoversigtPage — cell rules (server-today authority)', () => {
       afholdt: Array.from({ length: 12 }, () => 0),
       expiring: 0,
       boundaryMonth: 12,
+      settlement: null,
     }
     mockUseYearOverview.mockReturnValue(overviewHook(ov))
     // Must not throw while rendering.

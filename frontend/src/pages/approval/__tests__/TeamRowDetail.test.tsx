@@ -370,7 +370,8 @@ describe('TeamRowDetail — compliance Advarsel + fault isolation', () => {
     mockRoutes({
       compliance: {
         ruleId: 'WT', employeeId: 'emp001', success: false, violations: [],
-        warnings: [{ violationType: 'DAILY_REST', date: '2026-03-10', actualValue: 9, thresholdValue: 11, severity: 'WARNING', isVoluntaryExempt: false, message: 'For kort hviletid den 10.' }],
+        // S120 mock re-anchoring: the wire serves INTEGER enums (DAILY_REST=0, WARNING=0).
+        warnings: [{ violationType: 0, date: '2026-03-10', actualValue: 9, thresholdValue: 11, severity: 0, isVoluntaryExempt: false, message: 'For kort hviletid den 10.' }],
       },
     })
     renderPage()

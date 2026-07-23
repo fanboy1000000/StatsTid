@@ -18,19 +18,22 @@ const mockRows: SkemaRow[] = [
   { type: 'absence', key: 'VACATION', label: 'Ferie' },
 ]
 
+// S120 mock re-anchoring: `fullDayOnly` is REQUIRED on the spec row-preference
+// absence rows (the deleted hand-written type marked it optional) — the
+// fixtures carry `false` explicitly; no behavior pin changed.
 const prefsAll: SkemaRowPreferences = {
   configured: true,
   projects: [
     { projectId: 'p1', projectCode: 'DRIFT', projectName: 'Drift', sortOrder: 0 },
     { projectId: 'p2', projectCode: 'PROJ-2', projectName: 'Udvikling', sortOrder: 1 },
   ],
-  absenceTypes: [{ type: 'VACATION', label: 'Ferie', sortOrder: 0 }],
+  absenceTypes: [{ type: 'VACATION', label: 'Ferie', fullDayOnly: false, sortOrder: 0 }],
 }
 
 const prefsHideDrift: SkemaRowPreferences = {
   configured: true,
   projects: [{ projectId: 'p2', projectCode: 'PROJ-2', projectName: 'Udvikling', sortOrder: 0 }],
-  absenceTypes: [{ type: 'VACATION', label: 'Ferie', sortOrder: 0 }],
+  absenceTypes: [{ type: 'VACATION', label: 'Ferie', fullDayOnly: false, sortOrder: 0 }],
 }
 
 function renderGrid(overrides: Partial<Parameters<typeof SkemaGrid>[0]> = {}) {
@@ -287,7 +290,7 @@ describe('SkemaGrid — visibility-independence (R3 pins)', () => {
         { projectId: 'p2', projectCode: 'PROJ-2', projectName: 'Udvikling', sortOrder: 0 },
         { projectId: 'p1', projectCode: 'DRIFT', projectName: 'Drift', sortOrder: 1 },
       ],
-      absenceTypes: [{ type: 'VACATION', label: 'Ferie', sortOrder: 0 }],
+      absenceTypes: [{ type: 'VACATION', label: 'Ferie', fullDayOnly: false, sortOrder: 0 }],
     }
     const { container } = renderGrid({ rowPreferences: reversed })
     const labels = Array.from(container.querySelectorAll('tbody tr'))
@@ -854,7 +857,7 @@ describe('SkemaGrid — keyboard operability (R15)', () => {
       rowPreferences: {
         configured: true,
         projects: [], // hides the populated DRIFT → the affordance renders
-        absenceTypes: [{ type: 'VACATION', label: 'Ferie', sortOrder: 0 }],
+        absenceTypes: [{ type: 'VACATION', label: 'Ferie', fullDayOnly: false, sortOrder: 0 }],
       },
     })
     expect(

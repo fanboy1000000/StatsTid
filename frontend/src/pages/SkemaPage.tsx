@@ -245,7 +245,11 @@ export function SkemaPage() {
     const cells = new Map<string, number>()
     for (const entry of data.entries) {
       if (entry.hours !== 0) {
-        cells.set(`${entry.projectCode}:${entry.date}`, entry.hours)
+        // S120 — `projectCode` is NULLABLE on the wire (the spec truth the
+        // hand-written type hid); the degenerate null key normalizes to '' —
+        // the SAME normalization deriveSkemaRowBasis applies, so those hours
+        // stay inside the Diff/I alt arithmetic.
+        cells.set(`${entry.projectCode ?? ''}:${entry.date}`, entry.hours)
       }
     }
     for (const absence of data.absences) {
@@ -752,6 +756,9 @@ export function SkemaPage() {
       absenceTypes: (data?.absenceTypes ?? []).map((a, i) => ({
         type: a.type,
         label: a.label,
+        // S120 — the spec row-preference row REQUIRES the flag; thread the
+        // served value through (rendering-only — the wire body drops it).
+        fullDayOnly: a.fullDayOnly,
         sortOrder: i,
       })),
     }

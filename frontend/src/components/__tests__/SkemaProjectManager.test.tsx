@@ -14,13 +14,17 @@ import userEvent from '@testing-library/user-event'
 import { SkemaProjectManager } from '../SkemaProjectManager'
 import type { SkemaRowPreferencesInvalidPayload } from '../../lib/api'
 import type {
-  Project,
   SkemaCatalogs,
   SkemaRowPreferenceAbsenceType,
   SkemaRowPreferenceProject,
   SkemaRowPreferences,
 } from '../../types'
 
+// S120 mock re-anchoring: the S119 skema-owned `Project` interface was DELETED
+// (the catalog rows are the spec `ProjectResponse` — same 4 members, reached
+// here via `SkemaCatalogs['projects']`), and `fullDayOnly` is REQUIRED on the
+// spec absence rows (the deleted hand-written types marked it optional) — the
+// fixtures and emission pins carry it explicitly. No behavior pin changed.
 const SELECTED_PROJECTS: SkemaRowPreferenceProject[] = [
   { projectId: 'p-sag', projectCode: 'ØS-1042', projectName: 'Sagsbehandling', sortOrder: 0 },
   { projectId: 'p-borger', projectCode: 'DIG-2207', projectName: 'Borger.dk', sortOrder: 1 },
@@ -29,7 +33,7 @@ const SELECTED_PROJECTS: SkemaRowPreferenceProject[] = [
 
 // Catalog = selection-INDEPENDENT (R4): includes the selected three plus two
 // addable entries.
-const CATALOG_PROJECTS: Project[] = [
+const CATALOG_PROJECTS: SkemaCatalogs['projects'] = [
   { projectId: 'p-sag', projectCode: 'ØS-1042', projectName: 'Sagsbehandling', sortOrder: 0 },
   { projectId: 'p-borger', projectCode: 'DIG-2207', projectName: 'Borger.dk', sortOrder: 1 },
   { projectId: 'p-drift', projectCode: 'IT-6000', projectName: 'Drift & support', sortOrder: 2 },
@@ -38,14 +42,14 @@ const CATALOG_PROJECTS: Project[] = [
 ]
 
 const SELECTED_ABSENCE: SkemaRowPreferenceAbsenceType[] = [
-  { type: 'VACATION', label: 'Ferie', sortOrder: 0 },
-  { type: 'CARE_DAY', label: 'Omsorgsdag', sortOrder: 1 },
+  { type: 'VACATION', label: 'Ferie', fullDayOnly: false, sortOrder: 0 },
+  { type: 'CARE_DAY', label: 'Omsorgsdag', fullDayOnly: false, sortOrder: 1 },
 ]
 
-const CATALOG_ABSENCE = [
-  { type: 'VACATION', label: 'Ferie' },
-  { type: 'CARE_DAY', label: 'Omsorgsdag' },
-  { type: 'SENIOR_DAY', label: 'Seniordag' },
+const CATALOG_ABSENCE: SkemaCatalogs['absenceTypes'] = [
+  { type: 'VACATION', label: 'Ferie', fullDayOnly: false },
+  { type: 'CARE_DAY', label: 'Omsorgsdag', fullDayOnly: false },
+  { type: 'SENIOR_DAY', label: 'Seniordag', fullDayOnly: false },
 ]
 
 const CATALOGS: SkemaCatalogs = { projects: CATALOG_PROJECTS, absenceTypes: CATALOG_ABSENCE }
@@ -354,15 +358,18 @@ describe('SkemaProjectManager — Ferie og fravær tab', () => {
     expect(within(mine).getByText('CARE_DAY')).toBeInTheDocument()
   })
 
-  it('absence add emits {type, label, sortOrder} entries, appended at the END, dense', async () => {
+  it('absence add emits the FULL spec-row entries (incl. the required fullDayOnly), appended at the END, dense', async () => {
     const user = userEvent.setup()
     const { props } = renderManager()
     await user.click(screen.getByRole('tab', { name: 'Ferie og fravær 2' }))
     fireEvent.click(screen.getByRole('button', { name: 'Tilføj Seniordag' }))
+    // S120: `fullDayOnly` is REQUIRED on the spec row, so the emission always
+    // carries it (false for ordinary types — previously conditionally omitted,
+    // mirroring the deleted optional member; the wire PUT body is unchanged).
     expect(props.onAbsenceTypesChange).toHaveBeenCalledWith([
-      { type: 'VACATION', label: 'Ferie', sortOrder: 0 },
-      { type: 'CARE_DAY', label: 'Omsorgsdag', sortOrder: 1 },
-      { type: 'SENIOR_DAY', label: 'Seniordag', sortOrder: 2 },
+      { type: 'VACATION', label: 'Ferie', fullDayOnly: false, sortOrder: 0 },
+      { type: 'CARE_DAY', label: 'Omsorgsdag', fullDayOnly: false, sortOrder: 1 },
+      { type: 'SENIOR_DAY', label: 'Seniordag', fullDayOnly: false, sortOrder: 2 },
     ])
   })
 
@@ -372,8 +379,8 @@ describe('SkemaProjectManager — Ferie og fravær tab', () => {
     await user.click(screen.getByRole('tab', { name: 'Ferie og fravær 2' }))
     fireEvent.click(screen.getByRole('button', { name: 'Flyt Omsorgsdag op' }))
     expect(props.onAbsenceTypesChange).toHaveBeenCalledWith([
-      { type: 'CARE_DAY', label: 'Omsorgsdag', sortOrder: 0 },
-      { type: 'VACATION', label: 'Ferie', sortOrder: 1 },
+      { type: 'CARE_DAY', label: 'Omsorgsdag', fullDayOnly: false, sortOrder: 0 },
+      { type: 'VACATION', label: 'Ferie', fullDayOnly: false, sortOrder: 1 },
     ])
   })
 
@@ -457,14 +464,14 @@ describe('SkemaProjectManager — full-day note (S73 R5)', () => {
     configured: true,
     projects: SELECTED_PROJECTS,
     absenceTypes: [
-      { type: 'VACATION', label: 'Ferie', sortOrder: 0 },
-      { type: 'CARE_DAY', label: 'Omsorgsdag', sortOrder: 1, fullDayOnly: true },
+      { type: 'VACATION', label: 'Ferie', fullDayOnly: false, sortOrder: 0 },
+      { type: 'CARE_DAY', label: 'Omsorgsdag', fullDayOnly: true, sortOrder: 1 },
     ],
   }
   const fullDayCatalogs: SkemaCatalogs = {
     projects: CATALOG_PROJECTS,
     absenceTypes: [
-      { type: 'VACATION', label: 'Ferie' },
+      { type: 'VACATION', label: 'Ferie', fullDayOnly: false },
       { type: 'CARE_DAY', label: 'Omsorgsdag', fullDayOnly: true },
       { type: 'SENIOR_DAY', label: 'Seniordag', fullDayOnly: true },
     ],

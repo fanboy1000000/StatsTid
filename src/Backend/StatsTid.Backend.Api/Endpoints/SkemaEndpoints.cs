@@ -2,6 +2,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using Npgsql;
 using StatsTid.Auth;
+using StatsTid.Backend.Api.Contracts;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
@@ -251,7 +252,7 @@ public static class SkemaEndpoints
             // computation, two projections; keeping them identical prevents the S72-B1
             // cross-surface-drift class).
             var absenceTypes = absenceCatalog
-                .Select(c => new { type = c.Type, label = c.Label, fullDayOnly = c.FullDayOnly })
+                .Select(c => new SkemaAbsenceTypeRow(c.Type, c.Label, c.FullDayOnly))
                 .ToList();
 
             // S27 TASK-2706 GET migration: read time entries + absences from the
@@ -264,28 +265,24 @@ public static class SkemaEndpoints
             var entriesRows = await timeEntryProjectionRepo.GetByEmployeeAndDateRangeAsync(
                 employeeId, monthStart, monthEnd, ct);
             var entries = entriesRows
-                .Select(e => new
-                {
-                    date = e.Date,
-                    projectCode = e.TaskId,
-                    hours = e.Hours
-                })
+                .Select(e => new SkemaEntryRow(
+                    Date: e.Date,
+                    ProjectCode: e.TaskId,
+                    Hours: e.Hours))
                 .ToList();
 
             var absencesRows = await absenceProjectionRepo.GetByEmployeeAndDateRangeAsync(
                 employeeId, monthStart, monthEnd, ct);
             var absences = absencesRows
-                .Select(e => new
-                {
-                    date = e.Date,
-                    absenceType = e.AbsenceType,
-                    hours = e.Hours,
+                .Select(e => new SkemaAbsenceRow(
+                    Date: e.Date,
+                    AbsenceType: e.AbsenceType,
+                    Hours: e.Hours,
                     // S72 / TASK-7201 (R10) — the ADR-032 recorded per-absence feriedage,
                     // served verbatim from absences_projection (nullable passthrough: ADR-032
                     // persists null on zero-norm days / non-entitlement rows; the FE skips
                     // null-valued rows when summing — SPRINT-72 R10 / Reviewer N4).
-                    feriedage = e.Feriedage
-                })
+                    Feriedage: e.Feriedage))
                 .ToList();
 
             // ── TASK-5603 self-recorded work time ("Arbejdstid") ──
@@ -295,12 +292,10 @@ public static class SkemaEndpoints
             var workTimeRows = await workTimeProjectionRepo.GetByEmployeeAndDateRangeAsync(
                 employeeId, monthStart, monthEnd, ct);
             var workTime = workTimeRows
-                .Select(w => new
-                {
-                    date = w.Date,
-                    intervals = w.Intervals.Select(i => new { start = i.Start, end = i.End }).ToList(),
-                    manualHours = w.ManualHours
-                })
+                .Select(w => new SkemaWorkTimeDayRow(
+                    Date: w.Date,
+                    Intervals: w.Intervals.Select(i => new SkemaWorkIntervalRow(i.Start, i.End)).ToList(),
+                    ManualHours: w.ManualHours))
                 .ToList();
 
             // ── TASK-5603 per-day norm (dailyNorm) — S65 / TASK-6502 extraction ──
@@ -313,7 +308,7 @@ public static class SkemaEndpoints
             var dailyNormEntries = await dailyNormCalculator.ComputeRangeAsync(
                 employeeId, monthStart, monthEnd, user.PrimaryOrgId, ct);
             var dailyNorm = dailyNormEntries
-                .Select(n => (object)new { date = n.Date, hours = n.Hours })
+                .Select(n => new SkemaDayHoursRow(n.Date, n.Hours))
                 .ToList();
 
             // ── S72 / TASK-7201 — R4 catalog-vs-visible row preferences ──
@@ -361,49 +356,42 @@ public static class SkemaEndpoints
             var fullDayOnlyByType = absenceCatalog.ToDictionary(
                 c => c.Type, c => c.FullDayOnly, StringComparer.Ordinal);
 
-            var rowPreferences = new
-            {
-                configured = preferencesConfigured,
-                projects = visibleProjects
-                    .Select((p, i) => new
-                    {
-                        projectId = p.ProjectId,
-                        projectCode = p.ProjectCode,
-                        projectName = p.ProjectName,
-                        sortOrder = i
-                    })
+            // S120 / TASK-12000 — the project rows REUSE the S119 ProjectResponse (byte-identical
+            // 4-member shape; sibling rule); the container record is SHARED with the
+            // row-preferences PUT's 200 body (one shape, two surfaces).
+            var rowPreferences = new SkemaRowPreferencesResponse(
+                Configured: preferencesConfigured,
+                Projects: visibleProjects
+                    .Select((p, i) => new ProjectResponse(
+                        ProjectId: p.ProjectId,
+                        ProjectCode: p.ProjectCode,
+                        ProjectName: p.ProjectName,
+                        SortOrder: i))
                     .ToList(),
-                absenceTypes = visibleAbsenceTypes
-                    .Select((t, i) => new
-                    {
-                        type = t,
-                        label = AbsenceTypeLabels.TryGetValue(t, out var l) ? l : t,
-                        fullDayOnly = fullDayOnlyByType.TryGetValue(t, out var fdo) && fdo,
-                        sortOrder = i
-                    })
-                    .ToList()
-            };
+                AbsenceTypes: visibleAbsenceTypes
+                    .Select((t, i) => new SkemaRowPreferenceAbsenceRow(
+                        Type: t,
+                        Label: AbsenceTypeLabels.TryGetValue(t, out var l) ? l : t,
+                        FullDayOnly: fullDayOnlyByType.TryGetValue(t, out var fdo) && fdo,
+                        SortOrder: i))
+                    .ToList());
 
-            var catalogs = new
-            {
+            var catalogs = new SkemaCatalogs(
                 // Addable projects in the org read's order; sortOrder here is the ORG-level
                 // sort (mirrors the existing `projects` field's meaning for this value).
-                projects = catalogProjects
-                    .Select(p => new
-                    {
-                        projectId = p.ProjectId,
-                        projectCode = p.ProjectCode,
-                        projectName = p.ProjectName,
-                        sortOrder = p.SortOrder
-                    })
+                Projects: catalogProjects
+                    .Select(p => new ProjectResponse(
+                        ProjectId: p.ProjectId,
+                        ProjectCode: p.ProjectCode,
+                        ProjectName: p.ProjectName,
+                        SortOrder: p.SortOrder))
                     .ToList(),
                 // The SAME filtered chain (and order) the existing `absenceTypes` field
                 // serves — one computation, two projections. S73 / TASK-7301 (R3): the
                 // catalog surface carries fullDayOnly.
-                absenceTypes = absenceCatalog
-                    .Select(c => new { type = c.Type, label = c.Label, fullDayOnly = c.FullDayOnly })
-                    .ToList()
-            };
+                AbsenceTypes: absenceCatalog
+                    .Select(c => new SkemaAbsenceTypeRow(c.Type, c.Label, c.FullDayOnly))
+                    .ToList());
 
             // ── S72 / TASK-7201 — boundary-day workTime (SPRINT-72 R6 input) ──
             // EXACTLY two extra days — the last day of the previous month and the first day
@@ -417,12 +405,10 @@ public static class SkemaEndpoints
             var nextBoundaryRows = await workTimeProjectionRepo.GetByEmployeeAndDateRangeAsync(
                 employeeId, nextBoundaryDay, nextBoundaryDay, ct);
             var boundaryWorkTime = prevBoundaryRows.Concat(nextBoundaryRows)
-                .Select(w => new
-                {
-                    date = w.Date,
-                    intervals = w.Intervals.Select(i => new { start = i.Start, end = i.End }).ToList(),
-                    manualHours = w.ManualHours
-                })
+                .Select(w => new SkemaWorkTimeDayRow(
+                    Date: w.Date,
+                    Intervals: w.Intervals.Select(i => new SkemaWorkIntervalRow(i.Start, i.End)).ToList(),
+                    ManualHours: w.ManualHours))
                 .ToList();
 
             // ── S72 / TASK-7201 — R10 fullDayNormAtMonthEnd scalar ──
@@ -447,7 +433,7 @@ public static class SkemaEndpoints
             // scalar above: the S34 data-integrity fail-loud (profile row without a covering
             // agreement row) must never 500 a read — that day serves null and the save-path
             // guards keep fail-louding.
-            var consumptionBasis = new List<object>(daysInMonth);
+            var consumptionBasis = new List<SkemaDayHoursRow>(daysInMonth);
             for (var basisDay = monthStart; basisDay <= monthEnd; basisDay = basisDay.AddDays(1))
             {
                 decimal? basis;
@@ -460,57 +446,56 @@ public static class SkemaEndpoints
                 {
                     basis = null;
                 }
-                consumptionBasis.Add(new { date = basisDay, hours = RoundBasis(basis) });
+                consumptionBasis.Add(new SkemaDayHoursRow(basisDay, RoundBasis(basis)));
             }
 
-            // Get approval period for this month
+            // Get approval period for this month. S120 / TASK-12000 — the nullable-complex
+            // member (the S117 allOf wrapper's application #4); minted new after the
+            // sibling-CHECK against the S116 ApprovalResponses family (no 6-key sibling).
             var period = await approvalRepo.GetByEmployeeAndPeriodAsync(employeeId, monthStart, monthEnd, ct);
-            object? approval = period is not null
-                ? new
-                {
-                    periodId = period.PeriodId,
-                    status = period.Status,
-                    employeeDeadline = period.EmployeeDeadline,
-                    managerDeadline = period.ManagerDeadline,
-                    employeeApprovedAt = period.EmployeeApprovedAt,
-                    rejectionReason = period.RejectionReason
-                }
+            SkemaApprovalInfo? approval = period is not null
+                ? new SkemaApprovalInfo(
+                    PeriodId: period.PeriodId,
+                    Status: period.Status,
+                    EmployeeDeadline: period.EmployeeDeadline,
+                    ManagerDeadline: period.ManagerDeadline,
+                    EmployeeApprovedAt: period.EmployeeApprovedAt,
+                    RejectionReason: period.RejectionReason)
                 : null;
 
             // Compute deadlines
             var employeeDeadline = monthEnd.AddDays(2);
             var managerDeadline = monthEnd.AddDays(5);
 
-            return Results.Ok(new
-            {
-                year,
-                month,
-                daysInMonth,
-                projects = projects.Select(p => new
-                {
-                    projectId = p.ProjectId,
-                    projectCode = p.ProjectCode,
-                    projectName = p.ProjectName,
-                    sortOrder = p.SortOrder
-                }),
-                absenceTypes,
-                entries,
-                absences,
-                workTime,
-                dailyNorm,
-                approval,
-                employeeDeadline,
-                managerDeadline,
+            // S120 / TASK-12000 — named record (BYTE-IDENTICAL wire JSON; the skema family
+            // carries NO ruled delta).
+            return Results.Ok(new SkemaMonthResponse(
+                Year: year,
+                Month: month,
+                DaysInMonth: daysInMonth,
+                Projects: projects.Select(p => new ProjectResponse(
+                    ProjectId: p.ProjectId,
+                    ProjectCode: p.ProjectCode,
+                    ProjectName: p.ProjectName,
+                    SortOrder: p.SortOrder)).ToList(),
+                AbsenceTypes: absenceTypes,
+                Entries: entries,
+                Absences: absences,
+                WorkTime: workTime,
+                DailyNorm: dailyNorm,
+                Approval: approval,
+                EmployeeDeadline: employeeDeadline,
+                ManagerDeadline: managerDeadline,
                 // ── S72 / TASK-7201 additive fields (ALL existing fields above are
                 // byte-unchanged; the redesigned FE consumes these four) ──
-                rowPreferences,
-                catalogs,
-                boundaryWorkTime,
-                fullDayNormAtMonthEnd,
+                RowPreferences: rowPreferences,
+                Catalogs: catalogs,
+                BoundaryWorkTime: boundaryWorkTime,
+                FullDayNormAtMonthEnd: fullDayNormAtMonthEnd,
                 // ── S73 / TASK-7301 additive field (SPRINT-73 R3) ──
-                consumptionBasis
-            });
-        }).RequireAuthorization("EmployeeOrAbove");
+                ConsumptionBasis: consumptionBasis));
+        }).RequireAuthorization("EmployeeOrAbove")
+        .Produces<SkemaMonthResponse>(StatusCodes.Status200OK); // S120 / TASK-12000
 
         // ── POST /api/skema/{employeeId}/save — Batch save entries and absences ──
 
@@ -1737,8 +1722,12 @@ public static class SkemaEndpoints
                 return Results.Json(ex.Body, statusCode: 422);
             }
 
-            return Results.Ok(new { saved = savedCount });
-        }).RequireAuthorization("EmployeeOrAbove");
+            // S120 / TASK-12000 — named record (BYTE-IDENTICAL wire JSON). Response-shaping
+            // ONLY — the in-tx event/outbox/projection emits above are byte-untouched (P3
+            // fence); the 422/400/409 error fan stays untyped (S120 Explicit exclusions).
+            return Results.Ok(new SkemaSaveResponse(Saved: savedCount));
+        }).RequireAuthorization("EmployeeOrAbove")
+        .Produces<SkemaSaveResponse>(StatusCodes.Status200OK); // S120 / TASK-12000
 
         // ── PUT /api/skema/{employeeId}/row-preferences — R4 full-replacement write ──
         // S72 / TASK-7201. The manager-modal's save: the body is the FULL replacement set of
@@ -1874,33 +1863,30 @@ public static class SkemaEndpoints
             // post-save replacement state never drops the flag (the S72-B1 drift class).
             var prefFullDayOnlyByType = absenceCatalog.ToDictionary(
                 c => c.Type, c => c.FullDayOnly, StringComparer.Ordinal);
-            return Results.Ok(new
-            {
-                configured = true,
-                projects = orderedProjects
+            // S120 / TASK-12000 — the SHARED container record (the month GET's rowPreferences
+            // shape; sibling rule — one shape, two surfaces). BYTE-IDENTICAL wire JSON.
+            return Results.Ok(new SkemaRowPreferencesResponse(
+                Configured: true,
+                Projects: orderedProjects
                     .Select(p =>
                     {
                         var project = projectsById[p.ProjectId];
-                        return new
-                        {
-                            projectId = project.ProjectId,
-                            projectCode = project.ProjectCode,
-                            projectName = project.ProjectName,
-                            sortOrder = p.SortOrder
-                        };
+                        return new ProjectResponse(
+                            ProjectId: project.ProjectId,
+                            ProjectCode: project.ProjectCode,
+                            ProjectName: project.ProjectName,
+                            SortOrder: p.SortOrder);
                     })
                     .ToList(),
-                absenceTypes = orderedAbsenceTypes
-                    .Select(a => new
-                    {
-                        type = a.AbsenceType,
-                        label = AbsenceTypeLabels.TryGetValue(a.AbsenceType, out var l) ? l : a.AbsenceType,
-                        fullDayOnly = prefFullDayOnlyByType.TryGetValue(a.AbsenceType, out var fdo) && fdo,
-                        sortOrder = a.SortOrder
-                    })
-                    .ToList()
-            });
-        }).RequireAuthorization("EmployeeOrAbove");
+                AbsenceTypes: orderedAbsenceTypes
+                    .Select(a => new SkemaRowPreferenceAbsenceRow(
+                        Type: a.AbsenceType,
+                        Label: AbsenceTypeLabels.TryGetValue(a.AbsenceType, out var l) ? l : a.AbsenceType,
+                        FullDayOnly: prefFullDayOnlyByType.TryGetValue(a.AbsenceType, out var fdo) && fdo,
+                        SortOrder: a.SortOrder))
+                    .ToList()));
+        }).RequireAuthorization("EmployeeOrAbove")
+        .Produces<SkemaRowPreferencesResponse>(StatusCodes.Status200OK); // S120 / TASK-12000
 
         return app;
     }

@@ -62,8 +62,15 @@
           "required": true
         },
         "responses": {
-          "200": {
-            "description": "OK"
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.TimeEntryCreatedResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -85,7 +92,17 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StatsTid.SharedKernel.Models.TimeEntry"
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -107,7 +124,17 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StatsTid.SharedKernel.Models.AbsenceEntry"
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -129,7 +156,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.FlexBalanceResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -1636,7 +1670,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.SkemaMonthResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -1668,7 +1709,14 @@
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.SkemaSaveResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -1700,7 +1748,14 @@
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.SkemaRowPreferencesResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -3278,7 +3333,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.BalanceSummaryResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -3318,7 +3380,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.BalanceSeriesResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -3349,7 +3418,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.YearOverviewResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -3389,7 +3465,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.SharedKernel.Models.ComplianceCheckResult"
+                }
+              }
+            }
           }
         }
       }
@@ -3411,7 +3494,17 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.CompensatoryRestItem"
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -3442,7 +3535,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.OvertimeBalanceResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -3498,7 +3598,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.SharedKernel.Models.ComplianceCheckResult"
+                }
+              }
+            }
           }
         }
       }
@@ -3707,7 +3814,14 @@
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.OvertimeCompensateResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -3738,7 +3852,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.CompensationChoiceResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -3768,7 +3889,14 @@
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.CompensationChoiceUpdateResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -5505,6 +5633,268 @@
         },
         "additionalProperties": false
       },
+      "StatsTid.Backend.Api.Contracts.BalanceEntitlementRow": {
+        "required": [
+          "carryoverIn",
+          "earned",
+          "entitlementYear",
+          "label",
+          "planned",
+          "remaining",
+          "settlement",
+          "totalQuota",
+          "type",
+          "used"
+        ],
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "totalQuota": {
+            "type": "number",
+            "format": "double"
+          },
+          "earned": {
+            "type": "number",
+            "format": "double"
+          },
+          "used": {
+            "type": "number",
+            "format": "double"
+          },
+          "planned": {
+            "type": "number",
+            "format": "double"
+          },
+          "carryoverIn": {
+            "type": "number",
+            "format": "double"
+          },
+          "remaining": {
+            "type": "number",
+            "format": "double"
+          },
+          "entitlementYear": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "settlement": {
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.SettlementDispositionInfo"
+              }
+            ],
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.BalanceSeriesItem": {
+        "required": [
+          "annualQuota",
+          "entitlementYear",
+          "ferieaarStart",
+          "label",
+          "points",
+          "type"
+        ],
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "annualQuota": {
+            "type": "number",
+            "format": "double"
+          },
+          "entitlementYear": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "ferieaarStart": {
+            "type": "string"
+          },
+          "points": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.BalanceSeriesPoint"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.BalanceSeriesPoint": {
+        "required": [
+          "earned",
+          "isSelected",
+          "monthEnd"
+        ],
+        "type": "object",
+        "properties": {
+          "monthEnd": {
+            "type": "string"
+          },
+          "earned": {
+            "type": "number",
+            "format": "double"
+          },
+          "isSelected": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.BalanceSeriesResponse": {
+        "required": [
+          "employeeId",
+          "month",
+          "series",
+          "year"
+        ],
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string"
+          },
+          "year": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "month": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "series": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.BalanceSeriesItem"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.BalanceSummaryOvertimeInfo": {
+        "required": [
+          "accumulated",
+          "afspadseringUsed",
+          "compensationModel",
+          "paidOut",
+          "remaining"
+        ],
+        "type": "object",
+        "properties": {
+          "accumulated": {
+            "type": "number",
+            "format": "double"
+          },
+          "paidOut": {
+            "type": "number",
+            "format": "double"
+          },
+          "afspadseringUsed": {
+            "type": "number",
+            "format": "double"
+          },
+          "remaining": {
+            "type": "number",
+            "format": "double"
+          },
+          "compensationModel": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.BalanceSummaryResponse": {
+        "required": [
+          "agreementCode",
+          "employeeId",
+          "entitlements",
+          "flexBalance",
+          "flexDelta",
+          "hasMerarbejde",
+          "month",
+          "normHoursActual",
+          "normHoursExpected",
+          "overtimeBalance",
+          "overtimeHours",
+          "vacationDaysEntitlement",
+          "vacationDaysUsed",
+          "year"
+        ],
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string"
+          },
+          "year": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "month": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "flexBalance": {
+            "type": "number",
+            "format": "double"
+          },
+          "flexDelta": {
+            "type": "number",
+            "format": "double"
+          },
+          "vacationDaysUsed": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "vacationDaysEntitlement": {
+            "type": "number",
+            "format": "double"
+          },
+          "normHoursExpected": {
+            "type": "number",
+            "format": "double"
+          },
+          "normHoursActual": {
+            "type": "number",
+            "format": "double"
+          },
+          "overtimeHours": {
+            "type": "number",
+            "format": "double"
+          },
+          "agreementCode": {
+            "type": "string"
+          },
+          "hasMerarbejde": {
+            "type": "boolean"
+          },
+          "entitlements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.BalanceEntitlementRow"
+            }
+          },
+          "overtimeBalance": {
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.BalanceSummaryOvertimeInfo"
+              }
+            ],
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
       "StatsTid.Backend.Api.Contracts.BirthDateResponse": {
         "required": [
           "birthDate",
@@ -5524,6 +5914,99 @@
           "version": {
             "type": "integer",
             "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.CompensationChoiceResponse": {
+        "required": [
+          "compensationModel",
+          "employeeId",
+          "periodYear",
+          "source"
+        ],
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string"
+          },
+          "periodYear": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "compensationModel": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.CompensationChoiceUpdateResponse": {
+        "required": [
+          "compensationModel",
+          "employeeId",
+          "periodYear"
+        ],
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string"
+          },
+          "periodYear": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "compensationModel": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.CompensatoryRestItem": {
+        "required": [
+          "compensatoryDate",
+          "createdAt",
+          "employeeId",
+          "hours",
+          "id",
+          "sourceDate",
+          "status"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "employeeId": {
+            "type": "string"
+          },
+          "sourceDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "compensatoryDate": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "hours": {
+            "type": "number",
+            "format": "double"
+          },
+          "status": {
+            "enum": [
+              "PENDING",
+              "GRANTED",
+              "EXPIRED"
+            ],
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
           }
         },
         "additionalProperties": false
@@ -6131,6 +6614,40 @@
         },
         "additionalProperties": false
       },
+      "StatsTid.Backend.Api.Contracts.FlexBalanceResponse": {
+        "required": [
+          "balance",
+          "delta",
+          "employeeId",
+          "previousBalance",
+          "reason"
+        ],
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string"
+          },
+          "balance": {
+            "type": "number",
+            "format": "double"
+          },
+          "previousBalance": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "delta": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
       "StatsTid.Backend.Api.Contracts.ForestMaoNode": {
         "required": [
           "materializedPath",
@@ -6673,6 +7190,91 @@
           },
           "okVersion": {
             "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.OvertimeBalanceResponse": {
+        "required": [
+          "accumulated",
+          "afspadseringUsed",
+          "agreementCode",
+          "balanceId",
+          "compensationModel",
+          "employeeId",
+          "paidOut",
+          "periodYear",
+          "remaining",
+          "updatedAt"
+        ],
+        "type": "object",
+        "properties": {
+          "balanceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "employeeId": {
+            "type": "string"
+          },
+          "agreementCode": {
+            "type": "string"
+          },
+          "periodYear": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "accumulated": {
+            "type": "number",
+            "format": "double"
+          },
+          "paidOut": {
+            "type": "number",
+            "format": "double"
+          },
+          "afspadseringUsed": {
+            "type": "number",
+            "format": "double"
+          },
+          "remaining": {
+            "type": "number",
+            "format": "double"
+          },
+          "compensationModel": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.OvertimeCompensateResponse": {
+        "required": [
+          "applied",
+          "compensationType",
+          "employeeId",
+          "hours",
+          "periodYear"
+        ],
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string"
+          },
+          "periodYear": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "hours": {
+            "type": "number",
+            "format": "double"
+          },
+          "compensationType": {
+            "type": "string"
+          },
+          "applied": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false
@@ -7791,6 +8393,60 @@
         },
         "additionalProperties": false
       },
+      "StatsTid.Backend.Api.Contracts.SettlementDispositionInfo": {
+        "required": [
+          "claimDispositionDays",
+          "forfeitDays",
+          "forfeitPending",
+          "payoutDays",
+          "reviewDisposition",
+          "state",
+          "transferDays"
+        ],
+        "type": "object",
+        "properties": {
+          "state": {
+            "enum": [
+              "PENDING_REVIEW",
+              "SETTLED",
+              "REVERSED"
+            ],
+            "type": "string"
+          },
+          "transferDays": {
+            "type": "number",
+            "format": "double"
+          },
+          "payoutDays": {
+            "type": "number",
+            "format": "double"
+          },
+          "forfeitDays": {
+            "type": "number",
+            "format": "double"
+          },
+          "forfeitPending": {
+            "type": "boolean"
+          },
+          "reviewDisposition": {
+            "enum": [
+              "FORFEIT",
+              "DEFER",
+              "MODREGNING",
+              "WAIVED",
+              "FERIEHINDRING"
+            ],
+            "type": "string",
+            "nullable": true
+          },
+          "claimDispositionDays": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
       "StatsTid.Backend.Api.Contracts.SettlementReversalResponse": {
         "required": [
           "bareReversalNotDue",
@@ -7894,6 +8550,383 @@
           "version": {
             "type": "integer",
             "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.SkemaAbsenceRow": {
+        "required": [
+          "absenceType",
+          "date",
+          "feriedage",
+          "hours"
+        ],
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "absenceType": {
+            "type": "string"
+          },
+          "hours": {
+            "type": "number",
+            "format": "double"
+          },
+          "feriedage": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.SkemaAbsenceTypeRow": {
+        "required": [
+          "fullDayOnly",
+          "label",
+          "type"
+        ],
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "fullDayOnly": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.SkemaApprovalInfo": {
+        "required": [
+          "employeeApprovedAt",
+          "employeeDeadline",
+          "managerDeadline",
+          "periodId",
+          "rejectionReason",
+          "status"
+        ],
+        "type": "object",
+        "properties": {
+          "periodId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "enum": [
+              "DRAFT",
+              "SUBMITTED",
+              "EMPLOYEE_APPROVED",
+              "APPROVED",
+              "REJECTED"
+            ],
+            "type": "string"
+          },
+          "employeeDeadline": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "managerDeadline": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "employeeApprovedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "rejectionReason": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.SkemaCatalogs": {
+        "required": [
+          "absenceTypes",
+          "projects"
+        ],
+        "type": "object",
+        "properties": {
+          "projects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.ProjectResponse"
+            }
+          },
+          "absenceTypes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.SkemaAbsenceTypeRow"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.SkemaDayHoursRow": {
+        "required": [
+          "date",
+          "hours"
+        ],
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "hours": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.SkemaEntryRow": {
+        "required": [
+          "date",
+          "hours",
+          "projectCode"
+        ],
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "projectCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "hours": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.SkemaMonthResponse": {
+        "required": [
+          "absenceTypes",
+          "absences",
+          "approval",
+          "boundaryWorkTime",
+          "catalogs",
+          "consumptionBasis",
+          "dailyNorm",
+          "daysInMonth",
+          "employeeDeadline",
+          "entries",
+          "fullDayNormAtMonthEnd",
+          "managerDeadline",
+          "month",
+          "projects",
+          "rowPreferences",
+          "workTime",
+          "year"
+        ],
+        "type": "object",
+        "properties": {
+          "year": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "month": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "daysInMonth": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.ProjectResponse"
+            }
+          },
+          "absenceTypes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.SkemaAbsenceTypeRow"
+            }
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.SkemaEntryRow"
+            }
+          },
+          "absences": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.SkemaAbsenceRow"
+            }
+          },
+          "workTime": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.SkemaWorkTimeDayRow"
+            }
+          },
+          "dailyNorm": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.SkemaDayHoursRow"
+            }
+          },
+          "approval": {
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.SkemaApprovalInfo"
+              }
+            ],
+            "nullable": true
+          },
+          "employeeDeadline": {
+            "type": "string",
+            "format": "date"
+          },
+          "managerDeadline": {
+            "type": "string",
+            "format": "date"
+          },
+          "rowPreferences": {
+            "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.SkemaRowPreferencesResponse"
+          },
+          "catalogs": {
+            "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.SkemaCatalogs"
+          },
+          "boundaryWorkTime": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.SkemaWorkTimeDayRow"
+            }
+          },
+          "fullDayNormAtMonthEnd": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "consumptionBasis": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.SkemaDayHoursRow"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.SkemaRowPreferenceAbsenceRow": {
+        "required": [
+          "fullDayOnly",
+          "label",
+          "sortOrder",
+          "type"
+        ],
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "fullDayOnly": {
+            "type": "boolean"
+          },
+          "sortOrder": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.SkemaRowPreferencesResponse": {
+        "required": [
+          "absenceTypes",
+          "configured",
+          "projects"
+        ],
+        "type": "object",
+        "properties": {
+          "configured": {
+            "type": "boolean"
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.ProjectResponse"
+            }
+          },
+          "absenceTypes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.SkemaRowPreferenceAbsenceRow"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.SkemaSaveResponse": {
+        "required": [
+          "saved"
+        ],
+        "type": "object",
+        "properties": {
+          "saved": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.SkemaWorkIntervalRow": {
+        "required": [
+          "end",
+          "start"
+        ],
+        "type": "object",
+        "properties": {
+          "start": {
+            "type": "string"
+          },
+          "end": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.SkemaWorkTimeDayRow": {
+        "required": [
+          "date",
+          "intervals",
+          "manualHours"
+        ],
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "intervals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.SkemaWorkIntervalRow"
+            }
+          },
+          "manualHours": {
+            "type": "number",
+            "format": "double"
           }
         },
         "additionalProperties": false
@@ -8076,6 +9109,23 @@
           "version": {
             "type": "integer",
             "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.TimeEntryCreatedResponse": {
+        "required": [
+          "eventId",
+          "streamId"
+        ],
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "streamId": {
+            "type": "string"
           }
         },
         "additionalProperties": false
@@ -8605,6 +9655,208 @@
           "version": {
             "type": "integer",
             "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.YearOverviewCategory": {
+        "required": [
+          "afholdt",
+          "boundaryMonth",
+          "expiring",
+          "label",
+          "saldo",
+          "settlement",
+          "type"
+        ],
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "saldo": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double",
+              "nullable": true
+            }
+          },
+          "afholdt": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "expiring": {
+            "type": "number",
+            "format": "double"
+          },
+          "boundaryMonth": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "settlement": {
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.SettlementDispositionInfo"
+              }
+            ],
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.YearOverviewHeader": {
+        "required": [
+          "agreementCode",
+          "employeeName",
+          "okVersion",
+          "weeklyNormHours"
+        ],
+        "type": "object",
+        "properties": {
+          "employeeName": {
+            "type": "string"
+          },
+          "agreementCode": {
+            "type": "string"
+          },
+          "okVersion": {
+            "type": "string"
+          },
+          "weeklyNormHours": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.YearOverviewMonth": {
+        "required": [
+          "diff",
+          "month",
+          "normHours",
+          "workedHours"
+        ],
+        "type": "object",
+        "properties": {
+          "month": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "workedHours": {
+            "type": "number",
+            "format": "double"
+          },
+          "normHours": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "diff": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.YearOverviewResponse": {
+        "required": [
+          "categories",
+          "employeeId",
+          "header",
+          "months",
+          "tiles",
+          "today",
+          "year"
+        ],
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string"
+          },
+          "year": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "today": {
+            "type": "string"
+          },
+          "header": {
+            "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.YearOverviewHeader"
+          },
+          "tiles": {
+            "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.YearOverviewTiles"
+          },
+          "months": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.YearOverviewMonth"
+            }
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.YearOverviewCategory"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.YearOverviewTiles": {
+        "required": [
+          "careDayRemaining",
+          "childSickEligible",
+          "childSickRemaining",
+          "ferieRemaining",
+          "flexBalance",
+          "seniorDayEligible",
+          "seniorDayRemaining",
+          "sickDaysYtd"
+        ],
+        "type": "object",
+        "properties": {
+          "flexBalance": {
+            "type": "number",
+            "format": "double"
+          },
+          "ferieRemaining": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "careDayRemaining": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "seniorDayRemaining": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "sickDaysYtd": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "childSickRemaining": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "childSickEligible": {
+            "type": "boolean"
+          },
+          "seniorDayEligible": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false
@@ -10098,6 +11350,194 @@
           "effectiveFrom": {
             "type": "string",
             "format": "date"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.SharedKernel.Models.AbsenceEntry": {
+        "required": [
+          "absenceType",
+          "agreementCode",
+          "date",
+          "employeeId",
+          "hours",
+          "okVersion"
+        ],
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string"
+          },
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "absenceType": {
+            "type": "string"
+          },
+          "hours": {
+            "type": "number",
+            "format": "double"
+          },
+          "agreementCode": {
+            "type": "string"
+          },
+          "okVersion": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.SharedKernel.Models.ComplianceCheckResult": {
+        "required": [
+          "employeeId",
+          "ruleId",
+          "success",
+          "violations",
+          "warnings"
+        ],
+        "type": "object",
+        "properties": {
+          "ruleId": {
+            "type": "string"
+          },
+          "employeeId": {
+            "type": "string"
+          },
+          "success": {
+            "type": "boolean"
+          },
+          "violations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.SharedKernel.Models.ComplianceViolation"
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.SharedKernel.Models.ComplianceViolation"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.SharedKernel.Models.ComplianceSeverity": {
+        "enum": [
+          0,
+          1
+        ],
+        "type": "integer",
+        "format": "int32"
+      },
+      "StatsTid.SharedKernel.Models.ComplianceViolation": {
+        "required": [
+          "actualValue",
+          "date",
+          "isVoluntaryExempt",
+          "message",
+          "severity",
+          "thresholdValue",
+          "violationType"
+        ],
+        "type": "object",
+        "properties": {
+          "violationType": {
+            "$ref": "#/components/schemas/StatsTid.SharedKernel.Models.ComplianceViolationType"
+          },
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "actualValue": {
+            "type": "number",
+            "format": "double"
+          },
+          "thresholdValue": {
+            "type": "number",
+            "format": "double"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/StatsTid.SharedKernel.Models.ComplianceSeverity"
+          },
+          "isVoluntaryExempt": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.SharedKernel.Models.ComplianceViolationType": {
+        "enum": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "type": "integer",
+        "format": "int32"
+      },
+      "StatsTid.SharedKernel.Models.TimeEntry": {
+        "required": [
+          "activityType",
+          "agreementCode",
+          "date",
+          "employeeId",
+          "endTime",
+          "hours",
+          "okVersion",
+          "registeredAt",
+          "startTime",
+          "taskId",
+          "voluntaryUnsocialHours"
+        ],
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string"
+          },
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "hours": {
+            "type": "number",
+            "format": "double"
+          },
+          "startTime": {
+            "type": "string",
+            "format": "time",
+            "nullable": true
+          },
+          "endTime": {
+            "type": "string",
+            "format": "time",
+            "nullable": true
+          },
+          "taskId": {
+            "type": "string",
+            "nullable": true
+          },
+          "activityType": {
+            "type": "string",
+            "nullable": true
+          },
+          "agreementCode": {
+            "type": "string"
+          },
+          "okVersion": {
+            "type": "string"
+          },
+          "registeredAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "voluntaryUnsocialHours": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false

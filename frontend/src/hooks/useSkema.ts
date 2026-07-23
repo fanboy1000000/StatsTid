@@ -110,18 +110,13 @@ function parseApprovalValidationError(raw: string): ApprovalValidationError | nu
   return null
 }
 
-// ── S116 / TASK-11602 — the sanctioned LEGACY skema-family calls ─────────────
-// The skema month GET + save POST are GRANDFATHERED untyped operations (the
-// spec declares no response schema — `content?: never` — so they have NO typed
-// form until the skema family is drained in a later pass). Their explicit-T
-// legacy calls remain, pinned by these ROUTE HELPERS: the eslint tier for this
-// file bans every explicit-T apiClient call EXCEPT one whose first argument is
-// `SKEMA_MONTH_PATH(...)` / `SKEMA_SAVE_PATH(...)` (the S115
-// `ELIGIBILITY_PATH` lint-pin precedent), so a future explicit-T call on any
-// OTHER url in this file stays banned.
-const SKEMA_MONTH_PATH = (employeeId: string, year: number, month: number) =>
-  `/api/skema/${employeeId}/month?year=${year}&month=${month}`
-const SKEMA_SAVE_PATH = (employeeId: string) => `/api/skema/${employeeId}/save`
+// ── S120 / TASK-12001 — THE GRADUATION (the S116 promise honored) ────────────
+// The skema month GET + save POST were the file's last two GRANDFATHERED
+// legacy explicit-T calls; the S120 backend drain gave both spec-declared
+// responses (`SkemaMonthResponse` / `SkemaSaveResponse`), so they now ride the
+// TYPED spec-keyed forms like the rest of the file. The S116
+// `SKEMA_MONTH_PATH`/`SKEMA_SAVE_PATH` route-helper pins and BOTH eslint
+// carve-out rules were DELETED — this file is on the FULL lint tier.
 
 export function useSkema(employeeId: string, year: number, month: number): UseSkemaResult {
   const [data, setData] = useState<SkemaMonthData | null>(null)
@@ -134,9 +129,10 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
   const fetchData = useCallback(async () => {
     setLoading(true)
     setError(null)
-    const result = await apiClient.get<SkemaMonthData>(
-      SKEMA_MONTH_PATH(employeeId, year, month)
-    )
+    const result = await apiClient.get('/api/skema/{employeeId}/month', {
+      params: { path: { employeeId } },
+      query: { year, month },
+    })
     if (result.ok) {
       setData(result.data)
     } else {
@@ -167,20 +163,29 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
       setAbsenceRuleError(null)
       const absenceTypeSet = absenceTypesRef.current
 
-      const entries = cells
-        .filter(c => !absenceTypeSet.has(c.rowKey) && c.hours != null && c.hours !== 0)
-        .map(c => ({ date: c.date, projectCode: c.rowKey, hours: c.hours }))
+      // Built via explicit narrowing loops (not filter+map) so the typed spec
+      // request's `hours: number` holds without assertions — the emitted rows,
+      // their key sets and their order are byte-identical to the legacy build.
+      const entries: { date: string; projectCode: string; hours: number }[] = []
+      const absences: { date: string; absenceType: string; hours: number }[] = []
+      for (const c of cells) {
+        if (c.hours == null || c.hours === 0) continue
+        if (absenceTypeSet.has(c.rowKey)) {
+          absences.push({ date: c.date, absenceType: c.rowKey, hours: c.hours })
+        } else {
+          entries.push({ date: c.date, projectCode: c.rowKey, hours: c.hours })
+        }
+      }
 
-      const absences = cells
-        .filter(c => absenceTypeSet.has(c.rowKey) && c.hours != null && c.hours !== 0)
-        .map(c => ({ date: c.date, absenceType: c.rowKey, hours: c.hours }))
-
-      const result = await apiClient.post<void>(SKEMA_SAVE_PATH(employeeId), {
-        year,
-        month,
-        entries: entries.length > 0 ? entries : null,
-        absences: absences.length > 0 ? absences : null,
-        workTime: workTime && workTime.length > 0 ? workTime : null,
+      const result = await apiClient.post('/api/skema/{employeeId}/save', {
+        params: { path: { employeeId } },
+        body: {
+          year,
+          month,
+          entries: entries.length > 0 ? entries : null,
+          absences: absences.length > 0 ? absences : null,
+          workTime: workTime && workTime.length > 0 ? workTime : null,
+        },
       })
       if (result.ok) {
         return { status: 'ok' }
@@ -545,6 +550,22 @@ export function analyzeRestPeriods(
 // ApprovalDetailPanel, SkemaGrid and useBalanceSummary.
 // ════════════════════════════════════════════════════════════════════════════
 
+/** S120 — the tolerant structural input for `deriveSkemaRowBasis`: the spec
+    `SkemaMonthData` is assignable, and so are the pre-7201 fallback shapes the
+    function has always handled (no `catalogs`, flag-less absence-type rows) —
+    the tolerance that was previously encoded via the hand-written type's
+    optional members now lives HERE instead of lying on the wire type. */
+export interface SkemaRowBasisInput {
+  projects?: readonly { projectCode: string; projectName: string }[]
+  absenceTypes?: readonly { type: string; label: string; fullDayOnly?: boolean }[]
+  entries?: readonly { projectCode: string | null }[]
+  absences?: readonly { absenceType: string }[]
+  catalogs?: {
+    projects: readonly { projectCode: string; projectName: string }[]
+    absenceTypes: readonly { type: string; label: string; fullDayOnly?: boolean }[]
+  }
+}
+
 /** The R3/R12 ARITHMETIC/row basis derived from a served month (Step-7a B1). */
 export interface SkemaRowBasis {
   /** ALL rows the arithmetic spans (projects first, then absences), render-ready
@@ -568,9 +589,7 @@ export interface SkemaRowBasis {
  * projects with historical hours) are labeled by their code. RENDERING
  * visibility stays driven by `rowPreferences` — the grid filters rendering only.
  */
-export function deriveSkemaRowBasis(
-  data: Pick<SkemaMonthData, 'projects' | 'absenceTypes' | 'entries' | 'absences' | 'catalogs'>,
-): SkemaRowBasis {
+export function deriveSkemaRowBasis(data: SkemaRowBasisInput): SkemaRowBasis {
   const projectRows: SkemaRow[] = []
   const projectKeys = new Set<string>()
   const addProject = (key: string, label: string) => {
@@ -582,7 +601,11 @@ export function deriveSkemaRowBasis(
   for (const p of data.projects ?? []) addProject(p.projectCode, p.projectName)
   // Deactivated projects with historical hours: absent from every catalog —
   // they still carry served hours, so they enter the basis labeled by code.
-  for (const e of data.entries ?? []) addProject(e.projectCode, e.projectCode)
+  // S120 — the spec revealed `entries[].projectCode` NULLABLE (mapped from the
+  // nullable time-entry taskId); the degenerate null key normalizes to '' HERE
+  // and at the page's cell-map build (SkemaPage) — the SAME key at both sites,
+  // so the day/total arithmetic still spans those hours.
+  for (const e of data.entries ?? []) addProject(e.projectCode ?? '', e.projectCode ?? '')
 
   const absenceRows: SkemaRow[] = []
   const absenceKeys = new Set<string>()

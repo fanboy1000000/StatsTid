@@ -41,20 +41,20 @@ public static class OvertimeEndpoints
             if (balance is null)
                 return Results.NotFound(new { error = "Overtime balance not found" });
 
-            return Results.Ok(new
-            {
-                balanceId = balance.BalanceId,
-                employeeId = balance.EmployeeId,
-                agreementCode = balance.AgreementCode,
-                periodYear = balance.PeriodYear,
-                accumulated = balance.Accumulated,
-                paidOut = balance.PaidOut,
-                afspadseringUsed = balance.AfspadseringUsed,
-                remaining = balance.Remaining,
-                compensationModel = balance.CompensationModel,
-                updatedAt = balance.UpdatedAt
-            });
-        }).RequireAuthorization("EmployeeOrAbove");
+            // S120 / TASK-12000 — named record (BYTE-IDENTICAL wire JSON).
+            return Results.Ok(new OvertimeBalanceResponse(
+                BalanceId: balance.BalanceId,
+                EmployeeId: balance.EmployeeId,
+                AgreementCode: balance.AgreementCode,
+                PeriodYear: balance.PeriodYear,
+                Accumulated: balance.Accumulated,
+                PaidOut: balance.PaidOut,
+                AfspadseringUsed: balance.AfspadseringUsed,
+                Remaining: balance.Remaining,
+                CompensationModel: balance.CompensationModel,
+                UpdatedAt: balance.UpdatedAt));
+        }).RequireAuthorization("EmployeeOrAbove")
+        .Produces<OvertimeBalanceResponse>(StatusCodes.Status200OK); // S120 / TASK-12000
 
         // ── GET /api/overtime/{employeeId}/governance — Check overtime governance via Rule Engine ──
         app.MapGet("/api/overtime/{employeeId}/governance", async (
@@ -129,8 +129,19 @@ public static class OvertimeEndpoints
                 return Results.Json(new { error = "Overtime governance check service unavailable" }, statusCode: 503);
 
             var result = await response.Content.ReadFromJsonAsync<ComplianceCheckResult>(jsonOptions, ct);
+
+            // S120 / TASK-12000 — OWNER RULING #3 (dead-branch class; ONE ruling, TWO ops —
+            // see the compliance/period sibling): a null here means a literal-null 2xx body
+            // from the rule engine — proven defensive dead code (OvertimeGovernanceRule.Evaluate
+            // returns a non-nullable ComplianceCheckResult). 502 upstream-invalid makes the
+            // declared 200 STRUCTURALLY the full result.
+            if (result is null)
+                return Results.Json(new { error = "Invalid overtime governance response" }, statusCode: 502);
+
             return Results.Ok(result);
-        }).RequireAuthorization("EmployeeOrAbove");
+        }).RequireAuthorization("EmployeeOrAbove")
+        // S120 / TASK-12000 — the NAMED SharedKernel model IS the wire shape (pass-through).
+        .Produces<ComplianceCheckResult>(StatusCodes.Status200OK);
 
         // ── POST /api/overtime/pre-approval — Create pre-approval request ──
         app.MapPost("/api/overtime/pre-approval", async (
@@ -579,15 +590,17 @@ public static class OvertimeEndpoints
                 }
             }
 
-            return Results.Ok(new
-            {
-                employeeId,
-                periodYear = request.PeriodYear,
-                hours = request.Hours,
-                compensationType = request.CompensationType,
-                applied = true,
-            });
-        }).RequireAuthorization("LeaderOrAbove");
+            // S120 / TASK-12000 — named record (BYTE-IDENTICAL wire JSON; the 5-member echo,
+            // both compensation branches shape-uniform). Response-shaping ONLY — the in-tx
+            // event/outbox construction above is byte-untouched (P6 fence).
+            return Results.Ok(new OvertimeCompensateResponse(
+                EmployeeId: employeeId,
+                PeriodYear: request.PeriodYear,
+                Hours: request.Hours,
+                CompensationType: request.CompensationType,
+                Applied: true));
+        }).RequireAuthorization("LeaderOrAbove")
+        .Produces<OvertimeCompensateResponse>(StatusCodes.Status200OK); // S120 / TASK-12000
 
         // ── GET /api/overtime/{employeeId}/compensation-choice — Get employee's compensation choice ──
         app.MapGet("/api/overtime/{employeeId}/compensation-choice", async (
@@ -617,13 +630,13 @@ public static class OvertimeEndpoints
 
             if (balance is not null)
             {
-                return Results.Ok(new
-                {
-                    employeeId,
-                    periodYear,
-                    compensationModel = balance.CompensationModel,
-                    source = "balance"
-                });
+                // S120 / TASK-12000 — ONE record for both branches (same 4 keys, value-differing
+                // `source` — NOT polymorphic). BYTE-IDENTICAL wire JSON.
+                return Results.Ok(new CompensationChoiceResponse(
+                    EmployeeId: employeeId,
+                    PeriodYear: periodYear,
+                    CompensationModel: balance.CompensationModel,
+                    Source: "balance"));
             }
 
             // Fall back to default from config
@@ -645,14 +658,13 @@ public static class OvertimeEndpoints
             var config = await configService.GetActiveConfigAsync(agreementCode, user.OkVersion, ct);
             var defaultModel = config?.DefaultCompensationModel ?? "AFSPADSERING";
 
-            return Results.Ok(new
-            {
-                employeeId,
-                periodYear,
-                compensationModel = defaultModel,
-                source = "config_default"
-            });
-        }).RequireAuthorization("EmployeeOrAbove");
+            return Results.Ok(new CompensationChoiceResponse(
+                EmployeeId: employeeId,
+                PeriodYear: periodYear,
+                CompensationModel: defaultModel,
+                Source: "config_default"));
+        }).RequireAuthorization("EmployeeOrAbove")
+        .Produces<CompensationChoiceResponse>(StatusCodes.Status200OK); // S120 / TASK-12000
 
         // ── PUT /api/overtime/{employeeId}/compensation-choice — Set compensation choice ──
         app.MapPut("/api/overtime/{employeeId}/compensation-choice", async (
@@ -731,13 +743,13 @@ public static class OvertimeEndpoints
                 await overtimeBalanceRepo.UpsertAsync(updated, ct);
             }
 
-            return Results.Ok(new
-            {
-                employeeId,
-                periodYear = request.PeriodYear,
-                compensationModel = request.CompensationModel,
-            });
-        }).RequireAuthorization("EmployeeOrAbove");
+            // S120 / TASK-12000 — named record (BYTE-IDENTICAL wire JSON; the 3-member echo).
+            return Results.Ok(new CompensationChoiceUpdateResponse(
+                EmployeeId: employeeId,
+                PeriodYear: request.PeriodYear,
+                CompensationModel: request.CompensationModel));
+        }).RequireAuthorization("EmployeeOrAbove")
+        .Produces<CompensationChoiceUpdateResponse>(StatusCodes.Status200OK); // S120 / TASK-12000
 
         return app;
     }

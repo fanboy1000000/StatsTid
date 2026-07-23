@@ -110,8 +110,12 @@ public static class TimeEndpoints
                 }
             }
 
-            return Results.Created($"/api/time-entries/{request.EmployeeId}", new { eventId = @event.EventId, streamId });
-        }).RequireAuthorization("EmployeeOrAbove");
+            // S120 / TASK-12000 — named record (BYTE-IDENTICAL wire JSON; the 201 receipt).
+            return Results.Created($"/api/time-entries/{request.EmployeeId}", new TimeEntryCreatedResponse(
+                EventId: @event.EventId,
+                StreamId: streamId));
+        }).RequireAuthorization("EmployeeOrAbove")
+        .Produces<TimeEntryCreatedResponse>(StatusCodes.Status201Created); // S120 / TASK-12000
 
         app.MapGet("/api/time-entries/{employeeId}", async (
             string employeeId,
@@ -156,7 +160,10 @@ public static class TimeEndpoints
             }).ToList();
 
             return Results.Ok(entries);
-        }).RequireAuthorization("EmployeeOrAbove");
+        }).RequireAuthorization("EmployeeOrAbove")
+        // S120 / TASK-12000 — the NAMED SharedKernel model IS the wire shape (the handler
+        // serializes TimeEntry instances directly — PAT-012 named-model rule; a BARE ARRAY).
+        .Produces<IEnumerable<TimeEntry>>(StatusCodes.Status200OK);
 
         // ── Absences ──
         //
@@ -204,7 +211,9 @@ public static class TimeEndpoints
             }).ToList();
 
             return Results.Ok(absences);
-        }).RequireAuthorization("EmployeeOrAbove");
+        }).RequireAuthorization("EmployeeOrAbove")
+        // S120 / TASK-12000 — the NAMED SharedKernel model IS the wire shape (a BARE ARRAY).
+        .Produces<IEnumerable<AbsenceEntry>>(StatusCodes.Status200OK);
 
         // ── Flex Balance ──
         //
@@ -233,18 +242,26 @@ public static class TimeEndpoints
 
             var latest = events.OfType<FlexBalanceUpdated>().LastOrDefault();
 
+            // S120 / TASK-12000 — OWNER RULING #1 (branch-normalization class, 1st instance,
+            // ruled 2026-07-21): the no-history branch serves the ONE 5-member shape with the
+            // 3 history members null-filled; the vestigial `message` (no reader existed) DIES.
+            // The with-history branch below is BYTE-IDENTICAL to the pre-S120 wire.
             if (latest is null)
-                return Results.Ok(new { employeeId, balance = 0m, message = "No flex balance events found" });
+                return Results.Ok(new FlexBalanceResponse(
+                    EmployeeId: employeeId,
+                    Balance: 0m,
+                    PreviousBalance: null,
+                    Delta: null,
+                    Reason: null));
 
-            return Results.Ok(new
-            {
-                employeeId,
-                balance = latest.NewBalance,
-                previousBalance = latest.PreviousBalance,
-                delta = latest.Delta,
-                reason = latest.Reason
-            });
-        }).RequireAuthorization("EmployeeOrAbove");
+            return Results.Ok(new FlexBalanceResponse(
+                EmployeeId: employeeId,
+                Balance: latest.NewBalance,
+                PreviousBalance: latest.PreviousBalance,
+                Delta: latest.Delta,
+                Reason: latest.Reason));
+        }).RequireAuthorization("EmployeeOrAbove")
+        .Produces<FlexBalanceResponse>(StatusCodes.Status200OK); // S120 / TASK-12000
 
         return app;
     }

@@ -54,6 +54,29 @@ namespace StatsTid.Backend.Api;
 /// Retro-applied to the 2 pre-existing residual members (<c>RosterEmployeeRow.OutgoingVikar</c>,
 /// <c>ActiveVikarResponse.ActiveVikar</c>) — the nullable-$ref residual class is CLOSED (0 members).</para>
 ///
+/// <para><b>The nullable-ITEMS sibling (S120 — instance #1 fixed at FIRST firing).</b> Swashbuckle
+/// 6.6.2 also drops nullability in the array-ITEMS position: a collection member with a CLR-nullable
+/// ELEMENT type (e.g. <c>IReadOnlyList&lt;decimal?&gt;</c>) generates as <c>items: { type: number }</c>
+/// with NO <c>nullable: true</c> — the items-position sibling of the nullable-$ref class above.
+/// Instance #1 = <c>YearOverviewCategory.Saldo</c>: the year-overview empty-config branch serves an
+/// ALL-null 12-array (<c>new decimal?[12]</c>), and the S120 ruling-#2 runtime pin
+/// (<c>S120BalanceSpecRuntimeTests.YearOverview_EmptyConfigCategoryRows_CarrySettlementNull_Ruling2DeltaPin</c>)
+/// honestly REDs on the spec's never-null items claim ("schema type 'number' but runtime kind
+/// 'Null'"). Unlike S113's numbered deferral of the nullable-$ref class, this class is fixed at its
+/// FIRST firing — a live runtime pin REDs on it, so deferral would mean a standing red. The fix is
+/// GENERIC, spec-metadata only (zero wire bytes): for every closure member whose property schema is
+/// an INLINE array (<c>type: array</c> with inline <c>items</c>, not a bare $ref — a $ref'd member
+/// schema is a component processed on its own closure pass), the CLR ELEMENT type is resolved
+/// (array element info, or the single generic argument for IEnumerable&lt;T&gt;/IReadOnlyList&lt;T&gt;/
+/// List&lt;T&gt; etc., via <see cref="NullabilityInfoContext"/>) and, when the element is
+/// CLR-nullable: scalar element → <c>items.nullable: true</c>; complex ($ref) element → the S117
+/// <see cref="WrapAsNullableComplex"/> wrapper applied to the items schema (DEFENSIVE generality —
+/// repo-wide blast radius today is exactly ONE member, Saldo, and ZERO nullable-element COMPLEX
+/// collections exist; verified by grep across Contracts/ and Endpoints/). Nested arrays are
+/// DESCENDED through the Items chain, each level carrying its own element's nullability.
+/// FAIL-CONSERVATIVE: an unresolvable element type leaves the items schema untouched.
+/// <c>openapi-typescript</c> renders the items flag as <c>(number | null)[]</c>, non-optional.</para>
+///
 /// <para><b>What it does NOT touch.</b> Schemas outside the closure (today: all 58 request DTO
 /// schemas) are byte-UNTOUCHED — their <c>required</c> arrays are the C#-<c>required</c>-keyword
 /// binder-enforced truth Swashbuckle already emits, a DIFFERENT (request-validation) semantic this
@@ -143,6 +166,17 @@ public sealed class ResponseStrictTypesFilter : ISchemaFilter, IDocumentFilter
                     if (IsNullableRef(member, propertySchema, nullability))
                         WrapAsNullableComplex(propertySchema);
                     required.Add(propertyName);
+                }
+
+                // S120 — the nullable-ITEMS sibling: an INLINE array member whose CLR ELEMENT type
+                // is nullable must say so on its items schema (Swashbuckle 6.6.2 drops items-position
+                // nullability). A bare-$ref member schema never enters here (its Type is null; a
+                // $ref'd schema is a component processed on its own closure pass). See the class doc.
+                if (string.Equals(propertySchema.Type, "array", StringComparison.Ordinal)
+                    && propertySchema.Reference is null
+                    && propertySchema.Items is not null)
+                {
+                    ApplyElementNullability(propertySchema, nullability.Create(member));
                 }
 
                 // [AllowedValues] → enum. Read explicitly (6.6.2 has no native mapping). Emitted
@@ -277,6 +311,54 @@ public sealed class ResponseStrictTypesFilter : ISchemaFilter, IDocumentFilter
             return false;
         return Nullable.GetUnderlyingType(member.PropertyType) is not null
             || nullability.Create(member).WriteState == NullabilityState.Nullable;
+    }
+
+    /// <summary>S120 — apply the CLR ELEMENT nullability of a collection member onto an inline array
+    /// schema's <c>items</c> (the nullable-ITEMS sibling — see the class doc): a CLR-nullable SCALAR
+    /// element gets <c>items.nullable: true</c>; a CLR-nullable COMPLEX ($ref) element gets the S117
+    /// <see cref="WrapAsNullableComplex"/> wrapper (defensive generality — zero such members exist in
+    /// today's closure). Nested arrays are DESCENDED through the Items chain, each level carrying its
+    /// own element's nullability. FAIL-CONSERVATIVE: an unresolvable element type (no array element
+    /// info and not a single-generic-argument collection) leaves the items schema untouched.</summary>
+    private static void ApplyElementNullability(OpenApiSchema arraySchema, NullabilityInfo collectionInfo)
+    {
+        var items = arraySchema.Items;
+        if (items is null)
+            return;
+        var element = ElementNullability(collectionInfo);
+        if (element is null)
+            return; // fail-conservative: element type unresolvable → leave untouched
+
+        var elementIsNullable = Nullable.GetUnderlyingType(element.Type) is not null
+            || element.WriteState == NullabilityState.Nullable;
+
+        if (items.Reference is not null)
+        {
+            // Complex ($ref) element. Its component schema is processed on its own closure pass —
+            // only the NULLABILITY of the element position is decided here.
+            if (elementIsNullable)
+                WrapAsNullableComplex(items);
+            return;
+        }
+
+        if (elementIsNullable)
+            items.Nullable = true;
+
+        // Nested array element (e.g. IReadOnlyList<IReadOnlyList<decimal?>>) — descend with the
+        // element's own nullability info so each Items level is decided by its own element.
+        if (string.Equals(items.Type, "array", StringComparison.Ordinal) && items.Items is not null)
+            ApplyElementNullability(items, element);
+    }
+
+    /// <summary>The <see cref="NullabilityInfo"/> of a collection member's ELEMENT: array element
+    /// info (<c>T[]</c>), or the single generic argument (IEnumerable&lt;T&gt;/IReadOnlyList&lt;T&gt;/
+    /// List&lt;T&gt; etc.). Null for anything else (⇒ fail-conservative skip by the caller).</summary>
+    private static NullabilityInfo? ElementNullability(NullabilityInfo collectionInfo)
+    {
+        if (collectionInfo.ElementType is not null)
+            return collectionInfo.ElementType;
+        var genericArguments = collectionInfo.GenericTypeArguments;
+        return genericArguments.Length == 1 ? genericArguments[0] : null;
     }
 
     /// <summary>S117 — rewrite a CLR-nullable complex member's bare-$ref property schema IN PLACE to

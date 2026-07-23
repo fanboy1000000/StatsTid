@@ -270,13 +270,15 @@ describe('putSkemaRowPreferences', () => {
     absenceTypes: [{ absenceType: 'VACATION', sortOrder: 0 }],
   }
 
+  // S120 mock re-anchoring: `fullDayOnly` is REQUIRED on the spec
+  // row-preference absence rows — the fixture carries it explicitly.
   const EFFECTIVE: SkemaRowPreferences = {
     configured: true,
     projects: [
       { projectId: 'p-sag', projectCode: 'ØS-1042', projectName: 'Sagsbehandling', sortOrder: 0 },
       { projectId: 'p-borger', projectCode: 'DIG-2207', projectName: 'Borger.dk', sortOrder: 1 },
     ],
-    absenceTypes: [{ type: 'VACATION', label: 'Ferie', sortOrder: 0 }],
+    absenceTypes: [{ type: 'VACATION', label: 'Ferie', fullDayOnly: false, sortOrder: 0 }],
   }
 
   it('PUTs the exact body to /api/skema/{employeeId}/row-preferences with the auth header', async () => {
@@ -396,8 +398,8 @@ describe('toRowPreferencesPutBody', () => {
     const body = toRowPreferencesPutBody(
       [],
       [
-        { type: 'CARE_DAY', label: 'Omsorgsdag', sortOrder: 4 },
-        { type: 'VACATION', label: 'Ferie', sortOrder: 0 },
+        { type: 'CARE_DAY', label: 'Omsorgsdag', fullDayOnly: false, sortOrder: 4 },
+        { type: 'VACATION', label: 'Ferie', fullDayOnly: false, sortOrder: 0 },
       ],
     )
     expect(body.absenceTypes).toEqual([

@@ -79,6 +79,12 @@ function buildDailyNorm(): { date: string; hours: number | null }[] {
   return out
 }
 
+// S120 / TASK-12001 mock re-anchoring — the fixture mirrors the SPEC
+// `SkemaMonthResponse`: `fullDayOnly` is REQUIRED on every absence-type row
+// (previously optional-omitted), and the always-served top-level
+// `employeeDeadline`/`managerDeadline` + `consumptionBasis` members are
+// present (empty basis = no snap data, byte-equivalent to the pre-S120
+// absent-member behavior). No behavior pin changed.
 function makeMonthData(overrides: Partial<SkemaMonthData> = {}): SkemaMonthData {
   return {
     year: 2026,
@@ -93,9 +99,9 @@ function makeMonthData(overrides: Partial<SkemaMonthData> = {}): SkemaMonthData 
       { projectId: 'p-udv', projectCode: 'UDV', projectName: 'Udvikling', sortOrder: 1 },
     ],
     absenceTypes: [
-      { type: 'VACATION', label: 'Ferie' },
-      { type: 'CARE_DAY', label: 'Omsorgsdage' },
-      { type: 'SPECIAL_HOLIDAY', label: 'Særlige feriedage' },
+      { type: 'VACATION', label: 'Ferie', fullDayOnly: false },
+      { type: 'CARE_DAY', label: 'Omsorgsdage', fullDayOnly: false },
+      { type: 'SPECIAL_HOLIDAY', label: 'Særlige feriedage', fullDayOnly: false },
     ],
     entries: [
       { date: '2026-03-02', projectCode: 'DRIFT', hours: 7.4 },
@@ -107,6 +113,8 @@ function makeMonthData(overrides: Partial<SkemaMonthData> = {}): SkemaMonthData 
       { date: '2026-03-04', absenceType: 'VACATION', hours: 3.7, feriedage: null },
     ],
     approval: null,
+    employeeDeadline: '2026-04-05',
+    managerDeadline: '2026-04-10',
     workTime: [
       { date: '2026-03-02', intervals: [{ start: '08:00', end: '16:00' }], manualHours: 1.5 },
     ],
@@ -118,9 +126,9 @@ function makeMonthData(overrides: Partial<SkemaMonthData> = {}): SkemaMonthData 
         { projectId: 'p-udv', projectCode: 'UDV', projectName: 'Udvikling', sortOrder: 1 },
       ],
       absenceTypes: [
-        { type: 'VACATION', label: 'Ferie', sortOrder: 0 },
-        { type: 'CARE_DAY', label: 'Omsorgsdage', sortOrder: 1 },
-        { type: 'SPECIAL_HOLIDAY', label: 'Særlige feriedage', sortOrder: 2 },
+        { type: 'VACATION', label: 'Ferie', fullDayOnly: false, sortOrder: 0 },
+        { type: 'CARE_DAY', label: 'Omsorgsdage', fullDayOnly: false, sortOrder: 1 },
+        { type: 'SPECIAL_HOLIDAY', label: 'Særlige feriedage', fullDayOnly: false, sortOrder: 2 },
       ],
     },
     catalogs: {
@@ -130,19 +138,27 @@ function makeMonthData(overrides: Partial<SkemaMonthData> = {}): SkemaMonthData 
         { projectId: 'p-extra', projectCode: 'EXTRA', projectName: 'Ekstra projekt', sortOrder: 2 },
       ],
       absenceTypes: [
-        { type: 'VACATION', label: 'Ferie' },
-        { type: 'CARE_DAY', label: 'Omsorgsdage' },
-        { type: 'SPECIAL_HOLIDAY', label: 'Særlige feriedage' },
+        { type: 'VACATION', label: 'Ferie', fullDayOnly: false },
+        { type: 'CARE_DAY', label: 'Omsorgsdage', fullDayOnly: false },
+        { type: 'SPECIAL_HOLIDAY', label: 'Særlige feriedage', fullDayOnly: false },
       ],
     },
     boundaryWorkTime: [],
     fullDayNormAtMonthEnd: 7.4,
+    consumptionBasis: [],
     ...overrides,
   }
 }
 
+// S120 mock re-anchoring — the spec `BalanceSummaryResponse`: + the served
+// employeeId/year/month scalars, the REQUIRED null-valued `overtimeBalance`
+// and the REQUIRED nullable `settlement` per entitlement row (all display-only
+// shape growth; no behavior pin changed).
 function makeSummaryData(): BalanceSummaryData {
   return {
+    employeeId: 'emp001',
+    year: 2026,
+    month: 3,
     flexBalance: 4.2,
     flexDelta: 99.9, // the LAST-event delta — must never reach the strip (R10)
     vacationDaysUsed: 8,
@@ -153,13 +169,17 @@ function makeSummaryData(): BalanceSummaryData {
     agreementCode: 'AC',
     hasMerarbejde: true,
     entitlements: [
-      { type: 'VACATION', label: 'Ferie', totalQuota: 25, used: 8, planned: 0, carryoverIn: 3, remaining: 17, earned: 20.8, entitlementYear: 2025 },
-      { type: 'SPECIAL_HOLIDAY', label: 'Særlige feriedage', totalQuota: 5, used: 1, planned: 0, carryoverIn: 0, remaining: 4, earned: 5, entitlementYear: 2025 },
-      { type: 'CARE_DAY', label: 'Omsorgsdage', totalQuota: 2, used: 0, planned: 0, carryoverIn: 0, remaining: 2, earned: 2, entitlementYear: 2026 },
+      { type: 'VACATION', label: 'Ferie', totalQuota: 25, used: 8, planned: 0, carryoverIn: 3, remaining: 17, earned: 20.8, entitlementYear: 2025, settlement: null },
+      { type: 'SPECIAL_HOLIDAY', label: 'Særlige feriedage', totalQuota: 5, used: 1, planned: 0, carryoverIn: 0, remaining: 4, earned: 5, entitlementYear: 2025, settlement: null },
+      { type: 'CARE_DAY', label: 'Omsorgsdage', totalQuota: 2, used: 0, planned: 0, carryoverIn: 0, remaining: 2, earned: 2, entitlementYear: 2026, settlement: null },
     ],
+    overtimeBalance: null,
   }
 }
 
+// S120 mock re-anchoring — `violationType`/`severity` are INTEGERS on the wire
+// (the CLR enums serialize numerically; the old string-valued mock mirrored
+// the deleted lying union): DAILY_REST=0, WARNING=0.
 const COMPLIANCE_WITH_WARNING = {
   ruleId: 'EU_WTD',
   employeeId: 'emp001',
@@ -167,11 +187,11 @@ const COMPLIANCE_WITH_WARNING = {
   violations: [],
   warnings: [
     {
-      violationType: 'DAILY_REST',
+      violationType: 0,
       date: '2026-03-02',
       actualValue: 10,
       thresholdValue: 11,
-      severity: 'WARNING',
+      severity: 0,
       isVoluntaryExempt: false,
       message: 'Hviletid under 11 timer',
     },
@@ -231,7 +251,12 @@ function applyPrefsPut(body: (typeof putBodies)[number]) {
         projectName: p.projectName,
         sortOrder: i,
       })),
-      absenceTypes: visibleAbsenceTypes.map((a, i) => ({ type: a.type, label: a.label, sortOrder: i })),
+      absenceTypes: visibleAbsenceTypes.map((a, i) => ({
+        type: a.type,
+        label: a.label,
+        fullDayOnly: a.fullDayOnly,
+        sortOrder: i,
+      })),
     },
   }
   return monthData.rowPreferences
@@ -784,9 +809,9 @@ describe('SkemaPage — R7/R16 day-panel save paths', () => {
         configured: true,
         projects: [{ projectId: 'p-udv', projectCode: 'UDV', projectName: 'Udvikling', sortOrder: 0 }],
         absenceTypes: [
-          { type: 'VACATION', label: 'Ferie', sortOrder: 0 },
-          { type: 'CARE_DAY', label: 'Omsorgsdage', sortOrder: 1 },
-          { type: 'SPECIAL_HOLIDAY', label: 'Særlige feriedage', sortOrder: 2 },
+          { type: 'VACATION', label: 'Ferie', fullDayOnly: false, sortOrder: 0 },
+          { type: 'CARE_DAY', label: 'Omsorgsdage', fullDayOnly: false, sortOrder: 1 },
+          { type: 'SPECIAL_HOLIDAY', label: 'Særlige feriedage', fullDayOnly: false, sortOrder: 2 },
         ],
       },
     })

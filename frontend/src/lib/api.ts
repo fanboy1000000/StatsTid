@@ -8,7 +8,7 @@ import type {
 // source the typed `apiClient.get(pathKey, …)` overload derives response shapes
 // from, structurally closing the S97→S99→S100 "fetchEnheder" shape-mismatch class
 // for the wired reads.
-import type { paths } from './api-types'
+import type { components, paths } from './api-types'
 
 const TOKEN_KEY = 'statstid_token'
 const USER_KEY = 'statstid_user'
@@ -617,13 +617,27 @@ export async function apiFetchWithEtag(
 // The wire contract is TASK-7201's: FULL replacement, sortOrder dense 0..n-1 in
 // submitted order; 200 returns the new effective `rowPreferences` shape; 422
 // returns the `row_preferences_invalid` offender payload; 403 = self-only.
+//
+// S120 / TASK-12001 — the PUT rides the TYPED spec-keyed structured form; the
+// hand-written body/response locals were REPLACED by spec-derived types (the
+// response via the `types.ts` `SkemaRowPreferences` alias). Request-side lie
+// detector: NOT FIRED — the spec request's items have no required member the
+// FE omits (`sortOrder` is spec-optional; the FE has always sent it, kept
+// REQUIRED here via the S119 intersection precedent). Key set byte-unchanged.
 // ════════════════════════════════════════════════════════════════════════════
 
-/** PUT /api/skema/{employeeId}/row-preferences body (7201 contract, verbatim
-    field names — note the absence entries use `absenceType`, not `type`). */
+type RowPreferenceProjectItem =
+  components['schemas']['StatsTid.Backend.Api.Endpoints.SkemaEndpoints.RowPreferenceProjectItem']
+type RowPreferenceAbsenceItem =
+  components['schemas']['StatsTid.Backend.Api.Endpoints.SkemaEndpoints.RowPreferenceAbsenceItem']
+
+/** PUT /api/skema/{employeeId}/row-preferences body — the spec request's item
+    records with the always-sent `sortOrder` kept REQUIRED (the S119
+    `ProjectCreateRequest & { sortOrder: number }` precedent). Note the absence
+    entries use `absenceType`, not `type` (spec-verbatim key names). */
 export interface SkemaRowPreferencesPutBody {
-  projects: { projectId: string; sortOrder: number }[]
-  absenceTypes: { absenceType: string; sortOrder: number }[]
+  projects: (RowPreferenceProjectItem & { sortOrder: number })[]
+  absenceTypes: (RowPreferenceAbsenceItem & { sortOrder: number })[]
 }
 
 /** The 7201 422 payload — preserved typed so the manager modal can render the
@@ -677,10 +691,12 @@ export async function putSkemaRowPreferences(
   employeeId: string,
   body: SkemaRowPreferencesPutBody,
 ): Promise<PutSkemaRowPreferencesResult> {
-  const result = await apiClient.put<SkemaRowPreferences>(
-    `/api/skema/${employeeId}/row-preferences`,
+  // S120 — the typed spec-keyed structured form (URL + body byte-identical to
+  // the legacy template-string call). UNCONDITIONED (no If-Match/If-None-Match).
+  const result = await apiClient.put('/api/skema/{employeeId}/row-preferences', {
+    params: { path: { employeeId } },
     body,
-  )
+  })
   if (result.ok) {
     return { ok: true, data: result.data }
   }

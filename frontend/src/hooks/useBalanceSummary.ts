@@ -1,42 +1,35 @@
 import { useState, useEffect, useCallback } from 'react'
+import type { components } from '../lib/api-types'
 import { apiClient } from '../lib/api'
 import { computeDayDiffs, computeMonthDiffTotal, type MonthDiffInputs } from './useSkema'
 
-export interface EntitlementInfo {
-  type: string
-  label: string
-  totalQuota: number
-  used: number
-  planned: number
-  carryoverIn: number
-  remaining: number
-  earned: number
-  entitlementYear: number
-}
+// S120 / TASK-12001 (Typed API Contract retrofit Pass 7, PAT-012) — the
+// summary read rides the TYPED spec-keyed form; the hand-written
+// `BalanceSummary`/`EntitlementInfo`/`OvertimeBalanceInfo` interfaces were
+// DELETED. Lie-audit deltas vs the deleted interfaces:
+//  - the served `employeeId`/`year`/`month` scalars were OMITTED;
+//  - each entitlement row's REQUIRED (nullable-complex) `settlement` member
+//    was OMITTED — the S117 settlement disposition surfaces additively
+//    (display-only this pass; no consumer branches on it);
+//  - `entitlements` and `overtimeBalance` are REQUIRED on the wire (always
+//    emitted; `overtimeBalance` null-valued when absent) — the hand-written
+//    optionality was a lie kept harmless by `?.` consumers.
 
-// S61/ADR-030: overtime/afspadsering balance block returned verbatim by
-// `/api/balance/{id}/summary`. Display values only — never recomputed client-side.
-export interface OvertimeBalanceInfo {
-  accumulated: number
-  paidOut: number
-  afspadseringUsed: number
-  remaining: number
-  compensationModel: string
-}
+/** The S117 settlement disposition record (spec-shared with year-overview). */
+export type SettlementDispositionInfo =
+  components['schemas']['StatsTid.Backend.Api.Contracts.SettlementDispositionInfo']
 
-export interface BalanceSummary {
-  flexBalance: number
-  flexDelta: number
-  vacationDaysUsed: number
-  vacationDaysEntitlement: number
-  normHoursExpected: number
-  normHoursActual: number
-  overtimeHours: number
-  agreementCode: string
-  hasMerarbejde: boolean
-  entitlements?: EntitlementInfo[]
-  overtimeBalance?: OvertimeBalanceInfo | null
-}
+/** One entitlement row of the summary (10 members + `settlement`). */
+export type EntitlementInfo =
+  components['schemas']['StatsTid.Backend.Api.Contracts.BalanceEntitlementRow']
+
+/** S61/ADR-030: overtime/afspadsering balance block returned verbatim by
+    `/api/balance/{id}/summary`. Display values only — never recomputed client-side. */
+export type OvertimeBalanceInfo =
+  components['schemas']['StatsTid.Backend.Api.Contracts.BalanceSummaryOvertimeInfo']
+
+export type BalanceSummary =
+  components['schemas']['StatsTid.Backend.Api.Contracts.BalanceSummaryResponse']
 
 export function useBalanceSummary(employeeId: string, year: number, month: number) {
   const [data, setData] = useState<BalanceSummary | null>(null)
@@ -47,9 +40,10 @@ export function useBalanceSummary(employeeId: string, year: number, month: numbe
     if (!employeeId) return
     setLoading(true)
     setError(null)
-    const result = await apiClient.get<BalanceSummary>(
-      `/api/balance/${employeeId}/summary?year=${year}&month=${month}`
-    )
+    const result = await apiClient.get('/api/balance/{employeeId}/summary', {
+      params: { path: { employeeId } },
+      query: { year, month },
+    })
     if (result.ok) {
       setData(result.data)
     } else {

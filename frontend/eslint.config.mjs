@@ -6,8 +6,18 @@
 // was typed in TASK-11501); `useEntitlementEligibility.ts` joins on a PARTIAL
 // tier (see below).
 // SPRINT-116 / TASK-11602 — Pass 3 (the approval bucket): 7 switched files join
-// the FULL ban tier; `useSkema.ts` joins on a PARTIAL tier (its two legacy
-// skema-family calls ride grandfathered UNTYPED ops — route-helper-pinned).
+// the FULL ban tier; `useSkema.ts` joined on a PARTIAL tier (its two legacy
+// skema-family calls rode grandfathered UNTYPED ops — route-helper-pinned).
+// SPRINT-120 / TASK-12001 — Pass 7 (bucket C, the employee-facing drain): the
+// 7 switched hooks join the FULL ban tier, including THE useSkema GRADUATION —
+// the skema month GET + save POST went typed, so BOTH S116 carve-out rules
+// (`NO_GET_TYPEARG_RULE_EXCEPT_SKEMA_MONTH`,
+// `NO_BODY_VERB_TYPEARG_RULE_EXCEPT_SKEMA_SAVE`) and the partial
+// `TYPED_SLICE_FILES_WITH_LEGACY_SKEMA_CALLS` tier were DELETED (the S116
+// promise honored). `src/lib/api.ts` (host of the switched
+// `putSkemaRowPreferences`) stays UNTIERED: it is the overload-implementation
+// module whose internal runtime-normalization casts are structural — the lint
+// tiers guard CALL SITES, not the client's own plumbing.
 // SPRINT-119 / TASK-11901 — Pass 6 bucket B: 4 switched files join the FULL
 // ban tier (useConfig / useProjects hooks, the api/profileApi.ts module and
 // the ProjectManagement page) — no deferred legacy call remains in any of
@@ -93,23 +103,22 @@ const TYPED_SLICE_FILES = [
   'src/api/profileApi.ts',
   'src/hooks/useProjects.ts',
   'src/pages/admin/ProjectManagement.tsx',
+  // S120 — the Pass-7 bucket-C switched files (TASK-12001): the 6 fully
+  // drained employee-facing hooks + the GRADUATED useSkema.ts (its S116
+  // partial tier is gone — every call in the file is typed).
+  'src/hooks/useTimeEntries.ts',
+  'src/hooks/useFlexBalance.ts',
+  'src/hooks/useBalanceSummary.ts',
+  'src/hooks/useYearOverview.ts',
+  'src/hooks/useCompliance.ts',
+  'src/hooks/useCompensationChoice.ts',
+  'src/hooks/useSkema.ts',
 ]
 
 // S115 — fully switched EXCEPT the ONE deferred polymorphic explicit-T etag GET
 // (see the SCOPE NOTE above): everything banned, with the etag type-argument
 // ban narrowed to two-argument (structured/mutation) calls.
 const TYPED_SLICE_FILES_WITH_LEGACY_ETAG_GET = ['src/hooks/useEntitlementEligibility.ts']
-
-// S116 — useSkema.ts: the approval slice (submit / employee-approve ×2 / reopen)
-// is fully switched, but the file also hosts the skema-family month GET + save
-// POST, which are GRANDFATHERED UNTYPED ops (the spec declares no response
-// schema — `content?: never` — so no typed form exists until the skema family
-// is drained in a later pass). Those two legacy explicit-T calls are sanctioned,
-// pinned by their ROUTE HELPERS (`SKEMA_MONTH_PATH(...)` / `SKEMA_SAVE_PATH(...)`
-// — the S115 ELIGIBILITY_PATH precedent): every OTHER explicit-T get/post/put/
-// delete/etag call in the file stays banned, so a future raw-URL explicit-T
-// call cannot hide behind the carve-out.
-const TYPED_SLICE_FILES_WITH_LEGACY_SKEMA_CALLS = ['src/hooks/useSkema.ts']
 
 // S118 — useWageTypeMappings.ts: the list GET, the create POST and the
 // If-Match DELETE are fully switched, but the If-Match PUT is a SANCTIONED
@@ -171,19 +180,6 @@ const NO_ETAG_TYPEARG_RULE_EXCEPT_ELIGIBILITY_GET = {
     'SPRINT-115: no hand-written type on `apiFetchWithEtag<…>` — use the typed spec-keyed form. Only the ONE deferred polymorphic GET (`apiFetchWithEtag<T>(ELIGIBILITY_PATH(id))`, entitlement-eligibility) may carry an explicit T.',
 }
 
-// S116 — the useSkema-tier variants: ban EVERY explicit-T `apiClient.get` /
-// body-verb call EXCEPT the file's two sanctioned legacy skema-family calls,
-// each pinned by its ROUTE HELPER (the first argument is a call to
-// `SKEMA_MONTH_PATH` / `SKEMA_SAVE_PATH`) — not by URL shape, so an explicit-T
-// call on any other url (or a raw template-literal skema url that bypasses the
-// helper) stays banned.
-const NO_GET_TYPEARG_RULE_EXCEPT_SKEMA_MONTH = {
-  selector:
-    "CallExpression[callee.object.name='apiClient'][callee.property.name='get'][typeArguments]:not([arguments.0.callee.name='SKEMA_MONTH_PATH'])",
-  message:
-    'SPRINT-116: no hand-written response type on `apiClient.get<…>` — use the typed spec-keyed form. Only the ONE sanctioned legacy skema month read (`apiClient.get<T>(SKEMA_MONTH_PATH(…))`, a grandfathered untyped op) may carry an explicit T.',
-}
-
 // S118 — the useWageTypeMappings-tier variant: bans EVERY explicit-T
 // `apiFetchWithEtag` call EXCEPT the file's ONE sanctioned deferred PUT,
 // pinned by its ROUTE HELPER (the first argument is a call to
@@ -209,13 +205,6 @@ const NO_ETAG_TYPEARG_RULE_EXCEPT_CHILD_ENTITLEMENT_PUT = {
     "CallExpression[callee.name='apiFetchWithEtag'][typeArguments]:not([arguments.length=2][arguments.0.callee.name='CHILD_ENTITLEMENT_PATH'][arguments.1.type='ObjectExpression'][arguments.1.properties.0.key.name='method'][arguments.1.properties.0.value.value='PUT'])",
   message:
     'SPRINT-118: no hand-written type on `apiFetchWithEtag<…>` — use the typed spec-keyed form. Only the ONE sanctioned deferred child-entitlement update (`apiFetchWithEtag<T>(CHILD_ENTITLEMENT_PATH(…), …)`, the W2-ruling deferral) may carry an explicit T.',
-}
-
-const NO_BODY_VERB_TYPEARG_RULE_EXCEPT_SKEMA_SAVE = {
-  selector:
-    "CallExpression[callee.object.name='apiClient'][callee.property.name=/^(post|put|delete)$/][typeArguments]:not([callee.property.name='post'][arguments.0.callee.name='SKEMA_SAVE_PATH'])",
-  message:
-    'SPRINT-116: no hand-written type on `apiClient.post/put/delete<…>` — use the typed structured form. Only the ONE sanctioned legacy skema save (`apiClient.post<void>(SKEMA_SAVE_PATH(…), body)`, a grandfathered untyped op) may carry an explicit T.',
 }
 
 const languageOptions = {
@@ -248,19 +237,6 @@ export default [
         NO_GET_TYPEARG_RULE,
         NO_BODY_VERB_TYPEARG_RULE,
         NO_ETAG_TYPEARG_RULE_EXCEPT_ELIGIBILITY_GET,
-      ],
-    },
-  },
-  {
-    files: TYPED_SLICE_FILES_WITH_LEGACY_SKEMA_CALLS,
-    languageOptions,
-    rules: {
-      'no-restricted-syntax': [
-        'error',
-        NO_AS_RULE,
-        NO_GET_TYPEARG_RULE_EXCEPT_SKEMA_MONTH,
-        NO_BODY_VERB_TYPEARG_RULE_EXCEPT_SKEMA_SAVE,
-        NO_ETAG_TYPEARG_RULE,
       ],
     },
   },

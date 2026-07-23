@@ -282,13 +282,16 @@ export function SkemaProjectManager({
     onAbsenceTypesChange(
       // S73 R5 — carry the served fullDayOnly flag through so the optimistic
       // re-render keeps the "hele dage" note (the wire PUT body ignores it; the
-      // server owns the flag). Only attach the flag when TRUE so the emitted shape
-      // is byte-identical to the pre-S73 contract for ordinary types (S72 pins).
-      next.map((e, i) =>
-        e.fullDayOnly
-          ? { type: e.key, label: e.name, sortOrder: i, fullDayOnly: true }
-          : { type: e.key, label: e.name, sortOrder: i },
-      ),
+      // server owns the flag). S120: the spec row REQUIRES `fullDayOnly`, so it
+      // is always emitted (false for ordinary types — the pre-S120 conditional
+      // omission mirrored the deleted hand-written type's optional member; the
+      // wire PUT body is untouched since toRowPreferencesPutBody drops it).
+      next.map((e, i) => ({
+        type: e.key,
+        label: e.name,
+        fullDayOnly: e.fullDayOnly ?? false,
+        sortOrder: i,
+      })),
     )
 
   const tabs = [
