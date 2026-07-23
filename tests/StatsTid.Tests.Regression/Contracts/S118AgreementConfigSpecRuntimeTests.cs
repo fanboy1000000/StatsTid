@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Net.Http;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Npgsql;
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Segmentation;
 using Xunit.Sdk;
@@ -35,13 +36,16 @@ namespace StatsTid.Tests.Regression.Contracts;
 /// ANNUAL_ACTIVITY} are exercised on LIVE values (DRAFT create / ACTIVE publish;
 /// WEEKLY_HOURS create / ANNUAL_ACTIVITY clone+PUT).</para>
 ///
-/// <para><b>DECLARED CROSS-DOMAIN PRODUCT DEFECT (found by this gate, declared not fixed —
-/// src/** is out of scope):</b> the archive endpoint's EVERY success path and the publish
-/// endpoint's SUPERSESSION branch 500 (PostgresException 22P02 — the handlers pass BARE
-/// strings "DRAFT"/"ACTIVE"/"ARCHIVED" as audit previous/new data into <c>::jsonb</c> casts).
-/// See <see cref="PublishSupersedeAndArchive_DeclaredProductDefect_SuccessPathsBlockedByBareStringAuditJson"/>
-/// — the defect TRIPWIRE that goes RED when the backend fixes it, forcing the flip to the
-/// real envelope assertions.</para>
+/// <para><b>THE S118-DECLARED PRODUCT DEFECT IS FIXED (S121 / TASK-12100 + this task's
+/// tripwire flip):</b> the S118 gate DECLARED (not fixed — src/** was out of scope) that the
+/// archive endpoint's EVERY success path and the publish endpoint's SUPERSESSION branch 500'd
+/// (PostgresException 22P02 — bare strings "DRAFT"/"ACTIVE"/"ARCHIVED" into <c>::jsonb</c>
+/// audit casts) and pinned the failure signature as a TRIPWIRE. The backend fix landed in
+/// S121, the tripwire went RED as designed, and it is now REWRITTEN as the defect-FIXED
+/// proof: see <see cref="PublishSupersedeAndArchive_S118DefectFixed_AuditJsonLandsAndSuccessPathsMatchContract"/>
+/// (archive 200 for BOTH previous-status shapes with the LANDED audit rows' JSON content
+/// asserted; supersession re-publish 200 with <c>archivedConfigId</c> populated + both
+/// audit rows).</para>
 ///
 /// <para><b>Seed discipline:</b> a FRESH testcontainer per test (the established harness);
 /// every agreement code is <c>S118AGC_*</c>/<c>S118AGE_*</c> with okVersion <c>OKS118</c> —
@@ -299,14 +303,14 @@ public sealed class S118AgreementConfigSpecRuntimeTests : IAsyncLifetime
     //  archivedConfigId branches).
     // ════════════════════════════════════════════════════════════════════════════════
 
-    /// <summary>The bespoke publish envelope on its REACHABLE branch — ALL 4 keys ALWAYS
+    /// <summary>The bespoke publish envelope on its always-reachable branch — ALL 4 keys ALWAYS
     /// emitted (nullable-always-present, never optional-key): a first publish has NO prior
     /// ACTIVE ⇒ <c>archivedConfigId</c> SERVED null (key present); <c>status</c> "ACTIVE"
     /// exercises the enum set live.
     ///
-    /// <para><b>DECLARED CROSS-DOMAIN DEFECT (out of tests/** scope):</b> the SUPERSESSION
-    /// branch (<c>archivedConfigId</c> populated) is UNREACHABLE — see
-    /// <see cref="PublishSupersedeAndArchive_DeclaredProductDefect_SuccessPathsBlockedByBareStringAuditJson"/>.</para></summary>
+    /// <para>The SUPERSESSION branch (<c>archivedConfigId</c> populated) — UNREACHABLE until
+    /// the S121 audit-JSON fix — is asserted in
+    /// <see cref="PublishSupersedeAndArchive_S118DefectFixed_AuditJsonLandsAndSuccessPathsMatchContract"/>.</para></summary>
     [Fact]
     public async Task Publish_Post200_Envelope_NoPriorActiveBranch_ArchivedConfigIdServedNull()
     {
@@ -329,67 +333,107 @@ public sealed class S118AgreementConfigSpecRuntimeTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
-    //  Op 8 — POST .../archive + op 7's supersession branch: DECLARED PRODUCT DEFECT.
+    //  Op 8 — POST .../archive + op 7's supersession branch: the S118 DEFECT, FIXED.
     // ════════════════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// <b>DECLARED CROSS-DOMAIN PRODUCT DEFECT (found by this per-route gate — the first
-    /// HTTP-level drive of these success paths; src/** is out of this task's scope, so the
-    /// defect is DECLARED, not fixed):</b> the archive endpoint's audit call passes the BARE
-    /// strings <c>existing.Status.ToString()</c> / <c>"ARCHIVED"</c> as
-    /// <c>previous_data</c>/<c>new_data</c>, and the publish endpoint's ADR-019 D1 dual-emit
-    /// passes bare <c>"ACTIVE"</c>/<c>"ARCHIVED"</c> — the repo casts both parameters
-    /// <c>::jsonb</c>, so EVERY archive and EVERY supersession publish rolls back with
-    /// PostgresException 22P02 and surfaces 500 where the committed spec declares 200. The
-    /// existing REPO-level suites knew the strings are invalid JSON (their comments say so)
-    /// and passed hand-built JSON — masking the ENDPOINT bug from every prior run.
+    /// <b>THE DEFECT-FIXED PROOF (S121 / TASK-12102 — the S118 tripwire lineage):</b> the S118
+    /// gate was the FIRST HTTP-level drive of these success paths and found that the archive
+    /// endpoint's audit call passed the BARE strings <c>existing.Status.ToString()</c> /
+    /// <c>"ARCHIVED"</c> and the publish endpoint's ADR-019 D1 dual-emit passed bare
+    /// <c>"ACTIVE"</c>/<c>"ARCHIVED"</c> into the repo's <c>::jsonb</c> casts — EVERY archive
+    /// and EVERY supersession publish 22P02'd, rolled back, and surfaced 500 where the spec
+    /// declares 200; the audit rows had NEVER landed. The predecessor of this test pinned that
+    /// failure signature as a TRIPWIRE; the S121 / TASK-12100 backend fix (honest single-key
+    /// <c>{"status": …}</c> JSON, the direct archive sourcing the TRUE pre-archive status from
+    /// the FOR-UPDATE-locked <c>SaveAgreementConfigResult.PreviousStatus</c>) flipped it RED,
+    /// and per the tripwire's own contract it is REWRITTEN to the real assertions:
     ///
-    /// <para><b>This test is the defect TRIPWIRE, not an acceptance:</b> it pins today's
-    /// failure signature so the moment the backend fixes the audit JSON this test goes RED and
-    /// the fix task MUST replace it with the real envelope assertions (archive:
-    /// <c>{configId, status: "ARCHIVED", archivedAt}</c>; publish-supersede:
-    /// <c>archivedConfigId</c> = the superseded config id).</para>
+    /// <list type="bullet">
+    ///   <item><description>direct archive 200 for BOTH previous-status shapes — a
+    ///     DRAFT-archive AND an ACTIVE-archive — with the LANDED audit rows' JSON content
+    ///     asserted (<c>previous_data = {"status":"DRAFT"}</c> / <c>{"status":"ACTIVE"}</c>
+    ///     respectively, <c>new_data = {"status":"ARCHIVED"}</c>, jsonb-equality = exact
+    ///     content);</description></item>
+    ///   <item><description>supersession re-publish 200 with <c>archivedConfigId</c> POPULATED
+    ///     (the formerly-unreachable branch) + BOTH its audit rows: the PUBLISHED row carrying
+    ///     the archived id, and the archived-leg ARCHIVED row
+    ///     (<c>{"status":"ACTIVE"}</c> → <c>{"status":"ARCHIVED"}</c>).</description></item>
+    /// </list>
     /// </summary>
     [Fact]
-    public async Task PublishSupersedeAndArchive_DeclaredProductDefect_SuccessPathsBlockedByBareStringAuditJson()
+    public async Task PublishSupersedeAndArchive_S118DefectFixed_AuditJsonLandsAndSuccessPathsMatchContract()
     {
         using var admin = Admin();
+        string[] archiveEnvelopeKeys = { "configId", "status", "archivedAt" };
+        string[] publishEnvelopeKeys = { "configId", "status", "archivedConfigId", "publishedAt" };
 
-        // Archive — blocked on EVERY invocation (bare-string previous/new data).
-        var (archiveId, archiveVersion, _) = await CreateConfigAsync(admin, "S118AGC_ARC");
-        using (var archive = await admin.SendAsync(SpecRuntimeTestSupport.JsonRequest(
-            HttpMethod.Post, $"/api/agreement-configs/{archiveId}/archive",
-            jsonBody: null, ifMatchVersion: archiveVersion)))
+        // ── Shape #1: direct archive of a DRAFT (previous_data = {"status":"DRAFT"}). ──
+        var (draftArcId, draftArcVersion, _) = await CreateConfigAsync(admin, "S118AGC_ARC");
+        var draftArcBody = await SpecRuntimeTestSupport.AssertOperationMatchesRuntimeAsync(
+            _spec, admin,
+            SpecRuntimeTestSupport.JsonRequest(HttpMethod.Post,
+                $"/api/agreement-configs/{draftArcId}/archive", jsonBody: null, ifMatchVersion: draftArcVersion),
+            "/api/agreement-configs/{configId}/archive", "post");
+        var draftArcRoot = JsonDocument.Parse(draftArcBody).RootElement;
+        S118ContractAssert.AssertExactKeySet(draftArcRoot, archiveEnvelopeKeys, "archive 200 (DRAFT shape)");
+        Assert.Equal(draftArcId, draftArcRoot.GetProperty("configId").GetGuid());
+        Assert.Equal("ARCHIVED", draftArcRoot.GetProperty("status").GetString());
+        Assert.Equal(JsonValueKind.String, draftArcRoot.GetProperty("archivedAt").ValueKind);
+        Assert.Equal(1L, await CountArchivedAuditRowsAsync(draftArcId, previousStatus: "DRAFT"));
+
+        // ── Shape #2: direct archive of an ACTIVE (previous_data = {"status":"ACTIVE"}). ──
+        var (activeArcId, activeArcVersion, _) = await CreateConfigAsync(admin, "S118AGC_ARA");
+        long publishedEtagVersion;
+        using (var publish = await admin.SendAsync(SpecRuntimeTestSupport.JsonRequest(
+            HttpMethod.Post, $"/api/agreement-configs/{activeArcId}/publish",
+            jsonBody: null, ifMatchVersion: activeArcVersion)))
         {
-            var body = await archive.Content.ReadAsStringAsync();
-            Assert.Equal(500, (int)archive.StatusCode); // the spec declares 200 — the gate's verdict is honest: DEFECT
-            Assert.Contains("22P02", body, StringComparison.Ordinal);
-            // The tx rolled back: the row is still DRAFT at version 1 (no partial archive).
-            var after = await SpecRuntimeTestSupport.AssertOperationMatchesRuntimeAsync(
-                _spec, admin,
-                SpecRuntimeTestSupport.JsonRequest(HttpMethod.Get, $"/api/agreement-configs/{archiveId}"),
-                "/api/agreement-configs/{configId}", "get");
-            var afterRoot = JsonDocument.Parse(after).RootElement;
-            Assert.Equal("DRAFT", afterRoot.GetProperty("status").GetString());
-            Assert.Equal(1L, afterRoot.GetProperty("version").GetInt64());
+            Assert.Equal(200, (int)publish.StatusCode);
+            publishedEtagVersion = S118ContractAssert.EtagVersion(publish); // If-Match source for the archive
         }
+        var activeArcBody = await SpecRuntimeTestSupport.AssertOperationMatchesRuntimeAsync(
+            _spec, admin,
+            SpecRuntimeTestSupport.JsonRequest(HttpMethod.Post,
+                $"/api/agreement-configs/{activeArcId}/archive", jsonBody: null, ifMatchVersion: publishedEtagVersion),
+            "/api/agreement-configs/{configId}/archive", "post");
+        var activeArcRoot = JsonDocument.Parse(activeArcBody).RootElement;
+        S118ContractAssert.AssertExactKeySet(activeArcRoot, archiveEnvelopeKeys, "archive 200 (ACTIVE shape)");
+        Assert.Equal("ARCHIVED", activeArcRoot.GetProperty("status").GetString());
+        Assert.Equal(1L, await CountArchivedAuditRowsAsync(activeArcId, previousStatus: "ACTIVE"));
 
-        // Publish over a prior ACTIVE — blocked on the ADR-019 D1 dual-emit (bare strings).
+        // ── The supersession re-publish: the formerly-unreachable archivedConfigId branch. ──
         var (activeId, activeVersion, _) = await CreateConfigAsync(admin, "S118AGC_SUP");
         using (var firstPublish = await admin.SendAsync(SpecRuntimeTestSupport.JsonRequest(
             HttpMethod.Post, $"/api/agreement-configs/{activeId}/publish",
             jsonBody: null, ifMatchVersion: activeVersion)))
         {
-            Assert.Equal(200, (int)firstPublish.StatusCode); // the reachable branch works
+            Assert.Equal(200, (int)firstPublish.StatusCode); // the always-reachable first-publish branch
         }
 
         var (draftId, draftVersion, _) = await CreateConfigAsync(admin, "S118AGC_SUP");
-        using var supersede = await admin.SendAsync(SpecRuntimeTestSupport.JsonRequest(
-            HttpMethod.Post, $"/api/agreement-configs/{draftId}/publish",
-            jsonBody: null, ifMatchVersion: draftVersion));
-        var supersedeBody = await supersede.Content.ReadAsStringAsync();
-        Assert.Equal(500, (int)supersede.StatusCode); // spec declares 200 — DEFECT, declared upward
-        Assert.Contains("22P02", supersedeBody, StringComparison.Ordinal);
+        var supersedeBody = await SpecRuntimeTestSupport.AssertOperationMatchesRuntimeAsync(
+            _spec, admin,
+            SpecRuntimeTestSupport.JsonRequest(HttpMethod.Post,
+                $"/api/agreement-configs/{draftId}/publish", jsonBody: null, ifMatchVersion: draftVersion),
+            "/api/agreement-configs/{configId}/publish", "post");
+        var supersedeRoot = JsonDocument.Parse(supersedeBody).RootElement;
+        S118ContractAssert.AssertExactKeySet(supersedeRoot, publishEnvelopeKeys, "publish 200 (supersession branch)");
+        Assert.Equal(draftId, supersedeRoot.GetProperty("configId").GetGuid());
+        Assert.Equal("ACTIVE", supersedeRoot.GetProperty("status").GetString());
+        Assert.Equal(activeId, supersedeRoot.GetProperty("archivedConfigId").GetGuid()); // POPULATED — the S118-dead branch, live
+        Assert.Equal(JsonValueKind.String, supersedeRoot.GetProperty("publishedAt").ValueKind);
+
+        // BOTH supersession audit rows landed: the PUBLISHED row carries the archived id …
+        Assert.Equal(1L, await ScalarLongAsync(
+            """
+            SELECT COUNT(*) FROM agreement_config_audit
+            WHERE config_id = @id AND action = 'PUBLISHED'
+              AND new_data ->> 'archivedConfigId' = @archivedId
+            """,
+            ("id", draftId), ("archivedId", activeId.ToString())));
+        // … and the archived-leg ARCHIVED row is the exact {"status":"ACTIVE"}→{"status":"ARCHIVED"} content.
+        Assert.Equal(1L, await CountArchivedAuditRowsAsync(activeId, previousStatus: "ACTIVE"));
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
@@ -560,6 +604,30 @@ public sealed class S118AgreementConfigSpecRuntimeTests : IAsyncLifetime
             throw new XunitException($"Child entitlement create under {parentConfigId} returned {(int)response.StatusCode}: {body}");
         var root = JsonDocument.Parse(body).RootElement.Clone();
         return (root.GetProperty("configId").GetGuid(), S118ContractAssert.EtagVersion(response), root);
+    }
+
+    /// <summary>S121 (the tripwire flip): counts the ARCHIVED audit rows whose landed JSON
+    /// content is EXACTLY <c>{"status": previousStatus}</c> → <c>{"status":"ARCHIVED"}</c>
+    /// (jsonb equality is structural — a bare string, an extra key, or a wrong status all
+    /// count 0).</summary>
+    private Task<long> CountArchivedAuditRowsAsync(Guid configId, string previousStatus)
+        => ScalarLongAsync(
+            """
+            SELECT COUNT(*) FROM agreement_config_audit
+            WHERE config_id = @id AND action = 'ARCHIVED'
+              AND previous_data = @prev::jsonb
+              AND new_data = '{"status":"ARCHIVED"}'::jsonb
+            """,
+            ("id", configId), ("prev", $$"""{"status":"{{previousStatus}}"}"""));
+
+    private async Task<long> ScalarLongAsync(string sql, params (string Name, object Value)[] args)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        foreach (var (name, value) in args)
+            cmd.Parameters.AddWithValue(name, value);
+        return Convert.ToInt64(await cmd.ExecuteScalarAsync());
     }
 
     private static JsonElement FindByCode(JsonElement array, string agreementCode)

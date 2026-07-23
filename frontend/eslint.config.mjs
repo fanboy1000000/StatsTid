@@ -25,14 +25,17 @@
 // SPRINT-118 / TASK-11801 — Pass 5 bucket A: 5 switched files join the FULL
 // ban tier (useAgreementConfigs / useEntitlementConfig / usePositionOverrides
 // hooks + the AgreementConfigEditor / EntitlementConfigEditor pages);
-// `useWageTypeMappings.ts` and `components/admin/EntitlementSection.tsx` join
-// on PARTIAL tiers — each hosts ONE deferred legacy If-Match PUT whose spec
-// request body REQUIRES members the FE payload does not send (binder-required
-// `effectiveFrom`; the W2-pinned `fullDayOnly`) and whose addition is a barred
-// request-payload change this pass, so the typed form cannot compile against
-// the byte-identical legacy payload. Route-helper-pinned (the S115/S116
-// precedent): `WAGE_TYPE_MAPPING_UPDATE_PATH` / `CHILD_ENTITLEMENT_PATH` are
-// the sanction boundaries.
+// `useWageTypeMappings.ts` and `components/admin/EntitlementSection.tsx`
+// joined on PARTIAL tiers — each hosted ONE deferred legacy If-Match PUT (a
+// NAMED DEFERRED DEFECT).
+// SPRINT-121 / TASK-12101 — the S118 deferred defects FIXED under the owner
+// rulings (`effectiveFrom` server-defaulted optional; `fullDayOnly`
+// binder-required and now sent): both deferred PUTs GRADUATED to the typed
+// forms, so both S118 partial tiers and their carve-out rules
+// (`NO_ETAG_TYPEARG_RULE_EXCEPT_WAGE_UPDATE`,
+// `NO_ETAG_TYPEARG_RULE_EXCEPT_CHILD_ENTITLEMENT_PUT`) were DELETED and both
+// files join the FULL ban tier. The ONLY remaining carve-out is the S115
+// eligibility helper pin (`ELIGIBILITY_PATH`).
 //
 // This project has no general ESLint config; this flat config exists SOLELY to
 // guard the OpenAPI-typed calls against re-introducing the S97→S100 "fetchEnheder"
@@ -88,8 +91,6 @@ const TYPED_SLICE_FILES = [
   'src/pages/admin/OvertimePreApprovalManagement.tsx',
   // S118 — the Pass-5 bucket-A switched files (TASK-11801): the 3 fully
   // drained hooks + the 2 admin pages hosting direct calls / error narrowing.
-  // useWageTypeMappings.ts and EntitlementSection.tsx are NOT here — each
-  // holds ONE sanctioned deferred legacy PUT (see the tiers below).
   'src/hooks/useAgreementConfigs.ts',
   'src/hooks/useEntitlementConfig.ts',
   'src/hooks/usePositionOverrides.ts',
@@ -113,34 +114,16 @@ const TYPED_SLICE_FILES = [
   'src/hooks/useCompliance.ts',
   'src/hooks/useCompensationChoice.ts',
   'src/hooks/useSkema.ts',
+  // S121 — the two S118 deferred PUTs graduated (TASK-12101): every call in
+  // both files is typed; their S118 partial tiers are gone.
+  'src/hooks/useWageTypeMappings.ts',
+  'src/components/admin/EntitlementSection.tsx',
 ]
 
 // S115 — fully switched EXCEPT the ONE deferred polymorphic explicit-T etag GET
 // (see the SCOPE NOTE above): everything banned, with the etag type-argument
 // ban narrowed to two-argument (structured/mutation) calls.
 const TYPED_SLICE_FILES_WITH_LEGACY_ETAG_GET = ['src/hooks/useEntitlementEligibility.ts']
-
-// S118 — useWageTypeMappings.ts: the list GET, the create POST and the
-// If-Match DELETE are fully switched, but the If-Match PUT is a SANCTIONED
-// DEFERRED legacy call: the spec `UpdateWageTypeMappingRequest` REQUIRES
-// `effectiveFrom` (binder-enforced — the current FE payload's omission is a
-// LIVE 400 dead-end, a NAMED DEFERRED DEFECT) and adding it is a barred
-// request-payload change this pass, so the typed form cannot compile against
-// the byte-identical payload. The call is pinned by its ROUTE HELPER
-// (`WAGE_TYPE_MAPPING_UPDATE_PATH(...)` — the S115 ELIGIBILITY_PATH / S116
-// SKEMA_*_PATH precedent): every OTHER explicit-T etag call stays banned.
-const TYPED_SLICE_FILES_WITH_LEGACY_WAGE_UPDATE = ['src/hooks/useWageTypeMappings.ts']
-
-// S118 — components/admin/EntitlementSection.tsx (a COMPONENT path,
-// deliberately): the child-entitlement create POST and DELETE are fully
-// switched, but the If-Match PUT is a SANCTIONED DEFERRED legacy call — the
-// S118 Step-0b Reviewer W2 ruling bars wiring `fullDayOnly` (and the likewise
-// missing binder-required `effectiveFrom`) into the request body this pass,
-// so the typed form cannot compile against the byte-identical payload (the
-// dead-end is a NAMED DEFERRED DEFECT). Pinned by `CHILD_ENTITLEMENT_PATH`.
-const TYPED_SLICE_FILES_WITH_LEGACY_CHILD_ENTITLEMENT_PUT = [
-  'src/components/admin/EntitlementSection.tsx',
-]
 
 const NO_AS_RULE = {
   selector: 'TSAsExpression',
@@ -180,33 +163,6 @@ const NO_ETAG_TYPEARG_RULE_EXCEPT_ELIGIBILITY_GET = {
     'SPRINT-115: no hand-written type on `apiFetchWithEtag<…>` — use the typed spec-keyed form. Only the ONE deferred polymorphic GET (`apiFetchWithEtag<T>(ELIGIBILITY_PATH(id))`, entitlement-eligibility) may carry an explicit T.',
 }
 
-// S118 — the useWageTypeMappings-tier variant: bans EVERY explicit-T
-// `apiFetchWithEtag` call EXCEPT the file's ONE sanctioned deferred PUT,
-// pinned by its ROUTE HELPER (the first argument is a call to
-// `WAGE_TYPE_MAPPING_UPDATE_PATH`) AND by its exact call shape (Step-7a
-// tightening: two arguments, options-object literal whose FIRST property is
-// `method: 'PUT'`) — fail-closed: an explicit-T etag call on any other url,
-// a raw-literal url that bypasses the helper, OR any other method/arity on
-// the SAME helper stays banned.
-const NO_ETAG_TYPEARG_RULE_EXCEPT_WAGE_UPDATE = {
-  selector:
-    "CallExpression[callee.name='apiFetchWithEtag'][typeArguments]:not([arguments.length=2][arguments.0.callee.name='WAGE_TYPE_MAPPING_UPDATE_PATH'][arguments.1.type='ObjectExpression'][arguments.1.properties.0.key.name='method'][arguments.1.properties.0.value.value='PUT'])",
-  message:
-    'SPRINT-118: no hand-written type on `apiFetchWithEtag<…>` — use the typed spec-keyed form. Only the ONE sanctioned deferred wage-type-mapping update (`apiFetchWithEtag<T>(WAGE_TYPE_MAPPING_UPDATE_PATH(), …)`, a barred-payload-change deferral) may carry an explicit T.',
-}
-
-// S118 — the EntitlementSection-tier variant: same shape, pinned to
-// `CHILD_ENTITLEMENT_PATH` (the deferred child-entitlement PUT — the W2
-// ruling's named deferred defect) AND to the exact PUT call shape (Step-7a
-// tightening — `CHILD_ENTITLEMENT_PATH` is also the child DELETE route; the
-// method/arity pin keeps a future non-PUT reuse banned).
-const NO_ETAG_TYPEARG_RULE_EXCEPT_CHILD_ENTITLEMENT_PUT = {
-  selector:
-    "CallExpression[callee.name='apiFetchWithEtag'][typeArguments]:not([arguments.length=2][arguments.0.callee.name='CHILD_ENTITLEMENT_PATH'][arguments.1.type='ObjectExpression'][arguments.1.properties.0.key.name='method'][arguments.1.properties.0.value.value='PUT'])",
-  message:
-    'SPRINT-118: no hand-written type on `apiFetchWithEtag<…>` — use the typed spec-keyed form. Only the ONE sanctioned deferred child-entitlement update (`apiFetchWithEtag<T>(CHILD_ENTITLEMENT_PATH(…), …)`, the W2-ruling deferral) may carry an explicit T.',
-}
-
 const languageOptions = {
   parser: tsParser,
   ecmaVersion: 'latest',
@@ -237,32 +193,6 @@ export default [
         NO_GET_TYPEARG_RULE,
         NO_BODY_VERB_TYPEARG_RULE,
         NO_ETAG_TYPEARG_RULE_EXCEPT_ELIGIBILITY_GET,
-      ],
-    },
-  },
-  {
-    files: TYPED_SLICE_FILES_WITH_LEGACY_WAGE_UPDATE,
-    languageOptions,
-    rules: {
-      'no-restricted-syntax': [
-        'error',
-        NO_AS_RULE,
-        NO_GET_TYPEARG_RULE,
-        NO_BODY_VERB_TYPEARG_RULE,
-        NO_ETAG_TYPEARG_RULE_EXCEPT_WAGE_UPDATE,
-      ],
-    },
-  },
-  {
-    files: TYPED_SLICE_FILES_WITH_LEGACY_CHILD_ENTITLEMENT_PUT,
-    languageOptions,
-    rules: {
-      'no-restricted-syntax': [
-        'error',
-        NO_AS_RULE,
-        NO_GET_TYPEARG_RULE,
-        NO_BODY_VERB_TYPEARG_RULE,
-        NO_ETAG_TYPEARG_RULE_EXCEPT_CHILD_ENTITLEMENT_PUT,
       ],
     },
   },

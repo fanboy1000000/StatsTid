@@ -9,11 +9,12 @@
 //    this bucket;
 //  • URLs (interpolation + query building) are byte-identical to the legacy
 //    string-built forms;
-//  • request bodies are byte-identical — including THE NAMED DEFERRED DEFECT:
-//    the wage-type-mapping update PUT still omits the binder-REQUIRED
-//    `effectiveFrom` (a live 400 dead-end; wiring it in is a barred
-//    request-payload change this pass — the W2 exclusion class), so that call
-//    stays on the sanctioned legacy form and its CURRENT bytes are pinned;
+//  • request bodies are byte-identical — including the wage-type-mapping
+//    update PUT, whose omission of `effectiveFrom` was the S118 NAMED
+//    DEFERRED DEFECT (a live binder-400 dead-end) and is, post-S121 ruling
+//    #1, a DELIBERATE server-default omission (`effectiveFrom` is optional on
+//    the wire; the server stamps today). The call GRADUATED to the typed form
+//    in S121 with the SAME bytes — the 6-key pin REMAINS;
 //  • the ADDITIVE-surfacing pin: the 5 compliance fields
 //    (maxDailyHours / minimumRestHours / restPeriodDerogationAllowed /
 //    weeklyMaxHoursReferencePeriod / voluntaryUnsocialHoursAllowed) the old
@@ -409,7 +410,7 @@ describe('usePositionOverrides — precondition fidelity per the demand map', ()
 
 // ── useWageTypeMappings ──────────────────────────────────────────────────────
 
-describe('useWageTypeMappings — precondition fidelity + THE NAMED DEFERRED DEFECT pin', () => {
+describe('useWageTypeMappings — precondition fidelity + the S121 deliberate-omission pin', () => {
   const mappingRow = {
     timeType: 'NORMAL_WORK',
     wageType: 'SLS_0100',
@@ -459,7 +460,7 @@ describe('useWageTypeMappings — precondition fidelity + THE NAMED DEFERRED DEF
     expect(post.body).toEqual(body)
   })
 
-  it('updateMapping (the SANCTIONED DEFERRED legacy PUT) → If-Match kept; the CURRENT bytes pinned: effectiveFrom is ABSENT (the named 400 dead-end, W2-class deferral)', async () => {
+  it('updateMapping (GRADUATED to the typed PUT in S121) → If-Match kept; the bytes pinned: effectiveFrom is ABSENT (ruling #1 — a DELIBERATE server-default omission, no longer a dead-end)', async () => {
     const calls = mappingCalls()
     const { result } = await mount()
     const body = {
@@ -474,10 +475,11 @@ describe('useWageTypeMappings — precondition fidelity + THE NAMED DEFERRED DEF
     const put = calls.find((c) => c.method === 'PUT')!
     expect(put.url).toBe('/api/admin/wage-type-mappings')
     expect(put.headers['If-Match']).toBe('"1"')
-    // The deferred-defect pin: the payload is BYTE-IDENTICAL to pre-S118 —
-    // exactly these 6 keys, NO effectiveFrom (adding it = a barred
-    // request-payload change this pass; the omission is a live 400 dead-end
-    // named in the S118 report).
+    // S121 REMAIN pin (rationale rewritten): the payload is BYTE-IDENTICAL
+    // across the S121 graduation — exactly these 6 keys, NO effectiveFrom.
+    // The omission is no longer the S118 400 dead-end but ruling #1's
+    // DELIBERATE server-default: `effectiveFrom` is optional on the wire and
+    // the server stamps today.
     expect(Object.keys(put.body as Record<string, unknown>).sort()).toEqual([
       'agreementCode', 'description', 'okVersion', 'position', 'timeType', 'wageType',
     ])
@@ -555,7 +557,7 @@ describe('useEntitlementConfig — precondition fidelity per the demand map', ()
     }
     await act(async () => {
       await result.current.createConfig(createBody)
-      await result.current.updateConfig('ec-1', '"4"', { ...createBody, effectiveFrom: '2026-07-20' })
+      await result.current.updateConfig('ec-1', '"4"', createBody)
       await result.current.deleteConfig('ec-1', '"5"')
     })
     const [post, put, del] = calls
@@ -567,10 +569,14 @@ describe('useEntitlementConfig — precondition fidelity per the demand map', ()
     expect(put.url).toBe('/api/admin/entitlement-configs/ec-1')
     expect(put.method).toBe('PUT')
     expect(put.headers['If-Match']).toBe('"4"')
-    // The admin editor's PUT carries the full shape INCLUDING fullDayOnly +
-    // effectiveFrom (unlike the deferred child PUT) — pinned so a regression
-    // toward the child-PUT defect is caught.
-    expect(put.body).toEqual({ ...createBody, effectiveFrom: '2026-07-20' })
+    // S121 UPDATE pin (the S118 presence pin inverted by ruling #1): the
+    // primary editor's PUT now OMITS `effectiveFrom` — the server defaults it
+    // to today — while `fullDayOnly` (binder-REQUIRED post-ruling #3) still
+    // travels round-trip, so a regression toward the child-PUT defect class
+    // is still caught.
+    expect(put.body).toEqual(createBody)
+    expect(put.body).toHaveProperty('fullDayOnly', true)
+    expect(put.body).not.toHaveProperty('effectiveFrom')
     expect(del.url).toBe('/api/admin/entitlement-configs/ec-1')
     expect(del.method).toBe('DELETE')
     expect(del.headers['If-Match']).toBe('"5"')

@@ -100,6 +100,55 @@ internal static class ForcedRollbackHarness
     }
 
     /// <summary>
+    /// S121 / TASK-12102 — throw-on-SECOND-call variant of <see cref="ThrowingOutboxEnqueue"/>
+    /// for DUAL-EMIT orchestrations (the publish endpoint's ADR-019 D1 supersession flow:
+    /// state → PUBLISHED audit → outbox enqueue #1 → ARCHIVED audit → outbox enqueue #2 →
+    /// commit). <see cref="ThrowingOutboxEnqueue"/> throws on EVERY call and therefore never
+    /// reaches the archive leg — this decorator DELEGATES the first call to a REAL
+    /// <see cref="IOutboxEnqueue"/> (so the first outbox row genuinely lands IN-TX) and throws
+    /// <see cref="InvalidOperationException"/> with the same
+    /// <see cref="ThrowingOutboxEnqueue.ThrowMessage"/> on the second and any later call. A
+    /// fault AFTER the archive leg must roll back the WHOLE tx — including the first,
+    /// successfully-inserted outbox row — which is exactly what the post-rollback
+    /// <c>AssertNoOutboxRowAsync</c> on the FIRST stream pins.
+    /// </summary>
+    public sealed class ThrowOnSecondCallOutboxEnqueue : IOutboxEnqueue
+    {
+        private readonly IOutboxEnqueue _inner;
+        private int _calls;
+
+        public ThrowOnSecondCallOutboxEnqueue(IOutboxEnqueue inner) => _inner = inner;
+
+        public Task EnqueueAsync(
+            NpgsqlConnection conn,
+            NpgsqlTransaction tx,
+            string streamId,
+            IDomainEvent @event,
+            CancellationToken ct = default)
+        {
+            ThrowIfNotFirst();
+            return _inner.EnqueueAsync(conn, tx, streamId, @event, ct);
+        }
+
+        public Task<long> EnqueueAndReturnIdAsync(
+            NpgsqlConnection conn,
+            NpgsqlTransaction tx,
+            string streamId,
+            IDomainEvent @event,
+            CancellationToken ct = default)
+        {
+            ThrowIfNotFirst();
+            return _inner.EnqueueAndReturnIdAsync(conn, tx, streamId, @event, ct);
+        }
+
+        private void ThrowIfNotFirst()
+        {
+            if (Interlocked.Increment(ref _calls) > 1)
+                throw new InvalidOperationException(ThrowingOutboxEnqueue.ThrowMessage);
+        }
+    }
+
+    /// <summary>
     /// SQL DDL covering every table the Phase-2 forced-rollback tests touch. Idempotent
     /// (uses <c>CREATE TABLE IF NOT EXISTS</c>) so it's safe to re-apply on the same
     /// container across test classes. Mirrors <c>docker/postgres/init.sql</c> for the

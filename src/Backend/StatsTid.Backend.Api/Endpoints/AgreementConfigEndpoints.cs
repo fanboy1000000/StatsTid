@@ -507,9 +507,15 @@ public static class AgreementConfigEndpoints
                     if (saveResult.ArchivedId is { } archivedId &&
                         saveResult.ArchivedVersion is { } archivedVersion)
                     {
+                        // S121 / TASK-12100 (deferred defect #3): previous/new data are JSON
+                        // documents (::jsonb cast in the repo) — bare strings 22P02'd and
+                        // rolled back EVERY supersession publish. Hand-built single-key JSON
+                        // per the file convention (CLONED/PUBLISHED sites). The supersession
+                        // leg's previous status is structurally ACTIVE — the repo archives
+                        // only status='ACTIVE' rows on this path.
                         await agreementConfigRepo.AppendAuditAsync(
                             conn, tx, archivedId, "ARCHIVED",
-                            "ACTIVE", "ARCHIVED",
+                            "{\"status\":\"ACTIVE\"}", "{\"status\":\"ARCHIVED\"}",
                             actor.ActorId ?? "system", actor.ActorRole ?? "GLOBAL_ADMIN",
                             versionBefore: archivedVersion - 1, versionAfter: archivedVersion, ct);
 
@@ -592,9 +598,10 @@ public static class AgreementConfigEndpoints
                 return Results.Json(new { error = headerError }, statusCode: 428);
 
             // 2. Pre-flight existence read — surfaces 404 for genuinely-missing configs and
-            //    captures (agreement_code, ok_version) for the outbox event payload + the
-            //    pre-archive status string for the audit row's previousData. Already-archived
-            //    is NOT pre-checked: a stale-If-Match request against an already-ARCHIVED row
+            //    captures (agreement_code, ok_version) for the outbox event payload. The audit
+            //    row's previousData status comes from the FOR-UPDATE-locked row via
+            //    saveResult.PreviousStatus (S121 / TASK-12100), NOT from this racy pre-flight
+            //    read. Already-archived is NOT pre-checked: a stale-If-Match request against an already-ARCHIVED row
             //    must surface as 412 via v3 ArchiveAsync's OCE (Step 7a cycle 1 P2 fix), not
             //    as 409 — frontend banner-with-retry only triggers on 412.
             var existing = await agreementConfigRepo.GetByIdAsync(configId, ct);
@@ -616,9 +623,16 @@ public static class AgreementConfigEndpoints
                     saveResult = await agreementConfigRepo.ArchiveAsync(
                         conn, tx, configId, expectedVersion, actor.ActorId ?? "system", ct);
 
+                    // S121 / TASK-12100 (deferred defect #3): previous/new data are JSON
+                    // documents (::jsonb cast in the repo) — bare strings 22P02'd and rolled
+                    // back EVERY direct archive. Hand-built single-key JSON per the file
+                    // convention (CLONED/PUBLISHED sites). previousData carries the TRUE
+                    // pre-archive status (ACTIVE or DRAFT) from the FOR-UPDATE-locked row
+                    // (saveResult.PreviousStatus — the sanctioned repo result-member
+                    // extension), NOT the racy pre-flight `existing` read.
                     await agreementConfigRepo.AppendAuditAsync(
                         conn, tx, configId, "ARCHIVED",
-                        existing.Status.ToString(), "ARCHIVED",
+                        $"{{\"status\":\"{saveResult.PreviousStatus}\"}}", "{\"status\":\"ARCHIVED\"}",
                         actor.ActorId ?? "system", actor.ActorRole ?? "GLOBAL_ADMIN",
                         versionBefore: expectedVersion, versionAfter: saveResult.Version, ct);
 

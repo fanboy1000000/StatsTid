@@ -130,6 +130,10 @@ public sealed class EntitlementConfigEndpointTests : IAsyncLifetime
             isPerEpisode = false,
             minAge = (int?)null,
             description = "post-test",
+            // S121 / TASK-12102 (owner ruling #3): fullDayOnly is binder-REQUIRED on all 4
+            // entitlement DTOs — explicit false keeps this test on its original 201 concern
+            // (VACATION is not a D-A forced type, so false is guard-legal).
+            fullDayOnly = false,
             effectiveFrom = today.ToString("yyyy-MM-dd"),
         };
         var rsp = await client.PostAsJsonAsync("/api/admin/entitlement-configs", body);
@@ -207,6 +211,10 @@ public sealed class EntitlementConfigEndpointTests : IAsyncLifetime
             isPerEpisode = false,
             minAge = (int?)null,
             description = "illegal-reset-month",
+            // S121 / TASK-12102 (owner ruling #3): the member is binder-REQUIRED — sent
+            // explicitly so this test's reset-month 422 concern is NOT silently re-routed
+            // to a binder-400 (VACATION: false is guard-legal).
+            fullDayOnly = false,
             effectiveFrom = today.ToString("yyyy-MM-dd"),
         };
         var rsp = await client.PostAsJsonAsync("/api/admin/entitlement-configs", body);

@@ -18,10 +18,15 @@ namespace StatsTid.Tests.Regression.Config;
 /// WAF&lt;Program&gt; + admin-token pattern from <see cref="EntitlementConfigEndpointTests"/>.
 ///
 /// <list type="bullet">
-///   <item><b>POST/PUT guard</b> — a CARE_DAY/SENIOR_DAY config write whose
-///     <c>fullDayOnly</c> is false OR ABSENT → 422 (the second enforcement layer on TOP of
-///     the DB CHECK); nothing persists. Type-scoped: a CHILD_SICK write without the flag is
-///     untouched by the guard (CHILD_SICK stays hours-based per D-A).</item>
+///   <item><b>POST/PUT doctrine (post-S121 / owner ruling #3)</b> — <c>fullDayOnly</c> is
+///     binder-REQUIRED on every entitlement write DTO: an ABSENT flag is a 400 at the BINDER
+///     (the request-side lie detector; nothing reaches the guard, nothing persists). A
+///     PRESENT-but-false flag on a CARE_DAY/SENIOR_DAY write → the D-A guard's 422 (the
+///     second enforcement layer on TOP of the DB CHECK); nothing persists. Type-scoped: a
+///     CHILD_SICK write with an explicit false is untouched by the guard (CHILD_SICK stays
+///     hours-based per D-A). Pre-S121 the flag was optional and absence fell through to the
+///     guard as default-false — the silent-omission trap that shipped the S118 child
+///     dead-end defect.</item>
 ///   <item><b>Version-survival (the BACKEND pin)</b> — an admin PUT editing an UNRELATED
 ///     field (description) produces a Case-B successor whose <c>full_day_only</c> persists
 ///     TRUE, end-to-end: response DTO, the new live DB row, AND the
@@ -71,15 +76,21 @@ public sealed class EntitlementConfigFullDayOnlyAdminTests : IAsyncLifetime
         Assert.Equal(0, await CountRowsAsync(fakeOk));
     }
 
+    /// <summary>SEMANTIC FLIP (S121 / TASK-12102, owner ruling #3): pre-S121 an ABSENT flag
+    /// defaulted to false and fell through to the guard's 422 — the silent-omission trap. The
+    /// flag is now binder-REQUIRED, so absence is a 400 at the BINDER with nothing persisted
+    /// (the structural closure), and the guard's 422 concern is re-pinned via an EXPLICIT
+    /// false body (the D-A rule intact behind the binder).</summary>
     [Fact]
-    public async Task Post_SeniorDay_FlagAbsent_Returns422_NothingPersisted()
+    public async Task Post_SeniorDay_FlagAbsent_Returns400AtBinder_NothingPersisted_ExplicitFalseStillGuard422()
     {
         var client = AdminClient();
         var fakeOk = "OK_S73FDO_" + Guid.NewGuid().ToString("N").Substring(0, 8);
         var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
 
-        // The flag is deliberately ABSENT from the body — the DTO defaults it to false.
-        var rsp = await client.PostAsJsonAsync("/api/admin/entitlement-configs", new
+        // The flag is deliberately ABSENT from the body — binder-400 (ruling #3), nothing
+        // reaches the guard, nothing persists.
+        var absentRsp = await client.PostAsJsonAsync("/api/admin/entitlement-configs", new
         {
             entitlementType = "SENIOR_DAY",
             agreementCode = "AC",
@@ -95,7 +106,32 @@ public sealed class EntitlementConfigFullDayOnlyAdminTests : IAsyncLifetime
             effectiveFrom = today.ToString("yyyy-MM-dd"),
         });
 
-        Assert.Equal(HttpStatusCode.UnprocessableEntity, rsp.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, absentRsp.StatusCode);
+        Assert.Equal(0, await CountRowsAsync(fakeOk));
+
+        // The guard-422 re-pin: the SAME body with an EXPLICIT false passes the binder and is
+        // rejected by the D-A guard — 422 with the structured error, still nothing persisted.
+        var explicitFalseRsp = await client.PostAsJsonAsync("/api/admin/entitlement-configs", new
+        {
+            entitlementType = "SENIOR_DAY",
+            agreementCode = "AC",
+            okVersion = fakeOk,
+            annualQuota = 2m,
+            accrualModel = "IMMEDIATE",
+            resetMonth = 1,
+            carryoverMax = 0m,
+            proRateByPartTime = false,
+            isPerEpisode = false,
+            minAge = (int?)62,
+            description = "s73-explicit-false-flag",
+            fullDayOnly = false,
+            effectiveFrom = today.ToString("yyyy-MM-dd"),
+        });
+
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, explicitFalseRsp.StatusCode);
+        var body = await explicitFalseRsp.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("SENIOR_DAY", body.GetProperty("entitlementType").GetString());
+        Assert.False(body.GetProperty("suppliedFullDayOnly").GetBoolean());
         Assert.Equal(0, await CountRowsAsync(fakeOk));
     }
 
@@ -125,10 +161,12 @@ public sealed class EntitlementConfigFullDayOnlyAdminTests : IAsyncLifetime
         Assert.Equal("true", (string?)payloadFlag);
     }
 
-    /// <summary>Type-scoped: CHILD_SICK stays hours-based per D-A — a POST WITHOUT the flag
-    /// is not touched by the guard (201, row FALSE).</summary>
+    /// <summary>Type-scoped: CHILD_SICK stays hours-based per D-A — a POST with an EXPLICIT
+    /// false flag is not touched by the guard (201, row FALSE). Re-expressed in S121 /
+    /// TASK-12102: the flag was absent pre-ruling-#3 (absence is now a binder-400 for EVERY
+    /// type); the type-scoped-unguarded concern survives on the explicit-false form.</summary>
     [Fact]
-    public async Task Post_ChildSick_FlagAbsent_NotGuarded_CreatedWithFalse()
+    public async Task Post_ChildSick_ExplicitFalse_NotGuarded_CreatedWithFalse()
     {
         var client = AdminClient();
         var fakeOk = "OK_S73FDO_" + Guid.NewGuid().ToString("N").Substring(0, 8);
@@ -147,6 +185,7 @@ public sealed class EntitlementConfigFullDayOnlyAdminTests : IAsyncLifetime
             isPerEpisode = true,
             minAge = (int?)null,
             description = "s73-child-sick-unguarded",
+            fullDayOnly = false, // S121 ruling #3: binder-required; false is guard-legal for CHILD_SICK
             effectiveFrom = today.ToString("yyyy-MM-dd"),
         });
 
@@ -260,15 +299,18 @@ public sealed class EntitlementConfigFullDayOnlyAdminTests : IAsyncLifetime
         Assert.False(body.GetProperty("suppliedFullDayOnly").GetBoolean());
     }
 
-    /// <summary>Second surface POST — a SENIOR_DAY child entitlement with the flag ABSENT (the
-    /// DTO defaults it to false) is rejected → 422.</summary>
+    /// <summary>SEMANTIC FLIP (S121 / TASK-12102, owner ruling #3 — the same flip as the
+    /// primary surface, on the CHILD surface that shipped the S118 dead-end): a SENIOR_DAY
+    /// child POST with the flag ABSENT is now a 400 at the BINDER (pre-S121 the DTO defaulted
+    /// it to false and the guard 422'd — the silent-omission trap), with nothing persisted;
+    /// the guard-422 concern is re-pinned via an EXPLICIT false body.</summary>
     [Fact]
-    public async Task SubResource_Post_SeniorDay_FlagAbsent_Returns422()
+    public async Task SubResource_Post_SeniorDay_FlagAbsent_Returns400AtBinder_ExplicitFalseStillGuard422()
     {
         var client = AdminClient();
-        var parentId = await SeedAgreementConfigAsync();
+        var (parentId, code, _) = await SeedAgreementConfigWithCodeAsync();
 
-        var rsp = await client.PostAsJsonAsync(
+        var absentRsp = await client.PostAsJsonAsync(
             $"/api/agreement-configs/{parentId}/entitlements", new
             {
                 entitlementType = "SENIOR_DAY",
@@ -280,10 +322,42 @@ public sealed class EntitlementConfigFullDayOnlyAdminTests : IAsyncLifetime
                 isPerEpisode = false,
                 minAge = (int?)62,
                 description = "s73-subresource-absent-flag",
-                // fullDayOnly deliberately ABSENT.
+                // fullDayOnly deliberately ABSENT → binder-400 (ruling #3).
             });
 
-        Assert.Equal(HttpStatusCode.UnprocessableEntity, rsp.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, absentRsp.StatusCode);
+        Assert.Equal(0L, await ScalarAsync(
+            """
+            SELECT COUNT(*) FROM entitlement_configs
+            WHERE entitlement_type = 'SENIOR_DAY' AND agreement_code = @p0
+            """, code));
+
+        // The guard-422 re-pin on the child surface: explicit false passes the binder and is
+        // rejected by the shared D-A guard.
+        var explicitFalseRsp = await client.PostAsJsonAsync(
+            $"/api/agreement-configs/{parentId}/entitlements", new
+            {
+                entitlementType = "SENIOR_DAY",
+                annualQuota = 2m,
+                accrualModel = "IMMEDIATE",
+                resetMonth = 1,
+                carryoverMax = 0m,
+                proRateByPartTime = false,
+                isPerEpisode = false,
+                minAge = (int?)62,
+                description = "s73-subresource-explicit-false-flag",
+                fullDayOnly = false,
+            });
+
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, explicitFalseRsp.StatusCode);
+        var body = await explicitFalseRsp.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("SENIOR_DAY", body.GetProperty("entitlementType").GetString());
+        Assert.False(body.GetProperty("suppliedFullDayOnly").GetBoolean());
+        Assert.Equal(0L, await ScalarAsync(
+            """
+            SELECT COUNT(*) FROM entitlement_configs
+            WHERE entitlement_type = 'SENIOR_DAY' AND agreement_code = @p0
+            """, code));
     }
 
     /// <summary>Second surface POST — a CARE_DAY child entitlement with the flag TRUE is

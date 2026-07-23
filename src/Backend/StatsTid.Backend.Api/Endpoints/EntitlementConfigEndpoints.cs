@@ -388,14 +388,18 @@ public static class EntitlementConfigEndpoints
             var actorId = actor.ActorId ?? "unknown";
             var actorRole = actor.ActorRole ?? "unknown";
 
-            // 1. Same-day-only-edit validator (cycle 3 symmetric forbid).
+            // 1. Same-day-only-edit validator (cycle 3 symmetric forbid). S121 / TASK-12100
+            //    (owner ruling #1): body.EffectiveFrom is now OPTIONAL — omitted defaults to
+            //    server today (compute-once; the ONLY body.EffectiveFrom read in this
+            //    handler); an explicitly-sent value != today still 422s.
             var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
-            if (body.EffectiveFrom != today)
+            var requestedEffectiveFrom = body.EffectiveFrom ?? today;
+            if (requestedEffectiveFrom != today)
             {
                 return Results.UnprocessableEntity(new
                 {
                     error = "effective_from must equal today (same-day-only edits permitted in S30)",
-                    suppliedEffectiveFrom = body.EffectiveFrom,
+                    suppliedEffectiveFrom = requestedEffectiveFrom,
                     today = today,
                 });
             }
@@ -846,10 +850,11 @@ public static class EntitlementConfigEndpoints
         public int? MinAge { get; init; }
         public string? Description { get; init; }
 
-        // S73 / TASK-7301 (R2): the full-day-only day-shape flag. NOT required — an ABSENT
-        // field deserializes to false, which the FullDayOnlyGuard rejects (422) for
-        // CARE_DAY/SENIOR_DAY per the D-A owner ruling ("flag false/absent → 422").
-        public bool FullDayOnly { get; init; }
+        // S73 / TASK-7301 (R2) → S121 / TASK-12100 (owner ruling #3): the full-day-only
+        // day-shape flag is REQUIRED — omission is now a binder-400 (request-side lie
+        // detector) instead of a silent guard-422. The FullDayOnlyGuard still rejects
+        // explicit false for CARE_DAY/SENIOR_DAY with 422 (the D-A owner ruling untouched).
+        public required bool FullDayOnly { get; init; }
 
         // S30 / TASK-3007: optional same-day-only field. Defaulted to today by the endpoint
         // when omitted; rejected with 422 when supplied with any other value.
@@ -857,8 +862,9 @@ public static class EntitlementConfigEndpoints
     }
 
     /// <summary>
-    /// PUT request body. <see cref="EffectiveFrom"/> is REQUIRED and must equal today per the
-    /// same-day-only-edit validator (refinement L127, cycle 3 symmetric forbid).
+    /// PUT request body. <see cref="EffectiveFrom"/> is OPTIONAL (S121 / TASK-12100, owner
+    /// ruling #1) — when omitted, the endpoint defaults it to server today; an
+    /// explicitly-sent value != today still 422s (refinement L127, cycle 3 symmetric forbid).
     /// reset_month / accrual_model must match the predecessor (immutability guard, PLAN-s30
     /// Callout 8 + Q1 sub-fork (i) freeze); 422 otherwise.
     /// </summary>
@@ -876,12 +882,15 @@ public static class EntitlementConfigEndpoints
         public int? MinAge { get; init; }
         public string? Description { get; init; }
 
-        // S73 / TASK-7301 (R2 version-survival): the editor PUTs the full config shape and must
-        // round-trip the flag. ABSENT deserializes to false → 422 for CARE_DAY/SENIOR_DAY (the
-        // FullDayOnlyGuard) — an unrelated-field edit therefore always re-asserts TRUE.
-        public bool FullDayOnly { get; init; }
+        // S73 / TASK-7301 (R2 version-survival) → S121 / TASK-12100 (owner ruling #3): the
+        // editor PUTs the full config shape and must round-trip the flag EXPLICITLY —
+        // omission is now a binder-400 (request-side lie detector) instead of a silent
+        // guard-422. The FullDayOnlyGuard still rejects explicit false for
+        // CARE_DAY/SENIOR_DAY with 422 — an unrelated-field edit therefore re-asserts TRUE.
+        public required bool FullDayOnly { get; init; }
 
-        // S30 / TASK-3007: required. Validator rejects != today with 422.
-        public required DateOnly EffectiveFrom { get; init; }
+        // S30 / TASK-3007 → S121 / TASK-12100 (ruling #1): optional, server-defaulted to
+        // today when omitted. Validator rejects explicitly-sent != today with 422.
+        public DateOnly? EffectiveFrom { get; init; }
     }
 }

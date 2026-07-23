@@ -119,6 +119,22 @@ describe('EntitlementConfigEditor — fullDayOnly round-trip (S73 R2 / Step-0b B
     expect(putBodies[0].fullDayOnly).toBe(true)
   })
 
+  it('S121 ruling #1 — the PUT body OMITS effectiveFrom (the server defaults to today; the client-computed date is gone) while fullDayOnly still travels', async () => {
+    renderEditor()
+    await waitFor(() => expect(screen.getByText('AC')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rediger' }))
+    await screen.findByText('Rediger berettigelse')
+    fireEvent.click(screen.getByRole('button', { name: 'Gem' }))
+
+    await waitFor(() => expect(putBodies).toHaveLength(1))
+    // The alignment pin: no client-side `effectiveFrom` (the midnight race
+    // against the server's same-day validator is closed — the server owns
+    // today), and the binder-required `fullDayOnly` is present.
+    expect(putBodies[0]).not.toHaveProperty('effectiveFrom')
+    expect(putBodies[0].fullDayOnly).toBe(true)
+  })
+
   it('the CREATE request carries the fullDayOnly checkbox value', async () => {
     renderEditor()
     await waitFor(() => expect(screen.getByText('AC')).toBeInTheDocument())

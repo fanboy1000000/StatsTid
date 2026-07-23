@@ -306,14 +306,18 @@ public static class AgreementEntitlementEndpoints
             var agreementCode = parent.AgreementCode;
             var okVersion = parent.OkVersion;
 
-            // 3. Same-day-only-edit validator (cycle 3 symmetric forbid).
+            // 3. Same-day-only-edit validator (cycle 3 symmetric forbid). S121 / TASK-12100
+            //    (owner ruling #1): body.EffectiveFrom is now OPTIONAL — omitted defaults to
+            //    server today (compute-once; the ONLY body.EffectiveFrom read in this
+            //    handler); an explicitly-sent value != today still 422s.
             var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
-            if (body.EffectiveFrom != today)
+            var requestedEffectiveFrom = body.EffectiveFrom ?? today;
+            if (requestedEffectiveFrom != today)
             {
                 return Results.UnprocessableEntity(new
                 {
                     error = "effective_from must equal today (same-day-only edits permitted)",
-                    suppliedEffectiveFrom = body.EffectiveFrom,
+                    suppliedEffectiveFrom = requestedEffectiveFrom,
                     today = today,
                 });
             }
@@ -764,16 +768,19 @@ public static class AgreementEntitlementEndpoints
         public required bool IsPerEpisode { get; init; }
         public int? MinAge { get; init; }
         public string? Description { get; init; }
-        // S73 / TASK-7301 (R2): ABSENT deserializes to false -> 422 for CARE_DAY/SENIOR_DAY.
-        public bool FullDayOnly { get; init; }
+        // S73 / TASK-7301 (R2) → S121 / TASK-12100 (owner ruling #3): REQUIRED — omission is
+        // now a binder-400 (request-side lie detector) instead of a silent guard-422. The
+        // FullDayOnlyGuard still rejects explicit false for CARE_DAY/SENIOR_DAY with 422.
+        public required bool FullDayOnly { get; init; }
         public DateOnly? EffectiveFrom { get; init; }
     }
 
     /// <summary>
     /// PUT request body for sub-resource entitlement update. Does NOT include
     /// agreement_code or ok_version -- those are derived from the parent agreement config.
-    /// <see cref="EffectiveFrom"/> is REQUIRED and must equal today per same-day-only-edit
-    /// validator. reset_month / accrual_model must match the predecessor (immutability guard).
+    /// <see cref="EffectiveFrom"/> is OPTIONAL (S121 / TASK-12100, owner ruling #1) -- when
+    /// omitted, the endpoint defaults it to server today; an explicitly-sent value != today
+    /// still 422s. reset_month / accrual_model must match the predecessor (immutability guard).
     /// </summary>
     private sealed class UpdateChildEntitlementRequest
     {
@@ -786,8 +793,12 @@ public static class AgreementEntitlementEndpoints
         public required bool IsPerEpisode { get; init; }
         public int? MinAge { get; init; }
         public string? Description { get; init; }
-        // S73 / TASK-7301 (R2 version-survival): the full config shape round-trips the flag.
-        public bool FullDayOnly { get; init; }
-        public required DateOnly EffectiveFrom { get; init; }
+        // S73 / TASK-7301 (R2 version-survival) → S121 / TASK-12100 (owner ruling #3):
+        // REQUIRED — omission is now a binder-400 (request-side lie detector) instead of a
+        // silent guard-422; the full config shape must round-trip the flag explicitly.
+        public required bool FullDayOnly { get; init; }
+        // S121 / TASK-12100 (owner ruling #1): optional, server-defaulted to today when
+        // omitted. Validator rejects explicitly-sent != today with 422.
+        public DateOnly? EffectiveFrom { get; init; }
     }
 }

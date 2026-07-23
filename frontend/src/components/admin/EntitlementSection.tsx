@@ -26,23 +26,18 @@ import styles from './EntitlementSection.module.css'
 // 15-field `Entitlement` interface was DELETED for the GENERATED spec row,
 // which additively surfaces `fullDayOnly` on the READ side (the S73 flag).
 //
-// ── THE DEFERRED PUT (the S118 Step-0b Reviewer W2 ruling, ridden verbatim) ──
-// "THE WRITE-SIDE PIN (Reviewer W2): the drift repair is DISPLAY-ONLY this
-// pass. The sweep found a LIVE 422 DEAD-END today: `formToUpdateBody` omits
-// `fullDayOnly` from the child PUT body → the non-nullable DTO deserializes
-// `false` → the guard 422s every CARE_DAY/SENIOR_DAY edit from the by-id page.
-// Wiring the field into the PUT body would be an FE request-payload change on
-// a RULE-BEARING flag — barred. The dead-end is a NAMED DEFERRED DEFECT."
-// The typed-switch sweep additionally found the dead-end is WIDER than pinned:
-// the spec `UpdateChildEntitlementRequest` also REQUIRES `effectiveFrom` (C#
-// `required DateOnly`, binder-enforced 400 — AgreementEntitlementEndpoints
-// .cs:791), which `formToUpdateBody` ALSO omits — so EVERY child edit 400s at
-// binding before the 422 guard is even reached. Both omissions are barred
-// payload changes this pass, so the PUT stays on the legacy explicit-T form,
-// pinned by `CHILD_ENTITLEMENT_PATH` below (the S115/S116 route-helper-pin
-// precedent). A future deliberate fix wires BOTH fields and graduates the
-// call to the typed form in the same change. ZERO request-payload changes
-// were made in S118.
+// S121 / TASK-12101 — the S118 NAMED DEFERRED DEFECT is FIXED (the create+
+// update dead-ends: both verbs omitted `fullDayOnly`, tripping the
+// FullDayOnlyGuard 422 for CARE_DAY/SENIOR_DAY; the update also omitted the
+// then-binder-required `effectiveFrom` → 400 on every child edit). Under the
+// S121 owner rulings: the create body DERIVES `fullDayOnly` from the chosen
+// type (forced for CARE_DAY/SENIOR_DAY — ruling #2); the update body
+// PRESERVES the edited row's current value with the type-forced floor (ruling
+// #2, no new UI control); BOTH bodies deliberately OMIT `effectiveFrom` — the
+// server defaults it to today (ruling #1, `effectiveFrom` is now optional on
+// the wire). The PUT graduated from the legacy explicit-T form to the TYPED
+// structured form; the `CHILD_ENTITLEMENT_PATH` route-helper pin and its
+// eslint carve-out are gone — this file is on the FULL lint tier.
 
 /** The GENERATED spec row (S118) — replaces the hand-written interface. The
     wire `entitlementType` / `accrualModel` are OPEN strings; the UI narrows
@@ -53,18 +48,14 @@ export type Entitlement =
 type CreateChildEntitlementRequest =
   components['schemas']['StatsTid.Backend.Api.Endpoints.AgreementEntitlementEndpoints.CreateChildEntitlementRequest']
 
-/** The CURRENT (defective — see the header note) child-update payload: the
-    spec update request MINUS the two members the FE does not send yet
-    (`effectiveFrom`: binder-required; `fullDayOnly`: the W2-pinned flag). */
-type ChildEntitlementUpdateBody = Omit<
-  components['schemas']['StatsTid.Backend.Api.Endpoints.AgreementEntitlementEndpoints.UpdateChildEntitlementRequest'],
-  'effectiveFrom' | 'fullDayOnly'
->
+type UpdateChildEntitlementRequest =
+  components['schemas']['StatsTid.Backend.Api.Endpoints.AgreementEntitlementEndpoints.UpdateChildEntitlementRequest']
 
-/** The route-helper PIN for the ONE sanctioned legacy explicit-T call (the
-    deferred PUT). Every other explicit-T call in this file stays lint-banned. */
-const CHILD_ENTITLEMENT_PATH = (configId: string, entitlementConfigId: string) =>
-  `/api/agreement-configs/${configId}/entitlements/${entitlementConfigId}`
+/** S121 ruling #2 — the two types whose `fullDayOnly` is FORCED true (the DB
+    CHECK `entitlement_configs_full_day_only_types` + the D-A ruling). */
+function isFullDayForcedType(entitlementType: string): boolean {
+  return entitlementType === 'CARE_DAY' || entitlementType === 'SENIOR_DAY'
+}
 
 interface EntitlementSectionProps {
   configId: string
@@ -122,6 +113,9 @@ function parseOptionalInt(value: string): number | null {
   return Number.isFinite(parsed) ? parsed : null
 }
 
+// S121: `fullDayOnly` is DERIVED from the chosen type (forced true for
+// CARE_DAY/SENIOR_DAY, false otherwise — ruling #2); `effectiveFrom` is
+// deliberately OMITTED (the server defaults to today — ruling #1).
 function formToCreateBody(f: EntitlementFormState): CreateChildEntitlementRequest {
   return {
     entitlementType: f.entitlementType,
@@ -133,10 +127,17 @@ function formToCreateBody(f: EntitlementFormState): CreateChildEntitlementReques
     isPerEpisode: f.isPerEpisode,
     minAge: parseOptionalInt(f.minAge),
     description: f.description.trim() || null,
+    fullDayOnly: isFullDayForcedType(f.entitlementType),
   }
 }
 
-function formToUpdateBody(f: EntitlementFormState): ChildEntitlementUpdateBody {
+// S121: `fullDayOnly` is PRESERVED — the edited row's current value travels
+// round-trip (no UI control), with the type-forced floor: a forced type is
+// always true (ruling #2). `effectiveFrom` deliberately OMITTED (ruling #1).
+function formToUpdateBody(
+  f: EntitlementFormState,
+  currentFullDayOnly: boolean,
+): UpdateChildEntitlementRequest {
   return {
     entitlementType: f.entitlementType,
     annualQuota: parseNum(f.annualQuota, 0),
@@ -147,6 +148,7 @@ function formToUpdateBody(f: EntitlementFormState): ChildEntitlementUpdateBody {
     isPerEpisode: f.isPerEpisode,
     minAge: parseOptionalInt(f.minAge),
     description: f.description.trim() || null,
+    fullDayOnly: isFullDayForcedType(f.entitlementType) || currentFullDayOnly,
   }
 }
 
@@ -222,8 +224,8 @@ export function EntitlementSection({ configId, entitlements, readOnly, onRefresh
   }
 
   // UNCONDITIONED create (no precondition — S118 demand map); typed 201.
-  // NOTE (W2): `fullDayOnly` is deliberately NOT in the create body either —
-  // zero request-payload changes this pass.
+  // S121: the body carries the DERIVED `fullDayOnly` and omits `effectiveFrom`
+  // (server-defaulted today) — see the header note.
   const handleCreate = async (e: FormEvent) => {
     e.preventDefault()
     setSubmitting(true)
@@ -249,10 +251,9 @@ export function EntitlementSection({ configId, entitlements, readOnly, onRefresh
     }
   }
 
-  // DEFERRED — the legacy explicit-T If-Match PUT (see the header note): the
-  // payload is byte-identical to the pre-S118 call and deliberately NOT the
-  // typed form (the spec body requires `effectiveFrom` + `fullDayOnly` round-
-  // trip, both barred payload changes this pass).
+  // S121 — the GRADUATED typed If-Match PUT (the S118 deferred defect fixed):
+  // `fullDayOnly` preserved from the edited row (type-forced floor),
+  // `effectiveFrom` omitted (server-defaulted today).
   const handleUpdate = async (e: FormEvent) => {
     e.preventDefault()
     if (!editingId) return
@@ -263,12 +264,13 @@ export function EntitlementSection({ configId, entitlements, readOnly, onRefresh
     setSuccess(null)
     try {
       const ifMatch = formatVersionAsIfMatch(ent.version)
-      const result = await apiFetchWithEtag<Entitlement>(
-        CHILD_ENTITLEMENT_PATH(configId, editingId),
+      const result = await apiFetchWithEtag(
+        '/api/agreement-configs/{configId}/entitlements/{entitlementConfigId}',
         {
           method: 'PUT',
-          headers: { 'If-Match': ifMatch },
-          body: JSON.stringify(formToUpdateBody(form)),
+          params: { path: { configId, entitlementConfigId: editingId } },
+          ifMatch,
+          body: formToUpdateBody(form, ent.fullDayOnly),
         },
       )
       if (!result.ok) {

@@ -660,7 +660,8 @@ public sealed class AgreementConfigRepository
     /// </summary>
     /// <returns>
     /// <see cref="SaveAgreementConfigResult"/> with the archived entity, the new
-    /// <c>version</c>, <c>IsCreated: false</c>, and <c>ArchivedId: null</c>.
+    /// <c>version</c>, <c>IsCreated: false</c>, <c>ArchivedId: null</c>, and
+    /// <c>PreviousStatus</c> = the FOR-UPDATE-locked pre-archive status (S121 / TASK-12100).
     /// </returns>
     /// <exception cref="OptimisticConcurrencyException">
     /// Thrown when the row is missing, already ARCHIVED, or its <c>version</c> column does
@@ -726,7 +727,14 @@ public sealed class AgreementConfigRepository
                 $"ArchiveAsync produced no row for config_id={configId} at expected version {expectedVersion}; FOR UPDATE invariant violated.");
         }
         var entity = ReadEntity(updReader);
-        return new SaveAgreementConfigResult(entity, entity.Version, IsCreated: false, ArchivedId: null);
+        // S121 / TASK-12100: surface the FOR-UPDATE-locked pre-archive status so the archive
+        // endpoint can serialize an HONEST audit previousData (ACTIVE or DRAFT) — the locked
+        // read is the authority, not the endpoint's pre-flight read (Step-0b convergent
+        // BLOCKER both lenses). Result-shape extension only; SQL/locking/version semantics
+        // byte-unchanged.
+        return new SaveAgreementConfigResult(
+            entity, entity.Version, IsCreated: false, ArchivedId: null,
+            PreviousStatus: currentStatus);
     }
 
     public async Task AppendAuditAsync(
@@ -950,9 +958,16 @@ public sealed class AgreementConfigRepository
 /// <c>version_before</c> is <c>(ArchivedVersion - 1)</c> and <c>version_after</c> is
 /// <c>ArchivedVersion</c> (per ADR-019 D8). Required by the publish endpoint to emit the
 /// second (ARCHIVED) audit row + outbox event mandated by ADR-019 D1.</param>
+/// <param name="PreviousStatus">S121 / TASK-12100 (sanctioned result-member extension): on the
+/// v3 Archive path, the FOR-UPDATE-locked row's status BEFORE the archive UPDATE
+/// (<c>ACTIVE</c> or <c>DRAFT</c> — the direct-archive surface admits both). The archive
+/// endpoint uses it to serialize the audit row's <c>previous_data</c> from the locked truth
+/// rather than the racy pre-flight read. <c>null</c> on all other construction sites
+/// (Create / Update / Publish paths — default preserves those sites unchanged).</param>
 public sealed record SaveAgreementConfigResult(
     AgreementConfigEntity Config,
     long Version,
     bool IsCreated,
     Guid? ArchivedId,
-    long? ArchivedVersion = null);
+    long? ArchivedVersion = null,
+    string? PreviousStatus = null);

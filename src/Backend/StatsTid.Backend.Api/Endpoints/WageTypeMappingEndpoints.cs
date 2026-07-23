@@ -411,15 +411,18 @@ public static class WageTypeMappingEndpoints
             var actorRole = actor.ActorRole ?? "unknown";
 
             // 1. Same-day-only-edit validator (refinement L127, cycle 3 symmetric forbid) —
-            //    runs BEFORE opening the tx. PUT requires body.EffectiveFrom; rejects any
-            //    value != today with 422.
+            //    runs BEFORE opening the tx. S121 / TASK-12100 (owner ruling #1): PUT
+            //    body.EffectiveFrom is now OPTIONAL — omitted defaults to server today
+            //    (compute-once; the ONLY body.EffectiveFrom read in this handler); an
+            //    explicitly-sent value != today still 422s (S29 semantics unchanged).
             var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
-            if (body.EffectiveFrom != today)
+            var requestedEffectiveFrom = body.EffectiveFrom ?? today;
+            if (requestedEffectiveFrom != today)
             {
                 return Results.UnprocessableEntity(new
                 {
                     error = "effective_from must equal today (same-day-only edits permitted in S29)",
-                    suppliedEffectiveFrom = body.EffectiveFrom,
+                    suppliedEffectiveFrom = requestedEffectiveFrom,
                     today = today,
                 });
             }
@@ -446,7 +449,7 @@ public static class WageTypeMappingEndpoints
                 AgreementCode = body.AgreementCode,
                 Position = position,
                 Description = body.Description,
-                EffectiveFrom = body.EffectiveFrom,
+                EffectiveFrom = requestedEffectiveFrom,
             };
 
             // 4. Atomic supersession + audit (version-transition pair) + outbox enqueue
@@ -466,7 +469,7 @@ public static class WageTypeMappingEndpoints
 
                     // Cross-day → SUPERSEDED + WageTypeMappingSuperseded; same-day → UPDATED
                     // + WageTypeMappingUpdated. Routing matches the repo's internal branch.
-                    isCrossDay = previous.EffectiveFrom < body.EffectiveFrom;
+                    isCrossDay = previous.EffectiveFrom < requestedEffectiveFrom;
                     var auditAction = isCrossDay ? "SUPERSEDED" : "UPDATED";
 
                     await repo.AppendAuditAsync(
@@ -727,8 +730,10 @@ public static class WageTypeMappingEndpoints
     }
 
     /// <summary>
-    /// PUT request body. <see cref="EffectiveFrom"/> is REQUIRED and must equal today
-    /// per the same-day-only-edit validator (refinement L127, cycle 3 symmetric forbid).
+    /// PUT request body. <see cref="EffectiveFrom"/> is OPTIONAL (S121 / TASK-12100, owner
+    /// ruling #1) — when omitted, the endpoint defaults it to server today (kills the
+    /// client-computes-today midnight race). When supplied, the same-day-only-edit validator
+    /// (refinement L127) still requires it == today (S29 semantics unchanged).
     /// </summary>
     private sealed class UpdateWageTypeMappingRequest
     {
@@ -739,7 +744,8 @@ public static class WageTypeMappingEndpoints
         public string? Position { get; init; }
         public string? Description { get; init; }
 
-        // S29 / TASK-2908: required. Validator rejects != today with 422.
-        public required DateOnly EffectiveFrom { get; init; }
+        // S29 / TASK-2908 → S121 / TASK-12100 (ruling #1): optional, server-defaulted to
+        // today when omitted. Validator rejects explicitly-sent != today with 422.
+        public DateOnly? EffectiveFrom { get; init; }
     }
 }

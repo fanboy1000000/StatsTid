@@ -8,19 +8,14 @@ import { formatVersionAsIfMatch, resolveEtag } from '../lib/etag'
 // structured forms; the hand-written `WageTypeMappingItem` interface (audited
 // FAITHFUL) was DELETED in favor of the GENERATED spec type.
 //
-// ── THE DEFERRED PUT (a NAMED DEFERRED DEFECT, the S118 W2-ruling class) ─────
-// The spec `UpdateWageTypeMappingRequest` REQUIRES `effectiveFrom` (C#
-// `required DateOnly` — binder-enforced: absence → 400 before the handler
-// runs; WageTypeMappingEndpoints.cs:743). The FE update body has NEVER sent
-// it, so every wage-type-mapping edit from the admin page is a LIVE 400
-// DEAD-END today. Wiring the field in would be an FE request-payload change
-// on a RULE-BEARING date (the S29 same-day-only-edit validator) — barred this
-// pass ("zero request-payload changes", the W2 exclusion class). The PUT
-// therefore CANNOT compile against the spec-derived typed body and stays on
-// the legacy explicit-T form, pinned by the route helper below (the S115
-// ELIGIBILITY_PATH / S116 SKEMA_*_PATH precedent — the helper is the lint
-// sanction boundary). A future deliberate fix adds `effectiveFrom` AND
-// graduates the call to the typed form in the same change.
+// S121 / TASK-12101 — the S118 NAMED DEFERRED DEFECT is FIXED: the spec
+// `UpdateWageTypeMappingRequest` no longer requires `effectiveFrom` (S121
+// ruling #1 — the server defaults it to today, `WageTypeMappingEndpoints.cs`
+// compute-once), so the FE payload's long-standing omission is now LEGAL and
+// the update PUT graduated from the legacy explicit-T form to the TYPED
+// structured form with the SAME bytes. The `WAGE_TYPE_MAPPING_UPDATE_PATH`
+// route-helper pin and its eslint carve-out are gone — this file is on the
+// FULL lint tier.
 
 /** The GENERATED spec row (S118) — replaces the hand-written interface. */
 export type WageTypeMappingItem =
@@ -29,17 +24,11 @@ export type WageTypeMappingItem =
 export type WageTypeMappingCreateRequest =
   components['schemas']['StatsTid.Backend.Api.Endpoints.WageTypeMappingEndpoints.CreateWageTypeMappingRequest']
 
-/** The CURRENT (defective — see the header note) update payload: the spec
-    update request MINUS the binder-required `effectiveFrom` the FE does not
-    send yet. Spec-derived so the deferred defect is visible in one place. */
-export type WageTypeMappingUpdateBody = Omit<
-  components['schemas']['StatsTid.Backend.Api.Endpoints.WageTypeMappingEndpoints.UpdateWageTypeMappingRequest'],
-  'effectiveFrom'
->
-
-/** The route-helper PIN for the ONE sanctioned legacy explicit-T call (the
-    deferred PUT). Every other explicit-T call in this file stays lint-banned. */
-const WAGE_TYPE_MAPPING_UPDATE_PATH = () => '/api/admin/wage-type-mappings'
+/** The GENERATED spec update request (S121 — replaces the defective
+    `Omit<…, 'effectiveFrom'>` payload type; `effectiveFrom` is optional on
+    the wire and the FE deliberately omits it — server-defaulted today). */
+export type WageTypeMappingUpdateRequest =
+  components['schemas']['StatsTid.Backend.Api.Endpoints.WageTypeMappingEndpoints.UpdateWageTypeMappingRequest']
 
 export type WithEtag<T> = T & { etag: string; version: number }
 
@@ -114,22 +103,18 @@ export function useWageTypeMappings() {
     return { ...row, etag: resolvedEtag ?? formatVersionAsIfMatch(row.version) }
   }
 
-  // DEFERRED — the legacy explicit-T If-Match PUT (see the header note): the
-  // payload is byte-identical to the pre-S118 call and deliberately NOT the
-  // typed form, because the spec body REQUIRES `effectiveFrom` and adding it
-  // is a barred request-payload change this pass.
+  // S121 — the GRADUATED typed If-Match PUT (see the header note): the payload
+  // BYTES are unchanged (still no `effectiveFrom` — now a deliberate
+  // server-default omission per ruling #1, not a dead-end).
   const updateMapping = async (
     ifMatch: string,
-    body: WageTypeMappingUpdateBody,
+    body: WageTypeMappingUpdateRequest,
   ): Promise<WithEtag<WageTypeMappingItem>> => {
-    const result = await apiFetchWithEtag<WageTypeMappingItem>(
-      WAGE_TYPE_MAPPING_UPDATE_PATH(),
-      {
-        method: 'PUT',
-        headers: { 'If-Match': ifMatch },
-        body: JSON.stringify(body),
-      },
-    )
+    const result = await apiFetchWithEtag('/api/admin/wage-type-mappings', {
+      method: 'PUT',
+      ifMatch,
+      body,
+    })
     if (!result.ok) {
       throw makeMutationError(result.status, result.error, result.body)
     }

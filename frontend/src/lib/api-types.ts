@@ -6350,7 +6350,7 @@ export interface components {
             /** Format: int32 */
             minAge?: number | null;
             description?: string | null;
-            fullDayOnly?: boolean;
+            fullDayOnly: boolean;
             /** Format: date */
             effectiveFrom?: string | null;
         };
@@ -6368,9 +6368,9 @@ export interface components {
             /** Format: int32 */
             minAge?: number | null;
             description?: string | null;
-            fullDayOnly?: boolean;
+            fullDayOnly: boolean;
             /** Format: date */
-            effectiveFrom: string;
+            effectiveFrom?: string | null;
         };
         "StatsTid.Backend.Api.Endpoints.ApprovalEndpoints.RejectPeriodRequest": {
             reason: string;
@@ -6444,7 +6444,7 @@ export interface components {
             /** Format: int32 */
             minAge?: number | null;
             description?: string | null;
-            fullDayOnly?: boolean;
+            fullDayOnly: boolean;
             /** Format: date */
             effectiveFrom?: string | null;
         };
@@ -6464,9 +6464,9 @@ export interface components {
             /** Format: int32 */
             minAge?: number | null;
             description?: string | null;
-            fullDayOnly?: boolean;
+            fullDayOnly: boolean;
             /** Format: date */
-            effectiveFrom: string;
+            effectiveFrom?: string | null;
         };
         "StatsTid.Backend.Api.Endpoints.EntitlementEligibilityEndpoints.SetBirthDateRequest": {
             /** Format: date */
@@ -6688,7 +6688,7 @@ export interface components {
             position?: string | null;
             description?: string | null;
             /** Format: date */
-            effectiveFrom: string;
+            effectiveFrom?: string | null;
         };
         "StatsTid.SharedKernel.Models.AbsenceEntry": {
             employeeId: string;

@@ -1,18 +1,21 @@
 // S118 / TASK-11801 — WIRE-level pins for the child-entitlement sub-resource
-// switch in EntitlementSection (PAT-012). Component-level (fetch stubbed):
+// switch in EntitlementSection (PAT-012). Component-level (fetch stubbed).
+// S121 / TASK-12101 — the S118 NAMED DEFERRED DEFECT is FIXED and the pins
+// flipped DELIBERATELY (defer-pin-never-silence):
 //
 //  • create POST → the TYPED interpolated URL, UNCONDITIONED (no If-Match /
-//    If-None-Match), body byte-identical — and the W2 zero-payload-change pin:
-//    `fullDayOnly` / `effectiveFrom` are NOT added to the create body either;
-//  • update PUT (the SANCTIONED DEFERRED legacy call — the W2 ruling's named
-//    deferred defect) → If-Match `"<version>"` kept; the CURRENT bytes pinned:
-//    NO `fullDayOnly` (the pinned 422 dead-end for CARE_DAY/SENIOR_DAY) and
-//    NO `effectiveFrom` (the binder-required member whose omission 400s every
-//    child edit — the sweep's wider finding). Both stay ABSENT until a future
-//    deliberate fix;
+//    If-None-Match); the body now carries the DERIVED `fullDayOnly` (forced
+//    true for CARE_DAY/SENIOR_DAY, false otherwise — ruling #2; the S118
+//    absence pin FLIPPED to presence);
+//  • update PUT (GRADUATED to the typed form in S121) → If-Match `"<version>"`
+//    kept; the body now carries the PRESERVED `fullDayOnly` (the edited row's
+//    current value, type-forced floor — ruling #2; the S118 absence pin
+//    FLIPPED to presence);
+//  • `effectiveFrom` stays ABSENT from BOTH bodies — no longer a dead-end but
+//    a DELIBERATE server-default omission (ruling #1: the server owns today);
+//    these absence pins REMAIN;
 //  • delete DELETE → the TYPED form, If-Match kept, NO body, 204;
-//  • the read-side additive pin: the spec `Entitlement` row REQUIRES
-//    `fullDayOnly` (display/typing gain only this pass).
+//  • the read-side pin: the spec `Entitlement` row REQUIRES `fullDayOnly`.
 import { describe, it, expect, expectTypeOf, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { EntitlementSection, type Entitlement } from '../EntitlementSection'
@@ -87,16 +90,31 @@ const careDayRow: Entitlement = {
   version: 4,
 }
 
+// S121 — a NON-forced row (VACATION) whose fullDayOnly is TRUE: legal under
+// the DB CHECK (which only FORCES the two care/senior types) and the fixture
+// that distinguishes PRESERVE (round-trip the row value) from DERIVE (which
+// would send false for a non-forced type).
+const vacationFullDayRow: Entitlement = {
+  ...careDayRow,
+  configId: 'e-2',
+  entitlementType: 'VACATION',
+  annualQuota: 25,
+  fullDayOnly: true,
+  version: 7,
+}
+
+// S121 — 10 keys: `fullDayOnly` JOINED both bodies (the S118 9-key pin
+// FLIPPED); `effectiveFrom` stays deliberately absent (ruling #1).
 const EXPECTED_BODY_KEYS = [
   'accrualModel', 'annualQuota', 'carryoverMax', 'description', 'entitlementType',
-  'isPerEpisode', 'minAge', 'proRateByPartTime', 'resetMonth',
+  'fullDayOnly', 'isPerEpisode', 'minAge', 'proRateByPartTime', 'resetMonth',
 ]
 
-function renderSection(onRefresh = vi.fn()) {
+function renderSection(onRefresh = vi.fn(), rows: Entitlement[] = [careDayRow]) {
   return render(
     <EntitlementSection
       configId="cfg-1"
-      entitlements={[careDayRow]}
+      entitlements={rows}
       readOnly={false}
       onRefresh={onRefresh}
     />,
@@ -121,7 +139,7 @@ describe('EntitlementSection — the read side', () => {
 })
 
 describe('EntitlementSection — wire pins for the three mutations', () => {
-  it('create → POST /api/agreement-configs/cfg-1/entitlements, UNCONDITIONED, and the W2 pin: NO fullDayOnly / effectiveFrom in the body', async () => {
+  it('create → POST /api/agreement-configs/cfg-1/entitlements, UNCONDITIONED; the S121 FLIP: fullDayOnly PRESENT (derived false for the non-forced VACATION); effectiveFrom stays a DELIBERATE server-default omission', async () => {
     const calls = captureCalls(() => ({ body: careDayRow }))
     renderSection()
 
@@ -136,11 +154,32 @@ describe('EntitlementSection — wire pins for the three mutations', () => {
     expect(post.headers['If-Match']).toBeUndefined()
     expect(post.headers['If-None-Match']).toBeUndefined()
     expect(Object.keys(post.body as Record<string, unknown>).sort()).toEqual(EXPECTED_BODY_KEYS)
-    expect(post.body).not.toHaveProperty('fullDayOnly')
+    // S121 FLIP (was `.not.toHaveProperty('fullDayOnly')`): the create body
+    // DERIVES the flag — the default VACATION type is non-forced → false.
+    expect(post.body).toHaveProperty('fullDayOnly', false)
+    // REMAIN (rationale rewritten): the omission is no longer a dead-end but
+    // ruling #1's DELIBERATE server-default — the server stamps today.
     expect(post.body).not.toHaveProperty('effectiveFrom')
   })
 
-  it('update (the SANCTIONED DEFERRED legacy PUT) → If-Match "<version>" kept; bytes pinned: NO fullDayOnly (the W2 422 dead-end) and NO effectiveFrom (the binder 400 dead-end)', async () => {
+  it('create with a FORCED type (CARE_DAY) → the derived fullDayOnly is TRUE (ruling #2, the type-forced derivation)', async () => {
+    const calls = captureCalls(() => ({ body: careDayRow }))
+    renderSection()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Tilfoej berettigelse' }))
+    await screen.findByText('Tilfoej berettigelse', { selector: 'h2' })
+    fireEvent.change(screen.getByLabelText(/^Type/), { target: { value: 'CARE_DAY' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Opret' }))
+
+    await waitFor(() => expect(calls.length).toBe(1))
+    const post = calls[0]
+    expect(post.method).toBe('POST')
+    expect((post.body as Record<string, unknown>).entitlementType).toBe('CARE_DAY')
+    expect(post.body).toHaveProperty('fullDayOnly', true)
+    expect(post.body).not.toHaveProperty('effectiveFrom')
+  })
+
+  it('update (GRADUATED to the typed PUT in S121) → If-Match "<version>" kept; the S121 FLIP: fullDayOnly PRESENT (preserved — true for the forced CARE_DAY row); effectiveFrom stays a DELIBERATE server-default omission', async () => {
     const calls = captureCalls(() => ({ body: careDayRow }))
     renderSection()
 
@@ -154,7 +193,31 @@ describe('EntitlementSection — wire pins for the three mutations', () => {
     expect(put.method).toBe('PUT')
     expect(put.headers['If-Match']).toBe('"4"')
     expect(Object.keys(put.body as Record<string, unknown>).sort()).toEqual(EXPECTED_BODY_KEYS)
-    expect(put.body).not.toHaveProperty('fullDayOnly')
+    // S121 FLIP (was `.not.toHaveProperty('fullDayOnly')`): the update body
+    // PRESERVES the row's flag; CARE_DAY is also type-forced → true.
+    expect(put.body).toHaveProperty('fullDayOnly', true)
+    // REMAIN (rationale rewritten): ruling #1's deliberate server-default —
+    // the previously-binder-required member is now optional and NOT sent.
+    expect(put.body).not.toHaveProperty('effectiveFrom')
+  })
+
+  it('update of a NON-forced row (VACATION, fullDayOnly:true) → the row value round-trips (PRESERVE, not re-derive — ruling #2)', async () => {
+    const calls = captureCalls(() => ({ body: vacationFullDayRow }))
+    renderSection(vi.fn(), [vacationFullDayRow])
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rediger' }))
+    await screen.findByText('Rediger berettigelse')
+    fireEvent.click(screen.getByRole('button', { name: 'Gem' }))
+
+    await waitFor(() => expect(calls.length).toBe(1))
+    const put = calls[0]
+    expect(put.url).toBe('/api/agreement-configs/cfg-1/entitlements/e-2')
+    expect(put.method).toBe('PUT')
+    expect(put.headers['If-Match']).toBe('"7"')
+    // Derivation would send FALSE for the non-forced VACATION — the TRUE here
+    // proves the edited row's current value is what travels.
+    expect((put.body as Record<string, unknown>).entitlementType).toBe('VACATION')
+    expect(put.body).toHaveProperty('fullDayOnly', true)
     expect(put.body).not.toHaveProperty('effectiveFrom')
   })
 

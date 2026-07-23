@@ -1,6 +1,7 @@
 using System.Data;
 using Npgsql;
 using StatsTid.Infrastructure;
+using StatsTid.Infrastructure.Outbox;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Models;
 
@@ -26,6 +27,18 @@ namespace StatsTid.Tests.Regression.Outbox;
 ///         pins that BOTH state transitions roll back together.</item>
 ///   <item><c>POST /api/agreement-configs/{configId}/archive</c> (<see cref="Archive_OutboxFails_RollsBack"/>)</item>
 /// </list>
+/// </para>
+///
+/// <para>
+/// S121 / TASK-12102 extends the publish coverage to the ADR-019 D1 SUPERSEDE-LEG fault
+/// point (<see cref="Publish_SupersedeLeg_OutboxFailsOnSecondEnqueue_RollsBackWholeTx"/>):
+/// in the endpoint's dual-emit orchestration the FIRST outbox enqueue (PUBLISHED) precedes
+/// the archived-leg audit + SECOND enqueue (ARCHIVED), so the every-call-throwing double
+/// never reaches the archive leg — the test wires
+/// <see cref="ForcedRollbackHarness.ThrowOnSecondCallOutboxEnqueue"/> around a REAL
+/// <see cref="PostgresEventStore"/> enqueue and pins that a fault AFTER the archive leg
+/// rolls back the WHOLE tx: no archived row, no audit rows, no outbox events — including
+/// the first enqueue's genuinely-inserted row.
 /// </para>
 /// </summary>
 [Trait("Category", "Docker")]
@@ -247,6 +260,108 @@ public sealed class AgreementConfigAtomicTests : IAsyncLifetime
             _harness.ConnectionString, $"agreement-config-{draftId}");
     }
 
+    /// <summary>
+    /// S121 / TASK-12102 — the SUPERSEDE-LEG rollback proof (ADR-018 D3 extended to the
+    /// ADR-019 D1 dual-emit). Mirrors the publish endpoint's supersession orchestration
+    /// verbatim WITH the S121 audit-JSON fix in place (honest single-key
+    /// <c>{"status":"ACTIVE"}</c> → <c>{"status":"ARCHIVED"}</c> on the archived leg): the
+    /// FIRST outbox enqueue (PUBLISHED) genuinely lands in-tx via the real
+    /// <see cref="PostgresEventStore"/>, the archived-leg audit row is appended, and the
+    /// SECOND enqueue (ARCHIVED) throws. The fault after the archive leg must leave NO
+    /// archived row, NO audit rows (neither PUBLISHED nor ARCHIVED), and NO outbox events on
+    /// EITHER stream — the first enqueue's inserted row vanishing with the rollback is the
+    /// load-bearing full-tx assertion.
+    /// </summary>
+    [Fact]
+    public async Task Publish_SupersedeLeg_OutboxFailsOnSecondEnqueue_RollsBackWholeTx()
+    {
+        // A REAL enqueue behind the decorator so call #1 (PUBLISHED) inserts a genuine
+        // outbox row inside the tx; call #2 (the archived leg's ARCHIVED event) throws.
+        var outbox = new ForcedRollbackHarness.ThrowOnSecondCallOutboxEnqueue(
+            new PostgresEventStore(_harness.Factory, new OutboxServiceContext("backend-api")));
+
+        var (priorActiveId, draftId, sharedAgreementCode) = await SeedPriorActivePlusDraftAsync("FR_S121PUB_");
+
+        var preDraft = await _repo.GetByIdAsync(draftId);
+        Assert.NotNull(preDraft);
+        var expectedVersion = preDraft!.Version;
+
+        var archivedIdPlaceholder = Guid.Empty;
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await using var conn = _harness.Factory.Create();
+            await conn.OpenAsync();
+            await using var tx = await conn.BeginTransactionAsync();
+
+            var saveResult = await _repo.PublishAsync(conn, tx, draftId, expectedVersion, "tester");
+            Assert.Equal(priorActiveId, saveResult.ArchivedId);
+            Assert.NotNull(saveResult.ArchivedVersion);
+            archivedIdPlaceholder = saveResult.ArchivedId!.Value;
+
+            // Endpoint-mirror leg 1: PUBLISHED audit + outbox enqueue #1 (REAL insert, in-tx).
+            await _repo.AppendAuditAsync(
+                conn, tx, draftId, "PUBLISHED",
+                null, $"{{\"archivedConfigId\":\"{saveResult.ArchivedId}\"}}",
+                "tester", "GLOBAL_ADMIN",
+                versionBefore: expectedVersion, versionAfter: saveResult.Version);
+            var publishedEvent = new AgreementConfigPublished
+            {
+                ConfigId = draftId,
+                AgreementCode = sharedAgreementCode,
+                OkVersion = "OK24",
+                ArchivedConfigId = saveResult.ArchivedId,
+            };
+            var firstOutboxId = await outbox.EnqueueAndReturnIdAsync(
+                conn, tx, $"agreement-config-{draftId}", publishedEvent);
+            Assert.True(firstOutboxId > 0); // the first enqueue REALLY landed (inside the tx)
+
+            // Endpoint-mirror leg 2 (the S121-fixed archived leg): honest single-key audit
+            // JSON, then outbox enqueue #2 — the decorator throws HERE, after the archive leg.
+            await _repo.AppendAuditAsync(
+                conn, tx, saveResult.ArchivedId!.Value, "ARCHIVED",
+                "{\"status\":\"ACTIVE\"}", "{\"status\":\"ARCHIVED\"}",
+                "tester", "GLOBAL_ADMIN",
+                versionBefore: saveResult.ArchivedVersion!.Value - 1,
+                versionAfter: saveResult.ArchivedVersion!.Value);
+            var archivedEvent = new AgreementConfigArchived
+            {
+                ConfigId = saveResult.ArchivedId!.Value,
+                AgreementCode = sharedAgreementCode,
+                OkVersion = "OK24",
+            };
+            await outbox.EnqueueAndReturnIdAsync(
+                conn, tx, $"agreement-config-{saveResult.ArchivedId}", archivedEvent);
+            await tx.CommitAsync();
+        });
+        Assert.Equal(ForcedRollbackHarness.ThrowingOutboxEnqueue.ThrowMessage, ex.Message);
+        Assert.Equal(priorActiveId, archivedIdPlaceholder);
+
+        // Full-tx rollback: NO archived row, NO activated draft …
+        await ForcedRollbackHarness.AssertNoStateMutationAsync(
+            _harness.ConnectionString, "agreement_configs",
+            $"config_id = '{priorActiveId}' AND status = 'ARCHIVED'");
+        await ForcedRollbackHarness.AssertNoStateMutationAsync(
+            _harness.ConnectionString, "agreement_configs",
+            $"config_id = '{draftId}' AND status = 'ACTIVE'");
+        // … NO audit rows on either leg …
+        await ForcedRollbackHarness.AssertNoAuditRowAsync(
+            _harness.ConnectionString, "agreement_config_audit",
+            $"config_id = '{draftId}' AND action = 'PUBLISHED'");
+        await ForcedRollbackHarness.AssertNoAuditRowAsync(
+            _harness.ConnectionString, "agreement_config_audit",
+            $"config_id = '{priorActiveId}' AND action = 'ARCHIVED'");
+        // … and NO outbox/event rows on EITHER stream. The draft stream is the load-bearing
+        // one: its outbox row WAS inserted (call #1 succeeded) and must have rolled back.
+        await ForcedRollbackHarness.AssertNoOutboxRowAsync(
+            _harness.ConnectionString, $"agreement-config-{draftId}");
+        await ForcedRollbackHarness.AssertNoOutboxRowAsync(
+            _harness.ConnectionString, $"agreement-config-{priorActiveId}");
+        await ForcedRollbackHarness.AssertNoEventRowAsync(
+            _harness.ConnectionString, $"agreement-config-{draftId}");
+        await ForcedRollbackHarness.AssertNoEventRowAsync(
+            _harness.ConnectionString, $"agreement-config-{priorActiveId}");
+    }
+
     [Fact]
     public async Task Archive_OutboxFails_RollsBack()
     {
@@ -298,9 +413,13 @@ public sealed class AgreementConfigAtomicTests : IAsyncLifetime
 
     // ── Test data builders ────────────────────────────────────────────────────────────
 
-    private async Task<(Guid PriorActiveId, Guid DraftId, string SharedAgreementCode)> SeedPriorActivePlusDraftAsync()
+    /// <param name="codePrefix">Unique agreement-code prefix per consuming test family —
+    /// "FR_PUB_" (the S24 publish test) or "FR_S121PUB_" (the S121 supersede-leg test) — so
+    /// the absence-witness filters never collide.</param>
+    private async Task<(Guid PriorActiveId, Guid DraftId, string SharedAgreementCode)> SeedPriorActivePlusDraftAsync(
+        string codePrefix = "FR_PUB_")
     {
-        var sharedCode = "FR_PUB_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+        var sharedCode = codePrefix + Guid.NewGuid().ToString("N").Substring(0, 8);
         var prior = NewConfig();
         prior = WithCode(prior, sharedCode);
         var priorActiveId = await _repo.CreateAsync(prior, "ACTIVE");

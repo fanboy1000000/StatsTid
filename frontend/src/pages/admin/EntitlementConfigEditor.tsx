@@ -218,12 +218,12 @@ export function EntitlementConfigEditor() {
     try {
       // Backend UpdateEntitlementConfigRequest requires the full shape:
       // natural-key + frozen fields (immutable per Q1 sub-fork (i)) + editable
-      // patch + explicit effectiveFrom=today (cycle-3 same-day-only-edit
-      // validator). Source the immutable fields from `editing` directly — the
-      // page displays them read-only, so the round-trip matches the
-      // predecessor row and the server's freeze guard is a no-op on the
-      // happy path.
-      const today = new Date().toISOString().slice(0, 10)
+      // patch. Source the immutable fields from `editing` directly — the page
+      // displays them read-only, so the round-trip matches the predecessor row
+      // and the server's freeze guard is a no-op on the happy path.
+      // S121 ruling #1: `effectiveFrom` is deliberately OMITTED — the server
+      // defaults it to today (the previous client-computed `today` raced
+      // midnight against the server's same-day-only-edit validator).
       await updateConfig(editing.configId, editing.etag, {
         ...editFormToPatch(editForm),
         entitlementType: editing.entitlementType,
@@ -231,9 +231,9 @@ export function EntitlementConfigEditor() {
         okVersion: editing.okVersion,
         accrualModel: editing.accrualModel,
         resetMonth: editing.resetMonth,
-        effectiveFrom: today,
         // S73 R2 version-survival — carry the predecessor's flag round-trip so an
-        // unrelated field edit never resets it (the page displays it read-only).
+        // unrelated field edit never resets it (the page displays it read-only;
+        // binder-REQUIRED post-S121 ruling #3).
         fullDayOnly: editing.fullDayOnly,
       })
       closeEdit()

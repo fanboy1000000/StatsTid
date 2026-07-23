@@ -10237,6 +10237,7 @@
           "annualQuota",
           "carryoverMax",
           "entitlementType",
+          "fullDayOnly",
           "isPerEpisode",
           "proRateByPartTime",
           "resetMonth"
@@ -10292,8 +10293,8 @@
           "accrualModel",
           "annualQuota",
           "carryoverMax",
-          "effectiveFrom",
           "entitlementType",
+          "fullDayOnly",
           "isPerEpisode",
           "proRateByPartTime",
           "resetMonth"
@@ -10338,7 +10339,8 @@
           },
           "effectiveFrom": {
             "type": "string",
-            "format": "date"
+            "format": "date",
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -10522,6 +10524,7 @@
           "annualQuota",
           "carryoverMax",
           "entitlementType",
+          "fullDayOnly",
           "isPerEpisode",
           "okVersion",
           "proRateByPartTime",
@@ -10585,8 +10588,8 @@
           "agreementCode",
           "annualQuota",
           "carryoverMax",
-          "effectiveFrom",
           "entitlementType",
+          "fullDayOnly",
           "isPerEpisode",
           "okVersion",
           "proRateByPartTime",
@@ -10638,7 +10641,8 @@
           },
           "effectiveFrom": {
             "type": "string",
-            "format": "date"
+            "format": "date",
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -11320,7 +11324,6 @@
       "StatsTid.Backend.Api.Endpoints.WageTypeMappingEndpoints.UpdateWageTypeMappingRequest": {
         "required": [
           "agreementCode",
-          "effectiveFrom",
           "okVersion",
           "timeType",
           "wageType"
@@ -11349,7 +11352,8 @@
           },
           "effectiveFrom": {
             "type": "string",
-            "format": "date"
+            "format": "date",
+            "nullable": true
           }
         },
         "additionalProperties": false
