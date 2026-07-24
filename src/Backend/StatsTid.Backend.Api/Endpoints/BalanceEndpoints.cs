@@ -820,10 +820,44 @@ public static class BalanceEndpoints
             var datedConfigResolver = datedConfigResolverFactory.Create(
                 employeeId, user.OkVersion, user.AgreementCode, todayAgreementCode);
 
+            // ── SENIOR_DAY eligibility (hoisted above the category loop — S123 / TASK-12302) ──
+            // Age gate as-of today: birth_date + config min_age. Computed BEFORE the loop so the
+            // SENIOR_DAY category can be EXCLUDED for the age-ineligible (the reported bug: the grid
+            // showed an accrued senior saldo while the tile blanked — tile+grid now AGREE). Captures
+            // ONLY pre-loop vars (today, todayAgreementCode, user, entitlementConfigRepo, ct);
+            // BEHAVIOR of the eligible-senior path (tile + saldo + settlement math) is byte-unchanged.
+            var seniorLiveConfig = await entitlementConfigRepo.GetCurrentOpenAsync(
+                "SENIOR_DAY", todayAgreementCode, user.OkVersion, ct);
+            // S80 / TASK-8001 (R10) — SENIOR_DAY year-start via the shared resolver (BEHAVIOR-IDENTICAL:
+            // a calendar reset_month-1 type, so the accrual start is 1 Jan of the entitlement year).
+            int? seniorMinAge = seniorLiveConfig is not null
+                ? await ResolveSeniorMinAgeAsync(seniorLiveConfig)
+                : null;
+
+            async Task<int?> ResolveSeniorMinAgeAsync(EntitlementConfig live)
+            {
+                var seniorStart = EntitlementPeriodResolver
+                    .Resolve("SENIOR_DAY", live.ResetMonth, today).AccrualStart;
+                return (await entitlementConfigRepo.GetByTypeAtAsync(
+                        "SENIOR_DAY", todayAgreementCode,
+                        OkVersionResolver.ResolveVersion(seniorStart), seniorStart, ct))?.MinAge
+                    ?? live.MinAge;
+            }
+            // Eligible when no age gate is configured, OR the employee meets it as of today.
+            var seniorDayEligible = seniorMinAge is null
+                || (user.BirthDate is { } dob && AgeAsOf(dob, today) >= seniorMinAge.Value);
+
             // ── Categories: saldo[12] + afholdt[12] + expiring + boundaryMonth ──
             var categories = new List<YearOverviewCategory>(YearOverviewCategoryTypes.Length); // S120 — typed
             foreach (var type in YearOverviewCategoryTypes)
             {
+                // S123 / TASK-12302 — exclude the SENIOR_DAY category entirely for an age-ineligible
+                // employee, so the wire never carries a meaningless senior saldo (the tile below is
+                // gated on the SAME today-anchored flag). VACATION/SPECIAL_HOLIDAY/CARE_DAY are
+                // universal (no eligibility concept) and are never skipped.
+                if (string.Equals(type, "SENIOR_DAY", StringComparison.Ordinal) && !seniorDayEligible)
+                    continue;
+
                 // Resolve the live (open) config to discover ResetMonth (immutable per natural key,
                 // ADR-021 Q1) — the year-start anchors all dated entitlement-config reads below.
                 var liveConfig = await entitlementConfigRepo.GetCurrentOpenAsync(
@@ -1153,31 +1187,12 @@ public static class BalanceEndpoints
             var allEvents = await eventStore.ReadStreamAsync(streamId, ct);
             var flexBalance = allEvents.OfType<FlexBalanceUpdated>().LastOrDefault()?.NewBalance ?? 0m;
 
-            // Eligibility (display affordances). childSick = S59 opt-in eligibility as of today;
-            // senior = birth_date + config min_age as of today.
+            // Eligibility (display affordance). childSick = S59 opt-in eligibility as of today.
+            // (seniorDayEligible is computed ABOVE the category loop — S123 / TASK-12302 — so the
+            // SENIOR_DAY grid category can be excluded for the age-ineligible; it is reused by the
+            // seniorDayRemaining tile below and the SeniorDayEligible affordance.)
             var childSickEligible = (await eligibilityRepo
                 .GetEligibleAsOfAsync(employeeId, "CHILD_SICK", today, ct)).Eligible;
-
-            var seniorLiveConfig = await entitlementConfigRepo.GetCurrentOpenAsync(
-                "SENIOR_DAY", todayAgreementCode, user.OkVersion, ct);
-            // S80 / TASK-8001 (R10) — SENIOR_DAY year-start via the shared resolver (BEHAVIOR-IDENTICAL:
-            // a calendar reset_month-1 type, so the accrual start is 1 Jan of the entitlement year).
-            int? seniorMinAge = seniorLiveConfig is not null
-                ? await ResolveSeniorMinAgeAsync(seniorLiveConfig)
-                : null;
-
-            async Task<int?> ResolveSeniorMinAgeAsync(EntitlementConfig live)
-            {
-                var seniorStart = EntitlementPeriodResolver
-                    .Resolve("SENIOR_DAY", live.ResetMonth, today).AccrualStart;
-                return (await entitlementConfigRepo.GetByTypeAtAsync(
-                        "SENIOR_DAY", todayAgreementCode,
-                        OkVersionResolver.ResolveVersion(seniorStart), seniorStart, ct))?.MinAge
-                    ?? live.MinAge;
-            }
-            // Eligible when no age gate is configured, OR the employee meets it as of today.
-            var seniorDayEligible = seniorMinAge is null
-                || (user.BirthDate is { } dob && AgeAsOf(dob, today) >= seniorMinAge.Value);
 
             // Live "remaining" for the four entitlement tiles. Local helper computes
             // earned(asOf today) + carryoverIn − used − planned for the current ferieår of a type.
@@ -1239,8 +1254,16 @@ public static class BalanceEndpoints
                 .Distinct()
                 .Count();
 
+            // S123 / TASK-12302 — the authoritative WEEKDAY full-day norm as-of today
+            // (WeeklyNorm × partTimeFraction / 5, 2dp), the FE's days↔hours conversion scalar
+            // (mirrors the Skema fullDayNormAtMonthEnd precedent, SkemaEndpoints.cs R10). Null for
+            // ANNUAL_ACTIVITY / no dated profile (fail-soft — a read display scalar never 500s);
+            // can be 0 for a 0% part-time fraction (the FE guards norm > 0 before dividing).
+            var fullDayNormHours = await dailyNormCalculator.ComputeWeekdayNormAtAsync(
+                employeeId, today, user.PrimaryOrgId, ct);
+
             // S120 / TASK-12000 — named record (BYTE-IDENTICAL wire JSON except the ruled
-            // empty-config `settlement: null` delta above).
+            // empty-config `settlement: null` delta above + the S123 additive fullDayNormHours).
             return Results.Ok(new YearOverviewResponse(
                 EmployeeId: employeeId,
                 Year: year,
@@ -1249,7 +1272,8 @@ public static class BalanceEndpoints
                     EmployeeName: user.DisplayName,
                     AgreementCode: todayAgreementCode,
                     OkVersion: headerOkVersion,
-                    WeeklyNormHours: weeklyNormHours),
+                    WeeklyNormHours: weeklyNormHours,
+                    FullDayNormHours: fullDayNormHours),
                 Tiles: new YearOverviewTiles(
                     FlexBalance: flexBalance,
                     FerieRemaining: ferieRemaining,

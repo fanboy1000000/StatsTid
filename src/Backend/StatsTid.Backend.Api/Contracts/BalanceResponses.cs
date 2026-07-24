@@ -116,12 +116,18 @@ public sealed record BalanceSeriesResponse(
 
 /// <summary>The <c>header</c> member of <see cref="YearOverviewResponse"/>.
 /// <paramref name="WeeklyNormHours"/> is null when no dated profile/config covers today
-/// (graceful, ADR-023 D3).</summary>
+/// (graceful, ADR-023 D3).
+/// <paramref name="FullDayNormHours"/> (S123 / TASK-12302) is the authoritative WEEKDAY full-day
+/// norm as-of today (<c>WeeklyNorm × partTimeFraction / 5</c>, 2dp — the same scalar the Skema
+/// month GET emits as <c>fullDayNormAtMonthEnd</c>): the FE's days↔hours conversion source. Null
+/// for ANNUAL_ACTIVITY or no dated profile (the FE renders the native unit only); can be 0 for a
+/// 0% part-time fraction (the FE guards <c>norm &gt; 0</c> before dividing).</summary>
 public sealed record YearOverviewHeader(
     string EmployeeName,
     string AgreementCode,
     string OkVersion,
-    decimal? WeeklyNormHours);
+    decimal? WeeklyNormHours,
+    decimal? FullDayNormHours);
 
 /// <summary>The <c>tiles</c> member of <see cref="YearOverviewResponse"/> — the designed 6
 /// current-balance tiles + the two eligibility affordances. The nullable remainings are null

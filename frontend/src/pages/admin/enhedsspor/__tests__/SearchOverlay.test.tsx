@@ -48,17 +48,19 @@ const ALL_ORGS = ['STY02', 'STY03']
 function renderOverlay(props: Partial<Parameters<typeof SearchOverlay>[0]> = {}) {
   const onClose = vi.fn()
   const onNavigate = vi.fn()
+  const onNavigatePerson = vi.fn()
   render(
     <SearchOverlay
       open
       onClose={onClose}
       onNavigate={onNavigate}
+      onNavigatePerson={onNavigatePerson}
       selected={null}
       allOrgIds={ALL_ORGS}
       {...props}
     />,
   )
-  return { onClose, onNavigate }
+  return { onClose, onNavigate, onNavigatePerson }
 }
 
 beforeEach(() => {
@@ -89,15 +91,25 @@ describe('SearchOverlay — the read-only search palette', () => {
     expect(onClose).toHaveBeenCalled()
   })
 
-  it('a PERSON result navigates to their ORGANISATION (no unitId in the shape) and closes', () => {
-    const { onNavigate, onClose } = renderOverlay()
+  // S123 T2 — the person click now ALSO emits the person id (reversing the S107
+  // deferral): it routes through `onNavigatePerson` (org node + userId), so the
+  // StrukturPanel can reveal the row + open the edit drawer once the roster loads.
+  // The overlay still opens no drawer itself.
+  it('a PERSON result navigates to their ORGANISATION and EMITS the person id via onNavigatePerson (S123 T2)', () => {
+    const { onNavigate, onNavigatePerson, onClose } = renderOverlay()
     fireEvent.click(screen.getByTestId('search-person-p1'))
-    // path[0] is the OrganisationName per the contract → used as the nav node name.
-    expect(onNavigate).toHaveBeenCalledWith({ id: 'STY02', kind: 'organisation', name: 'Statens IT', type: 'organisation' })
+    // path[0] is the OrganisationName per the contract → the nav node name; the
+    // person's userId rides alongside so the panel can open their drawer.
+    expect(onNavigatePerson).toHaveBeenCalledWith(
+      { id: 'STY02', kind: 'organisation', name: 'Statens IT', type: 'organisation' },
+      'p1',
+    )
+    // A person result routes through onNavigatePerson, NOT the plain onNavigate (units use that).
+    expect(onNavigate).not.toHaveBeenCalled()
     expect(onClose).toHaveBeenCalled()
   })
 
-  it('selecting NAVIGATES ONLY — no edit/mutation affordance renders (S108)', () => {
+  it('the overlay itself opens NO drawer — no edit/mutation affordance renders (S123 T2 wires the drawer in the panel, not here)', () => {
     renderOverlay()
     for (const label of ['Rediger', 'Rediger ›', 'Slet', 'Ret', 'Gem', '+ Medarbejder']) {
       expect(screen.queryByText(label)).toBeNull()

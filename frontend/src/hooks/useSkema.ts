@@ -33,6 +33,20 @@ export interface AbsenceRuleError {
   message?: string
 }
 
+/**
+ * S123 / TASK-12303 — the typed body of the daily-norm ABSENCE cap 422
+ * (`SkemaEndpoints.cs:740` — SUM(absence.Hours) > RoundBasis(norm)). Discriminated
+ * by SHAPE (`maxHours` + `totalHours` present, NO `absenceType`) rather than the
+ * fragile prose `error` string, mirroring the `absenceRuleError` inline pattern.
+ * Without this branch the cap 422 fell through to `setError`, which the page
+ * swallows once data is loaded (no alert).
+ */
+export interface AbsenceCapError {
+  date?: string
+  totalHours: number
+  maxHours: number
+}
+
 /** 422 from employee-approve / submit-and-approve — discriminated union. */
 export interface CoverageValidationError {
   kind: 'coverage'
@@ -73,9 +87,13 @@ interface UseSkemaResult {
   /** S73 R4 — the typed `absence_full_day_only` / `absence_type_not_eligible`
       422 body, surfaced as a Danish alert; null when none. */
   absenceRuleError: AbsenceRuleError | null
+  /** S123 — the shape-discriminated daily-norm ABSENCE cap 422, surfaced as a
+      Danish alert; null when none. */
+  absenceCapError: AbsenceCapError | null
   approvalValidationError: ApprovalValidationError | null
   clearQuotaError: () => void
   clearAbsenceRuleError: () => void
+  clearAbsenceCapError: () => void
   clearApprovalValidationError: () => void
   refetch: () => void
   /** S73 R4 — returns the discriminated outcome so the page can split revert (422)
@@ -124,6 +142,7 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
   const [error, setError] = useState<string | null>(null)
   const [quotaError, setQuotaError] = useState<QuotaError | null>(null)
   const [absenceRuleError, setAbsenceRuleError] = useState<AbsenceRuleError | null>(null)
+  const [absenceCapError, setAbsenceCapError] = useState<AbsenceCapError | null>(null)
   const [approvalValidationError, setApprovalValidationError] = useState<ApprovalValidationError | null>(null)
 
   const fetchData = useCallback(async () => {
@@ -147,6 +166,7 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
 
   const clearQuotaError = useCallback(() => setQuotaError(null), [])
   const clearAbsenceRuleError = useCallback(() => setAbsenceRuleError(null), [])
+  const clearAbsenceCapError = useCallback(() => setAbsenceCapError(null), [])
   const clearApprovalValidationError = useCallback(() => setApprovalValidationError(null), [])
 
   const absenceTypesRef = useRef<Set<string>>(new Set())
@@ -161,6 +181,7 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
     ): Promise<SaveMonthResult> => {
       setQuotaError(null)
       setAbsenceRuleError(null)
+      setAbsenceCapError(null)
       const absenceTypeSet = absenceTypesRef.current
 
       // Built via explicit narrowing loops (not filter+map) so the typed spec
@@ -210,6 +231,23 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
               date: body.date,
               requiredHours: body.requiredHours,
               message: body.message,
+            })
+          } else if (
+            body.error === 'Total absence hours exceed norm day' &&
+            body.maxHours !== undefined &&
+            body.totalHours !== undefined
+          ) {
+            // S123 — the daily-norm ABSENCE cap 422. Anchored on the SPECIFIC
+            // backend error string, not just the {maxHours,totalHours} shape: the
+            // >24h work-time rejection (`work_time_exceeds_day`) carries the SAME
+            // shape (maxHours:24, totalHours, no absenceType), so a shape-only match
+            // mis-surfaced a work-time reject as the absence-cap alert ("fravær …
+            // overstiger normtiden 24 t" — nonsense). Step-7a Reviewer WARNING. The
+            // work-time 422 now falls through to the raw-text branch (its prior home).
+            setAbsenceCapError({
+              date: body.date,
+              totalHours: body.totalHours,
+              maxHours: body.maxHours,
             })
           } else {
             setError(result.error)
@@ -318,7 +356,7 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
     [fetchData]
   )
 
-  return { data, loading, error, quotaError, absenceRuleError, approvalValidationError, clearQuotaError, clearAbsenceRuleError, clearApprovalValidationError, refetch: fetchData, saveMonth, employeeApprove, submitAndApprove, reopenPeriod }
+  return { data, loading, error, quotaError, absenceRuleError, absenceCapError, approvalValidationError, clearQuotaError, clearAbsenceRuleError, clearAbsenceCapError, clearApprovalValidationError, refetch: fetchData, saveMonth, employeeApprove, submitAndApprove, reopenPeriod }
 }
 
 // ════════════════════════════════════════════════════════════════════════════

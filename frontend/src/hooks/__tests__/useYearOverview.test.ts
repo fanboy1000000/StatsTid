@@ -15,7 +15,7 @@ const { mockGet, OVERVIEW_2025, OVERVIEW_2026 } = vi.hoisted(() => {
   const base = {
     employeeId: 'emp001',
     today: '2026-03-15',
-    header: { employeeName: 'Anna Berg', agreementCode: 'AC', okVersion: 'OK26', weeklyNormHours: 37 },
+    header: { employeeName: 'Anna Berg', agreementCode: 'AC', okVersion: 'OK26', weeklyNormHours: 37, fullDayNormHours: 7.4 },
     tiles: {
       flexBalance: 0, ferieRemaining: 0, careDayRemaining: 0, seniorDayRemaining: null,
       sickDaysYtd: 0, childSickRemaining: null, childSickEligible: false, seniorDayEligible: false,

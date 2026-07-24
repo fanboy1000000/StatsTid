@@ -909,7 +909,11 @@ describe('SkemaPage — R4 rejected-save honesty', () => {
     vi.useFakeTimers()
     // Register a partial CARE_DAY on Mar 3 (server truth has none), then blur so
     // the cell is committed (the displayed value reflects cellValues, not the
-    // raw editing text).
+    // raw editing text). S123 note: this fixture keeps CARE_DAY fullDayOnly=FALSE,
+    // so the on-input fill does not intercept — in production CARE_DAY is full-day-
+    // only and this partial is UI-unreachable (the fill snaps it to the whole day).
+    // The test is retained as a SERVER-AUTHORITY pin: the 422 revert works whatever
+    // the FE config, and the backend full-day 422 stays the source of truth.
     const careInput = screen.getByLabelText('Omsorgsdage dag 3')
     fireEvent.change(careInput, { target: { value: '3' } })
     fireEvent.blur(careInput)
@@ -923,6 +927,63 @@ describe('SkemaPage — R4 rejected-save honesty', () => {
     )
     // …and the new 422 body surfaces a comprehensible Danish alert.
     expect(screen.getByText(/Omsorgsdage skal registreres som en hel dag/)).toBeInTheDocument()
+  })
+
+  it('S123: a daily-norm ABSENCE cap 422 surfaces the dedicated cap alert (shape-discriminated, NOT the generic page-level swallow)', async () => {
+    await renderLoaded()
+    // The cap 422 body shape: {error, date, totalHours, maxHours} — NO absenceType.
+    // Pre-S123 this fell through to setError, which the page swallows once data is
+    // loaded (no alert). The shape-keyed branch now surfaces a Danish cap alert.
+    saveResponder = () =>
+      jsonResponse(
+        { error: 'Total absence hours exceed norm day', date: '2026-03-04', totalHours: 9, maxHours: 7.4 },
+        422,
+      )
+    vi.useFakeTimers()
+    // Ferie is hours-based (fullDayOnly=false) → the typed value reaches save; the
+    // server rejects it as over the day's absence cap.
+    const ferieInput = screen.getByLabelText('Ferie dag 4')
+    fireEvent.change(ferieInput, { target: { value: '9' } })
+    fireEvent.blur(ferieInput)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1100)
+    })
+    vi.useRealTimers()
+    expect(await screen.findByText(/overstiger normtiden/)).toBeInTheDocument()
+  })
+
+  it('S123 (Step-7a WARNING): a >24h work-time 422 does NOT surface the absence-cap alert — the two 422s share a shape, so the branch anchors on the specific error string', async () => {
+    await renderLoaded()
+    // `work_time_exceeds_day` carries the SAME body shape as the absence cap
+    // ({date, totalHours, maxHours}, no absenceType). Under a shape-ONLY match it
+    // was mis-surfaced as "…fravær… overstiger normtiden 24 t" (nonsense — it's
+    // work time). The error-string anchor sends it to the raw-text branch instead.
+    saveResponder = () =>
+      jsonResponse(
+        {
+          error: 'work_time_exceeds_day',
+          date: '2026-03-04',
+          totalHours: 25,
+          maxHours: 24,
+          message: 'Arbejdstid for 04-03-2026 må ikke overstige 24 timer.',
+        },
+        422,
+      )
+    const ferieInput = screen.getByLabelText('Ferie dag 4') as HTMLInputElement
+    const serverTruth = ferieInput.value // capture before editing (revert target)
+    vi.useFakeTimers()
+    fireEvent.change(ferieInput, { target: { value: '5' } })
+    fireEvent.blur(ferieInput)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1100)
+    })
+    vi.useRealTimers()
+    // The 422 is still a rejection (the cell reverts to server truth)…
+    await waitFor(() =>
+      expect((screen.getByLabelText('Ferie dag 4') as HTMLInputElement).value).toBe(serverTruth),
+    )
+    // …but the absence-cap alert must NOT appear (it would, mis-keyed, pre-fix).
+    expect(screen.queryByText(/overstiger normtiden/)).not.toBeInTheDocument()
   })
 
   it('R4: a 422 reverts the cell to its PRE-EXISTING server value (not blank) when the server had one', async () => {
@@ -1183,15 +1244,15 @@ describe('SkemaPage — R5 full-day snap (served basis)', () => {
     }
   }
 
-  it('R5: a partial entry in the full-day CARE_DAY cell SNAPS to the served consumption basis on commit', async () => {
+  it('R5/S123: a partial entry in the full-day CARE_DAY cell fills to the served consumption basis (on input; the value is whole by commit)', async () => {
     monthData = withFullDayCare()
     const { container } = await renderLoaded()
     void container
     const input = screen.getByLabelText('Omsorgsdage dag 5') as HTMLInputElement
     fireEvent.focus(input)
-    fireEvent.change(input, { target: { value: '3' } })
+    fireEvent.change(input, { target: { value: '3' } }) // S123: fills to norm ON INPUT
     fireEvent.blur(input)
-    expect(input.value).toBe('7,4') // snapped to the basis (Mar 5 weekday)
+    expect(input.value).toBe('7,4') // whole day (Mar 5 weekday basis) — never the partial 3
   })
 
   it('R5: the CARE_DAY row carries the served "hele dage" note; the ferie row does not', async () => {
@@ -1207,7 +1268,7 @@ describe('SkemaPage — R5 full-day snap (served basis)', () => {
     monthData = withFullDayCare()
     await renderLoaded()
     const input = screen.getByLabelText('Ferie dag 5') as HTMLInputElement
-    fireEvent.focus(input) // ADR-032 D3 prefill seeds 7,4
+    fireEvent.focus(input) // S123: no prefill — the cell starts empty
     fireEvent.change(input, { target: { value: '3,7' } })
     fireEvent.blur(input)
     expect(input.value).toBe('3,7') // ferie keeps the partial — no snap

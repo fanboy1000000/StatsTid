@@ -9,10 +9,13 @@
 //
 // READ + NAVIGATE ONLY (S91 dead-button discipline): selecting a result
 // NAVIGATES the tree/panel (sets the page's selected node) and closes the
-// overlay. The design opens the person's EDIT DRAWER on click — S107 must NOT
-// (drawers are S108). A person result navigates to their Organisation (the id the
-// result carries — PersonSearchResult has no unitId; the Organisation is the
-// person's container the panel then renders).
+// overlay. The overlay itself opens NO drawer. S123 T2 REVERSED the S107
+// deferral: the person's EDIT DRAWER now opens after the click — but that is wired
+// in the StrukturPanel (drawers landed S108), NOT here. A person result navigates
+// to their Organisation (the id the result carries — PersonSearchResult has no
+// unitId; the Organisation is the person's container the panel then renders) AND
+// emits the person's `userId` via `onNavigatePerson`, so the panel can reveal the
+// row + open the drawer once the org roster has loaded.
 //
 // [Step-0b — respects the Afgrænsning]: the results are filtered client-side to
 // the selected org set via each result's `organisationId` (NOT the fragile path
@@ -35,6 +38,10 @@ interface SearchOverlayProps {
   onClose: () => void
   /** Navigate the page to a node (selecting it drives the tree + Struktur). */
   onNavigate: (node: SelectedNode) => void
+  /** S123 T2 — a PERSON result: navigate to their Organisation node AND emit the
+      person's userId so the StrukturPanel reveals the row + opens the edit drawer
+      once the org roster has loaded. The overlay still opens no drawer itself. */
+  onNavigatePerson: (orgNode: SelectedNode, personId: string) => void
   /** The applied Afgrænsning (null = all) — filters the results client-side. */
   selected: Set<string> | null
   allOrgIds: string[]
@@ -45,7 +52,7 @@ function initials(name: string): string {
   return ((parts[0]?.[0] ?? '') + (parts[parts.length - 1]?.[0] ?? '')).toUpperCase()
 }
 
-export function SearchOverlay({ open, onClose, onNavigate, selected, allOrgIds }: SearchOverlayProps) {
+export function SearchOverlay({ open, onClose, onNavigate, onNavigatePerson, selected, allOrgIds }: SearchOverlayProps) {
   const { query, setQuery, results, loading } = useSearch()
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -92,8 +99,14 @@ export function SearchOverlay({ open, onClose, onNavigate, selected, allOrgIds }
     onNavigate({ id: unitId, kind: 'unit', name, type })
     onClose()
   }
-  const goPerson = (organisationId: string, orgName: string) => {
-    onNavigate({ id: organisationId, kind: 'organisation', name: orgName, type: 'organisation' })
+  const goPerson = (organisationId: string, orgName: string, personId: string) => {
+    // Navigate to the person's Organisation (as today) AND emit the person id; the
+    // StrukturPanel consumes it to reveal the row + open the edit drawer (S123 T2).
+    // The overlay itself opens no drawer (dead-button discipline stays intact here).
+    onNavigatePerson(
+      { id: organisationId, kind: 'organisation', name: orgName, type: 'organisation' },
+      personId,
+    )
     onClose()
   }
 
@@ -170,7 +183,7 @@ export function SearchOverlay({ open, onClose, onNavigate, selected, allOrgIds }
                       type="button"
                       className={styles.resultRow}
                       data-testid={`search-person-${p.userId}`}
-                      onClick={() => goPerson(p.organisationId, p.path[0] ?? p.organisationId)}
+                      onClick={() => goPerson(p.organisationId, p.path[0] ?? p.organisationId, p.userId)}
                     >
                       <span className={styles.personAvatar} aria-hidden="true">{initials(p.displayName)}</span>
                       <span className={styles.resultBody}>

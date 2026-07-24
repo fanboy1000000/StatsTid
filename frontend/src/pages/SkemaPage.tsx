@@ -40,7 +40,7 @@ import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { useSkema, buildWorkTimePayload, deriveSkemaRowBasis, periodHours } from '../hooks/useSkema'
-import type { QuotaError, AbsenceRuleError, ApprovalValidationError, SkemaRowBasis } from '../hooks/useSkema'
+import type { QuotaError, AbsenceRuleError, AbsenceCapError, ApprovalValidationError, SkemaRowBasis } from '../hooks/useSkema'
 import {
   SkemaGrid,
   type WorkInterval,
@@ -107,6 +107,14 @@ function formatAbsenceRuleError(e: AbsenceRuleError): string {
   }
   // absence_type_not_eligible
   return `Du er ikke berettiget til ${label} på denne dato. Registreringen blev derfor sat tilbage.`
+}
+
+/** S123 / TASK-12303 — the daily-norm ABSENCE cap 422 (a day's summed absence
+    hours exceed the norm) → a comprehensible Danish alert. */
+function formatAbsenceCapError(e: AbsenceCapError): string {
+  const total = e.totalHours.toFixed(2).replace(/\.?0+$/, '').replace('.', ',')
+  const max = e.maxHours.toFixed(2).replace(/\.?0+$/, '').replace('.', ',')
+  return `Det samlede fravær for dagen (${total} t) overstiger normtiden (${max} t). Registreringen blev derfor sat tilbage.`
 }
 
 function formatDanishDate(dateStr: string): string {
@@ -203,7 +211,7 @@ export function SkemaPage() {
       : now.getMonth() + 1,
   )
 
-  const { data, loading, error, quotaError, absenceRuleError, approvalValidationError, clearQuotaError, clearAbsenceRuleError, clearApprovalValidationError, refetch, saveMonth, employeeApprove, submitAndApprove, reopenPeriod } = useSkema(employeeId, year, month)
+  const { data, loading, error, quotaError, absenceRuleError, absenceCapError, approvalValidationError, clearQuotaError, clearAbsenceRuleError, clearAbsenceCapError, clearApprovalValidationError, refetch, saveMonth, employeeApprove, submitAndApprove, reopenPeriod } = useSkema(employeeId, year, month)
   const { orgId, agreementCode } = useAuth()
   const { data: balanceData, loading: balanceLoading } = useBalanceSummary(employeeId, year, month)
   const { result: complianceResult, loading: complianceLoading } = useCompliance(employeeId, year, month)
@@ -971,6 +979,15 @@ export function SkemaPage() {
       {absenceRuleError && (
         <Alert variant="error" onDismiss={clearAbsenceRuleError}>
           {formatAbsenceRuleError(absenceRuleError)}
+        </Alert>
+      )}
+
+      {/* S123 — daily-norm ABSENCE cap 422 (shape-discriminated, not the generic
+          swallow). The cell reverted to server truth (all-422 revert path); this
+          alert explains why the day's summed absence exceeded the norm. */}
+      {absenceCapError && (
+        <Alert variant="error" onDismiss={clearAbsenceCapError}>
+          {formatAbsenceCapError(absenceCapError)}
         </Alert>
       )}
 

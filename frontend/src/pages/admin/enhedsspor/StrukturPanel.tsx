@@ -23,7 +23,7 @@
 // --unit-accent-<type> / --unit-tint-<type> page-root vars; the design's amber /
 // vikar status colours are declared as scoped CSS vars on .panel.
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button, useToast } from '../../../components/ui'
 import { useAuth } from '../../../contexts/AuthContext'
 import { hasMinRole } from '../../../lib/roles'
@@ -100,6 +100,13 @@ interface StrukturPanelProps {
       wires it only for a permitted actor (the gate is also re-checked here via
       useAuth); a read-only actor never reaches a mutation. */
   onMutated?: (organisationId: string | null) => void | Promise<void>
+  /** S123 T2 — the searched-person focus intent (the page's `pendingFocus`, scoped
+      to the CURRENTLY-selected org). When set AND this org's roster has loaded,
+      reveal the person's row in place + open their edit drawer, then call
+      `onFocusConsumed` so the page clears the intent. Optional so every existing
+      caller/test compiles unchanged. */
+  focusPersonId?: string
+  onFocusConsumed?: () => void
 }
 
 const MONTHS_DA = ['jan', 'feb', 'mar', 'apr', 'maj', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec']
@@ -216,6 +223,8 @@ export function StrukturPanel({
   onBack,
   onForward,
   onMutated,
+  focusPersonId,
+  onFocusConsumed,
 }: StrukturPanelProps) {
   const index = useMemo(() => buildForestIndex(forest), [forest])
   const selectedNode = selected ? index.byId.get(selected.id) ?? null : null
@@ -226,7 +235,11 @@ export function StrukturPanel({
   const [treeOpen, setTreeOpen] = useState<Record<string, boolean>>({})
   const [medClosed, setMedClosed] = useState<Record<string, boolean>>({})
   const [lCollapse, setLCollapse] = useState<Record<string, boolean>>({})
+  // S123 T1 — three peer visibility layers. `showPeople` now governs NON-LEADER
+  // employees only (label kept as "medarbejdere"); `showLeaders` governs the
+  // leader rows. Both default visible → the page opens exactly as before.
   const [showPeople, setShowPeople] = useState(true)
+  const [showLeaders, setShowLeaders] = useState(true)
   // SPRINT-109 / TASK-10904 — the ported period-settlement filter (the
   // MedarbejderAdministration status tiles). 'none' = no filter; 'indsend' = OPEN
   // (not-submitted, non-orphan) people; 'godkend' = managers with a pending
@@ -301,6 +314,115 @@ export function StrukturPanel({
 
   const roster = organisationId ? rosterByOrg[organisationId] : undefined
   const rosterIndex = useMemo(() => buildRosterIndex(roster), [roster])
+
+  // S123 T2 — best-effort scroll + brief highlight of the searched person's row
+  // once it is revealed. Inline style only (no CSS-module change); jsdom has no
+  // layout engine, so this is a test no-op — the asserted signals are the
+  // drawer-open + the reveal, never the scroll.
+  const [flashPersonId, setFlashPersonId] = useState<string | null>(null)
+  // S123 T2 — monotonic focus-request id: a second focus (a fresh search) before the
+  // first fetchUser settles must WIN, so a slow older request can't apply its result
+  // for the wrong person. Bumped when a focus opens the drawer; the async settle is a
+  // no-op if it no longer matches the current id.
+  const focusReqRef = useRef(0)
+
+  // S123 T2 — search-to-person: reveal the searched person's row IN PLACE (the org
+  // stays the selected node — NO re-navigation to their unit) and open their edit
+  // drawer. The page navigates to the person's Organisation and hands us
+  // `focusPersonId`; we consume it ONCE the per-org roster OBJECT has loaded (NOT
+  // the global `rosterLoading` flag), then signal `onFocusConsumed` so the page
+  // clears the intent. Keyed strictly on `[roster, focusPersonId]`, placed BEFORE
+  // the early return below (Rules of Hooks):
+  //   • roster === undefined → this org's roster is still loading → wait.
+  //   • roster defined + no matching row → terminal not-found (moved/stale/cross-org)
+  //     → consume the intent, no drawer, no throw.
+  //   • found + canEditUnits → reveal + open the drawer.
+  // The consume-once is the page's null→id EDGE (onFocusConsumed → pendingFocus=null),
+  // so a repeat search of the SAME person correctly RE-FIRES (no never-reset ref).
+  useEffect(() => {
+    if (!focusPersonId || !selectedNode) return
+    if (roster === undefined) return // still loading this org's roster — wait
+    const row = rosterIndex.rowById.get(focusPersonId)
+    if (!row) {
+      onFocusConsumed?.() // moved/stale/cross-org → land on the org, no drawer
+      return
+    }
+    // Mirror the per-row "Rediger ›" gate (:1352): structurally always true on this
+    // LocalHR+ page, but keeps "behaves exactly like clicking Rediger ›" honest.
+    if (canEditUnits) {
+      // REVEAL: both people layers on + expand the org's descendant units +
+      // un-collapse the target's unit med-section and (if the target is a report)
+      // its leader — else a previously-collapsed layer/leader would hide the row.
+      setShowPeople(true)
+      setShowLeaders(true)
+      setTreeOpen((prev) => {
+        const out = { ...prev }
+        for (const id of descendantUnitIds(selectedNode)) out[id] = true
+        return out
+      })
+      // The med-section key must match the RENDERED medHeader: a unit-homed row sits
+      // under its unit (medClosed keyed by unitId); an ORG-HOMED row (unitId null)
+      // sits under the selected org's OWN med-section — the medHeader pushes
+      // `unitId: node.id`, so its collapse key is the ORG id (selectedNode.id), never
+      // a null unit key. `descendantUnitIds` above already opened the containing unit
+      // for the unit-homed case.
+      const medKey = row.unitId ?? selectedNode.id
+      setMedClosed((prev) => (prev[medKey] ? { ...prev, [medKey]: false } : prev))
+      if (row.structuralApproverId) {
+        const leaderId = row.structuralApproverId
+        setLCollapse((prev) => (prev[leaderId] ? { ...prev, [leaderId]: false } : prev))
+      }
+      setFlashPersonId(focusPersonId)
+      // Open the edit drawer — INLINE openEditPerson's body with the STABLE setters
+      // + fetchUser. openEditPerson (:671) and fetchUser (useAdmin) are recreated
+      // every render; listing them in the deps would re-open/re-fetch in a loop, so
+      // they are intentionally omitted (the eslint-disable below is that trade). The
+      // `reqId` latest-request guard drops a stale settle if a newer focus supersedes
+      // this one (a second search before fetchUser resolves).
+      const reqId = (focusReqRef.current += 1)
+      setEditUser(null)
+      setPersonLoading(true)
+      setPersonDrawer({ mode: 'edit', row })
+      void (async () => {
+        try {
+          const fresh = await fetchUser(row.employeeId)
+          if (focusReqRef.current !== reqId) return // superseded by a newer focus
+          setEditUser(fresh)
+        } catch (err) {
+          if (focusReqRef.current !== reqId) return
+          toast({ title: 'Fejl', description: err instanceof Error ? err.message : String(err), variant: 'error' })
+          setPersonDrawer(null)
+        } finally {
+          if (focusReqRef.current === reqId) setPersonLoading(false)
+        }
+      })()
+    }
+    onFocusConsumed?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roster, focusPersonId])
+
+  // The scroll+flash runs in its own effect (after the reveal has committed, so the
+  // row is in the DOM). Best-effort: inline style, guarded scrollIntoView (jsdom
+  // provides no layout). Clearing flashPersonId makes it fire once per focus.
+  useEffect(() => {
+    if (!flashPersonId) return
+    const el = document.querySelector<HTMLElement>(
+      `[data-testid="leader-${flashPersonId}"],[data-testid="employee-${flashPersonId}"]`,
+    )
+    if (el) {
+      try {
+        el.scrollIntoView?.({ block: 'center' })
+      } catch {
+        /* jsdom: no layout engine — scrolling is a no-op */
+      }
+      el.style.transition = 'background-color 0.6s ease'
+      el.style.backgroundColor = 'var(--focus-flash, rgba(31, 122, 60, 0.16))'
+      window.setTimeout(() => {
+        el.style.backgroundColor = ''
+      }, 1200)
+    }
+    setFlashPersonId(null)
+  }, [flashPersonId])
 
   if (!selectedNode) {
     return (
@@ -767,6 +889,7 @@ export function StrukturPanel({
     if (next !== 'none') {
       // Reveal nested people so the filter is visible across the whole Struktur.
       setShowPeople(true)
+      setShowLeaders(true)
       setTreeOpen((prev) => {
         const out = { ...prev }
         for (const id of descendantUnitIds(selectedNode)) out[id] = true
@@ -793,6 +916,21 @@ export function StrukturPanel({
     setShowPeople(next)
   }
 
+  // S123 T1 — the peer "Vis/Skjul ledere" toggle. Mirrors togglePeople, including
+  // the descendant-unit reveal on enable so leaders in collapsed units appear (the
+  // S114 unit-homed reveal fix).
+  const toggleLeaders = () => {
+    const next = !showLeaders
+    if (next) {
+      setTreeOpen((prev) => {
+        const out = { ...prev }
+        for (const id of descendantUnitIds(selectedNode)) out[id] = true
+        return out
+      })
+    }
+    setShowLeaders(next)
+  }
+
   // ── the recursive node list ──────────────────────────────────────────────────
   const nodes: RenderNode[] = []
   const walkUnit = (node: StrukturNode, depth: number) => {
@@ -801,66 +939,104 @@ export function StrukturPanel({
     const leaderRows = members.filter((m) => leaderIdSet.has(m.employeeId))
     const nonLeaders = members.filter((m) => !leaderIdSet.has(m.employeeId))
 
-    if (showPeople && members.length) {
+    // S123 T1 — three peer layers. The "Medarbejdere" section shows when EITHER
+    // visible layer has rows; its count is the VISIBLE people under the current
+    // toggles (== today's members.length when both are on — no regression, honest
+    // in single-layer modes).
+    const medHeaderVisible = (showLeaders && leaderRows.length > 0) || (showPeople && nonLeaders.length > 0)
+    if (medHeaderVisible) {
       const closed = !!medClosed[node.id]
-      nodes.push({ t: 'medHeader', key: `med:${node.id}`, unitId: node.id, depth, count: members.length, closed })
+      const visibleCount = (showLeaders ? leaderRows.length : 0) + (showPeople ? nonLeaders.length : 0)
+      nodes.push({ t: 'medHeader', key: `med:${node.id}`, unitId: node.id, depth, count: visibleCount, closed })
 
       if (!closed) {
-        const reported = new Set<string>()
-        for (const L of leaderRows) {
-          const reps = nonLeaders.filter((m) => m.structuralApproverId === L.employeeId)
-          reps.forEach((r) => reported.add(r.employeeId))
-          const collapsed = !!lCollapse[L.employeeId]
-          nodes.push({
-            t: 'leader',
-            key: `l:${L.employeeId}`,
-            row: L,
-            depth: depth + 1,
-            reportCount: reps.length,
-            collapsed,
-            hasReports: reps.length > 0,
-            coveringNames: rosterIndex.coveringByUser.get(L.employeeId) ?? [],
-          })
-          if (!collapsed) {
-            reps.forEach((r) =>
-              nodes.push({
-                t: 'employee',
-                key: `e:${r.employeeId}`,
-                row: r,
-                depth: depth + 1,
-                variant: 'report',
-                coveringNames: rosterIndex.coveringByUser.get(r.employeeId) ?? [],
-              }),
-            )
-          }
-        }
-
-        const remaining = nonLeaders.filter((m) => !reported.has(m.employeeId))
-        if (leaderRows.length === 0) {
-          // Leaderless unit (members but no designated leaders) → READ-ONLY amber
-          // note (NO "Tildel leder" — S108). Only for real units, not the
-          // Organisation-homed group.
-          if (node.kind === 'unit') {
-            const upNames = [
-              ...new Set(
-                remaining
-                  .map((m) => m.structuralApproverId)
-                  .filter((id): id is string => !!id)
-                  .map(resolveName),
-              ),
-            ]
-            const n = remaining.length
-            const refers = n === 1 ? 'medarbejder refererer' : 'medarbejdere refererer'
-            const til = upNames.length ? ` til ${upNames.join(', ')}` : ''
+        if (showLeaders) {
+          const reported = new Set<string>()
+          for (const L of leaderRows) {
+            const reps = nonLeaders.filter((m) => m.structuralApproverId === L.employeeId)
+            reps.forEach((r) => reported.add(r.employeeId))
+            const collapsed = !!lCollapse[L.employeeId]
             nodes.push({
-              t: 'note',
-              key: `note:${node.id}`,
+              t: 'leader',
+              key: `l:${L.employeeId}`,
+              row: L,
               depth: depth + 1,
-              text: `Ingen leder i enheden — ${n} ${refers} opad${til}.`,
-              unit: node,
+              reportCount: reps.length,
+              collapsed,
+              // OQ-2: employees hidden → the "N medarb." count stays as static info,
+              // but the expand chevron is suppressed (there's nothing to expand).
+              hasReports: showPeople && reps.length > 0,
+              coveringNames: rosterIndex.coveringByUser.get(L.employeeId) ?? [],
             })
+            if (showPeople && !collapsed) {
+              reps.forEach((r) =>
+                nodes.push({
+                  t: 'employee',
+                  key: `e:${r.employeeId}`,
+                  row: r,
+                  depth: depth + 1,
+                  variant: 'report',
+                  coveringNames: rosterIndex.coveringByUser.get(r.employeeId) ?? [],
+                }),
+              )
+            }
           }
-          remaining.forEach((r) =>
+
+          if (showPeople) {
+            const remaining = nonLeaders.filter((m) => !reported.has(m.employeeId))
+            if (leaderRows.length === 0) {
+              // Leaderless unit (members but no designated leaders) → READ-ONLY amber
+              // note (NO "Tildel leder" — S108). Only for real units, not the
+              // Organisation-homed group.
+              if (node.kind === 'unit') {
+                const upNames = [
+                  ...new Set(
+                    remaining
+                      .map((m) => m.structuralApproverId)
+                      .filter((id): id is string => !!id)
+                      .map(resolveName),
+                  ),
+                ]
+                const n = remaining.length
+                const refers = n === 1 ? 'medarbejder refererer' : 'medarbejdere refererer'
+                const til = upNames.length ? ` til ${upNames.join(', ')}` : ''
+                nodes.push({
+                  t: 'note',
+                  key: `note:${node.id}`,
+                  depth: depth + 1,
+                  text: `Ingen leder i enheden — ${n} ${refers} opad${til}.`,
+                  unit: node,
+                })
+              }
+              remaining.forEach((r) =>
+                nodes.push({
+                  t: 'employee',
+                  key: `e:${r.employeeId}`,
+                  row: r,
+                  depth: depth + 1,
+                  variant: 'flat',
+                  coveringNames: rosterIndex.coveringByUser.get(r.employeeId) ?? [],
+                }),
+              )
+            } else {
+              remaining.forEach((m) => {
+                const external = m.structuralApproverId != null && !leaderIdSet.has(m.structuralApproverId)
+                nodes.push({
+                  t: 'employee',
+                  key: `e:${m.employeeId}`,
+                  row: m,
+                  depth: depth + 1,
+                  variant: external ? 'external' : 'flat',
+                  externalLeaderName: external ? resolveName(m.structuralApproverId!) : undefined,
+                  coveringNames: rosterIndex.coveringByUser.get(m.employeeId) ?? [],
+                })
+              })
+            }
+          }
+        } else {
+          // OQ-3: leaders hidden but employees shown → the leader-parent grouping is
+          // gone, so emit every non-leader FLAT (mirrors the leaderless flat path).
+          nonLeaders.forEach((r) =>
             nodes.push({
               t: 'employee',
               key: `e:${r.employeeId}`,
@@ -870,19 +1046,6 @@ export function StrukturPanel({
               coveringNames: rosterIndex.coveringByUser.get(r.employeeId) ?? [],
             }),
           )
-        } else {
-          remaining.forEach((m) => {
-            const external = m.structuralApproverId != null && !leaderIdSet.has(m.structuralApproverId)
-            nodes.push({
-              t: 'employee',
-              key: `e:${m.employeeId}`,
-              row: m,
-              depth: depth + 1,
-              variant: external ? 'external' : 'flat',
-              externalLeaderName: external ? resolveName(m.structuralApproverId!) : undefined,
-              coveringNames: rosterIndex.coveringByUser.get(m.employeeId) ?? [],
-            })
-          })
         }
       }
     }
@@ -938,6 +1101,7 @@ export function StrukturPanel({
   const expandLabel = anyOpen ? 'Skjul org.' : 'Vis org.'
   const expandDisabled = descendants.length === 0
   const peopleLabel = showPeople ? 'Skjul medarbejdere' : 'Vis medarbejdere'
+  const leaderLabel = showLeaders ? 'Skjul ledere' : 'Vis ledere'
 
   const toggleExpandAll = () => {
     setTreeOpen((prev) => {
@@ -1175,6 +1339,14 @@ export function StrukturPanel({
               data-testid="toggle-expand-all"
             >
               {expandLabel}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={toggleLeaders}
+              data-testid="toggle-leaders"
+            >
+              {leaderLabel}
             </Button>
             <Button
               variant="ghost"

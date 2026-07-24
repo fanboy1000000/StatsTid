@@ -9,13 +9,26 @@
 // (and closes the overlay) — read-only, no mutation affordances (S91).
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
+import { ToastProvider } from '../../../components/ui/Toast'
 import type { ForestMaoNode } from '../../../hooks/useForest'
+import type { RosterResponse } from '../../../hooks/useRoster'
 import type { SearchResponse } from '../../../hooks/useSearch'
 
 // ── mocks (mutable holders the mocked hooks read) ──────────────────────────────
 const h = vi.hoisted(() => ({
   forest: [] as ForestMaoNode[],
   search: { query: '', results: { units: [], people: [], unitsTotal: 0, peopleTotal: 0 } as SearchResponse, loading: false },
+  // S123 T2 — the per-org roster cache (byOrg) the happy/not-found path reads.
+  roster: {} as Record<string, RosterResponse>,
+}))
+
+// S123 T2 — opening the searched person's edit drawer invokes fetchUser (the
+// panel's inlined openEditPerson). Mock useOrgUsers so it PENDS (never resolves):
+// the drawer opens in its loading state and the subtree stays offline (editUser
+// null → create-mode render → LifecycleSections resolve effect early-returns).
+const admin = vi.hoisted(() => ({ fetchUser: vi.fn(() => new Promise<never>(() => {})) }))
+vi.mock('../../../hooks/useAdmin', () => ({
+  useOrgUsers: () => ({ fetchUser: admin.fetchUser }),
 }))
 
 // SPRINT-108 / TASK-10803 — the page + StrukturPanel now consume useAuth (the
@@ -34,7 +47,7 @@ vi.mock('../../../hooks/useForest', () => ({
   useForest: () => ({ forest: h.forest, loading: false, error: null, fetchForest: vi.fn() }),
 }))
 vi.mock('../../../hooks/useRoster', () => ({
-  useRoster: () => ({ byOrg: {}, loading: false, error: null, loadRoster: vi.fn(), refetchRoster: vi.fn() }),
+  useRoster: () => ({ byOrg: h.roster, loading: false, error: null, loadRoster: vi.fn(), refetchRoster: vi.fn() }),
 }))
 vi.mock('../../../hooks/useSearch', () => ({
   useSearch: () => ({ query: h.search.query, setQuery: vi.fn(), results: h.search.results, loading: h.search.loading, error: null }),
@@ -68,10 +81,46 @@ function twoOrgForest(): ForestMaoNode[] {
   ]
 }
 
+const VEJL = '000000d0-0000-0000-0000-0000000000a1'
+
+/** STY02 gains one unit (Vejledning) so a homed person's row can render + reveal. */
+function forestWithUnit(): ForestMaoNode[] {
+  const f = twoOrgForest()
+  f[0].organisations[0].units = [
+    {
+      unitId: VEJL, organisationId: 'STY02', parentUnitId: null, type: 'kontor',
+      name: 'Vejledning', level: 1, version: 1, directMemberCount: 1, memberCount: 1, children: [],
+    },
+  ]
+  f[0].organisations[0].memberCount = 1
+  f[0].memberCount = 1
+  return f
+}
+
+/** STY02 roster with p1 homed in Vejledning (the search target). */
+function rosterWithP1(): Record<string, RosterResponse> {
+  return {
+    STY02: {
+      employees: [
+        {
+          employeeId: 'p1', displayName: 'Jens Vej', position: 'Kontorchef',
+          structuralApproverId: null, periodStatus: 'OPEN', outgoingVikar: null,
+          isRoot: false, isOrphan: false, unitId: VEJL, unitName: 'Vejledning',
+          leaderIds: [], primaryReportingLineVersion: null,
+        },
+      ],
+      pendingCountByManager: {},
+      nameResolution: {},
+    },
+  }
+}
+
 beforeEach(() => {
   h.forest = twoOrgForest()
   h.search = { query: '', results: { units: [], people: [], unitsTotal: 0, peopleTotal: 0 }, loading: false }
+  h.roster = {}
   auth.role = 'LocalHR'
+  admin.fetchUser.mockClear()
 })
 
 describe('OrganisationOgMedarbejdere — page (shell + Afgrænsning + search)', () => {
@@ -172,8 +221,12 @@ describe('OrganisationOgMedarbejdere — page (shell + Afgrænsning + search)', 
     expect(screen.getByTestId('search-overlay')).toBeDefined()
   })
 
-  it('a search result NAVIGATES the panel (and closes the overlay) — no drawer', () => {
-    // A person result in STY02 → navigates to that Organisation.
+  // S123 T2 — a person NOT in the loaded roster (moved/stale/cross-org) hits the
+  // terminal not-found branch: land on the org, no drawer, no throw. (Repurposes the
+  // former "navigate, no drawer" test now that a found person DOES open the drawer.)
+  it('a person NOT in the loaded roster lands on the org with NO drawer (not-found, no throw)', () => {
+    // STY02's roster IS loaded but does not contain p1 → terminal not-found.
+    h.roster = { STY02: { employees: [], pendingCountByManager: {}, nameResolution: {} } }
     h.search = {
       query: 'jens',
       loading: false,
@@ -189,9 +242,46 @@ describe('OrganisationOgMedarbejdere — page (shell + Afgrænsning + search)', 
     render(<OrganisationOgMedarbejdere />)
     fireEvent.click(screen.getByTestId('soeg-button'))
     fireEvent.click(screen.getByTestId('search-person-p1'))
-    // The overlay closed…
+    // The overlay closed + the panel navigated to the person's Organisation…
     expect(screen.queryByTestId('search-overlay')).toBeNull()
-    // …and the detail panel now shows the navigated Organisation (resolved from the forest).
     expect(screen.getByTestId('title-name').textContent).toBe('Statens IT')
+    // …but NO edit drawer opened (the person is absent from the loaded roster).
+    expect(screen.queryByTestId('person-drawer-title')).toBeNull()
+    expect(screen.queryByTestId('person-drawer-loading')).toBeNull()
+  })
+
+  // S123 T2 — the happy path: a person result navigates to their org, REVEALS their
+  // row in place, and opens their edit drawer (loading while the fresh user pends).
+  it('a person result reveals the row + opens their edit drawer (S123 T2 happy path)', () => {
+    h.forest = forestWithUnit()
+    h.roster = rosterWithP1()
+    h.search = {
+      query: 'jens',
+      loading: false,
+      results: {
+        units: [],
+        people: [
+          { userId: 'p1', organisationId: 'STY02', displayName: 'Jens Vej', position: 'Kontorchef', unitName: 'Vejledning', path: ['Statens IT', 'Vejledning'] },
+        ],
+        unitsTotal: 0,
+        peopleTotal: 1,
+      },
+    }
+    render(
+      <ToastProvider>
+        <OrganisationOgMedarbejdere />
+      </ToastProvider>,
+    )
+    fireEvent.click(screen.getByTestId('soeg-button'))
+    fireEvent.click(screen.getByTestId('search-person-p1'))
+    // The overlay closed + the panel navigated to the person's Organisation…
+    expect(screen.queryByTestId('search-overlay')).toBeNull()
+    expect(screen.getByTestId('title-name').textContent).toBe('Statens IT')
+    // …the reveal expands the org so the person's row is visible…
+    expect(screen.getByTestId('employee-p1')).toBeDefined()
+    // …and their edit drawer opens (loading while the fresh user pends via fetchUser).
+    expect(screen.getByTestId('person-drawer-loading')).toBeDefined()
+    expect(screen.getByTestId('person-drawer-title')).toBeDefined()
+    expect(admin.fetchUser).toHaveBeenCalledWith('p1')
   })
 })

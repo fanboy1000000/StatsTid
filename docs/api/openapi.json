@@ -9736,6 +9736,7 @@
         "required": [
           "agreementCode",
           "employeeName",
+          "fullDayNormHours",
           "okVersion",
           "weeklyNormHours"
         ],
@@ -9751,6 +9752,11 @@
             "type": "string"
           },
           "weeklyNormHours": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "fullDayNormHours": {
             "type": "number",
             "format": "double",
             "nullable": true

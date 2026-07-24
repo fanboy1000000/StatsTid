@@ -337,6 +337,14 @@ public sealed class S120BalanceSpecRuntimeTests : IAsyncLifetime
     public async Task YearOverview_ConfiguredRows_SettledClosedFerieaar_BothWrapperBranches_TodayPinned()
     {
         var emp = await SeedEmployeeAsync("yo1");
+        // S123 / TASK-12302 — keep yo1 senior-ELIGIBLE (birth_date old enough for the AC
+        // SENIOR_DAY min_age=62 gate, as of the 2026-03-05 clock) so all FOUR categories stay
+        // present (categories.Count == 4). WITHOUT a birth_date the new eligibility gating would
+        // EXCLUDE the SENIOR_DAY category (→ 3), which would collide with this test's settled-
+        // ferieaar 4-category intent. Dedicated eligible/ineligible-senior coverage lives in
+        // YearOverviewTests; here we simply pin the eligible-4-category shape.
+        await S120ContractAssert.ExecAsync(_harness.ConnectionString,
+            "UPDATE users SET birth_date = DATE '1960-01-01' WHERE user_id = @e", ("e", emp));
         await SeedBalanceAsync(emp, ClosedYear, used: 20.75m);
         await SettleYearEndAsync(emp, ClosedYear);
 

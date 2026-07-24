@@ -1692,6 +1692,124 @@ public sealed class YearOverviewTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════════════
+    // 15. S123 / TASK-12302 — SENIOR_DAY eligibility gating + the fullDayNormHours
+    //     header scalar.
+    //     The reported cross-tier bug: an age-ineligible employee's Årsoversigt showed an
+    //     accrued SENIOR_DAY saldo in the grid while the tile blanked. The handler now
+    //     EXCLUDES the SENIOR_DAY category for the age-ineligible (the tile was already
+    //     gated on the SAME today-anchored flag), so tile and grid AGREE. The new
+    //     header.fullDayNormHours is the FE's authoritative days↔hours conversion scalar.
+    // ════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// <b>Eligible-senior path (byte-unchanged).</b> An AC employee old enough for the AC
+    /// SENIOR_DAY <c>min_age=62</c> gate as of the fixed today (2026-06-15) keeps the SENIOR_DAY
+    /// grid category AND a non-null senior tile: the eligibility gating skips ONLY the ineligible,
+    /// leaving the eligible path (grid row + tile + IMMEDIATE full-quota accrual = 2) intact.
+    /// </summary>
+    [Fact]
+    public async Task EligibilityGating_EligibleSenior_SeniorDayCategoryPresent_AndTileNonNull()
+    {
+        var employeeId = await CreateEmployeeAsync(Emp001OrgId, "AC", "OK24");
+        await RegressionSeed.SeedEmployeeAsync(
+            _harness.ConnectionString, employeeId, Emp001OrgId, "AC", "OK24");
+        // Born 1960-01-01 → age 66 as of 2026-06-15 ≥ the AC SENIOR_DAY min_age 62 ⇒ eligible.
+        await SetBirthDateAsync(employeeId, new DateOnly(1960, 1, 1));
+
+        var client = MakeFixedTodayClient(EmployeeBearerToken(employeeId, Emp001OrgId));
+        var body = await GetYearOverviewAsync(client, employeeId, 2026);
+
+        // Grid: the SENIOR_DAY category is PRESENT (all four categories emitted).
+        var types = body.GetProperty("categories").EnumerateArray()
+            .Select(c => c.GetProperty("type").GetString()).ToList();
+        Assert.Contains("SENIOR_DAY", types);
+        Assert.Equal(4, types.Count);
+
+        // Tiles: the eligible affordance is TRUE and the remaining is the AC SENIOR_DAY IMMEDIATE
+        // full-quota accrual (2) — NON-null (the eligible path is unchanged).
+        var tiles = body.GetProperty("tiles");
+        Assert.True(tiles.GetProperty("seniorDayEligible").GetBoolean());
+        var remaining = tiles.GetProperty("seniorDayRemaining");
+        Assert.Equal(JsonValueKind.Number, remaining.ValueKind);
+        Assert.Equal(2m, remaining.GetDecimal());
+    }
+
+    /// <summary>
+    /// <b>Ineligible-senior path (the fix).</b> An AC employee who cannot reach the SENIOR_DAY
+    /// <c>min_age=62</c> gate — either NO birth_date at all (the reported admin01 repro) or a
+    /// too-young DOB — gets NO SENIOR_DAY grid category AND a null senior tile. Tile and grid now
+    /// AGREE (the reproduced inconsistency is gone); the other three UNIVERSAL categories
+    /// (VACATION/SPECIAL_HOLIDAY/CARE_DAY) are unaffected.
+    /// </summary>
+    [Theory]
+    [InlineData(false, 0)]     // no birth_date at all — cannot reach min_age 62 (admin01 repro)
+    [InlineData(true, 1990)]   // born 1990-01-01 → age 36 as of 2026-06-15, below the min_age 62 gate
+    public async Task EligibilityGating_IneligibleSenior_SeniorDayCategoryAbsent_AndTileNull(
+        bool hasBirthDate, int birthYear)
+    {
+        var employeeId = await CreateEmployeeAsync(Emp001OrgId, "AC", "OK24");
+        await RegressionSeed.SeedEmployeeAsync(
+            _harness.ConnectionString, employeeId, Emp001OrgId, "AC", "OK24");
+        if (hasBirthDate)
+            await SetBirthDateAsync(employeeId, new DateOnly(birthYear, 1, 1));
+        // else: RegressionSeed leaves birth_date NULL (the admin01 case).
+
+        var client = MakeFixedTodayClient(EmployeeBearerToken(employeeId, Emp001OrgId));
+        var body = await GetYearOverviewAsync(client, employeeId, 2026);
+
+        // Grid: the SENIOR_DAY category is OMITTED — the accrued senior saldo no longer appears
+        // for the age-ineligible. The three universal categories remain, in their fixed order.
+        var types = body.GetProperty("categories").EnumerateArray()
+            .Select(c => c.GetProperty("type").GetString()).ToList();
+        Assert.DoesNotContain("SENIOR_DAY", types);
+        Assert.Equal(new[] { "VACATION", "SPECIAL_HOLIDAY", "CARE_DAY" }, types);
+
+        // Tiles: the eligible affordance is FALSE and the remaining is blanked (null) — tile and
+        // grid AGREE (the reported bug is fixed).
+        var tiles = body.GetProperty("tiles");
+        Assert.False(tiles.GetProperty("seniorDayEligible").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, tiles.GetProperty("seniorDayRemaining").ValueKind);
+    }
+
+    /// <summary>
+    /// <b>header.fullDayNormHours — the authoritative weekday full-day norm.</b> For a 0.5
+    /// part-time AC employee the header carries <c>fullDayNormHours</c> equal to the SAME value
+    /// the production <see cref="DailyNormCalculator.ComputeWeekdayNormAtAsync"/> path yields
+    /// (<c>Round(WeeklyNorm × fraction / 5, 2)</c> — 37 × 0.5 / 5 = 3.7 for AC). The expected value
+    /// is computed via that exact production seam (resolved from the fixed-today host), never a
+    /// test-local norm replica.
+    /// </summary>
+    [Fact]
+    public async Task FullDayNormHours_PartTimeEmployee_EqualsWeekdayNorm()
+    {
+        var employeeId = await CreateEmployeeAsync(Emp001OrgId, "AC", "OK24");
+        await RegressionSeed.SeedEmployeeAsync(
+            _harness.ConnectionString, employeeId, Emp001OrgId, "AC", "OK24",
+            partTimeFraction: 0.5m);
+
+        // Build the fixed-today host so BOTH the HTTP call AND the expected-norm computation ride
+        // the same 2026-06-15 clock + the same real testcontainer DB.
+        var derivedFactory = _factory.WithWebHostBuilder(builder =>
+            builder.ConfigureTestServices(services =>
+                services.AddSingleton<TimeProvider>(new FixedTimeProvider(FixedToday))));
+        var client = derivedFactory.CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", EmployeeBearerToken(employeeId, Emp001OrgId));
+
+        // The authoritative expected value — the SAME production seam the handler calls.
+        var calculator = derivedFactory.Services
+            .GetRequiredService<StatsTid.Backend.Api.Services.DailyNormCalculator>();
+        var expectedNorm = await calculator.ComputeWeekdayNormAtAsync(employeeId, FixedToday, Emp001OrgId);
+        Assert.NotNull(expectedNorm);
+        Assert.Equal(3.7m, expectedNorm!.Value); // sanity: 37 (AC weekly norm) × 0.5 / 5 = 3.7
+
+        var body = await GetYearOverviewAsync(client, employeeId, 2026);
+        var fullDayNormHours = body.GetProperty("header").GetProperty("fullDayNormHours");
+        Assert.Equal(JsonValueKind.Number, fullDayNormHours.ValueKind);
+        Assert.Equal(expectedNorm.Value, fullDayNormHours.GetDecimal());
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
     // Helpers — HTTP clients with fixed TimeProvider.
     // ════════════════════════════════════════════════════════════════════════
 
@@ -2089,6 +2207,24 @@ public sealed class YearOverviewTests : IAsyncLifetime
         await using var cmd = new NpgsqlCommand(
             "UPDATE users SET employment_start_date = @d WHERE user_id = @u", conn);
         cmd.Parameters.AddWithValue("d", employmentStart);
+        cmd.Parameters.AddWithValue("u", employeeId);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    /// <summary>
+    /// S123 / TASK-12302 — sets <c>users.birth_date</c> (the DOB the SENIOR_DAY age gate reads via
+    /// <c>AgeAsOf</c> + the config <c>min_age</c>). Used by the eligibility-gating tests to drive an
+    /// eligible (old-enough) vs ineligible (too-young) senior; the ineligible-null case simply
+    /// omits this call (RegressionSeed leaves birth_date NULL). Citation:
+    /// <c>users.birth_date</c> NULLABLE DATE column at init.sql (S59 / ADR-029).
+    /// </summary>
+    private async Task SetBirthDateAsync(string employeeId, DateOnly birthDate)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "UPDATE users SET birth_date = @d WHERE user_id = @u", conn);
+        cmd.Parameters.AddWithValue("d", birthDate);
         cmd.Parameters.AddWithValue("u", employeeId);
         await cmd.ExecuteNonQueryAsync();
     }

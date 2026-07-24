@@ -55,9 +55,12 @@
 }
 
 /* ---- Current-balance tiles (ov-stat*) ---- */
+/* Reflowing track (not a hard 6-col grid): ineligible entitlements are omitted
+   (S123 OQ-1), so a shorter tile list must pack cleanly with no empty trailing
+   columns. auto-fit collapses unused tracks; minmax keeps a sensible min width. */
 .statRow {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 14px;
   margin-bottom: 18px;
 }
@@ -200,6 +203,18 @@
 /* zero / not-applicable em-dash (gray-400 is UI-only, allowed on the dash glyph) */
 .dash {
   color: var(--color-gray-400);
+}
+
+/* Hours-first grid cell (VACATION): hours on top, the day-equivalent stacked
+   below in a smaller muted font (S123 owner polish). */
+.cellHours {
+  display: block;
+}
+.cellDays {
+  display: block;
+  font-size: 9.5px;
+  color: var(--color-text-muted);
+  line-height: 1.2;
 }
 
 /* category group header rows */

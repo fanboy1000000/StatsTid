@@ -511,8 +511,8 @@ describe('SkemaGrid — editable cells', () => {
     expect(onCellChange).not.toHaveBeenCalled()
   })
 
-  // ── ADR-032 D3 prefill — UNCHANGED behavior (R1) ──
-  it('prefills an EMPTY absence cell with the day\'s SERVED norm on first focus and shows it as editable raw text', () => {
+  // ── S123/TASK-12303 — the ADR-032 D3 focus-prefill is REMOVED (owner Decision 1) ──
+  it('does NOT prefill an empty absence cell on focus — the cell stays EMPTY and the user types the hours (S123: prefill removed, INVERTED)', () => {
     const onCellChange = vi.fn()
     renderGrid({
       onCellChange,
@@ -520,11 +520,15 @@ describe('SkemaGrid — editable cells', () => {
     })
     const input = screen.getByLabelText('Ferie dag 2') as HTMLInputElement
     fireEvent.focus(input)
-    expect(onCellChange).toHaveBeenCalledWith('VACATION', '2026-03-02', 7.4)
-    expect(input.value).toBe('7,4') // visible immediately while focused, fully editable
+    // No seed fires on focus (the pre-S123 prefill would have called onCellChange
+    // with the served norm 7,4 here) — half-day entry now works uninterrupted.
+    expect(onCellChange).not.toHaveBeenCalled()
+    expect(input.value).toBe('') // stays empty on focus
   })
 
-  it('does NOT overwrite an existing absence value on focus (prefill-once)', () => {
+  it('S123 (moot post-prefill-removal, kept): focusing an existing absence value fires no onCellChange', () => {
+    // Premise moot under S123 (focus never seeds anymore); retained as a regression
+    // pin that focus is inert — an existing value is never disturbed on focus.
     const onCellChange = vi.fn()
     renderGrid({
       onCellChange,
@@ -535,7 +539,8 @@ describe('SkemaGrid — editable cells', () => {
     expect(onCellChange).not.toHaveBeenCalled()
   })
 
-  it('does NOT prefill on zero-norm, null-norm, or missing-norm days', () => {
+  it('S123 (moot post-prefill-removal, kept): focus fires no onCellChange on zero-norm, null-norm, or missing-norm days', () => {
+    // Premise moot under S123 (no prefill on any day); retained as a focus-inert pin.
     const onCellChange = vi.fn()
     renderGrid({
       onCellChange,
@@ -651,6 +656,30 @@ describe('SkemaGrid — full-day snap (S73 R5)', () => {
     expect(input.value).toBe('7,4')
   })
 
+  it('S123: a full-day-only value fills to the served basis ON INPUT (before blur) — a partial can never reach save', () => {
+    // The page's 1s debounce autosave fires from this per-keystroke onCellChange,
+    // so the fill-to-norm MUST happen on INPUT (blur-snap alone would let a partial
+    // full-day value autosave in the pause-before-blur → backend 422).
+    const onCellChange = vi.fn()
+    render(
+      <SkemaGrid
+        year={2026}
+        month={3}
+        rows={fullDayRows}
+        cellValues={new Map()}
+        readOnly={false}
+        onCellChange={onCellChange}
+        consumptionBasis={new Map([['2026-03-02', 7.4]])}
+      />,
+    )
+    const input = screen.getByLabelText('Omsorgsdage dag 2') as HTMLInputElement
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: '3' } }) // NO blur
+    // The propagated value is the whole-day basis (7,4), never the partial 3.
+    expect(onCellChange).toHaveBeenLastCalledWith('CARE_DAY', '2026-03-02', 7.4)
+    expect(input.value).toBe('7,4') // whole day visible immediately (OQ-2), pre-blur
+  })
+
   it('R5 academic case: a null DISPLAY norm but a served basis (the ANNUAL_ACTIVITY 7.4×fraction fallback) STILL snaps', () => {
     render(
       <FullDayHarness
@@ -667,19 +696,23 @@ describe('SkemaGrid — full-day snap (S73 R5)', () => {
     expect(input.value).toBe('3,7') // snapped to the academic basis
   })
 
-  it('R5 null-basis: no dated profile covers the day → NO snap, NO invented value — the typed entry STANDS locally', () => {
+  it('S123 null-basis: a full-day cell whose day has NO resolvable basis is BLOCKED on input — no partial is emitted (no guaranteed 422), the cell is flagged, nothing persists on blur', () => {
+    // Codex WARNING (Step-4): after the prefill removal a typed partial on a
+    // null-basis full-day row would be a guaranteed 422. So we BLOCK (don't emit
+    // the partial) and SURFACE the reason, rather than let it stand for the server.
     render(
       <FullDayHarness
-        // basis explicitly null for the day → the server fail-closes via anchor-422
         consumptionBasis={new Map<string, number | null>([['2026-03-02', null]])}
       />,
     )
     const input = screen.getByLabelText('Omsorgsdage dag 2') as HTMLInputElement
     fireEvent.focus(input)
     fireEvent.change(input, { target: { value: '3' } })
+    // Flagged inline while mid-entry (aria-invalid); the partial is not propagated.
+    expect(input.getAttribute('aria-invalid')).toBe('true')
     fireEvent.blur(input)
-    // The typed value stands — no snap, no invented basis value.
-    expect(input.value).toBe('3')
+    // Nothing persisted — the blocked partial never reached cellValues.
+    expect(input.value).toBe('')
   })
 
   it('R5 blank-stays-blank: clearing a full-day cell on commit leaves it blank (no snap to basis)', () => {
@@ -696,13 +729,39 @@ describe('SkemaGrid — full-day snap (S73 R5)', () => {
     expect(input.value).toBe('') // blank, NOT re-snapped to 7,4
   })
 
-  it('R5 missing-basis-map: a full-day cell with no served basis does NOT snap (the typed value stands)', () => {
+  it('S123 regression (owner: "cannot delete an omsorgsdag"): backspacing an existing full day char-by-char REACHES empty — the display never re-snaps mid-delete', () => {
+    // The bug: the on-input fill-to-norm fired on EVERY keystroke, so backspacing a
+    // committed full day ("7,4" → "7,") refilled the display to "7,4" and the value
+    // could never be cleared. The fix snaps the DISPLAY only on the empty→value
+    // transition — an existing day edits DOWN to empty freely.
+    render(
+      <FullDayHarness
+        consumptionBasis={new Map([['2026-03-02', 7.4]])}
+        initial={new Map([['CARE_DAY:2026-03-02', 7.4]])}
+      />,
+    )
+    const input = screen.getByLabelText('Omsorgsdage dag 2') as HTMLInputElement
+    expect(input.value).toBe('7,4') // starts as a committed full day
+    fireEvent.focus(input)
+    // Delete one character at a time — the display must FOLLOW the deletion, not refill.
+    fireEvent.change(input, { target: { value: '7,' } })
+    expect(input.value).toBe('7,') // NOT re-snapped to "7,4"
+    fireEvent.change(input, { target: { value: '7' } })
+    expect(input.value).toBe('7')
+    fireEvent.change(input, { target: { value: '' } })
+    expect(input.value).toBe('') // reached empty
+    fireEvent.blur(input)
+    expect(input.value).toBe('') // stays cleared — the absence is deleted
+  })
+
+  it('S123 missing-basis-map: a full-day cell with no served basis map is likewise BLOCKED (unresolvable full day → no partial emitted, cell flagged)', () => {
     render(<FullDayHarness />) // no consumptionBasis prop
     const input = screen.getByLabelText('Omsorgsdage dag 2') as HTMLInputElement
     fireEvent.focus(input)
     fireEvent.change(input, { target: { value: '3' } })
+    expect(input.getAttribute('aria-invalid')).toBe('true')
     fireEvent.blur(input)
-    expect(input.value).toBe('3')
+    expect(input.value).toBe('') // blocked — nothing persisted
   })
 
   it('R5: a NON-full-day (ferie) cell does NOT snap — a partial below-norm value commits unchanged (ferie behavior UNCHANGED)', () => {
@@ -713,13 +772,13 @@ describe('SkemaGrid — full-day snap (S73 R5)', () => {
       />,
     )
     const input = screen.getByLabelText('Ferie dag 2') as HTMLInputElement
-    fireEvent.focus(input) // ADR-032 D3 prefill seeds 7,4…
-    fireEvent.change(input, { target: { value: '3,7' } }) // …user edits to a partial day
+    fireEvent.focus(input) // S123: no prefill — the cell starts empty
+    fireEvent.change(input, { target: { value: '3,7' } }) // user types a partial day
     fireEvent.blur(input)
     expect(input.value).toBe('3,7') // ferie keeps the partial value — no snap
   })
 
-  it('R5: the non-full-day ADR-032 D3 prefill is UNCHANGED on the ferie row even with a basis served', () => {
+  it('S123: the ferie (non-full-day) row does NOT prefill on focus even with a norm/basis served (INVERTED — prefill removed)', () => {
     const onCellChange = vi.fn()
     render(
       <SkemaGrid
@@ -734,8 +793,8 @@ describe('SkemaGrid — full-day snap (S73 R5)', () => {
       />,
     )
     fireEvent.focus(screen.getByLabelText('Ferie dag 2'))
-    // Prefill still seeds the served NORM (not the basis path) on first focus.
-    expect(onCellChange).toHaveBeenCalledWith('VACATION', '2026-03-02', 7.4)
+    // S123: focus no longer seeds the served norm (the pre-S123 prefill did).
+    expect(onCellChange).not.toHaveBeenCalled()
   })
 
   it('R5: the "hele dage" note renders from the SERVED fullDayOnly flag (not a hardcoded type list)', () => {
@@ -747,6 +806,51 @@ describe('SkemaGrid — full-day snap (S73 R5)', () => {
     // The hours-based ferie row carries NO note.
     const ferieRow = rowByLabel(container, 'Ferie')
     expect(ferieRow.querySelector('td span')).toBeNull()
+  })
+})
+
+// ── S123/TASK-12303 — the daily-norm ABSENCE cap, surfaced inline (aria-invalid) ──
+describe('SkemaGrid — absence daily-norm cap (S123)', () => {
+  const twoAbsenceRows: SkemaRow[] = [
+    { type: 'project', key: 'DRIFT', label: 'Drift' },
+    { type: 'absence', key: 'VACATION', label: 'Ferie' },
+    { type: 'absence', key: 'CHILD_SICK', label: 'Barns sygedag' },
+  ]
+
+  it("flags a day's absence cells inline when the SUMMED absence hours exceed the daily norm", () => {
+    renderGrid({
+      rows: twoAbsenceRows,
+      // Mar 2: 5 + 4 = 9 absence hours > norm 7,4 → over-cap (both rows flagged)
+      cellValues: new Map([
+        ['VACATION:2026-03-02', 5],
+        ['CHILD_SICK:2026-03-02', 4],
+      ]),
+      dailyNorm: new Map([['2026-03-02', 7.4]]),
+    })
+    expect(screen.getByLabelText('Ferie dag 2').getAttribute('aria-invalid')).toBe('true')
+    expect(screen.getByLabelText('Barns sygedag dag 2').getAttribute('aria-invalid')).toBe('true')
+    // A day with NO over-norm absence is not flagged.
+    expect(screen.getByLabelText('Ferie dag 3').getAttribute('aria-invalid')).toBeNull()
+  })
+
+  it('does NOT flag a day whose absence exactly equals the norm (a full day is legal)', () => {
+    renderGrid({
+      rows: twoAbsenceRows,
+      cellValues: new Map([['VACATION:2026-03-02', 7.4]]), // == norm
+      dailyNorm: new Map([['2026-03-02', 7.4]]),
+    })
+    expect(screen.getByLabelText('Ferie dag 2').getAttribute('aria-invalid')).toBeNull()
+  })
+
+  it('is ABSENCE-ONLY: work time is NOT included in the cap (4h work + 4h ferie on a 7,4 day is legal)', () => {
+    renderGrid({
+      rows: twoAbsenceRows,
+      cellValues: new Map([['VACATION:2026-03-02', 4]]), // 4h absence
+      manualHours: new Map([['2026-03-02', 4]]), // 4h WORK — separate, must NOT trip the cap
+      dailyNorm: new Map([['2026-03-02', 7.4]]),
+    })
+    // Absence alone (4) ≤ norm (7,4) → NOT flagged, even though absence+work = 8 > 7,4.
+    expect(screen.getByLabelText('Ferie dag 2').getAttribute('aria-invalid')).toBeNull()
   })
 })
 

@@ -6188,6 +6188,8 @@ export interface components {
             okVersion: string;
             /** Format: double */
             weeklyNormHours: number | null;
+            /** Format: double */
+            fullDayNormHours: number | null;
         };
         "StatsTid.Backend.Api.Contracts.YearOverviewMonth": {
             /** Format: int32 */

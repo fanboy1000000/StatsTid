@@ -62,6 +62,9 @@ function makeOverview(overrides: Partial<YearOverview> = {}): YearOverview {
       agreementCode: 'AC',
       okVersion: 'OK26',
       weeklyNormHours: 37,
+      // S123 — authoritative weekday norm (37 / 5 = 7,4 h per full day, full-time)
+      // drives the days↔hours display model.
+      fullDayNormHours: 7.4,
     },
     tiles: {
       flexBalance: 22.5,
@@ -157,27 +160,35 @@ describe('ArsoversigtPage — header + tiles', () => {
     expect(screen.getByText('Anna Berg · AC · Norm: 37 t/uge')).toBeInTheDocument()
   })
 
-  it('renders all 6 designed balance tiles with da-DK values, units and sub-lines', () => {
+  it('renders the designed balance tiles with the new labels, hours-first flex and saldo sub-lines', () => {
     mockUseYearOverview.mockReturnValue(overviewHook(makeOverview()))
     renderPage()
     // Tile labels (some — Ferie/Omsorgsdage/Seniordage — also appear as matrix
     // group headers, so assert presence rather than uniqueness).
-    const labels = ['Flex saldo', 'Ferie', 'Omsorgsdage', 'Seniordage', 'Sygedage', 'Barns sygedag']
+    const labels = ['Difference fra norm tid - år', 'Ferie', 'Omsorgsdage', 'Seniordage', 'Sygedage', 'Barns sygedag']
     for (const l of labels) expect(screen.getAllByText(l).length).toBeGreaterThanOrEqual(1)
-    // Tile-only labels are unique.
-    expect(screen.getByText('Flex saldo')).toBeInTheDocument()
+    // Tile-only labels are unique. The Flex tile is renamed.
+    expect(screen.getByText('Difference fra norm tid - år')).toBeInTheDocument()
+    expect(screen.queryByText('Flex saldo')).not.toBeInTheDocument()
     expect(screen.getByText('Sygedage')).toBeInTheDocument()
-    // da-DK decimal comma + trimmed integers.
-    expect(screen.getByText('22,5')).toBeInTheDocument() // Flex saldo
+    // Flex tile is hours-first: the raw over/under-norm hours (22,5) with the
+    // day-equivalent (22,5 ÷ 7,4 ≈ 3) in parens.
+    expect(screen.getByText('22,5 (3 dage)')).toBeInTheDocument()
+    // Flex sub-line retained under the new label.
     expect(screen.getByText('optjent overtid')).toBeInTheDocument()
-    // No 7th tile — Særlige feriedage appears ONLY as a matrix group header, never as
-    // a tile label. (It still appears once, in the matrix.)
+    // No 7th tile — Særlige feriedage appears ONLY as a matrix group header.
     expect(screen.getAllByText('Særlige feriedage')).toHaveLength(1)
-    // Tile "rest" sub-line appears for Omsorgsdage + Seniordage + Barns sygedag.
-    expect(screen.getAllByText('rest')).toHaveLength(3)
+    // rest → saldo EVERYWHERE: no 'rest' remains; 'saldo' subs on Ferie +
+    // Omsorgsdage + Seniordage + Barns sygedag = 4.
+    expect(screen.queryByText('rest')).not.toBeInTheDocument()
+    expect(screen.getAllByText('saldo')).toHaveLength(4)
   })
 
-  it('renders an em-dash (ineligible) for senior + child-sick tiles, layout unchanged', () => {
+  it('OMITS the Seniordage + Barns-sygedag tiles (and the Seniordage grid group) entirely for an ineligible employee', () => {
+    // Owner OQ-1: show NOTHING for an ineligible entitlement — no tile, no grid
+    // row, no em-dash placeholder. (The backend also excludes the SENIOR_DAY
+    // category; here the SENIOR_DAY category is left in the fixture to prove the
+    // FE's defensive filter drops it when senior-ineligible.)
     const ineligible = makeOverview()
     ineligible.tiles = {
       ...ineligible.tiles,
@@ -188,13 +199,12 @@ describe('ArsoversigtPage — header + tiles', () => {
     }
     mockUseYearOverview.mockReturnValue(overviewHook(ineligible))
     renderPage()
-    // Tiles still present (labels render); their value is an em-dash.
-    // (Seniordage also appears as a matrix group header → assert ≥1.)
-    expect(screen.getAllByText('Seniordage').length).toBeGreaterThanOrEqual(1)
-    expect(screen.getByText('Barns sygedag')).toBeInTheDocument()
-    // Two em-dash tile values (senior + child-sick) — at minimum the dashes exist.
-    const dashes = screen.getAllByText('–')
-    expect(dashes.length).toBeGreaterThanOrEqual(2)
+    // Neither entitlement appears anywhere (tile OR grid group).
+    expect(screen.queryByText('Seniordage')).not.toBeInTheDocument()
+    expect(screen.queryByText('Barns sygedag')).not.toBeInTheDocument()
+    // Eligible entitlements still render (Omsorgsdage as tile + grid group).
+    expect(screen.getAllByText('Omsorgsdage').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByText('Sygedage')).toBeInTheDocument()
   })
 })
 
@@ -210,8 +220,9 @@ describe('ArsoversigtPage — matrix structure', () => {
     // Header: the year label cell + 12 month columns = 13 <th scope="col">.
     const headerCells = screen.getAllByRole('columnheader')
     expect(headerCells).toHaveLength(13)
-    // Sub-rows present for a leave group.
-    expect(screen.getAllByText('Saldo (rest)').length).toBe(4) // Ferie, Særlige feriedage, Oms, Senior
+    // Sub-rows present for a leave group. The "Saldo (rest)" header is now "Saldo".
+    expect(screen.getAllByText('Saldo').length).toBe(4) // Ferie, Særlige feriedage, Oms, Senior
+    expect(screen.queryByText('Saldo (rest)')).not.toBeInTheDocument()
     expect(screen.getAllByText('Afholdt').length).toBe(4)
     // Disposition row label keys off type: SPECIAL_HOLIDAY → "Til udbetaling" (godtgørelse),
     // every other leave type → "Til udløb" (lapses). The old "Kan overføres" is gone.
@@ -260,13 +271,20 @@ describe('ArsoversigtPage — cell rules (server-today authority)', () => {
     expect(diffCells[3]).toHaveTextContent('–')
   })
 
-  it('renders fractional afholdt ("0,5") and the saldo drop for the half-day VACATION', () => {
+  it('renders the half-day VACATION afholdt + saldo hours-first (hours on top, days stacked below)', () => {
     mockUseYearOverview.mockReturnValue(overviewHook(makeOverview()))
     renderPage()
-    // The Ferie group's Afholdt row, Feb column = 0,5.
-    expect(screen.getByText('0,5')).toBeInTheDocument()
-    // Saldo 24,5 appears (post half-day).
-    expect(screen.getAllByText('24,5').length).toBeGreaterThanOrEqual(1)
+    // VACATION is hours-first and now STACKS (S123 owner polish): the hours on the
+    // top line, the day-equivalent below in a smaller font — two separate spans,
+    // no longer the inline "H (D dage)" string.
+    // Feb afholdt 0,5 day → 0,5 × 7,4 = 3,7 t on top, "0,5 dage" below.
+    const afholdtFeb = rowCells('Afholdt', 0)[1] // VACATION afholdt, Feb (index 1)
+    expect(within(afholdtFeb).getByText('3,7')).toBeInTheDocument()
+    expect(within(afholdtFeb).getByText('0,5 dage')).toBeInTheDocument()
+    // Post half-day saldo 24,5 days → 24,5 × 7,4 = 181,3 t, "24,5 dage" below.
+    const saldoFeb = rowCells('Saldo', 0)[1] // VACATION saldo, Feb (index 1)
+    expect(within(saldoFeb).getByText('181,3')).toBeInTheDocument()
+    expect(within(saldoFeb).getByText('24,5 dage')).toBeInTheDocument()
   })
 
   it('renders normHours: null months as an em-dash', () => {
@@ -283,9 +301,11 @@ describe('ArsoversigtPage — cell rules (server-today authority)', () => {
     mockUseYearOverview.mockReturnValue(overviewHook(makeOverview()))
     renderPage()
     // The Ferie disposition row is labelled "Til udløb" (VACATION lapses); 1st such row
-    // (occurrence 0): Dec cell = 5, others em-dash.
+    // (occurrence 0): Dec cell = expiring 5 days, hours-first → "37 (5 dage)" (5 × 7,4).
     const cells = rowCells('Til udløb', 0)
-    expect(cells[11]).toHaveTextContent('5') // Dec (index 11)
+    // Dec (index 11): expiring 5 days, hours-first → "37" on top, "5 dage" below (5 × 7,4).
+    expect(within(cells[11]).getByText('37')).toBeInTheDocument()
+    expect(within(cells[11]).getByText('5 dage')).toBeInTheDocument()
     // info styling class applied to the Dec cell.
     expect(cells[11].className).toMatch(/keep/)
     // Jan..Nov are em-dashes (disposition shown only in December).
@@ -300,7 +320,8 @@ describe('ArsoversigtPage — cell rules (server-today authority)', () => {
     // feriedage convert to the 2½% godtgørelse — money, not loss). Pre-amendment a cap-0
     // type rendered an em-dash even at December; now a positive expiring (3) SHOWS.
     const cells = rowCells('Til udbetaling', 0)
-    expect(cells[11]).toHaveTextContent('3') // Dec shows the godtgørelse-bound days
+    // SPECIAL_HOLIDAY is days-only → expiring 3 renders "3 dage" (no hours).
+    expect(cells[11]).toHaveTextContent('3 dage') // Dec shows the godtgørelse-bound days
     expect(cells[11].className).toMatch(/keep/)
     // Other months remain em-dashes (disposition shown only in December).
     expect(cells[0]).toHaveTextContent('–')
@@ -328,17 +349,48 @@ describe('ArsoversigtPage — cell rules (server-today authority)', () => {
     expect(() => renderPage()).not.toThrow()
     // The page rendered (heading present).
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Årsoversigt 2026')
-    // The graceful group's Saldo (rest) row (occurrence 0): all 12 cells are em-dashes.
-    const nullSaldoCells = rowCells('Saldo (rest)', 0)
+    // The graceful group's Saldo row (occurrence 0): all 12 cells are em-dashes.
+    const nullSaldoCells = rowCells('Saldo', 0)
     expect(nullSaldoCells).toHaveLength(12)
     for (const cell of nullSaldoCells) expect(cell).toHaveTextContent('–')
-    // Rest of the matrix intact: the CARE_DAY group (occurrence 2) still shows a
-    // real saldo value (2 in Jan/Feb per the fixture).
-    const careSaldoCells = rowCells('Saldo (rest)', 2)
-    expect(careSaldoCells[0]).toHaveTextContent('2')
+    // Rest of the matrix intact: the CARE_DAY group (occurrence 2, days-only)
+    // still shows a real saldo value ("2 dage" in Jan/Feb per the fixture).
+    const careSaldoCells = rowCells('Saldo', 2)
+    expect(careSaldoCells[0]).toHaveTextContent('2 dage')
     // Arbejdstid row still renders its worked hours (matrix structure preserved).
     const arbCells = rowCells('Arbejdstid')
     expect(arbCells[0]).toHaveTextContent('150,2')
+  })
+})
+
+describe('ArsoversigtPage — days/hours display model (S123)', () => {
+  // The >0 guard: ComputeWeekdayNormAtAsync returns null (ANNUAL_ACTIVITY/no-
+  // profile) OR 0 (0% part-time). Both must skip the days↔hours conversion and
+  // render the native unit only, with NO parenthetical (no divide-by-zero).
+  it.each([
+    ['null (ANNUAL_ACTIVITY / no-profile)', null],
+    ['0 (0% part-time — divide-by-zero guard)', 0],
+  ])('fullDayNormHours %s → days-only balances, hours-only flex, no parens', (_label, normValue) => {
+    const ov = makeOverview()
+    ov.header = { ...ov.header, fullDayNormHours: normValue as number | null }
+    mockUseYearOverview.mockReturnValue(overviewHook(ov))
+    renderPage()
+    // VACATION grid saldo (hours-first) falls back to days-only: Jan 25 → "25 dage".
+    const saldoCells = rowCells('Saldo', 0)
+    expect(saldoCells[0]).toHaveTextContent('25 dage')
+    expect(saldoCells[0].textContent).not.toContain('(') // no hours parenthetical
+    // Flex tile stays hours-only ("22,5") — the hours-first "(… dage)" form is gone.
+    expect(screen.getByText('22,5')).toBeInTheDocument()
+    expect(screen.queryByText('22,5 (3 dage)')).not.toBeInTheDocument()
+  })
+
+  it('renders the flex tile hours-first with a SIGNED day-equivalent (-162,8 → -22 dage)', () => {
+    const ov = makeOverview()
+    ov.tiles = { ...ov.tiles, flexBalance: -162.8 }
+    mockUseYearOverview.mockReturnValue(overviewHook(ov))
+    renderPage()
+    // -162,8 t ÷ 7,4 = -22 days; the sign is preserved on both the hours and the days.
+    expect(screen.getByText('-162,8 (-22 dage)')).toBeInTheDocument()
   })
 })
 

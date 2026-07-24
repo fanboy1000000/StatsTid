@@ -23,35 +23,90 @@ function parseToday(today: string): { year: number; monthIndex: number } {
   return { year: Number(y), monthIndex: Number(m) - 1 }
 }
 
-/** Per-tile descriptor for the 6 designed balance tiles. */
+/** Per-tile descriptor. `kind` selects the days/hours display model (S123):
+ *  - 'flex'          : value is HOURS (over/under-norm) → hours-first `H (D dage)`
+ *  - 'hoursFirstDays': value is DAYS, hours-addable (ferie, barns sygedag) → `H (D dage)`
+ *  - 'daysOnly'      : value is DAYS, full-day-only (omsorg, senior, sygedage) → `X dage`
+ * Ineligible entitlements are OMITTED from the list entirely (owner OQ-1: show
+ * nothing) — a remaining `value: null` is only a defensive graceful em-dash. */
+type TileKind = 'flex' | 'hoursFirstDays' | 'daysOnly'
+
 interface TileSpec {
   label: string
-  /** null → ineligible → renders an em-dash value with unchanged layout. */
   value: number | null
-  unit: string
+  kind: TileKind
   sub: string
+}
+
+interface TileDisplay {
+  primary: string
+  unit: string
+  /** hours-first day-equivalent, e.g. "(22 dage)"; null when no conversion. */
+  paren: string | null
+}
+
+/** The authoritative weekday norm (hours per full day) enables the days↔hours
+ * conversion; it is null (ANNUAL_ACTIVITY/no-profile) or 0 (0% part-time) when
+ * conversion is impossible — guarded on `> 0` (mirrors the Skema norm guards). */
+function canConvert(norm: number | null): norm is number {
+  return norm != null && norm > 0
+}
+
+/** Hours-first-or-days-only tile value per the display model + the >0 guard. */
+function tileDisplay(tile: TileSpec, norm: number | null): TileDisplay | null {
+  if (tile.value == null) return null
+  if (tile.kind === 'flex') {
+    // native HOURS; day-equivalent = hours ÷ norm.
+    const paren = canConvert(norm) ? `(${formatDanishNumber(tile.value / norm)} dage)` : null
+    return { primary: formatDanishNumber(tile.value), unit: 't', paren }
+  }
+  if (tile.kind === 'hoursFirstDays' && canConvert(norm)) {
+    // native DAYS; hours-equivalent = days × norm.
+    return {
+      primary: formatDanishNumber(tile.value * norm),
+      unit: 't',
+      paren: `(${formatDanishNumber(tile.value)} dage)`,
+    }
+  }
+  // daysOnly, OR an hours-addable balance with no usable norm → native days, no parens.
+  return { primary: formatDanishNumber(tile.value), unit: 'dage', paren: null }
+}
+
+// Grid-cell value per the category display unit + the >0 norm guard. Hours-addable
+// (VACATION) cells STACK — hours on the top line,
+// the day-equivalent below in a smaller muted font (S123 owner polish; the inline
+// `H (D dage)` was too cramped in the dense monthly matrix). Days-only categories
+// stay a single `X dage` line. (Tiles keep the inline `H (D dage)` — they have room.)
+function formatCategoryValue(days: number, hoursFirst: boolean, norm: number | null) {
+  if (hoursFirst && canConvert(norm)) {
+    return (
+      <>
+        <span className={styles.cellHours}>{formatDanishNumber(days * norm)}</span>
+        <span className={styles.cellDays}>{formatDanishNumber(days)} dage</span>
+      </>
+    )
+  }
+  return `${formatDanishNumber(days)} dage`
 }
 
 function buildTiles(data: YearOverview): TileSpec[] {
   const t = data.tiles
-  return [
-    { label: 'Flex saldo', value: t.flexBalance, unit: 't', sub: 'optjent overtid' },
-    { label: 'Ferie', value: t.ferieRemaining, unit: 'dage', sub: 'saldo' },
-    { label: 'Omsorgsdage', value: t.careDayRemaining, unit: 'dage', sub: 'rest' },
-    {
-      label: 'Seniordage',
-      value: t.seniorDayEligible ? t.seniorDayRemaining : null,
-      unit: 'dage',
-      sub: 'rest',
-    },
-    { label: 'Sygedage', value: t.sickDaysYtd, unit: 'dage', sub: 'i år' },
-    {
-      label: 'Barns sygedag',
-      value: t.childSickEligible ? t.childSickRemaining : null,
-      unit: 'dage',
-      sub: 'rest',
-    },
+  const tiles: TileSpec[] = [
+    { label: 'Difference fra norm tid - år', value: t.flexBalance, kind: 'flex', sub: 'optjent overtid' },
+    { label: 'Ferie', value: t.ferieRemaining, kind: 'hoursFirstDays', sub: 'saldo' },
+    { label: 'Omsorgsdage', value: t.careDayRemaining, kind: 'daysOnly', sub: 'saldo' },
   ]
+  // Owner OQ-1: show NOTHING for ineligible entitlements — omit the tile entirely
+  // (no em-dash placeholder). Seniordage needs senior eligibility; Barns sygedag
+  // needs the stored child-sick opt-in.
+  if (t.seniorDayEligible) {
+    tiles.push({ label: 'Seniordage', value: t.seniorDayRemaining, kind: 'daysOnly', sub: 'saldo' })
+  }
+  tiles.push({ label: 'Sygedage', value: t.sickDaysYtd, kind: 'daysOnly', sub: 'i år' })
+  if (t.childSickEligible) {
+    tiles.push({ label: 'Barns sygedag', value: t.childSickRemaining, kind: 'hoursFirstDays', sub: 'saldo' })
+  }
+  return tiles
 }
 
 export function ArsoversigtPage() {
@@ -118,6 +173,8 @@ export function ArsoversigtPage() {
 
   const tiles = buildTiles(data)
   const norm = data.header.weeklyNormHours
+  // Authoritative weekday norm (hours per full day) for the days↔hours model.
+  const fullDayNorm = data.header.fullDayNormHours
   const subLine =
     `${data.header.employeeName} · ${data.header.agreementCode}` +
     ` · Norm: ${norm != null ? formatDanishNumber(norm) : EM_DASH} t/uge`
@@ -148,23 +205,27 @@ export function ArsoversigtPage() {
         </div>
       </div>
 
-      {/* Current-balance tiles */}
+      {/* Current-balance tiles (ineligible entitlements are omitted, not em-dashed) */}
       <div className={styles.statRow}>
-        {tiles.map((tile) => (
-          <div className={styles.stat} key={tile.label}>
-            <p className={styles.statLabel}>{tile.label}</p>
-            <p className={styles.statValue}>
-              {tile.value != null ? (
-                <>
-                  {formatDanishNumber(tile.value)} <small>{tile.unit}</small>
-                </>
-              ) : (
-                <span className={styles.dash}>{EM_DASH}</span>
-              )}
-            </p>
-            <p className={styles.statSub}>{tile.sub}</p>
-          </div>
-        ))}
+        {tiles.map((tile) => {
+          const disp = tileDisplay(tile, fullDayNorm)
+          return (
+            <div className={styles.stat} key={tile.label}>
+              <p className={styles.statLabel}>{tile.label}</p>
+              <p className={styles.statValue}>
+                {disp ? (
+                  <>
+                    {disp.primary} <small>{disp.unit}</small>
+                    {disp.paren ? ` ${disp.paren}` : ''}
+                  </>
+                ) : (
+                  <span className={styles.dash}>{EM_DASH}</span>
+                )}
+              </p>
+              <p className={styles.statSub}>{tile.sub}</p>
+            </div>
+          )
+        })}
       </div>
 
       {/* Stale-data banner: a year switch failed; we keep showing the last good
@@ -255,14 +316,19 @@ export function ArsoversigtPage() {
                 })}
               </tr>
 
-              {/* Absence-category groups */}
-              {data.categories.map((cat) => (
-                <CategoryGroup
-                  key={cat.type}
-                  category={cat}
-                  cellClass={cellClass}
-                />
-              ))}
+              {/* Absence-category groups. The backend already excludes SENIOR_DAY
+                  for the age-ineligible (S123); the filter is a defensive mirror
+                  so a stale/buggy wire never shows a senior row without a tile. */}
+              {data.categories
+                .filter((cat) => !(cat.type === 'SENIOR_DAY' && !data.tiles.seniorDayEligible))
+                .map((cat) => (
+                  <CategoryGroup
+                    key={cat.type}
+                    category={cat}
+                    cellClass={cellClass}
+                    fullDayNorm={fullDayNorm}
+                  />
+                ))}
             </tbody>
           </table>
         </div>
@@ -274,12 +340,19 @@ export function ArsoversigtPage() {
 interface CategoryGroupProps {
   category: YearOverviewCategory
   cellClass: (i: number) => string
+  /** Authoritative weekday norm for the days↔hours conversion (null/0 → days-only). */
+  fullDayNorm: number | null
 }
 
-/** One leave group: header + Saldo (rest) / Afholdt / disposition (Til udløb /
- * Til udbetaling) rows. */
-function CategoryGroup({ category, cellClass }: CategoryGroupProps) {
+/** One leave group: header + Saldo / Afholdt / disposition (Til udløb / Til
+ * udbetaling) rows. Every row renders in the category's display unit (S123):
+ * VACATION is hours-first `H (D dage)`; the full-day + special-holiday
+ * categories are days-only `X dage`. */
+function CategoryGroup({ category, cellClass, fullDayNorm }: CategoryGroupProps) {
   const boundaryIndex = category.boundaryMonth - 1
+  // Only VACATION is hours-addable; CARE_DAY/SENIOR_DAY/SPECIAL_HOLIDAY are days-only.
+  const hoursFirst = category.type === 'VACATION'
+  const fmt = (v: number) => formatCategoryValue(v, hoursFirst, fullDayNorm)
   // Period-end disposition label keys off the category type: untaken særlige
   // feriedage convert to the 2½% godtgørelse (money → "Til udbetaling"); every
   // other type genuinely lapses ("Til udløb").
@@ -293,13 +366,13 @@ function CategoryGroup({ category, cellClass }: CategoryGroupProps) {
 
       <tr className={`${styles.row} ${styles.rowSub}`}>
         <th scope="row" className={styles.labelCell}>
-          Saldo (rest)
+          Saldo
         </th>
         {category.saldo.map((v, i) => (
           <td key={i} className={cellClass(i)}>
             {/* null (no-config graceful row) and 0 both render the em-dash. */}
             {v != null && v !== 0 ? (
-              formatDanishNumber(v)
+              fmt(v)
             ) : (
               <span className={styles.dash}>{EM_DASH}</span>
             )}
@@ -314,7 +387,7 @@ function CategoryGroup({ category, cellClass }: CategoryGroupProps) {
         {category.afholdt.map((v, i) => (
           <td key={i} className={cellClass(i)}>
             {v !== 0 ? (
-              formatDanishNumber(v)
+              fmt(v)
             ) : (
               <span className={styles.dash}>{EM_DASH}</span>
             )}
@@ -334,7 +407,7 @@ function CategoryGroup({ category, cellClass }: CategoryGroupProps) {
           return (
             <td key={i} className={cls}>
               {show ? (
-                formatDanishNumber(category.expiring)
+                fmt(category.expiring)
               ) : (
                 <span className={styles.dash}>{EM_DASH}</span>
               )}

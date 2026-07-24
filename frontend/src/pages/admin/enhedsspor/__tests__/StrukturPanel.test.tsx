@@ -39,6 +39,17 @@ vi.mock('../../../../hooks/useReportingLines', () => ({
   useReportingLines: () => ({ assignManager: reportingLines.assignManager }),
 }))
 
+// S123 T2 — the focus happy-path is the FIRST test here to open the PersonDrawer →
+// it invokes fetchUser (the panel's inlined openEditPerson). Mock useOrgUsers so
+// fetchUser PENDS (never resolves): the drawer opens in its loading state (editUser
+// stays null → create-mode render) and the LifecycleSections resolve effect
+// early-returns (no reporting-lines GET), keeping the subtree offline.
+const admin = vi.hoisted(() => ({ fetchUser: vi.fn(() => new Promise<never>(() => {})) }))
+vi.mock('../../../../hooks/useAdmin', () => ({
+  useOrgUsers: () => ({ fetchUser: admin.fetchUser }),
+}))
+
+import { ToastProvider } from '../../../../components/ui/Toast'
 import { StrukturPanel } from '../StrukturPanel'
 import type { SelectedNode } from '../OrgStructureTree'
 import type { ForestMaoNode } from '../../../../hooks/useForest'
@@ -48,6 +59,7 @@ beforeEach(() => {
   auth.role = 'LocalHR'
   reportingLines.assignManager.mockReset()
   reportingLines.assignManager.mockResolvedValue({ ok: true, data: { version: 7 } })
+  admin.fetchUser.mockClear()
 })
 
 const VEJL = '000000d0-0000-0000-0000-0000000000a1'
@@ -209,7 +221,14 @@ function renderPanel(overrides: Partial<ComponentProps<typeof StrukturPanel>> = 
     onForward: vi.fn(),
     ...overrides,
   }
-  return { ...render(<StrukturPanel {...props} />), props }
+  // A real ToastProvider satisfies the drawer's '/Toast' useToast (the focus
+  // happy-path opens the PersonDrawer); it renders no extra buttons when empty, so
+  // the S91 allowlist test is unaffected.
+  return { ...render(
+    <ToastProvider>
+      <StrukturPanel {...props} />
+    </ToastProvider>,
+  ), props }
 }
 
 describe('StrukturPanel — the recursive read-only Struktur', () => {
@@ -297,16 +316,75 @@ describe('StrukturPanel — the recursive read-only Struktur', () => {
     expect(within(note).getByText('Tildel leder')).toBeDefined()
   })
 
-  it('the "Vis/Skjul medarbejdere" toggle hides and re-shows all people', () => {
+  // S123 T1 — the three peer layers. "Skjul medarbejdere" now hides ONLY the
+  // NON-LEADER rows; the leaders stay (they have their own "Skjul ledere" toggle).
+  // This is the "org + leaders only" capability (OQ-2: static report count, no chevron).
+  it('the "Skjul medarbejdere" toggle hides only the NON-LEADER rows; the leaders stay (peer layers)', () => {
     renderPanel()
-    expect(screen.getByText('Jens Kofoed')).toBeDefined()
+    // Both people-layers on by default → leaders + their nested reports render.
+    expect(screen.getByTestId('leader-jens')).toBeDefined()
+    expect(screen.getByTestId('employee-anna')).toBeDefined()
     const toggle = screen.getByTestId('toggle-people')
     expect(toggle.textContent).toContain('Skjul medarbejdere')
     fireEvent.click(toggle)
-    expect(screen.queryByText('Jens Kofoed')).toBeNull()
+    // The non-leaders (anna/bo/carl) are hidden…
+    expect(screen.queryByTestId('employee-anna')).toBeNull()
+    expect(screen.queryByTestId('employee-bo')).toBeNull()
+    expect(screen.queryByTestId('employee-carl')).toBeNull()
+    // …but the leaders themselves remain (showLeaders still on) — "org + leaders only".
+    expect(screen.getByTestId('leader-jens')).toBeDefined()
+    expect(screen.getByTestId('leader-trine')).toBeDefined()
+    // OQ-2: the leader keeps its static "1 medarb." count, but the expand chevron is
+    // gone (employees hidden → nothing to expand).
+    expect(within(screen.getByTestId('leader-jens')).getByText('1 medarb.')).toBeDefined()
+    expect(screen.queryByTestId('caret-leader-jens')).toBeNull()
     expect(screen.getByTestId('toggle-people').textContent).toContain('Vis medarbejdere')
+    // Re-show restores the non-leader rows (nested under their leaders again).
     fireEvent.click(screen.getByTestId('toggle-people'))
-    expect(screen.getByText('Jens Kofoed')).toBeDefined()
+    expect(screen.getByTestId('employee-anna')).toBeDefined()
+    expect(screen.getByTestId('caret-leader-jens')).toBeDefined()
+  })
+
+  // S123 T1 — the new peer toggle. "Skjul ledere" hides the leader rows; the
+  // (non-leader) employees stay, now rendered FLAT with no leader-parent grouping
+  // (OQ-3). This is the "org + employees only" capability.
+  it('the "Vis/Skjul ledere" toggle hides and re-shows the leader rows; employees stay flat (OQ-3)', () => {
+    renderPanel()
+    expect(screen.getByTestId('leader-jens')).toBeDefined()
+    expect(screen.getByTestId('leader-trine')).toBeDefined()
+    const toggle = screen.getByTestId('toggle-leaders')
+    expect(toggle.textContent).toContain('Skjul ledere')
+    fireEvent.click(toggle)
+    // Leaders are hidden…
+    expect(screen.queryByTestId('leader-jens')).toBeNull()
+    expect(screen.queryByTestId('leader-trine')).toBeNull()
+    expect(screen.getByTestId('toggle-leaders').textContent).toContain('Vis ledere')
+    // …but every non-leader employee stays, rendered flat (no leader grouping).
+    expect(screen.getByTestId('employee-anna')).toBeDefined()
+    expect(screen.getByTestId('employee-bo')).toBeDefined()
+    expect(screen.getByTestId('employee-carl')).toBeDefined()
+    // Re-show restores the leaders (and the nested grouping returns).
+    fireEvent.click(screen.getByTestId('toggle-leaders'))
+    expect(screen.getByTestId('leader-jens')).toBeDefined()
+    expect(screen.getByTestId('caret-leader-jens')).toBeDefined()
+  })
+
+  // S123 T1 — the load-bearing regression invariant: both people-layers ON (the
+  // default) MUST reproduce the pre-split nested view (leaders as expandable parents,
+  // reports nested, the cross-unit exception flagged, section count = all visible people).
+  it('both people-layers ON (the default) reproduces the prior nested view exactly', () => {
+    renderPanel()
+    // Leaders render as expandable parents (reports exist → the chevron is present).
+    expect(screen.getByTestId('caret-leader-jens')).toBeDefined()
+    // Reports nest under their matching leader.
+    expect(screen.getByTestId('employee-anna')).toBeDefined() // → Jens
+    expect(screen.getByTestId('employee-bo')).toBeDefined() // → Trine
+    // The cross-unit exception is still flagged (external variant preserved).
+    const carl = screen.getByTestId('employee-carl')
+    expect(within(carl).getByText('Leder uden for enheden: Ekstern Leder')).toBeDefined()
+    // The "Medarbejdere" section count = all 5 visible people (2 leaders + 3 non-
+    // leaders) == the pre-split members.length (no regression).
+    expect(within(screen.getByTestId(`caret-med-${VEJL}`)).getByText('5')).toBeDefined()
   })
 
   it('the "Vis org./Skjul org." toggle expands all descendant child units', () => {
@@ -319,18 +397,19 @@ describe('StrukturPanel — the recursive read-only Struktur', () => {
     expect(screen.getByTestId('toggle-expand-all').textContent).toContain('Skjul org.')
   })
 
-  it('"Vis medarbejdere" REVEALS people nested in collapsed units (post-S114 every person is unit-homed — the toggle looked dead at Organisation/MAO level)', () => {
+  it('"Vis medarbejdere" REVEALS the non-leader rows nested in collapsed units (post-S114 every person is unit-homed — the toggle looked dead at Organisation/MAO level)', () => {
     renderPanel()
-    // kim sits in the COLLAPSED Kontrol unit — invisible at render.
+    // kim (a non-leader in the leaderless Kontrol unit) sits in the COLLAPSED Kontrol
+    // unit — invisible at render.
     expect(screen.queryByTestId('employee-kim')).toBeNull()
-    // Hide people, then show them again with ONE click: the reveal must also
+    // Hide the non-leaders, then show them again with ONE click: the reveal must also
     // expand the descendant units (the settlement-filter reveal semantics), so
     // kim appears — under the pre-fix behavior Kontrol stayed collapsed and the
     // toggle flipped a dead label at unit-homed-only levels.
     fireEvent.click(screen.getByTestId('toggle-people')) // Skjul
     fireEvent.click(screen.getByTestId('toggle-people')) // Vis → reveal
     expect(screen.getByTestId('employee-kim')).toBeDefined()
-    // Skjul hides member rows again but does NOT own unit expansion.
+    // Skjul hides the non-leader rows again but does NOT own unit expansion.
     fireEvent.click(screen.getByTestId('toggle-people'))
     expect(screen.queryByTestId('employee-kim')).toBeNull()
   })
@@ -364,7 +443,7 @@ describe('StrukturPanel — the recursive read-only Struktur', () => {
     const STRUCTURE = ['unit-action-create', 'unit-action-edit', 'unit-action-move', 'unit-action-delete']
     const allowed = (tid: string | null): boolean =>
       !!tid &&
-      (['nav-back', 'nav-forward', 'toggle-expand-all', 'toggle-people'].includes(tid) ||
+      (['nav-back', 'nav-forward', 'toggle-expand-all', 'toggle-leaders', 'toggle-people'].includes(tid) ||
         STRUCTURE.includes(tid) ||
         tid === 'person-action-create' ||
         tid.startsWith('person-edit-') ||
@@ -456,6 +535,85 @@ describe('StrukturPanel — the recursive read-only Struktur', () => {
     }
     render(<Harness />)
     expect(screen.getByTestId('leader-jens')).toBeDefined()
+  })
+
+  // ── S123 T2 — search-to-person focus: reveal the row + open the edit drawer ──────
+  // Given a `focusPersonId` for a row present in the loaded roster, the panel reveals
+  // the row IN PLACE (org stays selected) and opens its edit drawer, then signals
+  // `onFocusConsumed` exactly once. This is the FIRST test to open the PersonDrawer →
+  // fetchUser is mocked to pend, so the drawer renders in its loading state.
+  it('S123 T2 — focusPersonId reveals the row + opens the edit drawer (loading while fetchUser pends), consumed once', () => {
+    const onFocusConsumed = vi.fn()
+    renderPanel({ focusPersonId: 'anna', onFocusConsumed })
+    // The edit drawer opened for the focused person (loading — the fresh user pends).
+    expect(screen.getByTestId('person-drawer-loading')).toBeDefined()
+    expect(screen.getByTestId('person-drawer-title')).toBeDefined()
+    expect(admin.fetchUser).toHaveBeenCalledWith('anna')
+    // REVEAL: the focused row is visible (Anna nests under her leader Jens, both
+    // people-layers forced on by the reveal).
+    expect(screen.getByTestId('employee-anna')).toBeDefined()
+    // Consumed exactly once → the host clears pendingFocus (Back/Forward can't re-open).
+    expect(onFocusConsumed).toHaveBeenCalledTimes(1)
+  })
+
+  it('S123 T2 — a focusPersonId absent from the loaded roster consumes the intent with NO drawer (not-found)', () => {
+    const onFocusConsumed = vi.fn()
+    renderPanel({ focusPersonId: 'ghost', onFocusConsumed })
+    // Terminal not-found: no drawer, no throw, and the intent is consumed once.
+    expect(screen.queryByTestId('person-drawer-title')).toBeNull()
+    expect(screen.queryByTestId('person-drawer-loading')).toBeNull()
+    expect(admin.fetchUser).not.toHaveBeenCalled()
+    expect(onFocusConsumed).toHaveBeenCalledTimes(1)
+  })
+
+  // S123 T2 (BLOCKER regression) — an ORG-HOMED person has `unitId === null`; their
+  // row renders under the SELECTED ORG's own med-section (keyed by the org id, NOT a
+  // null unit key). The reveal must un-collapse `medClosed[selectedNode.id]`. A
+  // controlled harness collapses that section first, then focuses the person, proving
+  // the reveal re-opens the CORRECT key (the buggy `medClosed[null]` clear left it hidden).
+  it('S123 T2 — an ORG-HOMED person (unitId null) is revealed by un-collapsing the ORG med-section (BLOCKER)', () => {
+    const orgHomedRoster: RosterResponse = {
+      employees: [
+        row({ employeeId: 'omni', displayName: 'Omni Org', position: 'Konsulent', unitId: null, unitName: null, leaderIds: [], structuralApproverId: null }),
+      ],
+      pendingCountByManager: {},
+      nameResolution: {},
+    }
+    function Harness() {
+      const [focus, setFocus] = useState<string | undefined>(undefined)
+      return (
+        <ToastProvider>
+          <button data-testid="do-focus" onClick={() => setFocus('omni')}>focus</button>
+          <StrukturPanel
+            forest={makeForest()}
+            selected={STY02_NODE}
+            rosterByOrg={{ STY02: orgHomedRoster }}
+            rosterLoading={false}
+            onLoadRoster={vi.fn()}
+            onNavigate={vi.fn()}
+            canBack={false}
+            canForward={false}
+            onBack={vi.fn()}
+            onForward={vi.fn()}
+            focusPersonId={focus}
+            onFocusConsumed={vi.fn()}
+          />
+        </ToastProvider>
+      )
+    }
+    render(<Harness />)
+    // The org-homed row shows at the org level by default…
+    expect(screen.getByTestId('employee-omni')).toBeDefined()
+    // …collapse the ORG med-section (keyed by the org id) → the row hides…
+    fireEvent.click(screen.getByTestId('caret-med-STY02'))
+    expect(screen.queryByTestId('employee-omni')).toBeNull()
+    // …focusing the org-homed person un-collapses medClosed[selectedNode.id] (NOT a
+    // null key) so the row re-appears, and the edit drawer opens.
+    fireEvent.click(screen.getByTestId('do-focus'))
+    expect(screen.getByTestId('employee-omni')).toBeDefined()
+    expect(screen.getByTestId('person-drawer-loading')).toBeDefined()
+    expect(screen.getByTestId('person-drawer-title')).toBeDefined()
+    expect(admin.fetchUser).toHaveBeenCalledWith('omni')
   })
 })
 

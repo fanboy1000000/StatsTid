@@ -7,7 +7,13 @@
 //
 // Pinned rules implemented here:
 //   R1  — norms are SERVED, never constant (no 7,4 literal anywhere); null norm →
-//         blank rendering; ADR-032 D3 absence-cell prefill ships UNCHANGED.
+//         blank rendering. S123/TASK-12303 REMOVED the ADR-032 D3 absence-cell
+//         prefill: an empty absence cell now stays EMPTY on focus (the user types
+//         the hours). full_day_only rows instead fill-to-norm ON INPUT (see the
+//         handleCellInput snap below); a day whose summed ABSENCE hours exceed the
+//         served daily norm is flagged inline (aria-invalid) as the client mirror
+//         of the backend's absence-only cap (SkemaEndpoints.cs:740 — advisory; the
+//         backend 422 stays authoritative).
 //   R2  — Diff(day) = (workTime periods + manualHours + absence hours) − served norm.
 //         A full-absence day shows 0,0 GREEN (the shipped grid showed −7,4 red); a day
 //         with NO registration at all is BLANK (the shipped grid deliberately showed
@@ -65,11 +71,12 @@ interface SkemaGridProps {
       (owner ruling D-B drops the lump-hours entry UI). */
   onManualHoursChange?: (date: string, hours: number | null) => void
   dailyNorm?: DailyNormMap
-  /** S73 R5 — the served per-day ADR-032 consumption basis. A commit in a
-      `fullDayOnly` absence cell SNAPS to `consumptionBasis.get(dateKey)`; a null
-      basis (no dated profile) means NO snap (the typed value stands, fail-closed
-      server-side). Absent map → no snap data (full-day cells behave like the
-      pre-S73 prefill — the typed value stands). */
+  /** S73 R5 / S123 — the served per-day ADR-032 consumption basis. An entry in a
+      `fullDayOnly` absence cell fills-to-norm ON INPUT to `consumptionBasis.get(dateKey)`
+      (blur-snap kept as a backstop); a null/absent basis (no dated profile) can't
+      resolve the full day → the entry is BLOCKED (no partial emitted, which would
+      422) and the cell is flagged inline (S123 — was previously left to stand for
+      the server to fail-close). */
   consumptionBasis?: ConsumptionBasisMap
   /** S72 R4/R12 — the VISIBLE row sets + order. Absent → ALL served rows render
       (the approval surface / pre-S72 fallback). */
@@ -224,6 +231,12 @@ export function SkemaGrid({
   // ── Cell editing state: raw typed text while focused (decimal comma survives) ──
   const [editing, setEditing] = useState<{ key: string; raw: string; initial: string } | null>(null)
 
+  // S123 — a full_day_only cell whose day has NO resolvable full-day basis: the
+  // on-input fill-to-norm cannot snap, so we BLOCK the entry (emit no partial that
+  // would 422) and flag the cell inline. Ephemeral (only one cell is edited at a
+  // time; cleared on focus/blur). Keyed by `${rowKey}:${dateKey}`.
+  const [noBasisCell, setNoBasisCell] = useState<string | null>(null)
+
   // ── Recently-changed flash (--color-success-light → transparent, 1.2s) ──
   const [recentKey, setRecentKey] = useState<string | null>(null)
   const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -271,6 +284,36 @@ export function SkemaGrid({
     }
     return map
   }, [dateKeys, projectRowsAll, cellValues])
+
+  // S123 — per-day summed ABSENCE hours over ALL served absence rows (R3 basis):
+  // the client mirror of the backend's absence-only daily-norm cap
+  // (SkemaEndpoints.cs:740 — SUM(absence.Hours) ≤ RoundBasis(norm)). WORK time is
+  // SEPARATE (its own ≤24h cap) and MUST NOT enter this sum, so the check reads
+  // only absence cells — 4h work + 4h ferie on a 7,4 day is legal, not over-cap.
+  const absencePerDay = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const dateKey of dateKeys) {
+      let total = 0
+      for (const row of absenceRowsAll) {
+        total += cellValues.get(`${row.key}:${dateKey}`) ?? 0
+      }
+      map.set(dateKey, round2(total))
+    }
+    return map
+  }, [dateKeys, absenceRowsAll, cellValues])
+
+  // Advisory: a day's summed absence hours exceed the served daily norm. Null/0
+  // norm days impose no cap here (they can't resolve one — the backend's own
+  // sibling guards own weekend/no-profile rejections). Tolerance mirrors the
+  // allocation gate (|Δ| < 0,005) so an exact full day (7,4 == 7,4) never flags.
+  const absenceOverNorm = useCallback(
+    (dateKey: string): boolean => {
+      const norm = dailyNorm?.get(dateKey)
+      if (norm === null || norm === undefined || norm <= 0) return false
+      return (absencePerDay.get(dateKey) ?? 0) - norm > 0.005
+    },
+    [dailyNorm, absencePerDay],
+  )
 
   // ── Diff. fra normtid (R2) ──
   // S72 Step-7a W1: the diff arithmetic lives in useSkema's computeDayDiffs —
@@ -349,56 +392,91 @@ export function SkemaGrid({
 
   // ── Handlers ──
 
-  // ADR-032 D3 — norm prefill for absence-type cells, UNCHANGED behavior (R1).
-  // Trigger = FIRST FOCUS of an EMPTY absence cell: seed that day's SERVED norm
-  // (the same per-day value the Diff row reads). Never overwrites an existing
-  // value; skipped entirely on zero/null-norm days; the seeded value stays fully
-  // editable (partial days remain legal). No full-day snap (D-D owns that later).
+  // S123/TASK-12303 — the ADR-032 D3 focus-prefill is REMOVED (owner Decision 1):
+  // an empty absence cell stays EMPTY on focus so the user types the hours (half a
+  // vacation/sick day now works without the prefill getting in the way). Focus only
+  // seeds the editing state (raw text tracking + the flash's `initial` baseline)
+  // and clears any stale no-basis flag. NO onCellChange fires on focus.
   const handleCellFocus = useCallback(
     (row: SkemaRow, dateKey: string, currentValue: number | undefined) => {
       const cellKey = `${row.key}:${dateKey}`
       const fmt = currentValue != null ? formatCell(currentValue) : ''
-      if (row.type === 'absence' && currentValue == null) {
-        const norm = dailyNorm?.get(dateKey)
-        if (norm !== null && norm !== undefined && norm > 0) {
-          onCellChange(row.key, dateKey, norm)
-          setEditing({ key: cellKey, raw: formatCell(norm), initial: fmt })
-          return
-        }
-      }
+      setNoBasisCell((cur) => (cur === cellKey ? null : cur))
       setEditing({ key: cellKey, raw: fmt, initial: fmt })
     },
-    [dailyNorm, onCellChange]
+    [],
   )
 
   // Keeps the RAW typed text in the focused input (decimal comma survives
-  // mid-typing) while propagating the parsed value. Propagation semantics are
-  // verbatim from the shipped grid (R17): '' → null, 0 → null (the save path
+  // mid-typing) while propagating the parsed value. Ordinary propagation semantics
+  // are verbatim from the shipped grid (R17): '' → null, 0 → null (the save path
   // drops null/0 cells — clearing never persists; recorded inherited limitation),
   // unparsable input → no call.
+  //
+  // S123/TASK-12303 — FULL-DAY-ONLY FILL-TO-NORM *ON INPUT* (mandatory, not blur):
+  // for a `fullDayOnly` absence row, the moment a non-null/non-zero value is typed
+  // the propagated value SNAPS to the day's served full-day basis (consumptionBasis)
+  // and the input shows the whole day immediately. This must happen on INPUT because
+  // the page's 1s debounce autosave fires from this per-keystroke onCellChange — a
+  // partial full-day value left to snap only on blur would autosave in the
+  // pause-before-blur and the backend would 422. Entering 0 / clearing removes the
+  // absence (ordinary path). A full-day row whose basis can't be resolved (null/absent
+  // consumptionBasis) is BLOCKED: no partial is emitted (it would 422) and the cell is
+  // flagged inline (noBasisCell) so the reason surfaces. The blur-snap below is kept
+  // as an idempotent backstop.
   const handleCellInput = useCallback(
-    (rowKey: string, cellKey: string, dateKey: string, value: string) => {
-      setEditing((cur) =>
-        cur && cur.key === cellKey ? { ...cur, raw: value } : { key: cellKey, raw: value, initial: '' }
-      )
+    (row: SkemaRow, cellKey: string, dateKey: string, value: string) => {
       const num = value === '' ? null : parseDanishNumber(value)
-      if (num !== null && isNaN(num)) return
-      onCellChange(rowKey, dateKey, num === 0 ? null : num)
+      const unparsable = num !== null && isNaN(num)
+      const isFullDayEntry =
+        row.type === 'absence' && !!row.fullDayOnly && num !== null && !isNaN(num) && num !== 0
+      const basis = isFullDayEntry ? consumptionBasis?.get(dateKey) : undefined
+      const canSnap = isFullDayEntry && basis !== null && basis !== undefined && basis > 0
+
+      // S123 fix (owner: "cannot delete an omsorgsdag once a value is added") — the
+      // DISPLAY fill-to-norm fires ONLY on the empty→value transition (the first entry
+      // into a cell that currently holds nothing). Once the cell already holds a full
+      // day, editing it DOWN — backspacing toward empty, the only meaningful edit on a
+      // whole-day cell — must NOT re-snap the visible text: otherwise "7,4" → "7,"
+      // refills to "7,4" on every keystroke and the day can never be cleared. The
+      // PERSISTED value is unchanged (a non-zero full-day entry still emits the whole-
+      // day basis, never a partial), so the no-partial-autosave/422 invariant holds;
+      // reaching empty ('') emits null and removes the absence.
+      const committed = cellValues.get(cellKey)
+      const wasEmpty = committed == null || committed === 0
+      const snapDisplay = canSnap && wasEmpty
+
+      // Raw display: a FIRST full-day entry shows the whole day at once (owner OQ-2);
+      // every other case (incl. deleting an existing day) shows exactly what was typed.
+      const raw = snapDisplay ? formatCell(basis as number) : value
+      setEditing((cur) =>
+        cur && cur.key === cellKey ? { ...cur, raw } : { key: cellKey, raw, initial: '' },
+      )
+
+      // Null-basis full-day entry → flag + block; anything else clears the flag.
+      if (isFullDayEntry && !canSnap) setNoBasisCell(cellKey)
+      else setNoBasisCell((cur) => (cur === cellKey ? null : cur))
+
+      if (unparsable) return // no propagation (shipped semantics)
+      if (isFullDayEntry && !canSnap) return // BLOCK — never let a partial full-day autosave (→ 422)
+      if (canSnap) {
+        onCellChange(row.key, dateKey, basis as number)
+        return
+      }
+      onCellChange(row.key, dateKey, num === 0 ? null : num)
     },
-    [onCellChange]
+    [onCellChange, consumptionBasis, cellValues],
   )
 
   // On blur the cell reformats to 1 decimal (the display falls back to the
   // formatted cellValues entry) and flashes when the value changed.
   //
-  // S73 R5 — FULL-DAY SNAP (on commit): when the row is `fullDayOnly` and the
-  // cell holds an ENTRY (the raw text parses to a non-null, non-zero value), the
-  // value SNAPS to that day's served consumption basis. The null-basis case
-  // (no dated profile covers the day) does NOT snap and invents no value — the
-  // typed entry stands locally and the SERVER rejects it via the existing
-  // anchor-422 family (fail-closed server-side). Blank stays blank (a cleared
-  // cell propagated null already → nothing to snap). Non-full-day rows are
-  // untouched here (ADR-032 D3 norm prefill stays the only seeding, unchanged).
+  // S73 R5 / S123 — FULL-DAY SNAP BACKSTOP (on commit): the fill-to-norm now fires
+  // ON INPUT (handleCellInput), so by blur a positive-basis full-day cell already
+  // holds the whole day; re-snapping here is idempotent and covers any path that
+  // reached blur without an on-input snap. The null-basis case does NOT snap and
+  // invents no value (the on-input path already blocked the partial + flagged the
+  // cell). Blank stays blank. Non-full-day rows are untouched here.
   const handleCellBlur = useCallback(
     (row: SkemaRow, dateKey: string) => {
       if (row.type === 'absence' && row.fullDayOnly && editing) {
@@ -406,7 +484,7 @@ export function SkemaGrid({
         const hasEntry = num !== null && !isNaN(num) && num !== 0
         if (hasEntry) {
           const basis = consumptionBasis?.get(dateKey)
-          // null basis → no snap (typed value stands, server fail-closes); a
+          // null basis → no snap (the on-input path blocked the partial); a
           // positive basis snaps the committed value to the day's full-day basis.
           if (basis !== null && basis !== undefined && basis > 0) {
             onCellChange(row.key, dateKey, basis)
@@ -417,6 +495,7 @@ export function SkemaGrid({
         triggerFlash(editing.key)
       }
       setEditing(null)
+      setNoBasisCell(null)
     },
     [editing, triggerFlash, consumptionBasis, onCellChange],
   )
@@ -456,6 +535,19 @@ export function SkemaGrid({
           }
           const fmt = val != null ? formatCell(val) : ''
           const display = editing && editing.key === cellKey ? editing.raw : fmt
+          // S123 — inline cap/no-basis flag (aria-invalid + title). Absence cells on
+          // a day whose SUMMED absence hours exceed the daily norm are flagged
+          // (absence-only cap mirror); a full-day cell with no resolvable basis is
+          // flagged while the user is mid-entry (the blocked partial).
+          const overCapAbsence =
+            row.type === 'absence' && val != null && val !== 0 && absenceOverNorm(dateKey)
+          const noBasis = noBasisCell === cellKey
+          const invalid = overCapAbsence || noBasis
+          const invalidTitle = noBasis
+            ? 'Fuld-dags fravær: dagens normtid kan ikke findes — kan ikke registreres'
+            : overCapAbsence
+              ? `Samlet fravær ${formatCell(absencePerDay.get(dateKey) ?? 0)} t overstiger dagsnormen`
+              : undefined
           return (
             <td key={dateKey} className={tdClasses.join(' ')}>
               <input
@@ -464,9 +556,11 @@ export function SkemaGrid({
                 className={styles.cellInput}
                 value={display}
                 onFocus={() => handleCellFocus(row, dateKey, val)}
-                onChange={(e) => handleCellInput(row.key, cellKey, dateKey, e.target.value)}
+                onChange={(e) => handleCellInput(row, cellKey, dateKey, e.target.value)}
                 onBlur={() => handleCellBlur(row, dateKey)}
                 aria-label={`${row.label} dag ${day.getDate()}`}
+                aria-invalid={invalid || undefined}
+                title={invalidTitle}
               />
             </td>
           )

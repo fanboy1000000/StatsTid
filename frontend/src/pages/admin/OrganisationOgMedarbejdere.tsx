@@ -95,6 +95,32 @@ export function OrganisationOgMedarbejdere() {
     [],
   )
 
+  // S123 T2 — the transient "focus a searched person" intent. Set when a PERSON
+  // search result is clicked: we navigate to their Organisation AND stash their id
+  // here. The StrukturPanel consumes it (reveal the row + open the edit drawer) once
+  // the org roster has loaded, then clears it via onFocusConsumed. Kept OFF the nav
+  // history (a separate state, not a SelectedNode field) so Back/Forward never
+  // re-opens the drawer; the null→id edge means a repeat search of the SAME person
+  // re-fires (navigate() de-dups on same id, so focus can't ride a `selected` change).
+  const [pendingFocus, setPendingFocus] = useState<{ organisationId: string; personId: string } | null>(null)
+
+  const onNavigatePerson = useCallback(
+    (orgNode: SelectedNode, personId: string) => {
+      navigate(orgNode)
+      setPendingFocus({ organisationId: orgNode.id, personId })
+    },
+    [navigate],
+  )
+
+  // Stranded-intent guard: if the selection moves away from the pending org before
+  // the panel consumed the focus (a raced/abandoned landing), drop the intent so it
+  // can never fire against the wrong org.
+  useEffect(() => {
+    if (pendingFocus && selected?.id !== pendingFocus.organisationId) {
+      setPendingFocus(null)
+    }
+  }, [selected, pendingFocus])
+
   // The `/` shortcut opens the search overlay — but NOT while the actor is typing
   // in a field (an input/textarea/select/contenteditable), so `/` types normally
   // there. Esc-to-close is owned by the overlay.
@@ -177,6 +203,12 @@ export function OrganisationOgMedarbejdere() {
               onBack={goBack}
               onForward={goForward}
               onMutated={canEditUnits ? onUnitMutated : undefined}
+              focusPersonId={
+                pendingFocus && pendingFocus.organisationId === selected?.id
+                  ? pendingFocus.personId
+                  : undefined
+              }
+              onFocusConsumed={() => setPendingFocus(null)}
             />
           </div>
         </main>
@@ -188,6 +220,7 @@ export function OrganisationOgMedarbejdere() {
           open
           onClose={() => setSearchOpen(false)}
           onNavigate={navigate}
+          onNavigatePerson={onNavigatePerson}
           selected={afgraensning}
           allOrgIds={allOrgIds}
         />
