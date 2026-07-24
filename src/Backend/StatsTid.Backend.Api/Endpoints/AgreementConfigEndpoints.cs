@@ -239,6 +239,14 @@ public static class AgreementConfigEndpoints
                 RestPeriodDerogationAllowed = source.RestPeriodDerogationAllowed,
                 WeeklyMaxHoursReferencePeriod = source.WeeklyMaxHoursReferencePeriod,
                 VoluntaryUnsocialHoursAllowed = source.VoluntaryUnsocialHoursAllowed,
+                // S122 / TASK-12200 field-loss fix: the four overtime-governance fields were
+                // dropped from the clone, so a cloned config PERSISTED the CLR-default compensation
+                // model instead of the source's. The repo InsertSql writes default_compensation_model,
+                // so the copied value lands.
+                DefaultCompensationModel = source.DefaultCompensationModel,
+                EmployeeCompensationChoice = source.EmployeeCompensationChoice,
+                MaxOvertimeHoursPerPeriod = source.MaxOvertimeHoursPerPeriod,
+                OvertimeRequiresPreApproval = source.OvertimeRequiresPreApproval,
                 CreatedBy = actor.ActorId ?? "system",
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow,

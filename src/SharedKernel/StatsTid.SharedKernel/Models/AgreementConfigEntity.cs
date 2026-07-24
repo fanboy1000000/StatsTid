@@ -64,7 +64,7 @@ public sealed class AgreementConfigEntity
     public bool VoluntaryUnsocialHoursAllowed { get; init; } = true;
 
     // Overtime governance & compensation (Sprint 17)
-    public string DefaultCompensationModel { get; init; } = "UDBETALING";
+    public string DefaultCompensationModel { get; init; } = "AFSPADSERING";
     public bool EmployeeCompensationChoice { get; init; }
     public decimal MaxOvertimeHoursPerPeriod { get; init; }
     public bool OvertimeRequiresPreApproval { get; init; }

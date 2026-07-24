@@ -83,7 +83,14 @@ The two fields govern how overtime/merarbejde compensation is delivered per agre
 
 ### Historical correction (2026-05-18, S35 / TASK-3503)
 
-The AC family (AC + AC_RESEARCH + AC_TEACHING) seeds originally carried `'UDBETALING'` due to an S17 inheritance trap: the model default in `AgreementRuleConfig.cs:67` is `"UDBETALING"`, and the AC entries in `CentralAgreementConfigs.cs` did not override it. This inverted the cirkulære rule. Classified under the [ROADMAP rule correction policy](../../ROADMAP.md) (committed 2026-05-18) as **bug-with-no-past-impact** — pre-launch posture, no past periods exist, forward-only correction. See commit message of `S35 TASK-3503` for full source URLs (Personalestyrelsen + Akademikerne + Djøf + Folketinget + DM).
+The AC family (AC + AC_RESEARCH + AC_TEACHING) seeds originally carried `'UDBETALING'` due to an S17 inheritance trap: the model default in `AgreementRuleConfig.cs:67` **was** `"UDBETALING"` (flipped to `"AFSPADSERING"` at S122 — see the S122 subsection below), and the AC entries in `CentralAgreementConfigs.cs` did not override it. This inverted the cirkulære rule. Classified under the [ROADMAP rule correction policy](../../ROADMAP.md) (committed 2026-05-18) as **bug-with-no-past-impact** — pre-launch posture, no past periods exist, forward-only correction. See commit message of `S35 TASK-3503` for full source URLs (Personalestyrelsen + Akademikerne + Djøf + Folketinget + DM).
+
+### S122 completion of the S35 lineage (2026-07-24, TASK-12200)
+
+S35 fixed only the **seed values**; the S17 trap's **default heads** survived and kept inverting the rule wherever a config was built without an explicit model. S122 eradicated all of them and installed the authority the value set never had:
+- **Every `"UDBETALING"` default flipped to `"AFSPADSERING"`** — 2 DB DEFAULTs (`agreement_configs.default_compensation_model`, `overtime_balances.compensation_model`), 3 CLR property defaults (`AgreementRuleConfig.cs:67`, `AgreementConfigEntity.cs:67`, `OvertimeBalance.cs:13`), and 4 hand-rolled test-fixture DDL heads.
+- **Two genuinely-live field-loss inversions fixed** (they wrote the CLR default UDBETALING into real configs): `PositionOverrideConfigs.ApplyOverride` and the admin config-clone endpoint now copy all four overtime-governance fields.
+- **The vocabulary authority** is now the DB CHECK `agreement_configs_default_compensation_model_check` / `overtime_balances_compensation_model_check` (`IN ('AFSPADSERING','UDBETALING')`) — the model column values can no longer drift from this table, and the spec-enum on the response members is declared citing it (PAT-012). Same forward-only, bug-with-no-past-impact classification as S35.
 
 ### Forward reference (S36+ / ADR-024 — pending)
 

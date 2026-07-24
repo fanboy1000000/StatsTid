@@ -58,13 +58,17 @@ public sealed record BalanceEntitlementRow(
 /// <summary>The nested <c>overtimeBalance</c> member of <see cref="BalanceSummaryResponse"/> —
 /// 5 members. The parent member is CLR-nullable (null when no overtime_balances row exists for
 /// the year) — the S117 allOf wrapper's application #2. <paramref name="CompensationModel"/>
-/// carries NO enum (the overtime compensation vocabulary is a REFUSED set — raw strings, no DB
-/// CHECK authority; flagged P6 gap, S120).</summary>
+/// carries the [AllowedValues] enum DECLARED at S122 citing the DB CHECK
+/// overtime_balances_compensation_model_check (init.sql overtime_balances.compensation_model;
+/// the S120 P6 authority gap is closed — TASK-12200).</summary>
 public sealed record BalanceSummaryOvertimeInfo(
     decimal Accumulated,
     decimal PaidOut,
     decimal AfspadseringUsed,
     decimal Remaining,
+    // Authority: the DB CHECK overtime_balances_compensation_model_check (init.sql
+    // overtime_balances.compensation_model) — the closed model vocabulary (S122 / TASK-12200).
+    [property: AllowedValues("AFSPADSERING", "UDBETALING")]
     string CompensationModel);
 
 /// <summary>The GET /api/balance/{employeeId}/summary 200 body — 12 scalars + the entitlement

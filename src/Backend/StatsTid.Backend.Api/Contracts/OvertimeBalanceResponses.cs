@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace StatsTid.Backend.Api.Contracts;
 
 // S120 / TASK-12000 (Fork B retrofit Pass 7, PAT-010/PAT-012) — named response records for the
@@ -11,13 +13,16 @@ namespace StatsTid.Backend.Api.Contracts;
 // NAMED SharedKernel model (see ComplianceResponses.cs for the enum-authority note); the S120
 // ruling-#3 null→502 guard makes its 200 structurally non-null.
 //
-// REFUSED enum sets (S120 owner ruling, Explicit exclusions): BOTH overtime compensation
-// vocabularies — compensationType (PAYOUT/AFSPADSERING) and compensationModel
-// (AFSPADSERING/UDBETALING) — are raw strings with inline validation only and NO DB CHECK
-// (init.sql:1293 local_configurations.default_compensation_model, init.sql:1842
-// overtime_balances.compensation_model), and `source` is a pair of inline literals
-// ("balance"/"config_default"). None may carry [AllowedValues] — flagged to the owner as a
-// future P6 authority gap, not closed here.
+// DECLARED enum sets (S122 / TASK-12200, PAT-012): the S120 P6 authority gap is now closed —
+// BOTH overtime compensation vocabularies carry [AllowedValues]. compensationModel
+// (AFSPADSERING/UDBETALING) is authored by the two new DB CHECKs
+// agreement_configs_default_compensation_model_check (init.sql agreement_configs
+// .default_compensation_model — corrected: the column is on agreement_configs, NOT
+// local_configurations) and overtime_balances_compensation_model_check (init.sql
+// overtime_balances.compensation_model). compensationType (PAYOUT/AFSPADSERING) is authored by
+// the handler VALIDATOR (OvertimeEndpoints.cs:531-532) — the first spec-enum whose authority is a
+// handler-enforced check, not a DB CHECK or a total projection (S122 OQ-2). Only `source` stays
+// refused — a pair of inline literals ("balance"/"config_default") with no authority.
 
 /// <summary>The GET /api/overtime/{employeeId}/balance 200 body — the 10-member projection of
 /// the <c>OvertimeBalance</c> model (<c>remaining</c> is the model's computed
@@ -31,6 +36,9 @@ public sealed record OvertimeBalanceResponse(
     decimal PaidOut,
     decimal AfspadseringUsed,
     decimal Remaining,
+    // Authority: the DB CHECK overtime_balances_compensation_model_check (init.sql
+    // overtime_balances.compensation_model) — the closed model vocabulary (S122 / TASK-12200).
+    [property: AllowedValues("AFSPADSERING", "UDBETALING")]
     string CompensationModel,
     DateTime UpdatedAt);
 
@@ -41,6 +49,10 @@ public sealed record OvertimeBalanceResponse(
 public sealed record CompensationChoiceResponse(
     string EmployeeId,
     int PeriodYear,
+    // Authority: the DB CHECK agreement_configs_default_compensation_model_check /
+    // overtime_balances_compensation_model_check (init.sql) — the closed model vocabulary
+    // (S122 / TASK-12200).
+    [property: AllowedValues("AFSPADSERING", "UDBETALING")]
     string CompensationModel,
     string Source);
 
@@ -49,6 +61,10 @@ public sealed record CompensationChoiceResponse(
 public sealed record CompensationChoiceUpdateResponse(
     string EmployeeId,
     int PeriodYear,
+    // Authority: the DB CHECK agreement_configs_default_compensation_model_check /
+    // overtime_balances_compensation_model_check (init.sql) — the closed model vocabulary
+    // (S122 / TASK-12200). Also handler-enforced at OvertimeEndpoints.cs:687.
+    [property: AllowedValues("AFSPADSERING", "UDBETALING")]
     string CompensationModel);
 
 /// <summary>The POST /api/overtime/{employeeId}/compensate 200 echo — the 5-member receipt
@@ -58,5 +74,9 @@ public sealed record OvertimeCompensateResponse(
     string EmployeeId,
     int PeriodYear,
     decimal Hours,
+    // Authority (S122 OQ-2): the handler VALIDATOR OvertimeEndpoints.cs:531-532 — the per-event
+    // compensationType vocabulary (PAYOUT/AFSPADSERING) has no DB column/CHECK; this is the first
+    // spec-enum in a NEW "handler-enforced" authority class (PAT-012).
+    [property: AllowedValues("PAYOUT", "AFSPADSERING")]
     string CompensationType,
     bool Applied);

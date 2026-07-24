@@ -96,6 +96,13 @@ public static class PositionOverrideConfigs
             WorkingTravelRate = baseConfig.WorkingTravelRate,
             NonWorkingTravelRate = baseConfig.NonWorkingTravelRate,
             NormPeriodWeeks = positionOverride.NormPeriodWeeks ?? baseConfig.NormPeriodWeeks,
+            // S122 / TASK-12200 field-loss fix: the four overtime-governance fields were dropped
+            // here, so AC position keys resolved the CLR-default compensation model instead of the
+            // base config's. No PositionConfigOverride varies these — always carry the base value.
+            DefaultCompensationModel = baseConfig.DefaultCompensationModel,
+            EmployeeCompensationChoice = baseConfig.EmployeeCompensationChoice,
+            MaxOvertimeHoursPerPeriod = baseConfig.MaxOvertimeHoursPerPeriod,
+            OvertimeRequiresPreApproval = baseConfig.OvertimeRequiresPreApproval,
         };
     }
 }

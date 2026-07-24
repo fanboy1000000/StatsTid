@@ -1290,7 +1290,7 @@ CREATE TABLE IF NOT EXISTS agreement_configs (
     weekly_max_hours_reference_period INT       NOT NULL DEFAULT 17,
     voluntary_unsocial_hours_allowed BOOLEAN    NOT NULL DEFAULT TRUE,
     -- Overtime governance & compensation (Sprint 17)
-    default_compensation_model      TEXT        NOT NULL DEFAULT 'UDBETALING',
+    default_compensation_model      TEXT        NOT NULL DEFAULT 'AFSPADSERING',
     employee_compensation_choice    BOOLEAN     NOT NULL DEFAULT FALSE,
     max_overtime_hours_per_period    DECIMAL     NOT NULL DEFAULT 0,
     overtime_requires_pre_approval  BOOLEAN     NOT NULL DEFAULT FALSE,
@@ -1301,7 +1301,13 @@ CREATE TABLE IF NOT EXISTS agreement_configs (
     published_at            TIMESTAMPTZ,
     archived_at             TIMESTAMPTZ,
     cloned_from_id          UUID        REFERENCES agreement_configs(config_id),
-    description             TEXT
+    description             TEXT,
+    -- S122 / TASK-12200 (P6 compensation-vocabulary authority gap) construction-enforcement:
+    -- the base CREATE bakes the CHECK for greenfield DBs; the guarded DROP/ADD ALTER below lands
+    -- the SAME named constraint on legacy DBs (CREATE TABLE IF NOT EXISTS is a no-op there) —
+    -- the exact idiom of entitlement_configs_full_day_only_types.
+    CONSTRAINT agreement_configs_default_compensation_model_check
+        CHECK (default_compensation_model IN ('AFSPADSERING', 'UDBETALING'))
 );
 
 -- Only one ACTIVE per (agreement_code, ok_version)
@@ -1312,6 +1318,23 @@ CREATE INDEX IF NOT EXISTS idx_agreement_configs_code_version
     ON agreement_configs (agreement_code, ok_version);
 CREATE INDEX IF NOT EXISTS idx_agreement_configs_status
     ON agreement_configs (status);
+
+-- S122 / TASK-12200 (P6 compensation-vocabulary authority gap): the standing-preference
+-- compensation model is a closed system vocabulary (AFSPADSERING | UDBETALING). Guarded named
+-- CHECK in the init.sql house form (DROP-then-ADD) so it reaches legacy/rerun DBs where the
+-- inline column predates the constraint — same idiom as entitlement_configs_full_day_only_types.
+-- The guarded SET DEFAULT corrects the S17 inversion trap on a LEGACY/rerun DB too: the inline
+-- CREATE-TABLE DEFAULT only lands greenfield (the CREATE is skipped when the table exists), so
+-- an existing DB would otherwise keep DEFAULT 'UDBETALING' — the Step-7a Codex BLOCKER.
+ALTER TABLE agreement_configs
+ALTER COLUMN default_compensation_model SET DEFAULT 'AFSPADSERING';
+
+ALTER TABLE agreement_configs
+DROP CONSTRAINT IF EXISTS agreement_configs_default_compensation_model_check;
+
+ALTER TABLE agreement_configs
+ADD CONSTRAINT agreement_configs_default_compensation_model_check
+CHECK (default_compensation_model IN ('AFSPADSERING', 'UDBETALING'));
 
 -- Agreement config audit trail (append-only)
 CREATE TABLE IF NOT EXISTS agreement_config_audit (
@@ -1839,12 +1862,31 @@ CREATE TABLE IF NOT EXISTS overtime_balances (
     accumulated         DECIMAL     NOT NULL DEFAULT 0,
     paid_out            DECIMAL     NOT NULL DEFAULT 0,
     afspadsering_used   DECIMAL     NOT NULL DEFAULT 0,
-    compensation_model  TEXT        NOT NULL DEFAULT 'UDBETALING',
+    compensation_model  TEXT        NOT NULL DEFAULT 'AFSPADSERING',
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (employee_id, period_year)
+    UNIQUE (employee_id, period_year),
+    -- S122 / TASK-12200 (P6 compensation-vocabulary authority gap) construction-enforcement:
+    -- greenfield bakes the CHECK; the guarded DROP/ADD ALTER below lands the SAME named
+    -- constraint on legacy DBs — the exact idiom of entitlement_configs_full_day_only_types.
+    CONSTRAINT overtime_balances_compensation_model_check
+        CHECK (compensation_model IN ('AFSPADSERING', 'UDBETALING'))
 );
 CREATE INDEX IF NOT EXISTS idx_overtime_balances_employee
     ON overtime_balances(employee_id);
+
+-- S122 / TASK-12200 (P6 compensation-vocabulary authority gap): same closed vocabulary as
+-- agreement_configs.default_compensation_model (AFSPADSERING | UDBETALING). Guarded named CHECK
+-- in the init.sql house form (DROP-then-ADD) for legacy/rerun-DB reach. The guarded SET DEFAULT
+-- corrects the S17 inversion on a legacy DB (inline DEFAULT only lands greenfield — Step-7a Codex).
+ALTER TABLE overtime_balances
+ALTER COLUMN compensation_model SET DEFAULT 'AFSPADSERING';
+
+ALTER TABLE overtime_balances
+DROP CONSTRAINT IF EXISTS overtime_balances_compensation_model_check;
+
+ALTER TABLE overtime_balances
+ADD CONSTRAINT overtime_balances_compensation_model_check
+CHECK (compensation_model IN ('AFSPADSERING', 'UDBETALING'));
 
 -- Overtime pre-approval tracking (workflow gate)
 CREATE TABLE IF NOT EXISTS overtime_pre_approvals (

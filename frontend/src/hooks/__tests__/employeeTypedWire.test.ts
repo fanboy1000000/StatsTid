@@ -328,22 +328,22 @@ describe('useCompensationChoice — typed GET + UNCONDITIONED PUT', () => {
   it('update → PUT, UNCONDITIONED, body EXACTLY { periodYear, compensationModel } (byte-unchanged key set)', async () => {
     const calls = captureCalls((_url, method) =>
       method === 'PUT'
-        ? { body: { employeeId: 'emp001', periodYear: 2026, compensationModel: 'PAYOUT' } }
+        ? { body: { employeeId: 'emp001', periodYear: 2026, compensationModel: 'UDBETALING' } }
         : { body: choice },
     )
     const { result } = renderHook(() => useCompensationChoice('emp001', 2026))
     await waitFor(() => expect(result.current.choice).not.toBeNull())
     await act(async () => {
-      await result.current.updateChoice(2026, 'PAYOUT')
+      await result.current.updateChoice(2026, 'UDBETALING')
     })
     const put = calls.find((c) => c.method === 'PUT')!
     expect(put.url).toBe('/api/overtime/emp001/compensation-choice')
     expectUnconditioned(put)
-    expect(put.body).toEqual({ periodYear: 2026, compensationModel: 'PAYOUT' })
+    expect(put.body).toEqual({ periodYear: 2026, compensationModel: 'UDBETALING' })
     expect(Object.keys(put.body as Record<string, unknown>)).toEqual([
       'periodYear', 'compensationModel',
     ])
-    expect(result.current.choice?.compensationModel).toBe('PAYOUT')
+    expect(result.current.choice?.compensationModel).toBe('UDBETALING')
   })
 })
 

@@ -57,6 +57,42 @@ Apply the guarded ALTER blocks from init.sql in order. Each sprint's additions a
 | S40 | role_config_overrides + role_config_override_audit, overtime_pre_approvals extension | New tables + columns | ~L1900-1982 |
 | S43 | audit_projection | New table (CREATE IF NOT EXISTS) | ~L2035-2080 |
 | S97 | enheder + user_enheder | New tables (CREATE IF NOT EXISTS) + partial-unique `idx_enheder_active_name` | ~L563-589 |
+| S122 | agreement_configs, overtime_balances | DEFAULT flip `'UDBETALING'`→`'AFSPADSERING'` + named CHECK on the compensation-model column (each in BOTH the CREATE-body inline form AND a guarded post-table `ALTER COLUMN SET DEFAULT` + `DROP/ADD CONSTRAINT` block) | search `agreement_configs_default_compensation_model_check` / `overtime_balances_compensation_model_check` in init.sql (CREATE-body inline + guarded ALTER, ~2 sites each) |
+
+## S122 — Compensation-model DB CHECK + default correction (TASK-12200)
+
+S122 gives the compensation-model vocabulary a DB authority (the S120-flagged P6 gap) and eradicates the S17 `'UDBETALING'` default-inversion trap. On a **greenfield** DB the CREATE-TABLE-inline `CONSTRAINT` + flipped DEFAULT apply automatically. On a **legacy/incremental** DB, the inline CREATE is skipped (table exists), so the guarded ALTER blocks are the effective path — run them:
+
+### Census (before adding the constraint — pre-launch, expected empty)
+
+```sql
+-- Any stored value outside the allowed set would block the ADD CONSTRAINT.
+SELECT 'agreement_configs' AS tbl, config_id::text AS id, default_compensation_model AS val
+FROM agreement_configs
+WHERE default_compensation_model NOT IN ('AFSPADSERING', 'UDBETALING')
+UNION ALL
+SELECT 'overtime_balances', employee_id || ':' || period_year::text, compensation_model
+FROM overtime_balances
+WHERE compensation_model NOT IN ('AFSPADSERING', 'UDBETALING');
+```
+
+Expected: **zero rows** (the only writers are the inline-validated endpoints + the seeds, all in-set). If a row surfaces, correct it to the agreement-appropriate value (per `docs/references/danish-agreements.md`) before the ADD CONSTRAINT. **Note the pre-launch inversion class:** admin-CLONED configs created before S122 may carry `'UDBETALING'` from the field-loss bug (in-set, so not blocked, but semantically wrong for an AFSPADSERING agreement) — a value review, not a constraint blocker; forward-only per the S35 lineage.
+
+### Apply the guarded constraints + default correction
+
+```sql
+ALTER TABLE agreement_configs ALTER COLUMN default_compensation_model SET DEFAULT 'AFSPADSERING';
+ALTER TABLE agreement_configs DROP CONSTRAINT IF EXISTS agreement_configs_default_compensation_model_check;
+ALTER TABLE agreement_configs ADD CONSTRAINT agreement_configs_default_compensation_model_check
+    CHECK (default_compensation_model IN ('AFSPADSERING', 'UDBETALING'));
+
+ALTER TABLE overtime_balances ALTER COLUMN compensation_model SET DEFAULT 'AFSPADSERING';
+ALTER TABLE overtime_balances DROP CONSTRAINT IF EXISTS overtime_balances_compensation_model_check;
+ALTER TABLE overtime_balances ADD CONSTRAINT overtime_balances_compensation_model_check
+    CHECK (compensation_model IN ('AFSPADSERING', 'UDBETALING'));
+```
+
+The DEFAULT flip changes no existing row (every writer stamps the column explicitly and every seed is `'AFSPADSERING'`); it is belt-and-suspenders for the code-side default-trap fix.
 
 ## S97 — Enhed structured-metadata backfill (TASK-9704)
 

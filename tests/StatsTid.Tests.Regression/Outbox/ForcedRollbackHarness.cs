@@ -258,7 +258,7 @@ internal static class ForcedRollbackHarness
             rest_period_derogation_allowed BOOLEAN NOT NULL DEFAULT FALSE,
             weekly_max_hours_reference_period INT NOT NULL DEFAULT 17,
             voluntary_unsocial_hours_allowed BOOLEAN NOT NULL DEFAULT TRUE,
-            default_compensation_model TEXT NOT NULL DEFAULT 'UDBETALING',
+            default_compensation_model TEXT NOT NULL DEFAULT 'AFSPADSERING' CONSTRAINT agreement_configs_default_compensation_model_check CHECK (default_compensation_model IN ('AFSPADSERING', 'UDBETALING')),
             employee_compensation_choice BOOLEAN NOT NULL DEFAULT FALSE,
             max_overtime_hours_per_period DECIMAL NOT NULL DEFAULT 0,
             overtime_requires_pre_approval BOOLEAN NOT NULL DEFAULT FALSE,
@@ -343,7 +343,7 @@ internal static class ForcedRollbackHarness
             accumulated         DECIMAL     NOT NULL DEFAULT 0,
             paid_out            DECIMAL     NOT NULL DEFAULT 0,
             afspadsering_used   DECIMAL     NOT NULL DEFAULT 0,
-            compensation_model  TEXT        NOT NULL DEFAULT 'UDBETALING',
+            compensation_model  TEXT        NOT NULL DEFAULT 'AFSPADSERING' CONSTRAINT overtime_balances_compensation_model_check CHECK (compensation_model IN ('AFSPADSERING', 'UDBETALING')),
             updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             UNIQUE (employee_id, period_year)
         );

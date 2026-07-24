@@ -10,6 +10,6 @@ public sealed class OvertimeBalance
     public decimal PaidOut { get; init; }
     public decimal AfspadseringUsed { get; init; }
     public decimal Remaining => Accumulated - PaidOut - AfspadseringUsed;
-    public string CompensationModel { get; init; } = "UDBETALING";
+    public string CompensationModel { get; init; } = "AFSPADSERING";
     public DateTime UpdatedAt { get; init; } = DateTime.UtcNow;
 }

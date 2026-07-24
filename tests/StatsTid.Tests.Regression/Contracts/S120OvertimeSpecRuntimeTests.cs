@@ -15,10 +15,12 @@ namespace StatsTid.Tests.Regression.Contracts;
 /// family's 5th op — is gated in <c>S120ComplianceSpecRuntimeTests</c> with its ruling-#3
 /// sibling.)
 ///
-/// <para><b>REFUSED enum sets (asserted by NOT asserting):</b> <c>compensationModel</c> /
-/// <c>compensationType</c> / <c>source</c> carry NO spec enum (raw strings, no DB CHECK —
-/// the flagged P6 authority gap); the matcher walks them as plain strings and these tests pin
-/// VALUES only, never set-membership.</para>
+/// <para><b>Enum sets (updated S122):</b> <c>compensationModel</c> (AFSPADSERING\|UDBETALING) and
+/// <c>compensationType</c> (PAYOUT\|AFSPADSERING) are now DECLARED spec enums — S122 added the DB
+/// CHECK authority for the model and ruled the type a handler-enforced authority (the P6 gap
+/// flagged here is CLOSED); the matcher now enforces their set-membership. Only <c>source</c>
+/// stays REFUSED (raw strings, no authority). These tests pin VALUES; the S122 suites pin the
+/// enum-fidelity.</para>
 ///
 /// <para><b>Per-op policy pins:</b> balance/choice GET + choice PUT are EmployeeOrAbove and
 /// driven at the Employee floor (positive pins); the choice PUT is additionally SELF-ONLY in the

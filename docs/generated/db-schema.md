@@ -666,7 +666,7 @@
 | rest_period_derogation_allowed | BOOLEAN | No |  | FALSE |
 | weekly_max_hours_reference_period | INT | No |  | 17 |
 | voluntary_unsocial_hours_allowed | BOOLEAN | No |  | TRUE |
-| default_compensation_model | TEXT | No |  | 'UDBETALING' |
+| default_compensation_model | TEXT | No |  | 'AFSPADSERING' |
 | employee_compensation_choice | BOOLEAN | No |  | FALSE |
 | max_overtime_hours_per_period | DECIMAL | No |  | 0 |
 | overtime_requires_pre_approval | BOOLEAN | No |  | FALSE |
@@ -678,6 +678,9 @@
 | cloned_from_id | UUID | Yes | FK→agreement_configs |  |
 | description | TEXT | Yes |  |  |
 | version | BIGINT | No |  | 1 |
+
+**Table constraints:**
+- CONSTRAINT agreement_configs_default_compensation_model_check CHECK (default_compensation_model IN ('AFSPADSERING', 'UDBETALING'))
 
 **Indexes:**
 - `idx_agreement_configs_active` (UNIQUE) on (agreement_code, ok_version) WHERE status = 'ACTIVE'
@@ -915,11 +918,12 @@
 | accumulated | DECIMAL | No |  | 0 |
 | paid_out | DECIMAL | No |  | 0 |
 | afspadsering_used | DECIMAL | No |  | 0 |
-| compensation_model | TEXT | No |  | 'UDBETALING' |
+| compensation_model | TEXT | No |  | 'AFSPADSERING' |
 | updated_at | TIMESTAMPTZ | No |  | NOW() |
 
 **Table constraints:**
 - UNIQUE (employee_id, period_year)
+- CONSTRAINT overtime_balances_compensation_model_check CHECK (compensation_model IN ('AFSPADSERING', 'UDBETALING'))
 
 **Indexes:**
 - `idx_overtime_balances_employee` on (employee_id)

@@ -5085,7 +5085,8 @@ export interface components {
             afspadseringUsed: number;
             /** Format: double */
             remaining: number;
-            compensationModel: string;
+            /** @enum {string} */
+            compensationModel: "AFSPADSERING" | "UDBETALING";
         };
         "StatsTid.Backend.Api.Contracts.BalanceSummaryResponse": {
             employeeId: string;
@@ -5123,14 +5124,16 @@ export interface components {
             employeeId: string;
             /** Format: int32 */
             periodYear: number;
-            compensationModel: string;
+            /** @enum {string} */
+            compensationModel: "AFSPADSERING" | "UDBETALING";
             source: string;
         };
         "StatsTid.Backend.Api.Contracts.CompensationChoiceUpdateResponse": {
             employeeId: string;
             /** Format: int32 */
             periodYear: number;
-            compensationModel: string;
+            /** @enum {string} */
+            compensationModel: "AFSPADSERING" | "UDBETALING";
         };
         "StatsTid.Backend.Api.Contracts.CompensatoryRestItem": {
             /** Format: uuid */
@@ -5492,7 +5495,8 @@ export interface components {
             afspadseringUsed: number;
             /** Format: double */
             remaining: number;
-            compensationModel: string;
+            /** @enum {string} */
+            compensationModel: "AFSPADSERING" | "UDBETALING";
             /** Format: date-time */
             updatedAt: string;
         };
@@ -5502,7 +5506,8 @@ export interface components {
             periodYear: number;
             /** Format: double */
             hours: number;
-            compensationType: string;
+            /** @enum {string} */
+            compensationType: "PAYOUT" | "AFSPADSERING";
             applied: boolean;
         };
         "StatsTid.Backend.Api.Contracts.OvertimePreApprovalAdminListItem": {

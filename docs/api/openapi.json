@@ -5808,6 +5808,10 @@
             "format": "double"
           },
           "compensationModel": {
+            "enum": [
+              "AFSPADSERING",
+              "UDBETALING"
+            ],
             "type": "string"
           }
         },
@@ -5935,6 +5939,10 @@
             "format": "int32"
           },
           "compensationModel": {
+            "enum": [
+              "AFSPADSERING",
+              "UDBETALING"
+            ],
             "type": "string"
           },
           "source": {
@@ -5959,6 +5967,10 @@
             "format": "int32"
           },
           "compensationModel": {
+            "enum": [
+              "AFSPADSERING",
+              "UDBETALING"
+            ],
             "type": "string"
           }
         },
@@ -7240,6 +7252,10 @@
             "format": "double"
           },
           "compensationModel": {
+            "enum": [
+              "AFSPADSERING",
+              "UDBETALING"
+            ],
             "type": "string"
           },
           "updatedAt": {
@@ -7271,6 +7287,10 @@
             "format": "double"
           },
           "compensationType": {
+            "enum": [
+              "PAYOUT",
+              "AFSPADSERING"
+            ],
             "type": "string"
           },
           "applied": {
