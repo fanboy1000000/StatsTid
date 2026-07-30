@@ -552,6 +552,28 @@ public sealed class ApprovalPeriodRepository
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
 
+        // ── S125 / TASK-12501 step 2 — ONE SNAPSHOT for the whole projection ────────────────────
+        // A REPEATABLE READ transaction spanning BOTH phases, so the page reflects a single instant.
+        //
+        // This is not only what makes step 3's memoization sound (inside a snapshot "ask once" and
+        // "ask every time" are provably the same answer, so caching is an optimisation rather than an
+        // accepted staleness). It also closes a skew that ALREADY existed and that nobody chose:
+        // phase (1) scanned the employees on one read and phase (2) then evaluated authority on
+        // separate reads, so a reassignment landing mid-projection could put the page in a state that
+        // matched no instant in time. The old behaviour was not "fresher", it was arbitrary.
+        //
+        // Read-only, so it commits at the end purely to release the snapshot; nothing is written.
+        // It must stay SHORT — that is why steps 2 and 3 land together: a snapshot held across the
+        // pre-step-3 loop would be ~14s at month-end scale, which is a vacuum/bloat problem. After
+        // step 3 it is sub-second.
+        //
+        // NOTE the same-Organisation check now runs with lockRows: false. It is shared with the
+        // S74-7403 write path, where SELECT … FOR UPDATE pins both homes deliberately; here those
+        // locks would be HELD for the transaction's whole life, blocking writers to most of the
+        // Organisation's user rows. A read must not take write locks.
+        await using var snapshot = await conn.BeginTransactionAsync(
+            System.Data.IsolationLevel.RepeatableRead, ct);
+
         // (1) The per-employee last-closed-month status + the set of employees with an
         //     outstanding (SUBMITTED/EMPLOYEE_APPROVED, any period) row awaiting a manager.
         //     One round-trip: every active employee in the styrelse LEFT-JOINed to their
@@ -583,7 +605,7 @@ public sealed class ApprovalPeriodRepository
             WHERE u.is_active = TRUE
               AND o.materialized_path LIKE @pathPrefix ESCAPE '\'
             ORDER BY u.display_name, u.user_id
-            """, conn);
+            """, conn, snapshot);
         // Escape LIKE metacharacters in the (system-derived) path so a literal '%' or '_'
         // in an org id/path cannot widen the prefix into a wildcard (cross-styrelse over-match).
         cmd.Parameters.AddWithValue("pathPrefix", EscapeLike(treeRootPathPrefix) + "%");
@@ -636,37 +658,40 @@ public sealed class ApprovalPeriodRepository
         // role floor, the unit-kind lookup and the same-Organisation check opened its OWN connection:
         // 15 connection opens per pending employee, ~29,000 at month-end scale.
         //
-        // It reuses `conn` — step (1)'s connection, which is method-scoped and therefore STILL OPEN
-        // here (its reader is disposed, so the session is free). Opening a second connection for the
-        // tally would hold two where one does.
+        // It reuses `conn` (step (1)'s connection, still open) and now runs inside `snapshot`.
         //
-        // tx is DELIBERATELY null here. That keeps every statement autocommitting, so each read still
-        // observes the latest committed state exactly as it did with per-primitive connections — this
-        // step changes connection churn ONLY, and the statement count stays at 27/employee. Making the
-        // pass a single SNAPSHOT (a REPEATABLE READ transaction) is step 2, and it additionally requires
-        // a non-locking same-Organisation read: ValidateSameOrganisationAsync is shared with the
-        // S74-7403 write path and issues SELECT … FOR UPDATE, whose row locks are released at each
-        // implicit commit today but would be HELD for the whole projection inside a transaction —
-        // blocking writers to most of the Organisation's user rows.
+        // The memo context is what removes the re-derivation: ~16-17 of the measured 27 statements per
+        // pending employee were the SAME questions asked again — the employee's edge re-resolved once
+        // per candidate, the candidate's role floor asked per pair (twice for a unit-leader candidate),
+        // the same-Organisation verdict asked once per leg. The context is filled BY the authorizer's
+        // own code path, so it caches one implementation rather than introducing a second.
+        //
+        // Its lifetime is THIS CALL ONLY — never hoist it to a field. Outside the snapshot it would
+        // serve answers from before a mid-request revocation/reassignment/deactivation.
+        var authorityMemo = new ApprovalAuthorityContext(today);
+
         foreach (var employeeId in pendingEmployeeIds)
         {
             // Build the DISTINCT candidate-approver set for this pending employee.
             var candidates = new HashSet<string>(StringComparer.Ordinal);
 
-            var (edgeManagerId, _, _) = await _reportingLineRepo.ResolveDesignatedApproverAsync(
-                conn, tx: null, employeeId, today, ct);
+            // Goes through the memo so the authority gate's identical lookups below are cache hits.
+            var (edgeManagerId, _, _) = await authorityMemo.ResolveEdgeAsync(
+                employeeId,
+                () => _reportingLineRepo.ResolveDesignatedApproverAsync(
+                    conn, snapshot, employeeId, today, ct));
             if (edgeManagerId is not null)
                 candidates.Add(edgeManagerId);
 
             foreach (var unitApprover in await QueryUnitLeaderApproverCandidatesAsync(
-                         conn, tx: null, employeeId, today, ct))
+                         conn, snapshot, employeeId, today, ct))
                 candidates.Add(unitApprover);
 
             // Tally each candidate who is an AUTHORIZED approver (edge OR unit-leader, full floors).
             foreach (var candidate in candidates)
             {
                 var authorized = await _designatedAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(
-                    conn, tx: null, candidate, employeeId, asOf: today, ct: ct);
+                    conn, snapshot, authorityMemo, candidate, employeeId, asOf: today, ct: ct);
                 if (!authorized)
                     continue;
 
@@ -674,6 +699,9 @@ public sealed class ApprovalPeriodRepository
                 pendingCountByManager[candidate] = n + 1;
             }
         }
+
+        // Read-only: commit simply releases the snapshot (and its xmin) as early as possible.
+        await snapshot.CommitAsync(ct);
 
         return new TreePeriodStatusProjection(employees, pendingCountByManager);
     }

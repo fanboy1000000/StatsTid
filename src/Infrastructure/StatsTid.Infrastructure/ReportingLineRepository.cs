@@ -445,9 +445,35 @@ public sealed class ReportingLineRepository
     /// race against a concurrent transfer.
     /// </para>
     /// </summary>
-    public async Task<string> ValidateSameOrganisationAsync(
+    public Task<string> ValidateSameOrganisationAsync(
         NpgsqlConnection conn, NpgsqlTransaction? tx,
         string employeeId, string managerId, CancellationToken ct = default)
+        => ValidateSameOrganisationAsync(conn, tx, employeeId, managerId, lockRows: true, ct);
+
+    /// <summary>
+    /// S125 / TASK-12501 step 2 — the same rule with the row-pinning made OPTIONAL.
+    ///
+    /// <para><b>Why this exists.</b> The <c>FOR UPDATE</c> below is load-bearing for the WRITE path
+    /// (S74-7403 B1): it pins both homes so neither party can be transferred between this validation
+    /// and the edge insert. But the authority PREDICATE also calls this, purely as a read — and once
+    /// that predicate runs inside a projection-long REPEATABLE READ transaction, the row locks stop
+    /// being released at each statement's implicit commit and are instead HELD for the whole
+    /// projection, blocking writers to every candidate/employee row it touches — at ~1,900 employees,
+    /// most of the Organisation. A read must not take write locks.</para>
+    ///
+    /// <para><b>Why a flag rather than a second method.</b> The null-checks, the fail-closed
+    /// semantics and the equality comparison are the ORGANISATION-BOUND RULE (ADR-027 D2). Copying
+    /// them into a read-only sibling would fork it — exactly the drift this task is trying not to
+    /// introduce. The flag changes the LOCK MODE only; there remains one implementation of the rule,
+    /// and <paramref name="lockRows"/> defaults to the write path's behaviour so no existing caller
+    /// silently loses its pin.</para>
+    ///
+    /// <para>Snapshot note: with <paramref name="lockRows"/> = <c>false</c> inside REPEATABLE READ the
+    /// read is still stable — the snapshot, not the lock, is what makes it repeatable.</para>
+    /// </summary>
+    public async Task<string> ValidateSameOrganisationAsync(
+        NpgsqlConnection conn, NpgsqlTransaction? tx,
+        string employeeId, string managerId, bool lockRows, CancellationToken ct = default)
     {
         // S74-7403 B1: pin BOTH the employee AND the manager rows FOR UPDATE, ORDERED BY user_id.
         // The id-sorted lock guarantees deadlock-safety (two concurrent assigns over an overlapping
@@ -463,8 +489,7 @@ public sealed class ReportingLineRepository
             JOIN organizations o ON o.org_id = u.primary_org_id AND o.is_active = TRUE
             WHERE u.user_id = ANY(@ids) AND u.is_active = TRUE
             ORDER BY u.user_id
-            FOR UPDATE OF u
-            """, conn, tx);
+            """ + (lockRows ? "\nFOR UPDATE OF u" : string.Empty), conn, tx);
         cmd.Parameters.AddWithValue("ids", ids);
 
         string? employeeOrgId = null;

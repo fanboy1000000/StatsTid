@@ -276,6 +276,59 @@ therefore needs a non-locking read variant of the same-Org check, not merely a t
 
 ---
 
+### TASK-12501 steps 2+3a — the snapshot, and the memo it makes legitimate
+| Field | Value |
+|-------|-------|
+| **Status** | complete (2026-07-30) — **27.0 → 10.2 statements/employee; K=1000: 13.8s → 6.2s (2.23×)**; characterisation byte-identical; 441/441 blast radius |
+| **Components** | `Infrastructure/ApprovalAuthorityContext.cs` (new), `DesignatedApproverAuthorizer.cs`, `ReportingLineRepository.cs`, `ApprovalPeriodRepository.cs` |
+
+**Step 2 — one snapshot for the whole projection.** A REPEATABLE READ transaction spanning BOTH phases.
+Its purpose is not speed: it is what makes step 3's memoization *sound*. Inside a snapshot the rows
+cannot change, so "ask once and remember" and "ask every time" are provably the SAME answer — caching
+becomes an optimisation rather than an accepted staleness, which is why the owner's blocking question
+about stale counts stopped needing an answer.
+
+It also closes a skew that **already existed and that nobody chose**: phase (1) scanned employees on one
+read, phase (2) evaluated authority on separate reads, so a reassignment landing mid-projection could
+leave the page matching no instant in time. The old behaviour was not "fresher", it was arbitrary.
+
+**The FOR UPDATE blocker, found while mapping step 1 and fixed here.**
+`ValidateSameOrganisationAsync` issues `SELECT … FOR UPDATE` — load-bearing on the S74-7403 WRITE path,
+where pinning both homes between validation and edge-insert is the point. Inside a projection-long
+transaction those locks stop being released per statement and are held for the whole pass, blocking
+writers to most of the Organisation's user rows. Fixed with a `lockRows` flag rather than a read-only
+copy: **the null-checks, fail-closed semantics and equality comparison ARE the ADR-027 D2 rule**, and
+duplicating them into a sibling would fork it. The flag changes the lock mode only, and defaults to the
+write path's behaviour so no existing caller silently loses its pin.
+
+**Step 3a — the memo.** `ApprovalAuthorityContext` caches the employee's resolved edge, the candidate's
+role floor, and the same-Organisation verdict, for the life of ONE projection call. The design property
+that matters: **every value is produced BY the authorizer's own code path and merely remembered** — the
+caller cannot hand in an answer it computed some other way. It is a cache in front of one
+implementation, never a parallel one, so ADR-027/038's one-encoding rule still holds.
+
+**Why 10 and not the predicted ~6 — a deliberate choice, stated rather than glossed.** Only the SAFE
+memoizations were taken. The residual same-Org and unit-kind queries could also be served from per-user
+/ per-unit maps, but only by re-deriving predicates the SQL owns ("deny when the user is missing,
+inactive, or their home Organisation is inactive"; the `unit_id IS NOT NULL` and `e.user_id <> @actorId`
+bounds). That is the second encoding this design exists to avoid. Buying the last statements requires
+the prefetch — and the differential test that comes with it.
+
+**⚠ 6.2s is still far too slow, and the `<1s` criterion is NOT met.** At ~1,925 pending this is still
+~12s. **The prefetch (step 3b) is therefore LOAD-BEARING, not optional** — exactly what the external
+lens argued, now confirmed by measurement rather than by argument.
+
+**The existing guard test still passes** (`204 > 104 > 1` — still linear in K, just a smaller constant).
+Its strict-monotonic assertion breaks only when FLATNESS is achieved, so the "must be edited"
+prediction stands but belongs to step 3b.
+
+**Verification**: characterisation byte-identical (`em=2;l1=3;l2=3;xv=3`; `OPEN=253,SUBMITTED=10`);
+blast radius 441/441 across reporting-line, vikar, designated-approver, delegate, approval, approve,
+reopen, team-overview, compliance, skema, period-status and the perf class. Full output captured to a
+file this time, not piped through `tail`.
+
+---
+
 ## Carried in from S124 (not yet started)
 1. **RES-002** — the deferred endpoint-level read gate (~6 reads). Must be period-status-based, must
    settle the recorded ACTOR-MODEL question (actor-blind withholding vs the HR-exempt month read),
