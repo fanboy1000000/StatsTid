@@ -443,7 +443,7 @@ compliance, skema, period-status, unit-leader, organisation and the perf class.
 
 ## OPEN FOLLOW-UPS raised in S125 (for S126)
 
-### FU-1 — **RES-003: self-approval is a recurring DEFECT CLASS, not three separate bugs** ⚠ owner ruling needed
+### FU-1 — **RES-003: close the self-approval defect CLASS** ⚠ owner ruling needed (all 3 known INSTANCES are fixed)
 → `docs/knowledge-base/resolutions/RES-003-self-approval-is-a-recurring-defect-class.md`
 
 **Both known instances are fixed. The CLASS is not closed.** Three instances of the same rule failing,
@@ -455,7 +455,15 @@ in unrelated paths, none found by looking for it:
    `e.user_id <> @actorId` exclusion. Caught by a deliberate probe, and ONLY because self-pairs were
    deliberately included in the differential comparison set
    (`(perf_o3_l1 -> perf_o3_l1): sql=False prefetched=True`).
-3. **FAIL-004's residual — STILL UNRULED, and now CONFIRMED as the most reachable of the three.**
+3. **FAIL-004's residual — ✅ RULED AND FIXED 2026-07-30** (owner: *"I don't see why we would change
+   who approves Anna. Anna is on vacation, not her approver."*). A vikar now grants authority over the
+   absent leader's unit MEMBERS but never over the leader themselves — one predicate at five sites,
+   with a sixth unreferenced copy deleted. Verified the period is NOT stranded (a peer leader still
+   approves it) and that the vikar still covers what the leader OWED. The combined differential test
+   moved 58 → 57 admitted pairs: exactly the one pair intended, nothing else. **This corrected an
+   error in how the question was put — the "their month waits until they're back" cost was invented;
+   the leader's approver is unchanged by their absence.** Detail below (was: CONFIRMED as the most
+   reachable of the three):
    Tripwired at the real endpoint (`RES_003_TRIPWIRE_OwnDelegate_CanApprove_TheAppointingLeadersOwnPeriod`):
    a leader gets **403** on their own period, while **the vikar they themselves appointed gets 200 OK
    and the period goes APPROVED**. Correction to the earlier framing: this does NOT share FAIL-004's
@@ -471,12 +479,26 @@ re-stated by hand in five places and absent from a sixth, so every new authoriza
 in-memory mirror of an existing predicate — is a fresh chance to omit it. **Omission FAILS OPEN**: it
 grants authority rather than withholding it. Both catches above were luck of coverage.
 
-**Proposed** (needs an owner ruling on scope): audit every authority-granting path into a test matrix;
-consider a single choke point in `IsEffectiveApproverOrUnitLeaderAsync` denying `actor == subject` by
-default so the rule fails CLOSED — **but first rule whether any legitimate self-approval case exists**
-(e.g. HR/GlobalAdmin acting on their own period via the org-scope branch); rule the FAIL-004 residual;
-and require the differential-test pattern, with self-pairs mandatory, for any future in-memory mirror
-of a SQL predicate.
+**STATUS after S125: every known INSTANCE is fixed. The CLASS is not closed.** Deferred to a later
+sprint as its own scoped piece of work — three items, in the order they should be done:
+
+1. **The audit → a TEST MATRIX, not a document.** Enumerate every path that can grant approval
+   authority — the edge leg, the unit-leader leg, the vikar leg, the org-scope/HR fallback, and both
+   prefetched mirrors — and assert `actor == subject` is denied on each. The output must be executable,
+   because a document does not go red when someone adds a sixth path. Sizing hint from S125: the vikar
+   rule alone lived at FIVE sites, one of which was dead code still carrying the predicate.
+2. **The choke point — needs an owner ruling BEFORE any code.** Every current path funnels through
+   `IsEffectiveApproverOrUnitLeaderAsync`; a guard there denying `actor == subject` unless an explicit
+   named exemption applies would make the rule fail CLOSED by default, demoting each per-path exclusion
+   to defence-in-depth. ⚠ **Rule first whether any legitimate self-approval case exists** — an
+   HR/GlobalAdmin acting on their own period routes via the org-scope branch today and would also be
+   caught. Implementing without that ruling would break a working flow in the name of a guard.
+3. **A convention for in-memory mirrors of SQL predicates.** S125 step 3c showed that hand-mirroring a
+   `WHERE` clause into C# silently drops guards. Require the differential-test pattern for any future
+   mirror, **with self-pairs mandatory in the comparison set** — that specific choice is what caught
+   instance 2, and omitting it would have let a broken implementation pass.
+
+**Do NOT do item 2 opportunistically inside unrelated work**: it changes who may approve.
 
 ### FU-2 — the rest of the performance analysis (F2–F6), untouched
 F1 is done (27,001 commands / 13.8s → 9 / 79ms). Not started: **F3 code splitting** (594KB single

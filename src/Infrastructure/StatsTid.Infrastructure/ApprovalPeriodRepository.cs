@@ -338,6 +338,11 @@ public sealed class ApprovalPeriodRepository
             WHERE e.unit_id IS NOT NULL
               AND e.is_active = TRUE
               AND e.user_id <> @actorId   -- segregation of duties (S105 Step-7a BLOCKER): no self-period via the vikar-of-unit-leader edge
+              -- S125 / RES-003 (owner ruling 2026-07-30): a stand-in inherits the approvals the
+              -- absent leader OWES, never the approval that leader RECEIVES. Going on holiday does
+              -- not change who approves YOU — your own approver is unaffected by your absence — so a
+              -- vikar covering leader L grants authority over L's unit MEMBERS but not over L.
+              AND mv.absent_approver_id <> e.user_id
         ),
         candidate_employees AS (
             SELECT employee_id FROM candidate_walk
@@ -738,59 +743,15 @@ public sealed class ApprovalPeriodRepository
     }
 
     /// <summary>
-    /// S106 / TASK-10604 — the candidate unit-leader approvers of <paramref name="employeeId"/> at
-    /// <paramref name="today"/>: the designated leaders of the employee's OWN unit
-    /// (<c>unit_leaders.unit_id = users.unit_id</c>) PLUS the active <c>manager_vikar</c> stand-ins of
-    /// those leaders (covering <paramref name="today"/>). This is the INVERSE of the S105
-    /// <c>unit_led_members</c> CTE (there: leader → members; here: member → its unit's leaders/vikars),
-    /// STRICTLY single-table <c>E.unit_id</c>-bounded — NO ancestor walk over
-    /// <c>units.parent_unit_id</c> (the LOCKED D5 boundary). The employee themselves is excluded
-    /// (a leader never tallies their OWN period — the S105 segregation-of-duties rule). A NULL
-    /// <c>E.unit_id</c> yields the empty set. The returned ids are a SUPERSET candidate list — the
-    /// caller applies the full floors via the shared edge-OR-unit-leader predicate.
-    /// </summary>
-    private static async Task<List<string>> QueryUnitLeaderApproverCandidatesAsync(
-        NpgsqlConnection conn, NpgsqlTransaction? tx,
-        string employeeId, DateOnly today, CancellationToken ct)
-    {
-        await using var cmd = new NpgsqlCommand(
-            """
-            -- (a) the employee's OWN unit's designated leaders (single-table unit_leaders on
-            --     E.unit_id — NO ancestor walk; the LOCKED D5 boundary), self-excluded.
-            SELECT ul.user_id AS approver_id
-            FROM users e
-            JOIN unit_leaders ul ON ul.unit_id = e.unit_id
-            WHERE e.user_id = @employeeId
-              AND e.unit_id IS NOT NULL
-              AND ul.user_id <> @employeeId
-            UNION
-            -- (b) the ACTIVE vikars of those leaders, covering @today (the INVERSE of the S105
-            --     unit_led_members path-3), self-excluded.
-            SELECT mv.vikar_user_id AS approver_id
-            FROM users e
-            JOIN unit_leaders ul ON ul.unit_id = e.unit_id
-            JOIN manager_vikar mv ON mv.absent_approver_id = ul.user_id
-                 AND mv.effective_to IS NULL
-                 AND mv.until_date >= @today
-            WHERE e.user_id = @employeeId
-              AND e.unit_id IS NOT NULL
-              AND mv.vikar_user_id <> @employeeId
-            """, conn, tx);
-        cmd.Parameters.AddWithValue("employeeId", employeeId);
-        cmd.Parameters.AddWithValue("today", today);
-
-        var result = new List<string>();
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
-            result.Add(reader.GetString(0));
-        return result;
-    }
-
-    /// <summary>
-    /// S125 / TASK-12501 step 3c — the batched form of
-    /// <see cref="QueryUnitLeaderApproverCandidatesAsync"/>: the same two UNIONed branches with the
-    /// employee equality widened from <c>= @employeeId</c> to <c>= ANY(@employeeIds)</c>, grouped by
-    /// employee in memory.
+    /// S125 / TASK-12501 step 3c — the candidate unit-leader approvers for a whole pending set in
+    /// ONE read: the employee's OWN unit's designated leaders (single-table
+    /// <c>unit_leaders.unit_id = users.unit_id</c> — NO ancestor walk, the LOCKED D5 boundary) plus
+    /// the active vikars of those leaders covering <paramref name="today"/>.
+    ///
+    /// <para>Replaced a per-employee version that issued this same query once per pending employee;
+    /// that method was left unreferenced by step 3c and has been REMOVED rather than kept as a
+    /// second copy of the same predicate — per RES-003, an unused duplicate of an authorization
+    /// predicate is exactly the thing that later gets copied without its guards.</para>
     ///
     /// <para>The predicates are character-for-character the same — the single-table
     /// <c>unit_leaders.unit_id = users.unit_id</c> bound (NO ancestor walk, the LOCKED D5 boundary),
@@ -830,6 +791,11 @@ public sealed class ApprovalPeriodRepository
             WHERE e.user_id = ANY(@employeeIds)
               AND e.unit_id IS NOT NULL
               AND mv.vikar_user_id <> e.user_id
+              -- S125 / RES-003 (owner ruling 2026-07-30): a stand-in inherits the approvals the
+              -- absent leader OWES, never the approval that leader RECEIVES. Going on holiday does
+              -- not change who approves YOU — your own approver is unaffected by your absence — so a
+              -- vikar covering leader L grants authority over L's unit MEMBERS but not over L.
+              AND mv.absent_approver_id <> e.user_id
             """, conn, tx);
         cmd.Parameters.AddWithValue("employeeIds", employeeIds.ToArray());
         cmd.Parameters.AddWithValue("today", today);

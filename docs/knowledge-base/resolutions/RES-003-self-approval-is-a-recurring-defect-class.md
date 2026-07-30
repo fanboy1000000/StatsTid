@@ -4,7 +4,7 @@
 |-------|-------|
 | **ID** | RES-003 |
 | **Category** | resolution |
-| **Status** | **OPEN — follow-up required.** Both known instances are FIXED; the CLASS is not closed |
+| **Status** | **PARTIALLY CLOSED** — all THREE instances now fixed (the third owner-ruled 2026-07-30); the CLASS remains open pending the audit + choke-point ruling |
 | **Sprint** | Sprint 125 (raised) |
 | **Date** | 2026-07-30 |
 | **Domains** | Backend, Infrastructure, Security |
@@ -71,16 +71,60 @@ the rule exactly as these did, and nothing structural will catch it.
    ⚠ Needs a ruling first: is there ANY legitimate self-approval case (e.g. an HR/GlobalAdmin acting
    on their own period, which today routes to the org-scope branch)? If yes, the choke point needs
    that exemption to be explicit and tested rather than implicit.
-3. **Rule on the FAIL-004 residual** (approval-by-one's-own-delegate) — the one known-open instance,
-   and the only one reachable without legacy data. The operational question is narrow: when a leader
-   goes on holiday and appoints a stand-in, may that stand-in sign off the holidaying leader's OWN
-   timesheet? Note that denying it does not generally strand the period — a peer unit leader can
-   approve it (verified: `peerOverLeader=True`), as can the leader's own edge manager; it falls to
-   HR/org-scope only for a single-leader unit whose leader has no edge manager.
+3. ~~**Rule on the FAIL-004 residual**~~ — ✅ **RULED AND FIXED 2026-07-30. See below.**
 4. **A convention for in-memory mirrors of SQL predicates**: step 3c showed that hand-mirroring a
    `WHERE` clause into C# silently drops guards. The differential-test pattern used there is the
    mitigation and should be required for any future mirror, with self-pairs mandatory in the
    comparison set.
+
+## Instance 3 — RULED AND FIXED (2026-07-30)
+
+**The owner's ruling, and the reasoning that reframed it:**
+
+> *"I don't see why we would change who approves Anna. Anna is on vacation, not her approver."*
+
+That reframing is what turns this from a trade-off into a defect. A vikar exists to cover the
+approvals an absent leader **OWES** their unit. Who approves the LEADER is a separate question with a
+separate answer — their own edge manager, or a peer unit leader — and **that answer is entirely
+unaffected by the leader being away**. The delegate was never needed for the leader's own period.
+
+**This corrects an error in how the question was first put.** It was presented as a balance between
+segregation of duties and availability — "block it and their month waits until they are back". That
+cost does not exist: the leader's approver is unchanged whether they are at their desk or on a beach.
+The availability argument was invented, and it was the only argument for keeping the behaviour.
+
+**The fix**: a vikar covering leader L grants authority over L's unit MEMBERS, never over L. One
+predicate — `mv.absent_approver_id <> e.user_id` — applied at every site that grants
+vikar-of-unit-leader authority:
+
+| Site | |
+|---|---|
+| `ApprovalPeriodRepository` — dashboard candidate CTE (`unit_led_members` path-3) | what a vikar SEES |
+| `ApprovalPeriodRepository` — batched candidate enumeration | what the tiles COUNT |
+| `DesignatedApproverAuthorizer` — the gate's `LEFT JOIN` | what a vikar may ACT on |
+| `PrefetchedAuthorityFacts` — the in-memory mirror | the projection's fast path |
+| *(a fifth, unreferenced copy — DELETED)* | orphaned by TASK-12501 step 3c |
+
+**Five sites for one rule is the RES-003 argument made concrete**, and the fifth being dead code that
+still contained the predicate is precisely the rot this entry warns about: an unused duplicate of an
+authorization predicate is the thing that later gets copied without its guards.
+
+**Verified, both directions:**
+- the leader still cannot approve their own period (403, unchanged);
+- their appointed vikar now cannot either (403 — was **200 OK / APPROVED**);
+- **the period is NOT stranded**: a peer unit leader approves it exactly as they would if the leader
+  were present. This arm is asserted in the test, because without it the ruling would look like it
+  costs availability;
+- **the vikar still covers everything the absent leader OWED** — approving a unit MEMBER still
+  succeeds. Narrowing a rule must not break the feature it narrows.
+- the combined differential test moved from **58 to 57 admitted pairs** — exactly one removed,
+  `(vikar → their appointing leader)`, and nothing else.
+
+Tests: `S105UnitLeaderApprovalTests.RES_003_OwnDelegate_CannotApprove_TheAppointingLeadersOwnPeriod`
+and `…_StillApproves_TheAbsentLeadersUnitMembers`.
+
+Blast radius 464/464 (3 FAIL-002-class container-socket drops in `DockerHarness.StartAsync()` —
+identical stack, no assertion involved — isolation-cleared 35/35).
 
 ## Agent Guidance
 - **Any agent adding or modifying an approval-authority path**: the self-exclusion is NOT optional and
@@ -91,6 +135,8 @@ the rule exactly as these did, and nothing structural will catch it.
   reasonable person would have omitted.
 - Do NOT implement the choke point (item 2) opportunistically while doing unrelated work — it changes
   who may approve and needs the ruling in item 2 first.
+- The instance-3 fix narrows the vikar path only. It does NOT close the class: items 1, 2 and 4
+  remain open, and a new authorization path can still omit the rule and fail OPEN.
 
 ## Related
 - `FAIL-004` — instance 1, plus the unruled own-vikar residual

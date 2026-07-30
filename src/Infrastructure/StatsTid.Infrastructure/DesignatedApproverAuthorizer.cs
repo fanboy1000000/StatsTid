@@ -354,6 +354,10 @@ public sealed class DesignatedApproverAuthorizer
                   AND mv.vikar_user_id = @actorId
                   AND mv.effective_to IS NULL
                   AND mv.until_date >= @asOf
+                  -- S125 / RES-003 (owner ruling 2026-07-30): a stand-in inherits the approvals the
+                  -- absent leader OWES, never the approval that leader RECEIVES. A vikar covering
+                  -- leader L may approve L's unit MEMBERS, but not L's own period.
+                  AND mv.absent_approver_id <> e.user_id
             WHERE e.user_id = @employeeId
               AND e.unit_id IS NOT NULL
               -- SEGREGATION OF DUTIES (S105 Step-7a BLOCKER): a unit leader IS a member of the unit

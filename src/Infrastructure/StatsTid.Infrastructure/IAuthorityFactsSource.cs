@@ -215,8 +215,17 @@ public sealed class PrefetchedAuthorityFacts : IAuthorityFactsSource
         if (leaders.Contains(actorId))
             return Task.FromResult(UnitLeaderApprovalKind.Direct);
 
-        if (_coversLeaders.TryGetValue(actorId, out var covered) && covered.Overlaps(leaders))
+        // S125 / RES-003 (owner ruling 2026-07-30): the covered leader must not BE the employee — a
+        // stand-in inherits the approvals the absent leader OWES, never the approval that leader
+        // RECEIVES. Mirrors `AND mv.absent_approver_id <> e.user_id` in the SQL form; the combined
+        // differential test compares the two over self-pairs, which is what would catch a drift here.
+        if (_coversLeaders.TryGetValue(actorId, out var covered)
+            && covered.Any(coveredLeader =>
+                !string.Equals(coveredLeader, employeeId, StringComparison.Ordinal)
+                && leaders.Contains(coveredLeader)))
+        {
             return Task.FromResult(UnitLeaderApprovalKind.Vikar);
+        }
 
         return Task.FromResult(UnitLeaderApprovalKind.None);
     }

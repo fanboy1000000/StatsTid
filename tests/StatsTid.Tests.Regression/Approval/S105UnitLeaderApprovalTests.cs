@@ -482,44 +482,69 @@ public sealed class S105UnitLeaderApprovalTests : IAsyncLifetime
     // ════════════════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// <b>S125 / RES-003 — TRIPWIRE: a unit leader's OWN delegate can approve that leader's OWN
-    /// period. Documents CURRENT behaviour; awaiting an owner ruling.</b>
+    /// <b>S125 / RES-003 — a stand-in inherits the approvals the absent leader OWES, never the
+    /// approval that leader RECEIVES.</b> Owner-ruled 2026-07-30.
     ///
-    /// <para>The S105 rule is that nobody approves their own period — <c>e.user_id &lt;&gt; @actorId</c>
-    /// in the unit-leader gate, verified by the control below. But a leader IS a member of the unit
-    /// they lead (the D3 member-invariant), so when that leader appoints a vikar and goes away, the
-    /// vikar becomes a candidate approver for every member of the unit — INCLUDING the appointing
-    /// leader themselves.</para>
+    /// <para>History: this began as a TRIPWIRE asserting the DEFECT — the vikar a leader appointed
+    /// could approve that leader's OWN period (200 OK, APPROVED at the real endpoint), while the
+    /// leader themselves got 403. Segregation of duties was enforced against the person but not
+    /// against their proxy.</para>
     ///
-    /// <para><b>This needs NO cyclic or imported data.</b> It is the ordinary "I am on holiday, cover
-    /// my approvals" flow: <see cref="DirectLdr"/> leads unit Member and belongs to it;
-    /// <see cref="VikarUsr"/> is their active <c>manager_vikar</c>. Everything here is created through
-    /// the supported paths. That distinguishes it from FAIL-004's two routes, which both required a
-    /// legacy graph.</para>
+    /// <para><b>The owner's reasoning, which is what makes this a defect rather than a trade-off:</b>
+    /// <i>"I don't see why we would change who approves Anna. Anna is on vacation, not her
+    /// approver."</i> A vikar exists to cover the approvals the absent leader OWES their unit. Who
+    /// approves the LEADER is a separate question with a separate answer — their own edge manager or
+    /// a peer unit leader — and that answer is entirely unaffected by the leader being away. The
+    /// delegate was never needed for the leader's own period, so granting it costs nothing to remove.
+    /// An earlier framing of this as "block it and their month waits until they are back" was simply
+    /// wrong.</para>
     ///
-    /// <para><b>The asymmetry is the point</b>, and both halves are asserted: the leader may NOT
-    /// approve their own period, yet the delegate the leader themselves appointed MAY. Segregation of
-    /// duties is enforced against the person but not against their proxy.</para>
+    /// <para><b>Reachable through ordinary supported flows</b> — no cyclic or imported data, unlike
+    /// FAIL-004's two routes. A leader IS a member of the unit they lead (the D3 member-invariant), so
+    /// appointing a stand-in made that stand-in a candidate approver for every unit member, including
+    /// the appointer.</para>
     ///
-    /// <para><b>WHEN THIS IS RULED THIS TEST CHANGES — that is its job.</b> If the owner rules that a
-    /// delegate must not approve their appointer's own period, invert the first assertion to Forbidden;
-    /// if the owner rules the current behaviour correct, keep it and this becomes the pin that says so
-    /// deliberately. Do not delete it.</para>
+    /// <para>Enforced at FIVE sites (the count is itself the RES-003 argument): the dashboard
+    /// candidate CTE, the batched candidate enumeration, the authority gate's SQL, and the prefetched
+    /// in-memory mirror — with a fifth, now-unreferenced copy DELETED rather than left to rot.</para>
     /// </summary>
     [Fact]
-    public async Task RES_003_TRIPWIRE_OwnDelegate_CanApprove_TheAppointingLeadersOwnPeriod()
+    public async Task RES_003_OwnDelegate_CannotApprove_TheAppointingLeadersOwnPeriod()
     {
-        // CONTROL — the leader may NOT approve their own period (the S105 rule, still holding).
         var pSelf = await InsertSubmittedPeriodAsync(DirectLdr);
+
+        // The leader may not approve their own period (the S105 rule, unchanged).
         var selfRsp = await LeaderClient(DirectLdr).PostAsync($"/api/approval/{pSelf}/approve", null);
         Assert.Equal(HttpStatusCode.Forbidden, selfRsp.StatusCode);
         Assert.Equal("SUBMITTED", await ReadStatusAsync(pSelf));
 
-        // THE FINDING — the vikar that DirectLdr themselves appointed CAN approve DirectLdr's own
-        // period. Same person's authority, one indirection away.
+        // THE RULING: neither may the vikar that leader appointed. Was 200 OK / APPROVED.
         var vikarRsp = await LeaderClient(VikarUsr).PostAsync($"/api/approval/{pSelf}/approve", null);
-        Assert.Equal(HttpStatusCode.OK, vikarRsp.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, vikarRsp.StatusCode);
+        Assert.Equal("SUBMITTED", await ReadStatusAsync(pSelf));
+
+        // AND THE POINT: the period is NOT stranded. A peer leader of the same unit still approves it,
+        // exactly as they would if the leader were at their desk — which is the owner's argument made
+        // executable. Without this arm the ruling would look like it costs availability.
+        var peerRsp = await LeaderClient(DirectLdr2).PostAsync($"/api/approval/{pSelf}/approve", null);
+        Assert.Equal(HttpStatusCode.OK, peerRsp.StatusCode);
         Assert.Equal("APPROVED", await ReadStatusAsync(pSelf));
+    }
+
+    /// <summary>
+    /// S125 / RES-003 — the OTHER half of the ruling: a vikar still covers everything the absent
+    /// leader OWED. Narrowing must not have broken the feature it narrows.
+    ///
+    /// <para><c>VikarUsr</c> stands in for <c>DirectLdr</c>, who leads unit Member. Approving a
+    /// MEMBER of that unit must still succeed — only the leader's own period is now excluded.</para>
+    /// </summary>
+    [Fact]
+    public async Task RES_003_OwnDelegate_StillApproves_TheAbsentLeadersUnitMembers()
+    {
+        var pMember = await InsertSubmittedPeriodAsync(Emp);
+        var rsp = await LeaderClient(VikarUsr).PostAsync($"/api/approval/{pMember}/approve", null);
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+        Assert.Equal("APPROVED", await ReadStatusAsync(pMember));
     }
 
     /// <summary>An ACTIVE <c>manager_vikar</c> stand-in (VikarUsr) for a unit-leader (DirectLdr) of Emp's
