@@ -3,13 +3,13 @@
 | Field | Value |
 |-------|-------|
 | **Sprint** | 124 |
-| **Status** | CLOSED (2026-07-30) |
+| **Status** | CLOSED (2026-07-30) — **CI-VERIFIED GREEN**: run `30516602046`, all 7 jobs, on close commit `1e8bd27` |
 | **Start Date** | 2026-07-29 |
 | **End Date** | 2026-07-30 |
 | **Type** | Rolling UI/testing sprint (the second, after S123) — the owner drives the demo system by hand and names fixes one at a time; each clears the Pre-Implementation Gate (`refine-requirements`) with a proportionate dual-lens review, is implemented, and is verified against the RUNNING stack, not only by tests |
 | **Orchestrator Approved** | per-task |
 | **Build Verified** | `dotnet build` green (API + Regression); FE tsc 0 / lint 0 |
-| **Test Verified** | 868u + 1390r + 6s + 55demoseed + 707fe = **3026** — full regression MEASURED locally (1387 at the pre-Step-7a run: 1384 pass + 3 FAIL-002 environmental sheds, isolation-cleared 13/13; +3 TASK-12405 gate tests after). tsc 0 / lint 0. Smoke + DemoSeed carried, CI-verified at close |
+| **Test Verified** | 868u + 1390r + 6s + 55demoseed + 707fe = **3026** — full regression MEASURED locally (1387 at the pre-Step-7a run: 1384 pass + 3 FAIL-002 environmental sheds, isolation-cleared 13/13; +3 TASK-12405 gate tests after). tsc 0 / lint 0. Smoke + DemoSeed CI-verified green at close (run `30516602046`) |
 
 ## Shape
 Same rolling shape as S123, but this sprint turned out **not** to be UI-only. Driving the live demo
