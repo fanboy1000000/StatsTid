@@ -138,7 +138,7 @@ whether any live instance carried the shape.
 | Field | Value |
 |-------|-------|
 | **ID** | TASK-12501 |
-| **Status** | **IN PROGRESS** — Phase 0 (measure + characterise) COMPLETE; Phase A (delete the redundancy) next |
+| **Status** | **BLOCKED on an owner ruling** — Phase 0 (measure + characterise) COMPLETE; Phase A blocked on the staleness fork (Q1) |
 | **Agent** | Orchestrator |
 | **Components** | `Tests.Regression/Performance/S106SeedScalePerfFixture.cs` + `S106SeedScalePerfTests.cs` (Phase 0); `Infrastructure/ApprovalPeriodRepository.cs` + `DesignatedApproverAuthorizer.cs` (Phase A, not yet touched) |
 | **Refinement** | `.claude/refinements/REFINEMENT-f1-period-status-n-plus-1.md` rev 2 (absorbs 5 internal-lens BLOCKERs; external lens re-run in flight) |
@@ -155,9 +155,21 @@ pending ⇒ ~52,000 SQL round-trips for ONE page load** (~9.6s projected, on the
 precisely then).
 
 **≈16–17 of the 27 are re-asking answered questions**, all caller-side: the gate re-resolves the
-employee's edge once per candidate (~12 statements, 44%) having been handed it a line earlier, and the
-role floor + same-Organisation check — both per-USER facts — are asked per (candidate, employee) PAIR,
-twice each when the edge leg fails. So the fix is redundancy deletion, not a SQL rewrite.
+employee's edge once per candidate (12 statements, 44%) having been handed it a line earlier; the role
+floor is asked per (candidate, employee) PAIR **and twice** for a unit-leader candidate (once per leg);
+same-Organisation is asked per pair; and the unit-kind query re-derives membership the candidate
+enumeration already established. So the fix is redundancy deletion, not a SQL rewrite.
+
+**Correction (external lens, 2026-07-30)**: an earlier revision said same-Organisation was ALSO checked
+twice. It is not — on an edge mismatch the edge leg returns at step (3) *before* step (4)'s same-Org
+check. With that fixed the derivation is 15 connection opens and 5+6+8+8 = **27 statements**, reproducing
+the measurement exactly rather than merely landing near it.
+
+**Correction (external lens)**: this entry originally cited "Σ tiles = 30 > 10 pending (invariant 6)".
+**`Σ(tiles) ≥ pending` is FALSE** — an employee with no resolvable edge and no unit leaders, or whose
+every candidate fails the floors, contributes ZERO tiles, and an existing test already exhibits that.
+30 is a fact about the K=10 fixture, not a bound. The characterisation test's comment and assertion
+framing were corrected; the assertion itself (30) was always factually right for that fixture.
 
 **The N+1 is a DOCUMENTED, deliberately-accepted trade-off** (S106 / TASK-10605) whose premise fails
 at month-end: it was accepted because cost tracks PENDING rather than org size — but at month-end
@@ -169,9 +181,9 @@ the deliverable, not collateral damage.
 
 **Phase 0 delivered — the characterisation net** (2 tests, both green, added to the existing perf class
 so they share its container rather than rebuilding a 2,500-user one):
-1. `F1Characterisation_HappyPath_K10_…` — the EXACT `pendingCountByManager` map, Σ tiles = 30 > 10
-   pending (invariant 6, which a "count-once" rewrite would break), the status histogram, the exact
-   SUBMITTED id set, and the documented `ORDER BY display_name, user_id` contract.
+1. `F1Characterisation_HappyPath_K10_…` — the EXACT `pendingCountByManager` map, the multi-tally
+   property (Σ = 30 for this fixture, which a "count-once" rewrite would break), the status histogram,
+   the exact SUBMITTED id set, and the documented `ORDER BY display_name, user_id` contract.
 2. `F1Characterisation_ShapeMatrix_…` — four pending employees with structurally DIFFERENT candidate
    sets, pinning the invariants a prefetch rewrite would have to re-implement: NULL-unit → edge only;
    orphan → unit leaders only; a vikar-of-a-unit-leader IS a candidate; and an active, resolvable
@@ -202,3 +214,19 @@ still 27.0.
    correct review surface look broken in S124. Fold into the generator so it survives a reseed.
 4. **The P4 arm on the write class** — a save against a SUBMITTED period does not transition status,
    so content can change after submission and the approval binds to content the employee never sent.
+
+**Phase A is blocked on one owner question (rev 3).** The external lens caught that rev 2's claim
+"Phase A is equivalent by construction" is FALSE: one `today` fixes the date, not the snapshot. The
+caller's resolution and the gate's re-resolution are separate reads, so a reassignment landing between
+them is currently seen by the SECOND one; reusing the first uses the older view. That is a real P7
+behaviour fork, not a refactor, and a static characterisation baseline cannot detect it. Recommendation
+recorded in the refinement: accept it, because (a) the projection is already not a consistent snapshot
+(step 1 and step 2 are separate reads) and (b) nothing can be AUTHORIZED by a stale tile — the
+approve/reject/reopen endpoints re-evaluate in-lock at action time. Alternative if not acceptable: run
+step (2) in one REPEATABLE READ transaction, which also removes the existing step-1/step-2 skew.
+
+**Also corrected in rev 3**: Phase B is **load-bearing, not optional**, if the "O(1) in K" criterion
+stands — Phase A still issues ~6 statements × K, which is 4.5× better but still linear. The criteria are
+now split (Phase A: a per-employee ceiling; Phase B: flatness in K), the unverifiable
+connection-open criterion was dropped (`DbCommandCounter` has no connection counter), and the latency
+checks now specify layer, environment, warm-up and median-of-3.

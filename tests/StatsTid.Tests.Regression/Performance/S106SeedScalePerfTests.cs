@@ -285,9 +285,19 @@ public sealed class S106SeedScalePerfTests : IClassFixture<S106SeedScalePerfFixt
     /// be churn without added protection. Total count + histogram + ordering is the proportionate
     /// pin.</para>
     ///
-    /// <para>Invariant 6 (Σ tiles ≥ pending) is asserted directly: each of the 10 pending employees
-    /// tallies to THREE managers (edge manager + both unit leaders), so Σ = 30 > 10. A rewrite that
-    /// "fixed" this into count-once would drop Σ to 10 and fail here.</para>
+    /// <para><b>The multi-tally property</b> (invariant 6): each of these 10 pending employees tallies
+    /// to THREE managers (edge manager + both unit leaders), so Σ = 30 for THIS fixture. A rewrite that
+    /// "fixed" the multi-tally into count-once would drop Σ to 10 and fail here.</para>
+    ///
+    /// <para><b>Σ = 30 is a characterisation of this fixture, NOT a general lower bound</b> (external
+    /// review BLOCKER, 2026-07-30 — an earlier revision of this comment wrongly stated the invariant as
+    /// "Σ tiles ≥ pending"). There is NO such guarantee: a pending employee with no resolvable edge and
+    /// no unit leaders — or whose every candidate fails the role/same-Org floors — contributes ZERO
+    /// tiles (`ApprovalPeriodRepository.cs:640` only adds a candidate when the edge is non-null, and
+    /// `:651` skips unauthorized ones). `PeriodStatusAndPersonSearchReadsTests
+    /// .PerManagerPendingCount_RoleRevokedResolvedApprover_IsNotTallied_TileMatchesEmptyDashboard`
+    /// exhibits exactly that. The real invariant is one-directional: an employee MAY contribute to
+    /// several tiles, and nothing may impose count-once.</para>
     /// </summary>
     [Fact]
     public async Task F1Characterisation_HappyPath_K10_ProjectionIsExactlyReproducible()
@@ -308,7 +318,9 @@ public sealed class S106SeedScalePerfTests : IClassFixture<S106SeedScalePerfFixt
                 $"{S106SeedScalePerfFixture.Org3Leader2}=10",
                 string.Join(";", map));
 
-            // ── Invariant 6: a pending employee counts toward MULTIPLE managers, deliberately. ──
+            // ── The multi-tally property: a pending employee counts toward MULTIPLE managers,
+            //    deliberately. 30 characterises THIS fixture (10 × 3 candidates); it is NOT a general
+            //    Σ ≥ pending bound — see the summary. ──
             Assert.Equal(30, proj.PendingCountByManager.Values.Sum());
 
             // ── The status histogram over the whole Organisation. ──
