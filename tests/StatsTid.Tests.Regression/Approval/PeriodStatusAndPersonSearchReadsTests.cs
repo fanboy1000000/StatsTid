@@ -546,6 +546,78 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
     }
 
     /// <summary>
+    /// <b>S125 / FINDING-12502 — TRIPWIRE for a PRE-EXISTING P7 DEFECT: the escalation walk can
+    /// return a person as their OWN designated approver on a cyclic legacy graph.</b>
+    ///
+    /// <para>This test DOCUMENTS CURRENT BEHAVIOUR; it does not endorse it. Owner-directed
+    /// (2026-07-30) to be raised as its own named finding rather than folded silently into the F1
+    /// performance work, because "fixing" it changes WHO MAY APPROVE — a P7 decision, not a
+    /// refactor.</para>
+    ///
+    /// <para><b>The mechanism</b> (<see cref="ReportingLineRepository.ResolveDesignatedApproverAsync"/>):
+    /// the inactive-manager escalation sets <c>currentEmployeeId = primaryManagerId</c> and loops,
+    /// with NO check that the resolved manager differs from the ORIGINAL employee. So with
+    /// A → B (B inactive, no usable vikar) and B → A (A active):
+    /// iteration 0 finds B inactive and walks to B; iteration 1 reads B's PRIMARY = A, finds A
+    /// ACTIVE, and returns A as A's own approver.</para>
+    ///
+    /// <para><b>Why it matters beyond the resolver:</b> the tally loop in
+    /// <c>ApprovalPeriodRepository.GetPeriodStatusProjectionForTreeAsync</c> gates each candidate
+    /// through <c>IsEffectiveApproverOrUnitLeaderAsync</c>, which for the (A, A) pair finds the
+    /// resolved approver == the actor and a trivially-equal same-Organisation check — so A would be
+    /// counted as an authorized approver of A's OWN period. The unit-leader legs DO carry explicit
+    /// self-exclusion (<c>ul.user_id &lt;&gt; @employeeId</c>, <c>e.user_id &lt;&gt; @actorId</c>); the EDGE leg
+    /// carries none. That asymmetry is the finding.</para>
+    ///
+    /// <para>Cyclic legacy graphs are not hypothetical here — see
+    /// <see cref="GetDescendantIds_TerminatesOnCyclicLegacyGraph_AndReturnsFiniteSet"/>, which exists
+    /// precisely because such data can reach this system.</para>
+    ///
+    /// <para><b>WHEN THIS IS FIXED THIS TEST GOES RED — that is its job.</b> Replace the assertion
+    /// with the ruled behaviour (expected: no self-approval, i.e. the walk skips or denies the
+    /// original employee) rather than deleting it.</para>
+    /// </summary>
+    [Fact]
+    public async Task FINDING_12502_TRIPWIRE_EscalationWalk_ReturnsEmployeeAsTheirOwnApprover_OnTwoCycle()
+    {
+        // A -> B (B is the manager), B -> A (closes a 2-cycle). Raw-inserted: AssignAsync's cycle
+        // guard would reject this, which is exactly why only LEGACY data can produce it.
+        await RawInsertLineAsync(CycA, CycB);
+        await RawInsertLineAsync(CycB, CycA);
+        // B inactive and holding no vikar => iteration 0 escalates past B.
+        await SetUserActiveAsync(CycB, false);
+
+        try
+        {
+            var rlRepo = new ReportingLineRepository(_dbFactory);
+            var (managerId, method, depth) = await rlRepo.ResolveDesignatedApproverAsync(CycA);
+
+            // CURRENT behaviour, asserted so it cannot change unnoticed.
+            Assert.Equal(CycA, managerId);           // <-- the defect: A resolves to A
+            Assert.Equal("DESIGNATED_MANAGER", method);
+            Assert.Equal(1, depth);                  // one escalation hop
+        }
+        finally
+        {
+            await SetUserActiveAsync(CycB, true);
+        }
+    }
+
+    /// <summary>Flips <c>users.is_active</c> for one user — needed by the FINDING-12502 tripwire to
+    /// force the inactive-manager escalation branch. Restored in a finally so the shared fixture is
+    /// left as found.</summary>
+    private async Task SetUserActiveAsync(string userId, bool active)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "UPDATE users SET is_active = @active WHERE user_id = @uid", conn);
+        cmd.Parameters.AddWithValue("active", active);
+        cmd.Parameters.AddWithValue("uid", userId);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    /// <summary>
     /// Raw-inserts an active PRIMARY reporting line, BYPASSING
     /// <see cref="ReportingLineRepository.AssignAsync"/>'s cycle guard — the only way to plant a
     /// cyclic legacy graph for the termination test above.

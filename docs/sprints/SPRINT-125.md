@@ -70,6 +70,38 @@ the fold survives switching Kasper Olsen → Charlotte Schmidt; summary→grid g
 
 ---
 
+### FINDING-12502 / FAIL-004 — a PRE-EXISTING P7 defect, raised rather than folded in
+| Field | Value |
+|-------|-------|
+| **ID** | FINDING-12502 → `docs/knowledge-base/failures/FAIL-004-…md` |
+| **Status** | OPEN — confirmed empirically, tripwired, awaiting an owner ruling. NOT fixed. |
+| **Found** | While scoping TASK-12501 (the F1 performance work), by the Step-4 internal review lens |
+
+`ReportingLineRepository.ResolveDesignatedApproverAsync`'s inactive-manager escalation walk never
+compares the candidate against the ORIGINAL employee, so on a cyclic legacy graph it returns the
+employee as their own approver — and `IsEffectiveApproverOrUnitLeaderAsync` then ADMITS them over
+their own period. That predicate also gates approve/reject/reopen, so the S105 segregation-of-duties
+rule does not hold for this shape.
+
+**The asymmetry is what makes it a defect, not a choice**: the unit-leader legs carry explicit
+self-exclusion (`ul.user_id <> @employeeId`, `mv.vikar_user_id <> @employeeId`, `e.user_id <> @actorId`);
+the edge leg carries none.
+
+**Confirmed, not inferred.** The review flagged it from code; it was then proven with a tripwire —
+`A → B`, `B → A`, B inactive → `ResolveDesignatedApproverAsync(A)` returns `(A, "DESIGNATED_MANAGER", 1)`
+— and the tripwire was itself proven non-vacuous by inverting its assertion
+(`Expected "PROBE_EXPECT_FAIL" / Actual "t7404_cyc_a"`). Suite 13→14 green.
+
+**Owner ruling 2026-07-30: "Raise it as its own finding."** Correct: fixing it changes WHO MAY
+APPROVE — a P7 behaviour decision, not a refactor. Folding it into a performance task would have
+altered authorization under cover of an optimisation, and TASK-12501's characterisation baseline
+would have silently encoded the new behaviour as the reference.
+
+**Demo world checked**: ZERO cyclic PRIMARY paths (detection query recorded in FAIL-004 for reuse
+against real instances). Production unchecked — nobody has looked.
+
+---
+
 ## Carried in from S124 (not yet started)
 1. **RES-002** — the deferred endpoint-level read gate (~6 reads). Must be period-status-based, must
    settle the recorded ACTOR-MODEL question (actor-blind withholding vs the HR-exempt month read),
