@@ -39,6 +39,14 @@ interface LifecycleSectionsProps {
   personName: string
   /** Optional tree-supplied context (names + descendants). */
   context?: LifecycleContext
+  /** S124 / TASK-12401 — the SUBJECT's Organisation, threaded to all three sections' pickers so
+      each searches only inside it. REQUIRED (never optional): every edge these sections create is
+      same-Organisation-validated server-side, and an optional prop would let a forgotten caller
+      silently fall back to the all-Organisations search. In CREATE mode this is the DRAFT org. */
+  organisationId: string | null
+  /** S124 / TASK-12401 — optional one-line explanation of the approver field's Organisation
+      coupling (a discarded create-mode pick, or a pending transfer in edit mode). */
+  approverNotice?: string | null
   /** Create mode — the draft approver state (threaded into the create POST). */
   draftApproverId?: string | null
   draftApproverName?: string | null
@@ -57,6 +65,8 @@ export function LifecycleSections({
   employeeId,
   personName,
   context,
+  organisationId,
+  approverNotice,
   draftApproverId,
   draftApproverName,
   onDraftApproverChange,
@@ -186,6 +196,8 @@ export function LifecycleSections({
         currentReportingLineEtag={resolvedEtag}
         approverAwayVikarName={context?.currentApproverAwayVikarName ?? null}
         forbidden={forbidden}
+        organisationId={organisationId}
+        notice={approverNotice}
         draftApproverId={draftApproverId}
         draftApproverName={draftApproverName}
         onDraftApproverChange={onDraftApproverChange}
@@ -199,6 +211,7 @@ export function LifecycleSections({
           managerName={personName}
           activeVikar={activeVikar}
           forbidden={forbidden}
+          organisationId={organisationId}
           onChanged={handleMutated}
           disabled={disabled}
         />
@@ -209,6 +222,7 @@ export function LifecycleSections({
           employeeId={employeeId}
           personName={personName}
           forbidden={forbidden}
+          organisationId={organisationId}
           onRemoved={onPersonRemoved ?? onMutated}
           disabled={disabled}
         />

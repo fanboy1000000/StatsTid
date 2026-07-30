@@ -104,6 +104,7 @@ describe('ApproverSection — assign / reassign / remove', () => {
     const onChanged = vi.fn()
     wrap(
       <ApproverSection
+        organisationId="STY02"
         mode="edit"
         personName="Test Bruger"
         employeeId="EMP001"
@@ -130,6 +131,7 @@ describe('ApproverSection — assign / reassign / remove', () => {
     hookMock.assignManager.mockResolvedValue({ ok: true, data: lineEntry(3) })
     wrap(
       <ApproverSection
+        organisationId="STY02"
         mode="edit"
         personName="Test Bruger"
         employeeId="EMP001"
@@ -154,6 +156,7 @@ describe('ApproverSection — assign / reassign / remove', () => {
     const onChanged = vi.fn()
     wrap(
       <ApproverSection
+        organisationId="STY02"
         mode="edit"
         personName="Test Bruger"
         employeeId="EMP001"
@@ -173,6 +176,7 @@ describe('ApproverSection — assign / reassign / remove', () => {
   it('a root person shows the read-only top-of-line label (no assign affordance)', () => {
     wrap(
       <ApproverSection
+        organisationId="STY02"
         mode="edit"
         personName="Mette Holm"
         employeeId="MGR9"
@@ -189,6 +193,7 @@ describe('ApproverSection — assign / reassign / remove', () => {
     const onDraft = vi.fn()
     wrap(
       <ApproverSection
+        organisationId="STY02"
         mode="create"
         personName="Ny Bruger"
         draftApproverId={null}
@@ -217,6 +222,7 @@ describe('PersonPickerDialog — forbidden set excludes self + descendants', () 
     )
     wrap(
       <PersonPickerDialog
+        organisationId="STY02"
         open
         title="Vælg godkender"
         forbidden={new Set(['EMP001', 'CHILD1'])}
@@ -233,6 +239,7 @@ describe('PersonPickerDialog — forbidden set excludes self + descendants', () 
   it('threads excludeEmployeeId to the server search (the server-side mirror)', async () => {
     wrap(
       <PersonPickerDialog
+        organisationId="STY02"
         open
         title="Vælg godkender"
         excludeEmployeeId="EMP001"
@@ -242,6 +249,41 @@ describe('PersonPickerDialog — forbidden set excludes self + descendants', () 
     )
     await waitFor(() => expect(hookMock.searchPeople).toHaveBeenCalled())
     expect(hookMock.searchPeople.mock.calls[0][0]).toMatchObject({ excludeEmployeeId: 'EMP001' })
+  })
+
+  // S124 / TASK-12401 — the Organisation narrowing must reach the SERVER call. A client-side
+  // filter would be wrong twice over: `total` and the "søg for at indsnævre" footer are computed
+  // server-side from the full match count, so a filtered page would make both of them lie.
+  it('threads organisationId to the server search (the scope is applied server-side)', async () => {
+    wrap(
+      <PersonPickerDialog
+        organisationId="STY02"
+        open
+        title="Vælg godkender"
+        excludeEmployeeId="EMP001"
+        onPick={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    )
+    await waitFor(() => expect(hookMock.searchPeople).toHaveBeenCalled())
+    expect(hookMock.searchPeople.mock.calls[0][0]).toMatchObject({ organisationId: 'STY02' })
+  })
+
+  // The explicit opt-out: `null` means "no narrowing", and must NOT be sent as the string
+  // "null" or an empty param — the server would then match an Organisation named neither.
+  it('organisationId=null sends NO organisationId to the server (the explicit opt-out)', async () => {
+    wrap(
+      <PersonPickerDialog
+        organisationId={null}
+        open
+        title="Vælg godkender"
+        onPick={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    )
+    await waitFor(() => expect(hookMock.searchPeople).toHaveBeenCalled())
+    expect((hookMock.searchPeople.mock.calls[0][0] as { organisationId?: string }).organisationId)
+      .toBeUndefined()
   })
 })
 
@@ -261,7 +303,7 @@ describe('VikarSection — create / 409 one-active / end', () => {
     })
     const onChanged = vi.fn()
     wrap(
-      <VikarSection managerId="MGR9" managerName="Mette Holm" onChanged={onChanged} />,
+      <VikarSection organisationId="STY02" managerId="MGR9" managerName="Mette Holm" onChanged={onChanged} />,
     )
 
     fireEvent.click(screen.getByTestId('vikar-open-form'))
@@ -285,7 +327,7 @@ describe('VikarSection — create / 409 one-active / end', () => {
       status: 409,
       error: 'Manager already has an active vikar; revoke it first',
     })
-    wrap(<VikarSection managerId="MGR9" managerName="Mette Holm" onChanged={vi.fn()} />)
+    wrap(<VikarSection organisationId="STY02" managerId="MGR9" managerName="Mette Holm" onChanged={vi.fn()} />)
 
     fireEvent.click(screen.getByTestId('vikar-open-form'))
     fireEvent.click(screen.getByTestId('vikar-pick'))
@@ -301,7 +343,7 @@ describe('VikarSection — create / 409 one-active / end', () => {
 
   it('400 (cross-tree/coverage/cycle) surfaces a distinct honest message', async () => {
     hookMock.createVikar.mockResolvedValue({ ok: false, status: 400, error: 'bad' })
-    wrap(<VikarSection managerId="MGR9" managerName="Mette Holm" onChanged={vi.fn()} />)
+    wrap(<VikarSection organisationId="STY02" managerId="MGR9" managerName="Mette Holm" onChanged={vi.fn()} />)
     fireEvent.click(screen.getByTestId('vikar-open-form'))
     fireEvent.click(screen.getByTestId('vikar-pick'))
     await waitFor(() => expect(screen.getByTestId('picker-row-BO1')).toBeDefined())
@@ -316,6 +358,7 @@ describe('VikarSection — create / 409 one-active / end', () => {
     const onChanged = vi.fn()
     wrap(
       <VikarSection
+        organisationId="STY02"
         managerId="MGR9"
         managerName="Mette Holm"
         activeVikar={{
@@ -367,7 +410,7 @@ describe('DangerSection — delete-with-reassignment (BOTH 409s)', () => {
     )
 
     const onRemoved = vi.fn()
-    wrap(<DangerSection employeeId="EMP001" personName="Test Bruger" onRemoved={onRemoved} />)
+    wrap(<DangerSection organisationId="STY02" employeeId="EMP001" personName="Test Bruger" onRemoved={onRemoved} />)
 
     // Open the danger dialog + confirm (empty submit).
     fireEvent.click(screen.getByTestId('danger-open'))
@@ -421,7 +464,7 @@ describe('DangerSection — delete-with-reassignment (BOTH 409s)', () => {
   it('a person who approves no one is removed directly (empty submit → success)', async () => {
     hookMock.deletePersonWithReassignment.mockResolvedValueOnce({ ok: true })
     const onRemoved = vi.fn()
-    wrap(<DangerSection employeeId="EMP001" personName="Test Bruger" onRemoved={onRemoved} />)
+    wrap(<DangerSection organisationId="STY02" employeeId="EMP001" personName="Test Bruger" onRemoved={onRemoved} />)
     fireEvent.click(screen.getByTestId('danger-open'))
     fireEvent.click(screen.getByTestId('danger-confirm-submit'))
     await waitFor(() => expect(onRemoved).toHaveBeenCalled())
@@ -435,7 +478,7 @@ describe('DangerSection — delete-with-reassignment (BOTH 409s)', () => {
       error: 'transferred',
     })
     const onRemoved = vi.fn()
-    wrap(<DangerSection employeeId="EMP001" personName="Test Bruger" onRemoved={onRemoved} />)
+    wrap(<DangerSection organisationId="STY02" employeeId="EMP001" personName="Test Bruger" onRemoved={onRemoved} />)
     fireEvent.click(screen.getByTestId('danger-open'))
     fireEvent.click(screen.getByTestId('danger-confirm-submit'))
     await waitFor(() => expect(screen.getByText(/flyttet til en anden styrelse/i)).toBeDefined())
@@ -482,7 +525,7 @@ describe('LifecycleSections — vikar hydration from the single-manager read (BL
       },
     })
 
-    wrap(<LifecycleSections mode="edit" employeeId="MGR9" personName="Mette Holm" />)
+    wrap(<LifecycleSections organisationId="STY02" mode="edit" employeeId="MGR9" personName="Mette Holm" />)
 
     // The single-manager vikar read fired for the manager, and the active row shows.
     await waitFor(() => expect(hookMock.fetchActiveVikar).toHaveBeenCalledWith('MGR9'))
@@ -497,6 +540,7 @@ describe('LifecycleSections — vikar hydration from the single-manager read (BL
     hookMock.fetchDirectReports.mockResolvedValue({ ok: true, data: [report('CHILD1')] })
     wrap(
       <LifecycleSections
+        organisationId="STY02"
         mode="edit"
         employeeId="MGR9"
         personName="Mette Holm"
@@ -518,7 +562,7 @@ describe('LifecycleSections — vikar hydration from the single-manager read (BL
 
   it('skips the vikar read for a person who approves no one', async () => {
     hookMock.fetchDirectReports.mockResolvedValue({ ok: true, data: [] })
-    wrap(<LifecycleSections mode="edit" employeeId="EMP001" personName="Test Bruger" />)
+    wrap(<LifecycleSections organisationId="STY02" mode="edit" employeeId="EMP001" personName="Test Bruger" />)
     // The danger section is always present; wait for the resolve to settle.
     await waitFor(() => expect(screen.getByTestId('danger-open')).toBeDefined())
     // No vikar section (approves no one) → the read was not fired.

@@ -124,6 +124,9 @@ export function PersonDrawer({
   // Create-mode draft approver (threaded into the atomic create POST).
   const [draftApproverId, setDraftApproverId] = useState<string | null>(null)
   const [draftApproverName, setDraftApproverName] = useState<string | null>(null)
+  // S124 / TASK-12401 — set when an Organisation change DISCARDED a picked draft approver, so the
+  // ApproverSection can explain the empty field. Cleared as soon as a new approver is picked.
+  const [approverClearedByOrgChange, setApproverClearedByOrgChange] = useState(false)
 
   const [live, setLive] = useState<EditLiveState | null>(null)
   const [hydrating, setHydrating] = useState(false)
@@ -228,13 +231,24 @@ export function PersonDrawer({
       if (patch.primaryOrgId && patch.primaryOrgId !== s.primaryOrgId) {
         setPlacementUnitId(null)
         setPromote(false)
+        // S124 / TASK-12401 — a DRAFT approver picked under the OLD Organisation is now invalid:
+        // the create POST same-Organisation-validates the edge (AdminEndpoints.cs:1180) and would
+        // 400. Clear it for the same reason Placering resets, and flag it so the section can say
+        // WHY it emptied — a silently-cleared field reads as a bug.
+        // Read the current value OUTSIDE the updater: React may invoke an updater twice, and a
+        // conditional side effect in there would be impure (the discipline StrukturPanel.revealSubtree
+        // already documents). `draftApproverId` is therefore a DEPENDENCY of this callback — without
+        // it the closure goes stale and the notice never fires.
+        if (draftApproverId !== null) setApproverClearedByOrgChange(true)
+        setDraftApproverId(null)
+        setDraftApproverName(null)
         // Adopt the new org's default agreement (mirrors the create defaulting).
         const ag = organizations.find((o) => o.orgId === patch.primaryOrgId)?.agreementCode
         if (ag) next.agreementCode = ag
       }
       return next
     })
-  }, [organizations])
+  }, [organizations, draftApproverId])
   const patchProfile = useCallback((patch: Partial<ProfileFields>) => {
     setProfile((p) => ({ ...p, ...patch }))
   }, [])
@@ -247,6 +261,18 @@ export function PersonDrawer({
   }, [])
 
   const orgChanged = !isNew && !!user && stamdata.primaryOrgId !== user.primaryOrgId
+
+  // S124 / TASK-12401 — one line explaining the approver field's Organisation coupling, so
+  // neither behaviour reads as a bug. CREATE: the pick was DISCARDED by an org change. EDIT: the
+  // picker still searches the PERSISTED org while an unsaved transfer is pending, so the person
+  // list will not match the Organisation shown above it.
+  const approverNotice = isNew
+    ? approverClearedByOrgChange
+      ? 'Godkenderen blev ryddet, fordi organisationen blev ændret.'
+      : null
+    : orgChanged
+      ? 'Godkendere søges stadig i den nuværende organisation, indtil overflytningen er gemt.'
+      : null
   const unitChanged = !isNew && placementUnitId !== (currentUnitId ?? null)
   const placementOrgId = stamdata.primaryOrgId || null
 
@@ -522,11 +548,24 @@ export function PersonDrawer({
             employeeId={isNew ? undefined : user?.userId}
             personName={isNew ? stamdata.displayName : user?.displayName ?? ''}
             context={effectiveContext}
+            // S124 / TASK-12401 — scope the pickers to the Organisation the SERVER will validate
+            // the resulting edge against, which is NOT the same field in the two modes:
+            //   • CREATE — the approver rides along in the create POST, which carries the DRAFT
+            //     primaryOrgId and validates against it (AdminEndpoints.cs:1180) ⇒ the draft org.
+            //   • EDIT — the assign is an IMMEDIATE POST /api/admin/reporting-lines that validates
+            //     against the PERSISTED primary_org_id. A cross-Organisation transfer is a
+            //     first-class flow here, so the select can be dirty; scoping to the draft would
+            //     list the new org's people and then 400 on pick — reintroducing exactly the
+            //     dishonest picker this task removes ⇒ the persisted org, until the save lands.
+            organisationId={isNew ? stamdata.primaryOrgId || null : user?.primaryOrgId ?? null}
+            approverNotice={approverNotice}
             draftApproverId={draftApproverId}
             draftApproverName={draftApproverName}
             onDraftApproverChange={(id, name) => {
               setDraftApproverId(id)
               setDraftApproverName(name)
+              // The notice explained an EMPTY field; a fresh pick makes it stale.
+              setApproverClearedByOrgChange(false)
             }}
             onMutated={() => onSaved(placementOrgId)}
             onPersonRemoved={() => {

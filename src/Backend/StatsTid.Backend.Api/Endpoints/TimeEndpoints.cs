@@ -37,7 +37,32 @@ public static class TimeEndpoints
 
             if (actor.ActorRole != StatsTidRoles.Employee)
             {
-                var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, request.EmployeeId, ct);
+                // ── S124 / TASK-12404 — owner ruling 2026-07-30 ──────────────────────────────
+                // "A manager can never edit an employee's registrations. Only HR and admins can."
+                //
+                // Before this, ANY non-Employee actor whose org-scope covered the target could write
+                // another employee's time data — which includes LocalLeader. The floor lifts that to
+                // LocalHR-or-above (LocalHR / LocalAdmin / GlobalAdmin) via the EXISTING per-scope
+                // roleFloor mechanism (OrgScopeValidator:88-91): a scope below the floor never admits,
+                // so a mixed-role actor's LEADER scope cannot carry the write while their HR scope,
+                // if any, still can.
+                //
+                // SELF IS EXEMPT, and that exemption is load-bearing: a LocalLeader is also an
+                // employee who registers their OWN time. They are not Employee-role, so they fall
+                // through to this scope branch — applying the HR floor unconditionally would have
+                // locked every leader out of their own timesheet.
+                //
+                // READS are untouched. A leader must still review the full month grid of a submitted
+                // period (TASK-12403) — this narrows WRITES only.
+                //
+                // This endpoint is the WORSE member of the write class the skema save belongs to: it
+                // has NO approval-period status check at all, so before the floor a leader could write
+                // an employee's time entry in ANY period state.
+                var writeFloor = string.Equals(request.EmployeeId, actor.ActorId, StringComparison.Ordinal)
+                    ? null
+                    : StatsTidRoles.LocalHR;
+                var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(
+                    actor, request.EmployeeId, writeFloor, ct);
                 if (!allowed)
                     return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
             }

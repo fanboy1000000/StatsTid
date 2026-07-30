@@ -86,6 +86,20 @@ interface SkemaGridProps {
   onOpenDay?: (date: string) => void
   /** S72 R3 — the hidden-rows affordance links to the manager modal. */
   onOpenManager?: () => void
+  /**
+   * S124 / TASK-12403 — render the Arbejdstid row as the HOURS WORKED per day instead of the
+   * allocation classification (✓ / remainder / +over).
+   *
+   * The default display answers "is this day fully allocated?", which is what the employee filling
+   * the grid needs. A LEADER reviewing a submitted month needs the opposite: what was actually
+   * registered on each day. On a correctly-allocated month the default shows `✓` on every day, so
+   * the worked hours appear NOWHERE — which would leave the review surface unable to answer the
+   * question it exists for.
+   *
+   * A separate prop rather than keying off `readOnly`: the employee's own locked (approved) month is
+   * also read-only and must keep the allocation semantics it has today.
+   */
+  showWorkedHours?: boolean
 }
 
 // Danish weekday abbreviations, indexed by Date.getDay() (handoff prototype copy).
@@ -170,6 +184,7 @@ export function SkemaGrid({
   rowPreferences,
   onOpenDay,
   onOpenManager,
+  showWorkedHours = false,
 }: SkemaGridProps) {
   const days = useMemo(() => getDaysInMonth(year, month), [year, month])
   const dateKeys = useMemo(() => days.map(formatDateKey), [days])
@@ -652,7 +667,13 @@ export function SkemaGrid({
               const remainder = unallocated(worked, allocated)
               let content = ''
               let stateClass = ''
-              if (state === 'balanced') {
+              if (showWorkedHours) {
+                // The leader's review view: the day's WORKED hours, blank when nothing was
+                // registered. No allocation colouring — "Ikke fordelt" is already surfaced on the
+                // Teamoversigt row and in the detail panel's Fordeling column, so repeating the
+                // classification here would only obscure the number being reviewed.
+                content = worked > 0 ? formatHours1(worked) : ''
+              } else if (state === 'balanced') {
                 content = '✓'
                 stateClass = styles.workBalanced
               } else if (state === 'under') {

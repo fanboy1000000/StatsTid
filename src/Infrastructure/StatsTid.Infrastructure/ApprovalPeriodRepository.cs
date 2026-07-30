@@ -1047,12 +1047,24 @@ public sealed class ApprovalPeriodRepository
     /// <param name="excludedUserIds">User ids to exclude server-side (self + descendants).</param>
     /// <param name="limit">Page size (already clamped by the caller to a sane cap).</param>
     /// <param name="offset">Page offset (>= 0).</param>
+    /// <param name="organisationId">S124 / TASK-12401 — OPTIONAL caller-supplied Organisation
+    /// narrowing (the approver/vikar picker scopes itself to the SUBJECT's Organisation, because
+    /// <c>ValidateSameOrganisationAsync</c> would reject any cross-Organisation edge anyway).
+    /// <para><b>This NARROWS; it never WIDENS.</b> It is an ADDITIONAL conjunct alongside the
+    /// <paramref name="accessibleOrgIds"/> RBAC predicate, never a replacement for it. Were it
+    /// applied instead of the RBAC clause, a scoped LocalHR could pass a foreign org id and
+    /// enumerate that Organisation's roster — a privilege escalation. The two predicates
+    /// INTERSECT, so a foreign id simply yields an empty result (and deliberately NOT a 403,
+    /// which would turn the parameter into an org-existence oracle).</para>
+    /// <c>null</c> ⇒ no narrowing (the pre-S124 behaviour, byte-identical for every caller that
+    /// omits it).</param>
     public async Task<(IReadOnlyList<PersonSearchHit> Items, int Total)> SearchPeopleAsync(
         string q,
         IReadOnlyList<string>? accessibleOrgIds,
         IReadOnlyCollection<string> excludedUserIds,
         int limit,
         int offset,
+        string? organisationId = null,
         CancellationToken ct = default)
     {
         // GLOBAL (null) = no org filter; empty list = admit nobody.
@@ -1086,6 +1098,12 @@ public sealed class ApprovalPeriodRepository
                 WHERE u.is_active = TRUE
                   AND (@term = '' OR u.display_name ILIKE @pattern ESCAPE '\' OR u.username ILIKE @pattern ESCAPE '\')
                   AND (@unrestricted OR u.primary_org_id = ANY(@orgIds))
+                  -- S124 / TASK-12401: the caller-supplied Organisation narrowing. A SEPARATE
+                  -- conjunct, deliberately NOT folded into the RBAC line above: the two must
+                  -- INTERSECT. A foreign @orgId therefore yields nothing instead of that org's
+                  -- roster. Keeping them as distinct AND-ed lines makes the intersection visible
+                  -- at review, so a later edit cannot collapse them into an either/or by accident.
+                  AND (@orgId IS NULL OR u.primary_org_id = @orgId)
                   AND (cardinality(@excludedIds) = 0 OR u.user_id <> ALL(@excludedIds))
             ),
             total AS (
@@ -1114,6 +1132,12 @@ public sealed class ApprovalPeriodRepository
         cmd.Parameters.AddWithValue("pattern", pattern);
         cmd.Parameters.AddWithValue("unrestricted", unrestricted);
         cmd.Parameters.AddWithValue("orgIds", (object?)accessibleOrgIds?.ToArray() ?? Array.Empty<string>());
+        // NpgsqlDbType is explicit here: AddWithValue(DBNull.Value) cannot infer a type for a
+        // parameter that only ever appears in an `IS NULL` / `= text` comparison.
+        cmd.Parameters.Add(new NpgsqlParameter("orgId", NpgsqlTypes.NpgsqlDbType.Text)
+        {
+            Value = string.IsNullOrWhiteSpace(organisationId) ? DBNull.Value : organisationId,
+        });
         cmd.Parameters.AddWithValue("excludedIds", excludedUserIds.ToArray());
         cmd.Parameters.AddWithValue("limit", limit);
         cmd.Parameters.AddWithValue("offset", offset);

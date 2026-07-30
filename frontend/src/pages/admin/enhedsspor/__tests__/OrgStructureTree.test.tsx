@@ -7,7 +7,7 @@
 // per-type accent dots; expand/collapse of a unit sub-tree; and that selection
 // lifts the node (driving `selectedId` → the green-border + tint highlight).
 import { describe, it, expect, vi } from 'vitest'
-import { useState } from 'react'
+import { useState, type ComponentProps } from 'react'
 import { render, screen, fireEvent, within } from '@testing-library/react'
 import { OrgStructureTree, type SelectedNode } from '../OrgStructureTree'
 import type { ForestMaoNode } from '../../../../hooks/useForest'
@@ -85,10 +85,26 @@ function makeForest(): ForestMaoNode[] {
   ]
 }
 
+// S124 — `expanded` is now owned by the PAGE so the Struktur panel's "Vis/Skjul org."
+// can drive this tree. The suite therefore has to supply that state, and it must be
+// STATEFUL: a frozen `expanded={{}}` would make the caret tests below assert against a
+// map that never changes, turning real expand/collapse coverage into a no-op. This
+// harness mirrors OrganisationOgMedarbejdere's ownership exactly.
+function Tree(props: Omit<ComponentProps<typeof OrgStructureTree>, 'expanded' | 'onToggleNode'>) {
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({})
+  return (
+    <OrgStructureTree
+      {...props}
+      expanded={expanded}
+      onToggleNode={(id, open) => setExpanded((prev) => ({ ...prev, [id]: open }))}
+    />
+  )
+}
+
 describe('OrgStructureTree', () => {
   it('renders the MAO → Organisation → units nesting (org tiers open by default; deeper units collapsed)', () => {
     render(
-      <OrgStructureTree
+      <Tree
         forest={makeForest()}
         loading={false}
         error={null}
@@ -106,7 +122,7 @@ describe('OrgStructureTree', () => {
 
   it('renders the deep member-count pills', () => {
     render(
-      <OrgStructureTree
+      <Tree
         forest={makeForest()}
         loading={false}
         error={null}
@@ -121,7 +137,7 @@ describe('OrgStructureTree', () => {
 
   it('colours each row dot from the per-type --unit-accent token', () => {
     render(
-      <OrgStructureTree
+      <Tree
         forest={makeForest()}
         loading={false}
         error={null}
@@ -136,7 +152,7 @@ describe('OrgStructureTree', () => {
 
   it('expands and collapses a unit sub-tree via its caret', () => {
     render(
-      <OrgStructureTree
+      <Tree
         forest={makeForest()}
         loading={false}
         error={null}
@@ -158,7 +174,7 @@ describe('OrgStructureTree', () => {
   it('clicking the caret toggles expansion WITHOUT selecting the row', () => {
     const onSelect = vi.fn()
     render(
-      <OrgStructureTree
+      <Tree
         forest={makeForest()}
         loading={false}
         error={null}
@@ -173,7 +189,7 @@ describe('OrgStructureTree', () => {
   it('lifts the selected node on row click (id/kind/name/type)', () => {
     const onSelect = vi.fn()
     render(
-      <OrgStructureTree
+      <Tree
         forest={makeForest()}
         loading={false}
         error={null}
@@ -196,7 +212,7 @@ describe('OrgStructureTree', () => {
     function Harness() {
       const [selected, setSelected] = useState<SelectedNode | null>(null)
       return (
-        <OrgStructureTree
+        <Tree
           forest={makeForest()}
           loading={false}
           error={null}
@@ -214,18 +230,18 @@ describe('OrgStructureTree', () => {
 
   it('renders the loading and empty states', () => {
     const { rerender } = render(
-      <OrgStructureTree forest={[]} loading={true} error={null} selectedId={null} onSelect={vi.fn()} />,
+      <Tree forest={[]} loading={true} error={null} selectedId={null} onSelect={vi.fn()} />,
     )
     expect(screen.getByTestId('tree-loading')).toBeDefined()
     rerender(
-      <OrgStructureTree forest={[]} loading={false} error={null} selectedId={null} onSelect={vi.fn()} />,
+      <Tree forest={[]} loading={false} error={null} selectedId={null} onSelect={vi.fn()} />,
     )
     expect(screen.getByTestId('tree-empty')).toBeDefined()
   })
 
   it('renders the error state', () => {
     render(
-      <OrgStructureTree forest={[]} loading={false} error="boom" selectedId={null} onSelect={vi.fn()} />,
+      <Tree forest={[]} loading={false} error="boom" selectedId={null} onSelect={vi.fn()} />,
     )
     expect(screen.getByTestId('tree-error')).toBeDefined()
   })

@@ -493,6 +493,126 @@ public sealed class AllocationBreakdownEndpointTests : IAsyncLifetime
         Assert.Equal(7.4m, b.GetProperty("worked").GetDecimal());
     }
 
+    // ════════════════════════════════════════════════════════════════════════════════
+    //  S124 / TASK-12403 — the month GRID read (the leader's read-only skema).
+    //
+    //  Three reads hang off the SAME expander (compliance, allocation-breakdown, and now the month
+    //  grid) and they must share ONE authority shape: every roster row a leader can SEE must be
+    //  readable by that leader. The grid was added with org-scope only, which denies the
+    //  vikar/escalation and peer-unit-leader approvers the roster admits — the S88-8801 B2 hole,
+    //  re-introduced. These pin the additive designated-approver OR-branch that closes it.
+    // ════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary><b>THE DISCRIMINATING CASE (red-on-old).</b> An approver whose ORG-SCOPE does not
+    /// reach the employee, but who holds the designated edge.
+    ///
+    /// <para>Mgr IS Emp's designated approver (both homed on STY02, so the edge grants), but this
+    /// token carries an ORG_ONLY scope naming <c>STY01</c> — the mixed-role shape where an actor's
+    /// role-assignment scope is not the org they are homed in. <c>ValidateEmployeeAccessAsync</c>
+    /// requires a scope naming EXACTLY Emp's STY02, so org-scope DENIES; only the additive
+    /// designated-approver branch admits. Before that branch the leader's month-grid read 403'd here
+    /// while the row was fully visible on their Teamoversigt — the S88-8801 B2 hole re-introduced,
+    /// surfacing to the user as "Kunne ikke hente skemaet".</para>
+    ///
+    /// <para>NOTE the sibling vikar/escalation cases below are NOT red-on-old in this fixture: every
+    /// STY02 actor there happens to hold covering STY02 scope, so org-scope alone already admitted
+    /// them. They are regression guards. THIS test is the one that proves the branch.</para></summary>
+    [Fact]
+    public async Task SkemaMonth_ApproverWithoutCoveringOrgScope_Is200_ViaDesignatedEdge()
+    {
+        await InsertWorkTimeAsync(Emp, new DateOnly(2026, 5, 4), 7.4m);
+        // TASK-12405: a leader may read the grid only for a month the employee SENT.
+        await InsertPeriodAsync(Emp, "STY02", "SUBMITTED", new DateOnly(2026, 5, 1), new DateOnly(2026, 5, 31));
+
+        // Sanity control: a DIFFERENT leader (MgrX, STY05 — no scope reach and no edge over Emp) is
+        // denied, so the 200 below cannot be explained by authorization having been skipped wholesale.
+        // The tighter "same actor, no edge" containment is pinned by
+        // SkemaMonth_NonDesignatedLeaderOutOfScope_Is403 and SkemaMonth_CrossStyrelseLeader_Is403.
+        var control = await GetSkemaMonthRawAsync(MgrX, Emp, 2026, 5);
+        Assert.Equal(HttpStatusCode.Forbidden, control.StatusCode);
+
+        var rsp = await GetSkemaMonthRawAsync(Mgr, Emp, 2026, 5, orgId: "STY01");
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+    }
+
+    /// <summary>The ESCALATION approver: EmpIm reports to an INACTIVE manager, so authority escalates
+    /// to Mgr. Same class as the vikar case — on the roster, and must be able to read the grid.</summary>
+    [Fact]
+    public async Task SkemaMonth_EscalationApprover_Is200()
+    {
+        await InsertWorkTimeAsync(EmpIm, new DateOnly(2026, 5, 4), 7.4m);
+        await InsertPeriodAsync(EmpIm, "STY02", "SUBMITTED", new DateOnly(2026, 5, 1), new DateOnly(2026, 5, 31));
+        var rsp = await GetSkemaMonthRawAsync(Mgr, EmpIm, 2026, 5);
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+    }
+
+    /// <summary>The designated approver's ordinary case still reads 200 (the branch must not have
+    /// narrowed anything).</summary>
+    [Fact]
+    public async Task SkemaMonth_DesignatedApprover_Is200()
+    {
+        await InsertWorkTimeAsync(Emp, new DateOnly(2026, 5, 4), 7.4m);
+        await InsertPeriodAsync(Emp, "STY02", "SUBMITTED", new DateOnly(2026, 5, 1), new DateOnly(2026, 5, 31));
+        var rsp = await GetSkemaMonthRawAsync(Mgr, Emp, 2026, 5);
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+    }
+
+    /// <summary><b>THE TASK-12405 GATE (Step-7a Codex BLOCKER).</b> The designated edge does NOT hand a
+    /// leader an UN-SUBMITTED month. Same actor, same employee, same work time as the case above —
+    /// only the period is absent — and it must be DENIED. Without this the TASK-12403 branch was a P7
+    /// WIDENING of an ungated read, flatly contradicting the same sprint's TASK-12402 ruling that a
+    /// manager sees nothing before submission. RED-on-old: the branch returned the whole grid.</summary>
+    [Fact]
+    public async Task SkemaMonth_DesignatedApprover_UnsubmittedMonth_Is403()
+    {
+        await InsertWorkTimeAsync(Emp, new DateOnly(2026, 5, 4), 7.4m);
+        // NO period inserted: nothing was ever sent for this month.
+        var rsp = await GetSkemaMonthRawAsync(Mgr, Emp, 2026, 5);
+        Assert.Equal(HttpStatusCode.Forbidden, rsp.StatusCode);
+    }
+
+    /// <summary>A DRAFT period is withheld too — and since the create path submits in the same tx,
+    /// every persistent DRAFT is a REOPENED month, so this is the reopen case as well.</summary>
+    [Fact]
+    public async Task SkemaMonth_DesignatedApprover_DraftMonth_Is403()
+    {
+        await InsertPeriodAsync(Emp, "STY02", "DRAFT", new DateOnly(2026, 5, 1), new DateOnly(2026, 5, 31));
+        await InsertWorkTimeAsync(Emp, new DateOnly(2026, 5, 4), 7.4m);
+
+        var rsp = await GetSkemaMonthRawAsync(Mgr, Emp, 2026, 5);
+        Assert.Equal(HttpStatusCode.Forbidden, rsp.StatusCode);
+    }
+
+    /// <summary>HR is the CORRECTIVE tier and is deliberately NOT month-gated: TASK-12404 lets HR edit
+    /// an employee's registrations, and you cannot correct what you cannot read.</summary>
+    [Fact]
+    public async Task SkemaMonth_Hr_UnsubmittedMonth_IsAllowed()
+    {
+        await InsertWorkTimeAsync(Emp, new DateOnly(2026, 5, 4), 7.4m);
+        var rsp = await GetSkemaMonthRawAsync(HrOrg, Emp, 2026, 5, role: StatsTidRoles.LocalHR);
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+    }
+
+    /// <summary>THE CONTAINMENT GUARD — the branch is ADDITIVE, not a bypass. Other is a Leader on a
+    /// DIFFERENT Organisation with NO designated edge over Emp: it fails org-scope AND the edge, so it
+    /// must still be denied. Without this the OR-branch could have opened the grid to any leader.</summary>
+    [Fact]
+    public async Task SkemaMonth_NonDesignatedLeaderOutOfScope_Is403()
+    {
+        await InsertWorkTimeAsync(Emp, new DateOnly(2026, 5, 4), 7.4m);
+        var rsp = await GetSkemaMonthRawAsync(Other, Emp, 2026, 5);
+        Assert.Equal(HttpStatusCode.Forbidden, rsp.StatusCode);
+    }
+
+    /// <summary>Cross-STYRELSE stays denied: Mgr (STY02 tree) is not EmpX's (STY05) effective
+    /// approver, and the ADR-027 D2 tree bound is not something this branch may cross.</summary>
+    [Fact]
+    public async Task SkemaMonth_CrossStyrelseLeader_Is403()
+    {
+        var rsp = await GetSkemaMonthRawAsync(Mgr, EmpX, 2026, 5);
+        Assert.Equal(HttpStatusCode.Forbidden, rsp.StatusCode);
+    }
+
     [Fact]
     public async Task Breakdown_CrossStyrelseLeader_Is403()
     {
@@ -584,6 +704,19 @@ public sealed class AllocationBreakdownEndpointTests : IAsyncLifetime
     {
         var client = LeaderClient(actorId, ActorOrg(actorId));
         return await client.GetAsync($"/api/approval/{employeeId}/allocation-breakdown?year={year}&month={month}");
+    }
+
+    /// <summary>S124 / TASK-12403 — the THIRD read on the leader expander: the read-only month grid
+    /// (<c>GET /api/skema/{employeeId}/month</c>). Mirrors <see cref="GetComplianceRawAsync"/> so the
+    /// three reads in one panel can be asserted against the SAME authority expectation.</summary>
+    private async Task<HttpResponseMessage> GetSkemaMonthRawAsync(
+        string actorId, string employeeId, int year, int month,
+        string role = StatsTidRoles.LocalLeader, string? orgId = null)
+    {
+        var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer",
+            MintToken(actorId, orgId ?? ActorOrg(actorId), role));
+        return await client.GetAsync($"/api/skema/{employeeId}/month?year={year}&month={month}");
     }
 
     private async Task<HttpResponseMessage> GetComplianceRawAsync(

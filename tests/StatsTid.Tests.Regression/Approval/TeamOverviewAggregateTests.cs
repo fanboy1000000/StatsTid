@@ -462,6 +462,84 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
+    //  S124 / TASK-12402 — MANAGER VISIBILITY: an un-submitted month is not the manager's
+    //  to read. FIVE row fields can carry the employee's own registrations — `normRegistered`,
+    //  `overtime`, `hasWarning`, `flexBalance` and `ferieUsed` — so all five are withheld (null)
+    //  until the employee sends the period. Withheld SERVER-side: the value must never reach the
+    //  client, so these assert the JSON, not a rendering.
+    //
+    //  Both tests seed REAL registered hours first. Without that, a null assertion would
+    //  pass trivially against an employee who simply has no data, proving nothing.
+    // ════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>A DRAFT period with actual registered hours and a booked vacation day: all FIVE
+    /// month-derived fields are withheld, while the DENOMINATORS (norm-expected, ferie quota) still
+    /// come through — that combination is what lets the leader chase a missing submission before the
+    /// lederfrist without reading the draft itself.
+    ///
+    /// <para>`ferieUsed` is in the withheld set because `entitlement_balances.used` is incremented
+    /// inside the employee's OWN Skema save with no approval gate — a drafted day off moved the
+    /// leader's Ferie column. That was this sprint's headline finding.</para></summary>
+    [Fact]
+    public async Task DraftPeriod_WithRealRegisteredHours_WithholdsMonthDerivedFields()
+    {
+        // 40 h registered + a deliberate worked/allocated imbalance that WOULD raise hasWarning.
+        await InsertPeriodAsync(Emp, "STY02", "DRAFT");
+        await InsertTimeEntryAsync(Emp, new DateOnly(2026, 5, 4), 40m);
+        await InsertWorkTimeAsync(Emp, new DateOnly(2026, 5, 4), 40m);
+        await SetVacationBalanceAsync(Emp, 2025, used: 7m, totalQuota: 25m);
+        await InsertFlexEventAsync(Emp, 3.5m);
+
+        var row = (await GetTeamOverviewAsync(Mgr, 2026, 5)).Single(r => EmployeeId(r) == Emp);
+
+        Assert.Equal("DRAFT", row.GetProperty("status").GetString());
+        // WITHHELD — and specifically NOT 0: a zero would assert "registered nothing", which is
+        // both false and exactly the leak-shaped lie this change removes.
+        Assert.Equal(JsonValueKind.Null, row.GetProperty("normRegistered").ValueKind);
+        Assert.Equal(JsonValueKind.Null, row.GetProperty("overtime").ValueKind);
+        Assert.Equal(JsonValueKind.Null, row.GetProperty("hasWarning").ValueKind);
+        // Owner ruling 2026-07-30 — "a manager cannot see anything before a month is submitted".
+        // ferieUsed is the one that made this more than a display concern: it is incremented inside
+        // the employee's OWN Skema save transaction with no approval gate, so a drafted day off
+        // moved the leader's Ferie column. Seeded as 7 above precisely so a leak would surface as 7.
+        Assert.Equal(JsonValueKind.Null, row.GetProperty("ferieUsed").ValueKind);
+        Assert.Equal(JsonValueKind.Null, row.GetProperty("flexBalance").ValueKind);
+
+        // STILL VISIBLE — the DENOMINATORS, which no registration can move: normExpected is
+        // (weekdays / 5) x the agreement's weekly norm; ferieTotal is the standing annual quota.
+        Assert.True(row.GetProperty("normExpected").GetDecimal() > 0m);
+        Assert.Equal(25m, row.GetProperty("ferieTotal").GetDecimal());
+    }
+
+    /// <summary>The regression guard in the other direction: once the employee SUBMITS, every field
+    /// is released. The rule must not become "leaders see less of what they are asked to approve".
+    /// REJECTED is asserted too — the leader decided on those very numbers, so withholding them
+    /// afterwards would erase the basis of the decision.</summary>
+    [Theory]
+    [InlineData("SUBMITTED")]
+    [InlineData("EMPLOYEE_APPROVED")]
+    [InlineData("APPROVED")]
+    [InlineData("REJECTED")]
+    public async Task SubmittedOrDecidedPeriod_ReleasesMonthDerivedFields(string status)
+    {
+        await InsertPeriodAsync(Emp, "STY02", status);
+        await InsertTimeEntryAsync(Emp, new DateOnly(2026, 5, 4), 40m);
+        await InsertWorkTimeAsync(Emp, new DateOnly(2026, 5, 4), 40m);
+
+        var row = (await GetTeamOverviewAsync(Mgr, 2026, 5)).Single(r => EmployeeId(r) == Emp);
+
+        Assert.Equal(status, row.GetProperty("status").GetString());
+        Assert.Equal(JsonValueKind.Number, row.GetProperty("normRegistered").ValueKind);
+        Assert.Equal(40m, row.GetProperty("normRegistered").GetDecimal());
+        Assert.Equal(JsonValueKind.Number, row.GetProperty("overtime").ValueKind);
+        Assert.Contains(row.GetProperty("hasWarning").ValueKind, new[] { JsonValueKind.True, JsonValueKind.False });
+        // The whole withheld set is RELEASED once sent — including the two that joined it only
+        // because they can carry the employee's own registrations.
+        Assert.Equal(JsonValueKind.Number, row.GetProperty("ferieUsed").ValueKind);
+        Assert.Equal(JsonValueKind.Number, row.GetProperty("flexBalance").ValueKind);
+    }
+
+    // ════════════════════════════════════════════════════════════════════════════════
     //  Field correctness
     // ════════════════════════════════════════════════════════════════════════════════
 

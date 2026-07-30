@@ -37,6 +37,14 @@ interface ApproverSectionProps {
   /** Self + descendants — the cycle-prevention forbidden set (also enforced
       server-side via `excludeEmployeeId`). */
   forbidden?: Set<string>
+  /** S124 / TASK-12401 — the SUBJECT's Organisation; the picker searches only inside it,
+      because a cross-Organisation approver edge is rejected server-side (ADR-027 D2). In CREATE
+      mode this is the DRAFT organisation currently selected in the form, so it changes as the
+      admin changes that field. `null` = not yet chosen ⇒ unscoped. */
+  organisationId: string | null
+  /** S124 / TASK-12401 — one line explaining WHY the approver field looks the way it does when it
+      is coupled to an Organisation change. Rendered under the field; null renders nothing. */
+  notice?: string | null
   /** Create mode — the draft approver state, threaded into the create POST. */
   draftApproverId?: string | null
   draftApproverName?: string | null
@@ -63,6 +71,8 @@ export function ApproverSection({
   currentReportingLineEtag,
   approverAwayVikarName,
   forbidden,
+  organisationId,
+  notice,
   draftApproverId,
   draftApproverName,
   onDraftApproverChange,
@@ -230,12 +240,21 @@ export function ApproverSection({
         </span>
       </div>
 
+      {/* S124 / TASK-12401 — why the field looks like this. Rendered OUTSIDE the row so it
+          never competes with the "Skift"/"Fjern" controls for horizontal space. */}
+      {notice && (
+        <span className={styles.apprNotice} data-testid="approver-notice">
+          {notice}
+        </span>
+      )}
+
       <PersonPickerDialog
         open={pickerOpen}
         title={`Vælg godkender for ${personName || 'medarbejder'}`}
         currentId={shownId}
         forbidden={forbidden}
         excludeEmployeeId={mode === 'edit' ? employeeId : undefined}
+        organisationId={organisationId}
         onPick={handlePick}
         onClose={() => {
           setPickerOpen(false)

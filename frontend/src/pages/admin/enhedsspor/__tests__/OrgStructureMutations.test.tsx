@@ -106,6 +106,7 @@ function renderPanel(selected: SelectedNode, overrides: Partial<ComponentProps<t
     selected,
     rosterByOrg: { STY02: emptyRoster(), STY03: emptyRoster() },
     rosterLoading: false,
+    onExpandSync: vi.fn(),
     onLoadRoster: vi.fn(),
     onNavigate: vi.fn(),
     canBack: false,

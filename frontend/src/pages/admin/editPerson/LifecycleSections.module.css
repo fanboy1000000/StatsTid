@@ -63,6 +63,17 @@
   font-size: 12px;
 }
 
+/* S124 / TASK-12401 — the approver field's Organisation-coupling note (a create-mode pick
+   discarded by an org change, or an unsaved transfer keeping the picker on the persisted org).
+   Informational, not an error: it explains state the user just caused. */
+.apprNotice {
+  display: block;
+  margin-top: 4px;
+  color: var(--color-info);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .assignEmpty {
   font-family: 'IBM Plex Sans', sans-serif;
   padding: 6px 12px;

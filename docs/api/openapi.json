@@ -630,6 +630,13 @@
             }
           },
           {
+            "name": "organisationId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "limit",
             "in": "query",
             "schema": {
@@ -9018,19 +9025,23 @@
           },
           "normRegistered": {
             "type": "number",
-            "format": "double"
+            "format": "double",
+            "nullable": true
           },
           "flexBalance": {
             "type": "number",
-            "format": "double"
+            "format": "double",
+            "nullable": true
           },
           "overtime": {
             "type": "number",
-            "format": "double"
+            "format": "double",
+            "nullable": true
           },
           "ferieUsed": {
             "type": "number",
-            "format": "double"
+            "format": "double",
+            "nullable": true
           },
           "ferieTotal": {
             "type": "number",
@@ -9040,7 +9051,8 @@
             "type": "boolean"
           },
           "hasWarning": {
-            "type": "boolean"
+            "type": "boolean",
+            "nullable": true
           },
           "payrollExported": {
             "type": "boolean"

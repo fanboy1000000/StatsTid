@@ -759,6 +759,7 @@ export interface paths {
                 query?: {
                     q?: string;
                     excludeEmployeeId?: string;
+                    organisationId?: string;
                     limit?: number;
                     offset?: number;
                 };
@@ -5983,17 +5984,17 @@ export interface components {
             /** Format: double */
             normExpected: number;
             /** Format: double */
-            normRegistered: number;
+            normRegistered: number | null;
             /** Format: double */
-            flexBalance: number;
+            flexBalance: number | null;
             /** Format: double */
-            overtime: number;
+            overtime: number | null;
             /** Format: double */
-            ferieUsed: number;
+            ferieUsed: number | null;
             /** Format: double */
             ferieTotal: number;
             awayToday: boolean;
-            hasWarning: boolean;
+            hasWarning: boolean | null;
             payrollExported: boolean;
             /** Format: date-time */
             payrollExportedAt: string | null;

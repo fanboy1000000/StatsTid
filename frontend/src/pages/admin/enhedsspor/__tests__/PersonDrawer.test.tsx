@@ -5,7 +5,7 @@
 // ToastProvider satisfies the reused cores' useToast; useAuth is a LocalHR mock.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { ToastProvider } from '../../../../components/ui/Toast'
 import type { ForestMaoNode } from '../../../../hooks/useForest'
 import { orgsFromForest } from '../personDrawerData'
@@ -14,6 +14,34 @@ const auth = vi.hoisted(() => ({ role: 'LocalHR' as string | null }))
 vi.mock('../../../../contexts/AuthContext', () => ({
   useAuth: () => ({ role: auth.role }),
 }))
+
+// S124 / TASK-12401 — the picker's Organisation scoping is asserted here, at the DRAWER, not at
+// PersonPickerDialog: the interesting question is not "is the prop forwarded" but "which org does
+// each MODE choose", and only the drawer owns both candidate values (the draft `stamdata` org and
+// the persisted `user` org). The hook is mocked so the picker's search is observable; the other
+// tests in this file never touch it, so the mock is inert for them.
+const rlMock = vi.hoisted(() => ({
+  searchPeople: vi.fn(),
+  assignManager: vi.fn(),
+  removeManager: vi.fn(),
+  createVikar: vi.fn(),
+  endVikar: vi.fn(),
+  fetchActiveVikar: vi.fn(),
+  fetchEmployeeLines: vi.fn(),
+  fetchDirectReports: vi.fn(),
+  deletePersonWithReassignment: vi.fn(),
+}))
+vi.mock('../../../../hooks/useReportingLines', async (importActual) => ({
+  ...(await importActual<typeof import('../../../../hooks/useReportingLines')>()),
+  useReportingLines: () => rlMock,
+}))
+
+/** The org id the picker actually asked the server for, from the latest search call. */
+const searchedOrg = (): string | undefined => {
+  const calls = rlMock.searchPeople.mock.calls
+  if (calls.length === 0) return undefined
+  return (calls[calls.length - 1][0] as { organisationId?: string }).organisationId
+}
 
 import { PersonDrawer } from '../PersonDrawer'
 
@@ -80,6 +108,14 @@ function renderCreate(defaultUnitId: string | null = VEJL) {
 
 beforeEach(() => {
   auth.role = 'LocalHR'
+  rlMock.searchPeople.mockReset()
+  rlMock.searchPeople.mockResolvedValue({
+    ok: true,
+    data: { items: [], total: 0, limit: 60, offset: 0 },
+  })
+  rlMock.fetchEmployeeLines.mockResolvedValue({ ok: true, data: { active: [], history: [] } })
+  rlMock.fetchDirectReports.mockResolvedValue({ ok: true, data: [] })
+  rlMock.fetchActiveVikar.mockResolvedValue({ ok: true, data: { activeVikar: null } })
 })
 
 describe('PersonDrawer — the design §3 fields + the Placering reload', () => {
@@ -127,5 +163,101 @@ describe('PersonDrawer — the design §3 fields + the Placering reload', () => 
     renderCreate(null)
     expect((screen.getByTestId('pd-placement') as HTMLSelectElement).value).toBe('')
     expect((screen.getByTestId('pd-promote') as HTMLInputElement).disabled).toBe(true)
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════════════
+// S124 / TASK-12401 — WHICH Organisation the godkender picker searches.
+//
+// The rule is one sentence: scope to the Organisation the SERVER will validate the
+// resulting edge against. That is a DIFFERENT field per mode, which is the whole
+// subtlety and the reason these tests exist:
+//   • CREATE — the approver rides in the create POST, which carries the DRAFT org and
+//     validates against it ⇒ follow the draft, live.
+//   • EDIT   — the assign is an IMMEDIATE POST validated against the PERSISTED org.
+//     A cross-Organisation transfer is a first-class flow, so the select can be dirty;
+//     following the draft there would list the new org's people and then 400 on pick —
+//     reinstating the dishonest picker this task removed.
+// ═══════════════════════════════════════════════════════════════════════════════════
+describe('PersonDrawer — the godkender picker is Organisation-scoped', () => {
+  it('CREATE: searches the DRAFT organisation, and FOLLOWS it when the Organisation changes', async () => {
+    renderCreate()
+
+    fireEvent.click(screen.getByTestId('approver-assign'))
+    await waitFor(() => expect(rlMock.searchPeople).toHaveBeenCalled())
+    expect(searchedOrg()).toBe('STY02') // the draft org as opened
+
+    // Re-target the draft org; the OPEN picker must re-search against the new one.
+    fireEvent.change(screen.getByTestId('ep-primary-org'), { target: { value: 'STY03' } })
+    await waitFor(() => expect(searchedOrg()).toBe('STY03'))
+  })
+
+  it('CREATE: changing the Organisation DISCARDS a picked approver and says why', async () => {
+    rlMock.searchPeople.mockResolvedValue({
+      ok: true,
+      data: {
+        items: [{ userId: 'U1', displayName: 'Bo Dahl', primaryOrgName: 'Statens IT' }],
+        total: 1,
+        limit: 60,
+        offset: 0,
+      },
+    })
+    renderCreate()
+
+    fireEvent.click(screen.getByTestId('approver-assign'))
+    await waitFor(() => expect(screen.getByTestId('picker-row-U1')).toBeDefined())
+    fireEvent.click(screen.getByTestId('picker-row-U1'))
+    await waitFor(() => expect(screen.getByTestId('approver-assigned')).toBeDefined())
+
+    // The pick was made under STY02; STY03 would 400 on the create POST.
+    fireEvent.change(screen.getByTestId('ep-primary-org'), { target: { value: 'STY03' } })
+
+    await waitFor(() => expect(screen.queryByTestId('approver-assigned')).toBeNull())
+    // Silently emptying a field the user filled reads as a bug — it must be explained.
+    expect(screen.getByTestId('approver-notice').textContent).toContain('organisationen blev ændret')
+  })
+
+  it('EDIT: keeps searching the PERSISTED organisation while an unsaved transfer is pending', async () => {
+    const forest = makeForest()
+    render(
+      <ToastProvider>
+        <PersonDrawer
+          open
+          user={{
+            userId: 'EMP1',
+            username: 'emp1',
+            displayName: 'Karen Nielsen',
+            email: 'k@x.dk',
+            role: 'Employee',
+            primaryOrgId: 'STY02', // the PERSISTED org — what the server validates against
+            agreementCode: 'HK',
+            isActive: true,
+          } as never}
+          organizations={orgsFromForest(forest)}
+          forest={forest}
+          currentUnitId={null}
+          onClose={vi.fn()}
+          onSaved={vi.fn()}
+        />
+      </ToastProvider>,
+    )
+
+    // EDIT mode hydrates the HR profile before enabling its controls; wait that out, or the click
+    // lands on a still-disabled button and the test silently proves nothing.
+    await waitFor(() =>
+      expect((screen.getByTestId('approver-assign') as HTMLButtonElement).disabled).toBe(false),
+    )
+
+    // Stage a cross-Organisation transfer WITHOUT saving it.
+    fireEvent.change(screen.getByTestId('ep-primary-org'), { target: { value: 'STY03' } })
+
+    fireEvent.click(screen.getByTestId('approver-assign'))
+    await waitFor(() => expect(rlMock.searchPeople).toHaveBeenCalled())
+
+    // THE ASSERTION: the persisted STY02, NOT the dirty STY03. Following the draft here is
+    // exactly the bug — every STY03 name would be rejected by the immediate assign POST.
+    expect(searchedOrg()).toBe('STY02')
+    // …and the mismatch with the Organisation shown above is explained rather than mysterious.
+    expect(screen.getByTestId('approver-notice').textContent).toContain('indtil overflytningen er gemt')
   })
 })

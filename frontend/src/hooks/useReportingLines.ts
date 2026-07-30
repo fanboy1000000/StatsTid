@@ -220,6 +220,9 @@ export function useReportingLines() {
     async (params: {
       q?: string
       excludeEmployeeId?: string
+      /** S124 / TASK-12401 — narrow to ONE Organisation (the picker's subject org). The server
+          intersects this with the caller's RBAC scope, so it can only ever shrink the result. */
+      organisationId?: string
       limit?: number
       offset?: number
     }): Promise<ApiResult<PersonSearchResult>> => {
@@ -231,6 +234,7 @@ export function useReportingLines() {
         query: {
           q: params.q || undefined,
           excludeEmployeeId: params.excludeEmployeeId || undefined,
+          organisationId: params.organisationId || undefined,
           limit: params.limit ?? undefined,
           offset: params.offset ?? undefined,
         },

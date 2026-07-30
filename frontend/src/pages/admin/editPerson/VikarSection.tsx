@@ -37,6 +37,10 @@ interface VikarSectionProps {
   /** Self + descendants — the cycle-prevention forbidden set (the vikar must not
       be one of the manager's own reports). Also enforced server-side. */
   forbidden?: Set<string>
+  /** S124 / TASK-12401 — the manager's Organisation; the vikar picker searches only inside it.
+      A vikar must be in the SAME reporting tree (the server 400s cross-tree), and a tree lives
+      inside exactly one Organisation, so this narrowing can never hide a valid candidate. */
+  organisationId: string | null
   /** Fired after a successful create/end so the caller refetches. */
   onChanged?: () => void
   /** S86 — reveal the create form immediately on mount (the inline tree-row
@@ -54,6 +58,7 @@ export function VikarSection({
   managerName,
   activeVikar,
   forbidden,
+  organisationId,
   onChanged,
   autoOpenForm = false,
   onCancel,
@@ -247,6 +252,7 @@ export function VikarSection({
         currentId={vikarUserId}
         forbidden={forbidden}
         excludeEmployeeId={managerId}
+        organisationId={organisationId}
         onPick={(id, name) => {
           setVikarUserId(id)
           setVikarName(name)

@@ -15,7 +15,6 @@
 // --unit-accent-<type> CSS custom properties declared on the page root (`.app` in
 // OrganisationOgMedarbejdere.module.css), so the hex never appears here.
 
-import { useState } from 'react'
 import type { ForestMaoNode } from '../../../hooks/useForest'
 import type { UnitType } from './typeMaps'
 import styles from './OrgStructureTree.module.css'
@@ -88,6 +87,16 @@ interface OrgStructureTreeProps {
   /** The currently-selected node id (orgId or unitId), or null. */
   selectedId: string | null
   onSelect: (node: SelectedNode) => void
+  /** Per-node expand state, LIFTED to the page (S124) so the Struktur panel's
+      "Vis/Skjul org." can drive this tree too. Keyed by the RAW node id — ids are
+      disjoint across tiers (forestIndex.ts: orgId is a code string, unitId a GUID),
+      which `forestIndex.byId` and this tree's own `tree-row-<id>` testids already
+      rely on, so one key space serves both panels and needs no translation. */
+  expanded: Record<string, boolean>
+  /** Per-node caret toggle. Narrow by design (id + target state, not a whole map):
+      two writers share the lifted map, and a full-map callback computed from a stale
+      prop could clobber a same-batch sync write. */
+  onToggleNode: (id: string, open: boolean) => void
 }
 
 export function OrgStructureTree({
@@ -96,17 +105,16 @@ export function OrgStructureTree({
   error,
   selectedId,
   onSelect,
+  expanded,
+  onToggleNode,
 }: OrgStructureTreeProps) {
-  // Per-node expand state, keyed by the composite key. A node with no explicit
-  // entry defaults to OPEN for the two org tiers (so the units are visible at a
-  // glance) and CLOSED for unit nodes (the deep sub-tree expands on demand).
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({})
-
+  // A node with no explicit entry defaults to OPEN for the two org tiers (so the
+  // units are visible at a glance) and CLOSED for unit nodes (the deep sub-tree
+  // expands on demand). Unchanged from the pre-lift behaviour.
   const isOpen = (node: TreeNode): boolean =>
-    expanded[node.key] ?? node.kind !== 'unit'
+    expanded[node.id] ?? node.kind !== 'unit'
 
-  const toggle = (node: TreeNode) =>
-    setExpanded((prev) => ({ ...prev, [node.key]: !isOpen(node) }))
+  const toggle = (node: TreeNode) => onToggleNode(node.id, !isOpen(node))
 
   // Lift ONLY the SelectedNode contract (not the tree's internal key/count/
   // children) so the page/TASK-10703 consumes a stable, minimal shape.

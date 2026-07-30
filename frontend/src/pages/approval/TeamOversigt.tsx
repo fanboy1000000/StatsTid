@@ -3,6 +3,7 @@ import { useAuth } from '../../contexts/AuthContext'
 import { formatMonthLabel } from '../../lib/locale'
 import { apiClient } from '../../lib/api'
 import { Dialog } from '../../components/ui/Dialog'
+import { ManagerSkemaGrid } from './ManagerSkemaGrid'
 import { useTeamOverview, type TeamOverviewRow } from '../../hooks/useTeamOverview'
 import { useAllocationBreakdown } from '../../hooks/useAllocationBreakdown'
 import { useCompliance } from '../../hooks/useCompliance'
@@ -10,13 +11,17 @@ import styles from './TeamOversigt.module.css'
 
 // ── Status mapping (the 4 display statuses) ──────────────────────────────────
 // SUBMITTED + EMPLOYEE_APPROVED → Indsendt (the leader-approves bucket);
-// APPROVED → Godkendt; REJECTED → Afvist; DRAFT → Kladde.
-type DisplayStatus = 'Indsendt' | 'Godkendt' | 'Afvist' | 'Kladde'
+// APPROVED → Godkendt; REJECTED → Afvist; DRAFT → "Ikke indsendt".
+// S124 / TASK-12402 — the leader-facing label is "Ikke indsendt", NOT "Kladde". A kladde is the
+// employee's own working state and naming it here implies the leader can look inside one; from this
+// side the only true statement is that nothing has arrived yet. The EMPLOYEE's own view
+// (MyPeriods) still says "Kladde" — there it is accurate and it is their own draft.
+type DisplayStatus = 'Indsendt' | 'Godkendt' | 'Afvist' | 'Ikke indsendt'
 
 interface StatusMeta {
   label: DisplayStatus
   badgeClass: string
-  /** Sort rank: Indsendt 0, Afvist 1, Godkendt 2, Kladde 3 (per the hifi). */
+  /** Sort rank: Indsendt 0, Afvist 1, Godkendt 2, "Ikke indsendt" 3 (per the hifi). */
   rank: number
   /** A pending (leader-approvable) row → has Godkend/Afvis actions + selectable. */
   isPending: boolean
@@ -39,13 +44,29 @@ function statusMeta(status: TeamOverviewRow['status']): StatusMeta {
     case 'REJECTED':
       return { label: 'Afvist', badgeClass: styles.badgeAfvist, rank: 1, isPending: false, isDecided: true, isReopenable: false, isDraft: false }
     default:
-      return { label: 'Kladde', badgeClass: styles.badgeKladde, rank: 3, isPending: false, isDecided: false, isReopenable: false, isDraft: true }
+      return { label: 'Ikke indsendt', badgeClass: styles.badgeKladde, rank: 3, isPending: false, isDecided: false, isReopenable: false, isDraft: true }
   }
 }
 
 // ── Danish number formatting (decimal comma, 1 dp) ───────────────────────────
 function daNum(n: number, dec = 1): string {
   return Number(n).toFixed(dec).replace('.', ',')
+}
+
+/**
+ * S124 / TASK-12402 — a withheld figure renders as an em dash, never as 0,0.
+ *
+ * `normRegistered` / `overtime` / `hasWarning` / `flexBalance` / `ferieUsed` all arrive NULL when
+ * the employee has not sent the period — the owner rule is that a manager sees NOTHING before a
+ * month is submitted — so the server omits them (see ApprovalEndpoints.cs). Every read here keys
+ * off that NULL rather than re-deriving the status rule: one copy of the predicate, on the server,
+ * is the point. "0,0 t" would claim the employee registered nothing, which is a different and
+ * false statement. `normExpected` and `ferieTotal` survive as the honest denominators — both are
+ * standing contract/quota facts that no registration can move.
+ */
+const WITHHELD = '—'
+function daNumOrWithheld(n: number | null, dec = 1): string {
+  return n === null ? WITHHELD : daNum(n, dec)
 }
 
 function flexText(flex: number): string {
@@ -131,23 +152,27 @@ function TeamRowDetail({
             <div className={styles.saldiGrid}>
               <div className={styles.saldiCell}>
                 <div className={styles.saldiCellLabel}>Flex saldo</div>
-                <div className={`${styles.saldiCellValue} ${flexColorClass(row.flexBalance)}`}>
-                  {flexText(row.flexBalance)}
+                <div className={`${styles.saldiCellValue} ${row.flexBalance === null ? '' : flexColorClass(row.flexBalance)}`}>
+                  {row.flexBalance === null ? WITHHELD : flexText(row.flexBalance)}
                 </div>
               </div>
               <div className={styles.saldiCell}>
                 <div className={styles.saldiCellLabel}>Ferie</div>
-                <div className={styles.saldiCellValue}>{row.ferieUsed} / {row.ferieTotal} dage</div>
+                <div className={styles.saldiCellValue}>
+                  {daNumOrWithheld(row.ferieUsed, 0)} / {daNum(row.ferieTotal, 0)} dage
+                </div>
               </div>
               <div className={styles.saldiCell}>
                 <div className={styles.saldiCellLabel}>Normtimer</div>
                 <div className={styles.saldiCellValue}>
-                  {daNum(row.normRegistered)} / {daNum(row.normExpected)} t
+                  {daNumOrWithheld(row.normRegistered)} / {daNum(row.normExpected)} t
                 </div>
               </div>
               <div className={styles.saldiCell}>
                 <div className={styles.saldiCellLabel}>{overtimeLabel}</div>
-                <div className={styles.saldiCellValue}>{daNum(row.overtime)} t</div>
+                <div className={styles.saldiCellValue}>
+                  {row.overtime === null ? WITHHELD : `${daNum(row.overtime)} t`}
+                </div>
               </div>
             </div>
           </div>
@@ -236,6 +261,13 @@ function TeamRowDetail({
           </div>
         )}
 
+        {/* S124 / TASK-12403 — THE SKEMA IS THE DEFAULT VIEW (owner ruling 2026-07-30): the summary
+            sits above, the full day-by-day grid is ALWAYS shown below it, and the decision buttons
+            come after. Approving a month without ever seeing which days carried the hours is the
+            thing this ordering prevents — the evidence now sits between the summary and the verdict.
+            Read-only; the panel only renders for a month the employee actually sent. */}
+        <ManagerSkemaGrid employeeId={row.employeeId} year={year} month={month} />
+
         {/* Footer — status line + the large action buttons (parent handlers). */}
         <div className={styles.detailFooter}>
           <div className={styles.detailStatusLine}>
@@ -246,7 +278,8 @@ function TeamRowDetail({
             ) : row.status === 'REJECTED' ? (
               `Afvist ${daDate(row.decisionAt)} · afventer ny indsendelse`
             ) : (
-              'Ikke indsendt endnu · kladde'
+              // No "· kladde" suffix: from the leader's side there is nothing to characterise.
+              'Ikke indsendt endnu'
             )}
           </div>
           <div className={styles.detailFooterActions}>
@@ -342,9 +375,16 @@ export function TeamOversigt() {
   const kpiAdvarsler = rows.filter(r => r.hasWarning).length
   const kpiGodkendt = rows.filter(r => r.status === 'APPROVED').length
   const kpiFravaer = rows.filter(r => r.awayToday).length
-  const kpiNorm = rows.length > 0
-    ? Math.round(rows.reduce((s, r) => s + (r.normExpected > 0 ? r.normRegistered / r.normExpected : 0), 0) / rows.length * 100)
-    : 0
+  // S124 / TASK-12402 — Norm-opfyldelse averages ONLY rows the employee actually sent. Averaging
+  // over the whole team would re-leak the withheld hours in aggregate form (a single draft row's
+  // registrations, recoverable from the team %), and would also drag the figure down with rows
+  // that have no reportable number at all. Denominator = the rows counted, not the team size.
+  // An all-draft team (every month starts that way) has NOTHING to average. Rendering 0% there
+  // would state that the team registered nothing — the same fabricated-zero lie as "0,0 t".
+  const normRows = rows.filter(r => r.normRegistered !== null)
+  const kpiNorm: number | null = normRows.length > 0
+    ? Math.round(normRows.reduce((s, r) => s + (r.normExpected > 0 ? r.normRegistered! / r.normExpected : 0), 0) / normRows.length * 100)
+    : null
 
   // ── Filter + sort ──────────────────────────────────────────────────────────
   const view = useMemo(() => {
@@ -363,9 +403,16 @@ export function TeamOversigt() {
       if (sortKey === 'navn') { av = a.displayName; bv = b.displayName }
       else if (sortKey === 'status') { av = statusMeta(a.status).rank; bv = statusMeta(b.status).rank }
       else if (sortKey === 'norm') {
-        av = a.normExpected > 0 ? a.normRegistered / a.normExpected : 0
-        bv = b.normExpected > 0 ? b.normRegistered / b.normExpected : 0
-      } else { av = a.flexBalance; bv = b.flexBalance }
+        // A withheld figure sorts BELOW every real ratio (-1), so un-submitted rows group at one
+        // end deterministically instead of masquerading as 0% fulfilment.
+        av = a.normRegistered === null ? -1 : a.normExpected > 0 ? a.normRegistered / a.normExpected : 0
+        bv = b.normRegistered === null ? -1 : b.normExpected > 0 ? b.normRegistered / b.normExpected : 0
+      } else {
+        // Flex can legitimately be negative, so a withheld balance sorts at -Infinity rather than
+        // at a magic number a real balance could collide with.
+        av = a.flexBalance ?? Number.NEGATIVE_INFINITY
+        bv = b.flexBalance ?? Number.NEGATIVE_INFINITY
+      }
       if (av < bv) return -1 * dir
       if (av > bv) return 1 * dir
       return 0
@@ -600,8 +647,17 @@ export function TeamOversigt() {
           <p className={`${styles.kpiValue} ${kpiAdvarsler > 0 ? styles.kpiValueWarning : ''}`}>{kpiAdvarsler}</p>
         </div>
         <div className={styles.kpiCard}>
-          <p className={styles.kpiLabel}>Norm-opfyldelse</p>
-          <p className={styles.kpiValue}>{kpiNorm}<span className={styles.kpiSuffix}>%</span></p>
+          {/* The tile changed meaning: it now covers only the rows that were actually sent, so it
+              says so rather than silently averaging a different population than before. */}
+          <p className={styles.kpiLabel}>
+            Norm-opfyldelse
+            {rows.length > 0 && (
+              <span className={styles.kpiSuffix}> · {normRows.length} af {rows.length} indsendt</span>
+            )}
+          </p>
+          <p className={styles.kpiValue} data-testid="kpi-norm-value">
+            {kpiNorm === null ? WITHHELD : <>{kpiNorm}<span className={styles.kpiSuffix}>%</span></>}
+          </p>
         </div>
         <div className={styles.kpiCard}>
           <p className={styles.kpiLabel}>Fravær i dag</p>
@@ -680,18 +736,32 @@ export function TeamOversigt() {
             <tbody>
               {view.map(row => {
                 const meta = statusMeta(row.status)
-                const ratio = row.normExpected > 0 ? row.normRegistered / row.normExpected : 0
-                const barColor = ratio >= 1 ? styles.barGreen : ratio >= 0.95 ? styles.barInfo : styles.barWarn
+                // null ⇒ withheld (not sent): no ratio, so no progress bar — a bar at 0% would
+                // read as "registered nothing this month".
+                const ratio = row.normRegistered === null
+                  ? null
+                  : row.normExpected > 0 ? row.normRegistered / row.normExpected : 0
+                const barColor = ratio === null
+                  ? ''
+                  : ratio >= 1 ? styles.barGreen : ratio >= 0.95 ? styles.barInfo : styles.barWarn
                 const checked = !!selected[row.employeeId]
                 const bulkOutcome = bulkResults[row.employeeId]
-                const isExpanded = expanded === row.employeeId
+                // Expandable only when there is a sent period to inspect. Keyed on the withheld
+                // marker, so it can never drift from what the server actually released.
+                const canExpand = row.normRegistered !== null
+                const isExpanded = canExpand && expanded === row.employeeId
                 const detailId = `team-detail-${row.employeeId}`
                 return (
                   <Fragment key={row.employeeId}>
+                    {/* The whole-row click is gated on `canExpand` alongside the chevron. Left
+                        ungated it was a dead affordance (pointer cursor + hover on a row that
+                        cannot open — the S91 discipline) AND actively harmful: it set `expanded`
+                        to an id that can never render, silently COLLAPSING whichever row was
+                        open, and armed the Escape handler on an id with no toggleRef. */}
                     <tr
-                      className={`${styles.bodyRow} ${styles.clickableRow} ${checked || isExpanded ? styles.rowSelected : ''}`}
+                      className={`${styles.bodyRow} ${canExpand ? styles.clickableRow : ''} ${checked || isExpanded ? styles.rowSelected : ''}`}
                       data-testid={`team-row-${row.employeeId}`}
-                      onClick={() => toggleExpand(row.employeeId)}
+                      onClick={canExpand ? () => toggleExpand(row.employeeId) : undefined}
                     >
                       {/* stopPropagation: checkbox cell must not toggle the row. */}
                       <td className={styles.checkboxCell} onClick={e => e.stopPropagation()}>
@@ -704,17 +774,27 @@ export function TeamOversigt() {
                         />
                       </td>
                       <td>
-                        <button
-                          type="button"
-                          ref={el => { toggleRefs.current[row.employeeId] = el }}
-                          className={styles.chevronBtn}
-                          aria-expanded={isExpanded}
-                          aria-controls={isExpanded ? detailId : undefined}
-                          aria-label={`${isExpanded ? 'Skjul' : 'Vis'} detaljer for ${row.displayName}`}
-                          onClick={e => { e.stopPropagation(); toggleExpand(row.employeeId) }}
-                        >
-                          <span className={`${styles.chevron} ${isExpanded ? styles.chevronOpen : ''}`}>▸</span>
-                        </button>
+                        {/* S124 / TASK-12402 — NO expander on a row the employee has not sent. The
+                            detail panel's whole purpose is the un-submitted content: withheld
+                            Normtimer/overtid, plus a LAZY fetch of "Fordeling af arbejdstid" (the
+                            per-task hour split) and the compliance warnings. Rendering a chevron
+                            that opens a panel with nothing legitimate in it would also fire two
+                            requests per row for data the manager may not read. */}
+                        {canExpand ? (
+                          <button
+                            type="button"
+                            ref={el => { toggleRefs.current[row.employeeId] = el }}
+                            className={styles.chevronBtn}
+                            aria-expanded={isExpanded}
+                            aria-controls={isExpanded ? detailId : undefined}
+                            aria-label={`${isExpanded ? 'Skjul' : 'Vis'} detaljer for ${row.displayName}`}
+                            onClick={e => { e.stopPropagation(); toggleExpand(row.employeeId) }}
+                          >
+                            <span className={`${styles.chevron} ${isExpanded ? styles.chevronOpen : ''}`}>▸</span>
+                          </button>
+                        ) : (
+                          <span className={styles.chevronBtn} aria-hidden="true" />
+                        )}
                         <span className={styles.empName}>{row.displayName}</span>
                         <span className={styles.empId}>{row.employeeId}</span>
                       </td>
@@ -723,18 +803,24 @@ export function TeamOversigt() {
                         <span className={`${styles.badge} ${meta.badgeClass}`}>{meta.label}</span>
                       </td>
                       <td className={styles.nowrap}>
-                        <div>{daNum(row.normRegistered)} / {daNum(row.normExpected)} t</div>
-                        <div className={styles.barTrack}>
-                          <div
-                            className={`${styles.barFill} ${barColor}`}
-                            style={{ width: `${Math.min(100, Math.round(ratio * 100))}%` }}
-                          />
-                        </div>
+                        <div>{daNumOrWithheld(row.normRegistered)} / {daNum(row.normExpected)} t</div>
+                        {ratio !== null && (
+                          <div className={styles.barTrack}>
+                            <div
+                              className={`${styles.barFill} ${barColor}`}
+                              style={{ width: `${Math.min(100, Math.round(ratio * 100))}%` }}
+                            />
+                          </div>
+                        )}
                       </td>
-                      <td className={`${styles.right} ${styles.flexCell} ${flexColorClass(row.flexBalance)}`}>
-                        {flexText(row.flexBalance)}
+                      <td className={`${styles.right} ${styles.flexCell} ${row.flexBalance === null ? '' : flexColorClass(row.flexBalance)}`}>
+                        {row.flexBalance === null ? WITHHELD : flexText(row.flexBalance)}
                       </td>
-                      <td className={styles.secondary}>{row.ferieUsed} / {row.ferieTotal} dage</td>
+                      {/* The QUOTA stays (a standing entitlement, the honest denominator); only the
+                          USED count is withheld — it moves the moment the employee drafts a day off. */}
+                      <td className={styles.secondary}>
+                        {daNumOrWithheld(row.ferieUsed, 0)} / {daNum(row.ferieTotal, 0)} dage
+                      </td>
                       <td>
                         {row.hasWarning ? (
                           <span className={styles.warnChip} title="Manglende fordeling på projekter">
@@ -785,7 +871,10 @@ export function TeamOversigt() {
                           // no dead Genåbn button. The Status column already shows "Afvist".
                           <span className={styles.notSubmitted}>Afventer ny indsendelse</span>
                         ) : (
-                          <span className={styles.notSubmitted}>Ikke indsendt</span>
+                          // S124 / TASK-12402 — the Status badge now READS "Ikke indsendt", so
+                          // repeating it here said the same thing twice across two columns. There is
+                          // no action to offer either, so the Handling cell is simply empty.
+                          <span className={styles.notSubmitted} aria-hidden="true">{WITHHELD}</span>
                         )}
                       </td>
                     </tr>

@@ -6,6 +6,13 @@
 // (the cycle-prevention mirror); a client-side `forbidden` set is the additional
 // defence-in-depth mirror (R4: forbidden = self + descendantsOf), filtering any
 // stray hit before render.
+//
+// S124 / TASK-12401 — plus the REQUIRED `organisationId` narrowing: every reporting
+// edge this picker feeds is same-Organisation-validated server-side (ADR-027 D2), so
+// showing other Organisations' people was offering guaranteed-400 choices. The filter
+// is applied SERVER-side, not to the fetched page: `total` and the "søg for at
+// indsnævre" footer below must describe the SCOPED match count, and a client-side
+// filter of a 60-row page would make both of them lie.
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { Dialog } from '../../../components/ui'
 import { useReportingLines, type PersonSearchHit } from '../../../hooks/useReportingLines'
@@ -25,6 +32,20 @@ interface PersonPickerDialogProps {
   forbidden?: Set<string>
   /** Threaded to the server search so self + descendants are excluded at source. */
   excludeEmployeeId?: string
+  /**
+   * S124 / TASK-12401 — narrow the search to ONE Organisation: the SUBJECT's.
+   *
+   * REQUIRED, not optional, and that is the point. `ValidateSameOrganisationAsync` (ADR-027 D2)
+   * rejects every cross-Organisation reporting edge with a 400, so an unscoped picker offers
+   * names the server will always refuse. An OPTIONAL prop would let a forgotten call site
+   * silently fall back to the all-Organisations list — i.e. reintroduce exactly this bug,
+   * invisibly. Required means the compiler names any site that has not been considered.
+   *
+   * `null` is the explicit "no narrowing" opt-out (e.g. a create form before an Organisation has
+   * been chosen). The server intersects this with the caller's RBAC scope, so passing an id can
+   * only ever SHRINK the result — it can never widen a scoped actor's reach.
+   */
+  organisationId: string | null
   /** `displayName` is the picked person's name (for an immediate label). */
   onPick: (userId: string, displayName: string) => void
   onClose: () => void
@@ -37,6 +58,7 @@ export function PersonPickerDialog({
   currentId,
   forbidden,
   excludeEmployeeId,
+  organisationId,
   onPick,
   onClose,
 }: PersonPickerDialogProps) {
@@ -68,6 +90,7 @@ export function PersonPickerDialog({
       const result = await searchPeople({
         q: q.trim() || undefined,
         excludeEmployeeId,
+        organisationId: organisationId ?? undefined,
         limit: 60,
       })
       if (cancelled) return
@@ -85,7 +108,7 @@ export function PersonPickerDialog({
       cancelled = true
       clearTimeout(handle)
     }
-  }, [open, q, excludeEmployeeId, searchPeople])
+  }, [open, q, excludeEmployeeId, organisationId, searchPeople])
 
   // Focus the search field when opened.
   useEffect(() => {

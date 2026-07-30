@@ -179,6 +179,76 @@ public sealed class S91TreePageHrAccessTests : IAsyncLifetime
         Assert.DoesNotContain(emp, ids); // STY01 user out of the floored LocalHR accessible set
     }
 
+    // ════════════════════════════════════════════════════════════════════════════════
+    //  S124 / TASK-12401 — the picker's OPTIONAL `organisationId` narrowing. The picker
+    //  scopes itself to the SUBJECT's Organisation because a cross-Organisation reporting
+    //  edge is rejected server-side anyway (ADR-027 D2), so offering other orgs' people was
+    //  offering guaranteed-400 choices.
+    //
+    //  The parameter NARROWS ONLY. It is a SEPARATE conjunct AND-ed with the RBAC
+    //  accessible-org predicate, never a substitute for it — the two INTERSECT. These two
+    //  tests pin both halves of that contract; the second is the escalation guard and is the
+    //  reason the parameter is safe to expose at all.
+    // ════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>IN-SCOPE narrowing: HR@STY01 searching WITH <c>organisationId=STY01</c> still sees
+    /// the STY01 user, and searching with a DIFFERENT org id sees nobody. Proves the parameter
+    /// actually filters (not silently ignored) in the direction it is meant to.</summary>
+    [Fact]
+    public async Task PersonSearchPicker_OrganisationId_NarrowsWithinTheActorsOwnScope()
+    {
+        var emp = await SeedTargetEmployeeAsync("s124narrow");
+        var client = ClientWith(AdminToken(StatsTidRoles.LocalHR, CoveringOrg, "s124_narrow_hr"));
+
+        // (a) the SUBJECT's own org — the user is still returned.
+        var inOrg = await client.GetAsync(
+            $"/api/admin/users/search?q=s124narrow&organisationId={TargetOrg}&limit=200&offset=0");
+        Assert.Equal(HttpStatusCode.OK, inOrg.StatusCode);
+        var inBody = await inOrg.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Contains(emp, inBody.GetProperty("items").EnumerateArray()
+            .Select(e => e.GetProperty("userId").GetString()));
+
+        // (b) a DIFFERENT org — the same in-scope actor now sees nobody. `total` is asserted as
+        // well as `items`: the narrowing conjunct must sit in the `matched` CTE that feeds BOTH,
+        // not in the `page` slice — placed in `page` the items would empty while `total` kept
+        // reporting the unnarrowed count, and the picker footer would lie.
+        var otherOrg = await client.GetAsync(
+            $"/api/admin/users/search?q=s124narrow&organisationId={DisjointOrg}&limit=200&offset=0");
+        Assert.Equal(HttpStatusCode.OK, otherOrg.StatusCode);
+        var otherBody = await otherOrg.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Empty(otherBody.GetProperty("items").EnumerateArray());
+        Assert.Equal(0, otherBody.GetProperty("total").GetInt32());
+    }
+
+    /// <summary><b>THE ESCALATION GUARD.</b> An OUT-OF-SCOPE actor (the mixed HR@STY05 +
+    /// Leader@MIN01 JWT) explicitly asks for <c>organisationId=STY01</c> — an Organisation it may
+    /// NOT see. It must still get NOTHING: the parameter intersects with the RBAC accessible-org
+    /// set, so it can only ever shrink a result, never widen one. Were the narrowing applied
+    /// INSTEAD of the RBAC predicate, this request would hand the caller STY01's roster — a
+    /// privilege escalation opened by a UX convenience.
+    ///
+    /// <para>Also asserts <b>200-with-nothing, NOT 403</b>. Answering "you may not see that org"
+    /// would make the parameter an org-existence oracle: a caller could probe arbitrary ids and
+    /// distinguish "exists but forbidden" from "does not exist". An empty page is indistinguishable
+    /// across "no such org", "org I cannot see", and "org with no matches" — which is the point.</para></summary>
+    [Fact]
+    public async Task PersonSearchPicker_OutOfScopeActor_ForeignOrganisationId_StillReturnsNothing()
+    {
+        var emp = await SeedTargetEmployeeAsync("s124escal");
+        var client = ClientWith(MixedHrLeaderToken("s124_escal_oos"));
+
+        var rsp = await client.GetAsync(
+            $"/api/admin/users/search?q=s124escal&organisationId={TargetOrg}&limit=200&offset=0");
+
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode); // NOT 403 — no existence oracle
+        var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
+        var ids = body.GetProperty("items").EnumerateArray()
+            .Select(e => e.GetProperty("userId").GetString()).ToList();
+        Assert.DoesNotContain(emp, ids);
+        Assert.Empty(ids);
+        Assert.Equal(0, body.GetProperty("total").GetInt32());
+    }
+
     /// <summary>Active-vikar READ: the mixed HR@STY05 + Leader@MIN01 JWT → 403 on a STY01 manager's
     /// vikar (containment preserved at the LocalHR floor).</summary>
     [Fact]
@@ -274,6 +344,129 @@ public sealed class S91TreePageHrAccessTests : IAsyncLifetime
     }
 
     /// <summary>A single-scope token anchored at <paramref name="orgId"/> (ORG_ONLY, S93 flat role-scope).</summary>
+    // ════════════════════════════════════════════════════════════════════════════════
+    //  S124 / TASK-12404 — WHO MAY EDIT AN EMPLOYEE'S REGISTRATIONS.
+    //
+    //  Owner ruling 2026-07-30: "A manager can never edit an employee's registrations. Only HR and
+    //  admins can." Before this, ANY non-Employee actor whose org-scope covered the target could
+    //  write another employee's time data — LocalLeader included. Two endpoints carried that shape:
+    //  the skema save, and POST /api/time-entries (which has NO approval-period check at all).
+    //
+    //  These are RED-on-old in the denial direction: both leader writes returned 2xx before the
+    //  floor. The HR-allowed and SELF-allowed cases are the guards that the narrowing did not
+    //  over-reach — the self case especially, since a leader is also an employee who must be able to
+    //  register their OWN time.
+    // ════════════════════════════════════════════════════════════════════════════════
+
+    private static readonly object SkemaSavePayload = new
+    {
+        year = 2026,
+        month = 5,
+        entries = Array.Empty<object>(),
+        absences = Array.Empty<object>(),
+        workTime = Array.Empty<object>(),
+    };
+
+    private static object TimeEntryPayload(string employeeId) => new
+    {
+        employeeId,
+        date = "2026-05-04",
+        hours = 7.4m,
+        activityType = "NORMAL",
+        agreementCode = "AC",
+        okVersion = "OK24",
+    };
+
+    /// <summary>THE RULING, denial direction: a LocalLeader covering the target's org may NOT save
+    /// another employee's month. RED-on-old (was a 2xx).</summary>
+    [Fact]
+    public async Task SkemaSave_LeaderOnAnotherEmployee_Is403()
+    {
+        var emp = await SeedTargetEmployeeAsync("s124wr_leader");
+        var client = ClientWith(AdminToken(StatsTidRoles.LocalLeader, CoveringOrg, "s124_wr_leader"));
+
+        var rsp = await client.PostAsync($"/api/skema/{emp}/save", JsonContent.Create(SkemaSavePayload));
+        Assert.Equal(HttpStatusCode.Forbidden, rsp.StatusCode);
+    }
+
+    /// <summary>THE RULING, allowed direction: HR may. Anything but 403 proves the floor admits HR —
+    /// the save's own business validation is not what this test is about.</summary>
+    [Fact]
+    public async Task SkemaSave_HrOnAnotherEmployee_Is200()
+    {
+        var emp = await SeedTargetEmployeeAsync("s124wr_hr");
+        var client = ClientWith(AdminToken(StatsTidRoles.LocalHR, CoveringOrg, "s124_wr_hr"));
+
+        var rsp = await client.PostAsync($"/api/skema/{emp}/save", JsonContent.Create(SkemaSavePayload));
+        // Step-7a Codex: assert the DOCUMENTED success, not merely "not 403" — NotEqual(Forbidden)
+        // also passes on 400/404/500 and would prove nothing about the write being admitted.
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+    }
+
+    /// <summary>THE SELF-EXEMPTION GUARD — the most easily broken part of this change. A LocalLeader
+    /// is ALSO an employee who registers their own time. They are not Employee-role, so they fall
+    /// through the same scope branch the floor sits on; applying the HR floor unconditionally would
+    /// have locked every leader out of their OWN timesheet.</summary>
+    [Fact]
+    public async Task SkemaSave_LeaderOnTheirOwnMonth_Is200()
+    {
+        var self = await SeedTargetEmployeeAsync("s124wr_self");
+        var client = ClientWith(AdminToken(StatsTidRoles.LocalLeader, CoveringOrg, self));
+
+        var rsp = await client.PostAsync($"/api/skema/{self}/save", JsonContent.Create(SkemaSavePayload));
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+    }
+
+    /// <summary>The same ruling on the OTHER member of the write class. This endpoint is the worse
+    /// one: it has no approval-period status check, so before the floor a leader could write an
+    /// employee's entry in any period state. RED-on-old.</summary>
+    [Fact]
+    public async Task TimeEntryCreate_LeaderOnAnotherEmployee_Is403()
+    {
+        var emp = await SeedTargetEmployeeAsync("s124te_leader");
+        var client = ClientWith(AdminToken(StatsTidRoles.LocalLeader, CoveringOrg, "s124_te_leader"));
+
+        var rsp = await client.PostAsync("/api/time-entries", JsonContent.Create(TimeEntryPayload(emp)));
+        Assert.Equal(HttpStatusCode.Forbidden, rsp.StatusCode);
+    }
+
+    [Fact]
+    public async Task TimeEntryCreate_HrOnAnotherEmployee_Is201()
+    {
+        var emp = await SeedTargetEmployeeAsync("s124te_hr");
+        var client = ClientWith(AdminToken(StatsTidRoles.LocalHR, CoveringOrg, "s124_te_hr"));
+
+        var rsp = await client.PostAsync("/api/time-entries", JsonContent.Create(TimeEntryPayload(emp)));
+        Assert.Equal(HttpStatusCode.Created, rsp.StatusCode);
+    }
+
+    [Fact]
+    public async Task TimeEntryCreate_LeaderOnTheirOwnEntry_Is201()
+    {
+        var self = await SeedTargetEmployeeAsync("s124te_self");
+        var client = ClientWith(AdminToken(StatsTidRoles.LocalLeader, CoveringOrg, self));
+
+        var rsp = await client.PostAsync("/api/time-entries", JsonContent.Create(TimeEntryPayload(self)));
+        Assert.Equal(HttpStatusCode.Created, rsp.StatusCode);
+    }
+
+    /// <summary>The TASK-12404 WRITE narrowing did not bleed into READS: HR still reads the month (its
+    /// corrective tier is deliberately not month-gated).
+    ///
+    /// <para>This uses HR, not a leader, ON PURPOSE. An earlier version asserted a LEADER could read a
+    /// month with NO approval period — which was the P7 leak Step-7a Codex caught, not a guarantee
+    /// worth pinning. The leader read is month-gated; that behaviour is covered by the TASK-12405
+    /// cases in <c>AllocationBreakdownEndpointTests</c> (200 once SENT, 403 while DRAFT/absent).</para></summary>
+    [Fact]
+    public async Task SkemaMonthRead_HrStillAllowed_TheWriteNarrowingDidNotBleedIntoReads()
+    {
+        var emp = await SeedTargetEmployeeAsync("s124rd_hr");
+        var client = ClientWith(AdminToken(StatsTidRoles.LocalHR, CoveringOrg, "s124_rd_hr"));
+
+        var rsp = await client.GetAsync($"/api/skema/{emp}/month?year=2026&month=5");
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+    }
+
     private static string AdminToken(string role, string orgId, string actorId)
     {
         var svc = NewTokenService();

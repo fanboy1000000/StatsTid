@@ -15,9 +15,14 @@
 // row hosts the UNIT mutations (+ <ChildType> / Rediger / Flyt / Slet → LocalHR) and
 // the ORG/MAO mutations (Omdøb / Flyt / Slet / + Organisation / + Ministerområde →
 // LocalAdmin/GlobalAdmin per the live floors; the FE gate is UX, the backend
-// re-checks). The PEOPLE-mutation surface stays READ-ONLY (S109): NO + Medarbejder /
-// cross-unit "Ret" / leaderless "Tildel leder" / vikar-edit / per-row Rediger › /
-// person-name edit link — person & leader rows render but are NOT clickable-to-edit.
+// re-checks). The PEOPLE-mutation surface followed in S109 (TASK-10903): + Medarbejder,
+// the cross-unit "Ret", the leaderless "Tildel leder", vikar edit and per-row person
+// editing, all at the LocalHR floor.
+//
+// S124 moved each row's PRIMARY action onto its NAME and deleted the right-edge links:
+// a person name IS the edit affordance (was "Rediger ›") and a unit name IS the open
+// affordance (was "Åbn ›"). Below the LocalHR floor a person name renders as inert text,
+// never a dead button — the gate lives in ONE place, PersonNameCell.
 //
 // Styling is tokens-not-hardcoded: per-type accent/tint come from the inherited
 // --unit-accent-<type> / --unit-tint-<type> page-root vars; the design's amber /
@@ -107,6 +112,11 @@ interface StrukturPanelProps {
       caller/test compiles unchanged. */
   focusPersonId?: string
   onFocusConsumed?: () => void
+  /** S124 — push an expand/collapse into the page-owned left-tree expansion map.
+      REQUIRED, not optional: a caller that forgot to wire it would leave
+      "Vis/Skjul org." silently half-dead on the left, which is exactly the S91
+      dead-button class. Called once per action with the full target id set. */
+  onExpandSync: (ids: string[], open: boolean) => void
 }
 
 const MONTHS_DA = ['jan', 'feb', 'mar', 'apr', 'maj', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec']
@@ -211,6 +221,40 @@ function retMessageFor(status: number): string {
   }
 }
 
+// S124 — the person name AS the edit affordance (the right-edge "Rediger ›" is gone).
+// ONE component for both the leader row and the employee row on purpose: the
+// `canEditUnits` gate and the `person-edit-<id>` testid are the LocalHR-floor contract
+// asserted by CapabilityMatrix.test.tsx, and two hand-copied call sites would give that
+// contract two places to drift. Below the floor this renders exactly what it rendered
+// before — a plain, inert <span> — so the "no dead affordance for a role that cannot
+// act" guard is preserved rather than merely re-tested.
+function PersonNameCell({
+  employeeId,
+  displayName,
+  editable,
+  onEdit,
+}: {
+  employeeId: string
+  displayName: string
+  editable: boolean
+  onEdit: () => void
+}) {
+  if (!editable) {
+    return <span className={styles.personName}>{displayName}</span>
+  }
+  return (
+    <button
+      type="button"
+      className={`${styles.personName} ${styles.nameAction}`}
+      data-testid={`person-edit-${employeeId}`}
+      aria-label={`Rediger ${displayName}`}
+      onClick={onEdit}
+    >
+      {displayName}
+    </button>
+  )
+}
+
 export function StrukturPanel({
   forest,
   selected,
@@ -225,6 +269,7 @@ export function StrukturPanel({
   onMutated,
   focusPersonId,
   onFocusConsumed,
+  onExpandSync,
 }: StrukturPanelProps) {
   const index = useMemo(() => buildForestIndex(forest), [forest])
   const selectedNode = selected ? index.byId.get(selected.id) ?? null : null
@@ -347,19 +392,16 @@ export function StrukturPanel({
       onFocusConsumed?.() // moved/stale/cross-org → land on the org, no drawer
       return
     }
-    // Mirror the per-row "Rediger ›" gate (:1352): structurally always true on this
-    // LocalHR+ page, but keeps "behaves exactly like clicking Rediger ›" honest.
+    // Mirror the per-row edit gate (PersonNameCell's `editable`): structurally always
+    // true on this LocalHR+ page, but keeps "behaves exactly like clicking the name"
+    // honest.
     if (canEditUnits) {
       // REVEAL: both people layers on + expand the org's descendant units +
       // un-collapse the target's unit med-section and (if the target is a report)
       // its leader — else a previously-collapsed layer/leader would hide the row.
       setShowPeople(true)
       setShowLeaders(true)
-      setTreeOpen((prev) => {
-        const out = { ...prev }
-        for (const id of descendantUnitIds(selectedNode)) out[id] = true
-        return out
-      })
+      revealSubtree(selectedNode)
       // The med-section key must match the RENDERED medHeader: a unit-homed row sits
       // under its unit (medClosed keyed by unitId); an ORG-HOMED row (unitId null)
       // sits under the selected org's OWN med-section — the medHeader pushes
@@ -423,6 +465,31 @@ export function StrukturPanel({
     }
     setFlashPersonId(null)
   }, [flashPersonId])
+
+  // S124 — the ONE reveal path. Every bulk "open the sub-tree" action routes through
+  // here so the left navigation tree follows the right panel instead of silently
+  // desynchronising. Declared ABOVE the `!selectedNode` early return because the
+  // person-focus effect below/above it is a hook and must run unconditionally — a
+  // const declared after the return would be in the TDZ for that closure.
+  //
+  // The two panels need DIFFERENT id sets, which is the whole subtlety:
+  //   • right (`treeOpen`) — descendants only. The panel ROOTS at selectedNode
+  //     (walkUnit(selectedNode, 0)), so the node's own key is meaningless there.
+  //   • left  (`onExpandSync`) — `pathOf` (ancestors AND the node itself) PLUS the
+  //     descendants. The tree renders the whole forest and its `walk` only recurses
+  //     into OPEN nodes, and unit nodes default CLOSED — so without the self+ancestor
+  //     leg the descendants stay invisible no matter what we write for them.
+  const revealSubtree = (node: StrukturNode) => {
+    const descendants = descendantUnitIds(node)
+    setTreeOpen((prev) => {
+      const out = { ...prev }
+      for (const id of descendants) out[id] = true
+      return out
+    })
+    // Outside the updater on purpose: React may invoke an updater twice, and a side
+    // effect in there would double-fire.
+    onExpandSync([...pathOf(index, node.id).map((n) => n.id), ...descendants], true)
+  }
 
   if (!selectedNode) {
     return (
@@ -890,11 +957,7 @@ export function StrukturPanel({
       // Reveal nested people so the filter is visible across the whole Struktur.
       setShowPeople(true)
       setShowLeaders(true)
-      setTreeOpen((prev) => {
-        const out = { ...prev }
-        for (const id of descendantUnitIds(selectedNode)) out[id] = true
-        return out
-      })
+      revealSubtree(selectedNode)
     }
   }
 
@@ -906,13 +969,7 @@ export function StrukturPanel({
   // the unit expansion state alone ("Vis org./Skjul org." owns that).
   const togglePeople = () => {
     const next = !showPeople
-    if (next) {
-      setTreeOpen((prev) => {
-        const out = { ...prev }
-        for (const id of descendantUnitIds(selectedNode)) out[id] = true
-        return out
-      })
-    }
+    if (next) revealSubtree(selectedNode)
     setShowPeople(next)
   }
 
@@ -921,13 +978,7 @@ export function StrukturPanel({
   // S114 unit-homed reveal fix).
   const toggleLeaders = () => {
     const next = !showLeaders
-    if (next) {
-      setTreeOpen((prev) => {
-        const out = { ...prev }
-        for (const id of descendantUnitIds(selectedNode)) out[id] = true
-        return out
-      })
-    }
+    if (next) revealSubtree(selectedNode)
     setShowLeaders(next)
   }
 
@@ -1103,15 +1154,24 @@ export function StrukturPanel({
   const peopleLabel = showPeople ? 'Skjul medarbejdere' : 'Vis medarbejdere'
   const leaderLabel = showLeaders ? 'Skjul ledere' : 'Vis ledere'
 
+  // Expand and collapse are deliberately ASYMMETRIC on the left tree:
+  //   • expand  → revealSubtree (path + descendants), so the sub-tree is actually visible.
+  //   • collapse → descendants only, written as an explicit `false`. Two reasons: the
+  //     selected node and its ancestors must STAY open or the user loses their place;
+  //     and DELETING a key would revert the org tiers to their default-OPEN state,
+  //     i.e. the exact inverse of "Skjul". The consequence — an org collapsed here
+  //     stays collapsed for the session rather than silently reopening — is intended.
   const toggleExpandAll = () => {
+    if (!anyOpen) {
+      revealSubtree(selectedNode)
+      return
+    }
     setTreeOpen((prev) => {
       const next = { ...prev }
-      for (const id of descendants) {
-        if (anyOpen) delete next[id]
-        else next[id] = true
-      }
+      for (const id of descendants) delete next[id]
       return next
     })
+    onExpandSync(descendants, false)
   }
 
   const waitingForRoster = !!organisationId && !roster && rosterLoading
@@ -1292,6 +1352,7 @@ export function StrukturPanel({
                         currentApproverId={null}
                         currentApproverName={null}
                         computeForbidden={() => descendantsOfPerson(p.employeeId)}
+                        organisationId={organisationId}
                         trigger="assign"
                         onChanged={() => {
                           void onMutated?.(organisationId)
@@ -1340,22 +1401,36 @@ export function StrukturPanel({
             >
               {expandLabel}
             </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={toggleLeaders}
-              data-testid="toggle-leaders"
-            >
-              {leaderLabel}
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={togglePeople}
-              data-testid="toggle-people"
-            >
-              {peopleLabel}
-            </Button>
+            {/* The people-visibility toggles are OMITTED on a MAO. A MAO's
+                `organisationId` is null by design (forestIndex.ts — "a MAO spans multiple
+                Organisations, each its own roster"), so no roster ever loads, `membersOf`
+                is empty throughout the subtree, and neither toggle can reveal a row. They
+                are HIDDEN rather than disabled to match how this panel already handles
+                tier-inapplicable surfaces — the settlement overview (`showSettlement`) and
+                the unit action cluster both omit rather than grey — and because the MAO
+                view is already reframed as an organisation list ("Organisationer" /
+                "N organisationer"). Under that framing these are not "unavailable here",
+                they are not part of this view. */}
+            {!isMao && (
+              <>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={toggleLeaders}
+                  data-testid="toggle-leaders"
+                >
+                  {leaderLabel}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={togglePeople}
+                  data-testid="toggle-people"
+                >
+                  {peopleLabel}
+                </Button>
+              </>
+            )}
           </div>
         </div>
 
@@ -1392,18 +1467,25 @@ export function StrukturPanel({
                     <span className={styles.caretSpacer} aria-hidden="true" />
                   )}
                   <span className={styles.dot} aria-hidden="true" style={{ background: `var(--unit-accent-${n.node.type})` }} />
-                  <span className={styles.unitName}>{n.node.name}</span>
+                  {/* S124 — the name IS the open affordance (the right-edge "Åbn ›" is
+                      gone). The testid MOVED here rather than being re-minted, so the
+                      navigation contract keeps expressing the same intent. Ungated, as
+                      "Åbn ›" was: navigating is available to every role that can see the
+                      row. aria-label carries the VERB — a button whose whole content is a
+                      unit name would otherwise announce with no indication of what
+                      activation does, and read identically to a person name. */}
+                  <button
+                    type="button"
+                    className={`${styles.unitName} ${styles.unitNameAction}`}
+                    data-testid={`open-unit-${n.node.id}`}
+                    aria-label={`Åbn ${n.node.name}`}
+                    onClick={() => onNavigate(toSelected(n.node))}
+                  >
+                    {n.node.name}
+                  </button>
                   <span className={styles.typeChipSm} style={chipStyle(n.node.type)}>{LABEL[n.node.type]}</span>
                   <span className={styles.unitLeaders}>{n.leaderNames}</span>
                   <span className={styles.count}>{n.count}</span>
-                  <button
-                    type="button"
-                    className={styles.openLink}
-                    data-testid={`open-unit-${n.node.id}`}
-                    onClick={() => onNavigate(toSelected(n.node))}
-                  >
-                    Åbn ›
-                  </button>
                 </div>
               )
             }
@@ -1450,7 +1532,12 @@ export function StrukturPanel({
                   <span className={styles.leaderAvatar} aria-hidden="true">{initials(n.row.displayName)}</span>
                   <span className={styles.personBody}>
                     <span className={styles.personNameRow}>
-                      <span className={styles.personName}>{n.row.displayName}</span>
+                      <PersonNameCell
+                        employeeId={n.row.employeeId}
+                        displayName={n.row.displayName}
+                        editable={canEditUnits}
+                        onEdit={() => openEditPerson(n.row)}
+                      />
                       {v && <span className={styles.fravBadge} data-testid={`fravaerende-${n.row.employeeId}`}>Fraværende</span>}
                     </span>
                     {n.row.position && <span className={styles.personTitle}>{n.row.position}</span>}
@@ -1467,16 +1554,6 @@ export function StrukturPanel({
                     </span>
                   )}
                   <span className={styles.reportCount}>{n.reportCount} medarb.</span>
-                  {canEditUnits && (
-                    <button
-                      type="button"
-                      className={styles.personEdit}
-                      data-testid={`person-edit-${n.row.employeeId}`}
-                      onClick={() => openEditPerson(n.row)}
-                    >
-                      Rediger ›
-                    </button>
-                  )}
                 </div>
               )
             }
@@ -1491,7 +1568,12 @@ export function StrukturPanel({
                 >
                   <span className={styles.employeeAvatar} aria-hidden="true">{initials(n.row.displayName)}</span>
                   <span className={styles.personBody}>
-                    <span className={styles.personName}>{n.row.displayName}</span>
+                    <PersonNameCell
+                      employeeId={n.row.employeeId}
+                      displayName={n.row.displayName}
+                      editable={canEditUnits}
+                      onEdit={() => openEditPerson(n.row)}
+                    />
                     {n.row.position && <span className={styles.personTitle}>{n.row.position}</span>}
                   </span>
                   {n.variant === 'external' && (
@@ -1516,16 +1598,6 @@ export function StrukturPanel({
                     <span className={styles.vikarForTag} data-testid={`vikar-for-${n.row.employeeId}`}>
                       Vikar for {n.coveringNames.join(', ')}
                     </span>
-                  )}
-                  {canEditUnits && (
-                    <button
-                      type="button"
-                      className={styles.personEdit}
-                      data-testid={`person-edit-${n.row.employeeId}`}
-                      onClick={() => openEditPerson(n.row)}
-                    >
-                      Rediger ›
-                    </button>
                   )}
                 </div>
               )

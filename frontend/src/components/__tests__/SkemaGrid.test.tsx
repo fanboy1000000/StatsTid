@@ -877,6 +877,36 @@ describe('SkemaGrid — read-only / review mode (R12)', () => {
     expect(container.textContent).not.toContain('skjulte rækker')
   })
 
+  // ── S124 / TASK-12403 — showWorkedHours (the leader's review display) ──────────
+  // The DEFAULT Arbejdstid display answers "is this day fully allocated?" (a balanced day shows
+  // '✓'). A leader reviewing a submitted month needs the opposite question answered: what was
+  // actually registered that day. On a correctly-allocated month the default therefore hides the
+  // worked hours entirely — on the one surface whose purpose is to show them.
+  it('showWorkedHours renders the WORKED hours on a balanced day, not the ✓ glyph', () => {
+    const balanced = {
+      readOnly: true,
+      // Worked 7,4 AND allocated 7,4 → classifyAllocation = 'balanced' → the default renders '✓'.
+      workIntervals: new Map([['2026-03-02', [{ start: '08:00', end: '15:24' }]]]),
+      cellValues: new Map([['DRIFT:2026-03-02', 7.4]]),
+    }
+
+    // Default (the employee's own locked month): the allocation glyph, unchanged.
+    const before = renderGrid(balanced)
+    expect(dayCell(rowByLabel(before.container, 'Arbejdstid'), 2).textContent).toBe('✓')
+    before.unmount()
+
+    // The leader's review display: the hours.
+    const after = renderGrid({ ...balanced, showWorkedHours: true })
+    expect(dayCell(rowByLabel(after.container, 'Arbejdstid'), 2).textContent).toBe('7,4')
+    // And still no editing surface — the flag changes DISPLAY only.
+    expect(after.container.querySelectorAll('input').length).toBe(0)
+  })
+
+  it('showWorkedHours leaves a day with no registration BLANK (not 0,0)', () => {
+    const { container } = renderGrid({ readOnly: true, showWorkedHours: true })
+    expect(dayCell(rowByLabel(container, 'Arbejdstid'), 2).textContent).toBe('')
+  })
+
   it('does NOT prefill absence cells in read-only mode (no inputs exist to focus)', () => {
     const onCellChange = vi.fn()
     const { container } = renderGrid({

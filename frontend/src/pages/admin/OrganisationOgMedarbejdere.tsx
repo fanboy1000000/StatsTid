@@ -77,7 +77,7 @@ export function OrganisationOgMedarbejdere() {
 
   // The navigation history of selected nodes (back/forward). A single state
   // object keeps the stack + index in lock-step. The tree's onSelect, the detail
-  // panel's breadcrumb / "Åbn ›", and the search result all push through `navigate`.
+  // panel's breadcrumb / unit-name click, and the search result all push through `navigate`.
   const [nav, setNav] = useState<{ stack: SelectedNode[]; index: number }>({ stack: [], index: -1 })
   const selected = nav.index >= 0 ? nav.stack[nav.index] : null
 
@@ -103,6 +103,28 @@ export function OrganisationOgMedarbejdere() {
   // re-opens the drawer; the null→id edge means a repeat search of the SAME person
   // re-fires (navigate() de-dups on same id, so focus can't ride a `selected` change).
   const [pendingFocus, setPendingFocus] = useState<{ organisationId: string; personId: string } | null>(null)
+
+  // S124 — the left tree's per-node expansion, LIFTED here so the Struktur panel's
+  // "Vis/Skjul org." (and the bulk people/settlement reveals) can drive it. Plain
+  // useState, never derived from the forest: the filtered forest is a new object on
+  // every Afgrænsning change, so derived state would collapse the tree on refetch.
+  // Keyed by RAW node id — ids are disjoint across tiers, the same invariant
+  // `forestIndex.byId` already depends on.
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({})
+
+  const onToggleNode = useCallback((id: string, open: boolean) => {
+    setExpanded((prev) => ({ ...prev, [id]: open }))
+  }, [])
+
+  // One functional update for the whole set — the panel and the tree's carets both
+  // write here, so a stale-closure whole-map write could clobber the other.
+  const onExpandSync = useCallback((ids: string[], open: boolean) => {
+    setExpanded((prev) => {
+      const next = { ...prev }
+      for (const id of ids) next[id] = open
+      return next
+    })
+  }, [])
 
   const onNavigatePerson = useCallback(
     (orgNode: SelectedNode, personId: string) => {
@@ -184,6 +206,8 @@ export function OrganisationOgMedarbejdere() {
               error={error}
               selectedId={selected?.id ?? null}
               onSelect={navigate}
+              expanded={expanded}
+              onToggleNode={onToggleNode}
             />
           </div>
         </aside>
@@ -209,6 +233,7 @@ export function OrganisationOgMedarbejdere() {
                   : undefined
               }
               onFocusConsumed={() => setPendingFocus(null)}
+              onExpandSync={onExpandSync}
             />
           </div>
         </main>

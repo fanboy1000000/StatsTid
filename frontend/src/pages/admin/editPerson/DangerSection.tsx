@@ -22,6 +22,11 @@ interface DangerSectionProps {
   /** Self + descendants — the forbidden set for the replacement-approver pickers
       (a replacement cannot be the removed person; server also guards). */
   forbidden?: Set<string>
+  /** S124 / TASK-12401 — the departing person's Organisation; the replacement-approver picker
+      searches only inside it. The reassignment creates ordinary PRIMARY edges, which are
+      same-Organisation-validated server-side (ADR-027 D2), so a cross-Organisation replacement
+      was never a valid choice. */
+  organisationId: string | null
   /** Fired after a successful removal so the caller refetches + closes. */
   onRemoved?: () => void
   disabled?: boolean
@@ -37,6 +42,7 @@ export function DangerSection({
   employeeId,
   personName,
   forbidden,
+  organisationId,
   onRemoved,
   disabled = false,
 }: DangerSectionProps) {
@@ -200,6 +206,7 @@ export function DangerSection({
         currentId={pickerForReport ? replacements[pickerForReport] : null}
         forbidden={forbidden}
         excludeEmployeeId={employeeId}
+        organisationId={organisationId}
         onPick={(userId, displayName) => {
           if (pickerForReport) {
             setReplacements((prev) => ({ ...prev, [pickerForReport]: userId }))

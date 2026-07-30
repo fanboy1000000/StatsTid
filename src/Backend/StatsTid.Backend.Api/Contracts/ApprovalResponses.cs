@@ -88,7 +88,11 @@ public sealed record EmployeePeriodItem(
 /// DRAFT row (the roster LEFT JOIN); <paramref name="SubmittedAt"/>/<paramref name="DecisionAt"/>/
 /// <paramref name="RejectionReason"/>/<paramref name="PayrollExportedAt"/> are state-dependent
 /// nullable scalars. <paramref name="Status"/> includes the SYNTHETIC "DRAFT" the handler emits
-/// for zero-period rows — still inside the init.sql:1103 closed set.</summary>
+/// for zero-period rows — still inside the init.sql:1103 closed set.
+/// <para>S124 / TASK-12402: <paramref name="NormRegistered"/>, <paramref name="Overtime"/> and
+/// <paramref name="HasWarning"/> are ALSO null on a non-submitted row — the manager-visibility rule
+/// (an un-submitted timesheet is not the manager's to read). See their inline note below.</para>
+/// </summary>
 public sealed record TeamOverviewEmployeeRow(
     Guid? PeriodId,
     string EmployeeId,
@@ -102,13 +106,41 @@ public sealed record TeamOverviewEmployeeRow(
     DateTime? DecisionAt,
     string? RejectionReason,
     decimal NormExpected,
-    decimal NormRegistered,
-    decimal FlexBalance,
-    decimal Overtime,
-    decimal FerieUsed,
+    // ── S124 / TASK-12402 — THE WITHHELD SET ────────────────────────────────────────────────
+    // NULL until the employee SENDS the month. Owner ruling (2026-07-30): "a manager cannot see
+    // anything before a month is submitted", so every figure that can carry the employee's own
+    // registrations is withheld — not just the obvious hours.
+    //
+    // NULLABLE rather than 0: "registered 0,0 t" / "0 feriedage brugt" would be a LIE about
+    // someone who may have registered 140 t or booked a week off, and a contract that asserts
+    // something false is the exact failure class PAT-012 exists to prevent.
+    //
+    // What deliberately STAYS visible, and why it cannot leak the month:
+    //   • NormExpected  — (weekdays / 5) × the agreement's weekly norm. A CONTRACT fact; no
+    //                     projection or registration input. It is the honest denominator that
+    //                     makes "— / 155,4 t" readable.
+    //   • FerieTotal    — entitlement_balances.total_quota, the standing annual quota. Only
+    //                     `used` moves when the employee registers absence, so only `used` is
+    //                     withheld; the quota is the denominator, same shape as NormExpected.
+    //   • AwayToday     — is this person absent TODAY. A present-tense operational fact, and the
+    //                     reason the row is kept at all (the leader must staff the day and chase
+    //                     the missing submission before the lederfrist).
+    // Non-withheld rows are UNCHANGED: a manager must keep seeing everything about what they are
+    // asked to approve, and everything they already decided on.
+    decimal? NormRegistered,
+    // FlexBalance is withheld too. It has NO emission site anywhere in src/ today, so it cannot
+    // currently carry draft data — but that makes showing it worthless (always 0), and the moment
+    // flex gains a registration-time writer it would silently become a leak. Withholding is the
+    // fail-safe reading of the ruling and costs nothing.
+    decimal? FlexBalance,
+    decimal? Overtime,
+    // entitlement_balances.used is incremented INSIDE the employee's own Skema save transaction
+    // (SkemaEndpoints.cs → EntitlementBalanceRepository.CheckAndAdjustAsync) with NO approval
+    // gate — so a drafted vacation day moved the manager's Ferie column. That was a real leak.
+    decimal? FerieUsed,
     decimal FerieTotal,
     bool AwayToday,
-    bool HasWarning,
+    bool? HasWarning,
     bool PayrollExported,
     DateTime? PayrollExportedAt);
 

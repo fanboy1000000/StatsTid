@@ -111,7 +111,9 @@ describe('SearchOverlay — the read-only search palette', () => {
 
   it('the overlay itself opens NO drawer — no edit/mutation affordance renders (S123 T2 wires the drawer in the panel, not here)', () => {
     renderOverlay()
-    for (const label of ['Rediger', 'Rediger ›', 'Slet', 'Ret', 'Gem', '+ Medarbejder']) {
+    // S124 dropped the panel's "Rediger ›" link (the person NAME is the edit affordance
+    // now), so that entry would be vacuous here; 'Rediger' still guards the general case.
+    for (const label of ['Rediger', 'Slet', 'Ret', 'Gem', '+ Medarbejder']) {
       expect(screen.queryByText(label)).toBeNull()
     }
     // The person row is a single navigation button, not a click-to-edit name link.

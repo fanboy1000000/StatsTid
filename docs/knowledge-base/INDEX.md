@@ -76,6 +76,7 @@
 | ID | Title | Status | Sprint | Priorities | Tags |
 |----|-------|--------|--------|------------|------|
 | [RES-001](resolutions/RES-001-ac-no-overtime-supplements.md) | AC has no overtime/supplements (agreement fidelity over feature parity) | approved | S2 | P2 vs P9 | ac, overtime, supplements, priority-conflict |
+| [RES-002](resolutions/RES-002-manager-draft-visibility-enforced-at-surface-only.md) | Manager draft-visibility rule enforced at the Teamoversigt surface only (endpoint-level gate DEFERRED — follow-up OPEN) | approved — enforcement deliberately incomplete | S124 | P7 vs P9/scope | access-control, approval, draft-visibility, manager, priority-conflict, deferred-hardening, p7 |
 
 ## Failure/Pivot Log (FAIL)
 
@@ -92,8 +93,9 @@
 | Tag | Entries |
 |-----|---------|
 | accessibility | ADR-011 |
+| access-control | RES-002 |
 | ac | PAT-003, RES-001 |
-| approval | ADR-012 |
+| approval | ADR-012, RES-002 |
 | authentication | ADR-007, FAIL-001 |
 | agreement-config | PAT-003, ADR-014 |
 | architecture | ADR-006 |
@@ -149,7 +151,7 @@
 | organization | ADR-008 |
 | postgresql | ADR-001, ADR-008 |
 | precedence | PAT-002 |
-| priority-conflict | RES-001 |
+| priority-conflict | RES-001, RES-002 |
 | prosa | PAT-003 |
 | pure-functions | ADR-002 |
 | rbac | ADR-007, ADR-009 |

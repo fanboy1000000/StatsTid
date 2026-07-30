@@ -23,7 +23,8 @@
 // useAuth is a parametrized role holder; useToast is a no-op — mirroring the prior
 // S108 suites. The roster is intentionally PEOPLE-rich (leader + report + cross-unit
 // exception + vikar) so the per-role people-affordance assertions (S109: + Medarbejder
-// / Rediger › present at the LocalHR floor, absent below) are load-bearing.
+// / the per-row person edit present at the LocalHR floor, absent below — since S124
+// that edit is the person NAME itself) are load-bearing.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
@@ -263,9 +264,10 @@ describe('Capability-gating MATRIX (TASK-10804) — the per-role affordance floo
 
       // ── the PEOPLE-mutation surface (S109 inversion) — gated at the LocalHR floor ─
       // The unit roster IS rendered (leader + reports + external + vikar). After the
-      // S109 inversion the people-edit surface (+ Medarbejder on the unit + a per-row
-      // "Rediger ›") is PRESENT for every permitting actor (LocalHR is the floor ==
-      // the action-row floor) and ABSENT below it — load-bearing, not vacuous.
+      // S109 inversion the people-edit surface (+ Medarbejder on the unit + the per-row
+      // person edit, which since S124 is the person NAME itself) is PRESENT for every
+      // permitting actor (LocalHR is the floor == the action-row floor) and ABSENT
+      // below it — load-bearing, not vacuous.
       expect(screen.getByTestId('leader-jens')).toBeDefined() // people did render
       expect(screen.getByText('Carl Storm')).toBeDefined()
       const peopleEditable = m.actionRow // people create/edit floor == LocalHR
@@ -283,11 +285,16 @@ describe('Capability-gating MATRIX (TASK-10804) — the per-role affordance floo
       for (const label of ['Skift', 'Afslut']) {
         expect(screen.queryAllByText(label)).toHaveLength(0)
       }
-      // No <a> links; person/leader NAMES are not themselves buttons (the edit entry
-      // is the dedicated "Rediger ›" affordance).
+      // No <a> links. S124 — person/leader NAMES ARE the edit affordance now, so this
+      // guard becomes ROLE-CONDITIONAL rather than absolute: a permitting actor gets a
+      // real <button> on the name, and an actor BELOW the floor gets inert text — never
+      // a name that looks or behaves clickable while the action is denied. Asserting
+      // both directions in one expression keeps the dead-affordance guard load-bearing
+      // at exactly the roles where it matters.
       expect(screen.queryAllByRole('link')).toHaveLength(0)
       for (const name of ['Jens Kofoed', 'Anna Andersen', 'Carl Storm']) {
-        expect(screen.getByText(name).closest('button')).toBeNull()
+        const el = screen.getByText(name)
+        expect(el.closest('button') !== null).toBe(peopleEditable)
       }
     })
   }

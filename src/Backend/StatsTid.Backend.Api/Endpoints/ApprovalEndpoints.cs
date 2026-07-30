@@ -1078,6 +1078,14 @@ public static class ApprovalEndpoints
                 var weeklyNorm = await ResolveWeeklyNormAsync(agreement, uOk);
                 var normExpected = (weekdays / 5.0m) * weeklyNorm;
 
+                // S124 / TASK-12402 — the manager-visibility rule. `submittedToManager` is keyed on
+                // STATUS, not on `r.PeriodId`: a REAL DRAFT period row (created-but-not-submitted, or
+                // one that came back to DRAFT) must be blanked exactly like the synthetic zero-period
+                // row. Keying on periodId would blank only the synthetic case and leak the real one.
+                // REJECTED counts as submitted: the employee DID send it, the leader decided on these
+                // very numbers, and hiding them afterwards would erase the basis of that decision.
+                var submittedToManager = ApprovalVisibility.IsSubmittedToManager(status);
+
                 var normRegistered = registeredByEmployee.GetValueOrDefault(r.EmployeeId, 0m);
                 var overtime = Math.Max(0m, normRegistered - normExpected);
 
@@ -1125,13 +1133,17 @@ public static class ApprovalEndpoints
                     DecisionAt: decisionAt,
                     RejectionReason: rejectionReason,
                     NormExpected: normExpected,
-                    NormRegistered: normRegistered,
-                    FlexBalance: flexBalance,
-                    Overtime: overtime,
-                    FerieUsed: ferieUsed,
+                    // The five month-derived fields are withheld unless the employee actually sent
+                    // the period. Withheld SERVER-side, so the value never reaches the client at all —
+                    // blanking in the view would leave it readable in the network response, which is
+                    // presentation, not access control.
+                    NormRegistered: submittedToManager ? normRegistered : null,
+                    FlexBalance: submittedToManager ? flexBalance : null,
+                    Overtime: submittedToManager ? overtime : null,
+                    FerieUsed: submittedToManager ? ferieUsed : null,
                     FerieTotal: ferieTotal,
                     AwayToday: awayToday,
-                    HasWarning: hasWarning,
+                    HasWarning: submittedToManager ? hasWarning : null,
                     PayrollExported: payrollExported,
                     PayrollExportedAt: payrollExported ? exportedAt : (DateTime?)null));
             }

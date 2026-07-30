@@ -106,6 +106,52 @@ const cleanBreakdown = {
   hasAllocationImbalance: false,
 }
 
+// S124 / TASK-12403 - a served month with hours on SPECIFIC DAYS. The whole point of the grid is
+// day-level evidence, so the fixture places hours on distinguishable dates, not a lump total.
+const cleanSkemaMonth = {
+  employeeId: 'emp001',
+  year: 2026,
+  month: 3,
+  entries: [
+    { date: '2026-03-02', projectCode: 'ALFA', hours: 7.4, activityType: 'NORMAL', taskId: 'ALFA' },
+    { date: '2026-03-03', projectCode: 'BETA', hours: 5, activityType: 'NORMAL', taskId: 'BETA' },
+  ],
+  absences: [
+    { date: '2026-03-04', absenceType: 'VACATION', hours: 7.4, feriedage: 1 },
+  ],
+  workTime: [
+    { date: '2026-03-02', intervals: [{ start: '08:00', end: '15:24' }], manualHours: 0 },
+  ],
+  dailyNorm: [
+    { date: '2026-03-02', hours: 7.4 },
+    { date: '2026-03-03', hours: 7.4 },
+    { date: '2026-03-04', hours: 7.4 },
+  ],
+  consumptionBasis: [],
+  // Step-7a Codex: these MUST match the generated contract (projectCode/projectName, type/label).
+  // The earlier {code,name} shape rendered NO project rows, and the assertion below was silently
+  // satisfied by the identically-named strings in `cleanBreakdown` — a vacuous test.
+  projects: [
+    { projectId: 'p-alfa', projectCode: 'ALFA', projectName: 'Projekt Alfa', sortOrder: 1 },
+    { projectId: 'p-beta', projectCode: 'BETA', projectName: 'Projekt Beta', sortOrder: 2 },
+  ],
+  absenceTypes: [{ type: 'VACATION', label: 'Ferie', fullDayOnly: false }],
+  catalogs: {
+    projects: [
+      { projectId: 'p-alfa', projectCode: 'ALFA', projectName: 'Projekt Alfa', sortOrder: 1 },
+      { projectId: 'p-beta', projectCode: 'BETA', projectName: 'Projekt Beta', sortOrder: 2 },
+    ],
+    absenceTypes: [{ type: 'VACATION', label: 'Ferie', fullDayOnly: false }],
+  },
+  rowPreferences: null,
+  approval: {
+    status: 'SUBMITTED', periodId: 'p-1', submittedAt: '2026-03-29T10:00:00Z',
+    approvedAt: null, rejectionReason: null, payrollExported: false,
+  },
+  entitlementEligibility: null,
+  seniorDayMinAge: null,
+}
+
 const cleanCompliance = {
   ruleId: 'WT',
   employeeId: 'emp001',
@@ -122,6 +168,8 @@ interface Routes {
   complianceStatus?: number
   /** Optional spy/override for /approve POSTs. */
   onApprove?: (url: string) => unknown
+  /** S124 / TASK-12403 - the served skema month for the read-only grid. */
+  skema?: unknown
 }
 
 /** Wires fetch: team-overview, allocation-breakdown, compliance + a default. */
@@ -139,6 +187,10 @@ function mockRoutes(opts: Routes = {}) {
     if (url.includes('/api/compliance/')) {
       if (opts.complianceStatus && opts.complianceStatus >= 400) return errResponse(opts.complianceStatus)
       return jsonResponse(opts.compliance ?? cleanCompliance)
+    }
+    // S124 / TASK-12403 - the leader's read-only month-grid read.
+    if (url.includes('/api/skema/') && url.includes('/month')) {
+      return jsonResponse(opts.skema ?? cleanSkemaMonth)
     }
     if (url.includes('/approve') && init?.method === 'POST') {
       return (opts.onApprove?.(url) as ReturnType<typeof jsonResponse>) ?? jsonResponse({ status: 'APPROVED' })
@@ -268,8 +320,10 @@ describe('TeamRowDetail — lazy fetch (breakdown + compliance)', () => {
     mockRoutes()
     renderPage()
     await expandFirstRow(user)
-    await waitFor(() => expect(screen.getByText('Projekt Alfa')).toBeInTheDocument())
-    expect(screen.getByText('Projekt Beta')).toBeInTheDocument()
+    // S124 / TASK-12403 — the inline grid renders the SAME project names, so these are scoped to
+    // the Fordeling column rather than the whole panel (an unscoped query is now ambiguous).
+    await waitFor(() => expect(screen.getAllByText('Projekt Alfa').length).toBeGreaterThan(0))
+    expect(screen.getAllByText('Projekt Beta').length).toBeGreaterThan(0)
     // Header sum {allocated} / {worked} t.
     expect(screen.getByText('140,0 / 140,0 t')).toBeInTheDocument()
   })
@@ -387,7 +441,7 @@ describe('TeamRowDetail — compliance Advarsel + fault isolation', () => {
     await waitFor(() => expect(screen.getByText('Advarsler kunne ikke hentes')).toBeInTheDocument())
     // Saldi + breakdown still render (fault isolated to the Advarsel arm).
     expect(screen.getByText('Saldi')).toBeInTheDocument()
-    expect(screen.getByText('Projekt Alfa')).toBeInTheDocument()
+    expect(screen.getAllByText('Projekt Alfa').length).toBeGreaterThan(0)
   })
 })
 
@@ -467,5 +521,114 @@ describe('TeamRowDetail — footer reuses the parent handlers (no second save pa
     renderPage()
     await expandFirstRow(user)
     expect(screen.getByRole('button', { name: 'Genåbn måned' })).toBeInTheDocument()
+  })
+})
+
+// ===================================================================================
+// S124 / TASK-12403 - the leader's READ-ONLY month skema, INLINE and ALWAYS SHOWN.
+//
+// Owner ruling 2026-07-30: "Skema needs to be the default view ... the skema should always be
+// shown." It was briefly behind a "Vis skema" button; that put the evidence one click further away
+// than the decision. Expanding a row now renders summary -> grid -> decision buttons.
+//
+// The load-bearing assertion is still that this surface cannot WRITE: the grid is read-only by
+// construction, and since TASK-12404 the backend also refuses a leader's write. Both layers are
+// pinned - the component one here, the API one in S91TreePageHrAccessTests.
+// ===================================================================================
+describe("TeamRowDetail - the inline read-only employee skema (S124 / TASK-12403)", () => {
+  it("shows the month grid IMMEDIATELY on expand - no extra click, per-DAY registrations visible", async () => {
+    const user = userEvent.setup()
+    mockRoutes()
+    renderPage()
+    await expandFirstRow(user)
+
+    // Present as soon as the panel opens; there is no affordance to press first.
+    await waitFor(() => expect(screen.getByTestId("manager-skema-emp001")).toBeInTheDocument())
+    expect(screen.queryByTestId("view-skema-emp001")).toBeNull()
+
+    // The month read fired exactly once, on expand.
+    const skemaCalls = mockFetch.mock.calls.filter((c: unknown[]) =>
+      typeof c[0] === "string" && (c[0] as string).includes("/api/skema/emp001/month"))
+    expect(skemaCalls.length).toBe(1)
+
+    // DAY-LEVEL evidence, asserted INSIDE the grid — `cleanBreakdown` carries the same project
+    // names, so an unscoped query would pass even with an empty grid (Step-7a Codex).
+    const grid = screen.getByTestId("manager-skema-emp001")
+    await waitFor(() => expect(within(grid).getByText("Projekt Alfa")).toBeInTheDocument())
+    expect(within(grid).getByText("Projekt Beta")).toBeInTheDocument()
+    // NOTE the grid renders the month the PAGE stepper is on (real "today"), not the fixture's
+    // March, so a dated-cell assertion cannot be pinned here without freezing the clock. The
+    // scoping above is what removes the vacuity: `cleanBreakdown` carries these same names OUTSIDE
+    // the grid, so `within(grid)` is what proves the GRID itself rendered the served rows. Dated
+    // per-day cells are pinned in SkemaGrid.test.tsx against an explicit year/month.
+  })
+
+  it("orders the panel summary -> skema -> decision buttons (evidence before verdict)", async () => {
+    const user = userEvent.setup()
+    mockRoutes()
+    renderPage()
+    await expandFirstRow(user)
+    await waitFor(() => expect(screen.getByTestId("manager-skema-emp001")).toBeInTheDocument())
+
+    const panel = screen.getByTestId("team-detail-row-emp001")
+    const text = panel.textContent ?? ""
+    const summaryAt = text.indexOf("Saldi")
+    const skemaAt = text.indexOf("Skema")
+    const decideAt = text.indexOf("Godkend måned")
+    expect(summaryAt).toBeGreaterThanOrEqual(0)
+    expect(skemaAt).toBeGreaterThan(summaryAt)
+    expect(decideAt).toBeGreaterThan(skemaAt)
+  })
+
+  it("is STILL lazy: no month read happens until a row is expanded", async () => {
+    mockRoutes()
+    renderPage()
+    await waitFor(() => expect(screen.getByText("Anna Berg")).toBeInTheDocument())
+    // The table rendered; nothing expanded yet, so no per-employee month read.
+    const skemaCalls = mockFetch.mock.calls.filter((c: unknown[]) =>
+      typeof c[0] === "string" && (c[0] as string).includes("/api/skema/"))
+    expect(skemaCalls).toHaveLength(0)
+  })
+
+  it("THE READ-ONLY GUARD: no save request can be issued from the inline grid", async () => {
+    const user = userEvent.setup()
+    mockRoutes()
+    renderPage()
+    await expandFirstRow(user)
+    await waitFor(() => expect(screen.getByTestId("manager-skema-emp001")).toBeInTheDocument())
+
+    const body = screen.getByTestId("manager-skema-emp001")
+    expect(body.querySelectorAll("input")).toHaveLength(0)
+    const writes = mockFetch.mock.calls.filter((c: unknown[]) => {
+      const url = typeof c[0] === "string" ? (c[0] as string) : ""
+      const init = c[1] as RequestInit | undefined
+      return url.includes("/api/skema/") && init?.method === "POST"
+    })
+    expect(writes).toHaveLength(0)
+  })
+
+  it("an un-submitted row cannot reach the grid at all (no expander, so no panel)", async () => {
+    const user = userEvent.setup()
+    mockRoutes({
+      overview: [row({
+        periodId: null, employeeId: "emp009", displayName: "Withheld Person", status: "DRAFT",
+        normRegistered: null, overtime: null, hasWarning: null, flexBalance: null, ferieUsed: null,
+      })],
+    })
+    renderPage()
+    await waitFor(() => expect(screen.getByText("Withheld Person")).toBeInTheDocument())
+    // TASK-12402 removed the expander for un-submitted rows and the grid lives inside that panel, so
+    // the two rules compose: nothing sent means nothing to inspect.
+    expect(screen.queryByRole("button", { name: /detaljer for Withheld Person/ })).toBeNull()
+    await user.click(screen.getByTestId("team-row-emp009"))
+    expect(screen.queryByTestId("manager-skema-emp009")).toBeNull()
+  })
+
+  it("stays available AFTER a decision - a rejected month can be re-read", async () => {
+    const user = userEvent.setup()
+    mockRoutes({ overview: [row({ status: "REJECTED", rejectionReason: "Mangler fordeling" })] })
+    renderPage()
+    await expandFirstRow(user)
+    await waitFor(() => expect(screen.getByTestId("manager-skema-emp001")).toBeInTheDocument())
   })
 })

@@ -115,6 +115,33 @@ function rosterWithP1(): Record<string, RosterResponse> {
   }
 }
 
+// ── S124 — the expand-sync fixture ────────────────────────────────────────────
+// Needs real DEPTH: MIN01 (MAO) → STY02 (org) → Direktion (unit) → Driftsomraadet
+// (child unit). The nesting is what makes the sync testable — a unit node defaults
+// CLOSED in the left tree, and the tree's `walk` does not recurse into a closed
+// node, so a descendants-only sync leaves the child invisible no matter what was
+// written for it. That is precisely the failure these tests pin.
+const DIREKTION = '000000d0-0000-0000-0000-0000000000b1'
+const OMRADE = '000000d0-0000-0000-0000-0000000000b2'
+
+function deepForest(): ForestMaoNode[] {
+  const f = twoOrgForest()
+  f[0].organisations[0].units = [
+    {
+      unitId: DIREKTION, organisationId: 'STY02', parentUnitId: null, type: 'direktion',
+      name: 'Direktion', level: 1, version: 1, directMemberCount: 0, memberCount: 0,
+      children: [
+        {
+          unitId: OMRADE, organisationId: 'STY02', parentUnitId: DIREKTION, type: 'omrade',
+          name: 'Driftsomraadet', level: 2, version: 1, directMemberCount: 0, memberCount: 0,
+          children: [],
+        },
+      ],
+    },
+  ]
+  return f
+}
+
 beforeEach(() => {
   h.forest = twoOrgForest()
   h.search = { query: '', results: { units: [], people: [], unitsTotal: 0, peopleTotal: 0 }, loading: false }
@@ -283,5 +310,94 @@ describe('OrganisationOgMedarbejdere — page (shell + Afgrænsning + search)', 
     expect(screen.getByTestId('person-drawer-loading')).toBeDefined()
     expect(screen.getByTestId('person-drawer-title')).toBeDefined()
     expect(admin.fetchUser).toHaveBeenCalledWith('p1')
+  })
+
+  // ── S124 — "Vis/Skjul org." drives the LEFT navigation tree too ───────────────
+  // This is the only suite mounting BOTH panels, so it is the only place the sync is
+  // observable. Left testids are `tree-row-*`/`tree-caret-*`, right are
+  // `unit-row-*`/`caret-unit-*` — disjoint, so each side is asserted independently.
+
+  it('"Vis org." on a UNIT reveals its descendants in the LEFT tree (needs the self+ancestor leg)', () => {
+    h.forest = deepForest()
+    render(<OrganisationOgMedarbejdere />)
+    // Direktion is visible (STY02 is an org tier → default open) but is itself a UNIT
+    // → default CLOSED, so its child is hidden.
+    fireEvent.click(screen.getByTestId(`tree-row-${DIREKTION}`))
+    expect(screen.queryByTestId(`tree-row-${OMRADE}`)).toBeNull()
+
+    fireEvent.click(screen.getByTestId('toggle-expand-all')) // "Vis org."
+
+    // The child is now visible on the LEFT. A descendants-ONLY sync would write
+    // OMRADE=true and still render nothing, because `walk` stops at the closed
+    // Direktion — the selected node itself has to be opened too.
+    expect(screen.getByTestId(`tree-row-${OMRADE}`)).toBeDefined()
+    // …and on the RIGHT.
+    expect(screen.getByTestId(`unit-row-${OMRADE}`)).toBeDefined()
+  })
+
+  it('"Skjul org." at MAO collapses the default-OPEN Organisation tiers in the LEFT tree', () => {
+    h.forest = deepForest()
+    render(<OrganisationOgMedarbejdere />)
+    fireEvent.click(screen.getByTestId('tree-row-MIN01'))
+
+    // Expand everything: at MAO the descendants are the FULL transitive closure —
+    // the child Organisations AND every unit beneath them.
+    fireEvent.click(screen.getByTestId('toggle-expand-all')) // "Vis org."
+    expect(screen.getByTestId(`tree-row-${OMRADE}`)).toBeDefined()
+
+    // Collapse. Organisation rows default OPEN, so this only works if the sync writes
+    // an explicit `false` — deleting the key would revert them to open, the exact
+    // inverse of "Skjul".
+    fireEvent.click(screen.getByTestId('toggle-expand-all')) // "Skjul org."
+    expect(screen.queryByTestId(`tree-row-${DIREKTION}`)).toBeNull()
+    expect(screen.queryByTestId(`tree-row-${OMRADE}`)).toBeNull()
+    // The MAO itself and its Organisation rows stay visible — ancestors are never
+    // collapsed, so the user keeps their place.
+    expect(screen.getByTestId('tree-row-MIN01')).toBeDefined()
+    expect(screen.getByTestId('tree-row-STY02')).toBeDefined()
+  })
+
+  it('the people-reveal ("Vis medarbejdere") syncs the LEFT tree too — no dead first press on "Skjul org."', () => {
+    h.forest = deepForest()
+    render(<OrganisationOgMedarbejdere />)
+    fireEvent.click(screen.getByTestId(`tree-row-${DIREKTION}`))
+    expect(screen.queryByTestId(`tree-row-${OMRADE}`)).toBeNull()
+
+    // showPeople defaults true → first press hides, second press is the REVEAL.
+    fireEvent.click(screen.getByTestId('toggle-people')) // Skjul medarbejdere
+    fireEvent.click(screen.getByTestId('toggle-people')) // Vis medarbejdere → reveal
+
+    // The reveal expanded the right panel; the left must follow. Without this, the
+    // label would read "Skjul org." over a collapsed left tree and the next press
+    // would collapse the right panel while doing nothing on the left.
+    expect(screen.getByTestId(`tree-row-${OMRADE}`)).toBeDefined()
+  })
+
+  it('a LEFT caret click does not move the right panel (the sync is one-way, by ruling)', () => {
+    h.forest = deepForest()
+    render(<OrganisationOgMedarbejdere />)
+    fireEvent.click(screen.getByTestId('tree-row-STY02'))
+    // The right panel roots at STY02 with Direktion collapsed → no Område row.
+    expect(screen.queryByTestId(`unit-row-${OMRADE}`)).toBeNull()
+
+    fireEvent.click(screen.getByTestId(`tree-caret-${DIREKTION}`))
+
+    expect(screen.getByTestId(`tree-row-${OMRADE}`)).toBeDefined() // left moved
+    expect(screen.queryByTestId(`unit-row-${OMRADE}`)).toBeNull() // right did not
+  })
+
+  it('expansion survives an Afgrænsning change (the lifted state is useState, not derived)', () => {
+    h.forest = deepForest()
+    render(<OrganisationOgMedarbejdere />)
+    fireEvent.click(screen.getByTestId(`tree-row-${DIREKTION}`))
+    fireEvent.click(screen.getByTestId('toggle-expand-all'))
+    expect(screen.getByTestId(`tree-row-${OMRADE}`)).toBeDefined()
+
+    // Narrow the scope to STY02 only. `filteredForest` is a NEW object on every
+    // Afgrænsning change, so expansion derived from the forest would collapse here.
+    fireEvent.click(screen.getByTestId('afgraensning-trigger'))
+    fireEvent.click(screen.getByTestId('afg-org-STY03')) // untick STY03
+
+    expect(screen.getByTestId(`tree-row-${OMRADE}`)).toBeDefined()
   })
 })

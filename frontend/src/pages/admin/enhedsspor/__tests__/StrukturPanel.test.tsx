@@ -9,15 +9,15 @@
 //
 // The keystone is the RE-ARCHITECTED affordance allowlist (the S91 dead-button
 // discipline, both-lens-required): the interactive affordances are the expansion
-// carets, the two view toggles, breadcrumb + back/forward, "Åbn ›" navigation, the
+// carets, the two view toggles, breadcrumb + back/forward, unit-NAME navigation, the
 // gated UNIT structure actions (S108) and — NEW in S109 — the gated PEOPLE actions
-// (+ Medarbejder on a unit + a per-row "Rediger ›"). The out-of-scope shortcuts
+// (+ Medarbejder on a unit + the person-NAME edit). The out-of-scope shortcuts
 // stay absent: cross-unit "Ret" + leaderless "Tildel leder" (TASK-10903) and the
 // inline approver/vikar ("Skift"/"Afslut" — those live inside the drawer).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { useState, type ComponentProps } from 'react'
-import { render, screen, fireEvent, within, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, within, waitFor, cleanup } from '@testing-library/react'
 
 // SPRINT-108 / TASK-10803 — StrukturPanel now consumes useAuth (the capability
 // spine) + useToast; both THROW outside their providers. A parametrized role mock
@@ -206,6 +206,9 @@ function makeRoster(): RosterResponse {
 }
 
 const VEJL_NODE: SelectedNode = { id: VEJL, kind: 'unit', name: 'Vejledning', type: 'kontor' }
+// The MAO root of makeForest(). A MAO's `organisationId` is null by design, so no roster
+// ever loads for it — the tier where the people-visibility toggles cannot function.
+const MIN01_NODE: SelectedNode = { id: 'MIN01', kind: 'mao', name: 'Finansministeriet', type: 'ministeromrade' }
 
 function renderPanel(overrides: Partial<ComponentProps<typeof StrukturPanel>> = {}) {
   const props: ComponentProps<typeof StrukturPanel> = {
@@ -219,6 +222,7 @@ function renderPanel(overrides: Partial<ComponentProps<typeof StrukturPanel>> = 
     canForward: false,
     onBack: vi.fn(),
     onForward: vi.fn(),
+    onExpandSync: vi.fn(),
     ...overrides,
   }
   // A real ToastProvider satisfies the drawer's '/Toast' useToast (the focus
@@ -387,6 +391,43 @@ describe('StrukturPanel — the recursive read-only Struktur', () => {
     expect(within(screen.getByTestId(`caret-med-${VEJL}`)).getByText('5')).toBeDefined()
   })
 
+  // A MAO's `organisationId` is null by design (forestIndex.ts — a MAO spans multiple
+  // Organisations, each its own roster), so no roster loads and `membersOf` is empty
+  // across the whole subtree: neither people toggle can ever reveal a row there. They are
+  // HIDDEN, matching how this panel already treats tier-inapplicable surfaces (the
+  // settlement overview and the unit action cluster both omit rather than grey), and
+  // matching the MAO reframing of the panel as an organisation list.
+  it('omits BOTH people-visibility toggles on a MAO (they cannot function without a roster)', () => {
+    renderPanel({ selected: MIN01_NODE })
+    expect(screen.queryByTestId('toggle-people')).toBeNull()
+    expect(screen.queryByTestId('toggle-leaders')).toBeNull()
+    // The panel is reframed as an organisation list at this tier.
+    expect(screen.getByTestId('str-count').textContent).toContain('organisation')
+  })
+
+  // Guards against over-gating: the toggles must survive everywhere they DO work. The
+  // predicate is the MAO tier, not "no roster yet" — an Organisation mid-load keeps them.
+  it('keeps both people-visibility toggles on an Organisation and on a unit', () => {
+    renderPanel({ selected: STY02_NODE })
+    expect(screen.getByTestId('toggle-people')).toBeDefined()
+    expect(screen.getByTestId('toggle-leaders')).toBeDefined()
+    cleanup()
+    renderPanel() // VEJL_NODE — a unit
+    expect(screen.getByTestId('toggle-people')).toBeDefined()
+    expect(screen.getByTestId('toggle-leaders')).toBeDefined()
+  })
+
+  // "Vis org." is NOT people-dependent — at a MAO it expands the child Organisations, so
+  // it stays. (It disables only when the node genuinely has no descendants.)
+  it('keeps "Vis org." on a MAO — it expands the child organisations and still works', () => {
+    renderPanel({ selected: MIN01_NODE })
+    const expand = screen.getByTestId('toggle-expand-all')
+    expect(expand.textContent).toContain('Vis org.')
+    expect((expand as HTMLButtonElement).disabled).toBe(false)
+    fireEvent.click(expand)
+    expect(screen.getByTestId('toggle-expand-all').textContent).toContain('Skjul org.')
+  })
+
   it('the "Vis org./Skjul org." toggle expands all descendant child units', () => {
     renderPanel()
     expect(screen.queryByTestId('employee-kim')).toBeNull() // Kontrol collapsed
@@ -414,11 +455,17 @@ describe('StrukturPanel — the recursive read-only Struktur', () => {
     expect(screen.queryByTestId('employee-kim')).toBeNull()
   })
 
-  it('"Åbn ›" + breadcrumb + back/forward drive navigation (the only nav affordances)', () => {
+  it('the unit NAME + breadcrumb + back/forward drive navigation (the only nav affordances)', () => {
     const onNavigate = vi.fn()
     const onBack = vi.fn()
     renderPanel({ onNavigate, onBack, canBack: true })
-    fireEvent.click(screen.getByTestId(`open-unit-${KONTROL}`))
+    // S124 — the open affordance IS the unit name (the right-edge "Åbn ›" is gone), so
+    // the testid must sit on an element whose own text is the name, not on a sibling link.
+    const unitName = screen.getByTestId(`open-unit-${KONTROL}`)
+    expect(unitName.tagName).toBe('BUTTON')
+    expect(unitName.textContent).toBe('Kontrol')
+    expect(unitName.getAttribute('aria-label')).toBe('Åbn Kontrol')
+    fireEvent.click(unitName)
     expect(onNavigate).toHaveBeenCalledWith({ id: KONTROL, kind: 'unit', name: 'Kontrol', type: 'team' })
     fireEvent.click(screen.getByTestId('crumb-STY02'))
     expect(onNavigate).toHaveBeenCalledWith({ id: 'STY02', kind: 'organisation', name: 'Statens IT', type: 'organisation' })
@@ -429,17 +476,19 @@ describe('StrukturPanel — the recursive read-only Struktur', () => {
   // ── the keystone: the RE-ARCHITECTED allowlist (S108 structure + S109 people) ─
   // The S107 allowlist asserted EVERY button was a caret/toggle/breadcrumb/open.
   // S108 added the gated UNIT structure buttons; S109 (this) adds the gated PEOPLE
-  // buttons (+ Medarbejder on a unit + a per-row "Rediger ›"). The guard SURVIVES
-  // for the affordances NOT in S109's TASK-10901/10902 scope: cross-unit "Ret" +
+  // buttons (+ Medarbejder on a unit + a per-row person edit — since S124 that edit
+  // is the person NAME itself, still carrying `person-edit-<id>`, so the allowlist
+  // entry is unchanged). The guard SURVIVES for the affordances NOT in S109's
+  // TASK-10901/10902 scope: cross-unit "Ret" +
   // leaderless "Tildel leder" (TASK-10903) and the INLINE approver/vikar
   // ("Skift"/"Afslut" — those live inside the drawer, never on the panel).
   it('exposes the gated STRUCTURE + PEOPLE affordances (S109 inversion); the out-of-scope shortcuts stay absent', () => {
     renderPanel() // default role LocalHR (permitting)
     fireEvent.click(screen.getByTestId(`caret-unit-${KONTROL}`)) // surface every node type
 
-    // (a) ALLOWLIST: caret / view-toggle / breadcrumb / back-forward / "Åbn ›" PLUS
-    //     the four UNIT structure actions PLUS the people affordances (+ Medarbejder
-    //     and the per-row "Rediger ›"). Any OTHER stray button fails.
+    // (a) ALLOWLIST: caret / view-toggle / breadcrumb / back-forward / the unit-NAME
+    //     open button PLUS the four UNIT structure actions PLUS the people affordances
+    //     (+ Medarbejder and the person-NAME edit button). Any OTHER stray button fails.
     const STRUCTURE = ['unit-action-create', 'unit-action-edit', 'unit-action-move', 'unit-action-delete']
     const allowed = (tid: string | null): boolean =>
       !!tid &&
@@ -464,7 +513,7 @@ describe('StrukturPanel — the recursive read-only Struktur', () => {
     expect(screen.getByTestId('unit-action-delete')).toBeDefined()
 
     // (c) the PEOPLE surface is now PRESENT (the S109 inversion) — "+ Medarbejder"
-    //     on the unit + a per-row "Rediger ›" on leaders + employees + the S109
+    //     on the unit + the per-row name edit on leaders + employees + the S109
     //     TASK-10903 cross-unit "Ret" (Carl) + leaderless "Tildel leder" (Kontrol).
     expect(screen.getByTestId('person-action-create').textContent).toContain('Medarbejder')
     expect(screen.getByTestId('person-edit-jens')).toBeDefined() // a leader row
@@ -479,11 +528,40 @@ describe('StrukturPanel — the recursive read-only Struktur', () => {
     }
     expect(screen.queryAllByRole('link')).toHaveLength(0)
 
-    // (e) person & leader NAMES are not themselves buttons — the edit entry is the
-    //     dedicated "Rediger ›" affordance, not the name.
-    expect(screen.getByText('Jens Kofoed').closest('button')).toBeNull()
-    expect(screen.getByText('Anna Andersen').closest('button')).toBeNull()
-    expect(screen.getByText('Carl Storm').closest('button')).toBeNull()
+    // (e) S124 INVERSION — person & leader NAMES ARE the edit affordance now. This
+    //     assertion used to say the opposite (the edit entry was the dedicated
+    //     "Rediger ›" link); it is inverted rather than deleted, because the surviving
+    //     half — that a below-floor role gets an inert <span> and never a dead button —
+    //     is the load-bearing guard. Its below-floor twin lives in CapabilityMatrix.
+    for (const [name, id] of [
+      ['Jens Kofoed', 'jens'], // a leader row
+      ['Anna Andersen', 'anna'], // an employee row
+      ['Carl Storm', 'carl'], // a cross-unit employee row
+    ] as const) {
+      const el = screen.getByText(name)
+      expect(el.tagName).toBe('BUTTON')
+      expect(el.getAttribute('data-testid')).toBe(`person-edit-${id}`)
+      expect(el.getAttribute('aria-label')).toBe(`Rediger ${name}`)
+      // The hit area is the NAME, not the row: the affordance class is the one that
+      // hugs the text (`align-self: flex-start`). jsdom has no layout engine, so class
+      // presence is the verifiable proxy for the geometry; the box itself is a visual
+      // check. It must NOT be styled via the shared `personName` class alone — that
+      // one also renders the INERT orphan-card name.
+      expect(el.className).toContain('nameAction')
+    }
+
+    // (f) THE SAME ALLOWLIST AT MAO — the dead-button discipline extended to the tier
+    //     where the people toggles cannot function. A MAO loads no roster, so neither
+    //     toggle could ever reveal a row: both are OMITTED, and every button still
+    //     standing at this tier must be one that actually does something here.
+    //     Re-rendered LAST so the assertions above keep the unit-node context.
+    cleanup()
+    renderPanel({ selected: MIN01_NODE })
+    for (const btn of screen.getAllByRole('button')) {
+      expect(allowed(btn.getAttribute('data-testid'))).toBe(true)
+    }
+    expect(screen.queryByTestId('toggle-people')).toBeNull()
+    expect(screen.queryByTestId('toggle-leaders')).toBeNull()
   })
 
   // ── the gating spine: a non-permitting role sees NO unit affordances ─────────
@@ -530,6 +608,7 @@ describe('StrukturPanel — the recursive read-only Struktur', () => {
           canForward={false}
           onBack={vi.fn()}
           onForward={vi.fn()}
+          onExpandSync={vi.fn()}
         />
       )
     }
@@ -597,6 +676,7 @@ describe('StrukturPanel — the recursive read-only Struktur', () => {
             onForward={vi.fn()}
             focusPersonId={focus}
             onFocusConsumed={vi.fn()}
+            onExpandSync={vi.fn()}
           />
         </ToastProvider>
       )

@@ -2697,10 +2697,13 @@ public static class AdminEndpoints
         //   self + descendants server-side when excludeEmployeeId is supplied (the cycle-prevention
         //   mirror for the picker — a person cannot pick themselves or a subordinate as approver).
         //   Read-only. minRole LocalAdmin (admin surface). A REAL paginated DB query.
+        //   S124 / TASK-12401 — plus the OPTIONAL `organisationId` narrowing (see the call below):
+        //   an ADDITIONAL conjunct intersected with the RBAC scope, never a substitute for it.
         // ═══════════════════════════════════════════
         app.MapGet("/api/admin/users/search", async (
             string? q,
             string? excludeEmployeeId,
+            string? organisationId,
             int? limit,
             int? offset,
             ApprovalPeriodRepository approvalRepo,
@@ -2733,8 +2736,18 @@ public static class AdminEndpoints
 
             // S103 / TASK-10304 — the S97 optional enhed-id filter is retired with the legacy Enhed
             // tag tables (the search no longer joins them; the unit model returns in a later phase).
+            //
+            // S124 / TASK-12401 — the OPTIONAL `organisationId` narrowing. The approver/vikar
+            // picker passes the SUBJECT's Organisation because ValidateSameOrganisationAsync
+            // (ADR-027 D2, :1180) rejects any cross-Organisation edge — so an unscoped picker was
+            // offering choices the server would always 400. It NARROWS ONLY: it is handed to the
+            // repo ALONGSIDE `accessibleOrgs`, which still applies, so the two INTERSECT. A scoped
+            // actor passing a FOREIGN org id therefore gets an empty page, never that org's
+            // roster. Deliberately NOT validated against the accessible set + 403'd: a 403 here
+            // would answer "does org X exist / am I scoped to it" for any id the caller cares to
+            // probe, which is a worse disclosure than the empty result it replaces.
             var (items, total) = await approvalRepo.SearchPeopleAsync(
-                q ?? string.Empty, accessibleOrgs, excluded, pageLimit, pageOffset, ct);
+                q ?? string.Empty, accessibleOrgs, excluded, pageLimit, pageOffset, organisationId, ct);
 
             // S112 / TASK-11201 — named records (UserSearchResponse envelope + UserSearchItem rows)
             // replace the anonymous shapes; BYTE-IDENTICAL wire JSON (same member names/order,

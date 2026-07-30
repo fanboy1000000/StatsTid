@@ -73,7 +73,11 @@ const team = [
   row({ periodId: 'p-1', employeeId: 'emp001', displayName: 'Anna Berg', status: 'SUBMITTED', flexBalance: 5.0, normRegistered: 147, hasWarning: false }),
   row({ periodId: 'p-2', employeeId: 'emp002', displayName: 'Bo Dahl', status: 'APPROVED', flexBalance: -2.0, normRegistered: 120, awayToday: true, hasWarning: true }),
   row({ periodId: 'p-3', employeeId: 'emp003', displayName: 'Carla Eng', status: 'REJECTED', flexBalance: 0, normRegistered: 100, rejectionReason: 'Mangler fordeling' }),
-  row({ periodId: null, employeeId: 'emp004', displayName: 'David Friis', status: 'DRAFT', flexBalance: 1.0, normRegistered: 0 }),
+  // S124 / TASK-12402 — an un-submitted row arrives with FIVE fields WITHHELD (null): the hours,
+  // the derived overtime + warning, the flex balance and the ferie USED count. The old fixture said
+  // `normRegistered: 0` — the server no longer sends that, and the fabricated zero was the very lie
+  // this task removes. Only the DENOMINATORS survive (normExpected, ferieTotal) plus awayToday.
+  row({ periodId: null, employeeId: 'emp004', displayName: 'David Friis', status: 'DRAFT', normRegistered: null, overtime: null, hasWarning: null, flexBalance: null, ferieUsed: null }),
   row({ periodId: 'p-5', employeeId: 'emp005', displayName: 'Emil Holm', status: 'EMPLOYEE_APPROVED', flexBalance: 8.0, normRegistered: 130, hasWarning: true }),
 ]
 
@@ -92,6 +96,19 @@ function mockOverview(rows = team) {
   mockFetch.mockImplementation(async (url: string) => {
     if (typeof url === 'string' && url.includes('/api/approval/team-overview')) {
       return jsonResponse({ employees: rows })
+    }
+    // S124 / TASK-12403 — the expanded panel now renders the month grid inline, so the month read
+    // fires on expand. Served as an EMPTY month: this suite is about the table + KPIs, not the grid
+    // (TeamRowDetail.test.tsx owns that), and an empty served month still proves the panel survives.
+    if (typeof url === 'string' && url.includes('/api/skema/') && url.includes('/month')) {
+      return jsonResponse({
+        employeeId: 'emp', year: 2026, month: 3,
+        entries: [], absences: [], workTime: [], dailyNorm: [], consumptionBasis: [],
+        projects: [], absenceTypes: [],
+        catalogs: { projects: [], absenceTypes: [] },
+        rowPreferences: null, approval: null,
+        entitlementEligibility: null, seniorDayMinAge: null,
+      })
     }
     return jsonResponse({})
   })
@@ -133,7 +150,9 @@ describe('TeamOversigt — render + status mapping', () => {
     expect(screen.getAllByText('Indsendt', { selector: '.badge' })).toHaveLength(2) // SUBMITTED + EMPLOYEE_APPROVED
     expect(screen.getByText('Godkendt', { selector: '.badge' })).toBeInTheDocument() // APPROVED
     expect(screen.getByText('Afvist', { selector: '.badge' })).toBeInTheDocument()   // REJECTED
-    expect(screen.getByText('Kladde', { selector: '.badge' })).toBeInTheDocument()   // DRAFT
+    // S124 / TASK-12402 — the leader-facing label is "Ikke indsendt", never "Kladde".
+    expect(screen.getByText('Ikke indsendt', { selector: '.badge' })).toBeInTheDocument() // DRAFT
+    expect(screen.queryByText('Kladde')).toBeNull()
   })
 
   it('the no-period DRAFT row shows "Ikke indsendt" (no handling actions)', async () => {
@@ -141,10 +160,70 @@ describe('TeamOversigt — render + status mapping', () => {
     renderPage()
     await waitFor(() => expect(screen.getByText('David Friis')).toBeInTheDocument())
     const draftRow = screen.getByTestId('team-row-emp004')
-    expect(within(draftRow).getByText('Ikke indsendt')).toBeInTheDocument()
+    // Exactly ONE "Ikke indsendt": the status badge. The Handling column used to repeat it in the
+    // next cell — the same sentence twice across two columns.
+    expect(within(draftRow).getByText('Ikke indsendt', { selector: '.badge' })).toBeInTheDocument()
+    expect(within(draftRow).getAllByText('Ikke indsendt')).toHaveLength(1)
     expect(within(draftRow).queryByRole('button', { name: 'Godkend' })).toBeNull()
     // The checkbox is disabled for a non-pending / no-period row.
     expect(within(draftRow).getByRole('checkbox')).toBeDisabled()
+  })
+
+  // ── S124 / TASK-12402 — the manager-visibility rule ───────────────────────────
+  // A manager may not read an un-submitted timesheet. The server withholds the three
+  // month-derived fields; these assert the VIEW never fabricates them back.
+  it('WITHHOLDS the registered hours on an un-submitted row: em dash, never "0,0"', async () => {
+    mockOverview()
+    renderPage()
+    await waitFor(() => expect(screen.getByText('David Friis')).toBeInTheDocument())
+    const draftRow = screen.getByTestId('team-row-emp004')
+
+    // The norm cell reads "— / <expected> t": the EXPECTED norm is a standing contract fact the
+    // manager may see; the REGISTERED figure is withheld.
+    expect(within(draftRow).getByText(/—\s*\/\s*147,0 t/)).toBeInTheDocument()
+    // The specific lie this task removes — a fabricated zero — must not appear.
+    expect(within(draftRow).queryByText(/^0,0\s*\/\s*147,0 t$/)).toBeNull()
+
+    // Owner ruling 2026-07-30 — "a manager cannot see anything before a month is submitted", so
+    // flex and the ferie USED count are withheld too. `ferieUsed` was a genuine leak: it is
+    // incremented inside the employee's own Skema save with no approval gate, so a drafted day
+    // off moved this column. The QUOTA survives as the denominator.
+    expect(within(draftRow).getByText(/—\s*\/\s*25 dage/)).toBeInTheDocument()
+    const flexCell = draftRow.querySelector('[class*="flexCell"]')
+    expect(flexCell?.textContent?.trim()).toBe('—')
+  })
+
+  it('renders NO progress bar for an un-submitted row (a 0% bar would assert "registered nothing")', async () => {
+    mockOverview()
+    renderPage()
+    await waitFor(() => expect(screen.getByText('David Friis')).toBeInTheDocument())
+    expect(screen.getByTestId('team-row-emp004').querySelector('[class*="barTrack"]')).toBeNull()
+    // Contrast: a SUBMITTED row still shows its bar, so this is not a blanket removal.
+    expect(screen.getByTestId('team-row-emp001').querySelector('[class*="barTrack"]')).not.toBeNull()
+  })
+
+  it('offers NO expander on an un-submitted row — the detail panel is entirely draft content', async () => {
+    mockOverview()
+    renderPage()
+    await waitFor(() => expect(screen.getByText('David Friis')).toBeInTheDocument())
+    // No chevron button: expanding would show withheld Normtimer/overtid AND fetch the per-task
+    // "Fordeling af arbejdstid" + compliance for a period the employee never sent.
+    expect(within(screen.getByTestId('team-row-emp004'))
+      .queryByRole('button', { name: /detaljer for David Friis/ })).toBeNull()
+    // Contrast: a submitted row keeps its expander.
+    expect(within(screen.getByTestId('team-row-emp001'))
+      .getByRole('button', { name: /detaljer for Anna Berg/ })).toBeInTheDocument()
+  })
+
+  it('leaves every SUBMITTED / decided row FULLY visible (the rule must not over-reach)', async () => {
+    mockOverview()
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Anna Berg')).toBeInTheDocument())
+    // A manager must keep seeing everything about what they are asked to approve — and about what
+    // they already decided (REJECTED included: those numbers are the basis of the decision).
+    expect(within(screen.getByTestId('team-row-emp001')).getByText(/147,0\s*\/\s*147,0 t/)).toBeInTheDocument()
+    expect(within(screen.getByTestId('team-row-emp003')).getByText(/100,0\s*\/\s*147,0 t/)).toBeInTheDocument()
+    expect(within(screen.getByTestId('team-row-emp005')).getByText(/130,0\s*\/\s*147,0 t/)).toBeInTheDocument()
   })
 })
 
@@ -168,6 +247,36 @@ describe('TeamOversigt — KPI band (full team)', () => {
     // Godkendt = APPROVED count = "1 / 5" (value + "/ N" suffix).
     expect(kpiValueText('Godkendt')).toContain('1')
     expect(kpiValueText('Godkendt')).toContain('/ 5')
+  })
+
+  // ── S124 / TASK-12402 ─────────────────────────────────────────────────────────
+  it('Godkendt keeps the FULL-TEAM denominator (the owner ruling: the row stays, so the tracker stays)', async () => {
+    mockOverview()
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Anna Berg')).toBeInTheDocument())
+    // 5, not 4 — the un-submitted employee is still counted as someone who owes a month.
+    expect(kpiValueText('Godkendt')).toContain('/ 5')
+  })
+
+  it('Norm-opfyldelse covers only the SENT rows and says so', async () => {
+    mockOverview()
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Anna Berg')).toBeInTheDocument())
+    // 4 of the 5 fixture rows carry a figure (David Friis is withheld).
+    expect(screen.getByText(/4 af 5 indsendt/)).toBeInTheDocument()
+  })
+
+  it('Norm-opfyldelse shows — not 0% when NOBODY has submitted (early in every month)', async () => {
+    // An all-draft team: averaging nothing and printing "0%" would assert the team registered
+    // nothing — the same fabricated zero the row-level withholding removes.
+    mockOverview([
+      row({ periodId: null, employeeId: 'emp010', displayName: 'Frida Munk', status: 'DRAFT', normRegistered: null, overtime: null, hasWarning: null }),
+      row({ periodId: null, employeeId: 'emp011', displayName: 'Gorm Nyborg', status: 'DRAFT', normRegistered: null, overtime: null, hasWarning: null }),
+    ])
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Frida Munk')).toBeInTheDocument())
+    expect(screen.getByTestId('kpi-norm-value').textContent?.trim()).toBe('—')
+    expect(screen.getByText(/0 af 2 indsendt/)).toBeInTheDocument()
   })
 })
 

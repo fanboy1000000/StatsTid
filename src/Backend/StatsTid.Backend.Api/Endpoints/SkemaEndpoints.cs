@@ -171,6 +171,7 @@ public static class SkemaEndpoints
             // served==guard identity; never a second copy of the ADR-032 formula).
             StatsTid.Backend.Api.Services.ConsumptionCalculator consumptionCalculator,
             OrgScopeValidator scopeValidator,
+            DesignatedApproverAuthorizer designatedAuthorizer,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -180,11 +181,57 @@ public static class SkemaEndpoints
             if (actor.ActorRole == StatsTidRoles.Employee && employeeId != actor.ActorId)
                 return Results.Json(new { error = "Access denied", reason = "Employee can only access own data" }, statusCode: 403);
 
-            if (actor.ActorRole != StatsTidRoles.Employee)
+            // S124 / TASK-12405 — true when the caller reached this read as a LEADER over someone
+            // else (see the tiers below). Self and HR-or-above are false: neither is month-gated.
+            //
+            // NOTE the added `employeeId != actor.ActorId` on the branch below means a non-Employee
+            // actor reading their OWN month now skips scope resolution outright. That is deliberate
+            // (it is the same self-exemption TASK-12404 documents for writes) and is a self-read only,
+            // never an escalation — but it IS a behavioural widening: previously a scope-less
+            // LocalLeader was refused their own timesheet by "No scopes assigned".
+            var leaderTierRead = false;
+
+            if (actor.ActorRole != StatsTidRoles.Employee && employeeId != actor.ActorId)
             {
-                var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, ct);
-                if (!allowed)
-                    return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+                // ── S124 / TASK-12403 + TASK-12405 — the month read is admitted in TIERS ────────
+                // TIER 1  HR-or-above covering scope  → unrestricted. HR/Admin may CORRECT an
+                //         employee's month (TASK-12404 write floor), and you cannot correct what you
+                //         cannot read, so the corrective tier is deliberately not month-gated.
+                // TIER 2  LEADER (a covering below-HR scope, OR the designated approver / unit-leader
+                //         edge) → allowed ONLY for a month the employee has SENT. Enforced further
+                //         down, once the period is resolved.
+                //
+                // The designated-edge leg is the S88-8801 B2 shape both sibling reads on this expander
+                // already carry (ComplianceEndpoints.cs:38-58; ApprovalEndpoints.cs:1192-1199): the
+                // Teamoversigt roster is the DESIGNATED-APPROVER set (ADR-027 D13 / ADR-038 D4), which
+                // admits cross-afdeling vikar + escalation approvers and peer unit-leaders whose
+                // ORG_ONLY role-scope does NOT name the employee's org. Without it the leader's grid
+                // 403s for exactly that population — a hole masked as a transient "could not load".
+                //
+                // WHY THE TIERS EXIST (Step-7a Codex BLOCKER): the edge branch alone was a P7 WIDENING
+                // of an ungated read. It handed an edge-only leader the FULL grid of a DRAFT — or
+                // entirely nonexistent — month, flatly contradicting the same sprint's owner ruling
+                // that "a manager cannot see anything before a month is submitted" (TASK-12402). A
+                // named deferral (RES-002) does not make a widening acceptable.
+                var hrFloored = await scopeValidator.ValidateEmployeeAccessAsync(
+                    actor, employeeId, StatsTidRoles.LocalHR, ct);
+                if (hrFloored.Allowed)
+                {
+                    leaderTierRead = false;
+                }
+                else
+                {
+                    var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, ct);
+                    if (!allowed)
+                    {
+                        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+                        var hasEdgeOrUnit = await designatedAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(
+                            actor.ActorId!, employeeId, asOf: today, ct: ct);
+                        if (!hasEdgeOrUnit)
+                            return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+                    }
+                    leaderTierRead = true;
+                }
             }
 
             // Get employee profile
@@ -453,6 +500,29 @@ public static class SkemaEndpoints
             // member (the S117 allOf wrapper's application #4); minted new after the
             // sibling-CHECK against the S116 ApprovalResponses family (no 6-key sibling).
             var period = await approvalRepo.GetByEmployeeAndPeriodAsync(employeeId, monthStart, monthEnd, ct);
+
+            // ── S124 / TASK-12405 — THE LEADER MONTH GATE (Step-7a Codex BLOCKER) ──────────────
+            // A leader may read this month's grid ONLY once the employee has SENT it. Both this gate
+            // and the team-overview withholding call the SAME `ApprovalVisibility` member, so the two
+            // surfaces cannot drift: a row whose figures are withheld must not have its full grid
+            // readable through the back door. (Step-7a internal lens: these had been two hand-copied
+            // literal lists bound only by a comment — the shared member is the actual mechanism.)
+            //   • no period at all → nothing was ever sent → denied.
+            //   • DRAFT (i.e. a reopened month, since the create path submits in the same tx) → denied.
+            // Fail-CLOSED: an unrecognised future status is NOT readable by a leader.
+            if (leaderTierRead)
+            {
+                var sentToLeader = ApprovalVisibility.IsSubmittedToManager(period?.Status);
+                if (!sentToLeader)
+                {
+                    return Results.Json(new
+                    {
+                        error = "Access denied",
+                        reason = "The month has not been submitted for approval",
+                    }, statusCode: 403);
+                }
+            }
+
             SkemaApprovalInfo? approval = period is not null
                 ? new SkemaApprovalInfo(
                     PeriodId: period.PeriodId,
@@ -547,7 +617,28 @@ public static class SkemaEndpoints
 
             if (actor.ActorRole != StatsTidRoles.Employee)
             {
-                var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, ct);
+                // ── S124 / TASK-12404 — owner ruling 2026-07-30 ──────────────────────────────
+                // "A manager can never edit an employee's registrations. Only HR and admins can."
+                //
+                // Before this, ANY non-Employee actor whose org-scope covered the target could write
+                // another employee's time data — which includes LocalLeader. The floor lifts that to
+                // LocalHR-or-above (LocalHR / LocalAdmin / GlobalAdmin) via the EXISTING per-scope
+                // roleFloor mechanism (OrgScopeValidator:88-91): a scope below the floor never admits,
+                // so a mixed-role actor's LEADER scope cannot carry the write while their HR scope,
+                // if any, still can.
+                //
+                // SELF IS EXEMPT, and that exemption is load-bearing: a LocalLeader is also an
+                // employee who registers their OWN time. They are not Employee-role, so they fall
+                // through to this scope branch — applying the HR floor unconditionally would have
+                // locked every leader out of their own timesheet.
+                //
+                // READS are untouched. A leader must still review the full month grid of a submitted
+                // period (TASK-12403) — this narrows WRITES only.
+                var writeFloor = string.Equals(employeeId, actor.ActorId, StringComparison.Ordinal)
+                    ? null
+                    : StatsTidRoles.LocalHR;
+                var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(
+                    actor, employeeId, writeFloor, ct);
                 if (!allowed)
                     return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
             }

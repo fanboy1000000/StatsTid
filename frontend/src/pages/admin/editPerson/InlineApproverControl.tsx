@@ -28,6 +28,11 @@ interface InlineApproverControlProps {
       build a child index per-row on every render of the ~2000-row tree). The page
       passes a thunk that runs `descendantsOf` once, on activation. */
   computeForbidden: () => Set<string>
+  /** S124 / TASK-12401 — the orphan person's Organisation. This control always operates in EDIT
+      mode (an immediate POST /api/admin/reporting-lines), so the server validates the edge against
+      the PERSISTED primary_org_id — which, on the tree page, is the selected Organisation the row
+      is rendered under. Scoping the picker to it stops the control offering guaranteed-400 names. */
+  organisationId: string | null
   /** The trigger label/affordance — "Skift" (has approver) or "+ Tildel godkender". */
   trigger: 'change' | 'assign'
   /** Rendered after a successful assign/reassign/remove → the page refetches. */
@@ -42,6 +47,7 @@ export function InlineApproverControl({
   currentApproverId,
   currentApproverName,
   computeForbidden,
+  organisationId,
   trigger,
   onChanged,
   className,
@@ -108,6 +114,7 @@ export function InlineApproverControl({
         currentApproverName={currentApproverName}
         currentReportingLineEtag={resolved.etag}
         forbidden={forbidden}
+        organisationId={organisationId}
         onChanged={handleChanged}
         autoOpenPicker
         onPickerDismiss={() => setActive(false)}

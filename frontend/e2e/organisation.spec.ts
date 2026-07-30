@@ -20,11 +20,12 @@ import { runNonce } from './helpers/dates'
  * cannot exercise:
  *
  *   1. PEOPLE-EDIT (the S109 keystone): select the Organisation Statens IT (STY02)
- *      → expand its unit tree → open a member's "Rediger ›" drawer → change the
- *      display name → save → assert the PUT round-trips AND the roster row reflects
- *      the new name (the merged page refetched). The seeded STY02 tree has the
- *      IT-Drift kontor (mgr01 leads it; emp002 is a member — init.sql units +
- *      reporting_lines), so emp002 always renders a "Rediger ›" affordance.
+ *      → expand its unit tree → open a member's edit drawer by clicking their NAME
+ *      (S124 moved the affordance off the old right-edge "Rediger ›" link) → change
+ *      the display name → save → assert the PUT round-trips AND the roster row
+ *      reflects the new name (the merged page refetched). The seeded STY02 tree has
+ *      the IT-Drift kontor (mgr01 leads it; emp002 is a member — init.sql units +
+ *      reporting_lines), so emp002 always renders an editable name.
  *
  *   2. STRUCTURE (create → rename → delete a unit): on the STY02 Organisation node
  *      create a top-level unit, select it, rename it, then delete it. The delete is
@@ -38,7 +39,9 @@ import { runNonce } from './helpers/dates'
  *
  * Assertions are DISCRIMINATING: the person row is located by its stable
  * employeeId-keyed testid (person-edit-emp002) and the test asserts the rendered
- * NAME changed after the save round-trip (not merely that a button was clickable);
+ * NAME changed after the save round-trip (not merely that a button was clickable).
+ * Since S124 that testid sits ON the name element itself, so the two are asserted
+ * together — the located element's own text must be the new name;
  * the structure path asserts the tree row appeared / disappeared by its rendered
  * name.
  */
@@ -69,7 +72,7 @@ test('admin01 edits a person from the merged Organisation & medarbejdere page', 
   // Expand the whole unit sub-tree so the IT-Drift members (mgr01 + emp002) render.
   await page.getByTestId('toggle-expand-all').click()
 
-  // ── Open emp002 (Karen Nielsen)'s edit drawer via its "Rediger ›" affordance ──
+  // ── Open emp002 (Karen Nielsen)'s edit drawer by clicking their NAME (S124) ──
   const editBtn = page.getByTestId('person-edit-emp002')
   await expect(editBtn).toBeVisible()
   await editBtn.click()
@@ -96,8 +99,9 @@ test('admin01 edits a person from the merged Organisation & medarbejdere page', 
   // DISCRIMINATING: the drawer closes on success AND the refetched roster row shows
   // the new name (the edit truly persisted + the merged page re-pulled the roster).
   await expect(page.getByTestId('person-drawer-title')).toBeHidden()
-  await expect(page.getByTestId('person-edit-emp002')).toBeVisible()
-  await expect(page.getByText(newName, { exact: true })).toBeVisible()
+  // S124 — the testid IS the name element, so this single assertion now carries both
+  // legs: the row is still located by employeeId AND its own text is the new name.
+  await expect(page.getByTestId('person-edit-emp002')).toHaveText(newName)
 })
 
 test('admin01 creates, renames and deletes a unit on the merged page', async ({ page }) => {
