@@ -1,121 +1,163 @@
-# [FAIL-004] The inactive-manager escalation walk can return an employee as their OWN designated approver (cyclic legacy graph)
+# [FAIL-004] The designated-approver resolution could return an employee as their OWN approver
 
 | Field | Value |
 |-------|-------|
 | **ID** | FAIL-004 |
 | **Category** | failure |
-| **Status** | OPEN — confirmed, tripwired, awaiting an owner ruling on the intended behaviour |
-| **Sprint** | S125 (found) |
+| **Status** | **RESOLVED** — owner ruled option (a) 2026-07-30; fix shipped S125 with RED-on-old proof |
+| **Sprint** | S125 (found + fixed) |
 | **Date** | 2026-07-30 |
 | **Domains** | Backend, Infrastructure, Security |
-| **Tags** | authorization, reporting-line, designated-approver, escalation, cyclic-graph, segregation-of-duties, p7, pre-existing |
+| **Tags** | authorization, reporting-line, designated-approver, escalation, cyclic-graph, vikar, segregation-of-duties, p7, pre-existing |
 
 ## Summary
-`ReportingLineRepository.ResolveDesignatedApproverAsync` walks up the reporting chain when a manager
-is inactive. The walk has **no check that the resolved manager differs from the employee it started
-from**, so on a cyclic legacy graph it can return the employee as their own approver — and the
-authorization gate then admits them over their own period.
+`ReportingLineRepository.ResolveDesignatedApproverAsync` never compared a resolved manager against the
+employee it started from, so it could return the employee as their own approver — and
+`DesignatedApproverAuthorizer` then ADMITTED that pair. Since the same predicate gates
+**approve / reject / reopen**, the S105 segregation-of-duties rule did not hold for those shapes.
+
+Fixed by enforcing a self-exclusion invariant at **all three** candidate-returning legs.
 
 ## How it was found
 Not by looking for it. During the S125 performance analysis of F1 (the period-status projection's
 N+1), the Step-4 internal review lens traced the tally loop's authorization path and flagged that the
 refinement's stated invariant *"self-exclusion: a leader never tallies their OWN period"* is **not
-what the code does** — it holds for the unit-leader legs only. Verified from code, then **confirmed
+what the code does** — it held for the unit-leader legs only. Verified from code, then **confirmed
 empirically** rather than accepted on the reviewer's word.
 
-## Confirmation (empirical, not inferred)
-Tripwire: `PeriodStatusAndPersonSearchReadsTests
-.FINDING_12502_TRIPWIRE_EscalationWalk_ReturnsEmployeeAsTheirOwnApprover_OnTwoCycle`.
+## TWO routes, not one — the second needs no cycle at all
+The finding was originally written up as cyclic-legacy-data-only. Implementing the fix surfaced a
+second, **structurally different** route through the vikar leg, and it is the more reachable of the two:
 
-Setup: `A → B` and `B → A` (raw-inserted — `AssignAsync`'s cycle guard rejects this, so only LEGACY
-data can produce it), with `B` inactive and holding no usable vikar.
+| Route | Shape | Pre-fix result |
+|---|---|---|
+| **Cyclic PRIMARY** | `A → B`, `B → A`, B inactive | `(A, DESIGNATED_MANAGER, 1)` |
+| **Planted vikar** | `A → B`, B inactive, a `manager_vikar` row naming **A** as B's stand-in | `(A, ACTING_MANAGER, 0)` — **depth ZERO, no cycle anywhere** |
 
-Result: `ResolveDesignatedApproverAsync(A)` returns **`(A, "DESIGNATED_MANAGER", depth: 1)`**.
+The DB permits the vikar row: `CHECK (absent_approver_id <> vikar_user_id)` only forbids someone
+being their own stand-in, not a subordinate being their manager's stand-in. Both routes are
+write-path-guarded going forward (`GuardNoCycleAsync`, anchored on the absent approver for vikar
+creation, rejects any descendant as stand-in), so both are legacy/planted-data-only — **which is
+exactly why the invariant now lives at the READ instead of being assumed from write-path history.**
 
-The test was additionally proven non-vacuous by inverting its assertion, which reported
-`Expected: "PROBE_EXPECT_FAIL" / Actual: "t7404_cyc_a"` — i.e. the resolver really does return A.
+## Mechanism (pre-fix)
+`ResolveDesignatedApproverAsync` walks up while managers are inactive, tracking only
+`currentEmployeeId`. Three legs can return a person: (1) ACTING line, (2b) the manager's vikar,
+(3) the manager if active. None compared its candidate against the original `employeeId`. The
+`while (depth < 10)` ceiling bounded the walk but did not prevent returning to the start.
 
-## Mechanism
-`ReportingLineRepository.ResolveDesignatedApproverAsync` (~:956-999):
-
-1. Iteration 0 for employee `A`: no ACTING; PRIMARY manager is `B`; `B` has no usable vikar; `B` is
-   inactive → step 4 sets `currentEmployeeId = B`, `depth++`.
-2. Iteration 1 for `B`: PRIMARY manager is `A`; `A` is **active** → returns
-   `(A, "DESIGNATED_MANAGER", 1)`.
-
-Nothing compares the candidate against the ORIGINAL `employeeId`. The `while (depth < 10)` ceiling
-bounds the walk but does not prevent returning to the start.
-
-## Why it reaches authorization, not just resolution
-`DesignatedApproverAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(actor: A, employee: A)` passes:
+## Why it reached authorization, not just resolution
+`DesignatedApproverAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(actor: A, employee: A)` passed:
 - `IsActiveLeaderOrAboveAsync(A)` — satisfied when A is an active LeaderOrAbove;
-- the resolved designated approver of `A` **is** `A`, so the edge leg matches the actor;
+- the resolved designated approver of `A` **was** `A`, so the edge leg matched the actor;
 - `ValidateSameOrganisationAsync(A, A)` — the `= ANY(@ids)` collapses to one row, so both org values
   are trivially equal.
 
-Consequences: `GetPeriodStatusProjectionForTreeAsync` would tally A's own pending period onto A's own
-tile, and — more seriously — the same predicate gates the **approve / reject / reopen** action
-endpoints, so the segregation-of-duties rule those flows rely on does not hold for this shape.
-
-## The asymmetry that makes it a defect rather than a choice
-The unit-leader legs carry **explicit** self-exclusion:
+## The asymmetry that made it a defect rather than a choice
+The unit-leader legs carried **explicit** self-exclusion:
 - enumeration: `ul.user_id <> @employeeId` and `mv.vikar_user_id <> @employeeId`
   (`ApprovalPeriodRepository.QueryUnitLeaderApproverCandidatesAsync`);
 - gate: `e.user_id <> @actorId` (`DesignatedApproverAuthorizer.QueryUnitLeaderKindAsync`).
 
-The S105 segregation-of-duties rule is therefore clearly intended. The **edge leg has no equivalent**.
-That inconsistency — the same rule enforced on one path and absent on the other — is the finding.
+The S105 rule was therefore clearly intended. The **edge leg had no equivalent**. That inconsistency
+— the same rule enforced on one path and absent on the other — was the finding.
 
-## Reachability
-Requires a cyclic PRIMARY graph, which `AssignAsync`'s cycle guard prevents going forward. It is
-reachable only via legacy/imported data — and such data is **known to be possible here**: the sibling
-test `GetDescendantIds_TerminatesOnCyclicLegacyGraph_AndReturnsFiniteSet` exists precisely because
-cyclic legacy graphs can reach this system. No production instance has been checked; nobody has
-looked. A detection query is the obvious first step (see below).
+## The ruling and the fix
+**Owner ruled option (a) on 2026-07-30: skip the subject and KEEP LOOKING.** (Options (b) "bail out
+to org-scope on contact with self" and (c) "accept as unreachable" were rejected.)
 
-## NOT fixed — deliberately
-Owner-directed 2026-07-30: raise as its own finding rather than fold into the F1 performance task.
-Correct call — "fixing" this changes **who may approve**, which is a P7 behaviour decision, not a
-refactor. Folding it into a performance change would have altered authorization under cover of an
-optimisation, and the characterisation baseline for that work would have silently encoded the new
-behaviour as the reference.
+Implemented as a local `IsSubject(candidateId)` predicate applied at all three candidate legs. A
+candidate equal to the subject is skipped and the walk continues; for leg (3) that means escalating
+THROUGH an active subject rather than resolving to them.
 
-## Open questions for the ruling
-1. **Intended behaviour?** Options: (a) exclude the original employee from the walk and continue
-   escalating past them; (b) treat self-resolution as "no approver" (`(null, null, depth)`) and fall
-   back to org-scope; (c) accept it as unreachable-in-practice and leave it documented.
-   (a) and (b) differ observably when the cycle is the ONLY path upward.
-2. **Does any production data contain a cyclic PRIMARY graph?** A detection query should run before
-   choosing — if the answer is "none", the urgency drops sharply. **The demo world was checked
-   (2026-07-30): ZERO cyclic PRIMARY paths, zero employees on a cycle.** So the defect is currently
-   unreachable in the demo dataset; production has NOT been checked. The query, for reuse:
+**Deliberately NOT added: a visited-set to terminate cycles early.** It would cut the walk short and
+so LOWER the reported `depth`, flipping the existing `FallbackTraversalWarning` (fires at depth > 3)
+from firing to silent — a second behaviour change nobody ruled on. The depth-10 ceiling already
+terminates, and cycles already burned to it before this change.
 
-   ```sql
-   WITH RECURSIVE walk(start_id, cur_id, path, depth) AS (
-     SELECT rl.employee_id, rl.manager_id, ARRAY[rl.employee_id, rl.manager_id], 1
-     FROM reporting_lines rl
-     WHERE rl.relationship='PRIMARY' AND rl.effective_to IS NULL
-     UNION ALL
-     SELECT w.start_id, rl.manager_id, w.path || rl.manager_id, w.depth + 1
-     FROM walk w
-     JOIN reporting_lines rl ON rl.employee_id = w.cur_id
-      AND rl.relationship='PRIMARY' AND rl.effective_to IS NULL
-     WHERE w.depth < 12 AND NOT rl.manager_id = ANY(w.path)
-   )
-   SELECT count(*) AS cyclic_primary_paths, count(DISTINCT start_id) AS employees_on_a_cycle
-   FROM walk WHERE cur_id = start_id;
-   ```
+### A CORRECTION to how option (a) was sold
+When the options were put to the owner, (a) was described as being able to find a valid approver
+further up where (b) would give up. **That is true for the vikar route but NOT for the cyclic route.**
+A walk's decisions are a pure function of `currentEmployeeId`, so returning to the subject re-derives
+the same non-answer; a cycle through the subject therefore always exhausts the ceiling and both
+options end at org-scope fallback, differing only in the reported `depth`.
 
-   Run this against each real instance before ruling. A non-zero result makes option (c)
-   ("accept as unreachable") untenable.
-3. **Is the depth-10 ceiling's `(null, null)` return the intended fallback** for this shape too?
+The ruling is nevertheless vindicated by the vikar route, where the graph is NOT cyclic and there
+genuinely IS somewhere further to look: (b) would have returned `(null, null, 0)` and dumped the
+approval on HR, whereas (a) finds B's own manager C. The discriminating test asserts C precisely so
+that it fails under (b) as well as under the original defect.
 
-## Tripwire contract
-The tripwire asserts **current** behaviour and **will go RED when this is fixed — that is its job**.
-Replace its assertion with the ruled behaviour; do not delete it.
+## Post-fix behaviour
+| Shape | Result | Meaning |
+|---|---|---|
+| Cyclic `A → B → A`, B inactive | `(null, null, 10)` | org-scope fallback, and depth 10 > 3 trips `FallbackTraversalWarning` |
+| Planted vikar naming A, `B → C` | `(C, DESIGNATED_MANAGER, 1)` | the legitimate approver one level up |
+
+The high depth on the degenerate shape is asserted deliberately: it is what keeps a broken graph
+**visible** as a data-quality signal instead of becoming a silent permanent detour to org-scope. That
+also settles open question 3 without inventing a new return state.
+
+## Confirmation (empirical, both directions)
+Tests (`PeriodStatusAndPersonSearchReadsTests`):
+- `FAIL_004_SelfExclusion_TwoCycle_NeverResolvesToTheSubject_FallsBackToOrgScope`
+- `FAIL_004_SelfExclusion_PlantedVikarNamingTheSubject_SkipsIt_AndKeepsLooking`
+
+Both were proven **RED on old** by neutralising `IsSubject` and rebuilding:
+```
+Expected: Not "t7404_cyc_a"   Actual: "t7404_cyc_a"      (2-cycle)
+Expected:     "t7404_cyc_c"   Actual: "t7404_cyc_a"      (planted vikar — self at depth 0)
+```
+Restored → 15/15 green; reporting-line + vikar + designated-approver + delegate suites 162/162 green.
+
+## A latent test-ORDER bug fixed alongside
+`uq_reporting_line_active_primary` is a partial unique index (one active PRIMARY per employee), and
+three tests in this class plant an active PRIMARY for `CycA` — the pre-existing cyclic-descendant test
+points it at `CycC`, both FAIL-004 tests at `CycB`. The original tripwire did not clear its edges, so
+it passed only on xUnit's method ordering; run in the other order it would have died on a unique
+violation. `ClearCycEdgesAsync` now runs at entry AND in the finally of both FAIL-004 tests.
+
+## Production data
+The demo world was checked (2026-07-30): **ZERO cyclic PRIMARY paths, zero employees on a cycle.** No
+real instance has been checked. This no longer gates anything — the fix is unconditional — but the
+query is worth running once to learn whether any live instance carries the shape, since a hit means
+somebody's approvals have been routing to org-scope-or-worse:
+
+```sql
+WITH RECURSIVE walk(start_id, cur_id, path, depth) AS (
+  SELECT rl.employee_id, rl.manager_id, ARRAY[rl.employee_id, rl.manager_id], 1
+  FROM reporting_lines rl
+  WHERE rl.relationship='PRIMARY' AND rl.effective_to IS NULL
+  UNION ALL
+  SELECT w.start_id, rl.manager_id, w.path || rl.manager_id, w.depth + 1
+  FROM walk w
+  JOIN reporting_lines rl ON rl.employee_id = w.cur_id
+   AND rl.relationship='PRIMARY' AND rl.effective_to IS NULL
+  WHERE w.depth < 12 AND NOT rl.manager_id = ANY(w.path)
+)
+SELECT count(*) AS cyclic_primary_paths, count(DISTINCT start_id) AS employees_on_a_cycle
+FROM walk WHERE cur_id = start_id;
+```
+
+The vikar route has its own, cheaper detection query — worth running for the same reason:
+
+```sql
+SELECT mv.absent_approver_id, mv.vikar_user_id
+FROM manager_vikar mv
+JOIN reporting_lines rl
+  ON rl.employee_id = mv.vikar_user_id
+ AND rl.manager_id  = mv.absent_approver_id
+ AND rl.relationship = 'PRIMARY' AND rl.effective_to IS NULL
+WHERE mv.effective_to IS NULL;
+```
+
+## Residual, NOT fixed — deliberately
+**A subject's OWN vikar can still be their approver.** If A's own stand-in is V, resolution can return
+V for A's period. That is approval-by-one's-own-delegate, a weaker and distinct concern from
+self-approval, and it was not part of this ruling. Flagged here rather than folded in silently.
 
 ## Agent Guidance
-- **Backend / Security Agent**: do NOT add a uniform "self-exclusion" helper across both legs while
-  doing unrelated work — that silently implements option (a) without a ruling.
-- Any refactor of `ResolveDesignatedApproverAsync` must preserve this behaviour until ruled, or the
-  tripwire will fail and should be treated as a real signal, not noise.
+- The invariant is stated in the XML doc on `ResolveDesignatedApproverAsync`: **the returned ManagerId
+  is NEVER `employeeId`**. Preserve it in any refactor; the two tests above will catch a regression.
+- Do NOT "simplify" the walk by adding cycle-termination — see the visited-set note above; it silently
+  disables `FallbackTraversalWarning` on exactly the graphs that need it.
+- The residual (a subject's own vikar) needs an owner ruling before anyone changes it.

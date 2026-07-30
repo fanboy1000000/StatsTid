@@ -70,35 +70,67 @@ the fold survives switching Kasper Olsen → Charlotte Schmidt; summary→grid g
 
 ---
 
-### FINDING-12502 / FAIL-004 — a PRE-EXISTING P7 defect, raised rather than folded in
+### TASK-12502 — FAIL-004: nobody is their own designated approver (a PRE-EXISTING P7 defect)
 | Field | Value |
 |-------|-------|
-| **ID** | FINDING-12502 → `docs/knowledge-base/failures/FAIL-004-…md` |
-| **Status** | OPEN — confirmed empirically, tripwired, awaiting an owner ruling. NOT fixed. |
+| **ID** | TASK-12502 (was FINDING-12502) → `docs/knowledge-base/failures/FAIL-004-...md` |
+| **Status** | complete (2026-07-30) — owner ruled option **(a)** "skip the subject and keep looking"; fix shipped with RED-on-old proof on BOTH routes |
+| **Agent** | Orchestrator (small-task exception; the fix is one predicate applied at three sites) |
+| **Components** | `Infrastructure/ReportingLineRepository.cs` (`ResolveDesignatedApproverAsync`); `Tests.Regression/Approval/PeriodStatusAndPersonSearchReadsTests.cs` |
 | **Found** | While scoping TASK-12501 (the F1 performance work), by the Step-4 internal review lens |
 
-`ReportingLineRepository.ResolveDesignatedApproverAsync`'s inactive-manager escalation walk never
-compares the candidate against the ORIGINAL employee, so on a cyclic legacy graph it returns the
-employee as their own approver — and `IsEffectiveApproverOrUnitLeaderAsync` then ADMITS them over
-their own period. That predicate also gates approve/reject/reopen, so the S105 segregation-of-duties
-rule does not hold for this shape.
+`ResolveDesignatedApproverAsync` never compared a resolved manager against the employee it started
+from, so it could return the employee as their own approver — and `DesignatedApproverAuthorizer` then
+ADMITTED that pair. The same predicate gates approve/reject/reopen, so the S105 segregation-of-duties
+rule did not hold for those shapes.
 
-**The asymmetry is what makes it a defect, not a choice**: the unit-leader legs carry explicit
+**The asymmetry is what made it a defect, not a choice**: the unit-leader legs carry explicit
 self-exclusion (`ul.user_id <> @employeeId`, `mv.vikar_user_id <> @employeeId`, `e.user_id <> @actorId`);
-the edge leg carries none.
+the edge leg carried none.
 
-**Confirmed, not inferred.** The review flagged it from code; it was then proven with a tripwire —
-`A → B`, `B → A`, B inactive → `ResolveDesignatedApproverAsync(A)` returns `(A, "DESIGNATED_MANAGER", 1)`
-— and the tripwire was itself proven non-vacuous by inverting its assertion
-(`Expected "PROBE_EXPECT_FAIL" / Actual "t7404_cyc_a"`). Suite 13→14 green.
+**Raised separately rather than folded into the performance task** (owner-directed): fixing it changes
+WHO MAY APPROVE — a P7 behaviour decision, not a refactor. Folding it in would have altered
+authorization under cover of an optimisation, and TASK-12501's characterisation baseline would have
+silently encoded the defect as the reference. **Sequenced BEFORE F1 for the same reason** — a
+characterisation captured first would have made this fix read as an F1 regression.
 
-**Owner ruling 2026-07-30: "Raise it as its own finding."** Correct: fixing it changes WHO MAY
-APPROVE — a P7 behaviour decision, not a refactor. Folding it into a performance task would have
-altered authorization under cover of an optimisation, and TASK-12501's characterisation baseline
-would have silently encoded the new behaviour as the reference.
+**A SECOND route surfaced while implementing, and it needs no cycle at all.** The finding was written
+up as cyclic-legacy-data-only; the vikar leg can hand back the subject with a perfectly acyclic graph —
+`A → B`, B inactive, and a `manager_vikar` row naming A as B's stand-in returned `(A, ACTING_MANAGER, 0)`,
+i.e. self-approval at depth ZERO. The DB permits it (`CHECK (absent_approver_id <> vikar_user_id)` only
+forbids being one's own stand-in). This is why the fix went to ALL THREE candidate legs rather than just
+the escalation, and why the invariant is enforced at the READ rather than assumed from the write-path
+guards.
 
-**Demo world checked**: ZERO cyclic PRIMARY paths (detection query recorded in FAIL-004 for reuse
-against real instances). Production unchecked — nobody has looked.
+**Correction owed on how the options were sold**: (a) was pitched as able to find a valid approver where
+(b) gives up. True for the vikar route; NOT for the cyclic one — a walk's decisions are a pure function
+of `currentEmployeeId`, so returning to the subject re-derives the same non-answer and both options end
+at org-scope, differing only in reported depth. The ruling is vindicated by the vikar route, where there
+genuinely is somewhere further to look. Recorded in FAIL-004 rather than left as a nicer story.
+
+**Deliberately NOT added**: a visited-set to terminate cycles early. It would lower the reported depth
+and so flip `FallbackTraversalWarning` (depth > 3) from firing to silent — a second behaviour change
+nobody ruled on. Keeping depth 10 on the degenerate shape is what keeps a broken graph VISIBLE as a
+data-quality signal instead of a silent permanent detour to org-scope; that also settles the finding's
+third open question without inventing a new return state.
+
+**Proof (both directions)**: two tests replace the tripwire, both proven RED by neutralising the
+predicate and rebuilding — `Expected: Not "t7404_cyc_a" / Actual: "t7404_cyc_a"` (2-cycle) and
+`Expected: "t7404_cyc_c" / Actual: "t7404_cyc_a"` (planted vikar). Restored → 15/15; reporting-line +
+vikar + designated-approver + delegate 162/162.
+
+**A latent test-ORDER bug fixed alongside**: `uq_reporting_line_active_primary` is a partial unique
+index and three tests in the class plant an active PRIMARY for `CycA` (the pre-existing
+cyclic-descendant test points it at `CycC`, both FAIL-004 tests at `CycB`). The original tripwire did
+not clear its edges, so it passed only on xUnit's method ordering. `ClearCycEdgesAsync` now runs at
+entry AND in the finally.
+
+**Residual, flagged not fixed**: a subject's OWN vikar can still be their approver
+(approval-by-one's-own-delegate). Distinct and weaker concern; needs its own ruling.
+
+**Demo world**: ZERO cyclic PRIMARY paths. Production unchecked — no longer gating (the fix is
+unconditional), but FAIL-004 carries detection queries for BOTH routes, worth running once to learn
+whether any live instance carried the shape.
 
 ---
 

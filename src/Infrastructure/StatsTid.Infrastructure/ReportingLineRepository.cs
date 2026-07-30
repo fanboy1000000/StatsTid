@@ -941,6 +941,17 @@ public sealed class ReportingLineRepository
     /// user is INACTIVE, the vikar is SKIPPED (it cannot grant usable authority) and
     /// resolution falls through to M-if-active else escalation.
     /// </para>
+    ///
+    /// <para>
+    /// <b>INVARIANT (S125 / FAIL-004): the returned ManagerId is NEVER
+    /// <paramref name="employeeId"/>.</b> Nobody is their own designated approver, on any leg. A
+    /// candidate equal to the subject is skipped and the walk CONTINUES (owner ruling (a)), so a
+    /// valid approver further along still wins; only if none exists does the walk exhaust the depth
+    /// ceiling and return <c>(null, null, 10)</c> ⇒ org-scope fallback. Callers relying on this —
+    /// notably <see cref="StatsTid.Infrastructure.DesignatedApproverAuthorizer"/>, which gates
+    /// approve/reject/reopen — get the S105 segregation-of-duties rule on the EDGE leg, matching
+    /// what the unit-leader legs always enforced.
+    /// </para>
     /// </summary>
     public async Task<(string? ManagerId, string? ApprovalMethod, int Depth)> ResolveDesignatedApproverAsync(
         string employeeId, CancellationToken ct = default, DateOnly? asOf = null)
@@ -953,11 +964,42 @@ public sealed class ReportingLineRepository
         var currentEmployeeId = employeeId;
         var depth = 0;
 
+        // S125 / FAIL-004 — SELF-EXCLUSION, owner ruling (a) of 2026-07-30.
+        //
+        // NO candidate may be the employee we started from. Before this, the escalation at step (4)
+        // advanced without ever comparing the candidate against the ORIGINAL employeeId, so on a
+        // cyclic legacy graph (A→B, B→A, B inactive) resolution returned A as A's OWN approver — and
+        // DesignatedApproverAuthorizer then ADMITTED the (A, A) pair, which also gates
+        // approve/reject/reopen. The unit-leader legs already carried this rule explicitly
+        // (ul.user_id <> @employeeId, e.user_id <> @actorId); the edge leg carried none. That
+        // asymmetry was the defect.
+        //
+        // Ruling (a) is "skip the subject and KEEP LOOKING", NOT "bail out to org-scope on contact"
+        // (which was option (b)). The difference is observable and deliberate: with A→B (B inactive)
+        // and B→A, (b) would return (null, null, 1) immediately, whereas (a) skips A at step (3),
+        // escalates, and can still find a valid approver further along — e.g. via A's own ACTING
+        // line at step (1) on the next iteration. Only when the cycle is genuinely the ONLY route
+        // upward does the walk exhaust the depth ceiling and yield (null, null, 10) ⇒ org-scope
+        // fallback. That high depth ALSO trips the existing FallbackTraversalWarning (depth > 3),
+        // which is how a degenerate graph stays visible as a data-quality signal instead of becoming
+        // a silent permanent detour (the third open question of FAIL-004).
+        //
+        // Applied at ALL THREE candidate-returning legs, not just the escalation — the invariant is
+        // "the resolved approver is never the subject", and it must hold structurally regardless of
+        // which leg wins or how the data was created.
+        //
+        // Deliberately NOT added here: a visited-set to terminate cycles early. It would cut the
+        // walk short and so LOWER the reported depth, flipping FallbackTraversalWarning from firing
+        // to silent — a second behaviour change nobody ruled on. The depth-10 ceiling already
+        // terminates; cycles already burn to it today.
+        bool IsSubject(string candidateId) =>
+            string.Equals(candidateId, employeeId, StringComparison.Ordinal);
+
         while (depth < 10)
         {
             // 1. Check ACTING line — admin-assigned ACTING takes precedence over everything.
             var actingLine = await GetActiveLineAsync(conn, currentEmployeeId, "ACTING", ct);
-            if (actingLine is not null)
+            if (actingLine is not null && !IsSubject(actingLine.ManagerId))
             {
                 var isActive = await IsUserActiveAsync(conn, actingLine.ManagerId, ct);
                 if (isActive)
@@ -977,8 +1019,13 @@ public sealed class ReportingLineRepository
             //     BEFORE the walk advances, so the "M-inactive-but-has-active-vikar" edge
             //     (R3a, Reviewer N1) fires here. If V's user is INACTIVE the vikar is
             //     SKIPPED (R3b) — no usable authority — and we fall through to M / escalation.
+            //     FAIL-004: a stand-in who IS the subject is skipped here too. Creation already
+            //     guards this (the /delegate + admin-vikar paths run GuardNoCycleAsync anchored on
+            //     the absent approver, which rejects any descendant as stand-in), so this leg is
+            //     legacy-data-only — but the invariant is enforced at the read, not assumed from
+            //     write-path history.
             var vikar = await _vikarRepo.GetActiveByApproverAsync(conn, primaryManagerId, effectiveAsOf, tx: null, ct);
-            if (vikar is not null)
+            if (vikar is not null && !IsSubject(vikar.VikarUserId))
             {
                 var vikarUserActive = await IsUserActiveAsync(conn, vikar.VikarUserId, ct);
                 if (vikarUserActive)
@@ -986,12 +1033,15 @@ public sealed class ReportingLineRepository
                 // else: R3b — inactive stand-in, skip the vikar; fall through.
             }
 
-            // 3. M if active.
+            // 3. M if active — unless M IS the subject (FAIL-004). An active M who is the subject
+            //    does NOT resolve; per ruling (a) the walk continues THROUGH them (step 4), which is
+            //    what lets a valid approver further along still win.
             var primaryManagerActive = await IsUserActiveAsync(conn, primaryManagerId, ct);
-            if (primaryManagerActive)
+            if (primaryManagerActive && !IsSubject(primaryManagerId))
                 return (primaryManagerId, "DESIGNATED_MANAGER", depth);
 
-            // 4. Manager is inactive (and held no usable vikar) — walk up the chain.
+            // 4. Manager is inactive (or is the subject, FAIL-004) and held no usable vikar — walk
+            //    up the chain.
             currentEmployeeId = primaryManagerId;
             depth++;
         }

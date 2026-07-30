@@ -546,42 +546,39 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// <b>S125 / FINDING-12502 — TRIPWIRE for a PRE-EXISTING P7 DEFECT: the escalation walk can
-    /// return a person as their OWN designated approver on a cyclic legacy graph.</b>
+    /// <b>S125 / FAIL-004 — the SELF-EXCLUSION invariant on the EDGE leg: nobody is their own
+    /// designated approver.</b>
     ///
-    /// <para>This test DOCUMENTS CURRENT BEHAVIOUR; it does not endorse it. Owner-directed
-    /// (2026-07-30) to be raised as its own named finding rather than folded silently into the F1
-    /// performance work, because "fixing" it changes WHO MAY APPROVE — a P7 decision, not a
-    /// refactor.</para>
+    /// <para>History: this began life as a TRIPWIRE asserting the DEFECT (the walk returned A as A's
+    /// own approver on a 2-cycle, which <see cref="DesignatedApproverAuthorizer"/> then ADMITTED — and
+    /// that predicate also gates approve/reject/reopen, so the S105 segregation-of-duties rule did not
+    /// hold for this shape). The unit-leader legs always carried the rule explicitly
+    /// (<c>ul.user_id &lt;&gt; @employeeId</c>, <c>e.user_id &lt;&gt; @actorId</c>); the edge leg carried
+    /// none. Owner ruled option <b>(a)</b> on 2026-07-30 — skip the subject and KEEP LOOKING — so the
+    /// assertion below now pins the RULED behaviour, as the tripwire contract required.</para>
     ///
-    /// <para><b>The mechanism</b> (<see cref="ReportingLineRepository.ResolveDesignatedApproverAsync"/>):
-    /// the inactive-manager escalation sets <c>currentEmployeeId = primaryManagerId</c> and loops,
-    /// with NO check that the resolved manager differs from the ORIGINAL employee. So with
-    /// A → B (B inactive, no usable vikar) and B → A (A active):
-    /// iteration 0 finds B inactive and walks to B; iteration 1 reads B's PRIMARY = A, finds A
-    /// ACTIVE, and returns A as A's own approver.</para>
+    /// <para><b>The shape</b>: A → B (B inactive, no usable vikar) and B → A (A active), raw-inserted
+    /// because <see cref="ReportingLineRepository.AssignAsync"/>'s cycle guard rejects it — only
+    /// LEGACY/imported data can produce it. Before the fix: iteration 0 escalates past inactive B;
+    /// iteration 1 reads B's PRIMARY = A, finds A ACTIVE, returns <c>(A, DESIGNATED_MANAGER, 1)</c>.</para>
     ///
-    /// <para><b>Why it matters beyond the resolver:</b> the tally loop in
-    /// <c>ApprovalPeriodRepository.GetPeriodStatusProjectionForTreeAsync</c> gates each candidate
-    /// through <c>IsEffectiveApproverOrUnitLeaderAsync</c>, which for the (A, A) pair finds the
-    /// resolved approver == the actor and a trivially-equal same-Organisation check — so A would be
-    /// counted as an authorized approver of A's OWN period. The unit-leader legs DO carry explicit
-    /// self-exclusion (<c>ul.user_id &lt;&gt; @employeeId</c>, <c>e.user_id &lt;&gt; @actorId</c>); the EDGE leg
-    /// carries none. That asymmetry is the finding.</para>
+    /// <para><b>Now</b>: A is skipped at step (3) and the walk continues THROUGH them. Because the
+    /// walk's decisions are a pure function of <c>currentEmployeeId</c>, returning to A re-derives the
+    /// same non-answer, so this particular shape necessarily exhausts the depth-10 ceiling and yields
+    /// <c>(null, null, 10)</c> ⇒ ORG_SCOPE_FALLBACK. The depth is asserted deliberately: 10 (not the
+    /// depth-at-contact that option (b) would have returned) is what keeps the existing
+    /// FallbackTraversalWarning (depth &gt; 3) firing, so a degenerate graph stays VISIBLE as a
+    /// data-quality signal instead of becoming a silent permanent detour to org-scope.</para>
     ///
     /// <para>Cyclic legacy graphs are not hypothetical here — see
     /// <see cref="GetDescendantIds_TerminatesOnCyclicLegacyGraph_AndReturnsFiniteSet"/>, which exists
     /// precisely because such data can reach this system.</para>
-    ///
-    /// <para><b>WHEN THIS IS FIXED THIS TEST GOES RED — that is its job.</b> Replace the assertion
-    /// with the ruled behaviour (expected: no self-approval, i.e. the walk skips or denies the
-    /// original employee) rather than deleting it.</para>
     /// </summary>
     [Fact]
-    public async Task FINDING_12502_TRIPWIRE_EscalationWalk_ReturnsEmployeeAsTheirOwnApprover_OnTwoCycle()
+    public async Task FAIL_004_SelfExclusion_TwoCycle_NeverResolvesToTheSubject_FallsBackToOrgScope()
     {
-        // A -> B (B is the manager), B -> A (closes a 2-cycle). Raw-inserted: AssignAsync's cycle
-        // guard would reject this, which is exactly why only LEGACY data can produce it.
+        await ClearCycEdgesAsync();
+        // A -> B (B is the manager), B -> A (closes a 2-cycle).
         await RawInsertLineAsync(CycA, CycB);
         await RawInsertLineAsync(CycB, CycA);
         // B inactive and holding no vikar => iteration 0 escalates past B.
@@ -592,20 +589,69 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
             var rlRepo = new ReportingLineRepository(_dbFactory);
             var (managerId, method, depth) = await rlRepo.ResolveDesignatedApproverAsync(CycA);
 
-            // CURRENT behaviour, asserted so it cannot change unnoticed.
-            Assert.Equal(CycA, managerId);           // <-- the defect: A resolves to A
-            Assert.Equal("DESIGNATED_MANAGER", method);
-            Assert.Equal(1, depth);                  // one escalation hop
+            // THE invariant: never the subject. Before the fix this was (CycA, DESIGNATED_MANAGER, 1).
+            Assert.NotEqual(CycA, managerId);
+            Assert.Null(managerId);
+            Assert.Null(method);
+            // 10, not the depth-at-contact of the rejected option (b) — keeps the >3 warning firing.
+            Assert.Equal(10, depth);
         }
         finally
         {
             await SetUserActiveAsync(CycB, true);
+            await ClearCycEdgesAsync();
         }
     }
 
-    /// <summary>Flips <c>users.is_active</c> for one user — needed by the FINDING-12502 tripwire to
-    /// force the inactive-manager escalation branch. Restored in a finally so the shared fixture is
-    /// left as found.</summary>
+    /// <summary>
+    /// <b>S125 / FAIL-004 — the test that DISCRIMINATES the ruled option (a) from the rejected option
+    /// (b), and covers a SECOND self-approval route that needs no cycle at all.</b>
+    ///
+    /// <para>The vikar leg can hand back the subject without any cyclic reporting line: A → B, B
+    /// inactive, and a <c>manager_vikar</c> row naming A as B's stand-in. The DB permits it
+    /// (<c>CHECK (absent_approver_id &lt;&gt; vikar_user_id)</c> only forbids a vikar of THEMSELF), and
+    /// before the fix resolution returned <c>(A, ACTING_MANAGER, 0)</c> — A approving A's own month at
+    /// depth ZERO. Creation guards this going forward (both the <c>/delegate</c> and admin-vikar paths
+    /// run <c>GuardNoCycleAsync</c> anchored on the absent approver, which rejects any descendant as
+    /// stand-in), so like the 2-cycle it is legacy/planted-data-only — which is exactly why the
+    /// invariant is enforced at the READ rather than assumed from write-path history.</para>
+    ///
+    /// <para><b>Why this discriminates the two options</b>: here the graph is NOT cyclic, so there IS
+    /// somewhere further to look. Option (b) ("bail out to org-scope on contact with self") would
+    /// return <c>(null, null, 0)</c> and dump the approval on HR. Option (a) skips the vikar, falls
+    /// through to the inactive-B escalation, and finds B's OWN manager C — a legitimate approver.
+    /// Asserting C is what makes this test fail under (b) as well as under the original defect.</para>
+    /// </summary>
+    [Fact]
+    public async Task FAIL_004_SelfExclusion_PlantedVikarNamingTheSubject_SkipsIt_AndKeepsLooking()
+    {
+        await ClearCycEdgesAsync();
+        await RawInsertLineAsync(CycA, CycB); // A reports to B
+        await RawInsertLineAsync(CycB, CycC); // B reports to C  <- the "further to look" that (b) misses
+        await RawInsertVikarAsync(absentApproverId: CycB, vikarUserId: CycA);
+        await SetUserActiveAsync(CycB, false); // B inactive => vikar leg consulted, then escalation
+
+        try
+        {
+            var rlRepo = new ReportingLineRepository(_dbFactory);
+            var (managerId, method, depth) = await rlRepo.ResolveDesignatedApproverAsync(CycA);
+
+            // NOT the subject (was (CycA, ACTING_MANAGER, 0)), and NOT the org-scope bail-out that
+            // option (b) would have produced — the real manager one level up.
+            Assert.Equal(CycC, managerId);
+            Assert.Equal("DESIGNATED_MANAGER", method);
+            Assert.Equal(1, depth);
+        }
+        finally
+        {
+            await SetUserActiveAsync(CycB, true);
+            await ClearCycEdgesAsync();
+        }
+    }
+
+    /// <summary>Flips <c>users.is_active</c> for one user — the FAIL-004 tests need the
+    /// inactive-manager escalation branch. Restored in a finally so the shared fixture is left as
+    /// found.</summary>
     private async Task SetUserActiveAsync(string userId, bool active)
     {
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
@@ -614,6 +660,51 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
             "UPDATE users SET is_active = @active WHERE user_id = @uid", conn);
         cmd.Parameters.AddWithValue("active", active);
         cmd.Parameters.AddWithValue("uid", userId);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    /// <summary>
+    /// Removes every planted edge/vikar row for the three <c>t7404_cyc_*</c> fixtures.
+    ///
+    /// <para><b>Why this is required, not tidiness</b>: <c>uq_reporting_line_active_primary</c> is a
+    /// PARTIAL UNIQUE index (one active PRIMARY per employee), and three tests in this class plant an
+    /// active PRIMARY for <c>CycA</c> —
+    /// <see cref="GetDescendantIds_TerminatesOnCyclicLegacyGraph_AndReturnsFiniteSet"/> points it at
+    /// CycC while both FAIL-004 tests point it at CycB. Without a clear-down the second test to run
+    /// dies on a unique violation, so the suite would pass or fail on xUnit's method ORDER. Called at
+    /// entry (so a leftover from a previously-run test cannot poison this one) AND in the finally.</para>
+    /// </summary>
+    private async Task ClearCycEdgesAsync()
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            DELETE FROM reporting_lines WHERE employee_id = ANY(@ids) OR manager_id = ANY(@ids);
+            DELETE FROM manager_vikar   WHERE absent_approver_id = ANY(@ids) OR vikar_user_id = ANY(@ids);
+            """, conn);
+        cmd.Parameters.AddWithValue("ids", new[] { CycA, CycB, CycC });
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    /// <summary>
+    /// Raw-inserts an ACTIVE <c>manager_vikar</c> row, bypassing the endpoint's
+    /// <c>GuardNoCycleAsync</c> — the only way to plant the "your own manager's stand-in is YOU" shape
+    /// the second FAIL-004 test needs. <c>until_date</c> is far-future so the vikar covers today
+    /// INCLUSIVELY.
+    /// </summary>
+    private async Task RawInsertVikarAsync(string absentApproverId, string vikarUserId)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            INSERT INTO manager_vikar
+                (absent_approver_id, vikar_user_id, until_date, reason, organisation_id, version, created_by)
+            VALUES (@absent, @vikar, '2099-12-31', 'FERIE', 'STY02', 1, 'TEST')
+            """, conn);
+        cmd.Parameters.AddWithValue("absent", absentApproverId);
+        cmd.Parameters.AddWithValue("vikar", vikarUserId);
         await cmd.ExecuteNonQueryAsync();
     }
 
