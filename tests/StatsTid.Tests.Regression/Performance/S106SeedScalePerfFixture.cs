@@ -37,10 +37,13 @@ public sealed class S106SeedScalePerfFixture : IAsyncLifetime
     public const string Org3Path = "/PERF_MAO/PERF_O3/";
 
     // The PERF_O3 base approval scenario (created in the seed; pending employees attach to it).
-    private const string Org3EdgeManager = "perf_o3_em";
-    private const string Org3Leader1 = "perf_o3_l1";
-    private const string Org3Leader2 = "perf_o3_l2";
-    private const string PendingPrefix = "perf_o3_p"; // disjoint from bulk "perf_o3_<digit>" + scenario _em/_l1/_l2
+    // PUBLIC (S125 / TASK-12501): the F1 characterisation baseline pins the EXACT
+    // pendingCountByManager map, so it needs the candidate identities by name rather than by
+    // structural inference. Read-only use — the shapes themselves stay owned by this fixture.
+    public const string Org3EdgeManager = "perf_o3_em";
+    public const string Org3Leader1 = "perf_o3_l1";
+    public const string Org3Leader2 = "perf_o3_l2";
+    public const string PendingPrefix = "perf_o3_p"; // disjoint from bulk "perf_o3_<digit>" + scenario _em/_l1/_l2
 
     // (orgId, shortLabel, targetUsers) — the DemoSeed `full` per-tree sizing.
     private static readonly (string Org, string Short, int Target)[] OrgPlan =
@@ -271,6 +274,135 @@ public sealed class S106SeedScalePerfFixture : IAsyncLifetime
                 await cmd.ExecuteNonQueryAsync();
             }
         }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  S125 / TASK-12501 — the F1 characterisation SHAPE MATRIX
+    //
+    //  Four pending employees whose candidate sets differ STRUCTURALLY, so the characterisation
+    //  baseline pins the authorization invariants an optimisation could plausibly break — not just
+    //  the happy path the K=10/K=20 perf scenario already covers.
+    //
+    //  Deliberately a SEPARATE prefix ('perf_o3_x') with its own add/clear pair: adding a vikar or an
+    //  extra candidate to the SHARED base scenario would change the candidate fan-out and so move the
+    //  27.0 per-pending multiplier the existing perf assertions depend on.
+    // ════════════════════════════════════════════════════════════════════════
+
+    public const string ShapePrefix = "perf_o3_x";
+    public const string ShapeVikarOfLeader1 = "perf_o3_xv";   // active vikar of Leader1, LOCAL_LEADER
+    public const string ShapeRoleRevokedMgr = "perf_o3_xnr";  // active PRIMARY manager with NO LeaderOrAbove role
+    public const string ShapeInUnit = "perf_o3_x1";           // leaf unit + edge to EdgeManager
+    public const string ShapeNullUnit = "perf_o3_x2";         // unit_id NULL + edge to EdgeManager
+    public const string ShapeOrphan = "perf_o3_x3";           // leaf unit, NO reporting line at all
+    public const string ShapeRevokedEdge = "perf_o3_x4";      // leaf unit + edge to the role-revoked manager
+
+    /// <summary>
+    /// Adds the shape matrix. Expected candidate sets (the characterisation's whole point):
+    /// <list type="bullet">
+    /// <item><description><c>x1</c> (leaf unit + edge): EdgeManager, Leader1, Leader2, VikarOfLeader1</description></item>
+    /// <item><description><c>x2</c> (NULL unit + edge): EdgeManager ONLY — invariant 3, a NULL
+    /// <c>unit_id</c> yields the empty unit-leader set</description></item>
+    /// <item><description><c>x3</c> (orphan, leaf unit): Leader1, Leader2, VikarOfLeader1 — no edge
+    /// resolves, so the edge leg contributes nothing</description></item>
+    /// <item><description><c>x4</c> (leaf unit + edge to a ROLE-REVOKED manager): Leader1, Leader2,
+    /// VikarOfLeader1 — the revoked manager is resolved but REJECTED by the role floor (invariant 9),
+    /// so it must NOT appear in the map at all</description></item>
+    /// </list>
+    /// Idempotent (clears first).
+    /// </summary>
+    public async Task AddShapeMatrixAsync()
+    {
+        await ClearShapeMatrixAsync();
+
+        await using var conn = new NpgsqlConnection(ConnectionString);
+        await conn.OpenAsync();
+
+        var periodEnd = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(-1);
+        var periodStart = periodEnd.AddDays(-30);
+
+        // The two extra ACTORS: Leader1's vikar (must hold LeaderOrAbove to pass the role floor) and a
+        // manager who is active + resolvable but holds NO qualifying role.
+        await using (var cmd = new NpgsqlCommand(
+            """
+            INSERT INTO users (user_id, username, password_hash, display_name, primary_org_id, unit_id, is_active, agreement_code, ok_version) VALUES
+                (@xv,  @xv,  '$2a$11$fake', 'Perf O3 ShapeVikar',   'PERF_O3', NULL, TRUE, 'AC','OK24'),
+                (@xnr, @xnr, '$2a$11$fake', 'Perf O3 ShapeNoRole',  'PERF_O3', NULL, TRUE, 'AC','OK24')
+            ON CONFLICT DO NOTHING;
+            -- xv is LeaderOrAbove; xnr deliberately gets EMPLOYEE only (the role floor must reject it).
+            INSERT INTO role_assignments (user_id, role_id, org_id, scope_type, assigned_by) VALUES
+                (@xv,  'LOCAL_LEADER', 'PERF_O3', 'ORG_ONLY', 'PERF'),
+                (@xnr, 'EMPLOYEE',     'PERF_O3', 'ORG_ONLY', 'PERF')
+            ON CONFLICT DO NOTHING;
+            INSERT INTO manager_vikar
+                (absent_approver_id, vikar_user_id, until_date, reason, organisation_id, version, created_by)
+            VALUES (@l1, @xv, '2099-12-31', 'FERIE', 'PERF_O3', 1, 'PERF');
+            """, conn))
+        {
+            cmd.Parameters.AddWithValue("xv", ShapeVikarOfLeader1);
+            cmd.Parameters.AddWithValue("xnr", ShapeRoleRevokedMgr);
+            cmd.Parameters.AddWithValue("l1", Org3Leader1);
+            await cmd.ExecuteNonQueryAsync();
+        }
+
+        // The four pending employees. Every one gets a SUBMITTED period for the last closed month.
+        var rows = new (string Id, bool InUnit, string? ManagerId)[]
+        {
+            (ShapeInUnit,     true,  Org3EdgeManager),
+            (ShapeNullUnit,   false, Org3EdgeManager),
+            (ShapeOrphan,     true,  null),
+            (ShapeRevokedEdge, true, ShapeRoleRevokedMgr),
+        };
+
+        foreach (var (id, inUnit, managerId) in rows)
+        {
+            await using (var cmd = new NpgsqlCommand(
+                """
+                INSERT INTO users (user_id, username, password_hash, display_name, primary_org_id, unit_id, is_active, agreement_code, ok_version)
+                VALUES (@id, @id, '$2a$11$fake', 'Perf O3 Shape ' || @id, 'PERF_O3', @unit, TRUE, 'AC','OK24');
+                INSERT INTO role_assignments (user_id, role_id, org_id, scope_type, assigned_by)
+                VALUES (@id, 'EMPLOYEE', 'PERF_O3', 'ORG_ONLY', 'PERF');
+                INSERT INTO approval_periods
+                    (period_id, employee_id, org_id, period_start, period_end, period_type, status, agreement_code, ok_version, submitted_at, submitted_by)
+                VALUES (gen_random_uuid(), @id, 'PERF_O3', @start, @end, 'MONTHLY', 'SUBMITTED', 'AC','OK24', NOW(), @id);
+                """, conn))
+            {
+                cmd.Parameters.AddWithValue("id", id);
+                cmd.Parameters.AddWithValue("unit", inUnit ? (object)_org3LeafUnit : DBNull.Value);
+                cmd.Parameters.AddWithValue("start", periodStart);
+                cmd.Parameters.AddWithValue("end", periodEnd);
+                await cmd.ExecuteNonQueryAsync();
+            }
+
+            if (managerId is not null)
+            {
+                await using var edge = new NpgsqlCommand(
+                    """
+                    INSERT INTO reporting_lines (employee_id, manager_id, organisation_id, relationship, effective_from, source, created_by)
+                    VALUES (@id, @mgr, 'PERF_O3', 'PRIMARY', '2026-01-01', 'MANUAL', 'PERF');
+                    """, conn);
+                edge.Parameters.AddWithValue("id", id);
+                edge.Parameters.AddWithValue("mgr", managerId);
+                await edge.ExecuteNonQueryAsync();
+            }
+        }
+    }
+
+    /// <summary>Removes the shape matrix — FK-safe order. MUST run in a finally: leaving these rows
+    /// behind changes the candidate fan-out and would move the 27.0 per-pending multiplier the
+    /// perf assertions in this class depend on.</summary>
+    public async Task ClearShapeMatrixAsync()
+    {
+        await using var conn = new NpgsqlConnection(ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            DELETE FROM approval_periods WHERE employee_id LIKE 'perf_o3_x%';
+            DELETE FROM reporting_lines WHERE employee_id LIKE 'perf_o3_x%' OR manager_id LIKE 'perf_o3_x%';
+            DELETE FROM manager_vikar WHERE vikar_user_id LIKE 'perf_o3_x%' OR absent_approver_id LIKE 'perf_o3_x%';
+            DELETE FROM role_assignments WHERE user_id LIKE 'perf_o3_x%';
+            DELETE FROM users WHERE user_id LIKE 'perf_o3_x%';
+            """, conn);
+        await cmd.ExecuteNonQueryAsync();
     }
 
     /// <summary>Removes every pending-scenario user (and its period/edge/role) — FK-safe order. The base

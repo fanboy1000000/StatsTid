@@ -134,6 +134,64 @@ whether any live instance carried the shape.
 
 ---
 
+### TASK-12501 — F1: the period-status projection's per-pending-employee authorization storm
+| Field | Value |
+|-------|-------|
+| **ID** | TASK-12501 |
+| **Status** | **IN PROGRESS** — Phase 0 (measure + characterise) COMPLETE; Phase A (delete the redundancy) next |
+| **Agent** | Orchestrator |
+| **Components** | `Tests.Regression/Performance/S106SeedScalePerfFixture.cs` + `S106SeedScalePerfTests.cs` (Phase 0); `Infrastructure/ApprovalPeriodRepository.cs` + `DesignatedApproverAuthorizer.cs` (Phase A, not yet touched) |
+| **Refinement** | `.claude/refinements/REFINEMENT-f1-period-status-n-plus-1.md` rev 2 (absorbs 5 internal-lens BLOCKERs; external lens re-run in flight) |
+
+**The originally-reported cause was WRONG.** F1 was reported as "the roster read is unpaginated —
+665 KB". Measured: the roster SQL is **12ms**, serialisation ~40ms, and the reused period-status
+projection is **483ms of the 523ms**. The proposed pagination fix would have bought ~nothing.
+
+**MEASURED, not inferred (rev 1's figure was ~5× too low): 27.0 SQL commands per pending employee**,
+identical at K=10 and K=20, while 0 pending costs exactly 1 command at BOTH 2,000 and 253 users. The
+probe this needed turned out to already exist and already print the number — the existing
+`TileCount_ScalesWithPendingSet_NotOrgSize_AtSeedScale` output. **At month-end STYX1 has ~1,925
+pending ⇒ ~52,000 SQL round-trips for ONE page load** (~9.6s projected, on the page a manager opens
+precisely then).
+
+**≈16–17 of the 27 are re-asking answered questions**, all caller-side: the gate re-resolves the
+employee's edge once per candidate (~12 statements, 44%) having been handed it a line earlier, and the
+role floor + same-Organisation check — both per-USER facts — are asked per (candidate, employee) PAIR,
+twice each when the edge leg fails. So the fix is redundancy deletion, not a SQL rewrite.
+
+**The N+1 is a DOCUMENTED, deliberately-accepted trade-off** (S106 / TASK-10605) whose premise fails
+at month-end: it was accepted because cost tracks PENDING rather than org size — but at month-end
+pending → org size and the two converge. The existing guard **structurally cannot catch it**: K tops
+out at 20, the budget is 8s, and it asserts the multiplier is a small constant and linear in K — both
+TRUE, and both exactly why K=1,925 is catastrophic. **It asserts strictly monotonic growth in K
+(`count20 > count10 && count10 > small0`), so any successful fix BREAKS it** — editing it is part of
+the deliverable, not collateral damage.
+
+**Phase 0 delivered — the characterisation net** (2 tests, both green, added to the existing perf class
+so they share its container rather than rebuilding a 2,500-user one):
+1. `F1Characterisation_HappyPath_K10_…` — the EXACT `pendingCountByManager` map, Σ tiles = 30 > 10
+   pending (invariant 6, which a "count-once" rewrite would break), the status histogram, the exact
+   SUBMITTED id set, and the documented `ORDER BY display_name, user_id` contract.
+2. `F1Characterisation_ShapeMatrix_…` — four pending employees with structurally DIFFERENT candidate
+   sets, pinning the invariants a prefetch rewrite would have to re-implement: NULL-unit → edge only;
+   orphan → unit leaders only; a vikar-of-a-unit-leader IS a candidate; and an active, resolvable
+   manager **without** LeaderOrAbove is REJECTED and must be absent from the map entirely.
+
+**The map came out exactly as predicted from reading the code** (`em=2; l1=3; l2=3; xv=3`, role-revoked
+manager absent) — independent confirmation that the 11-invariant list in the refinement is right,
+rather than a plausible-looking list.
+
+**Ordering note**: the baseline was captured AFTER TASK-12502 landed, deliberately. Captured before,
+it would have encoded the self-approval defect as the reference and made that P7 fix read as an F1
+regression.
+
+**Isolation**: the shape matrix uses its own `perf_o3_x` prefix with its own add/clear pair, because
+adding a vikar to the SHARED base scenario would change the candidate fan-out and move the 27.0
+multiplier the existing perf assertions depend on. Verified: full perf class 6/6 green, multiplier
+still 27.0.
+
+---
+
 ## Carried in from S124 (not yet started)
 1. **RES-002** — the deferred endpoint-level read gate (~6 reads). Must be period-status-based, must
    settle the recorded ACTOR-MODEL question (actor-blind withholding vs the HR-exempt month read),

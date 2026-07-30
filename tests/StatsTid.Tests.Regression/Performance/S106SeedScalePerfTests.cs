@@ -262,6 +262,145 @@ public sealed class S106SeedScalePerfTests : IClassFixture<S106SeedScalePerfFixt
         await _fx.ClearPendingScenarioAsync();
     }
 
+    // ════════════════════════════════════════════════════════════════════════
+    //  S125 / TASK-12501 — the F1 CHARACTERISATION BASELINE
+    //
+    //  F1 rewrites how many round-trips evaluate the approval-authority rule inside
+    //  GetPeriodStatusProjectionForTreeAsync. That loop COMPUTES WHO MAY APPROVE, so "faster" and
+    //  "changed who can approve what" are indistinguishable without a baseline. These two tests ARE
+    //  that baseline: they must produce byte-identical output before and after the optimisation.
+    //
+    //  Captured AFTER FAIL-004 / TASK-12502 landed, deliberately — a baseline taken before that fix
+    //  would have encoded self-approval as the reference and made the fix read as an F1 regression.
+    // ════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Baseline 1 — the happy path at K=10: the EXACT <c>pendingCountByManager</c> map, the employee
+    /// status histogram, and the documented ordering contract.
+    ///
+    /// <para>Pins the map EXACTLY (keys AND values) because that is the output the authorization loop
+    /// produces and therefore the only place a round-trip rewrite can silently change authority. The
+    /// per-employee statuses are pinned as a histogram rather than 263 golden rows: they come from
+    /// step (1), a single set-based query this task does not touch, so an exact-row golden there would
+    /// be churn without added protection. Total count + histogram + ordering is the proportionate
+    /// pin.</para>
+    ///
+    /// <para>Invariant 6 (Σ tiles ≥ pending) is asserted directly: each of the 10 pending employees
+    /// tallies to THREE managers (edge manager + both unit leaders), so Σ = 30 > 10. A rewrite that
+    /// "fixed" this into count-once would drop Σ to 10 and fail here.</para>
+    /// </summary>
+    [Fact]
+    public async Task F1Characterisation_HappyPath_K10_ProjectionIsExactlyReproducible()
+    {
+        var repo = NewApprovalRepo();
+        await _fx.AddPendingScenarioAsync(10);
+        try
+        {
+            var proj = await repo.GetPeriodStatusProjectionForTreeAsync(S106SeedScalePerfFixture.Org3Path);
+
+            // ── The EXACT tile map: 3 tiles, each counting all 10 pending employees. ──
+            var map = proj.PendingCountByManager
+                .OrderBy(kv => kv.Key, StringComparer.Ordinal)
+                .Select(kv => $"{kv.Key}={kv.Value}");
+            Assert.Equal(
+                $"{S106SeedScalePerfFixture.Org3EdgeManager}=10;" +
+                $"{S106SeedScalePerfFixture.Org3Leader1}=10;" +
+                $"{S106SeedScalePerfFixture.Org3Leader2}=10",
+                string.Join(";", map));
+
+            // ── Invariant 6: a pending employee counts toward MULTIPLE managers, deliberately. ──
+            Assert.Equal(30, proj.PendingCountByManager.Values.Sum());
+
+            // ── The status histogram over the whole Organisation. ──
+            var histogram = proj.Employees
+                .GroupBy(e => e.Status)
+                .OrderBy(g => g.Key, StringComparer.Ordinal)
+                .Select(g => $"{g.Key}={g.Count()}");
+            _out.WriteLine($"CHARACTERISATION K=10: employees={proj.Employees.Count}, {string.Join(",", histogram)}");
+            Assert.Equal(10, proj.Employees.Count(e => e.Status == "SUBMITTED"));
+            Assert.All(proj.Employees, e => Assert.Contains(e.Status, new[] { "OPEN", "SUBMITTED", "APPROVED" }));
+            // Exactly the 10 scenario users are the SUBMITTED ones — not "10 of someone".
+            Assert.Equal(
+                Enumerable.Range(1, 10).Select(i => $"{S106SeedScalePerfFixture.PendingPrefix}{i}")
+                    .OrderBy(x => x, StringComparer.Ordinal),
+                proj.Employees.Where(e => e.Status == "SUBMITTED").Select(e => e.EmployeeId)
+                    .OrderBy(x => x, StringComparer.Ordinal));
+
+            // ── The documented ordering contract: ORDER BY display_name, user_id. ──
+            var ordered = proj.Employees
+                .OrderBy(e => e.DisplayName, StringComparer.Ordinal)
+                .ThenBy(e => e.EmployeeId, StringComparer.Ordinal)
+                .Select(e => e.EmployeeId);
+            Assert.Equal(ordered, proj.Employees.Select(e => e.EmployeeId));
+        }
+        finally
+        {
+            await _fx.ClearPendingScenarioAsync();
+        }
+    }
+
+    /// <summary>
+    /// Baseline 2 — the SHAPE MATRIX, which is where the authorization invariants actually live. Four
+    /// pending employees with structurally different candidate sets, and the exact map they produce:
+    ///
+    /// <list type="table">
+    /// <item><term>x1 — leaf unit + edge</term><description>EdgeManager, Leader1, Leader2, VikarOfLeader1</description></item>
+    /// <item><term>x2 — NULL unit + edge</term><description>EdgeManager ONLY (invariant 3)</description></item>
+    /// <item><term>x3 — orphan in leaf unit</term><description>the unit leaders + vikar; no edge resolves</description></item>
+    /// <item><term>x4 — edge to a ROLE-REVOKED manager</term><description>the unit leaders + vikar; the
+    /// revoked manager is resolved but REJECTED by the role floor (invariant 9) and must be ABSENT
+    /// from the map entirely</description></item>
+    /// </list>
+    ///
+    /// <para>Expected map: EdgeManager=2 (x1, x2); Leader1=3 and Leader2=3 (x1, x3, x4 — the three in
+    /// the leaf unit); VikarOfLeader1=3 (invariant 1's vikar-of-unit-leader arm + invariant 11's
+    /// inclusive coverage window); and NO key for the role-revoked manager.</para>
+    ///
+    /// <para>This is the test that makes a prefetch-based rewrite honest: answering the four
+    /// authorization primitives from in-memory maps means reimplementing their semantics, and every
+    /// one of those semantics is exercised here — the NULL-unit exclusion, the absent-edge case, the
+    /// role floor, and the vikar coverage window.</para>
+    /// </summary>
+    [Fact]
+    public async Task F1Characterisation_ShapeMatrix_CandidateSetsAndFloors_AreExactlyReproducible()
+    {
+        var repo = NewApprovalRepo();
+        await _fx.ClearPendingScenarioAsync(); // isolate: the map below is PURELY the shape matrix
+        await _fx.AddShapeMatrixAsync();
+        try
+        {
+            var proj = await repo.GetPeriodStatusProjectionForTreeAsync(S106SeedScalePerfFixture.Org3Path);
+
+            var map = proj.PendingCountByManager
+                .OrderBy(kv => kv.Key, StringComparer.Ordinal)
+                .Select(kv => $"{kv.Key}={kv.Value}")
+                .ToList();
+            _out.WriteLine($"CHARACTERISATION shapes: {string.Join(";", map)}");
+
+            Assert.Equal(
+                $"{S106SeedScalePerfFixture.Org3EdgeManager}=2;" +
+                $"{S106SeedScalePerfFixture.Org3Leader1}=3;" +
+                $"{S106SeedScalePerfFixture.Org3Leader2}=3;" +
+                $"{S106SeedScalePerfFixture.ShapeVikarOfLeader1}=3",
+                string.Join(";", map));
+
+            // Invariant 9, stated as its own assertion so a regression names itself: an active,
+            // resolvable manager WITHOUT LeaderOrAbove grants nothing.
+            Assert.DoesNotContain(S106SeedScalePerfFixture.ShapeRoleRevokedMgr, proj.PendingCountByManager.Keys);
+
+            // All four shapes are SUBMITTED — i.e. the map above is not small because rows went missing
+            // from step (1).
+            var submitted = proj.Employees.Where(e => e.Status == "SUBMITTED").Select(e => e.EmployeeId).ToList();
+            Assert.Equal(4, submitted.Count);
+            Assert.Contains(S106SeedScalePerfFixture.ShapeOrphan, submitted);
+            Assert.Contains(S106SeedScalePerfFixture.ShapeNullUnit, submitted);
+        }
+        finally
+        {
+            await _fx.ClearShapeMatrixAsync();
+        }
+    }
+
     // ── Helpers ──
 
     private ApprovalPeriodRepository NewApprovalRepo()
