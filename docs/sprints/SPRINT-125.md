@@ -455,7 +455,13 @@ in unrelated paths, none found by looking for it:
    `e.user_id <> @actorId` exclusion. Caught by a deliberate probe, and ONLY because self-pairs were
    deliberately included in the differential comparison set
    (`(perf_o3_l1 -> perf_o3_l1): sql=False prefetched=True`).
-3. **FAIL-004's residual — STILL UNRULED**: a person's own vikar can be their approver.
+3. **FAIL-004's residual — STILL UNRULED, and now CONFIRMED as the most reachable of the three.**
+   Tripwired at the real endpoint (`RES_003_TRIPWIRE_OwnDelegate_CanApprove_TheAppointingLeadersOwnPeriod`):
+   a leader gets **403** on their own period, while **the vikar they themselves appointed gets 200 OK
+   and the period goes APPROVED**. Correction to the earlier framing: this does NOT share FAIL-004's
+   cyclic-legacy-data precondition. A leader is a member of the unit they lead (D3), so appointing a
+   stand-in makes that stand-in a candidate approver for every unit member — including the appointer.
+   Ordinary supported flows only; the only instance reachable in a healthy production database.
 
 Arguably a fourth and earliest: S105's Step-7a added `e.user_id <> @actorId` after an external lens
 caught the same class in the unit-leader path.

@@ -19,8 +19,23 @@ found by looking for them:
 | 1 | **FAIL-004** — `ResolveDesignatedApproverAsync`'s escalation walk never compared a resolved manager against the employee it started from, so on a cyclic legacy graph a person resolved to themselves and `IsEffectiveApproverOrUnitLeaderAsync` ADMITTED the pair | Found by a review lens tracing an unrelated performance refinement's invariant list |
 | 2 | **TASK-12501 step 3c** — the prefetched unit-leader classification would have dropped the `e.user_id <> @actorId` exclusion | Caught by a deliberate probe, and ONLY because self-pairs were deliberately included in the differential comparison set: `(perf_o3_l1 -> perf_o3_l1): sql=False prefetched=True` |
 
-A third instance of the same family is already recorded and **unruled**: FAIL-004's residual — a
-person's OWN vikar can still be their approver (approval-by-one's-own-delegate).
+A third instance of the same family is recorded and **unruled — and it is the most reachable of all
+three**: FAIL-004's residual, approval-by-one's-own-delegate. **Confirmed empirically 2026-07-30**
+(tripwire `S105UnitLeaderApprovalTests.RES_003_TRIPWIRE_OwnDelegate_CanApprove_TheAppointingLeadersOwnPeriod`,
+driving the real `POST /api/approval/{id}/approve`):
+
+```
+leader approving their OWN period            → 403 Forbidden   (the S105 rule holds)
+their OWN appointed vikar, same period       → 200 OK, APPROVED
+```
+
+**A correction to how this was first framed.** It was described as a narrow leftover, on the
+assumption it shared FAIL-004's cyclic-legacy-data precondition. **It does not.** A leader IS a member
+of the unit they lead (the D3 member-invariant), so when they appoint a vikar and go away, that vikar
+becomes a candidate approver for every member of the unit — including the appointing leader. Every row
+involved is created through supported paths. This is the ordinary "I am on holiday, cover my
+approvals" flow, not a legacy-import artefact — which makes it the ONLY one of the three instances
+reachable in a healthy production database.
 
 **Three instances, one rule.** That is a class, not a coincidence.
 
@@ -56,7 +71,12 @@ the rule exactly as these did, and nothing structural will catch it.
    ⚠ Needs a ruling first: is there ANY legitimate self-approval case (e.g. an HR/GlobalAdmin acting
    on their own period, which today routes to the org-scope branch)? If yes, the choke point needs
    that exemption to be explicit and tested rather than implicit.
-3. **Rule on the FAIL-004 residual** (a subject's own vikar), which is the one known-open instance.
+3. **Rule on the FAIL-004 residual** (approval-by-one's-own-delegate) — the one known-open instance,
+   and the only one reachable without legacy data. The operational question is narrow: when a leader
+   goes on holiday and appoints a stand-in, may that stand-in sign off the holidaying leader's OWN
+   timesheet? Note that denying it does not generally strand the period — a peer unit leader can
+   approve it (verified: `peerOverLeader=True`), as can the leader's own edge manager; it falls to
+   HR/org-scope only for a single-leader unit whose leader has no edge manager.
 4. **A convention for in-memory mirrors of SQL predicates**: step 3c showed that hand-mirroring a
    `WHERE` clause into C# silently drops guards. The differential-test pattern used there is the
    mitigation and should be required for any future mirror, with self-pairs mandatory in the

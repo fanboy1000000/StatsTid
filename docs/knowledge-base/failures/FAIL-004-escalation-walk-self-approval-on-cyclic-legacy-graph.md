@@ -156,7 +156,9 @@ independent instance of the same rule failing surfaced the same day (the S125 st
 have dropped the unit-leader self-exclusion), which reframes this from "one leftover question" to
 "the segregation-of-duties rule has no single enforcement point".
 
-**A subject's OWN vikar can still be their approver.** If A's own stand-in is V, resolution can return
+**A subject's OWN vikar can still be their approver — and unlike the two routes fixed above, this one
+needs NO cyclic or imported data.** Confirmed at the endpoint 2026-07-30: a leader gets 403 on their
+own period, while the vikar they themselves appointed gets 200 OK. See RES-003. If A's own stand-in is V, resolution can return
 V for A's period. That is approval-by-one's-own-delegate, a weaker and distinct concern from
 self-approval, and it was not part of this ruling. Flagged here rather than folded in silently.
 

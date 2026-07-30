@@ -481,6 +481,47 @@ public sealed class S105UnitLeaderApprovalTests : IAsyncLifetime
     //  (4) Vikar of a unit-leader → UNIT_LEADER_VIKAR; a bad vikar (role floor) → denied.
     // ════════════════════════════════════════════════════════════════════════════════
 
+    /// <summary>
+    /// <b>S125 / RES-003 — TRIPWIRE: a unit leader's OWN delegate can approve that leader's OWN
+    /// period. Documents CURRENT behaviour; awaiting an owner ruling.</b>
+    ///
+    /// <para>The S105 rule is that nobody approves their own period — <c>e.user_id &lt;&gt; @actorId</c>
+    /// in the unit-leader gate, verified by the control below. But a leader IS a member of the unit
+    /// they lead (the D3 member-invariant), so when that leader appoints a vikar and goes away, the
+    /// vikar becomes a candidate approver for every member of the unit — INCLUDING the appointing
+    /// leader themselves.</para>
+    ///
+    /// <para><b>This needs NO cyclic or imported data.</b> It is the ordinary "I am on holiday, cover
+    /// my approvals" flow: <see cref="DirectLdr"/> leads unit Member and belongs to it;
+    /// <see cref="VikarUsr"/> is their active <c>manager_vikar</c>. Everything here is created through
+    /// the supported paths. That distinguishes it from FAIL-004's two routes, which both required a
+    /// legacy graph.</para>
+    ///
+    /// <para><b>The asymmetry is the point</b>, and both halves are asserted: the leader may NOT
+    /// approve their own period, yet the delegate the leader themselves appointed MAY. Segregation of
+    /// duties is enforced against the person but not against their proxy.</para>
+    ///
+    /// <para><b>WHEN THIS IS RULED THIS TEST CHANGES — that is its job.</b> If the owner rules that a
+    /// delegate must not approve their appointer's own period, invert the first assertion to Forbidden;
+    /// if the owner rules the current behaviour correct, keep it and this becomes the pin that says so
+    /// deliberately. Do not delete it.</para>
+    /// </summary>
+    [Fact]
+    public async Task RES_003_TRIPWIRE_OwnDelegate_CanApprove_TheAppointingLeadersOwnPeriod()
+    {
+        // CONTROL — the leader may NOT approve their own period (the S105 rule, still holding).
+        var pSelf = await InsertSubmittedPeriodAsync(DirectLdr);
+        var selfRsp = await LeaderClient(DirectLdr).PostAsync($"/api/approval/{pSelf}/approve", null);
+        Assert.Equal(HttpStatusCode.Forbidden, selfRsp.StatusCode);
+        Assert.Equal("SUBMITTED", await ReadStatusAsync(pSelf));
+
+        // THE FINDING — the vikar that DirectLdr themselves appointed CAN approve DirectLdr's own
+        // period. Same person's authority, one indirection away.
+        var vikarRsp = await LeaderClient(VikarUsr).PostAsync($"/api/approval/{pSelf}/approve", null);
+        Assert.Equal(HttpStatusCode.OK, vikarRsp.StatusCode);
+        Assert.Equal("APPROVED", await ReadStatusAsync(pSelf));
+    }
+
     /// <summary>An ACTIVE <c>manager_vikar</c> stand-in (VikarUsr) for a unit-leader (DirectLdr) of Emp's
     /// own unit approves Emp → 200, <c>UNIT_LEADER_VIKAR</c> (path-3). A vikar (BadVikar) of a unit-leader
     /// (DirectLdr2) of the SAME unit but holding only an EMPLOYEE role is below the LeaderOrAbove floor →
