@@ -186,14 +186,19 @@ public sealed class S106SeedScalePerfTests : IClassFixture<S106SeedScalePerfFixt
     //  TILE-COUNT — bounded by the PENDING set, not org size (the N+1 characterization)
     // ════════════════════════════════════════════════════════════════════════
 
-    /// <summary>The tile-count projection's command count scales with the PENDING set, NOT total org
-    /// size. The headline (org-size INDEPENDENCE): a 2000-user Organisation (Org1) AND a 250-user one
-    /// (Org3), each with ZERO pending periods, BOTH issue exactly ONE command (the per-employee status
-    /// scan) — an 8× org-size swing leaves the count at 1, so there is NO per-user fan-out. Then K=10 and
-    /// K=20 pending employees (each with an edge manager + a unit holding two leaders = 3 candidate
-    /// approvers) are added to Org3: the command count grows ~LINEARLY in K by a small per-pending
-    /// multiplier (the pre-existing per-pending-employee N+1, S105 / TASK-10604) — bounded by the pending
-    /// set, never by org size.</summary>
+    /// <summary>The tile-count projection's command count is independent of BOTH org size AND the
+    /// pending count.
+    ///
+    /// <para>Org-size independence (unchanged since S106): a 2000-user Organisation and a 250-user one,
+    /// each with ZERO pending periods, both issue exactly ONE command — the phase-(1) status scan.</para>
+    ///
+    /// <para><b>Pending-count independence is NEW (S125 / TASK-12501).</b> This test previously asserted
+    /// that the count grows monotonically with K, characterising a per-pending-employee N+1 of ~27
+    /// statements that S106 accepted on the premise that cost tracked the pending set rather than org
+    /// size. At month-end those converge, and the measured cost was 27,001 commands / 13.8s at K=1000.
+    /// The projection now prefetches the resolver's inputs and the authorizer's facts in set-based
+    /// reads, so K=10 and K=20 issue the SAME number of commands. See the inline note on the
+    /// assertions for the superseded expectation.</para></summary>
     [Fact]
     public async Task TileCount_ScalesWithPendingSet_NotOrgSize_AtSeedScale()
     {
@@ -248,15 +253,35 @@ public sealed class S106SeedScalePerfTests : IClassFixture<S106SeedScalePerfFixt
 
         var perPending10 = (count10 - 1) / 10.0;
         var perPending20 = (count20 - 1) / 20.0;
-        _out.WriteLine($"TILE per-pending multiplier: ~{perPending10:0.0} (K=10), ~{perPending20:0.0} (K=20); the N+1 is bounded by the PENDING set (org size {org3Users} is irrelevant to the slope).");
+        _out.WriteLine($"TILE per-pending multiplier: ~{perPending10:0.0} (K=10), ~{perPending20:0.0} (K=20); org size {org3Users} is irrelevant to the slope.");
 
-        // (1) Growth is driven SOLELY by the PENDING set: strictly monotonic in K (0 < 10 < 20).
-        Assert.True(count20 > count10 && count10 > small0, $"Expected monotonic growth with pending count (0→{small0}, 10→{count10}, 20→{count20}).");
-        // (2) LINEAR in K (not quadratic / org-coupled): the per-pending multiplier is the SAME small
-        //     constant at K=10 and K=20 (within tolerance) — the candidate fan-out (edge + 2 leaders) ×
-        //     a few authorization probes, independent of the ~250 users.
-        Assert.True(Math.Abs(perPending20 - perPending10) <= 3, $"Per-pending multiplier drifted ({perPending10:0.0} → {perPending20:0.0}) — growth is not linear in the pending set.");
-        Assert.True(perPending20 < 40, $"Per-pending command multiplier {perPending20:0.0} is unexpectedly large.");
+        // ── S125 / TASK-12501: THIS ASSERTION WAS INVERTED, and that inversion is the deliverable ──
+        //
+        // SUPERSEDED EXPECTATION (S106 → S125): this test used to assert
+        //     Assert.True(count20 > count10 && count10 > small0)
+        // i.e. that command count grows STRICTLY MONOTONICALLY with the pending count. That was a
+        // faithful characterisation of a pre-existing per-pending-employee N+1 (~27 statements each),
+        // deliberately accepted at S106 because the cost tracked the PENDING set rather than org size.
+        //
+        // The premise failed at month-end: pending → org size, and the two converge. Measured at
+        // K=1000 the projection issued 27,001 commands and took 13.8 SECONDS. The old assertion could
+        // never catch that — it tops out at K=20 under an 8s budget and asserts the very property
+        // (linear growth in K) that makes K=1,925 catastrophic. It proved the defect.
+        //
+        // The projection is now FLAT in K: the resolver's inputs and the authorizer's facts are
+        // prefetched in set-based reads, so the per-employee round-trips are gone. What remains is a
+        // small constant — phase (1) + the prefetch builds + the batched candidate enumeration.
+        //
+        // Flatness is asserted DIRECTLY rather than via a shrinking multiplier, because "smaller" and
+        // "independent of K" are different claims and only the second one survives month-end.
+        Assert.Equal(count10, count20);
+        Assert.True(count20 <= 12, $"Expected a small constant command count independent of K, saw {count20} at K=20.");
+        // Zero pending still costs exactly the phase-(1) scan — the prefetch must not be built for an
+        // empty pending set (it was, briefly, and this guard caught it: Expected 1, Actual 4).
+        Assert.Equal(1, small0);
+        // Per-pending multiplier now trends to ZERO as K grows — the signature of O(1), where the old
+        // shape held it at a constant ~27.
+        Assert.True(perPending20 < perPending10, $"Expected the per-pending multiplier to FALL with K (O(1)); saw {perPending10:0.0} → {perPending20:0.0}.");
         Assert.True(sw.ElapsedMilliseconds < TileBudgetMs, $"Tile-count took {sw.ElapsedMilliseconds} ms (budget {TileBudgetMs} ms).");
 
         await _fx.ClearPendingScenarioAsync();
@@ -505,6 +530,109 @@ public sealed class S106SeedScalePerfTests : IClassFixture<S106SeedScalePerfFixt
             // Non-vacuity: if nothing resolved, the comparison would be 250 identical (null, null, 0)s
             // and would pass while proving nothing.
             Assert.True(nonTrivial >= 10, $"Only {nonTrivial} users resolved to a manager — the comparison would be near-vacuous.");
+            Assert.Empty(divergences);
+
+            await tx.RollbackAsync();
+        }
+        finally
+        {
+            await _fx.ClearShapeMatrixAsync();
+            await _fx.ClearPendingScenarioAsync();
+        }
+    }
+
+    /// <summary>
+    /// <b>S125 / TASK-12501 step 3c — the COMBINED differential test: the final authority VERDICT,
+    /// prefetched vs live SQL, for every (candidate, employee) pair.</b>
+    ///
+    /// <para>Step 3c moved three more lookups behind a prefetch — the role floor, the home-Organisation
+    /// lookup and the unit-leader classification. The resolver differential test above covers the edge
+    /// leg only; this one compares what actually gates approval:
+    /// <c>IsEffectiveApproverOrUnitLeaderAsync</c>, the predicate the approve/reject/reopen endpoints
+    /// use. If any of the three prefetched facts disagrees with SQL for any pair, the verdict differs
+    /// and this fails.</para>
+    ///
+    /// <para><b>Why pairs and not the tile map.</b> Comparing two projections' maps would let
+    /// compensating errors cancel — one employee wrongly admitted and another wrongly denied leaves
+    /// the same totals. Comparing the boolean verdict for the full cross-product of candidates ×
+    /// employees cannot cancel: any single disagreement is reported with both sides named.</para>
+    ///
+    /// <para>The candidate set here is deliberately wider than the projection's own (every unit leader,
+    /// vikar, edge manager and role-revoked manager in the fixture, against every pending employee),
+    /// so the comparison covers pairs the projection would never construct — including ones that must
+    /// be DENIED. A test that only compares pairs expected to pass would miss a prefetch that is too
+    /// permissive, which is the dangerous direction.</para>
+    /// </summary>
+    [Fact]
+    public async Task F1Differential_PrefetchedFacts_MatchSqlFacts_ForEveryCandidateEmployeePair()
+    {
+        await _fx.AddPendingScenarioAsync(10);
+        await _fx.AddShapeMatrixAsync();
+        try
+        {
+            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+            var vikarRepo = new ManagerVikarRepository(_fx.Factory);
+            var reportingRepo = new ReportingLineRepository(_fx.Factory, vikarRepo);
+            var authorizer = new DesignatedApproverAuthorizer(_fx.Factory, reportingRepo);
+
+            await using var conn = _fx.Factory.Create();
+            await conn.OpenAsync();
+            await using var tx = await conn.BeginTransactionAsync(
+                System.Data.IsolationLevel.RepeatableRead);
+
+            var pathParam = S106SeedScalePerfFixture.Org3Path + "%";
+            var lines = await PrefetchedReportingLineDataSource.BuildAsync(conn, tx, pathParam, today, default);
+            var facts = await PrefetchedAuthorityFacts.BuildAsync(conn, tx, pathParam, today, default);
+
+            // Candidates: every actor in the fixture that could plausibly hold authority, INCLUDING
+            // ones that must be denied (the role-revoked manager, the inactive manager).
+            var candidates = new[]
+            {
+                S106SeedScalePerfFixture.Org3EdgeManager,
+                S106SeedScalePerfFixture.Org3Leader1,
+                S106SeedScalePerfFixture.Org3Leader2,
+                S106SeedScalePerfFixture.ShapeVikarOfLeader1,
+                S106SeedScalePerfFixture.ShapeRoleRevokedMgr,
+                S106SeedScalePerfFixture.ShapeInactiveMgr,
+            };
+            var employees = new List<string>
+            {
+                S106SeedScalePerfFixture.ShapeInUnit,
+                S106SeedScalePerfFixture.ShapeNullUnit,
+                S106SeedScalePerfFixture.ShapeOrphan,
+                S106SeedScalePerfFixture.ShapeRevokedEdge,
+                S106SeedScalePerfFixture.ShapeEscalates,
+            };
+            employees.AddRange(Enumerable.Range(1, 10)
+                .Select(i => $"{S106SeedScalePerfFixture.PendingPrefix}{i}"));
+            // Self-pairs included deliberately: segregation of duties must hold identically in both.
+            employees.AddRange(candidates);
+
+            var divergences = new List<string>();
+            var admitted = 0;
+            foreach (var candidate in candidates)
+            {
+                foreach (var employee in employees)
+                {
+                    var viaSql = await authorizer.IsEffectiveApproverOrUnitLeaderAsync(
+                        conn, tx, ctx: null, source: null, facts: null, candidate, employee, today, default);
+                    var viaPrefetch = await authorizer.IsEffectiveApproverOrUnitLeaderAsync(
+                        conn, tx, ctx: null, lines, facts, candidate, employee, today, default);
+
+                    if (viaSql != viaPrefetch)
+                        divergences.Add($"({candidate} -> {employee}): sql={viaSql} prefetched={viaPrefetch}");
+                    if (viaSql)
+                        admitted++;
+                }
+            }
+
+            var pairs = candidates.Length * employees.Count;
+            _out.WriteLine($"DIFFERENTIAL-COMBINED: {pairs} pairs compared, {admitted} admitted by SQL, {divergences.Count} divergences");
+
+            // Non-vacuity in BOTH directions: a comparison where everything is denied would pass while
+            // proving nothing, and so would one where everything is admitted.
+            Assert.True(admitted >= 5, $"Only {admitted} pairs admitted — the comparison is near-vacuous.");
+            Assert.True(admitted < pairs, "Every pair was admitted — the comparison cannot detect an over-permissive prefetch.");
             Assert.Empty(divergences);
 
             await tx.RollbackAsync();

@@ -687,6 +687,18 @@ public sealed class ApprovalPeriodRepository
             var prefetched = await PrefetchedReportingLineDataSource.BuildAsync(
                 conn, snapshot, EscapeLike(treeRootPathPrefix) + "%", today, ct);
 
+            // The authorizer's own three facts — role floor, home Organisation, unit-leader kind —
+            // likewise prefetched. Same discipline: the DECISIONS stay in the authorizer, only the
+            // lookups move. Differentially tested against the live-SQL source.
+            var facts = await PrefetchedAuthorityFacts.BuildAsync(
+                conn, snapshot, EscapeLike(treeRootPathPrefix) + "%", today, ct);
+
+            // The candidate ENUMERATION, batched for the whole pending set in ONE read. This one
+            // carries no decision at all — it is a superset candidate list the gate then filters — so
+            // batching it is a pure `= @id` → `= ANY(@ids)` widening of the identical predicate.
+            var candidatesByEmployee = await QueryUnitLeaderApproverCandidatesBatchAsync(
+                conn, snapshot, pendingEmployeeIds, today, ct);
+
             foreach (var employeeId in pendingEmployeeIds)
             {
                 // Build the DISTINCT candidate-approver set for this pending employee.
@@ -700,15 +712,16 @@ public sealed class ApprovalPeriodRepository
                 if (edgeManagerId is not null)
                     candidates.Add(edgeManagerId);
 
-                foreach (var unitApprover in await QueryUnitLeaderApproverCandidatesAsync(
-                             conn, snapshot, employeeId, today, ct))
-                    candidates.Add(unitApprover);
+                if (candidatesByEmployee.TryGetValue(employeeId, out var unitApprovers))
+                    foreach (var unitApprover in unitApprovers)
+                        candidates.Add(unitApprover);
 
                 // Tally each candidate who is an AUTHORIZED approver (edge OR unit-leader, full floors).
                 foreach (var candidate in candidates)
                 {
                     var authorized = await _designatedAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(
-                        conn, snapshot, authorityMemo, prefetched, candidate, employeeId, asOf: today, ct: ct);
+                        conn, snapshot, authorityMemo, prefetched, facts, candidate, employeeId,
+                        asOf: today, ct: ct);
                     if (!authorized)
                         continue;
 
@@ -771,6 +784,65 @@ public sealed class ApprovalPeriodRepository
         while (await reader.ReadAsync(ct))
             result.Add(reader.GetString(0));
         return result;
+    }
+
+    /// <summary>
+    /// S125 / TASK-12501 step 3c — the batched form of
+    /// <see cref="QueryUnitLeaderApproverCandidatesAsync"/>: the same two UNIONed branches with the
+    /// employee equality widened from <c>= @employeeId</c> to <c>= ANY(@employeeIds)</c>, grouped by
+    /// employee in memory.
+    ///
+    /// <para>The predicates are character-for-character the same — the single-table
+    /// <c>unit_leaders.unit_id = users.unit_id</c> bound (NO ancestor walk, the LOCKED D5 boundary),
+    /// the <c>e.unit_id IS NOT NULL</c> guard, the inclusive vikar coverage window, and BOTH
+    /// self-exclusions. This carries no decision of its own: the result is a SUPERSET candidate list
+    /// the authority gate then filters, which is why batching it needs no differential test the way
+    /// the authority lookups do.</para>
+    ///
+    /// <para>An employee with no unit-leader candidates is simply absent from the returned map, which
+    /// the caller treats as the empty set — the same as the per-employee query returning no rows.</para>
+    /// </summary>
+    private static async Task<Dictionary<string, List<string>>> QueryUnitLeaderApproverCandidatesBatchAsync(
+        NpgsqlConnection conn, NpgsqlTransaction? tx,
+        IReadOnlyList<string> employeeIds, DateOnly today, CancellationToken ct)
+    {
+        var byEmployee = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        if (employeeIds.Count == 0)
+            return byEmployee;
+
+        await using var cmd = new NpgsqlCommand(
+            """
+            -- (a) each employee's OWN unit's designated leaders, self-excluded.
+            SELECT e.user_id AS employee_id, ul.user_id AS approver_id
+            FROM users e
+            JOIN unit_leaders ul ON ul.unit_id = e.unit_id
+            WHERE e.user_id = ANY(@employeeIds)
+              AND e.unit_id IS NOT NULL
+              AND ul.user_id <> e.user_id
+            UNION
+            -- (b) the ACTIVE vikars of those leaders, covering @today, self-excluded.
+            SELECT e.user_id AS employee_id, mv.vikar_user_id AS approver_id
+            FROM users e
+            JOIN unit_leaders ul ON ul.unit_id = e.unit_id
+            JOIN manager_vikar mv ON mv.absent_approver_id = ul.user_id
+                 AND mv.effective_to IS NULL
+                 AND mv.until_date >= @today
+            WHERE e.user_id = ANY(@employeeIds)
+              AND e.unit_id IS NOT NULL
+              AND mv.vikar_user_id <> e.user_id
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("employeeIds", employeeIds.ToArray());
+        cmd.Parameters.AddWithValue("today", today);
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var employeeId = reader.GetString(0);
+            if (!byEmployee.TryGetValue(employeeId, out var list))
+                byEmployee[employeeId] = list = new List<string>();
+            list.Add(reader.GetString(1));
+        }
+        return byEmployee;
     }
 
     // ──────────────────────────────────────────────────────────────────────

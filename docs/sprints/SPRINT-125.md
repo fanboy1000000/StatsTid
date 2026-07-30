@@ -382,6 +382,64 @@ exactly 1 command; characterisation byte-identical at every step.
 
 ---
 
+### TASK-12501 step 3c — FLAT. 27,001 commands / 13.8s → **9 commands / 79ms** at K=1000
+| Field | Value |
+|-------|-------|
+| **Status** | complete (2026-07-30) — **the projection no longer scales with the pending count at all**; 462/462 |
+| **Components** | `IAuthorityFactsSource.cs` (new), `DesignatedApproverAuthorizer.cs`, `ReportingLineRepository.cs`, `ApprovalPeriodRepository.cs`, perf tests |
+
+| | Original | After 2+3a | After 3b | **After 3c** |
+|---|---|---|---|---|
+| Commands at K=1000 | 27,001 | 10,004 | 6,007 | **9** |
+| Median wall-clock at K=1000 | 13.8s | 6.2s | 3.8s | **79ms** |
+| Stmts per pending employee | 27.0 | 10.2 | 6.3 | **~0 (flat)** |
+| K=10 vs K=20 commands | 271 / 541 | — | — | **9 / 9** |
+
+**175× faster, ~3,000× fewer round-trips**, `<1s` met with a 12× margin, and 9 commands whether one
+person has submitted or a thousand.
+
+**What moved**: the last three per-employee lookups — the role floor, the home-Organisation lookup and
+the unit-leader classification — went behind `IAuthorityFactsSource` (live-SQL and prefetched
+implementations), and the candidate enumeration was batched with a plain `= @id` → `= ANY(@ids)`
+widening of the identical predicate. The same-Organisation DECISION was extracted to
+`ReportingLineRepository.DecideSameOrganisation` so the write path, the authority path and the
+prefetched path all apply one set of null-checks, one equality and one pair of exception types.
+
+**The discipline that held across all four steps: the DECISIONS never moved.** Precedence, floors,
+fail-closed comparisons and self-exclusions still live in one place and execute identically — only
+where the facts come from changed. That is why a 175× speedup could touch the approve/reject/reopen
+authority path without forking it.
+
+**The guard test broke exactly as predicted three refinement revisions ago**, and inverting it is the
+deliverable rather than collateral damage. It asserted `count20 > count10 && count10 > small0` — a
+faithful characterisation of the N+1 that S106 accepted on the premise that cost tracked the PENDING
+set rather than org size. At month-end those converge, which is what made 13.8s possible. It now
+asserts flatness DIRECTLY (`Assert.Equal(count10, count20)`), with the superseded expectation recorded
+inline, because "smaller" and "independent of K" are different claims and only the second survives
+month-end.
+
+**Both differential tests were proven to discriminate, and both catches were pointed:**
+1. Resolver probe (`IsUserActive` → always true) — caught ONLY by the inactive-manager shape added
+   after noticing the test's own documentation claimed coverage the fixture did not have:
+   `perf_o3_x5: sql=(, , 1) prefetched=(perf_o3_xim, DESIGNATED_MANAGER, 0)`.
+2. Combined probe (segregation-of-duties exclusion dropped from the prefetched path) — caught ONLY
+   because self-pairs were deliberately included in the comparison set:
+   `(perf_o3_l1 -> perf_o3_l1): sql=False prefetched=True` — a leader admitted over their OWN period.
+
+Both times the deliberate over-coverage is what made the test real rather than decorative. Note that
+(2) is the same defect class as FAIL-004 found earlier the same day — a useful signal about where this
+system's authorization is structurally fragile.
+
+**Verification**: characterisation byte-identical at every step (`em=2;l1=4;l2=4;xv=4`;
+`OPEN=253,SUBMITTED=10`); combined differential 126 pairs / 58 admitted / 0 divergences, with
+non-vacuity asserted in BOTH directions (some admitted, not all); blast radius 462/462 across
+reporting-line, vikar, designated-approver, delegate, approval, approve, reopen, team-overview,
+compliance, skema, period-status, unit-leader, organisation and the perf class.
+
+**Zero-pending still costs exactly 1 command** — the prefetch is skipped for an empty pending set.
+
+---
+
 ## Carried in from S124 (not yet started)
 1. **RES-002** — the deferred endpoint-level read gate (~6 reads). Must be period-status-based, must
    settle the recorded ACTOR-MODEL question (actor-blind withholding vs the HR-exempt month read),

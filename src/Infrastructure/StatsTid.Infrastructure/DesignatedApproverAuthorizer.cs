@@ -127,9 +127,16 @@ public sealed class DesignatedApproverAuthorizer
         => IsEffectiveDesignatedApproverAsync(conn, tx, ctx, source: null, actorId, employeeId, asOf, ct);
 
     /// <summary>Step 3b form — <paramref name="source"/> supplies the edge leg's facts; null = live SQL.</summary>
-    public async Task<bool> IsEffectiveDesignatedApproverAsync(
+    public Task<bool> IsEffectiveDesignatedApproverAsync(
         NpgsqlConnection conn, NpgsqlTransaction? tx, ApprovalAuthorityContext? ctx,
         IReportingLineDataSource? source,
+        string actorId, string employeeId, DateOnly? asOf = null, CancellationToken ct = default)
+        => IsEffectiveDesignatedApproverAsync(conn, tx, ctx, source, facts: null, actorId, employeeId, asOf, ct);
+
+    /// <summary>Step 3c form — see the combined predicate's remarks.</summary>
+    public async Task<bool> IsEffectiveDesignatedApproverAsync(
+        NpgsqlConnection conn, NpgsqlTransaction? tx, ApprovalAuthorityContext? ctx,
+        IReportingLineDataSource? source, IAuthorityFactsSource? facts,
         string actorId, string employeeId, DateOnly? asOf = null, CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(actorId) || string.IsNullOrEmpty(employeeId))
@@ -142,7 +149,7 @@ public sealed class DesignatedApproverAuthorizer
         //     gate is NOT enforced by the resolver (a vikar could be an Employee-role user),
         //     so we check it explicitly here — defense-in-depth and the load-bearing gate
         //     when the actor is reached purely as a vikar stand-in.
-        if (!await RoleFloorAsync(conn, tx, ctx, actorId, ct))
+        if (!await RoleFloorAsync(conn, tx, ctx, facts, actorId, ct))
             return false;
 
         // (2) Resolve the SINGLE effective approver at asOf (vikar-aware, R3 precedence).
@@ -163,7 +170,7 @@ public sealed class DesignatedApproverAuthorizer
         //     reads both users' primary_org_id directly (the tree-WALK is retired — post-S92 the
         //     Organisation IS the primary_org_id) and throws CrossOrganisationAssignmentException on
         //     mismatch; a throw ⇒ deny. An intra-Organisation edge shares a home ⇒ still passes.
-        return await SameOrganisationAsync(conn, tx, ctx, employeeId, actorId, ct);
+        return await SameOrganisationAsync(conn, tx, ctx, facts, employeeId, actorId, ct);
     }
 
     /// <summary>
@@ -233,14 +240,24 @@ public sealed class DesignatedApproverAuthorizer
 
     /// <summary>Step 3b form — additionally takes the prefetched
     /// <see cref="IReportingLineDataSource"/> the edge leg resolves through. Null means live SQL.</summary>
-    public async Task<bool> IsEffectiveApproverOrUnitLeaderAsync(
+    public Task<bool> IsEffectiveApproverOrUnitLeaderAsync(
         NpgsqlConnection conn, NpgsqlTransaction? tx, ApprovalAuthorityContext? ctx,
         IReportingLineDataSource? source,
         string actorId, string employeeId, DateOnly? asOf = null, CancellationToken ct = default)
+        => IsEffectiveApproverOrUnitLeaderAsync(conn, tx, ctx, source, facts: null, actorId, employeeId, asOf, ct);
+
+    /// <summary>Step 3c form — <paramref name="facts"/> supplies the role floor, the home-Organisation
+    /// lookup and the unit-leader classification. Null means live SQL. The DECISIONS are unchanged and
+    /// still live here; only the lookups move.</summary>
+    public async Task<bool> IsEffectiveApproverOrUnitLeaderAsync(
+        NpgsqlConnection conn, NpgsqlTransaction? tx, ApprovalAuthorityContext? ctx,
+        IReportingLineDataSource? source, IAuthorityFactsSource? facts,
+        string actorId, string employeeId, DateOnly? asOf = null, CancellationToken ct = default)
     {
-        if (await IsEffectiveDesignatedApproverAsync(conn, tx, ctx, source, actorId, employeeId, asOf, ct))
+        if (await IsEffectiveDesignatedApproverAsync(conn, tx, ctx, source, facts, actorId, employeeId, asOf, ct))
             return true;
-        return await IsUnitLeaderApproverAsync(conn, tx, ctx, actorId, employeeId, asOf, ct);
+        return await ResolveUnitLeaderApprovalKindAsync(conn, tx, ctx, facts, actorId, employeeId, asOf, ct)
+            != UnitLeaderApprovalKind.None;
     }
 
     /// <summary>
@@ -270,8 +287,15 @@ public sealed class DesignatedApproverAuthorizer
 
     /// <summary>Memoized form — see <see cref="ApprovalAuthorityContext"/>. All floors and the
     /// Direct-before-Vikar precedence are unchanged.</summary>
+    public Task<UnitLeaderApprovalKind> ResolveUnitLeaderApprovalKindAsync(
+        NpgsqlConnection conn, NpgsqlTransaction? tx, ApprovalAuthorityContext? ctx,
+        string actorId, string employeeId, DateOnly? asOf = null, CancellationToken ct = default)
+        => ResolveUnitLeaderApprovalKindAsync(conn, tx, ctx, facts: null, actorId, employeeId, asOf, ct);
+
+    /// <summary>Step 3c form — see the combined predicate's remarks.</summary>
     public async Task<UnitLeaderApprovalKind> ResolveUnitLeaderApprovalKindAsync(
         NpgsqlConnection conn, NpgsqlTransaction? tx, ApprovalAuthorityContext? ctx,
+        IAuthorityFactsSource? facts,
         string actorId, string employeeId, DateOnly? asOf = null, CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(actorId) || string.IsNullOrEmpty(employeeId))
@@ -281,20 +305,20 @@ public sealed class DesignatedApproverAuthorizer
 
         // (1) The actor must be an active LeaderOrAbove — the SAME role floor the edge path applies
         //     (a unit_leaders row for an Employee-role / inactive user grants nothing; D3 role-coupling).
-        if (!await RoleFloorAsync(conn, tx, ctx, actorId, ct))
+        if (!await RoleFloorAsync(conn, tx, ctx, facts, actorId, ct))
             return UnitLeaderApprovalKind.None;
 
         // (2) The SINGLE-TABLE membership/vikar lookup over the employee's OWN unit's leaders
         //     (unit_leaders.unit_id = E.unit_id) — NEVER an ancestor/recursive walk (the LOCKED D5
         //     boundary). NULL E.unit_id → zero rows → (false, false) → None.
-        var rawKind = await QueryUnitLeaderKindAsync(conn, tx, actorId, employeeId, effectiveAsOf, ct);
+        var rawKind = await UnitLeaderKindAsync(conn, tx, facts, actorId, employeeId, effectiveAsOf, ct);
         if (rawKind == UnitLeaderApprovalKind.None)
             return UnitLeaderApprovalKind.None;
 
         // (3) SECURITY — re-verify STRUCTURALLY that the actor and the employee share an Organisation
         //     (the same primary_org_id), the SAME re-check the edge path applies. Same-Org binds the
         //     vikar path transitively (D12). A throw ⇒ deny (fail-closed).
-        if (!await SameOrganisationAsync(conn, tx, ctx, employeeId, actorId, ct))
+        if (!await SameOrganisationAsync(conn, tx, ctx, facts, employeeId, actorId, ct))
             return UnitLeaderApprovalKind.None;
 
         return rawKind;
@@ -307,6 +331,13 @@ public sealed class DesignatedApproverAuthorizer
     /// Direct leader and/or an active vikar (covering <paramref name="asOf"/>) of one of those leaders.
     /// Direct membership wins. NO recursive walk over <c>units.parent_unit_id</c> (the D5 keystone).
     /// </summary>
+    /// <summary>Live-SQL form behind <see cref="IAuthorityFactsSource.GetUnitLeaderKindAsync"/> —
+    /// exposed so <see cref="SqlAuthorityFactsSource"/> reuses this exact query.</summary>
+    internal static Task<UnitLeaderApprovalKind> QueryUnitLeaderKindSqlAsync(
+        NpgsqlConnection conn, NpgsqlTransaction? tx,
+        string actorId, string employeeId, DateOnly asOf, CancellationToken ct)
+        => QueryUnitLeaderKindAsync(conn, tx, actorId, employeeId, asOf, ct);
+
     private static async Task<UnitLeaderApprovalKind> QueryUnitLeaderKindAsync(
         NpgsqlConnection conn, NpgsqlTransaction? tx,
         string actorId, string employeeId, DateOnly asOf, CancellationToken ct)
@@ -357,10 +388,21 @@ public sealed class DesignatedApproverAuthorizer
     /// amortises to near zero.</summary>
     private Task<bool> RoleFloorAsync(
         NpgsqlConnection conn, NpgsqlTransaction? tx, ApprovalAuthorityContext? ctx,
-        string userId, CancellationToken ct)
-        => ctx is null
+        IAuthorityFactsSource? facts, string userId, CancellationToken ct)
+    {
+        Task<bool> Query() => facts is null
             ? IsActiveLeaderOrAboveAsync(conn, tx, userId, ct)
-            : ctx.RoleFloorAsync(userId, () => IsActiveLeaderOrAboveAsync(conn, tx, userId, ct));
+            : facts.IsActiveLeaderOrAboveAsync(userId, ct);
+
+        return ctx is null ? Query() : ctx.RoleFloorAsync(userId, Query);
+    }
+
+    private static Task<UnitLeaderApprovalKind> UnitLeaderKindAsync(
+        NpgsqlConnection conn, NpgsqlTransaction? tx, IAuthorityFactsSource? facts,
+        string actorId, string employeeId, DateOnly asOf, CancellationToken ct)
+        => facts is null
+            ? QueryUnitLeaderKindAsync(conn, tx, actorId, employeeId, asOf, ct)
+            : facts.GetUnitLeaderKindAsync(actorId, employeeId, ct);
 
     /// <summary>Edge resolution, memoized per EMPLOYEE — the single biggest redundancy (12 of the 27
     /// statements): the projection resolves it, then the gate re-resolved it once per candidate.</summary>
@@ -388,20 +430,34 @@ public sealed class DesignatedApproverAuthorizer
     /// </summary>
     private Task<bool> SameOrganisationAsync(
         NpgsqlConnection conn, NpgsqlTransaction? tx, ApprovalAuthorityContext? ctx,
-        string employeeId, string actorId, CancellationToken ct)
-        => ctx is null
-            ? CheckSameOrganisationAsync(conn, tx, employeeId, actorId, ct)
-            : ctx.SameOrganisationAsync(employeeId, actorId,
-                () => CheckSameOrganisationAsync(conn, tx, employeeId, actorId, ct));
+        IAuthorityFactsSource? facts, string employeeId, string actorId, CancellationToken ct)
+    {
+        Task<bool> Check() => CheckSameOrganisationAsync(conn, tx, facts, employeeId, actorId, ct);
+        return ctx is null ? Check() : ctx.SameOrganisationAsync(employeeId, actorId, Check);
+    }
 
     private async Task<bool> CheckSameOrganisationAsync(
-        NpgsqlConnection conn, NpgsqlTransaction? tx,
+        NpgsqlConnection conn, NpgsqlTransaction? tx, IAuthorityFactsSource? facts,
         string employeeId, string actorId, CancellationToken ct)
     {
         try
         {
-            await _reportingLineRepo.ValidateSameOrganisationAsync(
-                conn, tx, employeeId, actorId, lockRows: false, ct);
+            if (facts is null)
+            {
+                await _reportingLineRepo.ValidateSameOrganisationAsync(
+                    conn, tx, employeeId, actorId, lockRows: false, ct);
+            }
+            else
+            {
+                // Same DECISION, different lookup: the two home Organisations come from the prefetch,
+                // then ReportingLineRepository.DecideSameOrganisation applies the identical
+                // null-checks and equality and throws the identical exception types the arms below
+                // catch. The rule is not restated here.
+                ReportingLineRepository.DecideSameOrganisation(
+                    employeeId, actorId,
+                    await facts.GetActiveHomeOrgAsync(employeeId, ct),
+                    await facts.GetActiveHomeOrgAsync(actorId, ct));
+            }
             return true;
         }
         catch (CrossOrganisationAssignmentException)
@@ -422,6 +478,11 @@ public sealed class DesignatedApproverAuthorizer
     /// Single query against <c>users</c> + <c>role_assignments</c> + <c>roles</c>; mirrors the
     /// <c>RoleAssignmentRepository</c> active-assignment predicate (is_active + non-expired).
     /// </summary>
+    /// <summary>Live-SQL form behind <see cref="IAuthorityFactsSource.IsActiveLeaderOrAboveAsync"/>.</summary>
+    internal static Task<bool> QueryActiveLeaderOrAboveAsync(
+        NpgsqlConnection conn, NpgsqlTransaction? tx, string userId, CancellationToken ct)
+        => IsActiveLeaderOrAboveAsync(conn, tx, userId, ct);
+
     private static async Task<bool> IsActiveLeaderOrAboveAsync(
         NpgsqlConnection conn, NpgsqlTransaction? tx, string userId, CancellationToken ct)
     {

@@ -505,6 +505,22 @@ public sealed class ReportingLineRepository
             }
         }
 
+        return DecideSameOrganisation(employeeId, managerId, employeeOrgId, managerOrgId);
+    }
+
+    /// <summary>
+    /// S125 / TASK-12501 step 3c — the same-Organisation DECISION, extracted so it has exactly one
+    /// implementation regardless of how the two home Organisations were looked up (a per-pair
+    /// <c>FOR UPDATE</c> read on the write path, a plain read on the authority path, or a prefetched
+    /// map on the projection path).
+    ///
+    /// <para>Both null cases and the inequality case are DENIALS, and the exception TYPES are part of
+    /// the contract: callers distinguish <see cref="CrossOrganisationAssignmentException"/> from
+    /// <see cref="InvalidOperationException"/>, and the authority predicate fails closed on both.</para>
+    /// </summary>
+    internal static string DecideSameOrganisation(
+        string employeeId, string managerId, string? employeeOrgId, string? managerOrgId)
+    {
         if (employeeOrgId is null)
             throw new InvalidOperationException($"Employee user_id='{employeeId}' not found, inactive, or home Organisation inactive.");
         if (managerOrgId is null)
@@ -520,6 +536,23 @@ public sealed class ReportingLineRepository
         }
 
         return employeeOrgId;
+    }
+
+    /// <summary>The single-user home-Organisation lookup behind
+    /// <see cref="IAuthorityFactsSource.GetActiveHomeOrgAsync"/> — the SAME active-user +
+    /// active-Organisation join the pair check uses, so the two cannot drift. Null = deny.</summary>
+    internal static async Task<string?> QueryActiveHomeOrgAsync(
+        NpgsqlConnection conn, NpgsqlTransaction? tx, string userId, CancellationToken ct)
+    {
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT u.primary_org_id FROM users u
+            JOIN organizations o ON o.org_id = u.primary_org_id AND o.is_active = TRUE
+            WHERE u.user_id = @userId AND u.is_active = TRUE
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("userId", userId);
+        var result = await cmd.ExecuteScalarAsync(ct);
+        return result as string;
     }
 
     // ──────────────────────────────────────────────────────────────────────
