@@ -339,6 +339,10 @@ public sealed class ManagerVikarRepository
     //  Mapper
     // ──────────────────────────────────────────────────────────────────────
 
+    /// <summary>Row mapper, exposed for <see cref="PrefetchedReportingLineDataSource"/> so the bulk
+    /// load uses the SAME mapping as the per-question read.</summary>
+    internal static ManagerVikar MapReaderRow(NpgsqlDataReader reader) => MapReader(reader);
+
     private static ManagerVikar MapReader(NpgsqlDataReader reader) => new()
     {
         VikarId = reader.GetGuid(reader.GetOrdinal("vikar_id")),

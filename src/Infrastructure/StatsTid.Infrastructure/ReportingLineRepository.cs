@@ -1001,12 +1001,32 @@ public sealed class ReportingLineRepository
     /// With <paramref name="tx"/> = <c>null</c> each statement still autocommits, so reads observe the
     /// latest committed state exactly as the self-contained path does: semantically inert.</para>
     /// </summary>
-    public async Task<(string? ManagerId, string? ApprovalMethod, int Depth)> ResolveDesignatedApproverAsync(
+    public Task<(string? ManagerId, string? ApprovalMethod, int Depth)> ResolveDesignatedApproverAsync(
         NpgsqlConnection conn, NpgsqlTransaction? tx, string employeeId, DateOnly? asOf,
         CancellationToken ct = default)
-    {
-        var effectiveAsOf = asOf ?? DateOnly.FromDateTime(DateTime.UtcNow);
+        => ResolveDesignatedApproverAsync(
+            new SqlReportingLineDataSource(conn, tx, _vikarRepo),
+            employeeId,
+            asOf ?? DateOnly.FromDateTime(DateTime.UtcNow),
+            ct);
 
+    /// <summary>
+    /// S125 / TASK-12501 step 3b — THE resolution algorithm, written once, over a pluggable
+    /// <see cref="IReportingLineDataSource"/>.
+    ///
+    /// <para>Every other overload funnels here, so the R3 precedence, the FAIL-004 self-exclusion
+    /// invariant and the depth-10 ceiling exist in exactly ONE place. Swapping the data source changes
+    /// only WHERE the four facts come from — live SQL (one round-trip per question, the historical
+    /// behaviour) or a prefetched snapshot of a whole pending set (which is what makes the period-status
+    /// projection flat in the pending count instead of linear).</para>
+    ///
+    /// <para>This is deliberately NOT a batched re-expression of the rule in SQL: that would fork the
+    /// authorization logic, which is a far worse regression risk than the latency it would buy.</para>
+    /// </summary>
+    public async Task<(string? ManagerId, string? ApprovalMethod, int Depth)> ResolveDesignatedApproverAsync(
+        IReportingLineDataSource source, string employeeId, DateOnly effectiveAsOf,
+        CancellationToken ct = default)
+    {
         var currentEmployeeId = employeeId;
         var depth = 0;
 
@@ -1044,16 +1064,16 @@ public sealed class ReportingLineRepository
         while (depth < 10)
         {
             // 1. Check ACTING line — admin-assigned ACTING takes precedence over everything.
-            var actingLine = await GetActiveLineAsync(conn, tx, currentEmployeeId, "ACTING", ct);
+            var actingLine = await source.GetActiveLineAsync(currentEmployeeId, "ACTING", ct);
             if (actingLine is not null && !IsSubject(actingLine.ManagerId))
             {
-                var isActive = await IsUserActiveAsync(conn, tx, actingLine.ManagerId, ct);
+                var isActive = await source.IsUserActiveAsync(actingLine.ManagerId, ct);
                 if (isActive)
                     return (actingLine.ManagerId, "ACTING_MANAGER", depth);
             }
 
             // 2. Check PRIMARY line.
-            var primaryLine = await GetActiveLineAsync(conn, tx, currentEmployeeId, "PRIMARY", ct);
+            var primaryLine = await source.GetActiveLineAsync(currentEmployeeId, "PRIMARY", ct);
             if (primaryLine is null)
                 return (null, null, depth); // No reporting line — org-scope fallback.
 
@@ -1070,10 +1090,10 @@ public sealed class ReportingLineRepository
             //     the absent approver, which rejects any descendant as stand-in), so this leg is
             //     legacy-data-only — but the invariant is enforced at the read, not assumed from
             //     write-path history.
-            var vikar = await _vikarRepo.GetActiveByApproverAsync(conn, primaryManagerId, effectiveAsOf, tx, ct);
+            var vikar = await source.GetActiveVikarByApproverAsync(primaryManagerId, effectiveAsOf, ct);
             if (vikar is not null && !IsSubject(vikar.VikarUserId))
             {
-                var vikarUserActive = await IsUserActiveAsync(conn, tx, vikar.VikarUserId, ct);
+                var vikarUserActive = await source.IsUserActiveAsync(vikar.VikarUserId, ct);
                 if (vikarUserActive)
                     return (vikar.VikarUserId, "ACTING_MANAGER", depth);
                 // else: R3b — inactive stand-in, skip the vikar; fall through.
@@ -1082,7 +1102,7 @@ public sealed class ReportingLineRepository
             // 3. M if active — unless M IS the subject (FAIL-004). An active M who is the subject
             //    does NOT resolve; per ruling (a) the walk continues THROUGH them (step 4), which is
             //    what lets a valid approver further along still win.
-            var primaryManagerActive = await IsUserActiveAsync(conn, tx, primaryManagerId, ct);
+            var primaryManagerActive = await source.IsUserActiveAsync(primaryManagerId, ct);
             if (primaryManagerActive && !IsSubject(primaryManagerId))
                 return (primaryManagerId, "DESIGNATED_MANAGER", depth);
 
@@ -1095,7 +1115,10 @@ public sealed class ReportingLineRepository
         return (null, null, depth); // Depth exceeded — org-scope fallback.
     }
 
-    private static async Task<ReportingLine?> GetActiveLineAsync(
+    /// <summary>The live-SQL form of <see cref="IReportingLineDataSource.GetActiveLineAsync"/>.
+    /// Internal so <see cref="SqlReportingLineDataSource"/> reuses this exact query rather than
+    /// carrying its own copy.</summary>
+    internal static async Task<ReportingLine?> QueryActiveLineAsync(
         NpgsqlConnection conn, NpgsqlTransaction? tx, string employeeId, string relationship,
         CancellationToken ct)
     {
@@ -1112,7 +1135,8 @@ public sealed class ReportingLineRepository
         return await reader.ReadAsync(ct) ? MapReader(reader) : null;
     }
 
-    private static async Task<bool> IsUserActiveAsync(
+    /// <summary>The live-SQL form of <see cref="IReportingLineDataSource.IsUserActiveAsync"/>.</summary>
+    internal static async Task<bool> QueryUserActiveAsync(
         NpgsqlConnection conn, NpgsqlTransaction? tx, string userId, CancellationToken ct)
     {
         await using var cmd = new NpgsqlCommand(
@@ -1279,6 +1303,11 @@ public sealed class ReportingLineRepository
             lines.Add(MapReader(reader));
         return lines;
     }
+
+    /// <summary>Row mapper, exposed for <see cref="PrefetchedReportingLineDataSource"/> so the bulk
+    /// load materialises rows through the SAME mapping as the per-question read — a divergent mapper
+    /// would be a silent second encoding of the row shape.</summary>
+    internal static ReportingLine MapReaderRow(NpgsqlDataReader reader) => MapReader(reader);
 
     private static ReportingLine MapReader(NpgsqlDataReader reader) => new()
     {

@@ -362,11 +362,14 @@ public sealed class S106SeedScalePerfTests : IClassFixture<S106SeedScalePerfFixt
     /// <item><term>x4 — edge to a ROLE-REVOKED manager</term><description>the unit leaders + vikar; the
     /// revoked manager is resolved but REJECTED by the role floor (invariant 9) and must be ABSENT
     /// from the map entirely</description></item>
+    /// <item><term>x5 — edge to an INACTIVE manager</term><description>the escalation walk runs, finds
+    /// the inactive manager has no PRIMARY of their own, and yields NO edge; the unit leaders alone
+    /// tally it, and the inactive manager must be absent from the map</description></item>
     /// </list>
     ///
-    /// <para>Expected map: EdgeManager=2 (x1, x2); Leader1=3 and Leader2=3 (x1, x3, x4 — the three in
-    /// the leaf unit); VikarOfLeader1=3 (invariant 1's vikar-of-unit-leader arm + invariant 11's
-    /// inclusive coverage window); and NO key for the role-revoked manager.</para>
+    /// <para>Expected map: EdgeManager=2 (x1, x2); Leader1=4 and Leader2=4 (x1, x3, x4, x5 — the four
+    /// in the leaf unit); VikarOfLeader1=4 (invariant 1's vikar-of-unit-leader arm + invariant 11's
+    /// inclusive coverage window); and NO key for either the role-revoked or the inactive manager.</para>
     ///
     /// <para>This is the test that makes a prefetch-based rewrite honest: answering the four
     /// authorization primitives from in-memory maps means reimplementing their semantics, and every
@@ -391,9 +394,9 @@ public sealed class S106SeedScalePerfTests : IClassFixture<S106SeedScalePerfFixt
 
             Assert.Equal(
                 $"{S106SeedScalePerfFixture.Org3EdgeManager}=2;" +
-                $"{S106SeedScalePerfFixture.Org3Leader1}=3;" +
-                $"{S106SeedScalePerfFixture.Org3Leader2}=3;" +
-                $"{S106SeedScalePerfFixture.ShapeVikarOfLeader1}=3",
+                $"{S106SeedScalePerfFixture.Org3Leader1}=4;" +
+                $"{S106SeedScalePerfFixture.Org3Leader2}=4;" +
+                $"{S106SeedScalePerfFixture.ShapeVikarOfLeader1}=4",
                 string.Join(";", map));
 
             // Invariant 9, stated as its own assertion so a regression names itself: an active,
@@ -403,13 +406,113 @@ public sealed class S106SeedScalePerfTests : IClassFixture<S106SeedScalePerfFixt
             // All four shapes are SUBMITTED — i.e. the map above is not small because rows went missing
             // from step (1).
             var submitted = proj.Employees.Where(e => e.Status == "SUBMITTED").Select(e => e.EmployeeId).ToList();
-            Assert.Equal(4, submitted.Count);
+            Assert.Equal(5, submitted.Count);
             Assert.Contains(S106SeedScalePerfFixture.ShapeOrphan, submitted);
             Assert.Contains(S106SeedScalePerfFixture.ShapeNullUnit, submitted);
+            // The escalation shape: its manager is INACTIVE, so no edge resolves and only the unit
+            // leaders tally it — which is why l1/l2/xv are 4 while the edge manager stays at 2. This
+            // shape is also what makes the differential test discriminating: an is_active divergence
+            // in the prefetched source shows up here and nowhere else.
+            Assert.Contains(S106SeedScalePerfFixture.ShapeEscalates, submitted);
+            Assert.DoesNotContain(S106SeedScalePerfFixture.ShapeInactiveMgr, proj.PendingCountByManager.Keys);
         }
         finally
         {
             await _fx.ClearShapeMatrixAsync();
+        }
+    }
+
+    /// <summary>
+    /// <b>S125 / TASK-12501 step 3b — THE DIFFERENTIAL TEST. This is the test that makes the prefetch
+    /// defensible.</b>
+    ///
+    /// <para>Step 3b introduced a SECOND way to answer the resolver's four data questions
+    /// (<see cref="PrefetchedReportingLineDataSource"/> alongside
+    /// <see cref="SqlReportingLineDataSource"/>). The resolution ALGORITHM is shared — the R3
+    /// precedence, the FAIL-004 self-exclusion invariant and the depth ceiling exist once — but two
+    /// data sources is still two chances to diverge: an inclusive-vs-exclusive date bound, a missing
+    /// row read as permission, a mapper that drops a column.</para>
+    ///
+    /// <para><b>It compares VERDICTS PAIR-BY-PAIR, not totals.</b> Asserting that the two produce the
+    /// same tile map would be much weaker — totals can agree by luck while individual resolutions are
+    /// wrong in offsetting directions. Here every user in the Organisation is resolved through BOTH
+    /// sources and the full <c>(ManagerId, ApprovalMethod, Depth)</c> triple must match, so a single
+    /// employee resolving differently fails the test and names itself.</para>
+    ///
+    /// <para><b>Depth is compared deliberately</b>, not just the resolved manager. Depth drives the
+    /// existing <c>FallbackTraversalWarning</c> (fires above 3), so a source that reached the same
+    /// answer by a different route — e.g. skipping an inactive-manager hop because it never saw the
+    /// inactive flag — would be a real behavioural difference even though the approver matched.</para>
+    ///
+    /// <para>Run over the pending scenario AND the shape matrix together, so the comparison covers an
+    /// employee with an ordinary edge, one whose manager is INACTIVE (the escalation walk), one whose
+    /// manager holds an active VIKAR (the R3 precedence branch), an ORPHAN with no line at all, and a
+    /// NULL-unit member — the branches most likely to expose a divergence.</para>
+    /// </summary>
+    [Fact]
+    public async Task F1Differential_PrefetchedSource_MatchesSqlSource_ForEveryUser_TripleByTriple()
+    {
+        await _fx.AddPendingScenarioAsync(10);
+        await _fx.AddShapeMatrixAsync();
+        try
+        {
+            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+            var vikarRepo = new ManagerVikarRepository(_fx.Factory);
+            var repo = new ReportingLineRepository(_fx.Factory, vikarRepo);
+
+            await using var conn = _fx.Factory.Create();
+            await conn.OpenAsync();
+            // The same isolation the projection uses, so both sources observe one identical snapshot —
+            // otherwise a concurrent change could make them differ for reasons that are not a defect.
+            await using var tx = await conn.BeginTransactionAsync(
+                System.Data.IsolationLevel.RepeatableRead);
+
+            var sqlSource = new SqlReportingLineDataSource(conn, tx, vikarRepo);
+            var prefetched = await PrefetchedReportingLineDataSource.BuildAsync(
+                conn, tx, S106SeedScalePerfFixture.Org3Path + "%", today, default);
+
+            var userIds = new List<string>();
+            await using (var cmd = new NpgsqlCommand(
+                """
+                SELECT u.user_id FROM users u
+                JOIN organizations o ON o.org_id = u.primary_org_id
+                WHERE o.materialized_path LIKE @p
+                ORDER BY u.user_id
+                """, conn, tx))
+            {
+                cmd.Parameters.AddWithValue("p", S106SeedScalePerfFixture.Org3Path + "%");
+                await using var reader = await cmd.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                    userIds.Add(reader.GetString(0));
+            }
+
+            Assert.True(userIds.Count > 250, $"Expected the seeded Organisation, saw {userIds.Count} users.");
+
+            var divergences = new List<string>();
+            var nonTrivial = 0;
+            foreach (var userId in userIds)
+            {
+                var viaSql = await repo.ResolveDesignatedApproverAsync(sqlSource, userId, today);
+                var viaPrefetch = await repo.ResolveDesignatedApproverAsync(prefetched, userId, today);
+                if (viaSql != viaPrefetch)
+                    divergences.Add($"{userId}: sql={viaSql} prefetched={viaPrefetch}");
+                if (viaSql.ManagerId is not null)
+                    nonTrivial++;
+            }
+
+            _out.WriteLine($"DIFFERENTIAL: {userIds.Count} users compared, {nonTrivial} resolving to a manager, {divergences.Count} divergences");
+
+            // Non-vacuity: if nothing resolved, the comparison would be 250 identical (null, null, 0)s
+            // and would pass while proving nothing.
+            Assert.True(nonTrivial >= 10, $"Only {nonTrivial} users resolved to a manager — the comparison would be near-vacuous.");
+            Assert.Empty(divergences);
+
+            await tx.RollbackAsync();
+        }
+        finally
+        {
+            await _fx.ClearShapeMatrixAsync();
+            await _fx.ClearPendingScenarioAsync();
         }
     }
 

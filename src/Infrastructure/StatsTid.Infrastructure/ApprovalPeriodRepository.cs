@@ -670,33 +670,51 @@ public sealed class ApprovalPeriodRepository
         // serve answers from before a mid-request revocation/reassignment/deactivation.
         var authorityMemo = new ApprovalAuthorityContext(today);
 
-        foreach (var employeeId in pendingEmployeeIds)
+        // S125 / TASK-12501 step 3b — the resolver's INPUTS, prefetched in three set-based reads.
+        // The resolution ALGORITHM is untouched and still lives in ReportingLineRepository; only the
+        // source of its four facts changes. Inside the snapshot the prefetched rows are exactly the
+        // rows a per-question read would have returned, so this is an equivalence, not a trade-off —
+        // and it is differentially tested against the SQL source rather than assumed.
+        //
+        // GUARDED ON A NON-EMPTY PENDING SET, and that guard is load-bearing rather than tidiness:
+        // the ZERO-pending case is a real, asserted property — a 2,000-user Organisation with nothing
+        // awaiting approval costs exactly ONE command (phase (1)) and must stay that way. Building the
+        // prefetch unconditionally took it to four, which the S106 guard caught immediately
+        // (Expected: 1, Actual: 4). Paying three set-based reads to serve an empty loop is pure waste;
+        // this is the fix, not a relaxation of the assertion.
+        if (pendingEmployeeIds.Count > 0)
         {
-            // Build the DISTINCT candidate-approver set for this pending employee.
-            var candidates = new HashSet<string>(StringComparer.Ordinal);
+            var prefetched = await PrefetchedReportingLineDataSource.BuildAsync(
+                conn, snapshot, EscapeLike(treeRootPathPrefix) + "%", today, ct);
 
-            // Goes through the memo so the authority gate's identical lookups below are cache hits.
-            var (edgeManagerId, _, _) = await authorityMemo.ResolveEdgeAsync(
-                employeeId,
-                () => _reportingLineRepo.ResolveDesignatedApproverAsync(
-                    conn, snapshot, employeeId, today, ct));
-            if (edgeManagerId is not null)
-                candidates.Add(edgeManagerId);
-
-            foreach (var unitApprover in await QueryUnitLeaderApproverCandidatesAsync(
-                         conn, snapshot, employeeId, today, ct))
-                candidates.Add(unitApprover);
-
-            // Tally each candidate who is an AUTHORIZED approver (edge OR unit-leader, full floors).
-            foreach (var candidate in candidates)
+            foreach (var employeeId in pendingEmployeeIds)
             {
-                var authorized = await _designatedAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(
-                    conn, snapshot, authorityMemo, candidate, employeeId, asOf: today, ct: ct);
-                if (!authorized)
-                    continue;
+                // Build the DISTINCT candidate-approver set for this pending employee.
+                var candidates = new HashSet<string>(StringComparer.Ordinal);
 
-                pendingCountByManager.TryGetValue(candidate, out var n);
-                pendingCountByManager[candidate] = n + 1;
+                // Goes through the memo so the authority gate's identical lookups below are cache hits.
+                var (edgeManagerId, _, _) = await authorityMemo.ResolveEdgeAsync(
+                    employeeId,
+                    () => _reportingLineRepo.ResolveDesignatedApproverAsync(
+                        prefetched, employeeId, today, ct));
+                if (edgeManagerId is not null)
+                    candidates.Add(edgeManagerId);
+
+                foreach (var unitApprover in await QueryUnitLeaderApproverCandidatesAsync(
+                             conn, snapshot, employeeId, today, ct))
+                    candidates.Add(unitApprover);
+
+                // Tally each candidate who is an AUTHORIZED approver (edge OR unit-leader, full floors).
+                foreach (var candidate in candidates)
+                {
+                    var authorized = await _designatedAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(
+                        conn, snapshot, authorityMemo, prefetched, candidate, employeeId, asOf: today, ct: ct);
+                    if (!authorized)
+                        continue;
+
+                    pendingCountByManager.TryGetValue(candidate, out var n);
+                    pendingCountByManager[candidate] = n + 1;
+                }
             }
         }
 

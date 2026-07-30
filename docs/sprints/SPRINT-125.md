@@ -329,6 +329,59 @@ file this time, not piped through `tail`.
 
 ---
 
+### TASK-12501 step 3b — prefetch the resolver's INPUTS (not the decision), with a differential test
+| Field | Value |
+|-------|-------|
+| **Status** | complete (2026-07-30) — **27.0 → 6.3 stmts/employee; K=1000: 13.8s → 3.8s (3.67×)**; characterisation byte-identical; 442/442 |
+| **Components** | `IReportingLineDataSource.cs` + `PrefetchedReportingLineDataSource.cs` (new), `ReportingLineRepository.cs`, `DesignatedApproverAuthorizer.cs`, `ApprovalPeriodRepository.cs`, `ManagerVikarRepository.cs`, perf fixture + tests |
+
+**The design that keeps this off the P7 surface.** Rather than batching the DECISION, the resolver's
+four data questions moved behind `IReportingLineDataSource`. The R3 precedence, the FAIL-004
+self-exclusion invariant and the depth-10 ceiling still live in ONE method and execute the same
+branches in the same order — only where the facts come from changes: live SQL (one round-trip per
+question) or three set-based reads over the whole Organisation. That is the difference between
+"prefetch the inputs" and "fork authorization", and it is why the rule was never re-expressed in SQL.
+
+Loading the whole Organisation rather than just the pending set is deliberate: the escalation walk
+climbs through up to ten managers that are not known until it reaches them, so a pending-set-only
+prefetch would miss them and silently change resolutions.
+
+**The differential test is what makes it defensible** — `F1Differential_PrefetchedSource_MatchesSqlSource_ForEveryUser_TripleByTriple`
+resolves EVERY user in the Organisation through BOTH sources and compares the full
+`(ManagerId, ApprovalMethod, Depth)` triple. Pair-by-pair, not totals: totals can agree by luck while
+individual resolutions are wrong in offsetting directions. Depth is compared too, since it drives
+`FallbackTraversalWarning` — the same approver reached by a different route is still a behavioural
+difference.
+
+**Proven discriminating, not assumed.** Breaking the prefetched source (`IsUserActive` → always true)
+produced exactly one divergence, named:
+`perf_o3_x5: sql=(, , 1) prefetched=(perf_o3_xim, DESIGNATED_MANAGER, 0)`.
+
+**THREE catches during the work, each by something doing its job:**
+1. **The existing S106 guard caught a real regression I introduced**: building the prefetch
+   unconditionally took the ZERO-pending case from 1 command to 4 (`Expected: 1, Actual: 4`). A
+   2,000-user Organisation with nothing pending must still cost one query. Fixed the code — guarded the
+   prefetch on a non-empty pending set — rather than relaxing the assertion.
+2. **My own test documentation was wrong**: it claimed the differential test covered "a manager who is
+   INACTIVE (the escalation walk)" when the fixture had none. Adding that shape turned out to be
+   decisive — it is the ONLY shape that caught the deliberate break above. Without it the differential
+   test would have passed a broken implementation and been decorative.
+3. **A stale whole-file backup destroyed work**: restoring a snapshot to remove a temporary measurement
+   probe silently reverted the differential test and the updated expectations that had landed since.
+   Recovered by re-running the generating scripts; verified green. Same class as the `git checkout --`
+   lesson — a whole-file backup goes stale the moment more work lands in that file.
+
+**⚠ STILL NOT AT TARGET.** 3.8s at K=1000 is ~7s at real STYX1 month-end, against `<1s`. The residual
+~6 statements/employee are the candidate ENUMERATION, the same-Organisation check and the unit-kind
+lookup — none of which the prefetch touched. Flatness requires batching those three as well, with the
+same differential-test obligation. The existing guard's strict-monotonic assertion therefore STILL
+passes (`127 > 67 > 1`) and still awaits that step.
+
+**Cumulative**: 27.0 → 6.3 statements/employee (4.3×); K=1000 13.8s → 3.8s (3.67×); zero-pending still
+exactly 1 command; characterisation byte-identical at every step.
+
+---
+
 ## Carried in from S124 (not yet started)
 1. **RES-002** — the deferred endpoint-level read gate (~6 reads). Must be period-status-based, must
    settle the recorded ACTOR-MODEL question (actor-blind withholding vs the HR-exempt month read),

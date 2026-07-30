@@ -121,8 +121,15 @@ public sealed class DesignatedApproverAuthorizer
     /// <c>null</c> gives exactly today's behaviour, one query per question. It is sound ONLY inside a
     /// snapshot, where "ask once" and "ask each time" are the same answer by construction.
     /// </summary>
+    public Task<bool> IsEffectiveDesignatedApproverAsync(
+        NpgsqlConnection conn, NpgsqlTransaction? tx, ApprovalAuthorityContext? ctx,
+        string actorId, string employeeId, DateOnly? asOf = null, CancellationToken ct = default)
+        => IsEffectiveDesignatedApproverAsync(conn, tx, ctx, source: null, actorId, employeeId, asOf, ct);
+
+    /// <summary>Step 3b form — <paramref name="source"/> supplies the edge leg's facts; null = live SQL.</summary>
     public async Task<bool> IsEffectiveDesignatedApproverAsync(
         NpgsqlConnection conn, NpgsqlTransaction? tx, ApprovalAuthorityContext? ctx,
+        IReportingLineDataSource? source,
         string actorId, string employeeId, DateOnly? asOf = null, CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(actorId) || string.IsNullOrEmpty(employeeId))
@@ -141,7 +148,7 @@ public sealed class DesignatedApproverAuthorizer
         // (2) Resolve the SINGLE effective approver at asOf (vikar-aware, R3 precedence).
         //     Memoized per employee: the projection's caller resolved this one line before calling us,
         //     and every further candidate for the same employee asks the identical question.
-        var (resolvedManagerId, _, _) = await ResolveEdgeAsync(conn, tx, ctx, employeeId, effectiveAsOf, ct);
+        var (resolvedManagerId, _, _) = await ResolveEdgeAsync(conn, tx, ctx, source, employeeId, effectiveAsOf, ct);
 
         // (3) The edge grants authority IFF the actor IS that single winner.
         if (resolvedManagerId is null
@@ -219,11 +226,19 @@ public sealed class DesignatedApproverAuthorizer
     /// <summary>Memoized form — the overload the period-status projection's tally loop uses. Identical
     /// short-circuit order (edge first, then unit-leader); <paramref name="ctx"/> only prevents the
     /// same question being asked twice. See <see cref="ApprovalAuthorityContext"/>.</summary>
-    public async Task<bool> IsEffectiveApproverOrUnitLeaderAsync(
+    public Task<bool> IsEffectiveApproverOrUnitLeaderAsync(
         NpgsqlConnection conn, NpgsqlTransaction? tx, ApprovalAuthorityContext? ctx,
         string actorId, string employeeId, DateOnly? asOf = null, CancellationToken ct = default)
+        => IsEffectiveApproverOrUnitLeaderAsync(conn, tx, ctx, source: null, actorId, employeeId, asOf, ct);
+
+    /// <summary>Step 3b form — additionally takes the prefetched
+    /// <see cref="IReportingLineDataSource"/> the edge leg resolves through. Null means live SQL.</summary>
+    public async Task<bool> IsEffectiveApproverOrUnitLeaderAsync(
+        NpgsqlConnection conn, NpgsqlTransaction? tx, ApprovalAuthorityContext? ctx,
+        IReportingLineDataSource? source,
+        string actorId, string employeeId, DateOnly? asOf = null, CancellationToken ct = default)
     {
-        if (await IsEffectiveDesignatedApproverAsync(conn, tx, ctx, actorId, employeeId, asOf, ct))
+        if (await IsEffectiveDesignatedApproverAsync(conn, tx, ctx, source, actorId, employeeId, asOf, ct))
             return true;
         return await IsUnitLeaderApproverAsync(conn, tx, ctx, actorId, employeeId, asOf, ct);
     }
@@ -351,11 +366,14 @@ public sealed class DesignatedApproverAuthorizer
     /// statements): the projection resolves it, then the gate re-resolved it once per candidate.</summary>
     private Task<(string? ManagerId, string? Method, int Depth)> ResolveEdgeAsync(
         NpgsqlConnection conn, NpgsqlTransaction? tx, ApprovalAuthorityContext? ctx,
-        string employeeId, DateOnly asOf, CancellationToken ct)
-        => ctx is null
+        IReportingLineDataSource? source, string employeeId, DateOnly asOf, CancellationToken ct)
+    {
+        Task<(string? ManagerId, string? Method, int Depth)> Resolve() => source is null
             ? _reportingLineRepo.ResolveDesignatedApproverAsync(conn, tx, employeeId, asOf, ct)
-            : ctx.ResolveEdgeAsync(employeeId,
-                () => _reportingLineRepo.ResolveDesignatedApproverAsync(conn, tx, employeeId, asOf, ct));
+            : _reportingLineRepo.ResolveDesignatedApproverAsync(source, employeeId, asOf, ct);
+
+        return ctx is null ? Resolve() : ctx.ResolveEdgeAsync(employeeId, Resolve);
+    }
 
     /// <summary>
     /// The same-Organisation re-check (ADR-027 D2), fail-closed, memoized per (employee, actor) pair.

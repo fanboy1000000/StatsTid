@@ -295,6 +295,8 @@ public sealed class S106SeedScalePerfFixture : IAsyncLifetime
     public const string ShapeNullUnit = "perf_o3_x2";         // unit_id NULL + edge to EdgeManager
     public const string ShapeOrphan = "perf_o3_x3";           // leaf unit, NO reporting line at all
     public const string ShapeRevokedEdge = "perf_o3_x4";      // leaf unit + edge to the role-revoked manager
+    public const string ShapeInactiveMgr = "perf_o3_xim";     // INACTIVE manager, holds no vikar
+    public const string ShapeEscalates = "perf_o3_x5";        // leaf unit + edge to the INACTIVE manager
 
     /// <summary>
     /// Adds the shape matrix. Expected candidate sets (the characterisation's whole point):
@@ -325,8 +327,11 @@ public sealed class S106SeedScalePerfFixture : IAsyncLifetime
         await using (var cmd = new NpgsqlCommand(
             """
             INSERT INTO users (user_id, username, password_hash, display_name, primary_org_id, unit_id, is_active, agreement_code, ok_version) VALUES
-                (@xv,  @xv,  '$2a$11$fake', 'Perf O3 ShapeVikar',   'PERF_O3', NULL, TRUE, 'AC','OK24'),
-                (@xnr, @xnr, '$2a$11$fake', 'Perf O3 ShapeNoRole',  'PERF_O3', NULL, TRUE, 'AC','OK24')
+                (@xv,  @xv,  '$2a$11$fake', 'Perf O3 ShapeVikar',   'PERF_O3', NULL, TRUE,  'AC','OK24'),
+                (@xnr, @xnr, '$2a$11$fake', 'Perf O3 ShapeNoRole',  'PERF_O3', NULL, TRUE,  'AC','OK24'),
+                -- INACTIVE: exercises the escalation walk, the branch most dependent on the
+                -- is_active lookup and therefore the one a prefetch divergence would hide in.
+                (@xim, @xim, '$2a$11$fake', 'Perf O3 ShapeInactive','PERF_O3', NULL, FALSE, 'AC','OK24')
             ON CONFLICT DO NOTHING;
             -- xv is LeaderOrAbove; xnr deliberately gets EMPLOYEE only (the role floor must reject it).
             INSERT INTO role_assignments (user_id, role_id, org_id, scope_type, assigned_by) VALUES
@@ -340,6 +345,7 @@ public sealed class S106SeedScalePerfFixture : IAsyncLifetime
         {
             cmd.Parameters.AddWithValue("xv", ShapeVikarOfLeader1);
             cmd.Parameters.AddWithValue("xnr", ShapeRoleRevokedMgr);
+            cmd.Parameters.AddWithValue("xim", ShapeInactiveMgr);
             cmd.Parameters.AddWithValue("l1", Org3Leader1);
             await cmd.ExecuteNonQueryAsync();
         }
@@ -351,6 +357,11 @@ public sealed class S106SeedScalePerfFixture : IAsyncLifetime
             (ShapeNullUnit,   false, Org3EdgeManager),
             (ShapeOrphan,     true,  null),
             (ShapeRevokedEdge, true, ShapeRoleRevokedMgr),
+            // x5's manager is INACTIVE and holds no vikar, so the resolver ESCALATES: it walks to the
+            // inactive manager, finds they have no PRIMARY of their own, and returns no edge. The
+            // employee is therefore tallied by the unit leaders alone — and the walk itself is what
+            // the differential test needs in order to compare the is_active-dependent branch.
+            (ShapeEscalates, true, ShapeInactiveMgr),
         };
 
         foreach (var (id, inUnit, managerId) in rows)
