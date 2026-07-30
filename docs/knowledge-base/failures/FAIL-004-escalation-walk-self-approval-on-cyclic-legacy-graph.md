@@ -151,6 +151,11 @@ WHERE mv.effective_to IS NULL;
 ```
 
 ## Residual, NOT fixed — deliberately
+⚠ **This residual is now tracked as part of a wider defect CLASS — see `RES-003`.** A second,
+independent instance of the same rule failing surfaced the same day (the S125 step-3c prefetch would
+have dropped the unit-leader self-exclusion), which reframes this from "one leftover question" to
+"the segregation-of-duties rule has no single enforcement point".
+
 **A subject's OWN vikar can still be their approver.** If A's own stand-in is V, resolution can return
 V for A's period. That is approval-by-one's-own-delegate, a weaker and distinct concern from
 self-approval, and it was not part of this ruling. Flagged here rather than folded in silently.

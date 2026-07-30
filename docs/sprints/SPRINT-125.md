@@ -428,7 +428,8 @@ month-end.
 
 Both times the deliberate over-coverage is what made the test real rather than decorative. Note that
 (2) is the same defect class as FAIL-004 found earlier the same day — a useful signal about where this
-system's authorization is structurally fragile.
+system's authorization is structurally fragile. **Raised as a tracked follow-up rather than left as an
+observation: see FU-1 / RES-003 above.**
 
 **Verification**: characterisation byte-identical at every step (`em=2;l1=4;l2=4;xv=4`;
 `OPEN=253,SUBMITTED=10`); combined differential 126 pairs / 58 admitted / 0 divergences, with
@@ -437,6 +438,48 @@ reporting-line, vikar, designated-approver, delegate, approval, approve, reopen,
 compliance, skema, period-status, unit-leader, organisation and the perf class.
 
 **Zero-pending still costs exactly 1 command** — the prefetch is skipped for an empty pending set.
+
+---
+
+## OPEN FOLLOW-UPS raised in S125 (for S126)
+
+### FU-1 — **RES-003: self-approval is a recurring DEFECT CLASS, not three separate bugs** ⚠ owner ruling needed
+→ `docs/knowledge-base/resolutions/RES-003-self-approval-is-a-recurring-defect-class.md`
+
+**Both known instances are fixed. The CLASS is not closed.** Three instances of the same rule failing,
+in unrelated paths, none found by looking for it:
+
+1. **FAIL-004** (TASK-12502) — the escalation walk resolved a person to themselves; the gate ADMITTED
+   the pair. Found by a review lens tracing an unrelated performance refinement's invariant list.
+2. **TASK-12501 step 3c** — the prefetched unit-leader classification would have dropped the
+   `e.user_id <> @actorId` exclusion. Caught by a deliberate probe, and ONLY because self-pairs were
+   deliberately included in the differential comparison set
+   (`(perf_o3_l1 -> perf_o3_l1): sql=False prefetched=True`).
+3. **FAIL-004's residual — STILL UNRULED**: a person's own vikar can be their approver.
+
+Arguably a fourth and earliest: S105's Step-7a added `e.user_id <> @actorId` after an external lens
+caught the same class in the unit-leader path.
+
+**Root cause is structural**: the segregation-of-duties rule has NO single enforcement point. It is
+re-stated by hand in five places and absent from a sixth, so every new authorization path — and every
+in-memory mirror of an existing predicate — is a fresh chance to omit it. **Omission FAILS OPEN**: it
+grants authority rather than withholding it. Both catches above were luck of coverage.
+
+**Proposed** (needs an owner ruling on scope): audit every authority-granting path into a test matrix;
+consider a single choke point in `IsEffectiveApproverOrUnitLeaderAsync` denying `actor == subject` by
+default so the rule fails CLOSED — **but first rule whether any legitimate self-approval case exists**
+(e.g. HR/GlobalAdmin acting on their own period via the org-scope branch); rule the FAIL-004 residual;
+and require the differential-test pattern, with self-pairs mandatory, for any future in-memory mirror
+of a SQL predicate.
+
+### FU-2 — the rest of the performance analysis (F2–F6), untouched
+F1 is done (27,001 commands / 13.8s → 9 / 79ms). Not started: **F3 code splitting** (594KB single
+chunk — user-visible on EVERY page load, so probably the highest-value next one if page-load feel is
+the goal), F2 StrictMode double-fetch (dev-only), F4, F5 latent flex-read scale risk, F6 loading-flash
+perception.
+
+### FU-3 — carried from S124, unchanged
+See the section below.
 
 ---
 

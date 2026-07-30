@@ -77,6 +77,7 @@
 |----|-------|--------|--------|------------|------|
 | [RES-001](resolutions/RES-001-ac-no-overtime-supplements.md) | AC has no overtime/supplements (agreement fidelity over feature parity) | approved | S2 | P2 vs P9 | ac, overtime, supplements, priority-conflict |
 | [RES-002](resolutions/RES-002-manager-draft-visibility-enforced-at-surface-only.md) | Manager draft-visibility rule enforced at the Teamoversigt surface only (endpoint-level gate DEFERRED — follow-up OPEN) | approved — enforcement deliberately incomplete | S124 | P7 vs P9/scope | access-control, approval, draft-visibility, manager, priority-conflict, deferred-hardening, p7 |
+| [RES-003](resolutions/RES-003-self-approval-is-a-recurring-defect-class.md) | Self-approval is a RECURRING defect class — the segregation-of-duties rule is enforced per-path, not structurally (3 instances, 1 unruled) | **OPEN — follow-up required** | S125 | P7 | access-control, approval, segregation-of-duties, self-approval, authorization, audit-required, p7, defect-class |
 
 ## Failure/Pivot Log (FAIL)
 
@@ -94,9 +95,9 @@
 | Tag | Entries |
 |-----|---------|
 | accessibility | ADR-011 |
-| access-control | RES-002 |
+| access-control | RES-002, RES-003 |
 | ac | PAT-003, RES-001 |
-| approval | ADR-012, RES-002 |
+| approval | ADR-012, RES-002, RES-003 |
 | authentication | ADR-007, FAIL-001 |
 | agreement-config | PAT-003, ADR-014 |
 | architecture | ADR-006 |
