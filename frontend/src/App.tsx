@@ -1,3 +1,4 @@
+import { lazy } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { ToastProvider } from './components/ui/Toast'
@@ -5,25 +6,43 @@ import { AppLayout } from './components/layout/AppLayout'
 import { RequireAuth } from './components/guards/RequireAuth'
 import { RequireRole } from './components/guards/RequireRole'
 import { LoginPage } from './pages/LoginPage'
-import { SkemaPage } from './pages/SkemaPage'
-import { ArsoversigtPage } from './pages/ArsoversigtPage'
-import { HealthDashboard } from './pages/HealthDashboard'
-import { NotFoundPage } from './pages/NotFoundPage'
-import { MyPeriods } from './pages/approval/MyPeriods'
 // S87 / TASK-8702 (OQ-3): approvals moved to TeamOversigt at /godkend/oversigt.
 // The old ApprovalDashboard was deleted in S88 (P2 parity reached); /godkend/godkendelser
 // redirects here.
-import { TeamOversigt } from './pages/approval/TeamOversigt'
-import { RoleManagement } from './pages/admin/RoleManagement'
-import { ProjectManagement } from './pages/admin/ProjectManagement'
-import { ConfigManagement } from './pages/config/ConfigManagement'
-import { AgreementConfigList } from './pages/admin/AgreementConfigList'
-import { AgreementConfigEditor } from './pages/admin/AgreementConfigEditor'
-import { PositionOverrideManagement } from './pages/admin/PositionOverrideManagement'
-import { WageTypeMappingManagement } from './pages/admin/WageTypeMappingManagement'
-import { AuditLogView } from './pages/admin/AuditLogView'
-import { OrganisationOgMedarbejdere } from './pages/admin/OrganisationOgMedarbejdere'
-import { DelegationPage } from './pages/delegation/DelegationPage'
+
+// ── S125 / TASK-12504 (F3) — route-level code splitting ────────────────────────────────────
+// Every page below was STATICALLY imported, so all 31 routes shipped in ONE 594 kB chunk: an
+// employee who only ever opens Skema still downloaded the agreement-config editor, the wage-type
+// mapping admin, the audit log and the whole org-management surface.
+//
+// These are named exports, so each lazy() maps the module's named binding onto `default` — the
+// alternative (adding default exports) would change every page's public shape for a build concern.
+//
+// LoginPage stays EAGER above: it is the first paint for an unauthenticated visitor, and making it
+// lazy would put a chunk request in front of the very first render — a worse first impression in
+// exchange for bytes that user needs anyway.
+//
+// The Suspense boundary lives INSIDE AppLayout, around its <Outlet />, so the header, top nav and
+// sidebar stay on screen while a page chunk loads and only the content region swaps. A boundary
+// placed here instead would blank the whole window on every navigation.
+
+const SkemaPage = lazy(() => import('./pages/SkemaPage').then(m => ({ default: m.SkemaPage })))
+const ArsoversigtPage = lazy(() => import('./pages/ArsoversigtPage').then(m => ({ default: m.ArsoversigtPage })))
+const HealthDashboard = lazy(() => import('./pages/HealthDashboard').then(m => ({ default: m.HealthDashboard })))
+const NotFoundPage = lazy(() => import('./pages/NotFoundPage').then(m => ({ default: m.NotFoundPage })))
+const MyPeriods = lazy(() => import('./pages/approval/MyPeriods').then(m => ({ default: m.MyPeriods })))
+const TeamOversigt = lazy(() => import('./pages/approval/TeamOversigt').then(m => ({ default: m.TeamOversigt })))
+const RoleManagement = lazy(() => import('./pages/admin/RoleManagement').then(m => ({ default: m.RoleManagement })))
+const ProjectManagement = lazy(() => import('./pages/admin/ProjectManagement').then(m => ({ default: m.ProjectManagement })))
+const ConfigManagement = lazy(() => import('./pages/config/ConfigManagement').then(m => ({ default: m.ConfigManagement })))
+const AgreementConfigList = lazy(() => import('./pages/admin/AgreementConfigList').then(m => ({ default: m.AgreementConfigList })))
+const AgreementConfigEditor = lazy(() => import('./pages/admin/AgreementConfigEditor').then(m => ({ default: m.AgreementConfigEditor })))
+const PositionOverrideManagement = lazy(() => import('./pages/admin/PositionOverrideManagement').then(m => ({ default: m.PositionOverrideManagement })))
+const WageTypeMappingManagement = lazy(() => import('./pages/admin/WageTypeMappingManagement').then(m => ({ default: m.WageTypeMappingManagement })))
+const AuditLogView = lazy(() => import('./pages/admin/AuditLogView').then(m => ({ default: m.AuditLogView })))
+const OrganisationOgMedarbejdere = lazy(() => import('./pages/admin/OrganisationOgMedarbejdere').then(m => ({ default: m.OrganisationOgMedarbejdere })))
+const DelegationPage = lazy(() => import('./pages/delegation/DelegationPage').then(m => ({ default: m.DelegationPage })))
+
 import './styles/tokens.css'
 
 export function App() {

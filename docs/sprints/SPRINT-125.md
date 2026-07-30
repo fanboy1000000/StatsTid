@@ -441,6 +441,61 @@ compliance, skema, period-status, unit-leader, organisation and the perf class.
 
 ---
 
+### TASK-12504 — F3: route-level code splitting (594 kB → 209 kB entry chunk)
+| Field | Value |
+|-------|-------|
+| **Status** | complete (2026-07-30) — FE-only. Entry chunk **594.46 → 209.22 kB raw / 176.34 → 68.10 kB gzip (−61% initial transfer)**; 711/711 vitest, tsc 0, lint 0, live-verified |
+| **Components** | `App.tsx`, `components/layout/AppLayout.tsx` + `.module.css`, `e2e/lazy-routes.spec.ts` (new) |
+
+**The defect**: every page was statically imported into `App.tsx` — 17 imports, 31 routes, ONE chunk.
+An employee who only ever opens Skema still downloaded the agreement-config editor, the wage-type
+mapping admin, the audit log and the whole org-management surface. Unlike F1 this is user-visible on
+EVERY page load rather than only at month-end.
+
+**Measured first, as with F1.** A vendor-split experiment (`manualChunks` for react/router/radix) was
+run purely to size the opportunity and then REVERTED: it showed the app code is 332.66 kB of the
+594.46 kB, and it also showed the grouping was ineffective — `react-vendor` came out at 0.03 kB
+because React hoists into the router chunk. Splitting vendors would not have reduced the initial
+payload anyway; only deferring routes does.
+
+| | Before | After |
+|---|---|---|
+| Entry chunk | 594.46 kB / 176.34 gzip | **209.22 kB / 68.10 gzip** |
+| Chunks | 1 JS + 1 CSS | 32 JS + 25 CSS |
+| Largest deferred page | — | `OrganisationOgMedarbejdere` 110 kB / 31 gzip |
+
+Total across all chunks rose ~1.5% (603 vs 594 kB) from per-chunk overhead — expected, and irrelevant
+next to a 61% cut in what loads first.
+
+**Two design decisions, both deliberate:**
+1. **`LoginPage` stays EAGER.** It is the first paint for an unauthenticated visitor; lazy-loading it
+   would put a chunk request in front of the very first render — a worse first impression in exchange
+   for bytes that user needs anyway.
+2. **The Suspense boundary is INSIDE `AppLayout`, around its `<Outlet />`**, not at the router. The
+   header, top nav and sidebar therefore stay on screen while a page chunk loads and only the content
+   region swaps. A boundary at the router would blank the whole window on every navigation. The
+   fallback is a height-reserving placeholder with NO spinner: route chunks are tens of milliseconds
+   warm, and a spinner at that duration reads as a flash of broken UI — which is the F6 perception
+   problem this must not make worse.
+
+**A new E2E test, because the 711 unit tests structurally cannot catch this class.** They import pages
+DIRECTLY, so a broken `lazy()` mapping compiles, type-checks and passes all of them while rendering a
+blank content area in the browser. `e2e/lazy-routes.spec.ts` drives the real router over 13 routes and
+also pins the Suspense PLACEMENT (asserting the header survives every navigation), so a later
+"simplification" of the boundary up to the router fails.
+
+**Proven discriminating**: pointing one mapping at a non-existent export produced exactly the right
+failure — `FAIL /tid/oversigt` plus `pageerror: Element type is invalid. Received a promise that
+resolves to: undefined.` Restored, re-verified green.
+
+**A probe-bug worth recording**: the first draft of that spec read `innerText` ONCE and reported
+"content EMPTY" for pages that were merely still fetching — a false defect that looks exactly like the
+real one. It also used guessed route paths (four 404s) and a user lacking leader scope (two 403s). The
+rewrite uses auto-retrying assertions and paths extracted from `App.tsx`. **Nothing was reported to the
+owner until the probe itself was fixed** — the earlier lesson about not trusting an unverified probe.
+
+---
+
 ## OPEN FOLLOW-UPS raised in S125 (for S126)
 
 ### FU-1 — **RES-003: close the self-approval defect CLASS** ⚠ owner ruling needed (all 3 known INSTANCES are fixed)
@@ -500,11 +555,11 @@ sprint as its own scoped piece of work — three items, in the order they should
 
 **Do NOT do item 2 opportunistically inside unrelated work**: it changes who may approve.
 
-### FU-2 — the rest of the performance analysis (F2–F6), untouched
-F1 is done (27,001 commands / 13.8s → 9 / 79ms). Not started: **F3 code splitting** (594KB single
-chunk — user-visible on EVERY page load, so probably the highest-value next one if page-load feel is
-the goal), F2 StrictMode double-fetch (dev-only), F4, F5 latent flex-read scale risk, F6 loading-flash
-perception.
+### FU-2 — the rest of the performance analysis (F2, F4–F6)
+F1 done (27,001 commands / 13.8s → 9 / 79ms). **F3 done** (entry chunk −61%). Not started: F2
+StrictMode double-fetch (dev-only), F4, F5 latent flex-read scale risk, F6 loading-flash perception —
+F3 deliberately did not make F6 worse (no spinner in the route fallback) but did not address it
+either.
 
 ### FU-3 — carried from S124, unchanged
 See the section below.

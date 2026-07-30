@@ -30,3 +30,12 @@
   max-width: none;
   height: 100%;
 }
+
+/* S125 / TASK-12504 (F3) — the lazy-route Suspense placeholder.
+   Deliberately EMPTY of visible chrome: it reserves the content region's height so the layout
+   does not jump when the chunk arrives, but shows no spinner. Route chunks are tens of
+   milliseconds on a warm connection, and a spinner at that duration reads as a flicker of
+   broken UI rather than as progress — the F6 perception problem this must not worsen. */
+.routeFallback {
+  min-height: 60vh;
+}
