@@ -147,7 +147,15 @@ whether any live instance carried the shape.
 665 KB". Measured: the roster SQL is **12ms**, serialisation ~40ms, and the reused period-status
 projection is **483ms of the 523ms**. The proposed pagination fix would have bought ~nothing.
 
-**MEASURED, not inferred (rev 1's figure was ~5× too low): 27.0 SQL commands per pending employee**,
+**MEASURED AT MONTH-END LOAD: 27,001 commands and a median of 13.8 SECONDS at K=1000**
+(`runs=[13731,13812,13850]` — under 1% spread, so the wall-clock is real, not noise). Taken on the S106
+**testcontainer**, not the demo world — which means the "month-end seed mutates demo state" risk this
+task carried is GONE, and nothing the owner clicks on was touched. STYX1's real ~1,925 pending is roughly
+double. The earlier ~9.6s was an extrapolation; the measured number is worse. It also exceeds the
+repo's EXISTING `TileBudgetMs = 8000`, so the high-K guard can be falsifiable against a budget that
+already exists rather than an invented one — it lands WITH the fix rather than committed red.
+
+**And per employee: 27.0 SQL commands** (rev 1's figure was ~5× too low),
 identical at K=10 and K=20, while 0 pending costs exactly 1 command at BOTH 2,000 and 253 users. The
 probe this needed turned out to already exist and already print the number — the existing
 `TileCount_ScalesWithPendingSet_NotOrgSize_AtSeedScale` output. **At month-end STYX1 has ~1,925
