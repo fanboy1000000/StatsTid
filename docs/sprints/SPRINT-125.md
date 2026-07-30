@@ -512,8 +512,8 @@ in unrelated paths, none found by looking for it:
    (`(perf_o3_l1 -> perf_o3_l1): sql=False prefetched=True`).
 3. **FAIL-004's residual — ✅ RULED AND FIXED 2026-07-30** (owner: *"I don't see why we would change
    who approves Anna. Anna is on vacation, not her approver."*). A vikar now grants authority over the
-   absent leader's unit MEMBERS but never over the leader themselves — one predicate at five sites,
-   with a sixth unreferenced copy deleted. Verified the period is NOT stranded (a peer leader still
+   absent leader's unit MEMBERS but never over the leader themselves — one predicate at FOUR live
+   sites, with a fifth unreferenced copy deleted. Verified the period is NOT stranded (a peer leader still
    approves it) and that the vikar still covers what the leader OWED. The combined differential test
    moved 58 → 57 admitted pairs: exactly the one pair intended, nothing else. **This corrected an
    error in how the question was put — the "their month waits until they're back" cost was invented;
@@ -541,7 +541,7 @@ sprint as its own scoped piece of work — three items, in the order they should
    authority — the edge leg, the unit-leader leg, the vikar leg, the org-scope/HR fallback, and both
    prefetched mirrors — and assert `actor == subject` is denied on each. The output must be executable,
    because a document does not go red when someone adds a sixth path. Sizing hint from S125: the vikar
-   rule alone lived at FIVE sites, one of which was dead code still carrying the predicate.
+   rule alone lived at FIVE copies — four live, one dead code still carrying the predicate.
 2. **The choke point — needs an owner ruling BEFORE any code.** Every current path funnels through
    `IsEffectiveApproverOrUnitLeaderAsync`; a guard there denying `actor == subject` unless an explicit
    named exemption applies would make the rule fail CLOSED by default, demoting each per-path exclusion

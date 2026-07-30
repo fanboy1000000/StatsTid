@@ -4,7 +4,7 @@
 |-------|-------|
 | **ID** | FAIL-004 |
 | **Category** | failure |
-| **Status** | **RESOLVED** — owner ruled option (a) 2026-07-30; fix shipped S125 with RED-on-old proof |
+| **Status** | **RESOLVED** — owner ruled option (a) 2026-07-30; fix shipped S125 with RED-on-old proof. The residual (own-delegate) was ALSO ruled and fixed the same day — see RES-003. Nothing here awaits a ruling. |
 | **Sprint** | S125 (found + fixed) |
 | **Date** | 2026-07-30 |
 | **Domains** | Backend, Infrastructure, Security |

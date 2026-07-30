@@ -1044,6 +1044,14 @@ public sealed class ReportingLineRepository
             ct);
 
     /// <summary>
+    /// S125 / TASK-12501 — builds the live-SQL data source over a caller-supplied connection. Lives
+    /// here because this repository owns the vikar repository the source needs, so callers do not
+    /// have to reach for it (or construct a second one) just to wire a fallback.
+    /// </summary>
+    public IReportingLineDataSource CreateSqlDataSource(NpgsqlConnection conn, NpgsqlTransaction? tx)
+        => new SqlReportingLineDataSource(conn, tx, _vikarRepo);
+
+    /// <summary>
     /// S125 / TASK-12501 step 3b — THE resolution algorithm, written once, over a pluggable
     /// <see cref="IReportingLineDataSource"/>.
     ///

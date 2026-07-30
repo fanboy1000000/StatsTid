@@ -690,7 +690,10 @@ public sealed class ApprovalPeriodRepository
         if (pendingEmployeeIds.Count > 0)
         {
             var prefetched = await PrefetchedReportingLineDataSource.BuildAsync(
-                conn, snapshot, EscapeLike(treeRootPathPrefix) + "%", today, ct);
+                conn, snapshot, EscapeLike(treeRootPathPrefix) + "%", today,
+                // Fallback for ids outside this Organisation — a cross-Organisation vikar must be
+                // resolved from live SQL, not read as "inactive" from an out-of-scope map miss.
+                _reportingLineRepo.CreateSqlDataSource(conn, snapshot), ct);
 
             // The authorizer's own three facts — role floor, home Organisation, unit-leader kind —
             // likewise prefetched. Same discipline: the DECISIONS stay in the authorizer, only the

@@ -19,10 +19,9 @@ found by looking for them:
 | 1 | **FAIL-004** — `ResolveDesignatedApproverAsync`'s escalation walk never compared a resolved manager against the employee it started from, so on a cyclic legacy graph a person resolved to themselves and `IsEffectiveApproverOrUnitLeaderAsync` ADMITTED the pair | Found by a review lens tracing an unrelated performance refinement's invariant list |
 | 2 | **TASK-12501 step 3c** — the prefetched unit-leader classification would have dropped the `e.user_id <> @actorId` exclusion | Caught by a deliberate probe, and ONLY because self-pairs were deliberately included in the differential comparison set: `(perf_o3_l1 -> perf_o3_l1): sql=False prefetched=True` |
 
-A third instance of the same family is recorded and **unruled — and it is the most reachable of all
-three**: FAIL-004's residual, approval-by-one's-own-delegate. **Confirmed empirically 2026-07-30**
-(tripwire `S105UnitLeaderApprovalTests.RES_003_TRIPWIRE_OwnDelegate_CanApprove_TheAppointingLeadersOwnPeriod`,
-driving the real `POST /api/approval/{id}/approve`):
+A third instance of the same family — **since RULED and FIXED, see "Instance 3" below** — was
+FAIL-004's residual, approval-by-one's-own-delegate, and it was the most reachable of the three.
+**Confirmed empirically 2026-07-30** at the real `POST /api/approval/{id}/approve` before the fix:
 
 ```
 leader approving their OWN period            → 403 Forbidden   (the S105 rule holds)
@@ -48,7 +47,8 @@ point**. It is re-stated by hand wherever someone remembered:
 - `DesignatedApproverAuthorizer.QueryUnitLeaderKindAsync`: `e.user_id <> @actorId`
 - `ReportingLineRepository.ResolveDesignatedApproverAsync`: **nothing until FAIL-004 added it**
 - `PrefetchedAuthorityFacts.GetUnitLeaderKindAsync`: a hand-written mirror of the SQL exclusion
-- the vikar path: **still nothing** (the unruled residual)
+- the vikar path: **nothing until instance 3 was ruled and fixed** (below) — and the fix then had
+  to be applied at FOUR live sites plus a fifth, dead copy
 
 Every new authorization path is therefore a fresh opportunity to omit it, and omission FAILS OPEN —
 it grants authority rather than withholding it. Both instances above were caught by luck of coverage:

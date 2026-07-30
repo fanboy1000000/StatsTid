@@ -297,6 +297,18 @@ public sealed class S106SeedScalePerfFixture : IAsyncLifetime
     public const string ShapeRevokedEdge = "perf_o3_x4";      // leaf unit + edge to the role-revoked manager
     public const string ShapeInactiveMgr = "perf_o3_xim";     // INACTIVE manager, holds no vikar
     public const string ShapeEscalates = "perf_o3_x5";        // leaf unit + edge to the INACTIVE manager
+    // S125 close (external-lens WARNING): the resolver's R3 VIKAR branch was never executed by this
+    // fixture — its only vikar covered Leader1, and NO employee reported to Leader1, so the branch the
+    // differential test CLAIMED to cover was unreachable. These two shapes make it reachable.
+    public const string ShapeVikaredMgr = "perf_o3_xvm";      // manager who HOLDS an active vikar
+    public const string ShapeStandIn = "perf_o3_xsi";         // that vikar (in-Organisation, LOCAL_LEADER)
+    public const string ShapeUnderVikar = "perf_o3_x6";       // edge → ShapeVikaredMgr ⇒ resolves to the stand-in
+    // S125 close (external-lens BLOCKER): a CROSS-ORGANISATION vikar. Live SQL resolves to it and then
+    // DENIES on same-Organisation; an Organisation-scoped prefetch used to read it as "inactive", skip
+    // it, and fall through to the in-Org PRIMARY — admitting someone SQL admits nobody for.
+    public const string ShapeCrossOrgStandIn = "perf_o1_xco"; // ACTIVE, homed in a DIFFERENT Organisation
+    public const string ShapeCrossVikaredMgr = "perf_o3_xcvm";// in-Org manager whose vikar is cross-Org
+    public const string ShapeUnderCrossVikar = "perf_o3_x7";  // edge → ShapeCrossVikaredMgr
 
     /// <summary>
     /// Adds the shape matrix. Expected candidate sets (the characterisation's whole point):
@@ -331,21 +343,39 @@ public sealed class S106SeedScalePerfFixture : IAsyncLifetime
                 (@xnr, @xnr, '$2a$11$fake', 'Perf O3 ShapeNoRole',  'PERF_O3', NULL, TRUE,  'AC','OK24'),
                 -- INACTIVE: exercises the escalation walk, the branch most dependent on the
                 -- is_active lookup and therefore the one a prefetch divergence would hide in.
-                (@xim, @xim, '$2a$11$fake', 'Perf O3 ShapeInactive','PERF_O3', NULL, FALSE, 'AC','OK24')
+                (@xim, @xim, '$2a$11$fake', 'Perf O3 ShapeInactive','PERF_O3', NULL, FALSE, 'AC','OK24'),
+                (@xvm, @xvm, '$2a$11$fake', 'Perf O3 VikaredMgr',  'PERF_O3', NULL, TRUE,  'AC','OK24'),
+                (@xsi, @xsi, '$2a$11$fake', 'Perf O3 StandIn',     'PERF_O3', NULL, TRUE,  'AC','OK24'),
+                (@xcvm,@xcvm,'$2a$11$fake', 'Perf O3 CrossVikMgr', 'PERF_O3', NULL, TRUE,  'AC','OK24'),
+                -- Homed in a DIFFERENT Organisation on purpose: this is the cross-Org threat shape.
+                (@xco, @xco, '$2a$11$fake', 'Perf O1 CrossStandIn','PERF_O1', NULL, TRUE,  'AC','OK24')
             ON CONFLICT DO NOTHING;
             -- xv is LeaderOrAbove; xnr deliberately gets EMPLOYEE only (the role floor must reject it).
             INSERT INTO role_assignments (user_id, role_id, org_id, scope_type, assigned_by) VALUES
                 (@xv,  'LOCAL_LEADER', 'PERF_O3', 'ORG_ONLY', 'PERF'),
-                (@xnr, 'EMPLOYEE',     'PERF_O3', 'ORG_ONLY', 'PERF')
+                (@xnr, 'EMPLOYEE',     'PERF_O3', 'ORG_ONLY', 'PERF'),
+                (@xvm, 'LOCAL_LEADER', 'PERF_O3', 'ORG_ONLY', 'PERF'),
+                (@xsi, 'LOCAL_LEADER', 'PERF_O3', 'ORG_ONLY', 'PERF'),
+                (@xcvm,'LOCAL_LEADER', 'PERF_O3', 'ORG_ONLY', 'PERF'),
+                (@xco, 'LOCAL_LEADER', 'PERF_O1', 'ORG_ONLY', 'PERF')
             ON CONFLICT DO NOTHING;
             INSERT INTO manager_vikar
                 (absent_approver_id, vikar_user_id, until_date, reason, organisation_id, version, created_by)
-            VALUES (@l1, @xv, '2099-12-31', 'FERIE', 'PERF_O3', 1, 'PERF');
+            VALUES
+                (@l1,   @xv,  '2099-12-31', 'FERIE', 'PERF_O3', 1, 'PERF'),
+                -- Reachable by the RESOLVER: x6 reports to xvm, so resolving x6 consults xvm's vikar.
+                (@xvm,  @xsi, '2099-12-31', 'FERIE', 'PERF_O3', 1, 'PERF'),
+                -- The cross-Organisation threat: xcvm's stand-in is homed in PERF_O1.
+                (@xcvm, @xco, '2099-12-31', 'FERIE', 'PERF_O3', 1, 'PERF');
             """, conn))
         {
             cmd.Parameters.AddWithValue("xv", ShapeVikarOfLeader1);
             cmd.Parameters.AddWithValue("xnr", ShapeRoleRevokedMgr);
             cmd.Parameters.AddWithValue("xim", ShapeInactiveMgr);
+            cmd.Parameters.AddWithValue("xvm", ShapeVikaredMgr);
+            cmd.Parameters.AddWithValue("xsi", ShapeStandIn);
+            cmd.Parameters.AddWithValue("xcvm", ShapeCrossVikaredMgr);
+            cmd.Parameters.AddWithValue("xco", ShapeCrossOrgStandIn);
             cmd.Parameters.AddWithValue("l1", Org3Leader1);
             await cmd.ExecuteNonQueryAsync();
         }
@@ -362,6 +392,12 @@ public sealed class S106SeedScalePerfFixture : IAsyncLifetime
             // employee is therefore tallied by the unit leaders alone — and the walk itself is what
             // the differential test needs in order to compare the is_active-dependent branch.
             (ShapeEscalates, true, ShapeInactiveMgr),
+            // x6 makes the R3 VIKAR branch reachable: its manager holds an active in-Org stand-in, so
+            // resolution returns the STAND-IN (ACTING_MANAGER), not the manager.
+            (ShapeUnderVikar, true, ShapeVikaredMgr),
+            // x7 is the cross-Organisation case: SQL resolves to the cross-Org stand-in and then
+            // DENIES on same-Organisation. Nobody may be admitted for x7 via the edge.
+            (ShapeUnderCrossVikar, true, ShapeCrossVikaredMgr),
         };
 
         foreach (var (id, inUnit, managerId) in rows)
@@ -407,11 +443,13 @@ public sealed class S106SeedScalePerfFixture : IAsyncLifetime
         await conn.OpenAsync();
         await using var cmd = new NpgsqlCommand(
             """
-            DELETE FROM approval_periods WHERE employee_id LIKE 'perf_o3_x%';
-            DELETE FROM reporting_lines WHERE employee_id LIKE 'perf_o3_x%' OR manager_id LIKE 'perf_o3_x%';
-            DELETE FROM manager_vikar WHERE vikar_user_id LIKE 'perf_o3_x%' OR absent_approver_id LIKE 'perf_o3_x%';
-            DELETE FROM role_assignments WHERE user_id LIKE 'perf_o3_x%';
-            DELETE FROM users WHERE user_id LIKE 'perf_o3_x%';
+            DELETE FROM approval_periods WHERE employee_id LIKE 'perf_o3_x%' OR employee_id LIKE 'perf_o1_x%';
+            DELETE FROM reporting_lines WHERE employee_id LIKE 'perf_o3_x%' OR manager_id LIKE 'perf_o3_x%'
+                                           OR employee_id LIKE 'perf_o1_x%' OR manager_id LIKE 'perf_o1_x%';
+            DELETE FROM manager_vikar WHERE vikar_user_id LIKE 'perf_o3_x%' OR absent_approver_id LIKE 'perf_o3_x%'
+                                        OR vikar_user_id LIKE 'perf_o1_x%' OR absent_approver_id LIKE 'perf_o1_x%';
+            DELETE FROM role_assignments WHERE user_id LIKE 'perf_o3_x%' OR user_id LIKE 'perf_o1_x%';
+            DELETE FROM users WHERE user_id LIKE 'perf_o3_x%' OR user_id LIKE 'perf_o1_x%';
             """, conn);
         await cmd.ExecuteNonQueryAsync();
     }

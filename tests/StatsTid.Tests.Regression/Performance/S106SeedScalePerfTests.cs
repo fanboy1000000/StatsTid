@@ -392,9 +392,10 @@ public sealed class S106SeedScalePerfTests : IClassFixture<S106SeedScalePerfFixt
     /// tally it, and the inactive manager must be absent from the map</description></item>
     /// </list>
     ///
-    /// <para>Expected map: EdgeManager=2 (x1, x2); Leader1=4 and Leader2=4 (x1, x3, x4, x5 — the four
-    /// in the leaf unit); VikarOfLeader1=4 (invariant 1's vikar-of-unit-leader arm + invariant 11's
-    /// inclusive coverage window); and NO key for either the role-revoked or the inactive manager.</para>
+    /// <para>Expected map: EdgeManager=2 (x1, x2); Leader1=6, Leader2=6 and VikarOfLeader1=6 (the six
+    /// leaf-unit shapes — x2 is NULL-unit); StandIn=1 (x6's edge resolves THROUGH its manager to that
+    /// manager's active stand-in — the R3 vikar branch); and NO key for the role-revoked manager, the
+    /// inactive manager, the cross-Organisation stand-in, or the manager whose vikar is cross-Org.</para>
     ///
     /// <para>This is the test that makes a prefetch-based rewrite honest: answering the four
     /// authorization primitives from in-memory maps means reimplementing their semantics, and every
@@ -418,10 +419,11 @@ public sealed class S106SeedScalePerfTests : IClassFixture<S106SeedScalePerfFixt
             _out.WriteLine($"CHARACTERISATION shapes: {string.Join(";", map)}");
 
             Assert.Equal(
-                $"{S106SeedScalePerfFixture.Org3EdgeManager}=2;" +
-                $"{S106SeedScalePerfFixture.Org3Leader1}=4;" +
-                $"{S106SeedScalePerfFixture.Org3Leader2}=4;" +
-                $"{S106SeedScalePerfFixture.ShapeVikarOfLeader1}=4",
+                $"{S106SeedScalePerfFixture.Org3EdgeManager}=2;" +          // x1, x2
+                $"{S106SeedScalePerfFixture.Org3Leader1}=6;" +               // the six leaf-unit shapes
+                $"{S106SeedScalePerfFixture.Org3Leader2}=6;" +
+                $"{S106SeedScalePerfFixture.ShapeStandIn}=1;" +              // x6's edge → the STAND-IN
+                $"{S106SeedScalePerfFixture.ShapeVikarOfLeader1}=6",
                 string.Join(";", map));
 
             // Invariant 9, stated as its own assertion so a regression names itself: an active,
@@ -431,7 +433,7 @@ public sealed class S106SeedScalePerfTests : IClassFixture<S106SeedScalePerfFixt
             // All four shapes are SUBMITTED — i.e. the map above is not small because rows went missing
             // from step (1).
             var submitted = proj.Employees.Where(e => e.Status == "SUBMITTED").Select(e => e.EmployeeId).ToList();
-            Assert.Equal(5, submitted.Count);
+            Assert.Equal(7, submitted.Count);
             Assert.Contains(S106SeedScalePerfFixture.ShapeOrphan, submitted);
             Assert.Contains(S106SeedScalePerfFixture.ShapeNullUnit, submitted);
             // The escalation shape: its manager is INACTIVE, so no edge resolves and only the unit
@@ -440,6 +442,19 @@ public sealed class S106SeedScalePerfTests : IClassFixture<S106SeedScalePerfFixt
             // in the prefetched source shows up here and nowhere else.
             Assert.Contains(S106SeedScalePerfFixture.ShapeEscalates, submitted);
             Assert.DoesNotContain(S106SeedScalePerfFixture.ShapeInactiveMgr, proj.PendingCountByManager.Keys);
+
+            // ── THE CROSS-ORGANISATION PIN (S125 close, external-lens BLOCKER) ───────────────────
+            // x7's manager holds a vikar homed in a DIFFERENT Organisation. Live SQL resolves the
+            // edge TO that vikar and then DENIES on same-Organisation, so NEITHER the cross-Org
+            // stand-in NOR x7's own manager may appear. The bug this pins was the opposite: an
+            // Organisation-scoped prefetch read the out-of-scope vikar as "inactive", SKIPPED it, and
+            // fell through to the in-Org manager — who then passed same-Organisation and was ADMITTED.
+            // Being more permissive than SQL is the direction that matters.
+            Assert.DoesNotContain(S106SeedScalePerfFixture.ShapeCrossOrgStandIn, proj.PendingCountByManager.Keys);
+            Assert.DoesNotContain(S106SeedScalePerfFixture.ShapeCrossVikaredMgr, proj.PendingCountByManager.Keys);
+            // And the in-Organisation vikar case DOES resolve to the stand-in — the same branch,
+            // working, so the assertion above is a same-Org bound and not the vikar path being dead.
+            Assert.Contains(S106SeedScalePerfFixture.ShapeStandIn, proj.PendingCountByManager.Keys);
         }
         finally
         {
@@ -471,8 +486,13 @@ public sealed class S106SeedScalePerfTests : IClassFixture<S106SeedScalePerfFixt
     ///
     /// <para>Run over the pending scenario AND the shape matrix together, so the comparison covers an
     /// employee with an ordinary edge, one whose manager is INACTIVE (the escalation walk), one whose
-    /// manager holds an active VIKAR (the R3 precedence branch), an ORPHAN with no line at all, and a
-    /// NULL-unit member — the branches most likely to expose a divergence.</para>
+    /// manager holds an active VIKAR (the R3 precedence branch), one whose manager's vikar is homed in
+    /// a DIFFERENT Organisation, an ORPHAN with no line at all, and a NULL-unit member.</para>
+    ///
+    /// <para><b>Those branches are ASSERTED to have executed, not assumed.</b> An earlier revision of
+    /// this comment claimed R3-vikar coverage the fixture could not deliver — its only vikar covered a
+    /// leader nobody reported to — so the branch never ran and "0 divergences" was partly vacuous. The
+    /// external review lens caught that at the S125 close, and it had in fact hidden a real BLOCKER.</para>
     /// </summary>
     [Fact]
     public async Task F1Differential_PrefetchedSource_MatchesSqlSource_ForEveryUser_TripleByTriple()
@@ -494,7 +514,7 @@ public sealed class S106SeedScalePerfTests : IClassFixture<S106SeedScalePerfFixt
 
             var sqlSource = new SqlReportingLineDataSource(conn, tx, vikarRepo);
             var prefetched = await PrefetchedReportingLineDataSource.BuildAsync(
-                conn, tx, S106SeedScalePerfFixture.Org3Path + "%", today, default);
+                conn, tx, S106SeedScalePerfFixture.Org3Path + "%", today, sqlSource, default);
 
             var userIds = new List<string>();
             await using (var cmd = new NpgsqlCommand(
@@ -531,6 +551,32 @@ public sealed class S106SeedScalePerfTests : IClassFixture<S106SeedScalePerfFixt
             // and would pass while proving nothing.
             Assert.True(nonTrivial >= 10, $"Only {nonTrivial} users resolved to a manager — the comparison would be near-vacuous.");
             Assert.Empty(divergences);
+
+            // ── BRANCH-COVERAGE PROOF (S125 close, external-lens WARNING) ────────────────────────
+            // An earlier revision of this test's summary CLAIMED to cover the R3 vikar branch while
+            // the fixture made it unreachable — its only vikar covered a leader nobody reported to.
+            // "No divergences" over branches that never execute proves nothing, so the branches are
+            // now asserted to have actually run.
+            var underVikar = await repo.ResolveDesignatedApproverAsync(
+                sqlSource, S106SeedScalePerfFixture.ShapeUnderVikar, today);
+            Assert.Equal(S106SeedScalePerfFixture.ShapeStandIn, underVikar.ManagerId);
+            Assert.Equal("ACTING_MANAGER", underVikar.ApprovalMethod);   // the R3 vikar branch RAN
+
+            var escalated = await repo.ResolveDesignatedApproverAsync(
+                sqlSource, S106SeedScalePerfFixture.ShapeEscalates, today);
+            Assert.Null(escalated.ManagerId);                            // the escalation branch RAN
+            Assert.Equal(1, escalated.Depth);
+
+            // THE CROSS-ORGANISATION CASE (external-lens BLOCKER). Live SQL resolves to the cross-Org
+            // stand-in; an Organisation-scoped prefetch that answered "inactive" from a map MISS would
+            // skip it and fall through to the in-Org PRIMARY — admitting an approver SQL admits nobody
+            // for. Asserted on BOTH sources, so the divergence cannot hide.
+            var crossSql = await repo.ResolveDesignatedApproverAsync(
+                sqlSource, S106SeedScalePerfFixture.ShapeUnderCrossVikar, today);
+            var crossPre = await repo.ResolveDesignatedApproverAsync(
+                prefetched, S106SeedScalePerfFixture.ShapeUnderCrossVikar, today);
+            Assert.Equal(S106SeedScalePerfFixture.ShapeCrossOrgStandIn, crossSql.ManagerId);
+            Assert.Equal(crossSql, crossPre);
 
             await tx.RollbackAsync();
         }
@@ -581,7 +627,8 @@ public sealed class S106SeedScalePerfTests : IClassFixture<S106SeedScalePerfFixt
                 System.Data.IsolationLevel.RepeatableRead);
 
             var pathParam = S106SeedScalePerfFixture.Org3Path + "%";
-            var lines = await PrefetchedReportingLineDataSource.BuildAsync(conn, tx, pathParam, today, default);
+            var sqlLines = reportingRepo.CreateSqlDataSource(conn, tx);
+            var lines = await PrefetchedReportingLineDataSource.BuildAsync(conn, tx, pathParam, today, sqlLines, default);
             var facts = await PrefetchedAuthorityFacts.BuildAsync(conn, tx, pathParam, today, default);
 
             // Candidates: every actor in the fixture that could plausibly hold authority, INCLUDING
