@@ -613,7 +613,52 @@
 .detailInner {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  /* S125 / TASK-12500 — 20px -> 12px. The old gap stacked with the skema block's own 18px margin +
+     14px padding for ~52px of dead space between the summary and the grid. Those are gone; the
+     section headers now carry the visual separation. */
+  gap: 12px;
+}
+
+/* ── S125 / TASK-12500 — collapsible detail sections (Overblik / Skema) ─────────── */
+.detailSection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* The section header doubles as the fold control. Styled to match the old `.detailLabel` it replaces
+   (same size/weight/tracking/uppercase) so folding did not change the panel's typography — only the
+   caret and the pointer are new. */
+.detailSectionHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-family: var(--font-family);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text-secondary);
+}
+
+.detailSectionHead:hover {
+  color: var(--color-text);
+}
+
+.detailSectionCaret {
+  display: inline-block;
+  font-size: 10px;
+  line-height: 1;
+  transition: transform 120ms ease;
+}
+
+.detailSectionCaretOpen {
+  transform: rotate(90deg);
 }
 
 .detailColumns {

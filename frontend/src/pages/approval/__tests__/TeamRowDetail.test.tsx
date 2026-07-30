@@ -334,14 +334,15 @@ describe('TeamRowDetail — lazy fetch (breakdown + compliance)', () => {
     renderPage()
     await expandFirstRow(user)
     await waitFor(() => expect(screen.getByText('Kunne ikke hente fordeling')).toBeInTheDocument())
-    // Saldi (from row data) still renders.
-    expect(screen.getByText('Saldi')).toBeInTheDocument()
+    // S125 / TASK-12500 — the summary section is titled "Overblik" (was "SALDI"); the row figures
+    // inside it still render, which is the fault-isolation point of this test.
+    expect(screen.getByText('Overblik')).toBeInTheDocument()
     expect(screen.getByText('Normtimer')).toBeInTheDocument()
   })
 })
 
-describe('TeamRowDetail — Saldi (row figures, no extra fetch)', () => {
-  it('renders the 4 Saldi cells with the Merarbejde label for AC', async () => {
+describe('TeamRowDetail — Overblik balances (row figures, no extra fetch)', () => {
+  it('renders the 4 balance cells with the Merarbejde label for AC', async () => {
     const user = userEvent.setup()
     mockRoutes({ overview: [row({ agreement: 'AC' })] })
     renderPage()
@@ -439,8 +440,8 @@ describe('TeamRowDetail — compliance Advarsel + fault isolation', () => {
     renderPage()
     await expandFirstRow(user)
     await waitFor(() => expect(screen.getByText('Advarsler kunne ikke hentes')).toBeInTheDocument())
-    // Saldi + breakdown still render (fault isolated to the Advarsel arm).
-    expect(screen.getByText('Saldi')).toBeInTheDocument()
+    // Overblik + breakdown still render (fault isolated to the Advarsel arm).
+    expect(screen.getByText('Overblik')).toBeInTheDocument()
     expect(screen.getAllByText('Projekt Alfa').length).toBeGreaterThan(0)
   })
 })
@@ -572,7 +573,7 @@ describe("TeamRowDetail - the inline read-only employee skema (S124 / TASK-12403
 
     const panel = screen.getByTestId("team-detail-row-emp001")
     const text = panel.textContent ?? ""
-    const summaryAt = text.indexOf("Saldi")
+    const summaryAt = text.indexOf("Overblik")
     const skemaAt = text.indexOf("Skema")
     const decideAt = text.indexOf("Godkend måned")
     expect(summaryAt).toBeGreaterThanOrEqual(0)
@@ -630,5 +631,81 @@ describe("TeamRowDetail - the inline read-only employee skema (S124 / TASK-12403
     renderPage()
     await expandFirstRow(user)
     await waitFor(() => expect(screen.getByTestId("manager-skema-emp001")).toBeInTheDocument())
+  })
+})
+
+// ===================================================================================
+// S125 / TASK-12500 — the two collapsible panel sections (Overblik / Skema).
+//
+// SESSION-STICKY by design (owner ruling): the fold lives on the PAGE, not the row, because the
+// panel unmounts when a row collapses — per-row state would reset on every expand. So a fold made
+// while reviewing one employee must survive opening the next, and reset only on reload.
+// ===================================================================================
+describe('TeamRowDetail — collapsible Overblik / Skema sections (S125 / TASK-12500)', () => {
+  it('both sections are OPEN by default when an employee is pressed', async () => {
+    const user = userEvent.setup()
+    mockRoutes()
+    renderPage()
+    await expandFirstRow(user)
+
+    expect(screen.getByTestId('toggle-overblik-emp001')).toHaveAttribute('aria-expanded', 'true')
+    await waitFor(() => expect(screen.getByTestId('toggle-skema-emp001')).toHaveAttribute('aria-expanded', 'true'))
+    // And their content is present.
+    expect(screen.getByText('Flex saldo')).toBeInTheDocument()
+    expect(screen.getByTestId('manager-skema-emp001')).toBeInTheDocument()
+  })
+
+  it('folds each section INDEPENDENTLY — collapsing Overblik leaves Skema open', async () => {
+    const user = userEvent.setup()
+    mockRoutes()
+    renderPage()
+    await expandFirstRow(user)
+    await waitFor(() => expect(screen.getByTestId('manager-skema-emp001')).toBeInTheDocument())
+
+    await user.click(screen.getByTestId('toggle-overblik-emp001'))
+    expect(screen.getByTestId('toggle-overblik-emp001')).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText('Flex saldo')).toBeNull()
+    // Skema untouched.
+    expect(screen.getByTestId('manager-skema-emp001')).toBeInTheDocument()
+
+    // And the other direction: fold Skema, Overblik comes back on its own.
+    await user.click(screen.getByTestId('toggle-overblik-emp001'))
+    await user.click(screen.getByTestId('toggle-skema-emp001'))
+    expect(screen.getByText('Flex saldo')).toBeInTheDocument()
+    expect(screen.queryByTestId('manager-skema-emp001')).toBeNull()
+  })
+
+  it('SESSION-STICKY: a fold survives switching to another employee', async () => {
+    const user = userEvent.setup()
+    mockRoutes({ overview: [row(), row({ periodId: 'p-2', employeeId: 'emp002', displayName: 'Bo Dahl' })] })
+    renderPage()
+    await expandFirstRow(user)
+
+    // Fold Overblik on Anna.
+    await user.click(screen.getByTestId('toggle-overblik-emp001'))
+    expect(screen.queryByText('Flex saldo')).toBeNull()
+
+    // Open Bo (the accordion closes Anna and UNMOUNTS her panel — the exact case per-row state
+    // would have got wrong).
+    await user.click(screen.getByRole('button', { name: /detaljer for Bo Dahl/ }))
+    await waitFor(() => expect(screen.getByTestId('toggle-overblik-emp002')).toBeInTheDocument())
+
+    expect(screen.getByTestId('toggle-overblik-emp002')).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText('Flex saldo')).toBeNull()
+    // Skema was never folded, so it stays open for Bo too.
+    expect(screen.getByTestId('toggle-skema-emp002')).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  it('the section headers are real buttons (keyboard-operable), not clickable divs', async () => {
+    const user = userEvent.setup()
+    mockRoutes()
+    renderPage()
+    await expandFirstRow(user)
+
+    const head = screen.getByTestId('toggle-overblik-emp001')
+    expect(head.tagName).toBe('BUTTON')
+    head.focus()
+    await user.keyboard('{Enter}')
+    expect(head).toHaveAttribute('aria-expanded', 'false')
   })
 })

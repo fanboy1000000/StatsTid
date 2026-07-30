@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useRef, useEffect, Fragment } from 'react'
+import { useState, useCallback, useMemo, useRef, useEffect, Fragment, type ReactNode } from 'react'
 import { useAuth } from '../../contexts/AuthContext'
 import { formatMonthLabel } from '../../lib/locale'
 import { apiClient } from '../../lib/api'
@@ -108,10 +108,47 @@ interface TeamRowDetailProps {
   onApprove: (row: TeamOverviewRow) => void
   onReject: (row: TeamOverviewRow) => void
   onReopen: (row: TeamOverviewRow) => void
+  /** S125 / TASK-12500 — the two collapsible sections. State is owned by the PAGE, not here, and
+      that is the whole mechanism behind "session-sticky": this panel UNMOUNTS when a row collapses
+      (the accordion keeps one row open), so per-row state would reset on every expand. Held one
+      level up, a fold survives moving between employees and resets only on reload. */
+  overblikOpen: boolean
+  skemaOpen: boolean
+  onToggleOverblik: () => void
+  onToggleSkema: () => void
+}
+
+/** A collapsible section header inside the detail panel. A real <button> with `aria-expanded`, so it
+    is keyboard- and screen-reader-operable rather than a clickable div. */
+function DetailSection({
+  title, open, onToggle, testId, children,
+}: {
+  title: string
+  open: boolean
+  onToggle: () => void
+  testId: string
+  children: ReactNode
+}) {
+  return (
+    <section className={styles.detailSection}>
+      <button
+        type="button"
+        className={styles.detailSectionHead}
+        aria-expanded={open}
+        onClick={onToggle}
+        data-testid={testId}
+      >
+        <span className={`${styles.detailSectionCaret} ${open ? styles.detailSectionCaretOpen : ''}`}>▸</span>
+        {title}
+      </button>
+      {open && children}
+    </section>
+  )
 }
 
 function TeamRowDetail({
   id, row, year, month, busy, onApprove, onReject, onReopen,
+  overblikOpen, skemaOpen, onToggleOverblik, onToggleSkema,
 }: TeamRowDetailProps) {
   const meta = statusMeta(row.status)
   // Lazy fetches — fire on mount (mount == expand).
@@ -144,11 +181,19 @@ function TeamRowDetail({
   return (
     <td colSpan={9} className={styles.detailCell} id={id}>
       <div className={styles.detailInner}>
-        {/* Row 1: Saldi + Fordeling */}
+        {/* S125 / TASK-12500 — the summary row is ONE collapsible "Overblik" section. The old
+            "SALDI" column label is retired: the section title carries the name, so keeping both
+            would say it twice. Folding Overblik hides the balances AND the Fordeling split — they
+            are one at-a-glance summary. */}
+        <DetailSection
+          title="Overblik"
+          open={overblikOpen}
+          onToggle={onToggleOverblik}
+          testId={`toggle-overblik-${row.employeeId}`}
+        >
         <div className={styles.detailColumns}>
-          {/* Saldi — reuses the row figures, NO extra fetch. */}
+          {/* Balances — reuses the row figures, NO extra fetch. */}
           <div className={styles.detailCol}>
-            <div className={styles.detailLabel}>Saldi</div>
             <div className={styles.saldiGrid}>
               <div className={styles.saldiCell}>
                 <div className={styles.saldiCellLabel}>Flex saldo</div>
@@ -228,6 +273,7 @@ function TeamRowDetail({
             ) : null}
           </div>
         </div>
+        </DetailSection>
 
         {/* Alerts — both allocation alerts gated behind hasAllocationImbalance so
             the detail never contradicts the row chip. */}
@@ -261,12 +307,19 @@ function TeamRowDetail({
           </div>
         )}
 
-        {/* S124 / TASK-12403 — THE SKEMA IS THE DEFAULT VIEW (owner ruling 2026-07-30): the summary
-            sits above, the full day-by-day grid is ALWAYS shown below it, and the decision buttons
-            come after. Approving a month without ever seeing which days carried the hours is the
-            thing this ordering prevents — the evidence now sits between the summary and the verdict.
-            Read-only; the panel only renders for a month the employee actually sent. */}
-        <ManagerSkemaGrid employeeId={row.employeeId} year={year} month={month} />
+        {/* S124 / TASK-12403 — the skema is the DEFAULT view: summary above, the full day-by-day
+            grid below it, decision buttons after. Approving without seeing which days carried the
+            hours is what this ordering prevents — the evidence sits between summary and verdict.
+            S125 / TASK-12500 — now collapsible, still open by default. Read-only; the panel only
+            renders for a month the employee actually sent. */}
+        <DetailSection
+          title="Skema"
+          open={skemaOpen}
+          onToggle={onToggleSkema}
+          testId={`toggle-skema-${row.employeeId}`}
+        >
+          <ManagerSkemaGrid employeeId={row.employeeId} year={year} month={month} />
+        </DetailSection>
 
         {/* Footer — status line + the large action buttons (parent handlers). */}
         <div className={styles.detailFooter}>
@@ -342,6 +395,12 @@ export function TeamOversigt() {
 
   // Accordion: the expanded employeeId (one open at a time; null = all closed).
   const [expanded, setExpanded] = useState<string | null>(null)
+  // S125 / TASK-12500 — the detail panel's two section folds. Deliberately PAGE-level, not per row:
+  // the panel unmounts when a row collapses, so per-row state would reset on every expand. Here it
+  // is SESSION-STICKY — fold Overblik once while reviewing twenty people and it stays folded — and
+  // both default OPEN, so pressing an employee shows everything until you say otherwise.
+  const [overblikOpen, setOverblikOpen] = useState(true)
+  const [skemaOpen, setSkemaOpen] = useState(true)
   // Refs to the per-row toggle buttons so Escape can return focus to the toggle.
   const toggleRefs = useRef<Record<string, HTMLButtonElement | null>>({})
 
@@ -889,6 +948,10 @@ export function TeamOversigt() {
                           onApprove={handleApprove}
                           onReject={openReject}
                           onReopen={handleReopen}
+                          overblikOpen={overblikOpen}
+                          skemaOpen={skemaOpen}
+                          onToggleOverblik={() => setOverblikOpen(o => !o)}
+                          onToggleSkema={() => setSkemaOpen(o => !o)}
                         />
                       </tr>
                     )}

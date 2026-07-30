@@ -1,18 +1,9 @@
 /* S124 / TASK-12403 — the inline read-only month skema inside the Teamoversigt detail panel.
-   Owner ruling: the skema is the DEFAULT view, below the summary, always shown. */
+   S125 / TASK-12500 — the heading + separator moved OUT to the panel's collapsible section header,
+   and the old 18px margin + 14px padding went with them: stacked on `.detailInner`'s 20px flex gap
+   they produced ~52px of dead space between the summary and the grid. */
 .wrap {
-  margin-top: 18px;
-  border-top: var(--border-width) solid var(--color-gray-100);
-  padding-top: 14px;
-}
-
-.label {
-  font-size: 11px;
-  font-weight: var(--font-weight-bold);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--color-text-secondary);
-  margin-bottom: 8px;
+  margin: 0;
 }
 
 /* A month grid is ~31 day columns. It scrolls HERE, inside its own container — the page body must

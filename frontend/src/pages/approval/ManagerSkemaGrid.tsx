@@ -88,8 +88,9 @@ export function ManagerSkemaGrid({ employeeId, year, month }: ManagerSkemaGridPr
   }, [data])
 
   return (
+    // S125 / TASK-12500 — no heading or top border here: the panel renders the collapsible
+    // "Skema" section header around this component, so owning one too would double the chrome.
     <div className={styles.wrap} data-testid={`manager-skema-${employeeId}`}>
-      <div className={styles.label}>Skema</div>
       {loading && <div className={styles.status} data-testid="manager-skema-loading">Henter skema…</div>}
       {error && (
         <div className={styles.statusError} role="alert" data-testid="manager-skema-error">
