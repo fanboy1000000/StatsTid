@@ -63,6 +63,29 @@ public sealed class DesignatedApproverAuthorizer
         _reportingLineRepo = reportingLineRepo;
     }
 
+    // ════════════════════════════════════════════════════════════════════════════════════════
+    //  S125 / TASK-12501 step 1 — the OVERLOAD-PAIR PATTERN, finally adopted here.
+    //
+    //  `ReportingLineRepository` is built throughout on a connection-reusing primitive
+    //  `(NpgsqlConnection conn, NpgsqlTransaction? tx, …)` plus a self-contained overload that opens a
+    //  connection and DELEGATES to it (see ValidateSameOrganisationAsync :397/:448 and its rationale at
+    //  :405-412). This class never adopted it: every primitive below existed ONLY in self-contained
+    //  form, each opening its own connection.
+    //
+    //  That single gap produced every symptom of the F1 defect — 15 connection opens per pending
+    //  employee, an authority gate that must RE-RESOLVE what its caller already computed (44% of the
+    //  round-trips) because nothing can be handed in, and no way for two reads to share a snapshot.
+    //
+    //  The delegation direction matters: the self-contained overload calls the reusing one, so each
+    //  rule has EXACTLY ONE implementation. That is what makes ADR-027/038's one-encoding requirement
+    //  structural here rather than a convention reviewers have to police.
+    //
+    //  STEP 1 IS SEMANTICALLY INERT. With `tx: null` every statement still autocommits, so each read
+    //  observes the latest committed state exactly as before — Postgres transactions are session-scoped,
+    //  so sharing a connection without a transaction changes only who pays for the handshake. The
+    //  snapshot (step 2) and the redundancy deletion (step 3) build on this; neither is done here.
+    // ════════════════════════════════════════════════════════════════════════════════════════
+
     /// <summary>
     /// The R5 canonical predicate. Returns <c>true</c> iff the actor is active +
     /// LeaderOrAbove AND is the single resolved effective approver of
@@ -78,6 +101,18 @@ public sealed class DesignatedApproverAuthorizer
     public async Task<bool> IsEffectiveDesignatedApproverAsync(
         string actorId, string employeeId, DateOnly? asOf = null, CancellationToken ct = default)
     {
+        await using var conn = _connectionFactory.Create();
+        await conn.OpenAsync(ct);
+        return await IsEffectiveDesignatedApproverAsync(conn, tx: null, actorId, employeeId, asOf, ct);
+    }
+
+    /// <summary>Connection-reusing sibling of
+    /// <see cref="IsEffectiveDesignatedApproverAsync(string, string, DateOnly?, CancellationToken)"/>.
+    /// Same rule, same order, same fail-closed behaviour — the self-contained overload delegates here.</summary>
+    public async Task<bool> IsEffectiveDesignatedApproverAsync(
+        NpgsqlConnection conn, NpgsqlTransaction? tx,
+        string actorId, string employeeId, DateOnly? asOf = null, CancellationToken ct = default)
+    {
         if (string.IsNullOrEmpty(actorId) || string.IsNullOrEmpty(employeeId))
             return false;
 
@@ -88,12 +123,12 @@ public sealed class DesignatedApproverAuthorizer
         //     gate is NOT enforced by the resolver (a vikar could be an Employee-role user),
         //     so we check it explicitly here — defense-in-depth and the load-bearing gate
         //     when the actor is reached purely as a vikar stand-in.
-        if (!await IsActiveLeaderOrAboveAsync(actorId, ct))
+        if (!await IsActiveLeaderOrAboveAsync(conn, tx, actorId, ct))
             return false;
 
         // (2) Resolve the SINGLE effective approver at asOf (vikar-aware, R3 precedence).
-        var (resolvedManagerId, _, _) =
-            await _reportingLineRepo.ResolveDesignatedApproverAsync(employeeId, ct, asOf: effectiveAsOf);
+        var (resolvedManagerId, _, _) = await _reportingLineRepo.ResolveDesignatedApproverAsync(
+            conn, tx, employeeId, effectiveAsOf, ct);
 
         // (3) The edge grants authority IFF the actor IS that single winner.
         if (resolvedManagerId is null
@@ -110,7 +145,7 @@ public sealed class DesignatedApproverAuthorizer
         //     mismatch; a throw ⇒ deny. An intra-Organisation edge shares a home ⇒ still passes.
         try
         {
-            await _reportingLineRepo.ValidateSameOrganisationAsync(employeeId, actorId, ct);
+            await _reportingLineRepo.ValidateSameOrganisationAsync(conn, tx, employeeId, actorId, ct);
         }
         catch (CrossOrganisationAssignmentException)
         {
@@ -141,6 +176,14 @@ public sealed class DesignatedApproverAuthorizer
         => await ResolveUnitLeaderApprovalKindAsync(actorId, employeeId, asOf, ct)
             != UnitLeaderApprovalKind.None;
 
+    /// <summary>Connection-reusing sibling of
+    /// <see cref="IsUnitLeaderApproverAsync(string, string, DateOnly?, CancellationToken)"/>.</summary>
+    public async Task<bool> IsUnitLeaderApproverAsync(
+        NpgsqlConnection conn, NpgsqlTransaction? tx,
+        string actorId, string employeeId, DateOnly? asOf = null, CancellationToken ct = default)
+        => await ResolveUnitLeaderApprovalKindAsync(conn, tx, actorId, employeeId, asOf, ct)
+            != UnitLeaderApprovalKind.None;
+
     /// <summary>
     /// S105 / ADR-038 D4 — the CENTRALIZED "edge OR unit-leader" approval predicate (the ONE shared
     /// helper every read-filter + the action endpoints' in-lock re-eval route through, so the two
@@ -154,9 +197,22 @@ public sealed class DesignatedApproverAuthorizer
     public async Task<bool> IsEffectiveApproverOrUnitLeaderAsync(
         string actorId, string employeeId, DateOnly? asOf = null, CancellationToken ct = default)
     {
-        if (await IsEffectiveDesignatedApproverAsync(actorId, employeeId, asOf, ct))
+        await using var conn = _connectionFactory.Create();
+        await conn.OpenAsync(ct);
+        return await IsEffectiveApproverOrUnitLeaderAsync(conn, tx: null, actorId, employeeId, asOf, ct);
+    }
+
+    /// <summary>Connection-reusing sibling of
+    /// <see cref="IsEffectiveApproverOrUnitLeaderAsync(string, string, DateOnly?, CancellationToken)"/> —
+    /// the overload the period-status projection's tally loop uses so one connection serves the whole
+    /// pass. Identical short-circuit order (edge first, then unit-leader).</summary>
+    public async Task<bool> IsEffectiveApproverOrUnitLeaderAsync(
+        NpgsqlConnection conn, NpgsqlTransaction? tx,
+        string actorId, string employeeId, DateOnly? asOf = null, CancellationToken ct = default)
+    {
+        if (await IsEffectiveDesignatedApproverAsync(conn, tx, actorId, employeeId, asOf, ct))
             return true;
-        return await IsUnitLeaderApproverAsync(actorId, employeeId, asOf, ct);
+        return await IsUnitLeaderApproverAsync(conn, tx, actorId, employeeId, asOf, ct);
     }
 
     /// <summary>
@@ -171,6 +227,18 @@ public sealed class DesignatedApproverAuthorizer
     public async Task<UnitLeaderApprovalKind> ResolveUnitLeaderApprovalKindAsync(
         string actorId, string employeeId, DateOnly? asOf = null, CancellationToken ct = default)
     {
+        await using var conn = _connectionFactory.Create();
+        await conn.OpenAsync(ct);
+        return await ResolveUnitLeaderApprovalKindAsync(conn, tx: null, actorId, employeeId, asOf, ct);
+    }
+
+    /// <summary>Connection-reusing sibling of
+    /// <see cref="ResolveUnitLeaderApprovalKindAsync(string, string, DateOnly?, CancellationToken)"/>.
+    /// All floors and the Direct-before-Vikar precedence are unchanged.</summary>
+    public async Task<UnitLeaderApprovalKind> ResolveUnitLeaderApprovalKindAsync(
+        NpgsqlConnection conn, NpgsqlTransaction? tx,
+        string actorId, string employeeId, DateOnly? asOf = null, CancellationToken ct = default)
+    {
         if (string.IsNullOrEmpty(actorId) || string.IsNullOrEmpty(employeeId))
             return UnitLeaderApprovalKind.None;
 
@@ -178,13 +246,13 @@ public sealed class DesignatedApproverAuthorizer
 
         // (1) The actor must be an active LeaderOrAbove — the SAME role floor the edge path applies
         //     (a unit_leaders row for an Employee-role / inactive user grants nothing; D3 role-coupling).
-        if (!await IsActiveLeaderOrAboveAsync(actorId, ct))
+        if (!await IsActiveLeaderOrAboveAsync(conn, tx, actorId, ct))
             return UnitLeaderApprovalKind.None;
 
         // (2) The SINGLE-TABLE membership/vikar lookup over the employee's OWN unit's leaders
         //     (unit_leaders.unit_id = E.unit_id) — NEVER an ancestor/recursive walk (the LOCKED D5
         //     boundary). NULL E.unit_id → zero rows → (false, false) → None.
-        var rawKind = await QueryUnitLeaderKindAsync(actorId, employeeId, effectiveAsOf, ct);
+        var rawKind = await QueryUnitLeaderKindAsync(conn, tx, actorId, employeeId, effectiveAsOf, ct);
         if (rawKind == UnitLeaderApprovalKind.None)
             return UnitLeaderApprovalKind.None;
 
@@ -193,7 +261,7 @@ public sealed class DesignatedApproverAuthorizer
         //     vikar path transitively (D12). A throw ⇒ deny (fail-closed).
         try
         {
-            await _reportingLineRepo.ValidateSameOrganisationAsync(employeeId, actorId, ct);
+            await _reportingLineRepo.ValidateSameOrganisationAsync(conn, tx, employeeId, actorId, ct);
         }
         catch (CrossOrganisationAssignmentException)
         {
@@ -215,11 +283,10 @@ public sealed class DesignatedApproverAuthorizer
     /// Direct leader and/or an active vikar (covering <paramref name="asOf"/>) of one of those leaders.
     /// Direct membership wins. NO recursive walk over <c>units.parent_unit_id</c> (the D5 keystone).
     /// </summary>
-    private async Task<UnitLeaderApprovalKind> QueryUnitLeaderKindAsync(
+    private static async Task<UnitLeaderApprovalKind> QueryUnitLeaderKindAsync(
+        NpgsqlConnection conn, NpgsqlTransaction? tx,
         string actorId, string employeeId, DateOnly asOf, CancellationToken ct)
     {
-        await using var conn = _connectionFactory.Create();
-        await conn.OpenAsync(ct);
         await using var cmd = new NpgsqlCommand(
             """
             SELECT
@@ -262,10 +329,9 @@ public sealed class DesignatedApproverAuthorizer
     /// Single query against <c>users</c> + <c>role_assignments</c> + <c>roles</c>; mirrors the
     /// <c>RoleAssignmentRepository</c> active-assignment predicate (is_active + non-expired).
     /// </summary>
-    private async Task<bool> IsActiveLeaderOrAboveAsync(string userId, CancellationToken ct)
+    private static async Task<bool> IsActiveLeaderOrAboveAsync(
+        NpgsqlConnection conn, NpgsqlTransaction? tx, string userId, CancellationToken ct)
     {
-        await using var conn = _connectionFactory.Create();
-        await conn.OpenAsync(ct);
         await using var cmd = new NpgsqlCommand(
             """
             SELECT 1

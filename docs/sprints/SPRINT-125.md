@@ -212,6 +212,70 @@ still 27.0.
 
 ---
 
+### TASK-12501 step 1 — the authorizer adopts the repo's connection-reusing overload pattern
+| Field | Value |
+|-------|-------|
+| **Status** | complete (2026-07-30) — SEMANTICALLY INERT, proven by the multiplier staying at exactly 27.0 |
+| **Components** | `Infrastructure/DesignatedApproverAuthorizer.cs`, `ReportingLineRepository.cs`, `ApprovalPeriodRepository.cs` |
+
+**The root cause, found by asking why the plan needed three separate mitigations.** Rev 3 of the
+refinement had a blocking owner question (is a stale count acceptable?), a differential test for
+Phase A, and another for Phase B. Three mitigations for one problem is a smell. The actual cause:
+
+`ReportingLineRepository` is built throughout on the repo's **overload-pair pattern** — a
+connection-reusing primitive `(conn, tx, …)` plus a self-contained overload that opens a connection and
+DELEGATES to it (`ValidateSameOrganisationAsync` at `:397`/`:448`, rationale at `:405-412`).
+**`DesignatedApproverAuthorizer` never adopted it**: all four primitives existed only in self-contained
+form, each opening its own connection. Every symptom follows from that one gap — 15 connection opens per
+pending employee; a gate that must RE-RESOLVE what its caller already computed (44% of round-trips)
+because nothing can be handed in; and no way for two reads to share a snapshot.
+
+**So the owner question dissolved rather than being answered.** With the pattern in place, step 2 can
+make the pass a single snapshot, which makes step 3's redundancy deletion a provable equivalence instead
+of a judgement call about acceptable staleness. Three mitigations collapse into one structural property.
+
+**What landed**: `(conn, tx)` siblings for all four authorizer predicates and both private primitives,
+plus one on `ResolveDesignatedApproverAsync`; `QueryUnitLeaderApproverCandidatesAsync` reuses the
+caller's connection; and the projection's tally pass threads ONE connection. Delegation direction
+matters — self-contained → reusing — so each rule has exactly ONE implementation, which makes
+ADR-027/038's one-encoding requirement structural rather than something reviewers must police.
+
+**Self-caught during review of the diff**: the first cut opened a *new* connection for the tally pass,
+but step (1)'s `conn` is method-scoped and still open (its reader disposed, so the session is idle) —
+two connections held where one does. The loop now reuses `conn`, so the whole projection runs on a
+single connection. Semantically identical either way (both autocommit), which is why the blast-radius
+run started before the edit remains valid evidence.
+
+**Why it is semantically inert, and the proof.** `tx` is deliberately null, so every statement still
+autocommits and each read observes the latest committed state exactly as before (Postgres transactions
+are session-scoped; sharing a connection without one changes only who pays for the handshake). Proof:
+the characterisation output is byte-identical (`em=2;l1=3;l2=3;xv=3`; `OPEN=253,SUBMITTED=10`) **and the
+per-pending multiplier is still exactly 27.0 at both K=10 and K=20** — an unchanged statement count is
+what distinguishes "changed who opens connections" from "changed what is asked". Wall-clock at K=20:
+~310ms → 273ms.
+
+**Verification**: characterisation byte-identical and multiplier 27.0 after the edit (21/21 on the
+projection suites); blast radius across every caller of the authority predicate — reporting-line, vikar,
+designated-approver, delegate, approval, approve, reopen, team-overview, compliance, skema —
+**433/433 green**.
+
+⚠ **Unresolved loose end, recorded rather than waved through**: the FIRST blast-radius run reported
+432/433 with one failure that could NOT be identified, because that run was piped through `tail -6` and
+the failure detail lives mid-output. The re-run was 433/433. "Passed on re-run" is weaker than
+"identified and cleared" — the failing test is unknown, so it cannot be confirmed as an environmental
+FAIL-002-class shed rather than a real intermittent. Lesson saved: never pipe a verification run through
+`tail`; redirect to a file (the `launch-demo-system` skill already warned this for the DemoSeed loader —
+the rule is general, and this cost a 25-minute rerun).
+
+**Found while mapping this step — a step-2 BLOCKER, recorded before it could bite**:
+`ValidateSameOrganisationAsync(conn, tx, …)` issues `SELECT … FOR UPDATE` (it is shared with the
+S74-7403 write path, where pinning both user rows is the point). Under `tx: null` those locks release at
+each implicit commit, so step 1 is unaffected — but inside a projection-long REPEATABLE READ transaction
+they would be HELD for the whole pass, blocking writers to most of the Organisation's user rows. **Step 2
+therefore needs a non-locking read variant of the same-Org check, not merely a transaction.**
+
+---
+
 ## Carried in from S124 (not yet started)
 1. **RES-002** — the deferred endpoint-level read gate (~6 reads). Must be period-status-based, must
    settle the recorded ACTOR-MODEL question (actor-blind withholding vs the HR-exempt month read),

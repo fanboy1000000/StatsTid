@@ -956,10 +956,31 @@ public sealed class ReportingLineRepository
     public async Task<(string? ManagerId, string? ApprovalMethod, int Depth)> ResolveDesignatedApproverAsync(
         string employeeId, CancellationToken ct = default, DateOnly? asOf = null)
     {
-        var effectiveAsOf = asOf ?? DateOnly.FromDateTime(DateTime.UtcNow);
-
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
+        return await ResolveDesignatedApproverAsync(conn, tx: null, employeeId, asOf, ct);
+    }
+
+    /// <summary>
+    /// S125 / TASK-12501 step 1 — connection-reusing sibling of
+    /// <see cref="ResolveDesignatedApproverAsync(string, CancellationToken, DateOnly?)"/>, following the
+    /// repo's established overload-pair pattern (see
+    /// <see cref="ValidateSameOrganisationAsync(NpgsqlConnection, NpgsqlTransaction?, string, string, CancellationToken)"/>).
+    /// The self-contained overload above delegates here with <c>tx: null</c>, so there is EXACTLY ONE
+    /// implementation of the R3 precedence and the FAIL-004 self-exclusion invariant — the pattern is
+    /// what makes that guarantee structural rather than a convention.
+    ///
+    /// <para>Why it exists: <c>GetPeriodStatusProjectionForTreeAsync</c> resolves this per pending
+    /// employee and its authority gate then re-resolved it per CANDIDATE, each on a fresh connection —
+    /// 15 connection opens per employee. With a caller-supplied connection the projection pays for one.
+    /// With <paramref name="tx"/> = <c>null</c> each statement still autocommits, so reads observe the
+    /// latest committed state exactly as the self-contained path does: semantically inert.</para>
+    /// </summary>
+    public async Task<(string? ManagerId, string? ApprovalMethod, int Depth)> ResolveDesignatedApproverAsync(
+        NpgsqlConnection conn, NpgsqlTransaction? tx, string employeeId, DateOnly? asOf,
+        CancellationToken ct = default)
+    {
+        var effectiveAsOf = asOf ?? DateOnly.FromDateTime(DateTime.UtcNow);
 
         var currentEmployeeId = employeeId;
         var depth = 0;
@@ -998,16 +1019,16 @@ public sealed class ReportingLineRepository
         while (depth < 10)
         {
             // 1. Check ACTING line — admin-assigned ACTING takes precedence over everything.
-            var actingLine = await GetActiveLineAsync(conn, currentEmployeeId, "ACTING", ct);
+            var actingLine = await GetActiveLineAsync(conn, tx, currentEmployeeId, "ACTING", ct);
             if (actingLine is not null && !IsSubject(actingLine.ManagerId))
             {
-                var isActive = await IsUserActiveAsync(conn, actingLine.ManagerId, ct);
+                var isActive = await IsUserActiveAsync(conn, tx, actingLine.ManagerId, ct);
                 if (isActive)
                     return (actingLine.ManagerId, "ACTING_MANAGER", depth);
             }
 
             // 2. Check PRIMARY line.
-            var primaryLine = await GetActiveLineAsync(conn, currentEmployeeId, "PRIMARY", ct);
+            var primaryLine = await GetActiveLineAsync(conn, tx, currentEmployeeId, "PRIMARY", ct);
             if (primaryLine is null)
                 return (null, null, depth); // No reporting line — org-scope fallback.
 
@@ -1024,10 +1045,10 @@ public sealed class ReportingLineRepository
             //     the absent approver, which rejects any descendant as stand-in), so this leg is
             //     legacy-data-only — but the invariant is enforced at the read, not assumed from
             //     write-path history.
-            var vikar = await _vikarRepo.GetActiveByApproverAsync(conn, primaryManagerId, effectiveAsOf, tx: null, ct);
+            var vikar = await _vikarRepo.GetActiveByApproverAsync(conn, primaryManagerId, effectiveAsOf, tx, ct);
             if (vikar is not null && !IsSubject(vikar.VikarUserId))
             {
-                var vikarUserActive = await IsUserActiveAsync(conn, vikar.VikarUserId, ct);
+                var vikarUserActive = await IsUserActiveAsync(conn, tx, vikar.VikarUserId, ct);
                 if (vikarUserActive)
                     return (vikar.VikarUserId, "ACTING_MANAGER", depth);
                 // else: R3b — inactive stand-in, skip the vikar; fall through.
@@ -1036,7 +1057,7 @@ public sealed class ReportingLineRepository
             // 3. M if active — unless M IS the subject (FAIL-004). An active M who is the subject
             //    does NOT resolve; per ruling (a) the walk continues THROUGH them (step 4), which is
             //    what lets a valid approver further along still win.
-            var primaryManagerActive = await IsUserActiveAsync(conn, primaryManagerId, ct);
+            var primaryManagerActive = await IsUserActiveAsync(conn, tx, primaryManagerId, ct);
             if (primaryManagerActive && !IsSubject(primaryManagerId))
                 return (primaryManagerId, "DESIGNATED_MANAGER", depth);
 
@@ -1050,7 +1071,8 @@ public sealed class ReportingLineRepository
     }
 
     private static async Task<ReportingLine?> GetActiveLineAsync(
-        NpgsqlConnection conn, string employeeId, string relationship, CancellationToken ct)
+        NpgsqlConnection conn, NpgsqlTransaction? tx, string employeeId, string relationship,
+        CancellationToken ct)
     {
         await using var cmd = new NpgsqlCommand(
             """
@@ -1058,7 +1080,7 @@ public sealed class ReportingLineRepository
             WHERE employee_id = @employeeId
               AND relationship = @relationship
               AND effective_to IS NULL
-            """, conn);
+            """, conn, tx);
         cmd.Parameters.AddWithValue("employeeId", employeeId);
         cmd.Parameters.AddWithValue("relationship", relationship);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -1066,10 +1088,10 @@ public sealed class ReportingLineRepository
     }
 
     private static async Task<bool> IsUserActiveAsync(
-        NpgsqlConnection conn, string userId, CancellationToken ct)
+        NpgsqlConnection conn, NpgsqlTransaction? tx, string userId, CancellationToken ct)
     {
         await using var cmd = new NpgsqlCommand(
-            "SELECT is_active FROM users WHERE user_id = @userId", conn);
+            "SELECT is_active FROM users WHERE user_id = @userId", conn, tx);
         cmd.Parameters.AddWithValue("userId", userId);
         var result = await cmd.ExecuteScalarAsync(ct);
         return result is true;

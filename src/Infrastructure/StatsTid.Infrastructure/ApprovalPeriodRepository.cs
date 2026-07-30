@@ -630,24 +630,43 @@ public sealed class ApprovalPeriodRepository
         //     reused pendingCountByManager → the medarbejder-page tiles shift accordingly (intended).
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         var pendingCountByManager = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        // S125 / TASK-12501 step 1 — ONE connection for the whole tally pass instead of one per
+        // primitive per candidate. Before this, each of the resolver, the candidate enumeration, the
+        // role floor, the unit-kind lookup and the same-Organisation check opened its OWN connection:
+        // 15 connection opens per pending employee, ~29,000 at month-end scale.
+        //
+        // It reuses `conn` — step (1)'s connection, which is method-scoped and therefore STILL OPEN
+        // here (its reader is disposed, so the session is free). Opening a second connection for the
+        // tally would hold two where one does.
+        //
+        // tx is DELIBERATELY null here. That keeps every statement autocommitting, so each read still
+        // observes the latest committed state exactly as it did with per-primitive connections — this
+        // step changes connection churn ONLY, and the statement count stays at 27/employee. Making the
+        // pass a single SNAPSHOT (a REPEATABLE READ transaction) is step 2, and it additionally requires
+        // a non-locking same-Organisation read: ValidateSameOrganisationAsync is shared with the
+        // S74-7403 write path and issues SELECT … FOR UPDATE, whose row locks are released at each
+        // implicit commit today but would be HELD for the whole projection inside a transaction —
+        // blocking writers to most of the Organisation's user rows.
         foreach (var employeeId in pendingEmployeeIds)
         {
             // Build the DISTINCT candidate-approver set for this pending employee.
             var candidates = new HashSet<string>(StringComparer.Ordinal);
 
             var (edgeManagerId, _, _) = await _reportingLineRepo.ResolveDesignatedApproverAsync(
-                employeeId, ct, asOf: today);
+                conn, tx: null, employeeId, today, ct);
             if (edgeManagerId is not null)
                 candidates.Add(edgeManagerId);
 
-            foreach (var unitApprover in await QueryUnitLeaderApproverCandidatesAsync(employeeId, today, ct))
+            foreach (var unitApprover in await QueryUnitLeaderApproverCandidatesAsync(
+                         conn, tx: null, employeeId, today, ct))
                 candidates.Add(unitApprover);
 
             // Tally each candidate who is an AUTHORIZED approver (edge OR unit-leader, full floors).
             foreach (var candidate in candidates)
             {
                 var authorized = await _designatedAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(
-                    candidate, employeeId, asOf: today, ct: ct);
+                    conn, tx: null, candidate, employeeId, asOf: today, ct: ct);
                 if (!authorized)
                     continue;
 
@@ -671,11 +690,10 @@ public sealed class ApprovalPeriodRepository
     /// <c>E.unit_id</c> yields the empty set. The returned ids are a SUPERSET candidate list — the
     /// caller applies the full floors via the shared edge-OR-unit-leader predicate.
     /// </summary>
-    private async Task<List<string>> QueryUnitLeaderApproverCandidatesAsync(
+    private static async Task<List<string>> QueryUnitLeaderApproverCandidatesAsync(
+        NpgsqlConnection conn, NpgsqlTransaction? tx,
         string employeeId, DateOnly today, CancellationToken ct)
     {
-        await using var conn = _connectionFactory.Create();
-        await conn.OpenAsync(ct);
         await using var cmd = new NpgsqlCommand(
             """
             -- (a) the employee's OWN unit's designated leaders (single-table unit_leaders on
@@ -698,7 +716,7 @@ public sealed class ApprovalPeriodRepository
             WHERE e.user_id = @employeeId
               AND e.unit_id IS NOT NULL
               AND mv.vikar_user_id <> @employeeId
-            """, conn);
+            """, conn, tx);
         cmd.Parameters.AddWithValue("employeeId", employeeId);
         cmd.Parameters.AddWithValue("today", today);
 
