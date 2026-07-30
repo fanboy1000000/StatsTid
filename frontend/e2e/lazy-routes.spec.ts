@@ -75,7 +75,12 @@ test('every lazy route resolves, renders, and never blanks the shell', async ({ 
   })
   page.on('pageerror', e => chunkErrors.push(`pageerror: ${e.message}`))
 
-  await login(page, 'demo_admin')
+  // admin01 (GLOBAL_ADMIN, GLOBAL scope, homed in STY01) — NOT demo_admin, which exists only after
+  // the DemoSeed loader runs and is therefore absent from CI's baseline stack. The first version of
+  // this spec used demo_admin because it was loaded locally, and CI went red on the login assertion.
+  // demo_admin is also homed at a MAO rather than an Organisation, so several leader routes 403 for
+  // it even locally.
+  await login(page, 'admin01')
 
   const failures: string[] = []
   for (const { path } of ROUTES) {
@@ -88,6 +93,12 @@ test('every lazy route resolves, renders, and never blanks the shell', async ({ 
       // exactly the difference between empty and not. A broken lazy mapping fails here AND raises a
       // pageerror — verified by deliberately mis-mapping a page.
       await expect(main).not.toBeEmpty({ timeout: 15000 })
+      // A gated route renders an access-denied or not-found PAGE, which is non-empty — so it would
+      // pass the check above while proving nothing about the lazy chunk. Fail loudly instead: the
+      // actor must be able to reach every route this spec claims to cover.
+      const body = await main.innerText()
+      if (/Adgang n[æa]gtet|Siden blev ikke fundet/i.test(body) && path !== '/no-such-route-xyz')
+        failures.push(`${path}: route GATED for this actor (403/404) — the lazy chunk was never exercised`)
     } catch (e) {
       failures.push(`${path}: ${(e as Error).message.split('\n')[0]}`)
     }

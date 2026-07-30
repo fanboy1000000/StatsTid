@@ -821,12 +821,23 @@ describe('SkemaPage — R7/R16 day-panel save paths', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Registrér arbejdstid 2026-03-02' }))
     const drawer = await screen.findByRole('dialog')
-    // Step 2 renders only the VISIBLE rows…
+
+    // S125: await the SETTLED state FIRST. This assertion used to sit last and use the synchronous
+    // getByText, which made it the documented "Alt fordelt ✓" async-settle flake (S121 flake-watch,
+    // red in CI 2026-07-30): the dialog role appears before Resterende has recomputed over the
+    // served allocations, so under load the query ran too early.
+    //
+    // Moving it first is not only a flake fix — the two absence/presence checks below were VACUOUS
+    // in exactly the same window. An element is trivially "not in the document" before the panel has
+    // rendered, so a drawer that never settled would have passed them.
+    //
+    // Resterende computes over ALL served allocations: 9,5 worked − (7,4 hidden Drift + 2,1 visible
+    // Udvikling) = balanced.
+    expect(await within(drawer).findByText('Alt fordelt ✓')).toBeInTheDocument()
+
+    // Step 2 renders only the VISIBLE rows — now checked against a settled panel.
     expect(within(drawer).queryByLabelText('Drift & support')).toBeNull()
     expect(within(drawer).getByLabelText('Udvikling')).toBeInTheDocument()
-    // …but Resterende computes over ALL served allocations: 9,5 worked −
-    // (7,4 hidden Drift + 2,1 visible Udvikling) = balanced.
-    expect(within(drawer).getByText('Alt fordelt ✓')).toBeInTheDocument()
   })
 })
 
