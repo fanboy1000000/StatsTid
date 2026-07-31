@@ -537,8 +537,10 @@ regex could not match the literal it targeted (dead code), and a flake fix resti
 (the awaited text also renders in the pre-hydration zero state, so it could resolve vacuously and mask
 what it was meant to catch). All absorbed. The absorbing changes are test-only and were NOT themselves
 re-reviewed — stated in the artifact rather than implied away.
-⚠ **SINGLE-LENS CLOSE** — the internal Reviewer Agent was NOT run; authorization was requested up front
-and again mid-close and did not arrive. Recorded in `.claude/reviews/SPRINT-125-step7a-reviewer.md`
+⚠ **SINGLE-LENS AT CLOSE TIME** — the internal Reviewer Agent was not run before `adee08e`;
+authorization was requested up front and again mid-close and did not arrive. **It was run
+retrospectively on 2026-07-31** after the owner granted standing authorization: 0 BLOCKER, 4 WARNING,
+6 NOTE — see FU-0. The close itself stands; the findings are S126 work. Recorded in `.claude/reviews/SPRINT-125-step7a-reviewer.md`
 with a retrospective-review recommendation for S126. This matters more than usual here, because the one
 lens that did run found a P7 regression the whole sprint's tests missed.
 
@@ -567,6 +569,43 @@ the named workflow run.
 ---
 
 ## OPEN FOLLOW-UPS raised in S125 (for S126)
+
+### FU-0 — **the retrospective internal review's findings (run 2026-07-31, AFTER the close)**
+The owner granted standing subagent authorization and asked for the missing lens to be run. It returned
+**0 BLOCKER, 4 WARNING, 6 NOTE** — the shipped code is sound, and these are S126 work. Full artifact:
+`.claude/reviews/SPRINT-125-step7a-reviewer.md`.
+
+**It paid for itself twice over:**
+1. **W1 (P7)** — `OrgScopeValidator` self-excludes only Employee-only actors, and both the pre-tx gate
+   and the in-lock re-eval are wrapped in `if (!orgScopeAllowed)`. **An HR/GlobalAdmin can submit and
+   then approve their OWN period**, audited as `ORG_SCOPE_FALLBACK`. RES-003 already lists this as
+   item 2, but the reviewer supplied the comparison this sprint failed to make: instance 3 was
+   reclassified from trade-off to DEFECT *because it needed no legacy data* — and this path needs no
+   delegation row, no unit-leader row, no cycle. **Strictly more reachable than the instance we fixed.**
+   Owner ruling needed (a legitimate exemption may exist) → folded into FU-1.
+2. **W4 (P9)** — **F3 shipped lazy routes with NO error boundary anywhere in `frontend/src`.** A
+   dynamic-import rejection (cached `index.html` after a redeploy, or a network blip) unmounts the tree
+   and leaves a **permanent blank page**. This failure mode did not exist before F3 — everything was in
+   one already-loaded bundle. The e2e spec listens for exactly this error class, so it was understood
+   and left unhandled.
+
+**And a FIFTH instance of the sprint's own recurring error**: `S106SeedScalePerfTests.cs:284` asserts
+`perPending20 < perPending10`, which given the `count10 == count20` assertion above it is
+arithmetically unfalsifiable — a tautology reading as independent corroboration, in the test written to
+prove the flatness win.
+
+Also: the differential test contains NO out-of-scope ids, so the asymmetry argument is argued rather
+than tested (2-line fix); `ApprovalAuthorityContext`'s per-call lifetime is documented but not
+enforceable; the lazy-route gated-route skip is unbounded; four stale doc comments; `MemoHits` is dead;
+two tx-threaded primitives ignore the transaction.
+
+**Verified sound**, with a better reason than the one I wrote: the asymmetry argument holds because
+every `IAuthorityFactsSource` consumer terminates in a fail-closed same-Organisation EQUALITY check, so
+any actor surviving it is necessarily in-scope — *unreachable-past-the-gate*, not merely denied. The
+snapshot is clean and the roster read does NOT inherit it. ADR-038 D5 intact; ADR-027 one-encoding
+strengthened.
+
+---
 
 ### FU-1 — **RES-003: close the self-approval defect CLASS** ⚠ owner ruling needed (all 3 known INSTANCES are fixed)
 → `docs/knowledge-base/resolutions/RES-003-self-approval-is-a-recurring-defect-class.md`

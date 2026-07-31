@@ -71,6 +71,16 @@ the rule exactly as these did, and nothing structural will catch it.
    ⚠ Needs a ruling first: is there ANY legitimate self-approval case (e.g. an HR/GlobalAdmin acting
    on their own period, which today routes to the org-scope branch)? If yes, the choke point needs
    that exemption to be explicit and tested rather than implicit.
+
+   **CONFIRMED REACHABLE, and more so than instance 3** (retrospective internal review, 2026-07-31).
+   `OrgScopeValidator.ValidateEmployeeAccessAsync` self-excludes only `IsEmployeeOnly` actors; for
+   LocalHR+ the actor's own id resolves their own org and returns allowed. `ApprovalEndpoints` wraps
+   BOTH the pre-tx gate and the in-lock re-eval in `if (!orgScopeAllowed)`, so an HR/GlobalAdmin can
+   submit and then approve their OWN period, audited as `ORG_SCOPE_FALLBACK`.
+
+   Instance 3 was reclassified from trade-off to DEFECT *because it needed no legacy data*. **This path
+   needs no delegation row, no unit-leader row and no cycle** — strictly more reachable than the
+   instance that was fixed. That makes this item the highest-value part of closing the class.
 3. ~~**Rule on the FAIL-004 residual**~~ — ✅ **RULED AND FIXED 2026-07-30. See below.**
 4. **A convention for in-memory mirrors of SQL predicates**: step 3c showed that hand-mirroring a
    `WHERE` clause into C# silently drops guards. The differential-test pattern used there is the
