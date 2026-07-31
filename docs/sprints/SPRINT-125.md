@@ -3,13 +3,13 @@
 | Field | Value |
 |-------|-------|
 | **Sprint** | 125 |
-| **Status** | OPEN (started 2026-07-30) |
+| **Status** | **CLOSED** 2026-07-31 |
 | **Start Date** | 2026-07-30 |
-| **End Date** | — |
+| **End Date** | 2026-07-31 |
 | **Type** | Rolling UI/testing sprint (the third, after S123 and S124) — the owner drives the demo system by hand and names fixes one at a time; each clears the Pre-Implementation Gate with a review proportionate to its size, is implemented, and is verified against the RUNNING stack |
 | **Orchestrator Approved** | per-task |
-| **Build Verified** | FE tsc 0 / lint 0 |
-| **Test Verified** | 711fe (+4) at TASK-12500; backend untouched so far |
+| **Build Verified** | backend 0 errors; FE tsc 0 / lint 0 |
+| **Test Verified** | **868u + 1398r + 6s + 55demoseed + 711fe = 3038**, ZERO failures and ZERO environmental sheds on the close regression (1h16m) |
 
 ## Shape
 Opened because S124 was already CLOSED, PUSHED and CI-VERIFIED (`1e8bd27`, run `30516602046`, all 7
@@ -493,6 +493,76 @@ resolves to: undefined.` Restored, re-verified green.
 real one. It also used guessed route paths (four 404s) and a user lacking leader scope (two 403s). The
 rewrite uses auto-retrying assertions and paths extracted from `App.tsx`. **Nothing was reported to the
 owner until the probe itself was fixed** — the earlier lesson about not trusting an unverified probe.
+
+---
+
+## Close summary (2026-07-31)
+
+**Shape**: opened as a rolling UI/testing sprint and became a performance + P7-authorization sprint.
+Five tasks: TASK-12500 (FE polish), TASK-12502/FAIL-004 (self-approval on the escalation walk),
+TASK-12501/F1 (the period-status projection, four steps), RES-003 instance 3 (own-delegate approval),
+TASK-12504/F3 (route-level code splitting).
+
+**Headline numbers**
+| | Before | After |
+|---|---|---|
+| Period-status projection @ K=1000 | 27,001 commands / 13.8s | **9 commands / 79ms** |
+| Commands per pending employee | 27.0 | **0 (flat in K)** |
+| FE entry chunk | 594.46 kB / 176.34 gzip | **209.22 kB / 68.10 gzip** |
+| Pyramid | 3010 (S124) | **3038** |
+
+**Three P7 defects found and fixed**, none of which anyone set out to look for:
+1. FAIL-004 — the escalation walk could return a person as their own approver (cyclic legacy data).
+2. RES-003 instance 3 — a leader's own appointed stand-in could approve that leader's own period, via
+   entirely ordinary data. Owner-ruled: *"Anna is on vacation, not her approver."*
+3. **A regression this sprint introduced itself** — the F1 prefetch could ADMIT a manager whom live SQL
+   denies, whenever a cross-Organisation stand-in was involved. Caught by the external lens AT THE
+   CLOSE, after every test in the sprint had passed over it.
+
+**The lesson worth carrying** (→ RES-003, FU-1): the segregation-of-duties rule has no single
+enforcement point, and omitting it FAILS OPEN. Three independent instances in one sprint, plus a
+fourth dating to S105.
+
+**A second, personal lesson**: THREE times this sprint a test's documentation claimed coverage its
+fixture did not deliver (the inactive-manager shape, the R3 vikar branch, the lazy-route list). Twice I
+caught it myself; once the external lens did — and that once was hiding the P7 regression above. A
+differential test over a branch that never executes proves nothing while looking rigorous. Related: two
+probes I wrote invented their own success criteria and manufactured false defects.
+
+**Step 7a**: external lens, TWO cycles (cap reached). Cycle 1 over the whole sprint: 1 BLOCKER +
+2 WARNING + 2 NOTE. Cycle 2 over the CI-green delta — forced by the guard refusing a STALE artifact,
+which was right: two commits had landed after cycle 1 and would have closed unreviewed. It found
+2 WARNING + 1 NOTE, **both warnings on the fixes I had just written**: a gated-route detector whose
+regex could not match the literal it targeted (dead code), and a flake fix resting on a false premise
+(the awaited text also renders in the pre-hydration zero state, so it could resolve vacuously and mask
+what it was meant to catch). All absorbed. The absorbing changes are test-only and were NOT themselves
+re-reviewed — stated in the artifact rather than implied away.
+⚠ **SINGLE-LENS CLOSE** — the internal Reviewer Agent was NOT run; authorization was requested up front
+and again mid-close and did not arrive. Recorded in `.claude/reviews/SPRINT-125-step7a-reviewer.md`
+with a retrospective-review recommendation for S126. This matters more than usual here, because the one
+lens that did run found a P7 regression the whole sprint's tests missed.
+
+**Ops**: the close regression ran against the live demo stack and produced ZERO environmental sheds —
+unusually clean for a FAIL-002-exposed run.
+
+**The close guard BLOCKED the first close attempt, correctly** — master was red from the F3 commit. Two
+failures, one mine and one inherited:
+1. **Mine**: the new lazy-route E2E logged in as `demo_admin`, which exists only after the DemoSeed
+   loader runs. CI uses the BASELINE seed, where it does not exist. **It passed locally purely because
+   this machine had the demo world loaded** — a test depending on the environment rather than the repo.
+   Switched to `admin01`; the spec now also fails loudly if a route is GATED for the actor, since an
+   access-denied page is non-empty and would otherwise have satisfied the "rendered" check while
+   proving nothing.
+2. **Inherited**: the `Alt fordelt ✓` async-settle flake, on the S121 flake-watch list. Fixed with
+   `findByText`, and moving it FIRST de-vacuumed the two absence checks above it — they asserted an
+   element was absent in exactly the window before the panel rendered.
+
+**A verification near-miss worth recording**: when checking CI, `gh run watch` exited non-zero on a
+transient API 502 and the first `gh run list` I pulled returned DEPENDABOT runs for the same SHA, all
+"success". Reporting green off those would have been wrong — the real `StatsTid CI` run was still in
+progress. Same shape as the `tail` incident earlier in the sprint: a tool exited for an unrelated
+reason and its output nearly became the answer. Resolved by polling explicit `status == completed` on
+the named workflow run.
 
 ---
 
