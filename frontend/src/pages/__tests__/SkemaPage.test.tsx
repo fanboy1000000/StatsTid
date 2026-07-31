@@ -822,22 +822,27 @@ describe('SkemaPage — R7/R16 day-panel save paths', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Registrér arbejdstid 2026-03-02' }))
     const drawer = await screen.findByRole('dialog')
 
-    // S125: await the SETTLED state FIRST. This assertion used to sit last and use the synchronous
-    // getByText, which made it the documented "Alt fordelt ✓" async-settle flake (S121 flake-watch,
-    // red in CI 2026-07-30): the dialog role appears before Resterende has recomputed over the
-    // served allocations, so under load the query ran too early.
+    // S125: await a POST-HYDRATION element before asserting anything. This test carried the
+    // documented "Alt fordelt ✓" async-settle flake (S121 flake-watch, red in CI 2026-07-30): the
+    // dialog role appears before the panel has hydrated from the served data, so a synchronous query
+    // ran too early under load.
     //
-    // Moving it first is not only a flake fix — the two absence/presence checks below were VACUOUS
-    // in exactly the same window. An element is trivially "not in the document" before the panel has
-    // rendered, so a drawer that never settled would have passed them.
-    //
-    // Resterende computes over ALL served allocations: 9,5 worked − (7,4 hidden Drift + 2,1 visible
-    // Udvikling) = balanced.
-    expect(await within(drawer).findByText('Alt fordelt ✓')).toBeInTheDocument()
+    // The barrier is the visible ROW, not the "Alt fordelt ✓" text. A first fix awaited that text
+    // instead — which the close review showed is NOT a settled-state barrier at all:
+    // classifyAllocation(0, 0) is balanced, so "Alt fordelt ✓" also renders for the pre-hydration
+    // worked=0/allocated=0 state. Awaiting it could resolve vacuously and MASK missing hydration —
+    // the opposite of what a flake fix should do. The 'Udvikling' row only exists once rowPreferences
+    // have been served, so it is a real barrier.
+    expect(await within(drawer).findByLabelText('Udvikling')).toBeInTheDocument()
 
-    // Step 2 renders only the VISIBLE rows — now checked against a settled panel.
+    // Step 2 renders only the VISIBLE rows — now checked against a hydrated panel, where an
+    // "is absent" assertion means something.
     expect(within(drawer).queryByLabelText('Drift & support')).toBeNull()
-    expect(within(drawer).getByLabelText('Udvikling')).toBeInTheDocument()
+
+    // …and Resterende computes over ALL served allocations: 9,5 worked − (7,4 hidden Drift +
+    // 2,1 visible Udvikling) = balanced. Asserted AFTER the barrier, so a balanced-looking zero
+    // state cannot satisfy it.
+    expect(within(drawer).getByText('Alt fordelt ✓')).toBeInTheDocument()
   })
 })
 
