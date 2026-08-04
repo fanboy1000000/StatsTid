@@ -39,3 +39,28 @@
 .routeFallback {
   min-height: 60vh;
 }
+
+/* S126 / W4 — the route error state. Sized and spaced like page content so the shell does not jump
+   when a route fails; deliberately quiet rather than alarming, since the usual cause is a routine
+   redeploy rather than a fault the user caused. */
+.routeError {
+  padding: 2rem;
+  max-width: 40rem;
+}
+.routeErrorTitle {
+  font-size: 1.125rem;
+  font-weight: 600;
+  margin: 0 0 0.5rem;
+}
+.routeErrorBody {
+  margin: 0 0 1rem;
+  line-height: 1.5;
+}
+.routeErrorBtn {
+  padding: 0.5rem 1rem;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+}
